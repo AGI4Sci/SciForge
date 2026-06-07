@@ -77,7 +77,7 @@ const markdownSkillSmokeMode = 'skill-markdown';
 const defaultRuntimeArtifactType = 'runtime-artifact';
 const defaultFailureModes = ['backend-unavailable', 'missing-input', 'schema-mismatch'];
 const defaultRequiredCapabilities = [
-  { capability: 'agentserver-generation', level: 'self-healing' },
+  { capability: 'backend-generation', level: 'self-healing' },
   { capability: 'artifact-emission', level: 'schema-checked' },
 ];
 const senseTextFormats = ['text/plain', 'application/json', 'application/x-ndjson'];
@@ -159,6 +159,12 @@ async function readMarkdownSkillPackage(root: string, path: string): Promise<Mar
   };
   if (typeof frontmatter.visionTaskRequest === 'string' && frontmatter.visionTaskRequest.trim()) {
     inputContract.visionTaskRequest = frontmatter.visionTaskRequest.trim();
+  }
+  if (typeof frontmatter.sensePluginRequest === 'string' && frontmatter.sensePluginRequest.trim()) {
+    inputContract.sensePluginRequest = frontmatter.sensePluginRequest.trim();
+  }
+  if (typeof frontmatter.actionProvider === 'string' && frontmatter.actionProvider.trim()) {
+    inputContract.actionProvider = frontmatter.actionProvider.trim();
   }
   return {
     id,

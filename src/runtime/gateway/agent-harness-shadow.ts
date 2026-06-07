@@ -1,7 +1,7 @@
 import type { GatewayRequest, LlmEndpointConfig, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { clipForAgentServerJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
-import type { AgentServerBackendSelectionDecision } from './agent-backend-config.js';
+import { clipForBackendJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
+import type { BackendSelectionDecision } from './agent-backend-config.js';
 import { agentHarnessBackendSelectionDecision } from './agent-harness-backend-selection.js';
 import { agentHarnessContinuityDecision } from './agent-harness-continuity-decision.js';
 import { agentHarnessProgressPlanProjection } from './agent-harness-progress-plan-projection.js';
@@ -126,7 +126,7 @@ export async function requestWithAgentHarnessShadow(
 }
 
 export function agentHarnessMetadata(request: GatewayRequest, runtime: {
-  backendSelectionDecision?: AgentServerBackendSelectionDecision;
+  backendSelectionDecision?: BackendSelectionDecision;
   llmEndpoint?: LlmEndpointConfig;
   startupContextEnvelope?: Record<string, unknown>;
 } = {}) {
@@ -134,7 +134,7 @@ export function agentHarnessMetadata(request: GatewayRequest, runtime: {
 }
 
 export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
-  backendSelectionDecision?: AgentServerBackendSelectionDecision;
+  backendSelectionDecision?: BackendSelectionDecision;
   llmEndpoint?: LlmEndpointConfig;
   startupContextEnvelope?: Record<string, unknown>;
 } = {}) {
@@ -840,7 +840,7 @@ function agentHarnessSummary(
     requiredContextRefCount: Array.isArray(contract.requiredContextRefs) ? contract.requiredContextRefs.length : undefined,
     promptDirectiveCount: Array.isArray(contract.promptDirectives) ? contract.promptDirectives.length : undefined,
     budgetSummary: agentHarnessBudgetSummary(contract),
-    decisionOwner: 'AgentServer',
+    decisionOwner: 'AgentHost',
     traceStageCount: Array.isArray(trace.stages) ? trace.stages.length : Array.isArray(trace.events) ? trace.events.length : undefined,
   };
 }
@@ -1077,8 +1077,8 @@ function emitAgentHarnessContractEvent(
       contractRef: input.contractRef,
       traceRef: input.traceRef,
       summary: input.summary,
-      contract: input.contract ? clipForAgentServerJson(input.contract) : undefined,
-      trace: input.trace ? clipForAgentServerJson(input.trace) : undefined,
+      contract: input.contract ? clipForBackendJson(input.contract) : undefined,
+      trace: input.trace ? clipForBackendJson(input.trace) : undefined,
     },
   });
 }

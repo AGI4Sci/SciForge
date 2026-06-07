@@ -18,9 +18,6 @@ import {
   type DesktopBrowserHostSurfaceViewContainer,
 } from './browser-host-surface.js';
 import {
-  createDesktopVirtualAppScreenSurfacePresenter,
-} from './virtual-app-screen-surface.js';
-import {
   createTrustedDesktopAnnotationScreenRegionOverlayBridge,
   type DesktopAnnotationScreenRegionOverlayBridge,
 } from './annotation-screen-region-overlay-bridge.js';
@@ -334,7 +331,6 @@ export function registerDesktopIpcHandlers(input: {
   };
 }): void {
   const nativeBrowser = createDesktopNativeBrowserController(input.electron);
-  const virtualAppScreenSurface = createDesktopVirtualAppScreenSurfacePresenter();
   const annotationScreen = input.electron.screen ?? fallbackDesktopAnnotationScreen();
   const annotationWindowInventory = input.desktopAnnotationWindowInventory
     ?? createDesktopAnnotationMacosWindowInventoryProvider();
@@ -405,15 +401,6 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:browser-host-surface:state', async (_event: unknown, value: unknown) => {
     if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
     return input.browserHostSurface.state(browserHostSurfaceSessionId(value));
-  });
-  input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:attach', async (_event: unknown, value: unknown) => {
-    return virtualAppScreenSurface.attach(value);
-  });
-  input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:present', async (_event: unknown, value: unknown) => {
-    return virtualAppScreenSurface.present(value);
-  });
-  input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:detach', async (_event: unknown, value: unknown) => {
-    return virtualAppScreenSurface.detach(value);
   });
   input.electron.ipcMain.handle('desktop:annotation-overlay:create', () => annotationOverlay.create());
   input.electron.ipcMain.handle('desktop:annotation-overlay:show', () => annotationOverlay.show());

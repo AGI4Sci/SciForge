@@ -161,5 +161,5 @@ export function literatureGenerationFailureRecoveryMessage(input: {
   fetchedCount: number;
   pdfExtractedCount: number;
 }) {
-  return `AgentServer 生成阶段失败后，SciForge 已通过 web_search/web_fetch/pdf_extract provider fallback 生成文献调研交付包：${input.rowCount} 篇候选论文、${input.fetchedCount} 条来源页面抓取、${input.pdfExtractedCount} 条 PDF 正文抽取、中文报告 artifact 和 evidence matrix。`;
+  return `Backend 生成阶段失败后，SciForge 已通过 web_search/web_fetch/pdf_extract provider fallback 生成文献调研交付包：${input.rowCount} 篇候选论文、${input.fetchedCount} 条来源页面抓取、${input.pdfExtractedCount} 条 PDF 正文抽取、中文报告 artifact 和 evidence matrix。`;
 }

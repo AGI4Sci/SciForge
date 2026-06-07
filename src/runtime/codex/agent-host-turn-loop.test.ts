@@ -71,6 +71,152 @@ test('Agent Host Turn Loop answers ordinary frontier AI search from browser.sear
   assert.doesNotMatch(serialized, /browser_search|browser-host-search-runtime|answerEvidenceState|browser-search-results|browser-host-projection|fixture:|diagnostic|gui\.present:|replay:|history:/);
 });
 
+test('Agent Host Turn Loop formats structured arXiv source summaries into dated paper answers', async () => {
+  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-arxiv-structured-answer',
+    attemptId: 'codex-command-browser-arxiv-structured-answer-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: ['browser-host-session:arxiv/source-pages/source-1.source.json'],
+      evidenceRefs: [
+        'browser-host-session:arxiv/source-pages/source-1.source.json',
+        'browser-host-session:arxiv/source-pages/source-1.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'arXiv search: agentic rl',
+          finalUrl: 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
+          textRef: 'browser-host-session:arxiv/source-pages/source-1.txt',
+          textSummary: [
+            'arXiv search page reports: 1–25 of 6,080 results for all: agentic rl.',
+            '1. Thinking with Imagination: Agentic Visual Spatial Reasoning with World Simulators (categories: cs.CV; authors: Chenming Zhu, Jingli Lin, Yilin Long; submitted: 4 June, 2026; announced: June 2026; comments: Project page; link: https://arxiv.org/abs/2606.06476): Astra lets VLM agents actively acquire imagined visual evidence from a world simulator during reasoning.',
+            '2. Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents (categories: cs.LG cs.AI; authors: Dae Yon Hwang, Raunaq Suri; submitted: 3 June, 2026; announced: June 2026; comments: Accepted by ICML 2026; link: https://arxiv.org/abs/2606.05296): Simulates reinforcement learning-style exploration for black-box LLM agents.',
+            '3. TAPO: Tool-Aware Policy Optimization via Credit Transfer for Multimodal Search Agents (categories: cs.AI; authors: Chengqi Dong, Chuhuai Yue; submitted: 4 June, 2026; announced: June 2026; link: https://arxiv.org/abs/2606.05784): It identifies credit misassignment in GRPO for tool-augmented multimodal search agents.',
+          ].join(' '),
+        }],
+      },
+    }),
+  });
+
+  const message = String(result?.result.message);
+  const todayIso = expectedLocalIsoDate();
+  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
+  assert.equal(acceptanceSpec?.schemaVersion, 'sciforge.agent-host.acceptance-spec.v1');
+  assert.deepEqual((acceptanceSpec?.evidence as Record<string, unknown>)?.required, ['source-page-ref', 'page-text-ref']);
+  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.kind, 'exact-date');
+  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.anchorDate, todayIso);
+  assert.deepEqual(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.evidenceFields, ['submitted', 'published', 'updated', 'released', 'observed']);
+  assert.equal((acceptanceSpec?.output as Record<string, unknown>)?.answerKind, 'dated-item-list');
+  assert.match(message, new RegExp(`未在已读来源页中看到符合今天（${escapeRegExp(todayIso)}）时间约束的日期字段`));
+  assert.match(message, /没有找到符合“今天”时间约束的可验证结果/);
+  assert.match(message, /不符合时间约束的已读候选（仅作排除依据）/);
+  assert.doesNotMatch(message, /今天新增论文：/);
+  assert.doesNotMatch(message, /已读页面中的最新相关论文：/);
+  assert.match(message, /Thinking with Imagination: Agentic Visual Spatial Reasoning with World Simulators/);
+  assert.match(message, /作者：Chenming Zhu, Jingli Lin, Yilin Long/);
+  assert.match(message, /https:\/\/arxiv\.org\/abs\/2606\.06476/);
+  assert.match(message, /一句话结论：Astra lets VLM agents actively acquire imagined visual evidence/);
+  assert.match(message, /Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents/);
+  assert.match(message, /3\. 标题：TAPO: Tool-Aware Policy Optimization via Credit Transfer for Multimodal Search Agents/);
+  assert.doesNotMatch(message, /Simulates reinforcement learning-style exploration.*3\. TAPO/s);
+  assert.doesNotMatch(message, /\(cate 来源|Skip to main content/);
+});
+
+test('Agent Host Turn Loop applies AcceptanceSpec exact-date constraints to non-arXiv published items', async () => {
+  const commandText = '搜索一下今天 example.test 上发布的安全公告，并列出标题、发布方、链接和一句话结论。';
+  const todayIso = expectedLocalIsoDate();
+  const todayLabel = expectedEnglishDateLabel();
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-generic-published-answer',
+    attemptId: 'codex-command-browser-generic-published-answer-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: ['browser-host-session:security/source-pages/source-1.source.json'],
+      evidenceRefs: [
+        'browser-host-session:security/source-pages/source-1.source.json',
+        'browser-host-session:security/source-pages/source-1.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'Example security advisories',
+          finalUrl: 'https://example.test/security',
+          sourcePageRef: 'browser-host-session:security/source-pages/source-1.source.json',
+          textRef: 'browser-host-session:security/source-pages/source-1.txt',
+          textSummary: [
+            `1. Critical TLS Advisory (publisher: Example Security Team; published: ${todayLabel}; link: https://example.test/security/tls): Recommends immediate rotation for impacted TLS certificates.`,
+            '2. Historical SSH Advisory (publisher: Example Security Team; published: 3 June, 2026; link: https://example.test/security/ssh): Documents a previously fixed SSH configuration issue.',
+          ].join(' '),
+        }],
+      },
+    }),
+  });
+
+  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
+  assert.equal(acceptanceSpec?.schemaVersion, 'sciforge.agent-host.acceptance-spec.v1');
+  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.kind, 'exact-date');
+  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.anchorDate, todayIso);
+  assert.equal((acceptanceSpec?.output as Record<string, unknown>)?.answerKind, 'dated-item-list');
+  const message = String(result?.result.message);
+  assert.match(message, /符合“今天”时间约束的已读结果/);
+  assert.match(message, /标题：Critical TLS Advisory/);
+  assert.match(message, /发布方：Example Security Team/);
+  assert.match(message, new RegExp(`发布：${escapeRegExp(todayLabel)}`));
+  assert.match(message, /https:\/\/example\.test\/security\/tls/);
+  assert.match(message, /一句话结论：Recommends immediate rotation/);
+  assert.doesNotMatch(message, /Historical SSH Advisory/);
+  assert.doesNotMatch(message, /论文/);
+});
+
+test('Agent Host Turn Loop records latest/current requests as AcceptanceSpec without exact-date filtering', async () => {
+  const commandText = 'What is the latest Python release? Please cite source URLs.';
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-latest-python-acceptance-spec',
+    attemptId: 'codex-command-browser-latest-python-acceptance-spec-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: ['browser-host-session:python/source-pages/source-1.source.json'],
+      evidenceRefs: [
+        'browser-host-session:python/source-pages/source-1.source.json',
+        'browser-host-session:python/source-pages/source-1.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'Python release page',
+          finalUrl: 'https://example.test/python/releases',
+          sourcePageRef: 'browser-host-session:python/source-pages/source-1.source.json',
+          textRef: 'browser-host-session:python/source-pages/source-1.txt',
+          textPreview: 'Python 3.14.0 is the latest stable release on this page. Released: 7 October 2025.',
+        }],
+      },
+    }),
+  });
+
+  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
+  assert.equal(acceptanceSpec?.schemaVersion, 'sciforge.agent-host.acceptance-spec.v1');
+  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.kind, 'latest-or-current');
+  assert.equal((acceptanceSpec?.output as Record<string, unknown>)?.answerKind, 'source-summary');
+  const message = String(result?.result.message);
+  assert.match(message, /Python 3\.14\.0 is the latest stable release/);
+  assert.match(message, /https:\/\/example\.test\/python\/releases/);
+  assert.doesNotMatch(message, /今天新增论文|今天新增|符合“今天”时间约束/);
+});
+
 test('Agent Host Turn Loop opens and reads explicit URL requests through browser.open_read bounded operation', async () => {
   const calls: ModuleInvokeRequest[] = [];
   const commandText = '打开并读取 https://example.test/source-page ，总结页面内容';
@@ -125,6 +271,46 @@ test('Agent Host Turn Loop opens and reads explicit URL requests through browser
   ]);
 });
 
+test('Agent Host Turn Loop routes in-app Browser open-source retrieval prompts to browser.search_read before GUI operation', async () => {
+  const calls: ModuleInvokeRequest[] = [];
+  const commandText = '请用 SciForge 内置浏览器打开 OpenAI 官方 changelog，读取页面内容，用中文总结最近的产品更新，并列出来源链接。';
+
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-open-source-search-read',
+    attemptId: 'codex-command-browser-open-source-search-read-attempt-1',
+    browserBoundedOperationInvoker: async (request) => {
+      calls.push(request);
+      return boundedOperationResult({
+        moduleId: 'browser',
+        operationKind: 'browser.search_read',
+        status: 'completed',
+        sourceRefs: ['browser-host-session:changelog/source-pages/source-1.source.json'],
+        evidenceRefs: [
+          'browser-host-session:changelog/source-pages/source-1.source.json',
+          'browser-host-session:changelog/source-pages/source-1.txt',
+        ],
+        value: {
+          sourcePages: [{
+            title: 'OpenAI API changelog',
+            finalUrl: 'https://platform.openai.com/docs/changelog',
+            textRef: 'browser-host-session:changelog/source-pages/source-1.txt',
+            textPreview: 'Jun 4 Feature Added moderation scores to the Responses API and Chat Completions API.',
+          }],
+        },
+      });
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
+  assert.match(String((calls[0]?.input?.targetScope as Record<string, unknown>).query), /OpenAI|changelog|产品更新/);
+  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
+});
+
 test('Agent Host Turn Loop blocks Browser completion without both source page and page text refs', async () => {
   const commandText = 'What is the current Python release? Please cite source URLs.';
 
@@ -156,6 +342,59 @@ test('Agent Host Turn Loop blocks Browser completion without both source page an
   assert.deepEqual(result?.result.evidenceRefs, [
     'browser-host-session:search/source-pages/source-1.source.json',
   ]);
+});
+
+test('Agent Host Turn Loop does not accept discovery-only Browser pages as completion evidence', async () => {
+  const commandText = 'Search arXiv and summarize current papers with source links.';
+
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-discovery-only-evidence',
+    attemptId: 'codex-command-browser-discovery-only-evidence-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: ['browser-host-session:search/source-pages/source-1.source.json'],
+      evidenceRefs: [
+        'browser-host-session:search/source-pages/source-1.source.json',
+        'browser-host-session:search/source-pages/source-1.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'arXiv search: agentic rl',
+          finalUrl: 'https://arxiv.org/search/?query=agentic+rl',
+          sourcePageRef: 'browser-host-session:search/source-pages/source-1.source.json',
+          textRef: 'browser-host-session:search/source-pages/source-1.txt',
+          discoveryOnly: true,
+          textSummary: '1. Example Paper (authors: Ada Example; submitted: 1 January, 2000; link: https://arxiv.org/abs/0001.00001): Listing summary.',
+        }],
+      },
+    }),
+  });
+
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
+  assert.match(String(result?.result.message), /missing current-run source\/page text evidence|source-page-ref|page-text-ref/i);
+  assert.doesNotMatch(String(result?.result.message), /Example Paper/);
+});
+
+test('Agent Host Turn Loop fails closed instead of falling back to legacy browser_search when Browser module is unavailable', async () => {
+  const commandText = 'Search the web for current Python release notes and cite the source.';
+
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-module-missing',
+    attemptId: 'codex-command-browser-module-missing-attempt-1',
+  });
+
+  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'browser-module-unavailable');
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
+  assert.match(String(result?.result.message), /Browser bounded operation invoker is unavailable|browser\.search_read|browser\.open_read/);
+  assert.doesNotMatch(JSON.stringify(result), /browser_search|browser-host-search-runtime|answerEvidenceState|browser-search-results|browser-host-projection/);
 });
 
 test('Agent Host Turn Loop explains no-network Browser skip without invoking Browser', async () => {
@@ -943,4 +1182,33 @@ function readyAgentHostInput(intentText: string) {
       stopCancelPath: true,
     },
   };
+}
+
+function expectedLocalIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function expectedEnglishDateLabel(date = new Date()) {
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return `${date.getDate()} ${months[date.getMonth()]}, ${date.getFullYear()}`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

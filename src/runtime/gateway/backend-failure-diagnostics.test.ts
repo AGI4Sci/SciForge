@@ -5,7 +5,7 @@ import {
   diagnosticForFailure,
   isContextWindowExceededError,
   isRateLimitError,
-  sanitizeAgentServerError,
+  sanitizeBackendError,
 } from './backend-failure-diagnostics';
 
 test('diagnostic schema maps network failures to user-visible recovery', () => {
@@ -55,7 +55,7 @@ test('context-window diagnostics use contract-owned user-facing recovery copy', 
   const diagnostic = diagnosticForFailure('maximum context length reached because input is too long and tokens exceeded');
 
   assert.equal(diagnostic.kind, 'context-window');
-  assert.match(sanitizeAgentServerError('maximum context length reached because input is too long and tokens exceeded'), /context window\/token limit/);
+  assert.match(sanitizeBackendError('maximum context length reached because input is too long and tokens exceeded'), /context window\/token limit/);
   assert.ok(diagnostic.recoverActions?.some((action) => /currentReferenceDigests/.test(action)));
   assert.equal(isContextWindowExceededError('token limit exceeded during backend generation'), true);
   assert.equal(isContextWindowExceededError('429 too many requests; not a context window overflow'), false);

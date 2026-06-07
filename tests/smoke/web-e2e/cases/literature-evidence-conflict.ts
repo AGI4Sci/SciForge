@@ -20,7 +20,7 @@ import {
   writeWebE2eEvidenceBundle,
   type WebE2eEvidenceBundleManifest,
 } from '../evidence-bundle.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerRecordedRequest,
@@ -151,7 +151,7 @@ export interface LiteratureEvidenceConflictCaseResult {
 
 export async function runLiteratureEvidenceConflictCase(outputRoot?: string): Promise<LiteratureEvidenceConflictCaseResult> {
   const routeTrace: RouteTraceEntry[] = [];
-  const server = await startScriptableAgentServerMock({
+  const server = await startScriptableBackendMock({
     seed: LITERATURE_EVIDENCE_CONFLICT_CASE_ID,
     fixedNow: now,
     discovery: {

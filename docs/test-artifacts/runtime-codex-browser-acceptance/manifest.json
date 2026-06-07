@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-06-02T18:20:21.844Z",
+  "observedAt": "2026-06-07T00:16:42.445Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrlEvidence": {
@@ -23,9 +23,9 @@
     "length": 73,
     "sha256": "06f2700939355f29a921c67f9c5087c2c73c6e275377b3c0c87551ab46aa43cd"
   },
-  "profile": "sciforge-runtime-deepseek",
-  "provider": "native",
-  "model": "bailian/deepseek-v4-flash",
+  "profile": "sciforge-runtime-default",
+  "provider": "sciforge-model-router",
+  "model": "sciforge-router",
   "startedFromDefaultChatEntry": false,
   "submittedThroughRuntimeCodex": false,
   "providerModelProfileVisible": false,
@@ -115,7 +115,7 @@
   "expectedRetestCommand": "npm run smoke:runtime-codex-browser-acceptance",
   "providerPreflightRef": "docs/test-artifacts/runtime-provider-preflight/manifest.json",
   "providerPreflightCategory": "config-secret-source",
-  "providerPreflightCheckedAt": "2026-06-02T18:20:21.842Z",
+  "providerPreflightCheckedAt": "2026-06-06T19:21:12.810Z",
   "providerPreflightReleaseAcceptance": "not-evaluated",
   "providerPreflightEvidenceMode": "current-env-diagnostic-only",
   "runtimeApiKeyPresentInServiceEnv": false,
@@ -128,7 +128,7 @@
     "ui": {
       "host": "127.0.0.1",
       "port": 5173,
-      "listening": false
+      "listening": true
     },
     "workspaceWriter": {
       "host": "127.0.0.1",
@@ -138,23 +138,12 @@
     "runtimeCodex": {
       "host": "127.0.0.1",
       "port": 18080,
-      "listening": true
+      "listening": false
     },
     "providerProxy": {
       "host": "127.0.0.1",
       "port": 3891,
       "listening": false
-    },
-    "kvGround": {
-      "host": "127.0.0.1",
-      "port": 18081,
-      "listening": false,
-      "healthUrlEvidence": {
-        "length": 29,
-        "sha256": "d13ae4f6f2bf1591482cd64b96903bbddcf7cb0cdc65c42bdf88d783797b9809"
-      },
-      "healthOk": false,
-      "note": "KV-Ground health is not currently reachable from this process; this is diagnostic-only and not browser/release acceptance."
     }
   },
   "serviceEnvRequired": {
@@ -180,7 +169,7 @@
   "liveRerunEligibility": {
     "serviceEnvReady": false,
     "canAttemptLiveBrowserRerun": false,
-    "requiresLiveBrowserAcceptance": false,
+    "requiresLiveBrowserAcceptance": true,
     "evidenceScope": "preflight-only",
     "keySourceKind": "config-debug-fallback",
     "upstreamSourceKind": "config",

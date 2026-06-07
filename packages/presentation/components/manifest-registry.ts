@@ -28,14 +28,12 @@ import { manifest as structureViewer } from './structure-viewer/manifest.js';
 import { manifest as terminalSessionViewer } from './terminal-session-viewer/manifest.js';
 import { manifest as timeSeriesViewer } from './time-series-viewer/manifest.js';
 import { manifest as unknownArtifactInspector } from './unknown-artifact-inspector/manifest.js';
-import { manifest as virtualScreenViewer } from './virtual-screen-viewer/manifest.js';
 import { manifest as workspaceFileViewer } from './workspace-file-viewer/manifest.js';
 import type { UIComponentManifest } from './types.js';
 
 export const uiComponentManifests: UIComponentManifest[] = [
   reportViewer,
   browserWorkbench,
-  virtualScreenViewer,
   computerUseControlPlane,
   paperCardList,
   evidenceMatrix,

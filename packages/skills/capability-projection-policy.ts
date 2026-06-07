@@ -4,6 +4,7 @@ import type { ToolPackageManifest } from './tool_skills/types.js';
 const PACKAGE_ROUTING_TAGS = new Set([
   '',
   'package',
+  'backend-generation',
   'agentserver-generation',
   'artifact-emission',
   'schema-checked',

@@ -60,7 +60,7 @@ export function browserHostSearchResultExtractionScript(limit: number): string {
     const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
     const rows = [];
     const seen = new Set();
-    const navTitle = /^(?:skip to content|web|images|videos|news|maps|shopping|more|all|search)$/i;
+    const navTitle = /^(?:skip to content|skip to main content|web|images|videos|news|maps|shopping|more|all|search)$/i;
     const add = (title, href, snippet) => {
       const cleanTitle = clean(title);
       const url = String(href || '');
@@ -172,7 +172,7 @@ function isSearchEngineNavigationUrl(value: string, title: string): boolean {
     const host = url.hostname.toLowerCase();
     const path = url.pathname.toLowerCase();
     if (!/(^|\.)bing\.com$|(^|\.)duckduckgo\.com$|(^|\.)google\.[a-z.]+$/i.test(host)) return false;
-    if (/^(?:skip to content|web|images|videos|news|maps|shopping|more|all|search)$/i.test(title)) return true;
+    if (/^(?:skip to content|skip to main content|web|images|videos|news|maps|shopping|more|all|search)$/i.test(title)) return true;
     if (/(^|\.)bing\.com$/i.test(host)) {
       return path === '/' || path === '/search' || /^\/(?:images|videos|news|maps)\/search/.test(path);
     }

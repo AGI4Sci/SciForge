@@ -351,12 +351,12 @@ async function coverStaticContracts() {
     'C07-runtime-visible-preflight#src/runtime/gateway/direct-context-fast-path.ts': 0,
     'C07-runtime-visible-preflight#src/runtime/gateway/capability-provider-preflight.ts': 0,
     'C07-runtime-visible-preflight#src/runtime/gateway/generated-task-payload-preflight.ts': 0,
-    'C10-agentserver-adapter-boundary#src/runtime/generation-gateway.ts': 0,
+    'C10-backend-generation-adapter-boundary#src/runtime/generation-gateway.ts': 0,
     'C08-gateway-public-api-internal-stage#src/runtime/generation-gateway.ts': 0,
     'C06-runtime-direct-context-implicit-strategy#src/runtime/gateway/direct-context-fast-path.ts': 0,
-    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-contract.ts': 0,
-    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-window.ts': 1,
-    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-prompts.ts': 1,
+    'C05-degraded-raw-history-shape#src/runtime/gateway/backend-context-contract.ts': 0,
+    'C05-degraded-raw-history-shape#src/runtime/gateway/backend-context-window.ts': 1,
+    'C05-degraded-raw-history-shape#src/runtime/gateway/backend-prompt-policy.ts': 1,
     'C12-ui-legacy-raw-terminal-fallback#src/ui/src/app/appShell/workspaceState.ts': 3,
   };
 
@@ -388,7 +388,7 @@ async function collectStaticFindings() {
       match: (line: string, file: string) => file.startsWith('src/runtime/') && /\bcapabilityProviderPreflight\s*\(/.test(line) && !/^export\s+function\b/.test(line.trim()),
     },
     {
-      id: 'C10-agentserver-adapter-boundary',
+      id: 'C10-backend-generation-adapter-boundary',
       match: (line: string, file: string) => file === 'src/runtime/generation-gateway.ts' && /\bagentBackendAdapter\s*\(/.test(line),
     },
     {

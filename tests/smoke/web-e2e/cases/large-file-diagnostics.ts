@@ -28,7 +28,7 @@ import {
   type WebE2eRunEvidence,
 } from '../evidence-bundle.js';
 import { buildWebE2eFixtureWorkspace } from '../fixture-workspace-builder.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerMockHandle,
@@ -100,7 +100,7 @@ export async function runLargeFileDiagnosticsCase(options: {
   now?: string;
 } = {}): Promise<LargeFileDiagnosticsCaseResult> {
   const fixedNow = options.now ?? now;
-  const server = await startScriptableAgentServerMock({
+  const server = await startScriptableBackendMock({
     seed: LARGE_FILE_DIAGNOSTICS_CASE_ID,
     fixedNow,
     script: (request, exchange) => scriptForRound(roundFromRequest(request), request, exchange.requestIndex, fixedNow),

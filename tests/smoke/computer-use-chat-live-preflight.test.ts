@@ -28,6 +28,12 @@ test('Computer Use chat live preflight reports ready without printing secret env
   assert.equal(text.includes('https://provider.example/v1'), false);
   assert.ok(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_RUNTIME_API_KEY' && entry.present && entry.valuePrinted === false));
   assert.equal(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_VISION_KV_GROUND_URL'), false);
+  assert.deepEqual(manifest.runtimeProviderPreflight?.checkedInference, {
+    category: 'ready',
+    ok: true,
+    httpStatus: 200,
+    retryable: false,
+  });
 });
 
 test('Computer Use chat live preflight writes blocked diagnostics for missing env and unhealthy services', async () => {
@@ -167,6 +173,75 @@ test('Computer Use chat live preflight blocks when local config has key but work
   assert.equal(text.includes('provider.example'), false);
 });
 
+test('Computer Use chat live preflight exposes non-secret runtime inference probe diagnostics', async () => {
+  const manifest = await buildComputerUseChatLivePreflightManifest({
+    env: readyEnv(),
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        return jsonResponse({
+          ok: true,
+          manifest: runtimeProviderPreflightInferenceBlocked(),
+        });
+      }
+      if (url.endsWith('/healthz')) return jsonResponse({ ok: true });
+      if (url.endsWith('/health')) return jsonResponse({ ok: true, ready: true });
+      return htmlResponse('<!doctype html><html><body>SciForge</body></html>');
+    },
+  });
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.runtimeProviderPreflight?.category, 'provider-auth');
+  assert.deepEqual(manifest.runtimeProviderPreflight?.checkedHealthz, {
+    category: 'ready',
+    ok: true,
+    httpStatus: 200,
+    retryable: false,
+  });
+  assert.deepEqual(manifest.runtimeProviderPreflight?.checkedInference, {
+    category: 'provider-auth',
+    ok: false,
+    httpStatus: 403,
+    retryable: false,
+  });
+  const text = JSON.stringify(manifest);
+  assert.equal(text.includes('sk-live-secret'), false);
+  assert.equal(text.includes('provider.example'), false);
+});
+
+test('Computer Use chat live preflight whitelists runtime provider diagnostic categories', async () => {
+  const manifest = await buildComputerUseChatLivePreflightManifest({
+    env: readyEnv(),
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        return jsonResponse({
+          ok: true,
+          manifest: {
+            ...runtimeProviderPreflightInferenceBlocked(),
+            category: 'provider-auth https://provider.example/raw sk-live-secret',
+            checkedInference: {
+              category: 'provider-auth https://provider.example/raw sk-live-secret',
+              ok: false,
+              httpStatus: 403,
+              retryable: false,
+            },
+          },
+        });
+      }
+      if (url.endsWith('/healthz')) return jsonResponse({ ok: true });
+      if (url.endsWith('/health')) return jsonResponse({ ok: true, ready: true });
+      return htmlResponse('<!doctype html><html><body>SciForge</body></html>');
+    },
+  });
+
+  assert.equal(manifest.runtimeProviderPreflight?.category, 'unknown');
+  assert.equal(manifest.runtimeProviderPreflight?.checkedInference?.category, 'unknown');
+  const text = JSON.stringify(manifest);
+  assert.equal(text.includes('sk-live-secret'), false);
+  assert.equal(text.includes('provider.example/raw'), false);
+});
+
 test('Computer Use chat live preflight reads textLLM presence and local policy blockers', async () => {
   const manifest = await buildComputerUseChatLivePreflightManifest({
     env: readyEnv({ withoutRuntimeProvider: true }),
@@ -274,7 +349,25 @@ function runtimeProviderPreflightReady() {
     upstreamBaseUrlSourceKind: 'env',
     missingEnv: [],
     policyViolations: [],
-    checkedHealthz: { category: 'ready', ok: true, httpStatus: 200 },
+    checkedHealthz: { category: 'ready', ok: true, httpStatus: 200, retryable: false },
+    checkedInference: { category: 'ready', ok: true, httpStatus: 200, retryable: false },
+  };
+}
+
+function runtimeProviderPreflightInferenceBlocked() {
+  return {
+    schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+    releaseAcceptance: 'not-evaluated',
+    evidenceMode: 'current-env-diagnostic-only',
+    category: 'provider-auth',
+    runtimeApiKeyPresentInServiceEnv: true,
+    upstreamBaseUrlPresent: true,
+    upstreamKeySourceKind: 'env',
+    upstreamBaseUrlSourceKind: 'env',
+    missingEnv: [],
+    policyViolations: [],
+    checkedHealthz: { category: 'ready', ok: true, httpStatus: 200, retryable: false },
+    checkedInference: { category: 'provider-auth', ok: false, httpStatus: 403, retryable: false },
   };
 }
 

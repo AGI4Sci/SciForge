@@ -64,67 +64,15 @@ export function createRightPaneCommandTextAction({
   createdAt = new Date().toISOString(),
 }: CreateRightPaneCommandTextActionInput): CommandTextUIAction | undefined {
   if (!commandText.trim()) return undefined;
-  const normalizedCommandText = rightPaneCommandTextForAction(commandText, id);
   return createCommandTextUIAction({
     session,
     id,
     createdAt,
     source: 'open',
-    commandText: normalizedCommandText,
+    commandText,
     label,
     targetRef,
   });
-}
-
-function rightPaneCommandTextForAction(commandText: string, actionId: string) {
-  if (!/^\/computer-use\s+screen\s+attach(?:\s|$)/.test(commandText.trim())) return commandText;
-  const scope = safeRightPaneCommandScope(actionId);
-  const refs = {
-    screenRef: `virtual-app-screen:${scope}/screen-request`,
-    activationRef: `computer-use:screen-activation/${scope}/attach-request.json`,
-    adapterReadinessRef: `computer-use:screen-activation/${scope}/provider-readiness.json`,
-    platformDriverRef: `computer-use:screen-activation/${scope}/platform-driver.json`,
-    permissionRef: `computer-use:screen-activation/${scope}/permissions/platform-gates.json`,
-    evidenceLedgerRef: `ledger:computer-use/${scope}/screen-activation.json`,
-    guiPresentRef: `gui.present:${scope}/screen-pane-activation`,
-  };
-  let rewritten = [
-    ['preflight-ref'],
-    ['preflight-ledger-ref'],
-    ['preflight-ledger-entry-ref'],
-    ['host-readiness-ref'],
-  ].reduce((next, [flag]) => removeTerminalFlag(next, flag), commandText);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'screen-ref', refs.screenRef);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'activation-ref', refs.activationRef);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'adapter-readiness-ref', refs.adapterReadinessRef);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'platform-driver-ref', refs.platformDriverRef);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'permission-ref', refs.permissionRef);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'evidence-ledger-ref', refs.evidenceLedgerRef);
-  rewritten = replaceOrAppendTerminalFlag(rewritten, 'gui-present-ref', refs.guiPresentRef);
-  return rewritten;
-}
-
-function safeRightPaneCommandScope(actionId: string) {
-  const normalized = actionId.trim().toLowerCase().replace(/[^a-z0-9._/-]+/g, '-').replace(/^-+|-+$/g, '');
-  return normalized ? `right-pane-${normalized}` : 'right-pane-command';
-}
-
-function replaceOrAppendTerminalFlag(commandText: string, flag: string, value: string) {
-  const withoutFlag = removeTerminalFlag(commandText, flag);
-  return `${withoutFlag.trim()} --${flag} ${terminalQuote(value)}`;
-}
-
-function removeTerminalFlag(commandText: string, flag: string) {
-  const flagPattern = escapeRegExp(`--${flag}`);
-  return commandText.replace(new RegExp(`\\s+${flagPattern}(?:\\s+(?:"(?:\\\\.|[^"])*"|'(?:\\\\.|[^'])*'|\\S+))?`, 'g'), '');
-}
-
-function terminalQuote(value: string) {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function applyRightPaneObjectActionResult(

@@ -32,7 +32,7 @@ test('backend input anchors preserve current turn snapshot and output contract',
         },
       },
     }, null, 2),
-    'Final output must be only compact JSON matching AgentServerGenerationResponse or SciForge ToolPayload.',
+    'Final output must be only compact JSON matching BackendGenerationResponse or SciForge ToolPayload.',
   ].join('\n'), { maxInlineStringChars: 2500 });
 
   const text = anchors.join('\n');
@@ -40,7 +40,7 @@ test('backend input anchors preserve current turn snapshot and output contract',
   assert.match(text, /检索最近一周的论文并写报告/);
   assert.match(text, /paper-list/);
   assert.match(text, /OUTPUT CONTRACT EXCERPT/);
-  assert.match(text, /AgentServerGenerationResponse|SciForge ToolPayload/);
+  assert.match(text, /BackendGenerationResponse|SciForge ToolPayload/);
 });
 
 test('backend input anchors fall back to current turn and recovery excerpts', () => {

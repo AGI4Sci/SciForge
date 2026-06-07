@@ -42,7 +42,7 @@ await runDriftCase({
   expectedKinds: ['plain-text-answer'],
   assertResult: (result) => {
     assert.ok(result.artifacts.some((artifact) => artifact.type === 'research-report'));
-    assert.ok(result.executionUnits.some((unit) => isRecord(unit) && unit.tool === 'agentserver.direct-text'));
+    assert.ok(result.executionUnits.some((unit) => isRecord(unit) && unit.tool === 'backend.direct-text'));
   },
 });
 
@@ -180,7 +180,7 @@ function directPayloadRun(runId: string) {
             confidence: 0.9,
             claimType: 'handoff-drift-smoke',
             evidenceLevel: 'agentserver-direct',
-            reasoningTrace: 'AgentServer returned a direct ToolPayload.',
+            reasoningTrace: 'backend returned a direct ToolPayload.',
             claims: [],
             uiManifest: [{ componentId: 'report-viewer', artifactRef: 'direct-payload-report' }],
             executionUnits: [{ id: 'direct-payload-unit', status: 'done', tool: 'agentserver.direct-payload-smoke' }],
@@ -208,7 +208,7 @@ function plainTextRun(runId: string) {
           result: [
             '# Plain text handoff report',
             '',
-            'AgentServer returned a readable final answer as prose. SciForge should recover it as an audited report artifact.',
+            'backend returned a readable final answer as prose. SciForge should recover it as an audited report artifact.',
           ].join('\n'),
         },
       },

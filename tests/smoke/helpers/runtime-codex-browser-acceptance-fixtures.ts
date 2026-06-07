@@ -148,6 +148,7 @@ export const rejectedBrowserAcceptanceFixtureFiles = [
   'fake-passed-missing-task-result.json',
   'fake-passed-unparseable-evidence.json',
   'fake-passed-native-outside-default-chat.json',
+  'fake-passed-native-default-chat-without-browser-source-evidence.json',
   'fake-passed-raw-payload.json',
   'blocked-status.json',
   'failed-status.json',
@@ -254,6 +255,11 @@ export function writeRuntimeCodexBrowserAcceptanceFixtures(
   writeJsonFixture(
     fixtureDir,
     nativeDefaultChatPositiveFixture,
+    passedFixtureManifest(context, nativeDefaultChatDom, notes, screenshot, 'native-default-chat', true),
+  );
+  writeJsonFixture(
+    fixtureDir,
+    'fake-passed-native-default-chat-without-browser-source-evidence.json',
     passedFixtureManifest(context, nativeDefaultChatDom, notes, screenshot, 'native-default-chat'),
   );
   writeJsonFixture(
@@ -288,8 +294,10 @@ function passedFixtureManifest(
   notesPath: string,
   _screenshotPath: string,
   proofMode: RuntimeOutputProofMode = 'gui-present',
+  includeBrowserSourceEvidence = false,
 ): BrowserAcceptanceManifest {
   const evidence = { domSnapshotPath: domPath, notesPath };
+  const sourceRefs = includeBrowserSourceEvidence ? browserSourceEvidenceRefs() : [];
   return {
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'passed',
@@ -324,18 +332,18 @@ function passedFixtureManifest(
       userIntent: 'prove browser acceptance',
       expectedObservableResult: 'visible live Runtime Codex result',
       actualResult: 'visible live Runtime Codex result',
-      evidenceRefs: [domPath, notesPath],
+      evidenceRefs: [domPath, notesPath, ...sourceRefs],
       negativeChecks: ['seed/demo excluded'],
       remainingRisks: 'none',
     },
-    actualTaskResult: passedTaskResult(domPath),
-    liveRuntimeCodexProof: passedLiveProof(domPath, proofMode),
+    actualTaskResult: passedTaskResult(domPath, sourceRefs),
+    liveRuntimeCodexProof: passedLiveProof(domPath, proofMode, sourceRefs),
     negativeChecks: context.negativeChecks,
     evidence,
-    singleTurn: passedScenario(context, 'single turn', evidence, proofMode),
-    artifactFollowUp: { ...passedScenario(context, 'artifact follow up', evidence, proofMode), selectedRefs: ['artifact:negative-fixture'] },
+    singleTurn: passedScenario(context, 'single turn', evidence, proofMode, sourceRefs),
+    artifactFollowUp: { ...passedScenario(context, 'artifact follow up', evidence, proofMode, sourceRefs), selectedRefs: ['artifact:negative-fixture'] },
     multiTurn: {
-      ...passedScenario(context, 'multi turn', evidence, proofMode),
+      ...passedScenario(context, 'multi turn', evidence, proofMode, sourceRefs),
       followUpPromptEvidence: boundedTextEvidence('reply with the remembered passphrase'),
       expectedPassphraseEvidence: boundedTextEvidence(context.expectedMultiTurnPassphrase),
       secondTurnVisibleAnswerConfirmed: true,
@@ -348,13 +356,14 @@ function passedScenario(
   userIntent: string,
   evidence: BrowserAcceptanceEvidence,
   proofMode: RuntimeOutputProofMode = 'gui-present',
+  sourceRefs: string[] = [],
 ): BrowserAcceptanceScenario {
   return {
     status: 'passed',
     promptEvidence: boundedTextEvidence(userIntent),
     userIntent,
-    actualTaskResult: passedTaskResult(evidence.domSnapshotPath ?? ''),
-    liveRuntimeCodexProof: passedLiveProof(evidence.domSnapshotPath ?? '', proofMode),
+    actualTaskResult: passedTaskResult(evidence.domSnapshotPath ?? '', sourceRefs),
+    liveRuntimeCodexProof: passedLiveProof(evidence.domSnapshotPath ?? '', proofMode, sourceRefs),
     negativeChecks: context.negativeChecks,
     visibleAnswerConfirmed: true,
     providerModelProfileVisible: true,
@@ -364,17 +373,17 @@ function passedScenario(
   };
 }
 
-function passedTaskResult(evidenceRef: string): ActualTaskResult {
+function passedTaskResult(evidenceRef: string, sourceRefs: string[] = []): ActualTaskResult {
   return {
     status: 'passed',
     summary: 'Runtime Codex completed the requested browser task.',
     userIntentSatisfied: true,
     outputVerified: true,
-    evidenceRefs: [evidenceRef],
+    evidenceRefs: [evidenceRef, ...sourceRefs],
   };
 }
 
-function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode = 'gui-present'): LiveRuntimeCodexProof {
+function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode = 'gui-present', sourceRefs: string[] = []): LiveRuntimeCodexProof {
   return {
     messageProvenance: 'live-runtime-codex',
     commandId: 'codex-command-negative-001',
@@ -382,8 +391,19 @@ function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode 
     nativeDefaultChatAssistantAnswerRendered: proofMode === 'native-default-chat',
     runtimeOutputObserved: true,
     seedOrDemoExcluded: true,
-    eventEvidenceRefs: [evidenceRef],
+    eventEvidenceRefs: [evidenceRef, ...sourceRefs],
   };
+}
+
+function browserSourceEvidenceRefs(): string[] {
+  return [
+    'action-ledger:browser.executeBoundedOperation/codex-command-negative-001/module.invoke',
+    'runtime-truth:module.invoke/browser.search_read/codex-command-negative-001',
+    'browser-host-session:fixture-session',
+    'browser-host-session:fixture-session/source-pages/source-1-fixture.source.json',
+    'browser-host-session:fixture-session/source-pages/source-1-fixture.txt',
+    'artifact:runtime-codex-browser-acceptance/final-answer.md',
+  ];
 }
 
 function writeFixture(fixtureDir: string, file: string, content: string): void {

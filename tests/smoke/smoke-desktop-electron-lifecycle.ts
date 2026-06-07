@@ -86,10 +86,8 @@ try {
   const apiKeys = await page.evaluate(() => Object.keys((window as Window & { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop ?? {}).sort());
   for (const requiredKey of [
     'attachBrowserHostSessionSurface',
-    'attachVirtualAppScreenSurface',
     'captureNativeBrowserScreenshot',
     'detachBrowserHostSessionSurface',
-    'detachVirtualAppScreenSurface',
     'getBrowserHostSessionSurfaceState',
     'getNativeBrowserState',
     'getRuntimeConfig',
@@ -101,12 +99,12 @@ try {
     'openExternal',
     'openNativeBrowser',
     'pickDirectory',
-    'presentVirtualAppScreenSurface',
     'requestShutdown',
     'revealPath',
   ]) {
     assert.ok(apiKeys.includes(requiredKey), `desktop bridge exposes ${requiredKey}`);
   }
+  assert.equal(apiKeys.some((key) => /VirtualAppScreen/.test(key)), false);
 
   const config = await page.evaluate(() =>
     (window as unknown as { sciforgeDesktop: DesktopBridgeApi }).sciforgeDesktop.getRuntimeConfig(),

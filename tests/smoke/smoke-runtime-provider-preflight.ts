@@ -46,6 +46,13 @@ type CurrentEnvProviderPreflightManifest = {
     httpStatus?: number;
     releaseAcceptance: 'not-evaluated';
   };
+  checkedInference?: {
+    category: string;
+    ok: boolean;
+    retryable: boolean;
+    httpStatus?: number;
+    releaseAcceptance: 'not-evaluated';
+  };
   evidenceMode: 'current-env-diagnostic-only';
   nextActions: Array<{
     label: string;
@@ -236,11 +243,15 @@ async function writeCurrentEnvProviderPreflightManifest(): Promise<CurrentEnvPro
   const healthz = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
     ? await requestCurrentHealthzPreflight(options)
     : undefined;
+  const inference = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent && healthz?.ok
+    ? await requestCurrentInferencePreflight(options)
+    : undefined;
   const category = currentEnvCategory({
     runtimeApiKeyPresentInServiceEnv,
     upstreamBaseUrlPresent,
     configSecretFallbackPaths,
     healthzCategory: healthz?.category,
+    inferenceCategory: inference?.category,
   });
   const manifest: CurrentEnvProviderPreflightManifest = {
     schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
@@ -262,6 +273,7 @@ async function writeCurrentEnvProviderPreflightManifest(): Promise<CurrentEnvPro
       ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
     ],
     checkedHealthz: healthz,
+    checkedInference: inference,
     evidenceMode: 'current-env-diagnostic-only',
     nextActions: currentEnvNextActions({
       runtimeApiKeyPresentInServiceEnv,
@@ -300,16 +312,71 @@ async function requestCurrentHealthzPreflight(options: ReturnType<typeof resolve
   }
 }
 
+async function requestCurrentInferencePreflight(options: ReturnType<typeof resolveProxyCliOptions>): Promise<CurrentEnvProviderPreflightManifest['checkedInference']> {
+  const proxy = await startCodexResponsesProxyServer({
+    upstreamBaseUrl: options.upstreamBaseUrl,
+    upstreamApiKey: options.upstreamApiKey,
+    port: 0,
+  });
+  try {
+    const runtimeApiKey = process.env.SCIFORGE_RUNTIME_API_KEY?.trim();
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(runtimeApiKey ? { authorization: `Bearer ${runtimeApiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: process.env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS?.trim()
+          || process.env.SCIFORGE_RUNTIME_MODEL?.trim()
+          || 'bailian/deepseek-v4-flash',
+        input: 'Return OK.',
+        max_output_tokens: 8,
+      }),
+    });
+    const parsed = await response.json().catch(() => ({}));
+    const code = isRecord(parsed)
+      ? stringValue(parsed.code)
+        ?? stringValue((isRecord(parsed.error) ? parsed.error : {}).code)
+        ?? stringValue((isRecord(parsed.error) ? parsed.error : {}).type)
+      : undefined;
+    const category = response.ok
+      ? 'ready'
+      : runtimeProviderProxyDiagnosticCategory(response.status, code ?? '');
+    return {
+      category,
+      ok: response.ok,
+      retryable: runtimeProviderProxyDiagnosticRetryable(response.status, category),
+      httpStatus: response.status,
+      releaseAcceptance: 'not-evaluated',
+    };
+  } catch {
+    return {
+      category: 'upstream-outage',
+      ok: false,
+      retryable: true,
+      releaseAcceptance: 'not-evaluated',
+    };
+  } finally {
+    await proxy.close();
+  }
+}
+
 function currentEnvCategory(input: {
   runtimeApiKeyPresentInServiceEnv: boolean;
   upstreamBaseUrlPresent: boolean;
   configSecretFallbackPaths: string[];
   healthzCategory?: string;
+  inferenceCategory?: string;
 }): CurrentEnvProviderPreflightCategory {
   if (!input.runtimeApiKeyPresentInServiceEnv && input.configSecretFallbackPaths.length > 0) return 'config-secret-source';
   if (!input.runtimeApiKeyPresentInServiceEnv) return 'missing-runtime-env';
   if (!input.upstreamBaseUrlPresent) return 'missing-upstream';
+  if (isCurrentEnvProviderPreflightCategory(input.inferenceCategory) && input.inferenceCategory !== 'ready') {
+    return input.inferenceCategory;
+  }
   if (isCurrentEnvProviderPreflightCategory(input.healthzCategory)) return input.healthzCategory;
+  if (input.inferenceCategory === 'ready') return 'ready';
   return 'unknown';
 }
 
@@ -366,6 +433,18 @@ function currentEnvNextActions(input: {
   return actions;
 }
 
+function runtimeProviderProxyDiagnosticCategory(status: number, code: string): CurrentEnvProviderPreflightCategory {
+  if (status === 401 || status === 403 || /unauthorized|forbidden|auth/i.test(code)) return 'provider-auth';
+  if (status === 429 || /rate|quota/i.test(code)) return 'rate-limited';
+  if ((status >= 500 && status <= 599) || /unavailable|timeout|gateway/i.test(code)) return 'upstream-outage';
+  return 'repo-bug';
+}
+
+function runtimeProviderProxyDiagnosticRetryable(status: number, category: string): boolean {
+  if (category === 'rate-limited' || category === 'upstream-outage') return true;
+  return status === 408 || status === 409;
+}
+
 function runtimeApiKeyPresentInConfig(path: string): boolean {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
@@ -398,6 +477,12 @@ function assertCurrentEnvProviderPreflightManifest(manifest: CurrentEnvProviderP
     assert.equal(manifest.runtimeApiKeyPresentInServiceEnv, true);
     assert.equal(manifest.upstreamBaseUrlPresent, true);
     assert.equal(manifest.checkedHealthz.releaseAcceptance, 'not-evaluated');
+  }
+  if (manifest.checkedInference) {
+    assert.equal(manifest.runtimeApiKeyPresentInServiceEnv, true);
+    assert.equal(manifest.upstreamBaseUrlPresent, true);
+    assert.equal(manifest.checkedInference.releaseAcceptance, 'not-evaluated');
+    assert.ok(isCurrentEnvProviderPreflightCategory(manifest.checkedInference.category));
   }
 }
 

@@ -2,39 +2,39 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
-  AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
-  AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
-  agentServerGeneratedEntrypointContractReason,
-  agentServerBackendDecisionPromptPolicyLines,
-  agentServerCapabilityRoutingPromptPolicyLines,
-  agentServerContinuationPromptPolicyLines,
-  agentServerCurrentTurnSnapshotPromptPolicyLines,
-  agentServerGeneratedTaskInterfaceContractReason,
-  agentServerExecutionModePromptPolicyLines,
-  agentServerExternalIoReliabilityContractLines,
-  agentServerFreshRetrievalPromptPolicyLines,
-  agentServerGeneratedTaskPromptPolicyLines,
-  agentServerGenerationOutputContract,
-  agentServerGenerationOutputContractLines,
-  agentServerLargeFilePromptContractLines,
-  agentServerPriorAttemptsPromptPolicyLines,
-  agentServerGeneratedTaskRetryDetail,
-  agentServerPathOnlyStrictRetryDirectPayloadReason,
-  agentServerPathOnlyStrictRetryStillMissingReason,
-  agentServerPathOnlyTaskFilesReason,
-  agentServerPayloadTaskDomain,
-  agentServerRepairPromptPolicyLines,
-  agentServerStablePayloadTaskId,
-  agentServerToolPayloadShapeContract,
-  agentServerViewSelectionPromptPolicyLines,
-  agentServerWorkspaceTaskRepairPromptPolicyLines,
-  agentServerWorkspaceTaskRoutingPromptPolicyLines,
+  GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
+  GENERATED_TASK_RETRY_EVENT_TYPE,
+  GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
+  backendGeneratedEntrypointContractReason,
+  backendDecisionPromptPolicyLines,
+  backendCapabilityRoutingPromptPolicyLines,
+  backendContinuationPromptPolicyLines,
+  backendCurrentTurnSnapshotPromptPolicyLines,
+  backendGeneratedTaskInterfaceContractReason,
+  backendExecutionModePromptPolicyLines,
+  backendExternalIoReliabilityContractLines,
+  backendFreshRetrievalPromptPolicyLines,
+  backendGeneratedTaskPromptPolicyLines,
+  backendGenerationOutputContract,
+  backendGenerationOutputContractLines,
+  backendLargeFilePromptContractLines,
+  backendPriorAttemptsPromptPolicyLines,
+  backendGeneratedTaskRetryDetail,
+  backendPathOnlyStrictRetryDirectPayloadReason,
+  backendPathOnlyStrictRetryStillMissingReason,
+  backendPathOnlyTaskFilesReason,
+  generatedTaskPayloadTaskDomain,
+  backendRepairPromptPolicyLines,
+  generatedTaskStablePayloadTaskId,
+  backendToolPayloadShapeContract,
+  backendViewSelectionPromptPolicyLines,
+  backendWorkspaceTaskRepairPromptPolicyLines,
+  backendWorkspaceTaskRoutingPromptPolicyLines,
   EVOLVED_SKILLS_RELATIVE_DIR,
   SKILL_ENTRYPOINT_TYPE,
   skillManifestHasWorkspaceTaskEntrypoint,
   skillManifestPathIsEvolvedWorkspaceSkill,
-  skillManifestUsesAgentServerGeneration,
+  skillManifestUsesBackendGeneration,
   skillPromotionShouldPropose,
   skillRuntimeLanguageForManifest,
   skillRuntimeTaskFileNameForManifest,
@@ -44,13 +44,13 @@ import {
   workspaceTaskPythonCommandCandidates,
 } from './runtime-policy';
 
-test('skills runtime policy owns AgentServer retrieval and task prompt snippets', () => {
-  const executionMode = agentServerExecutionModePromptPolicyLines().join('\n');
+test('skills runtime policy owns backend retrieval and task prompt snippets', () => {
+  const executionMode = backendExecutionModePromptPolicyLines().join('\n');
   assert.match(executionMode, /thin-reproducible-adapter/);
   assert.match(executionMode, /For lightweight search\/news\/current-events lookups/);
   assert.match(executionMode, /For heavy or durable work/);
 
-  const taskPolicy = agentServerGeneratedTaskPromptPolicyLines().join('\n');
+  const taskPolicy = backendGeneratedTaskPromptPolicyLines().join('\n');
   assert.match(taskPolicy, /taskFiles MUST be an array/);
   assert.match(taskPolicy, /entrypoint\.path MUST reference/);
   assert.match(taskPolicy, /physically write task files/);
@@ -80,38 +80,38 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(taskPolicy, /invoke_provider/);
   assert.match(taskPolicy, /do not use direct network packages or APIs such as requests, urllib, httpx, aiohttp/);
 
-  assert.match(agentServerCurrentTurnSnapshotPromptPolicyLines().join('\n'), /CURRENT TURN SNAPSHOT/);
-  assert.match(agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: true }).join('\n'), /FRESH GENERATION MODE/);
-  assert.match(agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: false }).join('\n'), /CONTINUITY MODE/);
-  assert.equal(agentServerGenerationOutputContract().finalOutput, 'exactly one compact JSON object');
-  assert.match(agentServerGenerationOutputContract().uiManifest, /array of component slots/);
-  assert.deepEqual(agentServerToolPayloadShapeContract().arrayFields, ['claims', 'uiManifest', 'executionUnits', 'artifacts']);
-  assert.match(agentServerToolPayloadShapeContract().uiManifestShape.forbiddenShape, /preferredView/);
-  assert.match(agentServerGenerationOutputContractLines().join('\n'), /Final output must be only compact JSON/);
-  assert.match(agentServerGenerationOutputContractLines().join('\n'), /Transport cap/);
-  assert.match(agentServerGenerationOutputContractLines().join('\n'), /ToolPayload array contract/);
-  assert.match(agentServerWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under the current session bundle tasks directory/);
-  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Runtime capability routing contract/);
-  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /capabilityProviderRoutes/);
-  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /invoke_capability/);
-  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Provider-first authoring template/);
-  assert.match(agentServerLargeFilePromptContractLines().join('\n'), /Large-file contract/);
-  assert.match(agentServerViewSelectionPromptPolicyLines().join('\n'), /selectedComponentIds/);
-  assert.match(agentServerContinuationPromptPolicyLines().join('\n'), /continuation requests/);
-  assert.match(agentServerPriorAttemptsPromptPolicyLines().join('\n'), /RECENT PRIOR ATTEMPTS/);
-  const workspaceRepair = agentServerWorkspaceTaskRepairPromptPolicyLines().join('\n');
+  assert.match(backendCurrentTurnSnapshotPromptPolicyLines().join('\n'), /CURRENT TURN SNAPSHOT/);
+  assert.match(backendDecisionPromptPolicyLines({ freshCurrentTurn: true }).join('\n'), /FRESH GENERATION MODE/);
+  assert.match(backendDecisionPromptPolicyLines({ freshCurrentTurn: false }).join('\n'), /CONTINUITY MODE/);
+  assert.equal(backendGenerationOutputContract().finalOutput, 'exactly one compact JSON object');
+  assert.match(backendGenerationOutputContract().uiManifest, /array of component slots/);
+  assert.deepEqual(backendToolPayloadShapeContract().arrayFields, ['claims', 'uiManifest', 'executionUnits', 'artifacts']);
+  assert.match(backendToolPayloadShapeContract().uiManifestShape.forbiddenShape, /preferredView/);
+  assert.match(backendGenerationOutputContractLines().join('\n'), /Final output must be only compact JSON/);
+  assert.match(backendGenerationOutputContractLines().join('\n'), /Transport cap/);
+  assert.match(backendGenerationOutputContractLines().join('\n'), /ToolPayload array contract/);
+  assert.match(backendWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under the current session bundle tasks directory/);
+  assert.match(backendCapabilityRoutingPromptPolicyLines().join('\n'), /Runtime capability routing contract/);
+  assert.match(backendCapabilityRoutingPromptPolicyLines().join('\n'), /capabilityProviderRoutes/);
+  assert.match(backendCapabilityRoutingPromptPolicyLines().join('\n'), /invoke_capability/);
+  assert.match(backendCapabilityRoutingPromptPolicyLines().join('\n'), /Provider-first authoring template/);
+  assert.match(backendLargeFilePromptContractLines().join('\n'), /Large-file contract/);
+  assert.match(backendViewSelectionPromptPolicyLines().join('\n'), /selectedComponentIds/);
+  assert.match(backendContinuationPromptPolicyLines().join('\n'), /continuation requests/);
+  assert.match(backendPriorAttemptsPromptPolicyLines().join('\n'), /RECENT PRIOR ATTEMPTS/);
+  const workspaceRepair = backendWorkspaceTaskRepairPromptPolicyLines().join('\n');
   assert.match(workspaceRepair, /workspace ready for SciForge to rerun/);
   assert.match(workspaceRepair, /to_markdown\/tabulate/);
   assert.match(workspaceRepair, /task bootstrap/);
 
-  const freshRetrieval = agentServerFreshRetrievalPromptPolicyLines().join('\n');
+  const freshRetrieval = backendFreshRetrievalPromptPolicyLines().join('\n');
   assert.match(freshRetrieval, /fresh retrieval\/analysis\/report requests/);
 
-  const repair = agentServerRepairPromptPolicyLines().join('\n');
+  const repair = backendRepairPromptPolicyLines().join('\n');
   assert.match(repair, /failureReason/);
   assert.match(repair, /logs are readable/);
 
-  const externalIo = agentServerExternalIoReliabilityContractLines().join('\n');
+  const externalIo = backendExternalIoReliabilityContractLines().join('\n');
   assert.match(externalIo, /External I\/O reliability contract/);
   assert.match(externalIo, /For provider-specific APIs/);
   assert.match(externalIo, /Ready SciForge web_search\/web_fetch provider routes override custom HTTP code/);
@@ -119,56 +119,56 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
 });
 
 test('skills runtime policy owns generated task retry and interface contract semantics', () => {
-  assert.match(agentServerGeneratedTaskRetryDetail('entrypoint'), /Retrying AgentServer generation once/);
-  assert.match(agentServerGeneratedTaskRetryDetail('task-interface'), /generated tasks must consume/);
-  assert.match(agentServerGeneratedTaskRetryDetail('payload-preflight'), /complete ToolPayload envelope/);
-  assert.match(agentServerGeneratedTaskRetryDetail('provider-first-recovery-adapter'), /deterministic provider-first recovery adapter/);
+  assert.match(backendGeneratedTaskRetryDetail('entrypoint'), /Retrying backend generation once/);
+  assert.match(backendGeneratedTaskRetryDetail('task-interface'), /generated tasks must consume/);
+  assert.match(backendGeneratedTaskRetryDetail('payload-preflight'), /complete ToolPayload envelope/);
+  assert.match(backendGeneratedTaskRetryDetail('provider-first-recovery-adapter'), /deterministic provider-first recovery adapter/);
 
-  const entrypointReason = agentServerGeneratedEntrypointContractReason({
+  const entrypointReason = backendGeneratedEntrypointContractReason({
     entrypoint: { path: '.sciforge/tasks/report.md', language: 'markdown' },
     taskFiles: [{ path: '.sciforge/tasks/report.md', language: 'markdown', content: '# Report' }],
   });
   assert.match(String(entrypointReason), /non-executable artifact\/report/);
 
-  const interfaceReason = agentServerGeneratedTaskInterfaceContractReason({
+  const interfaceReason = backendGeneratedTaskInterfaceContractReason({
     entryRel: '.sciforge/tasks/static.py',
     language: 'python',
     source: 'print("static answer")',
   });
   assert.match(String(interfaceReason), /does not read the SciForge inputPath argument and write the SciForge outputPath argument/);
 
-  assert.equal(agentServerGeneratedTaskInterfaceContractReason({
+  assert.equal(backendGeneratedTaskInterfaceContractReason({
     entryRel: '.sciforge/tasks/adapter.py',
     language: 'python',
     source: 'import json, sys\nfrom pathlib import Path\ninput_path = sys.argv[1]\noutput_path = sys.argv[2]\nPath(output_path).write_text(json.dumps({"message":"ok","claims":[],"uiManifest":[],"executionUnits":[],"artifacts":[]}))\n',
   }), undefined);
 
-  assert.match(String(agentServerGeneratedTaskInterfaceContractReason({
+  assert.match(String(backendGeneratedTaskInterfaceContractReason({
     entryRel: '.sciforge/tasks/stdout-only.py',
     language: 'python',
     source: 'import json, os, sys\ninput_path = sys.argv[1]\noutput_path = sys.argv[2]\nos.makedirs(output_path, exist_ok=True)\nprint(json.dumps({"message":"ok"}))\n',
   })), /write the SciForge outputPath argument/);
 
-  const pathOnly = agentServerPathOnlyTaskFilesReason(['.sciforge/tasks/a.py']);
+  const pathOnly = backendPathOnlyTaskFilesReason(['.sciforge/tasks/a.py']);
   assert.match(pathOnly, /path-only taskFiles/);
-  assert.match(agentServerPathOnlyStrictRetryDirectPayloadReason(pathOnly), /direct ToolPayload/);
-  assert.match(agentServerPathOnlyStrictRetryStillMissingReason(pathOnly, ['.sciforge/tasks/a.py']), /Strict retry still returned path-only/);
+  assert.match(backendPathOnlyStrictRetryDirectPayloadReason(pathOnly), /direct ToolPayload/);
+  assert.match(backendPathOnlyStrictRetryStillMissingReason(pathOnly, ['.sciforge/tasks/a.py']), /Strict retry still returned path-only/);
 });
 
 test('skills runtime policy owns generated runner event and stable id policy', () => {
-  assert.equal(AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE, 'agentserver-generation-retry');
-  assert.equal(AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE, 'workspace-task-materialized');
-  assert.equal(AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE, 'workspace-task-start');
-  assert.equal(agentServerPayloadTaskDomain('omics / spatial'), 'omics-spatial');
-  assert.equal(agentServerPayloadTaskDomain('###'), 'runtime');
-  assert.equal(agentServerStablePayloadTaskId({
+  assert.equal(GENERATED_TASK_RETRY_EVENT_TYPE, 'agentserver-generation-retry');
+  assert.equal(GENERATED_TASK_MATERIALIZED_EVENT_TYPE, 'workspace-task-materialized');
+  assert.equal(GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE, 'workspace-task-start');
+  assert.equal(generatedTaskPayloadTaskDomain('omics / spatial'), 'omics-spatial');
+  assert.equal(generatedTaskPayloadTaskDomain('###'), 'runtime');
+  assert.equal(generatedTaskStablePayloadTaskId({
     kind: 'direct',
     skillDomain: 'omics / spatial',
-    skillId: 'agentserver.generate.omics',
+    skillId: 'generated-task.generate.omics',
     prompt: 'make report',
     runId: undefined,
     shortHash: () => 'abc123',
-  }), 'agentserver-direct-omics-spatial-abc123');
+  }), 'backend-direct-omics-spatial-abc123');
 });
 
 test('skills runtime policy owns skill promotion domain normalization', () => {
@@ -188,8 +188,8 @@ test('skills runtime policy owns skill promotion entrypoint checks', () => {
   assert.equal(skillRuntimeTaskFileNameForManifest({
     entrypoint: { type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK, path: './report.md' },
   }), 'task.py');
-  assert.equal(skillManifestUsesAgentServerGeneration({
-    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
+  assert.equal(skillManifestUsesBackendGeneration({
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION },
   }), true);
   assert.equal(skillManifestPathIsEvolvedWorkspaceSkill(`/tmp/ws/${EVOLVED_SKILLS_RELATIVE_DIR}/skill.json`), true);
   assert.equal(skillPromotionShouldPropose({
@@ -201,9 +201,9 @@ test('skills runtime policy owns skill promotion entrypoint checks', () => {
   }), false);
   assert.equal(skillPromotionShouldPropose({
     skillKind: 'installed',
-    skillId: 'agentserver.generate.omics',
+    skillId: 'generated-task.generate.omics',
     manifestPath: 'agentserver://fallback',
-    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION },
     taskRel: '.sciforge/tasks/run.py',
   }), true);
   assert.equal(skillPromotionShouldPropose({
@@ -218,25 +218,32 @@ test('skills runtime policy owns skill promotion entrypoint checks', () => {
 
 test('skills runtime policy owns TaskProject adapter fallback manifest', () => {
   const fallback = taskProjectStageAdapterSkillAvailability('omics', '2026-01-01T00:00:00.000Z');
-  assert.equal(fallback.id, 'agentserver.generate.omics.task-project-stage-adapter');
+  assert.equal(fallback.id, 'generated-task.generate.omics.task-project-stage-adapter');
   assert.equal(fallback.checkedAt, '2026-01-01T00:00:00.000Z');
-  assert.equal(fallback.manifest.entrypoint.type, SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION);
+  assert.equal(fallback.manifest.entrypoint.type, SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION);
 });
 
 test('skills runtime policy owns entrypoint route labels and profile ids', () => {
+  assert.deepEqual(skillRuntimeRoutePolicy({
+    entrypoint: { type: 'backend-generation' },
+    backendRuntimeProfileId: 'backend-openai',
+  }), {
+    runtimeProfileId: 'backend-openai',
+    selectedRuntime: 'backend-generation',
+  });
   assert.deepEqual(skillRuntimeRoutePolicy({
     entrypoint: { type: 'agentserver-generation' },
     agentServerRuntimeProfileId: 'agentserver-openai',
   }), {
     runtimeProfileId: 'agentserver-openai',
-    selectedRuntime: 'agentserver-generation',
+    selectedRuntime: 'backend-generation',
   });
   assert.deepEqual(skillRuntimeRoutePolicy({
     entrypoint: { type: 'markdown-skill' },
-    agentServerRuntimeProfileId: 'agentserver-openai',
+    backendRuntimeProfileId: 'backend-openai',
   }), {
-    runtimeProfileId: 'agentserver-openai',
-    selectedRuntime: 'agentserver-markdown-skill',
+    runtimeProfileId: 'backend-openai',
+    selectedRuntime: 'backend-generation',
   });
   assert.deepEqual(skillRuntimeRoutePolicy({ entrypoint: { type: 'workspace-task' } }), {
     runtimeProfileId: 'workspace-python',

@@ -668,6 +668,13 @@ export interface RuntimeProviderPreflightManifest {
     httpStatus?: number;
     releaseAcceptance: 'not-evaluated';
   };
+  checkedInference?: {
+    category: string;
+    ok: boolean;
+    retryable: boolean;
+    httpStatus?: number;
+    releaseAcceptance: 'not-evaluated';
+  };
   nextActions: Array<{
     label: string;
     command?: string;

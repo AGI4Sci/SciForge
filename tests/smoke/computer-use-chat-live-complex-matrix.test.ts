@@ -2095,6 +2095,7 @@ function readyServiceResponse(url: string): Response {
         missingEnv: [],
         policyViolations: [],
         checkedHealthz: { category: 'ready', ok: true, httpStatus: 200 },
+        checkedInference: { category: 'ready', ok: true, httpStatus: 200 },
       },
     });
   }

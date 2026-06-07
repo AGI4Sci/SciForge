@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "sciforge.desktop-computer-use.action-grounding.v1",
+  "targetAppName": "TextEdit",
+  "action": "workspace-file-write-then-open-in-target-app",
+  "riskLevel": "low",
+  "targetFileRef": "sciforge-computer-use-proof.txt",
+  "evidenceCaveat": "The default dogfood path writes the workspace file with Node.js, then opens it in the target app for visible inspection. It is not a strict scoped-executor proof that TextEdit created the file."
+}

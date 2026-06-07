@@ -29,6 +29,7 @@ import {
 export const VISION_TOOL_ID = visionSenseTraceIds.tool;
 const COMPUTER_USE_CAPABILITY_ID = 'action.sciforge.computer-use';
 const COMPUTER_USE_BUDGET_AUDIT_REF = 'audit:computer-use-action-provider-loop';
+const COMPUTER_USE_SCREEN_EVIDENCE_COMPONENT_ID = 'image-evidence-viewer';
 
 type ComputerUseWorkEvidence = WorkEvidence & {
   id: string;
@@ -517,7 +518,7 @@ export function genericBridgeBlockedPayload(
   });
   if (virtualScreenArtifact) {
     uiManifest.unshift({
-      componentId: 'virtual-screen-viewer',
+      componentId: COMPUTER_USE_SCREEN_EVIDENCE_COMPONENT_ID,
       title: options.virtualScreen?.title ?? 'Computer Use screen',
       artifactRef: virtualScreenArtifact.id,
       priority: -6,
@@ -583,7 +584,7 @@ export function virtualAppScreenRuntimePayload(
     refs: { execution: visionSenseTraceIds.execution, trace: visionSenseTraceIds.trace },
   });
   uiManifest.unshift({
-    componentId: 'virtual-screen-viewer',
+    componentId: COMPUTER_USE_SCREEN_EVIDENCE_COMPONENT_ID,
     title: params.virtualScreen.title ?? 'Computer Use screen',
     artifactRef: virtualScreenArtifact.id,
     priority: -6,

@@ -1,6 +1,6 @@
 import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { clipForAgentServerJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import { clipForBackendJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 import {
   CONVERSATION_POLICY_REQUEST_VERSION,
@@ -49,7 +49,7 @@ export async function applyConversationPolicy(
       status: 'failed',
       message: 'Python conversation policy failed; continuing only with versioned transport constraints and fail-closed runtime gates.',
       detail: result.error,
-      raw: clipForAgentServerJson({ error: result.error, stderr: result.stderr }, 3),
+      raw: clipForBackendJson({ error: result.error, stderr: result.stderr }, 3),
     });
     return {
       request: failedRequest,
@@ -66,7 +66,7 @@ export async function applyConversationPolicy(
     status: 'applied',
     message: 'Python conversation policy applied.',
     detail: policySummary(result.response),
-    raw: clipForAgentServerJson(result.response, 4),
+    raw: clipForBackendJson(result.response, 4),
   });
   return { request: enriched, response: result.response, status: 'applied', stderr: result.stderr };
 }

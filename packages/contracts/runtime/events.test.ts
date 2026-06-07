@@ -46,6 +46,13 @@ import {
   TEXT_DELTA_EVENT_TYPE,
   TOOL_CALL_EVENT_TYPE,
   TOOL_RESULT_EVENT_TYPE,
+  backendConvergenceGuardEvent,
+  backendContextWindowRecoverySucceededEvent,
+  backendDispatchEvent,
+  backendGenerationRecoveryEventType,
+  backendGenerationRecoveryStartEvent,
+  backendGenerationRetrySucceededEvent,
+  backendSilentStreamGuardEvent,
   agentServerConvergenceGuardEvent,
   agentServerContextWindowRecoverySucceededEvent,
   agentServerDispatchEvent,
@@ -137,7 +144,7 @@ test('run termination normalization distinguishes user system timeout and backen
     retryable: false,
     detail: 'cancelled by user',
   });
-  assert.equal(normalizeRunTermination({ detail: 'AgentServer backend error' }).sessionStatus, 'failed');
+  assert.equal(normalizeRunTermination({ detail: 'Agent backend error' }).sessionStatus, 'failed');
 });
 
 test('silent stream decision records dedupe backend transport and UI layers per run', () => {
@@ -238,6 +245,7 @@ test('runtime events policy owns gateway event classification and latency refs',
   assert.equal(normalizeRuntimeWorkspaceEventType('provider-rate-limit', { rate_limit_reset_at: 'soon' }), 'rateLimit');
   assert.equal(runtimeEventIsUserVisible({ type: LATENCY_DIAGNOSTICS_EVENT_TYPE, message: 'done' }), false);
   assert.equal(runtimeEventIsUserVisible({ type: 'status', message: 'visible' }), true);
+  assert.equal(runtimeEventIsBackend({ type: 'backend-stage-start' }), true);
   assert.equal(runtimeEventIsBackend({ type: 'agentserver-stage-start' }), true);
   assert.equal(runtimeEventIsBackend({ type: 'status', source: 'workspace-runtime' }), false);
   assert.deepEqual(latencyDiagnosticsCachePolicy({
@@ -499,6 +507,20 @@ test('gateway event projection owns runtime generation event ids and copy', () =
     detail: 'schema mismatch',
   });
   assert.equal(repairAttemptResultEvent({ attempt: 2, maxAttempts: 3, exitCode: 1, stderr: 'failed' }).status, 'failed');
+  assert.equal(backendDispatchEvent({
+    backend: 'codex',
+    baseUrl: 'http://agent',
+    normalizedBytes: 12,
+    maxPayloadBytes: 100,
+    rawRef: 'raw.json',
+  }).type, 'backend-dispatch');
+  assert.equal(backendConvergenceGuardEvent('guard tripped').type, 'backend-convergence-guard');
+  assert.equal(backendSilentStreamGuardEvent('silent').type, 'backend-silent-stream-guard');
+  assert.equal(backendGenerationRecoveryEventType(['context-window']), 'backend-context-window-recovery');
+  assert.equal(backendGenerationRecoveryEventType(['rate-limit']), 'backend-generation-retry');
+  assert.equal(backendGenerationRecoveryStartEvent({ categories: ['http-429'], detail: 'retry later', raw: {} }).type, 'backend-generation-retry');
+  assert.equal(backendContextWindowRecoverySucceededEvent({ detail: 'ok', raw: {} }).type, 'backend-context-window-recovery');
+  assert.equal(backendGenerationRetrySucceededEvent({ detail: 'ok', raw: {} }).type, 'backend-generation-retry');
   assert.equal(agentServerDispatchEvent({
     backend: 'codex',
     baseUrl: 'http://agent',

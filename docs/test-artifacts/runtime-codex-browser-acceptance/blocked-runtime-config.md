@@ -1,19 +1,19 @@
 # Runtime Codex browser acceptance blocked
 
-Observed at: 2026-06-02T18:20:21.842Z
+Observed at: 2026-06-07T00:16:42.444Z
 Requested UI port: 5173
 Requested workspace writer port: 6173
 Actual/intended URL evidence: length=22; sha256=f91f474a9c7a1e3685f375bf10b045349fdb5eca121b9afa38213aec630313af
 Actual/intended workspace writer URL evidence: length=21; sha256=37f8ee8831db62338ad5bfa2d514dc755f01fc6185cebe31b91f8efe46a845fe
 Actual/intended RuntimeCodex URL evidence: length=22; sha256=d27399a3d529a195d84f7ef9aff7ccd37f9c37b75b876025864bd63e4a6cb6ab
 Workspace path evidence: length=73; sha256=06f2700939355f29a921c67f9c5087c2c73c6e275377b3c0c87551ab46aa43cd
-Profile: sciforge-runtime-deepseek
-Provider: native
-Model: bailian/deepseek-v4-flash
+Profile: sciforge-runtime-default
+Provider: sciforge-model-router
+Model: sciforge-router
 Reason: Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.
 Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json
 Provider preflight category: config-secret-source
-Provider preflight checked at: 2026-06-02T18:20:21.842Z
+Provider preflight checked at: 2026-06-06T19:21:12.810Z
 Provider preflight release acceptance: not-evaluated
 Runtime key in service env: missing
 Provider upstream base URL: present

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { GatewayRequest, WorkspaceRuntimeEvent } from '../runtime-types';
-import { buildAgentServerGenerationPrompt, summarizeUiStateForAgentServer } from '../gateway/agentserver-prompts';
+import { buildBackendGenerationPrompt, summarizeUiStateForAgentServer } from '../gateway/backend-prompt-policy';
 import { buildContextEnvelope } from '../gateway/context-envelope';
 import { applyConversationPolicy, requestWithPolicyResponse } from './apply';
 import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse, type ConversationPolicyResponse } from '@sciforge-ui/runtime-contract/conversation-policy';
@@ -363,7 +363,7 @@ test('context envelope and AgentServer prompt carry only clipped policy summarie
   assert.match(envelopeJson, /firstVisibleResponseMs/);
   assert.doesNotMatch(envelopeJson, /RAW_POLICY_SHOULD_NOT_BE_COPIED/);
 
-  const prompt = buildAgentServerGenerationPrompt({
+  const prompt = buildBackendGenerationPrompt({
     prompt: request.prompt,
     skillDomain: request.skillDomain,
     contextEnvelope: envelope,
@@ -403,7 +403,7 @@ test('generation prompt compacts capability broker briefs for backend handoff', 
       },
     })),
   };
-  const prompt = buildAgentServerGenerationPrompt({
+  const prompt = buildBackendGenerationPrompt({
     prompt: 'Find current papers and produce a report.',
     skillDomain: 'literature',
     contextEnvelope: {

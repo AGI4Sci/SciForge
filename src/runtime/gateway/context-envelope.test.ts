@@ -7,7 +7,7 @@ import test from 'node:test';
 import { VERIFICATION_RESULT_ARTIFACT_TYPE } from '@sciforge-ui/runtime-contract/verification-result';
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types';
 import { requestWithoutInlineAgentHarness } from './agent-harness-shadow';
-import { buildAgentServerGenerationPrompt, buildCompactRepairContext } from './agentserver-prompts';
+import { buildBackendGenerationPrompt, buildCompactRepairContext } from './backend-prompt-policy';
 import { buildContextEnvelope, summarizeTaskAttemptsForAgentServer } from './context-envelope';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types';
 
@@ -339,7 +339,7 @@ test('context envelope and AgentServer prompt keep verification bodies as bounde
   assert.match(envelopeJson, /bounded-session-refs/);
   assert.match(envelopeJson, /verify-current\.json/);
 
-  const prompt = buildAgentServerGenerationPrompt({
+  const prompt = buildBackendGenerationPrompt({
     prompt: request.prompt,
     skillDomain: request.skillDomain,
     contextEnvelope: envelope,
@@ -365,7 +365,7 @@ test('repair AgentServer prompt omits raw core snapshot turn and generated task 
   ].join('\n');
   const rawAgentServerOutput = [
     'RAW_AGENTSERVER_OUTPUT_SHOULD_NOT_LEAK',
-    'AgentServer returned a verbose failed generation payload.',
+    'backend returned a verbose failed generation payload.',
     rawGeneratedTask.repeat(120),
   ].join('\n');
   const request = {
@@ -433,7 +433,7 @@ test('repair AgentServer prompt omits raw core snapshot turn and generated task 
     },
   };
 
-  const prompt = buildAgentServerGenerationPrompt({
+  const prompt = buildBackendGenerationPrompt({
     prompt: request.prompt,
     skillDomain: request.skillDomain,
     contextEnvelope: envelope,

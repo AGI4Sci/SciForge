@@ -22,9 +22,9 @@ def test_runtime_planning_skill_does_not_force_workspace_execution_for_direct_co
             "goalSnapshot": {"goalType": "analysis", "taskRelation": "new-task"},
             "artifacts": [{"artifactType": "table", "status": "done", "summary": "model metrics"}],
             "selectedCapabilities": [{
-                "id": "scenario.literature.agentserver-generation",
+                "id": "scenario.literature.generated-task",
                 "kind": "skill",
-                "adapter": "agentserver:generation",
+                "adapter": "backend:generation",
                 "summary": "Runtime planning skill for literature tasks.",
             }],
         }

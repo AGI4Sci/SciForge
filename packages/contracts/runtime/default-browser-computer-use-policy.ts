@@ -232,10 +232,11 @@ export function evaluateBrowserEvidenceNeed(input: BrowserEvidenceDecisionInput)
 
 export function semanticBrowserSearchQueryFromPrompt(prompt: string): string | undefined {
   const explicitQuery = browserSearchQueryFromText(prompt);
-  if (explicitQuery) return explicitQuery;
+  if (explicitQuery) return finalizeSemanticBrowserSearchQuery(explicitQuery);
   const url = firstPublicHttpUrl(prompt);
   if (url) return url;
-  return naturalLanguageSearchTopicFromPrompt(prompt);
+  const topic = naturalLanguageSearchTopicFromPrompt(prompt);
+  return topic ? finalizeSemanticBrowserSearchQuery(topic) : undefined;
 }
 
 export function browserSearchEngineFromPrompt(prompt: string): 'bing' | 'duckduckgo' {
@@ -713,11 +714,92 @@ function browserSearchVerbMention(text: string) {
 function cleanBrowserSearchQueryCandidate(value: string | undefined): string | undefined {
   if (!value) return undefined;
   let query = compactText(value.replace(/[“”"']/g, ' '), 240);
+  query = stripSearchResultPresentationInstructions(query);
+  query = stripBrowserSearchRequestFraming(query);
   query = query.replace(/^(?:并|同时|然后|顺便)?\s*(?:总结|概括|梳理|汇总)\s*/i, '');
   query = query.replace(/^(?:网页|网络|互联网|浏览器)\s*(?:上|里|中)?\s*(?:查看|看看|搜索|检索|查询|查找)?\s*/i, '');
   query = query.replace(/^(?:查看|看看|了解|查询|搜索|检索|查找|一下)\s*/i, '');
+  query = strengthenExplicitSourceConstraint(query);
   query = query.replace(/[。；;，,]+$/g, '').trim();
   return query ? compactText(query, 240) : undefined;
+}
+
+function strengthenExplicitSourceConstraint(query: string): string {
+  const source = explicitSourceConstraint(query);
+  if (!source || /(?:^|\s)site:[^\s]+/i.test(query)) return query;
+  let topic = query
+    .replace(source.removePattern, ' ')
+    .replace(/\s+(?:on|from|in)\s*$/i, '')
+    .replace(/\s*(?:上|里|中|网站|站内)\s*$/iu, '')
+    .trim();
+  topic = stripGenericSearchNounSuffix(topic);
+  topic = stripLowInformationTemporalTerms(topic);
+  topic = stripGenericSearchNounSuffix(topic);
+  topic = stripCjkGenericSearchSuffix(topic);
+  return stripCjkGenericSearchSuffix(stripGenericSearchNounSuffix(compactText(`site:${source.domain} ${topic || query}`, 240)));
+}
+
+function stripGenericSearchNounSuffix(query: string): string {
+  return query
+    .replace(/\s*(?:相关|有关)\s*的?\s*(?:文章|论文)\s*$/u, '')
+    .replace(/\s*(?:papers?|articles?)\s*$/i, '')
+    .trim();
+}
+
+function stripCjkGenericSearchSuffix(query: string): string {
+  let out = query.trim();
+  for (const suffix of ['相关的文章', '相关的论文', '相关文章', '相关论文', '有关的文章', '有关的论文']) {
+    if (out.endsWith(suffix)) out = out.slice(0, -suffix.length).trim();
+  }
+  return out;
+}
+
+function finalizeSemanticBrowserSearchQuery(query: string): string {
+  return stripCjkGenericSearchSuffix(stripGenericSearchNounSuffix(query));
+}
+
+function explicitSourceConstraint(query: string): { domain: string; removePattern: RegExp } | undefined {
+  const explicitDomainMatch = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})(?:\/[^\s]*)?/i.exec(query);
+  const explicitDomain = explicitDomainMatch?.[1];
+  if (
+    explicitDomain
+    && !/^(?:www\.)?(?:today|latest|current|recent)\./i.test(explicitDomain)
+    && sourceContextAroundMatch(query, explicitDomainMatch)
+  ) {
+    const escaped = explicitDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return { domain: explicitDomain.replace(/^www\./i, ''), removePattern: new RegExp(`\\b(?:www\\.)?${escaped}\\b\\s*(?:上|里|中|网站|站内|官网|官方|site)?`, 'iu') };
+  }
+  const arxivMatch = /\barxiv(?:\.org)?\b/i.exec(query);
+  if (arxivMatch && sourceContextAroundMatch(query, arxivMatch)) {
+    return { domain: 'arxiv.org', removePattern: /\barxiv(?:\.org)?\b\s*(?:上|里|中|网站|站内)?/iu };
+  }
+  const huggingFaceMatch = /\bhugging\s*face\b|\bhuggingface\b/i.exec(query);
+  if (huggingFaceMatch && sourceContextAroundMatch(query, huggingFaceMatch)) {
+    return { domain: 'huggingface.co', removePattern: /\bhugging\s*face\b|\bhuggingface\b/iu };
+  }
+  return undefined;
+}
+
+function sourceContextAroundMatch(query: string, match: RegExpExecArray | undefined | null): boolean {
+  if (!match) return false;
+  const start = match.index;
+  const end = start + match[0].length;
+  const before = query.slice(Math.max(0, start - 16), start);
+  const after = query.slice(end, Math.min(query.length, end + 16));
+  return /^https?:\/\//i.test(match[0])
+    || /https?:\/\/$/i.test(before)
+    || /\b(?:on|from|in|at)\s+$/i.test(before)
+    || /(?:在|从|来自|去|到)\s*$/u.test(before)
+    || /^\s*(?:上|里|中|网站|站内|官网|官方|site)(?:\b|$)?/iu.test(after);
+}
+
+function stripLowInformationTemporalTerms(query: string): string {
+  const withoutTemporal = query
+    .replace(/(?:^|\s)(?:今天|今日|现在|当前|近期|最近|本周|这周)(?=\s|[A-Za-z0-9]|$)/giu, ' ')
+    .replace(/\b(?:today|current|recent|latest|this\s+week)\b/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return withoutTemporal.length >= 3 ? withoutTemporal : query;
 }
 
 function firstPublicHttpUrl(text: string) {

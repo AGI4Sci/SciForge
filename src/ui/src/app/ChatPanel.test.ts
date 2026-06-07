@@ -711,6 +711,29 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
         liveAcceptanceEligible: false,
       },
     }, {
+      id: 'runtime-failed-message',
+      role: 'scenario',
+      content: 'runtime failed diagnostic',
+      createdAt: '2026-05-19T00:00:03.000Z',
+      status: 'failed',
+      provenance: {
+        kind: 'live-runtime-codex',
+        source: 'codex.runtime-failure:codex-command-failed',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+      },
+    }, {
+      id: 'system-runtime-status',
+      role: 'system',
+      content: 'background runtime did not finish',
+      createdAt: '2026-05-19T00:00:03.500Z',
+      provenance: {
+        kind: 'system-ui',
+        source: 'background-completion:run-incomplete',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+      },
+    }, {
       id: 'legacy-live-runtime-message',
       role: 'scenario',
       content: 'legacy live answer',
@@ -788,6 +811,10 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
   assert.match(html, /data-message-id="seed-demo-message"/);
   assert.match(html, /data-message-provenance="seed-demo"/);
   assert.match(html, /seed-demo/);
+  assert.match(html, /data-message-id="runtime-failed-message"[^>]*data-message-provenance="assistant-result"/);
+  assert.match(html, /data-message-id="system-runtime-status"[^>]*data-message-provenance="system-message"/);
+  assert.doesNotMatch(html, /data-message-id="runtime-failed-message"[^>]*data-message-provenance="seed-demo"/);
+  assert.doesNotMatch(html, /data-message-id="system-runtime-status"[^>]*data-message-provenance="seed-demo"/);
   assert.match(html, /data-message-id="live-runtime-message"/);
   assert.match(html, /data-message-provenance="assistant-result"/);
   assert.match(html, /data-live-acceptance-eligible="true"/);

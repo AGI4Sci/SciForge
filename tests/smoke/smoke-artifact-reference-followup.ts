@@ -73,7 +73,7 @@ payload = {
   "confidence": 0.82,
   "claimType": "evidence-summary",
   "evidenceLevel": "workspace-task",
-  "reasoningTrace": "AgentServer generation run completed a continuation report task.",
+  "reasoningTrace": "backend generation run completed a continuation report task.",
   "claims": [{"text": "The continuation report was generated from prior paper-list context.", "confidence": 0.82, "evidenceLevel": "workspace-task"}],
   "uiManifest": [
     {"componentId": "report-viewer", "artifactRef": "research-report", "priority": 1},
@@ -83,7 +83,7 @@ payload = {
   "executionUnits": [{
     "id": "literature-continuation-report",
     "status": "done",
-    "tool": "agentserver.generated.python",
+    "tool": "generated-task.generate..python",
     "params": "{}"
   }],
   "artifacts": [{
@@ -248,7 +248,7 @@ assert.equal(directContextDispatchCount, 1);
 assert.match(requestBody, /workspace-task-generation/);
 assert.match(requestBody, /contextEnvelope/);
 assert.notEqual(reportContinuation.executionUnits[0]?.tool, DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId);
-assert.match(reportContinuation.reasoningTrace, /AgentServer generation run|continuation report task/i);
+assert.match(reportContinuation.reasoningTrace, /backend generation run|continuation report task/i);
 assert.ok(reportContinuation.artifacts.some((artifact) => artifact.type === 'paper-list'));
 assert.ok(reportContinuation.artifacts.some((artifact) => artifact.type === 'research-report'));
 
@@ -320,7 +320,7 @@ const failedAnswer = await runWorkspaceRuntimeGateway({
   },
   artifacts: [],
 });
-assert.match(failedAnswer.message, /Capability provider route preflight|AgentServer generation request failed|Agent backend context answer failed|Agent backend is required|repair/i);
+assert.match(failedAnswer.message, /Capability provider route preflight|backend generation request failed|Agent backend context answer failed|Agent backend is required|repair/i);
 assert.doesNotMatch(failedAnswer.message, /old-success\.py|Unrelated old paper/);
 
 console.log('[ok] artifact reference follow-up uses selected durable refs and direct-context without legacy backend dispatch');

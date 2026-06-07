@@ -305,7 +305,7 @@ export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
     status: 'unknown',
   }),
   literatureRetrievalCapabilityManifest(),
-  coreCapabilityManifest('skill.agentserver-generation', 'Use AgentServer with scenario policy, refs, and artifact contracts to generate or repair workspace tasks.', 'skill', 'src/runtime/generation-gateway.ts', ['workspace-write']),
+  coreCapabilityManifest('skill.generated-task', 'Use backend scenario policy, refs, and artifact contracts to generate or repair workspace tasks.', 'skill', 'src/runtime/generation-gateway.ts', ['workspace-write']),
   coreCapabilityManifest('runtime.artifact-list', 'List session artifacts and project them into stable object references.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.artifact-resolve', 'Resolve object references to workspace-backed facts.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.artifact-read', 'Read bounded artifact, file, run, and execution-unit refs.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),

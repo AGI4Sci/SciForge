@@ -147,6 +147,12 @@ PPT 场景用于证明“用户级完成”不能由 Computer Use 自己宣布�
 - blocked 也可以通过用户级验收，但必须说明缺失条件、保留 evidence refs，并给出可恢复路径。
 - 如果 final answer 不能让用户确认任务结果，或者缺 source / action / artifact / validator refs，不得打 `[x]`。
 
+## Runtime Codex 配置边界
+
+Runtime Codex / provider proxy 的 browser/release 验收必须从 service 环境读取 `SCIFORGE_RUNTIME_API_KEY`。本地 `config.toml`、`config.local.json` 或 `.sciforge/**/config.local.json` 里的 secret-like key 只能作为 provider proxy 调试 fallback，不能满足 Browser / release acceptance。
+
+provider proxy 还必须能解析 OpenAI-compatible upstream base URL，例如通过 `SCIFORGE_PROXY_UPSTREAM_BASE_URL` 或非 secret 的本地 upstream 配置。缺 Runtime API key、upstream base URL、runtime profile、provider route 或 browser source/page evidence 时必须 fail closed / blocked，不能把旧 BrowserHostSearch、配置 fallback、历史 run 或诊断结果当作产品完成。
+
 ## 非目标
 
 - 不实现 SciForge 侧 task router、planner、workflow engine 或 completion engine。

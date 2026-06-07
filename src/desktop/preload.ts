@@ -22,9 +22,6 @@ export type SciForgeDesktopPreloadApi = {
   detachBrowserHostSessionSurface(input: unknown): Promise<unknown>;
   resizeBrowserHostSessionSurface(input: unknown): Promise<unknown>;
   getBrowserHostSessionSurfaceState(input: unknown): Promise<unknown>;
-  attachVirtualAppScreenSurface(input: unknown): Promise<unknown>;
-  presentVirtualAppScreenSurface(input: unknown): Promise<unknown>;
-  detachVirtualAppScreenSurface(input: unknown): Promise<unknown>;
   startAnnotation(input: unknown): Promise<unknown>;
   startDesktopAnnotation(input: unknown): Promise<unknown>;
   getAnnotationState(): Promise<unknown>;
@@ -52,9 +49,6 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     detachBrowserHostSessionSurface: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:detach', input),
     resizeBrowserHostSessionSurface: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:resize', input),
     getBrowserHostSessionSurfaceState: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:state', input),
-    attachVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:attach', input),
-    presentVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:present', input),
-    detachVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:detach', input),
     startAnnotation: (input: unknown) => ipcRenderer.invoke('desktop:annotation-overlay:start', input),
     startDesktopAnnotation: (input: unknown) => ipcRenderer.invoke('desktop:annotation-overlay:start', input),
     getAnnotationState: () => ipcRenderer.invoke('desktop:annotation-overlay:status'),

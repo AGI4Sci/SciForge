@@ -111,6 +111,7 @@ export const CONTEXT_COMPACTION_EVENT_TYPE = 'contextCompaction' as const;
 export const CONTEXT_WINDOW_STATE_EVENT_TYPE = 'contextWindowState' as const;
 export const RATE_LIMIT_EVENT_TYPE = 'rateLimit' as const;
 export const BACKEND_EVENT_TYPE = 'backend-event' as const;
+export const BACKEND_EVENT_TYPE_PREFIX = 'backend-' as const;
 export const AGENTSERVER_EVENT_TYPE_PREFIX = 'agentserver-' as const;
 export const LATENCY_DIAGNOSTICS_SCHEMA_VERSION = 'sciforge.latency-diagnostics.v1' as const;
 export const LATENCY_DIAGNOSTICS_EVENT_TYPE = 'latency-diagnostics' as const;
@@ -119,6 +120,7 @@ export const LATENCY_DIAGNOSTICS_LOG_KIND = 'latency-diagnostics' as const;
 export const WORKSPACE_RUNTIME_SOURCE = 'workspace-runtime' as const;
 export const SCIFORGE_RUNTIME_PROVIDER = 'sciforge-runtime' as const;
 export const CONVERSATION_POLICY_EVENT_TYPE = 'conversation-policy' as const;
+export const BACKEND_CONTEXT_WINDOW_STATE_EVENT_TYPE = 'backend-context-window-state' as const;
 export const AGENTSERVER_CONTEXT_WINDOW_STATE_EVENT_TYPE = 'agentserver-context-window-state' as const;
 export const GATEWAY_REQUEST_RECEIVED_EVENT_TYPE = 'gateway-request-received' as const;
 export const CONVERSATION_POLICY_STARTED_EVENT_TYPE = 'conversation-policy-started' as const;
@@ -126,6 +128,12 @@ export const DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE = 'direct-context-fast-path' as
 export const WORKSPACE_SKILL_SELECTED_EVENT_TYPE = 'workspace-skill-selected' as const;
 export const REPAIR_ATTEMPT_START_EVENT_TYPE = 'repair-attempt-start' as const;
 export const REPAIR_ATTEMPT_RESULT_EVENT_TYPE = 'repair-attempt-result' as const;
+export const BACKEND_DISPATCH_EVENT_TYPE = 'backend-dispatch' as const;
+export const BACKEND_CONVERGENCE_GUARD_EVENT_TYPE = 'backend-convergence-guard' as const;
+export const BACKEND_SILENT_STREAM_GUARD_EVENT_TYPE = 'backend-silent-stream-guard' as const;
+export const BACKEND_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE = 'backend-context-window-recovery' as const;
+export const BACKEND_GENERATION_RETRY_EVENT_TYPE = 'backend-generation-retry' as const;
+export const BACKEND_GENERATION_RETRY_SCHEMA_VERSION = 'sciforge.backend-generation-retry.v1' as const;
 export const AGENTSERVER_DISPATCH_EVENT_TYPE = 'agentserver-dispatch' as const;
 export const AGENTSERVER_CONVERGENCE_GUARD_EVENT_TYPE = 'agentserver-convergence-guard' as const;
 export const AGENTSERVER_SILENT_STREAM_GUARD_EVENT_TYPE = 'agentserver-silent-stream-guard' as const;
@@ -462,7 +470,9 @@ export function runtimeEventIsBackend(event: {
   source?: unknown;
 }) {
   if (typeof event.source === 'string' && event.source && event.source !== WORKSPACE_RUNTIME_SOURCE) return true;
-  return event.type.startsWith(AGENTSERVER_EVENT_TYPE_PREFIX) || event.type === BACKEND_EVENT_TYPE;
+  return event.type.startsWith(BACKEND_EVENT_TYPE_PREFIX)
+    || event.type.startsWith(AGENTSERVER_EVENT_TYPE_PREFIX)
+    || event.type === BACKEND_EVENT_TYPE;
 }
 
 export function latencyDiagnosticsCachePolicy(policy: Record<string, unknown>) {
@@ -561,7 +571,7 @@ export function repairAttemptResultEvent(input: {
   };
 }
 
-export function agentServerDispatchEvent(input: {
+export function backendDispatchEvent(input: {
   backend: string;
   baseUrl: string;
   normalizedBytes: number;
@@ -569,16 +579,16 @@ export function agentServerDispatchEvent(input: {
   rawRef: string;
 }): WorkspaceRuntimePolicyEvent {
   return {
-    type: AGENTSERVER_DISPATCH_EVENT_TYPE,
+    type: BACKEND_DISPATCH_EVENT_TYPE,
     source: WORKSPACE_RUNTIME_SOURCE,
-    message: `Dispatching to AgentServer ${input.backend}`,
+    message: `Dispatching to backend ${input.backend}`,
     detail: `${input.baseUrl} · handoff ${input.normalizedBytes}/${input.maxPayloadBytes} bytes · raw ${input.rawRef}`,
   };
 }
 
-export function agentServerConvergenceGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
+export function backendConvergenceGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
   return {
-    type: AGENTSERVER_CONVERGENCE_GUARD_EVENT_TYPE,
+    type: BACKEND_CONVERGENCE_GUARD_EVENT_TYPE,
     source: WORKSPACE_RUNTIME_SOURCE,
     status: 'failed-with-reason',
     message,
@@ -586,9 +596,9 @@ export function agentServerConvergenceGuardEvent(message: string): WorkspaceRunt
   };
 }
 
-export function agentServerSilentStreamGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
+export function backendSilentStreamGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
   return {
-    type: AGENTSERVER_SILENT_STREAM_GUARD_EVENT_TYPE,
+    type: BACKEND_SILENT_STREAM_GUARD_EVENT_TYPE,
     source: WORKSPACE_RUNTIME_SOURCE,
     status: 'failed-with-reason',
     message,
@@ -596,17 +606,96 @@ export function agentServerSilentStreamGuardEvent(message: string): WorkspaceRun
   };
 }
 
-export function agentServerContextWindowRecoveryStartEvent(input: {
+export function backendContextWindowRecoveryStartEvent(input: {
   detail: string;
   raw: unknown;
 }): WorkspaceRuntimePolicyEvent {
   return {
-    type: AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
+    type: BACKEND_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
     source: WORKSPACE_RUNTIME_SOURCE,
     status: 'running',
-    message: 'AgentServer reported context window exceeded; compacting context before one retry.',
+    message: 'Backend reported context window exceeded; compacting context before one retry.',
     detail: input.detail,
     raw: input.raw,
+  };
+}
+
+export function backendGenerationRecoveryEventType(categories: readonly unknown[]) {
+  return categories.includes('context-window')
+    ? BACKEND_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE
+    : BACKEND_GENERATION_RETRY_EVENT_TYPE;
+}
+
+export function backendGenerationRecoveryStartEvent(input: {
+  categories: readonly unknown[];
+  detail: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: backendGenerationRecoveryEventType(input.categories),
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'running',
+    message: 'Backend provider/rate-limit recovery: compacting context and retrying once.',
+    detail: input.detail,
+    raw: input.raw,
+  };
+}
+
+export function backendContextWindowRecoverySucceededEvent(input: {
+  detail?: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: BACKEND_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'completed',
+    message: 'Backend generation succeeded after context compaction retry.',
+    detail: input.detail,
+    raw: input.raw,
+  };
+}
+
+export function backendGenerationRetrySucceededEvent(input: {
+  detail: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: BACKEND_GENERATION_RETRY_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'completed',
+    message: 'Backend provider/rate-limit recovery succeeded after one compact retry.',
+    detail: input.detail,
+    raw: input.raw,
+  };
+}
+
+export function agentServerDispatchEvent(input: Parameters<typeof backendDispatchEvent>[0]): WorkspaceRuntimePolicyEvent {
+  return {
+    ...backendDispatchEvent(input),
+    type: AGENTSERVER_DISPATCH_EVENT_TYPE,
+    message: `Dispatching to AgentServer ${input.backend}`,
+  };
+}
+
+export function agentServerConvergenceGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
+  return {
+    ...backendConvergenceGuardEvent(message),
+    type: AGENTSERVER_CONVERGENCE_GUARD_EVENT_TYPE,
+  };
+}
+
+export function agentServerSilentStreamGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
+  return {
+    ...backendSilentStreamGuardEvent(message),
+    type: AGENTSERVER_SILENT_STREAM_GUARD_EVENT_TYPE,
+  };
+}
+
+export function agentServerContextWindowRecoveryStartEvent(input: Parameters<typeof backendContextWindowRecoveryStartEvent>[0]): WorkspaceRuntimePolicyEvent {
+  return {
+    ...backendContextWindowRecoveryStartEvent(input),
+    type: AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
+    message: 'AgentServer reported context window exceeded; compacting context before one retry.',
   };
 }
 
@@ -616,46 +705,26 @@ export function agentServerGenerationRecoveryEventType(categories: readonly unkn
     : AGENTSERVER_GENERATION_RETRY_EVENT_TYPE;
 }
 
-export function agentServerGenerationRecoveryStartEvent(input: {
-  categories: readonly unknown[];
-  detail: string;
-  raw: unknown;
-}): WorkspaceRuntimePolicyEvent {
+export function agentServerGenerationRecoveryStartEvent(input: Parameters<typeof backendGenerationRecoveryStartEvent>[0]): WorkspaceRuntimePolicyEvent {
   return {
+    ...backendGenerationRecoveryStartEvent(input),
     type: agentServerGenerationRecoveryEventType(input.categories),
-    source: WORKSPACE_RUNTIME_SOURCE,
-    status: 'running',
     message: 'AgentServer provider/rate-limit recovery: compacting context and retrying once.',
-    detail: input.detail,
-    raw: input.raw,
   };
 }
 
-export function agentServerContextWindowRecoverySucceededEvent(input: {
-  detail?: string;
-  raw: unknown;
-}): WorkspaceRuntimePolicyEvent {
+export function agentServerContextWindowRecoverySucceededEvent(input: Parameters<typeof backendContextWindowRecoverySucceededEvent>[0]): WorkspaceRuntimePolicyEvent {
   return {
+    ...backendContextWindowRecoverySucceededEvent(input),
     type: AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
-    source: WORKSPACE_RUNTIME_SOURCE,
-    status: 'completed',
-    message: 'AgentServer generation succeeded after context compaction retry.',
-    detail: input.detail,
-    raw: input.raw,
   };
 }
 
-export function agentServerGenerationRetrySucceededEvent(input: {
-  detail: string;
-  raw: unknown;
-}): WorkspaceRuntimePolicyEvent {
+export function agentServerGenerationRetrySucceededEvent(input: Parameters<typeof backendGenerationRetrySucceededEvent>[0]): WorkspaceRuntimePolicyEvent {
   return {
+    ...backendGenerationRetrySucceededEvent(input),
     type: AGENTSERVER_GENERATION_RETRY_EVENT_TYPE,
-    source: WORKSPACE_RUNTIME_SOURCE,
-    status: 'completed',
     message: 'AgentServer provider/rate-limit recovery succeeded after one compact retry.',
-    detail: input.detail,
-    raw: input.raw,
   };
 }
 

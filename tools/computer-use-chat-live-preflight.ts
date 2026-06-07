@@ -62,6 +62,13 @@ export interface ComputerUseChatLivePreflightManifest {
       category?: string;
       ok?: boolean;
       httpStatus?: number;
+      retryable?: boolean;
+    };
+    checkedInference?: {
+      category?: string;
+      ok?: boolean;
+      httpStatus?: number;
+      retryable?: boolean;
     };
     readIssue?: string;
     valuePrinted: false;
@@ -469,7 +476,7 @@ async function readWorkspaceRuntimeProviderPreflight(input: {
     const policyViolations = stringList(manifest.policyViolations);
     const runtimeApiKeyPresentInServiceEnv = manifest.runtimeApiKeyPresentInServiceEnv === true;
     const upstreamBaseUrlPresent = manifest.upstreamBaseUrlPresent === true;
-    const category = stringField(manifest.category);
+    const category = runtimeProviderCategoryField(manifest.category);
     const ready = runtimeApiKeyPresentInServiceEnv
       && upstreamBaseUrlPresent
       && missingEnv.length === 0
@@ -477,9 +484,18 @@ async function readWorkspaceRuntimeProviderPreflight(input: {
       && category === 'ready';
     const checkedHealthz = isRecord(manifest.checkedHealthz)
       ? {
-          category: stringField(manifest.checkedHealthz.category),
+          category: runtimeProviderCategoryField(manifest.checkedHealthz.category),
           ok: typeof manifest.checkedHealthz.ok === 'boolean' ? manifest.checkedHealthz.ok : undefined,
           httpStatus: typeof manifest.checkedHealthz.httpStatus === 'number' ? manifest.checkedHealthz.httpStatus : undefined,
+          retryable: typeof manifest.checkedHealthz.retryable === 'boolean' ? manifest.checkedHealthz.retryable : undefined,
+        }
+      : undefined;
+    const checkedInference = isRecord(manifest.checkedInference)
+      ? {
+          category: runtimeProviderCategoryField(manifest.checkedInference.category),
+          ok: typeof manifest.checkedInference.ok === 'boolean' ? manifest.checkedInference.ok : undefined,
+          httpStatus: typeof manifest.checkedInference.httpStatus === 'number' ? manifest.checkedInference.httpStatus : undefined,
+          retryable: typeof manifest.checkedInference.retryable === 'boolean' ? manifest.checkedInference.retryable : undefined,
         }
       : undefined;
     return {
@@ -494,6 +510,7 @@ async function readWorkspaceRuntimeProviderPreflight(input: {
       evidenceMode: stringField(manifest.evidenceMode),
       releaseAcceptance: stringField(manifest.releaseAcceptance),
       checkedHealthz,
+      checkedInference,
       valuePrinted: false,
     };
   } catch (error) {
@@ -849,6 +866,24 @@ function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim()
     ? sanitizeDiagnosticText(value.trim())
     : undefined;
+}
+
+function runtimeProviderCategoryField(value: unknown): string | undefined {
+  const candidate = typeof value === 'string' ? value.trim() : '';
+  if (!candidate) return undefined;
+  return isRuntimeProviderCategory(candidate) ? candidate : 'unknown';
+}
+
+function isRuntimeProviderCategory(value: string): boolean {
+  return value === 'ready'
+    || value === 'config-secret-source'
+    || value === 'missing-runtime-env'
+    || value === 'missing-upstream'
+    || value === 'provider-auth'
+    || value === 'rate-limited'
+    || value === 'upstream-outage'
+    || value === 'repo-bug'
+    || value === 'unknown';
 }
 
 function stringList(value: unknown): string[] {

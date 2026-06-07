@@ -222,6 +222,69 @@ test('production launcher projects only non-secret proxy config into app-data co
   }
 });
 
+test('production launcher projects only non-secret Computer Use input adapter config for packaged sidecars', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    codexProxy: {
+      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
+      defaultModel: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-should-not-copy',
+    },
+    visionSense: {
+      inputAdapter: 'remote-desktop',
+      independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
+      inputAdapterProviderUrl: 'https://input-provider.example.test',
+      apiKey: 'sk-vision-should-not-copy',
+      allowSharedSystemInput: '1',
+    },
+  }), 'utf8');
+  const envKeys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_VISION_INPUT_ADAPTER',
+    'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
+    'SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const child = new FakeChild(1205);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    services: [service('runtime-codex')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    await launcher.start();
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_INPUT_ADAPTER, 'remote-desktop');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER, 'sciforge-simulated-remote-desktop');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT, undefined);
+
+    const desktopConfigPath = join(root, 'app-data', 'config', 'config.local.json');
+    const desktopConfig = JSON.parse(await readFile(desktopConfigPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual((desktopConfig.visionSense as Record<string, unknown>), {
+      inputAdapter: 'remote-desktop',
+      independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
+    });
+    const desktopConfigText = JSON.stringify(desktopConfig);
+    assert.doesNotMatch(desktopConfigText, /apiKey|sk-should-not-copy|sk-vision-should-not-copy|inputAdapterProviderUrl|input-provider\.example|allowSharedSystemInput|SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT/);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await launcher.shutdown();
+  }
+});
+
 test('production launcher maps local provider config into Model Router role env and public runtime alias', async () => {
   const root = await tempRoot();
   const sourceConfig = join(root, 'source-config.local.json');

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { buildCompactRepairContext } from '../../src/runtime/gateway/agentserver-prompts';
+import { buildCompactRepairContext } from '../../src/runtime/gateway/backend-prompt-policy';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope';
 import { ensureSessionBundle } from '../../src/runtime/session-bundle';
 import { appendTaskAttempt, readRecentTaskAttempts } from '../../src/runtime/task-attempt-history';

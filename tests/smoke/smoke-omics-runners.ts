@@ -39,10 +39,10 @@ payload = {
     "confidence": 0.82,
     "claimType": "evidence-summary",
     "evidenceLevel": "workspace-task",
-    "reasoningTrace": "AgentServer generated a task that honored the requested omics runner parameters.",
+    "reasoningTrace": "backend generated a task that honored the requested omics runner parameters.",
     "claims": [],
     "uiManifest": [{"componentId": "point-set-viewer", "artifactRef": "omics-differential-expression", "priority": 1}],
-    "executionUnits": [{"id": "omics-runner-generated", "skillId": "agentserver.generate.omics", "tool": "agentserver.generated.python", "status": "done"}],
+    "executionUnits": [{"id": "omics-runner-generated", "skillId": "generated-task.generate.omics", "tool": "generated-task.generate..python", "status": "done"}],
     "artifacts": [{
         "id": "omics-differential-expression",
         "type": "omics-differential-expression",
@@ -140,7 +140,7 @@ const metadata = (omicsArtifact.metadata ?? {}) as Record<string, unknown>;
 assert.equal(metadata.requestedRunner, 'scanpy.rank_genes_groups');
 assert.ok(metadata.effectiveRunner === 'scanpy.rank_genes_groups' || metadata.effectiveRunner === 'omics.python-csv-differential');
 assert.ok(metadata.runtimeAvailability);
-assert.equal(result.executionUnits[0]?.skillId, 'agentserver.generate.omics');
+assert.equal(result.executionUnits[0]?.skillId, 'generated-task.generate.omics');
 console.log(`[ok] omics runner smoke requested=${metadata.requestedRunner} effective=${metadata.effectiveRunner}`);
 
 await new Promise<void>((resolve) => server.close(() => resolve()));

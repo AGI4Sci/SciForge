@@ -351,10 +351,14 @@ export class ProductionRuntimeLauncher {
       ?? await readLocalRuntimeConfig(resolve(process.cwd(), 'config.local.json'));
     this.localRuntimeEnv = source ? localRuntimeEnvFromConfig(source, process.env) : {};
     if (!source) return;
-    const nonSecret = nonSecretProxyConfigFromLocalRuntimeConfig(source);
-    if (!nonSecret) return;
+    const nonSecretProxy = nonSecretProxyConfigFromLocalRuntimeConfig(source);
+    const nonSecretComputerUse = nonSecretComputerUseConfigFromLocalRuntimeConfig(source);
+    if (!nonSecretProxy && !nonSecretComputerUse) return;
     const target = join(this.appData.configDir, 'config.local.json');
-    await writeFile(target, `${JSON.stringify({ codexProxy: nonSecret }, null, 2)}\n`, 'utf8');
+    await writeFile(target, `${JSON.stringify({
+      ...(nonSecretProxy ? { codexProxy: nonSecretProxy } : {}),
+      ...(nonSecretComputerUse ? { visionSense: nonSecretComputerUse } : {}),
+    }, null, 2)}\n`, 'utf8');
   }
 }
 
@@ -429,6 +433,8 @@ type LocalRuntimeConfig = NonSecretProxyConfig & {
   apiKey?: string;
   visionBaseUrl?: string;
   visionModel?: string;
+  inputAdapter?: string;
+  independentInputAdapterProvider?: string;
 };
 
 function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.ProcessEnv): Record<string, string> {
@@ -438,6 +444,8 @@ function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.Proce
   const defaultModel = config.defaultModel ?? config.model;
   const visionModel = config.visionModel ?? defaultModel;
   const apiKey = env.SCIFORGE_RUNTIME_API_KEY ?? config.apiKey;
+  const inputAdapter = nonSecretComputerUseInputAdapter(config.inputAdapter);
+  const independentInputAdapterProvider = nonSecretComputerUseInputAdapterProvider(config.independentInputAdapterProvider);
   if (!env.SCIFORGE_RUNTIME_API_KEY && config.apiKey) output.SCIFORGE_RUNTIME_API_KEY = config.apiKey;
   if (!env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS) output.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS = RUNTIME_MODEL;
   if (!env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE) output.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE = RUNTIME_PROFILE;
@@ -450,6 +458,10 @@ function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.Proce
   if (!env.SCIFORGE_TEXT_API_KEY && apiKey) output.SCIFORGE_TEXT_API_KEY = apiKey;
   if (!env.SCIFORGE_VISION_API_KEY && apiKey) output.SCIFORGE_VISION_API_KEY = apiKey;
   if (!env.SCIFORGE_PROXY_DEFAULT_MODEL && defaultModel) output.SCIFORGE_PROXY_DEFAULT_MODEL = defaultModel;
+  if (!env.SCIFORGE_VISION_INPUT_ADAPTER && inputAdapter) output.SCIFORGE_VISION_INPUT_ADAPTER = inputAdapter;
+  if (!env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER && independentInputAdapterProvider) {
+    output.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER = independentInputAdapterProvider;
+  }
   return output;
 }
 
@@ -461,6 +473,37 @@ function nonSecretProxyConfigFromLocalRuntimeConfig(config: LocalRuntimeConfig):
     ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
     ...(defaultModel ? { defaultModel } : {}),
   };
+}
+
+function nonSecretComputerUseConfigFromLocalRuntimeConfig(config: LocalRuntimeConfig): {
+  inputAdapter?: string;
+  independentInputAdapterProvider?: string;
+} | undefined {
+  const inputAdapter = nonSecretComputerUseInputAdapter(config.inputAdapter);
+  const independentInputAdapterProvider = nonSecretComputerUseInputAdapterProvider(config.independentInputAdapterProvider);
+  if (!inputAdapter && !independentInputAdapterProvider) return undefined;
+  return {
+    ...(inputAdapter ? { inputAdapter } : {}),
+    ...(independentInputAdapterProvider ? { independentInputAdapterProvider } : {}),
+  };
+}
+
+function nonSecretComputerUseInputAdapter(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return undefined;
+  if (!['remote-desktop', 'remote-desktop-session', 'virtual-hid', 'virtual-hid-device', 'window-action-session'].includes(normalized)) {
+    return undefined;
+  }
+  if (/(?:shared|system|cg-?event|mouse|keyboard|secret|token|password|api-?key|url)/i.test(normalized)) return undefined;
+  return normalized;
+}
+
+function nonSecretComputerUseInputAdapterProvider(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized || normalized.length > 96) return undefined;
+  if (!/^[A-Za-z0-9._-]+$/.test(normalized)) return undefined;
+  if (/(?:shared|system|cg-?event|secret|token|password|api-?key|bearer|https?|url)/i.test(normalized)) return undefined;
+  return normalized;
 }
 
 async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRuntimeConfig | undefined> {
@@ -479,6 +522,7 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
     const textLLM = isRecord(parsed.textLLM) ? parsed.textLLM : {};
     const textLLMEnv = isRecord(textLLM.env) ? textLLM.env : {};
     const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
+    const computerUse = isRecord(parsed.computerUse) ? parsed.computerUse : {};
     const upstreamBaseUrl = stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
       ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
       ?? stringValue(textLLM.baseUrl)
@@ -512,13 +556,21 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
     const visionModel = stringValue(visionSense.vlmModel)
       ?? stringValue(visionSense.model)
       ?? stringValue(visionSense.modelName);
-    if (!upstreamBaseUrl && !defaultModel && !apiKey && !visionBaseUrl && !visionModel) return undefined;
+    const inputAdapter = stringValue(visionSense.inputAdapter)
+      ?? stringValue(computerUse.inputAdapter);
+    const independentInputAdapterProvider = stringValue(visionSense.independentInputAdapterProvider)
+      ?? stringValue(visionSense.inputAdapterProvider)
+      ?? stringValue(computerUse.independentInputAdapterProvider)
+      ?? stringValue(computerUse.inputAdapterProvider);
+    if (!upstreamBaseUrl && !defaultModel && !apiKey && !visionBaseUrl && !visionModel && !inputAdapter && !independentInputAdapterProvider) return undefined;
     return {
       ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
       ...(defaultModel ? { defaultModel } : {}),
       ...(apiKey ? { apiKey } : {}),
       ...(visionBaseUrl ? { visionBaseUrl } : {}),
       ...(visionModel ? { visionModel } : {}),
+      ...(inputAdapter ? { inputAdapter } : {}),
+      ...(independentInputAdapterProvider ? { independentInputAdapterProvider } : {}),
     };
   } catch {
     return undefined;

@@ -47,7 +47,7 @@
     "./*/render": "./*/render.tsx",
     "./*/assets/*": "./*/assets/*",
     "./*/workbench-demo/*": "./*/workbench-demo/*",
-    "./data-table/render": "./data-table/render.tsx",
+    "./data-table/render": "./record-table/render.tsx",
     "./report-viewer/render": "./report-viewer/render.tsx"
   },
   "peerDependencies": {

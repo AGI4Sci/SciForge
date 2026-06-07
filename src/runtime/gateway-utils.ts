@@ -11,7 +11,7 @@ export function extractLikelyErrorLine(text: string) {
 
 export function excerptAroundFailureLine(code: string, failureEvidence: string) {
   const line = extractLikelyErrorLine(failureEvidence);
-  if (!line) return headForAgentServer(code, 8000);
+  if (!line) return headForBackend(code, 8000);
   const lines = code.split(/\r?\n/);
   const start = Math.max(0, line - 16);
   const end = Math.min(lines.length, line + 15);
@@ -22,27 +22,27 @@ export function excerptAroundFailureLine(code: string, failureEvidence: string) 
   }).join('\n');
 }
 
-export function headForAgentServer(value: string, maxLength: number) {
+export function headForBackend(value: string, maxLength: number) {
   if (!value) return '';
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n... [truncated head ${value.length - maxLength} chars]` : value;
 }
 
-export function tailForAgentServer(value: string, maxLength: number) {
+export function tailForBackend(value: string, maxLength: number) {
   if (!value) return '';
   return value.length > maxLength ? `[truncated tail ${value.length - maxLength} chars] ...\n${value.slice(-maxLength)}` : value;
 }
 
 export function hashJson(value: unknown) {
-  return sha1(JSON.stringify(clipForAgentServerJson(value, 0))).slice(0, 16);
+  return sha1(JSON.stringify(clipForBackendJson(value, 0))).slice(0, 16);
 }
 
-export function clipForAgentServerPrompt(value: unknown, maxLength: number) {
+export function clipForBackendPrompt(value: unknown, maxLength: number) {
   if (typeof value !== 'string') return undefined;
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 }
 
-export function clipForAgentServerJson(value: unknown, depth = 0): unknown {
+export function clipForBackendJson(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     const normalized = value.replace(/\s+/g, ' ').trim();
     return normalized.length > 2400 ? `${normalized.slice(0, 2400)}... [truncated ${normalized.length - 2400} chars]` : normalized;
@@ -51,7 +51,7 @@ export function clipForAgentServerJson(value: unknown, depth = 0): unknown {
   if (depth >= 5) return '[truncated-depth]';
   if (Array.isArray(value)) {
     const limit = depth <= 1 ? 24 : 12;
-    const clipped = value.slice(0, limit).map((entry) => clipForAgentServerJson(entry, depth + 1));
+    const clipped = value.slice(0, limit).map((entry) => clipForBackendJson(entry, depth + 1));
     if (value.length > limit) clipped.push(`[truncated ${value.length - limit} entries]`);
     return clipped;
   }
@@ -61,7 +61,7 @@ export function clipForAgentServerJson(value: unknown, depth = 0): unknown {
       out[key] = entry ? '[redacted]' : entry;
       continue;
     }
-    out[key] = clipForAgentServerJson(entry, depth + 1);
+    out[key] = clipForBackendJson(entry, depth + 1);
   }
   return out;
 }
@@ -118,7 +118,7 @@ export async function readTextIfExists(path: string) {
 
 export function summarizeTextChange(before: string, after: string, agentSummary?: string) {
   const lines = [
-    agentSummary ? `AgentServer summary:\n${agentSummary}` : '',
+    agentSummary ? `Backend summary:\n${agentSummary}` : '',
     before === after
       ? 'No direct change detected in the task code file.'
       : [

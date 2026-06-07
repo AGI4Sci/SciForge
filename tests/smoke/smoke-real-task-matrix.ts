@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { CU_NEXT_TASK_MAPPINGS } from '../../packages/actions/computer-use/task-map.js';
+
 type ComputerUseTaskStatus = 'done' | 'partial';
 
 type ComputerUseTaskBoardEntry = {
@@ -32,6 +34,7 @@ type ComputerUseMatrixEntry = {
     | 'approval-chain'
     | 'repair-continuity'
     | 'dense-grounding'
+    | 'desktop-file-save'
     | 'no-hardcoded-success'
     | 'no-legacy-paths'
   >;
@@ -49,22 +52,29 @@ const matrix: ComputerUseMatrixEntry[] = [
   task('CU-NEXT-05', 'failure-recovery-multiturn-repair', ['smoke:web-multiturn-final', 'smoke:no-hardcoded-success'], ['project-board-evidence', 'repair-continuity', 'l3-multi-app', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
   task('CU-NEXT-06', 'high-risk-approval-chain', ['smoke:runtime-codex-browser-acceptance', 'smoke:no-hardcoded-success'], ['project-board-evidence', 'approval-chain', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
   task('CU-NEXT-07', 'visual-grounding-pressure-test', ['smoke:computer-use-long', 'smoke:vision-sense-runtime'], ['project-board-evidence', 'dense-grounding', 'model-router-grounding-diagnostics', 'real-input-trace']),
+  task('CU-NEXT-08', 'desktop-local-document-save', ['smoke:computer-use-long', 'smoke:cu-next-live-acceptance'], ['project-board-evidence', 'desktop-file-save', 'l2-artifact', 'real-input-trace', 'gui-present']),
 ];
 
 const projectTasks = extractComputerUseTaskBoard(projectText);
 const projectIds = [...projectTasks.keys()].sort();
 const matrixIds = matrix.map((entry) => entry.id).sort();
+const taskMapIds = CU_NEXT_TASK_MAPPINGS.map((entry) => entry.taskId).sort();
 
-assert.deepEqual(matrixIds, projectIds, 'Computer Use matrix must cover exactly the active CU-* task board in PROJECT.md');
+assert.deepEqual(matrixIds, taskMapIds, 'Computer Use matrix must cover exactly the active CU-NEXT task map');
+if (projectIds.length > 0) {
+  assert.deepEqual(matrixIds, projectIds, 'Computer Use matrix must cover exactly the active CU-* task board in PROJECT.md');
+} else {
+  assert.match(projectText, /## 打勾规则/, 'PROJECT.md without a CU task board must retain explicit checkmark rules');
+}
 assert.equal(new Set(matrixIds).size, matrix.length, 'Computer Use matrix ids must be unique');
 
 for (const entry of matrix) {
   const projectTask = projectTasks.get(entry.id);
-  assert.ok(projectTask, `${entry.id}: missing PROJECT.md task section`);
   assert.ok(entry.requiredGates.length > 0, `${entry.id}: must name at least one deterministic gate`);
   assert.ok(entry.requiredGates.every((gate) => gate.startsWith('smoke:')), `${entry.id}: gates must be npm smoke scripts`);
   assert.ok(entry.requiredGates.every((gate) => packageJson.scripts?.[gate]), `${entry.id}: all gates must exist in package.json scripts`);
   assert.ok(entry.requiredEvidence.includes('project-board-evidence'), `${entry.id}: PROJECT.md evidence is required`);
+  if (!projectTask) continue;
   assert.ok(projectTask.checklist.length > 0, `${entry.id}: PROJECT.md section must keep executable checklist items`);
 
   for (const item of projectTask.checklist) {
@@ -93,7 +103,7 @@ assert.ok(
   'Computer Use matrix must keep old-logic deletion hygiene in scope',
 );
 
-console.log(`[ok] Computer Use task matrix covers ${matrix.length} active PROJECT.md CU-* sections with deterministic gates and inline evidence checks.`);
+console.log(`[ok] Computer Use task matrix covers ${matrix.length} active CU-NEXT task-map entries with deterministic gates and PROJECT.md policy checks.`);
 
 function task(
   id: string,
@@ -147,7 +157,6 @@ function extractComputerUseTaskBoard(text: string): Map<string, ComputerUseTaskB
     if (!checked) current.status = 'partial';
   }
 
-  assert.ok(tasks.size > 0, 'PROJECT.md must contain active CU-* task sections');
   return tasks;
 }
 

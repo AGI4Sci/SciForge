@@ -14,7 +14,7 @@ import {
   readCapabilityEvolutionLedgerFacts,
 } from '../../src/runtime/capability-evolution-ledger.js';
 import { recordCapabilityEvolutionRuntimeEvent } from '../../src/runtime/gateway/capability-evolution-events.js';
-import { tryAgentServerSupplementMissingArtifacts } from '../../src/runtime/gateway/generated-task-runner-supplement-lifecycle.js';
+import { tryBackendSupplementMissingArtifacts } from '../../src/runtime/gateway/generated-task-runner-supplement-lifecycle.js';
 import type { GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generated-task-runner.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types.js';
 
@@ -115,7 +115,7 @@ await recordCapabilityEvolutionRuntimeEvent({
   now: () => new Date('2026-05-10T02:01:00.000Z'),
 });
 
-const supplemented = await tryAgentServerSupplementMissingArtifacts({
+const supplemented = await tryBackendSupplementMissingArtifacts({
   request,
   skill,
   skills: [skill],

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "sciforge.runtime-codex.browser-ordinary-chat-local-dogfood.v1",
+  "status": "passed",
+  "source": "runtime-codex-ordinary-chat-local-dogfood",
+  "observedAt": "2026-06-07T00:16:01.832Z",
+  "commandId": "browser-ordinary-chat-local-9b5805f7b55b",
+  "taskPromptDigest": {
+    "length": 164,
+    "sha1": "965b795a4a824f7ea7851d659294578e8c388875"
+  },
+  "localConfig": {
+    "present": true,
+    "providerPresent": true,
+    "modelPresent": true,
+    "upstreamBaseUrlPresent": true,
+    "apiKeyPresent": true,
+    "source": "config.local.json",
+    "secretValuesRedacted": true
+  },
+  "ordinaryChatAcceptance": {
+    "status": "passed",
+    "manifestRef": "artifact:runtime-codex-browser-ordinary-chat-local-dogfood/ordinary-chat-acceptance/manifest.json",
+    "startedFromDefaultChatEntry": true,
+    "submittedThroughRuntimeCodex": true,
+    "acceptanceConclusionFromRealBrowser": true,
+    "evidenceRefs": [
+      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.source.json",
+      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.txt",
+      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-9b5805f7b55b/module.invoke",
+      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-9b5805f7b55b",
+      "artifact:runtime-codex-browser-acceptance/final-answer.md"
+    ]
+  },
+  "releaseEligible": false,
+  "releaseBlocking": true,
+  "releaseGate": {
+    "status": "local-dogfood-only",
+    "strictReleaseStillRequiresServiceEnv": true,
+    "retestCommand": "npm run smoke:runtime-codex-browser-acceptance:strict"
+  }
+}

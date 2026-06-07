@@ -100,6 +100,18 @@ export function evaluateAgentHostLocalToolAct(input: AgentHostLocalToolActInput)
   }
   const approvalToken = safeApprovalToken(args.approvalToken);
   const sideEffect = intent.sideEffect;
+  if (intent.returnsOperation === true && sideEffect === 'local' && intent.requiresApproval !== true) {
+    return {
+      status: 'auto',
+      reason: `module.invoke ${moduleId}.${intentName} is a bounded local operation; the module result owns completion, blockers, and confirmation.`,
+      toolName,
+      moduleId,
+      functionName,
+      intent: intentName,
+      sideEffect,
+      evidenceRefs,
+    };
+  }
   if (sideEffect === 'none' && intent.requiresApproval !== true) {
     return {
       status: 'auto',

@@ -72,20 +72,10 @@ export type {
   TerminalSessionStatus,
 } from './terminal-session-viewer/render';
 export {
-  buildVirtualScreenInputIntentCommand,
-  renderVirtualScreenViewer,
-} from './virtual-screen-viewer/render';
-export type {
-  VirtualScreenCursor,
-  VirtualScreenEvent,
-  VirtualScreenFrame,
-  VirtualScreenInputIntentCommand,
-  VirtualScreenInputIntentKind,
-  VirtualScreenLeaseOwner,
-  VirtualScreenPayload,
-  VirtualScreenPointerButton,
-  VirtualScreenPresentationState,
-} from './virtual-screen-viewer/render';
+  IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE,
+  IMAGE_EVIDENCE_VIEWER_COMPONENT_ID,
+  IMAGE_EVIDENCE_VIEWER_SCHEMA_VERSION,
+} from './image-evidence-viewer/manifest';
 export {
   IMAGE_EVIDENCE_SOURCE_KINDS,
   renderImageEvidenceViewer,

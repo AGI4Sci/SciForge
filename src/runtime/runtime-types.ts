@@ -474,7 +474,7 @@ export interface SkillPromotionProposal {
   };
 }
 
-export interface AgentServerGenerationRequest {
+export interface BackendGenerationRequest {
   prompt: string;
   skillDomain: SciForgeSkillDomain;
   contextEnvelope?: Record<string, unknown>;
@@ -494,7 +494,7 @@ export interface AgentServerGenerationRequest {
   priorAttempts: TaskAttemptRecord[];
 }
 
-export interface AgentServerGenerationResponse {
+export interface BackendGenerationResponse {
   taskFiles: Array<{ path: string; content?: string; language: string }>;
   entrypoint: {
     language: WorkspaceTaskSpec['language'];
@@ -508,7 +508,7 @@ export interface AgentServerGenerationResponse {
   patchSummary?: string;
 }
 
-export interface AgentServerRepairRequest {
+export interface BackendRepairRequest {
   prompt: string;
   skillDomain: SciForgeSkillDomain;
   contextEnvelope?: Record<string, unknown>;
@@ -523,11 +523,20 @@ export interface AgentServerRepairRequest {
   priorAttempts: TaskAttemptRecord[];
 }
 
-export interface AgentServerRepairResponse extends AgentServerGenerationResponse {
+export interface BackendRepairResponse extends BackendGenerationResponse {
   parentAttempt: number;
   selfHealReason: string;
   diffSummary: string;
 }
+
+/** @deprecated Historical schema alias. Use BackendGenerationRequest. */
+export type AgentServerGenerationRequest = BackendGenerationRequest;
+/** @deprecated Historical schema alias. Use BackendGenerationResponse. */
+export type AgentServerGenerationResponse = BackendGenerationResponse;
+/** @deprecated Historical schema alias. Use BackendRepairRequest. */
+export type AgentServerRepairRequest = BackendRepairRequest;
+/** @deprecated Historical schema alias. Use BackendRepairResponse. */
+export type AgentServerRepairResponse = BackendRepairResponse;
 
 export interface TaskAttemptRecord {
   id: string;

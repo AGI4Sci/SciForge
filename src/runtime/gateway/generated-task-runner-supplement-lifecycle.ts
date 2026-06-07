@@ -12,9 +12,9 @@ import {
   selectedCapabilityForRegistryEntry,
 } from './provider-runtime-registry.js';
 import { workspaceCodeTaskPromptPolicy } from '@sciforge-ui/runtime-contract/generated-work-policy';
-import { AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE } from '../../../packages/skills/runtime-policy.js';
+import { GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE } from '../../../packages/skills/runtime-policy.js';
 
-type RunAgentServerGeneratedTask = (
+type RunGeneratedTaskBackend = (
   request: GatewayRequest,
   skill: SkillAvailability,
   skills: SkillAvailability[],
@@ -36,20 +36,20 @@ export interface GeneratedTaskSupplementLifecycleInput {
   expectedArtifactTypes?: string[];
   callbacks?: WorkspaceRuntimeCallbacks;
   deps: GeneratedTaskRunnerDeps;
-  runGeneratedTask: RunAgentServerGeneratedTask;
+  runGeneratedTask: RunGeneratedTaskBackend;
 }
 
-export async function tryAgentServerSupplementMissingArtifacts(
+export async function tryBackendSupplementMissingArtifacts(
   params: GeneratedTaskSupplementLifecycleInput,
 ) {
   const missingTypes = missingExpectedArtifactTypes(params.request, params.payload.artifacts, params.expectedArtifactTypes);
   if (!missingTypes.length) return undefined;
   const fallbackReason = `Missing expected artifact types: ${missingTypes.join(', ')}`;
   emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
+    type: GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
     source: 'workspace-runtime',
     status: 'running',
-    message: 'Requesting supplemental AgentServer/backend generation',
+    message: 'Requesting supplemental backend generation',
     detail: fallbackReason,
   });
   const existingTypes = uniqueStrings(params.payload.artifacts.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
@@ -110,6 +110,9 @@ export async function tryAgentServerSupplementMissingArtifacts(
   });
   return merged;
 }
+
+/** @deprecated Use tryBackendSupplementMissingArtifacts. */
+export const tryAgentServerSupplementMissingArtifacts = tryBackendSupplementMissingArtifacts;
 
 export function expectedArtifactTypesForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
   const generated = uniqueStrings((generatedExpectedArtifacts ?? []).map((type) => type.trim()).filter(Boolean));
@@ -398,7 +401,9 @@ function artifactNeedsRepair(artifact: Record<string, unknown>) {
   const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
   const data = isRecord(artifact.data) ? artifact.data : {};
   return metadata.status === 'repair-needed'
+    || metadata.requiresBackendGeneration === true
     || metadata.requiresAgentServerGeneration === true
+    || data.requiresBackendGeneration === true
     || data.requiresAgentServerGeneration === true;
 }
 

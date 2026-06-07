@@ -28,6 +28,11 @@ export interface CuNextTaskMarkerProjectionRefs {
   directoryListingRef?: string;
   denseGroundingRejectionRef?: string;
   denseGroundingTargetDescription?: string;
+  targetWindowRef?: string;
+  beforeAxRef?: string;
+  afterAxRef?: string;
+  guiSaveCommandRef?: string;
+  fileCreationOwner?: string;
 }
 
 export interface CuNextTaskMarkerProjection {
@@ -130,6 +135,10 @@ export function projectCuNextTaskAcceptanceMarkers(
   const directoryListingRef = refs.directoryListingRef;
   const denseGroundingRejectionRef = refs.denseGroundingRejectionRef;
   const denseGroundingTargetDescription = refs.denseGroundingTargetDescription;
+  const targetWindowRef = refs.targetWindowRef ?? refs.traceRef;
+  const beforeAxRef = refs.beforeAxRef ?? refs.traceRef;
+  const afterAxRef = refs.afterAxRef ?? refs.traceRef;
+  const guiSaveCommandRef = refs.guiSaveCommandRef ?? refs.traceRef;
 
   switch (taskId) {
     case 'CU-NEXT-01':
@@ -214,6 +223,25 @@ export function projectCuNextTaskAcceptanceMarkers(
           focusCropRef,
           fineGroundingDiagnosticRef: groundingRef,
           rejectedTargetRefs: denseGroundingRejectionRef ? [denseGroundingRejectionRef] : [],
+        }],
+      };
+    case 'CU-NEXT-08':
+      return {
+        status: 'multi-app-workflow-passed',
+        evidenceMarkers: [{
+          kind: 'desktop-file-save',
+          targetWindowRef,
+          beforeScreenshotRef: visibleRef,
+          beforeAxRef,
+          guiSaveCommandRef,
+          executorEventRef: refs.traceRef,
+          afterScreenshotRef: visibleRef,
+          afterAxRef,
+          artifactRef,
+          artifactValidationRef: refs.verifierRef,
+          fileCreationOwner: refs.fileCreationOwner ?? 'scoped-gui-save',
+          sharedSystemInputUsed: false,
+          shellDirectArtifactWrite: false,
         }],
       };
     default:

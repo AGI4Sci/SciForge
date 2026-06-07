@@ -7,9 +7,9 @@ import {
   type WorkspaceMemoryRef,
 } from '../project-session-memory.js';
 import {
-  buildAgentServerContextRequest,
-  type AgentServerContextRequest,
-} from './agentserver-context-contract.js';
+  buildBackendContextRequest,
+  type BackendContextRequest,
+} from './backend-context-contract.js';
 
 export const CONVERSATION_CONTEXT_PROJECTION_SCHEMA_VERSION = 'sciforge.conversation.context-projection.v1' as const;
 
@@ -26,8 +26,10 @@ export interface ConversationContextProjection {
   stablePrefixHash: string;
   contextRefs: WorkspaceMemoryRef[];
   capabilityBriefRef: WorkspaceMemoryRef;
-  cachePlan: AgentServerContextRequest['cachePlan'];
-  agentServerContextRequest: AgentServerContextRequest;
+  cachePlan: BackendContextRequest['cachePlan'];
+  backendContextRequest: BackendContextRequest;
+  /** @deprecated Use backendContextRequest. */
+  agentServerContextRequest: BackendContextRequest;
   selectedContextRefs: string[];
   retrievalTools: string[];
   selectedMessageRefs: JsonMap[];
@@ -73,7 +75,7 @@ export function buildConversationContextProjection(request: unknown): Conversati
       runtimeContract: 'ToolPayload refs-first handoff',
       rules: [
         'workspace ledger is canonical truth',
-        'AgentServer orchestrates context',
+        'Agent Host projects context',
         'backend reads refs on demand',
       ],
     },
@@ -124,7 +126,7 @@ export function buildConversationContextProjection(request: unknown): Conversati
   const capabilityBriefRef = memoryRef(
     `projection:${sessionId}:capability-brief`,
     'projection',
-    'AgentServer capability brief projection',
+    'Agent Host capability brief projection',
   );
   const currentTurnRef = memoryRef(
     `ledger-event:${textValue(recordValue(data.turn)?.turnId) || textValue(data.turnId) || textValue(data.requestId) || 'current-turn'}`,
@@ -140,7 +142,7 @@ export function buildConversationContextProjection(request: unknown): Conversati
       .filter((block) => block.cacheTier !== 'stable-prefix')
       .map((block) => projectionBlockRef(block)),
   ];
-  const contextRequest = buildAgentServerContextRequest({
+  const contextRequest = buildBackendContextRequest({
     sessionId,
     turnId: currentTurnRef.ref.replace(/^ledger-event:/, ''),
     mode: mode === 'continue' || mode === 'repair' || mode === 'answer-from-registry' ? mode : 'fresh',
@@ -185,6 +187,7 @@ export function buildConversationContextProjection(request: unknown): Conversati
     contextRefs: contextRequest.contextRefs,
     capabilityBriefRef,
     cachePlan: contextRequest.cachePlan,
+    backendContextRequest: contextRequest,
     agentServerContextRequest: contextRequest,
     selectedContextRefs,
     retrievalTools: ['retrieve', 'read_ref', 'workspace_search'],

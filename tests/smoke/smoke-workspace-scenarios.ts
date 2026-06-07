@@ -189,21 +189,21 @@ async function writeProposal(workspacePath: string, id: string, prompt: string) 
 
 function generatedOmicsSkill(): SkillAvailability {
   return {
-    id: 'agentserver.generate.omics',
+    id: 'generated-task.generate.omics',
     kind: 'installed',
     available: true,
     reason: 'workspace server smoke',
     checkedAt: new Date().toISOString(),
     manifestPath: 'agentserver://generation',
     manifest: {
-      id: 'agentserver.generate.omics',
+      id: 'generated-task.generate.omics',
       kind: 'installed',
-      description: 'Generic AgentServer task generation fallback.',
+      description: 'Generic backend task generation fallback.',
       skillDomains: ['omics'],
       inputContract: { prompt: 'string' },
       outputArtifactSchema: { type: 'runtime-artifact' },
       entrypoint: { type: 'agentserver-generation' },
-      environment: { runtime: 'AgentServer' },
+      environment: { runtime: 'backend-generation' },
       validationSmoke: { mode: 'delegated' },
       examplePrompts: [],
       promotionHistory: [],

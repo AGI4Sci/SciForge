@@ -53,7 +53,7 @@ const directFailure = contractValidationFailureFromErrors(['missing claims'], {
 });
 
 const generatedTaskFailure = contractValidationFailureFromErrors(['artifacts[0].type must be a non-empty string'], {
-  capabilityId: 'agentserver.generated-task',
+  capabilityId: 'generated-task.generate.-task',
   failureKind: 'artifact-schema',
   schemaPath: 'src/runtime/gateway/tool-payload-contract.ts#artifacts',
   contractId: 'sciforge.artifact.v1',
@@ -110,7 +110,7 @@ const chains = [
   buildChain({
     kind: 'generated-task-result',
     id: 'generated-1',
-    capabilityId: 'agentserver.generated-task',
+    capabilityId: 'generated-task.generate.-task',
     contractId: generatedTaskFailure.contractId,
     completedPayloadRef: 'run:generated-1/output.json',
     generatedTaskRef: '.sciforge/tasks/generated-task.py',
@@ -176,7 +176,7 @@ const repairRerunAcceptedChain = createValidationRepairAuditChain({
   subject: {
     kind: 'repair-rerun-result',
     id: 'repair-rerun-1',
-    capabilityId: 'agentserver.generated-task',
+    capabilityId: 'generated-task.generate.-task',
     contractId: 'sciforge.repair-rerun-result.v1',
     completedPayloadRef: 'run:generated-1-attempt-2/output.json',
     generatedTaskRef: '.sciforge/tasks/generated-task.py',
@@ -188,7 +188,7 @@ const repairRerunAcceptedChain = createValidationRepairAuditChain({
     kind: 'work-evidence',
     status: 'done',
     contractId: 'sciforge.repair-rerun-result.v1',
-    capabilityId: 'agentserver.generated-task',
+    capabilityId: 'generated-task.generate.-task',
     relatedRefs: ['run:generated-1-attempt-2/output.json'],
   }],
   relatedRefs: ['run:generated-1-attempt-2/output.json', '.sciforge/tasks/generated-task.py'],

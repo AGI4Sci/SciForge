@@ -217,7 +217,7 @@ export const CU_NEXT_PRODUCT_SMOKE_CASES: readonly CuNextProductSmokeCaseDefinit
   {
     id: 'real-artifact-save',
     label: 'Real artifact save through GUI causality',
-    taskId: 'CU-NEXT-02',
+    taskId: 'CU-NEXT-08',
     requiredTier: 'product-smoke',
     requiredExecutionMode: 'opt-in-live-backend',
     requirements: ['real-artifact-save', 'viewer-real-frames', 'current-bundle-evidence'],

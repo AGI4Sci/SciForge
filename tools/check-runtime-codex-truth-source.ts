@@ -96,11 +96,8 @@ assertScriptEquals(
   realTaskMatrixCommand,
   'Computer Use task matrix must execute the active CU-* project-board gate plus CU-NEXT readiness, runner, acceptance-contract, live acceptance, classification, and protocol gates.',
 );
-assertScriptEquals(
-  legacyVerifyScript,
-  `npm run ${legacyCompatScript}`,
-  'AgentServer compatibility checks must be explicit opt-in quarantine coverage.',
-);
+assertScriptAbsent(legacyVerifyScript, 'Legacy AgentServer compatibility verify bucket must be removed after runtime module retirement.');
+assertScriptAbsent(legacyCompatScript, 'Legacy AgentServer compatibility smoke bucket must be removed after runtime module retirement.');
 
 const smokeAllSteps = packageScriptSteps(scripts['smoke:all']);
 const directAgentServerInSmokeAll = smokeAllSteps.filter((step) => /\bagentserver\b/i.test(step));
@@ -114,15 +111,6 @@ if (directAgentServerInSmokeAll.length > 0) {
 }
 assertNoNestedAgentServerDefaultPath('smoke:all');
 
-const legacyCompatSteps = packageScriptSteps(scripts[legacyCompatScript]);
-if (legacyCompatSteps.length === 0 || !legacyCompatSteps.every((step) => /\bagentserver\b/i.test(step))) {
-  findings.push({
-    file: 'package.json',
-    rule: 'legacy-agentserver-compat-quarantine',
-    message: 'smoke:legacy-agentserver-compat must be the explicit bucket for old AgentServer smoke scripts.',
-    value: scripts[legacyCompatScript],
-  });
-}
 const realTaskOfflineGateSteps = packageScriptSteps(scripts[realTaskOfflineGatesScript]);
 const requiredRealTaskOfflineGates = [
   'smoke:real-task-protocol-gates',
@@ -167,7 +155,7 @@ if (/['"]smoke:agentserver-/i.test(realTaskMatrixText)) {
   findings.push({
     file: 'tests/smoke/smoke-real-task-matrix.ts',
     rule: 'real-task-matrix-agentserver-truth-source',
-    message: 'PROJECT.md CU-* task gates must not depend on direct AgentServer-first smoke scripts; keep legacy checks in verify:legacy-agentserver-compat only.',
+    message: 'PROJECT.md CU-* task gates must not depend on direct AgentServer-first smoke scripts; legacy AgentServer compatibility buckets are retired.',
   });
 }
 
@@ -215,7 +203,7 @@ if (findings.length) {
   }
   process.exitCode = 1;
 } else {
-  console.log('[ok] Runtime Codex truth-source gate checked package scripts and docs; AgentServer compatibility is explicit opt-in only.');
+  console.log('[ok] Runtime Codex truth-source gate checked package scripts and docs; legacy AgentServer compatibility buckets are retired.');
 }
 
 async function assertCurrentWebE2eRuntimeSemantics(): Promise<void> {
@@ -282,6 +270,16 @@ function assertScriptEquals(name: string, expected: string, message: string): vo
   });
 }
 
+function assertScriptAbsent(name: string, message: string): void {
+  if (scripts[name] === undefined) return;
+  findings.push({
+    file: 'package.json',
+    rule: `script-absent-${name}`,
+    message,
+    value: scripts[name],
+  });
+}
+
 function assertOrderedSubsequence(scriptName: string, expected: string[]): void {
   const actual = packageScriptSteps(scripts[scriptName]);
   let cursor = 0;
@@ -320,7 +318,7 @@ function assertNoNestedAgentServerDefaultPath(scriptName: string): void {
     findings.push({
       file: 'package.json',
       rule: `nested-agentserver-default-path-${scriptName}`,
-      message: `${scriptName} must not reach AgentServer-first commands through nested package scripts; use ${legacyVerifyScript} for compatibility checks.`,
+      message: `${scriptName} must not reach AgentServer-first commands through nested package scripts; legacy AgentServer compatibility buckets are retired.`,
       value: `${expanded.scriptName}: ${expanded.command}`,
     });
   }

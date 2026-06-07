@@ -319,7 +319,7 @@ test('workspace-relative artifact scoping preserves a newer session-bundle file 
       reasoningTrace: 'stale root copy guard test',
       claims: [],
       uiManifest: [{ componentId: 'report-viewer', artifactRef: 'timeline-budget' }],
-      executionUnits: [{ id: 'direct', status: 'done', tool: 'agentserver.direct-text' }],
+      executionUnits: [{ id: 'direct', status: 'done', tool: 'backend.direct-text' }],
       artifacts: [{
         id: 'timeline-budget',
         type: 'markdown',

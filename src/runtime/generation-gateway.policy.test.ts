@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,13 +7,10 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
-	  GATEWAY_PIPELINE_STAGE_ORDER,
-	  GATEWAY_PIPELINE_STAGES,
-  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
-  STAGE_AGENTSERVER_GENERATION,
+  GATEWAY_PIPELINE_STAGE_ORDER,
+  GATEWAY_PIPELINE_STAGES,
   STAGE_ARTIFACT_MUTATION_FAST_PATH,
   STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
-  STAGE_BROWSER_HOST_SEARCH_RUNTIME,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
   STAGE_CODEX_RUNTIME_BRIDGE,
   STAGE_CONVERSATION_POLICY,
@@ -28,11 +24,22 @@ import {
   STAGE_REQUEST_CLARIFICATION_RUNTIME,
   STAGE_REQUEST_ENRICHMENT,
   STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+  STAGE_RUNTIME_UNHANDLED,
   STAGE_VISION_SENSE_RUNTIME,
   runWorkspaceRuntimeGateway,
-	} from './generation-gateway.js';
+} from './generation-gateway.js';
 
-test('default terminal AgentServer generation is quarantined without explicit legacy opt-in', async () => {
+test('default gateway pipeline does not expose legacy BrowserHostSearch as a product stage', () => {
+  assert.equal(GATEWAY_PIPELINE_STAGE_ORDER.includes('browser-host-search-runtime' as any), false);
+  assert.equal(GATEWAY_PIPELINE_STAGES.some((stage) => stage.name === ('browser-host-search-runtime' as any)), false);
+  assert.equal(GATEWAY_PIPELINE_STAGE_ORDER.includes('agentserver-generation' as any), false);
+  assert.equal(GATEWAY_PIPELINE_STAGES.some((stage) => stage.name === ('agentserver-generation' as any)), false);
+  assert.equal(GATEWAY_PIPELINE_STAGE_ORDER.includes('agentserver-dispatch-constraints' as any), false);
+  assert.equal(GATEWAY_PIPELINE_STAGES.some((stage) => stage.name === ('agentserver-dispatch-constraints' as any)), false);
+  assert.ok(GATEWAY_PIPELINE_STAGE_ORDER.indexOf(STAGE_CODEX_RUNTIME_BRIDGE) > GATEWAY_PIPELINE_STAGE_ORDER.indexOf(STAGE_RUNTIME_EXECUTION_CONSTRAINTS));
+});
+
+test('default terminal gateway fails closed instead of falling back to AgentServer generation', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-quarantine-'));
   const originalPolicy = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
   const originalLegacy = process.env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH;
@@ -52,12 +59,12 @@ test('default terminal AgentServer generation is quarantined without explicit le
       },
     });
 
-    assert.match(payload.message, /AgentServer generation dispatch is quarantined/i);
-    assert.match(JSON.stringify(payload.executionUnits[0]?.refs ?? {}), /agentServerGenerationDispatchQuarantine/);
+    assert.equal(payload.artifacts[0]?.id, 'runtime-unhandled');
+    assert.match(payload.message, /Runtime Codex|没有回落到旧 AgentServer generation/i);
     assert.doesNotMatch(JSON.stringify(payload), /agentServerRunId|agentserver-generation-literature/i);
     const stageAudits = events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
-    assert.ok(stageAudits.some((event) => event.raw.stage === STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS && event.raw.shortCircuit === true));
-    assert.equal(stageAudits.some((event) => event.raw.stage === STAGE_AGENTSERVER_GENERATION), false);
+    assert.ok(stageAudits.some((event) => event.raw.stage === STAGE_RUNTIME_UNHANDLED && event.raw.shortCircuit === true));
+    assert.equal(stageAudits.some((event) => /agentserver/i.test(String(event.raw.stage))), false);
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', originalPolicy);
     restoreEnv('SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH', originalLegacy);
@@ -98,14 +105,13 @@ test('runtime gateway fails closed before AgentServer when conversation policy f
   }
 });
 
-test('stateless fresh policy timeout falls through to AgentServer generation without reusing context', async () => {
+test('stateless fresh policy timeout no longer falls through to AgentServer generation', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-policy-fresh-fallback-'));
   const original = {
     mode: process.env.SCIFORGE_CONVERSATION_POLICY_MODE,
     command: process.env.SCIFORGE_CONVERSATION_POLICY_PYTHON,
   };
   let sawGeneration = false;
-  let requestBody = '';
   const server = createServer(async (req, res) => {
     if (req.method === 'GET' && String(req.url).includes('/api/agent-server/agents/') && String(req.url).endsWith('/context')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -118,7 +124,6 @@ test('stateless fresh policy timeout falls through to AgentServer generation wit
       return;
     }
     sawGeneration = true;
-    requestBody = await readBody(req);
     const result = {
       ok: true,
       data: {
@@ -162,11 +167,10 @@ test('stateless fresh policy timeout falls through to AgentServer generation wit
       },
     });
 
-    assert.equal(sawGeneration, true);
-    assert.match(requestBody, /fresh stateless question|primer design/i);
-    assert.match(payload.message, /Primer design needs GC/);
-    assert.doesNotMatch(payload.message, /conversation policy timed out|fail-closed/i);
-    assert.equal(payload.executionUnits[0]?.status, 'done');
+    assert.equal(sawGeneration, false);
+    assert.equal(payload.artifacts[0]?.id, 'runtime-unhandled');
+    assert.match(payload.message, /Runtime Codex|没有回落到旧 AgentServer generation/i);
+    assert.equal(payload.executionUnits[0]?.status, 'needs-human');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original.mode);
@@ -175,7 +179,7 @@ test('stateless fresh policy timeout falls through to AgentServer generation wit
   }
 });
 
-test('agentServerForbidden constraints override forced AgentServer generation', async () => {
+test('forced AgentServer generation is ignored by the retired default path', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-forbidden-'));
   const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
   process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
@@ -203,13 +207,13 @@ test('agentServerForbidden constraints override forced AgentServer generation', 
       },
     });
 
-    assert.equal(payload.artifacts[0]?.id, 'agentserver-dispatch-forbidden');
-    assert.equal(payload.executionUnits[0]?.tool, 'sciforge.turn-execution-constraints');
-    assert.match(payload.message, /没有启动 AgentServer/);
+    assert.equal(payload.artifacts[0]?.id, 'runtime-unhandled');
+    assert.equal(payload.executionUnits[0]?.tool, 'sciforge.runtime-codex');
+    assert.match(payload.message, /没有回落到旧 AgentServer generation|Runtime Codex/i);
     const displayIntent = payload.displayIntent as Record<string, any>;
     assert.equal(displayIntent.conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
     assert.equal(displayIntent.conversationProjection?.visibleAnswer?.status, 'degraded-result');
-    assert.match(String(displayIntent.conversationProjection?.visibleAnswer?.text), /AgentServer|runtime/i);
+    assert.match(String(displayIntent.conversationProjection?.visibleAnswer?.text), /Runtime Codex|runtime/i);
     assert.equal(displayIntent.taskOutcomeProjection?.conversationEventLog?.schemaVersion, 'sciforge.conversation-event-log.v1');
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
@@ -234,9 +238,9 @@ test('provider preflight blocks before sense or backend dispatch for explicit pr
       },
     });
 
-    assert.match(payload.message, /Capability provider route preflight blocked AgentServer dispatch/);
-    assert.equal(payload.executionUnits[0]?.tool, 'sciforge.workspace-runtime-gateway');
-    assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
+    assert.match(payload.message, /Capability provider route preflight blocked runtime dispatch|Capability provider route preflight blocked/i);
+    assert.equal(payload.executionUnits[0]?.tool, 'sciforge.capability-provider-preflight');
+    assert.equal(payload.executionUnits[0]?.status, 'needs-human');
     assert.match(JSON.stringify(payload), /capability-provider-preflight/);
     assert.doesNotMatch(JSON.stringify(payload), /vision-sense-observation|agentserver-response/);
     const displayIntent = payload.displayIntent as Record<string, any>;
@@ -321,7 +325,7 @@ test('runtime gateway answers Computer Use capability questions from grounded re
     assert.equal(payload.artifacts[0]?.type, 'runtime-capability-answer');
     const stageAudits = events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
     assert.ok(stageAudits.some((event) => event.raw.stage === STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH && event.raw.shortCircuit === true));
-    assert.equal(stageAudits.some((event) => event.raw.stage === STAGE_AGENTSERVER_GENERATION), false);
+    assert.equal(stageAudits.some((event) => /agentserver/i.test(String(event.raw.stage))), false);
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
     await rm(workspace, { recursive: true, force: true });
@@ -409,6 +413,7 @@ test('runtime gateway pauses GUI submission intent for hard confirmation with re
         },
         computerUsePermissions: {
           refs: ['permission:turn/form-draft'],
+          scopedExecutorRefs: ['computer-use:executor/form-draft'],
           stopCancelPath: true,
         },
       },
@@ -420,7 +425,7 @@ test('runtime gateway pauses GUI submission intent for hard confirmation with re
     assert.equal(preflight.status, 'needs-confirmation');
     assert.equal(preflight.confirmation.action, 'Submit the registration form in the current browser window.');
     assert.equal(preflight.confirmation.authorizationProfile.id, 'high-autonomy');
-    assert.deepEqual(preflight.confirmation.evidenceRefs, ['browser-host-session:form/frame.png', 'permission:turn/form-draft']);
+    assert.deepEqual(preflight.confirmation.evidenceRefs, ['browser-host-session:form/frame.png', 'permission:turn/form-draft', 'computer-use:executor/form-draft']);
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
     await rm(workspace, { recursive: true, force: true });
@@ -460,7 +465,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
       },
     });
 
-    assert.match(payload.message, /没有启动 AgentServer/);
+    assert.match(payload.message, /没有回落到旧 AgentServer generation|Runtime Codex/i);
     assert.deepEqual(
       GATEWAY_PIPELINE_STAGES.map((stage) => stage.name),
       GATEWAY_PIPELINE_STAGE_ORDER,
@@ -480,7 +485,6 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
         STAGE_REQUEST_ENRICHMENT,
         STAGE_REQUEST_CLARIFICATION_RUNTIME,
         STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
-        STAGE_BROWSER_HOST_SEARCH_RUNTIME,
         STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
         STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME,
         STAGE_DIRECT_CONTEXT_FAST_PATH,
@@ -493,26 +497,26 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
         STAGE_LOCAL_TABULAR_ANALYSIS_RUNTIME,
         STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME,
         STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME,
-        STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+        STAGE_RUNTIME_UNHANDLED,
       ],
     );
     assert.deepEqual(
       stageAudits.map((event) => event.raw.shortCircuit),
-      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
     );
-    const dispatchAudit = stageAudits.at(-1);
-    assert.equal(dispatchAudit.raw.stage, STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS);
-    assert.equal(dispatchAudit.raw.payloadSummary.claimType, 'runtime-diagnostic');
-    assert.equal(dispatchAudit.raw.payloadSummary.executionUnitCount, 1);
-    assert.deepEqual(dispatchAudit.raw.payloadSummary.artifactIds, ['agentserver-dispatch-forbidden']);
-    assert.match(dispatchAudit.raw.payloadSummary.message, /没有启动 AgentServer/);
+    const terminalAudit = stageAudits.at(-1);
+    assert.equal(terminalAudit.raw.stage, STAGE_RUNTIME_UNHANDLED);
+    assert.equal(terminalAudit.raw.payloadSummary.claimType, 'runtime-diagnostic');
+    assert.equal(terminalAudit.raw.payloadSummary.executionUnitCount, 1);
+    assert.deepEqual(terminalAudit.raw.payloadSummary.artifactIds, ['runtime-unhandled']);
+    assert.match(terminalAudit.raw.payloadSummary.message, /没有回落到旧 AgentServer generation|Runtime Codex/i);
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test('code and external IO forbidden constraints still allow plain AgentServer answer when no runtime work is selected', async () => {
+test('code and external IO forbidden constraints do not reopen plain AgentServer answers', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-answer-only-constraints-'));
   const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
   process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
@@ -583,9 +587,9 @@ test('code and external IO forbidden constraints still allow plain AgentServer a
       },
     });
 
-    assert.equal(sawAgentServerGenerate, true);
-    assert.match(payload.message, /GC content/);
-    assert.doesNotMatch(payload.message, /fail-closed|禁止新的 runtime/);
+    assert.equal(sawAgentServerGenerate, false);
+    assert.equal(payload.artifacts[0]?.id, 'runtime-unhandled');
+    assert.match(payload.message, /Runtime Codex|没有回落到旧 AgentServer generation/i);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
@@ -593,7 +597,7 @@ test('code and external IO forbidden constraints still allow plain AgentServer a
   }
 });
 
-test('repair-continuation bounded stop returns terminal repair payload instead of backend failure', async () => {
+test('repair continuation no longer starts AgentServer backend generation', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-repair-bounded-stop-'));
   const originalPolicy = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
   process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
@@ -654,18 +658,14 @@ test('repair-continuation bounded stop returns terminal repair payload instead o
       },
     });
 
-    assert.equal(sawAgentServerGenerate, true);
-    assert.match(payload.message, /repair|needs repair|bounded-stop/i);
+    assert.equal(sawAgentServerGenerate, false);
+    assert.match(payload.message, /Runtime Codex|没有回落到旧 AgentServer generation/i);
     assert.doesNotMatch(payload.message, /backend failed/i);
     const unit = payload.executionUnits[0] as Record<string, unknown>;
-    assert.equal(unit.status, 'repair-needed');
-    assert.equal(unit.blocker, 'repair-continuation-bounded-stop');
-    assert.match(String(unit.failureReason), /repair generation bounded-stop after 60001 total tokens/);
+    assert.equal(unit.status, 'needs-human');
+    assert.equal(payload.artifacts[0]?.id, 'runtime-unhandled');
     assert.ok(Array.isArray(unit.recoverActions));
-    assert.ok((unit.recoverActions as string[]).some((action) => /refs\/digests-only|currentReferenceDigests|recentExecutionRefs/i.test(action)));
-    assert.match(String(unit.nextStep), /refs\/digests-only|minimal repair/i);
-    assert.match(JSON.stringify(unit.refs), /repair-continuation/);
-    assert.match(JSON.stringify(unit.refs), /prior\.stderr\.txt/);
+    assert.ok((unit.recoverActions as string[]).some((action) => /Runtime Codex|local runtime/i.test(action)));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', originalPolicy);
@@ -679,16 +679,4 @@ function restoreEnv(key: string, value: string | undefined) {
     return;
   }
   process.env[key] = value;
-}
-
-function readBody(req: IncomingMessage) {
-  return new Promise<string>((resolve, reject) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk: string) => {
-      body += chunk;
-    });
-    req.on('end', () => resolve(body));
-    req.on('error', reject);
-  });
 }

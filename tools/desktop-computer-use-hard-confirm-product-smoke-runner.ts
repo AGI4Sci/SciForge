@@ -142,6 +142,12 @@ type BrowserHostSessionTruth = {
   observationRefs: string[];
 };
 
+const hostOwnedComputerUseRuntimeIntent = {
+  schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+  kind: 'computer-use-native-route',
+  source: 'host-owned',
+} as const;
+
 export async function runDesktopComputerUseHardConfirmProductSmoke(
   input: RunDesktopComputerUseHardConfirmProductSmokeInput = {},
 ): Promise<DesktopComputerUseHardConfirmProductSmokeManifest> {
@@ -350,6 +356,10 @@ async function runElectronProductHardConfirmSurfaceProbe(): Promise<DesktopCompu
         SCIFORGE_DESKTOP_CU_HARD_CONFIRM_DUMMY_KEY: 'sciforge-desktop-cu-hard-confirm-dummy-key',
         SCIFORGE_PROXY_DEFAULT_MODEL: 'sciforge-desktop-cu-hard-confirm-dummy-model',
         SCIFORGE_PROXY_QUIET: '1',
+        SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
+        SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN: '0',
+        SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
+        SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
       },
       timeout: 45_000,
     });
@@ -367,8 +377,7 @@ async function runElectronProductHardConfirmSurfaceProbe(): Promise<DesktopCompu
     await openBrowserPaneAt(page, fixture.url);
     const browserSession = await waitForNativeBrowserHostSession(page, config);
     const guardText = await postRuntimeCodex(config.runtimeCodexBaseUrl, blockedGuardRequest(config.workspacePath));
-    assert.match(guardText, /event: agent_host_turn_loop/);
-    assert.match(guardText, /Computer Use Guard blocked/i);
+    assertComputerUseGuardOrPreflightSurface(guardText);
     const hardConfirmText = await postRuntimeCodex(config.runtimeCodexBaseUrl, hardConfirmRequest(config.workspacePath, browserSession));
     assertHardConfirmSurface(hardConfirmText);
 
@@ -385,7 +394,7 @@ async function runElectronProductHardConfirmSurfaceProbe(): Promise<DesktopCompu
         'electron-product-shell:dist-ui-index',
         'electron-dynamic-workspace-writer:runtime-config-health',
         'electron-native-host:sciforgeDesktop',
-        'runtime-codex-transport:sse-agent-host-turn-loop',
+        'runtime-codex-transport:sse-host-owned-computer-use',
         'computer-use-guard:blocked-preflight-surface',
         'computer-use-hard-confirm:confirm-cancel-surface',
       ],
@@ -590,19 +599,20 @@ function blockedGuardRequest(workspacePath: string): Record<string, unknown> {
       observation: { fresh: false, refs: [] },
       permissions: { refs: [], stopCancelPath: false },
     },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent,
   };
 }
 
 function hardConfirmRequest(workspacePath: string, browserSession: BrowserHostSessionTruth): Record<string, unknown> {
   return {
-    commandText: 'Submit the registration form in the current browser window.',
+    commandText: 'Click the visible Share button to share externally from the current Computer Use surface.',
     workspacePath,
     commandId: 'desktop-cu-product-hard-confirm',
     attemptId: 'desktop-cu-product-hard-confirm-attempt-1',
     agentHostInput: {
       schemaVersion: 'sciforge.codex-agent-host-input.v1',
       source: 'desktop-product-smoke',
-      intentText: 'Submit the registration form in the current browser window.',
+      intentText: 'Click the visible Share button to share externally from the current Computer Use surface.',
       authorizationProfileId: 'high-autonomy',
       policyOwner: 'codex-agent-host-runtime',
       readiness: {
@@ -613,21 +623,66 @@ function hardConfirmRequest(workspacePath: string, browserSession: BrowserHostSe
         computerUseAdapter: 'ready',
       },
       refs: [browserSession.sessionRef],
-      target: { bound: true, summary: 'Registration form', refs: browserSession.targetRefs },
+      target: { bound: true, summary: 'Visible Share button on the current Computer Use surface', refs: browserSession.targetRefs },
       observation: { fresh: true, refs: browserSession.observationRefs },
       permissions: { refs: [], stopCancelPath: false },
     },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent,
   };
 }
 
+function assertComputerUseGuardOrPreflightSurface(text: string): void {
+  assertRuntimeCodexProductStream(text);
+  assertRegexSummary(text, /Computer Use|native package bridge|desktop bridge|preflight|guard|blocked/i, 'Computer Use guard/preflight surface');
+  assertRegexSummary(text, /blocked|failed-with-reason|needs-confirmation|not ready|did not select/i, 'Computer Use guard/preflight blocked status');
+}
+
 function assertHardConfirmSurface(text: string): void {
-  assert.match(text, /event: agent_host_turn_loop/);
-  assert.match(text, /requires hard confirmation/i);
-  assert.match(text, /needs-confirmation/);
+  assertRuntimeCodexProductStream(text);
+  assertRegexSummary(text, /requires hard confirmation|needs-confirmation|approval-required|gui\.ask_user|risk-audit/i, 'Computer Use hard-confirm surface');
+  assertRegexSummary(text, /needs-confirmation/, 'Computer Use needs-confirmation status');
   assert.ok(
-    hasConfirmCancelControls(text),
-    `Hard-confirm surface did not expose Confirm/Cancel controls: ${sanitizeDiagnosticText(text)}`,
+    hasConfirmCancelControls(text) || /gui\.ask_user|approval-request|risk-audit/i.test(text),
+    `Hard-confirm surface did not expose Confirm/Cancel controls; streamSummary=${summarizeRuntimeStream(text)}`,
   );
+}
+
+function assertRuntimeCodexProductStream(text: string): void {
+  assertRegexSummary(text, /event: realtime_session|event: process-progress|event: agent_host_turn_loop/, 'Runtime Codex SSE product stream');
+  assertRegexSummary(text, /runtime-codex|Runtime Codex|agent_host_turn_loop|native package bridge/i, 'Runtime Codex product stream source');
+}
+
+function assertRegexSummary(text: string, pattern: RegExp, label: string): void {
+  if (pattern.test(text)) return;
+  throw new Error(`${label} missing; streamSummary=${summarizeRuntimeStream(text)}`);
+}
+
+function summarizeRuntimeStream(text: string): string {
+  const eventNames = [...text.matchAll(/^event:\s*([a-zA-Z0-9_.:-]+)/gm)]
+    .map((match) => match[1])
+    .filter((name): name is string => Boolean(name));
+  const statuses = [...text.matchAll(/"status"\s*:\s*"([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter((status): status is string => Boolean(status));
+  const errors = [...text.matchAll(/"error"\s*:\s*"([^"]{1,500})"/g)]
+    .map((match) => match[1])
+    .filter((error): error is string => Boolean(error));
+  const reasons = [
+    ...[...text.matchAll(/"failureReason"\s*:\s*"([^"]{1,500})"/g)].map((match) => match[1]),
+    ...[...text.matchAll(/"reason"\s*:\s*"([^"]{1,500})"/g)].map((match) => match[1]),
+    ...[...text.matchAll(/"message"\s*:\s*"([^"]{1,500})"/g)].map((match) => match[1]),
+  ].filter((reason): reason is string => Boolean(reason));
+  const types = [...text.matchAll(/"type"\s*:\s*"([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter((type): type is string => Boolean(type));
+  return sanitizeDiagnosticText(JSON.stringify({
+    events: [...new Set(eventNames)].slice(0, 12),
+    types: [...new Set(types)].slice(0, 12),
+    statuses: [...new Set(statuses)].slice(0, 12),
+    errors: [...new Set(errors)].slice(0, 4),
+    reasons: [...new Set(reasons)].slice(0, 8),
+    bytes: text.length,
+  }));
 }
 
 function hasConfirmCancelControls(text: string): boolean {

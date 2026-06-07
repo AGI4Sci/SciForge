@@ -126,7 +126,7 @@ if (scripts[fixedPlatformBoundaryScript] !== 'tsx tools/check-fixed-platform-bou
 
 const smokeAllSteps = packageScriptSteps(scripts[smokeAllScript]);
 if (smokeAllSteps.includes(legacyAgentServerCompatScript)) {
-  errors.push(`${smokeAllScript} must not run ${legacyAgentServerCompatScript}; legacy AgentServer checks are explicit opt-in compatibility coverage`);
+  errors.push(`${smokeAllScript} must not run ${legacyAgentServerCompatScript}; legacy AgentServer compatibility buckets are retired`);
 }
 const directLegacyAgentServerSteps = smokeAllSteps.filter(
   (step) => step !== legacyAgentServerCompatScript && /\bagentserver\b/i.test(step),
@@ -134,11 +134,15 @@ const directLegacyAgentServerSteps = smokeAllSteps.filter(
 if (directLegacyAgentServerSteps.length > 0) {
   errors.push(`${smokeAllScript} must not promote AgentServer-first smoke scripts directly: ${directLegacyAgentServerSteps.join(', ')}`);
 }
-if (!scripts[legacyAgentServerCompatScript]?.includes('smoke:agentserver-')) {
-  errors.push(`${legacyAgentServerCompatScript} must preserve old AgentServer compatibility coverage while Runtime Codex becomes the release truth source`);
+const publicAgentServerSmokeScripts = Object.keys(scripts).filter((script) => /^smoke:(?:workspace-)?agentserver-/i.test(script));
+if (publicAgentServerSmokeScripts.length > 0) {
+  errors.push(`package scripts must expose backend/generated-task diagnostics instead of AgentServer-first smoke names: ${publicAgentServerSmokeScripts.join(', ')}`);
 }
-if (scripts[legacyAgentServerVerifyScript] !== `npm run ${legacyAgentServerCompatScript}`) {
-  errors.push(`${legacyAgentServerVerifyScript} must be the explicit opt-in AgentServer compatibility verifier`);
+if (scripts[legacyAgentServerCompatScript] !== undefined) {
+  errors.push(`${legacyAgentServerCompatScript} must be removed after AgentServer runtime module retirement`);
+}
+if (scripts[legacyAgentServerVerifyScript] !== undefined) {
+  errors.push(`${legacyAgentServerVerifyScript} must be removed after AgentServer runtime module retirement`);
 }
 
 const finalGateSteps = packageScriptSteps(scripts[verifyScript]);
@@ -167,7 +171,7 @@ if (errors.length) {
   for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy/no-hardcoded source hygiene guards, Runtime Codex truth-source/package/platform ownership gates, Runtime Codex final acceptance, provider upstream preflight, browser acceptance evidence, active CU-* Computer Use task matrix coverage, Web final conformance, browser web-multiturn-final, final evidence validation, strict release fail-fast gating, desktop package release gating, and explicit legacy AgentServer compatibility isolation`);
+  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy/no-hardcoded source hygiene guards, Runtime Codex truth-source/package/platform ownership gates, Runtime Codex final acceptance, provider upstream preflight, browser acceptance evidence, active CU-* Computer Use task matrix coverage, Web final conformance, browser web-multiturn-final, final evidence validation, strict release fail-fast gating, desktop package release gating, and retired legacy AgentServer compatibility buckets`);
 }
 
 function packageScriptSteps(script: string | undefined): string[] {

@@ -1,7 +1,7 @@
-import type { AgentServerGenerationResponse } from '../runtime-types.js';
+import type { BackendGenerationResponse } from '../runtime-types.js';
 import { safeWorkspaceRel } from '../gateway-utils.js';
 
-export function hydrateGeneratedTaskResponseFromText(response: AgentServerGenerationResponse, text: string): AgentServerGenerationResponse {
+export function hydrateGeneratedTaskResponseFromText(response: BackendGenerationResponse, text: string): BackendGenerationResponse {
   return {
     ...response,
     taskFiles: response.taskFiles.map((file) => file.content ? file : {

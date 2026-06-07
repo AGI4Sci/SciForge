@@ -49,7 +49,7 @@ test('direct context fast path answers skill tool capability provider status que
   assert.match(payload.message, /web_search|provider/i);
 });
 
-test('context follow-up protocol yields when AgentServer generation is explicitly forced', () => {
+test('context follow-up protocol yields when backend generation is explicitly forced', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: 'Where did the generated files go?',
@@ -301,7 +301,7 @@ test('run-diagnostic direct context can answer from selected execution-unit refs
         status: 'repair-needed',
         outputRef: '.sciforge/task-results/failed.json',
         stderrRef: '.sciforge/logs/failed.stderr.log',
-        failureReason: 'AgentServer generation stopped by convergence guard.',
+        failureReason: 'backend generation stopped by convergence guard.',
         recoverActions: ['Retry with selected refs only.'],
         nextStep: 'Use currentReferenceDigests instead of broad history.',
       }],
@@ -314,7 +314,7 @@ test('run-diagnostic direct context can answer from selected execution-unit refs
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.match(payload.message, /EU-literature-failed|failed\.json|failed\.stderr\.log/);
-  assert.doesNotMatch(payload.message, /AgentServer generation request registered/);
+  assert.doesNotMatch(payload.message, /backend generation request registered/);
 });
 
 test('selected-reference direct context can produce a bounded planning register without AgentServer', () => {
@@ -564,7 +564,7 @@ test('selected-reference direct context can draft a main document artifact witho
   assert.match(payload.message, /# Proposal: Adaptive Spatial Transcriptomics/);
   assert.match(payload.message, /## Specific Aims/);
   assert.match(payload.message, /## Evidence Gaps and Risks/);
-  assert.doesNotMatch(payload.message, /AgentServer generation request registered/);
+  assert.doesNotMatch(payload.message, /backend generation request registered/);
 });
 
 test('applied context-only constraints do not synthesize direct context without DirectContextDecision', () => {
@@ -806,7 +806,7 @@ test('context follow-up protocol returns needs-work when expected artifacts are 
   assert.match(String(payload.executionUnits[0]?.failureReason ?? ''), /cannot satisfy follow-up/);
 });
 
-test('provider status follow-up reuses current context without AgentServer generation', () => {
+test('provider status follow-up reuses current context without backend generation', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: 'Round 2 continue from Round 1. Reuse the Example Domain result and fetch https://example.com again only if needed. Say whether tool providers are still available.',

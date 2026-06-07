@@ -47,6 +47,8 @@ import {
 import {
   buildRuntimeProviderPreflightManifest,
   normalizeRuntimeProviderProxyHealthzResponse,
+  normalizeRuntimeProviderProxyInferenceResponse,
+  runtimeProviderProxyInferenceRequestCandidates,
   runtimeProviderProxyBaseUrl as normalizeRuntimeProviderProxyBaseUrl,
 } from './workspace-server-runtime-provider-preflight.js';
 import { readRuntimeCodexBrowserAcceptanceManifest } from './workspace-server-runtime-codex-browser-acceptance.js';
@@ -121,6 +123,7 @@ import { assertCodexNoForkGate } from '../../packages/backend/src/codex-compatib
 import {
   DEFAULT_PROXY_BASE_URL,
   resolveRuntimeCodexSandbox,
+  RUNTIME_MODEL,
   RUNTIME_PROFILE,
 } from '../../packages/backend/src/runtime-home.js';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
@@ -939,11 +942,15 @@ async function readRuntimeProviderPreflightManifest() {
   const checkedHealthz = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
     ? await requestRuntimeProviderProxyHealthz(runtimeEnv)
     : undefined;
+  const checkedInference = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent && checkedHealthz?.ok
+    ? await requestRuntimeProviderProxyInference(runtimeEnv)
+    : undefined;
   return buildRuntimeProviderPreflightManifest({
     serviceEnv,
     runtimeEnv,
     proxyOptions,
     checkedHealthz,
+    checkedInference,
   });
 }
 
@@ -953,6 +960,48 @@ async function requestRuntimeProviderProxyHealthz(env: NodeJS.ProcessEnv) {
     const response = await fetch(`${baseUrl}/healthz?check=upstream`, { signal: AbortSignal.timeout(3_500) });
     const parsed = await response.json().catch(() => ({}));
     return normalizeRuntimeProviderProxyHealthzResponse(response.ok, parsed);
+  } catch {
+    return {
+      category: 'upstream-outage',
+      ok: false,
+      retryable: true,
+      releaseAcceptance: 'not-evaluated' as const,
+    };
+  }
+}
+
+async function requestRuntimeProviderProxyInference(env: NodeJS.ProcessEnv) {
+  const baseUrl = runtimeProviderProxyBaseUrl(env);
+  const runtimeApiKey = stringValue(env.SCIFORGE_RUNTIME_API_KEY);
+  const model = stringValue(env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS)
+    || stringValue(env.SCIFORGE_RUNTIME_MODEL)
+    || RUNTIME_MODEL;
+  let endpointMissingDiagnostic: ReturnType<typeof normalizeRuntimeProviderProxyInferenceResponse> | undefined;
+  try {
+    for (const candidate of runtimeProviderProxyInferenceRequestCandidates(model)) {
+      const response = await fetch(`${baseUrl}${candidate.endpoint}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(runtimeApiKey ? { authorization: `Bearer ${runtimeApiKey}` } : {}),
+        },
+        body: JSON.stringify(candidate.body),
+        signal: AbortSignal.timeout(5_000),
+      });
+      const parsed = await response.json().catch(() => ({}));
+      const diagnostic = normalizeRuntimeProviderProxyInferenceResponse(response.ok, response.status, parsed);
+      if (diagnostic.category === 'repo-bug' && diagnostic.httpStatus === 404) {
+        endpointMissingDiagnostic ??= diagnostic;
+        continue;
+      }
+      return diagnostic;
+    }
+    return endpointMissingDiagnostic ?? {
+      category: 'repo-bug',
+      ok: false,
+      retryable: false,
+      releaseAcceptance: 'not-evaluated' as const,
+    };
   } catch {
     return {
       category: 'upstream-outage',

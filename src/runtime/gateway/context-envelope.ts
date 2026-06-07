@@ -6,7 +6,7 @@ import { runtimeVerificationResultArtifacts } from '@sciforge-ui/runtime-contrac
 import { buildStartupContextEnvelope, type StartupCapabilityBriefInput } from '../../../packages/agent-harness/src/startup-context.js';
 import type { CapabilityCostClass, CapabilityLatencyClass, CapabilitySideEffectClass, LatencyTier, StartupContextEnvelope } from '../../../packages/agent-harness/src/contracts.js';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
-import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import { clipForBackendJson, clipForBackendPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput, type CapabilityBrokerProviderAvailability, type CapabilityBrokerSkillHint, type CapabilityBrokerToolBudget, type CapabilityBrokerVerificationPolicyHint } from '../capability-broker.js';
 import { sanitizeCapabilityEvolutionCompactSummaryForBroker } from '../capability-evolution-ledger.js';
 import {
@@ -113,14 +113,14 @@ export function buildContextEnvelope(
       toolPayloadContractRef: 'sciforge.toolPayload.v1',
     },
     orchestrationBoundary: {
-      decisionOwner: 'AgentServer',
+      decisionOwner: 'AgentHost',
       sciForgeRoleRef: 'sciforge.orchestration-boundary.runtime-role.v1',
       currentUserRequestIsAuthoritative: true,
       agentId: params.agentId,
-      agentServerCoreSnapshotAvailable: params.agentServerCoreSnapshotAvailable === true,
+      backendContextSnapshotAvailable: params.agentServerCoreSnapshotAvailable === true,
       contextModeReasonCode: mode === 'delta'
-        ? 'agentserver-core-compact-delta-refs'
-        : 'full-handoff-no-reusable-agentserver-session',
+        ? 'backend-context-compact-delta-refs'
+        : 'full-handoff-no-reusable-backend-session',
     },
     continuityPolicySummary: continuityPolicySummaryForEnvelope(mode, {
       hasRecentFailures: recentFailures.length > 0,
@@ -190,8 +190,8 @@ export function buildContextEnvelope(
       sessionId: typeof uiState.sessionId === 'string' ? uiState.sessionId : undefined,
       currentPrompt: typeof uiState.currentPrompt === 'string' ? uiState.currentPrompt : request.prompt,
       currentUserRequest: currentUserRequestFromPrompt(request.prompt),
-      currentReferences: governedCurrentReferences.length ? governedCurrentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2)) : undefined,
-      currentReferenceDigests: governedCurrentReferenceDigests.length ? governedCurrentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4)) : undefined,
+      currentReferences: governedCurrentReferences.length ? governedCurrentReferences.slice(0, 8).map((entry) => clipForBackendJson(entry, 2)) : undefined,
+      currentReferenceDigests: governedCurrentReferenceDigests.length ? governedCurrentReferenceDigests.slice(0, 8).map((entry) => clipForBackendJson(entry, 4)) : undefined,
       stateDigest,
       conversationPolicySummary,
       ...executionModeDecision,
@@ -208,7 +208,7 @@ export function buildContextEnvelope(
         ],
         stateDigestRefs,
       }),
-      contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
+      contextReusePolicy: contextReusePolicy ? clipForBackendJson(contextReusePolicy, 3) : undefined,
       recentRuns: Array.isArray(uiState.recentRuns)
         ? summarizeRecentRunsForEnvelope(uiState.recentRuns, mode)
         : undefined,
@@ -239,7 +239,7 @@ function evidenceExpansionPolicySummaryForEnvelope(request: GatewayRequest) {
   const policyRecord = isRecord(uiState.failureRecoveryPolicy) && isRecord(uiState.failureRecoveryPolicy.evidenceExpansionPolicy)
     ? uiState.failureRecoveryPolicy.evidenceExpansionPolicy
     : undefined;
-  const transportPolicy = policyRecord ? clipForAgentServerJson(policyRecord, 2) : undefined;
+  const transportPolicy = policyRecord ? clipForBackendJson(policyRecord, 2) : undefined;
   return {
     schemaVersion: 'sciforge.evidence-expansion-policy.v1',
     authority: 'agent-harness-contract-or-runtime-policy',
@@ -273,10 +273,10 @@ function continuityPolicySummaryForEnvelope(
     schemaVersion: 'sciforge.context-envelope.continuity-policy-summary.v1',
     mode,
     policyProviderRefs: [
-      '@sciforge/skills/runtime-policy#agentServerContinuationPromptPolicyLines',
-      '@sciforge/skills/runtime-policy#agentServerPriorAttemptsPromptPolicyLines',
-      '@sciforge/skills/runtime-policy#agentServerRepairPromptPolicyLines',
-      '@sciforge/skills/runtime-policy#agentServerLargeFilePromptContractLines',
+      '@sciforge/skills/runtime-policy#backendContinuationPromptPolicyLines',
+      '@sciforge/skills/runtime-policy#backendPriorAttemptsPromptPolicyLines',
+      '@sciforge/skills/runtime-policy#backendRepairPromptPolicyLines',
+      '@sciforge/skills/runtime-policy#backendLargeFilePromptContractLines',
       '@sciforge-ui/runtime-contract/artifact-policy#agentServerCurrentReferencePromptPolicyLines',
     ],
     contextFields: mode === 'full'
@@ -422,21 +422,21 @@ function compactBrokerOutputForAgentServer(
   harnessInputAudit?: Record<string, unknown>,
 ) {
   return {
-    schemaVersion: 'sciforge.agentserver.capability-broker-brief.v1',
+    schemaVersion: 'sciforge.backend.capability-broker-brief.v1',
     source: 'typescript-capability-broker',
     contract: brokered.contract,
     routingPolicy: {
-      decisionOwner: 'AgentServer',
+      decisionOwner: 'AgentHost',
       contractExpansion: 'lazy-load selected schemas/examples/repair hints only when needed',
       defaultPayload: 'compact briefs only; full capability catalog omitted',
     },
-    briefs: brokered.briefs.map((brief) => clipForAgentServerJson(brief, 3)),
+    briefs: brokered.briefs.map((brief) => clipForBackendJson(brief, 3)),
     excluded: brokered.excluded.slice(0, 12),
     audit: brokered.audit
       .filter((entry) => brokered.briefs.some((brief) => brief.id === entry.id) || entry.excluded)
       .slice(0, 16)
-      .map((entry) => clipForAgentServerJson(entry, 2)),
-    ...(harnessInputAudit ? { harnessInputAudit: clipForAgentServerJson(harnessInputAudit, 1) } : {}),
+      .map((entry) => clipForBackendJson(entry, 2)),
+    ...(harnessInputAudit ? { harnessInputAudit: clipForBackendJson(harnessInputAudit, 1) } : {}),
     ...(registryAudit ? { registryAudit: compactCapabilityRegistryAuditForBroker(registryAudit) } : {}),
     inputSummary: brokered.inputSummary,
   };
@@ -471,7 +471,7 @@ function compactCapabilityRegistryAuditForBroker(audit: CompactCapabilityManifes
 function capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief: Record<string, unknown>, legacyCapabilityBrief: unknown) {
   const briefs = Array.isArray(capabilityBrokerBrief.briefs) ? capabilityBrokerBrief.briefs.filter(isRecord) : [];
   const audit = Array.isArray(capabilityBrokerBrief.audit) ? capabilityBrokerBrief.audit.filter(isRecord) : [];
-  const selected = briefs.map((brief) => clipForAgentServerJson(pruneUndefined({
+  const selected = briefs.map((brief) => clipForBackendJson(pruneUndefined({
     id: stringField(brief.id),
     manifestRef: stringField(brief.id) ? `capability:${stringField(brief.id)}` : undefined,
     kind: stringField(brief.kind),
@@ -482,7 +482,7 @@ function capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief: Record<
     budget: isRecord(brief.budget) ? brief.budget : undefined,
     source: 'capability-broker-brief',
   }), 3));
-  const excluded = audit.filter((entry) => stringField(entry.excluded)).slice(0, 12).map((entry) => clipForAgentServerJson(pruneUndefined({
+  const excluded = audit.filter((entry) => stringField(entry.excluded)).slice(0, 12).map((entry) => clipForBackendJson(pruneUndefined({
     id: stringField(entry.id),
     manifestRef: stringField(entry.id) ? `capability:${stringField(entry.id)}` : undefined,
     reason: stringField(entry.excluded),
@@ -567,7 +567,7 @@ export function buildStartupContextEnvelopeForRequest(
     capabilityBriefs: startupCapabilityBriefsFromBrokerBrief(params.capabilityBrokerBrief),
     sourceRefs: [
       'sciforge.context-envelope.v1',
-      'sciforge.agentserver.capability-broker-brief.v1',
+      'sciforge.backend.capability-broker-brief.v1',
       ...(stringField(agentHarness.contractRef) ? [stringField(agentHarness.contractRef) as string] : []),
       ...(stringField(agentHarness.traceRef) ? [stringField(agentHarness.traceRef) as string] : []),
     ],
@@ -594,7 +594,7 @@ function startupCapabilityBriefsFromBrokerBrief(value: unknown): StartupCapabili
       latencyClass: capabilityLatencyClassField(brief.latencyClass),
       sideEffectClass: capabilitySideEffectClassField(brief.sideEffectClass),
       artifactTypes: routingTags.filter((tag) => tag.includes('artifact') || tag.includes('report') || tag.includes('matrix')),
-      sourceRef: 'sciforge.agentserver.capability-broker-brief.v1',
+      sourceRef: 'sciforge.backend.capability-broker-brief.v1',
       hash: hashJson(brief),
     };
   });
@@ -784,7 +784,7 @@ function mergeBrokerRefs(values: Array<Record<string, unknown>>): CapabilityBrok
   const out: CapabilityBrokerObjectRef[] = [];
   for (const value of values) {
     const ref = stringField(value.ref) ?? stringField(value.dataRef) ?? stringField(value.path);
-    const key = ref ?? stringField(value.id) ?? JSON.stringify(clipForAgentServerJson(value, 1));
+    const key = ref ?? stringField(value.id) ?? JSON.stringify(clipForBackendJson(value, 1));
     if (!key || seen.has(key)) continue;
     seen.add(key);
     out.push({
@@ -822,25 +822,25 @@ function summarizeFailureRecoveryPolicy(value: unknown) {
   const direct = {
     mode: typeof policy.mode === 'string' ? policy.mode : undefined,
     failureReason: typeof policy.priorFailureReason === 'string'
-      ? clipForAgentServerPrompt(policy.priorFailureReason, 700)
+      ? clipForBackendPrompt(policy.priorFailureReason, 700)
       : undefined,
     recoverActions: toStringList(policy.recoverActions).slice(0, 5),
-    nextStep: typeof policy.nextStep === 'string' ? clipForAgentServerPrompt(policy.nextStep, 300) : undefined,
+    nextStep: typeof policy.nextStep === 'string' ? clipForBackendPrompt(policy.nextStep, 300) : undefined,
     evidenceRefs: failureEvidenceRefs(policy),
   };
   const summarizedAttempts = attempts.map((attempt) => ({
     id: typeof attempt.id === 'string' ? attempt.id : undefined,
     status: typeof attempt.status === 'string' ? attempt.status : undefined,
     tool: typeof attempt.tool === 'string' ? attempt.tool : undefined,
-    failureReason: typeof attempt.failureReason === 'string' ? clipForAgentServerPrompt(attempt.failureReason, 500) : undefined,
+    failureReason: typeof attempt.failureReason === 'string' ? clipForBackendPrompt(attempt.failureReason, 500) : undefined,
     recoverActions: toStringList(attempt.recoverActions).slice(0, 4),
-    nextStep: typeof attempt.nextStep === 'string' ? clipForAgentServerPrompt(attempt.nextStep, 250) : undefined,
+    nextStep: typeof attempt.nextStep === 'string' ? clipForBackendPrompt(attempt.nextStep, 250) : undefined,
     evidenceRefs: failureEvidenceRefs(attempt),
     workEvidenceSummary: summarizeWorkEvidenceForHandoff(attempt.workEvidenceSummary ?? attempt),
   })).filter((attempt) => attempt.failureReason || attempt.evidenceRefs.length || attempt.recoverActions.length);
   const out = [direct, ...summarizedAttempts]
     .filter((entry) => entry.failureReason || entry.evidenceRefs.length || entry.recoverActions.length);
-  return out.slice(-4).map((entry) => clipForAgentServerJson(entry, 3));
+  return out.slice(-4).map((entry) => clipForBackendJson(entry, 3));
 }
 
 function failureEvidenceRefs(value: unknown) {
@@ -900,11 +900,11 @@ function stateDigestForEnvelope(uiState: Record<string, unknown>) {
     isRecord(uiState.contextCompaction) ? uiState.contextCompaction.stateDigest : undefined,
   );
   if (!candidate) return undefined;
-  return clipForAgentServerJson(pruneUndefined({
+  return clipForBackendJson(pruneUndefined({
     schemaVersion: stringField(candidate.schemaVersion),
     taskId: stringField(candidate.taskId),
     relation: stringField(candidate.relation),
-    summary: clipForAgentServerPrompt(candidate.summary, 700),
+    summary: clipForBackendPrompt(candidate.summary, 700),
     handoffPolicy: stringField(candidate.handoffPolicy),
     stateRefs: toStringList(candidate.stateRefs).slice(0, 12),
     completedRefs: toStringList(candidate.completedRefs).slice(0, 12),
@@ -936,8 +936,8 @@ function refKindForStateDigestRef(ref: string) {
 function summarizeRecentRunsForEnvelope(value: unknown[], mode: AgentServerContextMode) {
   const runs = mode === 'full' ? value.slice(-8) : value.slice(-4);
   return runs.map((entry) => {
-    if (!isRecord(entry)) return clipForAgentServerJson(entry, 1);
-    return clipForAgentServerJson(pruneUndefined({
+    if (!isRecord(entry)) return clipForBackendJson(entry, 1);
+    return clipForBackendJson(pruneUndefined({
       id: stringField(entry.id) ?? stringField(entry.runId),
       status: stringField(entry.status),
       ref: stringField(entry.ref),
@@ -945,8 +945,8 @@ function summarizeRecentRunsForEnvelope(value: unknown[], mode: AgentServerConte
       stdoutRef: stringField(entry.stdoutRef),
       stderrRef: stringField(entry.stderrRef),
       artifactRefs: toStringList(entry.artifactRefs).slice(0, 8),
-      summary: clipForAgentServerPrompt(entry.summary, 500),
-      failureReason: clipForAgentServerPrompt(entry.failureReason, 500),
+      summary: clipForBackendPrompt(entry.summary, 500),
+      failureReason: clipForBackendPrompt(entry.failureReason, 500),
       hash: hashJson(entry),
     }), 2);
   });
@@ -1064,12 +1064,12 @@ export function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>)
     return {
       id,
       type,
-      title: clipForAgentServerPrompt(title, 240),
+      title: clipForBackendPrompt(title, 240),
       ref: typeof artifact.ref === 'string' ? artifact.ref : undefined,
       path: typeof artifact.path === 'string' ? artifact.path : undefined,
       dataRef: typeof artifact.dataRef === 'string' ? artifact.dataRef : undefined,
       outputRef: typeof artifact.outputRef === 'string' ? artifact.outputRef : undefined,
-      metadata: isRecord(artifact.metadata) ? clipForAgentServerJson(artifact.metadata, 2) : undefined,
+      metadata: isRecord(artifact.metadata) ? clipForBackendJson(artifact.metadata, 2) : undefined,
       dataSummary: artifactDataSummaryForAgentServer(artifact),
       keys: Object.keys(artifact).slice(0, 12),
       hash: hashJson(artifact),
@@ -1088,8 +1088,8 @@ function artifactDataSummaryForAgentServer(artifact: Record<string, unknown>) {
       shape: artifactDataShape(data),
     };
   }
-  if (typeof data === 'string') return clipForAgentServerPrompt(data, 900);
-  return clipForAgentServerJson(data, 1);
+  if (typeof data === 'string') return clipForBackendPrompt(data, 900);
+  return clipForBackendJson(data, 1);
 }
 
 function artifactDataShape(value: unknown): Record<string, unknown> {
@@ -1116,7 +1116,7 @@ export function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
     outputRef: typeof entry.outputRef === 'string' ? entry.outputRef : undefined,
     stdoutRef: typeof entry.stdoutRef === 'string' ? entry.stdoutRef : undefined,
     stderrRef: typeof entry.stderrRef === 'string' ? entry.stderrRef : undefined,
-    failureReason: clipForAgentServerPrompt(entry.failureReason, 480),
+    failureReason: clipForBackendPrompt(entry.failureReason, 480),
     hash: hashJson(entry),
   }));
 }
@@ -1202,7 +1202,7 @@ function verificationTextSummary(value: unknown, limit: number) {
   if (looksLikeRawCarrierText(text)) {
     return `[omitted raw-like verification text; chars=${text.length}; hash=${hashJson(text)}]`;
   }
-  return clipForAgentServerPrompt(text, limit);
+  return clipForBackendPrompt(text, limit);
 }
 
 function looksLikeRawCarrierText(text: string) {
@@ -1308,21 +1308,21 @@ export function summarizeConversationPolicyForAgentServer(value: unknown) {
       allowBackgroundCompletion: booleanField(latency.allowBackgroundCompletion),
       blockOnContextCompaction: booleanField(latency.blockOnContextCompaction),
       blockOnVerification: booleanField(latency.blockOnVerification),
-      reason: clipForAgentServerPrompt(latency.reason, 320),
+      reason: clipForBackendPrompt(latency.reason, 320),
     },
     responsePlan: {
       initialResponseMode: stringField(response.initialResponseMode),
       finalizationMode: stringField(response.finalizationMode),
       userVisibleProgress: toStringList(response.userVisibleProgress).slice(0, 8),
       fallbackMessagePolicy: stringField(response.fallbackMessagePolicy),
-      reason: clipForAgentServerPrompt(response.reason, 320),
+      reason: clipForBackendPrompt(response.reason, 320),
     },
     backgroundPlan: {
       enabled: booleanField(background.enabled),
       tasks: toStringList(background.tasks).slice(0, 8),
       handoffRefsRequired: booleanField(background.handoffRefsRequired),
       cancelOnNewUserTurn: booleanField(background.cancelOnNewUserTurn),
-      reason: clipForAgentServerPrompt(background.reason, 320),
+      reason: clipForBackendPrompt(background.reason, 320),
     },
     cachePolicy: {
       reuseScenarioPlan: booleanField(cache.reuseScenarioPlan),
@@ -1332,7 +1332,7 @@ export function summarizeConversationPolicyForAgentServer(value: unknown) {
       reuseArtifactIndex: booleanField(cache.reuseArtifactIndex),
       reuseLastSuccessfulStage: booleanField(cache.reuseLastSuccessfulStage),
       reuseBackendSession: booleanField(cache.reuseBackendSession),
-      reason: clipForAgentServerPrompt(cache.reason, 320),
+      reason: clipForBackendPrompt(cache.reason, 320),
     },
   });
 }
@@ -1362,7 +1362,7 @@ function summarizeVerificationResults(request: GatewayRequest) {
 export function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {
   if (!ledger.length) return undefined;
   const budget = mode === 'full' ? 24 : 18;
-  const tail = ledger.slice(-budget).map((entry) => clipForAgentServerJson(entry, 3));
+  const tail = ledger.slice(-budget).map((entry) => clipForBackendJson(entry, 3));
   const omitted = Math.max(0, ledger.length - tail.length);
   return {
     totalTurns: ledger.length,
@@ -1387,12 +1387,12 @@ export function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
       outputRef: typeof attempt.outputRef === 'string' ? attempt.outputRef : undefined,
       stdoutRef: typeof attempt.stdoutRef === 'string' ? attempt.stdoutRef : undefined,
       stderrRef: typeof attempt.stderrRef === 'string' ? attempt.stderrRef : undefined,
-      failureReason: clipForAgentServerPrompt(attempt.failureReason, 800),
+      failureReason: clipForBackendPrompt(attempt.failureReason, 800),
       schemaErrors: Array.isArray(attempt.schemaErrors)
-        ? attempt.schemaErrors.map((entry) => clipForAgentServerPrompt(entry, 240)).filter(Boolean).slice(0, 8)
+        ? attempt.schemaErrors.map((entry) => clipForBackendPrompt(entry, 240)).filter(Boolean).slice(0, 8)
         : undefined,
       workEvidenceSummary: summarizeWorkEvidenceForHandoff(attempt.workEvidenceSummary ?? attempt),
-      patchSummary: clipForAgentServerPrompt(attempt.patchSummary, 800),
+      patchSummary: clipForBackendPrompt(attempt.patchSummary, 800),
       diffRef: typeof attempt.diffRef === 'string' ? attempt.diffRef : undefined,
       scenarioPackageRef: isRecord(attempt.scenarioPackageRef) ? attempt.scenarioPackageRef : undefined,
       skillPlanRef: typeof attempt.skillPlanRef === 'string' ? attempt.skillPlanRef : undefined,

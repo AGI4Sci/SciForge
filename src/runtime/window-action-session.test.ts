@@ -190,6 +190,28 @@ test('WindowActionSession keeps a bounded cursor/action contract and routes acti
     }).adapter,
     'app-native-command',
   );
+  const appiumTextEditSaveRoute = routeWindowAction({
+    target: {
+      app: { id: 'com.apple.TextEdit', name: 'TextEdit', kind: 'editor' },
+      capabilities: { appiumMac2: true, accessibility: true },
+    },
+    action: 'save',
+  });
+  assert.equal(appiumTextEditSaveRoute.adapter, 'appium-mac2');
+  assert.equal(appiumTextEditSaveRoute.evidence?.editorSaveRequiresInputEvent, true);
+  assert.equal(appiumTextEditSaveRoute.evidence?.editorSaveRequiresArtifactValidator, true);
+  assert.notEqual(appiumTextEditSaveRoute.evidence?.sharedSystemInput, true);
+  assert.ok(appiumTextEditSaveRoute.evidenceRefs.some((item) => item.kind === 'appium-mac2-target-binding'));
+  const appiumTextEditTypeRoute = routeWindowAction({
+    target: {
+      app: { id: 'com.apple.TextEdit', name: 'TextEdit', kind: 'editor' },
+      capabilities: { appiumMac2: true, accessibility: true },
+    },
+    action: 'type',
+  });
+  assert.equal(appiumTextEditTypeRoute.adapter, 'appium-mac2');
+  assert.notEqual(appiumTextEditTypeRoute.evidence?.sharedSystemInput, true);
+  assert.ok(appiumTextEditTypeRoute.evidenceRefs.some((item) => item.kind === 'appium-mac2-target-binding'));
   assert.equal(
     routeWindowAction({
       target: {

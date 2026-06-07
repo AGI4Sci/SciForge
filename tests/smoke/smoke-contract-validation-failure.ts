@@ -373,7 +373,7 @@ try {
   assert.doesNotMatch(structuredRepairText, new RegExp(rawScatteredReason));
   assert.match(structuredRepair.message, /ContractValidationFailure work-evidence/);
   assert.match(String(structuredRepairUnit.reasoningTrace ?? structuredRepair.reasoningTrace), /structuredValidationFailure=ContractValidationFailure/);
-  assert.equal(structuredRepairUnit.failureReason, structuredRepair.message.replace(/^SciForge runtime gateway needs repair or AgentServer task generation: /, ''));
+  assert.equal(structuredRepairUnit.failureReason, structuredRepair.message.replace(/^SciForge runtime gateway needs repair or backend task generation: /, ''));
   assert.deepEqual(recoverActionsFromUnit(structuredRepairUnit), workEvidenceFailure.recoverActions);
   assert.equal(structuredRepairUnit.nextStep, workEvidenceFailure.nextStep);
   assert.ok(requiredInputsFromUnit(structuredRepairUnit).includes(`contract:${workEvidenceFailure.contractId}`));

@@ -29,18 +29,25 @@ import {
   InMemoryNativeVirtualAppScreenHost,
 } from '../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 
+const VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV = 'SCIFORGE_VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC';
+process.env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] = '1';
+
 test('vision-sense wires native driver hook opt-in through env without importing smoke drivers', async () => {
   const runtimeSource = await readFile(new URL('./vision-sense-runtime.ts', import.meta.url), 'utf8');
-  const virtualAppScreenBranchStart = runtimeSource.indexOf("if (virtualAppScreenCommand.kind === 'parsed')");
-  const virtualAppScreenBranchEnd = runtimeSource.indexOf('const silentBackgroundGuard = silentBackgroundVirtualAppScreenGuard');
-  assert.notEqual(virtualAppScreenBranchStart, -1);
-  assert.ok(virtualAppScreenBranchEnd > virtualAppScreenBranchStart);
-  const virtualAppScreenRuntimeBranch = runtimeSource.slice(virtualAppScreenBranchStart, virtualAppScreenBranchEnd);
+  const diagnosticSource = await readFile(new URL('./vision-sense/virtual-app-screen-diagnostic-runtime.ts', import.meta.url), 'utf8');
 
-  assert.match(runtimeSource, /ensureVirtualAppScreenRuntimeExecutorsRegistered\(\{\s*nativeDriverHooks:\s*\{\s*env:\s*process\.env\s*\}/);
+  const staticVirtualAppScreenRuntimeImports = runtimeSource
+    .split('\n')
+    .filter((line) => /^import\s+(?!type\b).*from ['"]\.\/computer-use\/virtual-app-screen-(?:input-runtime|runtime-executors|session-manager)\.js['"]/.test(line));
+  assert.deepEqual(staticVirtualAppScreenRuntimeImports, []);
+  assert.match(runtimeSource, /import\('\.\/vision-sense\/virtual-app-screen-diagnostic-runtime\.js'\)/);
+  assert.doesNotMatch(runtimeSource, /import\('\.\/computer-use\/virtual-app-screen-(?:input-runtime|runtime-executors|session-manager|command)\.js'\)/);
+  assert.match(diagnosticSource, /import\('\.\.\/computer-use\/virtual-app-screen-runtime-executors\.js'\)/);
+  assert.match(diagnosticSource, /ensureVirtualAppScreenRuntimeExecutorsRegistered\(\{\s*nativeDriverHooks:\s*\{\s*env:\s*process\.env\s*\}/);
   assert.doesNotMatch(runtimeSource, /createMacosVirtualDisplayDriverHooks|createLinuxXpraVirtualDisplayDriverHooks|createWindowsIddVirtualDisplayDriverHooks/);
+  assert.doesNotMatch(diagnosticSource, /createMacosVirtualDisplayDriverHooks|createLinuxXpraVirtualDisplayDriverHooks|createWindowsIddVirtualDisplayDriverHooks/);
   assert.doesNotMatch(runtimeSource, /virtual-app-screen-vscode-smoke|vscode-virtual-app-screen-bridge|noVNC|RDP|QEMU|runPlaywright|import\([^)]*playwright|from ['"][^'"]*playwright/);
-  assert.doesNotMatch(virtualAppScreenRuntimeBranch, /VSCode|vscode|noVNC|RDP|QEMU|Playwright|playwright/);
+  assert.doesNotMatch(diagnosticSource, /virtual-app-screen-vscode-smoke|vscode-virtual-app-screen-bridge|noVNC|RDP|QEMU|runPlaywright|import\([^)]*playwright|from ['"][^'"]*playwright/);
 });
 
 test('vision-sense does not intercept explicit Playwright Edge MCP browser provider requests', async () => {
@@ -93,6 +100,45 @@ test('vision-sense does not intercept literature research topics that mention co
 
     assert.equal(payload, undefined);
   } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('vision-sense blocks VirtualAppScreen runtime commands without diagnostic opt-in', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-vas-default-blocked-'));
+  const original = process.env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV];
+  delete process.env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV];
+  try {
+    const payload = await tryRunVisionSenseRuntime({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use screen attach --source right-pane-screen --profile "vscode-editor" --target-app-ref "app:profile/vscode-editor"',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      selectedActionIds: ['action.sciforge.computer-use'],
+      artifacts: [],
+      uiState: {
+        selectedToolIds: ['local.vision-sense'],
+        selectedActionIds: ['action.sciforge.computer-use'],
+        visionSenseConfig: {
+          desktopBridgeEnabled: true,
+          dryRun: true,
+          runId: 'vas-default-blocked',
+        },
+      },
+    });
+
+    assert.equal(payload?.executionUnits[0]?.status, 'failed-with-reason');
+    assert.match(payload?.message ?? '', /VirtualAppScreen runtime commands are retired from the default Computer Use product path/);
+    assert.equal(payload?.uiManifest?.some((slot) => slot.componentId === 'virtual-screen-viewer'), false);
+    assert.equal(payload?.uiManifest?.some((slot) => slot.componentId === 'image-evidence-viewer'), false);
+    assert.equal(payload?.artifacts?.some((artifact) => artifact.type === 'computer-use-virtual-screen'), false);
+    assert.equal((payload?.executionUnits[0]?.routeDecision as Record<string, unknown> | undefined)?.diagnosticOptInEnv, VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV);
+  } finally {
+    if (original === undefined) {
+      process.env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] = '1';
+    } else {
+      process.env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] = original;
+    }
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -193,7 +239,8 @@ test('vision-sense blocks silent background VirtualAppScreen before shared-syste
     assert.match(String(payload?.executionUnits[0]?.failureReason ?? ''), /blocked before launching or activating the desktop app/);
     assert.equal((payload?.executionUnits[0]?.routeDecision as Record<string, unknown> | undefined)?.route, 'virtual-app-screen-silent-background');
 
-    const screenSlot = payload?.uiManifest?.find((slot) => slot.componentId === 'virtual-screen-viewer');
+    assert.equal(payload?.uiManifest?.some((slot) => slot.componentId === 'virtual-screen-viewer'), false);
+    const screenSlot = payload?.uiManifest?.find((slot) => slot.componentId === 'image-evidence-viewer');
     assert.equal(screenSlot?.artifactRef, 'computer-use-virtual-screen-cu-silent-vscode-blocked');
     const screenArtifact = payload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
@@ -261,7 +308,8 @@ test('vision-sense accepts right pane VirtualAppScreen attach commands as fail-c
     assert.equal(routeDecision?.screenRef, 'virtual-app-screen:session-screen/screen-request');
     assert.equal(routeDecision?.adapterReadinessRef, 'computer-use:screen-activation/session-screen/provider-readiness.json');
 
-    const screenSlot = payload?.uiManifest?.find((slot) => slot.componentId === 'virtual-screen-viewer');
+    assert.equal(payload?.uiManifest?.some((slot) => slot.componentId === 'virtual-screen-viewer'), false);
+    const screenSlot = payload?.uiManifest?.find((slot) => slot.componentId === 'image-evidence-viewer');
     assert.match(stringField(screenSlot?.artifactRef), /^computer-use-virtual-screen-virtual-app-screen-screen-attach-/);
     const screenArtifact = payload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
@@ -327,7 +375,8 @@ test('vision-sense materializes right pane VirtualAppScreen live refs from a reg
     assert.equal(routeDecision?.sessionManagerStatus, 'attached');
     assert.equal(routeDecision?.sessionManagerExecutorId, 'native-session-manager:vision-runtime-test');
 
-    const screenSlot = payload?.uiManifest?.find((slot) => slot.componentId === 'virtual-screen-viewer');
+    assert.equal(payload?.uiManifest?.some((slot) => slot.componentId === 'virtual-screen-viewer'), false);
+    const screenSlot = payload?.uiManifest?.find((slot) => slot.componentId === 'image-evidence-viewer');
     assert.match(stringField(screenSlot?.artifactRef), /^computer-use-virtual-screen-virtual-app-screen-screen-attach-/);
     const screenArtifact = payload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const screenData = screenArtifact?.data as Record<string, unknown> | undefined;

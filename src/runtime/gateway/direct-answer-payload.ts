@@ -1,6 +1,6 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { expectedArtifactTypesForRequest } from './gateway-request.js';
-import { clipForAgentServerJson, isRecord, toRecordList } from '../gateway-utils.js';
+import { clipForBackendJson, isRecord, toRecordList } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { isToolPayload } from './tool-payload-contract.js';
 import { normalizeRuntimeVerificationResultsOrUndefined } from './verification-results.js';
@@ -51,11 +51,11 @@ function artifactNeedsRepair(artifact: Record<string, unknown>) {
 
 export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRequest): ToolPayload {
   const extracted = extractJson(text);
-  const explanation = coerceAgentServerExplanationPayload(extracted, request);
+  const explanation = coerceBackendExplanationPayload(extracted, request);
   if (explanation) return ensureDirectAnswerReportArtifact(explanation, request, directAnswerResultPolicyIds.structuredAnswerSource);
-  const structured = coerceAgentServerToolPayload(extracted);
+  const structured = coerceBackendToolPayload(extracted);
   if (structured) return ensureDirectAnswerReportArtifact(structured, request, directAnswerResultPolicyIds.structuredAnswerSource);
-  const nested = extractNestedAgentServerPayloadFromText(text);
+  const nested = extractNestedBackendPayloadFromText(text);
   if (nested) return ensureDirectAnswerReportArtifact(nested, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const directTextGuard = classifyPlainAgentText(text);
   if (directTextGuard.kind === 'human-answer') {
@@ -66,20 +66,20 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
   return guardedDirectTextDiagnosticPayload(text, request, directTextGuard);
 }
 
-function coerceAgentServerExplanationPayload(value: unknown, request: GatewayRequest): ToolPayload | undefined {
+function coerceBackendExplanationPayload(value: unknown, request: GatewayRequest): ToolPayload | undefined {
   if (!isRecord(value)) return undefined;
   if (Array.isArray(value.taskFiles) || isRecord(value.response) || isRecord(value.projectPlan)) return undefined;
   if (['claims', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'].some((key) => Array.isArray(value[key]))) return undefined;
   const message = stringField(value.message);
   if (!message) return undefined;
-  const claimType = stringField(value.claimType) ?? 'agentserver-explanation';
-  const evidenceLevel = stringField(value.evidenceLevel) ?? 'agentserver';
+  const claimType = stringField(value.claimType) ?? 'backend-explanation';
+  const evidenceLevel = stringField(value.evidenceLevel) ?? 'backend';
   const reasoningTrace = typeof value.reasoningTrace === 'string'
     ? value.reasoningTrace
     : `Runtime backend returned a structured explanation JSON without full ToolPayload arrays; SciForge normalized it at the direct-answer boundary.`;
   const blocking = /\b(cannot|can't|unable|blocked|required|requires|missing|budget|quota|permission|credential|increase|refine|narrow|failed|failure)\b/i.test(message);
   const status = blocking ? 'failed-with-reason' : 'needs-human';
-  const id = sha1(`agentserver-explanation:${message}`).slice(0, 10);
+  const id = sha1(`backend-explanation:${message}`).slice(0, 10);
   const expected = expectedArtifactTypesForRequest(request);
   const confidence = typeof value.confidence === 'number' ? value.confidence : undefined;
   return {
@@ -89,7 +89,7 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
     evidenceLevel,
     reasoningTrace,
     claims: [{
-      id: `claim-agentserver-explanation-${id}`,
+      id: `claim-backend-explanation-${id}`,
       text: message,
       type: claimType,
       ...(confidence !== undefined ? { confidence } : {}),
@@ -99,12 +99,12 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
     }],
     uiManifest: [{
       componentId: reportViewerComponentId,
-      artifactRef: `agentserver-explanation-${id}`,
+      artifactRef: `backend-explanation-${id}`,
       title: blocking ? 'Blocked result explanation' : 'Runtime explanation',
       priority: 1,
     }],
     executionUnits: [{
-      id: `agentserver-explanation-${id}`,
+      id: `backend-explanation-${id}`,
       status,
       tool: directAnswerResultPolicyIds.directTextTool,
       params: JSON.stringify({ expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
@@ -115,8 +115,8 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
       nextStep: blocking ? 'Adjust the request or runtime budget, then retry.' : 'Retry with complete structured output if artifacts are required.',
     }],
     artifacts: [{
-      id: `agentserver-explanation-${id}`,
-      type: blocking ? 'runtime-blocker' : 'agentserver-explanation',
+      id: `backend-explanation-${id}`,
+      type: blocking ? 'runtime-blocker' : 'backend-explanation',
       format: 'markdown',
       title: blocking ? 'Blocked result explanation' : 'Runtime explanation',
       content: [
@@ -132,12 +132,12 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
       data: {
         message,
         expectedArtifactTypes: expected,
-        normalizedFrom: 'agentserver-message-json',
+        normalizedFrom: 'backend-message-json',
       },
     }],
     displayIntent: {
       status: blocking ? 'failed' : 'needs-human',
-      reason: blocking ? 'agentserver-explanation-blocked' : 'agentserver-explanation-needs-structure',
+      reason: blocking ? 'backend-explanation-blocked' : 'backend-explanation-needs-structure',
       primaryView: 'answer',
     },
   };
@@ -279,12 +279,12 @@ function guardedDirectTextDiagnosticPayload(
 ): ToolPayload {
   const id = sha1(`${classification.kind}:${text}`).slice(0, 10);
   const expected = expectedArtifactTypesForRequest(request);
-  const excerpt = clipForAgentServerJson(text, 2000);
+  const excerpt = clipForBackendJson(text, 2000);
   return {
     message: 'Runtime backend returned raw generated work instead of a user-facing result. SciForge preserved it as a diagnostic and did not present it as the final answer.',
     confidence: 0,
     claimType: 'runtime-diagnostic',
-    evidenceLevel: 'agentserver-direct-text-guard',
+    evidenceLevel: 'backend-direct-text-guard',
     reasoningTrace: [
       'Plain runtime text was blocked by the strict ToolPayload boundary.',
       `classification=${classification.kind}`,
@@ -295,14 +295,14 @@ function guardedDirectTextDiagnosticPayload(
       text: 'Plain runtime output was not a structured ToolPayload or taskFiles response and cannot be promoted to a final answer.',
       type: 'runtime-diagnostic',
       confidence: 0,
-      evidenceLevel: 'agentserver-direct-text-guard',
-      supportingRefs: [`artifact:agentserver-direct-text-diagnostic-${id}`],
+      evidenceLevel: 'backend-direct-text-guard',
+      supportingRefs: [`artifact:backend-direct-text-diagnostic-${id}`],
       opposingRefs: [],
     }],
     uiManifest: [
       {
         componentId: reportViewerComponentId,
-        artifactRef: `agentserver-direct-text-diagnostic-${id}`,
+        artifactRef: `backend-direct-text-diagnostic-${id}`,
         title: 'Direct text diagnostic',
         priority: 1,
       },
@@ -313,7 +313,7 @@ function guardedDirectTextDiagnosticPayload(
       },
     ],
     executionUnits: [{
-      id: `agentserver-direct-text-guard-${id}`,
+      id: `backend-direct-text-guard-${id}`,
       status: 'needs-human',
       tool: directAnswerResultPolicyIds.directTextTool,
       params: JSON.stringify({ classification: classification.kind, expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
@@ -325,7 +325,7 @@ function guardedDirectTextDiagnosticPayload(
       nextStep: 'Retry with structured output or inspect the preserved diagnostic artifact.',
     }],
     artifacts: [{
-      id: `agentserver-direct-text-diagnostic-${id}`,
+      id: `backend-direct-text-diagnostic-${id}`,
       type: 'runtime-diagnostic',
       format: 'markdown',
       title: 'Runtime direct text guard',
@@ -369,7 +369,7 @@ function toolPayloadFromPlainHumanAnswer(
     skillDomain: request.skillDomain,
     expectedArtifactTypes: expectedArtifactTypesForRequest(request),
   });
-  const reportId = `agentserver-direct-answer-${id}`;
+  const reportId = `backend-direct-answer-${id}`;
   const reportArtifact = {
     id: reportId,
     type: 'research-report',
@@ -402,8 +402,8 @@ function toolPayloadFromPlainHumanAnswer(
   ];
   return {
     message: trimmed,
-    claimType: 'agentserver-direct-answer',
-    evidenceLevel: 'agentserver',
+    claimType: 'backend-direct-answer',
+    evidenceLevel: 'backend',
     reasoningTrace: [
       'Plain runtime text was classified as a user-facing answer.',
       'SciForge wrapped it in a strict ToolPayload so ConversationProjection remains the user-visible source of truth.',
@@ -414,13 +414,13 @@ function toolPayloadFromPlainHumanAnswer(
       id: `claim-direct-answer-${id}`,
       text: trimmed.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'Runtime backend completed the request.',
       type: 'inference',
-      evidenceLevel: 'agentserver',
+      evidenceLevel: 'backend',
       supportingRefs: [],
       opposingRefs: [],
     }],
     uiManifest: uiManifestWithFileArtifacts,
     executionUnits: [{
-      id: `agentserver-direct-answer-${id}`,
+      id: `backend-direct-answer-${id}`,
       status: 'done',
       tool: directAnswerResultPolicyIds.directTextTool,
       params: JSON.stringify({ classification: classification.kind, prompt: request.prompt.slice(0, 200) }),
@@ -456,7 +456,7 @@ function directAnswerFileArtifactsFromText(text: string): Array<Record<string, u
       path,
       dataRef: path,
       metadata: {
-        source: 'agentserver-direct-text-file-ref',
+        source: 'backend-direct-text-file-ref',
         sourceRef: path,
         title: titleFromArtifactId(id),
         presentationRole: type === 'research-report' ? 'primary-deliverable' : 'supporting-evidence',
@@ -584,8 +584,8 @@ export function ensureDirectAnswerReportArtifact(payload: ToolPayload, request: 
   }, source);
 }
 
-export function coerceAgentServerToolPayload(value: unknown): ToolPayload | undefined {
-  const normalized = normalizeAgentServerToolPayloadCandidate(value);
+export function coerceBackendToolPayload(value: unknown): ToolPayload | undefined {
+  const normalized = normalizeBackendToolPayloadCandidate(value);
   return isToolPayload(normalized) ? normalizeToolPayloadShape(normalized) : undefined;
 }
 
@@ -720,18 +720,18 @@ export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
   const artifacts = normalizeWorkspaceTaskArtifacts(payload.artifacts);
   const rawDisplayIntent: unknown = payload.displayIntent;
   const message = String(payload.message || '');
-  const executionUnits = normalizeAgentServerExecutionUnits(payload.executionUnits);
+  const executionUnits = normalizeBackendExecutionUnits(payload.executionUnits);
   return {
     ...payloadWithoutConfidence,
     ...(confidence !== undefined ? { confidence } : {}),
-    claimType: String(payload.claimType || 'agentserver-answer'),
-    evidenceLevel: String(payload.evidenceLevel || 'agentserver'),
+    claimType: String(payload.claimType || 'backend-answer'),
+    evidenceLevel: String(payload.evidenceLevel || 'backend'),
     reasoningTrace: Array.isArray(payload.reasoningTrace)
       ? payload.reasoningTrace.map(String).filter(Boolean).join('\n')
       : typeof payload.reasoningTrace === 'string'
         ? payload.reasoningTrace
         : String(payload.reasoningTrace || ''),
-    claims: normalizeAgentServerClaims(payload.claims, message),
+    claims: normalizeBackendClaims(payload.claims, message),
     displayIntent: normalizeDirectAnswerDisplayIntent(rawDisplayIntent, message, executionUnits),
     uiManifest: normalizeDirectAnswerUiManifest(payload.uiManifest, artifacts),
     executionUnits,
@@ -740,28 +740,28 @@ export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
   };
 }
 
-function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): unknown {
+function normalizeBackendToolPayloadCandidate(value: unknown, depth = 0): unknown {
   if (depth > 4) return undefined;
   if (isToolPayload(value)) return value;
-  if (typeof value === 'string') return normalizeAgentServerToolPayloadCandidate(extractJson(value), depth + 1);
+  if (typeof value === 'string') return normalizeBackendToolPayloadCandidate(extractJson(value), depth + 1);
   if (!isRecord(value)) return undefined;
 
   for (const key of ['payload', 'toolPayload', 'result', 'output', 'data']) {
-    const nested = normalizeAgentServerToolPayloadCandidate(value[key], depth + 1);
+    const nested = normalizeBackendToolPayloadCandidate(value[key], depth + 1);
     if (isToolPayload(nested)) return nested;
   }
   for (const key of ['markdown', 'report', 'text', 'finalText', 'handoffSummary', 'outputSummary']) {
     const nested = typeof value[key] === 'string'
-      ? normalizeAgentServerToolPayloadCandidate(value[key], depth + 1)
+      ? normalizeBackendToolPayloadCandidate(value[key], depth + 1)
       : undefined;
     if (isToolPayload(nested)) return nested;
   }
 
   const message = firstStringField(value, ['message', 'answer', 'summary', 'markdown', 'report', 'text', 'finalText', 'handoffSummary', 'outputSummary']);
   const artifacts = normalizeDirectAnswerArtifacts(normalizeWorkspaceTaskArtifacts(value.artifacts), message);
-  const claims = normalizeAgentServerClaims(value.claims, message);
+  const claims = normalizeBackendClaims(value.claims, message);
   const uiManifest = normalizeDirectAnswerUiManifest(value.uiManifest, artifacts);
-  const executionUnits = normalizeAgentServerExecutionUnits(value.executionUnits);
+  const executionUnits = normalizeBackendExecutionUnits(value.executionUnits);
   const objectReferences = Array.isArray(value.objectReferences) ? value.objectReferences.filter(isRecord) : undefined;
   const displayIntent = normalizeDirectAnswerDisplayIntent(value.displayIntent, message, executionUnits);
 
@@ -770,8 +770,8 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
   return {
     message,
     ...(confidence !== undefined ? { confidence } : {}),
-    claimType: String(value.claimType || 'agentserver-answer'),
-    evidenceLevel: String(value.evidenceLevel || 'agentserver'),
+    claimType: String(value.claimType || 'backend-answer'),
+    evidenceLevel: String(value.evidenceLevel || 'backend'),
     reasoningTrace: String(value.reasoningTrace || 'Runtime backend returned structured answer JSON; SciForge normalized it into a ToolPayload.'),
     claims,
     uiManifest,
@@ -838,11 +838,11 @@ function strictToolPayloadCandidate(value: unknown, depth = 0): ToolPayload | un
   return undefined;
 }
 
-function extractNestedAgentServerPayloadFromText(text: string): ToolPayload | undefined {
+function extractNestedBackendPayloadFromText(text: string): ToolPayload | undefined {
   const parsed = extractJson(text);
   if (!isRecord(parsed)) return undefined;
   for (const key of ['markdown', 'report', 'message', 'text']) {
-    const nested = typeof parsed[key] === 'string' ? coerceAgentServerToolPayload(extractJson(parsed[key])) : undefined;
+    const nested = typeof parsed[key] === 'string' ? coerceBackendToolPayload(extractJson(parsed[key])) : undefined;
     if (nested) return nested;
   }
   return undefined;
@@ -856,10 +856,10 @@ function firstStringField(record: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
-function normalizeAgentServerClaims(value: unknown, message?: string): Array<Record<string, unknown>> {
+function normalizeBackendClaims(value: unknown, message?: string): Array<Record<string, unknown>> {
   if (Array.isArray(value)) {
     const claims = value.map((claim) => {
-      if (typeof claim === 'string') return { text: claim, type: 'inference', evidenceLevel: 'agentserver' };
+      if (typeof claim === 'string') return { text: claim, type: 'inference', evidenceLevel: 'backend' };
       if (isRecord(claim)) return claim;
       return undefined;
     }).filter(isRecord);
@@ -868,19 +868,19 @@ function normalizeAgentServerClaims(value: unknown, message?: string): Array<Rec
   return [{
     text: (message || 'Runtime backend completed the request.').split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'Runtime backend completed the request.',
     type: 'inference',
-    evidenceLevel: 'agentserver',
+    evidenceLevel: 'backend',
     supportingRefs: [],
     opposingRefs: [],
   }];
 }
 
-function normalizeAgentServerExecutionUnits(value: unknown): Array<Record<string, unknown>> {
+function normalizeBackendExecutionUnits(value: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(value)) {
     const units = value.map((unit) => isRecord(unit) ? unit : undefined).filter(isRecord);
     if (units.length) return units;
   }
   return [{
-    id: `agentserver-direct-${sha1(JSON.stringify(value ?? {})).slice(0, 8)}`,
+    id: `backend-direct-${sha1(JSON.stringify(value ?? {})).slice(0, 8)}`,
     status: 'done',
     tool: directAnswerResultPolicyIds.directTextTool,
     params: '{}',

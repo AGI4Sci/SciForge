@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 
 import {
   AGENTSERVER_CONTEXT_REQUEST_VERSION,
-  assertAgentServerContextRequest,
-  canonicalSerializeAgentServerContextRequest,
-  type AgentServerContextRequest,
+  assertBackendContextRequest,
+  canonicalSerializeBackendContextRequest,
+  type BackendContextRequest,
   type ContextMode,
   type RefDescriptor,
   type SelectedRefDescriptor,
-} from '../../../../src/runtime/gateway/agentserver-context-contract.js';
+} from '../../../../src/runtime/gateway/backend-context-contract.js';
 import type { ProjectMemoryRef } from '../../../../src/runtime/project-session-memory.js';
 import type {
   RuntimeArtifact,
@@ -28,7 +28,7 @@ import {
   type WebE2eEvidenceBundleManifest,
 } from '../evidence-bundle.js';
 import { buildWebE2eFixtureWorkspace } from '../fixture-workspace-builder.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerRecordedRequest,
@@ -54,7 +54,7 @@ interface FreshContinueMemoryRound {
   roundId: RoundId;
   prompt: string;
   stableGoalSource?: StableGoalSource;
-  contextRequest: AgentServerContextRequest;
+  contextRequest: BackendContextRequest;
   body: JsonRecord;
 }
 
@@ -76,7 +76,7 @@ export async function runFreshContinueMemoryCase(options: {
   now?: string;
 } = {}): Promise<FreshContinueMemoryCaseResult> {
   const now = options.now ?? '2026-05-16T00:00:00.000Z';
-  const agentServer = await startScriptableAgentServerMock({
+  const agentServer = await startScriptableBackendMock({
     seed: freshContinueMemoryCaseId,
     fixedNow: now,
     script(request) {
@@ -194,7 +194,7 @@ export function assertFreshContinueMemoryEvidence(result: FreshContinueMemoryCas
   assert.equal((memoryProposal?.stableGoalRef as JsonRecord | undefined)?.ref, freshContinueMemoryStableGoalRef);
 
   for (const round of result.rounds) {
-    assertAgentServerContextRequest(round.contextRequest);
+    assertBackendContextRequest(round.contextRequest);
     assertCurrentTurnBeatsOldArtifact(round);
     assertStableGoalOrigin(round);
     assertOldArtifactOnlyInBoundedIndex(round);
@@ -238,7 +238,7 @@ function buildRound(
   const selectedRefs = mode === 'fresh'
     ? []
     : [selectedRef(freshContinueMemoryStableGoalRef, 'projection', 'projection-primary', 0)];
-  const contextRequest: AgentServerContextRequest = {
+  const contextRequest: BackendContextRequest = {
     _contractVersion: AGENTSERVER_CONTEXT_REQUEST_VERSION,
     sessionId: fixture.sessionId,
     turnId: messageIdForRound(roundId),
@@ -288,7 +288,7 @@ function buildRound(
       maxContextTokens: 8000,
     },
   };
-  const canonicalContextRequest = JSON.parse(canonicalSerializeAgentServerContextRequest(contextRequest)) as JsonRecord;
+  const canonicalContextRequest = JSON.parse(canonicalSerializeBackendContextRequest(contextRequest)) as JsonRecord;
   const body: JsonRecord = {
     caseId: fixture.caseId,
     roundId,

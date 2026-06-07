@@ -1,8 +1,8 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
-import { attachAgentServerCompletionCandidateArtifacts } from './agentserver-completion-candidate.js';
-import { materializeAgentServerGenerationLifecyclePayload } from './generated-task-runner-payload-materialization.js';
+import { attachAgentServerCompletionCandidateArtifacts } from './generated-task-completion-candidate.js';
+import { materializeBackendGenerationLifecyclePayload } from './generated-task-runner-payload-materialization.js';
 import { literatureGenerationFailureRecoveryPayload } from './generated-task-runner-literature-recovery.js';
 import {
   attachGeneratedTaskFailureBudgetDebit,
@@ -11,11 +11,11 @@ import {
   generatedTaskFailureBudgetDebitId,
 } from './generated-task-runner-validation-lifecycle.js';
 
-const AGENTSERVER_GENERATION_FAILURE_TASK_REF = 'agentserver://generation-failure' as const;
+const BACKEND_GENERATION_FAILURE_TASK_REF = 'backend-generation://generation-failure' as const;
 
 type AttemptPlanRefs = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 
-export interface AgentServerGenerationFailure {
+export interface BackendGenerationFailure {
   ok: false;
   error: string;
   diagnostics?: any;
@@ -23,8 +23,8 @@ export interface AgentServerGenerationFailure {
 
 export interface GeneratedTaskGenerationFailureLifecycleDeps {
   attemptPlanRefs: AttemptPlanRefs;
-  agentServerFailurePayloadRefs(diagnostics?: any): Record<string, unknown>;
-  agentServerGenerationFailureReason(error: string, diagnostics?: any): string;
+  backendFailurePayloadRefs(diagnostics?: any): Record<string, unknown>;
+  backendGenerationFailureReason(error: string, diagnostics?: any): string;
   repairNeededPayload(request: GatewayRequest, skill: SkillAvailability, reason: string, refs?: Record<string, unknown>): ToolPayload;
   validateAndNormalizePayload(
     payload: ToolPayload,
@@ -34,15 +34,15 @@ export interface GeneratedTaskGenerationFailureLifecycleDeps {
   ): Promise<ToolPayload>;
 }
 
-export async function completeAgentServerGenerationFailureRepairPayload(input: {
+export async function completeBackendGenerationFailureRepairPayload(input: {
   workspace: string;
   request: GatewayRequest;
   skill: SkillAvailability;
-  generation: AgentServerGenerationFailure;
+  generation: BackendGenerationFailure;
   deps: GeneratedTaskGenerationFailureLifecycleDeps;
 }): Promise<ToolPayload> {
-  const failureReason = input.deps.agentServerGenerationFailureReason(input.generation.error, input.generation.diagnostics);
-  const failedRequestId = `agentserver-generation-${input.request.skillDomain}-${sha1(`${input.request.prompt}:${input.generation.error}`).slice(0, 12)}`;
+  const failureReason = input.deps.backendGenerationFailureReason(input.generation.error, input.generation.diagnostics);
+  const failedRequestId = `backend-generation-${input.request.skillDomain}-${sha1(`${input.request.prompt}:${input.generation.error}`).slice(0, 12)}`;
   const budgetDebitInput = {
     request: input.request,
     skill: input.skill,
@@ -65,7 +65,7 @@ export async function completeAgentServerGenerationFailureRepairPayload(input: {
     input.request,
     input.skill,
     failureReason,
-    input.deps.agentServerFailurePayloadRefs(input.generation.diagnostics),
+    input.deps.backendFailurePayloadRefs(input.generation.diagnostics),
   );
   const salvagedPayload = attachAgentServerCompletionCandidateArtifacts({
     payload: repairPayload,
@@ -82,14 +82,14 @@ export async function completeAgentServerGenerationFailureRepairPayload(input: {
     ...budgetDebitInput,
     payload: literatureRecovery ?? salvagedPayload,
   });
-  return await materializeAgentServerGenerationLifecyclePayload({
+  return await materializeBackendGenerationLifecyclePayload({
     workspace: input.workspace,
     request: input.request,
     skill: input.skill,
     payload,
     reason: failureReason,
     kind: literatureRecovery ? 'generation-failure-recovery' : 'generation-failure-repair',
-    taskRel: AGENTSERVER_GENERATION_FAILURE_TASK_REF,
+    taskRel: BACKEND_GENERATION_FAILURE_TASK_REF,
   });
 }
 

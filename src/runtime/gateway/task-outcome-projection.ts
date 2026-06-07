@@ -810,7 +810,7 @@ function directReadOnlyPayloadCannotSatisfyDurableWriteRequest(payload: ToolPayl
 }
 
 function isDirectReadOnlyExecutionUnit(unit: Record<string, unknown>) {
-  return /^(agentserver\.direct-(text|answer)|sciforge\.direct-context-fast-path)$/i.test(stringField(unit.tool) ?? '');
+  return /^((?:backend|agentserver)\.direct-(text|answer)|sciforge\.direct-context-fast-path)$/i.test(stringField(unit.tool) ?? '');
 }
 
 function requestRequiresDurableArtifactWrite(request: GatewayRequest | undefined) {
@@ -1341,7 +1341,7 @@ function nonBlockingStalePresentationCarriesUsableDraftAnswer(resultPresentation
     .filter((value): value is string => Boolean(value))
     .join('\n\n');
   if (!/Draft result summary:/i.test(answerText)) return false;
-  if (/AgentServer returned raw generated work|not a structured ToolPayload|cannot be promoted|direct text looks like|diagnostic artifact/i.test(answerText)) return false;
+  if (/backend returned raw generated work|not a structured ToolPayload|cannot be promoted|direct text looks like|diagnostic artifact/i.test(answerText)) return false;
   return /Partial result artifacts are available|required verification|human approval|user goal is not fully satisfied/i.test(answerText);
 }
 

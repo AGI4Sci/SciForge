@@ -5,7 +5,7 @@ import { skillPackageManifests } from './index';
 import { skillPackageManifests as catalogSkillPackageManifests } from './catalog';
 import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from './markdown-catalog';
 import {
-  agentServerGenerationSkillAvailability,
+  backendGenerationSkillAvailability,
   planSkillAvailabilityValidation,
   skillAvailabilityFailureReason,
 } from './runtime-policy';
@@ -31,10 +31,10 @@ test('markdown catalog discovery owns provider and artifact inference', async ()
 });
 
 test('runtime policy owns fallback generation and entrypoint availability checks', () => {
-  const fallback = agentServerGenerationSkillAvailability('literature', '2026-05-09T00:00:00.000Z');
-  assert.equal(fallback.id, 'agentserver.generate.literature');
+  const fallback = backendGenerationSkillAvailability('literature', '2026-05-09T00:00:00.000Z');
+  assert.equal(fallback.id, 'generated-task.generate.literature');
   assert.equal(fallback.manifest.outputArtifactSchema.type, 'runtime-artifact');
-  assert.equal(fallback.manifest.entrypoint.type, 'agentserver-generation');
+  assert.equal(fallback.manifest.entrypoint.type, 'backend-generation');
 
   const plan = planSkillAvailabilityValidation({
     id: 'workspace.generated',

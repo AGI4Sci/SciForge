@@ -54,6 +54,7 @@ const TOOL_PROVIDER_HEALTH_STATES = new Set([
   'unauthorized',
   'rate-limited',
 ]);
+const VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV = 'SCIFORGE_VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC';
 
 export function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
   const current = typeof currentValue === 'string' ? currentValue : '';
@@ -158,6 +159,12 @@ export function stringArray(value: unknown) {
 
 export function cleanUrlString(value: unknown) {
   return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
+}
+
+export function isSciForgeRuntimeProviderProxyHealth(value: unknown) {
+  if (!isRecord(value)) return false;
+  return value.service === 'sciforge.codex-responses-proxy'
+    || value.service === 'sciforge.model-router';
 }
 
 export interface WorkspaceLocalConfigServiceOptions {
@@ -295,7 +302,7 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
       : readRequiredLocalProviderSettings(runtimeLlmConfigLocalPath());
     const settings = completeDesktopSidecarLocalProviderSettings(loadedSettings, env);
     assertCompleteLocalProviderSettings(settings, runtimeLlmConfigLocalPath());
-    const localEnv = computerUseWorkspaceEnvFromLocalSettings(settings);
+    const localEnv = workspaceComputerUseEnv(settings, env);
     const upstreamBaseUrl = settings.baseUrl!;
     const upstreamModel = settings.model!;
     const upstreamApiKey = settings.apiKey!;
@@ -371,14 +378,14 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     try {
       const legacy = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(900) });
       const parsed = await legacy.json().catch(() => ({}));
-      if (legacy.ok && isRecord(parsed) && typeof parsed.upstreamBaseUrl === 'string') return true;
+      if (legacy.ok && isSciForgeRuntimeProviderProxyHealth(parsed)) return true;
     } catch {
       // Try the Model Router health endpoint below.
     }
     try {
       const router = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(900) });
       const parsed = await router.json().catch(() => ({}));
-      return router.ok && isRecord(parsed) && parsed.service === 'sciforge.model-router';
+      return router.ok && isSciForgeRuntimeProviderProxyHealth(parsed);
     } catch {
       return false;
     }
@@ -457,8 +464,18 @@ function completeDesktopSidecarLocalProviderSettings(
       forceNonStreamingUpstream: settings.forceNonStreamingUpstream,
       forceNonStreamingUpstreamSource: settings.forceNonStreamingUpstreamSource,
     } : {}),
-    ...(settings.virtualAppScreenEnv ? { virtualAppScreenEnv: settings.virtualAppScreenEnv } : {}),
+    ...(env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] === '1' && settings.virtualAppScreenEnv
+      ? { virtualAppScreenEnv: settings.virtualAppScreenEnv }
+      : {}),
   };
+}
+
+function workspaceComputerUseEnv(settings: LocalProviderSettings, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const localEnv = computerUseWorkspaceEnvFromLocalSettings(settings);
+  if (env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] === '1') return localEnv;
+  return Object.fromEntries(
+    Object.entries(localEnv).filter(([key]) => !key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_')),
+  );
 }
 
 function isCompleteLocalProviderSettings(settings: {

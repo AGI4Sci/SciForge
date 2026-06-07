@@ -3,7 +3,7 @@ import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy
 import { capabilityProviderPrimaryRouteProvider, capabilityProviderRouteTraceRef } from '@sciforge-ui/runtime-contract/capability-provider-policy';
 import { isRecord } from '../gateway-utils.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
-import { agentServerBackend } from './agent-backend-config.js';
+import { selectedAgentBackend } from './agent-backend-config.js';
 import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 
 function stringField(value: unknown) {
@@ -52,7 +52,8 @@ function routePolicyForRequest(request?: GatewayRequest, skill?: SkillAvailabili
   return skillRuntimeRoutePolicy({
     entrypoint: skill?.manifest.entrypoint,
     scenarioPackageSource: request?.scenarioPackageRef?.source,
-    agentServerRuntimeProfileId: request ? `agentserver-${agentServerBackend(request, request.llmEndpoint)}` : undefined,
+    backendRuntimeProfileId: request ? `backend-${selectedAgentBackend(request, request.llmEndpoint)}` : undefined,
+    agentServerRuntimeProfileId: request ? `agentserver-${selectedAgentBackend(request, request.llmEndpoint)}` : undefined,
   });
 }
 

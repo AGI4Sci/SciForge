@@ -8,13 +8,13 @@ import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-
 import { sha1 } from '../workspace-task-runner.js';
 import {
   backendPayloadRefs,
-  materializeAgentServerGenerationLifecyclePayload,
-  stableAgentServerPayloadTaskId,
+  materializeBackendGenerationLifecyclePayload,
+  stableGeneratedTaskPayloadTaskId,
 } from './generated-task-runner-payload-materialization.js';
 
 const request: GatewayRequest = {
   skillDomain: 'knowledge',
-  prompt: 'repair an AgentServer generation failure and return a bounded ToolPayload',
+  prompt: 'repair an backend generation failure and return a bounded ToolPayload',
   artifacts: [],
   uiState: {
     sessionId: 'generation-payload-materialization',
@@ -52,11 +52,11 @@ const payload: ToolPayload = {
 
 test('generation lifecycle payload materializer scopes refs and writes audit logs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generation-payload-materialization-'));
-  const reason = 'AgentServer generation returned malformed taskFiles.';
+  const reason = 'backend generation returned malformed taskFiles.';
   const kind = 'generation-retry-repair';
-  const taskRel = 'agentserver://generation-retry-repair';
+  const taskRel = 'backend-generation://generation-retry-repair';
   try {
-    const materialized = await materializeAgentServerGenerationLifecyclePayload({
+    const materialized = await materializeBackendGenerationLifecyclePayload({
       workspace,
       request,
       skill,
@@ -66,7 +66,7 @@ test('generation lifecycle payload materializer scopes refs and writes audit log
       taskRel,
     });
 
-    const taskId = stableAgentServerPayloadTaskId(kind, request, skill, sha1(reason).slice(0, 8));
+    const taskId = stableGeneratedTaskPayloadTaskId(kind, request, skill, sha1(reason).slice(0, 8));
     const refs = backendPayloadRefs(
       taskId,
       taskRel,

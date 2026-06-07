@@ -17,6 +17,7 @@ export type WindowActionEventStatus = 'running' | 'completed' | 'failed' | 'bloc
 export type WindowActionAdapter =
   | 'browser-host-session'
   | 'browser-cdp-playwright'
+  | 'appium-mac2'
   | 'app-native-command'
   | 'terminal'
   | 'file-manager'
@@ -272,6 +273,7 @@ export interface WindowActionRouteInput {
       playwright?: boolean;
       webContentsView?: boolean;
       appNativeCommand?: boolean;
+      appiumMac2?: boolean;
       terminal?: boolean;
       terminalWorkflow?: boolean;
       fileManager?: boolean;
@@ -682,6 +684,27 @@ export function routeWindowAction(input: WindowActionRouteInput): WindowActionRo
   }
   if (capabilities.cdp || capabilities.playwright || appKind === 'browser') {
     return route(1, 'browser-cdp-playwright');
+  }
+  if (capabilities.appiumMac2 && appKind === 'editor' && (input.action === 'type' || input.action === 'save')) {
+    return {
+      ...route(2, 'appium-mac2'),
+      evidenceRefs: [
+        { kind: 'appium-mac2-target-binding', ref: `appium-mac2:${appId}:target-window-binding` },
+        ...(input.action === 'save'
+          ? [{ kind: 'editor-save-validation', ref: `editor-save-validation:${appId}:input-event-and-artifact-validator-required` }]
+          : []),
+        ...boundedEvidenceRefs(input.evidenceRefs),
+      ].slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
+      evidence: {
+        bounded: true,
+        ...(input.action === 'save'
+          ? {
+              editorSaveRequiresInputEvent: true,
+              editorSaveRequiresArtifactValidator: true,
+            }
+          : {}),
+      },
+    };
   }
   if (capabilities.appNativeCommand || appKind === 'editor') {
     return input.action === 'save'

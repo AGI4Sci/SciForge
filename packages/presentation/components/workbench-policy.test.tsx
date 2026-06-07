@@ -98,4 +98,15 @@ test('component package owns special workbench renderer selection', () => {
     assert.match(packageHtml, new RegExp(componentId));
     assert.doesNotMatch(packageHtml, /fallback renderer/);
   }
+
+  const legacyVirtualScreenHtml = renderToStaticMarkup(createElement(
+    Fragment,
+    null,
+    renderPackageWorkbenchPreview({
+      slot: { componentId: 'virtual-screen-viewer' },
+      artifact: { id: 'legacy-screen', type: 'computer-use-virtual-screen' },
+    }, () => createElement('div', null, 'fallback renderer')),
+  ));
+  assert.match(legacyVirtualScreenHtml, /fallback renderer/);
+  assert.doesNotMatch(legacyVirtualScreenHtml, /virtual-screen-viewer/);
 });

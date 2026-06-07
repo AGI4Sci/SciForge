@@ -110,7 +110,7 @@ const runtimeLikePolicyFixtures = [
         capabilities: {
           ...policyOnlyFixture.policy?.capabilities,
           providerBranches: {
-            openai: ['agentserver.generate.literature'],
+            openai: ['generated-task.generate.literature'],
             local: ['literature.pubmed_search'],
           },
         },

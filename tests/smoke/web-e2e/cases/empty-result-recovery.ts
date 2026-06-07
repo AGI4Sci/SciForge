@@ -13,7 +13,7 @@ import {
   type WebE2eContractVerifierInput,
   type WebE2eRunAuditEvidence,
 } from '../contract-verifier.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerRecordedRequest,
@@ -79,7 +79,7 @@ interface MockRunFetchResult {
 }
 
 export async function buildEmptyResultRecoveryCase(): Promise<EmptyResultRecoveryCaseResult> {
-  const server = await startScriptableAgentServerMock({
+  const server = await startScriptableBackendMock({
     seed: EMPTY_RESULT_RECOVERY_CASE_ID,
     fixedNow: now,
     script: (_request, exchange) => {

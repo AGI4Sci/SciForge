@@ -94,7 +94,7 @@ test('pre-output generated task failure preserves session-bundle partial artifac
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async () => undefined,
+      tryGeneratedTaskRepairAndRerun: async () => undefined,
       validateAndNormalizePayload: async (value: ToolPayload) => value,
       normalizeToolPayloadShape,
       coerceWorkspaceTaskPayload: () => undefined,
@@ -207,7 +207,7 @@ test('partial PDF retrieval failures keep downloaded full text and metadata inst
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async () => {
+      tryGeneratedTaskRepairAndRerun: async () => {
         repairAttempted = true;
         return undefined;
       },
@@ -322,7 +322,7 @@ test('unstructured provider 429 payload is external blocked instead of repair-re
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async () => {
+      tryGeneratedTaskRepairAndRerun: async () => {
         repairAttempted = true;
         return undefined;
       },
@@ -439,7 +439,7 @@ test('failed-with-reason payload is a valid terminal result even when process ex
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async () => {
+      tryGeneratedTaskRepairAndRerun: async () => {
         repairAttempted = true;
         return undefined;
       },
@@ -551,7 +551,7 @@ test('workspace-task-runner failure checkpoint without partial refs enters repai
     reasoningTrace: 'repair rerun succeeded',
     claims: [],
     uiManifest: [],
-    executionUnits: [{ id: 'repair-rerun', status: 'done', tool: 'agentserver.generated.python' }],
+    executionUnits: [{ id: 'repair-rerun', status: 'done', tool: 'generated-task.generate..python' }],
     artifacts: [],
   } as ToolPayload;
   const run = {
@@ -601,7 +601,7 @@ test('workspace-task-runner failure checkpoint without partial refs enters repai
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async (params: Parameters<GeneratedTaskRunnerDeps['tryAgentServerRepairAndRerun']>[0]) => {
+      tryGeneratedTaskRepairAndRerun: async (params: Parameters<GeneratedTaskRunnerDeps['tryGeneratedTaskRepairAndRerun']>[0]) => {
         repairFailureReason = params.failureReason;
         return repairedPayload;
       },
@@ -715,7 +715,7 @@ test('normalizes generated task payload shape before validation even when schema
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async () => undefined,
+      tryGeneratedTaskRepairAndRerun: async () => undefined,
       validateAndNormalizePayload: async (value: ToolPayload) => {
         validateSawReasoningTrace = value.reasoningTrace;
         return value;
@@ -849,7 +849,7 @@ test('successful generated task reports receive an exact rerun command', async (
     deps: {
       attemptPlanRefs: () => ({}),
       failedTaskPayload,
-      tryAgentServerRepairAndRerun: async () => undefined,
+      tryGeneratedTaskRepairAndRerun: async () => undefined,
       validateAndNormalizePayload: async (value: ToolPayload) => value,
       normalizeToolPayloadShape,
       coerceWorkspaceTaskPayload: (value: unknown) => value as ToolPayload,

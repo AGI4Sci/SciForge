@@ -10,14 +10,6 @@ import {
 import { defaultComputerUseAdapterRegistry } from '../computer-use/adapter-registry-store.js';
 import { createComputerUsePermissionLedgerStore } from '../computer-use/permission-ledger-store.js';
 import { createDefaultStopCancelTakeoverStore } from '../computer-use/stop-cancel-takeover-store.js';
-import {
-  readVirtualAppScreenNativeHostSessionRecord,
-  type VirtualAppScreenNativeHostSessionRecord,
-} from '../computer-use/virtual-app-screen-native-host-session-store.js';
-import {
-  readVirtualAppScreenProviderSessionRecord,
-  type VirtualAppScreenProviderSessionRecord,
-} from '../computer-use/virtual-app-screen-provider-session-store.js';
 import { buildWorkspaceWriterHealth, normalizeBrowserHostNativeAdapterUrl } from '../workspace-server-health.js';
 import { authorizationProfileOrDefault, classifyComputerUseRisk } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
 import type {
@@ -231,23 +223,6 @@ export interface CodexAgentHostWindowActionActTimeStoreInput {
   abortSignal?: AbortSignal;
 }
 
-export interface CodexAgentHostVirtualAppScreenActTimeStoreInput {
-  agentHostInput: NormalizedCodexAgentHostInput;
-  nativeHostSession: VirtualAppScreenNativeHostSessionRecord;
-  providerSession?: VirtualAppScreenProviderSessionRecord;
-  sessionId: string;
-  sessionRef: string;
-  screenRef: string;
-  targetRefs: string[];
-  observationRefs: string[];
-  commandText: string;
-  commandId: string;
-  attemptId: string;
-  workspacePath: string;
-  riskCategory: string;
-  abortSignal?: AbortSignal;
-}
-
 export interface CodexAgentHostBrowserActTimeStores {
   windowActionSessionStore?: {
     materializeForBrowserHostSession(input: CodexAgentHostBrowserActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
@@ -256,17 +231,14 @@ export interface CodexAgentHostBrowserActTimeStores {
   computerUseAdapterRegistry?: {
     materializeBrowserHostAdapter(input: CodexAgentHostBrowserActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
     materializeWindowActionSessionAdapter?(input: CodexAgentHostWindowActionActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
-    materializeVirtualAppScreenNativeHostAdapter?(input: CodexAgentHostVirtualAppScreenActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
   };
   permissionLedger?: {
     materializeTurnPermission(input: CodexAgentHostBrowserActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
     materializeWindowActionTurnPermission?(input: CodexAgentHostWindowActionActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
-    materializeVirtualAppScreenNativeHostTurnPermission?(input: CodexAgentHostVirtualAppScreenActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
   };
   stopCancelTakeoverStore?: {
     materializeForBrowserHostSession(input: CodexAgentHostBrowserActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
     materializeForWindowActionSession?(input: CodexAgentHostWindowActionActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
-    materializeForVirtualAppScreenNativeHostSession?(input: CodexAgentHostVirtualAppScreenActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
   };
 }
 
@@ -288,33 +260,6 @@ export function createDefaultCodexAgentHostBrowserActTimeStores(options: {
       },
       materializeWindowActionSessionAdapter(input) {
         return computerUseAdapterRegistry.materializeWindowActionSessionAdapter(input);
-      },
-      materializeVirtualAppScreenNativeHostAdapter(input) {
-        const providerId = 'sciforge.virtual-app-screen.native-host-window-action';
-        computerUseAdapterRegistry.register({
-          providerId,
-          kind: 'native-host-window-action',
-          source: 'runtime',
-          evidenceRefs: [
-            input.sessionRef,
-            input.nativeHostSession.actionAdapterRef,
-            input.nativeHostSession.adapterReadinessRef,
-            `runtime-truth:computer-use-adapter/virtual-app-screen/${input.sessionId}`,
-          ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
-        });
-        return computerUseAdapterRegistry.probe({
-          providerId,
-          probeSource: 'runtime-probe',
-          nativeBridgeReady: true,
-          nativeSurfaceReady: true,
-          evidenceRefs: [
-            input.sessionRef,
-            input.nativeHostSession.actionAdapterRef,
-            input.nativeHostSession.adapterReadinessRef,
-            input.nativeHostSession.evidenceLedgerRef,
-            `runtime-truth:computer-use-adapter/virtual-app-screen/${input.sessionId}`,
-          ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
-        });
       },
     },
     permissionLedger: {
@@ -379,47 +324,6 @@ export function createDefaultCodexAgentHostBrowserActTimeStores(options: {
             ...entry.evidenceRefs,
           ],
           permissionRefs: entry.permissionRef ? [entry.permissionRef] : [],
-        };
-      },
-      materializeVirtualAppScreenNativeHostTurnPermission(input) {
-        const risk = classifyComputerUseRisk({ action: input.commandText, authorizationProfile: authorizationProfileOrDefault(input.agentHostInput.authorizationProfileId).profile });
-        const nativePermissionRefs = nativeHostPermissionRefs(input.nativeHostSession);
-        const entry = permissionLedger.requestTurnPermission({
-          turnId: input.commandId,
-          actionId: input.riskCategory,
-          authorizationProfileId: authorizationProfileOrDefault(input.agentHostInput.authorizationProfileId).profile.id,
-          risk: {
-            decision: risk.decision,
-            level: risk.decision === 'auto' ? 'low' : risk.decision === 'needs-confirmation' ? 'high' : 'high',
-            category: risk.category,
-            hardConfirm: risk.hardConfirm,
-            reason: risk.reason,
-          },
-          evidenceRefs: [
-            input.sessionRef,
-            input.screenRef,
-            ...input.targetRefs,
-            ...input.observationRefs,
-            input.nativeHostSession.adapterReadinessRef,
-            input.nativeHostSession.evidenceLedgerRef,
-            ...nativePermissionRefs,
-            `action-ledger:computer-use/native-host/${input.sessionId}/risk/${input.riskCategory}`,
-          ],
-        });
-        return {
-          status: entry.status === 'confirmed' ? 'ready' : 'blocked',
-          summary: entry.reason,
-          refs: [
-            entry.ledgerRef,
-            ...(entry.approvalRequestRef ? [entry.approvalRequestRef] : []),
-            ...(entry.permissionRef ? [entry.permissionRef] : []),
-            ...nativePermissionRefs,
-            ...entry.evidenceRefs,
-          ],
-          permissionRefs: uniqueStrings([
-            ...(entry.permissionRef ? [entry.permissionRef] : []),
-            ...nativePermissionRefs,
-          ]),
         };
       },
     },
@@ -528,97 +432,6 @@ export function createDefaultCodexAgentHostBrowserActTimeStores(options: {
           },
         };
       },
-      materializeForVirtualAppScreenNativeHostSession(input) {
-        const registration = stopCancelTakeoverStore.registerNativeHostControls({
-          sessionId: input.nativeHostSession.sessionId,
-          sessionRef: input.sessionRef,
-          evidenceRefs: [
-            input.sessionRef,
-            input.nativeHostSession.currentRunPointerRef,
-            input.nativeHostSession.evidenceLedgerRef,
-            `runtime-truth:cancel-path/computer-use/native-host/${input.sessionId}`,
-          ],
-          stop: async (context) => {
-            const result = await input.nativeHostSession.host.stop(input.nativeHostSession.sessionId, context.reason ?? 'Agent Host stop requested.');
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'session.stopped') };
-          },
-          pause: async (context) => {
-            const result = await input.nativeHostSession.host.pauseAgent(input.nativeHostSession.sessionId, context.reason ?? 'Agent Host pause requested.');
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'agent.paused') };
-          },
-          resume: async () => {
-            const result = await input.nativeHostSession.host.resumeAgent(input.nativeHostSession.sessionId, {
-              barrierRef: `computer-use:native-host/ledgers/${input.sessionId}/evidence-ledger.json/events/resume-barrier.json`,
-              currentRunRef: input.nativeHostSession.currentRunRef,
-              requiredReadinessRef: input.nativeHostSession.adapterReadinessRef,
-              beforeFrameRef: input.nativeHostSession.currentFrameRef,
-              leaseRef: input.nativeHostSession.inputLeaseRef,
-            });
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'agent.resumed') };
-          },
-          close: async () => {
-            const result = await input.nativeHostSession.host.closeSession(input.nativeHostSession.sessionId);
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'session.closed') };
-          },
-        });
-        const takeoverRegistration = stopCancelTakeoverStore.registerHumanTakeoverLease({
-          leaseId: `${input.sessionId}/human-takeover`,
-          actorId: 'runtime-human-operator',
-          evidenceRefs: [
-            input.sessionRef,
-            input.nativeHostSession.inputLeaseRef,
-            `runtime-truth:human-takeover/computer-use/native-host/${input.sessionId}`,
-          ],
-          takeover: () => ({
-            evidenceRefs: [
-              `lease:human-takeover/${input.sessionId}-human-takeover`,
-              `action-ledger:computer-use/native-host/${input.sessionId}/human-takeover/${input.attemptId}`,
-            ],
-          }),
-          pause: async (context) => {
-            const result = await input.nativeHostSession.host.pauseAgent(input.nativeHostSession.sessionId, context.reason ?? 'Human takeover pause requested.');
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'agent.paused') };
-          },
-          resume: async () => {
-            const result = await input.nativeHostSession.host.resumeAgent(input.nativeHostSession.sessionId, {
-              barrierRef: `computer-use:native-host/ledgers/${input.sessionId}/evidence-ledger.json/events/human-takeover-resume-barrier.json`,
-              currentRunRef: input.nativeHostSession.currentRunRef,
-              requiredReadinessRef: input.nativeHostSession.adapterReadinessRef,
-              beforeFrameRef: input.nativeHostSession.currentFrameRef,
-              leaseRef: input.nativeHostSession.inputLeaseRef,
-            });
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'agent.resumed') };
-          },
-          stop: async (context) => {
-            const result = await input.nativeHostSession.host.stop(input.nativeHostSession.sessionId, context.reason ?? 'Human takeover stop requested.');
-            return { evidenceRefs: nativeHostControlEvidenceRefs(result, input.nativeHostSession, 'session.stopped') };
-          },
-        });
-        const refs = uniqueStrings([
-          registration.stopRef,
-          registration.pauseRef,
-          registration.resumeRef,
-          registration.closeRef,
-          takeoverRegistration.leaseRef,
-          takeoverRegistration.pauseRef,
-          takeoverRegistration.resumeRef,
-          takeoverRegistration.stopRef,
-          ...registration.evidenceRefs,
-          ...takeoverRegistration.evidenceRefs,
-        ].filter((ref): ref is string => Boolean(ref)));
-        return {
-          status: registration.status === 'ready' && takeoverRegistration.status === 'ready' ? 'ready' : 'blocked',
-          refs,
-          stopCancelRefs: refs,
-          controlRefs: {
-            stop: [registration.stopRef, takeoverRegistration.stopRef].filter((ref): ref is string => Boolean(ref)),
-            pause: [registration.pauseRef, takeoverRegistration.pauseRef].filter((ref): ref is string => Boolean(ref)),
-            resume: [registration.resumeRef, takeoverRegistration.resumeRef].filter((ref): ref is string => Boolean(ref)),
-            takeover: [takeoverRegistration.leaseRef],
-            close: [registration.closeRef],
-          },
-        };
-      },
     },
   };
 }
@@ -629,8 +442,7 @@ export function createDefaultCodexAgentHostActTimeTruthSource(options: {
 } = {}): CodexAgentHostActTimeTruthSource {
   const browserSource = createDefaultBrowserHostSessionActTimeTruthSource(options);
   const windowActionSource = createDefaultWindowActionSessionActTimeTruthSource(options);
-  const virtualAppScreenSource = createDefaultVirtualAppScreenNativeHostActTimeTruthSource(options);
-  return async (input) => (await browserSource(input)) ?? (await windowActionSource(input)) ?? (await virtualAppScreenSource(input));
+  return async (input) => (await browserSource(input)) ?? (await windowActionSource(input));
 }
 
 export function createDefaultBrowserHostSessionActTimeTruthSource(options: {
@@ -894,261 +706,6 @@ export function createDefaultWindowActionSessionActTimeTruthSource(options: {
     }
     return undefined;
   };
-}
-
-export function createDefaultVirtualAppScreenNativeHostActTimeTruthSource(options: {
-  now?: () => Date;
-  stores?: CodexAgentHostBrowserActTimeStores;
-} = {}): CodexAgentHostActTimeTruthSource {
-  const now = options.now ?? (() => new Date());
-  return async (input) => {
-    const candidate = virtualAppScreenNativeHostCandidate(input.agentHostInput);
-    if (!candidate || !virtualAppScreenNativeHostReady(candidate.nativeHostSession, now())) return undefined;
-    const record = candidate.nativeHostSession;
-    const providerSession = candidate.providerSession;
-    const sessionId = safeRefPart(record.sessionId);
-    if (sessionId === 'unknown') return undefined;
-    const commandId = safeRefPart(input.commandId ?? 'codex-command-agent-host');
-    const attemptId = safeRefPart(input.attemptId ?? `${commandId}-attempt-1`);
-    const authorizationProfile = authorizationProfileOrDefault(input.agentHostInput.authorizationProfileId).profile;
-    const risk = classifyComputerUseRisk({ action: input.commandText, authorizationProfile });
-    const riskCategory = safeRefPart(risk.category);
-    const targetRefs = uniqueStrings([
-      record.sessionRef,
-      record.screenRef,
-      record.targetWindowRef,
-      record.liveSurfaceRef,
-      providerSession?.targetAppRef,
-      providerSession?.surfaceOwnerRef,
-      providerSession?.displayOwnerRef,
-      providerSession?.surfaceIdentityRef,
-      providerSession?.providerSessionOwnerRef,
-      providerSession?.reconnectRef,
-    ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0));
-    const observationRefs = uniqueStrings([
-      record.currentFrameRef,
-      record.frameStreamRef,
-      record.evidenceLedgerRef,
-      record.currentRunPointerRef,
-      providerSession?.currentFrameRef,
-      providerSession?.frameTelemetryRef,
-    ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0));
-    const storeInput: CodexAgentHostVirtualAppScreenActTimeStoreInput = {
-      agentHostInput: input.agentHostInput,
-      nativeHostSession: record,
-      providerSession,
-      sessionId,
-      sessionRef: record.sessionRef,
-      screenRef: record.screenRef!,
-      targetRefs,
-      observationRefs,
-      commandText: input.commandText,
-      commandId,
-      attemptId,
-      workspacePath: input.workspacePath,
-      riskCategory,
-      abortSignal: input.abortSignal,
-    };
-    const storedAdapter = await options.stores?.computerUseAdapterRegistry?.materializeVirtualAppScreenNativeHostAdapter?.(storeInput);
-    const storedPermission = await options.stores?.permissionLedger?.materializeVirtualAppScreenNativeHostTurnPermission?.(storeInput);
-    const storedStopCancel = await options.stores?.stopCancelTakeoverStore?.materializeForVirtualAppScreenNativeHostSession?.(storeInput);
-    const windowActionRefs = uniqueStrings([
-      record.sessionRef,
-      record.inputLeaseRef,
-      record.liveBindingAttachGrantRef,
-      record.grantValidationRef,
-      record.evidenceLedgerRef,
-      record.currentRunPointerRef,
-      providerSession?.providerSessionOwnerRef,
-      providerSession?.surfaceIdentityRef,
-    ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0));
-    const adapterRefs = storedAdapter
-      ? recordLikeStringList(storedAdapter.refs)
-      : [record.actionAdapterRef, record.adapterReadinessRef].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0);
-    const nativePermissionRefs = nativeHostPermissionRefs(record);
-    const permissionRefs = storedPermission
-      ? uniqueStrings([...recordLikeStringList(storedPermission.refs), ...recordLikeStringList(storedPermission.permissionRefs)])
-      : nativePermissionRefs;
-    const stopCancelRefs = storedStopCancel
-      ? uniqueStrings([...recordLikeStringList(storedStopCancel.refs), ...recordLikeStringList(storedStopCancel.stopCancelRefs)])
-      : [];
-    return {
-      schemaVersion: 'sciforge.agent-host.act-time-truth.v1',
-      source: 'virtual-app-screen-native-host-act-time-source',
-      target: {
-        bound: true,
-        summary: virtualAppScreenTargetSummary(record),
-        refs: targetRefs,
-      },
-      observation: {
-        fresh: virtualAppScreenObservationFresh(record, now()),
-        refs: observationRefs,
-      },
-      sessions: {
-        sessionReadyRefs: uniqueStrings(windowActionRefs),
-        targetRefs,
-        inputLeaseRefs: [record.inputLeaseRef].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
-        observationRefs: virtualAppScreenObservationFresh(record, now()) ? observationRefs : [],
-      },
-      windowActionSession: {
-        status: 'ready',
-        summary: virtualAppScreenTargetSummary(record),
-        refs: windowActionRefs,
-      },
-      computerUseAdapter: {
-        status: storedAdapter ? storeResultStatus(storedAdapter) : 'ready',
-        providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.virtual-app-screen.native-host-window-action',
-        refs: adapterRefs,
-      },
-      adapter: {
-        providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.virtual-app-screen.native-host-window-action',
-        refs: adapterRefs,
-        capabilityRefs: [
-          record.adapterReadinessRef,
-          `runtime-truth:computer-use-capability/virtual-app-screen/${sessionId}`,
-        ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
-        inputIsolation: {
-          mode: 'virtual-app-screen-lease',
-          refsOnly: true,
-          sharedSystemInput: false,
-          requiresFocusLease: false,
-          singleInteractiveTruth: true,
-          secondTruthSource: false,
-          refs: [record.inputLeaseRef, record.liveSurfaceRef].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
-        },
-      },
-      permissions: {
-        refs: permissionRefs,
-        permissionRefs,
-        appAllowlistRefs: [`runtime-truth:app-allowlist/virtual-app-screen/${sessionId}`],
-        windowAllowlistRefs: [`runtime-truth:window-allowlist/virtual-app-screen/${sessionId}`],
-        riskPreviewRefs: [`action-ledger:computer-use/native-host/${sessionId}/risk/${riskCategory}`],
-        stopCancelPath: stopCancelRefs.length > 0,
-        stopCancelRefs,
-      },
-      refs: uniqueStrings([
-        ...targetRefs,
-        ...observationRefs,
-        ...windowActionRefs,
-        ...adapterRefs,
-        ...permissionRefs,
-        ...stopCancelRefs,
-        record.currentRunRef,
-        record.currentRunPointerRef,
-        record.adapterReadinessRef,
-        record.evidenceLedgerRef,
-        `action-ledger:computer-use/native-host/${sessionId}/risk/${riskCategory}`,
-        `runtime-truth:act-source/virtual-app-screen/${sessionId}`,
-      ]),
-    };
-  };
-}
-
-function virtualAppScreenNativeHostCandidate(input: NormalizedCodexAgentHostInput): {
-  nativeHostSession: VirtualAppScreenNativeHostSessionRecord;
-  providerSession?: VirtualAppScreenProviderSessionRecord;
-} | undefined {
-  for (const ref of virtualAppScreenCandidateRefs(input)) {
-    const nativeBySession = readVirtualAppScreenNativeHostSessionRecord({ sessionRef: ref });
-    const nativeByScreen = readVirtualAppScreenNativeHostSessionRecord({ screenRef: ref });
-    const providerBySession = readVirtualAppScreenProviderSessionRecord({ sessionRef: ref });
-    const providerByScreen = readVirtualAppScreenProviderSessionRecord({ screenRef: ref });
-    const providerSession = providerBySession ?? providerByScreen;
-    const nativeFromProvider = providerSession
-      ? readVirtualAppScreenNativeHostSessionRecord({
-        sessionRef: providerSession.sessionRef,
-        screenRef: providerSession.screenRef,
-      })
-      : undefined;
-    const nativeHostSession = nativeBySession ?? nativeByScreen ?? nativeFromProvider;
-    if (nativeHostSession) {
-      return {
-        nativeHostSession,
-        providerSession: providerSession
-          ?? readVirtualAppScreenProviderSessionRecord({ sessionRef: nativeHostSession.sessionRef })
-          ?? (nativeHostSession.screenRef ? readVirtualAppScreenProviderSessionRecord({ screenRef: nativeHostSession.screenRef }) : undefined),
-      };
-    }
-  }
-  return undefined;
-}
-
-function virtualAppScreenCandidateRefs(input: NormalizedCodexAgentHostInput): string[] {
-  const refs = uniqueStrings([
-    ...input.refs,
-    ...recordStringList(input.target, 'refs'),
-    ...recordStringList(input.target, 'evidenceRefs'),
-    ...recordStringList(input.target, 'targetRefs'),
-    ...recordStringList(input.observation, 'refs'),
-    ...recordStringList(input.observation, 'evidenceRefs'),
-    ...recordStringList(input.observation, 'screenshotRefs'),
-    ...recordStringList(input.permissions, 'refs'),
-    ...recordStringList(input.permissions, 'evidenceRefs'),
-  ]);
-  return refs.filter((ref) =>
-    safeRuntimeOwnerRef(ref)
-    && /^(?:computer-use:native-host\/sessions\/|virtual-app-screen:|computer-use:provider-session\/)/i.test(ref),
-  );
-}
-
-function virtualAppScreenNativeHostReady(record: VirtualAppScreenNativeHostSessionRecord, now: Date): boolean {
-  if (record.owner !== 'NativeVirtualAppScreenHost') return false;
-  if (record.diagnosticOnly !== false) return false;
-  if (record.singleInteractiveTruth !== true || record.secondInteractiveSurfacePresent !== false || record.currentSessionOnly !== true) return false;
-  if (!virtualAppScreenObservationFresh(record, now)) return false;
-  const requiredRefs = [
-    record.sessionRef,
-    record.screenRef,
-    record.targetWindowRef,
-    record.liveSurfaceRef,
-    record.frameStreamRef,
-    record.currentFrameRef,
-    record.liveBindingAttachGrantRef,
-    record.grantValidationRef,
-    record.currentRunRef,
-    record.currentRunPointerRef,
-    record.adapterReadinessRef,
-    record.evidenceLedgerRef,
-    record.inputLeaseRef,
-    record.actionAdapterRef,
-  ];
-  if (requiredRefs.some((ref) => !safeRuntimeOwnerRef(ref ?? ''))) return false;
-  if (!nativeHostPermissionRefs(record).length) return false;
-  return true;
-}
-
-function virtualAppScreenObservationFresh(record: VirtualAppScreenNativeHostSessionRecord, now: Date): boolean {
-  if (!record.currentFrameRef || !record.currentFrameReadAt) return false;
-  const readAt = Date.parse(record.currentFrameReadAt);
-  return Number.isFinite(readAt) && now.getTime() - readAt <= OBSERVATION_MAX_AGE_MS;
-}
-
-function virtualAppScreenTargetSummary(record: VirtualAppScreenNativeHostSessionRecord): string {
-  const windowRef = safeSummary(record.targetWindowRef);
-  return windowRef
-    ? `VirtualAppScreen NativeHost ${safeRefPart(record.sessionId)}: ${windowRef}`
-    : `VirtualAppScreen NativeHost ${safeRefPart(record.sessionId)}`;
-}
-
-function nativeHostPermissionRefs(record: VirtualAppScreenNativeHostSessionRecord): string[] {
-  return uniqueStrings((record.permissionRefs ?? []).filter((ref) => /^permission:/i.test(ref) && safeRuntimeOwnerRef(ref)));
-}
-
-function nativeHostControlEvidenceRefs(
-  result: unknown,
-  record: VirtualAppScreenNativeHostSessionRecord,
-  eventType: 'session.stopped' | 'agent.paused' | 'agent.resumed' | 'session.closed',
-): string[] {
-  const refs = [
-    record.sessionRef,
-    record.evidenceLedgerRef,
-    record.currentRunPointerRef,
-    `computer-use:native-host/ledgers/${safeRefPart(record.sessionId)}/evidence-ledger.json/events/${eventType}.json`,
-  ];
-  if (isRecord(result) && result.status === 'blocked' && isRecord(result.error) && typeof result.error.ref === 'string') {
-    refs.push(result.error.ref);
-  }
-  return uniqueStrings(refs.filter((ref) => safeRuntimeOwnerRef(ref)));
 }
 
 function recordLikeStringList(value: unknown): string[] {

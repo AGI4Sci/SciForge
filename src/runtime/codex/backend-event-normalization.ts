@@ -242,6 +242,8 @@ function normalizeCodexAppServerEvent(
   const payload = recordField(raw.payload) ?? recordField(raw.params) ?? raw;
   const item = recordField(raw.item) ?? recordField(payload.item) ?? recordField(raw.tool) ?? {};
   const lowerType = type.toLowerCase();
+  const appServerItemType = stringField(item.type) ?? stringField(payload.type) ?? stringField(raw.item_type);
+  const text = textFromRaw(raw) ?? textFromRaw(payload) ?? textFromRaw(item);
 
   if (/thread[./](?:created|started|start)|thread.*(?:created|started)/.test(lowerType)) {
     return singleEvent(backendEvent(backend, 'thread_started', raw, options, commonFields(raw, payload, item)));
@@ -259,7 +261,6 @@ function normalizeCodexAppServerEvent(
     return eventWithTrace(backend, 'approval_resolved', raw, options, approvalTraceStatus(raw));
   }
 
-  const appServerItemType = stringField(item.type) ?? stringField(payload.type) ?? stringField(raw.item_type);
   if (/^response_item$/i.test(type) && /^function_call$/i.test(appServerItemType ?? '') && toolNameFromRaw(raw, item)) {
     return eventWithTrace(backend, 'tool_started', raw, options, 'started');
   }
@@ -277,16 +278,15 @@ function normalizeCodexAppServerEvent(
     return eventWithTrace(backend, guiType ?? 'tool_completed', raw, options, terminalTraceStatus(raw));
   }
 
-  if (/item[./]completed/.test(lowerType)) {
-    return singleEvent(backendEvent(backend, 'item_completed', raw, options, { ...commonFields(raw, payload, item), status: 'completed' }));
-  }
-
-  const text = textFromRaw(raw) ?? textFromRaw(payload) ?? textFromRaw(item);
-  if (/delta|partial/.test(lowerType) && text) {
+  if (/delta|partial/.test(lowerType) && text && isAssistantVisibleTextEvent(raw, payload, item, appServerItemType, lowerType)) {
     return singleEvent(backendEvent(backend, 'message_delta', raw, options, { ...commonFields(raw, payload, item), text }));
   }
 
-  if (/message/.test(lowerType) && text) {
+  if (text && isResponsesAssistantTextEvent(raw, payload, item, appServerItemType, lowerType)) {
+    return singleEvent(backendEvent(backend, 'message', raw, options, { ...commonFields(raw, payload, item), text }));
+  }
+
+  if (text && isAssistantMessageItem(raw, payload, item, appServerItemType, lowerType)) {
     return singleEvent(backendEvent(backend, 'message', raw, options, { ...commonFields(raw, payload, item), text }));
   }
 
@@ -301,6 +301,10 @@ function normalizeCodexAppServerEvent(
 
   if (/item[./]started/.test(lowerType)) {
     return singleEvent(backendEvent(backend, 'item_started', raw, options, commonFields(raw, payload, item)));
+  }
+
+  if (/item[./].*[./]completed|item[./]completed/.test(lowerType)) {
+    return singleEvent(backendEvent(backend, 'item_completed', raw, options, { ...commonFields(raw, payload, item), status: 'completed' }));
   }
 
   if (/(done|completed|finished)$|turn[./](?:done|completed)/.test(lowerType)) {
@@ -775,6 +779,86 @@ function statusForEventType(type: BackendNeutralEventType): string | undefined {
 
 function singleEvent(event: BackendNormalizedEvent): BackendEventNormalizationResult {
   return { events: [event], traceSteps: [] };
+}
+
+function isAssistantMessageItem(
+  raw: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  item: Record<string, unknown>,
+  itemType: string | undefined,
+  lowerEventType: string,
+): boolean {
+  const normalizedItemType = normalizeBackendItemType(itemType);
+  const role = normalizeBackendItemType(
+    stringField(item.role)
+      ?? stringField(payload.role)
+      ?? stringField(raw.role),
+  );
+  if (normalizedItemType === 'agentmessage' || normalizedItemType === 'assistantmessage' || normalizedItemType === 'assistant') {
+    return true;
+  }
+  if (normalizedItemType === 'message') {
+    return role !== 'user'
+      && role !== 'system'
+      && role !== 'tool'
+      && role !== 'developer';
+  }
+  if (/agentmessage|assistantmessage/.test(lowerEventType)) {
+    return role !== 'user' && role !== 'system' && role !== 'tool' && role !== 'developer';
+  }
+  return false;
+}
+
+function isAssistantVisibleTextEvent(
+  raw: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  item: Record<string, unknown>,
+  itemType: string | undefined,
+  lowerEventType: string,
+): boolean {
+  return isResponsesAssistantTextEvent(raw, payload, item, itemType, lowerEventType)
+    || isAssistantMessageItem(raw, payload, item, itemType, lowerEventType);
+}
+
+function isResponsesAssistantTextEvent(
+  raw: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  item: Record<string, unknown>,
+  itemType: string | undefined,
+  lowerEventType: string,
+): boolean {
+  const normalizedEventType = normalizeBackendItemType(lowerEventType);
+  if (!normalizedEventType?.startsWith('response')) return false;
+  if (/^responseoutputtext(?:delta|done)$/.test(normalizedEventType)) return true;
+  if (/^responsecontentpart(?:delta|done)$/.test(normalizedEventType)) {
+    const part = recordField(raw.part) ?? recordField(payload.part) ?? item;
+    const partType = normalizeBackendItemType(stringField(part.type));
+    return !partType || partType === 'outputtext' || partType === 'text';
+  }
+  if (/^responseoutputitemdone$/.test(normalizedEventType)) {
+    return isAssistantMessageItem(raw, payload, item, itemType, lowerEventType);
+  }
+  if (/^responsecompleted$/.test(normalizedEventType)) {
+    return responseHasAssistantText(recordField(raw.response) ?? recordField(payload.response) ?? raw);
+  }
+  return false;
+}
+
+function responseHasAssistantText(response: Record<string, unknown>): boolean {
+  if (textField(response.output_text) || textField(response.outputText)) return true;
+  const output = Array.isArray(response.output) ? response.output : [];
+  return output.some((entry) => {
+    if (!isRecord(entry)) return false;
+    const itemType = normalizeBackendItemType(stringField(entry.type));
+    const role = normalizeBackendItemType(stringField(entry.role));
+    if (itemType !== 'message' && itemType !== 'assistantmessage' && itemType !== 'agentmessage') return false;
+    if (role && role !== 'assistant') return false;
+    return Boolean(textFromContent(entry.content) ?? textField(entry.text) ?? textField(entry.output_text));
+  });
+}
+
+function normalizeBackendItemType(value: string | undefined): string | undefined {
+  return value?.toLowerCase().replace(/[^a-z0-9]+/g, '') || undefined;
 }
 
 function eventType(raw: Record<string, unknown>): string {
@@ -1310,14 +1394,42 @@ function textFromClaudeMessage(raw: Record<string, unknown>): string | undefined
 function textFromRaw(value: Record<string, unknown>): string | undefined {
   const delta = recordField(value.delta);
   const error = recordField(value.error);
+  const part = recordField(value.part);
+  const response = recordField(value.response);
   return textField(value.text)
     ?? textField(value.delta)
     ?? textField(delta?.text)
     ?? textField(value.message)
     ?? textField(error?.message)
     ?? textField(value.output_text)
+    ?? textField(value.outputText)
+    ?? textFromResponsePart(part)
+    ?? textFromResponseOutput(response)
     ?? textField(value.content)
     ?? textFromContent(value.content);
+}
+
+function textFromResponsePart(part: Record<string, unknown> | undefined): string | undefined {
+  if (!part) return undefined;
+  const partType = normalizeBackendItemType(stringField(part.type));
+  if (partType && partType !== 'outputtext' && partType !== 'text') return undefined;
+  return textField(part.text) ?? textField(part.content);
+}
+
+function textFromResponseOutput(response: Record<string, unknown> | undefined): string | undefined {
+  if (!response) return undefined;
+  const direct = textField(response.output_text) ?? textField(response.outputText);
+  if (direct) return direct;
+  const output = Array.isArray(response.output) ? response.output : [];
+  const text = output.map((entry) => {
+    if (!isRecord(entry)) return undefined;
+    const itemType = normalizeBackendItemType(stringField(entry.type));
+    const role = normalizeBackendItemType(stringField(entry.role));
+    if (itemType !== 'message' && itemType !== 'assistantmessage' && itemType !== 'agentmessage') return undefined;
+    if (role && role !== 'assistant') return undefined;
+    return textFromContent(entry.content) ?? textField(entry.text) ?? textField(entry.output_text);
+  }).filter((entry): entry is string => Boolean(entry)).join('');
+  return text || undefined;
 }
 
 function textFromContent(value: unknown): string | undefined {

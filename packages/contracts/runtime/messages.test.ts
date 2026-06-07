@@ -30,3 +30,27 @@ test('runtime message provenance keeps explicit seed demo messages excluded', ()
     },
   }), true);
 });
+
+test('non-live runtime and system messages are not seed demos just because replay eligibility is false', () => {
+  assert.equal(isSeedDemoOrFixtureMessage({
+    id: 'system-runtime-status',
+    role: 'system',
+    provenance: {
+      kind: 'system-ui',
+      source: 'background-completion:run-incomplete',
+      runtimeRequestEligible: false,
+      liveAcceptanceEligible: false,
+    },
+  }), false);
+
+  assert.equal(isSeedDemoOrFixtureMessage({
+    id: 'runtime-failure-message',
+    role: 'scenario',
+    provenance: {
+      kind: 'live-runtime-codex',
+      source: 'codex.runtime-failure:codex-command-failed',
+      runtimeRequestEligible: false,
+      liveAcceptanceEligible: false,
+    },
+  }), false);
+});

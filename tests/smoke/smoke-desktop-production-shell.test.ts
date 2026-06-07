@@ -127,9 +127,6 @@ test('R-DESK preload exposes a narrow renderer contract with Node disabled', () 
     'detachBrowserHostSessionSurface',
     'resizeBrowserHostSessionSurface',
     'getBrowserHostSessionSurfaceState',
-    'attachVirtualAppScreenSurface',
-    'presentVirtualAppScreenSurface',
-    'detachVirtualAppScreenSurface',
     'startAnnotation',
     'startDesktopAnnotation',
     'getAnnotationState',
@@ -152,9 +149,6 @@ test('R-DESK preload exposes a narrow renderer contract with Node disabled', () 
     'desktop:browser-host-surface:detach',
     'desktop:browser-host-surface:resize',
     'desktop:browser-host-surface:state',
-    'desktop:virtual-app-screen-surface:attach',
-    'desktop:virtual-app-screen-surface:present',
-    'desktop:virtual-app-screen-surface:detach',
     'desktop:annotation-overlay:start',
     'desktop:annotation-overlay:status',
     'desktop:annotation-overlay:cancel',
@@ -162,6 +156,7 @@ test('R-DESK preload exposes a narrow renderer contract with Node disabled', () 
     'platform:reveal-path',
     'platform:pick-directory',
   ]);
+  assert.doesNotMatch(JSON.stringify(plan.preload), /VirtualAppScreen|virtual-app-screen/);
   assert.ok(plan.preload.forbiddenRendererCapabilities.includes('start or own Runtime Codex sidecars'));
 });
 

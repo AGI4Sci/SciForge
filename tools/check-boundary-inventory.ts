@@ -203,7 +203,7 @@ const boundaryHeavyLongFiles: LongFilePlan[] = [
     extractionPlan: ['artifact digest helpers', 'retention/budget reducers', 'task input fixture builders'],
   },
   {
-    path: 'src/runtime/gateway/agentserver-prompts.ts',
+    path: 'src/runtime/gateway/backend-prompt-policy.ts',
     ownerBoundary: 'src-runtime',
     target: 'Keep prompt contract text modular without moving platform policy into packages.',
     extractionPlan: ['mode contract copy', 'capability brief copy', 'repair/validation instruction copy'],

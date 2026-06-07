@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { evaluateGeneratedTaskPayloadPreflight } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
-import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
+import { runGeneratedTaskBackend } from '../../src/runtime/gateway/generated-task-runner.js';
 import { makeGeneratedTaskRunnerDeps, runtimeGatewaySkill } from './runtime-gateway-runner-fixtures.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-task-payload-preflight-'));
@@ -193,9 +193,9 @@ const artifactStringList = evaluateGeneratedTaskPayloadPreflight({
 assert.equal(artifactStringList.status, 'blocked');
 assert.ok(artifactStringList.issues.some((issue) => issue.path === 'artifacts[0]'));
 
-const payload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+const payload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
   request,
-  requestAgentServerGeneration: async () => ({
+  requestBackendGeneration: async () => ({
     ok: true,
     runId: 'payload-preflight-run',
     response: {
@@ -218,10 +218,10 @@ assert.match(JSON.stringify(payload), /Generated task payload preflight blocked 
 await assert.rejects(access(join(workspace, 'should-not-run.txt')));
 
 const diagnosticRef = String(payload?.artifacts[0]?.dataRef ?? '');
-assert.match(diagnosticRef, /^\.sciforge\/sessions\/.+\/task-results\/agentserver-generation-retry-repair-knowledge-/);
+assert.match(diagnosticRef, /^\.sciforge\/sessions\/.+\/task-results\/backend-generation-retry-repair-knowledge-/);
 assert.ok(payload?.objectReferences?.some((reference) => {
   const record = reference as Record<string, unknown>;
-  return record.kind === 'run' && /agentserver-generation-retry-repair-knowledge-/.test(String(record.ref ?? ''));
+  return record.kind === 'run' && /backend-generation-retry-repair-knowledge-/.test(String(record.ref ?? ''));
 }));
 
 console.log(JSON.stringify({

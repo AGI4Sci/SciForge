@@ -40,7 +40,7 @@ import {
 import {
   assertSaWeb08DegradedAgentServerCase,
   createSaWeb08DegradedAgentServerCase,
-} from './cases/degraded-agentserver.js';
+} from './cases/degraded-backend.js';
 import {
   buildArtifactDeliveryVisibilityCase,
   verifyArtifactDeliveryVisibilityCase,

@@ -10,13 +10,13 @@ import {
   resolveObjectReference,
   resumeRun,
 } from '../../src/runtime/backend-artifact-tools.js';
-import { coerceAgentServerToolPayload, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
-import { runAgentServerGeneratedTask, type GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generated-task-runner.js';
+import { coerceBackendToolPayload, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { runGeneratedTaskBackend, type GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generated-task-runner.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import { firstPayloadFailureReason, payloadHasFailureStatus } from '../../src/runtime/gateway/runtime-routing.js';
 import { agentServerGenerationSkill } from '../../src/runtime/skill-registry/fallback.js';
 import { appendTaskAttempt } from '../../src/runtime/task-attempt-history.js';
-import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types.js';
+import type { BackendGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-t118-multiturn-fixtures-'));
 await mkdir(join(workspace, '.sciforge', 'task-results'), { recursive: true });
@@ -132,7 +132,7 @@ await writeFile(join(workspace, failedOutputRef), JSON.stringify({
   executionUnits: [{
     id: 't118-download-and-report',
     status: 'failed-with-reason',
-    tool: 'agentserver.generated.python',
+    tool: 'generated-task.generate..python',
     failureReason: 'missing --outputPath',
   }],
   artifacts: [],
@@ -198,8 +198,8 @@ assert.ok(repaired.objectReferences?.some((reference) => isRecord(reference) && 
 
 console.log('[ok] T118 minimal multi-round fixtures use backend generated tasks and object refs for markdown, artifact continuation, and failed-run repair');
 
-async function runGenerated(request: GatewayRequest, response: AgentServerGenerationResponse) {
-  return await runAgentServerGeneratedTask(request, skill, [skill], {}, depsFor(response), { allowSupplement: false });
+async function runGenerated(request: GatewayRequest, response: BackendGenerationResponse) {
+  return await runGeneratedTaskBackend(request, skill, [skill], {}, depsFor(response), { allowSupplement: false });
 }
 
 function roundRequest(input: {
@@ -226,18 +226,18 @@ function roundRequest(input: {
   };
 }
 
-function depsFor(response: AgentServerGenerationResponse): GeneratedTaskRunnerDeps {
+function depsFor(response: BackendGenerationResponse): GeneratedTaskRunnerDeps {
   return {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.t118.local',
-    requestAgentServerGeneration: async () => ({
+    readConfiguredBackendBaseUrl: async () => 'http://agentserver.t118.local',
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: `mock-${response.entrypoint.path.split('/').pop()?.replace(/\W+/g, '-')}`,
       response,
     }),
-    agentServerGenerationFailureReason: (error) => error,
+    backendGenerationFailureReason: (error) => error,
     attemptPlanRefs: (request) => ({ scenarioPackageRef: request.scenarioPackageRef, skillPlanRef: request.skillPlanRef }),
     repairNeededPayload: (request, selectedSkill, reason) => repairNeededPayload(request, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
+    backendFailurePayloadRefs: () => ({}),
     ensureDirectAnswerReportArtifact: (payload) => payload,
     mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
     validateAndNormalizePayload: async (payload, _request, selectedSkill, refs): Promise<ToolPayload> => ({
@@ -255,9 +255,9 @@ function depsFor(response: AgentServerGenerationResponse): GeneratedTaskRunnerDe
       })),
       logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
     }),
-    tryAgentServerRepairAndRerun: async () => undefined,
+    tryGeneratedTaskRepairAndRerun: async () => undefined,
     failedTaskPayload: (request, selectedSkill, _run: WorkspaceTaskRunResult, reason) => repairNeededPayload(request, selectedSkill, reason || 'generated task failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
+    coerceWorkspaceTaskPayload: (value) => coerceBackendToolPayload(value),
     schemaErrors: (payload) => {
       const record = isRecord(payload) ? payload : {};
       const missing = ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts']
@@ -275,7 +275,7 @@ function depsFor(response: AgentServerGenerationResponse): GeneratedTaskRunnerDe
   };
 }
 
-function round1Task(): AgentServerGenerationResponse {
+function round1Task(): BackendGenerationResponse {
   return taskResponse('t118-round1.py', [
     'import json, sys',
     'input_path = sys.argv[1]',
@@ -290,14 +290,14 @@ function round1Task(): AgentServerGenerationResponse {
     '  "reasoningTrace": "T118 round 1 generated task read inputPath and wrote outputPath.",',
     '  "claims": [{"text": "Round 1 report markdown was produced.", "supportingRefs": ["artifact:t118-round1-report"]}],',
     '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "t118-round1-report"}],',
-    '  "executionUnits": [{"id": "t118-round1", "status": "done", "tool": "agentserver.generated.python"}],',
+    '  "executionUnits": [{"id": "t118-round1", "status": "done", "tool": "generated-task.generate..python"}],',
     '  "artifacts": [{"id": "t118-round1-report", "type": "research-report", "producerScenario": "literature", "schemaVersion": "1", "data": {"markdown": markdown}}]',
     '}',
     'json.dump(payload, open(output_path, "w", encoding="utf-8"), indent=2)',
   ]);
 }
 
-function round2Task(): AgentServerGenerationResponse {
+function round2Task(): BackendGenerationResponse {
   return taskResponse('t118-round2-from-artifact.py', [
     'import json, os, sys',
     'input_path = sys.argv[1]',
@@ -324,14 +324,14 @@ function round2Task(): AgentServerGenerationResponse {
     '  "reasoningTrace": "T118 round 2 used only request.artifacts/currentReferences, not UI text guessing.",',
     '  "claims": [{"text": "Round 2 used the prior artifact body.", "supportingRefs": ["artifact:t118-round1-report", "artifact:t118-round2-report"]}],',
     '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "t118-round2-report"}],',
-    '  "executionUnits": [{"id": "t118-round2", "status": "done", "tool": "agentserver.generated.python", "params": "artifact:t118-round1-report"}],',
+    '  "executionUnits": [{"id": "t118-round2", "status": "done", "tool": "generated-task.generate..python", "params": "artifact:t118-round1-report"}],',
     '  "artifacts": [{"id": "t118-round2-report", "type": "research-report", "producerScenario": "literature", "schemaVersion": "1", "data": {"markdown": markdown}}]',
     '}',
     'json.dump(payload, open(output_path, "w", encoding="utf-8"), indent=2)',
   ]);
 }
 
-function repairFromFailedRunTask(): AgentServerGenerationResponse {
+function repairFromFailedRunTask(): BackendGenerationResponse {
   return taskResponse('t118-repair-from-failed-run.py', [
     'import json, sys',
     'input_path = sys.argv[1]',
@@ -353,14 +353,14 @@ function repairFromFailedRunTask(): AgentServerGenerationResponse {
     '  "reasoningTrace": "T118 repair task consumed recentExecutionRefs/priorAttempts failureReason.",',
     '  "claims": [{"text": "The failed run reason was used to choose the repair.", "supportingRefs": ["run:t118-failed-run", "artifact:t118-repair-report"]}],',
     '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "t118-repair-report"}],',
-    '  "executionUnits": [{"id": "t118-repair", "status": "done", "tool": "agentserver.generated.python", "failureReason": failure}],',
+    '  "executionUnits": [{"id": "t118-repair", "status": "done", "tool": "generated-task.generate..python", "failureReason": failure}],',
     '  "artifacts": [{"id": "t118-repair-report", "type": "research-report", "producerScenario": "literature", "schemaVersion": "1", "data": {"markdown": markdown}}]',
     '}',
     'json.dump(payload, open(output_path, "w", encoding="utf-8"), indent=2)',
   ]);
 }
 
-function taskResponse(fileName: string, sourceLines: string[]): AgentServerGenerationResponse {
+function taskResponse(fileName: string, sourceLines: string[]): BackendGenerationResponse {
   const path = `.sciforge/tasks/${fileName}`;
   return {
     taskFiles: [{

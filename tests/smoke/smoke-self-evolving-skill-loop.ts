@@ -36,7 +36,7 @@ payload = {
         {"componentId": "execution-unit-table", "artifactRef": "artifact.self.paper-list", "priority": 2}
     ],
     "executionUnits": [
-        {"id": "self-evolving-generated-task", "status": "done", "tool": "agentserver.generated.python", "attempt": request.get("attempt", 1)}
+        {"id": "self-evolving-generated-task", "status": "done", "tool": "generated-task.generate..python", "attempt": request.get("attempt", 1)}
     ],
     "artifacts": [
         {
@@ -299,21 +299,21 @@ async function writeComplexSingleCellProposalsSmoke() {
 function agentGeneratedOmicsSkill(): SkillAvailability {
   const checkedAt = new Date().toISOString();
   return {
-    id: 'agentserver.generate.omics',
+    id: 'generated-task.generate.omics',
     kind: 'installed',
     available: true,
     reason: 'smoke generated task',
     checkedAt,
     manifestPath: 'agentserver://generation',
     manifest: {
-      id: 'agentserver.generate.omics',
+      id: 'generated-task.generate.omics',
       kind: 'installed',
-      description: 'Generic AgentServer task generation fallback.',
+      description: 'Generic backend task generation fallback.',
       skillDomains: ['omics'],
       inputContract: { prompt: 'string' },
       outputArtifactSchema: { type: 'runtime-artifact' },
       entrypoint: { type: 'agentserver-generation' },
-      environment: { runtime: 'AgentServer' },
+      environment: { runtime: 'backend-generation' },
       validationSmoke: { mode: 'delegated' },
       examplePrompts: [],
       promotionHistory: [],
@@ -341,7 +341,7 @@ function successfulPayload(artifactType: string, prompt: string): ToolPayload {
     reasoningTrace: `${artifactType} generated as reusable smoke payload.`,
     claims: [{ id: `claim.${artifactType}`, text: prompt, supportingRefs: [`artifact.${artifactType}`] }],
     uiManifest: [{ componentId: 'execution-unit-table', artifactRef: `artifact.${artifactType}`, priority: 1 }],
-    executionUnits: [{ id: `unit.${artifactType}`, status: 'done', tool: 'agentserver.generated.python' }],
+    executionUnits: [{ id: `unit.${artifactType}`, status: 'done', tool: 'generated-task.generate..python' }],
     artifacts: [{ id: `artifact.${artifactType}`, type: artifactType, data: { prompt } }],
   };
 }

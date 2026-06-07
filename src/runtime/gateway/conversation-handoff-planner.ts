@@ -238,6 +238,7 @@ function compactContextProjection(projection: JsonMap, budget: Record<string, nu
     'contextRefs',
     'capabilityBriefRef',
     'cachePlan',
+    'backendContextRequest',
     'agentServerContextRequest',
     'selectedContextRefs',
     'retrievalTools',

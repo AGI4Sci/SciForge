@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { evaluateRawDataPreExecutionGuard } from '@sciforge-ui/runtime-contract/raw-data-execution-guard';
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
-import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
+import { runGeneratedTaskBackend } from '../../src/runtime/gateway/generated-task-runner.js';
 import { makeGeneratedTaskRunnerDeps, runtimeGatewaySkill } from './runtime-gateway-runner-fixtures.js';
 
 const readyDossier = {
@@ -130,9 +130,9 @@ const request = normalizeGatewayRequest({
   artifacts: [],
 });
 const skill = runtimeGatewaySkill();
-const payload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+const payload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
   request,
-  requestAgentServerGeneration: async () => ({
+  requestBackendGeneration: async () => ({
     ok: true,
     runId: 'raw-guard-run',
     response: {

@@ -121,6 +121,18 @@ export const DEFAULT_CU_NEXT_TASK_MAP = {
       recommendedTargetApp: 'Browser',
       recommendedMaxSteps: 8,
     },
+    {
+      taskId: 'CU-NEXT-08',
+      title: 'Desktop local document save',
+      slug: 'desktop-local-document-save',
+      priority: 8,
+      primaryScenarioId: 'CU-LONG-005',
+      longScenarioIds: ['CU-LONG-005'],
+      requirements: ['l2-artifact-refs', 'l3-workflow-refs', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'TextEdit',
+      recommendedMaxSteps: 8,
+    },
   ],
 } satisfies CuNextTaskMap;
 export const CU_NEXT_TASK_MAPPINGS = DEFAULT_CU_NEXT_TASK_MAP.tasks;

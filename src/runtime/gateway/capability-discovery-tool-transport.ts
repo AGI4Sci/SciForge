@@ -18,13 +18,16 @@ export const CAPABILITY_DISCOVERY_LEDGER_EVENT_SCHEMA_VERSION = 'sciforge.worksp
 
 export type CapabilityDiscoveryToolMethod = 'search' | 'expand' | 'plan' | 'explain';
 
-export interface AgentServerCapabilityDiscoveryToolTransportOptions {
+export interface BackendCapabilityDiscoveryToolTransportOptions {
   workspace?: string;
   sessionBundleRel?: string;
   auditSeed?: string;
   availableProviderIds?: string[];
   unavailableProviderReasons?: Record<string, string>;
 }
+
+/** @deprecated Use BackendCapabilityDiscoveryToolTransportOptions. */
+export type AgentServerCapabilityDiscoveryToolTransportOptions = BackendCapabilityDiscoveryToolTransportOptions;
 
 export interface CapabilityDiscoveryToolResultEvent {
   type: 'tool-result';
@@ -43,7 +46,7 @@ export interface CapabilityDiscoveryToolResultEvent {
   raw: Record<string, unknown>;
 }
 
-export function capabilityDiscoveryAgentServerToolTransportBrief() {
+export function capabilityDiscoveryBackendToolTransportBrief() {
   return {
     schemaVersion: CAPABILITY_DISCOVERY_AGENTSERVER_TOOL_TRANSPORT_SCHEMA_VERSION,
     tools: [
@@ -53,7 +56,7 @@ export function capabilityDiscoveryAgentServerToolTransportBrief() {
       'capability_discovery.explain',
     ],
     eventContract: {
-      request: 'AgentServer may emit a tool-call event with toolName/name/tool and JSON args/input/arguments.',
+      request: 'Backend may emit a tool-call event with toolName/name/tool and JSON args/input/arguments.',
       response: 'Gateway emits a tool-result event with result, discoveryRef, auditRef, persisted auditRefs, and completionEvidence=not-evidence.',
     },
     progressiveDisclosure: true,
@@ -66,9 +69,12 @@ export function capabilityDiscoveryAgentServerToolTransportBrief() {
   };
 }
 
+/** @deprecated Use capabilityDiscoveryBackendToolTransportBrief. */
+export const capabilityDiscoveryAgentServerToolTransportBrief = capabilityDiscoveryBackendToolTransportBrief;
+
 export async function maybeHandleCapabilityDiscoveryToolCall(
   event: unknown,
-  options: AgentServerCapabilityDiscoveryToolTransportOptions = {},
+  options: BackendCapabilityDiscoveryToolTransportOptions = {},
 ): Promise<CapabilityDiscoveryToolResultEvent | undefined> {
   const call = parseCapabilityDiscoveryToolCall(event);
   if (!call) return undefined;
@@ -252,7 +258,7 @@ function asExplainQuery(args: Record<string, unknown>): CapabilityExplainQuery {
 }
 
 async function persistDiscoveryAuditRecord(
-  options: AgentServerCapabilityDiscoveryToolTransportOptions,
+  options: BackendCapabilityDiscoveryToolTransportOptions,
   input: {
     method: CapabilityDiscoveryToolMethod;
     callId?: string;
@@ -294,7 +300,7 @@ async function persistDiscoveryAuditRecord(
 }
 
 async function appendDiscoveryLedgerEvent(
-  options: AgentServerCapabilityDiscoveryToolTransportOptions,
+  options: BackendCapabilityDiscoveryToolTransportOptions,
   input: {
     method: CapabilityDiscoveryToolMethod;
     callId?: string;

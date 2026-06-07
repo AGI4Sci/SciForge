@@ -415,7 +415,16 @@ function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {
 }
 
 function loadJsonFile<T>(relativePath: string): T {
-  return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8')) as T;
+  const candidates = [relativePath, `../${relativePath}`];
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(readFileSync(new URL(candidate, import.meta.url), 'utf8')) as T;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Could not load manifest ${relativePath}`);
 }
 
 interface ActionProviderManifestProjectionSource {

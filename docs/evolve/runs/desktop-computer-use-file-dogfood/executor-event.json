@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "sciforge.desktop-computer-use.executor-event.v1",
+  "executor": "macos-textedit-open-file",
+  "targetAppName": "TextEdit",
+  "exitCode": 0,
+  "stdoutDigest": {
+    "length": 0,
+    "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "stderrDigest": {
+    "length": 0,
+    "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "mutatingActionExecuted": true,
+  "fileCreationOwner": "workspace-file-writer-assisted",
+  "targetFileRef": "sciforge-computer-use-proof.txt"
+}

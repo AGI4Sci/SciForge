@@ -5,7 +5,7 @@ import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-
 import { sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
-import { agentServerStablePayloadTaskId } from '../../../packages/skills/runtime-policy.js';
+import { generatedTaskStablePayloadTaskId } from '../../../packages/skills/runtime-policy.js';
 
 export function backendPayloadRefs(taskId: string, taskRel: string, sessionBundleRel?: string): RuntimeRefBundle {
   return {
@@ -16,13 +16,13 @@ export function backendPayloadRefs(taskId: string, taskRel: string, sessionBundl
   };
 }
 
-export function stableAgentServerPayloadTaskId(
+export function stableGeneratedTaskPayloadTaskId(
   kind: string,
   request: GatewayRequest,
   skill: SkillAvailability,
   runId: string | undefined,
 ) {
-  return agentServerStablePayloadTaskId({
+  return generatedTaskStablePayloadTaskId({
     kind,
     skillDomain: request.skillDomain,
     skillId: skill.id,
@@ -52,7 +52,7 @@ export async function writeBackendPayloadLogs(
   }
 }
 
-export async function materializeAgentServerGenerationLifecyclePayload(input: {
+export async function materializeBackendGenerationLifecyclePayload(input: {
   workspace: string;
   request: GatewayRequest;
   skill: SkillAvailability;
@@ -62,7 +62,7 @@ export async function materializeAgentServerGenerationLifecyclePayload(input: {
   taskRel: string;
 }) {
   const refs = backendPayloadRefs(
-    stableAgentServerPayloadTaskId(input.kind, input.request, input.skill, sha1(input.reason).slice(0, 8)),
+    stableGeneratedTaskPayloadTaskId(input.kind, input.request, input.skill, sha1(input.reason).slice(0, 8)),
     input.taskRel,
     sessionBundleRelForRequest(input.request),
   );

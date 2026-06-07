@@ -11,7 +11,7 @@ import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { appendTaskAttempt, readRecentTaskAttempts } from '../task-attempt-history.js';
 import { sha1 } from '../workspace-task-runner.js';
 import type { RuntimeRefBundle } from './artifact-materializer.js';
-import { currentTurnReferences } from './agentserver-context-window.js';
+import { currentTurnReferences } from './backend-context-window.js';
 import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import {
   attachGeneratedTaskGuardBudgetDebit,
@@ -149,7 +149,7 @@ export interface GeneratedTaskRepairAuditLifecycleInput {
   failureReason: string;
   recoverActions: string[];
   callbacks?: WorkspaceRuntimeCallbacks;
-  tryAgentServerRepairAndRerun: RepairAttemptRunner;
+  tryGeneratedTaskRepairAndRerun: RepairAttemptRunner;
 }
 
 export interface GeneratedTaskAttemptLifecycleInput extends GeneratedTaskRuntimeRefs {
@@ -229,7 +229,7 @@ export interface GeneratedTaskSuccessLedgerLifecycleInput extends Omit<Generated
   refs: GeneratedTaskRuntimeRefs;
 }
 
-export interface AgentServerDirectPayloadSuccessLedgerLifecycleInput {
+export interface BackendDirectPayloadSuccessLedgerLifecycleInput {
   workspacePath: string;
   request: GatewayRequest;
   skill: SkillAvailability;
@@ -308,7 +308,7 @@ export function assessGeneratedTaskValidationLifecycle(
     : shouldRepairExecutionFailure
       ? normalizedRepairNeeded
         ? String(failureReason)
-        : runnerCheckpointFailureReason ?? evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`
+        : runnerCheckpointFailureReason ?? evidenceFailureReason ?? `backend-generated task exited ${run.exitCode} with failed payload: ${failureReason}`
       : undefined;
 
   return {
@@ -416,7 +416,7 @@ export async function runGeneratedTaskRepairAuditLifecycle(
     failureReason: input.failureReason,
     recoverActions: input.recoverActions,
   });
-  const repaired = await input.tryAgentServerRepairAndRerun({
+  const repaired = await input.tryGeneratedTaskRepairAndRerun({
     request: input.request,
     skill: input.skill,
     taskId: input.taskId,
@@ -486,14 +486,14 @@ export async function recordGeneratedTaskSuccessLedgerLifecycle(
   });
 }
 
-export async function recordAgentServerDirectPayloadSuccessLedgerLifecycle(
-  input: AgentServerDirectPayloadSuccessLedgerLifecycleInput,
+export async function recordBackendDirectPayloadSuccessLedgerLifecycle(
+  input: BackendDirectPayloadSuccessLedgerLifecycleInput,
 ) {
   return await writeCapabilityEvolutionEventBestEffort({
     workspacePath: input.workspacePath,
     request: input.request,
     skill: input.skill,
-    taskId: stableAgentServerDirectPayloadLedgerTaskId(input),
+    taskId: stableBackendDirectPayloadLedgerTaskId(input),
     runId: input.runId,
     payload: input.payload,
     taskRel: input.refs.taskRel,
@@ -501,10 +501,10 @@ export async function recordAgentServerDirectPayloadSuccessLedgerLifecycle(
     stdoutRel: input.refs.stdoutRel,
     stderrRel: input.refs.stderrRel,
     finalStatus: 'succeeded',
-    recoverActions: ['record-successful-agentserver-direct-payload', 'preserve-runtime-evidence-refs'],
-    eventKind: 'agentserver-direct-payload',
+    recoverActions: ['record-successful-backend-direct-payload', 'preserve-runtime-evidence-refs'],
+    eventKind: 'backend-direct-payload',
     promotionEligible: false,
-    promotionReason: 'AgentServer direct payload success is ledger evidence; promotion requires repeated compatible records.',
+    promotionReason: 'backend direct payload success is ledger evidence; promotion requires repeated compatible records.',
   });
 }
 
@@ -717,7 +717,7 @@ export async function appendGeneratedTaskDirectPayloadAttemptLifecycle(
     guardFinding: input.lifecycle.guardFinding,
   });
   await appendTaskAttempt(input.workspacePath, taskAttemptWithBudgetDebitRefs({
-    id: `agentserver-direct-${input.skill.id}-${sha1(`${input.request.prompt}:${input.runId || 'unknown'}`).slice(0, 12)}`,
+    id: `backend-direct-${input.skill.id}-${sha1(`${input.request.prompt}:${input.runId || 'unknown'}`).slice(0, 12)}`,
     prompt: input.request.prompt,
     skillDomain: input.request.skillDomain,
     ...input.attemptPlanRefs(input.request, input.skill),
@@ -739,7 +739,7 @@ export async function appendGeneratedTaskDirectPayloadAttemptLifecycle(
 export async function runGeneratedTaskPreOutputRepairLifecycle(
   input: Omit<GeneratedTaskRepairAttemptLifecycleInput, 'attemptStatus' | 'schemaErrors' | 'failureReason' | 'recoverActions'>,
 ): Promise<{ repaired?: ToolPayload; failureReason: string }> {
-  const failureReason = input.run.stderr || 'AgentServer generated task failed before writing output.';
+  const failureReason = input.run.stderr || 'backend-generated task failed before writing output.';
   const repaired = await runGeneratedTaskRepairAttemptLifecycle({
     ...input,
     attemptStatus: 'repair-needed',
@@ -753,7 +753,7 @@ export async function runGeneratedTaskPreOutputRepairLifecycle(
 export async function runGeneratedTaskParseRepairLifecycle(
   input: Omit<GeneratedTaskRepairAttemptLifecycleInput, 'attemptStatus' | 'schemaErrors' | 'failureReason' | 'recoverActions'> & { error: unknown },
 ): Promise<{ repaired?: ToolPayload; failureReason: string }> {
-  const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(input.error)}`;
+  const failureReason = `backend-generated task output could not be parsed: ${errorMessage(input.error)}`;
   const repaired = await runGeneratedTaskRepairAttemptLifecycle({
     ...input,
     attemptStatus: 'repair-needed',
@@ -837,7 +837,7 @@ function generatedTaskRunnerFailureCheckpointRepairReason(payload: ToolPayload, 
   if (generatedTaskRunnerCheckpointPartialRefs(payload).length) return undefined;
   return firstRepairOrFailurePayloadReason(payload)
     ?? run.stderr
-    ?? `AgentServer generated task exited ${run.exitCode} before writing a final ToolPayload.`;
+    ?? `backend-generated task exited ${run.exitCode} before writing a final ToolPayload.`;
 }
 
 function generatedTaskRunnerCheckpointPartialRefs(payload: ToolPayload) {
@@ -889,7 +889,7 @@ function isPartialArtifactWorkEvidence(item: Record<string, unknown>) {
 }
 
 function generatedTaskSchemaFailureReason(schemaErrors: string[]) {
-  return `AgentServer generated task output failed schema validation: ${schemaErrors.join('; ')}`;
+  return `backend-generated task output failed schema validation: ${schemaErrors.join('; ')}`;
 }
 
 function generatedTaskRepairRecoverActions(kind: 'schema-validation' | 'runtime-evidence' | 'pre-output-failure' | 'parse-output-failure') {
@@ -1007,8 +1007,8 @@ function taskAttemptWithWorkEvidenceRefs(record: TaskAttemptRecord): TaskAttempt
   } as TaskAttemptRecord;
 }
 
-function stableAgentServerDirectPayloadLedgerTaskId(input: AgentServerDirectPayloadSuccessLedgerLifecycleInput) {
-  return `agentserver-direct-${input.request.skillDomain}-${sha1([
+function stableBackendDirectPayloadLedgerTaskId(input: BackendDirectPayloadSuccessLedgerLifecycleInput) {
+  return `backend-direct-${input.request.skillDomain}-${sha1([
     input.request.prompt,
     input.skill.id,
     input.runId ?? '',

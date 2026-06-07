@@ -1,4 +1,4 @@
-import type { ToolPackageManifest } from './types.js';
+import type { ToolPackageManifest } from './types';
 
 export const toolPackageManifests = [
   {
@@ -103,4 +103,4 @@ export const toolPackageManifests = [
   }
 ] as const satisfies readonly ToolPackageManifest[];
 
-export type { SensePluginManifest, ToolPackageManifest, ToolPackageSource } from './types.js';
+export type { SensePluginManifest, ToolPackageManifest, ToolPackageSource } from './types';

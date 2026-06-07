@@ -91,7 +91,7 @@ function messageProvenanceKind(message: SciForgeMessage) {
   const kind = message.provenance?.kind;
   if (kind && isInternalMessageProvenance(kind)) return 'runtime-result';
   return kind
-    ?? (message.role === 'user' ? 'user-authored' : message.role === 'system' ? 'system-ui' : 'seed-demo');
+    ?? (message.role === 'user' ? 'user-authored' : message.role === 'system' ? 'system-ui' : 'message');
 }
 
 function MessageProvenanceBadge({ message }: { message: SciForgeMessage }) {

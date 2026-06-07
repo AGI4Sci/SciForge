@@ -1,5 +1,6 @@
 export const CAPABILITY_BUDGET_DEBIT_CONTRACT_ID = 'sciforge.capability-budget-debit.v1' as const;
 export const CAPABILITY_BUDGET_DEBIT_SCHEMA_VERSION = 1 as const;
+export const BACKEND_GENERATION_FAILURE_CAPABILITY_ID = 'sciforge.backend.generation-failure' as const;
 
 export const CAPABILITY_BUDGET_DEBIT_DIMENSIONS = [
   'wallMs',

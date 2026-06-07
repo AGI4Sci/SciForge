@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "sciforge.desktop-computer-use.file-validation.v1",
+  "fileRef": "sciforge-computer-use-proof.txt",
+  "checkedAt": "2026-06-06T18:40:50.667Z",
+  "validation": {
+    "fileExists": true,
+    "contentMatches": true,
+    "titlePresent": true,
+    "bulletCount": 3,
+    "datePresent": true,
+    "sha1": "018ab87b0ba453834977eb28d9a350edcddc4d01"
+  }
+}

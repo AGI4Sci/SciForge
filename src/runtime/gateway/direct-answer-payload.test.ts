@@ -89,7 +89,7 @@ test('structured direct answers without displayIntent default to satisfied Proje
     reasoningTrace: 'Answered without execution.',
     claims: ['ConversationProjection is authoritative.'],
     uiManifest: [{ componentId: 'report-viewer' }],
-    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'agentserver.direct-text' }],
+    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'backend.direct-text' }],
     artifacts: [],
   });
 
@@ -127,7 +127,7 @@ test('structured direct answers with nonblocking displayIntent merge satisfied d
     claims: ['ConversationProjection is authoritative.'],
     displayIntent: { primaryView: 'answer' },
     uiManifest: [{ componentId: 'report-viewer' }],
-    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'agentserver.direct-text' }],
+    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'backend.direct-text' }],
     artifacts: [],
   });
 
@@ -144,7 +144,7 @@ test('plain AgentServer ToolPayload JSON normalizes loose artifact refs instead 
     confidence: 0.91,
     claimType: 'research-package',
     evidenceLevel: 'generated',
-    reasoningTrace: 'AgentServer returned structured ToolPayload JSON.',
+    reasoningTrace: 'backend returned structured ToolPayload JSON.',
     claims: [
       { id: 'claim-brief', text: 'Project brief, risk register, and timeline were produced.', evidenceLevel: 'generated' },
     ],
@@ -188,7 +188,7 @@ test('structured blocking answers without displayIntent do not default to satisf
     reasoningTrace: 'Provider unavailable.',
     claims: ['Provider unavailable.'],
     uiManifest: [{ componentId: 'report-viewer' }],
-    executionUnits: [{ id: 'blocked', status: 'needs-human', tool: 'agentserver.direct-text' }],
+    executionUnits: [{ id: 'blocked', status: 'needs-human', tool: 'backend.direct-text' }],
     artifacts: [],
   });
 
@@ -253,7 +253,7 @@ test('plain AgentServer text wraps human-facing prose in an audited ToolPayload'
     artifacts: [],
   });
 
-  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.claimType, 'backend-direct-answer');
   assert.equal(payload.displayIntent?.status, 'completed');
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.equal(payload.artifacts[0]?.type, 'research-report');
@@ -297,7 +297,7 @@ test('plain AgentServer text exposes mentioned workspace files as artifacts', ()
     artifacts: [],
   });
 
-  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.claimType, 'backend-direct-answer');
   assert.ok(payload.artifacts.some((artifact) => artifact.id === 'experiment_data' && artifact.type === 'csv' && artifact.path === 'output/experiment_data.csv'));
   assert.ok(payload.artifacts.some((artifact) => artifact.id === 'chart_treatment_timepoint' && artifact.type === 'image'));
   assert.ok(payload.artifacts.some((artifact) => artifact.id === 'evidence_matrix' && artifact.type === 'evidence-matrix'));
@@ -460,7 +460,7 @@ test('plain AgentServer text guard allows prose that references taskFiles withou
     artifacts: [],
   });
 
-  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.claimType, 'backend-direct-answer');
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.deepEqual(schemaErrors(payload), []);
 });

@@ -21,6 +21,8 @@ import {
   normalizeBrowserHostUrl,
   type BrowserHostFrameCaptureResult,
   type BrowserHostMouseButton,
+  type BrowserHostOpenReadInput,
+  type BrowserHostOpenReadOutput,
   type BrowserHostSearchInput,
   type BrowserHostSearchOutput,
   type BrowserHostSessionDriver,
@@ -1103,6 +1105,79 @@ test('BrowserHostSession openRead persists source page metadata and page text re
   }
 });
 
+test('BrowserHostSession openRead falls back to public source text fetch when browser text extraction fails', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-open-read-fetch-fallback-'));
+  const sourceUrl = 'https://platform.openai.com/docs/changelog';
+  const { factory } = fakeDriverFactory({
+    failTextUrls: [sourceUrl],
+  });
+  const fetchedUrls: string[] = [];
+  try {
+    const manager = new BrowserHostSessionManager({
+      driverFactory: factory,
+      sourceTextFetcher: async (url) => {
+        fetchedUrls.push(url);
+        return {
+          finalUrl: 'https://developers.openai.com/api/docs/changelog',
+          text: 'Changelog June, 2026 Jun 4 Feature Added moderation scores to the Responses API and Chat Completions API.',
+        };
+      },
+    });
+    const output = await manager.openRead(workspacePath, {
+      url: sourceUrl,
+      sessionId: 'open-read-fetch-fallback-session',
+      title: 'OpenAI API changelog',
+    });
+
+    assert.deepEqual(fetchedUrls, [sourceUrl]);
+    assert.equal(output.sourcePage.status, 'read');
+    assert.equal(output.sourcePage.url, sourceUrl);
+    assert.equal(output.sourcePage.finalUrl, 'https://developers.openai.com/api/docs/changelog');
+    assert.match(output.sourcePage.sourcePageRef ?? '', /^browser-host-session:open-read-fetch-fallback-session\/source-pages\/source-1-[a-f0-9]+\.source\.json$/);
+    assert.match(output.sourcePage.textRef ?? '', /^browser-host-session:open-read-fetch-fallback-session\/source-pages\/source-1-[a-f0-9]+\.txt$/);
+    assert.match(output.sourcePage.textSummary ?? output.sourcePage.textPreview ?? '', /Jun 4.*moderation scores/);
+    assert.match(output.session.diagnostics.join('\n'), /public source text fetch/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession openRead falls back to public source text fetch when browser driver is unavailable', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-open-read-no-driver-fallback-'));
+  const previousNativeAdapterUrl = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  const sourceUrl = 'https://platform.openai.com/docs/changelog';
+  const fetchedUrls: string[] = [];
+  try {
+    const manager = new BrowserHostSessionManager({
+      sourceTextFetcher: async (url) => {
+        fetchedUrls.push(url);
+        return {
+          finalUrl: 'https://developers.openai.com/api/docs/changelog',
+          text: 'Changelog June, 2026 Jun 4 Feature Added moderation scores to the Responses API and Chat Completions API.',
+        };
+      },
+    });
+    const output = await manager.openRead(workspacePath, {
+      url: sourceUrl,
+      sessionId: 'open-read-no-driver-fallback-session',
+      title: 'OpenAI API changelog',
+    });
+
+    assert.deepEqual(fetchedUrls, [sourceUrl]);
+    assert.equal(output.sourcePage.status, 'read');
+    assert.equal(output.sourcePage.finalUrl, 'https://developers.openai.com/api/docs/changelog');
+    assert.match(output.sourcePage.sourcePageRef ?? '', /^browser-host-session:open-read-no-driver-fallback-session\/source-pages\/source-1-[a-f0-9]+\.source\.json$/);
+    assert.match(output.sourcePage.textRef ?? '', /^browser-host-session:open-read-no-driver-fallback-session\/source-pages\/source-1-[a-f0-9]+\.txt$/);
+    assert.match(output.session.diagnostics.join('\n'), /no active browser driver/i);
+    assert.match(output.session.diagnostics.join('\n'), /public source text fetch/i);
+  } finally {
+    if (previousNativeAdapterUrl === undefined) delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+    else process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL = previousNativeAdapterUrl;
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('BrowserHostSession search prioritizes preferred official results before reading source pages', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-preferred-search-'));
   const { factory, drivers } = fakeDriverFactory();
@@ -1123,6 +1198,288 @@ test('BrowserHostSession search prioritizes preferred official results before re
     assert.equal(output.results[0]?.url, 'https://huggingface.co/api/daily_papers?sort=trending');
     assert.equal(output.sourcePages?.[0]?.url, 'https://huggingface.co/api/daily_papers?sort=trending');
     assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://huggingface.co/api/daily_papers?sort=trending'));
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search enforces explicit site constraints without synthesizing sources', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-site-filter-'));
+  const { factory, drivers } = fakeDriverFactory({
+    searchResults: [
+      { title: 'Agentic RL blog', url: 'https://example.org/agentic-rl', snippet: 'Wrong host' },
+      { title: 'Agentic RL notes', url: 'https://zhuanlan.zhihu.com/p/agentic-rl', snippet: 'Wrong host' },
+    ],
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'site:arxiv.org agentic rl',
+      limit: 4,
+      sourcePageLimit: 2,
+    });
+
+    assert.equal(output.results.length, 0);
+    assert.deepEqual(output.sourcePages, []);
+    assert.ok(drivers[0]?.actions.every((action) => !/arxiv\.org\/search/.test(action)));
+    assert.doesNotMatch(JSON.stringify(output.results), /example\.org|zhihu/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search filters source-constrained results after a wider raw extraction window', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-site-filter-window-'));
+  const arxivAbsUrl = 'https://arxiv.org/abs/2509.02547';
+  const { factory } = fakeDriverFactory({
+    searchResults: [
+      { title: 'Wrong host 1', url: 'https://example.org/1', snippet: 'agentic rl' },
+      { title: 'Wrong host 2', url: 'https://example.org/2', snippet: 'agentic rl' },
+      { title: 'Wrong host 3', url: 'https://example.org/3', snippet: 'agentic rl' },
+      { title: 'Wrong host 4', url: 'https://example.org/4', snippet: 'agentic rl' },
+      { title: 'Wrong host 5', url: 'https://example.org/5', snippet: 'agentic rl' },
+      { title: 'The Landscape of Agentic Reinforcement Learning', url: arxivAbsUrl, snippet: 'arXiv source result' },
+    ],
+    textByUrl: {
+      [arxivAbsUrl]: [
+        'Title: The Landscape of Agentic Reinforcement Learning',
+        'Authors: Example Author',
+        '[Submitted on 2 Sep 2025]',
+        'Abstract: A survey of agentic reinforcement learning.',
+      ].join('\n'),
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'site:arxiv.org agentic rl',
+      limit: 3,
+      sourcePageLimit: 1,
+    });
+
+    assert.equal(output.results.length, 1);
+    assert.equal(output.results[0]?.url, arxivAbsUrl);
+    assert.equal(output.sourcePages?.[0]?.status, 'read');
+    assert.equal(output.sourcePages?.[0]?.url, arxivAbsUrl);
+    assert.match(output.sourcePages?.[0]?.textSummary ?? '', /Landscape of Agentic Reinforcement Learning/);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search retries relaxed constrained queries when strict site search returns no usable results', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-relaxed-site-retry-'));
+  const arxivAbsUrl = 'https://arxiv.org/abs/2606.05296';
+  const arxivHomeUrl = 'https://arxiv.org/';
+  const arxivSearchUrl = 'https://arxiv.org/search/?query=agentic+rl&searchtype=all';
+  const { factory, drivers } = fakeDriverFactory({
+    searchResultsByQuery: {
+      'site:arxiv.org agentic rl': [],
+      'arxiv.org agentic rl': [
+        { title: 'arXiv.org e-Print archive', url: arxivHomeUrl, snippet: 'Right host but only the home page' },
+        { title: 'Wrong host', url: 'https://example.org/agentic-rl', snippet: 'Search engine drift' },
+      ],
+    },
+    contentByUrl: {
+      [arxivHomeUrl]: [
+        '<html><body>',
+        '<form method="GET" action="/search">',
+        '<input type="text" name="query">',
+        '<select name="searchtype"><option value="all" selected>All fields</option></select>',
+        '<button>Search</button>',
+        '</form>',
+        '</body></html>',
+      ].join(''),
+      [arxivSearchUrl]: [
+        '<html><body>',
+        '<a href="/abs/2606.05296">Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents</a>',
+        '</body></html>',
+      ].join(''),
+    },
+    textByUrl: {
+      [arxivAbsUrl]: [
+        'Title: Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents',
+        'Authors: Dae Yon Hwang, Raunaq Suri',
+        '[Submitted on 3 Jun 2026]',
+        'Abstract: Simulates reinforcement learning-style exploration for black-box LLM agents.',
+      ].join('\n'),
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'site:arxiv.org agentic rl',
+      limit: 4,
+      sourcePageLimit: 1,
+    });
+
+    assert.equal(output.query, 'site:arxiv.org agentic rl');
+    assert.equal(output.engine, 'bing');
+    assert.equal(output.results.length, 1);
+    assert.equal(output.results[0]?.url, arxivAbsUrl);
+    assert.equal(output.sourcePages?.[0]?.status, 'read');
+    assert.equal(output.sourcePages?.[0]?.url, arxivAbsUrl);
+    assert.match(output.sourcePages?.[0]?.textSummary ?? '', /Agentic Monte Carlo/);
+    assert.ok(drivers[0]?.actions.some((action) => action.includes('q=site%3Aarxiv.org+agentic+rl')));
+    assert.ok(drivers[0]?.actions.some((action) => action.includes('q=arxiv.org+agentic+rl')));
+    assert.equal(output.searchUrl, arxivSearchUrl);
+    assert.match(output.session.diagnostics.join('\n'), /relaxed constrained query/i);
+    assert.match(output.session.diagnostics.join('\n'), /source-site search form/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search isolates source-page reads when visible search navigation stays on search page', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-isolated-source-read-'));
+  const arxivSearchUrl = 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25';
+  const arxivAbsUrl = 'https://arxiv.org/abs/2606.05296';
+  const { factory, drivers } = fakeDriverFactory({
+    stayOnSearchPageForSourceNavigation: true,
+    searchResults: [
+      { title: 'Agentic RL blog', url: 'https://example.org/agentic-rl', snippet: 'Wrong host' },
+      { title: 'arXiv search: agentic rl', url: arxivSearchUrl, snippet: 'Official listing' },
+    ],
+    textByUrl: {
+      [arxivSearchUrl]: [
+        'Showing 1-25 of 6,080 results for all: agentic rl',
+        'arXiv:2606.05296 [pdf, ps, other] cs.LG cs.AI Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents Authors: Dae Yon Hwang, Raunaq Suri Abstract: LLM agents operate in open-weight and black-box regimes. Submitted 3 June, 2026; originally announced June 2026.',
+      ].join('\n'),
+      [arxivAbsUrl]: [
+        'Title: Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents',
+        'Authors: Dae Yon Hwang, Raunaq Suri',
+        '[Submitted on 3 Jun 2026]',
+        'Abstract: Simulates reinforcement learning-style exploration for black-box LLM agents.',
+        'Subjects: Artificial Intelligence (cs.AI)',
+      ].join('\n'),
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'site:arxiv.org agentic rl',
+      limit: 4,
+      sourcePageLimit: 1,
+    });
+
+    const discoveryPage = output.sourcePages?.[0];
+    const sourcePage = output.sourcePages?.[1];
+    assert.equal(discoveryPage?.status, 'read');
+    assert.equal(discoveryPage?.discoveryOnly, true);
+    assert.equal(discoveryPage?.url, arxivSearchUrl);
+    assert.deepEqual(discoveryPage?.discoveredSourceUrls, [arxivAbsUrl]);
+    assert.equal(sourcePage?.status, 'read');
+    assert.equal(sourcePage?.discoveryOnly, undefined);
+    assert.equal(sourcePage?.url, arxivAbsUrl);
+    assert.match(sourcePage?.textSummary ?? '', /Agentic Monte Carlo/);
+    assert.match(sourcePage?.sourcePageRef ?? '', /^browser-host-session:[^/]+\/source-pages\/source-2-[a-f0-9]+\.source\.json$/);
+    assert.match(sourcePage?.textRef ?? '', /^browser-host-session:[^/]+\/source-pages\/source-2-[a-f0-9]+\.txt$/);
+    assert.ok(drivers.length >= 3);
+    assert.ok(drivers[0]?.actions.filter((action) => action === `goto:${arxivSearchUrl}`).length >= 2);
+    assert.ok(drivers[1]?.actions.some((action) => action === `goto:${arxivSearchUrl}`));
+    assert.ok(drivers[1]?.closed);
+    assert.ok(drivers.some((driver) => driver.actions.some((action) => action === `goto:${arxivAbsUrl}`)));
+    assert.match(output.session.diagnostics.join('\n'), /isolated source-page reader/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search falls back to public source text fetch when browser source navigation fails', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-source-fetch-fallback-'));
+  const sourceUrl = 'https://example.org/research/source-paper';
+  const { factory } = fakeDriverFactory({
+    failNavigationUrls: [sourceUrl],
+    searchResults: [
+      { title: 'Source paper', url: sourceUrl, snippet: 'A relevant source result' },
+    ],
+  });
+  const fetchedUrls: string[] = [];
+  try {
+    const manager = new BrowserHostSessionManager({
+      driverFactory: factory,
+      sourceTextFetcher: async (url) => {
+        fetchedUrls.push(url);
+        return {
+          finalUrl: url,
+          text: 'Title: Source Paper\nAuthors: Ada Example\nAbstract: Source-backed fallback text.',
+        };
+      },
+    });
+    const output = await manager.search(workspacePath, {
+      query: 'source paper',
+      limit: 1,
+      sourcePageLimit: 1,
+    });
+
+    const sourcePage = output.sourcePages?.[0];
+    assert.deepEqual(fetchedUrls, [sourceUrl]);
+    assert.equal(sourcePage?.status, 'read');
+    assert.equal(sourcePage?.url, sourceUrl);
+    assert.match(sourcePage?.textPreview ?? '', /Source-backed fallback text/);
+    assert.match(sourcePage?.sourcePageRef ?? '', /^browser-host-session:[^/]+\/source-pages\/source-1-[a-f0-9]+\.source\.json$/);
+    assert.match(output.session.diagnostics.join('\n'), /public source text fetch/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search treats bare public domains as source constraints', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-bare-domain-filter-'));
+  const { factory, drivers } = fakeDriverFactory({
+    searchResults: [
+      { title: 'Agentic RL blog', url: 'https://example.org/agentic-rl', snippet: 'Wrong host' },
+      { title: 'Agentic RL notes', url: 'https://zhuanlan.zhihu.com/p/agentic-rl', snippet: 'Wrong host' },
+      { title: 'arXiv homepage', url: 'https://arxiv.org/', snippet: 'Right host but less specific' },
+    ],
+    textByUrl: {
+      'https://arxiv.org/': 'arXiv homepage',
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'arxiv.org agentic reinforcement learning 2026-06-07',
+      limit: 4,
+      sourcePageLimit: 2,
+    });
+
+    assert.equal(output.results.length, 1);
+    assert.equal(output.results[0]?.url, 'https://arxiv.org/');
+    assert.equal(output.sourcePages?.[0]?.url, 'https://arxiv.org/');
+    assert.match(output.sourcePages?.[0]?.textPreview ?? '', /arXiv homepage/);
+    assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://arxiv.org/'));
+    assert.doesNotMatch(JSON.stringify(output.results), /example\.org|zhihu/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search leaves source aliases to Host query policy instead of filtering locally', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-source-alias-filter-'));
+  const { factory, drivers } = fakeDriverFactory({
+    searchResults: [
+      { title: 'arXiv.org e-Print archive', url: 'https://arxiv.org/', snippet: 'Right host but less specific' },
+      { title: 'arXiv 是期刊吗？', url: 'https://zhuanlan.zhihu.com/p/2019340359319209416', snippet: 'Wrong host' },
+      { title: 'Tsinghua arXiv news', url: 'https://lib.tsinghua.edu.cn/info/1377/7955.htm', snippet: 'Wrong host' },
+    ],
+    textByUrl: {
+      'https://arxiv.org/': 'arXiv homepage',
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'arxiv agentic reinforcement learning 2026-06-07',
+      limit: 4,
+      sourcePageLimit: 2,
+    });
+
+    assert.equal(output.results.length, 3);
+    assert.equal(output.results[0]?.url, 'https://arxiv.org/');
+    assert.match(JSON.stringify(output.results), /zhihu|tsinghua/i);
+    assert.equal(output.sourcePages?.[0]?.url, 'https://arxiv.org/');
+    assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://arxiv.org/'));
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
@@ -1415,6 +1772,39 @@ test('BrowserHostSession HTTP routes expose start, state, action, search, and mi
     assert.equal(search.search.schemaVersion, BROWSER_HOST_SEARCH_SCHEMA);
     assert.equal(search.search.session.id, 'route-session');
     assert.equal(search.search.results.length, 1);
+
+    const openRead = await postJson(`${baseUrl}/api/sciforge/browser-host/open-read`, {
+      workspacePath,
+      url: 'https://example.org/open-read',
+      sessionId: 'route-session',
+      title: 'Route Open Read',
+      timeoutMs: 1234,
+    });
+    assert.equal(openRead.ok, true);
+    assert.equal(openRead.openRead.session.id, 'route-session');
+    assert.equal(openRead.openRead.sourcePage.status, 'read');
+    assert.equal(openRead.openRead.sourcePage.title, 'Route Open Read');
+    assert.match(openRead.openRead.sourcePage.sourcePageRef ?? '', /^browser-host-session:route-session\/source-pages\/source-1-route\.source\.json$/);
+    assert.match(openRead.openRead.sourcePage.textRef ?? '', /^browser-host-session:route-session\/source-pages\/source-1-route\.txt$/);
+    assert.equal(manager.openReadInputs[0]?.input.title, 'Route Open Read');
+    assert.equal(manager.openReadInputs[0]?.input.timeoutMs, 1234);
+    assert.doesNotMatch(JSON.stringify(openRead), /FULL_ROUTE_PAGE_TEXT_SHOULD_NOT_INLINE|rawHtml|secret-value/i);
+
+    const invalidOpenReadResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/open-read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspacePath,
+        title: 'Missing URL',
+        text: 'FULL_ROUTE_PAGE_TEXT_SHOULD_NOT_INLINE',
+        rawHtml: '<html>secret-value</html>',
+      }),
+    });
+    assert.equal(invalidOpenReadResponse.status, 400);
+    const invalidOpenRead = await invalidOpenReadResponse.json() as { ok: boolean; error?: string };
+    assert.equal(invalidOpenRead.ok, false);
+    assert.match(invalidOpenRead.error ?? '', /open_read url is required/);
+    assert.equal(manager.openReadInputs.length, 1);
 
     const missingFrame = await fetch(`${baseUrl}/api/sciforge/browser-host/sessions/route-session/frame?workspacePath=${encodeURIComponent(workspacePath)}`);
     assert.equal(missingFrame.status, 404);
@@ -2115,7 +2505,14 @@ interface FakeBrowserHostDriverOptions {
   holdNavigation?: boolean;
   holdStop?: boolean;
   failNavigation?: boolean;
+  failNavigationUrls?: string[];
+  failTextUrls?: string[];
+  stayOnSearchPageForSourceNavigation?: boolean;
+  contentByUrl?: Record<string, string>;
   textByUrl?: Record<string, string>;
+  searchResults?: Array<{ title: string; url: string; snippet: string }>;
+  searchResultsByQuery?: Record<string, Array<{ title: string; url: string; snippet: string }>>;
+  searchResultsByUrl?: Record<string, Array<{ title: string; url: string; snippet: string }>>;
 }
 
 function fakeDriverFactory(options: FakeBrowserHostDriverOptions = {}): {
@@ -2168,6 +2565,13 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   async goto(url: string): Promise<void> {
     this.actions.push(`goto:${url}`);
     if (this.options.failNavigation) throw new Error(`navigation failed for ${url}: <html><body>secret DOM token=secret-value</body></html>`);
+    if (this.options.failNavigationUrls?.includes(url)) throw new Error(`navigation failed for ${url}`);
+    if (this.options.stayOnSearchPageForSourceNavigation && isSearchEngineTestUrl(this.currentUrl) && !isSearchEngineTestUrl(url)) {
+      this.emitConsole({ level: 'info', text: 'token:secret-value should not leak' });
+      this.emitNetwork({ event: 'request', authorization: 'Bearer secret' });
+      await this.maybeHoldNavigation();
+      return;
+    }
     this.currentUrl = normalizeBrowserHostUrl(url);
     this.emitConsole({ level: 'info', text: 'token:secret-value should not leak' });
     this.emitNetwork({ event: 'request', authorization: 'Bearer secret' });
@@ -2184,10 +2588,13 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
 
   async content(): Promise<string> {
     this.contentCalls += 1;
+    const custom = this.options.contentByUrl?.[this.currentUrl];
+    if (custom !== undefined) return custom;
     return '<html><body><a href="https://example.org/browser-host">Browser Host</a><p>Ready</p></body></html>';
   }
 
   async text(): Promise<string> {
+    if (this.options.failTextUrls?.some((url) => normalizeBrowserHostUrl(url) === this.currentUrl)) throw new Error(`text extraction failed for ${this.currentUrl}`);
     const custom = this.options.textByUrl?.[this.currentUrl];
     if (custom !== undefined) return custom;
     return 'Browser Host\nhttps://example.org/browser-host\nReady';
@@ -2205,6 +2612,10 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   }
 
   async searchResults(): Promise<Array<{ title: string; url: string; snippet: string }>> {
+    if (this.options.searchResultsByUrl?.[this.currentUrl]) return this.options.searchResultsByUrl[this.currentUrl];
+    const query = searchQueryFromTestUrl(this.currentUrl);
+    if (query && this.options.searchResultsByQuery?.[query]) return this.options.searchResultsByQuery[query];
+    if (this.options.searchResults) return this.options.searchResults;
     return [
       { title: 'Browser Host', url: 'https://example.org/browser-host', snippet: 'First result' },
       { title: 'Duplicate Browser Host', url: 'https://example.org/browser-host', snippet: 'Duplicate' },
@@ -2355,6 +2766,24 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   }
 }
 
+function searchQueryFromTestUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return url.searchParams.get('q') ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSearchEngineTestUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return /(^|\.)bing\.com$|(^|\.)duckduckgo\.com$|(^|\.)google\.[a-z.]+$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const startedAt = Date.now();
   while (!await predicate()) {
@@ -2370,6 +2799,7 @@ function createRouteManager(
   const sessions = new Map<string, BrowserHostSessionState>();
   const framePaths = new Map<string, string>();
   const actionInputs: Array<{ root: string; sessionId: string; input: Record<string, unknown> }> = [];
+  const openReadInputs: Array<{ root: string; input: BrowserHostOpenReadInput }> = [];
   let frameStreamSkipIndex = 0;
   const captureFrame = async (sessionId: string) => {
     const session = sessions.get(sessionId);
@@ -2387,6 +2817,7 @@ function createRouteManager(
   };
   return {
     actionInputs,
+    openReadInputs,
     async openSession(root: string, input: { url: string; sessionId?: string }) {
       const id = input.sessionId || 'route-session';
       const session: BrowserHostSessionState = {
@@ -2470,6 +2901,28 @@ function createRouteManager(
         searchResultRef: 'browser-host-session:search-route/search-results.json',
       };
       return search;
+    },
+    async openRead(root: string, input: BrowserHostOpenReadInput): Promise<BrowserHostOpenReadOutput> {
+      openReadInputs.push({ root, input: { ...input } });
+      const session = input.sessionId && sessions.get(input.sessionId)
+        ? await this.act(workspacePath, input.sessionId, { action: 'navigate', url: input.url })
+        : await this.openSession(workspacePath, { url: input.url, sessionId: input.sessionId ?? 'open-read-route' });
+      return {
+        sourcePage: {
+          resultIndex: 0,
+          title: input.title ?? input.url,
+          url: normalizeBrowserHostUrl(input.url),
+          finalUrl: session.url,
+          openedAt: '2026-06-01T00:00:02.000Z',
+          status: 'read',
+          sourcePageRef: `browser-host-session:${session.id}/source-pages/source-1-route.source.json`,
+          textRef: `browser-host-session:${session.id}/source-pages/source-1-route.txt`,
+          textPreview: 'Route open_read page text evidence',
+          textArtifactKind: 'page-text',
+          textCharCount: 34,
+        },
+        session,
+      };
     },
     async framePath(_root: string, sessionId: string) {
       return framePaths.get(sessionId);

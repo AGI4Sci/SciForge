@@ -17,7 +17,7 @@ import {
 } from '../../src/runtime/capability-evolution-ledger.js';
 import { normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { recordCapabilityEvolutionRuntimeEvent } from '../../src/runtime/gateway/capability-evolution-events.js';
-import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
+import { runGeneratedTaskBackend } from '../../src/runtime/gateway/generated-task-runner.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 import { listSkillPromotionProposals, writeSkillPromotionProposalsFromCapabilityEvolutionSummary } from '../../src/runtime/skill-promotion.js';
@@ -230,7 +230,7 @@ try {
       artifacts: [{ id: 'broken-report', type: 'research-report' }],
     },
     schemaErrors: ['uiManifest[0].componentId must be a non-empty string'],
-    failureReason: 'AgentServer generated task output failed schema validation: uiManifest[0].componentId must be a non-empty string',
+    failureReason: 'backend-generated task output failed schema validation: uiManifest[0].componentId must be a non-empty string',
     now: () => new Date('2026-05-09T00:02:00.000Z'),
   });
   assert.equal(validationFailure.ledgerRef, CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH);
@@ -281,9 +281,9 @@ try {
   assert.equal(runtimeRecords[1]?.metadata?.eventKind, 'validation-failure');
   assert.equal(runtimeRecords[2]?.metadata?.eventKind, 'repair-completion');
 
-  const realPathPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
-    requestAgentServerGeneration: async () => ({
+  const realPathPayload = await runGeneratedTaskBackend(request, skill, [skill], {}, {
+    readConfiguredBackendBaseUrl: async () => 'http://agentserver.local',
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'agentserver-run-ledger-real-path',
       response: {
@@ -304,14 +304,14 @@ try {
         patchSummary: 'ledger real path validation failure smoke',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
+    backendGenerationFailureReason: (error) => error,
     attemptPlanRefs: () => ({}),
     repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
+    backendFailurePayloadRefs: () => ({}),
     ensureDirectAnswerReportArtifact: (payload) => payload,
     mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
     validateAndNormalizePayload: async (payload): Promise<ToolPayload> => payload,
-    tryAgentServerRepairAndRerun: async () => undefined,
+    tryGeneratedTaskRepairAndRerun: async () => undefined,
     failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
     coerceWorkspaceTaskPayload: () => undefined,
     schemaErrors: (payload) => {
@@ -393,14 +393,14 @@ try {
   assert.ok(listedLedgerProposals.some((proposal) => proposal.id === ledgerSkillProposals[0]?.id));
 
   let supplementGenerationCalls = 0;
-  const supplementalFallbackPayload = await runAgentServerGeneratedTask({
+  const supplementalFallbackPayload = await runGeneratedTaskBackend({
     ...request,
     prompt: 'Generate a report and fill any missing evidence matrix through backend fallback.',
     expectedArtifactTypes: ['research-report', 'evidence-matrix'],
     selectedComponentIds: ['report-viewer', 'evidence-matrix'],
   }, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
-    requestAgentServerGeneration: async (_params) => {
+    readConfiguredBackendBaseUrl: async () => 'http://agentserver.local',
+    requestBackendGeneration: async (_params) => {
       supplementGenerationCalls += 1;
       const isSupplement = supplementGenerationCalls === 2;
       return {
@@ -430,14 +430,14 @@ try {
         },
       };
     },
-    agentServerGenerationFailureReason: (error) => error,
+    backendGenerationFailureReason: (error) => error,
     attemptPlanRefs: () => ({}),
     repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
+    backendFailurePayloadRefs: () => ({}),
     ensureDirectAnswerReportArtifact: (payload) => payload,
     mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
     validateAndNormalizePayload: async (payload): Promise<ToolPayload> => payload,
-    tryAgentServerRepairAndRerun: async () => undefined,
+    tryGeneratedTaskRepairAndRerun: async () => undefined,
     failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
     coerceWorkspaceTaskPayload: () => undefined,
     schemaErrors: (payload) => {

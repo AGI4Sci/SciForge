@@ -1,4 +1,4 @@
-import { clipForAgentServerJson, clipForAgentServerPrompt, isRecord } from '../gateway-utils.js';
+import { clipForBackendJson, clipForBackendPrompt, isRecord } from '../gateway-utils.js';
 import { buildAgentHarnessPromptRenderPlan } from './agent-harness-shadow.js';
 
 export interface AgentHarnessHandoffRefs {
@@ -77,7 +77,7 @@ export function reconstructAgentHarnessHandoffPayloadFromContract(input: {
     promptDirectiveCount: Array.isArray(input.contract.promptDirectives) ? input.contract.promptDirectives.length : undefined,
     traceStageCount: Array.isArray(input.trace?.stages) ? input.trace?.stages.length : undefined,
     budgetSummary,
-    decisionOwner: 'AgentServer',
+    decisionOwner: 'AgentHost',
   };
   const promptRenderPlan = buildAgentHarnessPromptRenderPlan({
     contract: input.contract,
@@ -96,7 +96,7 @@ export function reconstructAgentHarnessHandoffPayloadFromContract(input: {
   const handoff = {
     schemaVersion: refs.agentHarnessHandoffSchemaVersion ?? 'sciforge.agent-harness-handoff.v1',
     shadowMode: true,
-    decisionOwner: 'AgentServer',
+    decisionOwner: 'AgentHost',
     harnessProfileId: profileId,
     harnessContractRef: refs.harnessContractRef,
     harnessTraceRef: refs.harnessTraceRef,
@@ -119,7 +119,7 @@ export function reconstructAgentHarnessHandoffPayloadFromContract(input: {
       harnessContractRef: refs.harnessContractRef,
       harnessTraceRef: refs.harnessTraceRef,
       harnessBudgetSummary: budgetSummary,
-      harnessDecisionOwner: 'AgentServer',
+      harnessDecisionOwner: 'AgentHost',
       harnessSummary: summary,
       agentHarnessHandoff: handoff,
     },
@@ -132,11 +132,11 @@ export function agentHarnessPromptRenderPlanSummaryFromPlan(plan: Record<string,
   const renderedEntries = Array.isArray(plan.renderedEntries)
     ? plan.renderedEntries.filter(isRecord).slice(0, 32).map(promptRenderPlanEntrySummary).filter(isRecord)
     : [];
-  const sourceRefs = isRecord(plan.sourceRefs) ? clipForAgentServerJson(plan.sourceRefs, 2) : undefined;
+  const sourceRefs = isRecord(plan.sourceRefs) ? clipForBackendJson(plan.sourceRefs, 2) : undefined;
   const renderDigest = stringField(plan.renderDigest);
   if (!renderDigest && !sourceRefs && !renderedEntries.length) return undefined;
   return {
-    schemaVersion: 'sciforge.agentserver.prompt-render-plan-summary.v1',
+    schemaVersion: 'sciforge.backend.prompt-render-plan-summary.v1',
     source,
     renderPlanSchemaVersion: stringField(plan.schemaVersion),
     renderMode: stringField(plan.renderMode),
@@ -157,7 +157,7 @@ function promptRenderPlanEntrySummary(entry: Record<string, unknown>) {
     sourceCallbackId,
   };
   const text = stringField(entry.text);
-  if (text) out.text = clipForAgentServerPrompt(text, 800);
+  if (text) out.text = clipForBackendPrompt(text, 800);
   if (typeof entry.priority === 'number' && Number.isFinite(entry.priority)) out.priority = entry.priority;
   return out;
 }

@@ -81,7 +81,7 @@ try {
   assert.equal(blocked.executionUnits[0].tool, 'local.vision-sense');
   assert.equal(blocked.executionUnits[0].status, 'failed-with-reason');
   assert.match(String(blocked.executionUnits[0].failureReason || blocked.message), /desktop bridge is disabled/i);
-  assert.doesNotMatch(blocked.message, /AgentServer task generation/i);
+  assert.doesNotMatch(blocked.message, /backend task generation/i);
 
   const missingPlannerWorkspace = await createVisionWorkspace('missing-planner');
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE = '1';

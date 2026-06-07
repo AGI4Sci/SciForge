@@ -400,6 +400,17 @@ test('Computer Use chat live product-strict CLI uses ordinary Desktop chat promp
   assert.equal(args.prompt, undefined);
   assert.doesNotMatch(suggestedComputerUseChatProductStrictPrompt, /^\s*\/computer-use\b/i);
   assert.match(suggestedComputerUseChatProductStrictPrompt, /visible desktop/i);
+  assert.match(suggestedComputerUseChatProductStrictPrompt, /sciforge-computer-use-proof/i);
+  assert.match(suggestedComputerUseChatProductStrictPrompt, /TextEdit|document|file/i);
+});
+
+test('Computer Use chat live product-strict script targets the T1 Desktop local document save task', async () => {
+  const packageJson = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+
+  assert.match(
+    packageJson.scripts?.['smoke:computer-use-chat-live-e2e:product-strict'] ?? '',
+    /--task-id CU-NEXT-08 --scenario-id CU-LONG-005/,
+  );
 });
 
 test('Computer Use chat live product strict routes ordinary chat through host-owned Computer Use intent', async () => {
@@ -3482,6 +3493,7 @@ function readyPreflight() {
       evidenceMode: 'current-env-diagnostic-only',
       releaseAcceptance: 'not-evaluated',
       checkedHealthz: { category: 'ready', ok: true, httpStatus: 200 },
+      checkedInference: { category: 'ready', ok: true, httpStatus: 200 },
       valuePrinted: false as const,
     },
     suggestedSmokePrompt: '/computer-use read-only smoke',
@@ -3507,6 +3519,7 @@ async function readyServiceResponse(input: URL | RequestInfo): Promise<Response>
         missingEnv: [],
         policyViolations: [],
         checkedHealthz: { category: 'ready', ok: true, httpStatus: 200 },
+        checkedInference: { category: 'ready', ok: true, httpStatus: 200 },
       },
     });
   }

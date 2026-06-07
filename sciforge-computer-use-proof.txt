@@ -1,0 +1,5 @@
+# sciforge-computer-use-proof
+
+- 目标：验证 SciForge Computer Use 能操作真实桌面软件。
+- 当前日期：2026-06-07
+- 结果：文件已保存到当前 workspace，并在保存后完成内容校验。

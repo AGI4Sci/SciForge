@@ -1,4 +1,4 @@
-import { startScriptableAgentServerMock } from './scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from './scriptable-backend-mock.js';
 import type {
   ScriptableAgentServerMockHandle,
   ScriptableAgentServerMockOptions,
@@ -14,5 +14,5 @@ export const RUNTIME_DISPATCH_RUN_STREAM_PATH = '/api/runtime-dispatch/runs/stre
 export function startScriptableRuntimeDispatchMock(
   options: ScriptableRuntimeDispatchMockOptions = {},
 ): Promise<ScriptableRuntimeDispatchMockHandle> {
-  return startScriptableAgentServerMock(options);
+  return startScriptableBackendMock(options);
 }

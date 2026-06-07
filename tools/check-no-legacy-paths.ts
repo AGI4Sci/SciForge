@@ -160,8 +160,9 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/markdown-readonly-fast-path.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/transient-external-failure.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/agentserver-context-window.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/backend-context-window.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/backend-prompt-policy.ts#provider-scenario-prompt-special-case': 4,
+  'src/runtime/gateway/generated-task-prompt-policy.ts#provider-scenario-prompt-special-case': 6,
   'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/context-envelope.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 0,
@@ -176,9 +177,9 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/generated-task-payload-preflight.ts#sa-runtime-visible-preflight': 0,
   'src/runtime/gateway/direct-context-fast-path.ts#sa-direct-context-implicit-strategy': 0,
   'src/runtime/gateway/capability-provider-preflight.ts#sa-provider-discovery-endpoint-leak': 0,
-  'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 0,
-  'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 0,
-  'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 0,
+  'src/runtime/gateway/backend-context-contract.ts#sa-degraded-raw-context-shape': 0,
+  'src/runtime/gateway/backend-context-window.ts#sa-degraded-raw-context-shape': 0,
+  'src/runtime/gateway/backend-prompt-policy.ts#sa-degraded-raw-context-shape': 0,
   'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 0,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/results-renderer-registry-slot.tsx#ui-semantic-fallback': 0,
@@ -192,7 +193,8 @@ const migrationByFile: Array<{ file: RegExp; migration: string }> = [
   { file: /^src\/ui\/src\/uiModuleRegistry\.ts$/, migration: 'T120/T119: retire UI compatibility alias fallback once package manifests own all legacy ids.' },
   { file: /^src\/ui\/src\/app\/ScenarioBuilderPanel\.tsx$/, migration: 'T120/T119: move scenario fallback component policy into scenario packages and registry contracts.' },
   { file: /^src\/ui\/src\/app\/chat\/runOrchestrator\.ts$/, migration: 'T120/T119: remove prompt/scenario special cases from chat orchestration and use package/runtime policy.' },
-  { file: /^src\/runtime\/gateway\/agentserver-prompts\.ts$/, migration: 'T120/T122: move provider/prompt special cases from prompt text into capability manifests or runtime policy.' },
+  { file: /^src\/runtime\/gateway\/backend-prompt-policy\.ts$/, migration: 'T120/T122: move provider/prompt special cases from prompt text into capability manifests or runtime policy.' },
+  { file: /^src\/runtime\/gateway\/generated-task-prompt-policy\.ts$/, migration: 'T120/T122: move generated-task prompt special cases into capability manifests or runtime policy.' },
   { file: /^src\/runtime\/gateway\//, migration: 'T120/T122: gateway may keep transport/runtime fallback, but provider/scenario/prompt branches must migrate to policy/catalogs.' },
   { file: /^src\/runtime\/skill-registry\//, migration: 'T120/T122: move prompt/provider skill matching special cases into package skill manifests and catalog metadata.' },
   { file: /^src\/runtime\/skill-markdown-catalog\.ts$/, migration: 'T120/T122: move skill provider normalization into skill package metadata/catalog generation.' },
@@ -272,11 +274,11 @@ async function main() {
 async function legacyStructuralErrors(files: string[]): Promise<string[]> {
   const errors: string[] = [];
   const gatewayText = await readTextIfExists(join(root, 'src', 'runtime', 'generation-gateway.ts'));
-  if (!gatewayText.includes('agentServerDispatchQuarantinedPayload(context.request)')) {
-    errors.push('generation-gateway.ts must quarantine terminal AgentServer generation before STAGE_AGENTSERVER_GENERATION can run.');
+  if (/STAGE_AGENTSERVER_GENERATION|STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS|requestBackendGeneration|backend-generation-dispatch/i.test(gatewayText)) {
+    errors.push('generation-gateway.ts must not expose default AgentServer dispatch/generation stages or import the AgentServer generation dispatch runtime module.');
   }
-  if (!gatewayText.includes('agentServerGenerationDispatchQuarantineDecision')) {
-    errors.push('generation-gateway.ts must use the canonical AgentServer generation dispatch quarantine decision.');
+  if (!gatewayText.includes('STAGE_RUNTIME_UNHANDLED')) {
+    errors.push('generation-gateway.ts must terminate unhandled default requests with runtime-unhandled instead of legacy AgentServer generation fallback.');
   }
   const backendConfigText = await readTextIfExists(join(root, 'src', 'runtime', 'gateway', 'agent-backend-config.ts'));
   if (!/requestBackendSupported:\s*runtimeAgentBackendSupported\(requestBackend\)\s*&&\s*requestBackend\s*!==\s*'codex'/.test(backendConfigText)) {

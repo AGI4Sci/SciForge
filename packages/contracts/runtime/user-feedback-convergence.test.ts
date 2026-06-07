@@ -20,7 +20,7 @@ import {
 test('user feedback convergence turns repeated complaints into generic TODO candidates with runtime evidence', () => {
   const timeoutSignature = createFailureSignature({
     kind: 'timeout',
-    message: 'AgentServer generation request timed out after 30000ms.',
+    message: 'backend generation request timed out after 30000ms.',
     refs: ['file:.sciforge/logs/run-timeout.stderr.log'],
   });
   const repairNoopSignature = createFailureSignature({

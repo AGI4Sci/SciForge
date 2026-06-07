@@ -1,5 +1,4 @@
 import { sha1 } from '../workspace-task-runner.js';
-import { tryRunBrowserHostSearchRuntime } from '../browser-host-search-runtime.js';
 import {
   EXECUTE_BOUNDED_OPERATION_INTENT,
   type BoundedOperationResultValue,
@@ -722,46 +721,55 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
       const operationResult = await input.browserBoundedOperationInvoker(operationRequest);
       return browserBoundedOperationTurnLoopResult({
         metadata,
+        commandText: semanticPrompt,
         commandId,
         ground,
         operationRequest,
         operationResult,
       });
     }
-    const payload = await tryRunBrowserHostSearchRuntime(runtimeRequest);
-    if (!payload) return undefined;
-    const message = payload.message;
-    return {
-      event: {
-        ...metadata,
-        type: 'audit',
-        status: 'agent-host-turn-loop',
-        message,
-        raw: {
-          schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
-          stage: 'Act / Answer',
-          ground,
-          selectedRuntime: 'browser-host-search-runtime',
-        },
-      },
-      result: structuredResult({
-        commandId,
-        message,
-        confidence: payload.confidence ?? 0.6,
-        claimType: payload.claimType,
-        evidenceLevel: 'runtime',
-        reasoningTrace: payload.reasoningTrace,
-        status: browserPayloadStatus(payload.displayIntent),
-        artifacts: payload.artifacts ?? [],
-        uiManifest: payload.uiManifest ?? [],
-        executionUnits: payload.executionUnits ?? [],
-        claims: payload.claims ?? [],
-        evidenceRefs: evidenceRefsFromToolPayload(payload),
-      }),
-    };
+    return browserModuleUnavailableTurnLoopResult({
+      metadata,
+      commandId,
+      ground,
+      refs: agentHostInput.refs,
+    });
   }
 
   return undefined;
+}
+
+export function createCodexAgentHostBrowserBoundedOperationTurnLoopResult(input: {
+  commandText: string;
+  workspacePath: string;
+  commandId?: string;
+  attemptId?: string;
+  operationRequest: ModuleInvokeRequest;
+  operationResult: ModuleInvokeResult<BoundedOperationResultValue>;
+}): CodexAgentHostTurnLoopResult {
+  const commandId = input.commandId ?? 'codex-command-agent-host';
+  const attemptId = input.attemptId ?? `${commandId}-attempt-1`;
+  const agentHostInput = normalizeAgentHostInput({
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'runtime-codex-server-module-invoke-fallback',
+    intentText: input.commandText,
+    authorizationProfileId: 'high-autonomy',
+    refs: [],
+  });
+  const ground = agentHostInput ? groundAgentHostInput(agentHostInput) : { intent: 'browser-evidence' as const };
+  return browserBoundedOperationTurnLoopResult({
+    metadata: baseEventMetadata({
+      commandText: input.commandText,
+      workspacePath: input.workspacePath,
+      commandId,
+      attemptId,
+    }),
+    commandText: input.commandText,
+    commandId,
+    ground,
+    operationRequest: input.operationRequest,
+    operationResult: input.operationResult,
+  });
 }
 
 export function createCodexAgentHostGroundingSnapshot(
@@ -1281,8 +1289,83 @@ function browserEvidenceSkippedTurnLoopResult(input: {
   };
 }
 
+function browserModuleUnavailableTurnLoopResult(input: {
+  metadata: ReturnType<typeof baseEventMetadata>;
+  commandId: string;
+  ground: ReturnType<typeof groundAgentHostInput>;
+  refs: string[];
+}): CodexAgentHostTurnLoopResult {
+  const id = sha1(JSON.stringify({ commandId: input.commandId, refs: input.refs })).slice(0, 12);
+  const message = 'Browser bounded operation invoker is unavailable, so Agent Host did not fall back to legacy browser answer synthesis. Configure module.invoke(executeBoundedOperation) for browser.search_read or browser.open_read, then retry.';
+  const artifact = {
+    id: `browser-module-unavailable-${id}`,
+    type: 'runtime-diagnostic',
+    schemaVersion: 'sciforge.runtime-diagnostic.v1',
+    metadata: {
+      source: TOOL_ID,
+      status: 'blocked',
+      requiredIntents: ['browser.search_read', 'browser.open_read'],
+    },
+    data: {
+      message,
+      blockedReason: 'browser-bounded-operation-invoker-unavailable',
+      legacyFallbackDisabled: true,
+    },
+  };
+  return {
+    event: {
+      ...input.metadata,
+      type: 'audit',
+      status: 'agent-host-turn-loop',
+      message,
+      raw: {
+        schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+        stage: 'Act / Answer',
+        ground: input.ground,
+        selectedRuntime: 'browser-module-unavailable',
+      },
+    },
+    result: structuredResult({
+      commandId: input.commandId,
+      message,
+      confidence: 0.86,
+      claimType: 'runtime-diagnostic',
+      evidenceLevel: 'runtime',
+      reasoningTrace: 'SciForge failed closed because Browser product evidence must come from module.invoke(executeBoundedOperation), not the legacy BrowserHostSearch answer-synthesis runtime.',
+      status: 'blocked',
+      artifacts: [artifact],
+      uiManifest: [{
+        componentId: RUNTIME_GUI_COMPONENT_ID,
+        artifactRef: artifact.id,
+        title: 'Browser module unavailable',
+        priority: 1,
+      }],
+      executionUnits: [{
+        id: `EU-browser-module-unavailable-${id}`,
+        tool: TOOL_ID,
+        status: 'failed-with-reason',
+        params: JSON.stringify({ requiredIntents: ['browser.search_read', 'browser.open_read'] }),
+        failureReason: message,
+        outputRef: `artifact:${artifact.id}`,
+        hash: id,
+      }],
+      claims: [{
+        id: `claim-browser-module-unavailable-${id}`,
+        type: 'diagnostic',
+        text: message,
+        confidence: 0.86,
+        evidenceLevel: 'runtime',
+        supportingRefs: input.refs,
+        opposingRefs: [],
+      }],
+      evidenceRefs: input.refs,
+    }),
+  };
+}
+
 function browserBoundedOperationTurnLoopResult(input: {
   metadata: ReturnType<typeof baseEventMetadata>;
+  commandText: string;
   commandId: string;
   ground: ReturnType<typeof groundAgentHostInput>;
   operationRequest: ModuleInvokeRequest;
@@ -1302,9 +1385,13 @@ function browserBoundedOperationTurnLoopResult(input: {
     && evidenceRefs.length > 0
     && evidenceCheck.ok;
   const operationKind = stringField(input.operationRequest.input?.operationKind) ?? 'browser.operation';
+  const acceptanceSpec = browserOperationAcceptanceSpec({
+    commandText: input.commandText,
+    sourceSummaries,
+  });
   const operationSlug = operationKind.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'browser-operation';
   const message = completed
-    ? browserOperationFinalAnswer(sourceSummaries, evidenceRefs)
+    ? browserOperationFinalAnswer(sourceSummaries, evidenceRefs, acceptanceSpec)
     : `Browser ${operationKind} is ${operationValue?.status ?? 'failed'}: ${operationValue?.blockedReason ?? input.operationResult.error ?? evidenceCheck.reason}.`;
   const status = completed ? 'completed' : operationValue?.status === 'needs-confirmation' ? 'needs-confirmation' : 'blocked';
   const executionUnit = {
@@ -1340,6 +1427,7 @@ function browserBoundedOperationTurnLoopResult(input: {
         stage: 'Act / Answer',
         ground: input.ground,
         selectedRuntime: 'module.invoke',
+        acceptanceSpec,
         operation: {
           moduleId: input.operationRequest.moduleId,
           intent: input.operationRequest.intent,
@@ -1374,15 +1462,20 @@ function browserOperationRequiredEvidenceCheck(
 ) {
   const payload = isRecord(value?.payload) ? value.payload : {};
   const pages = Array.isArray(payload.sourcePages) ? payload.sourcePages.filter(isRecord) : [];
-  const pageTextRefs = pages.map((page) => stringField(page.textRef)).filter((ref): ref is string => Boolean(ref));
-  const sourcePageRefs = uniqueStrings([
+  const completionPages = pages.filter((page) => page.discoveryOnly !== true);
+  const hasCompletionPage = completionPages.length > 0;
+  const pageTextRefs = completionPages.map((page) => stringField(page.textRef)).filter((ref): ref is string => Boolean(ref));
+  const sourcePageRefs = hasCompletionPage ? uniqueStrings([
+    ...completionPages.map((page) => stringField(page.sourcePageRef)).filter((ref): ref is string => Boolean(ref)),
     ...(value?.sourceRefs ?? []),
     ...evidenceRefs.filter((ref) => /source-pages\/.+\.source\.json$/i.test(ref)),
-  ]).filter(runtimeOwnedRuntimeTruthRef);
+  ]).filter(runtimeOwnedRuntimeTruthRef) : [];
   const evidenceRefSet = new Set(evidenceRefs);
   const hasSourcePageRef = sourcePageRefs.some((ref) => evidenceRefSet.has(ref) || (value?.sourceRefs ?? []).includes(ref));
-  const hasPageTextRef = pageTextRefs.some((ref) => evidenceRefSet.has(ref) && runtimeOwnedRuntimeTruthRef(ref))
-    || evidenceRefs.some((ref) => /source-pages\/.+\.txt$/i.test(ref));
+  const hasPageTextRef = hasCompletionPage && (
+    pageTextRefs.some((ref) => evidenceRefSet.has(ref) && runtimeOwnedRuntimeTruthRef(ref))
+    || evidenceRefs.some((ref) => /source-pages\/.+\.txt$/i.test(ref))
+  );
   const missing = [
     hasSourcePageRef ? undefined : 'source-page-ref',
     hasPageTextRef ? undefined : 'page-text-ref',
@@ -1405,11 +1498,11 @@ function browserOperationEvidenceRefs(value: BoundedOperationResultValue | undef
 
 function browserOperationSourceSummaries(value: BoundedOperationResultValue | undefined) {
   const payload = isRecord(value?.payload) ? value.payload : {};
-  const pages = Array.isArray(payload.sourcePages) ? payload.sourcePages.filter(isRecord) : [];
+  const pages = Array.isArray(payload.sourcePages) ? payload.sourcePages.filter(isRecord).filter((page) => page.discoveryOnly !== true) : [];
   return pages.map((page) => ({
     title: stringField(page.title) ?? 'Source page',
     url: stringField(page.finalUrl) ?? stringField(page.url),
-    summary: stringField(page.textSummary) ?? stringField(page.textPreview),
+    summary: sourceSummaryTextField(page.textSummary) ?? sourceSummaryTextField(page.textPreview),
     textRef: stringField(page.textRef),
   })).filter((page) => page.summary || page.textRef).slice(0, 4);
 }
@@ -1417,7 +1510,38 @@ function browserOperationSourceSummaries(value: BoundedOperationResultValue | un
 function browserOperationFinalAnswer(
   sourceSummaries: Array<{ title: string; url?: string; summary?: string; textRef?: string }>,
   evidenceRefs: string[],
+  acceptanceSpec: AgentHostAcceptanceSpec,
 ) {
+  const freshnessNote = browserOperationTemporalFreshnessNote(sourceSummaries, acceptanceSpec);
+  const datedItems = browserOperationStructuredDatedItems(sourceSummaries);
+  if (datedItems.length && acceptanceSpec.output.answerKind === 'dated-item-list') {
+    const temporal = acceptanceSpec.constraints.temporal;
+    const matchingItems = temporal.kind === 'exact-date'
+      ? datedItems.filter((item) => browserOperationDatedItemMatchesTemporalConstraint(item, temporal))
+      : [];
+    if (temporal.kind === 'exact-date' && !matchingItems.length) {
+      return [
+        `我已用内置浏览器打开并阅读来源页，但没有找到符合“${temporal.label}”时间约束的可验证结果。`,
+        freshnessNote ?? browserOperationExactDateNoMatchNote(temporal),
+        '不符合时间约束的已读候选（仅作排除依据）：',
+        ...datedItems.slice(0, 6).flatMap((item, index) => browserOperationDatedItemLines(item, index)),
+        `证据 refs: ${evidenceRefs.slice(0, 6).join(', ')}`,
+      ].join('\n');
+    }
+    const visibleItems = (matchingItems.length ? matchingItems : datedItems).slice(0, 6);
+    const heading = temporal.kind === 'exact-date'
+      ? `符合“${temporal.label}”时间约束的已读结果：`
+      : temporal.kind === 'latest-or-current'
+        ? '基于已读来源页的最新/当前相关结果：'
+        : '基于已读来源页的相关结果：';
+    return [
+      '我已用内置浏览器打开并阅读来源页。基于这些页面，我能给出以下摘要：',
+      ...(freshnessNote ? [freshnessNote] : []),
+      heading,
+      ...visibleItems.flatMap((item, index) => browserOperationDatedItemLines(item, index)),
+      `证据 refs: ${evidenceRefs.slice(0, 6).join(', ')}`,
+    ].join('\n');
+  }
   const lines = sourceSummaries.length
     ? sourceSummaries.map((source, index) => {
         const sourceLabel = source.url ? `${source.title} (${source.url})` : source.title;
@@ -1425,10 +1549,392 @@ function browserOperationFinalAnswer(
       })
     : ['Opened and read source pages, but only refs were returned for the answer body.'];
   return [
-    '基于本轮 Browser bounded operation 打开的来源页，我能给出以下摘要：',
+    '我已用内置浏览器打开并阅读来源页。基于这些页面，我能给出以下摘要：',
+    ...(freshnessNote ? [freshnessNote] : []),
     ...lines,
     `证据 refs: ${evidenceRefs.slice(0, 6).join(', ')}`,
   ].join('\n');
+}
+
+type BrowserOperationEvidenceRequirement = 'source-page-ref' | 'page-text-ref';
+type BrowserOperationAnswerKind = 'source-summary' | 'dated-item-list';
+type BrowserOperationTemporalField = 'submitted' | 'published' | 'updated' | 'released' | 'observed';
+type BrowserOperationTemporalKind = 'none' | 'exact-date' | 'latest-or-current';
+type BrowserOperationTemporalStrictness = 'must-match' | 'best-effort-with-disclosure';
+
+interface AgentHostAcceptanceSpec {
+  schemaVersion: 'sciforge.agent-host.acceptance-spec.v1';
+  goal: string;
+  evidence: {
+    required: BrowserOperationEvidenceRequirement[];
+  };
+  constraints: {
+    temporal: AgentHostTemporalConstraint;
+  };
+  output: {
+    answerKind: BrowserOperationAnswerKind;
+  };
+  failurePolicy: {
+    missingRequiredEvidence: 'blocked';
+    unsatisfiedTemporalConstraint: 'no-result-with-evidence' | 'partial-with-disclosure';
+  };
+}
+
+interface AgentHostTemporalConstraint {
+  kind: BrowserOperationTemporalKind;
+  label: string;
+  anchorDate?: string;
+  evidenceFields: BrowserOperationTemporalField[];
+  strictness: BrowserOperationTemporalStrictness;
+}
+
+interface BrowserOperationDatedItem {
+  title: string;
+  authors?: string;
+  publisher?: string;
+  submitted?: string;
+  published?: string;
+  updated?: string;
+  released?: string;
+  observed?: string;
+  link?: string;
+  conclusion?: string;
+  sourceUrl?: string;
+}
+
+const BROWSER_OPERATION_REQUIRED_EVIDENCE: BrowserOperationEvidenceRequirement[] = ['source-page-ref', 'page-text-ref'];
+const BROWSER_OPERATION_TEMPORAL_FIELDS: BrowserOperationTemporalField[] = ['submitted', 'published', 'updated', 'released', 'observed'];
+
+function browserOperationAcceptanceSpec(input: {
+  commandText: string;
+  sourceSummaries: Array<{ url?: string; summary?: string }>;
+}): AgentHostAcceptanceSpec {
+  const temporal = browserOperationTemporalConstraintFromIntent(input.commandText);
+  const answerKind: BrowserOperationAnswerKind = browserOperationStructuredDatedItems(input.sourceSummaries).length
+    ? 'dated-item-list'
+    : 'source-summary';
+  return {
+    schemaVersion: 'sciforge.agent-host.acceptance-spec.v1',
+    goal: truncateStructuredAnswerText(input.commandText || 'Browser source answer', 280),
+    evidence: {
+      required: [...BROWSER_OPERATION_REQUIRED_EVIDENCE],
+    },
+    constraints: {
+      temporal,
+    },
+    output: {
+      answerKind,
+    },
+    failurePolicy: {
+      missingRequiredEvidence: 'blocked',
+      unsatisfiedTemporalConstraint: temporal.kind === 'exact-date' ? 'no-result-with-evidence' : 'partial-with-disclosure',
+    },
+  };
+}
+
+function browserOperationStructuredDatedItems(
+  sourceSummaries: Array<{ url?: string; summary?: string }>,
+): BrowserOperationDatedItem[] {
+  return sourceSummaries
+    .flatMap((source) => structuredDatedItemsFromSummary(source.summary ?? '', source.url))
+    .slice(0, 8);
+}
+
+function structuredDatedItemsFromSummary(text: string, sourceUrl?: string): BrowserOperationDatedItem[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized || !/\blink:\s+https?:\/\//i.test(normalized)) return [];
+  const rawItems: Array<{
+    markerStart: number;
+    detailsEnd: number;
+    title: string;
+    details: string;
+  }> = [];
+  const detailPattern = /\(([^)]*?\blink:\s+https?:\/\/[^\s;)]+[^)]*)\):/gi;
+  let searchFrom = 0;
+  for (const detailMatch of normalized.matchAll(detailPattern)) {
+    const detailStart = detailMatch.index ?? 0;
+    const detailEnd = detailStart + detailMatch[0].length;
+    const beforeDetails = normalized.slice(searchFrom, detailStart);
+    const markerMatches = [...beforeDetails.matchAll(/(?:^|\s)(\d{1,2})\.\s+/g)];
+    const markerMatch = markerMatches.at(-1);
+    if (!markerMatch) continue;
+    const markerStart = searchFrom + (markerMatch.index ?? 0);
+    const contentStart = markerStart + markerMatch[0].length;
+    const title = cleanStructuredAnswerText(normalized.slice(contentStart, detailStart));
+    const details = detailMatch[1] ?? '';
+    const link = structuredDetailField(details, 'link');
+    if (!title || !link) {
+      searchFrom = detailEnd;
+      continue;
+    }
+    rawItems.push({
+      markerStart,
+      detailsEnd: detailEnd,
+      title,
+      details,
+    });
+    searchFrom = detailEnd;
+  }
+  return rawItems.map((item, index) => {
+    const nextItemStart = rawItems[index + 1]?.markerStart ?? normalized.length;
+    const conclusion = cleanStructuredAnswerText(normalized.slice(item.detailsEnd, nextItemStart));
+    return {
+      title: item.title,
+      authors: structuredDetailField(item.details, 'authors'),
+      publisher: structuredDetailField(item.details, 'publisher')
+        ?? structuredDetailField(item.details, 'publisher(s)')
+        ?? structuredDetailField(item.details, 'source')
+        ?? structuredDetailField(item.details, 'organization'),
+      submitted: structuredDetailField(item.details, 'submitted'),
+      published: structuredDetailField(item.details, 'published'),
+      updated: structuredDetailField(item.details, 'updated'),
+      released: structuredDetailField(item.details, 'released'),
+      observed: structuredDetailField(item.details, 'observed'),
+      link: structuredDetailField(item.details, 'link'),
+      conclusion: truncateStructuredAnswerText(conclusion, 360),
+      sourceUrl,
+    };
+  });
+}
+
+function structuredDetailField(details: string, field: string): string | undefined {
+  const pattern = new RegExp(String.raw`(?:^|;\s*)${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\s*([^;]+)`, 'iu');
+  const value = cleanStructuredAnswerText(pattern.exec(details)?.[1] ?? '');
+  return value || undefined;
+}
+
+function browserOperationTemporalConstraintFromIntent(commandText: string): AgentHostTemporalConstraint {
+  const text = commandText.replace(/\s+/g, ' ').trim();
+  const relativeExact = browserOperationRelativeExactDate(text);
+  if (relativeExact) {
+    return {
+      kind: 'exact-date',
+      label: relativeExact.label,
+      anchorDate: relativeExact.anchorDate,
+      evidenceFields: [...BROWSER_OPERATION_TEMPORAL_FIELDS],
+      strictness: 'must-match',
+    };
+  }
+  const explicitDate = browserOperationExplicitDate(text);
+  if (explicitDate) {
+    return {
+      kind: 'exact-date',
+      label: explicitDate.label,
+      anchorDate: explicitDate.anchorDate,
+      evidenceFields: [...BROWSER_OPERATION_TEMPORAL_FIELDS],
+      strictness: 'must-match',
+    };
+  }
+  if (/(?:最新|当前|目前|近期|最近|本周|本月|latest|current|recent|newest|this\s+week|this\s+month)/iu.test(text)) {
+    return {
+      kind: 'latest-or-current',
+      label: '最新/当前',
+      evidenceFields: [...BROWSER_OPERATION_TEMPORAL_FIELDS],
+      strictness: 'best-effort-with-disclosure',
+    };
+  }
+  return {
+    kind: 'none',
+    label: '无显式时间约束',
+    evidenceFields: [...BROWSER_OPERATION_TEMPORAL_FIELDS],
+    strictness: 'best-effort-with-disclosure',
+  };
+}
+
+function browserOperationRelativeExactDate(commandText: string): { label: string; anchorDate: string } | undefined {
+  const today = new Date();
+  if (/(?:今天|今日|\btoday\b)/iu.test(commandText)) {
+    return { label: /today/iu.test(commandText) ? 'today' : '今天', anchorDate: localIsoDate(today) };
+  }
+  if (/(?:昨天|昨日|\byesterday\b)/iu.test(commandText)) {
+    return { label: /yesterday/iu.test(commandText) ? 'yesterday' : '昨天', anchorDate: localIsoDate(offsetDate(today, -1)) };
+  }
+  if (/(?:明天|\btomorrow\b)/iu.test(commandText)) {
+    return { label: /tomorrow/iu.test(commandText) ? 'tomorrow' : '明天', anchorDate: localIsoDate(offsetDate(today, 1)) };
+  }
+  return undefined;
+}
+
+function browserOperationExplicitDate(commandText: string): { label: string; anchorDate: string } | undefined {
+  const isoMatch = /\b((?:19|20)\d{2})-(\d{1,2})-(\d{1,2})\b/u.exec(commandText);
+  if (isoMatch) {
+    return {
+      label: isoMatch[0],
+      anchorDate: `${isoMatch[1]}-${isoMatch[2]!.padStart(2, '0')}-${isoMatch[3]!.padStart(2, '0')}`,
+    };
+  }
+  const chineseMatch = /((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/u.exec(commandText);
+  if (chineseMatch) {
+    return {
+      label: chineseMatch[0],
+      anchorDate: `${chineseMatch[1]}-${chineseMatch[2]!.padStart(2, '0')}-${chineseMatch[3]!.padStart(2, '0')}`,
+    };
+  }
+  return undefined;
+}
+
+function browserOperationDatedItemMatchesTemporalConstraint(
+  item: BrowserOperationDatedItem,
+  temporal: AgentHostTemporalConstraint,
+): boolean {
+  if (temporal.kind !== 'exact-date' || !temporal.anchorDate) return true;
+  return browserOperationDatedItemDateFacts(item, temporal.evidenceFields)
+    .some((fact) => dateLabelToIso(fact.value) === temporal.anchorDate);
+}
+
+function browserOperationDatedItemLines(item: BrowserOperationDatedItem, index: number): string[] {
+  return [
+    `${index + 1}. 标题：${item.title}`,
+    browserOperationDatedItemAttributionLine(item),
+    `   链接：${item.link || item.sourceUrl || '来源页未提供'}`,
+    ...browserOperationDatedItemDateFacts(item, BROWSER_OPERATION_TEMPORAL_FIELDS)
+      .map((fact) => `   ${browserOperationTemporalFieldChineseLabel(fact.field)}：${fact.value}`),
+    `   一句话结论：${item.conclusion || '来源页未提供摘要'}`,
+  ];
+}
+
+function browserOperationDatedItemAttributionLine(item: BrowserOperationDatedItem): string {
+  if (item.publisher) return `   发布方：${item.publisher}`;
+  if (item.authors) return `   作者：${item.authors}`;
+  return '   来源：来源页未提供';
+}
+
+function browserOperationDatedItemDateFacts(
+  item: BrowserOperationDatedItem,
+  fields: BrowserOperationTemporalField[],
+): Array<{ field: BrowserOperationTemporalField; value: string }> {
+  return fields.flatMap((field) => {
+    const value = item[field];
+    return value ? [{ field, value }] : [];
+  });
+}
+
+function browserOperationTemporalFieldChineseLabel(field: BrowserOperationTemporalField): string {
+  switch (field) {
+    case 'submitted':
+      return '提交';
+    case 'published':
+      return '发布';
+    case 'updated':
+      return '更新';
+    case 'released':
+      return '发布';
+    case 'observed':
+      return '观察';
+  }
+}
+
+function cleanStructuredAnswerText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function truncateStructuredAnswerText(value: string, maxLength: number): string {
+  const text = cleanStructuredAnswerText(value);
+  if (text.length <= maxLength) return text;
+  const clipped = text.slice(0, maxLength);
+  const lastSpace = clipped.lastIndexOf(' ');
+  return `${(lastSpace > 120 ? clipped.slice(0, lastSpace) : clipped).trim()}…`;
+}
+
+function browserOperationTemporalFreshnessNote(
+  sourceSummaries: Array<{ summary?: string }>,
+  acceptanceSpec: AgentHostAcceptanceSpec,
+): string | undefined {
+  const temporal = acceptanceSpec.constraints.temporal;
+  if (temporal.kind !== 'exact-date' || !temporal.anchorDate) return undefined;
+  const dateFacts = uniqueTemporalDateFacts(sourceSummaries
+    .flatMap((source) => browserOperationTemporalDateFactsFromText(source.summary ?? '', temporal.evidenceFields)));
+  if (dateFacts.some((fact) => dateLabelToIso(fact.value) === temporal.anchorDate)) return undefined;
+  const observed = dateFacts
+    .slice(0, 4)
+    .map((fact) => `${fact.field}: ${fact.value}`)
+    .join('、');
+  return observed
+    ? `${browserOperationExactDateNoMatchNote(temporal)}；页面可见日期字段为 ${observed}。`
+    : `${browserOperationExactDateNoMatchNote(temporal)}。`;
+}
+
+function browserOperationExactDateNoMatchNote(temporal: AgentHostTemporalConstraint): string {
+  return `未在已读来源页中看到符合${temporal.label}（${temporal.anchorDate ?? '未知日期'}）时间约束的日期字段`;
+}
+
+function browserOperationTemporalDateFactsFromText(
+  text: string,
+  fields: BrowserOperationTemporalField[],
+): Array<{ field: BrowserOperationTemporalField; value: string }> {
+  const datePattern = String.raw`(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s+[A-Za-z]+,?\s+\d{4}|[A-Za-z]+\s+\d{1,2},?\s+\d{4})`;
+  return fields.flatMap((field) => {
+    const pattern = new RegExp(String.raw`\b${field}:\s*${datePattern}`, 'giu');
+    return [...text.matchAll(pattern)]
+      .map((match) => cleanStructuredAnswerText(match[1] ?? ''))
+      .filter((value): value is string => Boolean(value))
+      .map((value) => ({ field, value }));
+  });
+}
+
+function uniqueTemporalDateFacts(
+  values: Array<{ field: BrowserOperationTemporalField; value: string }>,
+): Array<{ field: BrowserOperationTemporalField; value: string }> {
+  const seen = new Set<string>();
+  return values.filter((fact) => {
+    const key = `${fact.field}:${fact.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dateLabelToIso(value: string): string | undefined {
+  const text = value.trim();
+  const isoMatch = /^((?:19|20)\d{2})-(\d{1,2})-(\d{1,2})$/.exec(text);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]!.padStart(2, '0')}-${isoMatch[3]!.padStart(2, '0')}`;
+  }
+  const dayMonthYear = /^(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})$/.exec(text);
+  if (dayMonthYear) {
+    const month = monthNumber(dayMonthYear[2]);
+    if (!month) return undefined;
+    return `${dayMonthYear[3]}-${month}-${dayMonthYear[1]!.padStart(2, '0')}`;
+  }
+  const monthDayYear = /^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/.exec(text);
+  if (monthDayYear) {
+    const month = monthNumber(monthDayYear[1]);
+    if (!month) return undefined;
+    return `${monthDayYear[3]}-${month}-${monthDayYear[2]!.padStart(2, '0')}`;
+  }
+  return undefined;
+}
+
+function offsetDate(date: Date, dayOffset: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + dayOffset);
+  return next;
+}
+
+function monthNumber(value: string | undefined): string | undefined {
+  const month = (value ?? '').toLowerCase();
+  const months: Record<string, string> = {
+    january: '01',
+    february: '02',
+    march: '03',
+    april: '04',
+    may: '05',
+    june: '06',
+    july: '07',
+    august: '08',
+    september: '09',
+    october: '10',
+    november: '11',
+    december: '12',
+  };
+  return months[month];
+}
+
+function localIsoDate(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function evidenceRefsFromToolPayload(payload: {
@@ -2138,6 +2644,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, 160) : undefined;
+}
+
+function sourceSummaryTextField(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  if (/[\u0000-\u001f]|(?:authorization|bearer|api[_-]?key|password|secret|token|<html|data:image|base64)/i.test(text)) {
+    return undefined;
+  }
+  return text.slice(0, 8_000);
 }
 
 function stringList(value: unknown): string[] {

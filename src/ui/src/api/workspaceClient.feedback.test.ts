@@ -43,6 +43,8 @@ describe('workspaceClient feedback issue helpers', () => {
     assert.equal(manifest?.upstreamKeySourceKind, 'env');
     assert.equal(manifest?.upstreamBaseUrlSourceKind, 'env');
     assert.equal(manifest?.checkedHealthz?.releaseAcceptance, 'not-evaluated');
+    assert.equal(manifest?.checkedInference?.releaseAcceptance, 'not-evaluated');
+    assert.equal(manifest?.checkedInference?.category, 'ready');
     assert.deepEqual(manifest?.nextActions, [
       {
         label: 'Rerun provider preflight.',
@@ -444,6 +446,13 @@ function runtimeProviderPreflightManifest() {
     missingEnv: [],
     evidenceMode: 'current-env-diagnostic-only',
     checkedHealthz: {
+      category: 'ready',
+      ok: true,
+      retryable: false,
+      httpStatus: 200,
+      releaseAcceptance: 'not-evaluated',
+    },
+    checkedInference: {
       category: 'ready',
       ok: true,
       retryable: false,

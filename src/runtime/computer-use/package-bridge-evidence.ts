@@ -1231,6 +1231,35 @@ function buildPackageBridgeAcceptanceInput(params: {
     completionEvidenceRef(params.completionEvidence, 'sessionManifestRef'),
     completionEvidenceRef(params.completionEvidence, 'targetWindowRef'),
   ].filter((item): item is string => Boolean(item)));
+  const targetWindowRef = firstStringAt(params.completionEvidence, [
+    ['targetWindowRef'],
+    ['windowRef'],
+    ['targetBinding', 'targetWindowRef'],
+  ]);
+  const beforeAxRef = firstStringAt(params.completionEvidence, [
+    ['beforeAxRef'],
+    ['beforeAccessibilityRef'],
+    ['accessibilityEvidence', 'beforeAxRef'],
+    ['accessibilityEvidence', 'beforeRef'],
+  ]);
+  const afterAxRef = firstStringAt(params.completionEvidence, [
+    ['afterAxRef'],
+    ['afterAccessibilityRef'],
+    ['accessibilityEvidence', 'afterAxRef'],
+    ['accessibilityEvidence', 'afterRef'],
+  ]);
+  const guiSaveCommandRef = firstStringAt(params.completionEvidence, [
+    ['guiSaveCommandRef'],
+    ['saveCommandRef'],
+    ['saveIntentRef'],
+    ['artifactCausality', 'guiSaveCommandRef'],
+  ]);
+  const fileCreationOwner = firstStringAt(params.completionEvidence, [
+    ['fileCreationOwner'],
+    ['creationOwner'],
+    ['artifactCreationOwner'],
+    ['artifactCausality', 'fileCreationOwner'],
+  ]);
   const projectedTaskAcceptance = projectCuNextTaskAcceptanceMarkers(taskId as CuNextTaskId | undefined, {
     traceRef: ref('vision-trace.json'),
     requestRef: ref('computer-use-request.json'),
@@ -1245,6 +1274,11 @@ function buildPackageBridgeAcceptanceInput(params: {
     continuationRequestRef: continuationContext ? ref('continuation-request.json') : undefined,
     directoryListingRef: ref('directory-listing.json'),
     denseGroundingRejectionRef: effectiveGroundingDiagnosticsRefs[0],
+    targetWindowRef,
+    beforeAxRef,
+    afterAxRef,
+    guiSaveCommandRef,
+    fileCreationOwner,
   });
   const diagnosticProductPathProjection = buildPackageBridgeDiagnosticCurrentRunProjection({
     completionEvidence: params.completionEvidence,

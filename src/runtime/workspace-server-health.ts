@@ -7,6 +7,7 @@ export const WORKSPACE_WRITER_HEALTH_CAPABILITIES = [
   'browser-host-session',
   'browser-host-native-surface',
   'browser-host-search',
+  'browser-host-open-read',
   'repair-handoff-runner',
   'feedback-direct-codex-terminal-websocket-pty',
   'feedback-direct-codex-terminal-system-terminal',
@@ -53,6 +54,7 @@ export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
       browserHostNativeSurface: WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT,
       browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
+      browserHostOpenRead: '/api/sciforge/browser-host/open-read',
       runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
     },
   };

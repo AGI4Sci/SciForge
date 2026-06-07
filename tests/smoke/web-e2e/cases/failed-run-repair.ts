@@ -20,7 +20,7 @@ import {
   type WebE2eRunAuditEvidence,
 } from '../contract-verifier.js';
 import { buildWebE2eFixtureWorkspace } from '../fixture-workspace-builder.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerMockHandle,
@@ -68,7 +68,7 @@ export async function buildFailedRunRepairCase(
 ): Promise<FailedRunRepairCaseResult> {
   const failureMode = options.failureMode ?? 'provider-unavailable';
   const failure = failureDefinition(failureMode);
-  const server = await startScriptableAgentServerMock({
+  const server = await startScriptableBackendMock({
     seed: `web-e2e-${caseId}-${failureMode}`,
     fixedNow: now,
     discovery: { providers: discoveryProviders(failureMode) },

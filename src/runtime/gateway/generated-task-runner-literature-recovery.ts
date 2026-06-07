@@ -20,7 +20,7 @@ export async function literatureGenerationFailureRecoveryPayload(
     toolId: 'web_search',
     input: { query, limit: 8 },
     requestId: `literature-generation-failure-search-${sha1(query).slice(0, 10)}`,
-    metadata: { source: 'agentserver-generation-failure-recovery' },
+    metadata: { source: 'backend-generation-failure-recovery' },
   });
   if (!search.ok || !isRecord(search.output)) {
     return literatureNoResultRecoveryPayload(
@@ -54,7 +54,7 @@ export async function literatureGenerationFailureRecoveryPayload(
       toolId: 'web_fetch',
       input: { url, maxChars: 8000 },
       requestId: `literature-generation-failure-fetch-${sha1(url).slice(0, 10)}`,
-      metadata: { source: 'agentserver-generation-failure-recovery' },
+      metadata: { source: 'backend-generation-failure-recovery' },
     });
     if (!fetch.ok || !isRecord(fetch.output)) {
       row.fetchStatus = fetch.ok ? 'web_fetch returned non-object output' : `web_fetch failed: ${fetch.error.message}`;
@@ -79,7 +79,7 @@ export async function literatureGenerationFailureRecoveryPayload(
       toolId: 'pdf_extract',
       input: { url: pdfUrl, maxChars: 14000, maxPages: 8, timeoutMs: 30000 },
       requestId: `literature-generation-failure-pdf-${sha1(pdfUrl).slice(0, 10)}`,
-      metadata: { source: 'agentserver-generation-failure-recovery' },
+      metadata: { source: 'backend-generation-failure-recovery' },
     });
     if (!pdf.ok || !isRecord(pdf.output)) {
       row.fullTextStatus = `PDF/full-text candidate URL found (${pdfUrl}), but extraction failed: ${pdf.ok ? 'pdf_extract returned non-object output' : pdf.error.message}`;
@@ -110,7 +110,7 @@ export async function literatureGenerationFailureRecoveryPayload(
     'citation/ref': row.url || row.doi || row.title,
   }));
   const report = [
-    '# 中文文献调研报告（AgentServer generation failure recovery）',
+    '# 中文文献调研报告（backend generation failure recovery）',
     '',
     `检索 query：${query}`,
     `检索 provider：${provider || 'web_search'}；provider query：${providerQuery}`,
@@ -130,7 +130,7 @@ export async function literatureGenerationFailureRecoveryPayload(
     '',
     '## 局限性',
     '',
-    '- 这是 AgentServer generation failure 后的 bounded provider recovery，不等同完整系统综述。',
+    '- 这是 backend generation failure 后的 bounded provider recovery，不等同完整系统综述。',
     ...(dateFallbackNote ? ['- 用户要求的当天窗口没有被满足；当前候选只能作为“最近匹配”继续阅读清单。'] : []),
     '- 搜索 provider 的排序和摘要可能遗漏最新论文，全文可得性受站点访问、PDF 可解析性和 bounded page/char budget 影响。',
     '',
@@ -163,7 +163,7 @@ export async function literatureGenerationFailureRecoveryPayload(
       id: 'literature-generation-failure-provider-recovery',
       status: 'done',
       tool: 'sciforge.web-worker.web_search+web_fetch+pdf_extract',
-      summary: `Called web_search, fetched ${fetchedCount} source pages, and extracted ${pdfExtractedCount} PDFs after AgentServer generation failed.`,
+      summary: `Called web_search, fetched ${fetchedCount} source pages, and extracted ${pdfExtractedCount} PDFs after backend generation failed.`,
       failureReason,
       recoverActions: pdfExtractedCount > 0
         ? ['Audit extracted PDF snippets against exact page/section claims before making stronger citation-level conclusions.']
@@ -262,7 +262,7 @@ function literatureNoResultRecoveryPayload(
       id: 'literature-generation-failure-provider-empty-result',
       status: 'done',
       tool: 'sciforge.web-worker.web_search',
-      summary: `Called web_search after AgentServer generation failed; no normalized literature records were returned for query: ${query}.`,
+      summary: `Called web_search after backend generation failed; no normalized literature records were returned for query: ${query}.`,
       recoverActions: ['Retry with a wider date window or alternate topic terms, then run PDF extraction.'],
     }],
     artifacts: [
@@ -426,7 +426,7 @@ export function literatureDirectPayloadRecoveryReason(request: GatewayRequest, p
   });
   if (!admitsMissingWork || !hasExpectedDeliverables) return undefined;
   return [
-    'AgentServer direct ToolPayload was literature-shaped but explicitly incomplete.',
+    'backend direct ToolPayload was literature-shaped but explicitly incomplete.',
     `status/evidence fields: ${statusFields.trim() || 'none'}.`,
     'SciForge is running bounded provider recovery instead of presenting placeholder or budget-limit output as the final deliverable.',
   ].join(' ');

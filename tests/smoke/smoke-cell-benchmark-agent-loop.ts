@@ -32,7 +32,7 @@ def report_text():
         "",
         f"Prompt: {prompt[:240]}",
         "",
-        "- Complex single-cell workflow routed through AgentServer generation.",
+        "- Complex single-cell workflow routed through backend generation.",
         "- Recent conversation, selected UI components, expected artifacts, and prior attempts were preserved.",
         "- Missing real data would be reported as failed-with-reason instead of fabricated success.",
         "- Keywords covered: Tabula Sapiens, label transfer, scVelo RNA velocity, Perturb-seq, spatial cardiac niches, CITE-seq totalVI."
@@ -102,13 +102,13 @@ payload = {
     "confidence": 0.84,
     "claimType": "evidence-summary",
     "evidenceLevel": "mock-runtime",
-    "reasoningTrace": "Mock AgentServer generated a coordinated single-cell task from multi-turn context.",
-    "claims": [{"text": "Complex single-cell work routed through AgentServer generation.", "confidence": 0.84, "evidenceLevel": "mock-runtime"}],
+    "reasoningTrace": "Mock backend generated a coordinated single-cell task from multi-turn context.",
+    "claims": [{"text": "Complex single-cell work routed through backend generation.", "confidence": 0.84, "evidenceLevel": "mock-runtime"}],
     "uiManifest": ui_manifest,
     "executionUnits": [{
         "id": "cell-benchmark-generated-task",
         "status": "done",
-        "tool": "agentserver.generated.python",
+        "tool": "generated-task.generate..python",
         "params": json.dumps({"prompt": prompt[:160], "expected": expected})
     }],
     "artifacts": artifacts
@@ -215,7 +215,7 @@ const server = createServer(async (req, res) => {
           id: 'mock-cell-benchmark-direct-text',
           status: 'completed',
           output: {
-            result: 'Research report: AgentServer returned direct text for a CITE-seq totalVI direct text bridge smoke. SciForge should preserve this as a report artifact and keep omics plus execution UI slots visible.',
+            result: 'Research report: backend returned direct text for a CITE-seq totalVI direct text bridge smoke. SciForge should preserve this as a report artifact and keep omics plus execution UI slots visible.',
           },
         },
       },
@@ -257,7 +257,7 @@ const baseUrl = `http://127.0.0.1:${address.port}`;
 try {
   for (const item of cases) {
     const recommendation = recommendScenarioElements(item.prompt);
-    assert.ok(recommendation.selectedSkillIds.includes('agentserver.generate.omics'), `${item.name} should select generated omics capability`);
+    assert.ok(recommendation.selectedSkillIds.includes('generated-task.generate.omics'), `${item.name} should select generated omics capability`);
     assert.ok(recommendation.selectedArtifactTypes.includes('research-report'), `${item.name} should request research-report`);
     assert.ok(recommendation.selectedArtifactTypes.includes('omics-differential-expression'), `${item.name} should request omics artifact`);
 
@@ -280,7 +280,7 @@ try {
       ],
     );
     assertCellOutput(continuation, `${item.name} continuation`);
-    assert.match(String(continuation.reasoningTrace), /AgentServer generation run/);
+    assert.match(String(continuation.reasoningTrace), /backend generation run/);
   }
 
   const directText = await runCellCase(
@@ -360,7 +360,7 @@ function assertCellOutput(payload: {
   assert.ok(payload.executionUnits.every((unit) => {
     if (!isRecord(unit) || !isRecord(unit.routeDecision)) return false;
     return unit.routeDecision.selectedRuntime === 'agentserver-generation';
-  }), `${label} should route through AgentServer generation`);
+  }), `${label} should route through backend generation`);
 }
 
 async function readJson(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
@@ -408,7 +408,7 @@ payload = {
   "executionUnits": [{
     "id": "tabula-round-1",
     "status": "done",
-    "tool": "agentserver.generated.python",
+    "tool": "generated-task.generate..python",
     "codeRef": ".sciforge/tasks/tabula-round-1.py",
     "stdoutRef": ".sciforge/logs/tabula-round-1.stdout.log",
     "stderrRef": ".sciforge/logs/tabula-round-1.stderr.log",
@@ -423,7 +423,7 @@ payload = {
     "dataRef": ".sciforge/task-results/tabula-round-1.json",
     "metadata": {
       "runId": "tabula-round-1",
-      "producer": "agentserver.generated.python",
+      "producer": "generated-task.generate..python",
       "codeRef": ".sciforge/tasks/tabula-round-1.py",
       "stdoutRef": ".sciforge/logs/tabula-round-1.stdout.log",
       "stderrRef": ".sciforge/logs/tabula-round-1.stderr.log"
@@ -434,14 +434,14 @@ payload = {
     "type": "omics-differential-expression",
     "producerScenario": "omics",
     "schemaVersion": "1",
-    "metadata": {"runId": "tabula-round-1", "producer": "agentserver.generated.python"},
+    "metadata": {"runId": "tabula-round-1", "producer": "generated-task.generate..python"},
     "data": {"rows": [{"feature": "marker genes", "status": "planned"}]}
   }, {
     "id": "research-report",
     "type": "research-report",
     "producerScenario": "omics",
     "schemaVersion": "1",
-    "metadata": {"runId": "tabula-round-1", "producer": "agentserver.generated.python"},
+    "metadata": {"runId": "tabula-round-1", "producer": "generated-task.generate..python"},
     "data": {"markdown": "Round 1 plan: QC, integration, clustering, marker genes, annotation, composition comparison."}
   }]
 }

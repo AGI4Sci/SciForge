@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract';
 
@@ -60,7 +61,14 @@ test('interactive views alias preserves ui-components registry compatibility', (
   assert.equal(interactiveViewManifests, uiComponentManifests);
   assert.equal(interactiveViewCompatibilityAliases, uiComponentCompatibilityAliases);
   assert.ok(interactiveViewManifests.some((manifest) => manifest.componentId === 'record-table'));
+  assert.equal(interactiveViewManifests.some((manifest) => manifest.componentId === 'virtual-screen-viewer'), false);
   assert.ok(uiComponentCompatibilityAliases.some((alias) => alias.legacyComponentId === 'data-table'));
+});
+
+test('interactive view manifest policy does not preserve retired VirtualAppScreen component semantics', () => {
+  const source = readFileSync(new URL('./runtime-ui-manifest-policy.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /virtual-screen-viewer/);
+  assert.doesNotMatch(source, /Legacy virtual screen inspector/);
 });
 
 test('interactive view renderer mapping owns package renderer aliases and fallback labels', () => {
@@ -72,6 +80,7 @@ test('interactive view renderer mapping owns package renderer aliases and fallba
   assert.equal(interactiveViewPackageRendererForComponent('computer-use-control-plane')?.label, 'Computer Use control plane');
   assert.equal(interactiveViewPackageRendererForComponent('terminal-session-viewer')?.label, 'Terminal session viewer');
   assert.equal(interactiveViewPackageRendererForComponent('workspace-file-viewer')?.label, 'Workspace file viewer');
+  assert.equal(interactiveViewPackageRendererForComponent('virtual-screen-viewer'), undefined);
 
   const fallback = interactiveUnknownComponentFallbackPolicy({
     componentId: 'custom-result-view',
@@ -584,7 +593,7 @@ test('interactive view policy owns report runtime result slots', () => {
 });
 
 test('direct answer result policy owns report artifact and view selection semantics', () => {
-  assert.equal(directAnswerResultPolicyIds.directTextTool, 'agentserver.direct-text');
+  assert.equal(directAnswerResultPolicyIds.directTextTool, 'backend.direct-text');
   assert.equal(directAnswerResultPolicyIds.workspaceArtifactJsonTool, 'workspace-task.artifact-json');
   const plain = directAnswerPlainTextResultPolicy('Final markdown report', {
     skillDomain: 'literature',
@@ -612,7 +621,7 @@ test('direct answer result policy owns report artifact and view selection semant
     skillDomain: 'literature',
     prompt: 'summary please',
     expectedArtifactTypes: ['research-report'],
-  }, 'agentserver-structured-answer');
+  }, 'backend-structured-answer');
   assert.equal(ensured.artifacts.length, 1);
   assert.equal(ensured.artifacts[0].type, 'research-report');
   assert.equal(ensured.uiManifest[0].componentId, 'report-viewer');

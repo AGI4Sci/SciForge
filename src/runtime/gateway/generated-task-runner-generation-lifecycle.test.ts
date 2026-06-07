@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 
-import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeEvent } from '../runtime-types.js';
+import type { BackendGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import {
-  completeAgentServerGenerationFailureLifecycle,
+  completeBackendGenerationFailureLifecycle,
   literatureDirectPayloadRecoveryReason,
   resolveGeneratedTaskGenerationRetryLifecycle,
   type GeneratedTaskGenerationLifecycleDeps,
@@ -523,13 +523,13 @@ test('generation failure lifecycle exposes AgentServer side-effect writes as unv
   const candidatePath = join(workspace, 'fixed_inverse_square_decay.py');
   await writeFile(candidatePath, 'def fixed_inverse_square_decay(x):\n    return 1 / (1 + x * x)\n');
 
-  const payload = await completeAgentServerGenerationFailureLifecycle({
+  const payload = await completeBackendGenerationFailureLifecycle({
     workspace,
     request: readyWebProviderRequest,
     skill,
     generation: {
       ok: false,
-      error: 'AgentServer generation stopped by convergence guard after 214465 total tokens.',
+      error: 'backend generation stopped by convergence guard after 214465 total tokens.',
       diagnostics: {
         kind: 'agentserver',
         originalErrorSummary: 'bounded generation stopped',
@@ -549,8 +549,8 @@ test('generation failure lifecycle exposes AgentServer side-effect writes as unv
         throw new Error('failure lifecycle should not retry generation');
       }),
       repairNeededPayload: (_request, _skill, reason, _refs) => repairPayload(reason),
-      agentServerGenerationFailureReason: (error) => error,
-      agentServerFailurePayloadRefs: () => ({}),
+      backendGenerationFailureReason: (error) => error,
+      backendFailurePayloadRefs: () => ({}),
     },
   });
 
@@ -567,7 +567,7 @@ test('generation failure lifecycle exposes AgentServer side-effect writes as unv
       && typeof delivery?.rawRef === 'string';
   }), true);
   assert.doesNotMatch(JSON.stringify(payload), new RegExp(workspace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(payload.message, /needs repair|AgentServer/i);
+  assert.match(payload.message, /needs repair|backend generation/i);
   assert.notEqual(payload.claimType, 'satisfied');
 });
 
@@ -627,7 +627,7 @@ test('generation failure lifecycle recovers literature generation failures throu
   });
 
   try {
-    const payload = await completeAgentServerGenerationFailureLifecycle({
+    const payload = await completeBackendGenerationFailureLifecycle({
       workspace,
       request: {
         skillDomain: 'literature',
@@ -639,7 +639,7 @@ test('generation failure lifecycle recovers literature generation failures throu
       skill,
       generation: {
         ok: false,
-        error: 'AgentServer returned a malformed or incomplete AgentServerGenerationResponse-looking JSON payload.',
+        error: 'Backend generation returned a malformed or incomplete GeneratedTaskResponse-looking JSON payload.',
         diagnostics: {
           kind: 'agentserver',
           originalErrorSummary: 'malformed generation response',
@@ -658,8 +658,8 @@ test('generation failure lifecycle recovers literature generation failures throu
           throw new Error('failure lifecycle should not retry generation');
         }),
         repairNeededPayload: (_request, _skill, reason, _refs) => repairPayload(reason),
-        agentServerGenerationFailureReason: (error) => error,
-        agentServerFailurePayloadRefs: () => ({}),
+        backendGenerationFailureReason: (error) => error,
+        backendFailurePayloadRefs: () => ({}),
       },
     });
 
@@ -714,7 +714,7 @@ test('generation failure no-result recovery uses the requested topic instead of 
   }) as typeof fetch;
 
   try {
-    const payload = await completeAgentServerGenerationFailureLifecycle({
+    const payload = await completeBackendGenerationFailureLifecycle({
       workspace,
       request: {
         skillDomain: 'literature',
@@ -726,7 +726,7 @@ test('generation failure no-result recovery uses the requested topic instead of 
       skill,
       generation: {
         ok: false,
-        error: 'AgentServer returned malformed generation response',
+        error: 'backend returned malformed generation response',
         diagnostics: { kind: 'agentserver', originalErrorSummary: 'malformed generation response' },
       },
       deps: {
@@ -734,8 +734,8 @@ test('generation failure no-result recovery uses the requested topic instead of 
           throw new Error('failure lifecycle should not retry generation');
         }),
         repairNeededPayload: (_request, _skill, reason, _refs) => repairPayload(reason),
-        agentServerGenerationFailureReason: (error) => error,
-        agentServerFailurePayloadRefs: () => ({}),
+        backendGenerationFailureReason: (error) => error,
+        backendFailurePayloadRefs: () => ({}),
       },
     });
 
@@ -831,7 +831,7 @@ test('generation retry lifecycle recovers literature strict retry failures throu
       },
       deps: depsWithRetry(async () => ({
         ok: false,
-        error: 'AgentServer returned a malformed or incomplete AgentServerGenerationResponse-looking JSON payload.',
+        error: 'Backend generation returned a malformed or incomplete GeneratedTaskResponse-looking JSON payload.',
         diagnostics: { kind: 'agentserver', originalErrorSummary: 'malformed retry generation response' },
       })),
     });
@@ -856,10 +856,10 @@ test('generation retry lifecycle recovers literature strict retry failures throu
 });
 
 function depsWithRetry(
-  requestAgentServerGeneration: GeneratedTaskGenerationLifecycleDeps['requestAgentServerGeneration'],
+  requestBackendGeneration: GeneratedTaskGenerationLifecycleDeps['requestBackendGeneration'],
 ): GeneratedTaskGenerationLifecycleDeps {
   return {
-    requestAgentServerGeneration,
+    requestBackendGeneration,
     attemptPlanRefs: () => ({}),
     repairNeededPayload: (_request, _skill, reason) => repairPayload(reason),
     ensureDirectAnswerReportArtifact: (payload) => payload,
@@ -889,7 +889,7 @@ function repairPayload(reason: string): ToolPayload {
   };
 }
 
-function directNetworkGeneration(path: string): AgentServerGenerationResponse {
+function directNetworkGeneration(path: string): BackendGenerationResponse {
   return generation(path, [
     'import json, sys, urllib.request',
     'input_path = sys.argv[1]',
@@ -900,7 +900,7 @@ function directNetworkGeneration(path: string): AgentServerGenerationResponse {
   ].join('\n'));
 }
 
-function generation(path: string, content: string): AgentServerGenerationResponse {
+function generation(path: string, content: string): BackendGenerationResponse {
   return {
     taskFiles: [{ path, language: 'python', content }],
     entrypoint: { language: 'python', path },

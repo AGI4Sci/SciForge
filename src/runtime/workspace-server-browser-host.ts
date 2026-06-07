@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import {
   defaultBrowserHostSessionManager,
   type BrowserHostFrameCaptureResult,
+  type BrowserHostOpenReadInput,
   type BrowserHostSearchInput,
   type BrowserHostSessionActionInput,
   type BrowserHostSessionManager,
@@ -88,6 +89,18 @@ export async function handleBrowserHostSessionRoutes(
       const root = await options.workspaceRootFromBodyOrRequest(body, url);
       const search = await manager.search(root, browserHostSearchInput(body));
       writeJson(res, 200, { ok: true, workspacePath: root, search });
+    } catch (error) {
+      writeJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/sciforge/browser-host/open-read' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = await options.workspaceRootFromBodyOrRequest(body, url);
+      const openRead = await manager.openRead(root, browserHostOpenReadInput(body));
+      writeJson(res, 200, { ok: true, workspacePath: root, openRead });
     } catch (error) {
       writeJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
     }
@@ -825,6 +838,17 @@ function browserHostSearchInput(body: Record<string, unknown>): BrowserHostSearc
     sourcePageLimit: numberField(body.sourcePageLimit),
     region: stringField(body.region),
     engine: stringField(body.engine) === 'duckduckgo' ? 'duckduckgo' : 'bing',
+    timeoutMs: numberField(body.timeoutMs),
+  };
+}
+
+function browserHostOpenReadInput(body: Record<string, unknown>): BrowserHostOpenReadInput {
+  const url = stringField(body.url);
+  if (!url) throw new Error('BrowserHostSession open_read url is required.');
+  return {
+    url,
+    sessionId: stringField(body.sessionId),
+    title: stringField(body.title),
     timeoutMs: numberField(body.timeoutMs),
   };
 }

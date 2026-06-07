@@ -52,25 +52,7 @@ export function legacyToolsRunSyncDecision(body: unknown): LegacyToolsRunSyncDec
   if (forbidden.length) return syncBlocked(`legacy sync tools run repair harness contains forbidden route fields: ${forbidden.join(', ')}`);
   const unexpected = unexpectedLegacySyncKeys(body);
   if (unexpected.length) return syncBlocked(`legacy sync tools run repair harness contains unsupported fields: ${unexpected.join(', ')}`);
-  if (body.schemaVersion !== LEGACY_TOOLS_RUN_REPAIR_HARNESS_SCHEMA) {
-    return syncBlocked('legacy sync tools run is sealed; use Runtime Codex stream for product turns');
-  }
-  if (body.kind !== 'legacy-agentserver-repair-harness') return syncBlocked('legacy sync tools run only accepts the explicit legacy AgentServer repair harness');
-  if (body.repairHarnessOnly !== true || body.handoffSource !== 'test') {
-    return syncBlocked('legacy sync tools run repair harness requires repairHarnessOnly=true and handoffSource=test');
-  }
-  const agentServerBaseUrl = typeof body.agentServerBaseUrl === 'string' ? body.agentServerBaseUrl.trim() : '';
-  if (!agentServerBaseUrl) {
-    return syncBlocked('legacy sync tools run repair harness requires explicit loopback agentServerBaseUrl');
-  }
-  if (!loopbackHttpUrl(agentServerBaseUrl)) {
-    return syncBlocked('legacy sync tools run repair harness requires loopback agentServerBaseUrl');
-  }
-  return {
-    allowed: true,
-    reason: 'legacy-agentserver-repair-harness',
-    statusCode: 200,
-  };
+  return syncBlocked('legacy sync AgentServer repair harness is retired; use Runtime Codex stream or backend generated-task repair flows');
 }
 
 export async function handleLegacyToolsRunStreamRoute(
@@ -155,14 +137,4 @@ function unexpectedLegacySyncKeys(value: Record<string, unknown>) {
     'workspacePath',
   ]);
   return Object.keys(value).filter((key) => !allowed.has(key)).slice(0, 12);
-}
-
-function loopbackHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === 'http:' || url.protocol === 'https:')
-      && (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1');
-  } catch {
-    return false;
-  }
 }

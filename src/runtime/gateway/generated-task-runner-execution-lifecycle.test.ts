@@ -470,7 +470,7 @@ test('generated Python syntax preflight attempts bounded repair before returning
     deps: {
       repairNeededPayload,
       attemptPlanRefs: () => ({}),
-      tryAgentServerRepairAndRerun: async (params) => {
+      tryGeneratedTaskRepairAndRerun: async (params) => {
         repairAttempted = true;
         assert.match(params.failureReason, /Generated Python entrypoint failed syntax preflight/i);
         assert.match(params.run.stderr, /Generated Python entrypoint failed syntax preflight/i);

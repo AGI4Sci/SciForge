@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "sciforge.desktop-computer-use.file-dogfood.v1",
+  "status": "passed",
+  "source": "sciforge-desktop-file-task-dogfood",
+  "observedAt": "2026-06-06T18:40:50.667Z",
+  "taskPromptDigest": {
+    "length": 306,
+    "sha1": "cc5e795151df64e8fad32a1ca38a9bcfc2f6ae71"
+  },
+  "localConfig": {
+    "present": true,
+    "providerPresent": true,
+    "modelPresent": true,
+    "upstreamBaseUrlPresent": true,
+    "apiKeyPresent": true,
+    "source": "config.local.json",
+    "secretValuesRedacted": true
+  },
+  "target": {
+    "appName": "TextEdit",
+    "targetWindowRef": "window:macos/TextEdit/fac845cdee4e",
+    "windowTitle": "sciforge-computer-use-proof.txt",
+    "visibleToUser": true,
+    "canCancelOrRetarget": true
+  },
+  "beforeEvidence": {
+    "targetWindowRef": "window:macos/TextEdit/fac845cdee4e",
+    "screenshotRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/before-screenshot.png",
+    "axEvidenceRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/before-ax.json",
+    "appName": "TextEdit",
+    "windowTitle": "sciforge-computer-use-proof.txt"
+  },
+  "actionGroundingRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/action-grounding.json",
+  "executorEventRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/executor-event.json",
+  "fileCreationOwner": "workspace-file-writer-assisted",
+  "afterEvidence": {
+    "targetWindowRef": "window:macos/TextEdit/fac845cdee4e",
+    "screenshotRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/after-screenshot.png",
+    "axEvidenceRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/after-ax.json",
+    "appName": "TextEdit",
+    "windowTitle": "sciforge-computer-use-proof.txt"
+  },
+  "artifactRef": "sciforge-computer-use-proof.txt",
+  "artifactPath": "/Applications/workspace/ailab/research/app/SciForge/sciforge-computer-use-proof.txt",
+  "validationRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/file-validation.json",
+  "validation": {
+    "fileExists": true,
+    "contentMatches": true,
+    "titlePresent": true,
+    "bulletCount": 3,
+    "datePresent": true,
+    "sha1": "018ab87b0ba453834977eb28d9a350edcddc4d01"
+  },
+  "finalAnswerRef": "docs/evolve/runs/desktop-computer-use-file-dogfood/final-answer.md",
+  "finalAnswer": "已写入 workspace 文件 sciforge-computer-use-proof.txt，并用 TextEdit 打开进行可见检查。\n验证结果：文件存在=yes，内容正确=yes，三条要点数=3。\n没有执行发送、上传、删除、支付或账号安全相关动作。",
+  "releaseGate": {
+    "status": "local-dogfood-only",
+    "strictReleaseStillRequiresLiveAcceptanceBundle": true,
+    "retestCommand": "npm run smoke:computer-use-chat-live-e2e:product-strict"
+  }
+}

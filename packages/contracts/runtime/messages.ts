@@ -125,7 +125,6 @@ export function isSeedDemoOrFixtureMessage(message: Pick<SciForgeMessage, 'id' |
   ].map((value) => String(value ?? '').toLowerCase()).join(' ');
   if (provenance?.kind === 'seed-demo' || provenance?.kind === 'fixture') return true;
   if (/\b(seed|demo|fixture)\b|scenariodemodata/.test(marker)) return true;
-  if (provenance?.runtimeRequestEligible === false || provenance?.liveAcceptanceEligible === false) return true;
   return false;
 }
 

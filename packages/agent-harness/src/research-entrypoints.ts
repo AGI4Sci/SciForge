@@ -35,7 +35,7 @@ export const harnessResearchEntryPoints: HarnessResearchEntryPoint[] = [
   },
   {
     id: 'prompt-renderer',
-    path: 'src/runtime/gateway/agentserver-prompts.ts',
+    path: 'src/runtime/gateway/backend-prompt-policy.ts',
     purpose: 'Final prompt rendering from contract/directives; governance remains in harness contracts and modules.',
     ownsPolicyTruth: false,
   },

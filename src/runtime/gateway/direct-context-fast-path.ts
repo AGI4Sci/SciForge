@@ -1314,7 +1314,7 @@ function extractPlanningLines(text: string, pattern: RegExp, limit: number) {
     .split(/\n+|(?<=[。.!?；;])\s+|\s+\|\s+/)
     .map((line) => line.replace(/^[-*|#\d.\s:]+/, '').replace(/\s+/g, ' ').trim())
     .filter((line) => line.length >= 10 && line.length <= 260 && pattern.test(line) && isDirectContextAnswerStatement(line))
-    .filter((line) => !/AgentServer generation stopped|convergence guard|\.sciforge\/sessions|task-results|artifact:/i.test(line))
+    .filter((line) => !/backend generation stopped|convergence guard|\.sciforge\/sessions|task-results|artifact:/i.test(line))
     .slice(0, limit));
 }
 

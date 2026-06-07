@@ -5199,7 +5199,6 @@
 }
 
 .right-pane-browser-surface,
-.right-pane-virtual-screen-surface,
 .right-pane-terminal-surface,
 .right-pane-files-surface {
   min-height: 0;
@@ -5214,7 +5213,6 @@
 }
 
 .results-panel[data-result-tab='browser'] .right-pane-browser-surface,
-.results-panel[data-result-tab='screen'] .right-pane-virtual-screen-surface,
 .results-panel[data-result-tab='terminal'] .right-pane-terminal-surface,
 .results-panel[data-result-tab='files'] .right-pane-files-surface {
   height: 100%;
@@ -5562,21 +5560,6 @@
   flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
-}
-
-.right-pane-virtual-screen-surface .virtual-screen-viewer {
-  position: relative;
-  height: 100%;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 6px;
-  padding: 6px;
-  overflow: hidden;
-}
-
-.right-pane-virtual-screen-surface .virtual-screen-footer {
-  display: grid;
 }
 
 .virtual-screen-toolbar {

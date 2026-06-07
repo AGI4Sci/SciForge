@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "sciforge.desktop-computer-use.ax-evidence.v1",
+  "phase": "after",
+  "appName": "TextEdit",
+  "windowTitle": "sciforge-computer-use-proof.txt",
+  "processRunning": true,
+  "screenshotCaptureExitCode": 0
+}

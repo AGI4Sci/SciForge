@@ -132,7 +132,8 @@ test('SSE reader still requires gui.present or a native assistant message for Ru
 
 test('SSE reader materializes structured VirtualAppScreen artifacts from done payloads without raw text fallback', async () => {
   const commandId = 'codex-command-virtual-screen-done';
-  const screenArtifactId = `computer-use-virtual-screen-${commandId}`;
+  const legacyScreenArtifactId = `computer-use-virtual-screen-${commandId}`;
+  const screenArtifactId = `computer-use-screen-evidence-${commandId}`;
   const body = [
     'event: done',
     `data: ${JSON.stringify({
@@ -145,11 +146,11 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
       uiManifest: [{
         componentId: 'virtual-screen-viewer',
         title: 'Computer Use screen',
-        artifactRef: screenArtifactId,
+        artifactRef: legacyScreenArtifactId,
         priority: -6,
       }],
       artifacts: [{
-        id: screenArtifactId,
+        id: legacyScreenArtifactId,
         type: 'computer-use-virtual-screen',
         schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
         metadata: {
@@ -189,6 +190,7 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
   const result = stream.result as {
     structuredRuntimeProjection?: { artifactRefs?: string[]; failClosedRawText?: boolean };
     artifacts?: Array<{ id?: string; type?: string; data?: Record<string, unknown> }>;
+    uiManifest?: Array<{ componentId?: string; artifactRef?: string }>;
     displayIntent?: { conversationProjection?: { visibleAnswer?: { artifactRefs?: string[] } } };
   };
 
@@ -196,8 +198,10 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
   assert.equal(result.structuredRuntimeProjection?.failClosedRawText, true);
   assert.deepEqual(result.structuredRuntimeProjection?.artifactRefs, [`artifact:${screenArtifactId}`]);
   assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.includes(`artifact:${screenArtifactId}`));
+  assert.equal(result.uiManifest?.some((slot) => slot.componentId === 'virtual-screen-viewer'), false);
+  assert.ok(result.uiManifest?.some((slot) => slot.componentId === 'image-evidence-viewer' && slot.artifactRef === screenArtifactId));
   const screenArtifact = result.artifacts?.find((artifact) => artifact.id === screenArtifactId);
-  assert.equal(screenArtifact?.type, 'computer-use-virtual-screen');
+  assert.equal(screenArtifact?.type, 'image-evidence');
   assert.equal(screenArtifact?.data?.screenRef, 'virtual-app-screen:structured-done/screen');
   assert.equal(screenArtifact?.data?.preflightRef, 'computer-use:native-host/preflights/structured-done/preflight.json');
   assert.equal(screenArtifact?.data?.preflightLedgerRef, 'computer-use:native-host/preflights/structured-done/preflight-ledger.json');
@@ -344,6 +348,257 @@ test('SSE reader fails closed when native Runtime Codex message uses plural DSML
   assert.equal(failed.status, 'failed');
   assert.equal(failed.raw?.boundary, 'gui-present-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /DSML|multi_agent|tool_calls|伊朗/);
+});
+
+test('SSE reader fails closed when native Runtime Codex message contains module invoke markup', async () => {
+  const commandId = 'codex-command-native-module-invoke-protocol';
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: 'Looking for papers.\\n\\n<module_invoke>{\"moduleId\":\"browser\",\"intent\":\"executeBoundedOperation\"}</module_invoke>',
+      commandId,
+      profile: 'sciforge-runtime-default',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:normalized-events`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /module_invoke|browser|executeBoundedOperation/);
+});
+
+test('SSE reader fails closed when native Runtime Codex message contains malformed function_calls protocol', async () => {
+  const commandId = 'codex-command-native-malformed-function-calls-protocol';
+  const protocolText = [
+    `name="module_invoke">browser executeBoundedOperation {'operationKind': 'browser.search_read', 'targetScope': {'query': 'arxiv.org agentic reinforcement learning 2026'}}`,
+    '<function_calls>',
+    `browser executeBoundedOperation {'operationKind': 'browser.search_read', 'targetScope': {'query': 'arxiv.org agentic reinforcement learning 2026'}}`,
+    '</function_calls>',
+  ].join('\n');
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: protocolText,
+      commandId,
+      profile: 'sciforge-runtime-default',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:normalized-events`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /module_invoke|function_calls|browser|executeBoundedOperation|agentic reinforcement/i);
+});
+
+test('SSE reader fails closed when native Runtime Codex message is only a Browser tool intent', async () => {
+  const commandId = 'codex-command-native-browser-tool-intent-only';
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: '使用 Browser 模块搜索 arxiv 上 agentic RL 相关的今天论文，并用中文总结结果。',
+      commandId,
+      profile: 'sciforge-runtime-default',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /Browser|agentic RL|arxiv/i);
+});
+
+test('SSE reader fails closed when text-only Runtime Codex message contains stdoutRef or raw provider output', async () => {
+  const commandId = 'codex-command-native-text-only-transport-diagnostic';
+  const body = [
+    'event: message',
+    'data: stdoutRef=.sciforge/runtime-events/stdout.log raw provider output: {"secret":"provider-payload"}',
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /stdoutRef|raw provider output|provider-payload/);
+});
+
+test('SSE reader fails closed when streamed native Runtime Codex message contains transport diagnostics', async () => {
+  const commandId = 'codex-command-native-record-transport-diagnostic';
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: 'stderrRef=.sciforge/runtime-events/stderr.log raw provider payload: {"secret":"provider-payload"}',
+      commandId,
+      profile: 'sciforge-runtime-default',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /stderrRef|raw provider payload|provider-payload/);
+});
+
+test('SSE reader fails closed when done-only final text contains raw provider output', async () => {
+  const commandId = 'codex-command-native-done-only-transport-diagnostic';
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      finalText: 'raw provider output: {"secret":"provider-payload"}',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /raw provider output|provider-payload/);
+});
+
+test('SSE reader fails closed when done-only final text is only a Browser tool intent', async () => {
+  const commandId = 'codex-command-native-done-only-tool-intent';
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      finalText: 'I will use the Browser module to search today arXiv agentic RL papers and summarize them.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /Browser|agentic RL|arXiv/i);
 });
 
 test('SSE reader joins CJK native assistant deltas without inserting word spaces', async () => {
@@ -599,7 +854,17 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   const response = createSseResponse(body);
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
-  const result = stream.result as { message?: string; displayIntent?: { source?: string; conversationProjection?: { artifacts?: Array<{ mime?: string }> } }; guiPresentation?: { source?: string; hint?: string } };
+  const result = stream.result as {
+    message?: string;
+    displayIntent?: {
+      source?: string;
+      conversationProjection?: {
+        artifacts?: Array<{ mime?: string }>;
+        verificationState?: { status?: string; verdict?: string };
+      };
+    };
+    guiPresentation?: { source?: string; hint?: string };
+  };
 
   assert.equal(stream.error, undefined);
   assert.equal(result.message, 'VISIBLE_FROM_GUI_PRESENT');
@@ -607,7 +872,82 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   assert.equal(result.guiPresentation?.hint, 'markdown');
   assert.equal(result.displayIntent?.source, `gui.present:${commandId}`);
   assert.equal(result.displayIntent?.conversationProjection?.artifacts?.[0]?.mime, 'markdown');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
   assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
+});
+
+test('SSE reader marks Agent Host gui.present projections verified only when structured success has completion evidence', async () => {
+  const commandId = 'codex-command-gui-present-verified-evidence';
+  const sourceRef = 'browser-host-session:browser-verified/source-pages/source-1.source.json';
+  const textRef = 'browser-host-session:browser-verified/source-pages/source-1.txt';
+  const body = [
+    'event: gui_present',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_present',
+      status: 'completed',
+      text: 'VISIBLE_VERIFIED_BROWSER_ANSWER',
+      provider: 'sciforge-agent-host',
+      model: 'codex-agent-host-turn-loop',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [sourceRef, textRef],
+      raw: {
+        source: `gui.present:${commandId}:agent-host`,
+        presentation: {
+          source: `gui.present:${commandId}:agent-host`,
+          text: 'VISIBLE_VERIFIED_BROWSER_ANSWER',
+          ref: sourceRef,
+          title: 'Runtime answer',
+          hint: 'markdown',
+          status: 'completed',
+          displayedRefs: [sourceRef, textRef],
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-agent-host',
+      model: 'codex-agent-host-turn-loop',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [sourceRef, textRef],
+      displayIntent: {
+        protocolStatus: 'protocol-success',
+        taskOutcome: 'satisfied',
+        status: 'completed',
+      },
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    displayIntent?: {
+      conversationProjection?: {
+        verificationState?: { status?: string; verdict?: string; verifierRef?: string };
+        auditRefs?: string[];
+      };
+    };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, 'VISIBLE_VERIFIED_BROWSER_ANSWER');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'verified');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'pass');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verifierRef, `gui.present:${commandId}:agent-host`);
+  assert.deepEqual(result.displayIntent?.conversationProjection?.auditRefs, [sourceRef, textRef]);
 });
 
 test('SSE reader promotes gui.ask_user into a visible confirmation result', async () => {
@@ -917,8 +1257,8 @@ test('SSE reader turns Computer Use TUI host action metadata into visible result
   assert.ok(artifactRefs.includes(screenshotRef));
   assert.ok(artifactRefs.includes('EU-computer-use-risk'));
   assert.ok(artifactRefs.includes('workEvidence:vision-sense-computer-use:cu-risk'));
-  assert.ok(artifactRefs.some((ref) => ref?.startsWith('artifact:computer-use-virtual-screen-')));
-  const screenArtifact = result.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
+  assert.ok(artifactRefs.some((ref) => ref?.startsWith('artifact:computer-use-screen-evidence-')));
+  const screenArtifact = result.artifacts?.find((artifact) => artifact.type === 'image-evidence');
   assert.equal(screenArtifact?.data?.currentFrameRef, screenshotRef);
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
   assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
@@ -1048,7 +1388,7 @@ test('NDJSON reader preserves VirtualAppScreen target binding and frame dimensio
     artifacts?: Array<{ type?: string; data?: Record<string, unknown> }>;
     displayIntent?: { conversationProjection?: { visibleAnswer?: { artifactRefs?: string[] } } };
   };
-  const screenArtifact = result.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
+  const screenArtifact = result.artifacts?.find((artifact) => artifact.type === 'image-evidence');
   const data = screenArtifact?.data as Record<string, unknown> | undefined;
 
   assert.equal(stream.error, undefined);
@@ -1062,11 +1402,11 @@ test('NDJSON reader preserves VirtualAppScreen target binding and frame dimensio
   assert.equal(data?.actionAdapterRef, 'computer-use:session/screen-carrier/adapters/native-window.json');
   assert.equal(data?.adapterReadinessRef, 'computer-use:session/screen-carrier/readiness/native-window.json');
   assert.equal(data?.evidenceLedgerRef, 'computer-use:session/screen-carrier/evidence-ledger.json');
-  assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.some((ref) => ref.startsWith('artifact:computer-use-virtual-screen-')));
+  assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.some((ref) => ref.startsWith('artifact:computer-use-screen-evidence-')));
   assert.doesNotMatch(JSON.stringify(data), /data:image|base64|providerRoute|desktopBridge|executorLease|schedulerParams/);
 });
 
-test('NDJSON reader exposes Computer Use repair sidecars and continuation action', async () => {
+test('NDJSON reader exposes Computer Use repair sidecars without GUI-derived continuation actions', async () => {
   const commandId = 'computer-use-command-repair';
   const traceRef = '.sciforge/vision-runs/cu-repair/vision-trace.json';
   const blockedManifestRef = '.sciforge/vision-runs/cu-repair/blocked-manifest.json';
@@ -1135,9 +1475,7 @@ test('NDJSON reader exposes Computer Use repair sidecars and continuation action
   assert.ok(projection?.visibleAnswer?.artifactRefs?.includes(blockedManifestRef));
   assert.ok(projection?.artifacts?.some((artifact) => artifact.ref === continuationRequestRef && artifact.mime === 'json'));
   assert.ok(projection?.auditRefs?.includes(runTaskChainRef));
-  assert.deepEqual(projection?.recoverActions, [
-    `/computer-use continue --continuation-request-ref "${continuationRequestRef}"`,
-  ]);
+  assert.deepEqual(projection?.recoverActions, []);
 });
 
 test('NDJSON reader surfaces Computer Use completion-grade and producer diagnostics in gui.present text', async () => {
@@ -1197,11 +1535,11 @@ test('NDJSON reader surfaces Computer Use completion-grade and producer diagnost
   assert.match(result.message ?? '', /L3 producer diagnostic refs/);
   assert.equal(result.guiPresentation?.ref, diagnosticRef);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(producerDiagnosticRef));
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'output-materialized');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'partial-ready');
   assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.includes(diagnosticRef));
 });
 
-test('NDJSON reader projects Computer Use blocked sidecars as external blocked with continuation action', async () => {
+test('NDJSON reader projects Computer Use blocked sidecars without GUI-derived continuation actions', async () => {
   const commandId = 'computer-use-command-blocked';
   const traceRef = '.sciforge/vision-runs/cu-blocked/vision-trace.json';
   const blockedManifestRef = '.sciforge/vision-runs/cu-blocked/blocked-manifest.json';
@@ -1263,9 +1601,7 @@ test('NDJSON reader projects Computer Use blocked sidecars as external blocked w
   assert.equal(projection?.visibleAnswer?.status, 'external-blocked');
   assert.ok(projection?.visibleAnswer?.artifactRefs?.includes(blockedManifestRef));
   assert.ok(projection?.auditRefs?.includes(runTaskChainRef));
-  assert.deepEqual(projection?.recoverActions, [
-    `/computer-use continue --continuation-request-ref "${continuationRequestRef}"`,
-  ]);
+  assert.deepEqual(projection?.recoverActions, []);
 });
 
 test('Runtime Codex realtime transport marker declares RT-02 WebSocket bridge complete', () => {

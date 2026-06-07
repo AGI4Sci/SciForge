@@ -33,8 +33,9 @@ export const suggestedComputerUseChatRepairPrompt = [
 ].join(' ');
 
 export const suggestedComputerUseChatProductStrictPrompt = [
-  'Use the visible desktop from the ordinary SciForge Desktop chat to complete the Computer Use acceptance task.',
-  'Start from the product chat surface, bind the current BrowserHostSession or WindowActionSession target, and produce current-run evidence refs.',
+  'Use the visible desktop from the ordinary SciForge Desktop chat to create a short TextEdit document named sciforge-computer-use-proof in the current workspace.',
+  'The document must contain a title, three bullet points, and the current date; save it through the target desktop app, then verify the saved file exists and its content is correct.',
+  'Start from the product chat surface, bind the current WindowActionSession target, and produce current-run target window, before/after evidence, executor event, artifact validation, and final answer refs.',
   'Do not use slash commands, debug producers, isolated package completion, or stale diagnostic evidence as the product pass.',
 ].join(' ');
 

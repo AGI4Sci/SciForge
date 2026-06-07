@@ -9,8 +9,8 @@ import { errorMessage, generatedTaskArchiveRel, isTaskInputRel, safeWorkspaceRel
 import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { fileExists, runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { readGeneratedTaskFileIfPresent, type AgentServerTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
+import { sanitizeBackendError } from './backend-failure-diagnostics.js';
+import { readGeneratedTaskFileIfPresent, type BackendTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
 import { expectedArtifactTypesForGeneratedRun, supplementScopeForGeneratedRun } from './generated-task-runner-supplement-lifecycle.js';
 import {
   buildGeneratedTaskRunInputLifecycle,
@@ -22,7 +22,7 @@ import {
 } from './generated-task-runner-validation-lifecycle.js';
 import { isGeneratedTaskCapabilityFirstPolicyIssue } from './generated-task-payload-preflight.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
-import { AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy.js';
+import { GENERATED_TASK_MATERIALIZED_EVENT_TYPE, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,9 +30,9 @@ export interface GeneratedTaskExecutionLifecycleInput {
   workspace: string;
   request: GatewayRequest;
   skill: SkillAvailability;
-  generation: AgentServerTaskFilesGeneration;
+  generation: BackendTaskFilesGeneration;
   callbacks?: WorkspaceRuntimeCallbacks;
-  deps: Pick<GeneratedTaskRunnerDeps, 'repairNeededPayload'> & Partial<Pick<GeneratedTaskRunnerDeps, 'attemptPlanRefs' | 'tryAgentServerRepairAndRerun'>>;
+  deps: Pick<GeneratedTaskRunnerDeps, 'repairNeededPayload'> & Partial<Pick<GeneratedTaskRunnerDeps, 'attemptPlanRefs' | 'tryGeneratedTaskRepairAndRerun'>>;
 }
 
 export interface GeneratedTaskExecutionLifecycleRun extends GeneratedTaskRuntimeRefs {
@@ -205,14 +205,14 @@ async function runGeneratedTaskSyntaxPreflightRepairLifecycle(input: {
   workspace: string;
   request: GatewayRequest;
   skill: SkillAvailability;
-  generation: AgentServerTaskFilesGeneration;
+  generation: BackendTaskFilesGeneration;
   taskId: string;
   refs: GeneratedTaskRuntimeRefs;
   syntaxPreflight: { blocked: true; reason: string; language: string; taskRel?: string; diagnostic: string };
   callbacks?: WorkspaceRuntimeCallbacks;
-  deps: Pick<GeneratedTaskRunnerDeps, 'repairNeededPayload'> & Partial<Pick<GeneratedTaskRunnerDeps, 'attemptPlanRefs' | 'tryAgentServerRepairAndRerun'>>;
+  deps: Pick<GeneratedTaskRunnerDeps, 'repairNeededPayload'> & Partial<Pick<GeneratedTaskRunnerDeps, 'attemptPlanRefs' | 'tryGeneratedTaskRepairAndRerun'>>;
 }): Promise<ToolPayload | undefined> {
-  if (!input.deps.attemptPlanRefs || !input.deps.tryAgentServerRepairAndRerun) return undefined;
+  if (!input.deps.attemptPlanRefs || !input.deps.tryGeneratedTaskRepairAndRerun) return undefined;
   await writeSyntaxPreflightDiagnosticRefs(input.workspace, input.refs, input.syntaxPreflight);
   const run = syntaxPreflightRunResult(input);
   return await runGeneratedTaskRepairAttemptLifecycle({
@@ -233,7 +233,7 @@ async function runGeneratedTaskSyntaxPreflightRepairLifecycle(input: {
       'Run a syntax-only parser check before rerunning expensive workspace work.',
     ],
     callbacks: input.callbacks,
-    tryAgentServerRepairAndRerun: input.deps.tryAgentServerRepairAndRerun,
+    tryGeneratedTaskRepairAndRerun: input.deps.tryGeneratedTaskRepairAndRerun,
   });
 }
 
@@ -264,7 +264,7 @@ async function writeSyntaxPreflightDiagnosticRefs(
 function syntaxPreflightRunResult(input: {
   workspace: string;
   request: GatewayRequest;
-  generation: AgentServerTaskFilesGeneration;
+  generation: BackendTaskFilesGeneration;
   taskId: string;
   refs: GeneratedTaskRuntimeRefs;
   syntaxPreflight: { reason: string; diagnostic: string };
@@ -316,14 +316,14 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
     kind: 'materialized';
     generatedPathMap: Map<string, string>;
     generatedInputRels: string[];
-    materializedTaskFiles: AgentServerTaskFilesGeneration['response']['taskFiles'];
+    materializedTaskFiles: BackendTaskFilesGeneration['response']['taskFiles'];
     taskHelperRel: string;
   }
   | { kind: 'payload'; payload: ToolPayload }
 > {
   const generatedPathMap = new Map<string, string>();
   const generatedInputRels: string[] = [];
-  const materializedTaskFiles: AgentServerTaskFilesGeneration['response']['taskFiles'] = [];
+  const materializedTaskFiles: BackendTaskFilesGeneration['response']['taskFiles'] = [];
   let taskHelperRel = '';
   try {
     for (const file of input.generation.response.taskFiles) {
@@ -338,7 +338,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
           payload: input.deps.repairNeededPayload(
             input.request,
             input.skill,
-            `AgentServer returned taskFiles path-only reference but SciForge could not read workspace file: ${declaredRel}`,
+            `backend returned taskFiles path-only reference but SciForge could not read workspace file: ${declaredRel}`,
           ),
         };
       }
@@ -350,7 +350,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
       await mkdir(dirname(join(input.workspace, rel)), { recursive: true });
       await writeFile(join(input.workspace, rel), content);
       emitWorkspaceRuntimeEvent(input.callbacks, {
-        type: AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
+        type: GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
         source: 'workspace-runtime',
         message: `Materialized AgentServer task file ${declaredRel}`,
         detail: rel === declaredRel ? declaredRel : `${declaredRel} -> ${rel}`,
@@ -363,7 +363,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
     await mkdir(dirname(join(input.workspace, taskHelperRel)), { recursive: true });
     await writeFile(join(input.workspace, taskHelperRel), sciforgeTaskHelperSource(), 'utf8');
     emitWorkspaceRuntimeEvent(input.callbacks, {
-      type: AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
+      type: GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
       source: 'workspace-runtime',
       message: 'Materialized SciForge generated task helper SDK sciforge_task.py',
       detail: taskHelperRel,
@@ -374,7 +374,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
       payload: input.deps.repairNeededPayload(
         input.request,
         input.skill,
-        `AgentServer generated task files could not be archived: ${sanitizeAgentServerError(errorMessage(error))}`,
+        `backend-generated task files could not be archived: ${sanitizeBackendError(errorMessage(error))}`,
       ),
     };
   }
@@ -383,7 +383,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
 
 async function evaluateGeneratedTaskEntrypointSyntax(input: {
   workspace: string;
-  entrypoint: AgentServerTaskFilesGeneration['response']['entrypoint'];
+  entrypoint: BackendTaskFilesGeneration['response']['entrypoint'];
   generatedPathMap: Map<string, string>;
 }): Promise<{ blocked: false } | { blocked: true; reason: string; language: string; taskRel?: string; diagnostic: string }> {
   if (input.entrypoint.language !== 'python') return { blocked: false };
@@ -409,7 +409,7 @@ async function evaluateGeneratedTaskEntrypointSyntax(input: {
     });
     return { blocked: false };
   } catch (error) {
-    const diagnostic = sanitizeAgentServerError(childProcessDiagnostic(error));
+    const diagnostic = sanitizeBackendError(childProcessDiagnostic(error));
     return {
       blocked: true,
       language: 'python',
@@ -885,7 +885,7 @@ function sciforgeTaskHelperSource() {
 }
 
 function generatedTaskRuntimeRefs(
-  generation: AgentServerTaskFilesGeneration,
+  generation: BackendTaskFilesGeneration,
   taskId: string,
   generatedPathMap: Map<string, string>,
   sessionBundleRel?: string,

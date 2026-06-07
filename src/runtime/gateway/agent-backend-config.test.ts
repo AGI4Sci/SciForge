@@ -3,40 +3,40 @@ import test from 'node:test';
 
 import type { GatewayRequest } from '../runtime-types.js';
 import {
-  AGENTSERVER_ALLOW_DEFAULT_LLM_ENV,
-  AGENTSERVER_BASE_URL_ENV_KEYS,
-  DEFAULT_AGENTSERVER_BASE_URL,
-  agentServerBackend,
-  agentServerBaseUrlSelectionDecision,
-  configuredAgentServerBaseUrl,
-  effectiveAgentServerBaseUrl,
-  requiresUserLlmEndpointForAgentServerBaseUrl,
+  BACKEND_ALLOW_DEFAULT_LLM_ENV,
+  BACKEND_BASE_URL_ENV_KEYS,
+  DEFAULT_BACKEND_BASE_URL,
+  selectedAgentBackend,
+  backendBaseUrlSelectionDecision,
+  configuredBackendBaseUrl,
+  effectiveBackendBaseUrl,
+  requiresUserLlmEndpointForBackendBaseUrl,
 } from './agent-backend-config.js';
 
 test('AgentServer backend selection reuses the centralized runtime backend policy', () => {
   const originalBackend = process.env.SCIFORGE_AGENTSERVER_BACKEND;
   try {
     delete process.env.SCIFORGE_AGENTSERVER_BACKEND;
-    assert.equal(agentServerBackend(gatewayRequest({ agentBackend: 'gemini' })), 'gemini');
-    assert.equal(agentServerBackend(gatewayRequest({ agentBackend: 'not-supported' })), 'codex');
-    assert.equal(agentServerBackend(gatewayRequest(), { baseUrl: 'https://llm.example.test/v1' }), 'openteam_agent');
+    assert.equal(selectedAgentBackend(gatewayRequest({ agentBackend: 'gemini' })), 'gemini');
+    assert.equal(selectedAgentBackend(gatewayRequest({ agentBackend: 'not-supported' })), 'codex');
+    assert.equal(selectedAgentBackend(gatewayRequest(), { baseUrl: 'https://llm.example.test/v1' }), 'openteam_agent');
 
     process.env.SCIFORGE_AGENTSERVER_BACKEND = 'openclaw';
-    assert.equal(agentServerBackend(gatewayRequest()), 'openclaw');
+    assert.equal(selectedAgentBackend(gatewayRequest()), 'openclaw');
   } finally {
     restoreEnv('SCIFORGE_AGENTSERVER_BACKEND', originalBackend);
   }
 });
 
 test('AgentServer base URL selection honors request, env, workspace config, then optional runtime default', () => {
-  const originals = snapshotEnv(AGENTSERVER_BASE_URL_ENV_KEYS);
+  const originals = snapshotEnv(BACKEND_BASE_URL_ENV_KEYS);
   try {
-    clearEnv(AGENTSERVER_BASE_URL_ENV_KEYS);
+    clearEnv(BACKEND_BASE_URL_ENV_KEYS);
 
-    assert.equal(agentServerBaseUrlSelectionDecision().baseUrl, undefined);
-    assert.equal(effectiveAgentServerBaseUrl(), DEFAULT_AGENTSERVER_BASE_URL);
+    assert.equal(backendBaseUrlSelectionDecision().baseUrl, undefined);
+    assert.equal(effectiveBackendBaseUrl(), DEFAULT_BACKEND_BASE_URL);
 
-    const requestDecision = agentServerBaseUrlSelectionDecision({
+    const requestDecision = backendBaseUrlSelectionDecision({
       request: { agentServerBaseUrl: 'http://127.0.0.1:28080/' },
       workspaceConfigBaseUrl: 'http://workspace-agent.example.test',
     });
@@ -44,14 +44,14 @@ test('AgentServer base URL selection honors request, env, workspace config, then
     assert.equal(requestDecision.source, 'request.agentServerBaseUrl');
 
     process.env.SCIFORGE_AGENT_SERVER_URL = 'http://127.0.0.1:29080/';
-    const envDecision = agentServerBaseUrlSelectionDecision({
+    const envDecision = backendBaseUrlSelectionDecision({
       workspaceConfigBaseUrl: 'http://workspace-agent.example.test',
     });
     assert.equal(envDecision.baseUrl, 'http://127.0.0.1:29080');
     assert.equal(envDecision.source, 'env.SCIFORGE_AGENT_SERVER_URL');
 
     delete process.env.SCIFORGE_AGENT_SERVER_URL;
-    assert.equal(configuredAgentServerBaseUrl({
+    assert.equal(configuredBackendBaseUrl({
       workspaceConfigBaseUrl: 'http://workspace-agent.example.test/',
     }), 'http://workspace-agent.example.test');
   } finally {
@@ -60,16 +60,16 @@ test('AgentServer base URL selection honors request, env, workspace config, then
 });
 
 test('default local LLM guard follows centralized AgentServer URL config with env and request overrides', () => {
-  const originals = snapshotEnv([...AGENTSERVER_BASE_URL_ENV_KEYS, AGENTSERVER_ALLOW_DEFAULT_LLM_ENV]);
+  const originals = snapshotEnv([...BACKEND_BASE_URL_ENV_KEYS, BACKEND_ALLOW_DEFAULT_LLM_ENV]);
   try {
-    clearEnv(AGENTSERVER_BASE_URL_ENV_KEYS);
-    delete process.env[AGENTSERVER_ALLOW_DEFAULT_LLM_ENV];
+    clearEnv(BACKEND_BASE_URL_ENV_KEYS);
+    delete process.env[BACKEND_ALLOW_DEFAULT_LLM_ENV];
 
-    assert.equal(requiresUserLlmEndpointForAgentServerBaseUrl(DEFAULT_AGENTSERVER_BASE_URL), true);
-    assert.equal(requiresUserLlmEndpointForAgentServerBaseUrl('http://127.0.0.1:28080'), false);
+    assert.equal(requiresUserLlmEndpointForBackendBaseUrl(DEFAULT_BACKEND_BASE_URL), true);
+    assert.equal(requiresUserLlmEndpointForBackendBaseUrl('http://127.0.0.1:28080'), false);
 
     assert.equal(
-      requiresUserLlmEndpointForAgentServerBaseUrl(
+      requiresUserLlmEndpointForBackendBaseUrl(
         'http://localhost:28080/',
         { agentServerBaseUrl: 'http://127.0.0.1:28080' },
       ),
@@ -77,10 +77,10 @@ test('default local LLM guard follows centralized AgentServer URL config with en
     );
 
     process.env.SCIFORGE_AGENTSERVER_BASE_URL = 'http://127.0.0.1:29080';
-    assert.equal(requiresUserLlmEndpointForAgentServerBaseUrl('http://localhost:29080/'), true);
+    assert.equal(requiresUserLlmEndpointForBackendBaseUrl('http://localhost:29080/'), true);
 
-    process.env[AGENTSERVER_ALLOW_DEFAULT_LLM_ENV] = '1';
-    assert.equal(requiresUserLlmEndpointForAgentServerBaseUrl(DEFAULT_AGENTSERVER_BASE_URL), false);
+    process.env[BACKEND_ALLOW_DEFAULT_LLM_ENV] = '1';
+    assert.equal(requiresUserLlmEndpointForBackendBaseUrl(DEFAULT_BACKEND_BASE_URL), false);
   } finally {
     restoreEnvSnapshot(originals);
   }

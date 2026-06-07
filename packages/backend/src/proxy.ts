@@ -136,6 +136,7 @@ export function createCodexResponsesProxyServer(options: CodexResponsesProxyServ
           const upstream = await preflightUpstream(request, fetchImpl, requestOptions, upstreamBaseUrl, upstreamPreflightTimeoutMs);
           return sendJson(response, 200, {
             ok: upstream.ok,
+            service: 'sciforge.codex-responses-proxy',
             upstreamBaseUrl,
             checkedAt: new Date().toISOString(),
             upstream,
@@ -143,6 +144,7 @@ export function createCodexResponsesProxyServer(options: CodexResponsesProxyServ
         }
         return sendJson(response, 200, {
           ok: true,
+          service: 'sciforge.codex-responses-proxy',
           upstreamBaseUrl,
           checkedAt: new Date().toISOString(),
         });

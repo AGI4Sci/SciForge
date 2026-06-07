@@ -16,6 +16,7 @@ export type CuNextLiveAcceptanceMarkerKind =
   | 'chart-report'
   | 'needs-confirmation'
   | 'file-index'
+  | 'desktop-file-save'
   | 'repair-continuity'
   | 'approval-ref'
   | 'dense-grounding';
@@ -68,6 +69,7 @@ export const CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES: readonly CuNextLiveAcceptanceTa
   { taskId: 'CU-NEXT-05', markerKind: 'repair-continuity', label: 'repair continuity' },
   { taskId: 'CU-NEXT-06', markerKind: 'approval-ref', label: 'approvalRef' },
   { taskId: 'CU-NEXT-07', markerKind: 'dense-grounding', label: 'dense grounding' },
+  { taskId: 'CU-NEXT-08', markerKind: 'desktop-file-save', label: 'desktop file save' },
 ] as const;
 
 const taskRulesById = new Map(CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES.map((rule) => [rule.taskId, rule]));
@@ -80,6 +82,7 @@ const markerAliases: Record<CuNextLiveAcceptanceMarkerKind, readonly string[]> =
   'chart-report': ['chart-report', 'chartreport', 'spreadsheet-chart-report'],
   'needs-confirmation': ['needs-confirmation', 'needsconfirmation', 'confirmation-required', 'approval-request'],
   'file-index': ['file-index', 'fileindex', 'directory-index', 'workspace-file-index'],
+  'desktop-file-save': ['desktop-file-save', 'desktopfilesave', 'desktop-local-document-save', 'local-document-save', 'gui-file-save'],
   'repair-continuity': ['repair-continuity', 'repaircontinuity', 'continuation-repair'],
   'approval-ref': ['approval-ref', 'approvalref', 'human-approval-ref'],
   'dense-grounding': ['dense-grounding', 'densegrounding', 'visual-grounding-pressure-test'],
@@ -1876,6 +1879,19 @@ function validateMarkerFields(
         ...requireMarkerRefs(marker, 'directory/file listing refs', ['directoryListingRefs', 'fileRefs', 'organizedFileRefs', 'movedFileRefs']),
         ...requireMarkerRefs(marker, 'file preview refs', ['previewRef', 'previewRefs', 'finalVisibleScreenshotRef']),
       ];
+    case 'desktop-file-save':
+      return [
+        ...requireMarkerRefs(marker, 'target window ref', ['targetWindowRef', 'windowRef', 'targetWindowRefs']),
+        ...requireMarkerRefs(marker, 'before screenshot ref', ['beforeScreenshotRef', 'beforeScreenshotRefs']),
+        ...requireMarkerRefs(marker, 'before AX evidence ref', ['beforeAxRef', 'beforeAxRefs', 'beforeAccessibilityRef']),
+        ...requireMarkerRefs(marker, 'GUI save command ref', ['guiSaveCommandRef', 'saveCommandRef', 'saveIntentRef']),
+        ...requireMarkerRefs(marker, 'executor event ref', ['executorEventRef', 'executorEventRefs']),
+        ...requireMarkerRefs(marker, 'after screenshot ref', ['afterScreenshotRef', 'afterScreenshotRefs']),
+        ...requireMarkerRefs(marker, 'after AX evidence ref', ['afterAxRef', 'afterAxRefs', 'afterAccessibilityRef']),
+        ...requireMarkerRef(marker, evidence, 'saved file artifact ref', ['artifactRef', 'fileArtifactRef', 'finalArtifactRef'], 'finalArtifactRef'),
+        ...requireMarkerRef(marker, evidence, 'artifact validation ref', ['artifactValidationRef', 'fileValidationRef'], 'artifactValidationRef'),
+        ...requireDesktopFileSaveCausality(marker),
+      ];
     case 'repair-continuity':
       return [
         ...requireMarkerRefs(marker, 'blocked manifest ref', ['blockedManifestRef', 'blockedRunRef']),
@@ -1907,6 +1923,33 @@ function validateMarkerFields(
         ...requireDenseGroundingRejectionEvidence(marker, refRecords),
       ];
   }
+}
+
+function requireDesktopFileSaveCausality(marker: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const owner = stringValue(marker.fileCreationOwner) ?? stringValue(marker.creationOwner) ?? stringValue(marker.artifactCreationOwner);
+  if (owner !== 'scoped-gui-save' && owner !== 'native-gui-save') {
+    issues.push({
+      id: 'invalid-task-marker',
+      path: 'fileCreationOwner',
+      reason: 'desktop-file-save marker must prove a scoped/native GUI save owner; workspace-file-writer-assisted or shell writes cannot satisfy Evolve T1.',
+    });
+  }
+  if (marker.sharedSystemInputUsed === true || stringValue(marker.inputOwnership)?.match(/shared-system|system mouse|system keyboard/i)) {
+    issues.push({
+      id: 'invalid-task-marker',
+      path: 'sharedSystemInputUsed',
+      reason: 'desktop-file-save marker must not use shared system input; it must be scoped to the target desktop session.',
+    });
+  }
+  if (marker.shellDirectArtifactWrite === true || marker.directShellArtifactWrite === true) {
+    issues.push({
+      id: 'invalid-task-marker',
+      path: 'shellDirectArtifactWrite',
+      reason: 'desktop-file-save marker must not use shell/direct file writes as the artifact creation path.',
+    });
+  }
+  return issues;
 }
 
 function requireNeedsConfirmationStatus(marker: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {

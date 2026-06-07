@@ -6,6 +6,7 @@ export const CONVERSATION_POLICY_SELECTED_SENSE_ADAPTER = 'runtime:selected-sens
 export const CONVERSATION_POLICY_SELECTED_VERIFIER_ADAPTER = 'runtime:selected-verifier' as const;
 export const CONVERSATION_POLICY_SELECTED_COMPONENT_KIND = 'ui-component' as const;
 export const CONVERSATION_POLICY_SELECTED_COMPONENT_ADAPTER = 'ui:component' as const;
+export const CONVERSATION_POLICY_BACKEND_GENERATION_ADAPTER = 'backend:generation' as const;
 export const CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER = 'agentserver:generation' as const;
 
 export interface SelectedConversationPolicyCapabilityManifestInput {
@@ -127,13 +128,13 @@ export function selectedConversationPolicyCapabilityManifests(
   }
   if (input.allowAgentServerGeneration !== false) {
     manifests.push({
-      id: `scenario.${input.skillDomain}.agentserver-generation`,
+      id: `scenario.${input.skillDomain}.generated-task`,
       kind: 'skill',
       domain: [input.skillDomain],
-      summary: `General AgentServer generation for ${input.skillDomain} tasks.`,
-      triggers: [input.skillDomain, 'agentserver', 'generation'],
+      summary: `General backend generated-task planning for ${input.skillDomain} tasks.`,
+      triggers: [input.skillDomain, 'backend', 'generated-task'],
       artifacts: uniquePolicyStrings(input.expectedArtifactTypes ?? []),
-      adapter: CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER,
+      adapter: CONVERSATION_POLICY_BACKEND_GENERATION_ADAPTER,
       internalAgent: 'required',
     });
   }

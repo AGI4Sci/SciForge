@@ -15,7 +15,7 @@ const result = await runWorkspaceRuntimeGateway({
   skillDomain: 'knowledge',
   prompt,
   workspacePath: workspace,
-  availableSkills: ['agentserver.generate.knowledge'],
+  availableSkills: ['generated-task.generate.knowledge'],
   expectedArtifactTypes: ['research-report', 'omics-differential-expression', 'knowledge-graph'],
   selectedComponentIds: ['report-viewer', 'graph-viewer', 'evidence-matrix', 'execution-unit-table'],
   uiState: {

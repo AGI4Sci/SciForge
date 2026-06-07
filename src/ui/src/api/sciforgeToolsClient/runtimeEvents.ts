@@ -22,6 +22,9 @@ import {
   COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE,
   COMPUTER_USE_CONTROL_PLANE_COMPONENT_ID,
   COMPUTER_USE_CONTROL_PLANE_SCHEMA_VERSION,
+  IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE,
+  IMAGE_EVIDENCE_VIEWER_COMPONENT_ID,
+  IMAGE_EVIDENCE_VIEWER_SCHEMA_VERSION,
   computerUseControlPlaneDisplayedRefs,
   hasComputerUseControlPlanePresentation,
   normalizeComputerUseControlPlanePayload as normalizePresentationComputerUseControlPlanePayload,
@@ -29,9 +32,11 @@ import {
 } from '../../../../../packages/presentation/components';
 import { runtimeNativeMessageLiveAcceptanceEligible, runtimeNativeMessageSafeForVisibleAnswer } from './runtimeNativeMessage';
 
-const COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE = 'computer-use-virtual-screen';
-const COMPUTER_USE_VIRTUAL_SCREEN_COMPONENT_ID = 'virtual-screen-viewer';
-const COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION = 'sciforge.computer-use.virtual-screen.v1';
+const COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_ARTIFACT_TYPE = 'computer-use-virtual-screen';
+const VIRTUAL_SCREEN_VIEWER_COMPONENT_ID = 'virtual-screen-viewer';
+const COMPUTER_USE_SCREEN_EVIDENCE_ARTIFACT_TYPE = IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE;
+const COMPUTER_USE_SCREEN_EVIDENCE_SCHEMA_VERSION = IMAGE_EVIDENCE_VIEWER_SCHEMA_VERSION;
+const COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_SCHEMA_VERSION = 'sciforge.computer-use.virtual-screen.v1';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -273,6 +278,8 @@ async function readWorkspaceToolSse(
       const computerUseGui = guiEventsFromComputerUseTuiHostActions(data);
       if (computerUseGui.guiPresent) guiPresent = computerUseGui.guiPresent;
       if (computerUseGui.guiAskUser) guiAskUser = computerUseGui.guiAskUser;
+    } else if (runtimeSseTextEventIsAssistantMessage(eventName, data)) {
+      genericMessages.push({ text: String(data), exact: false });
     }
     if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
       if (guiAskUser) {
@@ -301,6 +308,11 @@ async function readWorkspaceToolSse(
           return;
         }
         result = withAssistantMessageRuntimeResult(data, nativeMessage);
+        return;
+      }
+      const doneMessage = isRecord(data) ? runtimeDoneNativeMessage(data) : undefined;
+      if (doneMessage) {
+        result = withAssistantMessageRuntimeResult(data, doneMessage);
         return;
       }
       const failed = runtimeCodexMissingGuiPresentFailure(data);
@@ -370,6 +382,49 @@ function assistantTextFromStreamEventRecord(eventName: string, data: Record<stri
       || lowerEventType === 'text-delta'
       || lowerEventType === 'text_delta',
   };
+}
+
+function runtimeSseTextEventIsAssistantMessage(eventName: string, data: unknown): data is string {
+  if (typeof data !== 'string' || !data.trim()) return false;
+  const normalized = eventName.trim().toLowerCase();
+  return normalized === 'message' || normalized === 'message_delta' || normalized === 'text-delta' || normalized === 'text_delta';
+}
+
+function runtimeDoneNativeMessage(data: Record<string, unknown>): string | undefined {
+  if (!isRuntimeCodexDoneEvent(data)) return undefined;
+  const output = isRecord(data.output) ? data.output : {};
+  const candidates = [
+    data.finalText,
+    data.final_text,
+    data.answer,
+    data.text,
+    data.message,
+    output.finalText,
+    output.final_text,
+    output.answer,
+    output.message,
+    output.text,
+    output.output_text,
+  ];
+  for (const candidate of candidates) {
+    const text = asString(candidate);
+    if (!text) continue;
+    if (runtimeDoneMessageLooksTransportOnly(text)) continue;
+    if (!agentHostVisibleMessageSafeForProjection(text)) continue;
+    if (!runtimeNativeMessageSafeForVisibleAnswer(text)) continue;
+    return text;
+  }
+  return undefined;
+}
+
+function runtimeDoneMessageLooksTransportOnly(text: string): boolean {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return true;
+  return /^(?:ok|done|completed|success|successful)$/i.test(compact)
+    || /^Runtime Codex completed successfully\.?$/i.test(compact)
+    || /^Runtime Codex completed without gui\.present\b/i.test(compact)
+    || /^Runtime Codex (?:started|exited|was cancelled|运行未完成)\b/i.test(compact)
+    || /^Codex app-server (?:stream|正在|started|completed|finished)\b/i.test(compact);
 }
 
 function joinAssistantStreamText(fragments: AssistantStreamTextFragment[]): string {
@@ -447,16 +502,16 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         artifacts: [
           ...artifacts,
           ...(controlPlane.artifact ? [{ ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE }] : []),
-          ...(virtualScreen.artifact ? [{ ref: `artifact:${virtualScreen.artifact.id}`, label: 'Computer Use screen', mime: COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE }] : []),
+          ...(virtualScreen.artifact ? [{ ref: `artifact:${virtualScreen.artifact.id}`, label: 'Computer Use screen', mime: COMPUTER_USE_SCREEN_EVIDENCE_ARTIFACT_TYPE }] : []),
         ],
         executionProcess: [{
           eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
           type: 'GuiPresent',
-          summary: `Runtime Codex rendered completion through ${presentation.source}.`,
+          summary: `Runtime Codex rendered presentation evidence through ${presentation.source}.`,
           timestamp: asString(result.timestamp) ?? new Date().toISOString(),
         }],
-        recoverActions: recoverActionsForGuiPresentation(presentation),
-        verificationState: { status: 'unverified', verifierRef: presentation.source },
+        recoverActions: [],
+        verificationState: guiPresentVerificationState(result, presentation, auditRefs),
         runtimeMetadata,
         auditRefs,
         diagnostics: [],
@@ -474,7 +529,7 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         ...(virtualScreen.artifact ? [virtualScreen.artifact] : []),
       ],
       uiManifest: [
-        ...recordList(result.uiManifest),
+        ...normalizeRuntimeUiManifestSlots(recordList(result.uiManifest)),
         ...(controlPlane.slot ? [controlPlane.slot] : []),
         ...(virtualScreen.slot ? [virtualScreen.slot] : []),
       ],
@@ -482,9 +537,42 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
   };
 }
 
+function guiPresentVerificationState(
+  result: Record<string, unknown>,
+  presentation: ReturnType<typeof guiPresentationFromEvent>,
+  auditRefs: string[],
+): Record<string, unknown> {
+  const displayIntent = isRecord(result.displayIntent) ? result.displayIntent : {};
+  const protocolStatus = asString(displayIntent.protocolStatus);
+  const taskOutcome = asString(displayIntent.taskOutcome);
+  const resultStatus = asString(result.status);
+  const presentationStatus = asString(presentation.status);
+  const structuredSuccess = protocolStatus === 'protocol-success'
+    && taskOutcome === 'satisfied'
+    && (resultStatus === 'done' || resultStatus === 'completed' || resultStatus === 'success')
+    && !/^(?:blocked|failed|error|needs-confirmation)$/i.test(presentationStatus ?? '');
+  const hasCompletionEvidence = auditRefs.some(runtimeCompletionEvidenceRef);
+  if (structuredSuccess && hasCompletionEvidence) {
+    return {
+      status: 'verified',
+      verdict: 'pass',
+      verifierRef: presentation.source,
+    };
+  }
+  return { status: 'unverified', verifierRef: presentation.source };
+}
+
+function runtimeCompletionEvidenceRef(ref: string): boolean {
+  const text = ref.trim();
+  if (!text || text.length > 240) return false;
+  if (/^(?:audit:|stdout:|stderr:|raw:|log:)/i.test(text)) return false;
+  if (/raw-jsonl|stderr|stdout|diagnostic|debug/i.test(text)) return false;
+  return /^(?:browser-host-session:|window-action-session:|computer-use:|native-host:|action-ledger:|workEvidence:|runtime-truth:|evidence:|artifact:|file:)/i.test(text);
+}
+
 function isStructuredRuntimeDoneProjection(result: unknown): result is Record<string, unknown> {
   if (!isRecord(result)) return false;
-  const uiManifest = recordList(result.uiManifest);
+  const uiManifest = normalizeRuntimeUiManifestSlots(recordList(result.uiManifest));
   const artifacts = recordList(result.artifacts);
   if (!uiManifest.length || !artifacts.length) return false;
   const artifactIds = new Set(artifacts.map((artifact) => asString(artifact.id)).filter((id): id is string => Boolean(id)));
@@ -498,8 +586,14 @@ function isStructuredRuntimeDoneProjection(result: unknown): result is Record<st
 function withStructuredRuntimeDoneProjection(result: Record<string, unknown>): unknown {
   const output = isRecord(result.output) ? result.output : {};
   const commandId = asString(result.commandId);
-  const uiManifest = recordList(result.uiManifest);
-  const artifacts = recordList(result.artifacts).filter(artifactSafeForStructuredDoneProjection);
+  const normalizedArtifacts = normalizeStructuredDoneArtifacts(recordList(result.artifacts).filter(artifactSafeForStructuredDoneProjection));
+  const uiManifest = normalizeRuntimeUiManifestSlots(recordList(result.uiManifest)).map((slot) => {
+    const artifactRef = asString(slot.artifactRef);
+    if (!artifactRef) return slot;
+    const mappedRef = normalizedArtifacts.idMap.get(artifactRef);
+    return mappedRef ? { ...slot, artifactRef: mappedRef } : slot;
+  });
+  const artifacts = normalizedArtifacts.artifacts;
   const artifactRefs = artifacts.map((artifact) => `artifact:${asString(artifact.id)}`);
   const auditRefs = uniqueStrings([
     ...(asStringArray(result.evidenceRefs) ?? []),
@@ -507,12 +601,14 @@ function withStructuredRuntimeDoneProjection(result: Record<string, unknown>): u
   ]);
   const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
   const message = safeSummaryText(result.message)
-    ?? (artifacts.some((artifact) => artifact.type === COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE)
-      ? 'Computer Use screen artifact is available in the Screen pane.'
+    ?? (artifacts.some((artifact) => artifact.type === COMPUTER_USE_SCREEN_EVIDENCE_ARTIFACT_TYPE || artifact.type === COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_ARTIFACT_TYPE)
+      ? 'Computer Use image evidence is available in the evidence pane.'
       : 'Runtime Codex materialized structured artifacts.');
   return {
     ...result,
     message,
+    artifacts,
+    uiManifest,
     structuredRuntimeProjection: {
       schemaVersion: 'sciforge.runtime-codex-structured-done-projection.v1',
       source: commandId ? `runtime-codex:done:${commandId}` : 'runtime-codex:done',
@@ -591,7 +687,7 @@ function withGuiAskUserRuntimeResult(
   const projectedArtifacts = [
     ...artifacts,
     ...(controlPlane.artifact ? [{ ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE }] : []),
-    ...(virtualScreen.artifact ? [{ ref: `artifact:${virtualScreen.artifact.id}`, label: 'Computer Use screen', mime: COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE }] : []),
+    ...(virtualScreen.artifact ? [{ ref: `artifact:${virtualScreen.artifact.id}`, label: 'Computer Use screen', mime: COMPUTER_USE_SCREEN_EVIDENCE_ARTIFACT_TYPE }] : []),
   ];
   const executionProcess = [
     presentation ? {
@@ -650,7 +746,7 @@ function withGuiAskUserRuntimeResult(
         ...(virtualScreen.artifact ? [virtualScreen.artifact] : []),
       ],
       uiManifest: [
-        ...recordList(result.uiManifest),
+        ...normalizeRuntimeUiManifestSlots(recordList(result.uiManifest)),
         ...(controlPlane.slot ? [controlPlane.slot] : []),
         ...(virtualScreen.slot ? [virtualScreen.slot] : []),
       ],
@@ -1349,7 +1445,7 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     return undefined;
   }
   return compactRecord({
-    schemaVersion: COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION,
+    schemaVersion: COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_SCHEMA_VERSION,
     title: asString(value.title) ?? 'Computer Use Virtual Screen',
     status: asString(value.status),
     attachState: asString(value.attachState),
@@ -1601,23 +1697,23 @@ function computerUseVirtualScreenResultBundle(value: unknown, commandId: string 
 } {
   const payload = normalizeComputerUseVirtualScreenPayload(value);
   if (!payload) return {};
-  const id = `computer-use-virtual-screen-${safeRefSegment(commandId ?? asString(payload.sessionRef) ?? asString(payload.replayRef) ?? 'current')}`;
+  const id = `computer-use-screen-evidence-${safeRefSegment(commandId ?? asString(payload.sessionRef) ?? asString(payload.replayRef) ?? 'current')}`;
   const artifact = {
     id,
-    type: COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE,
+    type: IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE,
     producerScenario: 'computer-use',
-    schemaVersion: COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION,
+    schemaVersion: IMAGE_EVIDENCE_VIEWER_SCHEMA_VERSION,
     metadata: {
       title: 'Computer Use screen',
-      presentationRole: 'primary-deliverable',
+      presentationRole: 'supporting-evidence',
       producer: 'gui.presentation',
     },
     data: payload,
     delivery: {
       contractId: 'sciforge.artifact-delivery.v1',
       ref: `artifact:${id}`,
-      role: 'primary-deliverable',
-      declaredMediaType: 'application/vnd.sciforge.computer-use-virtual-screen+json',
+      role: 'supporting-evidence',
+      declaredMediaType: 'application/vnd.sciforge.image-evidence+json',
       declaredExtension: '.json',
       contentShape: 'external-ref',
       readableRef: `artifact:${id}`,
@@ -1627,12 +1723,52 @@ function computerUseVirtualScreenResultBundle(value: unknown, commandId: string 
   return {
     artifact,
     slot: {
-      componentId: COMPUTER_USE_VIRTUAL_SCREEN_COMPONENT_ID,
+      componentId: IMAGE_EVIDENCE_VIEWER_COMPONENT_ID,
       title: 'Computer Use screen',
       artifactRef: id,
       priority: -6,
     },
   };
+}
+
+function normalizeRuntimeUiManifestSlots(slots: Record<string, unknown>[]): Record<string, unknown>[] {
+  return slots.map((slot) => {
+    if (slot.componentId !== VIRTUAL_SCREEN_VIEWER_COMPONENT_ID) return slot;
+    return {
+      ...slot,
+      componentId: IMAGE_EVIDENCE_VIEWER_COMPONENT_ID,
+      title: asString(slot.title) ?? 'Computer Use screen',
+    };
+  });
+}
+
+function normalizeStructuredDoneArtifacts(artifacts: Record<string, unknown>[]): {
+  artifacts: Record<string, unknown>[];
+  idMap: Map<string, string>;
+} {
+  const idMap = new Map<string, string>();
+  const normalized = artifacts.map((artifact) => {
+    if (artifact.type !== COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_ARTIFACT_TYPE) return artifact;
+    const oldId = asString(artifact.id);
+    const newId = oldId?.startsWith('computer-use-virtual-screen-')
+      ? oldId.replace(/^computer-use-virtual-screen-/, 'computer-use-screen-evidence-')
+      : `computer-use-screen-evidence-${safeRefSegment(oldId ?? 'legacy')}`;
+    if (oldId) idMap.set(oldId, newId);
+    const delivery = isRecord(artifact.delivery) ? artifact.delivery : {};
+    return {
+      ...artifact,
+      id: newId,
+      type: IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE,
+      schemaVersion: IMAGE_EVIDENCE_VIEWER_SCHEMA_VERSION,
+      delivery: {
+        ...delivery,
+        ref: `artifact:${newId}`,
+        declaredMediaType: 'application/vnd.sciforge.image-evidence+json',
+        readableRef: `artifact:${newId}`,
+      },
+    };
+  });
+  return { artifacts: normalized, idMap };
 }
 
 function computerUseAskUserFromAction(payload: Record<string, unknown>) {
@@ -1899,24 +2035,12 @@ function confirmationChoicesForApprovalRef(approvalRef: string | undefined) {
   ] : undefined;
 }
 
-function recoverActionsForGuiPresentation(presentation: { source?: string; status?: string; displayedRefs?: string[] }) {
-  if (!isComputerUseGuiPresentation(presentation)) return [];
-  const status = visibleAnswerStatusForGuiPresent(presentation);
-  if (status !== 'external-blocked' && status !== 'repair-needed') return [];
-  const continuationRef = presentation.displayedRefs?.find((ref) => /(?:^|\/)continuation-request\.json$/i.test(ref));
-  if (continuationRef) return [`/computer-use continue --continuation-request-ref ${quoteCommandArg(continuationRef)}`];
-  const repairHintRef = presentation.displayedRefs?.find((ref) => /(?:^|\/)repair-hint\.json$/i.test(ref));
-  if (repairHintRef) return [`/computer-use repair --repair-hint-ref ${quoteCommandArg(repairHintRef)}`];
-  return ['Review the Computer Use evidence refs and rerun from the latest repair hint.'];
-}
-
 function visibleAnswerStatusForGuiPresent(presentation: { source?: string; status?: string }) {
   if (!isComputerUseGuiPresentation(presentation)) return 'satisfied';
   const status = presentation.status?.trim().toLowerCase().replace(/[\s_]+/g, '-');
   if (status === 'needs-confirmation' || status === 'needs-human') return 'needs-human';
   if (status === 'external-blocked' || status === 'blocked') return 'external-blocked';
   if (status === 'failed' || status === 'failed-with-reason' || status === 'error' || status === 'repair-needed') return 'repair-needed';
-  if (status === 'completed' || status === 'done' || status === 'succeeded' || status === 'success') return 'output-materialized';
   return 'partial-ready';
 }
 
@@ -1945,7 +2069,11 @@ function artifactSafeForStructuredDoneProjection(artifact: Record<string, unknow
   const id = asString(artifact.id);
   const type = asString(artifact.type);
   if (!id || !type) return false;
-  if (type !== COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE && type !== COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE) return false;
+  if (
+    type !== COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_ARTIFACT_TYPE
+    && type !== COMPUTER_USE_SCREEN_EVIDENCE_ARTIFACT_TYPE
+    && type !== COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE
+  ) return false;
   const text = JSON.stringify(artifact);
   return !/data:image|;base64,|rawScreenshot|screenshotBase64|providerUrl|providerRoute|Authorization|apiKey|password|secret|token/i.test(text);
 }

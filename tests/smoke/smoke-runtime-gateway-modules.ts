@@ -4,20 +4,20 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { buildContextEnvelope, expectedArtifactSchema, workspaceTreeSummary } from '../../src/runtime/gateway/context-envelope.js';
 import { normalizeGatewayRequest, selectedComponentIdsForRequest } from '../../src/runtime/gateway/gateway-request.js';
-import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
-import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gateway/agentserver-context-window.js';
-import { agentServerBackend } from '../../src/runtime/gateway/agent-backend-config.js';
+import { runGeneratedTaskBackend } from '../../src/runtime/gateway/generated-task-runner.js';
+import { backendAgentId, currentTurnReferences } from '../../src/runtime/gateway/backend-context-window.js';
+import { selectedAgentBackend } from '../../src/runtime/gateway/agent-backend-config.js';
 import { materializeBackendPayloadOutput, normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
-import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
-import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { classifyBackendFailure, sanitizeBackendError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
+import { coerceBackendToolPayload, coerceWorkspaceTaskPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
-import { parseGenerationResponse } from '../../src/runtime/gateway/agentserver-run-output.js';
+import { parseGenerationResponse } from '../../src/runtime/gateway/backend-run-output.js';
 import { attemptPlanRefs, runtimeProfileIdForRequest, selectedRuntimeForSkill } from '../../src/runtime/gateway/runtime-routing.js';
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
-import { normalizeAgentServerWorkspaceEvent, normalizeWorkspaceProcessEvents, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
+import { normalizeBackendWorkspaceEvent, normalizeWorkspaceProcessEvents, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
 import { applyConversationPolicy } from '../../src/runtime/conversation-policy/apply.js';
-import { buildAgentServerRepairPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { buildGeneratedTaskRepairPrompt } from '../../src/runtime/gateway/backend-prompt-policy.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 import { makeGeneratedTaskRunnerDeps, runtimeGatewaySkill } from './runtime-gateway-runner-fixtures.js';
@@ -66,18 +66,18 @@ try {
   assert.equal(request.agentServerBaseUrl, 'http://127.0.0.1:3000');
   assert.deepEqual(request.selectedVerifierIds, ['schema.verifier']);
   assert.equal(request.verificationPolicy, undefined);
-  const rateLimitDiagnostic = classifyAgentServerBackendFailure('429 retry-after: 2 api_key=sk-secret1234567890', {
+  const rateLimitDiagnostic = classifyBackendFailure('429 retry-after: 2 api_key=sk-secret1234567890', {
     httpStatus: 429,
     provider: 'openai-compatible',
   });
   assert.ok(rateLimitDiagnostic?.categories.includes('rate-limit'));
   assert.equal(rateLimitDiagnostic?.retryAfterMs, 2000);
-  assert.doesNotMatch(sanitizeAgentServerError('api_key=sk-secret1234567890'), /sk-secret/);
+  assert.doesNotMatch(sanitizeBackendError('api_key=sk-secret1234567890'), /sk-secret/);
   assert.equal(normalizeRuntimeVerificationResults({ verdict: 'unverified', reason: 'smoke' })[0]?.critique, 'smoke');
   assert.deepEqual(selectedComponentIdsForRequest(request), ['report-viewer', 'paper-card-list']);
   assert.deepEqual(expectedArtifactSchema(request), { types: ['research-report', 'paper-list'] });
 
-  const repairPrompt = buildAgentServerRepairPrompt({
+  const repairPrompt = buildGeneratedTaskRepairPrompt({
     request,
     skill: {
       id: 'literature-agentserver-generation',
@@ -133,7 +133,7 @@ try {
   assert.deepEqual(envelope.scenarioFacts.expectedArtifactTypes, ['research-report', 'paper-list']);
   const sessionFacts = envelope.sessionFacts as Record<string, unknown>;
   assert.equal(sessionFacts.conversationLedger, undefined);
-  assert.equal((sessionFacts.contextProjection as Record<string, unknown> | undefined)?.authority, 'workspaceKernel refs are canonical truth; AgentServer consumes contextRefs, capabilityBriefRef, and cachePlan');
+  assert.equal((sessionFacts.contextProjection as Record<string, unknown> | undefined)?.authority, 'workspaceKernel refs are canonical truth; backend consumes contextRefs, capabilityBriefRef, and cachePlan');
   assert.equal('handoffMemoryProjection' in sessionFacts, false);
   assert.equal((sessionFacts.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'continue');
 
@@ -193,7 +193,7 @@ try {
   assert.match(await readFile(join(workspace, '.sciforge/task-results/backend-materialized-smoke.json'), 'utf8'), /materializedOutputRef/);
   assert.match(await readFile(join(workspace, '.sciforge/task-results/backend-materialized-smoke-backend-report.md'), 'utf8'), /Stable markdown ref/);
 
-  const directPayload = coerceAgentServerToolPayload({
+  const directPayload = coerceBackendToolPayload({
     message: 'Direct answer',
     artifacts: [{ id: 'research-report', type: 'research-report' }],
   });
@@ -245,7 +245,7 @@ try {
   assert.equal(generation?.entrypoint.path, '.sciforge/tasks/task.py');
   assert.deepEqual(generation?.entrypoint.args, ['--flag']);
 
-  const normalizedEvent = withRequestContextWindowLimit(normalizeAgentServerWorkspaceEvent({
+  const normalizedEvent = withRequestContextWindowLimit(normalizeBackendWorkspaceEvent({
     type: 'context_compressor',
     backend: 'hermes-agent',
     usage: { input: 120, output: 30, cacheRead: 12, provider: 'hermes', model: 'smoke-model' },
@@ -278,13 +278,13 @@ try {
   assert.ok(processProgress.events.every((event) => event.type === 'process-progress'));
 
   const skill = runtimeGatewaySkill();
-  const agentServerRuntimeProfileId = `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
-  assert.equal(runtimeProfileIdForRequest(request, skill), agentServerRuntimeProfileId);
-  assert.equal(selectedRuntimeForSkill(skill), 'agentserver-generation');
+  const backendRuntimeProfileId = `backend-${selectedAgentBackend(request, request.llmEndpoint)}`;
+  assert.equal(runtimeProfileIdForRequest(request, skill), backendRuntimeProfileId);
+  assert.equal(selectedRuntimeForSkill(skill), 'backend-generation');
   const routingRefs = attemptPlanRefs(request, skill, 'smoke fallback');
   assert.deepEqual(routingRefs.routeDecision, {
     selectedSkill: 'agentserver.generation.literature',
-    selectedRuntime: 'agentserver-generation',
+    selectedRuntime: 'backend-generation',
     fallbackReason: 'smoke fallback',
     capabilityProviderRoutes: [],
     selectedAt: routingRefs.routeDecision.selectedAt,
@@ -300,8 +300,8 @@ try {
       entrypoint: { type: 'markdown-skill' },
     },
   };
-  assert.equal(runtimeProfileIdForRequest(request, markdownSkill), agentServerRuntimeProfileId);
-  assert.equal(selectedRuntimeForSkill(markdownSkill), 'agentserver-markdown-skill');
+  assert.equal(runtimeProfileIdForRequest(request, markdownSkill), backendRuntimeProfileId);
+  assert.equal(selectedRuntimeForSkill(markdownSkill), 'backend-generation');
 
   const brokerEnvelope = buildContextEnvelope({
     ...request,
@@ -338,7 +338,7 @@ try {
   });
   const brokerBrief = (brokerEnvelope.scenarioFacts as Record<string, unknown>).capabilityBrokerBrief as Record<string, unknown>;
   const brokerBriefText = JSON.stringify(brokerBrief);
-  assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
+  assert.equal(brokerBrief.schemaVersion, 'sciforge.backend.capability-broker-brief.v1');
   assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
   assert.match(brokerBriefText, /view\.report/);
   assert.match(brokerBriefText, /observe\.vision/);
@@ -360,13 +360,13 @@ try {
   };
   assert.equal(currentTurnReferences(currentReferenceRequest).length, 1);
   assert.notEqual(
-    agentServerAgentId(request, 'task-generation'),
-    agentServerAgentId(currentReferenceRequest, 'task-generation'),
+    backendAgentId(request, 'task-generation'),
+    backendAgentId(currentReferenceRequest, 'task-generation'),
     'current-turn references should get an isolated AgentServer session scope',
   );
   assert.notEqual(
-    agentServerAgentId(currentReferenceRequest, 'task-generation'),
-    agentServerAgentId({
+    backendAgentId(currentReferenceRequest, 'task-generation'),
+    backendAgentId({
       ...currentReferenceRequest,
       uiState: {
         ...currentReferenceRequest.uiState,
@@ -513,9 +513,9 @@ try {
   assert.equal(repair.artifacts[0]?.type, 'runtime-diagnostic');
   assert.equal(repair.uiManifest[0]?.artifactRef, 'literature-runtime-result');
 
-  const generatedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const generatedPayload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-smoke-run',
       response: {
@@ -548,7 +548,7 @@ try {
     }),
   }));
   assert.equal(generatedPayload?.message, 'Generated runner smoke passed.');
-  assert.match(generatedPayload?.reasoningTrace ?? '', /AgentServer generation run: runner-smoke-run/);
+  assert.match(generatedPayload?.reasoningTrace ?? '', /backend generation run: runner-smoke-run/);
   assert.equal(generatedPayload?.executionUnits[0]?.agentServerGenerated, true);
   const runnerOutputRef = String(generatedPayload?.executionUnits[0]?.outputRef || '');
   const runnerAttemptId = runnerOutputRef.match(/generated-literature-[^.]+/)?.[0];
@@ -574,9 +574,9 @@ try {
     prompt: '帮我调研最近一周 arXiv 上 agent 相关论文和研究趋势',
     expectedEvidenceKinds: ['retrieval'],
   };
-  const emptyRetrievalPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const emptyRetrievalPayload = await runGeneratedTaskBackend(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: arxivEmptyRequest,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-empty-arxiv-run',
       response: {
@@ -608,7 +608,7 @@ try {
         patchSummary: 'empty arxiv retrieval should require diagnosis',
       },
     }),
-    tryAgentServerRepairAndRerun: async (_params) => {
+    tryGeneratedTaskRepairAndRerun: async (_params) => {
       emptyRetrievalRepairCalled = true;
       emptyRetrievalTaskId = _params.taskId;
       assert.match(_params.failureReason, /External retrieval returned zero results/);
@@ -628,9 +628,9 @@ try {
   assert.match(emptyRetrievalAttempt[0]?.stderrRef ?? '', /^\.sciforge\/sessions\/.+\/logs\/generated-literature-/);
 
   let providerDiagnosticsRepairCalled = false;
-  const providerDiagnosticsPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const providerDiagnosticsPayload = await runGeneratedTaskBackend(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: arxivEmptyRequest,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-empty-provider-diagnostics-run',
       response: {
@@ -661,7 +661,7 @@ try {
         patchSummary: 'empty retrieval includes diagnostics',
       },
     }),
-    tryAgentServerRepairAndRerun: async () => {
+    tryGeneratedTaskRepairAndRerun: async () => {
       providerDiagnosticsRepairCalled = true;
       return undefined;
     },
@@ -669,10 +669,10 @@ try {
   assert.equal(providerDiagnosticsRepairCalled, false);
   assert.equal(providerDiagnosticsPayload?.executionUnits[0]?.status, 'done');
 
-  const directPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const directPlanOnlyPayload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request,
     useProductionPayloadValidation: true,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-direct-plan-only-run',
       directPayload: {
@@ -693,10 +693,10 @@ try {
   assert.ok((directPlanOnlyPayload?.executionUnits[0]?.recoverActions as string[] | undefined)?.some((action) => /promised retrieval\/analysis/.test(action)));
 
   let generatedPlanRepairCalled = false;
-  const generatedPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const generatedPlanOnlyPayload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request,
     useProductionPayloadValidation: true,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-generated-plan-only-run',
       response: {
@@ -727,7 +727,7 @@ try {
         patchSummary: 'plan-only generated payload must not complete',
       },
     }),
-    tryAgentServerRepairAndRerun: async (_params) => {
+    tryGeneratedTaskRepairAndRerun: async (_params) => {
       generatedPlanRepairCalled = true;
       assert.match(_params.failureReason, /only plan\/promise text/);
       return undefined;
@@ -740,9 +740,9 @@ try {
 
   let commandFailedRepairCalled = false;
   let commandFailedTaskId = '';
-  const commandFailedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const commandFailedPayload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-command-failed-run',
       response: {
@@ -773,7 +773,7 @@ try {
         patchSummary: 'command failure evidence should require repair',
       },
     }),
-    tryAgentServerRepairAndRerun: async (_params) => {
+    tryGeneratedTaskRepairAndRerun: async (_params) => {
       commandFailedRepairCalled = true;
       commandFailedTaskId = _params.taskId;
       assert.match(_params.failureReason, /non-zero exitCode/);
@@ -790,10 +790,10 @@ try {
 
   let partialCheckpointRepairCalled = false;
   let partialCheckpointTaskId = '';
-  const partialCheckpointPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const partialCheckpointPayload = await runGeneratedTaskBackend(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request,
     useProductionPayloadValidation: true,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-partial-checkpoint-run',
       response: {
@@ -825,7 +825,7 @@ try {
         patchSummary: 'partial external fetch checkpoint smoke task',
       },
     }),
-    tryAgentServerRepairAndRerun: async (_params) => {
+    tryGeneratedTaskRepairAndRerun: async (_params) => {
       partialCheckpointRepairCalled = true;
       partialCheckpointTaskId = _params.taskId;
       assert.match(_params.failureReason, /Workspace task exited 3/);
@@ -847,9 +847,9 @@ try {
   assert.match(await readFile(join(workspace, checkpointOutputRef), 'utf8'), /sciforge\.partial-checkpoint\.v1/);
   assert.equal(partialCheckpointTaskId, '', 'partial checkpoint terminal payload should not enter repair rerun');
 
-  const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const generatedReferencePayload = await runGeneratedTaskBackend(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: currentReferenceRequest,
-    requestAgentServerGeneration: async () => ({
+    requestBackendGeneration: async () => ({
       ok: true,
       runId: 'runner-current-ref-smoke-run',
       response: {
@@ -888,9 +888,9 @@ try {
   assert.match(generatedReferencePayload?.message ?? '', /current-input\.pdf; priorAttempts=0/);
 
   let staticTaskRetryCount = 0;
-  const staticTaskRetriedPayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+  const staticTaskRetriedPayload = await runGeneratedTaskBackend(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: currentReferenceRequest,
-    requestAgentServerGeneration: async () => {
+    requestBackendGeneration: async () => {
       staticTaskRetryCount += 1;
       if (staticTaskRetryCount === 1) {
         return {

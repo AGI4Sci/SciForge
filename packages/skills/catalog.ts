@@ -1,4 +1,4 @@
-import type { SkillPackageManifest } from './types.js';
+import type { SkillPackageManifest } from './types';
 
 export const skillPackageManifests = [
   {
@@ -25,7 +25,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -90,7 +90,7 @@ export const skillPackageManifests = [
         "level": "external-tool"
       },
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -150,7 +150,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -203,7 +203,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -260,7 +260,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -315,7 +315,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -371,7 +371,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -430,7 +430,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -491,7 +491,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -553,7 +553,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -614,7 +614,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -672,7 +672,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -728,7 +728,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -782,7 +782,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -840,7 +840,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -895,7 +895,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -948,7 +948,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1004,7 +1004,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1060,7 +1060,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1115,7 +1115,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1168,7 +1168,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1223,7 +1223,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1278,7 +1278,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1333,7 +1333,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1387,7 +1387,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1444,7 +1444,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1502,7 +1502,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1560,7 +1560,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1620,7 +1620,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1675,7 +1675,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1729,7 +1729,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1785,7 +1785,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1839,7 +1839,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1896,7 +1896,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -1954,7 +1954,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2007,7 +2007,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2060,7 +2060,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2116,7 +2116,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2171,7 +2171,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2223,7 +2223,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2281,7 +2281,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2336,7 +2336,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2390,7 +2390,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2444,7 +2444,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2498,7 +2498,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2552,7 +2552,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2610,7 +2610,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2668,7 +2668,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2726,7 +2726,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2778,7 +2778,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2834,7 +2834,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2889,7 +2889,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2942,7 +2942,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -2998,7 +2998,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3051,7 +3051,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3108,7 +3108,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3165,7 +3165,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3224,7 +3224,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3281,7 +3281,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3339,7 +3339,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3396,7 +3396,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3448,7 +3448,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3501,7 +3501,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3557,7 +3557,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3611,7 +3611,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3663,7 +3663,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3717,7 +3717,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3774,7 +3774,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3832,7 +3832,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3889,7 +3889,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -3947,7 +3947,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4003,7 +4003,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4059,7 +4059,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4116,7 +4116,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4170,7 +4170,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4224,7 +4224,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4277,7 +4277,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4333,7 +4333,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4390,7 +4390,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4448,7 +4448,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4506,7 +4506,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4561,7 +4561,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4615,7 +4615,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4668,7 +4668,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4724,7 +4724,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4781,7 +4781,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4836,7 +4836,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4892,7 +4892,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -4946,7 +4946,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5002,7 +5002,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5059,7 +5059,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5114,7 +5114,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5167,7 +5167,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5221,7 +5221,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5279,7 +5279,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5336,7 +5336,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5394,7 +5394,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5454,7 +5454,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5515,7 +5515,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5572,7 +5572,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5628,7 +5628,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5683,7 +5683,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5736,7 +5736,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5790,7 +5790,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5843,7 +5843,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5898,7 +5898,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -5956,7 +5956,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6012,7 +6012,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6066,7 +6066,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6123,7 +6123,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6182,7 +6182,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6238,7 +6238,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6291,7 +6291,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6346,7 +6346,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6398,7 +6398,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6452,7 +6452,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6507,7 +6507,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6559,7 +6559,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6609,7 +6609,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6666,7 +6666,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6723,7 +6723,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6776,7 +6776,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6829,7 +6829,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6883,7 +6883,7 @@ export const skillPackageManifests = [
     "entrypointType": "markdown-skill",
     "requiredCapabilities": [
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {
@@ -6947,7 +6947,7 @@ export const skillPackageManifests = [
         "level": "external-tool"
       },
       {
-        "capability": "agentserver-generation",
+        "capability": "backend-generation",
         "level": "self-healing"
       },
       {

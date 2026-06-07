@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { summarizeToolsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { summarizeToolsForBackend } from '../../src/runtime/gateway/backend-prompt-policy.js';
 import { buildCapabilityBrokerBriefForAgentServer } from '../../src/runtime/gateway/context-envelope.js';
 import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 
@@ -59,14 +59,14 @@ const request: GatewayRequest = {
 };
 
 const brokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
-const toolBriefs = summarizeToolsForAgentServer(request);
+const toolBriefs = summarizeToolsForBackend(request);
 const brokerText = JSON.stringify(brokerBrief);
 const inputSummary = brokerBrief.inputSummary as Record<string, unknown>;
 const legacyOnlyAudit = brokerBrief.harnessInputAudit as Record<string, unknown>;
 const briefs = brokerBrief.briefs as Array<Record<string, unknown>>;
 const audit = brokerBrief.audit as Array<Record<string, unknown>>;
 
-assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
+assert.equal(brokerBrief.schemaVersion, 'sciforge.backend.capability-broker-brief.v1');
 assert.equal(inputSummary.harnessSkillHints, 0);
 assert.equal(inputSummary.blockedCapabilities, 0);
 assert.equal(inputSummary.availableProviders, 0);

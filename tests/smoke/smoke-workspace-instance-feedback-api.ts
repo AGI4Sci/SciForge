@@ -76,6 +76,7 @@ try {
       missingEnv: string[];
       evidenceMode: string;
       checkedHealthz?: { category: string; ok: boolean; retryable: boolean; httpStatus?: number; releaseAcceptance: string };
+      checkedInference?: { category: string; ok: boolean; retryable: boolean; httpStatus?: number; releaseAcceptance: string };
       nextActions: Array<{ label: string; command?: string; writesRepo: boolean }>;
     };
   };
@@ -92,6 +93,13 @@ try {
   assert.deepEqual(providerPreflightJson.manifest.missingEnv, []);
   assert.equal(providerPreflightJson.manifest.evidenceMode, 'current-env-diagnostic-only');
   assert.deepEqual(providerPreflightJson.manifest.checkedHealthz, {
+    category: 'ready',
+    ok: true,
+    retryable: false,
+    httpStatus: 200,
+    releaseAcceptance: 'not-evaluated',
+  });
+  assert.deepEqual(providerPreflightJson.manifest.checkedInference, {
     category: 'ready',
     ok: true,
     retryable: false,

@@ -16,6 +16,12 @@ import {
   runComputerUseCodexTextPlanner,
   type ComputerUseTextPlannerOptions,
 } from './computer-use-text-planner.js';
+import {
+  createAppiumMac2WindowActionAdapter,
+  type AppiumMac2WindowActionClient,
+} from './appium-mac2-window-action-adapter.js';
+import { createAppiumMac2WebDriverClient } from './appium-mac2-webdriver-client.js';
+import { createTextEditSavedArtifactValidator } from './textedit-saved-artifact-validator.js';
 import type {
   CodexAgentHostComputerUseActMaterializer,
   CodexAgentHostComputerUseActMaterializerInput,
@@ -46,11 +52,12 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
   adapterHandlers?: WindowActionAdapterHandlers;
   actionPlanner?: WindowActionSessionComputerUseActionPlanner;
   textPlannerOptions?: Partial<ComputerUseTextPlannerOptions>;
+  appiumMac2Client?: AppiumMac2WindowActionClient;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
 } = {}): CodexAgentHostComputerUseActMaterializer {
   const store = options.windowActionSessionStore ?? createDefaultWindowActionSessionStore();
-  const adapterHandlers = options.adapterHandlers ?? {};
+  const adapterHandlers = windowActionAdapterHandlers(options.env, options.adapterHandlers, options.appiumMac2Client);
   const planner = options.actionPlanner ?? createRuntimeCodexTextPlannerActionPlanner({
     ...options.textPlannerOptions,
     env: options.env ?? options.textPlannerOptions?.env,
@@ -123,6 +130,7 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
       beforeRefs,
       observeBeforeMutate: observeBeforeMutateEvidence(input, entry.session),
       terminalWorkflowSelected: explicitTerminalWorkflowSelected(input),
+      appiumMac2Enabled: appiumMac2Enabled(options.env),
     });
     if (!dispatchInput) {
       return blockedResult(input, `WindowActionSession Computer Use Act materializer blocked: action "${action.type}" is not supported by the WindowActionSession adapter.`, [
@@ -365,6 +373,7 @@ function dispatchInputFromAction(
     beforeRefs: string[];
     observeBeforeMutate?: WindowActionObserveBeforeMutateEvidence;
     terminalWorkflowSelected?: boolean;
+    appiumMac2Enabled?: boolean;
   },
 ): WindowActionDispatchInput | undefined {
   const base = {
@@ -540,13 +549,17 @@ function rawEvidenceRefStrings(value: unknown): string[] {
 
 function defaultCapabilitiesForSession(
   session: WindowActionSession,
-  options: { terminalWorkflowSelected?: boolean } = {},
+  options: { terminalWorkflowSelected?: boolean; appiumMac2Enabled?: boolean } = {},
 ): WindowActionDispatchInput['target']['capabilities'] {
   if (session.app.kind === 'browser') {
     return { cdp: true, playwright: true, accessibility: true };
   }
   if (session.app.kind === 'editor') {
-    return { appNativeCommand: true, accessibility: true };
+    return {
+      appNativeCommand: true,
+      ...(options.appiumMac2Enabled && isTextEditSession(session) ? { appiumMac2: true } : {}),
+      accessibility: true,
+    };
   }
   if (session.app.kind === 'terminal') {
     return {
@@ -570,6 +583,78 @@ function explicitTerminalWorkflowSelected(input: CodexAgentHostComputerUseActMat
     ...allCandidateRefs(input),
   ].join('\n');
   return /\b(?:explicit\s+terminal\s+workflow|terminal\s+workflow|terminal\/pty|pty\s+workflow|use\s+(?:the\s+)?terminal|in\s+(?:the\s+)?terminal)\b/i.test(text);
+}
+
+function appiumMac2Enabled(env: NodeJS.ProcessEnv | undefined): boolean {
+  return /^(?:1|true|yes|on|enabled)$/i.test(env?.SCIFORGE_WINDOW_ACTION_APPIUM_MAC2?.trim() ?? '');
+}
+
+function windowActionAdapterHandlers(
+  env: NodeJS.ProcessEnv | undefined,
+  handlers: WindowActionAdapterHandlers | undefined,
+  appiumMac2Client: AppiumMac2WindowActionClient | undefined,
+): WindowActionAdapterHandlers {
+  if (!appiumMac2Enabled(env)) return handlers ?? {};
+  const client = appiumMac2Client ?? (appiumMac2ExecutorEnabled(env)
+    ? createAppiumMac2WebDriverClient({
+        validateSavedArtifact: createTextEditSavedArtifactValidator({
+          artifactPath: env?.SCIFORGE_TEXTEDIT_SAVE_ARTIFACT_PATH,
+        }),
+      })
+    : undefined);
+  return {
+    'appium-mac2': appiumMac2ExecutorEnabled(env) && client
+      ? createAppiumMac2WindowActionAdapter({
+          serverUrl: appiumMac2ServerUrl(env),
+          executorEnabled: true,
+          client,
+        })
+      : createAppiumMac2ReadinessHandler(env),
+    ...(handlers ?? {}),
+  };
+}
+
+function createAppiumMac2ReadinessHandler(env: NodeJS.ProcessEnv | undefined): NonNullable<WindowActionAdapterHandlers['appium-mac2']> {
+  return async (context) => {
+    const serverUrl = appiumMac2ServerUrl(env);
+    const appPart = appiumMac2AppRefPart(context.session);
+    if (!serverUrl) {
+      return {
+        status: 'blocked',
+        blockedReason: 'Appium Mac2 adapter blocked: server URL is not configured (SCIFORGE_APPIUM_MAC2_SERVER_URL).',
+        evidenceRefs: [
+          { kind: 'appium-mac2-readiness', ref: `appium-mac2:${appPart}/readiness/missing-server-url` },
+        ],
+      };
+    }
+    return {
+      status: 'blocked',
+      blockedReason: 'Appium Mac2 adapter blocked: no target-bound Mac2 executor is registered for this WindowActionSession.',
+      evidenceRefs: [
+        { kind: 'appium-mac2-readiness', ref: `appium-mac2:${appPart}/readiness/executor-unregistered` },
+      ],
+    };
+  };
+}
+
+function appiumMac2ServerUrl(env: NodeJS.ProcessEnv | undefined): string | undefined {
+  const value = env?.SCIFORGE_APPIUM_MAC2_SERVER_URL?.trim();
+  if (!value || value.length > 240) return undefined;
+  if (!/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{2,5})?(?:\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]*)?$/i.test(value)) return undefined;
+  return value;
+}
+
+function appiumMac2ExecutorEnabled(env: NodeJS.ProcessEnv | undefined): boolean {
+  return /^(?:1|true|yes|on|enabled)$/i.test(env?.SCIFORGE_APPIUM_MAC2_EXECUTOR?.trim() ?? '');
+}
+
+function appiumMac2AppRefPart(session: WindowActionSession): string {
+  if (isTextEditSession(session)) return 'textedit';
+  return safeToken(session.app.id ?? session.app.name ?? session.id)?.toLowerCase() ?? 'window';
+}
+
+function isTextEditSession(session: WindowActionSession): boolean {
+  return /(?:^|\.)TextEdit$/i.test(session.app.id ?? '') || /^TextEdit$/i.test(session.app.name ?? '');
 }
 
 function preflightNotReady(input: CodexAgentHostComputerUseActMaterializerInput): string | undefined {
@@ -743,7 +828,7 @@ function runtimeOwnedRef(ref: string): boolean {
   ) {
     return false;
   }
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|audit:|window:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function scrollDelta(direction: 'up' | 'down' | 'left' | 'right', amount: number): { x?: number; y?: number } {

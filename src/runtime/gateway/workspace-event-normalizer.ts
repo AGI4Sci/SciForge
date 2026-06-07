@@ -18,10 +18,19 @@ import { isRecord, toStringList } from '../gateway-utils.js';
 import { redactSecretText, retryAfterMsFromText } from './backend-failure-diagnostics.js';
 import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
 
+export function normalizeBackendWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
+  return normalizeBackendWorkspaceEventWithSource(raw, 'backend');
+}
+
+/** @deprecated Use normalizeBackendWorkspaceEvent. */
 export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
+  return normalizeBackendWorkspaceEventWithSource(raw, 'agentserver');
+}
+
+function normalizeBackendWorkspaceEventWithSource(raw: unknown, source: 'backend' | 'agentserver'): WorkspaceRuntimeEvent {
   const record = isRecord(raw) ? raw : {};
   const rawType = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : DEFAULT_WORKSPACE_EVENT_TYPE;
-  const type = normalizeAgentServerWorkspaceEventType(rawType, record);
+  const type = normalizeBackendWorkspaceEventType(rawType, record);
   const toolName = typeof record.toolName === 'string' ? record.toolName : undefined;
   const usage = normalizeWorkspaceTokenUsage(record.usage)
     ?? normalizeWorkspaceTokenUsage(isRecord(record.output) ? record.output.usage : undefined)
@@ -61,7 +70,7 @@ export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRunti
   const detail = [baseDetail, usageDetail].filter(Boolean).join(' | ') || undefined;
   return {
     type,
-    source: 'agentserver',
+    source,
     toolName,
     message: toolName ? `${type}: ${toolName}` : type,
     detail,
@@ -93,9 +102,12 @@ export function withRequestContextWindowLimit(event: WorkspaceRuntimeEvent, requ
   };
 }
 
-export function normalizeAgentServerWorkspaceEventType(type: string, record: Record<string, unknown>) {
+export function normalizeBackendWorkspaceEventType(type: string, record: Record<string, unknown>) {
   return normalizeRuntimeWorkspaceEventType(type, record);
 }
+
+/** @deprecated Use normalizeBackendWorkspaceEventType. */
+export const normalizeAgentServerWorkspaceEventType = normalizeBackendWorkspaceEventType;
 
 export function normalizeWorkspaceContextWindowState(
   value: unknown,

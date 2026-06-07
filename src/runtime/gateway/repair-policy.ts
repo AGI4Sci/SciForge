@@ -12,7 +12,7 @@ import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/va
 import { repairDiagnosticViewSlotPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { safeWorkspaceRel, uniqueStrings } from '../gateway-utils.js';
-import { diagnosticForFailure, type AgentServerBackendFailureDiagnostic } from './backend-failure-diagnostics.js';
+import { diagnosticForFailure, type BackendFailureDiagnostic } from './backend-failure-diagnostics.js';
 
 export const BACKEND_REPAIR_FAILURE_CONTRACT_ID = 'sciforge.backend-repair-failure.v1';
 export const REPAIR_BOUNDARY_POLICY_ID = 'sciforge.repair-boundary-source-edit-guard.v1';
@@ -23,7 +23,7 @@ export interface BackendRepairFailure {
   failureKind: 'backend-diagnostic' | 'repair-boundary';
   capabilityId: string;
   failureReason: string;
-  diagnostic: AgentServerBackendFailureDiagnostic;
+  diagnostic: BackendFailureDiagnostic;
   recoverActions: string[];
   nextStep: string;
   relatedRefs: string[];
@@ -144,7 +144,7 @@ export function repairNeededPayload(
     attempt: 1,
   };
   return {
-    message: `SciForge runtime gateway needs repair or AgentServer task generation: ${displayReason}`,
+    message: `SciForge runtime gateway needs repair or backend task generation: ${displayReason}`,
     confidence: 0.2,
     claimType: payloadClaimType,
     evidenceLevel: 'runtime',
@@ -260,7 +260,7 @@ export function repairBoundaryFailureFromViolation(
     violation.taskRel,
     ...violation.blockedPaths,
   ].filter((value): value is string => Boolean(value)));
-  const diagnostic: AgentServerBackendFailureDiagnostic = {
+  const diagnostic: BackendFailureDiagnostic = {
     kind: 'acceptance',
     categories: ['acceptance'],
     message: violation.reason,
@@ -292,7 +292,7 @@ function repairDiagnosticArtifact(input: {
   request: GatewayRequest;
   skill: SkillAvailability;
   repairFailure: StructuredRepairFailure;
-  diagnostic: AgentServerBackendFailureDiagnostic;
+  diagnostic: BackendFailureDiagnostic;
   displayReason: string;
   executionUnit: Record<string, unknown>;
   status: 'repair-needed' | 'failed-with-reason' | 'needs-human';
@@ -547,7 +547,7 @@ export function recoverActionsForRepair(problem: StructuredRepairFailure) {
   return ['Repair the structured payload contract and rerun validation.'];
 }
 
-function backendDiagnosticRecoverActions(diagnostic: AgentServerBackendFailureDiagnostic) {
+function backendDiagnosticRecoverActions(diagnostic: BackendFailureDiagnostic) {
   const userModelActions = runtimeAgentBackendConfigurationRecoverActions(diagnostic.message);
   if (userModelActions) return userModelActions;
   const categories = new Set(diagnostic.categories);
@@ -580,7 +580,7 @@ export function nextStepForRepair(problem: StructuredRepairFailure) {
   return 'Repair the structured payload contract and rerun validation.';
 }
 
-function backendDiagnosticNextStep(diagnostic: AgentServerBackendFailureDiagnostic) {
+function backendDiagnosticNextStep(diagnostic: BackendFailureDiagnostic) {
   return runtimeAgentBackendConfigurationNextStep(diagnostic.message)
     ?? diagnostic.nextStep
     ?? 'Review diagnostics, provide missing inputs, and rerun.';

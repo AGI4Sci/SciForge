@@ -11,7 +11,7 @@ import {
   type PublicCapabilityProviderPreflightResult,
 } from '../../../../src/runtime/gateway/capability-provider-preflight.js';
 import { buildWebE2eFixtureWorkspace } from '../fixture-workspace-builder.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerMockHandle,
@@ -52,7 +52,7 @@ export interface ProviderTransitionRound {
 
 export async function createProviderUnavailableAvailableHarness(): Promise<ProviderTransitionHarness> {
   const baseDir = await mkdtemp(join(tmpdir(), 'sciforge-sa-web-05-'));
-  const agentServer = await startScriptableAgentServerMock({
+  const agentServer = await startScriptableBackendMock({
     seed: PROVIDER_UNAVAILABLE_AVAILABLE_CASE_ID,
     discovery: { providers: unavailableWebProviders() },
     script: {

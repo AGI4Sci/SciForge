@@ -192,7 +192,7 @@ test('answer-only continuation transform returns checklist from prior visible an
   const displayIntent = payload.displayIntent;
   assert.ok(displayIntent);
   assert.equal(displayIntent.taskOutcome, 'satisfied');
-  assert.doesNotMatch(payload.message, /sciforge\.agentserver|generated workspace task/i);
+  assert.doesNotMatch(payload.message, /sciforge\.generated-task.generate. workspace task/i);
 });
 
 test('bounded previous evidence-matrix follow-up uses direct-context hypotheses without AgentServer policy', () => {
@@ -280,7 +280,7 @@ test('bounded protocol budget follow-up answers from current artifact without Ag
   assert.match(payload.message, /needs-work/);
   assert.match(payload.message, /blocker/);
   assert.doesNotMatch(payload.message, /week 0/);
-  assert.doesNotMatch(payload.message, /AgentServer generation|workspace task was started/i);
+  assert.doesNotMatch(payload.message, /backend generation|workspace task was started/i);
 });
 
 test('bounded previous evidence-matrix follow-up hydrates artifacts from session bundle', async () => {

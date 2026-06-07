@@ -1,17 +1,17 @@
 import { resolve } from 'node:path';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import {
-  completeAgentServerGenerationFailureLifecycle,
-  completeAgentServerDirectPayloadLifecycle,
+  completeBackendGenerationFailureLifecycle,
+  completeBackendDirectPayloadLifecycle,
   resolveGeneratedTaskGenerationRetryLifecycle,
-  type AgentServerGenerationResult,
+  type BackendGenerationResult,
 } from './generated-task-runner-generation-lifecycle.js';
 import { runGeneratedTaskExecutionLifecycle } from './generated-task-runner-execution-lifecycle.js';
 import { completeGeneratedTaskRunOutputLifecycle } from './generated-task-runner-output-lifecycle.js';
 
 export interface GeneratedTaskRunnerDeps {
-  readConfiguredAgentServerBaseUrl(workspace: string): Promise<string | undefined>;
-  requestAgentServerGeneration(params: {
+  readConfiguredBackendBaseUrl(workspace: string): Promise<string | undefined>;
+  requestBackendGeneration(params: {
     baseUrl: string;
     request: GatewayRequest;
     skill: SkillAvailability;
@@ -19,11 +19,11 @@ export interface GeneratedTaskRunnerDeps {
     workspace: string;
     callbacks?: WorkspaceRuntimeCallbacks;
     strictTaskFilesReason?: string;
-  }): Promise<AgentServerGenerationResult>;
-  agentServerGenerationFailureReason(error: string, diagnostics?: any): string;
+  }): Promise<BackendGenerationResult>;
+  backendGenerationFailureReason(error: string, diagnostics?: any): string;
   attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string): Record<string, unknown>;
   repairNeededPayload(request: GatewayRequest, skill: SkillAvailability, reason: string, refs?: Record<string, unknown>): ToolPayload;
-  agentServerFailurePayloadRefs(diagnostics?: any): Record<string, unknown>;
+  backendFailurePayloadRefs(diagnostics?: any): Record<string, unknown>;
   ensureDirectAnswerReportArtifact(payload: ToolPayload, request: GatewayRequest, source: string): ToolPayload;
   mergeReusableContextArtifactsForDirectPayload(payload: ToolPayload, request: GatewayRequest): Promise<ToolPayload>;
   validateAndNormalizePayload(
@@ -32,7 +32,7 @@ export interface GeneratedTaskRunnerDeps {
     skill: SkillAvailability,
     refs: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string; runtimeFingerprint: Record<string, unknown> },
   ): Promise<ToolPayload>;
-  tryAgentServerRepairAndRerun(params: {
+  tryGeneratedTaskRepairAndRerun(params: {
     request: GatewayRequest;
     skill: SkillAvailability;
     taskId: string;
@@ -56,7 +56,7 @@ export interface GeneratedTaskRunnerDeps {
   payloadHasFailureStatus(payload: ToolPayload): boolean;
 }
 
-export async function runAgentServerGeneratedTask(
+export async function runGeneratedTaskBackend(
   request: GatewayRequest,
   skill: SkillAvailability,
   skills: SkillAvailability[],
@@ -65,16 +65,16 @@ export async function runAgentServerGeneratedTask(
   options: { allowSupplement?: boolean } = {},
 ): Promise<ToolPayload | undefined> {
   const {
-    readConfiguredAgentServerBaseUrl,
+    readConfiguredBackendBaseUrl,
     repairNeededPayload,
-    requestAgentServerGeneration,
+    requestBackendGeneration,
   } = deps;
   const workspace = resolve(request.workspacePath || process.cwd());
-  const baseUrl = request.agentServerBaseUrl || await readConfiguredAgentServerBaseUrl(workspace);
+  const baseUrl = request.agentServerBaseUrl || await readConfiguredBackendBaseUrl(workspace);
   if (!baseUrl) {
     return repairNeededPayload(request, skill, 'No validated local skill matched this request and no AgentServer base URL is configured.');
   }
-  let generation = await requestAgentServerGeneration({
+  let generation = await requestBackendGeneration({
     baseUrl,
     request,
     skill,
@@ -83,7 +83,7 @@ export async function runAgentServerGeneratedTask(
     callbacks,
   });
   if (!generation.ok) {
-    return await completeAgentServerGenerationFailureLifecycle({
+    return await completeBackendGenerationFailureLifecycle({
       workspace,
       request,
       skill,
@@ -93,7 +93,7 @@ export async function runAgentServerGeneratedTask(
     });
   }
   if ('directPayload' in generation) {
-    return await completeAgentServerDirectPayloadLifecycle({
+    return await completeBackendDirectPayloadLifecycle({
       workspace,
       request,
       skill,
@@ -101,8 +101,8 @@ export async function runAgentServerGeneratedTask(
       deps,
       kind: 'initial',
       stableTaskKind: 'direct',
-      logLine: `AgentServer direct ToolPayload run: ${generation.runId || 'unknown'}\n`,
-      source: 'agentserver-direct-payload',
+      logLine: `backend direct ToolPayload run: ${generation.runId || 'unknown'}\n`,
+      source: 'backend-direct-payload',
       callbacks,
     });
   }
@@ -148,6 +148,6 @@ export async function runAgentServerGeneratedTask(
     stdoutRel,
     stderrRel,
     supplementArtifactTypes,
-    runGeneratedTask: runAgentServerGeneratedTask,
+    runGeneratedTask: runGeneratedTaskBackend,
   });
 }

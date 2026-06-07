@@ -54,6 +54,18 @@ npm run typecheck --silent
 npm run test
 ```
 
+Runtime Codex browser 默认验收（允许写出 blocked evidence 证明 fail-closed）：
+
+```bash
+npm run smoke:runtime-codex-browser-acceptance
+```
+
+Runtime Codex browser release 严格验收（release 前必须拒绝 blocked / partial / failed evidence）：
+
+```bash
+npm run smoke:runtime-codex-browser-acceptance:strict
+```
+
 文档 / patch 格式检查：
 
 ```bash
@@ -70,5 +82,7 @@ git diff --check
 ## 配置提醒
 
 - 不要把 secret、provider raw URL、API key 或 raw model slug 写入文档、trace 或长期主上下文。
+- Runtime Codex / browser release acceptance 需要在 service 环境设置 `SCIFORGE_RUNTIME_API_KEY`；配置文件里的 apiKey 只能作为本地 provider proxy 调试 fallback，不能算作验收凭据。
+- Provider proxy 需要 OpenAI-compatible upstream base URL，例如 `SCIFORGE_PROXY_UPSTREAM_BASE_URL` 或非 secret 的本地 upstream 配置；缺 upstream 时必须 blocked / fail closed。
 - 大对象必须 refs-first。
 - 运行期配置以实际代码和本地配置文件为准；本文不列完整配置矩阵。

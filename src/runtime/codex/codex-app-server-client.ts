@@ -18,7 +18,8 @@ import {
   evaluateAgentHostLocalToolAct,
   type AgentHostLocalToolActDecision,
 } from './agent-host-local-tool-act-orchestrator.js';
-import { createRuntimeModuleDispatcher, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
+import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
+import { createBrowserBoundedOperationModuleHandler } from '../modules/bounded-operation-module-handlers.js';
 import { callSubagentMcpTool } from './subagent-mcp-tools.js';
 import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import {
@@ -150,7 +151,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       cwd: config.workspace,
       env,
       spawnProcess: this.options.spawnProcess ?? spawn,
-      dispatcher: this.options.dispatcher ?? createRuntimeModuleDispatcher(),
+      dispatcher: this.options.dispatcher ?? createCodexAppServerRuntimeModuleDispatcher(config.workspace),
       agentHostRuntimeTruth: request.agentHostRuntimeTruth,
       transcriptRoot,
       clientInfo: this.options.clientInfo,
@@ -215,7 +216,6 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     commandId: string,
   ): Promise<CodexAppServerTurnStream | undefined> {
     if (!isHostOwnedComputerUseRuntimeIntent(request.runtimeIntent)) return undefined;
-    if (!isComputerUseNativeRouteCommand(request.commandText)) return undefined;
     const config = await assertCodexRuntimeConfig({
       workspacePath: request.workspacePath,
       allowOpenAiRuntime: request.allowOpenAiRuntime,
@@ -539,16 +539,22 @@ class CodexAppServerJsonRpcSession {
           parentAttemptId: this.options.parentAttemptId,
         });
       } else if (isModuleToolName(toolName)) {
-        const localToolDecision = await this.evaluateLocalToolAct(toolName, args);
+        const moduleToolName = canonicalModuleToolName(toolName);
+        if (!moduleToolName) {
+          success = false;
+          result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
+          return { contentItems: [{ type: 'inputText', text: JSON.stringify(result) }], success };
+        }
+        const localToolDecision = await this.evaluateLocalToolAct(moduleToolName, args);
         if (localToolDecision.status !== 'auto') {
           result = localToolActPolicyResult(localToolDecision);
-        } else if (toolName === 'module.describe') {
+        } else if (moduleToolName === 'module.describe') {
           result = await this.options.dispatcher.describe({ moduleId: stringAt(args, 'moduleId') ?? stringAt(args, 'module_id') });
-        } else if (toolName === 'module.query') {
+        } else if (moduleToolName === 'module.query') {
           result = await this.options.dispatcher.query(args as unknown as ModuleQueryRequest);
-        } else if (toolName === 'module.read') {
+        } else if (moduleToolName === 'module.read') {
           result = await this.options.dispatcher.read(args as unknown as ModuleReadRequest);
-        } else if (toolName === 'module.invoke') {
+        } else if (moduleToolName === 'module.invoke') {
           result = await this.options.dispatcher.invoke(args as unknown as ModuleInvokeRequest);
         } else {
           success = false;
@@ -734,6 +740,12 @@ function isHostOwnedComputerUseRuntimeIntent(value: unknown): boolean {
     && value.source === 'host-owned';
 }
 
+function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string): RuntimeModuleDispatcher {
+  return createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
+    browser: createBrowserBoundedOperationModuleHandler({ workspacePath }),
+  }));
+}
+
 function runtimeDeveloperInstructions(
   declaredIntents?: CodexAppServerStartTurnRequest['declaredIntents'],
   agentHostGrounding?: CodexAppServerStartTurnRequest['agentHostGrounding'],
@@ -743,8 +755,19 @@ function runtimeDeveloperInstructions(
   const multitaskDeclared = mode?.modeIntentId === 'multitask'
     || mode?.publicLabel?.toLowerCase() === 'multitask';
   const subagentToolAlias = providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
+  const moduleDescribeAlias = providerSafeDynamicToolAlias('module.describe');
+  const moduleInvokeAlias = providerSafeDynamicToolAlias('module.invoke');
   const lines = [
     'SciForge Agent Host delegation protocol:',
+    '- Use SciForge module tools for Host-owned capabilities; do not replace Browser, Computer Use, files, artifacts, or verifier modules with model-memory guesses.',
+    `- Dynamic module call names: prefer the provider-safe functions ${moduleDescribeAlias} and ${moduleInvokeAlias}. Canonical names module.describe and module.invoke are equivalent only when the runtime exposes namespaced dynamic tools.`,
+    '- Never print or simulate tool-call protocol as prose or markup: no XML/HTML tags, DSML snippets, fenced pseudo-calls, or JSON objects whose function/moduleId/intent fields describe a tool call.',
+    '- If a module is needed, make an actual dynamic tool/function call and wait for the tool result. If no dynamic call is possible, say the module call is unavailable; do not output the call payload as text.',
+    `- For current, latest, today, external-web, citation, source-verification, or time-sensitive facts, first use ${moduleDescribeAlias} for the relevant module when needed, then collect bounded evidence before synthesizing the answer.`,
+    `- Browser evidence path: call ${moduleInvokeAlias} with moduleId "browser", intent "executeBoundedOperation", input.operationKind "browser.search_read" for searches or "browser.open_read" for known URLs, input.ownerModuleId "browser", targetScope.query or targetScope.url, and explicit config allowedActions/maxSteps/maxTimeMs/maxModelCalls/requiredEvidence/stopConditions.`,
+    '- Browser bounded config must use nonzero maxSteps, maxTimeMs, and maxModelCalls budgets, allow only the requested low-risk actions such as search/open/read, and require source-page-ref plus page-text-ref evidence; if the module returns blocked, partial, or needs-confirmation, report the blocker and repair hint instead of fabricating current facts.',
+    `- Computer Use evidence path: call ${moduleInvokeAlias} with moduleId "computer_use" and executeBoundedOperation only for target-bound local GUI actions; respect required evidence, hard confirmation, and blocked readiness.`,
+    '- After a module returns refs or source pages, answer from that evidence and cite stable refs or source URLs present in the returned payload; runtime audit streams, provider payloads, local paths, and credentials stay out of the user-visible answer.',
     '- Treat GUI composer choices as public declared intents only; keep the user turn input as the source of task content.',
     `- When the user asks for delegation, or when Multitask mode is declared and the work can be split into independent subtasks, call the ${SUBAGENT_SPAWN_AGENT_TOOL_NAME} tool to create child agents.`,
     `- If the provider exposes the child-agent tool as ${subagentToolAlias}, call that function directly; do not search for it through resource-listing tools.`,
@@ -773,11 +796,53 @@ function providerSafeDynamicToolAlias(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
 }
 
+const MODULE_DYNAMIC_TOOL_NAMES = [
+  'module.describe',
+  'module.query',
+  'module.read',
+  'module.invoke',
+] as const;
+
+type ModuleDynamicToolName = typeof MODULE_DYNAMIC_TOOL_NAMES[number];
+
 function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
   const anyObjectSchema = {
     type: 'object',
     additionalProperties: true,
   };
+  const moduleToolSpecs = [
+    {
+      namespace: 'module',
+      name: 'describe',
+      description: 'Describe a SciForge boundary module and its stable semantic interface.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          moduleId: { type: 'string' },
+          module_id: { type: 'string' },
+        },
+        additionalProperties: true,
+      },
+    },
+    {
+      namespace: 'module',
+      name: 'query',
+      description: 'Query a SciForge boundary module using the Agent Host semantic pipeline.',
+      inputSchema: anyObjectSchema,
+    },
+    {
+      namespace: 'module',
+      name: 'read',
+      description: 'Read a stable SciForge module resource or artifact by safe ref.',
+      inputSchema: anyObjectSchema,
+    },
+    {
+      namespace: 'module',
+      name: 'invoke',
+      description: 'Invoke a SciForge module intent through the Agent Host semantic pipeline.',
+      inputSchema: anyObjectSchema,
+    },
+  ];
   const spawnAgentInputSchema = {
     type: 'object',
     properties: {
@@ -812,37 +877,15 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
     additionalProperties: true,
   };
   return [
-    {
-      namespace: 'module',
-      name: 'describe',
-      description: 'Describe a SciForge boundary module and its stable semantic interface.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          moduleId: { type: 'string' },
-          module_id: { type: 'string' },
-        },
-        additionalProperties: true,
-      },
-    },
-    {
-      namespace: 'module',
-      name: 'query',
-      description: 'Query a SciForge boundary module using the Agent Host semantic pipeline.',
-      inputSchema: anyObjectSchema,
-    },
-    {
-      namespace: 'module',
-      name: 'read',
-      description: 'Read a stable SciForge module resource or artifact by safe ref.',
-      inputSchema: anyObjectSchema,
-    },
-    {
-      namespace: 'module',
-      name: 'invoke',
-      description: 'Invoke a SciForge module intent through the Agent Host semantic pipeline.',
-      inputSchema: anyObjectSchema,
-    },
+    ...moduleToolSpecs,
+    ...moduleToolSpecs.map((tool) => {
+      const canonicalName = `${tool.namespace}.${tool.name}`;
+      return {
+        name: providerSafeDynamicToolAlias(canonicalName),
+        description: `Provider-safe alias for ${canonicalName}; ${tool.description}`,
+        inputSchema: tool.inputSchema,
+      };
+    }),
     {
       namespace: 'multi_agent_v1',
       name: 'spawn_agent',
@@ -938,10 +981,13 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function isModuleToolName(toolName: string): boolean {
-  return toolName === 'module.describe'
-    || toolName === 'module.query'
-    || toolName === 'module.read'
-    || toolName === 'module.invoke';
+  return Boolean(canonicalModuleToolName(toolName));
+}
+
+function canonicalModuleToolName(toolName: string): ModuleDynamicToolName | undefined {
+  const direct = MODULE_DYNAMIC_TOOL_NAMES.find((name) => name === toolName);
+  if (direct) return direct;
+  return MODULE_DYNAMIC_TOOL_NAMES.find((name) => providerSafeDynamicToolAlias(name) === toolName);
 }
 
 function localToolActPolicyResult(decision: AgentHostLocalToolActDecision): Record<string, unknown> {

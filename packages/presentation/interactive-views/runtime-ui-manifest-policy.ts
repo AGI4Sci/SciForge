@@ -498,7 +498,6 @@ function componentTargetType(componentId: string, artifacts: Array<Record<string
   if (componentId === 'statistical-annotation-layer') return 'statistical-result';
   if (componentId === 'browser-workbench') return 'browser-runtime-projection';
   if (componentId === 'image-evidence-viewer') return 'image-evidence';
-  if (componentId === 'virtual-screen-viewer') return 'computer-use-virtual-screen';
   if (componentId === 'computer-use-control-plane') return 'computer-use-control-plane';
   if (componentId === 'terminal-session-viewer') return 'terminal-session';
   if (componentId === 'workspace-file-viewer') return 'workspace-file-view';
@@ -524,7 +523,6 @@ function titleForComponent(componentId: string) {
     'paper-card-list': '文献卡片',
     'computer-use-control-plane': 'Computer Use 控制面',
     'image-evidence-viewer': '图片 / 证据',
-    'virtual-screen-viewer': 'Legacy virtual screen inspector',
     'molecule-viewer': '分子结构查看器',
     'structure-viewer': '结构查看器',
     'scientific-plot-viewer': '科学绘图',

@@ -19,7 +19,7 @@ const taskCode = [
   '    "confidence": 0.9,',
   '    "claimType": "evidence-synthesis",',
   '    "evidenceLevel": "runtime",',
-  '    "reasoningTrace": "Reran an existing workspace task instead of starting new AgentServer generation.",',
+  '    "reasoningTrace": "Reran an existing workspace task instead of starting new backend generation.",',
   '    "claims": [],',
   '    "uiManifest": [{"componentId": "paper-card-list", "artifactRef": "paper-list"}],',
   '    "executionUnits": [{"id": "existing-rerun", "status": "done", "tool": "workspace.existing-rerun"}],',

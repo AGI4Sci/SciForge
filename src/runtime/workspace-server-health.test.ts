@@ -31,6 +31,7 @@ test('workspace writer health helper preserves the public health response shape'
       browserHostNativeSurface: WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT,
       browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
+      browserHostOpenRead: '/api/sciforge/browser-host/open-read',
       runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
     },
   });
@@ -41,6 +42,7 @@ test('workspace writer health helper preserves the public health response shape'
   assert.ok(health.capabilities.includes('browser-host-session'));
   assert.ok(health.capabilities.includes('browser-host-native-surface'));
   assert.ok(health.capabilities.includes('browser-host-search'));
+  assert.ok(health.capabilities.includes('browser-host-open-read'));
   assert.ok(health.capabilities.includes('repair-handoff-runner'));
   assert.ok(health.capabilities.includes('stable-version-registry'));
 });

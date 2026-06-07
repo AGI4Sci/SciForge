@@ -345,6 +345,8 @@ export interface BrowserHostSearchSourcePage {
   textPreview?: string;
   textSummary?: string;
   textArtifactKind?: 'page-text' | 'structured-summary';
+  discoveryOnly?: boolean;
+  discoveredSourceUrls?: string[];
   textCharCount?: number;
   sourceTextCharCount?: number;
   textSha1?: string;

@@ -13,7 +13,7 @@ import {
   type WebE2eEvidenceBundleManifest,
 } from '../evidence-bundle.js';
 import { buildWebE2eFixtureWorkspace } from '../fixture-workspace-builder.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerRecordedRequest,
@@ -47,7 +47,7 @@ export async function runExplicitArtifactSelectionCase(options: {
   now?: string;
 } = {}): Promise<ExplicitArtifactSelectionResult> {
   const now = options.now ?? '2026-05-16T00:00:00.000Z';
-  const agentServer = await startScriptableAgentServerMock({
+  const agentServer = await startScriptableBackendMock({
     seed: explicitArtifactSelectionCaseId,
     fixedNow: now,
     script: {

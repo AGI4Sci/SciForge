@@ -37,8 +37,8 @@ const UNKNOWN_ARTIFACT_COMPONENT = 'unknown-artifact-inspector';
 const BACKEND_PROCESS_TEXT_PATTERN = /```json|ToolPayload|Let me (?:inspect|check|read|start|verify)|prior attempts?|existing workspace|workspace artifacts|I'll produce the ToolPayload|construct the ToolPayload/i;
 
 export const directAnswerResultPolicyIds = {
-  structuredAnswerSource: 'agentserver-structured-answer',
-  directTextTool: 'agentserver.direct-text',
+  structuredAnswerSource: 'backend-structured-answer',
+  directTextTool: 'backend.direct-text',
   existingContextSource: 'existing-context',
   workspaceArtifactJsonSource: 'workspace-task-artifact-json',
   workspaceArtifactJsonTool: 'workspace-task.artifact-json',
@@ -56,7 +56,7 @@ const ARTIFACT_COMPONENTS: Record<string, string> = {
 
 export function directAnswerPlainTextResultPolicy(text: string, request: DirectAnswerResultPolicyRequest) {
   const artifacts = directAnswerNeedsReportArtifact(request)
-    ? [directAnswerReportArtifact(text, request.skillDomain, 'agentserver-direct-text', 'plain-text')]
+    ? [directAnswerReportArtifact(text, request.skillDomain, 'backend-direct-text', 'plain-text')]
     : [];
   const runtimeResultRef = `${request.skillDomain}-runtime-result`;
   const reportRef = artifacts.some((artifact) => artifact.type === REPORT_ARTIFACT_TYPE) ? REPORT_ARTIFACT_TYPE : runtimeResultRef;
@@ -185,7 +185,7 @@ export function normalizeDirectAnswerUiManifest(value: unknown, artifacts: Array
   if (artifacts.some((artifact) => artifact.type === REPORT_ARTIFACT_TYPE)) {
     return [{ componentId: REPORT_VIEW_COMPONENT, artifactRef: REPORT_ARTIFACT_TYPE, priority: 1 }];
   }
-  return [{ componentId: EXECUTION_VIEW_COMPONENT, artifactRef: 'agentserver-runtime-result', priority: 1 }];
+  return [{ componentId: EXECUTION_VIEW_COMPONENT, artifactRef: 'backend-runtime-result', priority: 1 }];
 }
 
 export function normalizeDirectAnswerArtifacts(value: unknown, message?: string): Array<Record<string, unknown>> {

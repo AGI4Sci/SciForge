@@ -241,12 +241,12 @@ export type {
   UserFeedbackSignalSeverity,
 } from './user-feedback-convergence';
 export {
-  extractAgentServerCurrentUserRequest,
-  normalizeConfiguredAgentServerLlmEndpoint,
-} from './agentserver-prompt-policy';
+  extractBackendCurrentUserRequest,
+  normalizeConfiguredBackendLlmEndpoint,
+} from './backend-prompt-policy';
 export type {
-  ConfiguredAgentServerLlmEndpoint,
-} from './agentserver-prompt-policy';
+  ConfiguredBackendLlmEndpoint,
+} from './backend-prompt-policy';
 export {
   CAPABILITY_DISCOVERY_CONTRACT_ID,
   CAPABILITY_DISCOVERY_TINY_BRIEF_SCHEMA_VERSION,
@@ -553,6 +553,11 @@ export {
   BIBLIOGRAPHIC_COMPONENT_IDS,
   BIBLIOGRAPHIC_RECORD_CONTRACT_ID,
   BIBLIOGRAPHIC_VERIFICATION_POLICY_CONTRACT_ID,
+  backendArtifactSelectionPromptPolicyLines,
+  backendBibliographicVerificationPromptPolicyLines,
+  backendCurrentReferencePromptPolicyLines,
+  backendShouldIncludeBibliographicVerificationPromptPolicy,
+  backendToolPayloadProtocolContractLines,
   agentServerArtifactSelectionPromptPolicyLines,
   agentServerBibliographicVerificationPromptPolicyLines,
   agentServerCurrentReferencePromptPolicyLines,
@@ -1145,7 +1150,15 @@ export {
   AGENTSERVER_GENERATION_RETRY_EVENT_TYPE,
   AGENTSERVER_GENERATION_RETRY_SCHEMA_VERSION,
   AGENTSERVER_SILENT_STREAM_GUARD_EVENT_TYPE,
+  BACKEND_CONVERGENCE_GUARD_EVENT_TYPE,
+  BACKEND_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
+  BACKEND_CONTEXT_WINDOW_STATE_EVENT_TYPE,
+  BACKEND_DISPATCH_EVENT_TYPE,
   BACKEND_EVENT_TYPE,
+  BACKEND_EVENT_TYPE_PREFIX,
+  BACKEND_GENERATION_RETRY_EVENT_TYPE,
+  BACKEND_GENERATION_RETRY_SCHEMA_VERSION,
+  BACKEND_SILENT_STREAM_GUARD_EVENT_TYPE,
   BACKGROUND_COMPLETION_CONTRACT_ID,
   BACKGROUND_COMPLETION_TOOL_ID,
   CONTEXT_COMPACTION_EVENT_TYPE,
@@ -1208,6 +1221,14 @@ export {
   WORKSPACE_RUNTIME_EVENT_TYPE,
   WORKSPACE_RUNTIME_SOURCE,
   acceptanceRepairRerunToolId,
+  backendConvergenceGuardEvent,
+  backendContextWindowRecoveryStartEvent,
+  backendContextWindowRecoverySucceededEvent,
+  backendDispatchEvent,
+  backendGenerationRecoveryEventType,
+  backendGenerationRecoveryStartEvent,
+  backendGenerationRetrySucceededEvent,
+  backendSilentStreamGuardEvent,
   agentServerConvergenceGuardEvent,
   agentServerContextWindowRecoveryStartEvent,
   agentServerContextWindowRecoverySucceededEvent,
@@ -1315,6 +1336,7 @@ export type {
   AgentTokenUsage,
 } from './stream';
 export {
+  CONVERSATION_POLICY_BACKEND_GENERATION_ADAPTER,
   CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER,
   CONVERSATION_POLICY_REQUEST_VERSION,
   CONVERSATION_POLICY_RESPONSE_VERSION,

@@ -9,6 +9,7 @@ import {
   cleanUrlString,
   configuredString,
   createWorkspaceLocalConfigService,
+  isSciForgeRuntimeProviderProxyHealth,
   normalizeConfiguredPeerInstances,
   normalizePeerInstances,
   normalizeToolProviderRoutes,
@@ -187,7 +188,23 @@ test('normalizeToolProviderRoutes trims route fields, filters enums, de-duplicat
   assert.equal(normalizeToolProviderRoutes({ empty: { source: 'root' } }), undefined);
 });
 
-test('workspace Computer Use env from local config includes safe VirtualAppScreen native driver env', async () => {
+test('isSciForgeRuntimeProviderProxyHealth rejects stale legacy healthz payloads without service identity', () => {
+  assert.equal(isSciForgeRuntimeProviderProxyHealth({
+    ok: true,
+    upstreamBaseUrl: 'https://stale-provider.example/v1',
+  }), false);
+  assert.equal(isSciForgeRuntimeProviderProxyHealth({
+    ok: true,
+    service: 'sciforge.codex-responses-proxy',
+    upstreamBaseUrl: 'https://provider.example/v1',
+  }), true);
+  assert.equal(isSciForgeRuntimeProviderProxyHealth({
+    ok: true,
+    service: 'sciforge.model-router',
+  }), true);
+});
+
+test('workspace Computer Use env keeps VirtualAppScreen native driver env diagnostic-only', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-computer-use-env-'));
   const service = createWorkspaceLocalConfigService({
     configLocalPath: join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json'),
@@ -219,9 +236,38 @@ test('workspace Computer Use env from local config includes safe VirtualAppScree
   assert.equal(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, 'https://provider.example/v1');
   assert.equal(env.SCIFORGE_PROXY_DEFAULT_MODEL, 'root-model');
   assert.equal(env.SCIFORGE_CONFIG_PATH, join(root, 'config.local.json'));
-  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, '1');
-  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, 'powerpoint');
+  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, undefined);
+  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, undefined);
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
+
+  const diagnosticService = createWorkspaceLocalConfigService({
+    configLocalPath: join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json'),
+    runtimeCodexPort: 18080,
+    workspaceWriterPort: 5174,
+    defaultWorkspacePath: join(root, 'workspace'),
+    cwd: root,
+    env: {
+      HOME: join(root, 'home'),
+      SCIFORGE_VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC: '1',
+    } as NodeJS.ProcessEnv,
+  });
+  const diagnosticEnv = await diagnosticService.runtimeCodexEnvFromLocalConfig({
+    apiKey: 'root-key',
+    baseUrl: 'https://provider.example/v1',
+    model: 'root-model',
+    computerUse: {
+      virtualAppScreen: {
+        env: {
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: true,
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'powerpoint',
+          SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS: true,
+        },
+      },
+    },
+  });
+  assert.equal(diagnosticEnv.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, '1');
+  assert.equal(diagnosticEnv.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, 'powerpoint');
+  assert.equal(diagnosticEnv.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
 });
 
 test('workspace runtime env uses config.local root fields over stale service env', async () => {

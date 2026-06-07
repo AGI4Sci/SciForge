@@ -1,6 +1,7 @@
-import type { AgentStreamEvent, NormalizedAgentResponse, ObjectAction, ObjectReference, SendAgentMessageInput } from '../../domain';
+import type { AgentStreamEvent, NormalizedAgentResponse, ObjectAction, ObjectReference, RuntimeProviderPreflightManifest, SendAgentMessageInput } from '../../domain';
 import type { ScenarioId } from '../../data';
 import { makeId, nowIso } from '../../domain';
+import { defaultSciForgeConfig } from '../../config';
 import { extractLatencyPolicy, extractResponsePlan, latencyThresholdsFromPolicy, type RuntimeLatencyThresholds } from '../../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../../processProgress';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
@@ -58,6 +59,8 @@ const TRANSPORT_ARTIFACT_INLINE_DATA_BYTES = 12_000;
 const TRANSPORT_TEXT_PREVIEW_CHARS = 500;
 const TRANSPORT_REF_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
 const WORKSPACE_TOOL_STREAM_PATH = '/api/sciforge/tools/run/stream';
+const RUNTIME_PROVIDER_PREFLIGHT_MANIFEST_PATH = '/api/sciforge/runtime-provider-preflight/manifest';
+const RUNTIME_PROVIDER_PREFLIGHT_EVIDENCE_REF = 'runtime-provider-preflight:current-env';
 const CODEX_RUNTIME_SELECTED_MESSAGE_CONTEXT_LIMIT = 2;
 const CODEX_RUNTIME_SELECTED_MESSAGE_TEXT_LIMIT = 2_000;
 const MULTITASK_SUMMARY_GUIDANCE = 'Use Multitask for parallel research, long commands, or independent verification. Keep strongly coupled same-file edits or full-chat-history work with the main agent.';
@@ -291,6 +294,20 @@ export async function sendSciForgeToolMessage(
       requestBodyForFailure = requestBody;
       assertCodexRuntimeStreamRequestBoundary(requestBody);
       assertCodexRealtimeSessionRequestBoundary(requestBody);
+      const providerPreflightBlock = await runtimeProviderPreflightBlock(input, activeRequestController?.signal ?? signal);
+      if (providerPreflightBlock) {
+        const detail = runtimeProviderPreflightPublicFailureReason(providerPreflightBlock);
+        callbacks.onEvent?.(toolEvent('runtime-provider-preflight-blocked', detail, {
+          category: providerPreflightBlock.category,
+          owner: providerPreflightBlock.owner,
+          httpStatus: runtimeProviderPreflightHttpStatus(providerPreflightBlock),
+        }));
+        return runtimeCodexPreflightBlockedResponse({
+          input,
+          request: requestBody,
+          manifest: providerPreflightBlock,
+        });
+      }
       callbacks.onRuntimeRequest?.(requestBody);
       const requestBodyText = JSON.stringify(requestBody);
       callbacks.onEvent?.(contextWindowTelemetryEvent(
@@ -417,6 +434,117 @@ function assertNotAnnotationPlanOnlyRuntimeRequest(input: SendAgentMessageInput)
     && !hasAnnotationPlanOnlyEnvelopeMarker(input.conversationEnvelope)
   ) return;
   throw new Error('annotation-plan-only requests must be resolved by the plan-only conversation policy before Codex Runtime transport; runtime execution, repair, workspace writes, and GitHub sync are forbidden.');
+}
+
+async function runtimeProviderPreflightBlock(
+  input: SendAgentMessageInput,
+  signal: AbortSignal | undefined,
+): Promise<RuntimeProviderPreflightManifest | undefined> {
+  if (!runtimeProviderPreflightGateEnabled(input)) return undefined;
+  if (localHostBrowserEvidenceCanRunWithoutProvider(input)) return undefined;
+  const manifest = await loadRuntimeProviderPreflightManifestForGate(input, signal);
+  if (!manifest || manifest.category === 'ready') return undefined;
+  return manifest;
+}
+
+function localHostBrowserEvidenceCanRunWithoutProvider(input: SendAgentMessageInput): boolean {
+  const prompt = (input.prompt ?? '').replace(/\s+/g, ' ').trim();
+  if (!prompt) return false;
+  const asksForLookup = /(?:搜索|查找|查询|查一下|检索|浏览|打开|阅读|获取|总结|search|look\s*up|find|browse|open|read|summari[sz]e)/iu.test(prompt);
+  if (!asksForLookup) return false;
+  return /(?:https?:\/\/|www\.|site:|\barxiv\b|\bhugging\s*face\b|\bhuggingface\b|网页|网站|来源|论文|文章|新闻|今天|今日|最新|近期|\bweb\b|\bsite\b|\bsource\b|\bsources\b|\bpaper\b|\bpapers\b|\barticle\b|\barticles\b|\bnews\b|\btoday\b|\blatest\b|\brecent\b|\bcurrent\b)/iu.test(prompt);
+}
+
+function runtimeProviderPreflightGateEnabled(input: SendAgentMessageInput) {
+  if ((input.runtimeHealth ?? []).some((item) => item.id === 'model' && item.source === 'runtime-provider-preflight')) return true;
+  return typeof window !== 'undefined';
+}
+
+async function loadRuntimeProviderPreflightManifestForGate(
+  input: SendAgentMessageInput,
+  signal: AbortSignal | undefined,
+): Promise<RuntimeProviderPreflightManifest | undefined> {
+  let firstSyntheticFailure: RuntimeProviderPreflightManifest | undefined;
+  for (const baseUrl of await runtimeProviderPreflightCandidateBaseUrls(input)) {
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${RUNTIME_PROVIDER_PREFLIGHT_MANIFEST_PATH}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal,
+      });
+    } catch {
+      firstSyntheticFailure ??= runtimeProviderPreflightSyntheticManifest(0);
+      continue;
+    }
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!response.ok) {
+      firstSyntheticFailure ??= runtimeProviderPreflightSyntheticManifest(response.status);
+      continue;
+    }
+    if (!/\bjson\b/i.test(contentType)) continue;
+    const json = await response.json().catch(() => undefined) as unknown;
+    const manifest = isRecord(json) ? json.manifest : undefined;
+    if (isRuntimeProviderPreflightManifest(manifest)) return manifest;
+  }
+  return firstSyntheticFailure;
+}
+
+async function runtimeProviderPreflightCandidateBaseUrls(input: SendAgentMessageInput): Promise<string[]> {
+  const candidates = [
+    input.config.workspaceWriterBaseUrl,
+    ...(input.config.peerInstances ?? []).map((peer) => peer.workspaceWriterUrl),
+    await desktopRuntimeWorkspaceWriterBaseUrl(),
+    defaultSciForgeConfig.workspaceWriterBaseUrl,
+  ];
+  return uniqueRuntimeStringList(candidates.map((candidate) => candidate?.replace(/\/+$/, '') ?? ''))
+    .filter((candidate) => /^https?:\/\//i.test(candidate));
+}
+
+async function desktopRuntimeWorkspaceWriterBaseUrl(): Promise<string | undefined> {
+  if (typeof window === 'undefined' || !window.sciforgeDesktop?.getRuntimeConfig) return undefined;
+  try {
+    const raw = await window.sciforgeDesktop.getRuntimeConfig();
+    return isRecord(raw) ? asString(raw.workspaceWriterBaseUrl) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRuntimeProviderPreflightManifest(value: unknown): value is RuntimeProviderPreflightManifest {
+  if (!isRecord(value)) return false;
+  const category = asString(value.category);
+  return value.schemaVersion === 'sciforge.runtime-provider-preflight.current-env.v1'
+    && Boolean(category)
+    && Array.isArray(value.nextActions);
+}
+
+function runtimeProviderPreflightSyntheticManifest(httpStatus: number): RuntimeProviderPreflightManifest {
+  return {
+    schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+    checkedAt: nowIso(),
+    releaseAcceptance: 'not-evaluated',
+    runtimeApiKeyPresentInServiceEnv: false,
+    upstreamBaseUrlPresent: false,
+    upstreamKeySourceKind: 'missing',
+    upstreamBaseUrlSourceKind: 'missing',
+    category: 'repo-bug',
+    owner: 'repo',
+    policyViolations: [`runtime-provider-preflight endpoint returned HTTP ${httpStatus}`],
+    missingEnv: [],
+    evidenceMode: 'current-env-diagnostic-only',
+    checkedHealthz: {
+      category: 'repo-bug',
+      ok: false,
+      retryable: httpStatus >= 500,
+      httpStatus,
+      releaseAcceptance: 'not-evaluated',
+    },
+    nextActions: [{
+      label: 'Fix the runtime provider preflight endpoint before starting Codex Runtime.',
+      writesRepo: false,
+    }],
+  };
 }
 
 function buildCodexRuntimeStreamRequest(input: {
@@ -1571,8 +1699,36 @@ function runtimeCodexFailedResponse(input: {
 }): NormalizedAgentResponse {
   const failureEvent = [...input.runtimeEvents].reverse().find(isRuntimeCodexFailedEvent);
   const metadata = runtimeFailureMetadata(input.request, failureEvent, input.runtimeEvents);
-  const message = 'Runtime Codex 运行未完成；失败 run、审计 refs 和恢复状态已保留。';
+  return runtimeCodexFailureResponseFromMetadata({
+    input: input.input,
+    request: input.request,
+    runtimeEvents: input.runtimeEvents,
+    metadata,
+  });
+}
+
+function runtimeCodexPreflightBlockedResponse(input: {
+  input: SendAgentMessageInput;
+  request: ReturnType<typeof buildCodexRuntimeStreamRequest>;
+  manifest: RuntimeProviderPreflightManifest;
+}): NormalizedAgentResponse {
+  return runtimeCodexFailureResponseFromMetadata({
+    input: input.input,
+    request: input.request,
+    runtimeEvents: [],
+    metadata: runtimeProviderPreflightFailureMetadata(input.request, input.manifest),
+  });
+}
+
+function runtimeCodexFailureResponseFromMetadata(input: {
+  input: SendAgentMessageInput;
+  request: ReturnType<typeof buildCodexRuntimeStreamRequest>;
+  runtimeEvents: AgentStreamEvent[];
+  metadata: ReturnType<typeof runtimeFailureMetadata> | ReturnType<typeof runtimeProviderPreflightFailureMetadata>;
+}): NormalizedAgentResponse {
+  const metadata = input.metadata;
   const publicFailureReason = metadata.publicFailureReason ?? `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`;
+  const message = `${publicFailureReason}\n\nRuntime Codex 运行未完成；失败 run、审计 refs 和恢复状态已保留。`;
   const structuredFailure = {
     status: 'failed',
     message,
@@ -1685,6 +1841,13 @@ function runtimeCodexFailedResponse(input: {
       ...response.message,
       status: 'failed',
       content: message,
+      provenance: {
+        ...(response.message.provenance ?? {}),
+        kind: 'live-runtime-codex',
+        source: `codex.runtime-failure:${input.request.commandId}`,
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+      },
     },
   };
 }
@@ -1776,6 +1939,112 @@ function runtimeFailureMetadata(
       ],
     },
   };
+}
+
+function runtimeProviderPreflightFailureMetadata(
+  request: ReturnType<typeof buildCodexRuntimeStreamRequest>,
+  manifest: RuntimeProviderPreflightManifest,
+) {
+  const auditMetadata: Record<string, unknown> = isRecord(request.auditMetadata) ? request.auditMetadata : {};
+  const runtime: Record<string, unknown> = isRecord(auditMetadata.runtime) ? auditMetadata.runtime : {};
+  const httpStatus = runtimeProviderPreflightHttpStatus(manifest);
+  const retryable = runtimeProviderPreflightRetryable(manifest);
+  const publicFailureReason = runtimeProviderPreflightPublicFailureReason(manifest);
+  const evidenceRefs = [RUNTIME_PROVIDER_PREFLIGHT_EVIDENCE_REF];
+  const workspace = publicRuntimeWorkspaceRef(request.workspacePath);
+  const profile = publicRuntimeProfile(request.profile);
+  const provider = publicRuntimeProvider(asString(runtime.provider));
+  const model = publicRuntimeModel(asString(runtime.model));
+  const recoverAction = runtimeProviderPreflightRecoverAction(manifest);
+  return {
+    schemaVersion: 'sciforge.runtime-codex-failed-run.v1',
+    failureKind: 'runtime-provider-preflight-blocked',
+    ownerLayer: runtimeProviderPreflightOwnerLayer(manifest),
+    retryable,
+    nativeResumeSupported: false,
+    commandId: request.commandId,
+    attemptId: request.attemptId,
+    workspace,
+    profile,
+    provider,
+    model,
+    codexSessionId: undefined,
+    exitCode: undefined,
+    stderrSummary: publicFailureReason,
+    publicFailureReason,
+    runtimeProviderPreflightCategory: manifest.category,
+    preflightHttpStatus: httpStatus,
+    evidenceRefs,
+    recoverState: {
+      status: 'repair-needed',
+      failureKind: 'runtime-provider-preflight-blocked',
+      ownerLayer: runtimeProviderPreflightOwnerLayer(manifest),
+      retryable,
+      nativeResumeSupported: false,
+      resumeStrategy: 'preflight-retry',
+      commandId: request.commandId,
+      attemptId: request.attemptId,
+      workspace,
+      profile,
+      provider,
+      model,
+      stderrSummary: publicFailureReason,
+      publicFailureReason,
+      runtimeProviderPreflightCategory: manifest.category,
+      preflightHttpStatus: httpStatus,
+      evidenceRefs,
+      recoverActions: [
+        recoverAction,
+        'Retry the same user request after the runtime provider preflight reports ready.',
+      ],
+    },
+  };
+}
+
+function runtimeProviderPreflightPublicFailureReason(manifest: RuntimeProviderPreflightManifest) {
+  const httpStatus = runtimeProviderPreflightHttpStatus(manifest);
+  const statusText = httpStatus ? ` (HTTP ${httpStatus})` : '';
+  const recoverAction = runtimeProviderPreflightRecoverAction(manifest);
+  return `Runtime provider preflight blocked before starting Codex Runtime: ${manifest.category}${statusText}. ${recoverAction}`;
+}
+
+function runtimeProviderPreflightRecoverAction(manifest: RuntimeProviderPreflightManifest) {
+  const label = manifest.nextActions
+    .map((action) => scrubRuntimeCodexFailureText(asString(action.label)))
+    .find((action): action is string => Boolean(action));
+  return label ?? 'Fix the runtime provider or local runtime configuration, then rerun the preflight.';
+}
+
+function runtimeProviderPreflightHttpStatus(manifest: RuntimeProviderPreflightManifest): number | undefined {
+  const inference = runtimeProviderPreflightDiagnosticRecord(manifest, 'checkedInference');
+  const healthz = runtimeProviderPreflightDiagnosticRecord(manifest, 'checkedHealthz');
+  return asFiniteNumber(inference?.httpStatus) ?? asFiniteNumber(healthz?.httpStatus);
+}
+
+function runtimeProviderPreflightRetryable(manifest: RuntimeProviderPreflightManifest) {
+  const inference = runtimeProviderPreflightDiagnosticRecord(manifest, 'checkedInference');
+  const healthz = runtimeProviderPreflightDiagnosticRecord(manifest, 'checkedHealthz');
+  const retryable = typeof inference?.retryable === 'boolean'
+    ? inference.retryable
+    : typeof healthz?.retryable === 'boolean'
+      ? healthz.retryable
+      : undefined;
+  if (retryable !== undefined) return retryable;
+  return manifest.category === 'rate-limited' || manifest.category === 'upstream-outage' || manifest.category === 'unknown';
+}
+
+function runtimeProviderPreflightDiagnosticRecord(
+  manifest: RuntimeProviderPreflightManifest,
+  key: 'checkedInference' | 'checkedHealthz',
+) {
+  const record = (manifest as unknown as Record<string, unknown>)[key];
+  return isRecord(record) ? record : undefined;
+}
+
+function runtimeProviderPreflightOwnerLayer(manifest: RuntimeProviderPreflightManifest) {
+  if (manifest.owner === 'provider') return 'provider-preflight';
+  if (manifest.owner === 'environment') return 'runtime-config';
+  return 'repo-runtime-preflight';
 }
 
 function scrubRuntimeCodexFailureText(

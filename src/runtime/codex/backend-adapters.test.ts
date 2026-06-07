@@ -82,6 +82,56 @@ test('CodexAppServerAdapter maps app-server lifecycle, tool, approval, and done 
   assert.doesNotMatch(JSON.stringify(events), /secret-123456|example\.test/);
 });
 
+test('CodexAppServerAdapter promotes completed app-server assistant message items', async () => {
+  const client: CodexAppServerClient = {
+    async startTurn() {
+      return {
+        threadId: 'thread-app-message',
+        turnId: 'turn-app-message',
+        events: asyncGenerator([
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-app-message',
+              turnId: 'turn-app-message',
+              item: {
+                id: 'message-app-answer',
+                type: 'agentMessage',
+                text: 'FINAL APP SERVER ANSWER',
+                status: 'completed',
+              },
+            },
+          },
+          {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-app-message',
+              turn: { id: 'turn-app-message', status: 'completed' },
+            },
+          },
+        ]),
+      };
+    },
+  };
+  const adapter = new CodexAppServerAdapter({ client });
+
+  const turn = await adapter.startTurn({
+    commandText: 'Answer a generic user request',
+    workspacePath: '/tmp/sciforge-workspace',
+    commandId: 'app-command-message',
+    attemptId: 'attempt-1',
+  });
+  const events = await collect(turn.events);
+
+  assert.deepEqual(events.map((event) => event.type), [
+    'run_started',
+    'message',
+    'done',
+  ]);
+  assert.equal(events[1]?.text, 'FINAL APP SERVER ANSWER');
+  assert.equal(events[1]?.codexSessionId, 'thread-app-message');
+});
+
 test('CodexAppServerAdapter preserves native shell command lifecycle details', async () => {
   const client: CodexAppServerClient = {
     async startTurn() {

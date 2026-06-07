@@ -91,7 +91,7 @@ async function writeFixtureFiles() {
     executionUnits: [{
       id: 'r-run-01-timeout-eu',
       status: 'failed-with-reason',
-      failureReason: 'AgentServer generation request timed out after 30000ms.',
+      failureReason: 'backend generation request timed out after 30000ms.',
       stdoutRef: refs.failedStdout,
       stderrRef: refs.failedStderr,
       outputRef: refs.failedOutput,
@@ -104,7 +104,7 @@ async function writeFixtureFiles() {
     }],
   }, null, 2));
   await writeFileSafe(join(workspace, refs.failedStdout), 'partial progress before timeout\n');
-  await writeFileSafe(join(workspace, refs.failedStderr), 'AgentServer generation request timed out after 30000ms.\n');
+  await writeFileSafe(join(workspace, refs.failedStderr), 'backend generation request timed out after 30000ms.\n');
   await writeFileSafe(join(workspace, refs.codeDriftStdout), 'backend returned malformed payload\n');
   await writeFileSafe(join(workspace, refs.codeDriftStderr), '');
   await writeFileSafe(join(workspace, refs.repairOutput), JSON.stringify({ message: 'repair no-op fixture' }, null, 2));
@@ -118,11 +118,11 @@ function failedRunAttempt(): TaskAttemptRecord {
     id: 'r-run-01-timeout',
     prompt: 'Diagnose the failed run without rerunning expensive work.',
     skillDomain: 'knowledge',
-    skillId: 'agentserver.generated-task',
+    skillId: 'generated-task.generate.-task',
     scenarioPackageRef: { id: 'runtime-failure-boundary', version: '1.0.0', source: 'workspace' },
     attempt: 1,
     status: 'failed-with-reason',
-    failureReason: 'AgentServer generation request timed out after 30000ms.',
+    failureReason: 'backend generation request timed out after 30000ms.',
     failureCode: 'timeout',
     outputRef: refs.failedOutput,
     stdoutRef: refs.failedStdout,
@@ -138,7 +138,7 @@ function malformedPayloadAttempt(): TaskAttemptRecord {
     id: 'r-code-02-malformed',
     prompt: 'Handle backend schema drift and malformed payload without entering an unbounded repair loop.',
     skillDomain: 'knowledge',
-    skillId: 'agentserver.generated-task',
+    skillId: 'generated-task.generate.-task',
     scenarioPackageRef: { id: 'runtime-failure-boundary', version: '1.0.0', source: 'workspace' },
     attempt: 1,
     status: 'repair-needed',
@@ -221,7 +221,7 @@ function gatewayRequest(): GatewayRequest {
 
 function skill(): SkillAvailability {
   return {
-    id: 'agentserver.generated-task',
+    id: 'generated-task.generate.-task',
     kind: 'agentserver',
     available: true,
     checkedAt: '2026-05-12T00:00:00.000Z',

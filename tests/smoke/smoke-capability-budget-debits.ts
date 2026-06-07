@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -20,7 +19,6 @@ import {
 import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-trace-output.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import { runWorkspaceOpenAction } from '../../src/runtime/server/workspace-open.js';
-import { readRecentTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import { agentVerifierRequestFixture } from '../../packages/verifiers/agent-rubric/fixture.js';
 import { createMockAgentVerifierProvider } from '../../packages/verifiers/agent-rubric/index.js';
 import { createHumanApprovalFixtureProvider } from '../../packages/verifiers/fixtures/human-approval.js';
@@ -318,218 +316,35 @@ assert.ok(workspaceOpenDebit.debitLines.some((line) => line.dimension === 'costU
 assert.equal(workspaceOpenRepeat.budgetDebits?.[0]?.debitId, workspaceOpenDebit.debitId);
 assert.equal(workspaceOpenRepeat.executionUnit?.id, workspaceOpenResult.executionUnit?.id);
 
-const agentServerWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-budget-agentserver-'));
-const generatedTaskCode = String.raw`
-import json
-import sys
-
-input_path = sys.argv[1]
-output_path = sys.argv[2]
-with open(input_path, encoding="utf-8") as input_handle:
-    request = json.load(input_handle)
-
-with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump({
-        "message": "Generated budget debit task completed.",
-        "confidence": 0.9,
-        "claimType": "fact",
-        "evidenceLevel": "runtime",
-        "reasoningTrace": "generated budget debit dynamic glue for " + request.get("prompt", ""),
-        "claims": [{"text": "Generated dynamic glue produced a report.", "confidence": 0.9}],
-        "uiManifest": [{"componentId": "report-viewer", "artifactRef": "generated-budget-report"}],
-        "executionUnits": [{"id": "generated-budget-unit", "status": "done", "tool": "agentserver.generated.python"}],
-        "artifacts": [{"id": "generated-budget-report", "type": "research-report", "data": {"markdown": "Generated report."}}]
-    }, handle)
-`;
-let agentServerRequestCount = 0;
-const agentServer = createServer(async (req, res) => {
-  if (req.method === 'GET' && String(req.url).includes('/api/agent-server/agents/') && String(req.url).endsWith('/context')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, data: { session: { id: 'budget-debit-context' }, recentTurns: [], currentWorkEntries: [] } }));
-    return;
-  }
-  if (!['/api/agent-server/runs', '/api/agent-server/runs/stream'].includes(String(req.url)) || req.method !== 'POST') {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: false, error: 'not found' }));
-    return;
-  }
-  const body = await readJson(req);
-  const promptText = isRecord(body.input) && typeof body.input.text === 'string' ? body.input.text : '';
-  const rawBodyText = JSON.stringify(body);
-  agentServerRequestCount += 1;
-  if (agentServerRequestCount >= 3 || promptText.includes('failed budget debit') || rawBodyText.includes('failed budget debit')) {
-    res.writeHead(503, { 'Content-Type': req.url === '/api/agent-server/runs/stream' ? 'application/x-ndjson' : 'application/json' });
-    const error = { error: 'mock AgentServer provider dispatch failed with HTTP 503' };
-    res.end(req.url === '/api/agent-server/runs/stream' ? `${JSON.stringify(error)}\n` : JSON.stringify(error));
-    return;
-  }
-  const result = promptText.includes('direct budget debit')
-    ? {
-        ok: true,
-        data: {
-          run: {
-            id: 'mock-agentserver-direct-budget-debit-run',
-            status: 'completed',
-            output: {
-              result: {
-                message: 'Direct budget debit payload completed.',
-                confidence: 0.91,
-                claimType: 'fact',
-                evidenceLevel: 'agentserver-direct',
-                reasoningTrace: 'direct budget debit payload',
-                claims: [{ text: 'Direct AgentServer payload was accepted.', confidence: 0.91 }],
-                uiManifest: [{ componentId: 'report-viewer', artifactRef: 'direct-budget-report' }],
-                executionUnits: [{ id: 'direct-budget-unit', status: 'done', tool: 'agentserver.direct' }],
-                artifacts: [{ id: 'direct-budget-report', type: 'research-report', data: { markdown: 'Direct report.' } }],
-              },
-            },
-          },
-        },
-      }
-    : {
-        ok: true,
-        data: {
-          run: {
-            id: 'mock-agentserver-generated-budget-debit-run',
-            status: 'completed',
-            output: {
-              result: {
-                taskFiles: [{
-                  path: '.sciforge/tasks/generated-budget-debit.py',
-                  language: 'python',
-                  content: generatedTaskCode,
-                }],
-                entrypoint: { language: 'python', path: '.sciforge/tasks/generated-budget-debit.py' },
-                environmentRequirements: {},
-                validationCommand: 'python .sciforge/tasks/generated-budget-debit.py <input> <output>',
-                expectedArtifacts: ['research-report'],
-                patchSummary: 'Generated budget debit smoke task.',
-              },
-            },
-          },
-        },
-      };
-  res.writeHead(200, { 'Content-Type': req.url === '/api/agent-server/runs/stream' ? 'application/x-ndjson' : 'application/json' });
-  res.end(req.url === '/api/agent-server/runs/stream' ? `${JSON.stringify({ result })}\n` : JSON.stringify(result));
+const retiredAgentServerWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-budget-retired-agentserver-'));
+const retiredAgentServerPayload = await runWorkspaceRuntimeGateway({
+  skillDomain: 'literature',
+  prompt: 'generated budget debit dynamic glue task',
+  workspacePath: retiredAgentServerWorkspace,
+  agentServerBaseUrl: 'http://127.0.0.1:1',
+  expectedArtifactTypes: ['research-report'],
+  availableSkills: ['missing.skill'],
+  uiState: {
+    sessionId: 'budget-debit-session',
+    forceAgentServerGeneration: true,
+    freshTaskGeneration: true,
+  },
+  artifacts: [],
 });
+assert.equal(retiredAgentServerPayload.claimType, 'runtime-diagnostic');
+assert.match(retiredAgentServerPayload.message, /没有回落到旧 backend generation|legacy backend generation fallback is retired/i);
+const retiredFallbackDebit = retiredAgentServerPayload.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.runtime-verification-gate');
+assert.ok(retiredFallbackDebit, 'retired AgentServer fallback should still emit a runtime verification budget debit');
+assert.equal(retiredFallbackDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.ok(hasBudgetDebitRef(retiredAgentServerPayload.executionUnits[0], retiredFallbackDebit.debitId));
+assert.equal(retiredFallbackDebit.sinkRefs.executionUnitRef, retiredAgentServerPayload.executionUnits[0]?.id);
+assert.ok(retiredFallbackDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('audit:runtime-verification-gate:')));
 
-await new Promise<void>((resolve) => agentServer.listen(0, '127.0.0.1', resolve));
-const agentServerAddress = agentServer.address();
-assert.ok(agentServerAddress && typeof agentServerAddress === 'object');
-const agentServerBaseUrl = `http://127.0.0.1:${agentServerAddress.port}`;
-
-try {
-  const generatedPayload = await runWorkspaceRuntimeGateway({
-    skillDomain: 'literature',
-    prompt: 'generated budget debit dynamic glue task',
-    workspacePath: agentServerWorkspace,
-    agentServerBaseUrl,
-    expectedArtifactTypes: ['research-report'],
-    availableSkills: ['missing.skill'],
-    uiState: {
-      sessionId: 'budget-debit-session',
-      forceAgentServerGeneration: true,
-      freshTaskGeneration: true,
-    },
-    artifacts: [],
-  });
-  const generatedDebit = generatedPayload.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
-  assert.ok(generatedDebit, 'successful generated task should emit a generated-task runner budget debit');
-  assert.equal(generatedDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
-  assert.ok(hasBudgetDebitRef(generatedPayload.executionUnits[0], generatedDebit.debitId));
-  assert.ok(generatedPayload.workEvidence?.[0]?.budgetDebitRefs?.includes(generatedDebit.debitId));
-  assert.equal(generatedDebit.sinkRefs.executionUnitRef, 'generated-budget-unit');
-  assert.deepEqual(generatedDebit.sinkRefs.workEvidenceRefs, [generatedPayload.workEvidence?.[0]?.id]);
-  assert.ok(generatedDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('.sciforge/capability-evolution-ledger/records.jsonl#L')));
-  assert.equal(generatedPayload.budgetDebits?.filter((debit) => debit.debitId === generatedDebit.debitId).length, 1);
-
-  const directPayload = await runWorkspaceRuntimeGateway({
-    skillDomain: 'literature',
-    prompt: 'direct budget debit payload',
-    workspacePath: agentServerWorkspace,
-    agentServerBaseUrl,
-    expectedArtifactTypes: ['research-report'],
-    availableSkills: ['missing.skill'],
-    uiState: {
-      sessionId: 'budget-debit-session',
-      forceAgentServerGeneration: true,
-      freshTaskGeneration: true,
-    },
-    artifacts: [],
-  });
-  const directDebit = directPayload.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.agentserver.direct-payload');
-  assert.ok(directDebit, 'successful AgentServer direct payload should emit a direct-payload budget debit');
-  assert.equal(directDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
-  assert.ok(hasBudgetDebitRef(directPayload.executionUnits[0], directDebit.debitId));
-  assert.ok(directPayload.workEvidence?.[0]?.budgetDebitRefs?.includes(directDebit.debitId));
-  assert.equal(directDebit.sinkRefs.executionUnitRef, 'direct-budget-unit');
-  assert.ok(directDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('.sciforge/capability-evolution-ledger/records.jsonl#L')));
-  assert.equal(directPayload.budgetDebits?.filter((debit) => debit.debitId === directDebit.debitId).length, 1);
-
-  const failurePayload = await runWorkspaceRuntimeGateway({
-    skillDomain: 'literature',
-    prompt: 'failed budget debit provider dispatch',
-    workspacePath: agentServerWorkspace,
-    agentServerBaseUrl,
-    expectedArtifactTypes: ['research-report'],
-    availableSkills: ['missing.skill'],
-    uiState: {
-      sessionId: 'budget-debit-session',
-      forceAgentServerGeneration: true,
-      freshTaskGeneration: true,
-    },
-    artifacts: [],
-  });
-  const failureDebit = failurePayload.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.agentserver.generation-failure');
-  assert.ok(failureDebit, `AgentServer generation HTTP failure should emit a generation-failure budget debit: ${JSON.stringify({
-    message: failurePayload.message,
-    budgetDebits: failurePayload.budgetDebits?.map((debit) => debit.capabilityId),
-  })}`);
-  assert.equal(failureDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
-  assert.ok(hasBudgetDebitRef(failurePayload.executionUnits[0], failureDebit.debitId));
-  assert.ok(failurePayload.workEvidence?.some((entry) => hasBudgetDebitRef(entry, failureDebit.debitId)));
-  assert.ok(failurePayload.logs?.some((entry) => hasBudgetDebitRef(entry, failureDebit.debitId)));
-  assert.ok(failureDebit.sinkRefs.executionUnitRef);
-  assert.ok(failureDebit.sinkRefs.workEvidenceRefs.length >= 1);
-  assert.ok(failureDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('audit:capability-budget-debit:agentserver-generation-failure:')));
-  assert.ok(failureDebit.debitLines.some((line) => line.dimension === 'networkCalls' && line.amount === 1));
-  assert.equal(failurePayload.budgetDebits?.filter((debit) => debit.debitId === failureDebit.debitId).length, 1);
-
-  const attempts = await readRecentTaskAttempts(agentServerWorkspace, 'literature', 20);
-  assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, generatedDebit.debitId)));
-  assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, directDebit.debitId)));
-  assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, failureDebit.debitId)));
-  assert.ok(agentServerRequestCount >= 3);
-} finally {
-  await new Promise<void>((resolve) => agentServer.close(() => resolve()));
-}
-
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, workspace open, generated task, AgentServer direct payload, and AgentServer generation failure runtime output');
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, workspace open, and retired AgentServer fallback fail-closed runtime verification output');
 
 function hasBudgetDebitRef(record: unknown, debitId: string) {
   return typeof record === 'object'
     && record !== null
     && Array.isArray((record as { budgetDebitRefs?: unknown }).budgetDebitRefs)
     && ((record as { budgetDebitRefs: unknown[] }).budgetDebitRefs).includes(debitId);
-}
-
-function attemptHasBudgetDebitRef(record: unknown, debitId: string) {
-  if (hasBudgetDebitRef(record, debitId)) return true;
-  if (typeof record !== 'object' || record === null) return false;
-  const refs = (record as { refs?: unknown }).refs;
-  return typeof refs === 'object'
-    && refs !== null
-    && Array.isArray((refs as { budgetDebits?: unknown }).budgetDebits)
-    && ((refs as { budgetDebits: unknown[] }).budgetDebits).includes(debitId);
-}
-
-async function readJson(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  return isRecord(parsed) ? parsed : {};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

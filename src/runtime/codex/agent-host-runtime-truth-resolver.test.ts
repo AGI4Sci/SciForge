@@ -7,6 +7,7 @@ import {
   createDefaultCodexAgentHostBrowserActTimeStores,
   createDefaultCodexAgentHostRuntimeTruthResolver,
 } from './agent-host-runtime-truth-resolver.js';
+import { createDefaultVirtualAppScreenNativeHostActTimeTruthSource } from './agent-host-virtual-app-screen-diagnostic-act-time-source.js';
 import type { BrowserHostSessionManager } from '../browser-host-session.js';
 import { createActorCursor, createWindowActionSession } from '../window-action-session.js';
 import type { WindowActionSessionStore } from '../window-action-session-store.js';
@@ -718,7 +719,7 @@ test('default Agent Host runtime truth resolver fail-closes WindowActionSession 
   assert.ok(!truth?.refs?.some((ref) => ref.includes('computer-use-adapter/window-action-session/desktop-window-no-handler')));
 });
 
-test('default Agent Host runtime truth resolver materializes VirtualAppScreen Native Host refs from runtime owner stores', async () => {
+test('default Agent Host runtime truth resolver ignores VirtualAppScreen Native Host refs', async () => {
   resetVirtualAppScreenNativeHostSessionStoreForTests();
   resetVirtualAppScreenProviderSessionStoreForTests();
   const now = '2026-06-06T00:05:00.000Z';
@@ -756,39 +757,30 @@ test('default Agent Host runtime truth resolver materializes VirtualAppScreen Na
     attemptId: 'codex-command-virtual-app-screen-attempt-1',
   });
 
-  assert.equal(truth?.readiness?.windowActionSession, 'ready');
-  assert.equal(truth?.readiness?.computerUseAdapter, 'ready');
-  assert.equal(truth?.target?.bound, true);
-  assert.ok(truth?.target?.refs?.includes(record.sessionRef));
-  assert.ok(truth?.target?.refs?.includes(record.screenRef!));
-  assert.ok(truth?.target?.refs?.includes(record.liveSurfaceRef!));
-  assert.ok(truth?.target?.refs?.includes(record.targetWindowRef!));
-  assert.equal(truth?.observation?.fresh, true);
-  assert.ok(truth?.observation?.refs?.includes(record.currentFrameRef!));
-  assert.ok(truth?.refs?.includes(record.currentRunPointerRef));
-  assert.ok(truth?.refs?.includes(record.adapterReadinessRef));
-  assert.ok(truth?.refs?.includes(record.actionAdapterRef!));
-  assert.ok(truth?.refs?.includes(record.inputLeaseRef!));
-  assert.ok(truth?.refs?.includes('permission:macos/screen-recording'));
-  assert.ok(truth?.refs?.some((ref) => /^computer-use:provider-session\/.+\/owner\.json$/u.test(ref)));
-  assert.equal(truth?.permissions?.stopCancelPath, true);
-  assert.ok(truth?.refs?.includes('stop:computer-use/native-host/vas-product-session/stop'));
-  assert.ok(truth?.refs?.includes('lease:computer-use/native-host/vas-product-session/pause'));
+  assert.equal(truth?.readiness?.windowActionSession, 'blocked');
+  assert.equal(truth?.readiness?.computerUseAdapter, 'blocked');
+  assert.equal(truth?.target?.bound, false);
+  assert.equal(truth?.observation?.fresh, false);
+  assert.equal(truth?.permissions?.stopCancelPath, false);
+  assert.ok(!truth?.refs?.includes(record.currentRunPointerRef));
+  assert.ok(!truth?.refs?.includes(record.adapterReadinessRef));
+  assert.ok(!truth?.refs?.includes(record.actionAdapterRef!));
+  assert.ok(!truth?.refs?.includes(record.inputLeaseRef!));
+  assert.ok(!truth?.refs?.some((ref) => /^computer-use:provider-session\/.+\/owner\.json$/u.test(ref)));
   assert.doesNotMatch(JSON.stringify(truth), /gui\.present|ui:|fixture:|replay:|data:image|base64/);
 
   resetVirtualAppScreenNativeHostSessionStoreForTests();
   resetVirtualAppScreenProviderSessionStoreForTests();
 });
 
-test('default Agent Host runtime truth resolver keeps VirtualAppScreen NativeHost evidence bounded when unsafe refs are mixed in', async () => {
+test('explicitly injected VirtualAppScreen diagnostic Act-time source keeps NativeHost evidence bounded', async () => {
   resetVirtualAppScreenNativeHostSessionStoreForTests();
   resetVirtualAppScreenProviderSessionStoreForTests();
   const now = '2026-06-06T00:05:30.000Z';
   const record = recordProductVirtualAppScreenSession({ now, diagnosticOnly: false });
-  const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({
-    env: {},
+  const source = createDefaultVirtualAppScreenNativeHostActTimeTruthSource({
     now: () => new Date(now),
-    actTimeStores: {
+    stores: {
       computerUseAdapterRegistry: {
         async materializeBrowserHostAdapter() {
           return undefined;
@@ -843,6 +835,11 @@ test('default Agent Host runtime truth resolver keeps VirtualAppScreen NativeHos
         },
       },
     },
+  });
+  const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({
+    env: {},
+    now: () => new Date(now),
+    actTimeTruthSource: source,
   });
 
   const truth = await resolver({

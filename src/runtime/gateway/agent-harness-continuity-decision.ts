@@ -36,7 +36,7 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
   return {
     schemaVersion: AGENT_HARNESS_CONTINUITY_DECISION_SCHEMA_VERSION,
     shadowMode: true,
-    decisionOwner: 'AgentServer',
+    decisionOwner: 'AgentHost',
     decision: useContinuity ? 'continuity' : 'fresh',
     useContinuity,
     reasons,

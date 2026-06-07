@@ -1,4 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 
 import type { ComputerUsePreflightResult } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
@@ -585,6 +590,153 @@ test('WindowActionSession Computer Use Act materializer blocks editor save witho
   assert.ok(result?.evidenceRefs.includes('action-ledger:window-action-session/execution-blocked'));
 });
 
+test('WindowActionSession Computer Use Act materializer can select Appium Mac2 for TextEdit save and fail closed on missing readiness', async () => {
+  const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
+    windowActionSessionStore: readyStore({
+      app: { id: 'com.apple.TextEdit', name: 'TextEdit', kind: 'editor' },
+    }),
+    env: { SCIFORGE_WINDOW_ACTION_APPIUM_MAC2: '1' },
+    actionPlanner: async () => ({
+      status: 'planned',
+      message: 'Save the visible TextEdit document.',
+      nextAction: { type: 'save', targetPath: 'sciforge-computer-use-proof.txt' },
+      evidenceRefs: ['action-ledger:planner/textedit-save'],
+    }),
+    adapterHandlers: {},
+    now: () => new Date(now),
+  });
+
+  const result = await materializer(readyMaterializerInput({
+    commandText: 'Save the TextEdit document.',
+  }));
+
+  assert.equal(result?.status, 'blocked');
+  assert.match(result?.message ?? '', /Appium Mac2.*server URL/i);
+  assert.ok(result?.evidenceRefs.includes('action-ledger:window-action-session/execution-blocked'));
+  assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/readiness/missing-server-url'));
+  assert.equal(result?.evidenceRefs.includes('action-ledger:window-action-session/adapter-handler-missing'), false);
+});
+
+test('WindowActionSession Computer Use Act materializer can execute TextEdit save through injected Appium Mac2 executor', async () => {
+  const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
+    windowActionSessionStore: readyStore({
+      app: { id: 'com.apple.TextEdit', name: 'TextEdit', kind: 'editor' },
+    }),
+    env: {
+      SCIFORGE_WINDOW_ACTION_APPIUM_MAC2: '1',
+      SCIFORGE_APPIUM_MAC2_SERVER_URL: 'http://127.0.0.1:4723',
+      SCIFORGE_APPIUM_MAC2_EXECUTOR: '1',
+    },
+    actionPlanner: async () => ({
+      status: 'planned',
+      message: 'Save the visible TextEdit document.',
+      nextAction: { type: 'save', targetPath: 'sciforge-computer-use-proof.txt' },
+      evidenceRefs: ['action-ledger:planner/textedit-save'],
+    }),
+    appiumMac2Client: async (request) => ({
+      executorEventRef: `appium-mac2:textedit/actions/${request.actionId}/executor-event`,
+      inputEventRef: `appium-mac2:textedit/actions/${request.actionId}/input-event`,
+      verifierRef: `appium-mac2:textedit/actions/${request.actionId}/verification/source-read`,
+      artifactValidatorRef: `appium-mac2:textedit/actions/${request.actionId}/artifact-validator`,
+      freshnessInvalidationRef: `window-action-session:vscode-main/actions/${request.actionId}/freshness-invalidation.json`,
+      afterEvidenceRef: `window-action-session:vscode-main/evidence/${request.actionId}/after-ax.json`,
+    }),
+    now: () => new Date(now),
+  });
+
+  const result = await materializer(readyMaterializerInput({
+    commandText: 'Save the TextEdit document.',
+  }));
+
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.ok(result?.evidenceRefs.includes('adapter-registry:window-action-session/appium-mac2/computer-use'));
+  assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/executor-event'));
+  assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/input-event'));
+  assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/verification/source-read'));
+  assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/artifact-validator'));
+  assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/evidence/codex-window-action-attempt-1/after-ax.json'));
+  assert.doesNotMatch(JSON.stringify(result), /shared-system-input|workspace-file-writer|osascript|CGEvent|base64|secret|token/i);
+});
+
+test('WindowActionSession Computer Use Act materializer can execute TextEdit type through default Appium Mac2 WebDriver client', async () => {
+  const server = await startAppiumMac2WebDriverFixture();
+  try {
+    const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
+      windowActionSessionStore: readyStore({
+        app: { id: 'com.apple.TextEdit', name: 'TextEdit', kind: 'editor' },
+      }),
+      env: {
+        SCIFORGE_WINDOW_ACTION_APPIUM_MAC2: '1',
+        SCIFORGE_APPIUM_MAC2_SERVER_URL: server.url,
+        SCIFORGE_APPIUM_MAC2_EXECUTOR: '1',
+      },
+      actionPlanner: async () => ({
+        status: 'planned',
+        message: 'Type into the visible TextEdit document.',
+        nextAction: { type: 'type_text', text: 'Draft report' },
+        evidenceRefs: ['action-ledger:planner/textedit-type'],
+      }),
+      now: () => new Date(now),
+    });
+
+    const result = await materializer(readyMaterializerInput({
+      commandText: 'Type into the TextEdit document.',
+    }));
+
+    assert.equal(result?.status, 'completed', result?.message);
+    assert.equal(server.requests[0]?.path, '/session');
+    assert.equal(server.requests[1]?.path, '/session/session-1/actions');
+    assert.equal(server.requests[2]?.path, '/session/session-1/source');
+    assert.equal(server.requests.at(-1)?.path, '/session/session-1');
+    assert.ok(result?.evidenceRefs.includes('adapter-registry:window-action-session/appium-mac2/computer-use'));
+    assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/type-input'));
+    assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/after-source'));
+    assert.doesNotMatch(JSON.stringify(result), /Draft report|shared-system-input|workspace-file-writer|osascript|CGEvent|base64|secret|token/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('WindowActionSession Computer Use Act materializer validates TextEdit save through default Appium Mac2 WebDriver client', async () => {
+  const server = await startAppiumMac2WebDriverFixture();
+  const dir = await mkdtemp(join(tmpdir(), 'sciforge-textedit-materializer-'));
+  try {
+    const artifactPath = join(dir, 'proof.txt');
+    await writeFile(artifactPath, 'Draft report\n', 'utf8');
+    const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
+      windowActionSessionStore: readyStore({
+        app: { id: 'com.apple.TextEdit', name: 'TextEdit', kind: 'editor' },
+      }),
+      env: {
+        SCIFORGE_WINDOW_ACTION_APPIUM_MAC2: '1',
+        SCIFORGE_APPIUM_MAC2_SERVER_URL: server.url,
+        SCIFORGE_APPIUM_MAC2_EXECUTOR: '1',
+        SCIFORGE_TEXTEDIT_SAVE_ARTIFACT_PATH: artifactPath,
+      },
+      actionPlanner: async () => ({
+        status: 'planned',
+        message: 'Save the visible TextEdit document.',
+        nextAction: { type: 'save', targetPath: 'proof.txt' },
+        evidenceRefs: ['action-ledger:planner/textedit-save-default-client'],
+      }),
+      now: () => new Date(now),
+    });
+
+    const result = await materializer(readyMaterializerInput({
+      commandText: 'Save the TextEdit document.',
+    }));
+
+    assert.equal(result?.status, 'completed', result?.message);
+    assert.equal(server.requests[1]?.path, '/session/session-1/actions');
+    assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/save-input'));
+    assert.ok(result?.evidenceRefs.includes('appium-mac2:textedit/actions/codex-window-action-attempt-1/artifact-validator/content-match'));
+    assert.doesNotMatch(JSON.stringify(result), /Draft report|proof\.txt|\/tmp|shared-system-input|workspace-file-writer|osascript|CGEvent|base64|secret|token/i);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 function readyStore(options: {
   app?: Parameters<typeof createWindowActionSession>[0]['app'];
 } = {}) {
@@ -739,6 +891,51 @@ function runtimeTruth(options: {
       'cancel:runtime-turn/codex-window-action',
     ],
   };
+}
+
+async function startAppiumMac2WebDriverFixture() {
+  const requests: Array<{ method: string; path: string; body: unknown }> = [];
+  const server = createServer(async (req, res) => {
+    const body = await readFixtureBody(req);
+    const path = req.url ?? '/';
+    requests.push({ method: req.method ?? 'GET', path, body });
+    if (req.method === 'POST' && path === '/session') {
+      return writeFixtureJson(res, 200, { value: { sessionId: 'session-1', capabilities: {} } });
+    }
+    if (req.method === 'POST' && path === '/session/session-1/actions') {
+      return writeFixtureJson(res, 200, { value: null });
+    }
+    if (req.method === 'GET' && path === '/session/session-1/source') {
+      return writeFixtureJson(res, 200, { value: '<AXApplication><AXTextArea value="Draft report"/></AXApplication>' });
+    }
+    if (req.method === 'DELETE' && path === '/session/session-1') {
+      return writeFixtureJson(res, 200, { value: null });
+    }
+    return writeFixtureJson(res, 404, { value: { error: 'unknown command' } });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected TCP fixture address');
+  const tcpAddress: AddressInfo = address;
+  return {
+    url: `http://127.0.0.1:${tcpAddress.port}`,
+    requests,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
+}
+
+async function readFixtureBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  const text = Buffer.concat(chunks).toString('utf8');
+  return text ? JSON.parse(text) : undefined;
+}
+
+function writeFixtureJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
 }
 
 export type _WindowActionTestGenericVisionAction = GenericVisionAction;

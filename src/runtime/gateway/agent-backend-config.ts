@@ -10,25 +10,25 @@ import { cleanUrl } from '../gateway-utils.js';
 import {
   compactBackendContext,
   readBackendContextWindowState,
-} from './agentserver-context-window.js';
+} from './backend-context-window.js';
 
-export const AGENTSERVER_BACKEND_SELECTION_DECISION_SCHEMA_VERSION = 'sciforge.agentserver-backend-selection-decision.v1' as const;
-export const DEFAULT_AGENTSERVER_BASE_URL = DEFAULT_AGENT_SERVER_URL;
-export const AGENTSERVER_BASE_URL_ENV_KEYS = [
+export const BACKEND_SELECTION_DECISION_SCHEMA_VERSION = 'sciforge.backend-selection-decision.v1' as const;
+export const DEFAULT_BACKEND_BASE_URL = DEFAULT_AGENT_SERVER_URL;
+export const BACKEND_BASE_URL_ENV_KEYS = [
   'SCIFORGE_AGENTSERVER_BASE_URL',
   'SCIFORGE_AGENT_SERVER_URL',
   'SCIFORGE_AGENT_SERVER_BASE_URL',
   'SCIFORGE_AGENT_SERVER_BASEURL',
 ] as const;
-export const AGENTSERVER_ALLOW_DEFAULT_LLM_ENV = 'SCIFORGE_ALLOW_AGENTSERVER_DEFAULT_LLM' as const;
+export const BACKEND_ALLOW_DEFAULT_LLM_ENV = 'SCIFORGE_ALLOW_AGENTSERVER_DEFAULT_LLM' as const;
 
-export type AgentServerBackendSelectionSource =
+export type BackendSelectionSource =
   | 'request.agentBackend'
   | 'env.SCIFORGE_AGENTSERVER_BACKEND'
   | 'llmEndpoint.baseUrl'
   | 'runtime.default';
 
-export type AgentServerGenerationDispatchOptInSource =
+export type BackendGenerationDispatchOptInSource =
   | 'request.agentBackend'
   | 'request.forceAgentServerGeneration'
   | 'request.agentServerBaseUrl'
@@ -36,22 +36,22 @@ export type AgentServerGenerationDispatchOptInSource =
   | 'env.SCIFORGE_AGENTSERVER_BACKEND'
   | 'env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH';
 
-export type AgentServerBaseUrlEnvKey = typeof AGENTSERVER_BASE_URL_ENV_KEYS[number];
-export type AgentServerBaseUrlSelectionSource =
+export type BackendBaseUrlEnvKey = typeof BACKEND_BASE_URL_ENV_KEYS[number];
+export type BackendBaseUrlSelectionSource =
   | 'request.agentServerBaseUrl'
-  | `env.${AgentServerBaseUrlEnvKey}`
+  | `env.${BackendBaseUrlEnvKey}`
   | 'workspace-config.agentServerBaseUrl'
   | 'runtime.default';
 
-export interface AgentServerBackendSelectionDecision {
-  schemaVersion: typeof AGENTSERVER_BACKEND_SELECTION_DECISION_SCHEMA_VERSION;
+export interface BackendSelectionDecision {
+  schemaVersion: typeof BACKEND_SELECTION_DECISION_SCHEMA_VERSION;
   shadowMode: true;
-  decisionOwner: 'AgentServer';
+  decisionOwner: 'AgentHost';
   harnessStage: 'beforeAgentDispatch';
   decision: string;
   backend: string;
   provider?: string;
-  source: AgentServerBackendSelectionSource;
+  source: BackendSelectionSource;
   reason: string;
   runtimeSignals: {
     requestBackendPresent: boolean;
@@ -62,32 +62,32 @@ export interface AgentServerBackendSelectionDecision {
     fallbackBackend: 'codex';
   };
   trace: {
-    selectionOrder: AgentServerBackendSelectionSource[];
+    selectionOrder: BackendSelectionSource[];
     ignoredSources: string[];
   };
 }
 
-export interface AgentServerGenerationDispatchQuarantineDecision {
-  schemaVersion: 'sciforge.agentserver-generation-dispatch-quarantine.v1';
+export interface BackendGenerationDispatchQuarantineDecision {
+  schemaVersion: 'sciforge.backend-generation-dispatch-quarantine.v1';
   allowed: boolean;
-  source?: AgentServerGenerationDispatchOptInSource;
+  source?: BackendGenerationDispatchOptInSource;
   reason: string;
-  backendSelectionDecision: AgentServerBackendSelectionDecision;
+  backendSelectionDecision: BackendSelectionDecision;
   explicitSignals: Record<string, boolean>;
 }
 
-export interface AgentServerBaseUrlSelectionDecision {
+export interface BackendBaseUrlSelectionDecision {
   baseUrl?: string;
-  source?: AgentServerBaseUrlSelectionSource;
+  source?: BackendBaseUrlSelectionSource;
   defaultBaseUrl: string;
   trace: {
-    envKeys: AgentServerBaseUrlEnvKey[];
+    envKeys: BackendBaseUrlEnvKey[];
     includeRuntimeDefault: boolean;
     ignoredSources: string[];
   };
 }
 
-export function isBlockingAgentServerConfigurationFailure(reason: string) {
+export function isBlockingBackendConfigurationFailure(reason: string) {
   return runtimeAgentBackendConfigurationFailureIsBlocking(reason);
 }
 
@@ -95,84 +95,84 @@ export function providerForBackend(backend: string) {
   return runtimeAgentBackendProvider(backend);
 }
 
-export function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
-  return agentServerBackendSelectionDecision(request, llmEndpoint).backend;
+export function selectedAgentBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
+  return backendSelectionDecisionForRequest(request, llmEndpoint).backend;
 }
 
-export function normalizeAgentServerBaseUrl(value: unknown) {
+export function normalizeBackendBaseUrl(value: unknown) {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed ? cleanUrl(trimmed) : undefined;
 }
 
-export function agentServerBaseUrlSelectionDecision(
+export function backendBaseUrlSelectionDecision(
   input: {
     request?: Pick<GatewayRequest, 'agentServerBaseUrl'>;
     workspaceConfigBaseUrl?: string;
   } = {},
   options: { includeRuntimeDefault?: boolean } = {},
-): AgentServerBaseUrlSelectionDecision {
+): BackendBaseUrlSelectionDecision {
   const ignoredSources: string[] = [];
-  const requestBaseUrl = normalizeAgentServerBaseUrl(input.request?.agentServerBaseUrl);
+  const requestBaseUrl = normalizeBackendBaseUrl(input.request?.agentServerBaseUrl);
   if (requestBaseUrl) {
     return baseUrlSelectionDecision(requestBaseUrl, 'request.agentServerBaseUrl', options, ignoredSources);
   }
   ignoredSources.push(`request.agentServerBaseUrl:${input.request?.agentServerBaseUrl ? 'invalid' : 'missing'}`);
 
-  const envBaseUrl = configuredAgentServerEnvBaseUrl();
+  const envBaseUrl = configuredBackendEnvBaseUrl();
   if (envBaseUrl) {
     return baseUrlSelectionDecision(envBaseUrl.baseUrl, `env.${envBaseUrl.key}`, options, ignoredSources);
   }
   ignoredSources.push('env.agentServerBaseUrl:missing');
 
-  const workspaceConfigBaseUrl = normalizeAgentServerBaseUrl(input.workspaceConfigBaseUrl);
+  const workspaceConfigBaseUrl = normalizeBackendBaseUrl(input.workspaceConfigBaseUrl);
   if (workspaceConfigBaseUrl) {
     return baseUrlSelectionDecision(workspaceConfigBaseUrl, 'workspace-config.agentServerBaseUrl', options, ignoredSources);
   }
   ignoredSources.push(`workspace-config.agentServerBaseUrl:${input.workspaceConfigBaseUrl ? 'invalid' : 'missing'}`);
 
   if (options.includeRuntimeDefault === true) {
-    return baseUrlSelectionDecision(DEFAULT_AGENTSERVER_BASE_URL, 'runtime.default', options, ignoredSources);
+    return baseUrlSelectionDecision(DEFAULT_BACKEND_BASE_URL, 'runtime.default', options, ignoredSources);
   }
   return baseUrlSelectionDecision(undefined, undefined, options, ignoredSources);
 }
 
-export function configuredAgentServerBaseUrl(input: {
+export function configuredBackendBaseUrl(input: {
   request?: Pick<GatewayRequest, 'agentServerBaseUrl'>;
   workspaceConfigBaseUrl?: string;
 } = {}) {
-  return agentServerBaseUrlSelectionDecision(input).baseUrl;
+  return backendBaseUrlSelectionDecision(input).baseUrl;
 }
 
-export function effectiveAgentServerBaseUrl(input: {
+export function effectiveBackendBaseUrl(input: {
   request?: Pick<GatewayRequest, 'agentServerBaseUrl'>;
   workspaceConfigBaseUrl?: string;
 } = {}) {
-  return agentServerBaseUrlSelectionDecision(input, { includeRuntimeDefault: true }).baseUrl ?? DEFAULT_AGENTSERVER_BASE_URL;
+  return backendBaseUrlSelectionDecision(input, { includeRuntimeDefault: true }).baseUrl ?? DEFAULT_BACKEND_BASE_URL;
 }
 
-export function requiresUserLlmEndpointForAgentServerBaseUrl(
+export function requiresUserLlmEndpointForBackendBaseUrl(
   agentServerBaseUrl: string,
   request?: Pick<GatewayRequest, 'agentServerBaseUrl'>,
 ) {
-  if (process.env[AGENTSERVER_ALLOW_DEFAULT_LLM_ENV] === '1') return false;
-  if (!isLoopbackAgentServerBaseUrl(agentServerBaseUrl)) return false;
-  const target = canonicalAgentServerBaseUrlKey(agentServerBaseUrl);
+  if (process.env[BACKEND_ALLOW_DEFAULT_LLM_ENV] === '1') return false;
+  if (!isLoopbackBackendBaseUrl(agentServerBaseUrl)) return false;
+  const target = canonicalBackendBaseUrlKey(agentServerBaseUrl);
   if (!target) return false;
-  return target === canonicalAgentServerBaseUrlKey(effectiveAgentServerBaseUrl({ request }));
+  return target === canonicalBackendBaseUrlKey(effectiveBackendBaseUrl({ request }));
 }
 
-export function agentServerBackendSelectionDecision(
+export function backendSelectionDecisionForRequest(
   request?: GatewayRequest,
   llmEndpoint?: LlmEndpointConfig,
-): AgentServerBackendSelectionDecision {
+): BackendSelectionDecision {
   const requestBackend = request?.agentBackend?.trim();
   const envBackend = process.env.SCIFORGE_AGENTSERVER_BACKEND?.trim();
   const endpoint = llmEndpoint ?? request?.llmEndpoint;
   const endpointConfigured = Boolean(endpoint?.baseUrl?.trim());
-  const ignoredSources: AgentServerBackendSelectionDecision['trace']['ignoredSources'] = [];
+  const ignoredSources: BackendSelectionDecision['trace']['ignoredSources'] = [];
   if (runtimeAgentBackendSupported(requestBackend)) {
-    return backendSelectionDecision(requestBackend, 'request.agentBackend', 'request selected a supported AgentServer backend', {
+    return backendSelectionDecision(requestBackend, 'request.agentBackend', 'request selected a supported agent backend', {
       requestBackend,
       envBackend,
       endpointConfigured,
@@ -181,7 +181,7 @@ export function agentServerBackendSelectionDecision(
   }
   ignoredSources.push(`request.agentBackend:${requestBackend ? 'unsupported' : 'missing'}`);
   if (runtimeAgentBackendSupported(envBackend)) {
-    return backendSelectionDecision(envBackend, 'env.SCIFORGE_AGENTSERVER_BACKEND', 'environment selected a supported AgentServer backend', {
+    return backendSelectionDecision(envBackend, 'env.SCIFORGE_AGENTSERVER_BACKEND', 'environment selected a supported agent backend', {
       requestBackend,
       envBackend,
       endpointConfigured,
@@ -190,7 +190,7 @@ export function agentServerBackendSelectionDecision(
   }
   ignoredSources.push(`env.SCIFORGE_AGENTSERVER_BACKEND:${envBackend ? 'unsupported' : 'missing'}`);
   if (endpointConfigured) {
-    return backendSelectionDecision('openteam_agent', 'llmEndpoint.baseUrl', 'configured LLM endpoint routes through the OpenTeam AgentServer backend', {
+    return backendSelectionDecision('openteam_agent', 'llmEndpoint.baseUrl', 'configured LLM endpoint routes through the OpenTeam agent backend', {
       requestBackend,
       envBackend,
       endpointConfigured,
@@ -205,11 +205,11 @@ export function agentServerBackendSelectionDecision(
   });
 }
 
-export function agentServerGenerationDispatchQuarantineDecision(
+export function backendGenerationDispatchQuarantineDecision(
   request?: GatewayRequest,
   llmEndpoint?: LlmEndpointConfig,
   llmEndpointSource?: string,
-): AgentServerGenerationDispatchQuarantineDecision {
+): BackendGenerationDispatchQuarantineDecision {
   const uiState = isRecord(request?.uiState) ? request.uiState : {};
   const requestBackend = request?.agentBackend?.trim();
   const envBackend = process.env.SCIFORGE_AGENTSERVER_BACKEND?.trim();
@@ -222,21 +222,21 @@ export function agentServerGenerationDispatchQuarantineDecision(
     legacyCompatEnv: process.env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH === '1',
   };
   const source = dispatchOptInSource(explicitSignals);
-  const backendSelectionDecision = agentServerBackendSelectionDecision(request, llmEndpoint);
+  const backendSelectionDecision = backendSelectionDecisionForRequest(request, llmEndpoint);
   if (source) {
     return {
-      schemaVersion: 'sciforge.agentserver-generation-dispatch-quarantine.v1',
+      schemaVersion: 'sciforge.backend-generation-dispatch-quarantine.v1',
       allowed: true,
       source,
-      reason: `AgentServer generation dispatch is explicitly opted in by ${source}.`,
+      reason: `Backend generation dispatch is explicitly opted in by ${source}.`,
       backendSelectionDecision,
       explicitSignals,
     };
   }
   return {
-    schemaVersion: 'sciforge.agentserver-generation-dispatch-quarantine.v1',
+    schemaVersion: 'sciforge.backend-generation-dispatch-quarantine.v1',
     allowed: false,
-    reason: 'AgentServer generation dispatch is quarantined: no request, environment, or legacy compatibility opt-in was present.',
+    reason: 'Backend generation dispatch is quarantined: no request, environment, or legacy compatibility opt-in was present.',
     backendSelectionDecision,
     explicitSignals,
   };
@@ -252,7 +252,7 @@ export function agentBackendAdapter(backend: string): AgentBackendAdapter {
   };
 }
 
-function dispatchOptInSource(signals: AgentServerGenerationDispatchQuarantineDecision['explicitSignals']): AgentServerGenerationDispatchOptInSource | undefined {
+function dispatchOptInSource(signals: BackendGenerationDispatchQuarantineDecision['explicitSignals']): BackendGenerationDispatchOptInSource | undefined {
   if (signals.requestBackendSupported) return 'request.agentBackend';
   if (signals.requestForceGeneration) return 'request.forceAgentServerGeneration';
   if (signals.requestAgentServerBaseUrl) return 'request.agentServerBaseUrl';
@@ -272,19 +272,19 @@ export function agentBackendCapabilities(backend: string): AgentBackendCapabilit
 
 function backendSelectionDecision(
   backend: string,
-  source: AgentServerBackendSelectionSource,
+  source: BackendSelectionSource,
   reason: string,
   input: {
     requestBackend?: string;
     envBackend?: string;
     endpointConfigured: boolean;
-    ignoredSources: AgentServerBackendSelectionDecision['trace']['ignoredSources'];
+    ignoredSources: BackendSelectionDecision['trace']['ignoredSources'];
   },
-): AgentServerBackendSelectionDecision {
+): BackendSelectionDecision {
   return {
-    schemaVersion: AGENTSERVER_BACKEND_SELECTION_DECISION_SCHEMA_VERSION,
+    schemaVersion: BACKEND_SELECTION_DECISION_SCHEMA_VERSION,
     shadowMode: true,
-    decisionOwner: 'AgentServer',
+    decisionOwner: 'AgentHost',
     harnessStage: 'beforeAgentDispatch',
     decision: backend,
     backend,
@@ -306,9 +306,9 @@ function backendSelectionDecision(
   };
 }
 
-function configuredAgentServerEnvBaseUrl(): { key: AgentServerBaseUrlEnvKey; baseUrl: string } | undefined {
-  for (const key of AGENTSERVER_BASE_URL_ENV_KEYS) {
-    const baseUrl = normalizeAgentServerBaseUrl(process.env[key]);
+function configuredBackendEnvBaseUrl(): { key: BackendBaseUrlEnvKey; baseUrl: string } | undefined {
+  for (const key of BACKEND_BASE_URL_ENV_KEYS) {
+    const baseUrl = normalizeBackendBaseUrl(process.env[key]);
     if (baseUrl) return { key, baseUrl };
   }
   return undefined;
@@ -316,23 +316,23 @@ function configuredAgentServerEnvBaseUrl(): { key: AgentServerBaseUrlEnvKey; bas
 
 function baseUrlSelectionDecision(
   baseUrl: string | undefined,
-  source: AgentServerBaseUrlSelectionSource | undefined,
+  source: BackendBaseUrlSelectionSource | undefined,
   options: { includeRuntimeDefault?: boolean },
   ignoredSources: string[],
-): AgentServerBaseUrlSelectionDecision {
+): BackendBaseUrlSelectionDecision {
   return {
     baseUrl,
     source,
-    defaultBaseUrl: DEFAULT_AGENTSERVER_BASE_URL,
+    defaultBaseUrl: DEFAULT_BACKEND_BASE_URL,
     trace: {
-      envKeys: [...AGENTSERVER_BASE_URL_ENV_KEYS],
+      envKeys: [...BACKEND_BASE_URL_ENV_KEYS],
       includeRuntimeDefault: options.includeRuntimeDefault === true,
       ignoredSources,
     },
   };
 }
 
-function isLoopbackAgentServerBaseUrl(value: string) {
+function isLoopbackBackendBaseUrl(value: string) {
   try {
     const url = new URL(value);
     return isLoopbackHostname(url.hostname);
@@ -341,8 +341,8 @@ function isLoopbackAgentServerBaseUrl(value: string) {
   }
 }
 
-function canonicalAgentServerBaseUrlKey(value: string | undefined) {
-  const normalized = normalizeAgentServerBaseUrl(value);
+function canonicalBackendBaseUrlKey(value: string | undefined) {
+  const normalized = normalizeBackendBaseUrl(value);
   if (!normalized) return undefined;
   try {
     const url = new URL(normalized);

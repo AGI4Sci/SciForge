@@ -15,7 +15,6 @@ import {
   renderReportViewer,
   renderStructureViewer,
   renderTerminalSessionViewer,
-  renderVirtualScreenViewer,
   renderWorkspaceFileViewer,
   uiComponentManifests,
 } from '../components';
@@ -55,7 +54,6 @@ export type InteractiveArtifactInspectorTablePolicy = {
 const packageRenderersByComponentId: Record<string, UIComponentRenderer> = {
   'browser-workbench': renderBrowserWorkbench,
   'image-evidence-viewer': renderImageEvidenceViewer,
-  'virtual-screen-viewer': renderVirtualScreenViewer,
   'computer-use-control-plane': renderComputerUseControlPlane,
   'terminal-session-viewer': renderTerminalSessionViewer,
   'workspace-file-viewer': renderWorkspaceFileViewer,

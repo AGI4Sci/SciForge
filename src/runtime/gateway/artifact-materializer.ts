@@ -11,7 +11,7 @@ import {
   normalizeArtifactDataWithPolicy,
 } from '@sciforge-ui/runtime-contract/artifact-policy';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
-import { clipForAgentServerJson, isRecord } from '../gateway-utils.js';
+import { clipForBackendJson, isRecord } from '../gateway-utils.js';
 import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { sha1 } from '../workspace-task-runner.js';
 
@@ -367,7 +367,7 @@ export async function persistArtifactRefsForPayload(
   for (const artifact of artifacts) {
     const id = safeArtifactId(String(artifact.id || artifact.type || 'artifact'));
     const type = safeArtifactId(String(artifact.type || artifact.id || 'artifact'));
-    const artifactHash = sha1(JSON.stringify(clipForAgentServerJson(artifact, 4))).slice(0, 12);
+    const artifactHash = sha1(JSON.stringify(clipForBackendJson(artifact, 4))).slice(0, 12);
     const rel = sessionBundleResourceRel(sessionBundleRel, 'artifacts', `${type}-${id}-${artifactHash}.json`);
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
     const record = {

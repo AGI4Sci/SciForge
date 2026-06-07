@@ -20,8 +20,8 @@ import {
   runGeneratedTaskRepairAttemptLifecycle,
   type GeneratedTaskRuntimeRefs,
 } from './generated-task-runner-validation-lifecycle.js';
-import { tryAgentServerSupplementMissingArtifacts } from './generated-task-runner-supplement-lifecycle.js';
-import type { AgentServerTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
+import { tryBackendSupplementMissingArtifacts } from './generated-task-runner-supplement-lifecycle.js';
+import type { BackendTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { normalizeWorkspaceTaskPayloadBoundary } from './direct-answer-payload.js';
@@ -35,7 +35,7 @@ import {
   transientExternalFailureReasonFromRun,
 } from './transient-external-failure.js';
 
-type RunAgentServerGeneratedTask = (
+type RunGeneratedTaskBackend = (
   request: GatewayRequest,
   skill: SkillAvailability,
   skills: SkillAvailability[],
@@ -53,10 +53,10 @@ export interface CompleteGeneratedTaskRunOutputLifecycleInput extends GeneratedT
   deps: GeneratedTaskRunnerDeps;
   options?: { allowSupplement?: boolean };
   taskId: string;
-  generation: AgentServerTaskFilesGeneration;
+  generation: BackendTaskFilesGeneration;
   run: WorkspaceTaskRunResult;
   supplementArtifactTypes: string[];
-  runGeneratedTask: RunAgentServerGeneratedTask;
+  runGeneratedTask: RunGeneratedTaskBackend;
 }
 
 export async function completeGeneratedTaskRunOutputLifecycle(
@@ -80,7 +80,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       ...refs,
       attemptPlanRefs: deps.attemptPlanRefs,
       callbacks: input.callbacks,
-      tryAgentServerRepairAndRerun: deps.tryAgentServerRepairAndRerun,
+      tryGeneratedTaskRepairAndRerun: deps.tryGeneratedTaskRepairAndRerun,
     });
     if (repair.repaired) return repair.repaired;
     const partialRefs = await collectGeneratedTaskPartialEvidenceRefs(workspace, refs);
@@ -175,7 +175,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
         failureReason: lifecycle.repair.failureReason,
         recoverActions: lifecycle.repair.recoverActions,
         callbacks: input.callbacks,
-        tryAgentServerRepairAndRerun: deps.tryAgentServerRepairAndRerun,
+        tryGeneratedTaskRepairAndRerun: deps.tryGeneratedTaskRepairAndRerun,
       });
       if (repaired) return repaired;
       if (lifecycle.normalizedRepairNeeded && normalized) return normalized;
@@ -231,11 +231,11 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       }),
     });
     if (!normalized) {
-      return deps.repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
+      return deps.repairNeededPayload(request, skill, 'backend-generated task output could not be normalized after schema validation.');
     }
 
     if (input.options?.allowSupplement !== false) {
-      const supplemented = await tryAgentServerSupplementMissingArtifacts({
+      const supplemented = await tryBackendSupplementMissingArtifacts({
         request,
         skill,
         skills: input.skills,
@@ -270,7 +270,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
           payload: completed,
           refs,
           source: 'generated-task',
-          runtimeLabel: 'AgentServer generated workspace task with supplemental fallback',
+          runtimeLabel: 'backend-generated workspace task with supplemental fallback',
           ledgerRefs: capabilityEvolutionLedgerRefsFromResult(ledgerResult),
         });
         const generatedDebit = completedWithDebit.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
@@ -315,7 +315,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       payload: completed,
       refs,
       source: 'generated-task',
-      runtimeLabel: 'AgentServer generated workspace task',
+      runtimeLabel: 'backend-generated workspace task',
       ledgerRefs: capabilityEvolutionLedgerRefsFromResult(ledgerResult),
     });
     const generatedDebit = completedWithDebit.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
@@ -353,7 +353,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       attemptPlanRefs: deps.attemptPlanRefs,
       error,
       callbacks: input.callbacks,
-      tryAgentServerRepairAndRerun: deps.tryAgentServerRepairAndRerun,
+      tryGeneratedTaskRepairAndRerun: deps.tryGeneratedTaskRepairAndRerun,
     });
     if (repair.repaired) return repair.repaired;
     const partialRefs = await collectGeneratedTaskPartialEvidenceRefs(workspace, refs);
@@ -431,7 +431,7 @@ async function completeSuccessfulGeneratedTaskPayload(
     ...normalized,
     reasoningTrace: [
       normalized.reasoningTrace,
-      `AgentServer generation run: ${input.generation.runId || 'unknown'}`,
+      `backend generation run: ${input.generation.runId || 'unknown'}`,
       `Generation summary: ${input.generation.response.patchSummary || 'task generated'}`,
       proposal ? `Skill promotion proposal: .sciforge/skill-proposals/${proposal.id}` : '',
     ].filter(Boolean).join('\n'),

@@ -20,7 +20,7 @@ import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { composeRuntimeUiManifest } from '../runtime-ui-manifest.js';
 import { isRecord, toRecordList } from '../gateway-utils.js';
 import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs } from './repair-policy.js';
-import { contextCompactionMetadata } from './agentserver-context-window.js';
+import { contextCompactionMetadata } from './backend-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
 import { schemaErrors as toolPayloadSchemaErrors } from './tool-payload-contract.js';
 import { normalizeToolPayloadShape, normalizeWorkspaceTaskArtifacts } from './direct-answer-payload.js';
@@ -41,7 +41,7 @@ export function validateToolPayloadStructure(payload: unknown) {
   return toolPayloadSchemaErrors(payload);
 }
 
-type AgentServerGenerationFailureDiagnostics = {
+type BackendGenerationFailureDiagnostics = {
   kind: 'contextWindowExceeded' | 'rateLimit' | 'agentserver';
   backend?: string;
   provider?: string;
@@ -1290,7 +1290,7 @@ export function repairNeededPayload(
   );
 }
 
-export function agentServerGenerationFailureReason(error: string, diagnostics?: AgentServerGenerationFailureDiagnostics) {
+export function backendGenerationFailureReason(error: string, diagnostics?: BackendGenerationFailureDiagnostics) {
   if (diagnostics?.kind !== 'contextWindowExceeded') return error;
   const parts = [
     'blocker=contextWindowExceeded: AgentServer/backend exceeded its context window during task generation.',
@@ -1306,7 +1306,7 @@ export function agentServerGenerationFailureReason(error: string, diagnostics?: 
   return parts.filter(Boolean).join(' | ');
 }
 
-export function agentServerFailurePayloadRefs(diagnostics?: AgentServerGenerationFailureDiagnostics): Partial<{
+export function backendFailurePayloadRefs(diagnostics?: BackendGenerationFailureDiagnostics): Partial<{
   blocker: string;
   agentServerRefs: Record<string, unknown>;
   recoverActions: string[];

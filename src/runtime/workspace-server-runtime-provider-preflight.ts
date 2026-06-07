@@ -6,6 +6,13 @@ export interface RuntimeProviderProxyHealthzDiagnostic {
   releaseAcceptance: 'not-evaluated';
 }
 
+export type RuntimeProviderProxyInferenceDiagnostic = RuntimeProviderProxyHealthzDiagnostic;
+
+export interface RuntimeProviderProxyInferenceRequestCandidate {
+  endpoint: '/v1/responses' | '/v1/chat/completions';
+  body: Record<string, unknown>;
+}
+
 export interface RuntimeProviderPreflightProxyOptions {
   upstreamBaseUrl?: string;
 }
@@ -15,6 +22,7 @@ export interface RuntimeProviderPreflightManifestInput {
   runtimeEnv: NodeJS.ProcessEnv;
   proxyOptions: RuntimeProviderPreflightProxyOptions;
   checkedHealthz?: RuntimeProviderProxyHealthzDiagnostic;
+  checkedInference?: RuntimeProviderProxyInferenceDiagnostic;
   checkedAt?: string;
 }
 
@@ -41,6 +49,7 @@ export function buildRuntimeProviderPreflightManifest(input: RuntimeProviderPref
     runtimeApiKeyPresentInServiceEnv,
     upstreamBaseUrlPresent,
     healthzCategory: input.checkedHealthz?.category,
+    inferenceCategory: input.checkedInference?.category,
   });
   return {
     schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
@@ -59,12 +68,54 @@ export function buildRuntimeProviderPreflightManifest(input: RuntimeProviderPref
     ],
     evidenceMode: 'current-env-diagnostic-only',
     checkedHealthz: input.checkedHealthz,
+    ...(input.checkedInference ? { checkedInference: input.checkedInference } : {}),
     nextActions: runtimeProviderPreflightNextActions({
       runtimeApiKeyPresentInServiceEnv,
       upstreamBaseUrlPresent,
       category,
     }),
   };
+}
+
+export function normalizeRuntimeProviderProxyInferenceResponse(
+  responseOk: boolean,
+  httpStatus: number,
+  parsed: unknown,
+): RuntimeProviderProxyInferenceDiagnostic {
+  const error = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : {};
+  const status = numberValue(error.status) ?? httpStatus;
+  const errorCode = stringValue(error.code);
+  const category = responseOk && !errorCode
+    ? 'ready'
+    : runtimeProviderProxyDiagnosticCategory(status, errorCode);
+  return {
+    category,
+    ok: responseOk && category === 'ready',
+    retryable: runtimeProviderProxyDiagnosticRetryable(status, category),
+    ...(category !== 'ready' && Number.isInteger(status) && status > 0 ? { httpStatus: status } : {}),
+    releaseAcceptance: 'not-evaluated',
+  };
+}
+
+export function runtimeProviderProxyInferenceRequestCandidates(model: string): RuntimeProviderProxyInferenceRequestCandidate[] {
+  const selectedModel = stringValue(model) || 'sciforge-router';
+  return [{
+    endpoint: '/v1/responses',
+    body: {
+      model: selectedModel,
+      input: 'Reply with exactly OK.',
+      stream: false,
+      max_output_tokens: 8,
+    },
+  }, {
+    endpoint: '/v1/chat/completions',
+    body: {
+      model: selectedModel,
+      messages: [{ role: 'user', content: 'Reply with exactly OK.' }],
+      stream: false,
+      max_tokens: 8,
+    },
+  }];
 }
 
 export function normalizeRuntimeProviderProxyHealthzResponse(
@@ -111,10 +162,19 @@ function runtimeProviderPreflightCategory(input: {
   runtimeApiKeyPresentInServiceEnv: boolean;
   upstreamBaseUrlPresent: boolean;
   healthzCategory?: string;
+  inferenceCategory?: string;
 }) {
   if (!input.runtimeApiKeyPresentInServiceEnv) return 'missing-runtime-env';
   if (!input.upstreamBaseUrlPresent) return 'missing-upstream';
-  if (isRuntimeProviderPreflightCategory(input.healthzCategory)) return input.healthzCategory;
+  const healthzCategory = isRuntimeProviderPreflightCategory(input.healthzCategory)
+    ? input.healthzCategory
+    : undefined;
+  const inferenceCategory = isRuntimeProviderPreflightCategory(input.inferenceCategory)
+    ? input.inferenceCategory
+    : undefined;
+  if (inferenceCategory && inferenceCategory !== 'ready') return inferenceCategory;
+  if (healthzCategory && healthzCategory !== 'ready') return healthzCategory;
+  if (inferenceCategory === 'ready' || healthzCategory === 'ready') return 'ready';
   return 'unknown';
 }
 
@@ -164,10 +224,26 @@ function runtimeProviderPreflightNextActions(input: {
   return actions;
 }
 
+function runtimeProviderProxyDiagnosticCategory(status: number, code: string) {
+  if (status === 401 || status === 403 || /unauthorized|forbidden|auth/i.test(code)) return 'provider-auth';
+  if (status === 429 || /rate|quota/i.test(code)) return 'rate-limited';
+  if ((status >= 500 && status <= 599) || /unavailable|timeout|gateway/i.test(code)) return 'upstream-outage';
+  return 'repo-bug';
+}
+
+function runtimeProviderProxyDiagnosticRetryable(status: number, category: string) {
+  if (category === 'rate-limited' || category === 'upstream-outage') return true;
+  return status === 408 || status === 409;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function stringValue(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function numberValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

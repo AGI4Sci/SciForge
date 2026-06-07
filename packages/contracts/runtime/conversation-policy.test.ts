@@ -134,13 +134,13 @@ test('conversation policy owns selected capability manifest projection', () => {
     'vision-sense',
     'citation-verifier',
     'paper-table',
-    'scenario.literature.agentserver-generation',
+    'scenario.literature.generated-task',
   ]);
   assert.equal(manifests[1].internalAgent, 'optional');
   assert.deepEqual(manifests[4].artifacts, ['paper-list']);
 });
 
-test('conversation policy capability projection can omit AgentServer generation', () => {
+test('conversation policy capability projection can omit backend generation', () => {
   const manifests = selectedConversationPolicyCapabilityManifests({
     skillDomain: 'literature',
     selectedToolIds: ['runtime.direct-context-answer'],

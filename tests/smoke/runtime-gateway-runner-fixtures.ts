@@ -1,5 +1,5 @@
 import type { GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generated-task-runner.js';
-import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { coerceBackendToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
 import type { GatewayRequest, SciForgeSkillDomain, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
@@ -51,22 +51,22 @@ export function runtimeGatewaySkill(skillDomain: SciForgeSkillDomain = 'literatu
 
 export function makeGeneratedTaskRunnerDeps({
   request,
-  requestAgentServerGeneration,
+  requestBackendGeneration,
   useProductionPayloadValidation = false,
-  tryAgentServerRepairAndRerun = async () => undefined,
+  tryGeneratedTaskRepairAndRerun = async () => undefined,
 }: {
   request: GatewayRequest;
-  requestAgentServerGeneration: GeneratedTaskRunnerDeps['requestAgentServerGeneration'];
+  requestBackendGeneration: GeneratedTaskRunnerDeps['requestBackendGeneration'];
   useProductionPayloadValidation?: boolean;
-  tryAgentServerRepairAndRerun?: GeneratedTaskRunnerDeps['tryAgentServerRepairAndRerun'];
+  tryGeneratedTaskRepairAndRerun?: GeneratedTaskRunnerDeps['tryGeneratedTaskRepairAndRerun'];
 }): GeneratedTaskRunnerDeps {
   return {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
-    requestAgentServerGeneration,
-    agentServerGenerationFailureReason: (error) => error,
+    readConfiguredBackendBaseUrl: async () => 'http://agentserver.local',
+    requestBackendGeneration,
+    backendGenerationFailureReason: (error) => error,
     attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
     repairNeededPayload: (req, selectedSkill, reason, refs) => repairNeededPayload(req, selectedSkill, reason, refs),
-    agentServerFailurePayloadRefs: () => ({}),
+    backendFailurePayloadRefs: () => ({}),
     ensureDirectAnswerReportArtifact: useProductionPayloadValidation
       ? ensureDirectAnswerReportArtifact
       : (payload) => payload,
@@ -74,11 +74,11 @@ export function makeGeneratedTaskRunnerDeps({
     validateAndNormalizePayload: useProductionPayloadValidation
       ? validateAndNormalizePayload
       : smokeValidateAndNormalizePayload,
-    tryAgentServerRepairAndRerun,
+    tryGeneratedTaskRepairAndRerun,
     failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
     coerceWorkspaceTaskPayload: useProductionPayloadValidation
       ? coerceWorkspaceTaskPayload
-      : (value) => coerceAgentServerToolPayload(value),
+      : (value) => coerceBackendToolPayload(value),
     schemaErrors: useProductionPayloadValidation ? toolPayloadSchemaErrors : smokeSchemaErrors,
     normalizeToolPayloadShape: useProductionPayloadValidation
       ? normalizeToolPayloadShape

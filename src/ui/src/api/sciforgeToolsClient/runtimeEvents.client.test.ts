@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { SendAgentMessageInput } from '../../domain';
-import { sendSciForgeToolMessage } from '../sciforgeToolsClient';
+import { CODEX_RUNTIME_STREAM_PATH, sendSciForgeToolMessage } from '../sciforgeToolsClient';
 import { recursiveForbiddenKeys, runtimeRequestInput } from './runtimeEvents.testHelpers';
 
 test('Runtime Codex foreground Computer Use host actions preserve gui.present and gui.ask_user for default chat', async () => {
@@ -90,7 +90,7 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
     assert.equal((guiAskUser.approvalRequest as Record<string, unknown>).id, 'approval:computer-use:cu-risk');
     assert.deepEqual(guiAskUser.relatedRefs, [traceRef, screenshotRef]);
     const objectRefs = response.message.objectReferences?.map((reference) => reference.ref) ?? [];
-    assert.ok(objectRefs.some((ref) => ref.startsWith('artifact:computer-use-virtual-screen-')));
+    assert.ok(objectRefs.some((ref) => ref.startsWith('artifact:computer-use-screen-evidence-')));
     assert.ok(objectRefs.includes(`file:${traceRef}`));
     assert.ok(objectRefs.includes(`file:${screenshotRef}`));
     assert.doesNotMatch(response.message.content, /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
@@ -321,7 +321,8 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     const controlSlot = response.uiManifest.find((slot) => slot.componentId === 'computer-use-control-plane');
     const controlArtifact = response.artifacts.find((artifact) => artifact.id === controlSlot?.artifactRef);
     const controlData = controlArtifact?.data as Record<string, unknown> | undefined;
-    const screenSlot = response.uiManifest.find((slot) => slot.componentId === 'virtual-screen-viewer');
+    const screenSlot = response.uiManifest.find((slot) => slot.componentId === 'image-evidence-viewer');
+    assert.equal(response.uiManifest.some((slot) => slot.componentId === 'virtual-screen-viewer'), false);
     const screenArtifact = response.artifacts.find((artifact) => artifact.id === screenSlot?.artifactRef);
     const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
     const raw = response.run.raw as Record<string, unknown>;
@@ -349,7 +350,7 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     assert.equal(controlData?.status, 'needs-confirmation');
     assert.ok(screenSlot);
     assert.ok(screenArtifact);
-    assert.equal(screenArtifact?.type, 'computer-use-virtual-screen');
+    assert.equal(screenArtifact?.type, 'image-evidence');
     assert.equal(screenData?.sessionRef, 'computer-use:session/live/current-bundle.json');
     assert.deepEqual(screenData?.visibleScreenRefs, ['computer-use:screen/live/screen-1.json']);
     assert.deepEqual(screenData?.frameRefs, ['.sciforge/computer-use/live/frame-after.png']);
@@ -450,13 +451,6 @@ test('Runtime Codex keeps VirtualAppScreen slash commands exact even when refs a
     '--source right-pane-screen',
     '--profile "vscode-editor"',
     '--target-app-ref "app:profile/vscode-editor"',
-    '--screen-ref "virtual-app-screen:right-pane-command-test/screen-request"',
-    '--activation-ref "computer-use:screen-activation/right-pane-command-test/attach-request.json"',
-    '--adapter-readiness-ref "computer-use:screen-activation/right-pane-command-test/provider-readiness.json"',
-    '--platform-driver-ref "computer-use:screen-activation/right-pane-command-test/platform-driver.json"',
-    '--permission-ref "computer-use:screen-activation/right-pane-command-test/permissions/platform-gates.json"',
-    '--evidence-ledger-ref "ledger:computer-use/right-pane-command-test/screen-activation.json"',
-    '--gui-present-ref "gui.present:right-pane-command-test/screen-pane-activation"',
   ].join(' ');
   try {
     globalThis.fetch = (async (_url, init) => {
@@ -600,6 +594,111 @@ test('Runtime Codex foreground final message can use native assistant message pr
     const raw = response.run.raw as Record<string, unknown>;
     const nativeMessage = raw.nativeCodexMessage as Record<string, unknown>;
     assert.equal(nativeMessage.liveAcceptanceEligible, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex done-only final text can use native assistant message provenance', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      return new Response([
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          finalText: 'VISIBLE_DONE_ONLY_NATIVE_MESSAGE',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+
+    assert.equal(response.run.status, 'completed');
+    assert.equal(response.message.content, 'VISIBLE_DONE_ONLY_NATIVE_MESSAGE');
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+    assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex text-only SSE message can use native assistant message provenance', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      return new Response([
+        'event: message\n',
+        'data: VISIBLE_TEXT_ONLY_NATIVE_MESSAGE\n\n',
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+
+    assert.equal(response.run.status, 'completed');
+    assert.equal(response.message.content, 'VISIBLE_TEXT_ONLY_NATIVE_MESSAGE');
+    assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex generic done status without final text still fails closed', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      return new Response([
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+
+    assert.equal(response.message.status, 'failed');
+    assert.equal(response.run.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex completed without gui\.present/);
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    assert.equal(failure.failureKind, 'missing-gui-present');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -991,6 +1090,344 @@ test('Runtime Codex foreground plural tool_calls protocol text fails closed inst
     assert.equal(failure.failureKind, 'missing-gui-present');
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex foreground module_invoke protocol text fails closed instead of completing', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      return new Response([
+        'event: message\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'message',
+          text: 'Looking for papers.\\n\\n<module_invoke>{\"moduleId\":\"browser\",\"intent\":\"executeBoundedOperation\"}</module_invoke>',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    assert.equal(response.message.status, 'failed');
+    assert.equal(response.run.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex completed without gui\.present/);
+    assert.doesNotMatch(response.message.content, /module_invoke|browser|executeBoundedOperation/);
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    assert.equal(failure.failureKind, 'missing-gui-present');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex foreground malformed function_calls protocol text fails closed instead of completing', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const protocolText = [
+        `name="module_invoke">browser executeBoundedOperation {'operationKind': 'browser.search_read', 'targetScope': {'query': 'arxiv.org agentic reinforcement learning 2026'}}`,
+        '<function_calls>',
+        `browser executeBoundedOperation {'operationKind': 'browser.search_read', 'targetScope': {'query': 'arxiv.org agentic reinforcement learning 2026'}}`,
+        '</function_calls>',
+      ].join('\n');
+      return new Response([
+        'event: message\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'message',
+          text: protocolText,
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    assert.equal(response.message.status, 'failed');
+    assert.equal(response.run.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex completed without gui\.present/);
+    assert.doesNotMatch(response.message.content, /module_invoke|function_calls|browser|executeBoundedOperation|agentic reinforcement/i);
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    assert.equal(failure.failureKind, 'missing-gui-present');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider inference preflight blocks stream dispatch for any prompt', async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchedUrls: string[] = [];
+  try {
+    globalThis.fetch = (async (url) => {
+      const urlText = String(url);
+      fetchedUrls.push(urlText);
+      if (urlText.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        return new Response(JSON.stringify({
+          manifest: {
+            schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+            checkedAt: '2026-06-07T00:00:00.000Z',
+            releaseAcceptance: 'not-evaluated',
+            runtimeApiKeyPresentInServiceEnv: true,
+            upstreamBaseUrlPresent: true,
+            upstreamKeySourceKind: 'env',
+            upstreamBaseUrlSourceKind: 'env',
+            category: 'provider-auth',
+            owner: 'provider',
+            policyViolations: [],
+            missingEnv: [],
+            evidenceMode: 'current-env-diagnostic-only',
+            checkedHealthz: {
+              category: 'ready',
+              ok: true,
+              retryable: false,
+              httpStatus: 200,
+              releaseAcceptance: 'not-evaluated',
+            },
+            checkedInference: {
+              category: 'provider-auth',
+              ok: false,
+              retryable: false,
+              httpStatus: 403,
+              releaseAcceptance: 'not-evaluated',
+            },
+            nextActions: [{
+              label: 'Resolve provider-side provider-auth before live repair can pass.',
+              writesRepo: false,
+            }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (urlText.includes(CODEX_RUNTIME_STREAM_PATH)) {
+        throw new Error('Runtime stream should not be called when provider inference preflight is blocked.');
+      }
+      throw new Error(`Unexpected fetch ${urlText}`);
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '请分析任何需要 runtime 的普通任务',
+      runtimeHealth: [{
+        id: 'model',
+        status: 'not-configured',
+        source: 'runtime-provider-preflight',
+      }],
+    });
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    const recoverState = failure.recoverState as Record<string, unknown>;
+
+    assert.equal(response.message.status, 'failed');
+    assert.equal(response.run.status, 'failed');
+    assert.equal(failure.failureKind, 'runtime-provider-preflight-blocked');
+    assert.equal(failure.runtimeProviderPreflightCategory, 'provider-auth');
+    assert.equal(failure.preflightHttpStatus, 403);
+    assert.equal(failure.retryable, false);
+    assert.equal(recoverState.resumeStrategy, 'preflight-retry');
+    assert.match(response.message.content, /Runtime provider preflight blocked before starting Codex Runtime/);
+    assert.match(response.message.content, /provider-auth/);
+    assert.match(response.message.content, /403/);
+    assert.equal(fetchedUrls.some((entry) => entry.includes(CODEX_RUNTIME_STREAM_PATH)), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider inference preflight does not block local Host Browser evidence prompts', async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchedUrls: string[] = [];
+  try {
+    globalThis.fetch = (async (url, init) => {
+      const urlText = String(url);
+      fetchedUrls.push(urlText);
+      if (urlText.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        throw new Error('Browser evidence prompts should bypass provider preflight.');
+      }
+      if (urlText.includes(CODEX_RUNTIME_STREAM_PATH)) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const commandId = String(body.commandId);
+        return new Response([
+          'event: gui_present\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'gui_present',
+            text: '我已用内置浏览器打开并阅读来源页。Agentic Monte Carlo 来源：https://arxiv.org/search/?query=agentic+rl',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
+            workspace: '/tmp/current',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+            evidenceRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt'],
+            raw: {
+              source: `gui.present:${commandId}`,
+              presentation: {
+                source: `gui.present:${commandId}`,
+                text: '我已用内置浏览器打开并阅读来源页。Agentic Monte Carlo 来源：https://arxiv.org/search/?query=agentic+rl',
+                title: 'Runtime answer',
+                hint: 'markdown',
+                displayedRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt'],
+              },
+            },
+          })}\n\n`,
+          'event: done\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            status: 'done',
+            message: 'Runtime Codex completed successfully.',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
+            workspace: '/tmp/current',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+          })}\n\n`,
+        ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+      }
+      throw new Error(`Unexpected fetch ${urlText}`);
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。',
+      runtimeHealth: [{
+        id: 'model',
+        status: 'not-configured',
+        source: 'runtime-provider-preflight',
+      }],
+    });
+
+    assert.equal(response.message.status, 'completed');
+    assert.match(response.message.content, /Agentic Monte Carlo/);
+    assert.match(response.message.content, /arxiv\.org/);
+    assert.equal(fetchedUrls.some((entry) => entry.includes(CODEX_RUNTIME_STREAM_PATH)), true);
+    assert.equal(fetchedUrls.some((entry) => entry.includes('/api/sciforge/runtime-provider-preflight/manifest')), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider preflight falls back from UI origin to desktop writer manifest', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const fetchedUrls: string[] = [];
+  try {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      writable: true,
+      value: {
+        sciforgeDesktop: {
+          getRuntimeConfig: async () => ({
+            workspaceWriterBaseUrl: 'http://127.0.0.1:6173',
+          }),
+        },
+      },
+    });
+    globalThis.fetch = (async (url) => {
+      const urlText = String(url);
+      fetchedUrls.push(urlText);
+      if (urlText.includes(CODEX_RUNTIME_STREAM_PATH)) {
+        throw new Error('Runtime stream should not be called after desktop writer preflight fallback blocks.');
+      }
+      if (urlText.startsWith('http://127.0.0.1:5173/')) {
+        return new Response('<!doctype html><title>SciForge</title>', { status: 200, headers: { 'Content-Type': 'text/html' } });
+      }
+      if (urlText === 'http://127.0.0.1:6173/api/sciforge/runtime-provider-preflight/manifest') {
+        return new Response(JSON.stringify({
+          manifest: {
+            schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+            checkedAt: '2026-06-07T00:00:00.000Z',
+            releaseAcceptance: 'not-evaluated',
+            runtimeApiKeyPresentInServiceEnv: true,
+            upstreamBaseUrlPresent: true,
+            upstreamKeySourceKind: 'env',
+            upstreamBaseUrlSourceKind: 'env',
+            category: 'provider-auth',
+            owner: 'provider',
+            policyViolations: [],
+            missingEnv: [],
+            evidenceMode: 'current-env-diagnostic-only',
+            checkedInference: {
+              category: 'provider-auth',
+              ok: false,
+              retryable: false,
+              httpStatus: 403,
+              releaseAcceptance: 'not-evaluated',
+            },
+            nextActions: [{
+              label: 'Resolve provider-side provider-auth before live repair can pass.',
+              writesRepo: false,
+            }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected fetch ${urlText}`);
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      config: {
+        ...runtimeRequestInput().config,
+        workspaceWriterBaseUrl: 'http://127.0.0.1:5173',
+      },
+      prompt: '任何普通 runtime 请求',
+    });
+    const failure = (response.run.raw as Record<string, unknown>).codexRuntimeFailure as Record<string, unknown>;
+
+    assert.equal(response.run.status, 'failed');
+    assert.equal(failure.runtimeProviderPreflightCategory, 'provider-auth');
+    assert.equal(failure.preflightHttpStatus, 403);
+    assert.equal(fetchedUrls.includes('http://127.0.0.1:5173/api/sciforge/runtime-provider-preflight/manifest'), true);
+    assert.equal(fetchedUrls.includes('http://127.0.0.1:6173/api/sciforge/runtime-provider-preflight/manifest'), true);
+    assert.equal(fetchedUrls.some((entry) => entry.includes(CODEX_RUNTIME_STREAM_PATH)), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, 'window', originalWindowDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
   }
 });
 
@@ -2241,6 +2678,10 @@ test('Runtime Codex failed SSE returns a persistable failed run with folded audi
 
     assert.equal(response.run.status, 'failed');
     assert.equal(response.run.id.startsWith('codex-command-'), true);
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+    assert.match(String(response.message.provenance?.source), /^codex\.runtime-failure:codex-command-/);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
+    assert.equal(response.message.provenance?.runtimeRequestEligible, false);
     assert.equal(failure.schemaVersion, 'sciforge.runtime-codex-failed-run.v1');
     assert.equal(failure.commandId, response.run.id);
     assert.equal(failure.attemptId, `${response.run.id}-attempt-1`);
@@ -2329,7 +2770,43 @@ test('Runtime Codex provider auth failures surface a sanitized recoverable reaso
     assert.equal(failure.failureKind, 'provider-auth');
     assert.equal(failure.ownerLayer, 'provider-config');
     assert.equal(failure.retryable, false);
+    assert.match(response.message.content, /Runtime Codex provider rejected credentials \(401 Unauthorized\)/);
     assert.doesNotMatch(response.message.content, /Invalid token|req-secret-123|127\.0\.0\.1:3891/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider forbidden failures surface a sanitized account access reason', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = String(body.attemptId);
+      const stderrRef = `audit:codex-runtime:${commandId}:${attemptId}:stderr`;
+      const rawStderr = 'upstream_forbidden: Upstream provider returned HTTP 403 Forbidden. Raw provider error content was suppressed; url: http://127.0.0.1:3891/v1/chat/completions';
+      return new Response([
+        'event: run_started\n',
+        `data: ${JSON.stringify({ type: 'run_started', provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, evidenceRefs: [stderrRef] })}\n\n`,
+        'event: failed\n',
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawStderr, provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, exitCode: 1, raw: { stderrSummary: rawStderr, evidenceRefs: [stderrRef] } })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    const recoverState = failure.recoverState as Record<string, unknown>;
+    const publicReason = 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.';
+
+    assert.equal(failure.publicFailureReason, publicReason);
+    assert.equal(recoverState.publicFailureReason, publicReason);
+    assert.equal(failure.failureKind, 'provider-forbidden');
+    assert.equal(failure.ownerLayer, 'provider-access');
+    assert.equal(failure.retryable, false);
+    assert.match(response.message.content, /Runtime Codex provider or plugin access was forbidden \(403\)/);
+    assert.doesNotMatch(response.message.content, /upstream_forbidden|127\.0\.0\.1:3891|chat\/completions/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -2362,6 +2839,7 @@ test('Runtime Codex provider gateway failures surface a retryable upstream reaso
     assert.equal(failure.failureKind, 'provider-gateway');
     assert.equal(failure.ownerLayer, 'provider-upstream');
     assert.equal(failure.retryable, true);
+    assert.match(response.message.content, /Runtime Codex provider gateway returned 502 Bad Gateway/);
     assert.doesNotMatch(response.message.content, /127\.0\.0\.1:3891/);
   } finally {
     globalThis.fetch = originalFetch;

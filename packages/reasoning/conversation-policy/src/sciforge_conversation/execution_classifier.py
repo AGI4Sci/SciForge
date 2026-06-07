@@ -427,7 +427,7 @@ def _action_capabilities(req: JsonMap) -> list[Mapping[str, Any]]:
         if not isinstance(item, Mapping):
             continue
         adapter = _text(item.get("adapter"))
-        if adapter and adapter == "agentserver:generation":
+        if adapter and adapter in {"backend:generation", "agentserver:generation"}:
             continue
         if _text(item.get("kind")) in {"tool", "sense", "action", "skill", "verifier"}:
             out.append(item)

@@ -50,11 +50,12 @@ for (const item of cases) {
   });
 
   const unit = result.executionUnits[0] ?? {};
-  assert.equal(unit.status, 'repair-needed');
-  const routeDecision = unit.routeDecision as Record<string, unknown> | undefined;
-  assert.equal(routeDecision?.selectedSkill, `agentserver.generate.${item.skillDomain}`);
-  assert.equal(routeDecision?.selectedRuntime, 'agentserver-generation');
-  assert.match(String(unit.failureReason || ''), /AgentServer base URL is not configured|no AgentServer base URL is configured/i);
-  assert.ok(result.message || unit.failureReason, `${item.skillId} should require AgentServer reasoning before execution`);
-  console.log(`[ok] ${item.skillId} SKILL.md request is routed through AgentServer generation`);
+  assert.equal(unit.status, 'needs-human');
+  assert.match(String(unit.tool || ''), /sciforge\.(?:capability-provider-preflight|runtime-codex)/);
+  assert.match(
+    [result.message, unit.failureReason, unit.params, unit.nextStep].map(String).join('\n'),
+    /provider route|legacy AgentServer generation fallback is retired|migrated Runtime Codex/,
+  );
+  assert.ok(result.message || unit.failureReason, `${item.skillId} should fail closed without legacy generation fallback`);
+  console.log(`[ok] ${item.skillId} SKILL.md request fails closed without legacy AgentServer generation fallback`);
 }

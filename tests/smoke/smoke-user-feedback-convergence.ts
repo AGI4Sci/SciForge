@@ -19,7 +19,7 @@ try {
     id: 'feedback-latency',
     prompt: 'Long research task should show progress instead of appearing stuck.',
     status: 'failed-with-reason',
-    failureReason: 'AgentServer generation request timed out after 30000ms.',
+    failureReason: 'backend generation request timed out after 30000ms.',
     outputRef: '.sciforge/task-results/feedback-latency.json',
     stderrRef: '.sciforge/logs/feedback-latency.stderr.log',
     createdAt: '2026-05-13T00:00:00.000Z',
@@ -125,7 +125,7 @@ console.log('[ok] user feedback convergence folds slow/crash/unclear/citation/du
 function attempt(overrides: Partial<TaskAttemptRecord> & { id: string; prompt: string; status: TaskAttemptRecord['status'] }): TaskAttemptRecord {
   return {
     skillDomain: 'knowledge',
-    skillId: 'agentserver.generated-task',
+    skillId: 'generated-task.generate.-task',
     scenarioPackageRef: { id: 'feedback-convergence', version: '1.0.0', source: 'workspace' },
     attempt: 1,
     outputRef: '.sciforge/task-results/feedback.json',

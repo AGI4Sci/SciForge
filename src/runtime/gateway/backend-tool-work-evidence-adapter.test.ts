@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { adaptBackendToolEventToWorkEvidence } from '@sciforge-ui/runtime-contract/work-evidence-adapter';
 import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
-import { normalizeAgentServerWorkspaceEvent } from './workspace-event-normalizer.js';
+import { normalizeBackendWorkspaceEvent } from './workspace-event-normalizer.js';
 
 test('adapts generic search result facts into WorkEvidence without provider branches', () => {
   const evidence = adaptBackendToolEventToWorkEvidence({
@@ -129,7 +129,7 @@ test('adapts textual backend write events with embedded workspace paths', () => 
 });
 
 test('normalizer attaches adapted WorkEvidence while preserving raw event', () => {
-  const normalized = normalizeAgentServerWorkspaceEvent({
+  const normalized = normalizeBackendWorkspaceEvent({
     type: 'tool-result',
     toolName: 'generic_search',
     query: 'work evidence contract',

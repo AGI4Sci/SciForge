@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
-import { buildCompactRepairContext } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { buildCompactRepairContext } from '../../src/runtime/gateway/backend-prompt-policy.js';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
-import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
+import { runGeneratedTaskBackend } from '../../src/runtime/gateway/generated-task-runner.js';
 import { readRecentTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types.js';
@@ -150,7 +150,7 @@ const fixtures: ProviderFixture[] = [
 
 for (const fixture of fixtures) {
   const request = requestForFixture(fixture);
-  const result = await runAgentServerGeneratedTask(request, skill, [skill], {}, depsForFixture(fixture));
+  const result = await runGeneratedTaskBackend(request, skill, [skill], {}, depsForFixture(fixture));
   assert.ok(result, `${fixture.id} should return a payload`);
   assert.equal(result.executionUnits[0]?.status, fixture.expectedResultStatus, `${fixture.id} result status: ${result.message}`);
   const attempts = await readRecentTaskAttempts(workspace, 'literature', 20, { prompt: fixture.prompt });
@@ -226,7 +226,7 @@ async function runBackendStreamSmoke() {
         id: 'real-empty-after-fallback',
         message: 'Retrieved 0 records after documented provider and fallback checks.',
         confidence: 0.72,
-        reasoningTrace: 'AgentServer backend streamed provider and fallback diagnostics.',
+        reasoningTrace: 'Agent backend streamed provider and fallback diagnostics.',
       }),
       expectedStatus: 'done',
       expectedEvidenceStatus: 'empty',
@@ -272,7 +272,7 @@ async function runBackendStreamSmoke() {
         id: 'real-fallback-success',
         message: 'Fetch completed after fallback recovery.',
         confidence: 0.91,
-        reasoningTrace: 'AgentServer backend used fallback provider successfully.',
+        reasoningTrace: 'Agent backend used fallback provider successfully.',
       }),
       expectedStatus: 'done',
       expectedEvidenceStatus: 'partial',
@@ -291,7 +291,7 @@ async function runBackendStreamSmoke() {
         id: 'real-success-without-durable-ref',
         message: 'Fetch completed successfully with high confidence.',
         confidence: 0.92,
-        reasoningTrace: 'AgentServer backend summarized a fetched source without durable refs.',
+        reasoningTrace: 'Agent backend summarized a fetched source without durable refs.',
         executionUnits: [{ id: 'fetch', status: 'done', tool: 'agentserver.fetch' }],
       }),
       expectedStatus: 'repair-needed',
@@ -493,8 +493,8 @@ async function assertRuntimeWorkEvidenceFeedsUiAtoms() {
 
 function depsForFixture(fixture: ProviderFixture) {
   return {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
-    requestAgentServerGeneration: async () => ({
+    readConfiguredBackendBaseUrl: async () => 'http://agentserver.local',
+    requestBackendGeneration: async () => ({
       ok: true as const,
       runId: `t096-${fixture.id}`,
       response: {
@@ -510,10 +510,10 @@ function depsForFixture(fixture: ProviderFixture) {
         patchSummary: `T096 provider fixture ${fixture.id}`,
       },
     }),
-    agentServerGenerationFailureReason: (error: string) => error,
+    backendGenerationFailureReason: (error: string) => error,
     attemptPlanRefs: () => ({}),
     repairNeededPayload: (request: GatewayRequest, selectedSkill: SkillAvailability, reason: string) => repairNeededPayload(request, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
+    backendFailurePayloadRefs: () => ({}),
     ensureDirectAnswerReportArtifact: (payload: ToolPayload) => payload,
     mergeReusableContextArtifactsForDirectPayload: async (payload: ToolPayload) => payload,
     validateAndNormalizePayload: async (payload: ToolPayload, _request: GatewayRequest, selectedSkill: SkillAvailability, refs: {
@@ -527,7 +527,7 @@ function depsForFixture(fixture: ProviderFixture) {
       executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
       logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
     }),
-    tryAgentServerRepairAndRerun: async (params: { failureReason: string }) => repairNeededPayload(requestForFixture(fixture), skill, params.failureReason),
+    tryGeneratedTaskRepairAndRerun: async (params: { failureReason: string }) => repairNeededPayload(requestForFixture(fixture), skill, params.failureReason),
     failedTaskPayload: (request: GatewayRequest, selectedSkill: SkillAvailability, _run: WorkspaceTaskRunResult, reason?: string) => repairNeededPayload(request, selectedSkill, reason || 'failed'),
     coerceWorkspaceTaskPayload: () => undefined,
     schemaErrors: (payload: unknown) => {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import {
   buildUIComponentArtifactTypeIndex,
@@ -32,6 +33,7 @@ test('component package exports a deduped runtime registry and alias artifact in
   assert.ok(uiComponentRuntimeRegistry.length > uiComponentManifests.length);
   assert.ok(uiComponentManifests.some((module) => module.componentId === 'computer-use-control-plane'));
   assert.ok(uiComponentManifests.some((module) => module.componentId === 'image-evidence-viewer'));
+  assert.equal(uiComponentManifests.some((module) => module.componentId === 'virtual-screen-viewer'), false);
   assert.deepEqual(index['computer-use-control-plane'], ['computer-use-control-plane', 'computer-use-user-control-plane', 'computer-use-session-control', 'computer-use-replay-control']);
   assert.deepEqual(index['image-evidence-viewer'], [
     'image-evidence',
@@ -49,4 +51,10 @@ test('component package exports a deduped runtime registry and alias artifact in
   ]);
   assert.deepEqual(index['data-table'], index['record-table']);
   assert.deepEqual(index['volcano-plot'], index['point-set-viewer']);
+});
+
+test('component package public barrel does not expose retired VirtualAppScreen viewer', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /virtual-screen-viewer\/render/);
+  assert.doesNotMatch(source, /renderVirtualScreenViewer|buildVirtualScreenInputIntentCommand|VirtualScreenPayload/);
 });

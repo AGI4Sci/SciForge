@@ -32,7 +32,8 @@ type CuNextTaskId =
   | 'CU-NEXT-04'
   | 'CU-NEXT-05'
   | 'CU-NEXT-06'
-  | 'CU-NEXT-07';
+  | 'CU-NEXT-07'
+  | 'CU-NEXT-08';
 
 const expectedMarkerKinds: Record<CuNextTaskId, CuNextLiveAcceptanceMarkerKind> = {
   'CU-NEXT-01': 'briefing-deck',
@@ -42,9 +43,10 @@ const expectedMarkerKinds: Record<CuNextTaskId, CuNextLiveAcceptanceMarkerKind> 
   'CU-NEXT-05': 'repair-continuity',
   'CU-NEXT-06': 'approval-ref',
   'CU-NEXT-07': 'dense-grounding',
+  'CU-NEXT-08': 'desktop-file-save',
 };
 
-test('CU-NEXT live acceptance semantic rules cover CU-NEXT-01..07 with task-specific markers', () => {
+test('CU-NEXT live acceptance semantic rules cover CU-NEXT-01..08 with task-specific markers', () => {
   assert.deepEqual(
     CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES.map((rule) => rule.taskId),
     Object.keys(expectedMarkerKinds),
@@ -52,6 +54,26 @@ test('CU-NEXT live acceptance semantic rules cover CU-NEXT-01..07 with task-spec
   for (const rule of CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES) {
     assert.equal(rule.markerKind, expectedMarkerKinds[rule.taskId as CuNextTaskId]);
   }
+});
+
+test('CU-NEXT-08 accepts desktop GUI save evidence and rejects workspace-writer assisted artifacts', () => {
+  const valid = validateCuNextLiveAcceptanceTaskEvidence(liveAcceptanceInput('CU-NEXT-08'));
+  assert.equal(valid.ok, true, valid.issues.map((issue) => `${issue.id}: ${issue.reason}`).join('\n'));
+  assert.equal(valid.markerKind, 'desktop-file-save');
+
+  const assisted = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-08',
+    evidence: liveAcceptanceEvidence('CU-NEXT-08', {
+      evidenceMarkers: [{
+        ...taskMarker('CU-NEXT-08'),
+        fileCreationOwner: 'workspace-file-writer-assisted',
+      }],
+    }),
+    refRecords: acceptanceSupportRefRecords('CU-NEXT-08'),
+  });
+  assert.equal(assisted.ok, false);
+  assert.ok(hasIssue(assisted, 'invalid-task-marker'));
+  assert.match(assisted.issues.map((issue) => issue.reason).join('\n'), /workspace-file-writer-assisted|GUI save/i);
 });
 
 test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform smoke, and product smoke gates', () => {
@@ -89,6 +111,10 @@ test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform sm
     }
     assert.equal(item.requiredExecutionMode, 'opt-in-live-backend');
   }
+  assert.equal(
+    CU_NEXT_PRODUCT_SMOKE_CASES.find((item) => item.id === 'real-artifact-save')?.taskId,
+    'CU-NEXT-08',
+  );
   const requirements = new Set<string>(CU_NEXT_PRODUCT_SMOKE_CASES.flatMap((item) => item.requirements));
   for (const requirement of [
     'codex-app-server-native-plugin-path',
@@ -898,7 +924,7 @@ test('CU-NEXT live acceptance matrix accepts complete task-level semantic eviden
 
   const results = validateCuNextLiveAcceptanceMatrix(inputs);
 
-  assert.deepEqual(results.map((result) => result.ok), [true, true, true, true, true, true, true]);
+  assert.deepEqual(results.map((result) => result.ok), Object.keys(expectedMarkerKinds).map(() => true));
   assert.deepEqual(results.map((result) => result.markerKind), Object.values(expectedMarkerKinds));
   for (const result of results) {
     assert.equal(result.checks.exactTaskId, true, result.taskId);
@@ -924,7 +950,7 @@ test('CU-NEXT live acceptance rejects evidence without SciForge chat-origin proo
   assert.match(result.issues.map((issue) => issue.reason).join('\n'), /chat-origin|SciForge chat/i);
 });
 
-test('CU-NEXT task marker projector emits validator-accepted markers for CU-NEXT-01..07', () => {
+test('CU-NEXT task marker projector emits validator-accepted markers for CU-NEXT-01..08', () => {
   for (const taskId of Object.keys(expectedMarkerKinds) as CuNextTaskId[]) {
     const projection = projectCuNextTaskAcceptanceMarkers(taskId, projectionRefs(taskId));
     const evidence = liveAcceptanceEvidence(taskId, {
@@ -2217,6 +2243,22 @@ function taskMarker(taskId: CuNextTaskId): Record<string, unknown> {
         fineGroundingDiagnosticRef: ref(taskId, 'fine-grounding-diagnostic.json'),
         rejectedTargetRefs: [ref(taskId, 'dense-grounding-rejections.json')],
       };
+    case 'CU-NEXT-08':
+      return {
+        kind: 'desktop-file-save',
+        targetWindowRef: ref(taskId, 'target-window.json'),
+        beforeScreenshotRef: ref(taskId, 'before.png'),
+        beforeAxRef: ref(taskId, 'before-ax.json'),
+        guiSaveCommandRef: ref(taskId, 'gui-save-command.json'),
+        executorEventRef: ref(taskId, 'executor-event.json'),
+        afterScreenshotRef: ref(taskId, 'after.png'),
+        afterAxRef: ref(taskId, 'after-ax.json'),
+        artifactRef: ref(taskId, finalArtifactName(taskId)),
+        artifactValidationRef: artifactValidationRef(taskId),
+        fileCreationOwner: 'scoped-gui-save',
+        sharedSystemInputUsed: false,
+        shellDirectArtifactWrite: false,
+      };
   }
 }
 
@@ -2710,6 +2752,8 @@ function finalArtifactName(taskId: CuNextTaskId): string {
       return 'approved-submission.txt';
     case 'CU-NEXT-07':
       return 'dense-grounding-export.csv';
+    case 'CU-NEXT-08':
+      return 'sciforge-computer-use-proof.txt';
   }
 }
 

@@ -14,10 +14,10 @@ import {
 } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import { isRecord } from '../gateway-utils.js';
 
-export type AgentServerBackendFailureKind = RuntimeAgentBackendFailureKind;
-export type AgentServerBackendFailureDiagnostic = RuntimeAgentBackendFailureDiagnostic;
+export type BackendFailureKind = RuntimeAgentBackendFailureKind;
+export type BackendFailureDiagnostic = RuntimeAgentBackendFailureDiagnostic;
 
-export function classifyAgentServerBackendFailure(
+export function classifyBackendFailure(
   message: string,
   context: {
     httpStatus?: number;
@@ -27,7 +27,7 @@ export function classifyAgentServerBackendFailure(
     model?: string;
     evidenceRefs?: string[];
   } = {},
-): AgentServerBackendFailureDiagnostic | undefined {
+): BackendFailureDiagnostic | undefined {
   const text = parseJsonErrorMessage(message) || message;
   const uniqueCategories = runtimeAgentBackendFailureCategories(text, context.httpStatus);
   if (!uniqueCategories.length) return undefined;
@@ -42,7 +42,7 @@ export function classifyAgentServerBackendFailure(
     resetAt: rateLimitResetAtFromHeaders(context.headers) ?? rateLimitResetAtFromText(text),
     message: sanitizeBackendFailureDetail(text),
     evidenceRefs: context.evidenceRefs,
-  } satisfies AgentServerBackendFailureDiagnostic;
+  } satisfies BackendFailureDiagnostic;
   return withUserFacingDiagnostic(diagnostic);
 }
 
@@ -56,8 +56,8 @@ export function diagnosticForFailure(
     model?: string;
     evidenceRefs?: string[];
   } = {},
-): AgentServerBackendFailureDiagnostic {
-  return classifyAgentServerBackendFailure(message, context) ?? withUserFacingDiagnostic({
+): BackendFailureDiagnostic {
+  return classifyBackendFailure(message, context) ?? withUserFacingDiagnostic({
     kind: 'unknown',
     categories: ['unknown'],
     backend: context.backend,
@@ -69,23 +69,23 @@ export function diagnosticForFailure(
   });
 }
 
-export function withUserFacingDiagnostic(diagnostic: AgentServerBackendFailureDiagnostic): AgentServerBackendFailureDiagnostic {
+export function withUserFacingDiagnostic(diagnostic: BackendFailureDiagnostic): BackendFailureDiagnostic {
   return withRuntimeAgentBackendUserFacingDiagnostic(diagnostic);
 }
 
-export function recoverActionsForDiagnostic(diagnostic: Pick<AgentServerBackendFailureDiagnostic, 'categories' | 'retryAfterMs' | 'resetAt'>) {
+export function recoverActionsForDiagnostic(diagnostic: Pick<BackendFailureDiagnostic, 'categories' | 'retryAfterMs' | 'resetAt'>) {
   return runtimeAgentBackendRecoverActions(diagnostic);
 }
 
-export function providerRateLimitDiagnosticMessage(diagnostic: AgentServerBackendFailureDiagnostic, finalFailure: boolean) {
+export function providerRateLimitDiagnosticMessage(diagnostic: BackendFailureDiagnostic, finalFailure: boolean) {
   return runtimeAgentBackendProviderFailureMessage(diagnostic, finalFailure);
 }
 
-export function rateLimitRecoverActions(diagnostic: AgentServerBackendFailureDiagnostic) {
+export function rateLimitRecoverActions(diagnostic: BackendFailureDiagnostic) {
   return runtimeAgentBackendRateLimitRecoverActions(diagnostic);
 }
 
-export function boundedRateLimitBackoffMs(diagnostic: AgentServerBackendFailureDiagnostic) {
+export function boundedRateLimitBackoffMs(diagnostic: BackendFailureDiagnostic) {
   const configuredMax = Number(process.env.SCIFORGE_AGENTSERVER_RATE_LIMIT_BACKOFF_MAX_MS || 1500);
   const max = Number.isFinite(configuredMax) ? Math.max(0, Math.min(10_000, configuredMax)) : 1500;
   const requested = diagnostic.retryAfterMs ?? 250;
@@ -105,9 +105,9 @@ export function parseJsonErrorMessage(text: string) {
   return undefined;
 }
 
-export function sanitizeAgentServerError(text: string) {
+export function sanitizeBackendError(text: string) {
   const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || text;
-  const providerDiagnostic = classifyAgentServerBackendFailure(firstLine);
+  const providerDiagnostic = classifyBackendFailure(firstLine);
   if (providerDiagnostic) return runtimeAgentBackendSanitizedFailureUserReason(providerDiagnostic, false);
   return redactSecretText(firstLine
     .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
@@ -115,6 +115,18 @@ export function sanitizeAgentServerError(text: string) {
     .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url'))
     .slice(0, 320);
 }
+
+/** @deprecated Use BackendFailureKind. */
+export type AgentServerBackendFailureKind = BackendFailureKind;
+
+/** @deprecated Use BackendFailureDiagnostic. */
+export type AgentServerBackendFailureDiagnostic = BackendFailureDiagnostic;
+
+/** @deprecated Use classifyBackendFailure. */
+export const classifyAgentServerBackendFailure = classifyBackendFailure;
+
+/** @deprecated Use sanitizeBackendError. */
+export const sanitizeAgentServerError = sanitizeBackendError;
 
 export function isContextWindowExceededError(text: string) {
   return runtimeAgentBackendFailureIsContextWindowExceeded(text);

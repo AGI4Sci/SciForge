@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "sciforge.runtime-codex.browser-ordinary-chat-audit.v1",
+  "selectedRuntime": "module.invoke",
+  "commandId": "browser-ordinary-chat-local-9b5805f7b55b",
+  "evidenceRefs": [
+    "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.source.json",
+    "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.txt",
+    "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-9b5805f7b55b/module.invoke",
+    "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-9b5805f7b55b",
+    "artifact:runtime-codex-browser-acceptance/final-answer.md"
+  ],
+  "outputDigest": {
+    "length": 1692,
+    "sha256": "931e4f8aac25a56072cbcddc896b0a5cedef03e23f05cc0e24359cc1c643de7d"
+  }
+}

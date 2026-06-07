@@ -47,7 +47,7 @@ test('R-DESK default production sidecars include workspace, provider proxy, and 
 	  assert.deepEqual(services.map((service) => service.role), ['workspace-writer', 'provider-proxy', 'runtime-codex']);
 	  assert.ok(services.every((service) => service.command === process.execPath));
 	  assert.ok(services.some((service) => service.args?.some((arg) => /dist-desktop\/src\/runtime\/workspace-server\.js$/.test(arg))));
-	  assert.ok(services.some((service) => service.args?.some((arg) => /dist-desktop\/packages\/backend\/src\/cli\.js$/.test(arg))));
+		  assert.ok(services.some((service) => service.args?.some((arg) => /dist-desktop\/packages\/workers\/model-router\/src\/cli\.js$/.test(arg))));
 	  assert.ok(services.some((service) => service.args?.some((arg) => /dist-desktop\/src\/runtime\/codex\/codex-runtime-standalone-server\.js$/.test(arg))));
 	  assert.ok(services.every((service) => !(service.args ?? []).includes('--import')));
 	  assert.ok(services.every((service) => !(service.args ?? []).includes('tsx')));
@@ -112,10 +112,7 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
 	    'desktop:native-browser:reload',
 	    'desktop:native-browser:screenshot',
     'desktop:native-browser:state',
-      'desktop:virtual-app-screen-surface:attach',
-      'desktop:virtual-app-screen-surface:detach',
-      'desktop:virtual-app-screen-surface:present',
-	    'platform:open-external',
+		    'platform:open-external',
 	    'platform:pick-directory',
 	    'platform:reveal-path',
 	    'runtime:config',
@@ -163,7 +160,7 @@ test('P1-DESK main controller can load the Vite dev URL while preserving the iso
   assert.equal(startedWindow.options.webPreferences.nodeIntegration, false);
   assert.ok(handledChannels.includes('runtime:config'));
   assert.ok(handledChannels.includes('desktop:browser-host-surface:attach'));
-  assert.ok(handledChannels.includes('desktop:virtual-app-screen-surface:attach'));
+  assert.equal(handledChannels.some((channel) => channel.includes('virtual-app-screen-surface')), false);
   assert.doesNotMatch(JSON.stringify(started.runtimeConfig), /SCIFORGE_RUNTIME_API_KEY|apiKey|sk-/);
 });
 
@@ -237,10 +234,6 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
   await api.attachBrowserHostSessionSurface({ sessionId: 'browser-host-1', bounds: { x: 1, y: 2, width: 300, height: 200 } });
   await api.getBrowserHostSessionSurfaceState({ sessionId: 'browser-host-1' });
   await api.detachBrowserHostSessionSurface({ sessionId: 'browser-host-1' });
-  const virtualAppScreenApi = api as Record<string, (input: unknown) => Promise<unknown>>;
-  await virtualAppScreenApi.attachVirtualAppScreenSurface(validVirtualAppScreenSurfaceRequest());
-  await virtualAppScreenApi.presentVirtualAppScreenSurface(validVirtualAppScreenSurfaceRequest());
-  await virtualAppScreenApi.detachVirtualAppScreenSurface(validVirtualAppScreenSurfaceDetachRequest());
   await api.startAnnotation(validOneClickDesktopAnnotationRequest());
   await api.startDesktopAnnotation(validOneClickDesktopAnnotationRequest());
   await api.getAnnotationState();
@@ -264,9 +257,6 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'desktop:browser-host-surface:attach',
     'desktop:browser-host-surface:state',
     'desktop:browser-host-surface:detach',
-    'desktop:virtual-app-screen-surface:attach',
-    'desktop:virtual-app-screen-surface:present',
-    'desktop:virtual-app-screen-surface:detach',
     'desktop:annotation-overlay:start',
     'desktop:annotation-overlay:start',
     'desktop:annotation-overlay:status',
@@ -274,13 +264,11 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'platform:reveal-path',
     'platform:pick-directory',
   ]);
-	  assert.deepEqual(Object.keys(api).sort(), [
-	    'attachBrowserHostSessionSurface',
-      'attachVirtualAppScreenSurface',
+		  assert.deepEqual(Object.keys(api).sort(), [
+		    'attachBrowserHostSessionSurface',
       'cancelAnnotation',
-	    'captureNativeBrowserScreenshot',
-	    'detachBrowserHostSessionSurface',
-      'detachVirtualAppScreenSurface',
+		    'captureNativeBrowserScreenshot',
+		    'detachBrowserHostSessionSurface',
       'getAnnotationState',
 	    'getBrowserHostSessionSurfaceState',
 	    'getNativeBrowserState',
@@ -291,10 +279,9 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'nativeBrowserForward',
     'nativeBrowserReload',
     'openExternal',
-    'openNativeBrowser',
-    'pickDirectory',
-    'presentVirtualAppScreenSurface',
-    'requestShutdown',
+	    'openNativeBrowser',
+	    'pickDirectory',
+	    'requestShutdown',
     'resizeBrowserHostSessionSurface',
     'revealPath',
     'startAnnotation',
@@ -328,18 +315,12 @@ test('P1-DESK copied CommonJS preload stays in parity with the TypeScript preloa
 
   const api = exposed.sciforgeDesktop;
   assert.ok(api);
-  await api.attachVirtualAppScreenSurface({});
-  await api.presentVirtualAppScreenSurface({});
-  await api.detachVirtualAppScreenSurface({});
   await api.startAnnotation(validOneClickDesktopAnnotationRequest());
   await api.startDesktopAnnotation(validOneClickDesktopAnnotationRequest());
   await api.getAnnotationState();
   await api.cancelAnnotation();
 
   assert.deepEqual(invoked, [
-    'desktop:virtual-app-screen-surface:attach',
-    'desktop:virtual-app-screen-surface:present',
-    'desktop:virtual-app-screen-surface:detach',
     'desktop:annotation-overlay:start',
     'desktop:annotation-overlay:start',
     'desktop:annotation-overlay:status',
@@ -347,11 +328,9 @@ test('P1-DESK copied CommonJS preload stays in parity with the TypeScript preloa
   ]);
   assert.deepEqual(Object.keys(api).sort(), [
     'attachBrowserHostSessionSurface',
-    'attachVirtualAppScreenSurface',
     'cancelAnnotation',
     'captureNativeBrowserScreenshot',
     'detachBrowserHostSessionSurface',
-    'detachVirtualAppScreenSurface',
     'getAnnotationState',
     'getBrowserHostSessionSurfaceState',
     'getNativeBrowserState',
@@ -364,7 +343,6 @@ test('P1-DESK copied CommonJS preload stays in parity with the TypeScript preloa
     'openExternal',
     'openNativeBrowser',
     'pickDirectory',
-    'presentVirtualAppScreenSurface',
     'requestShutdown',
     'resizeBrowserHostSessionSurface',
     'revealPath',
@@ -1724,7 +1702,7 @@ test('P0 desktop annotation begin accepts screen-region selections without windo
   });
 });
 
-test('P0.2 desktop VirtualAppScreenSurface presenter accepts only refs-only Native Host observe requests', async () => {
+test('P0.2 desktop main does not expose VirtualAppScreenSurface IPC on the product preload bridge', async () => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   registerDesktopIpcHandlers({
 	    electron: {
@@ -1786,82 +1764,9 @@ test('P0.2 desktop VirtualAppScreenSurface presenter accepts only refs-only Nati
     platformService: new DesktopPlatformService(),
   });
 
-  const attach = handlers.get('desktop:virtual-app-screen-surface:attach');
-  const present = handlers.get('desktop:virtual-app-screen-surface:present');
-  const detach = handlers.get('desktop:virtual-app-screen-surface:detach');
-  assert.equal(typeof attach, 'function');
-  assert.equal(typeof present, 'function');
-  assert.equal(typeof detach, 'function');
-
-  const attached = await attach?.({}, validVirtualAppScreenSurfaceRequest());
-  assert.deepEqual(attached, {
-    ok: true,
-    owner: 'VirtualAppScreenSurface',
-    presenterRole: 'observe-only-host-ref-presenter',
-    surfaceMode: 'live',
-    liveSurfaceTransport: 'native-frame-stream',
-    singleInteractiveTruth: true,
-    secondTruthSource: false,
-    sessionRef: 'computer-use:native-host/run-live/session.json',
-    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
-    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
-    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
-    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
-    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
-    bounds: { x: 10, y: 20, width: 640, height: 480 },
-    visible: true,
-  });
-
-  const presented = await present?.({}, {
-    ...validVirtualAppScreenSurfaceRequest(),
-    bounds: { x: 12, y: 22, width: 800, height: 600 },
-  });
-  assert.equal((presented as { ok?: unknown }).ok, true);
-  assert.deepEqual((presented as { bounds?: unknown }).bounds, { x: 12, y: 22, width: 800, height: 600 });
-
-  assert.deepEqual(await detach?.({}, validVirtualAppScreenSurfaceDetachRequest()), {
-    ok: true,
-    owner: 'VirtualAppScreenSurface',
-    presenterRole: 'observe-only-host-ref-presenter',
-    surfaceMode: 'live',
-    liveSurfaceTransport: 'native-frame-stream',
-    singleInteractiveTruth: true,
-    secondTruthSource: false,
-    sessionRef: 'computer-use:native-host/run-live/session.json',
-    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
-    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
-    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
-    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
-    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
-    visible: false,
-  });
-
-  assert.deepEqual(await attach?.({}, {
-    ...validVirtualAppScreenSurfaceRequest(),
-    liveSurfaceRef: 'computer-use:provider-session/run-live/live-surface.json',
-  }), {
-    ok: false,
-    reason: 'non-native-host-live-ref:liveSurfaceRef',
-  });
-
-  assert.deepEqual(await present?.({}, {
-    ...validVirtualAppScreenSurfaceRequest(),
-    currentFrameRef: 'computer-use:native-host/run-live/replay/current.png',
-  }), {
-    ok: false,
-    reason: 'non-product-live-ref:currentFrameRef',
-  });
-
-  assert.deepEqual(await attach?.({}, {
-    ...validVirtualAppScreenSurfaceRequest(),
-    surfaceTransportDescriptor: {
-      ...validVirtualAppScreenSurfaceRequest().surfaceTransportDescriptor,
-      dataUrl: 'data:image/png;base64,raw',
-    },
-  }), {
-    ok: false,
-    reason: 'raw-live-payload-forbidden:surfaceTransportDescriptor.dataUrl',
-  });
+  assert.equal(handlers.has('desktop:virtual-app-screen-surface:attach'), false);
+  assert.equal(handlers.has('desktop:virtual-app-screen-surface:present'), false);
+  assert.equal(handlers.has('desktop:virtual-app-screen-surface:detach'), false);
 });
 
 test('R-DESK native browser controller opens frame-blocked sites in an Electron-owned top-level window', async () => {

@@ -5,7 +5,6 @@ import { renderComputerUseControlPlane } from './computer-use-control-plane/rend
 import { renderImageEvidenceViewer } from './image-evidence-viewer/render';
 import { renderScientificPlotViewer } from './scientific-plot-viewer/render';
 import { renderTerminalSessionViewer } from './terminal-session-viewer/render';
-import { renderVirtualScreenViewer } from './virtual-screen-viewer/render';
 import { renderWorkspaceFileViewer } from './workspace-file-viewer/render';
 
 type WorkbenchRenderer = (props: UIComponentRendererProps) => ReactNode;
@@ -14,7 +13,6 @@ const workbenchRenderers: Record<string, WorkbenchRenderer> = {
   'browser-workbench': renderBrowserWorkbench,
   'computer-use-control-plane': renderComputerUseControlPlane,
   'image-evidence-viewer': renderImageEvidenceViewer,
-  'virtual-screen-viewer': renderVirtualScreenViewer,
   'terminal-session-viewer': renderTerminalSessionViewer,
   'workspace-file-viewer': renderWorkspaceFileViewer,
   'scientific-plot-viewer': renderScientificPlotViewer,

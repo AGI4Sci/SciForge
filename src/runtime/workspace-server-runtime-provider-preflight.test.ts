@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   buildRuntimeProviderPreflightManifest,
   normalizeRuntimeProviderProxyHealthzResponse,
+  normalizeRuntimeProviderProxyInferenceResponse,
   runtimeProviderProxyBaseUrl,
+  runtimeProviderProxyInferenceRequestCandidates,
 } from './workspace-server-runtime-provider-preflight.js';
 
 test('buildRuntimeProviderPreflightManifest reports missing runtime service env without changing response shape', () => {
@@ -85,6 +87,46 @@ test('buildRuntimeProviderPreflightManifest preserves provider healthz diagnosti
   assert.equal(manifest.nextActions[0]?.label, 'Resolve provider-side provider-auth before live repair can pass.');
 });
 
+test('buildRuntimeProviderPreflightManifest treats inference failures as provider readiness failures even when healthz is ready', () => {
+  const manifest = buildRuntimeProviderPreflightManifest({
+    serviceEnv: {
+      SCIFORGE_RUNTIME_API_KEY: 'sk-service',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.test/v1',
+    },
+    runtimeEnv: {
+      SCIFORGE_RUNTIME_API_KEY: 'sk-runtime',
+    },
+    proxyOptions: {
+      upstreamBaseUrl: 'https://provider.test/v1',
+    },
+    checkedHealthz: {
+      category: 'ready',
+      ok: true,
+      retryable: false,
+      releaseAcceptance: 'not-evaluated',
+    },
+    checkedInference: {
+      category: 'provider-auth',
+      ok: false,
+      retryable: false,
+      httpStatus: 403,
+      releaseAcceptance: 'not-evaluated',
+    },
+    checkedAt: '2026-05-29T00:01:30.000Z',
+  });
+
+  assert.equal(manifest.category, 'provider-auth');
+  assert.equal(manifest.owner, 'provider');
+  assert.deepEqual(manifest.checkedInference, {
+    category: 'provider-auth',
+    ok: false,
+    retryable: false,
+    httpStatus: 403,
+    releaseAcceptance: 'not-evaluated',
+  });
+  assert.equal(manifest.nextActions[0]?.label, 'Resolve provider-side provider-auth before live repair can pass.');
+});
+
 test('buildRuntimeProviderPreflightManifest reports config fallbacks without requiring service base URL', () => {
   const manifest = buildRuntimeProviderPreflightManifest({
     serviceEnv: {},
@@ -127,6 +169,55 @@ test('normalizeRuntimeProviderProxyHealthzResponse reads upstream diagnostics an
     ok: true,
     retryable: false,
     releaseAcceptance: 'not-evaluated',
+  });
+});
+
+test('normalizeRuntimeProviderProxyInferenceResponse classifies real inference failures without leaking provider body', () => {
+  assert.deepEqual(
+    normalizeRuntimeProviderProxyInferenceResponse(false, 403, {
+      error: {
+        code: 'upstream_forbidden',
+        status: 403,
+        message: 'Upstream provider returned HTTP 403 Forbidden. Raw provider error content was suppressed.',
+        audit: {
+          rawProviderBody: 'suppressed',
+          bodySha256: 'sha256:abc',
+        },
+      },
+    }),
+    {
+      category: 'provider-auth',
+      ok: false,
+      retryable: false,
+      httpStatus: 403,
+      releaseAcceptance: 'not-evaluated',
+    },
+  );
+
+  assert.deepEqual(normalizeRuntimeProviderProxyInferenceResponse(true, 200, {}), {
+    category: 'ready',
+    ok: true,
+    retryable: false,
+    releaseAcceptance: 'not-evaluated',
+  });
+});
+
+test('runtimeProviderProxyInferenceRequestCandidates probes Responses first and keeps chat fallback', () => {
+  const candidates = runtimeProviderProxyInferenceRequestCandidates('sciforge-router');
+
+  assert.equal(candidates[0]?.endpoint, '/v1/responses');
+  assert.deepEqual(candidates[0]?.body, {
+    model: 'sciforge-router',
+    input: 'Reply with exactly OK.',
+    stream: false,
+    max_output_tokens: 8,
+  });
+  assert.equal(candidates[1]?.endpoint, '/v1/chat/completions');
+  assert.deepEqual(candidates[1]?.body, {
+    model: 'sciforge-router',
+    messages: [{ role: 'user', content: 'Reply with exactly OK.' }],
+    stream: false,
+    max_tokens: 8,
   });
 });
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import test from 'node:test';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
-import { completeAgentServerGenerationFailureRepairPayload } from './generated-task-runner-generation-failure.js';
+import { completeBackendGenerationFailureRepairPayload } from './generated-task-runner-generation-failure.js';
 
 const request: GatewayRequest = {
   skillDomain: 'literature',
@@ -32,7 +32,7 @@ const skill = {
 
 test('generation failure helper preserves side-effect candidates when repair is safer than provider recovery', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generation-failure-helper-'));
-  const payload = await completeAgentServerGenerationFailureRepairPayload({
+  const payload = await completeBackendGenerationFailureRepairPayload({
     workspace,
     request,
     skill,
@@ -53,8 +53,8 @@ test('generation failure helper preserves side-effect candidates when repair is 
     },
     deps: {
       attemptPlanRefs: () => ({}),
-      agentServerGenerationFailureReason: (error) => error,
-      agentServerFailurePayloadRefs: () => ({}),
+      backendGenerationFailureReason: (error) => error,
+      backendFailurePayloadRefs: () => ({}),
       repairNeededPayload: (_request, _skill, reason) => repairPayload(reason),
       validateAndNormalizePayload: async (value) => value,
     },
@@ -66,7 +66,7 @@ test('generation failure helper preserves side-effect candidates when repair is 
   assert.equal(completionCandidate?.status, 'unverified');
   assert.deepEqual(completionCandidate?.auditRefs, ['partial_report.md']);
   assert.equal(payload.artifacts.some((artifact) => artifact.id === 'agentserver-candidate-partial-report-md'), true);
-  assert.equal(payload.budgetDebits?.some((debit) => debit.capabilityId === 'sciforge.agentserver.generation-failure'), true);
+  assert.equal(payload.budgetDebits?.some((debit) => debit.capabilityId === 'sciforge.backend.generation-failure'), true);
 });
 
 function repairPayload(reason: string): ToolPayload {

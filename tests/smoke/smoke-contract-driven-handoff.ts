@@ -13,7 +13,7 @@ import {
   reconstructAgentHarnessHandoffPayloadFromContract,
 } from '../../src/runtime/gateway/agent-harness-handoff-reconstruction.js';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
-import { buildAgentServerGenerationPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { buildBackendGenerationPrompt } from '../../src/runtime/gateway/backend-prompt-policy.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 
@@ -431,7 +431,7 @@ function assertSyntheticDirectiveRenderingIsSourced() {
 }
 
 function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<string, unknown>) {
-  const prompt = buildAgentServerGenerationPrompt({
+  const prompt = buildBackendGenerationPrompt({
     prompt: 'fresh: Create a contract-driven handoff report.',
     skillDomain: 'literature',
     metadata: {
@@ -475,7 +475,7 @@ function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<str
         taskCodePolicy: 'LOCAL_PROJECT_FACTS_POLICY_SENTINEL must not become AgentServer prompt prose.',
       },
       orchestrationBoundary: {
-        decisionOwner: 'AgentServer',
+        decisionOwner: 'AgentHost',
         sciForgeRole: 'LOCAL_ORCHESTRATION_ROLE_SENTINEL must not become AgentServer prompt prose.',
         contextModeReason: 'LOCAL_CONTEXT_MODE_REASON_SENTINEL must not become AgentServer prompt prose.',
       },
@@ -535,7 +535,7 @@ function assertContextEnvelopeLocalPolicyProseIsRefOnly() {
   assert.equal(boundary.contextModeReasonCode, 'full-handoff-no-reusable-agentserver-session');
   const continuitySummary = record(envelope.continuityPolicySummary);
   assert.equal(continuitySummary.schemaVersion, 'sciforge.context-envelope.continuity-policy-summary.v1');
-  assert.ok(list(continuitySummary.policyProviderRefs).includes('@sciforge/skills/runtime-policy#agentServerContinuationPromptPolicyLines'));
+  assert.ok(list(continuitySummary.policyProviderRefs).includes('@sciforge/skills/runtime-policy#backendContinuationPromptPolicyLines'));
 }
 
 async function assertNormalizedHandoffPayloadReconstruction() {

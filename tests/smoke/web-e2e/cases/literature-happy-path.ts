@@ -20,7 +20,7 @@ import {
   writeWebE2eEvidenceBundle,
   type WebE2eEvidenceBundleManifest,
 } from '../evidence-bundle.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import { startScriptableBackendMock } from '../scriptable-backend-mock.js';
 import type {
   JsonRecord,
   ScriptableAgentServerRecordedRequest,
@@ -101,7 +101,7 @@ interface MockRunFetchResult {
 
 export async function runLiteratureHappyPathCase(outputRoot?: string): Promise<LiteratureHappyPathCaseResult> {
   const providerRouteTrace: ProviderRouteTraceEntry[] = [];
-  const server = await startScriptableAgentServerMock({
+  const server = await startScriptableBackendMock({
     seed: LITERATURE_HAPPY_PATH_CASE_ID,
     fixedNow: now,
     discovery: {

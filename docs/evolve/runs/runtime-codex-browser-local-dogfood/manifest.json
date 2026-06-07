@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "sciforge.runtime-codex.browser-local-dogfood.v1",
+  "status": "passed",
+  "source": "codex-in-app-browser-local-dogfood",
+  "observedAt": "2026-06-06T18:57:18.489Z",
+  "taskPromptDigest": {
+    "length": 225,
+    "sha1": "7b014df01d94da374088cd5fbfc9e8e8a4afd11a"
+  },
+  "localConfig": {
+    "present": true,
+    "providerPresent": true,
+    "modelPresent": true,
+    "upstreamBaseUrlPresent": true,
+    "apiKeyPresent": true,
+    "source": "config.local.json",
+    "secretValuesRedacted": true
+  },
+  "browserSessionRef": "browser-host-session:browser-host-0f226e6698b4",
+  "playwrightAdapterTraceRef": "browser-host-session:browser-host-0f226e6698b4/search-results-1780772250756-7ffb04f7.json",
+  "searchResultRef": "browser-host-session:browser-host-0f226e6698b4/search-results-1780772250756-7ffb04f7.json",
+  "sourcePageRefs": [
+    "browser-host-session:browser-host-0f226e6698b4/source-pages/source-1-9370c544ce.source.json",
+    "browser-host-session:browser-host-0f226e6698b4/source-pages/source-2-93427821af.source.json"
+  ],
+  "pageTextRefs": [
+    "browser-host-session:browser-host-0f226e6698b4/source-pages/source-1-9370c544ce.txt",
+    "browser-host-session:browser-host-0f226e6698b4/source-pages/source-2-93427821af.txt"
+  ],
+  "finalAnswerRef": "artifact:runtime-codex-browser-local-dogfood/final-answer.md",
+  "finalAnswer": "我已用 SciForge 内置浏览器搜索“site:developers.openai.com/api/docs/changelog OpenAI API changelog latest product update official”，并打开、读取了 OpenAI 官方来源页面。\n\n- Jun 4 Feature omni-moderation-latest v1/responses v1/chat/completions Added moderation scores to the Responses API and Chat Completions API. Pass a moderation object in a generation request to receive moderation results for both the model input and generated output in the same response. Learn more in the Moderation guide. 来源：https://developers.openai.com/api/docs/changelog\n- Jun 3 Update Announced the deprecation of reusable prompt objects, the Evals platform, and Agent Builder. See the deprecations page for shutdown timelines and migration guidance. 来源：https://developers.openai.com/api/docs/changelog\n- Jun 2 Update Starting June 2, 2026, eligible container sessions will be billed per minute with a 5-minute minimum, instead of being billed at the full 20-minute session rate. The underlying per-minute rate will remain the same. This update is intended to make billing more granular for shorter sessions and will lower effective cost for customers. You can find current built-in tool pricing in our API pricing docs. 来源：https://developers.openai.com/api/docs/changelog\n- Jun 1 Feature gpt-5.4 gpt-5.5 v1/responses OpenAI models are now available in Amazon Bedrock through an OpenAI-compatible Responses API endpoint. Supported models and features vary by AWS Region. Learn more. 来源：https://developers.openai.com/api/docs/changelog\n\n实际读取页面：\n- OpenAI API changelog https://developers.openai.com/api/docs/changelog\n- OpenAI models documentation https://developers.openai.com/api/docs/models",
+  "actuallyReadPages": [
+    {
+      "title": "OpenAI API changelog",
+      "url": "https://developers.openai.com/api/docs/changelog",
+      "sourcePageRef": "browser-host-session:browser-host-0f226e6698b4/source-pages/source-1-9370c544ce.source.json",
+      "textRef": "browser-host-session:browser-host-0f226e6698b4/source-pages/source-1-9370c544ce.txt"
+    },
+    {
+      "title": "OpenAI models documentation",
+      "url": "https://developers.openai.com/api/docs/models",
+      "sourcePageRef": "browser-host-session:browser-host-0f226e6698b4/source-pages/source-2-93427821af.source.json",
+      "textRef": "browser-host-session:browser-host-0f226e6698b4/source-pages/source-2-93427821af.txt"
+    }
+  ],
+  "releaseGate": {
+    "status": "local-dogfood-only",
+    "strictReleaseStillRequiresServiceEnv": true,
+    "retestCommand": "npm run smoke:runtime-codex-browser-acceptance:strict"
+  }
+}

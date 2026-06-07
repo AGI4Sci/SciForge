@@ -1,4 +1,5 @@
 import {
+  BACKEND_GENERATION_FAILURE_CAPABILITY_ID,
   createCapabilityBudgetDebitRecord,
   type CapabilityBudgetDebitLine,
   type CapabilityInvocationBudgetDebitRecord,
@@ -45,7 +46,7 @@ export function attachGeneratedTaskFailureBudgetDebit(
   const debit = createCapabilityBudgetDebitRecord({
     debitId,
     invocationId: `capabilityInvocation:${debitSlug}`,
-    capabilityId: 'sciforge.agentserver.generation-failure',
+    capabilityId: BACKEND_GENERATION_FAILURE_CAPABILITY_ID,
     candidateId: input.skill.id,
     manifestRef: input.skill.manifestPath || `capability:${input.skill.id}`,
     subjectRefs: generatedTaskFailureSubjectRefs(input, executionUnitRef, workEvidenceRefs),
@@ -56,7 +57,7 @@ export function attachGeneratedTaskFailureBudgetDebit(
       auditRefs,
     },
     metadata: {
-      source: 'agentserver-generation-failure',
+      source: 'backend-generation-failure',
       skillDomain: input.request.skillDomain,
       skillId: input.skill.id,
       failedRequestId: input.failedRequestId,
@@ -80,8 +81,8 @@ export function attachGeneratedTaskFailureBudgetDebit(
     workEvidence,
     logs: upsertBudgetDebitAuditLog(input.payload.logs ?? [], {
       ref: `audit:capability-budget-debit:${debitSlug}`,
-      capabilityId: 'sciforge.agentserver.generation-failure',
-      source: 'agentserver-generation-failure',
+      capabilityId: BACKEND_GENERATION_FAILURE_CAPABILITY_ID,
+      source: 'backend-generation-failure',
       failedRequestId: input.failedRequestId,
       budgetDebitRefs,
     }),
@@ -92,7 +93,7 @@ function generatedTaskFailureBudgetDebitSlug(
   input: Pick<GeneratedTaskFailureBudgetDebitInput, 'request' | 'skill' | 'failedRequestId' | 'failureReason' | 'diagnostics'>,
 ) {
   const stableInput = [
-    'agentserver-generation-failure',
+    'backend-generation-failure',
     input.request.skillDomain,
     input.skill.id,
     input.failedRequestId,
@@ -101,7 +102,7 @@ function generatedTaskFailureBudgetDebitSlug(
     stringField(input.diagnostics?.agentId),
     stringField(input.diagnostics?.sessionRef),
   ].filter(Boolean).join(':');
-  return `agentserver-generation-failure:${sha1(stableInput).slice(0, 12)}`;
+  return `backend-generation-failure:${sha1(stableInput).slice(0, 12)}`;
 }
 
 function generatedTaskFailureSubjectRefs(
@@ -132,13 +133,13 @@ function generatedTaskFailureDebitLines(input: GeneratedTaskFailureBudgetDebitIn
     {
       dimension: 'networkCalls',
       amount: 1,
-      reason: 'AgentServer generation dispatch failed',
+      reason: 'backend generation dispatch failed',
       sourceRef: stringField(input.diagnostics?.sessionRef) ?? input.failedRequestId,
     },
     {
       dimension: 'costUnits',
       amount: 1,
-      reason: 'AgentServer generation failure surfaced repair-needed payload',
+      reason: 'backend generation failure surfaced repair-needed payload',
       sourceRef: input.skill.id,
     },
   ];
@@ -148,7 +149,7 @@ function generatedTaskFailureDebitLines(input: GeneratedTaskFailureBudgetDebitIn
       amount: 1,
       limit: 1,
       remaining: 0,
-      reason: 'AgentServer generation retry budget consumed',
+      reason: 'backend generation retry budget consumed',
       sourceRef: stringField(input.diagnostics?.sessionRef) ?? input.failedRequestId,
     });
   }
@@ -169,7 +170,7 @@ function workEvidenceWithFailureBudgetDebitRefs(
       kind: stringField(record.kind) ?? 'other',
       id: stringField(record.id) ?? `workEvidence:${debitSlug}:${index + 1}`,
       status: stringField(record.status) ?? 'repair-needed',
-      provider: stringField(record.provider) ?? 'AgentServer generation',
+      provider: stringField(record.provider) ?? 'backend generation',
       evidenceRefs: uniqueStrings([
         ...toStringList(record.evidenceRefs),
         input.failedRequestId,
@@ -193,8 +194,8 @@ function generatedTaskFailureWorkEvidence(
     kind: 'other',
     id: `workEvidence:${debitSlug}:failure`,
     status: 'repair-needed',
-    provider: 'AgentServer generation',
-    outputSummary: 'AgentServer generation failed before a runnable task or direct ToolPayload was accepted.',
+    provider: 'backend generation',
+    outputSummary: 'backend generation failed before a runnable task or direct ToolPayload was accepted.',
     evidenceRefs: uniqueStrings([
       input.failedRequestId,
       stringField(input.diagnostics?.sessionRef),

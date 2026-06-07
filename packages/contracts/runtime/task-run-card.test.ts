@@ -51,7 +51,7 @@ test('classifies rate limited wording as provider-neutral transient failure', ()
 
 test('classifies runtime timeout separately from provider transient timeout', () => {
   const runtime = createFailureSignature({
-    message: 'AgentServer generation request timed out after 30000ms.',
+    message: 'backend generation request timed out after 30000ms.',
     code: 'timeout',
   });
   const provider = createFailureSignature({
@@ -107,7 +107,7 @@ test('merges tracked failure signatures into a run-level registry', () => {
     refs: ['stderr:1'],
     failureSignatures: [
       { kind: 'schema-drift', message: 'Missing required field artifacts[123].id', schemaPath: 'displayIntent.artifacts' },
-      { code: 'timeout', message: 'AgentServer generation request timed out after 30000ms.' },
+      { code: 'timeout', message: 'backend generation request timed out after 30000ms.' },
       { code: 'repair-no-op', message: 'Repair no-op: repeated same failure with no change.' },
       { code: 'rate-limit', httpStatus: 429, message: 'HTTP Error 429: rate limited for request 12345' },
       { code: 'validation-failure', message: 'A semantic verifier is uncertain.' },
@@ -122,7 +122,7 @@ test('merges tracked failure signatures into a run-level registry', () => {
     refs: ['stderr:2'],
     failureSignatures: [
       { kind: 'schema-drift', message: 'Missing required field artifacts[987].id', schemaPath: 'displayIntent.artifacts' },
-      { code: 'timeout', message: 'AgentServer generation request timed out after 45000ms.' },
+      { code: 'timeout', message: 'backend generation request timed out after 45000ms.' },
       { code: 'repair-no-op', message: 'Repair no-op: repeated same failure with no change.' },
       { code: 'rate-limit', httpStatus: 429, message: 'HTTP Error 429: rate limited for request 67890' },
       { code: 'validation-failure', message: 'A semantic verifier is uncertain.' },

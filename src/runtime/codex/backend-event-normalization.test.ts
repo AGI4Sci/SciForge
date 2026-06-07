@@ -133,6 +133,175 @@ test('normalizes backend assistant deltas without trimming markdown whitespace',
   ]);
 });
 
+test('normalizes app-server completed assistant message items into visible message events', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-answer',
+        turnId: 'turn-answer',
+        item: {
+          id: 'message-answer',
+          type: 'agentMessage',
+          text: 'FINAL ANSWER FROM APP SERVER',
+          status: 'completed',
+        },
+      },
+    },
+    {
+      type: 'response_item',
+      thread_id: 'thread-answer',
+      turn_id: 'turn-answer',
+      item: {
+        id: 'response-message-answer',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'output_text', text: 'RESPONSES ' },
+          { type: 'output_text', text: 'ANSWER' },
+        ],
+      },
+    },
+    {
+      type: 'response.output_text.done',
+      thread_id: 'thread-answer',
+      turn_id: 'turn-answer',
+      item_id: 'response-output-text-answer',
+      text: 'OUTPUT TEXT DONE ANSWER',
+    },
+    {
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-answer',
+        turnId: 'turn-answer',
+        item: {
+          id: 'user-message-answer',
+          type: 'userMessage',
+          text: 'User prompt stays lifecycle-only.',
+          status: 'completed',
+        },
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), [
+    'message',
+    'message',
+    'message',
+    'item_completed',
+  ]);
+  assert.equal(normalized.events[0]?.text, 'FINAL ANSWER FROM APP SERVER');
+  assert.equal(normalized.events[1]?.text, 'RESPONSES ANSWER');
+  assert.equal(normalized.events[2]?.text, 'OUTPUT TEXT DONE ANSWER');
+  assert.equal(normalized.events[3]?.text, undefined);
+});
+
+test('does not project non-assistant app-server message lifecycle text', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      method: 'item/userMessage/delta',
+      params: {
+        item: {
+          id: 'user-message-delta',
+          type: 'userMessage',
+          text: 'User delta stays audit-only.',
+        },
+      },
+    },
+    {
+      method: 'item/systemMessage/completed',
+      params: {
+        item: {
+          id: 'system-message-completed',
+          type: 'systemMessage',
+          text: 'System message stays lifecycle-only.',
+        },
+      },
+    },
+    {
+      method: 'item/developerMessage/completed',
+      params: {
+        item: {
+          id: 'developer-message-completed',
+          type: 'developerMessage',
+          text: 'Developer message stays lifecycle-only.',
+        },
+      },
+    },
+    {
+      method: 'item/toolMessage/completed',
+      params: {
+        item: {
+          id: 'tool-message-completed',
+          type: 'toolMessage',
+          text: 'Tool message stays lifecycle-only.',
+        },
+      },
+    },
+    {
+      type: 'response_item',
+      item: {
+        id: 'system-responses-message',
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'output_text', text: 'Responses system text stays audit-only.' }],
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), [
+    'audit',
+    'item_completed',
+    'item_completed',
+    'item_completed',
+    'audit',
+  ]);
+  assert.deepEqual(normalized.events.map((event) => event.text), [undefined, undefined, undefined, undefined, undefined]);
+});
+
+test('normalizes responses content part and completed assistant text into messages', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'response.content_part.done',
+      item_id: 'response-content-part-answer',
+      part: {
+        type: 'output_text',
+        text: 'CONTENT PART ANSWER',
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        id: 'response-completed-output-text',
+        output_text: 'COMPLETED OUTPUT TEXT ANSWER',
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        id: 'response-completed-output-array',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              { type: 'output_text', text: 'COMPLETED ' },
+              { type: 'output_text', text: 'OUTPUT ARRAY ANSWER' },
+            ],
+          },
+        ],
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), ['message', 'message', 'message']);
+  assert.deepEqual(normalized.events.map((event) => event.text), [
+    'CONTENT PART ANSWER',
+    'COMPLETED OUTPUT TEXT ANSWER',
+    'COMPLETED OUTPUT ARRAY ANSWER',
+  ]);
+});
+
 test('normalizes Codex app-server sampling retry failures as audit instead of terminal failure', () => {
   const normalized = normalizeBackendEvents([
     {

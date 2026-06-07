@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { createModuleDescription, moduleResult } from '../../../packages/contracts/runtime/modules.js';
+import { createModuleDescription, moduleResult, type ModuleInvokeRequest } from '../../../packages/contracts/runtime/modules.js';
 import {
   ensureRuntimeHome,
   RUNTIME_KEY_ENV,
@@ -71,6 +71,7 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
 
   const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'module' && tool.name === 'invoke'));
+  assert.ok(dynamicTools.some((tool) => tool.name === 'module_invoke'), 'provider-safe module.invoke alias should be registered');
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
   const spawnTool = dynamicTools.find((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent');
   const spawnAliasTool = dynamicTools.find((tool) => tool.name === 'multi_agent_v1_spawn_agent');
@@ -85,6 +86,131 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
   assert.match(text, /artifact:subagent-result-[a-f0-9]{12}/);
   assert.match(text, /artifact:subagent-transcript-[a-f0-9]{12}/);
+});
+
+test('Codex app-server client serves provider-safe module dynamic tool aliases', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let invoked: ModuleInvokeRequest | undefined;
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'module_invoke',
+      arguments: {
+        moduleId: 'browser',
+        intent: 'executeBoundedOperation',
+        input: {
+          operationKind: 'browser.search_read',
+          ownerModuleId: 'browser',
+          targetScope: { query: 'agentic rl' },
+          config: {
+            allowedActions: ['search', 'open', 'read'],
+            maxSteps: 1,
+            maxTimeMs: 1000,
+            maxModelCalls: 1,
+            riskPolicy: 'low',
+            requiredEvidence: ['source-page-ref', 'page-text-ref'],
+            stopConditions: ['read-source-pages-before-synthesis'],
+          },
+        },
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async () => moduleResult({
+        moduleId: 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser',
+          summary: 'Bounded browser read module.',
+          intents: [{ name: 'executeBoundedOperation', sideEffect: 'local', returnsOperation: true }],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked = request;
+        return moduleResult({ moduleId: request.moduleId, ok: true, value: { routed: true } });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Call provider-safe module alias once.',
+    workspacePath: workspace,
+    commandId: 'provider-safe-module-alias-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.equal(invoked?.moduleId, 'browser');
+  assert.equal(invoked?.intent, 'executeBoundedOperation');
+  assert.equal(appServer.toolCallResponse?.success, true);
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /"routed":true/);
+});
+
+test('Codex app-server client binds default Browser module dispatcher to the turn workspace', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const previousNativeAdapterUrl = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'module_invoke',
+      arguments: {
+        moduleId: 'browser',
+        intent: 'executeBoundedOperation',
+        input: {
+          operationKind: 'browser.open_read',
+          ownerModuleId: 'browser',
+          targetScope: { url: 'https://example.org/current-source' },
+          config: {
+            allowedActions: ['open', 'read'],
+            maxSteps: 1,
+            maxTimeMs: 1000,
+            maxModelCalls: 1,
+            riskPolicy: 'low',
+            requiredEvidence: ['source-page-ref', 'page-text-ref'],
+            stopConditions: ['read-source-page-before-synthesis'],
+          },
+        },
+      },
+    },
+  });
+  try {
+    const client = createCodexAppServerClient({
+      env,
+      spawnProcess() {
+        return appServer.process;
+      },
+    });
+
+    const stream = await client.startTurn({
+      commandText: 'Read a current source through the Browser module.',
+      workspacePath: workspace,
+      commandId: 'default-browser-module-workspace-command',
+      attemptId: 'attempt-1',
+      guiExtension: { enabled: false },
+    });
+    await collect(stream.events);
+  } finally {
+    if (previousNativeAdapterUrl === undefined) delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+    else process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL = previousNativeAdapterUrl;
+  }
+
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /missing_required_evidence|BrowserHostSession adapter/i);
+  assert.doesNotMatch(text, /unsupported_operation_kind:browser\.open_read/);
 });
 
 test('Codex app-server client serves provider-safe sub-agent dynamic tool aliases', async () => {
@@ -429,6 +555,69 @@ test('Codex app-server client injects bounded Agent Host grounding facts into de
   assert.doesNotMatch(developerInstructions, /private\.example|sk-private|Applications\/workspace|raw JSONL/i);
 });
 
+test('Codex app-server client instructs models to route current external evidence through bounded modules', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Search today for relevant research and cite the sources.',
+    workspacePath: workspace,
+    commandId: 'agent-host-module-routing-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    agentHostGrounding: {
+      schemaVersion: 'sciforge.agent-host.grounding-snapshot.v1',
+      source: 'runtime-codex-grounding',
+      productCapabilities: {
+        browser: 'supported',
+        computerUse: 'supported',
+      },
+      runtimeReadiness: {
+        browser: 'ready',
+        computerUse: 'blocked',
+      },
+      readiness: {
+        browserHostSession: 'ready',
+        nativeBridge: 'ready',
+        nativeSurface: 'ready',
+        windowActionSession: 'blocked',
+        computerUseAdapter: 'blocked',
+      },
+      blockers: ['computer-use-adapter-unavailable'],
+      actionContext: {
+        targetBound: false,
+        freshObservation: false,
+        permissionRefsPresent: false,
+        stopCancelPath: false,
+      },
+      refs: ['runtime-health:workspace'],
+    },
+  });
+  await collect(stream.events);
+
+  const developerInstructions = String(appServer.threadStartParams.developerInstructions ?? '');
+  assert.match(developerInstructions, /module\.describe/);
+  assert.match(developerInstructions, /module\.invoke/);
+  assert.match(developerInstructions, /module_describe/);
+  assert.match(developerInstructions, /module_invoke/);
+  assert.match(developerInstructions, /executeBoundedOperation/);
+  assert.match(developerInstructions, /browser\.search_read/);
+  assert.match(developerInstructions, /browser\.open_read/);
+  assert.match(developerInstructions, /Never print or simulate tool-call protocol/);
+  assert.match(developerInstructions, /do not output the call payload as text/i);
+  assert.doesNotMatch(developerInstructions, /<module_invoke>|<tool_call>|<\{"function"/i);
+  assert.match(developerInstructions, /current|latest|today|external|citations/i);
+  assert.match(developerInstructions, /nonzero maxSteps, maxTimeMs, and maxModelCalls/);
+  assert.doesNotMatch(developerInstructions, /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr|Applications\/workspace/i);
+});
+
 test('Codex app-server client treats slash terminal turn events as stream completion', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -602,6 +791,54 @@ test('Codex app-server client routes host-owned Computer Use runtime intents thr
   ]);
 });
 
+test('Codex app-server client routes ordinary host-owned Computer Use text through native package bridge', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let spawnCalled = false;
+  let runnerCommandText = '';
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      spawnCalled = true;
+      throw new Error('app-server should not spawn for host-owned ordinary Computer Use route');
+    },
+    computerUseNativeRouteRunner(input) {
+      runnerCommandText = input.request.commandText;
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([{
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          timestamp: new Date().toISOString(),
+          commandId: input.request.commandId,
+          attemptId: input.request.attemptId,
+          status: 'done',
+        }]),
+      };
+    },
+  });
+
+  const commandText = '请用 SciForge 的 Computer Use 操作当前电脑上的真实软件，创建并验证本地文档。';
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'ordinary-native-cu-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(spawnCalled, false);
+  assert.equal(runnerCommandText, commandText);
+  assert.equal(stream.turnId, 'ordinary-native-cu-command');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
+});
+
 test('Computer Use native route strips private runtime fields from public events', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -717,15 +954,19 @@ test('Computer Use native route is not blocked by unsupported assistant profile'
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
 });
 
-test('Computer Use native route accepts UI-generated right pane screen attach commands before resume context', async () => {
+test('Computer Use native route rejects UI-generated right pane VirtualAppScreen attach commands', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   let spawnCalled = false;
+  let executorCalled = false;
   const unregister = registerVirtualAppScreenSessionExecutor({
     executorId: 'native-session-manager:codex-native-route-test',
     providerId: 'provider:codex-native-route-test',
     supportedProfiles: ['vscode-editor'],
-    attach: (command) => codexNativeRouteVirtualAppScreenAttachResult(command),
+    attach: (command) => {
+      executorCalled = true;
+      return codexNativeRouteVirtualAppScreenAttachResult(command);
+    },
   });
   const client = createCodexAppServerClient({
     env,
@@ -761,21 +1002,14 @@ test('Computer Use native route accepts UI-generated right pane screen attach co
       runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
     });
     const events = await collect(stream.events) as Array<Record<string, unknown>>;
-    const done = events.at(-1) as Record<string, unknown> | undefined;
-    const screenArtifact = (done?.artifacts as Array<Record<string, unknown>> | undefined)
-      ?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
-    const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
+    const failed = events.at(-1) as Record<string, unknown> | undefined;
 
     assert.equal(spawnCalled, false);
-    assert.equal(done?.type, 'done');
-    assert.equal(done?.status, 'done', String(done?.message ?? 'missing Computer Use native route done message'));
-    assert.doesNotMatch(String(done?.message ?? ''), /Unexpected VirtualAppScreen runtime command token|without gui\.present|missing-gui-present/);
-    assert.equal(screenArtifact?.schemaVersion, 'sciforge.computer-use.virtual-screen.v1');
-    assert.equal(screenData?.attachState, 'attached');
-    assert.equal(screenData?.surfaceMode, 'live');
-    assert.equal(screenData?.sessionRef, 'computer-use:native-host/sessions/codex-native-route-test/session.json');
-    assert.equal(screenData?.currentFrameRef, 'computer-use:native-host/frames/codex-native-route-test/current.png');
-    assert.deepEqual(screenData?.guiPresentRefs, ['gui.present:codex-native-route/screen-pane-activation']);
+    assert.equal(executorCalled, false);
+    assert.equal(failed?.type, 'failed');
+    assert.equal(failed?.status, 'failed');
+    assert.match(String(failed?.message ?? ''), /VirtualAppScreen.*retired|right pane screen attach.*retired/i);
+    assert.doesNotMatch(JSON.stringify(failed), /computer-use-virtual-screen|virtual-screen-viewer|currentFrameRef|liveSurfaceRef/);
   } finally {
     unregister();
     resetVirtualAppScreenRuntimeExecutorsForTests();

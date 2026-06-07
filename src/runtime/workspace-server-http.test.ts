@@ -120,19 +120,18 @@ test('legacy sync tools run guard blocks ordinary payloads before running old ga
   assert.match(decision.reason, /Runtime Codex stream/);
 });
 
-test('legacy sync tools run guard only allows explicit loopback repair harness payloads', () => {
-  assert.deepEqual(legacyToolsRunSyncDecision({
+test('legacy sync tools run guard rejects retired repair harness payloads even with explicit loopback', () => {
+  const explicitHarness = legacyToolsRunSyncDecision({
     schemaVersion: LEGACY_TOOLS_RUN_REPAIR_HARNESS_SCHEMA,
     kind: 'legacy-agentserver-repair-harness',
     repairHarnessOnly: true,
     handoffSource: 'test',
     agentServerBaseUrl: 'http://127.0.0.1:43111',
     workspacePath: '/tmp/workspace',
-  }), {
-    allowed: true,
-    reason: 'legacy-agentserver-repair-harness',
-    statusCode: 200,
   });
+  assert.equal(explicitHarness.allowed, false);
+  assert.equal(explicitHarness.statusCode, 410);
+  assert.match(explicitHarness.reason, /retired/);
 
   const routed = legacyToolsRunSyncDecision({
     schemaVersion: LEGACY_TOOLS_RUN_REPAIR_HARNESS_SCHEMA,
@@ -145,26 +144,6 @@ test('legacy sync tools run guard only allows explicit loopback repair harness p
   assert.equal(routed.allowed, false);
   assert.equal(routed.statusCode, 410);
   assert.match(routed.reason, /forbidden route fields/);
-
-  const external = legacyToolsRunSyncDecision({
-    schemaVersion: LEGACY_TOOLS_RUN_REPAIR_HARNESS_SCHEMA,
-    kind: 'legacy-agentserver-repair-harness',
-    repairHarnessOnly: true,
-    handoffSource: 'test',
-    agentServerBaseUrl: 'https://example.com/agent',
-  });
-  assert.equal(external.allowed, false);
-  assert.match(external.reason, /loopback/i);
-
-  const missingExplicitUrl = legacyToolsRunSyncDecision({
-    schemaVersion: LEGACY_TOOLS_RUN_REPAIR_HARNESS_SCHEMA,
-    kind: 'legacy-agentserver-repair-harness',
-    repairHarnessOnly: true,
-    handoffSource: 'test',
-    workspacePath: '/tmp/workspace',
-  });
-  assert.equal(missingExplicitUrl.allowed, false);
-  assert.match(missingExplicitUrl.reason, /explicit loopback agentServerBaseUrl/);
 
   const nestedProviderRoutes = legacyToolsRunSyncDecision({
     schemaVersion: LEGACY_TOOLS_RUN_REPAIR_HARNESS_SCHEMA,

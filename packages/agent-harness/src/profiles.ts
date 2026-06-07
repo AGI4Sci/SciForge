@@ -199,7 +199,7 @@ function cheapFirstCapabilityPolicy(overrides: Partial<LatencyTierPolicy['capabi
       },
       {
         tier: 'workspace-task',
-        candidateIds: ['skill.agentserver-generation'],
+        candidateIds: ['skill.generated-task'],
         benefit: 'use generated workspace task only after cheap candidates fail',
         cost: 'medium-to-high/long/workspace write',
         expectedBenefit: 'produce or repair durable artifacts',
@@ -234,7 +234,7 @@ function cheapFirstCapabilityPolicy(overrides: Partial<LatencyTierPolicy['capabi
     candidateTiers: overrides.candidateTiers ?? {
       'direct-context': preferredCapabilityIds.includes('runtime.direct-context-answer') ? ['runtime.direct-context-answer'] : [],
       'metadata-summary': ['runtime.artifact-list', 'runtime.artifact-resolve'],
-      'workspace-task': ['skill.agentserver-generation'],
+      'workspace-task': ['skill.generated-task'],
     },
   };
 }

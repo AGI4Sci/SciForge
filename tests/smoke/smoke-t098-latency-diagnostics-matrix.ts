@@ -311,7 +311,7 @@ const repairProviderRoutes = Array.isArray(repairRouteDecision.capabilityProvide
   : [];
 assert.equal(repairProviderRoutes.some((route) => route.capabilityId === 'web_search'), true);
 assert.equal(repairProviderRoutes.some((route) => route.capabilityId === 'web_fetch'), true);
-assert.match(repairProvider.message, /AgentServer task generation|AgentServer/);
+assert.match(repairProvider.message, /backend task generation|AgentServer/);
 assert.doesNotMatch(repairProvider.message, /Tool\/provider status answered/);
 
 console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, background duration, direct-context finalization, and AgentServer repair routing without preflight result shortcuts');

@@ -10,7 +10,7 @@ import { sha1 } from '../workspace-task-runner.js';
 import type { RuntimeRefBundle } from './artifact-materializer.js';
 import type { CapabilityEvolutionRuntimeEventResult } from './capability-evolution-events.js';
 
-export type GeneratedTaskSuccessBudgetDebitSource = 'generated-task' | 'agentserver-direct-payload';
+export type GeneratedTaskSuccessBudgetDebitSource = 'generated-task' | 'backend-direct-payload';
 
 export interface GeneratedTaskSuccessBudgetDebitInput {
   request: GatewayRequest;
@@ -64,7 +64,7 @@ export function attachGeneratedTaskSuccessBudgetDebit(
   const workEvidenceRefs = workEvidence.map((entry) => stringField(entry.id)).filter((id): id is string => Boolean(id));
   const capabilityId = input.source === 'generated-task'
     ? 'sciforge.generated-task-runner'
-    : 'sciforge.agentserver.direct-payload';
+    : 'sciforge.backend.direct-payload';
   const debit = createCapabilityBudgetDebitRecord({
     debitId,
     invocationId: `capabilityInvocation:${debitSlug}`,
@@ -150,8 +150,8 @@ function generatedTaskSuccessDebitLines(input: GeneratedTaskSuccessBudgetDebitIn
       dimension: 'toolCalls',
       amount: 1,
       reason: input.source === 'generated-task'
-        ? 'executed AgentServer generated workspace task'
-        : 'accepted AgentServer direct payload',
+        ? 'executed backend-generated workspace task'
+        : 'accepted backend direct payload',
       sourceRef: input.refs.taskRel,
     },
     {
@@ -210,8 +210,8 @@ function generatedTaskSuccessWorkEvidence(
     provider: input.runtimeLabel,
     resultCount: Math.max(1, input.payload.artifacts.length + input.payload.claims.length),
     outputSummary: input.source === 'generated-task'
-      ? 'AgentServer generated task executed successfully and produced a normalized ToolPayload.'
-      : 'AgentServer direct payload completed successfully and was normalized into a ToolPayload.',
+      ? 'backend-generated task executed successfully and produced a normalized ToolPayload.'
+      : 'backend direct payload completed successfully and was normalized into a ToolPayload.',
     evidenceRefs: uniqueStrings([
       input.refs.outputRel,
       input.refs.stdoutRel,

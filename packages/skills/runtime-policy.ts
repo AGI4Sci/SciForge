@@ -2,12 +2,13 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { toolPayloadShapeContract } from '@sciforge-ui/runtime-contract/tool-payload-shape';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
-export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'agentserver-generation', 'markdown-skill'] as const;
+export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'backend-generation', 'agentserver-generation', 'markdown-skill'] as const;
 export type SkillEntrypointType = typeof SKILL_ENTRYPOINT_TYPES[number];
 export const SKILL_ENTRYPOINT_TYPE = {
   WORKSPACE_TASK: 'workspace-task',
   INSPECTOR: 'inspector',
-  AGENTSERVER_GENERATION: 'agentserver-generation',
+  BACKEND_GENERATION: 'backend-generation',
+  LEGACY_AGENTSERVER_GENERATION: 'agentserver-generation',
   MARKDOWN_SKILL: 'markdown-skill',
 } as const satisfies Record<string, SkillEntrypointType>;
 export const EVOLVED_SKILLS_RELATIVE_DIR = '.sciforge/evolved-skills';
@@ -56,6 +57,7 @@ export interface SkillAvailabilityValidationPlan {
 export interface SkillRuntimeRoutePolicyInput {
   entrypoint?: RuntimePolicySkillManifest['entrypoint'] | { type?: string };
   scenarioPackageSource?: string;
+  backendRuntimeProfileId?: string;
   agentServerRuntimeProfileId?: string;
 }
 
@@ -64,7 +66,7 @@ export interface SkillRuntimeRoutePolicy {
   selectedRuntime?: string;
 }
 
-export interface AgentServerGeneratedTaskContractResponse {
+export interface BackendGeneratedTaskContractResponse {
   entrypoint: {
     path: string;
     language?: string;
@@ -76,9 +78,9 @@ export interface AgentServerGeneratedTaskContractResponse {
   }>;
 }
 
-export const AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
-export const AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE = 'workspace-task-materialized' as const;
-export const AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-start' as const;
+export const GENERATED_TASK_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
+export const GENERATED_TASK_MATERIALIZED_EVENT_TYPE = 'workspace-task-materialized' as const;
+export const GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-start' as const;
 export const CAPABILITY_ROUTE_SUMMARY_SCHEMA_VERSION = 'sciforge.capability-provider-routes.v1' as const;
 
 const skillPromotionDomainFallback: SkillPackageDomain = 'literature';
@@ -106,26 +108,26 @@ export function skillAvailabilityFailureReason(
   return failedProbe?.unavailableReason;
 }
 
-export function agentServerGenerationSkillAvailability(
+export function backendGenerationSkillAvailability(
   skillDomain: SkillPackageDomain,
   checkedAt: string,
 ): RuntimePolicySkillAvailability {
   return {
-    id: `agentserver.generate.${skillDomain}`,
+    id: `generated-task.generate.${skillDomain}`,
     kind: 'package',
     available: true,
-    reason: 'No executable skill matched; caller should fall through to AgentServer task generation.',
+    reason: 'No executable skill matched; caller should fall through to backend task generation.',
     checkedAt,
-    manifestPath: '@sciforge/skills/runtime-policy#agentserver-generation',
+    manifestPath: '@sciforge/skills/runtime-policy#backend-generation',
     manifest: {
-      id: `agentserver.generate.${skillDomain}`,
+      id: `generated-task.generate.${skillDomain}`,
       kind: 'package',
-      description: 'Generic AgentServer task generation fallback.',
+      description: 'Generic backend task generation fallback.',
       skillDomains: [skillDomain],
       inputContract: { prompt: 'string', workspacePath: 'string' },
       outputArtifactSchema: { type: 'runtime-artifact' },
-      entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
-      environment: { runtime: 'AgentServer' },
+      entrypoint: { type: SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION },
+      environment: { runtime: 'backend-generation' },
       validationSmoke: { mode: 'delegated' },
       examplePrompts: [],
       promotionHistory: [],
@@ -138,21 +140,21 @@ export function taskProjectStageAdapterSkillAvailability(
   checkedAt: string,
 ): RuntimePolicySkillAvailability {
   return {
-    id: `agentserver.generate.${skillDomain}.task-project-stage-adapter`,
+    id: `generated-task.generate.${skillDomain}.task-project-stage-adapter`,
     kind: 'installed',
     available: true,
     reason: 'TaskProject stable stage adapter promotion candidate.',
     checkedAt,
     manifestPath: '@sciforge/skills/runtime-policy#task-project-stage-adapter',
     manifest: {
-      id: `agentserver.generate.${skillDomain}.task-project-stage-adapter`,
+      id: `generated-task.generate.${skillDomain}.task-project-stage-adapter`,
       kind: 'installed',
-      description: 'Generic AgentServer TaskProject stage adapter generation fallback.',
+      description: 'Generic backend TaskProject stage adapter generation fallback.',
       skillDomains: [skillDomain],
       inputContract: { prompt: 'string', projectId: 'string', stageId: 'string' },
       outputArtifactSchema: { type: 'runtime-artifact' },
-      entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
-      environment: { runtime: 'AgentServer', sourceRuntime: 'task-project' },
+      entrypoint: { type: SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION },
+      environment: { runtime: 'backend-generation', sourceRuntime: 'task-project' },
       validationSmoke: { mode: 'delegated-task-project-stage' },
       examplePrompts: [],
       promotionHistory: [],
@@ -162,16 +164,16 @@ export function taskProjectStageAdapterSkillAvailability(
 
 export function skillRuntimeRoutePolicy(input: SkillRuntimeRoutePolicyInput): SkillRuntimeRoutePolicy {
   const entrypointType = input.entrypoint?.type;
-  if (entrypointType === SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION) {
+  if (skillEntrypointTypeUsesBackendGeneration(entrypointType)) {
     return {
-      runtimeProfileId: input.agentServerRuntimeProfileId,
-      selectedRuntime: 'agentserver-generation',
+      runtimeProfileId: input.backendRuntimeProfileId ?? input.agentServerRuntimeProfileId,
+      selectedRuntime: 'backend-generation',
     };
   }
   if (entrypointType === SKILL_ENTRYPOINT_TYPE.MARKDOWN_SKILL) {
     return {
-      runtimeProfileId: input.agentServerRuntimeProfileId,
-      selectedRuntime: 'agentserver-markdown-skill',
+      runtimeProfileId: input.backendRuntimeProfileId ?? input.agentServerRuntimeProfileId,
+      selectedRuntime: 'backend-generation',
     };
   }
   if (entrypointType === SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK) {
@@ -209,8 +211,8 @@ export function skillManifestHasWorkspaceTaskEntrypoint(
   return skillEntrypointIsWorkspaceTask(manifest.entrypoint);
 }
 
-export function skillManifestUsesAgentServerGeneration(manifest: Pick<RuntimePolicySkillManifest, 'entrypoint'>) {
-  return manifest.entrypoint.type === SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION;
+export function skillManifestUsesBackendGeneration(manifest: Pick<RuntimePolicySkillManifest, 'entrypoint'>) {
+  return skillEntrypointTypeUsesBackendGeneration(manifest.entrypoint.type);
 }
 
 export function skillPromotionShouldPropose(input: {
@@ -223,8 +225,8 @@ export function skillPromotionShouldPropose(input: {
 }) {
   if (input.skillKind === 'workspace' && skillManifestPathIsEvolvedWorkspaceSkill(input.manifestPath)) return false;
   if (input.selfHealed) return true;
-  if (input.entrypoint?.type === SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION) return true;
-  if (input.skillId.startsWith('agentserver.generate.')) return true;
+  if (skillEntrypointTypeUsesBackendGeneration(input.entrypoint?.type)) return true;
+  if (input.skillId.startsWith('generated-task.generate.')) return true;
   return normalizePath(input.taskRel).includes('/generated-');
 }
 
@@ -252,36 +254,41 @@ function isSkillPackageDomain(value: unknown): value is SkillPackageDomain {
   return typeof value === 'string' && skillPackageDomainSet.has(value as SkillPackageDomain);
 }
 
+function skillEntrypointTypeUsesBackendGeneration(value: unknown) {
+  return value === SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION
+    || value === SKILL_ENTRYPOINT_TYPE.LEGACY_AGENTSERVER_GENERATION;
+}
+
 function normalizePath(value: string) {
   return value.replaceAll('\\', '/');
 }
 
-export function agentServerExecutionModePromptPolicyLines() {
+export function backendExecutionModePromptPolicyLines() {
   return [
-    'Do not ask SciForge to decide scientific, topical, retrieval, or domain intent. The executionModeRecommendation fields are advisory handoff metadata; AgentServer must make the actual domain/tool/stage decision.',
+    'Do not ask SciForge to decide scientific, topical, retrieval, or domain intent. The executionModeRecommendation fields are advisory handoff metadata; Agent backend must make the actual domain/tool/stage decision.',
     'executionModeRecommendation=direct-context-answer: only use this when the answer can be produced entirely from existing context, current refs/digests, artifacts, or prior execution refs already present in the handoff. Do not use direct-context-answer for fresh search/fetch/current-events, even if the user asks a simple question.',
-    'executionModeRecommendation=thin-reproducible-adapter: use this for simple search/fetch/current-events lookups with no explicit report/table/download/batch requirement. Keep it lightweight, but preserve code/input/output/log/evidence refs: return AgentServerGenerationResponse with a minimal bounded adapter task unless the backend already has durable tool/result refs it can expose in a ToolPayload.',
-    'executionModeRecommendation=single-stage-task: use this for one bounded local computation, file transform, narrow analysis, or simple artifact generation that can be run and validated in one workspace task. Return one AgentServerGenerationResponse, not a multi-stage project plan.',
+    'executionModeRecommendation=thin-reproducible-adapter: use this for simple search/fetch/current-events lookups with no explicit report/table/download/batch requirement. Keep it lightweight, but preserve code/input/output/log/evidence refs: return BackendGenerationResponse with a minimal bounded adapter task unless the backend already has durable tool/result refs it can expose in a ToolPayload.',
+    'executionModeRecommendation=single-stage-task: use this for one bounded local computation, file transform, narrow analysis, or simple artifact generation that can be run and validated in one workspace task. Return one BackendGenerationResponse, not a multi-stage project plan.',
     'executionModeRecommendation=multi-stage-project: use this for complex research, durable artifacts, multi-file outputs, local-file processing, code/command execution, batch retrieval, full-document reading, reports/tables/notebooks, or multi-artifact validation. Do not generate a complete end-to-end pipeline in one response; return only the next stage spec/patch/task plus the expected refs/artifacts for that stage.',
     'executionModeRecommendation=repair-or-continue-project: use this when the current turn refers to a previous failure, existing project/stage, user guidance queue, continuation, repair, or rerun. Inspect only the cited project/stage refs and return a minimal repair/continue stage instead of starting unrelated fresh work.',
     'Multi-stage/project guidance: for multi-stage-project, plan the durable project internally but return only the immediately executable next stage; later stages must be represented as bounded stage hints, not as a one-shot generated pipeline.',
     'Project guidance adoption contract: when a TaskProject handoff includes userGuidanceQueue, the next stage plan/result must declare every queued or deferred guidance item as adopted, deferred, or rejected, with a short reason in executionUnits[].guidanceDecisions. Do not silently ignore guidance.',
-    'Reproducibility principle: when the answer depends on fresh external retrieval, local files, commands, or generated artifacts, prefer AgentServerGenerationResponse so SciForge can archive runnable code/input/output/log refs.',
+    'Reproducibility principle: when the answer depends on fresh external retrieval, local files, commands, or generated artifacts, prefer BackendGenerationResponse so SciForge can archive runnable code/input/output/log refs.',
     'For lightweight search/news/current-events lookups with no explicit report/table/download/batch requirement, still keep the work reproducible, but use a minimal bounded adapter task: one executable file, small provider list, capped results, short timeouts, no workspace exploration, no full-document download, and no bespoke long research pipeline.',
     'Return a direct ToolPayload for lightweight retrieval only when the backend already has durable tool/result refs and can expose WorkEvidence-style provider/query/status/resultCount/evidenceRefs/failureReason/recoverActions/nextStep in the payload; otherwise generate the minimal adapter task.',
-    'For heavy or durable work, return AgentServerGenerationResponse with taskFiles, entrypoint, environmentRequirements, validationCommand, expectedArtifacts, and patchSummary. Heavy work includes local file processing, code/command execution, batch retrieval, full-document download/reading, explicit report/table/notebook deliverables, multi-file outputs, or repair/rerun of a prior task. For multi-stage-project, scope this to the next stage only.',
+    'For heavy or durable work, return BackendGenerationResponse with taskFiles, entrypoint, environmentRequirements, validationCommand, expectedArtifacts, and patchSummary. Heavy work includes local file processing, code/command execution, batch retrieval, full-document download/reading, explicit report/table/notebook deliverables, multi-file outputs, or repair/rerun of a prior task. For multi-stage-project, scope this to the next stage only.',
   ];
 }
 
-export function agentServerGeneratedTaskPromptPolicyLines() {
+export function backendGeneratedTaskPromptPolicyLines() {
   return [
     'Hard contract: taskFiles MUST be an array of objects with path, language, and non-empty content unless the file was physically written in the workspace before returning. Never return taskFiles as string paths only.',
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
-    'Transport budget contract: single long string around 8k characters may compact; terminal AgentServerGenerationResponse JSON should stay under 6000 characters and each taskFiles[].content should normally stay under 3500 characters.',
+    'Transport budget contract: single long string around 8k characters may compact; terminal BackendGenerationResponse JSON should stay under 6000 characters and each taskFiles[].content should normally stay under 3500 characters.',
     'Entrypoint contract: entrypoint.path must be executable task code supported by the runner (.py/.r/.sh, or language=cli with an explicit command). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
     'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON file to the outputPath argument. outputPath is a JSON file path, not an output directory; write extra report/data files beside it under dirname(outputPath) / Path(output_path).parent, then cite those files from artifacts[].path/dataRef/ref.',
-    'Generated task compactness contract: build long text at runtime; no huge markdown, long comments, long embedded tables, or verbose report templates in taskFiles[].content. Never embed report prose with raw double quotes inside taskFiles[].content; assemble markdown from short Python lists/dicts at runtime or use json.dumps/repr-safe literals so the outer AgentServerGenerationResponse remains valid JSON. If the executable cannot fit compactly, return a valid failed-with-reason ToolPayload explaining the missing capability/budget instead of emitting oversized taskFiles JSON.',
+    'Generated task compactness contract: build long text at runtime; no huge markdown, long comments, long embedded tables, or verbose report templates in taskFiles[].content. Never embed report prose with raw double quotes inside taskFiles[].content; assemble markdown from short Python lists/dicts at runtime or use json.dumps/repr-safe literals so the outer BackendGenerationResponse remains valid JSON. If the executable cannot fit compactly, return a valid failed-with-reason ToolPayload explaining the missing capability/budget instead of emitting oversized taskFiles JSON.',
     'Generated Python dependency contract: avoid optional pandas/report helpers that require undeclared packages, for example DataFrame.to_markdown requires tabulate; either include the package in the task dependency bootstrap or use dependency-free formatting such as to_csv/string tables. Report formatting must not prevent the ToolPayload write.',
     'Generated Python statistics contract: when using pandas with statsmodels/sklearn/scipy, coerce design matrices and outcomes to numeric dtypes after get_dummies/joins (for example X = X.astype(float), y = y.astype(float)); wrap model fitting and rerun-command creation so a fit/runtime failure still writes a failed-with-reason ToolPayload with stderr-style diagnostics, not only a traceback or partial files.',
     'Generated ToolPayload construction contract: initialize top-level claims, uiManifest, executionUnits, and artifacts as arrays. Append uiManifest slots as array entries such as {"componentId":"table-viewer","artifactRef":"artifact-id"}; never use an object descriptor such as {"preferredView":...,"views":[...]} for uiManifest.',
@@ -294,15 +301,15 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
   ];
 }
 
-export function agentServerToolPayloadShapeContract() {
+export function backendToolPayloadShapeContract() {
   return toolPayloadShapeContract();
 }
 
-export function agentServerGenerationOutputContract() {
-  const shapeContract = agentServerToolPayloadShapeContract();
+export function backendGenerationOutputContract() {
+  const shapeContract = backendToolPayloadShapeContract();
   return {
     finalOutput: 'exactly one compact JSON object',
-    alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
+    alternatives: ['BackendGenerationResponse', 'SciForge ToolPayload'],
     taskFiles: 'array of { path, language, content? }; omit content only when the file was physically written in workspace',
     entrypoint: 'object { language, path, command?, args? } for executable code path only; report/data files are artifacts, not entrypoints',
     toolPayloadArrayFields: `${shapeContract.arrayFields.join(', ')} are arrays at the top level`,
@@ -312,16 +319,16 @@ export function agentServerGenerationOutputContract() {
   };
 }
 
-export function agentServerCurrentTurnSnapshotPromptPolicyLines() {
+export function backendCurrentTurnSnapshotPromptPolicyLines() {
   return [
     'CURRENT TURN SNAPSHOT (authoritative; preserve this even when context is compacted):',
   ];
 }
 
-export function agentServerBackendDecisionPromptPolicyLines(input: { freshCurrentTurn?: boolean } = {}) {
+export function backendDecisionPromptPolicyLines(input: { freshCurrentTurn?: boolean } = {}) {
   return [
     'Handle this SciForge request as the agent backend decision-maker.',
-    'AgentServer owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
+    'Agent backend owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
     input.freshCurrentTurn
       ? 'FRESH GENERATION MODE: do not call tools before returning. Do not inspect workspace directories, .sciforge, old task attempts, old artifacts, logs, installed packages, or previous generated code. Return final compact JSON immediately; generated task code can perform runtime inspection/retrieval later using inputPath/outputPath.'
       : 'CONTINUITY MODE: inspect only the concrete prior refs needed for the current continuation/repair/rerun request.',
@@ -330,13 +337,13 @@ export function agentServerBackendDecisionPromptPolicyLines(input: { freshCurren
   ];
 }
 
-export function agentServerGenerationOutputContractLines(group: 'all' | 'json-envelope' | 'tool-payload' | 'missing-input' = 'all') {
+export function backendGenerationOutputContractLines(group: 'all' | 'json-envelope' | 'tool-payload' | 'missing-input' = 'all') {
   const groups = {
     'json-envelope': [
       'Return exactly one JSON object, with no markdown before or after it.',
     ],
     'tool-payload': [
-      'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
+      'Final output must be only compact JSON: either BackendGenerationResponse or SciForge ToolPayload.',
       'Transport cap: small JSON; long artifacts use refs.',
       'ToolPayload array contract: claims, uiManifest, executionUnits, and artifacts must be arrays; uiManifest is an array of component slots, not an object-shaped view descriptor.',
       'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
@@ -354,7 +361,7 @@ export function agentServerGenerationOutputContractLines(group: 'all' | 'json-en
   ];
 }
 
-export function agentServerWorkspaceTaskRoutingPromptPolicyLines(group: 'all' | 'prior-task' | 'new-task' = 'all') {
+export function backendWorkspaceTaskRoutingPromptPolicyLines(group: 'all' | 'prior-task' | 'new-task' = 'all') {
   const groups = {
     'prior-task': [
       'If a prior task already exists and the user asks to continue, repair, or rerun it, prefer returning taskFiles that reference that existing workspace task path or a minimal patched task instead of starting an unrelated fresh analysis.',
@@ -370,7 +377,7 @@ export function agentServerWorkspaceTaskRoutingPromptPolicyLines(group: 'all' | 
   return [...groups['prior-task'], ...groups['new-task']];
 }
 
-export function agentServerCapabilityRoutingPromptPolicyLines() {
+export function backendCapabilityRoutingPromptPolicyLines() {
   return [
     'Runtime capability routing contract: use capabilityBrokerBrief as the compact broker-ranked capability list; the old scattered capability catalog is omitted by default, and full schemas, examples, implementation notes, and repair hints stay lazy until execution or repair needs them.',
     'Capability discovery API contract: the initial handoff only exposes a tiny capability_discovery brief with search/expand/plan/explain. Use search for lightweight candidates, expand only selected capability ids, plan for dependencies/fallbacks/missing provider or permission, and explain for user/debug/audit summaries. Discovery never executes the task and is never task completion evidence.',
@@ -382,32 +389,32 @@ export function agentServerCapabilityRoutingPromptPolicyLines() {
   ];
 }
 
-export function agentServerLargeFilePromptContractLines() {
+export function backendLargeFilePromptContractLines() {
   return [
     'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
     'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction under the current .sciforge/sessions/<date>_<scenario>_<session>/{artifacts,task-results,data}/ directories, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
   ];
 }
 
-export function agentServerViewSelectionPromptPolicyLines() {
+export function backendViewSelectionPromptPolicyLines() {
   return [
     'Use selectedComponentIds only when the current user turn explicitly requested those views; do not preserve default UI slots as output requirements.',
   ];
 }
 
-export function agentServerContinuationPromptPolicyLines() {
+export function backendContinuationPromptPolicyLines() {
   return [
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
   ];
 }
 
-export function agentServerPriorAttemptsPromptPolicyLines() {
+export function backendPriorAttemptsPromptPolicyLines() {
   return [
     'RECENT PRIOR ATTEMPTS (authoritative repair/continuation context; preserve failureReason):',
   ];
 }
 
-export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | 'intro' | 'completion' = 'all') {
+export function backendWorkspaceTaskRepairPromptPolicyLines(group: 'all' | 'intro' | 'completion' = 'all') {
   const groups = {
     intro: [
       'Repair this SciForge workspace task and leave the workspace ready for SciForge to rerun it.',
@@ -425,21 +432,21 @@ export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | '
   return [...groups.intro, ...groups.completion];
 }
 
-export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'syntax-preflight' | 'payload-preflight' | 'provider-first-payload-preflight' | 'provider-first-recovery-adapter' | 'raw-data-pre-execution-guard') {
+export function backendGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'syntax-preflight' | 'payload-preflight' | 'provider-first-payload-preflight' | 'provider-first-recovery-adapter' | 'raw-data-pre-execution-guard') {
   if (kind === 'entrypoint') {
-    return 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
+    return 'Retrying backend generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
   }
   if (kind === 'path-only-task-files') {
-    return 'Retrying AgentServer generation once; taskFiles must include inline content or be physically written before returning.';
+    return 'Retrying backend generation once; taskFiles must include inline content or be physically written before returning.';
   }
   if (kind === 'provider-first-payload-preflight') {
-    return 'Retrying AgentServer generation once; generated tasks must use ready SciForge provider routes for web work instead of direct external network libraries.';
+    return 'Retrying backend generation once; generated tasks must use ready SciForge provider routes for web work instead of direct external network libraries.';
   }
   if (kind === 'payload-preflight') {
-    return 'Retrying AgentServer generation once; generated tasks must write a complete ToolPayload envelope before expensive execution.';
+    return 'Retrying backend generation once; generated tasks must write a complete ToolPayload envelope before expensive execution.';
   }
   if (kind === 'syntax-preflight') {
-    return 'Retrying AgentServer generation once; generated task entrypoints must parse before SciForge runs workspace code.';
+    return 'Retrying backend generation once; generated task entrypoints must parse before SciForge runs workspace code.';
   }
 	  if (kind === 'provider-first-recovery-adapter') {
 	    return 'Using deterministic provider-first recovery adapter after strict retry still bypassed ready SciForge provider routes.';
@@ -447,11 +454,11 @@ export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-o
 	  if (kind === 'raw-data-pre-execution-guard') {
 	    return 'Blocking generated raw-data execution before retry/adapters; raw downloads require a ready raw-data-readiness-dossier with approval, budgets, checksums, and environment refs.';
 	  }
-  return 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.';
+  return 'Retrying backend generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.';
 }
 
-export function agentServerGeneratedEntrypointContractReason(
-  response: AgentServerGeneratedTaskContractResponse,
+export function backendGeneratedEntrypointContractReason(
+  response: BackendGeneratedTaskContractResponse,
   options: { normalizePath?: (path: string) => string } = {},
 ) {
   const normalizePath = options.normalizePath ?? ((path: string) => path);
@@ -461,22 +468,22 @@ export function agentServerGeneratedEntrypointContractReason(
   const executableExts = new Set(['.py', '.r', '.R', '.sh', '.bash', '.zsh']);
   const artifactExts = new Set(['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.pdf', '.png', '.jpg', '.jpeg', '.html']);
   if (artifactExts.has(ext) && !executableExts.has(ext)) {
-    return `AgentServer returned a non-executable artifact/report as entrypoint: ${entryRel}. Return a direct ToolPayload for report-only answers, or use an executable task file that writes the report artifact.`;
+    return `backend returned a non-executable artifact/report as entrypoint: ${entryRel}. Return a direct ToolPayload for report-only answers, or use an executable task file that writes the report artifact.`;
   }
   if ((language === 'python' || !language) && ext && !['.py'].includes(ext)) {
-    return `AgentServer entrypoint language/path mismatch: language=${language || 'python'} path=${entryRel}.`;
+    return `backend entrypoint language/path mismatch: language=${language || 'python'} path=${entryRel}.`;
   }
   if (['.js', '.mjs', '.ts'].includes(ext) && language !== 'cli') {
-    return `AgentServer entrypoint ${entryRel} uses ${ext}, but SciForge generated task runner supports python/r/shell paths or explicit cli commands.`;
+    return `backend entrypoint ${entryRel} uses ${ext}, but SciForge generated task runner supports python/r/shell paths or explicit cli commands.`;
   }
   const entryFile = response.taskFiles.find((file) => normalizePath(file.path) === entryRel);
   if (entryFile && artifactExts.has(ext) && !/^(python|r|shell|cli)$/i.test(String(entryFile.language || ''))) {
-    return `AgentServer taskFiles marks artifact-like entrypoint ${entryRel} as ${entryFile.language || 'unknown'} instead of executable code.`;
+    return `backend taskFiles marks artifact-like entrypoint ${entryRel} as ${entryFile.language || 'unknown'} instead of executable code.`;
   }
   return undefined;
 }
 
-export function agentServerGeneratedTaskInterfaceContractReason(input: {
+export function backendGeneratedTaskInterfaceContractReason(input: {
   entryRel: string;
   language?: string;
   source: string;
@@ -492,30 +499,30 @@ export function agentServerGeneratedTaskInterfaceContractReason(input: {
       writesOutput ? '' : 'write the SciForge outputPath argument',
     ].filter(Boolean).join(' and ');
     return [
-      `AgentServer generated task ${input.entryRel} does not ${missing}.`,
+      `backend-generated task ${input.entryRel} does not ${missing}.`,
       'Generated workspace tasks must be reusable adapters that read request/current-reference data from argv inputPath and write a valid ToolPayload to argv outputPath.',
-      'For report-only answers already reasoned by AgentServer, return a direct ToolPayload instead of static code that embeds the current report.',
+      'For report-only answers already reasoned by the backend, return a direct ToolPayload instead of static code that embeds the current report.',
     ].join(' ');
   }
   return undefined;
 }
 
-export function agentServerPathOnlyTaskFilesReason(files: string[]) {
-  return `AgentServer returned path-only taskFiles that were not present in the workspace and had no inline content: ${files.join(', ')}`;
+export function backendPathOnlyTaskFilesReason(files: string[]) {
+  return `backend returned path-only taskFiles that were not present in the workspace and had no inline content: ${files.join(', ')}`;
 }
 
-export function agentServerPathOnlyStrictRetryDirectPayloadReason(reason: string) {
+export function backendPathOnlyStrictRetryDirectPayloadReason(reason: string) {
   return `${reason}. Strict retry returned a direct ToolPayload instead of executable taskFiles.`;
 }
 
-export function agentServerPathOnlyStrictRetryStillMissingReason(reason: string, files: string[]) {
+export function backendPathOnlyStrictRetryStillMissingReason(reason: string, files: string[]) {
   return [
     reason,
     `Strict retry still returned path-only taskFiles without inline content or workspace files: ${files.join(', ')}`,
   ].join('. ');
 }
 
-export function agentServerStablePayloadTaskId(input: {
+export function generatedTaskStablePayloadTaskId(input: {
   kind: string;
   skillDomain: string;
   skillId: string;
@@ -523,28 +530,28 @@ export function agentServerStablePayloadTaskId(input: {
   runId?: string;
   shortHash: (value: string) => string;
 }) {
-  const domain = agentServerPayloadTaskDomain(input.skillDomain);
+  const domain = generatedTaskPayloadTaskDomain(input.skillDomain);
   const hash = input.shortHash(`${input.kind}:${input.skillId}:${input.prompt}:${input.runId || 'unknown'}`);
-  return `agentserver-${input.kind}-${domain}-${hash}`;
+  return `backend-${input.kind}-${domain}-${hash}`;
 }
 
-export function agentServerPayloadTaskDomain(skillDomain: string) {
+export function generatedTaskPayloadTaskDomain(skillDomain: string) {
   return skillDomain.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'runtime';
 }
 
-export function agentServerFreshRetrievalPromptPolicyLines() {
+export function backendFreshRetrievalPromptPolicyLines() {
   return [
     'For fresh retrieval/analysis/report requests, do not inspect prior task-attempt files to learn old failures. Generate an inputPath/outputPath task that performs the requested retrieval/analysis at execution time and writes bounded artifacts.',
   ];
 }
 
-export function agentServerRepairPromptPolicyLines() {
+export function backendRepairPromptPolicyLines() {
   return [
     'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
   ];
 }
 
-export function agentServerExternalIoReliabilityContractLines() {
+export function backendExternalIoReliabilityContractLines() {
   return [
     'External I/O reliability contract: generated or repaired tasks that call remote APIs, web feeds, model endpoints, package registries, databases, or downloadable files must use bounded timeouts, descriptive User-Agent/contact metadata when applicable, limited retries with exponential backoff, and explicit handling for 429/5xx/network timeout/empty-result cases.',
     'Binary/text contract: downloadable binary resources such as PDFs, images, archives, and model files must be fetched and processed as bytes until an explicit decoder/parser converts them to text. Do not apply bytes regex/patterns to decoded strings or string regex/patterns to bytes; keep helpers named and typed distinctly, for example fetch_bytes versus fetch_text.',

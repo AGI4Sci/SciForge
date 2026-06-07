@@ -216,7 +216,7 @@ try {
     assert.ok(events.some((event) => event.type === 'contextWindowState'), `${item.id} missing UI/runtime context status event`);
 
     if (item.runnerKind === 'direct-payload') {
-      assert.match(result.reasoningTrace, /AgentServer returned a SciForge ToolPayload directly/);
+      assert.match(result.reasoningTrace, /backend returned a SciForge ToolPayload directly/);
       assert.equal(String(result.executionUnits[0]?.outputRef).startsWith('agentserver://'), true);
       continue;
     }
@@ -312,7 +312,7 @@ payload = {
     "executionUnits": [{
         "id": "t097-${id}",
         "status": "done",
-        "tool": "agentserver.generated.python",
+        "tool": "generated-task.generate..python",
         "workEvidence": work_evidence,
         "guidanceDecisions": guidance_decisions
     }],

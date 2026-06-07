@@ -123,8 +123,12 @@ test('bounded Computer Use confirmation is handled by module operation result, n
       targetScope: { kind: 'window', targetBindingRef: 'computer-use:target:window-1' },
       config: {
         allowedActions: ['submit'],
+        maxSteps: 1,
+        maxTimeMs: 1000,
+        maxModelCalls: 1,
         riskPolicy: 'confirmation-required',
         requiredEvidence: ['before-evidence-ref'],
+        stopConditions: ['return-needs-confirmation-before-submit'],
       },
       action: { kind: 'submit', risk: 'high' },
     },

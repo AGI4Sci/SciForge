@@ -138,7 +138,7 @@ export function capabilityProviderStatusFastPathMessage(input: {
     : ['- No core web/pdf provider route was required by this status query.'];
   const selectedLine = input.selectedIds.length ? `Selected runtime ids: ${input.selectedIds.join(', ')}` : 'Selected runtime ids: none reported.';
   return [
-    'Tool/provider status answered from SciForge runtime registries without dispatching AgentServer generation.',
+    'Tool/provider status answered from SciForge runtime registries without dispatching backend generation.',
     selectedLine,
     'Provider routes:',
     ...routeLines,

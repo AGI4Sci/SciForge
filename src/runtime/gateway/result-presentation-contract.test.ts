@@ -374,7 +374,7 @@ test('attachResultPresentationContract does not treat quoted failure notes as cu
     '',
     '- 是否确认今天 arXiv 上的相关论文：没有。选中报告明确是无可确认结果/最新论文列表为空。',
     '- PDF/全文状态：没有可对应到论文的 PDF/全文可读记录。',
-    '- 选中报告依据：Recovery note: AgentServer returned failed-with-reason during the original literature run.',
+    '- 选中报告依据：Recovery note: backend returned failed-with-reason during the original literature run.',
   ].join('\n');
   const attached = attachResultPresentationContract(payload({
     message: answer,
@@ -710,16 +710,16 @@ test('attachResultPresentationContract rebuilds stale partial presentation after
       data: { markdown: '# Timeline and Budget\n\nTotal: $80,000 / 100%' },
     }],
     executionUnits: [{
-      id: 'agentserver-direct-answer',
+      id: 'backend-direct-answer',
       status: 'done',
-      tool: 'agentserver.direct-answer',
-      outputRef: '.sciforge/task-results/agentserver-direct-answer.md',
+      tool: 'backend.direct-answer',
+      outputRef: '.sciforge/task-results/backend-direct-answer.md',
     }],
     verificationResults: [{
       id: 'background-work-verify',
       verdict: 'unverified',
       confidence: 0,
-      evidenceRefs: ['execution-unit:agentserver-direct-answer'],
+      evidenceRefs: ['execution-unit:backend-direct-answer'],
       repairHints: [],
       diagnostics: {
         required: false,
@@ -794,10 +794,10 @@ test('attachResultPresentationContract treats soft direct read-only answers as b
       data: { markdown: '# Timeline and Budget\n\nTotal: $80,000 / 100%' },
     }],
     executionUnits: [{
-      id: 'agentserver-direct-answer',
+      id: 'backend-direct-answer',
       status: 'done',
-      tool: 'agentserver.direct-text',
-      outputRef: '.sciforge/task-results/agentserver-direct-answer.md',
+      tool: 'backend.direct-text',
+      outputRef: '.sciforge/task-results/backend-direct-answer.md',
     }],
     displayIntent: {
       resultPresentation: stalePartial,
@@ -864,16 +864,16 @@ test('attachResultPresentationContract does not let direct read-only answers sat
       data: { markdown: '# Timeline and Budget\n\nTotal: $80,000 / 100%' },
     }],
     executionUnits: [{
-      id: 'agentserver-direct-answer',
+      id: 'backend-direct-answer',
       status: 'done',
-      tool: 'agentserver.direct-answer',
-      outputRef: '.sciforge/task-results/agentserver-direct-answer.md',
+      tool: 'backend.direct-answer',
+      outputRef: '.sciforge/task-results/backend-direct-answer.md',
     }],
     verificationResults: [{
       id: 'background-work-verify',
       verdict: 'unverified',
       confidence: 0,
-      evidenceRefs: ['execution-unit:agentserver-direct-answer'],
+      evidenceRefs: ['execution-unit:backend-direct-answer'],
       repairHints: [],
       diagnostics: {
         required: false,
@@ -917,16 +917,16 @@ test('attachResultPresentationContract treats explicit read-only no-rewrite conf
       },
     }],
     executionUnits: [{
-      id: 'agentserver-direct-answer',
+      id: 'backend-direct-answer',
       status: 'done',
-      tool: 'agentserver.direct-text',
-      outputRef: '.sciforge/task-results/agentserver-direct-answer.md',
+      tool: 'backend.direct-text',
+      outputRef: '.sciforge/task-results/backend-direct-answer.md',
     }],
     verificationResults: [{
       id: 'background-work-verify',
       verdict: 'unverified',
       confidence: 0,
-      evidenceRefs: ['execution-unit:agentserver-direct-answer'],
+      evidenceRefs: ['execution-unit:backend-direct-answer'],
       repairHints: [],
       diagnostics: {
         required: false,

@@ -37,6 +37,18 @@ export function createComputerUseNativeRouteStream(input: ComputerUseNativeRoute
   if (!isComputerUseNativeRouteCommand(input.request.commandText) && !hasExplicitHostOwnedComputerUseNativeRouteIntent(input.request.runtimeIntent)) {
     return undefined;
   }
+  const retiredVirtualAppScreenReason = retiredVirtualAppScreenNativeRouteReason(input.request.commandText);
+  if (retiredVirtualAppScreenReason) {
+    const metadata = routeMetadata(input);
+    return {
+      turnId: input.request.commandId,
+      provider: input.provider,
+      model: input.model,
+      profile: input.profile,
+      workspacePath: input.workspace,
+      events: singleEventStream(failedEvent(metadata, retiredVirtualAppScreenReason)),
+    };
+  }
   return {
     turnId: input.request.commandId,
     provider: input.provider,
@@ -47,11 +59,24 @@ export function createComputerUseNativeRouteStream(input: ComputerUseNativeRoute
   };
 }
 
+async function* singleEventStream(event: Record<string, unknown>): AsyncIterable<Record<string, unknown>> {
+  yield event;
+}
+
 function hasExplicitHostOwnedComputerUseNativeRouteIntent(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return value.schemaVersion === 'sciforge.runtime-codex.host-intent.v1'
     && value.kind === 'computer-use-native-route'
     && value.source === 'host-owned';
+}
+
+function retiredVirtualAppScreenNativeRouteReason(commandText: string): string | undefined {
+  const text = computerUseNativeRouteCommandText(commandText);
+  if (!text) return undefined;
+  if (!/^\/(?:computer-use|computer\s+use)\s+screen\s+(?:attach|reconnect)\b/i.test(text)) return undefined;
+  const usesVirtualAppScreenSurface = /(?:--source(?:=|\s+)(?:"right-pane-screen"|'right-pane-screen'|right-pane-screen)|virtual-app-screen:|gui\.present:|screen-activation)/i.test(text);
+  if (!usesVirtualAppScreenSurface) return undefined;
+  return 'VirtualAppScreen right pane screen attach/reconnect is retired from the default Computer Use native route; use Runtime Codex Computer Use bounded operations or image evidence refs instead.';
 }
 
 async function* computerUseNativeRouteEvents(input: ComputerUseNativeRouteInput): AsyncIterable<Record<string, unknown>> {

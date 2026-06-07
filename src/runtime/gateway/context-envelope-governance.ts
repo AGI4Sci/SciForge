@@ -1,5 +1,5 @@
 import type { GatewayRequest } from '../runtime-types.js';
-import { clipForAgentServerJson, hashJson, isRecord, toStringList } from '../gateway-utils.js';
+import { clipForBackendJson, hashJson, isRecord, toStringList } from '../gateway-utils.js';
 
 export type ContextEnvelopeGovernanceBudget = {
   maxPromptTokens?: number;
@@ -202,14 +202,14 @@ export function contextEnvelopeGovernanceAudit(governance: ContextEnvelopeGovern
     contextBudget: governance.contextBudget,
     contextRefs: governance.contextRefs,
     repairContextPolicy: governance.repairContextPolicy
-      ? clipForAgentServerJson(governance.repairContextPolicy, 1)
+      ? clipForBackendJson(governance.repairContextPolicy, 1)
       : undefined,
-    decisions: governance.decisions.map((decision) => clipForAgentServerJson(decision, 2)),
-    ignoredLegacySources: governance.ignoredLegacySources?.map((source) => clipForAgentServerJson(source, 1)),
+    decisions: governance.decisions.map((decision) => clipForBackendJson(decision, 2)),
+    ignoredLegacySources: governance.ignoredLegacySources?.map((source) => clipForBackendJson(source, 1)),
     slimmingTrace: governance.decisions
       .map((decision) => decision.trace)
       .filter((trace): trace is ContextEnvelopeSlimmingTrace => Boolean(trace))
-      .map((trace) => clipForAgentServerJson(trace, 1)),
+      .map((trace) => clipForBackendJson(trace, 1)),
   };
 }
 

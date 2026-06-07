@@ -362,7 +362,7 @@ export function normalizeArtifactDataWithPolicy(
   }
 }
 
-export function agentServerToolPayloadProtocolContractLines() {
+export function backendToolPayloadProtocolContractLines() {
   const shape = toolPayloadShapeContractSummary();
   return [
     `ToolPayload schema is strict (${shape.contractId}): ${shape.arrayFields.join(', ')} must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact entry must be an object with non-empty id and type. Do not put result rows inside uiManifest. Do not put artifact filenames, variable names, or result rows directly in artifacts/uiManifest; put content in artifacts[].data, artifacts[].dataRef, artifacts[].path, or a clearly declared artifact object.`,
@@ -371,14 +371,14 @@ export function agentServerToolPayloadProtocolContractLines() {
   ];
 }
 
-export function agentServerArtifactSelectionPromptPolicyLines() {
+export function backendArtifactSelectionPromptPolicyLines() {
   return [
     'Only treat expectedArtifactTypes as required when the list is non-empty. If it is empty, infer the minimal output from the raw user prompt and do not add scenario-default artifacts.',
     'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial package skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
   ];
 }
 
-export function agentServerCurrentReferencePromptPolicyLines() {
+export function backendCurrentReferencePromptPolicyLines() {
   return [
     'Current-reference contract: if uiStateSummary.currentReferences or contextEnvelope.sessionFacts.currentReferences is non-empty, treat those refs as explicit current-turn inputs. The final message, claims, or artifact content must reflect that each non-UI ref was actually read/used. Merely echoing it as objectReferences or preserving a file chip is not enough.',
     'If the current refs cannot be read or do not contain enough information to answer, return executionUnits.status="failed-with-reason" with the missing/unreadable refs and a precise nextStep. Do not answer from old session memory, priorAttempts, or broad scenario defaults.',
@@ -386,7 +386,7 @@ export function agentServerCurrentReferencePromptPolicyLines() {
   ];
 }
 
-export function agentServerBibliographicVerificationPromptPolicyLines() {
+export function backendBibliographicVerificationPromptPolicyLines() {
   return [
     'Bibliographic verification contract: never mark a PMID, DOI, trial id, citation, or paper record as corrected/verified unless the returned title, year, journal, and identifier correspond to the same work as the source claim.',
     'If an identifier lookup returns a title mismatch, topic mismatch, unrelated journal, or only a broad review when the source claim is a trial/cohort/paper, preserve the original claim and mark it needs-verification with the mismatch reason and search terms. Do not substitute the unrelated record as a correction.',
@@ -407,9 +407,24 @@ export interface BibliographicVerificationPromptPolicyGateInput {
   verificationPolicies?: unknown;
 }
 
-export function agentServerShouldIncludeBibliographicVerificationPromptPolicy(input: BibliographicVerificationPromptPolicyGateInput) {
+export function backendShouldIncludeBibliographicVerificationPromptPolicy(input: BibliographicVerificationPromptPolicyGateInput) {
   return bibliographicVerificationPolicyScopeEnabled(input);
 }
+
+/** @deprecated Use backendToolPayloadProtocolContractLines. */
+export const agentServerToolPayloadProtocolContractLines = backendToolPayloadProtocolContractLines;
+
+/** @deprecated Use backendArtifactSelectionPromptPolicyLines. */
+export const agentServerArtifactSelectionPromptPolicyLines = backendArtifactSelectionPromptPolicyLines;
+
+/** @deprecated Use backendCurrentReferencePromptPolicyLines. */
+export const agentServerCurrentReferencePromptPolicyLines = backendCurrentReferencePromptPolicyLines;
+
+/** @deprecated Use backendBibliographicVerificationPromptPolicyLines. */
+export const agentServerBibliographicVerificationPromptPolicyLines = backendBibliographicVerificationPromptPolicyLines;
+
+/** @deprecated Use backendShouldIncludeBibliographicVerificationPromptPolicy. */
+export const agentServerShouldIncludeBibliographicVerificationPromptPolicy = backendShouldIncludeBibliographicVerificationPromptPolicy;
 
 export function bibliographicVerificationPolicyScopeEnabled(input: BibliographicVerificationPromptPolicyGateInput) {
   return policyTokenInSet(input.skillDomain, BIBLIOGRAPHIC_SKILL_DOMAIN_SET)
@@ -556,7 +571,7 @@ export function buildCurrentReferenceDigestRecoveryPayload(input: CurrentReferen
     claimType: CURRENT_REFERENCE_DIGEST_RECOVERY_CLAIM_TYPE,
     evidenceLevel: CURRENT_REFERENCE_DIGEST_RECOVERY_EVIDENCE_LEVEL,
     reasoningTrace: [
-      'AgentServer generation was stopped by convergence guard.',
+      'backend generation was stopped by convergence guard.',
       'SciForge recovered from bounded current-reference digests instead of replaying full files into the backend context.',
       `Failure reason: ${input.failureReason}`,
     ].join('\n'),

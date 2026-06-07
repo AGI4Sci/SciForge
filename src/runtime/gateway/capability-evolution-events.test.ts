@@ -17,14 +17,14 @@ test('capability evolution runtime events use the gateway provider registry for 
     artifacts: [],
   };
   const skill: SkillAvailability = {
-    id: 'agentserver.generate.literature',
+    id: 'generated-task.generate.literature',
     kind: 'installed',
     available: true,
     reason: 'registry test',
     checkedAt: '2026-05-10T00:00:00.000Z',
     manifestPath: 'agentserver://generate-literature',
     manifest: {
-      id: 'agentserver.generate.literature',
+      id: 'generated-task.generate.literature',
       kind: 'installed',
       description: 'registry test',
       skillDomains: ['literature'],
