@@ -209,6 +209,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const targetFileBlock = targetFileRefsBlock(input, targetWindow, observation);
   if (targetFileBlock) return targetFileBlock;
 
+  const draftTextRefBlock = draftTextRefRequiredBlock(input, targetWindow, observation);
+  if (draftTextRefBlock) return draftTextRefBlock;
+
   const riskEnvelopeBlock = realFileChangeRiskEnvelopeBlock(input, targetWindow, observation);
   if (riskEnvelopeBlock) return riskEnvelopeBlock;
 
@@ -409,6 +412,25 @@ function targetFileRefsBlock(
     repairHints: [{
       code: 'confirm-target-file',
       message: 'Collect a user-selected fileRef from the current observation, then retry the same Host-chosen primitive.',
+      suggestedPrimitive: 'act',
+    }],
+  };
+}
+
+function draftTextRefRequiredBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (input.operation !== 'insert-draft') return undefined;
+  if (nonEmptyString(input.draftTextRef)) return undefined;
+  return {
+    ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+    targetWindowRef: targetWindow.windowRef,
+    blockedReason: 'vscode_cowork_draft_text_ref_required',
+    repairHints: [{
+      code: 'provide-draft-text-ref',
+      message: 'Host must provide a refs-first draftTextRef for draft insertion. Raw draft text must not be embedded in the Computer Use decision.',
       suggestedPrimitive: 'act',
     }],
   };

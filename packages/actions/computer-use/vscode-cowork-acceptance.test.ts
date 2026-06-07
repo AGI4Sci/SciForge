@@ -164,6 +164,30 @@ test('Host-side VSCode co-work blocks selected file refs that are not in current
   assert.ok(decision.refs.includes('file-ref:vscode:notes'));
 });
 
+test('Host-side VSCode co-work requires a draft text ref before inserting draft text', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:missing-draft-ref',
+    operation: 'insert-draft',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.blockedReason, 'vscode_cowork_draft_text_ref_required');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.deepEqual(decision.repairHints, [{
+    code: 'provide-draft-text-ref',
+    message: 'Host must provide a refs-first draftTextRef for draft insertion. Raw draft text must not be embedded in the Computer Use decision.',
+    suggestedPrimitive: 'act',
+  }]);
+  assert.ok(decision.refs.includes('observation:vscode:current'));
+  assert.ok(decision.refs.includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(decision), /draft body|rawDraftText|clipboard|providerPayload|base64|planner/i);
+});
+
 test('Host-side VSCode co-work chooses the next primitive only from fresh observe refs', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:focus',
