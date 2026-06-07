@@ -319,7 +319,9 @@ Acceptance Gates：
 
 本轮补充：P9 cleanup / live manifest validator 现在会 fail closed 校验用户 profile 与共享系统输入标记。manifest 若没有明确 `userProfileUsed=true` 或 `sharedSystemInputUsed=true`，即使 release refs、restoration refs 和 cleanup flags 都完整，也会返回 validation issue；这防止复用用户 VSCode profile / 共享键鼠输入的诊断路径被误写成 profile-isolated 或 product-ready 证据。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、cursor movement refs gate、selection replacement refs / approval gate、real-file risk/approval refs gate、live-manifest bind/target refs validator、action input/stale evidence validator 和 before/after visual refs validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+本轮补充：P9 live manifest 的 Host decision evidence 现在也必须绑定当前 requestRef、target window、before observe ref、freshness ref；文件目标操作还必须绑定 selected `file-ref:`，真实文件修改还必须绑定 tokenized `risk:` riskActionHash 与 `approval:` approvalRef。只有泛泛的 `decision:` ref 不足以证明 Host 是根据当前 observe refs 选择下一步原子能力。
+
+当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、cursor movement refs gate、selection replacement refs / approval gate、real-file risk/approval refs gate、live-manifest bind/target refs validator、Host decision observe-context refs validator、action input/stale evidence validator 和 before/after visual refs validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
 
 ## P10：论文修改 / 润色 GUI 协作
 

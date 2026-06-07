@@ -379,6 +379,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   const screenshotRefs = manifest.evidence.screenshotRefs.filter(imageRef);
   const accessibilityRefs = manifest.evidence.accessibilityRefs.filter(accessibilityRef);
   const textRefs = manifest.evidence.textRefs.filter(textRef);
+  const hostDecisionRefs = manifest.evidence.hostDecisionRefs;
   if (screenshotRefs.length === 0) issues.push('invalid-evidence-ref:screenshot');
   if (screenshotRefs.length < 2) issues.push('missing-evidence-ref:before-after-screenshot');
   if (accessibilityRefs.length === 0) issues.push('invalid-evidence-ref:accessibility');
@@ -386,7 +387,21 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (textRefs.length === 0) issues.push('invalid-evidence-ref:text');
   if (textRefs.length < 2) issues.push('missing-evidence-ref:before-after-text');
   if (!manifest.evidence.beforeObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:before-observe');
+  if (!manifest.evidence.beforeObservationRefs.some(freshnessRef)) issues.push('missing-evidence-ref:before-freshness');
   if (!manifest.evidence.hostDecisionRefs.some(hostDecisionRef)) issues.push('invalid-evidence-ref:host-decision');
+  if (!hostDecisionRefs.some(requestRef)) issues.push('missing-host-decision-ref:request');
+  if (!hostDecisionRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-host-decision-ref:target-window');
+  if (!hostDecisionRefs.some((ref) => manifest.evidence.beforeObservationRefs.some((beforeRef) => observationRef(ref) && sameRef(ref, beforeRef)))) {
+    issues.push('missing-host-decision-ref:before-observe');
+  }
+  if (!hostDecisionRefs.some((ref) => manifest.evidence.beforeObservationRefs.some((beforeRef) => freshnessRef(ref) && sameRef(ref, beforeRef)))) {
+    issues.push('missing-host-decision-ref:freshness');
+  }
+  if (fileTargetOperation(manifest.operation) && !hostDecisionRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
+    issues.push('missing-host-decision-ref:target-file');
+  }
+  if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(riskActionHashRef)) issues.push('missing-host-decision-ref:risk-action-hash');
+  if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(approvalRef)) issues.push('missing-host-decision-ref:approval');
   if (!manifest.evidence.actionRefs.some(actionRef)) issues.push('invalid-evidence-ref:act');
   if (!manifest.evidence.actionRefs.some(executorEventRef)) issues.push('missing-action-ref:executor-event');
   if (!manifest.evidence.actionRefs.some(inputEventRef)) issues.push('missing-action-ref:input-event');
@@ -969,6 +984,12 @@ function decisionBase(status: VSCodeCoWorkDecision['status'], refs: string[]): P
 
 function hasRefPrefix(refs: string[], prefix: string): boolean {
   return refs.some((ref) => ref.startsWith(prefix));
+}
+
+function sameRef(left: unknown, right: unknown): boolean {
+  return typeof left === 'string'
+    && typeof right === 'string'
+    && left.trim() === right.trim();
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

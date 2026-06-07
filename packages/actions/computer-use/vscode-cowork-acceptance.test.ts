@@ -1136,6 +1136,30 @@ test('VSCode co-work live manifest requires refs-first bind target evidence', ()
   }
 });
 
+test('VSCode co-work live manifest requires Host decision refs to bind request, observe, target, and approval evidence', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      hostDecisionRefs: ['decision:vscode-cowork:save-confirmed'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'missing-host-decision-ref:request',
+    'missing-host-decision-ref:target-window',
+    'missing-host-decision-ref:before-observe',
+    'missing-host-decision-ref:freshness',
+    'missing-host-decision-ref:target-file',
+    'missing-host-decision-ref:risk-action-hash',
+    'missing-host-decision-ref:approval',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1186,8 +1210,17 @@ function vscodeCoWorkLiveManifest() {
         'process:vscode:paper',
         'frontmost:vscode:paper',
       ],
-      beforeObservationRefs: ['observation:vscode:before'],
-      hostDecisionRefs: ['decision:vscode-cowork:save-confirmed'],
+      beforeObservationRefs: ['observation:vscode:before', 'freshness:vscode:before'],
+      hostDecisionRefs: [
+        'decision:vscode-cowork:save-confirmed',
+        'chat-request:vscode-cowork:save-confirmed',
+        'window:vscode:paper',
+        'file-ref:vscode:paper',
+        'observation:vscode:before',
+        'freshness:vscode:before',
+        'risk:save-current-file:paper',
+        'approval:risk:save-current-file:paper:confirmed',
+      ],
       actionRefs: [
         'action:vscode-cowork:save',
         'executor-event:vscode-cowork:save',
