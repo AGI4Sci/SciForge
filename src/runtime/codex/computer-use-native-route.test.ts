@@ -886,6 +886,40 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
   assert.equal(hiddenUnit?.blockedReason, 'vscode_cowork_editor_not_visible');
   assert.doesNotMatch(JSON.stringify(hiddenEvents), /visible text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 
+  const missingEditorElementEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      commandId: 'native-route-vscode-cowork-read-visible-text-missing-editor-element',
+      attemptId: 'native-route-vscode-cowork-read-visible-text-missing-editor-element-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:read-visible-text-missing-editor-element',
+        operation: 'read-visible-text',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: {
+          ...vscodeNativeRouteObservation(),
+          elementRefs: ['element:vscode:file-tabs'],
+          editorVisible: true,
+        },
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const missingEditorElementDone = missingEditorElementEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const missingEditorElementUnit = (missingEditorElementDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(missingEditorElementDone?.status, 'blocked');
+  assert.equal(missingEditorElementUnit?.primitive, undefined);
+  assert.equal(missingEditorElementUnit?.action, undefined);
+  assert.equal(missingEditorElementUnit?.blockedReason, 'vscode_cowork_editor_element_ref_required');
+  assert.ok((missingEditorElementDone?.evidenceRefs as string[]).includes('element:vscode:file-tabs'));
+  assert.doesNotMatch(JSON.stringify(missingEditorElementEvents), /visible text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
   const stream = createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '读取我当前打开的 VSCode 可见文本。',

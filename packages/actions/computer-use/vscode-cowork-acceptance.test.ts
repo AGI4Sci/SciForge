@@ -284,6 +284,24 @@ test('Host-side VSCode co-work blocks stale or incomplete observe refs before se
   assert.equal(editorHiddenRead.primitive, undefined);
   assert.equal(editorHiddenRead.action, undefined);
 
+  const editorElementMissing = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:editor-element-missing',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      elementRefs: ['element:vscode:file-tabs'],
+      editorVisible: true,
+    },
+  });
+
+  assert.equal(editorElementMissing.status, 'blocked');
+  assert.equal(editorElementMissing.blockedReason, 'vscode_cowork_editor_element_ref_required');
+  assert.equal(editorElementMissing.primitive, undefined);
+  assert.equal(editorElementMissing.action, undefined);
+  assert.ok(editorElementMissing.refs.includes('element:vscode:file-tabs'));
+
   const missingSession = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:missing-session',
     operation: 'focus-editor',

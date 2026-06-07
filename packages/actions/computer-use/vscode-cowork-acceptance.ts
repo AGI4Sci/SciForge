@@ -592,6 +592,13 @@ function observationRefsBlock(
       suggestedPrimitive: 'observe',
     }]);
   }
+  if (!editorElementRef(observation)) {
+    return blocked(input, 'vscode_cowork_editor_element_ref_required', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'observe-editor-element-ref',
+      message: 'Host must provide a refs-first editor element ref from the current VSCode observation before choosing an editor primitive.',
+      suggestedPrimitive: 'observe',
+    }]);
+  }
   return undefined;
 }
 
@@ -782,8 +789,8 @@ function actionForOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
 ): ComputerUseAtomicAction | undefined {
-  const observedElementRefs = observation.elementRefs.filter(elementRef);
-  const editorElementRef = observedElementRefs.find((ref) => /editor/i.test(ref)) ?? observedElementRefs[0];
+  const editorElementRef = editorElementRefForObservation(observation);
+  if (!editorElementRef) return undefined;
   if (input.operation === 'focus-editor') {
     return {
       type: 'key',
@@ -830,6 +837,14 @@ function actionForOperation(
     };
   }
   return undefined;
+}
+
+function editorElementRef(observation: VSCodeCoWorkObservationRefs): boolean {
+  return editorElementRefForObservation(observation) !== undefined;
+}
+
+function editorElementRefForObservation(observation: VSCodeCoWorkObservationRefs): string | undefined {
+  return observation.elementRefs.filter(elementRef).find((ref) => /editor/i.test(ref));
 }
 
 function realFileChangeNeedsConfirmation(
