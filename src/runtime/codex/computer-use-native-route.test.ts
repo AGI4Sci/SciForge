@@ -224,13 +224,68 @@ test('Computer Use native route can select opt-in TextEdit WindowActionSession b
     assert.equal(appiumCalls.length, 1);
     assert.equal(appiumCalls[0]?.action, 'save');
     assert.equal(appiumCalls[0]?.targetArtifactPath, artifactPath);
-    assert.match(String(done?.message), /Computer Use Act materializer is completed|product workflow completion is blocked/i);
+    assert.match(String(done?.message), /Computer Use Act materializer (?:is )?completed|product workflow completion is blocked/i);
     assert.ok((done?.evidenceRefs as string[]).includes('window-action-session:textedit-local-save'));
     assert.ok((done?.evidenceRefs as string[]).includes('adapter-registry:window-action-session/appium-mac2/computer-use'));
     assert.doesNotMatch(JSON.stringify(events), /workspace-file-writer|shell-writer|shared-system-input|SECRET|token/i);
   } finally {
     restoreEnv(previous);
   }
+});
+
+test('Computer Use native route selects VSCode co-work bridge and fails closed on ambiguous current windows', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '操作我已经打开的 VSCode，聚焦编辑器。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork',
+      attemptId: 'native-route-vscode-cowork-attempt-1',
+      runtimeIntent: {
+        schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+        kind: 'computer-use-native-route',
+        source: 'host-owned',
+        computerUseNext: {
+          taskId: 'CU-NEXT-09',
+          recommendedTargetMode: 'active-window',
+          recommendedTargetApp: 'Visual Studio Code',
+          semanticMarkers: ['current-vscode-cowork', 'refs-first'],
+        },
+        vscodeCoWork: {
+          requestRef: 'chat-request:vscode-cowork:ordinary',
+          operation: 'focus-editor',
+          windowCandidates: [
+            vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+            vscodeNativeRouteWindow({ windowRef: 'window:vscode:notes', titleRef: 'text:title:notes' }),
+          ],
+          rawScreenshotBase64: 'data:image/png;base64,SECRET_SCREENSHOT_SHOULD_NOT_LEAK',
+          providerPayload: 'SECRET_PROVIDER_PAYLOAD_SHOULD_NOT_LEAK',
+        },
+      } as any,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const selected = events.find((event) => String(event.message).includes('VSCode co-work'));
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const executionUnits = done?.executionUnits as Record<string, unknown>[] | undefined;
+  const unit = executionUnits?.[0];
+
+  assert.ok(selected);
+  assert.equal(done?.status, 'needs-confirmation');
+  assert.equal(unit?.status, 'needs-confirmation');
+  assert.equal(unit?.maturity, 'live-diagnostic');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.equal(unit?.blockedReason, 'vscode_cowork_target_window_needs_confirmation');
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:ordinary'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:notes'));
+  assert.doesNotMatch(JSON.stringify(events), /SECRET|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
 test('Computer Use native route keeps only safe task and scenario bindings', () => {
@@ -414,4 +469,17 @@ function restoreEnv(snapshot: Record<string, string | undefined>) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+}
+
+function vscodeNativeRouteWindow(input: {
+  windowRef: string;
+  titleRef?: string;
+}) {
+  return {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: input.windowRef.replace('window:', 'process:'),
+    windowRef: input.windowRef,
+    titleRef: input.titleRef ?? `${input.windowRef}:title`,
+    frontmostRef: `${input.windowRef}:frontmost`,
+  };
 }

@@ -8,6 +8,7 @@ import type {
 } from './codex-app-server-adapter.js';
 import type { AppiumMac2WindowActionClient } from './appium-mac2-window-action-adapter.js';
 import { createTextEditWindowActionChatBridge } from './textedit-window-action-chat-bridge.js';
+import { createVSCodeCoWorkChatBridge } from './vscode-cowork-chat-bridge.js';
 
 export interface ComputerUseNativeRouteInput {
   request: CodexAppServerStartTurnRequest;
@@ -105,6 +106,7 @@ async function runComputerUseNativeRoute(
   queue.abort = abort;
   try {
     queue.push(operationEvent(metadata, 'Runtime Codex selected the Computer Use native package bridge.', 'running'));
+    if (await tryRunVSCodeCoWorkChatBridge(input, queue, metadata)) return;
     if (await tryRunTextEditWindowActionBridge(input, queue, metadata)) return;
     const { tryRunVisionSenseRuntime } = await import('../vision-sense-runtime.js');
     const payload = await tryRunVisionSenseRuntime(request, {
@@ -124,6 +126,22 @@ async function runComputerUseNativeRoute(
     input.abortSignal?.removeEventListener('abort', abort);
     queue.end();
   }
+}
+
+async function tryRunVSCodeCoWorkChatBridge(
+  input: ComputerUseNativeRouteInput,
+  queue: AsyncEventQueue<Record<string, unknown>>,
+  metadata: RouteMetadata,
+): Promise<boolean> {
+  const bridge = createVSCodeCoWorkChatBridge({
+    runtimeIntent: input.request.runtimeIntent,
+    commandId: input.request.commandId,
+    attemptId: input.request.attemptId,
+  });
+  if (!bridge) return false;
+  queue.push(operationEvent(metadata, 'Runtime Codex selected the VSCode co-work Host bridge.', 'running'));
+  queue.push(doneEvent(metadata, bridge.payload));
+  return true;
 }
 
 async function tryRunTextEditWindowActionBridge(

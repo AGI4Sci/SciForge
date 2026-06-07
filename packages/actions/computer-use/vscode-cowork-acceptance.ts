@@ -143,7 +143,7 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
 
   if (!input.selectedWindowRef && candidateRefs.length > 1) {
     return {
-      ...decisionBase('needs-confirmation', requestRefs),
+      ...decisionBase('needs-confirmation', uniqueStrings([...requestRefs, ...candidateRefs])),
       blockedReason: 'vscode_cowork_target_window_needs_confirmation',
       confirmation: {
         reason: 'Multiple VSCode window refs match this co-work request; Host must ask the user which one to bind.',

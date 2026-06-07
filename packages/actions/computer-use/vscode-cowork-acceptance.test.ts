@@ -47,6 +47,9 @@ test('Host-side VSCode co-work asks for confirmation when multiple user windows 
   assert.equal(decision.primitive, undefined);
   assert.equal(decision.action, undefined);
   assert.deepEqual(decision.confirmation?.candidateWindowRefs, ['window:vscode:paper', 'window:vscode:notes']);
+  assert.ok(decision.refs.includes('chat-request:vscode-cowork:multi-window'));
+  assert.ok(decision.refs.includes('window:vscode:paper'));
+  assert.ok(decision.refs.includes('window:vscode:notes'));
   assert.equal(decision.productReady, false);
   assert.equal(decision.maturity, 'live-diagnostic');
 });
