@@ -1207,6 +1207,34 @@ test('VSCode co-work live manifest requires refs-first bind target evidence', ()
   }
 });
 
+test('VSCode co-work live manifest requires bind refs to assign released input resources', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      bindRefs: base.evidence.bindRefs.filter((ref) =>
+        !ref.startsWith('scoped-input-lease:')
+          && !ref.startsWith('input-adapter:')
+          && !ref.startsWith('cursor-marker:')
+          && !ref.startsWith('cursor:'),
+      ),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'missing-bind-ref:scoped-input-lease',
+    'missing-bind-ref:input-adapter',
+    'missing-bind-ref:cursor-marker',
+    'missing-bind-release-ref:scoped-input-lease',
+    'missing-bind-release-ref:input-adapter',
+    'missing-bind-release-ref:cursor-marker',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 test('VSCode co-work live manifest requires Host decision refs to bind request, observe, target, and approval evidence', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1378,6 +1406,9 @@ function vscodeCoWorkLiveManifest() {
         'macos-app:com.microsoft.VSCode',
         'process:vscode:paper',
         'frontmost:vscode:paper',
+        'scoped-input-lease:vscode-cowork:1',
+        'input-adapter:vscode-cowork:1',
+        'cursor-marker:vscode-cowork:1',
       ],
       beforeObservationRefs: [
         'observation:vscode:before',

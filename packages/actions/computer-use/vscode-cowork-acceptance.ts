@@ -368,6 +368,18 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.bindRefs.some(appRef)) issues.push('missing-bind-ref:app');
   if (!manifest.evidence.bindRefs.some(processRef)) issues.push('missing-bind-ref:process');
   if (!manifest.evidence.bindRefs.some(frontmostRef)) issues.push('missing-bind-ref:frontmost');
+  if (!manifest.evidence.bindRefs.some(scopedInputLeaseRef)) issues.push('missing-bind-ref:scoped-input-lease');
+  if (!manifest.evidence.bindRefs.some(inputAdapterRef)) issues.push('missing-bind-ref:input-adapter');
+  if (!manifest.evidence.bindRefs.some(cursorMarkerRef)) issues.push('missing-bind-ref:cursor-marker');
+  if (releaseRefs.some(scopedInputLeaseRef) && !refsContainBoundRef(manifest.evidence.bindRefs, releaseRefs, scopedInputLeaseRef)) {
+    issues.push('missing-bind-release-ref:scoped-input-lease');
+  }
+  if (releaseRefs.some(inputAdapterRef) && !refsContainBoundRef(manifest.evidence.bindRefs, releaseRefs, inputAdapterRef)) {
+    issues.push('missing-bind-release-ref:input-adapter');
+  }
+  if (releaseRefs.some(cursorMarkerRef) && !refsContainBoundRef(manifest.evidence.bindRefs, releaseRefs, cursorMarkerRef)) {
+    issues.push('missing-bind-release-ref:cursor-marker');
+  }
   if (!manifest.evidence.beforeObservationRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:before-observe');
   if (!manifest.evidence.hostDecisionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:host-decision');
   if (!manifest.evidence.actionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:act');
