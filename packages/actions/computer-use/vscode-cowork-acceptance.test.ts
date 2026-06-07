@@ -1162,6 +1162,30 @@ test('VSCode co-work live manifest requires before observe refs to bind the targ
   assert.ok(failed.issues.includes('missing-before-observe-ref:target-window'));
 });
 
+test('VSCode co-work live manifest requires observe refs to bind the active session', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      beforeObservationRefs: base.evidence.beforeObservationRefs.map((ref) =>
+        ref.startsWith('window-action-session:')
+          ? 'window-action-session:vscode-cowork:other-before'
+          : ref,
+      ),
+      afterObservationRefs: base.evidence.afterObservationRefs.map((ref) =>
+        ref.startsWith('window-action-session:')
+          ? 'window-action-session:vscode-cowork:other-after'
+          : ref,
+      ),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-before-observe-ref:active-session'));
+  assert.ok(failed.issues.includes('missing-after-observe-ref:active-session'));
+});
+
 test('VSCode co-work live manifest requires refs-first bind target evidence', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1357,6 +1381,7 @@ function vscodeCoWorkLiveManifest() {
       ],
       beforeObservationRefs: [
         'observation:vscode:before',
+        'window-action-session:vscode-cowork:1',
         'window:vscode:paper',
         'freshness:vscode:before',
         'image:vscode:before',
@@ -1385,6 +1410,7 @@ function vscodeCoWorkLiveManifest() {
       ],
       afterObservationRefs: [
         'observation:vscode:after',
+        'window-action-session:vscode-cowork:1',
         'window:vscode:paper',
         'freshness:vscode:after',
         'image:vscode:after',

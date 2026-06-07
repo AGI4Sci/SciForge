@@ -396,6 +396,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!refsContainBoundRef(beforeObservationRefs, screenshotRefs, imageRef)) issues.push('missing-before-observe-ref:screenshot');
   if (!refsContainBoundRef(beforeObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-before-observe-ref:accessibility');
   if (!refsContainBoundRef(beforeObservationRefs, textRefs, textRef)) issues.push('missing-before-observe-ref:text');
+  if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(beforeObservationRefs, manifest.evidence.bindRefs, sessionRef)) {
+    issues.push('missing-before-observe-ref:active-session');
+  }
   if (!manifest.evidence.hostDecisionRefs.some(hostDecisionRef)) issues.push('invalid-evidence-ref:host-decision');
   if (!hostDecisionRefs.some(requestRef)) issues.push('missing-host-decision-ref:request');
   if (!hostDecisionRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-host-decision-ref:target-window');
@@ -435,6 +438,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!refsContainBoundRef(afterObservationRefs, screenshotRefs, imageRef)) issues.push('missing-after-observe-ref:screenshot');
   if (!refsContainBoundRef(afterObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-after-observe-ref:accessibility');
   if (!refsContainBoundRef(afterObservationRefs, textRefs, textRef)) issues.push('missing-after-observe-ref:text');
+  if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(afterObservationRefs, manifest.evidence.bindRefs, sessionRef)) {
+    issues.push('missing-after-observe-ref:active-session');
+  }
   if (!manifest.evidence.controlRefs.some(controlRef)) issues.push('invalid-evidence-ref:control');
   if (!controlRefs.some(sessionRef)) issues.push('missing-control-ref:session');
   if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(controlRefs, manifest.evidence.bindRefs, sessionRef)) {

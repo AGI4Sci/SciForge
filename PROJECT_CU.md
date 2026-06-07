@@ -329,13 +329,15 @@ Acceptance Gates：
 
 本轮补充：P9 live manifest 的 before/after observe evidence 现在必须分别绑定对应 screenshot、AX 和 text refs。全局 visual refs 存在但未进入 observe evidence 分组时会 fail closed，防止用松散视觉证据替代当前 run 的 before/after observe。
 
+本轮补充：P9 live manifest 的 before/after observe evidence 现在必须绑定 bind evidence 中的同一个 active session ref。只有 target window、freshness 和 visual refs 不足以证明 observe 是本次 VSCode co-work session 内的 current-run observation；observe refs 里出现另一条合法 session ref 也会 fail closed。
+
 本轮补充：P9 live manifest 的 before observe evidence 现在必须绑定同一个 target window ref。只有 before `observation:` / `freshness:` / visual refs 不足以证明 Host 是基于当前用户 VSCode 窗口做下一步原子能力选择。
 
 本轮补充：P9 live manifest 的 action evidence 现在必须绑定本次 release evidence 中释放的 scoped input lease、input adapter 和 cursor marker refs。action refs 里出现另一组合法 input refs 会 fail closed，防止“执行用 A 资源、释放 B 资源”的证据断链。
 
 本轮补充：P9 live manifest 的 action evidence 现在必须绑定 bind evidence 中的同一个 active session ref。只有 action/input/release refs 不足以证明 act 发生在本次绑定的 VSCode co-work session 内。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、cursor movement refs gate、selection replacement refs / approval gate、real-file risk/approval refs gate、live-manifest bind/target refs validator、Host decision observe-context refs validator、before observe target-window refs validator、after observe target/freshness refs validator、control release/restoration refs validator、control active-session refs validator、action session refs validator、action input/stale evidence validator、action release input-resource binding refs validator、before/after visual refs validator 和 before/after observe visual binding refs validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、cursor movement refs gate、selection replacement refs / approval gate、real-file risk/approval refs gate、live-manifest bind/target refs validator、Host decision observe-context refs validator、before observe target-window refs validator、before/after observe active-session refs validator、after observe target/freshness refs validator、control release/restoration refs validator、control active-session refs validator、action session refs validator、action input/stale evidence validator、action release input-resource binding refs validator、before/after visual refs validator 和 before/after observe visual binding refs validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
 
 ## P10：论文修改 / 润色 GUI 协作
 
