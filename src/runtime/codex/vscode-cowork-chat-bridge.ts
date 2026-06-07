@@ -96,7 +96,7 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     operation: operationField(value.operation),
     windowCandidates: sanitizeWindowCandidates(value.windowCandidates),
     selectedWindowRef: safeRuntimeString(value.selectedWindowRef),
-    selectedFileRef: safeRuntimeString(value.selectedFileRef),
+    selectedFileRef: safeRuntimeRef(value.selectedFileRef, ['file-ref:']),
     latestObservation: sanitizeObservation(value.latestObservation),
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
     riskActionHash: safeRuntimeString(value.riskActionHash),
@@ -118,7 +118,7 @@ function sanitizeWindowCandidates(value: unknown): VSCodeCoWorkWindowCandidate[]
       processRef: safeRuntimeString(item.processRef),
       titleRef: safeRuntimeString(item.titleRef),
       frontmostRef: safeRuntimeString(item.frontmostRef),
-      visibleFileRefs: safeRuntimeStringList(item.visibleFileRefs),
+      visibleFileRefs: safeRuntimeRefList(item.visibleFileRefs, ['file-ref:']),
     });
   }
   return candidates;
@@ -138,7 +138,7 @@ function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | unde
     freshnessRef: safeRuntimeString(value.freshnessRef) ?? '',
     stale: booleanField(value.stale),
     editorVisible: booleanField(value.editorVisible),
-    visibleFileRefs: safeRuntimeStringList(value.visibleFileRefs),
+    visibleFileRefs: safeRuntimeRefList(value.visibleFileRefs, ['file-ref:']),
     userFile: booleanField(value.userFile),
   };
 }
@@ -151,6 +151,12 @@ function operationField(value: unknown): VSCodeCoWorkOperation | undefined {
 function safeRuntimeStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const refs = [...new Set(value.map(safeRuntimeString).filter(nonEmptyString))];
+  return refs.length ? refs : undefined;
+}
+
+function safeRuntimeRefList(value: unknown, prefixes: string[]): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const refs = [...new Set(value.map((item) => safeRuntimeRef(item, prefixes)).filter(nonEmptyString))];
   return refs.length ? refs : undefined;
 }
 

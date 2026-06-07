@@ -437,6 +437,47 @@ test('Computer Use native route blocks stale VSCode selected file refs', async (
   assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route blocks VSCode file targets that are raw paths instead of refs', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '在我已经打开的 VSCode 里插入这段草稿。',
+      commandId: 'native-route-vscode-cowork-raw-file-path',
+      attemptId: 'native-route-vscode-cowork-raw-file-path-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:raw-file-path',
+        operation: 'insert-draft',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: '/Users/example/paper.md',
+        windowCandidates: [
+          {
+            ...vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+            visibleFileRefs: ['/Users/example/paper.md'],
+          },
+        ],
+        latestObservation: vscodeNativeRouteObservation({
+          visibleFileRefs: ['/Users/example/paper.md'],
+        }),
+        draftTextRef: 'text-ref:vscode:draft',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.equal(unit?.blockedReason, 'vscode_cowork_target_file_refs_required');
+  assert.doesNotMatch(JSON.stringify(events), /\/Users\/example\/paper\.md|paper\.md|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route requires draft text refs for VSCode draft insertion', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({

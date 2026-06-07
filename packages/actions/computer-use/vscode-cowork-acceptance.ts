@@ -390,12 +390,26 @@ function targetFileRefsBlock(
   const candidateFileRefs = uniqueStrings([
     ...(targetWindow.visibleFileRefs ?? []),
     ...(observation.visibleFileRefs ?? []),
-  ]);
-  if (nonEmptyString(input.selectedFileRef) && candidateFileRefs.includes(input.selectedFileRef.trim())) return undefined;
+  ].filter(fileRef));
+  if (fileRef(input.selectedFileRef) && candidateFileRefs.includes(input.selectedFileRef.trim())) return undefined;
+  if (nonEmptyString(input.selectedFileRef) && !fileRef(input.selectedFileRef)) {
+    return blocked(input, 'vscode_cowork_selected_file_ref_invalid', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'provide-selected-file-ref',
+      message: 'The selected file target must be a refs-first file-ref from the current VSCode observation.',
+      suggestedPrimitive: 'observe',
+    }]);
+  }
   if (nonEmptyString(input.selectedFileRef)) {
     return blocked(input, 'vscode_cowork_selected_file_not_found', refsForTargetAndObservation(input, targetWindow, observation), [{
       code: 'refresh-visible-file-refs',
       message: 'The selected fileRef is not visible in the current VSCode observation. Refresh observe refs and ask again if needed.',
+      suggestedPrimitive: 'observe',
+    }]);
+  }
+  if (candidateFileRefs.length === 0) {
+    return blocked(input, 'vscode_cowork_target_file_refs_required', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'observe-visible-file-refs',
+      message: 'Host must provide refs-first visible file refs from the current VSCode observation before choosing a file-target operation.',
       suggestedPrimitive: 'observe',
     }]);
   }
@@ -511,6 +525,10 @@ function draftTextRef(value: unknown): value is string {
   return typeof value === 'string' && /^text-ref:[^\s]+$/i.test(value.trim());
 }
 
+function fileRef(value: unknown): value is string {
+  return typeof value === 'string' && /^file-ref:[^\s]+$/i.test(value.trim());
+}
+
 function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {
   return approvalRef.startsWith(`approval:${riskActionHash}:`);
 }
@@ -560,10 +578,10 @@ function refsForTargetAndObservation(
     targetWindow.processRef,
     targetWindow.titleRef,
     targetWindow.frontmostRef,
-    input.selectedFileRef,
+    fileRef(input.selectedFileRef) ? input.selectedFileRef : undefined,
     input.riskActionHash,
     input.confirmationRef,
-    ...(targetWindow.visibleFileRefs ?? []),
+    ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
     observation.windowRef,
     observation.observationRef,
     observation.screenshotRef,
@@ -571,7 +589,7 @@ function refsForTargetAndObservation(
     observation.freshnessRef,
     ...(observation.textRefs ?? []),
     ...(observation.elementRefs ?? []),
-    ...(observation.visibleFileRefs ?? []),
+    ...(observation.visibleFileRefs ?? []).filter(fileRef),
   ]);
 }
 
