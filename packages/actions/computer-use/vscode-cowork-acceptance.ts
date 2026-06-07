@@ -371,6 +371,17 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.screenshotRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:screenshot');
   if (!manifest.evidence.accessibilityRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:accessibility');
   if (!manifest.evidence.textRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:text');
+  if (!manifest.evidence.beforeObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:before-observe');
+  if (!manifest.evidence.hostDecisionRefs.some(hostDecisionRef)) issues.push('invalid-evidence-ref:host-decision');
+  if (!manifest.evidence.actionRefs.some(actionRef)) issues.push('invalid-evidence-ref:act');
+  if (!manifest.evidence.actionRefs.some(executorEventRef)) issues.push('missing-action-ref:executor-event');
+  if (!manifest.evidence.actionRefs.some(inputEventRef)) issues.push('missing-action-ref:input-event');
+  if (!manifest.evidence.actionRefs.some(inputAdapterRef)) issues.push('missing-action-ref:input-adapter');
+  if (!manifest.evidence.actionRefs.some(cursorMarkerRef)) issues.push('missing-action-ref:cursor-marker');
+  if (!manifest.evidence.actionRefs.some(scopedInputLeaseRef)) issues.push('missing-action-ref:scoped-input-lease');
+  if (!manifest.evidence.actionRefs.some(staleInvalidationRef)) issues.push('missing-action-ref:stale-invalidation');
+  if (!manifest.evidence.afterObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:after-observe');
+  if (!manifest.evidence.controlRefs.some(controlRef)) issues.push('invalid-evidence-ref:control');
   if (!hasRefPrefix(releaseRefs, 'scoped-input-lease:')) issues.push('missing-release-ref:scoped-input-lease');
   if (!hasRefPrefix(releaseRefs, 'input-adapter:')) issues.push('missing-release-ref:input-adapter');
   if (!releaseRefs.some((ref) => ref.startsWith('cursor-marker:') || ref.startsWith('cursor:'))) issues.push('missing-release-ref:cursor-marker');
@@ -710,6 +721,42 @@ function riskActionHashRef(value: unknown): value is string {
 
 function approvalRef(value: unknown): value is string {
   return typeof value === 'string' && /^approval:[a-z0-9_-]+(?::[a-z0-9_-]+)*$/i.test(value.trim());
+}
+
+function actionRef(value: unknown): value is string {
+  return structuredRef(value, ['action:', 'window-action:']);
+}
+
+function executorEventRef(value: unknown): value is string {
+  return structuredRef(value, ['executor-event:']);
+}
+
+function inputEventRef(value: unknown): value is string {
+  return structuredRef(value, ['input-event:']);
+}
+
+function inputAdapterRef(value: unknown): value is string {
+  return structuredRef(value, ['input-adapter:']);
+}
+
+function scopedInputLeaseRef(value: unknown): value is string {
+  return structuredRef(value, ['scoped-input-lease:']);
+}
+
+function cursorMarkerRef(value: unknown): value is string {
+  return structuredRef(value, ['cursor-marker:', 'cursor:']);
+}
+
+function hostDecisionRef(value: unknown): value is string {
+  return structuredRef(value, ['decision:']);
+}
+
+function controlRef(value: unknown): value is string {
+  return structuredRef(value, ['control:']);
+}
+
+function staleInvalidationRef(value: unknown): value is string {
+  return structuredRef(value, ['stale-invalidation:', 'freshness-invalidation:', 'invalidated-observation:']);
 }
 
 function requestRef(value: unknown): value is string {

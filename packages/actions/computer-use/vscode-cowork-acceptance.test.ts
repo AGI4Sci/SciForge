@@ -1062,6 +1062,35 @@ test('VSCode co-work live manifest requires refs-first target window and file re
   assert.doesNotMatch(JSON.stringify(rawFile), /\/Users\/example\/paper\.md|paper\.md/);
 });
 
+test('VSCode co-work live manifest requires action input and stale invalidation refs', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      beforeObservationRefs: ['image:vscode:before'],
+      actionRefs: ['action:vscode-cowork:save'],
+      afterObservationRefs: ['text:vscode:after'],
+      controlRefs: ['action:vscode-cowork:release'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'invalid-evidence-ref:before-observe',
+    'missing-action-ref:executor-event',
+    'missing-action-ref:input-event',
+    'missing-action-ref:input-adapter',
+    'missing-action-ref:cursor-marker',
+    'missing-action-ref:scoped-input-lease',
+    'missing-action-ref:stale-invalidation',
+    'invalid-evidence-ref:after-observe',
+    'invalid-evidence-ref:control',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1108,7 +1137,15 @@ function vscodeCoWorkLiveManifest() {
       bindRefs: ['window-action-session:vscode-cowork:1'],
       beforeObservationRefs: ['observation:vscode:before'],
       hostDecisionRefs: ['decision:vscode-cowork:save-confirmed'],
-      actionRefs: ['action:vscode-cowork:save'],
+      actionRefs: [
+        'action:vscode-cowork:save',
+        'executor-event:vscode-cowork:save',
+        'input-event:vscode-cowork:save',
+        'input-adapter:vscode-cowork:1',
+        'cursor-marker:vscode-cowork:1',
+        'scoped-input-lease:vscode-cowork:1',
+        'stale-invalidation:vscode-cowork:before-observation',
+      ],
       afterObservationRefs: ['observation:vscode:after'],
       controlRefs: ['control:vscode-cowork:release'],
       screenshotRefs: ['image:vscode:before', 'image:vscode:after'],
