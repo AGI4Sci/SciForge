@@ -456,7 +456,7 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
   assert.doesNotMatch(JSON.stringify(events), /visible text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
-test('Computer Use native route keeps VSCode real-file save blocked until matching approval refs are present', async () => {
+test('Computer Use native route keeps VSCode real-file save and undo blocked until matching approval refs are present', async () => {
   const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '保存我当前打开的 VSCode 文件。',
@@ -487,6 +487,37 @@ test('Computer Use native route keeps VSCode real-file save blocked until matchi
   assert.equal(unconfirmedUnit?.action, undefined);
   assert.equal(unconfirmedUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+
+  const unconfirmedUndoEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '撤销我当前打开的 VSCode 文件里的上一步编辑。',
+      commandId: 'native-route-vscode-cowork-undo-unconfirmed',
+      attemptId: 'native-route-vscode-cowork-undo-unconfirmed-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:undo-unconfirmed',
+        operation: 'undo-last-action',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:undo-last-action:paper',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const unconfirmedUndoDone = unconfirmedUndoEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unconfirmedUndoUnit = (unconfirmedUndoDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(unconfirmedUndoDone?.status, 'needs-confirmation');
+  assert.equal(unconfirmedUndoUnit?.primitive, undefined);
+  assert.equal(unconfirmedUndoUnit?.action, undefined);
+  assert.equal(unconfirmedUndoUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.ok((unconfirmedUndoDone?.evidenceRefs as string[]).includes('risk:undo-last-action:paper'));
 
   const approvalWithoutRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({

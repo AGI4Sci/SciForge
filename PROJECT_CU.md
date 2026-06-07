@@ -282,7 +282,7 @@ Build Tasks：
 - [ ] 支持绑定用户当前前台 VSCode 窗口或用户明确选择的 VSCode 窗口；绑定证据必须包含 window/session refs、process/app refs、frontmost/focus refs 和可见文件/编辑区 refs。
 - [ ] Agent Host 可以根据最新 observe refs 决定下一步原子能力，例如聚焦编辑区、读取当前可见文本、移动光标、替换选区、插入草稿、保存或撤销；Computer Use core 仍只执行 primitive，不做 task planning。
 - [ ] 复用用户 VSCode profile、扩展、账号和当前权限来支持真实 co-work；manifest / evidence 必须显式标记 `userProfileUsed=true` 和共享系统输入影响，不能宣称 profile-isolated。
-- [ ] 对用户已有文件的修改默认只做草稿或 diff preview；保存、批量替换、跨文件修改、提交、发布、删除或不可逆动作必须 `needs-confirmation`。
+- [ ] 对用户已有文件的修改默认只做草稿或 diff preview；保存、撤销、批量替换、跨文件修改、提交、发布、删除或不可逆动作必须 `needs-confirmation`。
 - [ ] 每个 GUI action 都必须有 current-run before/after screenshot refs、AX/text refs、action refs、input adapter / cursor / lease refs 和 stale invalidation refs；文件内容读取只能作为补充 validator。
 - [ ] 会话释放时必须释放 input lease / cursor / adapter、恢复焦点和鼠标位置；不得杀用户 VSCode 进程、关闭用户原有窗口、清理用户 profile 或擅自保存无关文件。
 
@@ -290,10 +290,10 @@ Acceptance Gates：
 
 - [ ] 用户在普通聊天中说“操作我已经打开的 VSCode”时，Host 能通过 `bind -> observe -> act -> observe -> control(release)` 完成一个低风险局部动作，并在 final answer 中给出 refs-first 证据。
 - [ ] 如果当前有多个 VSCode 窗口、目标文件不明确、编辑区不可见或 observation refs 不新鲜，必须返回 `needs-confirmation` / `blocked`，不能猜窗口或猜文件。
-- [ ] 对用户真实文件的改动必须先给预览或确认；未确认时 executor 不得执行保存、批量替换或跨文件修改。
+- [ ] 对用户真实文件的改动必须先给预览或确认；未确认时 executor 不得执行保存、撤销、批量替换或跨文件修改。
 - [ ] shared-system-input 路径只能标为 `live-diagnostic`；只有 session-local / focus-free adapter 通过真实 co-work 验收且无副作用时，才允许升级为 `product-ready`。
 
-本轮推进：新增 `packages/actions/computer-use/vscode-cowork-acceptance.ts` 和 focused tests，登记 `CU-NEXT-09 current-vscode-cowork`。该 Host-side acceptance controller 只把 current VSCode co-work 的下一步选择规则固化为 refs-first 契约：多 VSCode 窗口或目标不明确返回 `needs-confirmation`，缺少 fresh observe refs / editor 不可见 / refs 陈旧返回 `blocked`，fresh observe refs 可产出一个低风险 `focus-editor` 原子 `act`，用户真实文件的保存、批量替换和跨文件修改在缺少 matching confirmationRef 时返回 `needs-confirmation` 且不返回可执行 action；确认后的真实文件保存会把 `riskActionHash` 绑定到后续 `act` 的 risk envelope 和 approvalRef。cleanup validator 要求 release input lease / cursor / adapter，并要求 front app / mouse position restoration refs，且禁止杀用户 VSCode 或清用户 profile。该契约为 `unit-proven`，仍不是真实桌面 co-work live 完成。
+本轮推进：新增 `packages/actions/computer-use/vscode-cowork-acceptance.ts` 和 focused tests，登记 `CU-NEXT-09 current-vscode-cowork`。该 Host-side acceptance controller 只把 current VSCode co-work 的下一步选择规则固化为 refs-first 契约：多 VSCode 窗口或目标不明确返回 `needs-confirmation`，缺少 fresh observe refs / editor 不可见 / refs 陈旧返回 `blocked`，fresh observe refs 可产出一个低风险 `focus-editor` 原子 `act`，用户真实文件的保存、撤销、批量替换和跨文件修改在缺少 matching confirmationRef 时返回 `needs-confirmation` 且不返回可执行 action；确认后的真实文件保存/撤销会把 `riskActionHash` 绑定到后续 `act` 的 risk envelope 和 approvalRef。cleanup validator 要求 release input lease / cursor / adapter，并要求 front app / mouse position restoration refs，且禁止杀用户 VSCode 或清用户 profile。该契约为 `unit-proven`，仍不是真实桌面 co-work live 完成。
 
 本轮补充：新增 Runtime Codex native-route 的 VSCode co-work Host bridge。只有 host-owned `CU-NEXT-09` runtime intent 会选择该 bridge；它只消费 Host 传入的 sanitized refs / operation / confirmationRef，调用 package-local acceptance controller 后返回一个 refs-first route payload。多 VSCode window 候选且未选择 windowRef 时，ordinary/native route 现在会返回 `needs-confirmation`，并把 requestRef 与 candidate windowRefs 保留到 evidenceRefs；raw screenshot、provider payload、base64 和 secret sidecars 不进入 public events。该 bridge 不执行 primitive、不做 task planning、不新增 MCP public surface，也不产生用户级 completion truth。
 
@@ -303,13 +303,13 @@ Acceptance Gates：
 
 本轮补充：`read-visible-text` 已作为 refs-only co-work 能力接入。Host 提供 fresh observe refs 后，controller/native route 返回 `ready` + `primitive=observe`，只保留 observation/text/AX refs，不返回 `act` action、不嵌入 visible text 原文，也不触发用户 VSCode 输入或文件修改。
 
-本轮补充：真实文件保存的 route-level approval chain 也改为 refs-first。未确认的 `save-current-file` 在 native route 上保持 `needs-confirmation`，不返回 primitive/action，并把 `riskActionHash` 放进 evidenceRefs；如果 Host 只提供 approvalRef 但没有先提供 `riskActionHash`，route 会 `blocked`，不返回 primitive/action；只有带 matching confirmationRef 的保存才返回一个 Host 指定的 `app_command save` 原子 `act`，并把 `riskActionHash` 与 `approvalRef` 都保留到 evidenceRefs / execution unit。
+本轮补充：真实文件保存与撤销的 route-level approval chain 也改为 refs-first。未确认的 `save-current-file` / `undo-last-action` 在 native route 上保持 `needs-confirmation`，不返回 primitive/action，并把 `riskActionHash` 放进 evidenceRefs；如果 Host 只提供 approvalRef 但没有先提供 `riskActionHash`，route 会 `blocked`，不返回 primitive/action；只有带 matching confirmationRef 的保存/撤销才返回一个 Host 指定的原子 `act`，并把 `riskActionHash` 与 `approvalRef` 都保留到 evidenceRefs / execution unit。
 
 本轮补充：新增 P9 co-work live acceptance manifest validator。一个 passed manifest 必须保持 `live-diagnostic` / `productReady=false`，并显式标记 `userProfileUsed=true`、`sharedSystemInputUsed=true`；记录 `bind -> observe -> act -> observe -> control(release)`，保留 bind / before observe / Host decision / act / after observe / control refs，包含 screenshot / AX / text refs，释放 input lease / cursor / adapter，恢复 front app 和 mouse position，并禁止杀用户 VSCode 或清 profile；真实文件操作还必须带 riskActionHash 与 approvalRef evidence refs。validator 会在所有 evidence group 拒绝 rawScreenshot、providerPayload、data URL、base64、URL、token/password/secret-like 值，只允许 refs-first 证据进入 live manifest。
 
 本轮补充：P9 cleanup / live manifest validator 现在会 fail closed 校验用户 profile 与共享系统输入标记。manifest 若没有明确 `userProfileUsed=true` 或 `sharedSystemInputUsed=true`，即使 release refs、restoration refs 和 cleanup flags 都完整，也会返回 validation issue；这防止复用用户 VSCode profile / 共享键鼠输入的诊断路径被误写成 profile-isolated 或 product-ready 证据。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、real-file save approval refs gate 和 live-manifest validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、real-file save/undo approval refs gate 和 live-manifest validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
 
 ## P10：论文修改 / 润色 GUI 协作
 

@@ -221,7 +221,7 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
       targetWindowRef,
       blockedReason: 'vscode_cowork_real_file_change_needs_confirmation',
       confirmation: {
-        reason: 'Saving, bulk replacement, or cross-file modification against a user file requires Host-collected confirmation.',
+        reason: 'Saving, undoing, bulk replacement, or cross-file modification against a user file requires Host-collected confirmation.',
         riskActionHash: input.riskActionHash,
         approvalScope: input.operation,
       },
@@ -449,7 +449,7 @@ function realFileChangeRiskEnvelopeBlock(
     targetWindowRef: targetWindow.windowRef,
     blockedReason: 'vscode_cowork_real_file_change_risk_hash_required',
     confirmation: {
-      reason: 'Saving, bulk replacement, or cross-file modification against a user file requires a Host-computed riskActionHash before confirmation can authorize the action.',
+      reason: 'Saving, undoing, bulk replacement, or cross-file modification against a user file requires a Host-computed riskActionHash before confirmation can authorize the action.',
       approvalScope: input.operation,
     },
     repairHints: [{
@@ -509,6 +509,7 @@ function realFileChangeNeedsConfirmation(
 
 function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
   return operation === 'save-current-file'
+    || operation === 'undo-last-action'
     || operation === 'bulk-replace'
     || operation === 'cross-file-modify';
 }

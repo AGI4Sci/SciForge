@@ -232,8 +232,8 @@ test('Host-side VSCode co-work exposes visible text as refs-only observe decisio
   assert.doesNotMatch(JSON.stringify(decision), /visibleText|rawScreenshot|base64|task|goal|planner/i);
 });
 
-test('Host-side VSCode co-work requires confirmation before real-file save, bulk replace, or cross-file modification', () => {
-  for (const operation of ['save-current-file', 'bulk-replace', 'cross-file-modify'] as const) {
+test('Host-side VSCode co-work requires confirmation before real-file save, undo, bulk replace, or cross-file modification', () => {
+  for (const operation of ['save-current-file', 'undo-last-action', 'bulk-replace', 'cross-file-modify'] as const) {
     const decision = decideVSCodeCoWorkNextPrimitive({
       requestRef: `chat-request:vscode-cowork:${operation}`,
       operation,
@@ -291,6 +291,32 @@ test('Host-side VSCode co-work requires confirmation before real-file save, bulk
   assert.equal(confirmedSave.approvalRef, 'approval:risk:save-current-file:paper:confirmed');
   assert.ok(confirmedSave.refs.includes('risk:save-current-file:paper'));
   assert.ok(confirmedSave.refs.includes('approval:risk:save-current-file:paper:confirmed'));
+
+  const confirmedUndo = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:undo-confirmed',
+    operation: 'undo-last-action',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'risk:undo-last-action:paper',
+    confirmationRef: 'approval:risk:undo-last-action:paper:confirmed',
+  });
+
+  assert.equal(confirmedUndo.status, 'ready');
+  assert.equal(confirmedUndo.primitive, 'act');
+  assert.deepEqual(confirmedUndo.action, {
+    type: 'key',
+    key: 'Command+Z',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.deepEqual(confirmedUndo.risk, {
+    level: 'high',
+    categories: ['user-real-file-change'],
+    actionHash: 'risk:undo-last-action:paper',
+  });
+  assert.equal(confirmedUndo.approvalRef, 'approval:risk:undo-last-action:paper:confirmed');
+  assert.ok(confirmedUndo.refs.includes('risk:undo-last-action:paper'));
+  assert.ok(confirmedUndo.refs.includes('approval:risk:undo-last-action:paper:confirmed'));
 });
 
 test('VSCode co-work cleanup validation requires release refs and focus/mouse restoration without killing user state', () => {
