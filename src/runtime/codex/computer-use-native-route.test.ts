@@ -938,6 +938,45 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.doesNotMatch(JSON.stringify(confirmedEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route blocks confirmed VSCode bulk and cross-file requests until Host decomposes them', async () => {
+  for (const operation of ['bulk-replace', 'cross-file-modify'] as const) {
+    const events = await collectStreamEvents(createComputerUseNativeRouteStream({
+      request: vscodeCoWorkRouteRequest({
+        commandText: '对我当前打开的 VSCode 文件执行已确认的批量编辑。',
+        commandId: `native-route-vscode-cowork-${operation}-confirmed`,
+        attemptId: `native-route-vscode-cowork-${operation}-confirmed-attempt-1`,
+        vscodeCoWork: {
+          requestRef: `chat-request:vscode-cowork:${operation}-confirmed`,
+          operation,
+          selectedWindowRef: 'window:vscode:paper',
+          selectedFileRef: 'file-ref:vscode:paper',
+          windowCandidates: [
+            vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+          ],
+          latestObservation: vscodeNativeRouteObservation(),
+          riskActionHash: `risk:${operation}:paper`,
+          confirmationRef: `approval:risk:${operation}:paper:confirmed`,
+        },
+      }),
+      workspace: '/tmp/workspace',
+      provider: 'sciforge-provider',
+      model: 'sciforge-model',
+      profile: 'host-owned',
+    })!);
+    const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+    const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+    assert.equal(done?.status, 'blocked', operation);
+    assert.equal(unit?.status, 'blocked', operation);
+    assert.equal(unit?.blockedReason, 'vscode_cowork_non_atomic_operation_requires_host_decomposition', operation);
+    assert.equal(unit?.primitive, undefined, operation);
+    assert.equal(unit?.action, undefined, operation);
+    assert.ok((done?.evidenceRefs as string[]).includes(`risk:${operation}:paper`), operation);
+    assert.ok((done?.evidenceRefs as string[]).includes(`approval:risk:${operation}:paper:confirmed`), operation);
+    assert.doesNotMatch(JSON.stringify(events), /replacement plan|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+  }
+});
+
 test('Computer Use native route keeps only safe task and scenario bindings', () => {
   const request = computerUseGatewayRequest({
     request: {

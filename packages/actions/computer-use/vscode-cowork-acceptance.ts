@@ -245,6 +245,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
     };
   }
 
+  const nonAtomicFileChangeBlock = nonAtomicFileChangeOperationBlock(input, targetWindow, observation);
+  if (nonAtomicFileChangeBlock) return nonAtomicFileChangeBlock;
+
   if (input.operation === 'read-visible-text') {
     return {
       ...decisionBase('ready', refsForTargetAndObservation(input, targetWindow, observation)),
@@ -487,6 +490,24 @@ function realFileChangeRiskEnvelopeBlock(
   };
 }
 
+function nonAtomicFileChangeOperationBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (!nonAtomicFileChangeOperation(input.operation)) return undefined;
+  return {
+    ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+    targetWindowRef: targetWindow.windowRef,
+    blockedReason: 'vscode_cowork_non_atomic_operation_requires_host_decomposition',
+    repairHints: [{
+      code: 'decompose-file-change-into-atomic-primitives',
+      message: 'Host must decompose bulk replacement or cross-file modification into explicit refs-first atomic editor primitives; Computer Use core must not plan or execute a batch edit.',
+      suggestedPrimitive: 'act',
+    }],
+  };
+}
+
 function actionForOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
@@ -622,6 +643,11 @@ function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
   return operation === 'save-current-file'
     || operation === 'undo-last-action'
     || operation === 'bulk-replace'
+    || operation === 'cross-file-modify';
+}
+
+function nonAtomicFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
+  return operation === 'bulk-replace'
     || operation === 'cross-file-modify';
 }
 

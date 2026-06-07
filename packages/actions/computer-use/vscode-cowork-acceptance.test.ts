@@ -512,6 +512,33 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.ok(confirmedUndo.refs.includes('approval:risk:undo-last-action:paper:confirmed'));
 });
 
+test('Host-side VSCode co-work blocks confirmed bulk and cross-file requests until Host decomposes them', () => {
+  for (const operation of ['bulk-replace', 'cross-file-modify'] as const) {
+    const decision = decideVSCodeCoWorkNextPrimitive({
+      requestRef: `chat-request:vscode-cowork:${operation}-confirmed`,
+      operation,
+      selectedWindowRef: 'window:vscode:paper',
+      selectedFileRef: 'file-ref:vscode:paper',
+      windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+      latestObservation: freshObservation(),
+      riskActionHash: `risk:${operation}:paper`,
+      confirmationRef: `approval:risk:${operation}:paper:confirmed`,
+    });
+
+    assert.equal(decision.status, 'blocked', operation);
+    assert.equal(decision.blockedReason, 'vscode_cowork_non_atomic_operation_requires_host_decomposition', operation);
+    assert.equal(decision.primitive, undefined, operation);
+    assert.equal(decision.action, undefined, operation);
+    assert.ok(decision.refs.includes(`risk:${operation}:paper`), operation);
+    assert.ok(decision.refs.includes(`approval:risk:${operation}:paper:confirmed`), operation);
+    assert.deepEqual(decision.repairHints, [{
+      code: 'decompose-file-change-into-atomic-primitives',
+      message: 'Host must decompose bulk replacement or cross-file modification into explicit refs-first atomic editor primitives; Computer Use core must not plan or execute a batch edit.',
+      suggestedPrimitive: 'act',
+    }], operation);
+  }
+});
+
 test('VSCode co-work cleanup validation requires release refs and focus/mouse restoration without killing user state', () => {
   const passed = validateVSCodeCoWorkRunCleanup({
     maturity: 'live-diagnostic',
