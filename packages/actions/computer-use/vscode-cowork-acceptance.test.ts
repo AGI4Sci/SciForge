@@ -1096,6 +1096,7 @@ test('VSCode co-work live manifest requires primitive chain, cleanup, restoratio
     'cleanup-must-not-clear-user-profile',
     'missing-approval-ref:risk-action-hash',
     'missing-approval-ref:approval',
+    'missing-approval-ref:target-file',
   ]);
 });
 
@@ -1156,6 +1157,20 @@ test('VSCode co-work live manifest rejects raw path risk and approval evidence r
   assert.ok(failed.issues.includes('missing-approval-ref:risk-action-hash'));
   assert.ok(failed.issues.includes('missing-approval-ref:approval'));
   assert.ok(failed.issues.includes('unsafe-evidence-ref:approval'));
+});
+
+test('VSCode co-work live manifest requires approval refs to bind the selected file target', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      approvalRefs: base.evidence.approvalRefs.filter((ref) => ref !== base.target.selectedFileRef),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-approval-ref:target-file'));
 });
 
 test('VSCode co-work live manifest requires refs-first target window and file refs for user-file changes', () => {
@@ -1737,6 +1752,7 @@ function vscodeCoWorkLiveManifest() {
       textRefs: ['text:vscode:visible-before', 'text:vscode:visible-after'],
       approvalRefs: [
         'risk:save-current-file:paper',
+        'file-ref:vscode:paper',
         'approval:risk:save-current-file:paper:confirmed',
       ],
       releaseRefs: [

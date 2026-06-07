@@ -164,6 +164,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 file-target live manifest 的 after observe evidence 还必须直接绑定同一个 selected `file-ref:`。该检查只证明动作后观察仍对应 Host 选择的文件目标，不把“文件修改完成”的语义判断交给 Computer Use core。
 
+补充：P9 real-file live manifest 的 approval evidence 还必须直接绑定同一个 selected `file-ref:`。Host 仍负责收集用户确认；manifest validator 只要求 confirmation evidence 同时保留 `risk:`、`approval:` 和目标文件 ref，避免确认证据与实际文件目标脱钩。
+
 ## 职责边界
 
 ```text

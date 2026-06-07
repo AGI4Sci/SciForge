@@ -560,6 +560,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(riskActionHashRef)) issues.push('missing-approval-ref:risk-action-hash');
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(approvalRef)) issues.push('missing-approval-ref:approval');
+  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
+    issues.push('missing-approval-ref:target-file');
+  }
   issues.push(...unsafeEvidenceRefIssues(manifest.evidence));
 
   return {
