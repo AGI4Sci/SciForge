@@ -423,7 +423,7 @@ function draftTextRefRequiredBlock(
   observation: VSCodeCoWorkObservationRefs,
 ): VSCodeCoWorkDecision | undefined {
   if (input.operation !== 'insert-draft') return undefined;
-  if (nonEmptyString(input.draftTextRef)) return undefined;
+  if (draftTextRef(input.draftTextRef)) return undefined;
   return {
     ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
     targetWindowRef: targetWindow.windowRef,
@@ -479,10 +479,10 @@ function actionForOperation(
       elementRef: editorElementRef,
     };
   }
-  if (input.operation === 'insert-draft' && nonEmptyString(input.draftTextRef)) {
+  if (input.operation === 'insert-draft' && draftTextRef(input.draftTextRef)) {
     return {
       type: 'type',
-      textRef: input.draftTextRef,
+      textRef: input.draftTextRef.trim(),
       elementRef: editorElementRef,
     };
   }
@@ -505,6 +505,10 @@ function realFileChangeNeedsConfirmation(
   if (!nonEmptyString(input.confirmationRef)) return true;
   if (!nonEmptyString(input.riskActionHash)) return true;
   return !approvalRefMatchesRiskActionHash(input.confirmationRef, input.riskActionHash);
+}
+
+function draftTextRef(value: unknown): value is string {
+  return typeof value === 'string' && /^text-ref:[^\s]+$/i.test(value.trim());
 }
 
 function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {

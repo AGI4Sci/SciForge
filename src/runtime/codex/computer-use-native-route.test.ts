@@ -475,6 +475,40 @@ test('Computer Use native route requires draft text refs for VSCode draft insert
   assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
   assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
   assert.doesNotMatch(JSON.stringify(events), /draft body|rawDraftText|clipboard|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
+  const rawDraftEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '在我已经打开的 VSCode 里插入这段草稿。',
+      commandId: 'native-route-vscode-cowork-raw-draft-text',
+      attemptId: 'native-route-vscode-cowork-raw-draft-text-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:raw-draft-text',
+        operation: 'insert-draft',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation({
+          visibleFileRefs: ['file-ref:vscode:paper'],
+        }),
+        draftTextRef: 'Please insert this raw draft body into the editor.',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const rawDraftDone = rawDraftEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawDraftUnit = (rawDraftDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(rawDraftDone?.status, 'blocked');
+  assert.equal(rawDraftUnit?.status, 'blocked');
+  assert.equal(rawDraftUnit?.primitive, undefined);
+  assert.equal(rawDraftUnit?.action, undefined);
+  assert.equal(rawDraftUnit?.blockedReason, 'vscode_cowork_draft_text_ref_required');
+  assert.doesNotMatch(JSON.stringify(rawDraftEvents), /Please insert this raw draft body|rawDraftText|clipboard|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
 test('Computer Use native route returns refs-only observe decision for VSCode visible text reads', async () => {

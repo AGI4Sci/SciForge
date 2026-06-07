@@ -98,7 +98,7 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     selectedWindowRef: safeRuntimeString(value.selectedWindowRef),
     selectedFileRef: safeRuntimeString(value.selectedFileRef),
     latestObservation: sanitizeObservation(value.latestObservation),
-    draftTextRef: safeRuntimeString(value.draftTextRef),
+    draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
     riskActionHash: safeRuntimeString(value.riskActionHash),
     confirmationRef: safeRuntimeString(value.confirmationRef),
   };
@@ -161,6 +161,12 @@ function safeRuntimeString(value: unknown): string | undefined {
   if (UNSAFE_RUNTIME_STRING_PATTERN.test(text)) return undefined;
   if (BASE64ISH_RUNTIME_STRING_PATTERN.test(text)) return undefined;
   return text;
+}
+
+function safeRuntimeRef(value: unknown, prefixes: string[]): string | undefined {
+  const text = safeRuntimeString(value);
+  if (!text) return undefined;
+  return prefixes.some((prefix) => text.startsWith(prefix)) ? text : undefined;
 }
 
 function booleanField(value: unknown): boolean | undefined {
