@@ -228,6 +228,22 @@ test('Host-side VSCode co-work blocks stale or incomplete observe refs before se
   assert.equal(editorHidden.primitive, undefined);
   assert.equal(editorHidden.action, undefined);
 
+  const editorHiddenRead = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:editor-hidden-read',
+    operation: 'read-visible-text',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      editorVisible: false,
+    },
+  });
+
+  assert.equal(editorHiddenRead.status, 'blocked');
+  assert.equal(editorHiddenRead.blockedReason, 'vscode_cowork_editor_not_visible');
+  assert.equal(editorHiddenRead.primitive, undefined);
+  assert.equal(editorHiddenRead.action, undefined);
+
   const missingSession = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:missing-session',
     operation: 'focus-editor',

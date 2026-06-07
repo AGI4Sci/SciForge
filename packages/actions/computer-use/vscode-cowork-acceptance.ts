@@ -549,7 +549,7 @@ function observationRefsBlock(
       suggestedPrimitive: 'observe',
     }]);
   }
-  if (editorOperation(input.operation) && observation.editorVisible === false) {
+  if (observation.editorVisible === false) {
     return blocked(input, 'vscode_cowork_editor_not_visible', refsForTargetAndObservation(input, targetWindow, observation), [{
       code: 'make-editor-visible',
       message: 'The current observation does not show an editor area. Ask the user or choose another primitive without guessing.',
@@ -1002,10 +1002,6 @@ function invalidRefListItemCount(
   predicate: (value: unknown) => value is string,
 ): number {
   return (values ?? []).filter((value) => !predicate(value)).length;
-}
-
-function editorOperation(operation: VSCodeCoWorkOperation): boolean {
-  return operation !== 'read-visible-text';
 }
 
 function refsForTargetAndObservation(
