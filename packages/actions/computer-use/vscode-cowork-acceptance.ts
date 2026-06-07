@@ -375,7 +375,6 @@ function targetFileRefsBlock(
     ...(targetWindow.visibleFileRefs ?? []),
     ...(observation.visibleFileRefs ?? []),
   ]);
-  if (candidateFileRefs.length <= 1) return undefined;
   if (nonEmptyString(input.selectedFileRef) && candidateFileRefs.includes(input.selectedFileRef.trim())) return undefined;
   if (nonEmptyString(input.selectedFileRef)) {
     return blocked(input, 'vscode_cowork_selected_file_not_found', refsForTargetAndObservation(input, targetWindow, observation), [{
@@ -384,6 +383,7 @@ function targetFileRefsBlock(
       suggestedPrimitive: 'observe',
     }]);
   }
+  if (candidateFileRefs.length <= 1) return undefined;
   return {
     ...decisionBase('needs-confirmation', refsForTargetAndObservation(input, targetWindow, observation)),
     targetWindowRef: targetWindow.windowRef,

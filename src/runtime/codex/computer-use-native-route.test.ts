@@ -341,6 +341,46 @@ test('Computer Use native route requires confirmation when VSCode target file is
   assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route blocks stale VSCode selected file refs', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '在我已经打开的 VSCode 里插入这段草稿。',
+      commandId: 'native-route-vscode-cowork-stale-selected-file',
+      attemptId: 'native-route-vscode-cowork-stale-selected-file-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:stale-selected-file',
+        operation: 'insert-draft',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:notes',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation({
+          visibleFileRefs: ['file-ref:vscode:paper'],
+        }),
+        draftTextRef: 'text-ref:vscode:draft',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.equal(unit?.blockedReason, 'vscode_cowork_selected_file_not_found');
+  assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:notes'));
+  assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route keeps VSCode real-file save blocked until matching approval refs are present', async () => {
   const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({

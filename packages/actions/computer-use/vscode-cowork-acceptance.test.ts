@@ -142,6 +142,28 @@ test('Host-side VSCode co-work asks for confirmation when the target file is amb
   assert.ok(decision.refs.includes('file-ref:vscode:notes'));
 });
 
+test('Host-side VSCode co-work blocks selected file refs that are not in current observe refs', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:stale-selected-file',
+    operation: 'insert-draft',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:notes',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      visibleFileRefs: ['file-ref:vscode:paper'],
+    },
+    draftTextRef: 'text-ref:vscode:draft',
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.blockedReason, 'vscode_cowork_selected_file_not_found');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.ok(decision.refs.includes('file-ref:vscode:paper'));
+  assert.ok(decision.refs.includes('file-ref:vscode:notes'));
+});
+
 test('Host-side VSCode co-work chooses the next primitive only from fresh observe refs', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:focus',
