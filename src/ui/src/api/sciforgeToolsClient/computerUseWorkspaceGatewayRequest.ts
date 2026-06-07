@@ -21,6 +21,10 @@ function asStringArray(value: unknown): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function uniqueRuntimeStringList(values: unknown[]) {
   return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
 }
@@ -69,6 +73,10 @@ function sanitizedComputerUseNext(value: unknown): Record<string, unknown> | und
     scenarioId: asString(value.scenarioId),
     title: asString(value.title),
     requirements: asStringArray(value.requirements),
+    recommendedTargetMode: asString(value.recommendedTargetMode),
+    recommendedTargetApp: asString(value.recommendedTargetApp),
+    recommendedMaxSteps: asFiniteNumber(value.recommendedMaxSteps),
+    semanticMarkers: asStringArray(value.semanticMarkers),
     ...(safetyBoundary ? { safetyBoundary } : {}),
   });
   return Object.keys(out).length ? out : undefined;
@@ -82,6 +90,10 @@ function sanitizedComputerUseLong(value: unknown): Record<string, unknown> | und
     scenarioId: asString(value.scenarioId),
     title: asString(value.title),
     requirements: asStringArray(value.requirements),
+    recommendedTargetMode: asString(value.recommendedTargetMode),
+    recommendedTargetApp: asString(value.recommendedTargetApp),
+    recommendedMaxSteps: asFiniteNumber(value.recommendedMaxSteps),
+    semanticMarkers: asStringArray(value.semanticMarkers),
     ...(safetyBoundary ? { safetyBoundary } : {}),
   });
   return Object.keys(out).length ? out : undefined;
@@ -130,8 +142,17 @@ export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageI
     approvalRef,
     ...(approvalProvenance ? { approvalProvenance } : {}),
   } : undefined;
-  const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
   const taskBindings = sanitizedComputerUseTaskBindings(scenario);
+  const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
+  const runtimeIntent = taskBindings || completionEvidencePolicy
+    ? {
+        schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+        kind: 'computer-use-native-route',
+        source: 'host-owned',
+        ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
+        ...(taskBindings ?? {}),
+      }
+    : undefined;
   const terminalEquivalentText = input.prompt.trim();
   return {
     schemaVersion: LEGACY_WORKSPACE_GATEWAY_SHIM_SCHEMA,
@@ -155,6 +176,7 @@ export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageI
       runCount: input.runs?.length ?? 0,
       completionEvidencePolicyPresent: Boolean(completionEvidencePolicy),
     },
+    ...(runtimeIntent ? { runtimeIntent } : {}),
     uiState: {
       commandId,
       currentTurnId: input.currentTurnId,
@@ -164,7 +186,6 @@ export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageI
       humanApproval,
       approvalRef,
       approvalProvenance,
-      completionEvidencePolicy,
       ...(taskBindings ?? {}),
       guiOwnsExecutor: false,
       guiOwnsExecutionRoute: false,

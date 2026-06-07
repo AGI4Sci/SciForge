@@ -876,8 +876,8 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
 });
 
-test('SSE reader marks Agent Host gui.present projections verified only when structured success has completion evidence', async () => {
-  const commandId = 'codex-command-gui-present-verified-evidence';
+test('SSE reader does not mark Agent Host gui.present verified from taskOutcome and evidence refs alone', async () => {
+  const commandId = 'codex-command-gui-present-no-completion-truth';
   const sourceRef = 'browser-host-session:browser-verified/source-pages/source-1.source.json';
   const textRef = 'browser-host-session:browser-verified/source-pages/source-1.txt';
   const body = [
@@ -944,9 +944,90 @@ test('SSE reader marks Agent Host gui.present projections verified only when str
 
   assert.equal(stream.error, undefined);
   assert.equal(result.message, 'VISIBLE_VERIFIED_BROWSER_ANSWER');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verifierRef, `gui.present:${commandId}:agent-host`);
+  assert.deepEqual(result.displayIntent?.conversationProjection?.auditRefs, [sourceRef, textRef]);
+});
+
+test('SSE reader marks Agent Host gui.present verified from satisfied completionTruth', async () => {
+  const commandId = 'codex-command-gui-present-completion-truth';
+  const sourceRef = 'browser-host-session:browser-verified/source-pages/source-1.source.json';
+  const textRef = 'browser-host-session:browser-verified/source-pages/source-1.txt';
+  const body = [
+    'event: gui_present',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_present',
+      status: 'completed',
+      text: 'VISIBLE_VERIFIED_BROWSER_ANSWER',
+      provider: 'sciforge-agent-host',
+      model: 'codex-agent-host-turn-loop',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [sourceRef, textRef],
+      raw: {
+        source: `gui.present:${commandId}:agent-host`,
+        presentation: {
+          source: `gui.present:${commandId}:agent-host`,
+          text: 'VISIBLE_VERIFIED_BROWSER_ANSWER',
+          ref: sourceRef,
+          title: 'Runtime answer',
+          hint: 'markdown',
+          status: 'completed',
+          displayedRefs: [sourceRef, textRef],
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-agent-host',
+      model: 'codex-agent-host-turn-loop',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [sourceRef, textRef],
+      completionTruth: {
+        schemaVersion: 'sciforge.agent-host.completion-truth.v1',
+        scope: 'user-task',
+        status: 'satisfied',
+        evidenceRefs: [sourceRef, textRef],
+        validator: 'agent-host-browser-acceptance',
+      },
+      displayIntent: {
+        protocolStatus: 'protocol-success',
+        taskOutcome: 'satisfied',
+        status: 'completed',
+      },
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    displayIntent?: {
+      conversationProjection?: {
+        verificationState?: { status?: string; verdict?: string; verifierRef?: string };
+        auditRefs?: string[];
+      };
+    };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, 'VISIBLE_VERIFIED_BROWSER_ANSWER');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'verified');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'pass');
-  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verifierRef, `gui.present:${commandId}:agent-host`);
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verifierRef, 'agent-host-browser-acceptance');
   assert.deepEqual(result.displayIntent?.conversationProjection?.auditRefs, [sourceRef, textRef]);
 });
 
@@ -1687,6 +1768,24 @@ test('Runtime Codex shell lifecycle details prefer structured command fields', (
   assert.match(completed.detail ?? '', /Shell command completed/);
   assert.match(completed.detail ?? '', /exit=0/);
   assert.match(completed.detail ?? '', /PROJECT heading/);
+});
+
+test('Runtime Codex metadata event details redact private workspace paths before presentation', () => {
+  const event = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    type: 'run_started',
+    provider: 'sciforge-deepseek-proxy',
+    model: 'bailian/deepseek-v4-flash',
+    profile: 'sciforge-runtime-deepseek',
+    workspace: '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1',
+    commandId: 'codex-command-visible',
+    message: 'Runtime Codex started with sciforge-deepseek-proxy/bailian/deepseek-v4-flash profile sciforge-runtime-deepseek workspace /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1',
+  });
+
+  assert.match(event.detail ?? '', /Runtime Codex metadata/);
+  assert.match(event.detail ?? '', /workspace=\[redacted-workspace\]/);
+  assert.match(event.detail ?? '', /command=codex-command-visible/);
+  assert.doesNotMatch(event.detail ?? '', /\/Applications\/workspace|parallel\/p1/);
 });
 
 test('Runtime Codex provider message events summarize native-message layering without leaking raw payload internals', () => {

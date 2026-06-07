@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import {
@@ -12,6 +12,11 @@ import {
   type CodexAgentHostBrowserBoundedOperationInvoker,
 } from './codex/agent-host-turn-loop.js';
 import { browserHostSessionDir } from './browser-host-session.js';
+import {
+  BrowserHostSessionManager,
+  createPlaywrightBrowserHostDriverFactory,
+  defaultBrowserHostSessionManager,
+} from './browser-host-session.js';
 import {
   createBrowserBoundedOperationModuleHandler,
   type BrowserBoundedOperationPorts,
@@ -85,11 +90,15 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(
   const outputDir = resolve(options.outputDir);
   const observedAt = (options.now ?? (() => new Date()))().toISOString();
   await mkdir(outputDir, { recursive: true });
+  const ownedBrowserHostSessionManager = options.browserBoundedOperationInvoker || options.browserBoundedOperationPorts?.manager
+    ? undefined
+    : createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager();
   const browserBoundedOperationInvoker = options.browserBoundedOperationInvoker
     ?? createDefaultBrowserBoundedOperationInvoker({
       workspacePath,
       commandId: options.commandId,
       ports: options.browserBoundedOperationPorts,
+      manager: ownedBrowserHostSessionManager,
     });
 
   const result = await evaluateCodexAgentHostTurnLoop({
@@ -106,6 +115,9 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(
     ...evidenceRefs,
     finalAnswerRef,
   ]);
+  if (ownedBrowserHostSessionManager) {
+    await closeRuntimeCodexBrowserOrdinaryChatBrowserSessions(ownedBrowserHostSessionManager, workspacePath, allRefs);
+  }
   const check = await browserSourceEvidenceCheck(workspacePath, allRefs);
   const finalAnswer = String(result?.result?.message ?? '').trim();
   const blockedReason = browserSourceEvidenceBlockedReason(check)
@@ -200,10 +212,12 @@ function createDefaultBrowserBoundedOperationInvoker(input: {
   workspacePath: string;
   commandId: string;
   ports?: BrowserBoundedOperationPorts;
+  manager?: BrowserHostSessionManager;
 }): CodexAgentHostBrowserBoundedOperationInvoker {
   const handler = createBrowserBoundedOperationModuleHandler({
     ...(input.ports ?? {}),
     workspacePath: input.workspacePath,
+    manager: input.ports?.manager ?? input.manager ?? createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager(),
   });
   return async (request) => {
     const operationKind = typeof request.input?.operationKind === 'string'
@@ -237,6 +251,39 @@ function createDefaultBrowserBoundedOperationInvoker(input: {
   };
 }
 
+export function runtimeCodexBrowserOrdinaryChatBrowserHostAdapterMode(
+  env: Record<string, string | undefined> = process.env,
+): 'native-adapter' | 'playwright-fallback' {
+  return env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL?.trim() ? 'native-adapter' : 'playwright-fallback';
+}
+
+export function createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager(
+  env: Record<string, string | undefined> = process.env,
+): BrowserHostSessionManager {
+  if (runtimeCodexBrowserOrdinaryChatBrowserHostAdapterMode(env) === 'native-adapter') {
+    return defaultBrowserHostSessionManager();
+  }
+  return new BrowserHostSessionManager({ driverFactory: createPlaywrightBrowserHostDriverFactory() });
+}
+
+export async function closeRuntimeCodexBrowserOrdinaryChatBrowserSessions(
+  manager: BrowserHostSessionManager,
+  workspacePath: string,
+  refs: string[],
+): Promise<void> {
+  const sessionIds = browserHostSessionIdsFromRefs(refs);
+  await Promise.all(sessionIds.map((sessionId) => (
+    manager.act(workspacePath, sessionId, { action: 'close', capture: 'none', timeoutMs: 5_000 }).catch(() => undefined)
+  )));
+}
+
+function browserHostSessionIdsFromRefs(refs: string[]): string[] {
+  return [...new Set(refs.flatMap((ref) => {
+    const match = /^browser-host-session:([^/]+)/.exec(ref);
+    return match?.[1] ? [match[1]] : [];
+  }))];
+}
+
 async function writeManifest(
   outputDir: string,
   manifest: RuntimeCodexBrowserOrdinaryChatAcceptanceManifest,
@@ -261,13 +308,14 @@ async function browserSourceEvidenceCheck(workspacePath: string, refs: string[])
     refs.some((ref) => /final[-_/]?answer/i.test(ref)) ? undefined : 'final-answer ref',
   ].filter((item): item is string => Boolean(item));
   if (missing.length) return { ok: false, reason: `missing ${missing.join(', ')}` };
-  const sourceFiles = refs
+  const sourceRefs = refs
     .filter((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref))
-    .map((ref) => browserHostFileForRef(workspacePath, ref));
-  const invalid = sourceFiles.find((file) => !file);
-  if (invalid === undefined && sourceFiles.length > 0) {
-    for (const file of sourceFiles) {
-      if (!file) continue;
+    .map((ref) => ({ ref, file: browserHostFileForRef(workspacePath, ref) }));
+  if (sourceRefs.some((item) => !item.file)) return { ok: false, reason: 'invalid BrowserHostSession source evidence ref' };
+  if (sourceRefs.length > 0) {
+    for (const item of sourceRefs) {
+      const file = item.file;
+      if (!file) return { ok: false, reason: 'invalid BrowserHostSession source evidence ref' };
       try {
         const info = await stat(file);
         if (!info.isFile() || info.size === 0) return { ok: false, reason: `empty BrowserHostSession source evidence file: ${file}` };
@@ -275,9 +323,43 @@ async function browserSourceEvidenceCheck(workspacePath: string, refs: string[])
         return { ok: false, reason: `missing BrowserHostSession source evidence file: ${file}` };
       }
     }
+    const metadataCheck = await browserSourceMetadataCheck(workspacePath, refs);
+    if (!metadataCheck.ok) return metadataCheck;
     return { ok: true };
   }
   return { ok: false, reason: 'invalid BrowserHostSession source evidence ref' };
+}
+
+async function browserSourceMetadataCheck(workspacePath: string, refs: string[]): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const refSet = new Set(refs);
+  const sourcePageRefs = refs.filter((ref) => /source-pages\/.+\.source\.json$/i.test(ref));
+  for (const ref of sourcePageRefs) {
+    const file = browserHostFileForRef(workspacePath, ref);
+    if (!file) return { ok: false, reason: 'invalid BrowserHostSession source evidence ref' };
+    let metadata: Record<string, unknown>;
+    try {
+      metadata = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    } catch {
+      return { ok: false, reason: `invalid BrowserHostSession source metadata: ${ref}` };
+    }
+    const textRef = typeof metadata.textRef === 'string' ? metadata.textRef : '';
+    const finalUrl = typeof metadata.finalUrl === 'string' ? metadata.finalUrl.trim() : '';
+    if (metadata.status !== 'read' || !textRef || !finalUrl) {
+      return { ok: false, reason: `invalid BrowserHostSession source metadata: ${ref}` };
+    }
+    if (!refSet.has(textRef) || !/source-pages\/.+\.txt$/i.test(textRef)) {
+      return { ok: false, reason: `invalid BrowserHostSession source metadata textRef pair: ${ref}` };
+    }
+    const textFile = browserHostFileForRef(workspacePath, textRef);
+    if (!textFile) return { ok: false, reason: `invalid BrowserHostSession source metadata textRef pair: ${ref}` };
+    try {
+      const text = await readFile(textFile, 'utf8');
+      if (!text.trim()) return { ok: false, reason: `empty BrowserHostSession page text evidence: ${textFile}` };
+    } catch {
+      return { ok: false, reason: `missing BrowserHostSession source evidence file: ${textFile}` };
+    }
+  }
+  return { ok: true };
 }
 
 function browserSourceEvidenceBlockedReason(check: { ok: true } | { ok: false; reason: string }): string | undefined {

@@ -30,16 +30,9 @@ packages/actions/
   computer-use/
     README.md
     action-provider.manifest.json
-    virtual-app-screen-host/
-      README.md
-    pyproject.toml
-    sciforge_computer_use/
-    tests/
 ```
 
-Provider 实现可以是 Python、TypeScript、MCP server 或外部 adapter。manifest 只描述稳定边界；运行时 broker 可以先读取 manifest 生成紧凑 capability brief，只有真正选中 provider 后再加载更详细的实现文档。
-
-`computer-use/virtual-app-screen-host` 是 VirtualAppScreen 终局 C 的 native surface/control-plane target package。它不是 GUI renderer，也不是第二个 agent host；它负责 virtual display/app surface lifecycle、frame/input transport、host grants、human fire-and-release input queue、automation barrier 和 host-owned evidence writer。第三方虚拟屏幕软件只能作为 reference/diagnostic adapter，不能成为 action provider 的产品验收 owner。
+Provider 实现可以是 TypeScript、MCP server 或外部 adapter。manifest 只描述稳定边界；运行时 broker 可以先读取 manifest 生成紧凑 capability brief，只有真正选中 provider 后再加载更详细的实现文档。Computer Use 当前是 TS-only，产品验收走 Agent Host / WindowActionSession / current-run evidence。
 
 ## 安全原则
 

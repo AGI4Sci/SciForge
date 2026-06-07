@@ -12,7 +12,6 @@ export type LocalProviderSettings = {
   modelSource?: string;
   forceNonStreamingUpstream?: boolean;
   forceNonStreamingUpstreamSource?: string;
-  virtualAppScreenEnv?: Record<string, string>;
 };
 
 type SourceCandidate = {
@@ -29,31 +28,6 @@ export const LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS = [
   ['codexProxy', 'apiKey'],
   ['runtimeCodexProxy', 'apiKey'],
   ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
-] as const;
-
-const SAFE_VIRTUAL_APP_SCREEN_LOCAL_ENV_KEYS = new Set([
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_NAME',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_COMMAND',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_ARGS_JSON',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_BUNDLE_ID',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_APP_PATH',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_APP_USER_MODEL_ID',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_PROCESS_MATCH',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_WINDOW_TITLE_PATTERN',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS',
-  'SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_WINDOW_TIMEOUT_MS',
-]);
-
-const VIRTUAL_APP_SCREEN_ENV_CANDIDATE_PATHS = [
-  ['virtualAppScreen', 'env'],
-  ['virtualAppScreen', 'nativeDriver', 'env'],
-  ['computerUse', 'virtualAppScreen', 'env'],
-  ['computerUse', 'virtualAppScreen', 'nativeDriver', 'env'],
 ] as const;
 
 export function defaultLocalProviderConfigPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -97,41 +71,12 @@ export function providerEnvFromLocalSettings(settings: LocalProviderSettings): R
   };
 }
 
-export function virtualAppScreenEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
-  return { ...(settings.virtualAppScreenEnv ?? {}) };
-}
-
 export function runtimeCodexEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
   return providerEnvFromLocalSettings(settings);
 }
 
 export function computerUseWorkspaceEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
-  return {
-    ...providerEnvFromLocalSettings(settings),
-    ...virtualAppScreenEnvFromLocalSettings(settings),
-  };
-}
-
-export function agentServerEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
-  return {
-    ...(settings.provider ? {
-      AGENT_SERVER_MODEL_PROVIDER: settings.provider,
-      AGENT_SERVER_ADAPTER_LLM_PROVIDER: settings.provider,
-    } : {}),
-    ...(settings.baseUrl ? {
-      AGENT_SERVER_MODEL_BASE_URL: settings.baseUrl,
-      AGENT_SERVER_ADAPTER_LLM_BASE_URL: settings.baseUrl,
-    } : {}),
-    ...(settings.apiKey ? {
-      AGENT_SERVER_MODEL_API_KEY: settings.apiKey,
-      AGENT_SERVER_ADAPTER_LLM_API_KEY: settings.apiKey,
-    } : {}),
-    ...(settings.model ? {
-      AGENT_SERVER_MODEL: settings.model,
-      AGENT_SERVER_MODEL_NAME: settings.model,
-      AGENT_SERVER_ADAPTER_LLM_MODEL: settings.model,
-    } : {}),
-  };
+  return providerEnvFromLocalSettings(settings);
 }
 
 export function localProviderSettings(
@@ -194,8 +139,6 @@ export function localProviderSettings(
     candidate(root, ['codexProxy', 'forceNonStreamingUpstream'], prefix),
     candidate(root, ['runtimeCodexProxy', 'forceNonStreamingUpstream'], prefix),
   ].find((item) => item.value === true);
-  const virtualAppScreenEnv = virtualAppScreenEnvFromConfig(root);
-
   return {
     ...(apiKey ? { apiKey: apiKey.value, apiKeySource: apiKey.source } : {}),
     ...(provider ? { provider: provider.value, providerSource: provider.source } : {}),
@@ -205,7 +148,6 @@ export function localProviderSettings(
       forceNonStreamingUpstream: true,
       forceNonStreamingUpstreamSource: forceNonStreamingUpstream.source,
     } : {}),
-    ...(Object.keys(virtualAppScreenEnv).length ? { virtualAppScreenEnv } : {}),
   };
 }
 
@@ -261,28 +203,6 @@ function normalizeOpenAiCompatibleBaseUrl(value: string) {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function virtualAppScreenEnvFromConfig(root: Record<string, unknown>): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const path of VIRTUAL_APP_SCREEN_ENV_CANDIDATE_PATHS) {
-    const block = valueAtPath(root, path);
-    if (!isRecord(block)) continue;
-    for (const [key, rawValue] of Object.entries(block)) {
-      if (!SAFE_VIRTUAL_APP_SCREEN_LOCAL_ENV_KEYS.has(key)) continue;
-      const value = localEnvStringValue(rawValue);
-      if (value !== undefined) env[key] = value;
-    }
-  }
-  return env;
-}
-
-function localEnvStringValue(value: unknown): string | undefined {
-  if (typeof value === 'string') return value.trim() ? value.trim() : undefined;
-  if (typeof value === 'boolean') return value ? '1' : '0';
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : undefined;
-  if (Array.isArray(value) || isRecord(value)) return JSON.stringify(value);
-  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

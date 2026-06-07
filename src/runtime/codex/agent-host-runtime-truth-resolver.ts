@@ -984,11 +984,11 @@ function ownerRefsForPurpose(refs: string[], purpose: ActOwnerRefPurpose): strin
 
 function runtimeOwnerRefAllowed(ref: string, purpose: ActOwnerRefPurpose): boolean {
   if (!safeRuntimeOwnerRef(ref)) return false;
-  if (purpose === 'window-action') return /^(?:window-action-session:|browser-host-session:|window:|desktop-native:window-action|virtual-app-screen:|computer-use:(?:session|provider-session|native-host\/(?:sessions|surfaces|leases|ledgers|grants|runs)))/i.test(ref);
+  if (purpose === 'window-action') return /^(?:window-action-session:|browser-host-session:|window:|desktop-native:window-action|computer-use:(?:session|provider-session|native-host\/(?:sessions|surfaces|leases|ledgers|grants|runs)))/i.test(ref);
   if (purpose === 'adapter') return /^(?:adapter-registry:|computer-use:(?:adapter|native-host\/(?:adapters|readiness|sessions|ledgers))|browser-host-session:.*computer-use|runtime-truth:computer-use-adapter)/i.test(ref);
   if (purpose === 'permission') return /^(?:permission:|computer-use:permission|native-host:permission|audit:approval|approval:)/i.test(ref);
   if (purpose === 'stop-cancel') return /^(?:cancel:|stop:|lease:|browser-host-session:.*\/(?:stop|close|cancel)|computer-use:.*(?:stop|cancel|lease)|native-host:.*(?:stop|cancel|lease)|runtime-truth:cancel-path)/i.test(ref);
-  if (purpose === 'target') return /^(?:browser-host-session:|window-action-session:|window:|desktop-native:|virtual-app-screen:|computer-use:(?:target|session|provider-session|native-host\/(?:sessions|surfaces|apps)))/i.test(ref);
+  if (purpose === 'target') return /^(?:browser-host-session:|window-action-session:|window:|desktop-native:|computer-use:(?:target|session|provider-session|native-host\/(?:sessions|surfaces|apps)))/i.test(ref);
   if (purpose === 'observation') return /^(?:browser-host-session:|window-action-session:|computer-use:(?:observation|evidence|native-host\/(?:frames|surfaces|ledgers|runs))|desktop-native:|evidence:|workEvidence:)/i.test(ref);
   return true;
 }
@@ -998,7 +998,7 @@ function safeRuntimeOwnerRef(ref: string): boolean {
   if (!trimmed || trimmed.length > 240) return false;
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:)/i.test(trimmed)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(trimmed)) return false;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|virtual-app-screen:|computer-use:|native-adapter:|desktop-native:|permission:|approval:|cancel:|stop:|lease:|adapter-registry:|window:|action-ledger:|evidence:|workEvidence:|native-host:|audit:)/i.test(trimmed);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-adapter:|desktop-native:|permission:|approval:|cancel:|stop:|lease:|adapter-registry:|window:|action-ledger:|evidence:|workEvidence:|native-host:|audit:)/i.test(trimmed);
 }
 
 async function nativeAdapterHealth(nativeAdapterUrl: string | undefined): Promise<{

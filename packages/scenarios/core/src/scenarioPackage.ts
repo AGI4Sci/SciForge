@@ -161,7 +161,7 @@ export function builtInScenarioPackageRef(scenarioId: ScenarioId): ScenarioPacka
 }
 
 function skillIdsForDomain(skillDomain: SkillDomain) {
-  return [`agentserver.generate.${skillDomain}`];
+  return [`generated-task.generate.${skillDomain}`];
 }
 
 function safeElementId(value: string) {

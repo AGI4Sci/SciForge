@@ -9,8 +9,8 @@ import {
 
 test('package bridge invocation diagnostics bounds stdout and stderr summaries', () => {
   const summary = packageBridgeInvocationProcessSummary({
-    command: 'python3',
-    args: ['-m', 'sciforge_computer_use'],
+    command: 'node',
+    args: ['--import', 'tsx', 'src/runtime/computer-use/package-bridge.ts'],
     stdout: `stdout-${'x'.repeat(80)}`,
     stderr: `stderr-${'y'.repeat(80)}`,
   }, { outputLimit: 24 });
@@ -22,7 +22,7 @@ test('package bridge invocation diagnostics bounds stdout and stderr summaries',
 
 test('package bridge invocation diagnostics redacts secrets in stdout stderr args and env', () => {
   const summary = packageBridgeInvocationProcessSummary({
-    command: 'python3',
+    command: 'node',
     args: [
       '--provider-url=https://provider.example/v1',
       '--api-key',
@@ -55,8 +55,8 @@ test('package bridge invocation diagnostics redacts secrets in stdout stderr arg
 
 test('package bridge invocation diagnostics preserves process exit signal timeout fields', () => {
   const summary = packageBridgeInvocationProcessSummary({
-    command: '/usr/bin/python3',
-    args: ['-m', 'sciforge_computer_use'],
+    command: '/usr/bin/node',
+    args: ['--import', 'tsx', 'src/runtime/computer-use/package-bridge.ts'],
     code: 124,
     cwd: '/tmp/workspace',
     signal: 'SIGTERM',
@@ -66,8 +66,8 @@ test('package bridge invocation diagnostics preserves process exit signal timeou
     stderr: 'partial stderr',
   });
 
-  assert.equal(summary.command, '/usr/bin/python3');
-  assert.deepEqual(summary.args, ['-m', 'sciforge_computer_use']);
+  assert.equal(summary.command, '/usr/bin/node');
+  assert.deepEqual(summary.args, ['--import', 'tsx', 'src/runtime/computer-use/package-bridge.ts']);
   assert.equal(summary.cwd, '/tmp/workspace');
   assert.equal(summary.code, 124);
   assert.equal(summary.signal, 'SIGTERM');

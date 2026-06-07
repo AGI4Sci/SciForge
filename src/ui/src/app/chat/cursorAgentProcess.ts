@@ -1961,6 +1961,25 @@ function isRuntimeLifecyclePlaceholder(entry: StreamWorklogEntry) {
 function isRuntimeMetadataPlaceholder(entry: StreamWorklogEntry) {
   if (nativeString(entry.event, 'toolName') || nativeString(entry.event, 'command')) return false;
   const text = normalizeText(cursorEntryText(entry) || entry.event.label || '');
+  const type = rawType(entry.event);
+  const metadataText = normalizeText([
+    text,
+    entry.event.label,
+    nativeString(entry.event, 'provider') ? 'provider' : '',
+    nativeString(entry.event, 'model') ? 'model' : '',
+    nativeString(entry.event, 'profile') ? 'profile' : '',
+    nativeString(entry.event, 'workspace') ? 'workspace' : '',
+    nativeString(entry.event, 'commandId') || nativeString(entry.event, 'command_id') ? 'command' : '',
+    nativeString(entry.event, 'codexSessionId') || nativeString(entry.event, 'codex_session_id') ? 'session' : '',
+  ].filter(Boolean).join(' '));
+  if (!hasStrongActionEvidence(entry.event) && !hasUserFacingStructuredProgress(entry)) {
+    if (/(?:visible trace metadata|runtime metadata|可见追踪元数据|运行时元数据)/i.test(metadataText)) return true;
+    const runtimeMetadataFieldCount = ['provider', 'model', 'profile', 'workspace']
+      .filter((field) => metadataText.includes(field)).length;
+    if ((type === 'runtime_metadata' || type === 'run_metadata' || type === 'workspace-runtime-event') && runtimeMetadataFieldCount >= 3) {
+      return true;
+    }
+  }
   return text === '上下文窗口'
     || text === 'context window'
     || text === 'workspace runtime'

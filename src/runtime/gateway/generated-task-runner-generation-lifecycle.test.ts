@@ -29,18 +29,18 @@ const readyWebProviderRequest: GatewayRequest = {
 };
 
 const skill = {
-  id: 'literature-agentserver-generation',
+  id: 'literature-backend-generation',
   kind: 'package',
   available: true,
   reason: 'test',
   checkedAt: '2026-05-16T00:00:00.000Z',
   manifestPath: '/tmp/skill.json',
   manifest: {
-    id: 'literature-agentserver-generation',
+    id: 'literature-backend-generation',
     kind: 'skill',
     label: 'Literature',
     description: 'test',
-    entrypoint: { type: 'agentserver-generation' },
+    entrypoint: { type: 'backend-generation' },
   },
 } as unknown as SkillAvailability;
 

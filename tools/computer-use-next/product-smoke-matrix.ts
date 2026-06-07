@@ -8,8 +8,6 @@ const NATIVE_SIDECAR_CAPABILITIES_SCHEMA =
   'sciforge.computer-use.native-sidecar-capabilities.v1' as const;
 const NATIVE_SIDECAR_DISCOVERY_SCHEMA =
   'sciforge.computer-use.native-sidecar-discovery.v1' as const;
-const VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA =
-  'sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1' as const;
 
 export type CuNextProductSmokeTier =
   | 'package-diagnostic'
@@ -36,8 +34,6 @@ export type CuNextProductSmokeEvidenceRequirement =
   | 'viewer-real-frames'
   | 'multi-app-workflow'
   | 'current-bundle-evidence'
-  | 'virtual-app-screen-user-acceptance'
-  | 'virtual-app-screen-user-acceptance-manifest'
   | 'single-screen-single-actor'
   | 'single-screen-multi-actor'
   | 'multi-screen-single-actor'
@@ -52,7 +48,6 @@ export type CuNextProductSmokeEvidenceRequirement =
 
 export type CuNextProductSmokeCaseId =
   | 'product-path-codex-native-plugin-sidecar'
-  | 'virtual-app-screen-user-acceptance'
   | 'real-single-app-input'
   | 'real-artifact-save'
   | 'high-risk-confirmation-stop'
@@ -130,7 +125,6 @@ export interface CuNextProductSmokeCaseEvidence {
   evidenceRefs?: Partial<Record<CuNextProductSmokeEvidenceRequirement, string[]>>;
   currentRunBundleRef?: string;
   acceptanceManifestRef?: string;
-  virtualAppScreenUserAcceptanceManifestRef?: string;
   regressionManifestRef?: string;
   userAcceptanceGate?: string;
   userAcceptanceEligible?: boolean;
@@ -182,21 +176,6 @@ export const CU_NEXT_PRODUCT_SMOKE_CASES: readonly CuNextProductSmokeCaseDefinit
       'sciforge-computer-use-provider',
       'platform-sidecar-isolation',
       'native-multi-screen-sidecar',
-      'current-bundle-evidence',
-    ],
-  },
-  {
-    id: 'virtual-app-screen-user-acceptance',
-    label: 'VirtualAppScreen user-level acceptance',
-    taskId: 'P0-CU-UA-FIRST-SCENARIO',
-    requiredTier: 'product-smoke',
-    requiredExecutionMode: 'opt-in-live-backend',
-    gateRole: 'active-product-gate',
-    requirements: [
-      'virtual-app-screen-user-acceptance',
-      'virtual-app-screen-user-acceptance-manifest',
-      'viewer-real-frames',
-      'real-artifact-save',
       'current-bundle-evidence',
     ],
   },
@@ -546,9 +525,6 @@ function validateProductSmokeCase(
   const currentRunBundleRef = stringValue(item.currentRunBundleRef);
   requireRef(issues, `${path}.currentRunBundleRef`, currentRunBundleRef);
   requireRef(issues, `${path}.acceptanceManifestRef`, stringValue(item.acceptanceManifestRef));
-  if (definition.id === 'virtual-app-screen-user-acceptance') {
-    issues.push(...validateVirtualAppScreenUserAcceptanceGate(item, path, options.refRecords, currentRunBundleRef));
-  }
   const evidenceRefs = asRecord(item.evidenceRefs) ?? {};
   for (const requirement of definition.requirements) {
     const refs = stringArray(evidenceRefs[requirement]);
@@ -610,7 +586,7 @@ function validateHistoricalRegressionCase(
     issues.push({
       id: 'historical-regression-cannot-pass-user-acceptance',
       path: `${path}.userAcceptanceEligible`,
-      reason: 'M6/native multi-screen is historical regression evidence and cannot by itself satisfy VirtualAppScreen user-level acceptance.',
+      reason: 'M6/native multi-screen is historical regression evidence and cannot by itself satisfy Computer Use product acceptance.',
     });
   }
   if (!passed && !stringValue(item.notRunReason) && status !== 'failed') {
@@ -652,308 +628,6 @@ function validateHistoricalRegressionCase(
     }));
   }
   issues.push(...validateCurrentBundleScopedRefs(item, currentRunBundleRef, path));
-  return issues;
-}
-
-const requiredVirtualAppScreenManifestArrayFields = [
-  'targetAppRefs',
-  'targetWindowRefs',
-  'sessionRefs',
-  'adapterReadinessRefs',
-  'screenFrameRefs',
-  'inputIntentRefs',
-  'executorEventRefs',
-  'beforeAfterFrameRefs',
-  'annotationProposalRefs',
-  'artifactRefs',
-  'verificationRefs',
-  'guiPresentRefs',
-] as const;
-
-function validateVirtualAppScreenUserAcceptanceGate(
-  item: Record<string, unknown>,
-  path: string,
-  refRecords: Record<string, unknown> | undefined,
-  currentRunBundleRef: string | undefined,
-): CuNextProductSmokeMatrixIssue[] {
-  const issues: CuNextProductSmokeMatrixIssue[] = [];
-  if (item.userAcceptanceGate !== 'virtual-app-screen-user-acceptance') {
-    issues.push({
-      id: 'missing-virtual-app-screen-user-acceptance-gate',
-      path: `${path}.userAcceptanceGate`,
-      reason: 'Active Computer Use product pass must name userAcceptanceGate=virtual-app-screen-user-acceptance.',
-    });
-  }
-
-  const manifestRef = stringValue(item.virtualAppScreenUserAcceptanceManifestRef)
-    ?? stringValue(item.acceptanceManifestRef);
-  requireRef(issues, `${path}.virtualAppScreenUserAcceptanceManifestRef`, manifestRef);
-  if (
-    stringValue(item.acceptanceManifestRef)
-    && stringValue(item.virtualAppScreenUserAcceptanceManifestRef)
-    && item.acceptanceManifestRef !== item.virtualAppScreenUserAcceptanceManifestRef
-  ) {
-    issues.push({
-      id: 'virtual-app-screen-manifest-ref-mismatch',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef`,
-      reason: 'virtualAppScreenUserAcceptanceManifestRef must match acceptanceManifestRef when both are present.',
-    });
-  }
-
-  const manifest = manifestRef
-    ? requireLoadedRecord(
-      issues,
-      refRecords,
-      manifestRef,
-      `${path}.virtualAppScreenUserAcceptanceManifestRef`,
-      'virtual-app-screen-user-acceptance-manifest',
-    )
-    : undefined;
-  if (!manifest) return issues;
-
-  const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
-    ? currentBundleRoot(currentRunBundleRef)
-    : undefined;
-  if (bundleRoot && manifestRef && isSafeProductSmokeRef(manifestRef) && !isRefUnderBundleRoot(manifestRef, bundleRoot)) {
-    issues.push({
-      id: 'product-smoke-ref-outside-current-bundle',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef`,
-      reason: `VirtualAppScreen user acceptance manifest ${manifestRef} must be under currentRunBundleRef ${currentRunBundleRef}.`,
-    });
-  }
-
-  if (manifest.schemaVersion !== VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-user-acceptance-manifest',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.schemaVersion`,
-      reason: `VirtualAppScreen user acceptance manifest must use ${VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA}.`,
-    });
-  }
-  if (manifest.status !== 'passed' || manifest.userAcceptanceEligible !== true || manifest.diagnosticOnly === true) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-user-acceptance-status',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.status`,
-      reason: 'VirtualAppScreen user acceptance pass requires status=passed, userAcceptanceEligible=true, and diagnosticOnly=false.',
-    });
-  }
-  if (!Object.prototype.hasOwnProperty.call(manifest, 'blockedReason')) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-user-acceptance-manifest',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.blockedReason`,
-      reason: 'VirtualAppScreen user acceptance manifest must declare blockedReason; passed manifests use null.',
-    });
-  } else if (manifest.status === 'passed' && manifest.blockedReason !== null) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-user-acceptance-status',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.blockedReason`,
-      reason: 'VirtualAppScreen user acceptance passed status must declare blockedReason=null.',
-    });
-  }
-  if (asRecord(manifest.validation)?.ok !== true) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-user-acceptance-validation',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.validation`,
-      reason: 'VirtualAppScreen user acceptance manifest validation.ok must be true.',
-    });
-  }
-  for (const field of ['taskId', 'scenarioId', 'userIntent', 'replayRef', 'evidenceLedgerRef'] as const) {
-    if (!stringValue(manifest[field])) {
-      issues.push({
-        id: 'invalid-virtual-app-screen-user-acceptance-manifest',
-        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.${field}`,
-        reason: `VirtualAppScreen user acceptance manifest must include ${field}.`,
-      });
-    }
-  }
-  for (const field of requiredVirtualAppScreenManifestArrayFields) {
-    if (stringArray(manifest[field]).length === 0) {
-      issues.push({
-        id: 'invalid-virtual-app-screen-user-acceptance-manifest',
-        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.${field}`,
-        reason: `VirtualAppScreen user acceptance manifest must include non-empty ${field}.`,
-      });
-    }
-  }
-
-  const flags = asRecord(manifest.isolationFlags);
-  const unsafeIsolationFlags = [
-    ['backgroundRenderable', flags?.backgroundRenderable !== true],
-    ['affectsPhysicalDisplay', flags?.affectsPhysicalDisplay !== false],
-    ['requiresFocusSteal', flags?.requiresFocusSteal !== false],
-    ['sharedSystemInputUsed', flags?.sharedSystemInputUsed !== false],
-    ['physicalDisplayPopup', flags?.physicalDisplayPopup !== false],
-    ['systemPointerMoved', flags?.systemPointerMoved !== false],
-    ['systemKeyboardEventsSent', flags?.systemKeyboardEventsSent !== false],
-    ['diagnosticOnly', flags?.diagnosticOnly !== false],
-  ] as const;
-  for (const [field, unsafe] of unsafeIsolationFlags) {
-    if (unsafe) {
-      issues.push({
-        id: 'invalid-virtual-app-screen-isolation-flags',
-        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.isolationFlags.${field}`,
-        reason: 'VirtualAppScreen user acceptance requires isolated background control flags that do not affect the physical desktop.',
-      });
-    }
-  }
-
-  const rejectedClaimKinds = stringArray(asRecord(manifest.validation)?.rejectedClaimKinds);
-  if (rejectedClaimKinds.length > 0) {
-    issues.push({
-      id: 'virtual-app-screen-rejected-substitute-claims',
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.validation.rejectedClaimKinds`,
-      reason: `VirtualAppScreen user acceptance manifest rejects substitute evidence: ${rejectedClaimKinds.join(', ')}.`,
-    });
-  }
-  const claims = records(manifest.evidenceClaims);
-  for (const [index, claim] of claims.entries()) {
-    const kind = normalizeToken(stringValue(claim.kind) ?? '');
-    if (
-      ['package-smoke', 'm6-native-multi-screen', 'target-bound-fixture', 'historical-docker-novnc', 'single-click-smoke', 'dom', 'playwright', 'accessibility', 'shell-direct-artifact', 'old-trace', 'gui-executor', 'shared-system-input'].includes(kind)
-      && (claim.userAcceptanceEligible === true || claim.completionEvidence === true)
-    ) {
-      issues.push({
-        id: 'virtual-app-screen-rejected-substitute-claims',
-        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.evidenceClaims[${index}]`,
-        reason: 'Package smoke, M6/native multi-screen, fixtures, shortcuts, GUI executor, shared input, old traces, or shell direct artifact writes cannot satisfy user-level acceptance.',
-      });
-    }
-  }
-  issues.push(...validateVirtualAppScreenManifestEvidenceLedger(
-    manifest,
-    `${path}.virtualAppScreenUserAcceptanceManifestRef`,
-    currentRunBundleRef,
-  ));
-  return issues;
-}
-
-function validateVirtualAppScreenManifestEvidenceLedger(
-  manifest: Record<string, unknown>,
-  path: string,
-  currentRunBundleRef: string | undefined,
-): CuNextProductSmokeMatrixIssue[] {
-  const issues: CuNextProductSmokeMatrixIssue[] = [];
-  const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
-    ? currentBundleRoot(currentRunBundleRef)
-    : undefined;
-  const sessionRefs = stringArray(manifest.sessionRefs);
-  const guiPresentRefs = new Set(stringArray(manifest.guiPresentRefs));
-  const screenFrameRefs = new Set(stringArray(manifest.screenFrameRefs));
-  const inputIntentRefs = new Set(stringArray(manifest.inputIntentRefs));
-  const adapterReadinessRefs = new Set(stringArray(manifest.adapterReadinessRefs));
-  const executorEventRefs = new Set(stringArray(manifest.executorEventRefs));
-  const beforeAfterFrameRefs = new Set(stringArray(manifest.beforeAfterFrameRefs));
-  const artifactRefs = new Set(stringArray(manifest.artifactRefs));
-  const verificationRefs = new Set(stringArray(manifest.verificationRefs));
-  const declaredRefs = new Set(virtualAppScreenManifestFileRefs(manifest));
-  const actions = [
-    ...records(manifest.evidenceLedgerActions),
-    ...records(asRecord(manifest.evidenceLedger)?.actions),
-    ...records(asRecord(manifest.actionLedger)?.actions),
-  ];
-
-  if (actions.length === 0) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-evidence-ledger',
-      path: `${path}.evidenceLedgerActions`,
-      reason: 'VirtualAppScreen acceptance manifest must include per-action evidence ledger records.',
-    });
-  }
-  for (const [index, action] of actions.entries()) {
-    const actionPath = `${path}.evidenceLedgerActions[${index}]`;
-    const inputIntentRef = firstString(action, ['inputIntentRef', 'intentRef']);
-    const providerAdapterRef = firstString(action, ['providerAdapterRef', 'adapterReadinessRef', 'executorAdapterRef']);
-    const executorEventRef = firstString(action, ['executorEventRef']);
-    const beforeFrameRef = firstString(action, ['beforeFrameRef', 'beforeScreenshotRef']);
-    const afterFrameRef = firstString(action, ['afterFrameRef', 'afterScreenshotRef']);
-    const beforeAfterFrameRef = firstString(action, ['beforeAfterFrameRef']);
-    const verifierRef = firstString(action, ['verifierRef', 'verificationRef']);
-    const artifactRef = firstString(action, ['artifactRef', 'outputArtifactRef']);
-    const blockedReasonRef = firstString(action, ['blockedReasonRef', 'permissionHandoffRef', 'observeOnlyRef']);
-    const guiPresentRef = firstString(action, ['guiPresentRef', 'presentRef']);
-    const sessionRef = firstString(action, ['sessionRef']);
-
-    requireManifestLedgerRef(issues, actionPath, 'inputIntentRef', inputIntentRef, inputIntentRefs);
-    requireManifestLedgerRef(issues, actionPath, 'providerAdapterRef', providerAdapterRef, adapterReadinessRefs);
-    requireManifestLedgerRef(issues, actionPath, 'executorEventRef', executorEventRef, executorEventRefs);
-    requireManifestLedgerRef(issues, actionPath, 'beforeFrameRef', beforeFrameRef, screenFrameRefs);
-    requireManifestLedgerRef(issues, actionPath, 'afterFrameRef', afterFrameRef, screenFrameRefs);
-    requireManifestLedgerRef(issues, actionPath, 'beforeAfterFrameRef', beforeAfterFrameRef, beforeAfterFrameRefs);
-    requireManifestLedgerRef(issues, actionPath, 'verifierRef', verifierRef, verificationRefs);
-    requireManifestLedgerRef(issues, actionPath, 'guiPresentRef', guiPresentRef, guiPresentRefs);
-    if (!sessionRef || !sessionRefs.includes(sessionRef)) {
-      issues.push({
-        id: 'invalid-virtual-app-screen-evidence-ledger',
-        path: `${actionPath}.sessionRef`,
-        reason: 'Each action ledger record must bind a current manifest sessionRef.',
-      });
-    }
-    if (artifactRef) {
-      if (!artifactRefs.has(artifactRef)) {
-        issues.push({
-          id: 'invalid-virtual-app-screen-evidence-ledger',
-          path: `${actionPath}.artifactRef`,
-          reason: 'Action artifactRef must appear in manifest artifactRefs.',
-        });
-      }
-    } else if (!blockedReasonRef && !stringValue(action.blockedReason)) {
-      issues.push({
-        id: 'invalid-virtual-app-screen-evidence-ledger',
-        path: `${actionPath}.artifactRef`,
-        reason: 'Each action must resolve to an artifact ref or a blocked/permission/observe-only reason.',
-      });
-    }
-    for (const ref of [
-      inputIntentRef,
-      providerAdapterRef,
-      executorEventRef,
-      beforeFrameRef,
-      afterFrameRef,
-      beforeAfterFrameRef,
-      verifierRef,
-      artifactRef,
-      blockedReasonRef,
-      guiPresentRef,
-    ].filter((item): item is string => Boolean(item))) {
-      if (isSafeProductSmokeRef(ref) && !declaredRefs.has(ref)) {
-        issues.push({
-          id: 'invalid-virtual-app-screen-evidence-ledger',
-          path: actionPath,
-          reason: `Action ledger ref ${ref} must be declared by the same VirtualAppScreen manifest.`,
-        });
-      }
-    }
-  }
-
-  if (findRecordValue(manifest, (key, value) => (
-    (
-      key === 'shellOnly'
-      || key === 'shellOnlyArtifact'
-      || key === 'staleFile'
-      || key === 'staleArtifact'
-      || key === 'fixturePass'
-      || key === 'fixtureArtifactPass'
-      || key === 'passFromFixture'
-    )
-    && value === true
-  ))) {
-    issues.push({
-      id: 'virtual-app-screen-rejected-substitute-claims',
-      path,
-      reason: 'VirtualAppScreen artifact evidence must reject shell-only, stale-file, fixture, or fixture-pass completion records.',
-    });
-  }
-
-  if (bundleRoot) {
-    for (const [index, ref] of virtualAppScreenManifestFileRefs(manifest).entries()) {
-      if (isSafeProductSmokeRef(ref) && !isRefUnderBundleRoot(ref, bundleRoot)) {
-        issues.push({
-          id: 'product-smoke-ref-outside-current-bundle',
-          path: `${path}.refs[${index}]`,
-          reason: `VirtualAppScreen manifest ref ${ref} must be under currentRunBundleRef ${currentRunBundleRef}.`,
-        });
-      }
-    }
-  }
   return issues;
 }
 
@@ -1866,13 +1540,6 @@ function validateCurrentBundleScopedRefs(
   if (acceptanceManifestRef) {
     refs.push({ path: `${path}.acceptanceManifestRef`, ref: acceptanceManifestRef });
   }
-  const virtualAppScreenUserAcceptanceManifestRef = stringValue(item.virtualAppScreenUserAcceptanceManifestRef);
-  if (virtualAppScreenUserAcceptanceManifestRef) {
-    refs.push({
-      path: `${path}.virtualAppScreenUserAcceptanceManifestRef`,
-      ref: virtualAppScreenUserAcceptanceManifestRef,
-    });
-  }
   const regressionManifestRef = stringValue(item.regressionManifestRef);
   if (regressionManifestRef) {
     refs.push({ path: `${path}.regressionManifestRef`, ref: regressionManifestRef });
@@ -2012,30 +1679,6 @@ function requireRef(
   }
 }
 
-function requireManifestLedgerRef(
-  issues: CuNextProductSmokeMatrixIssue[],
-  actionPath: string,
-  field: string,
-  ref: string | undefined,
-  declaredRefs: Set<string>,
-): void {
-  if (!ref) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-evidence-ledger',
-      path: `${actionPath}.${field}`,
-      reason: `Action ledger ${field} is required.`,
-    });
-    return;
-  }
-  requireRef(issues, `${actionPath}.${field}`, ref);
-  if (!declaredRefs.has(ref)) {
-    issues.push({
-      id: 'invalid-virtual-app-screen-evidence-ledger',
-      path: `${actionPath}.${field}`,
-      reason: `Action ledger ${field} must appear in the matching top-level manifest refs.`,
-    });
-  }
-}
 
 function isSafeProductSmokeRef(ref: string): boolean {
   const normalized = ref.trim();
@@ -2110,47 +1753,6 @@ function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function firstString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  for (const key of keys) {
-    const value = stringValue(record[key]);
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function virtualAppScreenManifestFileRefs(manifest: Record<string, unknown>): string[] {
-  return uniqueStringList([
-    ...requiredVirtualAppScreenManifestArrayFields.flatMap((field) => stringArray(manifest[field])),
-    stringValue(manifest.replayRef),
-    stringValue(manifest.evidenceLedgerRef),
-    ...records(manifest.evidenceLedgerActions).flatMap((action) => Object.values(action).filter((value): value is string => (
-      typeof value === 'string' && isPotentialProductEvidenceRef(value) && isSafeProductSmokeRef(value)
-    ))),
-    ...records(asRecord(manifest.evidenceLedger)?.actions).flatMap((action) => Object.values(action).filter((value): value is string => (
-      typeof value === 'string' && isPotentialProductEvidenceRef(value) && isSafeProductSmokeRef(value)
-    ))),
-  ].filter((ref): ref is string => (
-    typeof ref === 'string'
-    && isPotentialProductEvidenceRef(ref)
-    && isSafeProductSmokeRef(ref)
-  )));
-}
-
-function findRecordValue(
-  value: unknown,
-  predicate: (key: string, value: unknown) => boolean,
-  seen = new Set<unknown>(),
-): boolean {
-  if (!value || typeof value !== 'object') return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  if (Array.isArray(value)) return value.some((item) => findRecordValue(item, predicate, seen));
-  for (const [key, child] of Object.entries(value)) {
-    if (predicate(key, child)) return true;
-    if (findRecordValue(child, predicate, seen)) return true;
-  }
-  return false;
-}
 
 function isPotentialProductEvidenceRef(value: string): boolean {
   return /\/|\.json$|\.png$|\.jpe?g$|\.webp$|\.txt$|\.md$|\.pptx$|\.docx$|\.csv$|\.html$|\.xlsx$/i.test(value.trim());

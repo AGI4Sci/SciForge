@@ -15,7 +15,7 @@ export const runtimeCapabilityProfiles: RuntimeCapabilityProfile[] = [
     label: 'Core capability package',
     description: 'Schema-checked SciForge capability contracts that guide TUI-native workspace task generation.',
     capabilities: {
-      'agentserver-generation': 'self-healing',
+      'backend-generation': 'self-healing',
       'artifact-emission': 'schema-checked',
       'http-fetch': 'basic',
       'artifact-inspection': 'deterministic',
@@ -44,17 +44,17 @@ export const runtimeCapabilityProfiles: RuntimeCapabilityProfile[] = [
     capabilities: {
       'external-tool': 'external-tool',
       'artifact-emission': 'schema-checked',
-      'agentserver-generation': 'self-healing',
+      'backend-generation': 'self-healing',
     },
     runtimePriority: 3,
     failureModes: ['backend-unavailable', 'missing-input', 'schema-mismatch'],
   },
   {
-    id: 'agentserver-codex',
+    id: 'backend-codex',
     label: 'Runtime Codex backend',
     description: 'Code generation, repair, and workspace task synthesis backend.',
     capabilities: {
-      'agentserver-generation': 'self-healing',
+      'backend-generation': 'self-healing',
       'code-generation': 'self-healing',
       'filesystem-ops': 'deterministic',
       'artifact-emission': 'schema-checked',
@@ -63,13 +63,13 @@ export const runtimeCapabilityProfiles: RuntimeCapabilityProfile[] = [
     failureModes: ['backend-unavailable', 'schema-mismatch', 'runtime-error'],
   },
   {
-    id: 'agentserver-native',
+    id: 'backend-native',
     label: 'Native runtime backend',
     description: 'Structured chat and JSON response backend.',
     capabilities: {
       'structured-json': 'schema-checked',
       'artifact-emission': 'basic',
-      'agentserver-generation': 'basic',
+      'backend-generation': 'basic',
     },
     runtimePriority: 5,
     failureModes: ['backend-unavailable', 'schema-mismatch'],

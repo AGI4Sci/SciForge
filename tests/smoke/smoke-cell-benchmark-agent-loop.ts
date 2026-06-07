@@ -359,7 +359,7 @@ function assertCellOutput(payload: {
   assert.ok(payload.executionUnits.length > 0, `${label} missing execution units`);
   assert.ok(payload.executionUnits.every((unit) => {
     if (!isRecord(unit) || !isRecord(unit.routeDecision)) return false;
-    return unit.routeDecision.selectedRuntime === 'agentserver-generation';
+    return unit.routeDecision.selectedRuntime === 'backend-generation';
   }), `${label} should route through backend generation`);
 }
 

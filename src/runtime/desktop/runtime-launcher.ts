@@ -97,6 +97,7 @@ export class ProductionRuntimeLauncher {
   private readonly sidecarPorts = new Map<RuntimeLauncherPortBinding['name'], RuntimeLauncherPortBinding>();
   private readonly statuses = new Map<string, ManagedRuntimeServiceStatus>();
   private readonly children = new Map<string, ManagedChildProcess>();
+  private readonly childExitTasks = new Map<string, Promise<void>>();
   private shuttingDown = false;
   private auditLogPath = '';
   private appData?: DesktopAppDataLayout;
@@ -135,12 +136,16 @@ export class ProductionRuntimeLauncher {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    const exitTasks: Promise<void>[] = [];
     for (const [id, child] of this.children) {
       const status = this.statuses.get(id);
       if (status && status.state !== 'exited' && status.state !== 'failed') status.state = 'stopped';
       if (!child.killed) child.kill('SIGTERM');
+      const exitTask = this.childExitTasks.get(id);
+      if (exitTask) exitTasks.push(exitTask);
       await this.audit(id, 'lifecycle', 'shutdown requested');
     }
+    await Promise.all(exitTasks.map((task) => withTimeout(task, 5_000)));
     const server = this.server;
     this.server = undefined;
     if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -221,6 +226,7 @@ export class ProductionRuntimeLauncher {
       this.children.set(service.id, child);
       status.pid = child.pid;
       status.state = 'running';
+      this.childExitTasks.set(service.id, managedChildExitTask(child));
       void this.audit(service.id, 'lifecycle', `started ${service.command} ${(service.args ?? []).join(' ')}`.trim());
       this.attachAudit(service.id, 'stdout', child.stdout);
       this.attachAudit(service.id, 'stderr', child.stderr);
@@ -238,6 +244,7 @@ export class ProductionRuntimeLauncher {
         status.exitCode = code;
         status.signal = signal;
         void this.audit(service.id, 'lifecycle', `exited with ${signal ?? `code ${code}`}`);
+        this.childExitTasks.delete(service.id);
       });
     } catch (error) {
       status.state = 'failed';
@@ -363,6 +370,34 @@ export class ProductionRuntimeLauncher {
 }
 
 const defaultSpawnManagedProcess: SpawnManagedProcess = (command, args, options) => spawn(command, args, options) as ManagedChildProcess;
+
+function managedChildExitTask(child: ManagedChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    child.once('exit', done);
+    child.once('close', done);
+    child.once('error', done);
+  });
+}
+
+async function withTimeout(task: Promise<void>, timeoutMs: number): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      task,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 export async function findAvailableLoopbackPort(preferredPort: number | undefined): Promise<number> {
   const server = createServer();

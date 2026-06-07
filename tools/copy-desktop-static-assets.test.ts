@@ -6,14 +6,14 @@ import { test } from 'node:test';
 
 import { copyDesktopStaticAssets } from './copy-desktop-static-assets.js';
 
-test('copyDesktopStaticAssets materializes runtime JSON manifests and Computer Use Python package assets', async () => {
+test('copyDesktopStaticAssets materializes runtime JSON manifests and Computer Use TS package assets', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-desktop-assets-'));
   await writeRequiredStaticAssetFixture(workspace);
 
   const result = await copyDesktopStaticAssets({ rootDir: workspace });
 
-  assert.equal(result.files, 14);
-  assert.equal(result.dirs, 3);
+  assert.equal(result.files, 11);
+  assert.equal(result.dirs, 2);
   assert.equal(
     await readFile(join(workspace, 'dist-desktop/packages/actions/computer-use/action-provider.manifest.json'), 'utf8'),
     '{"id":"sciforge.computer-use"}\n',
@@ -22,13 +22,8 @@ test('copyDesktopStaticAssets materializes runtime JSON manifests and Computer U
     await readFile(join(workspace, 'dist-desktop/packages/observe/web/capabilities/browser_runtime.manifest.json'), 'utf8'),
     '{"id":"browser_runtime"}\n',
   );
-  assert.equal(
-    await readFile(join(workspace, 'dist-desktop/packages/actions/computer-use/sciforge_computer_use/__main__.py'), 'utf8'),
-    'print("ok")\n',
-  );
-
   await assert.rejects(
-    stat(join(workspace, 'dist-desktop/packages/actions/computer-use/sciforge_computer_use/__pycache__/stale.pyc')),
+    stat(join(workspace, 'dist-desktop/packages/actions/computer-use/fixtures/__pycache__/stale.pyc')),
     /ENOENT/u,
   );
 });
@@ -36,14 +31,10 @@ test('copyDesktopStaticAssets materializes runtime JSON manifests and Computer U
 async function writeRequiredStaticAssetFixture(workspace: string): Promise<void> {
   const files: Record<string, string> = {
     'packages/actions/computer-use/action-provider.manifest.json': '{"id":"sciforge.computer-use"}\n',
-    'packages/actions/computer-use/adapter-registry.manifest.json': '{"id":"adapter-registry"}\n',
     'packages/actions/computer-use/native-window-capability.manifest.json': '{"id":"native-window"}\n',
-    'packages/actions/computer-use/virtual-app-screen-host/capability.manifest.json': '{"id":"virtual-app-screen-host"}\n',
-    'packages/actions/computer-use/pyproject.toml': '[project]\nname="sciforge-computer-use"\n',
     'packages/actions/computer-use/README.md': '# Computer Use\n',
-    'packages/actions/computer-use/sciforge_computer_use/__main__.py': 'print("ok")\n',
-    'packages/actions/computer-use/sciforge_computer_use/__pycache__/stale.pyc': 'cache',
     'packages/actions/computer-use/fixtures/sample.json': '{}\n',
+    'packages/actions/computer-use/fixtures/__pycache__/stale.pyc': 'cache',
     'packages/actions/computer-use/skills/sciforge-computer-use/SKILL.md': '# Skill\n',
     'packages/observe/web/capabilities/web_search.manifest.json': '{"id":"web_search"}\n',
     'packages/observe/web/capabilities/web_fetch.manifest.json': '{"id":"web_fetch"}\n',

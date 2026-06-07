@@ -77,7 +77,7 @@ export function directContextRequiredContextForIntentPolicy(intent: DirectContex
 }
 
 export function directContextCapabilityStatusBlockedContextPolicy() {
-  return ['capability-registry', 'tool-registry', 'provider-registry', 'agentserver-worker-registry'];
+  return ['capability-registry', 'tool-registry', 'provider-registry', 'backend-worker-registry'];
 }
 
 export function directContextGateBlockedReasonForIntent(intent: DirectContextPolicyIntent | string) {

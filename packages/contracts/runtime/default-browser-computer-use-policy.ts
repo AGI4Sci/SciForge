@@ -627,6 +627,9 @@ function publicExternalTopicSignal(text: string) {
       '大模型',
       '前沿',
       'AI',
+      '论文',
+      '文章',
+      'arxiv',
     ]);
 }
 
@@ -795,8 +798,8 @@ function sourceContextAroundMatch(query: string, match: RegExpExecArray | undefi
 
 function stripLowInformationTemporalTerms(query: string): string {
   const withoutTemporal = query
-    .replace(/(?:^|\s)(?:今天|今日|现在|当前|近期|最近|本周|这周)(?=\s|[A-Za-z0-9]|$)/giu, ' ')
-    .replace(/\b(?:today|current|recent|latest|this\s+week)\b/giu, ' ')
+    .replace(/(?:^|\s)(?:今天|今日|现在|当前|近期|最近(?:一周|一星期|7天)?|近(?:一周|一星期|7天)|过去(?:一周|一星期|7天)|本周|这周)(?=\s|[A-Za-z0-9]|$)/giu, ' ')
+    .replace(/\b(?:today|current|recent|latest|this\s+week|last\s+(?:week|7\s+days)|past\s+(?:week|7\s+days))\b/giu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   return withoutTemporal.length >= 3 ? withoutTemporal : query;

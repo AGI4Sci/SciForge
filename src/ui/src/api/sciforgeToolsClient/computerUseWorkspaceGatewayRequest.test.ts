@@ -142,14 +142,7 @@ test('buildComputerUseWorkspaceGatewayRequest creates only a legacy diagnostic s
   assert.deepEqual(provenance.sourceRiskAuditRef, '.sciforge/vision-runs/cu-risk/risk-audit.json');
   assert.deepEqual(uiState.humanApproval, humanApproval);
   assert.deepEqual(uiState.approvalProvenance, provenance);
-  assert.deepEqual(uiState.completionEvidencePolicy, {
-    schemaVersion: 'sciforge.completion-evidence-policy.v1',
-    producers: [{
-      id: 'computer-use.embedded-isolated-desktop-l3',
-      enabled: true,
-      trigger: 'on-completed-current-run',
-    }],
-  });
+  assert.equal('completionEvidencePolicy' in uiState, false);
   assert.deepEqual(uiState.computerUseNext, {
     taskId: 'CU-NEXT-01',
     scenarioId: 'CU-LONG-001',

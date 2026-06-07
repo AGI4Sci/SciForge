@@ -662,7 +662,7 @@ test('normalizes generated task payload shape before validation even when schema
     manifestPath: join(workspace, 'skill.json'),
     manifest: {
       id: 'literature-test',
-      entrypoint: { type: 'agentserver-generation', path: 'task.py' },
+      entrypoint: { type: 'backend-generation', path: 'task.py' },
       environment: { language: 'python' },
     },
   } as unknown as SkillAvailability;
@@ -797,7 +797,7 @@ test('successful generated task reports receive an exact rerun command', async (
     manifestPath: join(workspace, 'skill.json'),
     manifest: {
       id: 'literature-test',
-      entrypoint: { type: 'agentserver-generation', path: 'task.py' },
+      entrypoint: { type: 'backend-generation', path: 'task.py' },
       environment: { language: 'python' },
     },
   } as unknown as SkillAvailability;

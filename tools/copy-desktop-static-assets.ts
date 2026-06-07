@@ -9,9 +9,7 @@ export type DesktopStaticAssetCopy = {
 
 const desktopStaticFiles: DesktopStaticAssetCopy[] = [
   { from: 'packages/actions/computer-use/action-provider.manifest.json' },
-  { from: 'packages/actions/computer-use/adapter-registry.manifest.json' },
   { from: 'packages/actions/computer-use/native-window-capability.manifest.json' },
-  { from: 'packages/actions/computer-use/virtual-app-screen-host/capability.manifest.json' },
   { from: 'packages/observe/web/capabilities/web_search.manifest.json' },
   { from: 'packages/observe/web/capabilities/web_fetch.manifest.json' },
   { from: 'packages/observe/web/capabilities/browser_search.manifest.json' },
@@ -23,13 +21,11 @@ const desktopStaticFiles: DesktopStaticAssetCopy[] = [
 ];
 
 const desktopStaticDirs: DesktopStaticAssetCopy[] = [
-  { from: 'packages/actions/computer-use/sciforge_computer_use' },
   { from: 'packages/actions/computer-use/fixtures' },
   { from: 'packages/actions/computer-use/skills' },
 ];
 
 const computerUsePackageFiles: DesktopStaticAssetCopy[] = [
-  { from: 'packages/actions/computer-use/pyproject.toml' },
   { from: 'packages/actions/computer-use/README.md' },
 ];
 

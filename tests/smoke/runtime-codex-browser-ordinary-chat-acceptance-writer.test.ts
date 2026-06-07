@@ -17,7 +17,40 @@ import {
   type BrowserHostSearchOutput,
 } from '../../src/runtime/browser-host-session-types.js';
 import type { BrowserHostSessionManager } from '../../src/runtime/browser-host-session.js';
-import { writeRuntimeCodexBrowserOrdinaryChatAcceptance } from '../../src/runtime/runtime-codex-browser-ordinary-chat-acceptance-writer.js';
+import {
+  closeRuntimeCodexBrowserOrdinaryChatBrowserSessions,
+  runtimeCodexBrowserOrdinaryChatBrowserHostAdapterMode,
+  writeRuntimeCodexBrowserOrdinaryChatAcceptance,
+} from '../../src/runtime/runtime-codex-browser-ordinary-chat-acceptance-writer.js';
+
+test('Runtime Codex browser ordinary-chat acceptance defaults to Playwright BrowserHostSession fallback without native adapter', () => {
+  assert.equal(runtimeCodexBrowserOrdinaryChatBrowserHostAdapterMode({}), 'playwright-fallback');
+  assert.equal(runtimeCodexBrowserOrdinaryChatBrowserHostAdapterMode({
+    SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: 'http://127.0.0.1:43921',
+  }), 'native-adapter');
+});
+
+test('Runtime Codex browser ordinary-chat acceptance closes BrowserHostSession ids from produced refs', async () => {
+  const calls: Array<{ workspacePath: string; sessionId: string; action: string; capture?: string }> = [];
+  const manager = {
+    async act(workspacePath: string, sessionId: string, input: { action: string; capture?: string }) {
+      calls.push({ workspacePath, sessionId, action: input.action, capture: input.capture });
+      return {};
+    },
+  } as unknown as BrowserHostSessionManager;
+
+  await closeRuntimeCodexBrowserOrdinaryChatBrowserSessions(manager, '/workspace', [
+    'browser-host-session:session-a/source-pages/source-1.source.json',
+    'browser-host-session:session-a/source-pages/source-1.txt',
+    'runtime-truth:module.invoke/browser.search_read/codex-command-browser-ordinary-chat',
+    'browser-host-session:session-b/source-pages/source-2.txt',
+  ]);
+
+  assert.deepEqual(calls, [
+    { workspacePath: '/workspace', sessionId: 'session-a', action: 'close', capture: 'none' },
+    { workspacePath: '/workspace', sessionId: 'session-b', action: 'close', capture: 'none' },
+  ]);
+});
 
 test('Runtime Codex browser ordinary-chat acceptance writer uses the real browser bounded-operation handler by default', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-ordinary-chat-default-handler-'));
@@ -26,7 +59,12 @@ test('Runtime Codex browser ordinary-chat acceptance writer uses the real browse
   await mkdir(sessionDir, { recursive: true });
   await mkdir(outputDir, { recursive: true });
   await Promise.all([
-    writeText(join(sessionDir, 'source-default.source.json'), '{"schemaVersion":"sciforge.browser-host-session.source-page.v1","status":"read"}\n'),
+    writeText(join(sessionDir, 'source-default.source.json'), JSON.stringify({
+      schemaVersion: 'sciforge.browser-host-session.source-page.v1',
+      status: 'read',
+      finalUrl: 'https://example.test/openai-product-update',
+      textRef: 'browser-host-session:ordinary-chat-default/source-pages/source-default.txt',
+    }, null, 2)),
     writeText(join(sessionDir, 'source-default.txt'), 'Current source text produced by BrowserHostSession manager.\n'),
   ]);
 
@@ -123,7 +161,12 @@ test('Runtime Codex browser ordinary-chat acceptance writer passes only with cur
   await mkdir(outputDir, { recursive: true });
   await writeText(join(outputDir, 'blocked-runtime-codex-browser-ordinary-chat.md'), 'stale blocked note');
   await Promise.all([
-    writeText(join(sessionDir, 'source-1-current.source.json'), '{"schemaVersion":"sciforge.browser-host-session.source-page.v1","status":"read"}\n'),
+    writeText(join(sessionDir, 'source-1-current.source.json'), JSON.stringify({
+      schemaVersion: 'sciforge.browser-host-session.source-page.v1',
+      status: 'read',
+      finalUrl: 'https://example.test/openai-product-update',
+      textRef: 'browser-host-session:ordinary-chat/source-pages/source-1-current.txt',
+    }, null, 2)),
     writeText(join(sessionDir, 'source-1-current.txt'), 'Official source text read by BrowserHostSession.\n'),
   ]);
 
@@ -231,6 +274,54 @@ test('Runtime Codex browser ordinary-chat acceptance writer blocks when current 
   assert.match(manifest.reason ?? '', /missing BrowserHostSession source evidence file/i);
   const persisted = JSON.parse(await readFile(join(outputDir, 'manifest.json'), 'utf8')) as typeof manifest;
   assert.equal(persisted.status, 'blocked');
+});
+
+test('Runtime Codex browser ordinary-chat acceptance writer validates source metadata pairs before passing', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-ordinary-chat-invalid-source-'));
+  const outputDir = join(workspacePath, 'acceptance');
+  const sessionDir = join(workspacePath, '.sciforge', 'browser-host', 'sessions', 'ordinary-chat', 'source-pages');
+  await mkdir(sessionDir, { recursive: true });
+  await Promise.all([
+    writeText(join(sessionDir, 'source-1-invalid.source.json'), JSON.stringify({
+      schemaVersion: 'sciforge.browser-host-session.source-page.v1',
+      status: 'failed',
+      textRef: 'browser-host-session:ordinary-chat/source-pages/source-1-other.txt',
+    }, null, 2)),
+    writeText(join(sessionDir, 'source-1-current.txt'), 'Official source text read by BrowserHostSession.\n'),
+  ]);
+
+  const manifest = await writeRuntimeCodexBrowserOrdinaryChatAcceptance({
+    workspacePath,
+    outputDir,
+    commandText: 'Search and cite current source pages.',
+    commandId: 'codex-command-browser-ordinary-chat-invalid-source',
+    attemptId: 'codex-command-browser-ordinary-chat-invalid-source-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.open_read',
+      status: 'completed',
+      sourceRefs: ['browser-host-session:ordinary-chat/source-pages/source-1-invalid.source.json'],
+      evidenceRefs: [
+        'action-ledger:browser.executeBoundedOperation/codex-command-browser-ordinary-chat-invalid-source/module.invoke',
+        'runtime-truth:module.invoke/browser.open_read/codex-command-browser-ordinary-chat-invalid-source',
+        'browser-host-session:ordinary-chat',
+        'browser-host-session:ordinary-chat/source-pages/source-1-invalid.source.json',
+        'browser-host-session:ordinary-chat/source-pages/source-1-current.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'Invalid source page',
+          finalUrl: 'https://example.test/invalid',
+          sourcePageRef: 'browser-host-session:ordinary-chat/source-pages/source-1-invalid.source.json',
+          textRef: 'browser-host-session:ordinary-chat/source-pages/source-1-current.txt',
+          textPreview: 'This cannot pass because metadata does not describe a read source.',
+        }],
+      },
+    }),
+  });
+
+  assert.equal(manifest.status, 'blocked');
+  assert.match(manifest.reason ?? '', /invalid BrowserHostSession source metadata/i);
 });
 
 async function writeText(path: string, text: string) {

@@ -7,11 +7,6 @@ import {
   gatewayRequestToComputerUseRequest,
 } from './host-adapter.js';
 import { normalizePackageBridgeApprovalRequest } from './package-bridge-approval.js';
-import {
-  completionEvidenceProducerEnabled,
-  EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID,
-  sanitizeCompletionEvidencePolicy,
-} from './completion-evidence-policy.js';
 
 export const PACKAGE_BRIDGE_RUN_TASK_BOUNDARY = 'computer_use.runTask(request, hostPorts)';
 
@@ -19,7 +14,6 @@ export type PackageBridgeRunTaskInvocation = {
   boundary: typeof PACKAGE_BRIDGE_RUN_TASK_BOUNDARY;
   request: ComputerUseActionProviderRequest;
   hostPorts: ReturnType<typeof computerUseHostPortsContract>;
-  completionProducerOptIn: boolean;
 };
 
 export type PackageBridgeRuntimeSelectionDetailInput = {
@@ -38,7 +32,6 @@ export function materializePackageBridgeRunTaskInvocation(
     boundary: PACKAGE_BRIDGE_RUN_TASK_BOUNDARY,
     request: materializePackageBridgeActionProviderRequest(request, config, workspace),
     hostPorts: computerUseHostPortsContract(config),
-    completionProducerOptIn: packageBridgeCompletionProducerRequestOptIn(request),
   };
 }
 
@@ -51,7 +44,6 @@ export function materializePackageBridgeRuntimeSelectionDetail(
     hostPorts: invocation.hostPorts,
     bridge: 'ts-package-host-port-loop',
     boundary: invocation.boundary,
-    completionProducerOptIn: invocation.completionProducerOptIn,
     runId: detail.runId,
     testActionFixtureMode: detail.testActionFixtureMode,
     testOnlyPlannedActions: detail.testOnlyPlannedActions,
@@ -85,13 +77,6 @@ export function materializePackageBridgeTraceRequest(
     computerUseLong,
     computerUseRequest: actionProviderRequest,
   };
-}
-
-export function packageBridgeCompletionProducerRequestOptIn(request: GatewayRequest): boolean {
-  return completionEvidenceProducerEnabled(
-    sanitizeCompletionEvidencePolicy(recordAt(request.uiState, 'completionEvidencePolicy')),
-    EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID,
-  );
 }
 
 function recordAt(value: unknown, key: string) {

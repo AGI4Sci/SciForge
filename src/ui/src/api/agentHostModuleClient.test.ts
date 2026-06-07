@@ -9,7 +9,7 @@ import {
 import { SciForgeClientError } from './clientError';
 import type { SciForgeConfig } from '../domain';
 
-test('agent host module client prefers the configured Agent Host dispatcher over the workspace shim', async () => {
+test('agent host module client uses the workspace runtime module dispatcher', async () => {
   const requests: Array<{ origin: string; path: string; body: Record<string, unknown> }> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -26,7 +26,7 @@ test('agent host module client prefers the configured Agent Host dispatcher over
 
     assert.equal(result.result.ok, true);
     assert.deepEqual(requests.map((request) => `${request.origin}${request.path}`), [
-      'http://127.0.0.1:5174/api/sciforge/modules/query',
+      'http://127.0.0.1:5175/api/sciforge/modules/query',
     ]);
     assert.equal(requests[0]?.body.workspacePath, '/tmp/sciforge');
   } finally {
@@ -34,7 +34,7 @@ test('agent host module client prefers the configured Agent Host dispatcher over
   }
 });
 
-test('agent host module client falls back to the local workspace runtime shim when the agent endpoint is not a dispatcher', async () => {
+test('agent host module client does not probe agentServerBaseUrl before the workspace runtime shim', async () => {
   const requests: string[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -65,7 +65,6 @@ test('agent host module client falls back to the local workspace runtime shim wh
 
     assert.equal((result.result.value as { content?: string }).content, 'export {};\n');
     assert.deepEqual(requests, [
-      'http://127.0.0.1:5174/api/sciforge/modules/read',
       'http://127.0.0.1:5175/api/sciforge/modules/read',
     ]);
   } finally {
@@ -110,7 +109,7 @@ test('agent host module client sends writes only through module.invoke', async (
   }
 });
 
-test('agent host module dispatcher candidates are unique and ordered', () => {
+test('agent host module dispatcher candidates only include the workspace runtime shim', () => {
   assert.deepEqual(agentHostModuleDispatcherCandidates({
     ...testConfig(),
     agentServerBaseUrl: 'http://127.0.0.1:5174/',

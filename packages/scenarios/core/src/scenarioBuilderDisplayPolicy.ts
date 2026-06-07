@@ -353,7 +353,7 @@ export function scenarioDefaultElementSelectionForRuntimeOverride(
       ? compiledHints.recommendedSkillIds
       : recommendation.selectedSkillIds.length
       ? recommendation.selectedSkillIds
-      : [`agentserver.generate.${scenario.skillDomain}`],
+      : [`generated-task.generate.${scenario.skillDomain}`],
     selectedToolIds: scenario.selectedToolIds?.length
       ? scenario.selectedToolIds
       : recommendation.selectedToolIds.length

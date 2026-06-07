@@ -1,11 +1,13 @@
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import { COMPUTER_USE_ACTION_PROVIDER_ID } from '../computer-use/host-adapter.js';
-import { sanitizeCompletionEvidencePolicy } from '../computer-use/completion-evidence-policy.js';
 import { VISION_TOOL_ID } from '../vision-sense/trace-policy.js';
+import { evaluateCodexAgentHostTurnLoop } from './agent-host-turn-loop.js';
 import type {
   CodexAppServerStartTurnRequest,
   CodexAppServerTurnStream,
 } from './codex-app-server-adapter.js';
+import type { AppiumMac2WindowActionClient } from './appium-mac2-window-action-adapter.js';
+import { createTextEditWindowActionChatBridge } from './textedit-window-action-chat-bridge.js';
 
 export interface ComputerUseNativeRouteInput {
   request: CodexAppServerStartTurnRequest;
@@ -14,6 +16,7 @@ export interface ComputerUseNativeRouteInput {
   model: string;
   profile: string;
   abortSignal?: AbortSignal;
+  textEditAppiumMac2Client?: AppiumMac2WindowActionClient;
 }
 
 const NORMALIZED_SCHEMA_VERSION = 'sciforge.codex.normalized-event.v1' as const;
@@ -103,6 +106,7 @@ async function runComputerUseNativeRoute(
   queue.abort = abort;
   try {
     queue.push(operationEvent(metadata, 'Runtime Codex selected the Computer Use native package bridge.', 'running'));
+    if (await tryRunTextEditWindowActionBridge(input, queue, metadata)) return;
     const { tryRunVisionSenseRuntime } = await import('../vision-sense-runtime.js');
     const payload = await tryRunVisionSenseRuntime(request, {
       signal: input.abortSignal,
@@ -123,6 +127,49 @@ async function runComputerUseNativeRoute(
   }
 }
 
+async function tryRunTextEditWindowActionBridge(
+  input: ComputerUseNativeRouteInput,
+  queue: AsyncEventQueue<Record<string, unknown>>,
+  metadata: RouteMetadata,
+): Promise<boolean> {
+  const commandText = computerUseNativeRouteCommandText(input.request.commandText) ?? input.request.commandText;
+  const bridge = createTextEditWindowActionChatBridge({
+    commandText,
+    workspacePath: input.workspace,
+    env: process.env,
+    appiumMac2Client: input.textEditAppiumMac2Client,
+  });
+  if (!bridge) return false;
+  queue.push(operationEvent(metadata, 'Runtime Codex selected the TextEdit WindowActionSession bridge.', 'running'));
+  const turn = await evaluateCodexAgentHostTurnLoop({
+    input: input.request.agentHostInput ?? ordinaryChatAgentHostInput(commandText),
+    commandText,
+    workspacePath: input.workspace,
+    commandId: input.request.commandId,
+    attemptId: input.request.attemptId,
+    runtimeTruth: bridge.runtimeTruth,
+    computerUseActMaterializer: bridge.computerUseActMaterializer,
+    abortSignal: input.abortSignal,
+  });
+  if (!turn) return false;
+  queue.push(doneEvent(metadata, turn.result as unknown as ToolPayload));
+  return true;
+}
+
+function ordinaryChatAgentHostInput(intentText: string) {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'ordinary-chat',
+    intentText,
+    singleTurnOverride: false,
+    refs: [],
+    readiness: {},
+    target: {},
+    observation: {},
+    permissions: {},
+  };
+}
+
 export function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): GatewayRequest {
   const commandText = computerUseNativeRouteCommandText(input.request.commandText) ?? input.request.commandText;
   const approvalRef = firstSafeApprovalRef([
@@ -131,7 +178,6 @@ export function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): G
     stringField(input.request.uiState, 'approvalRef'),
     stringField(input.request.uiState, 'computerUseApprovalRef'),
   ]);
-  const completionEvidencePolicy = sanitizeCompletionEvidencePolicy(input.request.runtimeIntent?.completionEvidencePolicy);
   const computerUseNext = sanitizeComputerUseNextBinding(input.request.runtimeIntent?.computerUseNext);
   const computerUseLong = sanitizeComputerUseLongBinding(input.request.runtimeIntent?.computerUseLong);
   return {
@@ -158,7 +204,6 @@ export function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): G
       entrypoint: 'runtime-codex-commandText',
       terminalEquivalentText: true,
       computerUseApprovalRef: approvalRef,
-      ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
       ...(computerUseNext ? { computerUseNext } : {}),
       ...(computerUseLong ? { computerUseLong } : {}),
     },
@@ -177,6 +222,10 @@ function sanitizeComputerUseNextBinding(value: unknown): Record<string, unknown>
     scenarioId: stringField(value, 'scenarioId'),
     title: stringField(value, 'title'),
     requirements: stringListField(value.requirements),
+    recommendedTargetMode: stringField(value, 'recommendedTargetMode'),
+    recommendedTargetApp: stringField(value, 'recommendedTargetApp'),
+    recommendedMaxSteps: numberField(value, 'recommendedMaxSteps'),
+    semanticMarkers: stringListField(value.semanticMarkers),
     safetyBoundary: booleanRecord(value.safetyBoundary),
   });
 }
@@ -188,8 +237,17 @@ function sanitizeComputerUseLongBinding(value: unknown): Record<string, unknown>
     scenarioId: stringField(value, 'scenarioId'),
     title: stringField(value, 'title'),
     requirements: stringListField(value.requirements),
+    recommendedTargetMode: stringField(value, 'recommendedTargetMode'),
+    recommendedTargetApp: stringField(value, 'recommendedTargetApp'),
+    recommendedMaxSteps: numberField(value, 'recommendedMaxSteps'),
+    semanticMarkers: stringListField(value.semanticMarkers),
     safetyBoundary: booleanRecord(value.safetyBoundary),
   });
+}
+
+function numberField(value: Record<string, unknown>, key: string): number | undefined {
+  const item = value[key];
+  return typeof item === 'number' && Number.isFinite(item) ? item : undefined;
 }
 
 function stringListField(value: unknown): string[] | undefined {
@@ -250,6 +308,10 @@ function operationEvent(
 }
 
 function doneEvent(metadata: RouteMetadata, payload: ToolPayload): Record<string, unknown> {
+  const payloadRecord = payload as unknown as Record<string, unknown>;
+  const payloadRefs = Array.isArray(payloadRecord.evidenceRefs)
+    ? (payloadRecord.evidenceRefs as unknown[]).filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)
+    : [];
   return compactRecord({
     ...baseEvent(metadata, 'done'),
     ...payload,
@@ -258,7 +320,7 @@ function doneEvent(metadata: RouteMetadata, payload: ToolPayload): Record<string
     text: payload.message,
     commandId: metadata.commandId,
     attemptId: metadata.attemptId,
-    evidenceRefs: metadata.evidenceRefs,
+    evidenceRefs: uniqueRouteStrings([...payloadRefs, ...metadata.evidenceRefs]),
   });
 }
 
@@ -338,6 +400,10 @@ function safeApprovalRef(value: unknown): string | undefined {
 
 function compactRecord<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+
+function uniqueRouteStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function stringField(value: unknown, key: string) {

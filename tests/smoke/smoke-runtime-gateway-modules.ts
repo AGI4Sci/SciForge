@@ -80,13 +80,13 @@ try {
   const repairPrompt = buildGeneratedTaskRepairPrompt({
     request,
     skill: {
-      id: 'literature-agentserver-generation',
+      id: 'literature-backend-generation',
       kind: 'workspace',
       available: true,
       reason: 'smoke',
       checkedAt: '2026-05-09T00:00:00.000Z',
       manifestPath: 'agentserver://literature',
-      manifest: { id: 'literature-agentserver-generation', description: 'smoke', entrypoint: { type: 'agentserver' } },
+      manifest: { id: 'literature-backend-generation', description: 'smoke', entrypoint: { type: 'backend-generation' } },
     } as unknown as SkillAvailability,
     run: {
       workspace,

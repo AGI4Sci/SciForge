@@ -2,15 +2,15 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { toolPayloadShapeContract } from '@sciforge-ui/runtime-contract/tool-payload-shape';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
-export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'backend-generation', 'agentserver-generation', 'markdown-skill'] as const;
+export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'backend-generation', 'markdown-skill'] as const;
 export type SkillEntrypointType = typeof SKILL_ENTRYPOINT_TYPES[number];
 export const SKILL_ENTRYPOINT_TYPE = {
   WORKSPACE_TASK: 'workspace-task',
   INSPECTOR: 'inspector',
   BACKEND_GENERATION: 'backend-generation',
-  LEGACY_AGENTSERVER_GENERATION: 'agentserver-generation',
   MARKDOWN_SKILL: 'markdown-skill',
 } as const satisfies Record<string, SkillEntrypointType>;
+export const LEGACY_AGENTSERVER_GENERATION_ENTRYPOINT_TYPE = 'agentserver-generation' as const;
 export const EVOLVED_SKILLS_RELATIVE_DIR = '.sciforge/evolved-skills';
 
 export interface RuntimePolicySkillManifest {
@@ -78,7 +78,7 @@ export interface BackendGeneratedTaskContractResponse {
   }>;
 }
 
-export const GENERATED_TASK_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
+export const GENERATED_TASK_RETRY_EVENT_TYPE = 'backend-generation-retry' as const;
 export const GENERATED_TASK_MATERIALIZED_EVENT_TYPE = 'workspace-task-materialized' as const;
 export const GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-start' as const;
 export const CAPABILITY_ROUTE_SUMMARY_SCHEMA_VERSION = 'sciforge.capability-provider-routes.v1' as const;
@@ -256,7 +256,7 @@ function isSkillPackageDomain(value: unknown): value is SkillPackageDomain {
 
 function skillEntrypointTypeUsesBackendGeneration(value: unknown) {
   return value === SKILL_ENTRYPOINT_TYPE.BACKEND_GENERATION
-    || value === SKILL_ENTRYPOINT_TYPE.LEGACY_AGENTSERVER_GENERATION;
+    || value === LEGACY_AGENTSERVER_GENERATION_ENTRYPOINT_TYPE;
 }
 
 function normalizePath(value: string) {
@@ -265,7 +265,7 @@ function normalizePath(value: string) {
 
 export function backendExecutionModePromptPolicyLines() {
   return [
-    'Do not ask SciForge to decide scientific, topical, retrieval, or domain intent. The executionModeRecommendation fields are advisory handoff metadata; Agent backend must make the actual domain/tool/stage decision.',
+    'Do not ask SciForge to decide scientific, topical, retrieval, or domain intent. The executionModeRecommendation fields are advisory handoff metadata; Backend must make the actual domain/tool/stage decision.',
     'executionModeRecommendation=direct-context-answer: only use this when the answer can be produced entirely from existing context, current refs/digests, artifacts, or prior execution refs already present in the handoff. Do not use direct-context-answer for fresh search/fetch/current-events, even if the user asks a simple question.',
     'executionModeRecommendation=thin-reproducible-adapter: use this for simple search/fetch/current-events lookups with no explicit report/table/download/batch requirement. Keep it lightweight, but preserve code/input/output/log/evidence refs: return BackendGenerationResponse with a minimal bounded adapter task unless the backend already has durable tool/result refs it can expose in a ToolPayload.',
     'executionModeRecommendation=single-stage-task: use this for one bounded local computation, file transform, narrow analysis, or simple artifact generation that can be run and validated in one workspace task. Return one BackendGenerationResponse, not a multi-stage project plan.',
@@ -328,7 +328,7 @@ export function backendCurrentTurnSnapshotPromptPolicyLines() {
 export function backendDecisionPromptPolicyLines(input: { freshCurrentTurn?: boolean } = {}) {
   return [
     'Handle this SciForge request as the agent backend decision-maker.',
-    'Agent backend owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
+    'Backend owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
     input.freshCurrentTurn
       ? 'FRESH GENERATION MODE: do not call tools before returning. Do not inspect workspace directories, .sciforge, old task attempts, old artifacts, logs, installed packages, or previous generated code. Return final compact JSON immediately; generated task code can perform runtime inspection/retrieval later using inputPath/outputPath.'
       : 'CONTINUITY MODE: inspect only the concrete prior refs needed for the current continuation/repair/rerun request.',

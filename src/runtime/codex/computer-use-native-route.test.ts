@@ -6,7 +6,7 @@ import {
   createComputerUseNativeRouteStream,
 } from './computer-use-native-route.js';
 
-test('Computer Use native route projects sanitized completion evidence policy into gateway uiState', () => {
+test('Computer Use native route ignores retired completion evidence policy and projects task bindings', () => {
   const request = computerUseGatewayRequest({
     request: {
       commandText: '/computer-use write a visible report',
@@ -53,7 +53,7 @@ test('Computer Use native route projects sanitized completion evidence policy in
             secretFlag: 'SECRET_LONG_SHOULD_NOT_LEAK',
           },
         },
-      },
+      } as any,
     },
     workspace: '/tmp/workspace',
     provider: 'sciforge-provider',
@@ -61,14 +61,7 @@ test('Computer Use native route projects sanitized completion evidence policy in
     profile: 'host-owned',
   });
 
-  assert.deepEqual(request.uiState?.completionEvidencePolicy, {
-    schemaVersion: 'sciforge.completion-evidence-policy.v1',
-    producers: [{
-      id: 'computer-use.embedded-isolated-desktop-l3',
-      enabled: true,
-      trigger: 'on-completed-current-run',
-    }],
-  });
+  assert.equal('completionEvidencePolicy' in (request.uiState ?? {}), false);
   assert.deepEqual(request.uiState?.computerUseNext, {
     taskId: 'CU-NEXT-01',
     scenarioId: 'CU-LONG-001',
@@ -135,6 +128,81 @@ test('Computer Use native route accepts ordinary chat text when host-owned runti
   });
   assert.equal(request.prompt, 'Use the visible desktop from ordinary SciForge Desktop chat to complete the Computer Use acceptance task.');
   assert.deepEqual(request.uiState?.computerUseNext, { taskId: 'CU-NEXT-01' });
+});
+
+test('Computer Use native route can select opt-in TextEdit WindowActionSession bridge', async () => {
+  const previous = snapshotEnv([
+    'SCIFORGE_WINDOW_ACTION_APPIUM_MAC2',
+    'SCIFORGE_APPIUM_MAC2_EXECUTOR',
+    'SCIFORGE_APPIUM_MAC2_SERVER_URL',
+    'SCIFORGE_TEXTEDIT_SAVE_ARTIFACT_PATH',
+  ]);
+  const workspace = '/tmp/sciforge-native-route-textedit';
+  const artifactPath = `${workspace}/proof.txt`;
+  process.env.SCIFORGE_WINDOW_ACTION_APPIUM_MAC2 = '1';
+  process.env.SCIFORGE_APPIUM_MAC2_EXECUTOR = '1';
+  process.env.SCIFORGE_APPIUM_MAC2_SERVER_URL = 'http://127.0.0.1:4723';
+  process.env.SCIFORGE_TEXTEDIT_SAVE_ARTIFACT_PATH = artifactPath;
+  const appiumCalls: Array<{ action: string; targetArtifactPath?: string }> = [];
+  try {
+    const stream = createComputerUseNativeRouteStream({
+      request: {
+        commandText: `Use the visible TextEdit document window and save the local document to ${artifactPath}.`,
+        workspacePath: workspace,
+        commandId: 'native-route-textedit-save',
+        attemptId: 'native-route-textedit-save-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ordinary-chat',
+          intentText: `Use the visible TextEdit document window and save the local document to ${artifactPath}.`,
+          singleTurnOverride: false,
+          refs: [],
+          readiness: {},
+          target: {},
+          observation: {},
+          permissions: {},
+        },
+        runtimeIntent: {
+          schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+          kind: 'computer-use-native-route',
+          source: 'host-owned',
+          computerUseNext: {
+            taskId: 'CU-NEXT-08',
+            recommendedTargetMode: 'app-window',
+            recommendedTargetApp: 'TextEdit',
+            semanticMarkers: ['desktop-file-save'],
+          },
+        },
+      },
+      workspace,
+      provider: 'sciforge-provider',
+      model: 'sciforge-model',
+      profile: 'host-owned',
+      textEditAppiumMac2Client: async (request) => {
+        appiumCalls.push({ action: request.action, targetArtifactPath: request.targetArtifactPath });
+        return {
+          executorEventRef: `appium-mac2:textedit/actions/${request.actionId}/executor-event`,
+          inputEventRef: `appium-mac2:textedit/actions/${request.actionId}/save-input`,
+          verifierRef: `appium-mac2:textedit/actions/${request.actionId}/verification/source-read`,
+          artifactValidatorRef: `appium-mac2:textedit/actions/${request.actionId}/artifact-validator/content-match`,
+          freshnessInvalidationRef: `window-action-session:textedit-local-save/actions/${request.actionId}/freshness-invalidation.json`,
+          afterEvidenceRef: `window-action-session:textedit-local-save/evidence/${request.actionId}/after-ax.json`,
+        };
+      },
+    });
+    assert.notEqual(stream, undefined);
+    const events = await collectStreamEvents(stream!);
+    const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+    assert.equal(appiumCalls.length, 1);
+    assert.equal(appiumCalls[0]?.action, 'save');
+    assert.equal(appiumCalls[0]?.targetArtifactPath, artifactPath);
+    assert.match(String(done?.message), /Computer Use Act materializer is completed|product workflow completion is blocked/i);
+    assert.ok((done?.evidenceRefs as string[]).includes('window-action-session:textedit-local-save'));
+    assert.ok((done?.evidenceRefs as string[]).includes('adapter-registry:window-action-session/appium-mac2/computer-use'));
+    assert.doesNotMatch(JSON.stringify(events), /workspace-file-writer|shell-writer|shared-system-input|SECRET|token/i);
+  } finally {
+    restoreEnv(previous);
+  }
 });
 
 test('Computer Use native route keeps only safe task and scenario bindings', () => {
@@ -302,3 +370,20 @@ test('Computer Use native route drops unsafe approval ref candidates', () => {
   assert.equal(request.humanApproval, undefined);
   assert.doesNotMatch(JSON.stringify(request), /SECRET|example\.invalid|data:text|base64/);
 });
+
+async function collectStreamEvents(stream: NonNullable<ReturnType<typeof createComputerUseNativeRouteStream>>) {
+  const events: Record<string, unknown>[] = [];
+  for await (const event of stream.events) events.push(event as Record<string, unknown>);
+  return events;
+}
+
+function snapshotEnv(keys: string[]): Record<string, string | undefined> {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreEnv(snapshot: Record<string, string | undefined>) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}

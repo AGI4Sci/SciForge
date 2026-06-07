@@ -1253,7 +1253,7 @@ test.skip('UI handoff filters agentserver selected skill overrides when current 
 
   await sendSciForgeToolMessage(messageInput({
     selectedSkillIds: [
-      'agentserver.generate.literature',
+      'generated-task.generate.literature',
       'AgentServer.experimental.override',
       'scp.biomedical-web-search',
       'local.pdf-extract',

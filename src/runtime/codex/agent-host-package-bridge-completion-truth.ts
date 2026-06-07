@@ -29,20 +29,6 @@ export function completionTruthFromPackageBridgeWorkEvidence(input: {
   const manifestRef = sameRunRefs.find((ref) => ref.endsWith(`/${ACCEPTANCE_MANIFEST}`));
   const completionEvidenceRef = sameRunRefs.find((ref) => ref.endsWith(`/${COMPLETION_EVIDENCE}`));
 
-  if (evidence.status === 'verified' && currentRunDir && manifestRef && completionEvidenceRef) {
-    return {
-      schemaVersion: COMPLETION_TRUTH_SCHEMA,
-      scope: 'workflow',
-      status: 'satisfied',
-      validator: COMPLETION_TRUTH_VALIDATOR,
-      evidenceRefs: uniqueStrings([
-        ...anchorRefs,
-        manifestRef,
-        completionEvidenceRef,
-      ]),
-    };
-  }
-
   const diagnosticRefs = sameRunRefs.filter((ref) => ref.endsWith(`/${COMPLETION_DIAGNOSTIC}`));
   const reason = blockedReason(evidence, {
     currentRunDir,
@@ -109,7 +95,7 @@ function blockedReason(
   ].filter((item): item is string => Boolean(item));
   const missingText = missing.length
     ? `Package bridge completion evidence is missing same current-run ${missing.join(' and ')}.`
-    : 'Package bridge completion evidence did not verify.';
+    : 'Package bridge isolated L3 completion evidence is diagnostic-only and cannot satisfy Agent Host workflow completion truth.';
   return boundedDiagnosticText(sourceReason ? `${missingText} ${sourceReason}` : missingText);
 }
 

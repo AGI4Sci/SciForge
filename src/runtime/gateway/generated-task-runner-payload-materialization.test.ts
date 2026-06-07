@@ -23,18 +23,18 @@ const request: GatewayRequest = {
 };
 
 const skill = {
-  id: 'knowledge-agentserver-generation',
+  id: 'knowledge-backend-generation',
   kind: 'package',
   available: true,
   reason: 'test',
   checkedAt: '2026-05-16T00:00:00.000Z',
   manifestPath: '/tmp/skill.json',
   manifest: {
-    id: 'knowledge-agentserver-generation',
+    id: 'knowledge-backend-generation',
     kind: 'skill',
     label: 'Knowledge',
     description: 'test',
-    entrypoint: { type: 'agentserver-generation' },
+    entrypoint: { type: 'backend-generation' },
   },
 } as unknown as SkillAvailability;
 

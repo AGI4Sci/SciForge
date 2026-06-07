@@ -758,8 +758,20 @@ function isBodyCarrierKey(key: string) {
     'output',
     'result',
     'finaltext',
+    'generatedtext',
+    'generatedcode',
+    'generatedsource',
+    'generatedresult',
+    'tasktext',
+    'taskcode',
+    'taskcontent',
+    'taskoutput',
+    'taskresult',
+    'filetext',
+    'fileoutput',
+    'fileresult',
   ].includes(lower)) return true;
-  return /(?:generated|task|file|agentserver).*?(?:code|source|content|output|result|text)$/i.test(key);
+  return false;
 }
 
 function promptBodyCarrierSummary(key: string, value: unknown) {

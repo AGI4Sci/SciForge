@@ -40,7 +40,7 @@ export function runtimeGatewaySkill(skillDomain: SciForgeSkillDomain = 'literatu
       skillDomains: [skillDomain],
       inputContract: {},
       outputArtifactSchema: {},
-      entrypoint: { type: 'agentserver-generation' },
+      entrypoint: { type: 'backend-generation' },
       environment: {},
       validationSmoke: {},
       examplePrompts: [],

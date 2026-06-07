@@ -370,7 +370,7 @@ async function writeOrdinaryChatBrowserAcceptanceManifest(): Promise<BrowserAcce
   const ordinary = await writeRuntimeCodexBrowserOrdinaryChatAcceptanceForSmoke({
     workspacePath,
     outputDir,
-    commandText: '请用 SciForge 内置浏览器检索 OpenAI 官方最近发布的一条产品更新，并用来源页回答。',
+    commandText: '请用 SciForge 内置浏览器打开并读取 OpenAI 官方来源页 https://developers.openai.com/api/docs/changelog ，给出 5 条以内中文摘要，列出来源链接，并明确说明哪些页面被实际读取。',
     commandId,
     attemptId: `${commandId}-attempt-1`,
   });
@@ -1743,7 +1743,7 @@ function runtimeLiveRerunEligibilityDiagnostic(
 }
 
 function isPreflightOnlyBlockedReason(reason: string): boolean {
-  return /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file debug fallback|provider proxy upstream base URL|Runtime Codex home config|env_key|wire_api|profile|provider preflight is (?:missing|not ready)|browser acceptance evidence is missing|browser acceptance evidence is incomplete or stale/i.test(reason);
+  return /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file debug fallback|provider proxy upstream base URL|Runtime Codex home config|env_key|wire_api|profile|provider preflight is (?:missing|not ready)|ordinary-chat Browser acceptance did not pass|browser acceptance (?:is incomplete|evidence is missing|evidence is incomplete or stale)/i.test(reason);
 }
 
 function blockedDiagnosticsForReason(reason: string): Pick<

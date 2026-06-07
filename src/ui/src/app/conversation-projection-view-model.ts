@@ -320,10 +320,10 @@ function normalizeConversationProjection(value: unknown, fallbackTimestamp?: str
 function normalizeRuntimeMetadata(value: unknown): UiConversationProjection['runtimeMetadata'] {
   if (!isRecord(value)) return undefined;
   const metadata = {
-    provider: asString(value.provider),
-    model: asString(value.model),
-    profile: asString(value.profile),
-    workspace: asString(value.workspace),
+    provider: publicRuntimeMetadataValue(value.provider, 'provider'),
+    model: publicRuntimeMetadataValue(value.model, 'model'),
+    profile: publicRuntimeMetadataValue(value.profile, 'profile'),
+    workspace: publicRuntimeMetadataValue(value.workspace, 'workspace'),
     commandId: asString(value.commandId),
     attemptId: asString(value.attemptId),
     codexSessionId: asString(value.codexSessionId),
@@ -333,6 +333,23 @@ function normalizeRuntimeMetadata(value: unknown): UiConversationProjection['run
   return Object.entries(metadata).some(([, entry]) => Array.isArray(entry) ? entry.length > 0 : entry !== undefined)
     ? metadata
     : undefined;
+}
+
+type PublicRuntimeMetadataField = 'provider' | 'model' | 'profile' | 'workspace';
+
+const unsafeRuntimeMetadataPattern = /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}\b|https?:\/\/|^(?:data|blob|file|javascript):/i;
+const localWorkspacePathPattern = /^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/;
+
+function publicRuntimeMetadataValue(value: unknown, field: PublicRuntimeMetadataField): string | undefined {
+  const text = asString(value)?.trim();
+  if (!text) return undefined;
+  if (unsafeRuntimeMetadataPattern.test(text)) return `[redacted-${field}]`;
+  if (field === 'workspace') {
+    if (localWorkspacePathPattern.test(text) || /[\\/]/.test(text)) return '[redacted-workspace]';
+  }
+  if (field !== 'model' && /[?#]/.test(text)) return `[redacted-${field}]`;
+  if (text.length > 160) return `[redacted-${field}]`;
+  return text;
 }
 
 function completionCandidateProjectionFromRun(run: SciForgeRun | undefined, fallbackTimestamp?: string): UiConversationProjection | undefined {

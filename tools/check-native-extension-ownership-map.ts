@@ -36,7 +36,6 @@ const requiredEntries = [
   'provider-route',
   'verifier',
   'skill-promotion',
-  'virtual-app-screen-native-host',
   'computer-use',
   'dual-instance-self-repair',
 ];
@@ -96,16 +95,6 @@ async function main() {
   assert.match(JSON.stringify(computerUse), /packages\/observe\/vision/);
   assert.match(JSON.stringify(computerUse), /packages\/actions\/computer-use/);
   assert.match(JSON.stringify(computerUse), /React\/UI Computer Use executor/);
-
-  const virtualAppScreenNativeHost = entriesById.get('virtual-app-screen-native-host');
-  assert.match(String(virtualAppScreenNativeHost?.owner), /native-host-control-plane/);
-  assert.match(JSON.stringify(virtualAppScreenNativeHost?.targetImplementationPaths), /packages\/actions\/computer-use\/virtual-app-screen-host/);
-  assert.match(JSON.stringify(virtualAppScreenNativeHost?.targetNativeSurfaces), /host session\/surface\/input\/grant\/evidence refs/);
-  assert.match(JSON.stringify(virtualAppScreenNativeHost?.forbiddenOwners), /GUI-owned live surface replacement/);
-  assert.match(JSON.stringify(virtualAppScreenNativeHost?.forbiddenOwners), /snapshot\/replay second interactive truth/);
-  assert.match(JSON.stringify(virtualAppScreenNativeHost?.forbiddenOwners), /third-party virtual screen UI as product truth/);
-  assert.match(String(virtualAppScreenNativeHost?.migrationNote), /host grants/);
-  assert.match(String(virtualAppScreenNativeHost?.migrationNote), /host-owned evidence writing/);
 
   if (computerUse?.status === 'migrating') {
     const remaining = assertMigrationSubtasks(computerUse.remainingMigrationSubtasks, 'computer-use.remainingMigrationSubtasks');

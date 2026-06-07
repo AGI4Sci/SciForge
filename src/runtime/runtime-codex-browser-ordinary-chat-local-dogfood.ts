@@ -2,12 +2,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { readRequiredLocalProviderSettings, type LocalProviderSettings } from '../../packages/backend/src/local-provider-config.js';
+import type { BrowserHostSessionManager } from './browser-host-session.js';
 import {
-  BrowserHostSessionManager,
-  createPlaywrightBrowserHostDriverFactory,
-  defaultBrowserHostSessionManager,
-} from './browser-host-session.js';
-import {
+  createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager,
   writeRuntimeCodexBrowserOrdinaryChatAcceptance,
   type RuntimeCodexBrowserOrdinaryChatAcceptanceManifest,
   type RuntimeCodexBrowserOrdinaryChatAcceptanceOptions,
@@ -214,8 +211,7 @@ function safeReason(value: string | undefined): string {
 }
 
 function createLocalOrdinaryChatDogfoodBrowserHostSessionManager(): BrowserHostSessionManager {
-  if (process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL?.trim()) return defaultBrowserHostSessionManager();
-  return new BrowserHostSessionManager({ driverFactory: createPlaywrightBrowserHostDriverFactory() });
+  return createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager();
 }
 
 async function closeLocalDogfoodBrowserSessions(

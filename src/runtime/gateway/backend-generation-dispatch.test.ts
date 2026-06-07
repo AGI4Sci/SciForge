@@ -25,7 +25,7 @@ function testSkill(): SkillAvailability {
       skillDomains: ['literature'],
       inputContract: {},
       outputArtifactSchema: {},
-      entrypoint: { type: 'agentserver-generation' },
+      entrypoint: { type: 'backend-generation' },
       environment: {},
       validationSmoke: {},
       examplePrompts: [],

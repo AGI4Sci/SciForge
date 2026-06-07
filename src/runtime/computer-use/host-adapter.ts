@@ -4,12 +4,6 @@ import { join, relative, resolve } from 'node:path';
 import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import type { ComputerUseConfig, WindowTarget } from './types.js';
-import {
-  COMPLETION_EVIDENCE_POLICY_SCHEMA,
-  COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN,
-  EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID,
-  sanitizeCompletionEvidencePolicy,
-} from './completion-evidence-policy.js';
 import { windowTargetTraceConfig } from './window-target.js';
 import { independentInputAdapterExecutionBoundary } from './independent-input-adapter.js';
 import {
@@ -136,7 +130,6 @@ export function gatewayRequestToComputerUseRequest(
     computerUsePlannerAcceptanceContract(request),
     computerUseContinuationContract(request, workspace),
   );
-  const completionEvidencePolicy = computerUseCompletionEvidencePolicy(request);
   return {
     schemaVersion: COMPUTER_USE_REQUEST_SCHEMA,
     task: computerUseTaskForPlanner(request.prompt, approvalRef, approvalProvenance, approveCommandText),
@@ -167,30 +160,9 @@ export function gatewayRequestToComputerUseRequest(
         inputAdapter: config.inputAdapter,
         independentInputAdapterProvider: config.independentInputAdapterProvider,
       },
-      ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
       ...(plannerAcceptanceContract ? { plannerAcceptanceContract } : {}),
       ...(approvalProvenance ? { approvalProvenance } : {}),
     },
-  };
-}
-
-function computerUseCompletionEvidencePolicy(request: GatewayRequest) {
-  const policy = sanitizeCompletionEvidencePolicy(recordAt(request.uiState, 'completionEvidencePolicy'));
-  const producers = policy?.producers
-    .filter((producer) => (
-      producer.id === EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID
-      && producer.enabled === true
-      && producer.trigger === COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN
-    ))
-    .map(() => ({
-      id: EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID,
-      enabled: true,
-      trigger: COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN,
-    })) ?? [];
-  if (!producers.length) return undefined;
-  return {
-    schemaVersion: COMPLETION_EVIDENCE_POLICY_SCHEMA,
-    producers,
   };
 }
 
@@ -338,6 +310,13 @@ function computerUsePlannerAcceptanceContract(request: GatewayRequest): Record<s
     runId: stringAt(computerUseLong, 'runId'),
     round: numberAt(computerUseLong, 'round'),
     title: stringAt(computerUseLong, 'title') ?? stringAt(computerUseNext, 'title'),
+    recommendedTargetMode: stringAt(computerUseLong, 'recommendedTargetMode') ?? stringAt(computerUseNext, 'recommendedTargetMode'),
+    recommendedTargetApp: stringAt(computerUseLong, 'recommendedTargetApp') ?? stringAt(computerUseNext, 'recommendedTargetApp'),
+    recommendedMaxSteps: numberAt(computerUseLong, 'recommendedMaxSteps') ?? numberAt(computerUseNext, 'recommendedMaxSteps'),
+    semanticMarkers: uniqueStrings([
+      ...stringListAt(computerUseLong, 'semanticMarkers'),
+      ...stringListAt(computerUseNext, 'semanticMarkers'),
+    ]),
     roundPrompt: stringAt(computerUseLong, 'roundPrompt'),
     expectedTrace: stringListAt(computerUseLong, 'expectedTrace'),
     acceptance: stringListAt(computerUseLong, 'acceptance'),

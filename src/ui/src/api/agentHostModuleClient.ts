@@ -65,7 +65,6 @@ export async function callAgentHostModule<T>(
 
 export function agentHostModuleDispatcherCandidates(config: SciForgeConfig) {
   return uniqueUrls([
-    config.agentServerBaseUrl,
     // Compatibility transport: current web shell exposes the Agent Host module dispatcher through
     // the local workspace runtime while Codex app-server itself is stdio-owned.
     config.workspaceWriterBaseUrl,

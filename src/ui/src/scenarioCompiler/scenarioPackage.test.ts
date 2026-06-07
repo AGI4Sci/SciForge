@@ -38,11 +38,11 @@ describe('scenario compiler package model', () => {
   });
 
   it('compiles skill plans with route options for SKILL.md and generated skill paths', () => {
-    const plan = compileSkillPlan(['agentserver.generate.literature', 'scp.biomarker_discovery']);
+    const plan = compileSkillPlan(['generated-task.generate.literature', 'scp.biomarker_discovery']);
 
-    assert.ok(plan.skillIRs.some((skill) => skill.skillId === 'agentserver.generate.literature'));
+    assert.ok(plan.skillIRs.some((skill) => skill.skillId === 'generated-task.generate.literature'));
     assert.ok(plan.skillIRs.some((skill) => skill.skillId === 'scp.biomarker_discovery'));
-    assert.ok(plan.routeOptions.some((route) => route.skillId === 'agentserver.generate.literature' && route.runtimeProfileId === 'agentserver-codex'));
+    assert.ok(plan.routeOptions.some((route) => route.skillId === 'generated-task.generate.literature' && route.runtimeProfileId === 'backend-codex'));
     assert.ok(plan.routeOptions.some((route) => route.skillId === 'scp.biomarker_discovery' && route.runtimeProfileId === 'scp-hub'));
   });
 
@@ -119,7 +119,7 @@ describe('scenario compiler package model', () => {
       ...recommendation,
     });
 
-    assert.ok(recommendation.selectedSkillIds.includes('agentserver.generate.literature'));
+    assert.ok(recommendation.selectedSkillIds.includes('generated-task.generate.literature'));
     assert.ok(recommendation.selectedArtifactTypes.includes('paper-list'));
     assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
     assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
@@ -138,7 +138,7 @@ describe('scenario compiler package model', () => {
       ...recommendation,
     });
 
-    assert.ok(recommendation.selectedSkillIds.includes('agentserver.generate.structure'));
+    assert.ok(recommendation.selectedSkillIds.includes('generated-task.generate.structure'));
     assert.ok(recommendation.selectedArtifactTypes.includes('structure-summary'));
     assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
     assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
@@ -152,7 +152,7 @@ describe('scenario compiler package model', () => {
 
     assert.equal(draft.skillDomain, 'omics');
     assert.equal(draft.baseScenarioId, 'omics-differential-exploration');
-    assert.deepEqual(recommendation.selectedSkillIds, ['agentserver.generate.omics']);
+    assert.deepEqual(recommendation.selectedSkillIds, ['generated-task.generate.omics']);
     assert.ok(recommendation.selectedArtifactTypes.includes('omics-differential-expression'));
     assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
     assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
@@ -166,7 +166,7 @@ describe('scenario compiler package model', () => {
 
     assert.equal(draft.skillDomain, 'knowledge');
     assert.equal(draft.baseScenarioId, 'biomedical-knowledge-graph');
-    assert.deepEqual(recommendation.selectedSkillIds, ['agentserver.generate.knowledge']);
+    assert.deepEqual(recommendation.selectedSkillIds, ['generated-task.generate.knowledge']);
     assert.ok(recommendation.selectedArtifactTypes.includes('knowledge-graph'));
     assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
     assert.equal(recommendation.selectedArtifactTypes.includes('omics-differential-expression'), false);

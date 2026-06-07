@@ -120,8 +120,8 @@ test('ready preflight producer branch enriches ordinary-chat writer output witho
     assert.doesNotMatch(String(manifest.evidence?.runtimeAuditPath), /^\//);
     assert.ok(
       Array.isArray(manifest.liveRuntimeCodexProof?.eventEvidenceRefs)
-        && manifest.liveRuntimeCodexProof.eventEvidenceRefs.some((ref) => String(ref).includes('browser.search_read')),
-      'producer branch must preserve ordinary-chat Browser source refs',
+        && manifest.liveRuntimeCodexProof.eventEvidenceRefs.some((ref) => String(ref).includes('browser.open_read')),
+      'producer branch must preserve ordinary-chat Browser open_read source refs',
     );
     assert.doesNotMatch(manifestText, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i);
     assert.doesNotMatch(manifestText, /\/(?:Applications|Users|private|var|tmp)\/[^\s"']+/i);

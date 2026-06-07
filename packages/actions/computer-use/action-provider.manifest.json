@@ -5,9 +5,24 @@
   "kind": "action",
   "displayName": "SciForge Computer Use",
   "summary": "面向 GUI 的 refs-first Computer Use action loop；真实桌面完成必须由 host-provided target-bound ports 和 evidence 证明。",
-  "domains": ["gui", "automation", "workspace"],
-  "triggers": ["operate GUI", "click", "type", "scroll", "press key", "window-bound action"],
-  "antiTriggers": ["vision-only question", "artifact rendering", "schema-only validation"],
+  "domains": [
+    "gui",
+    "automation",
+    "workspace"
+  ],
+  "triggers": [
+    "operate GUI",
+    "click",
+    "type",
+    "scroll",
+    "press key",
+    "window-bound action"
+  ],
+  "antiTriggers": [
+    "vision-only question",
+    "artifact rendering",
+    "schema-only validation"
+  ],
   "integrationLevel": "package-local-host-ports",
   "entrypoint": {
     "type": "typescript-package",
@@ -19,91 +34,237 @@
     "productRoute": "Agent Host -> WindowActionSession -> TypeScript host-port contract -> current evidence bundle",
     "notes": "Computer Use product/default acceptance is TS-only and consumes refs-first host ports plus WindowAction evidence projection."
   },
-  "legacyPythonImplementation": {
-    "legacyObsolete": true,
-    "diagnosticOnly": true,
-    "productDefaultAcceptanceAllowed": false,
-    "filesPath": "packages/actions/computer-use/sciforge_computer_use",
-    "scriptLabelRequirement": "Every package.json script that invokes this implementation must include opt-in, diagnostic, legacy, or historical in the script name or command.",
-    "claimLimit": "Python files are legacy-obsolete and cannot be referenced by product/default acceptance. These commands may be used only for isolated historical diagnostics, package-local regression archaeology, or manual compatibility probes.",
-    "diagnosticCommands": {
-      "stdioLoop": "python -m sciforge_computer_use --request-json '<json>' --host-port-stdio",
-      "discoveryProbe": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
-      "virtualDesktopProbe": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir>",
-      "targetBoundWindowHostProbe": "python -m sciforge_computer_use.target_bound_window_host_probe --scenario-file <file> --output-dir <dir>",
-      "nativeToolProbe": "python -m sciforge_computer_use.native_tool --tool get_app_state --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
-      "platformSidecarProbe": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
-      "virtualDisplayProviderProbe": "python -m sciforge_computer_use.virtual_display_provider --target-app-kind vscode --output-dir <dir>"
-    }
-  },
-  "virtualAppScreenRuntimeProductFallbackAllowed": false,
   "actionSchema": {
     "schemaRef": "sciforge.computer-use.request.v1",
     "inputShape": {
       "type": "object",
-      "required": ["task"],
+      "required": [
+        "task"
+      ],
       "properties": {
-        "schema_version": { "const": "sciforge.computer-use.request.v1" },
-        "task": { "type": "string" },
-        "max_steps": { "type": "integer", "minimum": 1, "default": 12 },
-        "risk_policy": { "enum": ["fail-closed", "allow-confirmed"] },
-        "approval_ref": { "type": "string" },
+        "schema_version": {
+          "const": "sciforge.computer-use.request.v1"
+        },
+        "task": {
+          "type": "string"
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 12
+        },
+        "risk_policy": {
+          "enum": [
+            "fail-closed",
+            "allow-confirmed"
+          ]
+        },
+        "approval_ref": {
+          "type": "string"
+        },
         "providers": {
           "type": "object",
           "properties": {
-            "sense": { "type": "string" },
-            "grounder": { "type": "string" },
-            "executor": { "type": "string" },
-            "verifier": { "type": "string" }
+            "sense": {
+              "type": "string"
+            },
+            "grounder": {
+              "type": "string"
+            },
+            "executor": {
+              "type": "string"
+            },
+            "verifier": {
+              "type": "string"
+            }
           },
           "additionalProperties": true
         },
-        "window_target": { "type": "object" },
-        "metadata": { "type": "object" }
-      }
-      },
-      "outputShape": {
-        "type": "object",
-        "required": ["schemaVersion", "status", "reason", "steps", "traceRefs", "screenshotRefs", "artifactRefs"],
-        "properties": {
-          "schemaVersion": { "const": "sciforge.computer-use.result.v1" },
-          "status": { "enum": ["completed", "failed-with-reason", "needs-confirmation", "max-steps"] },
-          "reason": { "type": "string" },
-          "message": { "type": "string" },
-          "steps": { "type": "array" },
-          "finalObservationRef": { "type": ["string", "null"] },
-          "final_observation": { "type": ["object", "null"] },
-          "traceRefs": { "type": "array", "items": { "type": "string" } },
-          "screenshotRefs": { "type": "array", "items": { "type": "string" } },
-          "artifactRefs": { "type": "array", "items": { "type": "string" } },
-          "finalArtifactRef": { "type": ["string", "null"] },
-          "finalArtifactRefs": { "type": "array", "items": { "type": "string" } },
-          "approvalRequest": { "type": ["object", "null"] },
-          "approval_request": { "type": ["object", "null"] },
-          "failureDiagnostics": { "type": "object" },
-          "failure_diagnostics": { "type": "object" },
-          "targetPointerStateRef": { "type": ["string", "null"] },
-          "targetKeyboardStateRef": { "type": ["string", "null"] },
-          "targetInputEventLogRef": { "type": ["string", "null"] },
-          "pointerEventLogRef": { "type": ["string", "null"] },
-          "keyboardEventLogRef": { "type": ["string", "null"] },
-          "inputEventLogRef": { "type": ["string", "null"] },
-          "evidenceLogRef": { "type": ["string", "null"] },
-          "evidenceSnapshotRef": { "type": ["string", "null"] },
-          "evidenceIndexRef": { "type": ["string", "null"] },
-          "plannerBriefRef": { "type": ["string", "null"] },
-          "artifactMetadata": { "type": "object" },
-          "metrics": { "type": "object" },
-          "budgetDebits": { "type": "array" },
-          "budgetDebitRefs": { "type": "array", "items": { "type": "string" } }
+        "window_target": {
+          "type": "object"
+        },
+        "metadata": {
+          "type": "object"
         }
-      },
+      }
+    },
+    "outputShape": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "status",
+        "reason",
+        "steps",
+        "traceRefs",
+        "screenshotRefs",
+        "artifactRefs"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "sciforge.computer-use.result.v1"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed-with-reason",
+            "needs-confirmation",
+            "max-steps"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array"
+        },
+        "finalObservationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "final_observation": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "traceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "screenshotRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifactRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "finalArtifactRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finalArtifactRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "approvalRequest": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "approval_request": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "failureDiagnostics": {
+          "type": "object"
+        },
+        "failure_diagnostics": {
+          "type": "object"
+        },
+        "targetPointerStateRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targetKeyboardStateRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targetInputEventLogRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pointerEventLogRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keyboardEventLogRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputEventLogRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceLogRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceSnapshotRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceIndexRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plannerBriefRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifactMetadata": {
+          "type": "object"
+        },
+        "metrics": {
+          "type": "object"
+        },
+        "budgetDebits": {
+          "type": "array"
+        },
+        "budgetDebitRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "examples": [
       {
         "task": "点击目标窗口中可见的搜索框",
         "max_steps": 3,
         "risk_policy": "fail-closed",
-        "window_target": { "titleContains": "SciForge" }
+        "window_target": {
+          "titleContains": "SciForge"
+        }
       }
     ]
   },
@@ -111,13 +272,20 @@
     {
       "type": "window",
       "coordinatePolicy": "window-bound",
-      "sideEffects": ["pointer", "keyboard", "focused-window-state"],
+      "sideEffects": [
+        "pointer",
+        "keyboard",
+        "focused-window-state"
+      ],
       "isolation": "观察、坐标映射和执行都必须绑定目标窗口或窗口内容坐标。"
     },
     {
       "type": "remote-desktop",
       "coordinatePolicy": "provider-defined",
-      "sideEffects": ["remote-pointer", "remote-keyboard"],
+      "sideEffects": [
+        "remote-pointer",
+        "remote-keyboard"
+      ],
       "isolation": "远程会话必须隔离输入通道和 trace。"
     }
   ],
@@ -126,29 +294,79 @@
     "defaultPolicy": "fail-closed",
     "highRiskPolicy": "fail-closed",
     "supportsDryRun": true,
-    "blockedActions": ["payment", "credential-change", "destructive-delete", "external-send-without-approval"],
+    "blockedActions": [
+      "payment",
+      "credential-change",
+      "destructive-delete",
+      "external-send-without-approval"
+    ],
     "requiresExplicitTarget": true,
     "notes": "旧实现中 high risk action 在 fail-closed 策略下返回 needs-confirmation，不执行。"
   },
   "confirmationRules": {
-    "requiredWhen": ["riskLevel=high", "external side effect", "destructive action", "approvalPolicy missing"],
-    "approvalEvidence": ["ComputerUseRequest.risk_policy=allow-confirmed", "ComputerUseRequest.approval_ref"],
+    "requiredWhen": [
+      "riskLevel=high",
+      "external side effect",
+      "destructive action",
+      "approvalPolicy missing"
+    ],
+    "approvalEvidence": [
+      "ComputerUseRequest.risk_policy=allow-confirmed",
+      "ComputerUseRequest.approval_ref"
+    ],
     "timeoutPolicy": "fail"
   },
   "hostPortsContract": {
     "schemaRef": "sciforge.computer-use.host-ports.v1",
     "policySource": "packages/actions/computer-use/provider-policy.ts",
-    "requiredPorts": ["capture", "plan", "locate", "execute", "verify"],
-    "optionalPorts": ["crop", "query", "writeTrace", "emitEvent"],
-    "realDesktopEvidenceRequiredPorts": ["capture", "plan", "locate", "execute", "verify", "writeTrace", "emitEvent"],
-    "forbiddenPorts": ["requestApproval", "gui.present", "gui.ask_user"],
+    "requiredPorts": [
+      "capture",
+      "plan",
+      "locate",
+      "execute",
+      "verify"
+    ],
+    "optionalPorts": [
+      "crop",
+      "query",
+      "writeTrace",
+      "emitEvent"
+    ],
+    "realDesktopEvidenceRequiredPorts": [
+      "capture",
+      "plan",
+      "locate",
+      "execute",
+      "verify",
+      "writeTrace",
+      "emitEvent"
+    ],
+    "forbiddenPorts": [
+      "requestApproval",
+      "gui.present",
+      "gui.ask_user"
+    ],
     "providerIdPolicy": {
-      "capture": ["display-capture", "target-window-capture", "virtual-display-frame-capture"],
+      "capture": [
+        "display-capture",
+        "target-window-capture",
+        "historical-frame-evidence-reader"
+      ],
       "crop": "host-focus-region-crop",
       "plan": "model-router.capability.computer-use.planner",
       "locate": "model-router.capability.computer-use.grounding-translator",
-      "actionRequestExecutor": ["dry-run-generic-gui-executor", "package-target-bound-window-executor", "<desktopPlatform>-host-port-executor"],
-      "execute": ["dry-run-generic-gui-executor", "virtual-input-state-executor", "virtual-display-scoped-input-provider", "package-target-bound-window-executor", "<desktopPlatform>-generic-gui-executor"],
+      "actionRequestExecutor": [
+        "dry-run-generic-gui-executor",
+        "package-target-bound-window-executor",
+        "<desktopPlatform>-host-port-executor"
+      ],
+      "execute": [
+        "dry-run-generic-gui-executor",
+        "virtual-input-state-executor",
+        "target-bound-scoped-input-provider",
+        "package-target-bound-window-executor",
+        "<desktopPlatform>-generic-gui-executor"
+      ],
       "verify": "model-router.capability.computer-use.verifier-translator",
       "writeTrace": "workspace-file-ref-trace-writer",
       "emitEvent": "workspace-runtime-events"
@@ -162,21 +380,46 @@
         "systemPointerMove": false,
         "systemKeyboardEvent": false
       },
-      "stateRefs": ["virtualInputStateRef", "virtualPointerStateRef", "virtualKeyboardStateRef", "targetPointerStateRef", "targetKeyboardStateRef", "targetInputEventLogRef"],
+      "stateRefs": [
+        "virtualInputStateRef",
+        "virtualPointerStateRef",
+        "virtualKeyboardStateRef",
+        "targetPointerStateRef",
+        "targetKeyboardStateRef",
+        "targetInputEventLogRef"
+      ],
       "bindingManifestSchema": "sciforge.computer-use.input-adapter-target-binding.v1",
-      "targetBoundManifestBuilder": "sciforge_computer_use.virtual_input_adapter.build_target_bound_input_adapter_manifest",
-      "adapterManifestValidator": "sciforge_computer_use.virtual_input_adapter.validate_input_adapter_manifest_for_real_desktop",
       "adapterManifestValidationSchema": "sciforge.computer-use.input-adapter-manifest-validation.v1",
-      "bindingHelper": "sciforge_computer_use.virtual_input_adapter.build_input_adapter_target_binding_manifest",
-      "bindingValidator": "sciforge_computer_use.virtual_input_adapter.validate_input_adapter_target_binding_manifest",
       "bindingValidationSchema": "sciforge.computer-use.input-adapter-target-binding-validation.v1",
-      "bindingRequiredRefs": ["adapterManifestRef", "targetWindowRef", "evidenceRefs"],
+      "bindingRequiredRefs": [
+        "adapterManifestRef",
+        "targetWindowRef",
+        "evidenceRefs"
+      ],
       "bindingClaimLimit": "Target binding validation is required for real desktop preflight readiness, but is not B/C/verifier completion evidence.",
       "targetBindingRequiredForRealDesktopEvidence": true,
-      "readyInputChannels": ["isolated-window", "target-bound-simulated-input", "independent-simulated-input-adapter", "remote-desktop-isolated-session"],
-      "diagnosticExecutorProvidersBlockedForReady": ["native-stdio-fail-closed-executor", "fail-closed-executor", "diagnostic-fail-closed-executor", "virtual-input-state-executor"],
-      "shortcutExecutorProvidersBlockedForReady": ["shell-direct-file-write", "accessibility-tree", "ax", "applescript", "dom", "playwright", "private-api", "clipboard"],
-      "virtualOrDiagnosticInputChannelsBlockedForReady": ["virtual-session", "simulated", "state-only", "diagnostic-only"],
+      "readyInputChannels": [
+        "isolated-window",
+        "target-bound-simulated-input",
+        "independent-simulated-input-adapter",
+        "remote-desktop-isolated-session"
+      ],
+      "diagnosticExecutorProvidersBlockedForReady": [
+        "native-stdio-fail-closed-executor",
+        "fail-closed-executor",
+        "diagnostic-fail-closed-executor",
+        "virtual-input-state-executor"
+      ],
+      "shortcutExecutorProvidersBlockedForReady": [
+        "shell-direct-file-write",
+        "accessibility-tree",
+        "ax",
+        "applescript",
+        "dom",
+        "playwright",
+        "private-api",
+        "clipboard"
+      ],
       "diagnosticOnlyUntilHostBound": true
     },
     "stdioProtocol": {
@@ -184,39 +427,44 @@
       "resultSchema": "sciforge.computer-use.host-port-result.v1",
       "finalResultSchema": "sciforge.computer-use.cli-final-result.v1"
     },
-    "diagnosticProbes": {
-      "pluginDiscovery": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
-      "virtualDisplayProvider": "python -m sciforge_computer_use.virtual_display_provider --target-app-kind vscode --output-dir <dir>",
-      "scriptedHostPorts": "python -m sciforge_computer_use.host_ports_probe --probe-file <file> --output-dir <dir>",
-      "nativePreflight": "python -m sciforge_computer_use.desktop_preflight --output-dir <dir>",
-      "nativeCaptureOnly": "python -m sciforge_computer_use.native_capture_probe --output-dir <dir>",
-      "nativeFailClosedStdio": "python -m sciforge_computer_use.native_host_ports_probe --request-json '<json>' --output-dir <dir>",
-      "isolatedDesktopBackend": "python -m sciforge_computer_use.isolated_desktop_backend_probe --output-dir <dir>",
-      "isolatedDesktopBackendBundle": "python -m sciforge_computer_use.isolated_desktop_backend_bundle --output-dir <dir>",
-      "isolatedDesktopL1SmokeReadiness": "python -m sciforge_computer_use.isolated_desktop_l1_smoke_probe --output-dir <dir>",
-      "isolatedDesktopL1SmokeExecute": "python -m sciforge_computer_use.isolated_desktop_l1_smoke_probe --output-dir <dir> --execute",
-      "isolatedDesktopL3WorkflowReadiness": "python -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir <dir>",
-      "isolatedDesktopL3WorkflowExecute": "python -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir <dir> --execute [--display <display>] [--vnc-port <port>] [--novnc-port <port>] [--timeout-seconds <seconds>] [--resource-lock-root <dir>]",
-      "virtualDesktopStateOnly": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir> [--source-repair-manifest <blocked-repair-manifest.json>]",
-      "targetBoundWindowHost": "python -m sciforge_computer_use.target_bound_window_host_probe --request-json '<json>' --scenario-file <file> --output-dir <dir> [--source-repair-manifest <blocked-repair-manifest.json>]",
-      "nativeToolDebug": "python -m sciforge_computer_use.native_tool --tool get_replay_refs --payload-json '{\"displayGroupId\":\"debug-display-group\"}' --output-dir <dir>",
-      "platformSidecarDiagnostic": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
-      "nativeMultiScreenLiveDemo": "python -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> [--run-id <run-id>] [--platform <platform>] [--sidecar-command <command>] [--sidecar-timeout-seconds <seconds>]",
-      "macosNativeVirtualScreenSidecar": "python -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> --platform macos --sidecar-command 'python -m sciforge_computer_use.macos_native_sidecar'",
-      "semanticVerifier": "python -m sciforge_computer_use.semantic_verifier_probe --output-dir <dir> [--diagnose-provider]"
-    },
     "nativeMultiScreenSidecarProtocol": {
       "callSchema": "sciforge.computer-use.native-sidecar-dispatch-call.v1",
       "resultSchema": "sciforge.computer-use.platform-sidecar-result.v1",
-      "requiredDiscoveryTools": ["capabilities", "discover"],
-      "requiredExecutionTools": ["preflight", "capture", "state", "execute"],
-      "completedRunRequiredRefs": ["sidecarBindingRef", "sidecarCapabilitiesRef", "sidecarDiscoveryRef", "schedulerLeaseRef", "schedulerLeaseRefs", "targetRefs", "replayRef", "validationRef", "currentBundleRef"],
-      "completedRunRequiredCapabilities": ["multi-screen", "multi-actor-cursor", "window-local-lease", "screen-global-lease", "refs-first-evidence", "virtual-screen", "independent-virtual-input-adapter"],
+      "requiredDiscoveryTools": [
+        "capabilities",
+        "discover"
+      ],
+      "requiredExecutionTools": [
+        "preflight",
+        "capture",
+        "state",
+        "execute"
+      ],
+      "completedRunRequiredRefs": [
+        "sidecarBindingRef",
+        "sidecarCapabilitiesRef",
+        "sidecarDiscoveryRef",
+        "schedulerLeaseRef",
+        "schedulerLeaseRefs",
+        "targetRefs",
+        "replayRef",
+        "validationRef",
+        "currentBundleRef"
+      ],
+      "completedRunRequiredCapabilities": [
+        "multi-screen",
+        "multi-actor-cursor",
+        "window-local-lease",
+        "screen-global-lease",
+        "refs-first-evidence",
+        "image-evidence-replay",
+        "independent-virtual-input-adapter"
+      ],
       "commands": {
         "nativeM6OptIn": "npm run smoke:cu-native-m6:opt-in",
         "nativeM6OptInHelp": "npm run smoke:cu-native-m6:opt-in -- --help"
       },
-      "claimLimit": "The native multi-screen live runner may use DOM/AX/Playwright refs only as grounding hints and may mark M6 completed only as historical opt-in regression/diagnostic evidence when capabilities/discovery plus preflight/capture/state/execute are all non-diagnostic current-bundle evidence; it cannot set userAcceptanceEligible=true or satisfy virtual-app-screen-user-acceptance without a separate manifest."
+      "claimLimit": "The native multi-screen live runner may use DOM/AX/Playwright refs only as grounding hints and is historical regression/diagnostic evidence only; it cannot set userAcceptanceEligible=true or satisfy Computer Use product acceptance."
     },
     "traceHandoff": {
       "schemaRef": "sciforge.computer-use.trace-handoff.v1",
@@ -224,76 +472,17 @@
       "approvalTarget": "computer-use.approval-request",
       "storagePolicy": "refs-first",
       "payloadPolicy": "refs-and-compact-summary-only",
-      "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image", "rawProviderPayload", "requestBody", "apiKey", "inlineImage"]
+      "forbiddenInlinePayloads": [
+        "rawScreenshot",
+        "base64",
+        "data:image",
+        "rawProviderPayload",
+        "requestBody",
+        "apiKey",
+        "inlineImage"
+      ]
     },
     "notes": "Computer Use action provider consumes host-owned platform ports. It never imports GUI implementation and never opens confirmation UI directly."
-  },
-  "virtualDisplayProviderContract": {
-    "schemaRef": "sciforge.virtual-display.provider-contract.v1",
-    "descriptionSchemaRef": "sciforge.virtual-display.provider-description.v1",
-    "readinessSchemaRef": "sciforge.virtual-display.readiness.v1",
-    "probeBundleSchemaRef": "sciforge.virtual-display.provider-probe-bundle.v1",
-    "invokeResultSchemaRef": "sciforge.virtual-display.provider-invoke-result.v1",
-    "manifestHelper": "sciforge_computer_use.virtual_display_provider.build_virtual_display_provider_manifest",
-    "describeHelper": "sciforge_computer_use.virtual_display_provider.describe_virtual_display_providers",
-    "queryHelper": "sciforge_computer_use.virtual_display_provider.query_virtual_display_providers",
-    "readHelper": "sciforge_computer_use.virtual_display_provider.read_virtual_display_provider",
-    "probeHelper": "sciforge_computer_use.virtual_display_provider.probe_virtual_display_providers",
-    "invokeHelper": "sciforge_computer_use.virtual_display_provider.invoke_virtual_display_provider",
-    "readinessValidator": "sciforge_computer_use.virtual_display_provider.validate_virtual_display_readiness",
-    "providerIds": [
-      "virtual-display.macos.cgvirtualdisplay-screencapturekit",
-      "virtual-display.linux.xpra",
-      "virtual-display.windows.idd"
-    ],
-    "platformBackends": {
-      "darwin": ["cgvirtualdisplay-screencapturekit"],
-      "linux": ["xpra-app-session"],
-      "win32": ["windows-indirect-display-driver"]
-    },
-    "supportedTransports": ["webrtc", "native-frame-stream"],
-    "primaryTransport": "webrtc",
-    "fallbackTransports": [],
-    "supportedInputAdapters": ["app-command", "ax", "uia", "at-spi", "virtual-display-input"],
-    "invokeIntents": ["probe", "createSession", "launchApp", "attachSurface", "executeInputIntent", "pause", "resume", "closeSession", "handoff"],
-    "requiredReadinessFields": ["providerId", "platform", "backendKind", "installationStatus", "captureSupported", "liveSurfaceSupported", "inputSupported", "backgroundRenderable", "affectsPhysicalDisplay", "requiresFocusSteal", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent", "singleInteractiveTruth", "permissionRefs", "diagnosticRefs", "installHintRefs"],
-    "requiredFalseFlags": ["affectsPhysicalDisplay", "requiresFocusSteal", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent"],
-    "requiredRefs": ["providerProbeRef", "providerReadinessRef", "adapterReadinessRef", "liveSurfaceRef", "surfaceTransport", "frameStreamRef", "currentFrameRef", "inputIntentRef", "beforeAfterFrameRef", "verificationRef", "evidenceLedgerRef"],
-    "failClosedWhen": ["driver-or-runtime-missing", "permission-missing", "shared-system-input-required", "physical-display-affected", "focus-steal-required", "multiple-interactive-surfaces", "current-session-evidence-missing"],
-    "claimLimit": "The virtual display provider contract proves catalog/probe/readiness/invoke boundaries only. It is legacy compatibility evidence and cannot replace the TypeScript WindowActionSession product path, current evidence bundle, action causality, verifier refs, or Host completion."
-  },
-  "nativeToolsContract": {
-    "schemaRef": "sciforge.computer-use.native-tool-manifest.v1",
-    "productionHost": "TypeScript host adapter via Agent Host WindowActionSession and refs-first host ports",
-    "diagnosticEntrypoint": "python -m sciforge_computer_use.native_tool --tool <get_app_state|observe|click|type_text|scroll|press_key|propose_action|execute_scoped_action|get_replay_refs> --payload-json '<json>' --output-dir <dir>",
-    "mcpServer": {
-      "legacyDiagnosticOnly": true,
-      "serverName": "sciforge-computer-use",
-      "configRef": "manual-legacy-diagnostic-only; repo default .mcp.json intentionally omits this server",
-      "command": "python -m sciforge_computer_use.mcp_server",
-      "transport": "stdio"
-    },
-    "manifestHelper": "sciforge_computer_use.native_tool.get_native_tool_manifest",
-    "mcpToolsHelper": "sciforge_computer_use.mcp_server.get_mcp_tool_schemas",
-    "mcpServerHelper": "sciforge_computer_use.mcp_server.run_mcp_server",
-    "dispatcherHelper": "sciforge_computer_use.native_tool.dispatch_native_tool",
-    "validator": "sciforge_computer_use.native_tool.validate_native_tool_payload",
-    "tools": ["get_app_state", "observe", "click", "type_text", "scroll", "press_key", "propose_action", "execute_scoped_action", "get_replay_refs"],
-    "sideEffectPolicy": {
-      "get_app_state": "read-only",
-      "observe": "read-only",
-      "click": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
-      "type_text": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
-      "scroll": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
-      "press_key": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
-      "propose_action": "proposal-only",
-      "execute_scoped_action": "scoped-executor-projection-required",
-      "get_replay_refs": "read-only"
-    },
-    "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image", "rawProviderPayload", "Authorization", "token", "secret", "password"],
-    "forbiddenPublicParameters": ["providerRoute", "guiPrivateState", "schedulerInternals", "executorAdapterRef", "leaseId", "leaseScope", "globalX", "globalY"],
-    "requiredProvenance": ["displayGroupId", "screenId", "windowId", "actorId", "cursorId", "target.scope", "schedulerLeaseRef", "appStateRef", "screenshotRef", "accessibilitySnapshotRef", "groundingRefs", "replayRefs", "currentBundleRef"],
-    "claimLimit": "This is a package-local debug/native-tool contract. It never executes GUI actions itself; real mutating input still requires a host-bound scoped executor adapter."
   },
   "publicSurfaceParity": {
     "schemaRef": "sciforge.computer-use.public-surface-parity.v1",
@@ -310,7 +499,6 @@
       "computer-use-current-evidence-bundle manifest",
       "BrowserRuntime DOM/AX observation refs",
       "native multi-app workflow/live acceptance matrix",
-      "legacy VirtualAppScreen compatibility diagnostics",
       "native multi-screen/multi-actor cursor historical opt-in regression",
       "multi-screen live demo historical diagnostic"
     ],
@@ -319,25 +507,112 @@
       "manifestName": "computer-use-current-evidence-bundle",
       "manifestSchemaRef": "sciforge.computer-use.current-evidence-bundle.v1",
       "productionHost": "Agent Host WindowActionSession via TypeScript host-port adapter",
-      "requiredProvenance": ["taskId", "scenarioId", "userIntent", "currentBundleRef", "windowActionSessionRef", "hostPortsRef", "targetWindowRefs", "appStateRef", "screenshotRef", "focusCropRefs", "groundingRefs", "executorLeaseRefs", "executorEventRefs", "beforeAfterFrameRefs", "artifactRefs", "verificationRefs", "guiPresentRefs", "approvalRefs", "cancelRefs", "traceRefs", "replayRefs", "evidenceLedgerRef", "isolationFlags", "blockedReason"],
-      "requiredManifestFields": ["taskId", "scenarioId", "userIntent", "currentBundleRef", "windowActionSessionRef", "hostPortsRef", "targetWindowRefs", "executorEventRefs", "beforeAfterFrameRefs", "artifactRefs", "verificationRefs", "traceRefs", "evidenceLedgerRef", "isolationFlags", "blockedReason"],
+      "requiredProvenance": [
+        "taskId",
+        "scenarioId",
+        "userIntent",
+        "currentBundleRef",
+        "windowActionSessionRef",
+        "hostPortsRef",
+        "targetWindowRefs",
+        "appStateRef",
+        "screenshotRef",
+        "focusCropRefs",
+        "groundingRefs",
+        "executorLeaseRefs",
+        "executorEventRefs",
+        "beforeAfterFrameRefs",
+        "artifactRefs",
+        "verificationRefs",
+        "guiPresentRefs",
+        "approvalRefs",
+        "cancelRefs",
+        "traceRefs",
+        "replayRefs",
+        "evidenceLedgerRef",
+        "isolationFlags",
+        "blockedReason"
+      ],
+      "requiredManifestFields": [
+        "taskId",
+        "scenarioId",
+        "userIntent",
+        "currentBundleRef",
+        "windowActionSessionRef",
+        "hostPortsRef",
+        "targetWindowRefs",
+        "executorEventRefs",
+        "beforeAfterFrameRefs",
+        "artifactRefs",
+        "verificationRefs",
+        "traceRefs",
+        "evidenceLedgerRef",
+        "isolationFlags",
+        "blockedReason"
+      ],
       "passStatePolicy": {
-        "passedRequires": ["artifactRefs", "visible screenshot/frame refs", "action causality", "validator/verifier refs", "gui.present refs when presentation is requested", "replay refs", "isolation flags"],
-        "blockedStatuses": ["blocked", "needs-confirmation", "requires-handoff"],
+        "passedRequires": [
+          "artifactRefs",
+          "visible screenshot/frame refs",
+          "action causality",
+          "validator/verifier refs",
+          "gui.present refs when presentation is requested",
+          "replay refs",
+          "isolation flags"
+        ],
+        "blockedStatuses": [
+          "blocked",
+          "needs-confirmation",
+          "requires-handoff"
+        ],
         "m6NativeMultiScreenUserLevelPassAllowed": false,
         "packageSmokeUserLevelPassAllowed": false
       },
-      "historicalRegressionGateIds": ["legacy-compatibility-diagnostics", "m6-native-multi-screen", "multi-screen-live-demo"],
-      "forbiddenSubstituteGateIds": ["package-smoke", "m6-native-multi-screen", "target-bound-fixture", "historical-docker-novnc", "single-click-smoke", "dom", "playwright", "accessibility", "shell-direct-artifact", "old-trace", "gui-executor", "shared-system-input"],
+      "historicalRegressionGateIds": [
+        "legacy-compatibility-diagnostics",
+        "m6-native-multi-screen",
+        "multi-screen-live-demo"
+      ],
+      "forbiddenSubstituteGateIds": [
+        "package-smoke",
+        "m6-native-multi-screen",
+        "target-bound-fixture",
+        "historical-docker-novnc",
+        "single-click-smoke",
+        "dom",
+        "playwright",
+        "accessibility",
+        "shell-direct-artifact",
+        "old-trace",
+        "gui-executor",
+        "shared-system-input"
+      ],
       "guiExecutionAllowed": false,
       "runtimeBridgePublicProductionApiAllowed": false,
       "workspaceGatewayProductionFallbackAllowed": false,
       "codexExecJsonProductionFallbackAllowed": false
     },
     "browserRuntimeObservationPolicy": {
-      "allowedRefs": ["browserRuntimeDomSnapshotRef", "browserRuntimeVisibleDomRef", "browserRuntimeAccessibilitySnapshotRef", "browserRuntimePlaywrightEvaluateRef", "browserRuntimeStableTargetRef", "browserRuntimePageQueryRef", "browserRuntimeGroundingHintRef"],
-      "allowedUses": ["observe-before-mutate-hint", "grounding-hint"],
-      "forbiddenUses": ["Computer Use executor", "completion evidence by itself", "DOM click shortcut", "AX action shortcut", "Playwright action shortcut"]
+      "allowedRefs": [
+        "browserRuntimeDomSnapshotRef",
+        "browserRuntimeVisibleDomRef",
+        "browserRuntimeAccessibilitySnapshotRef",
+        "browserRuntimePlaywrightEvaluateRef",
+        "browserRuntimeStableTargetRef",
+        "browserRuntimePageQueryRef",
+        "browserRuntimeGroundingHintRef"
+      ],
+      "allowedUses": [
+        "observe-before-mutate-hint",
+        "grounding-hint"
+      ],
+      "forbiddenUses": [
+        "Computer Use executor",
+        "completion evidence by itself",
+        "DOM click shortcut",
+        "AX action shortcut",
+        "Playwright action shortcut"
+      ]
     },
     "legacyBackendPackaging": {
       "docker": "legacy diagnostic/backend packaging only",
@@ -346,463 +621,71 @@
       "activeProductGateEligible": false,
       "historicalEvidenceAllowedWhenRefsFirst": true
     },
-    "claimLimit": "This parity block keeps the action manifest aligned with the TS-only product route. WindowActionSession current evidence is the active Computer Use product gate; VirtualAppScreen, M6/native multi-screen, Docker/noVNC/RDP, and Python probes are retained only as legacy, historical, opt-in, or diagnostic evidence and cannot be the product owner."
-  },
-  "platformSidecarContract": {
-    "schemaRef": "sciforge.computer-use.platform-sidecar-manifest.v1",
-    "manifestHelper": "sciforge_computer_use.platform_sidecar.get_platform_sidecar_manifest",
-    "dispatcherHelper": "sciforge_computer_use.platform_sidecar.dispatch_platform_sidecar_tool",
-    "validator": "sciforge_computer_use.platform_sidecar.validate_platform_sidecar_payload",
-    "diagnosticEntrypoint": "python -m sciforge_computer_use.platform_sidecar --tool <preflight|capture|state|execute> --payload-json '<json>' --output-dir <dir>",
-    "platforms": ["diagnostic-local", "linux", "linux-novnc", "rdp", "darwin", "win32"],
-    "tools": ["preflight", "capture", "state", "execute"],
-    "permissionRequirements": [
-      "sessionPermissionRef",
-      "appWindowAllowlistRef",
-      "riskPreviewRef",
-      "dataVisibilityRef",
-      "stopRef or cancelLeaseRef",
-      "inputModalityPolicy"
-    ],
-    "isolationFlags": {
-      "sharedSystemInputUsed": false,
-      "systemPointerMoved": false,
-      "systemKeyboardEventsSent": false,
-      "realOsInputExecuted": false,
-      "rawPayloadWritten": false,
-      "inlineImageWritten": false,
-      "secretsWritten": false
-    },
-    "supportedInputModalities": ["pointer", "keyboard", "scroll", "hotkey"],
-    "executorEventSchema": {
-      "schemaRef": "sciforge.computer-use.platform-sidecar-executor-event.v1",
-      "schedulerLeaseBindingRequired": true,
-      "requiredFields": [
-        "eventId",
-        "status",
-        "actionKind",
-        "displayGroupId",
-        "screenId",
-        "actorId",
-        "cursorId",
-        "leaseId",
-        "schedulerLeaseRef",
-        "leaseScope",
-        "schedulerLease",
-        "permissionPreflightRef",
-        "beforeEvidenceRefs",
-        "groundingRefs",
-        "isolationReportRef"
-      ]
-    },
-    "unsupportedActions": [
-      "bare-global-coordinate-execute",
-      "shared-system-input",
-      "real-os-input-without-isolated-backend",
-      "gui.present",
-      "gui.ask_user",
-      "workspace-write-policy",
-      "provider-ranking",
-      "planning",
-      "user-level-completion",
-      "completion-validator"
-    ],
-    "policies": {
-      "refsFirst": true,
-      "failClosedWithoutBackend": true,
-      "noPlanning": true,
-      "noCompletion": true,
-      "noCapabilityRanking": true,
-      "noWorkspaceWritePolicy": true,
-      "noGuiDependency": true,
-      "noRuntimePrivateDependency": true,
-      "noSchedulerBypass": true
-    },
-    "claimLimit": "Platform sidecar L0 backend returns refs, permission preflight, isolation report and scheduler-lease-bound executor events only. It cannot perform planning, provider ranking, GUI presentation, workspace write policy or user-level completion."
-  },
-  "isolatedDesktopBackendRuntime": {
-    "schemaRef": "sciforge.computer-use.isolated-desktop-backend-bundle.v1",
-    "bundleProbe": "python -m sciforge_computer_use.isolated_desktop_backend_bundle --output-dir <dir>",
-    "container": {
-      "dockerfile": "packages/actions/computer-use/sciforge_computer_use/isolated_desktop_backend.Dockerfile",
-      "buildContext": "packages/actions/computer-use",
-      "baseImage": "python:3.12-slim-bookworm",
-      "baseImageOverrideEnv": "SCIFORGE_DOCKER_BASE_IMAGE",
-      "aptMirrorOverrideEnv": "SCIFORGE_DOCKER_DEBIAN_APT_MIRROR",
-      "securityAptMirrorOverrideEnv": "SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR",
-      "aptAcquireRetriesEnv": "SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES",
-      "imageTag": "sciforge-computer-use-isolated-backend:local",
-      "entrypoint": "python -m sciforge_computer_use.isolated_desktop_l1_smoke_probe",
-      "evidenceOutputMount": "<output-dir>:/evidence",
-      "hostEvidenceOutputDirEnv": "SCIFORGE_CU_ISOLATED_L1_EVIDENCE_DIR",
-      "l3HostEvidenceOutputDirEnv": "SCIFORGE_CU_ISOLATED_L3_EVIDENCE_DIR",
-      "localhostOnlyNoVncPort": "127.0.0.1:6089:6089",
-      "l3LocalhostOnlyNoVncPort": "127.0.0.1:6090:6090"
-    },
-    "requiredAptPackages": ["ca-certificates", "chromium", "fonts-dejavu", "imagemagick", "libreoffice-writer", "novnc", "openbox", "scrot", "websockify", "x11vnc", "xdotool", "xvfb"],
-    "dockerBuildCommand": "docker build --build-arg PYTHON_BASE_IMAGE=${SCIFORGE_DOCKER_BASE_IMAGE:-python:3.12-slim-bookworm} --build-arg DEBIAN_APT_MIRROR=${SCIFORGE_DOCKER_DEBIAN_APT_MIRROR:-} --build-arg DEBIAN_SECURITY_APT_MIRROR=${SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR:-} --build-arg APT_ACQUIRE_RETRIES=${SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES:-3} -f sciforge_computer_use/isolated_desktop_backend.Dockerfile -t sciforge-computer-use-isolated-backend:local .",
-    "dockerRunBackendReadinessCommand": "docker run --rm -v <output-dir>:/evidence --entrypoint python sciforge-computer-use-isolated-backend:local -m sciforge_computer_use.isolated_desktop_backend_probe --output-dir /evidence/backend",
-    "dockerRunL1SmokeCommand": "docker run --rm --shm-size 1g -p 127.0.0.1:6089:6089 -v <output-dir>:/evidence sciforge-computer-use-isolated-backend:local --output-dir /evidence/l1 --execute --display :99 --vnc-port 5909 --novnc-port 6089 --timeout-seconds 30 --resource-lock-root /tmp/sciforge-computer-use-l1-locks",
-    "dockerRunL3WorkflowCommand": "docker run --rm --shm-size 1g -p 127.0.0.1:6090:6090 -v <output-dir>:/evidence --entrypoint python sciforge-computer-use-isolated-backend:local -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir /evidence/l3 --execute --display :100 --vnc-port 5910 --novnc-port 6090 --timeout-seconds 90 --resource-lock-root /tmp/sciforge-computer-use-l3-locks",
-    "bundleSpecDiagnosticOnly": true,
-    "legacyDiagnosticOnly": true,
-    "activeProductGateEligible": false,
-    "backendPackagingOnly": true,
-    "legacyBackendKinds": ["docker", "linux-novnc", "rdp"],
-    "diagnosticOnlyUntilCompletedL1Evidence": true,
-    "diagnosticOnlyUntilCompletedL3Evidence": true,
-    "completionEvidenceRef": null,
-    "claimLimit": "The Docker/noVNC/RDP bundle spec only records reproducible backend packaging, readiness, and historical diagnostic commands. It is not an active Computer Use product gate, concurrency model, or running backend by itself; native product acceptance must come through the app-server/native plugin surface plus current refs-first evidence."
+    "claimLimit": "Computer Use is TS-only. WindowActionSession current evidence is the active product gate; removed legacy package routes, VirtualAppScreen, M6/native multi-screen, container viewers, remote desktop packaging, and retired desktop probes cannot satisfy product acceptance."
   },
   "plannerContract": {
     "schemaRef": "sciforge.computer-use.planner-action.v1",
-    "inputs": ["task", "compactObservation", "visibleText", "recentActions", "verifierFeedback"],
+    "inputs": [
+      "task",
+      "compactObservation",
+      "visibleText",
+      "recentActions",
+      "verifierFeedback"
+    ],
     "output": "exactly one generic action or done=true",
-    "supportedActions": ["open_app", "click", "double_click", "drag", "type_text", "press_key", "hotkey", "scroll", "wait", "focus", "save"],
-    "rejectedIssues": ["coordinate-output", "app-private-shortcut", "unsupported-action", "empty-action"],
+    "supportedActions": [
+      "open_app",
+      "click",
+      "double_click",
+      "drag",
+      "type_text",
+      "press_key",
+      "hotkey",
+      "scroll",
+      "wait",
+      "focus",
+      "save"
+    ],
+    "rejectedIssues": [
+      "coordinate-output",
+      "app-private-shortcut",
+      "unsupported-action",
+      "empty-action"
+    ],
     "coordinateOwner": "grounder-provider",
     "notes": "Planner must not output coordinates, app-private shortcuts, unsupported action types, or empty action blocks."
   },
   "traceContract": {
     "schemaRef": "sciforge.computer-use.loop-trace.v1",
     "storagePolicy": "ref-only",
-    "eventTypes": ["observe", "plan", "ground", "execute", "verify", "complete", "fail"],
-    "redaction": ["typedText", "credentials", "privateWindowTitle", "rawScreenshot"],
+    "eventTypes": [
+      "observe",
+      "plan",
+      "ground",
+      "execute",
+      "verify",
+      "complete",
+      "fail"
+    ],
+    "redaction": [
+      "typedText",
+      "credentials",
+      "privateWindowTitle",
+      "rawScreenshot"
+    ],
     "retention": "trace 只保存 refs、紧凑摘要和结构化步骤，大 payload 进入 artifact store。"
-  },
-  "repairManifestContract": {
-    "manifestSchemaRef": "sciforge.computer-use.repair-manifest.v1",
-    "validationSchemaRef": "sciforge.computer-use.repair-manifest-validation.v1",
-    "validator": "sciforge_computer_use.repair_manifest.validate_repair_manifest",
-    "requiredRefs": ["resultRef", "traceRefs", "screenshotRefs or finalObservationRef"],
-    "requiredFlags": {
-      "realWindowEvidence": "explicit boolean",
-      "diagnosticOnly": "explicit boolean",
-      "inputExecuted": "explicit boolean",
-      "sharedSystemInputUsed": "explicit boolean",
-      "rawPayloadWritten": false,
-      "inlineImageWritten": false
-    },
-    "validationOptions": {
-      "requireExistingRefs": "optional boolean; when true result, trace, screenshot, observation, artifact, and probe refs must point to existing local files"
-    },
-    "claimLimit": "Blocked repair manifests are refs-first failure diagnostics. Package-local failures with realWindowEvidence=false must remain diagnosticOnly=true and cannot be promoted into real-window success evidence."
-  },
-  "repairReplayContract": {
-    "evidenceSchemaRef": "sciforge.computer-use.repair-replay-evidence.v1",
-    "validationSchemaRef": "sciforge.computer-use.repair-replay-evidence-validation.v1",
-    "builder": "sciforge_computer_use.trace.build_repair_replay_evidence",
-    "validator": "sciforge_computer_use.trace.validate_repair_replay_evidence",
-    "requiredRefs": ["sourceFailureManifestRef", "replayResultRef", "replayTraceRefs"],
-    "validationOptions": {
-      "requireExistingRefs": "optional boolean; when true source failure, replay result, and replay trace refs must point to existing local files"
-    },
-    "claimLimit": "Package-local repair replay evidence can validate disambiguation replay plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to verifier completion."
-  },
-  "viewportRecoveryContract": {
-    "evidenceSchemaRef": "sciforge.computer-use.viewport-recovery-evidence.v1",
-    "validationSchemaRef": "sciforge.computer-use.viewport-recovery-evidence-validation.v1",
-    "builder": "sciforge_computer_use.trace.build_viewport_recovery_evidence",
-    "validator": "sciforge_computer_use.trace.validate_viewport_recovery_evidence",
-    "requiredRefs": ["sourceFailureManifestRef", "replayResultRef", "replayTraceRefs", "scrollStateBeforeRef", "scrollStateAfterRef"],
-    "validationOptions": {
-      "requireExistingRefs": "optional boolean; when true source failure, replay result, replay trace, and scroll state refs must point to existing local files"
-    },
-    "claimLimit": "Package-local viewport recovery evidence can validate offscreen scroll recovery plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to verifier completion."
-  },
-  "targetBoundRealWindowProbeContract": {
-    "evidenceSchemaRef": "sciforge.computer-use.target-bound-real-window-probe-evidence.v1",
-    "validationSchemaRef": "sciforge.computer-use.target-bound-real-window-probe-evidence-validation.v1",
-    "builder": "sciforge_computer_use.target_bound_evidence.build_target_bound_real_window_probe_evidence",
-    "validator": "sciforge_computer_use.target_bound_evidence.validate_target_bound_real_window_probe_evidence",
-    "requiredRefs": ["preflightRef", "resultRef", "traceRefs", "realWindowEvidenceRefs", "initialScreenshotRef", "finalScreenshotRef", "finalArtifactRef"],
-    "requiredFlags": {
-      "preflightStatus": "ready",
-      "realWindowEvidence": true,
-      "diagnosticOnly": false,
-      "inputExecuted": true,
-      "executeFailClosed": false,
-      "sharedSystemInputUsed": false,
-      "systemPointerMoved": false,
-      "systemKeyboardEventsSent": false
-    },
-    "workflowRequirements": {
-      "minimumActionCount": "optional integer; Task B real-window evidence uses at least 6",
-      "requiredInputModalities": "optional array of pointer and/or keyboard; validator must read both resolved result/trace steps and target-bound input event refs, including targetPointerStateRef, targetKeyboardStateRef, targetInputEventLogRef or their pointer/keyboard/inputEventLogRef aliases",
-      "requiresCurrentStepScreenshots": "optional boolean; when true each step must carry a current screenshot or observation ref",
-      "forbidPriorRoundCompletionEvidence": "optional boolean; when true prior-round ledger/historical done markers are rejected",
-      "requiresDirectoryEvidence": "optional boolean; when true fileListArtifactRef and fileListDataRef must be present and visible in result/trace refs"
-    },
-    "packageOwnedProbe": "sciforge_computer_use.target_bound_window_host_probe",
-    "acceptanceTier": "package-diagnostic",
-    "userAcceptanceEligible": false,
-    "declaredArtifactOutput": {
-      "selector": "artifactSpec.kind or finalArtifactRef extension",
-      "supportedFormats": ["text", "markdown", "csv", "pptx", "docx", "word-document"],
-      "pptxValidationSchemaRef": "sciforge.computer-use.pptx-validation.v1",
-      "pptxValidationRef": "written next to the final .pptx artifact when a slide-deck artifact is saved",
-      "pptxTextEvidenceFields": ["textRuns", "textRunCount", "textCharCount", "normalizedTextSha256"],
-      "docxValidationSchemaRef": "sciforge.computer-use.docx-validation.v1",
-      "docxValidationRef": "written next to the final .docx artifact when a word-document artifact is saved",
-      "docxTextEvidenceFields": ["textRuns", "textRunCount", "textCharCount", "normalizedTextSha256"],
-      "causalityFields": ["artifactMetadata.finalArtifactRef", "artifactMetadata.savedByActionIndex", "artifactMetadata.savedByInputModality", "artifactMetadata.artifactValidationRef", "artifactMetadata.pptxValidationRef", "artifactMetadata.docxValidationRef"],
-      "causalityPolicy": "When artifact metadata is present, finalArtifactRef must match evidence finalArtifactRef, savedByActionIndex must point to a generic save or Ctrl/Cmd+S action, and the save action must have a matching keyboard event."
-    },
-    "claimLimit": "This contract validates refs from an actual target-bound package diagnostic run. The package-owned target-bound window host can produce package-level real-window evidence only when its run writes ready preflight, target binding validation, initial/final screenshots, trace/result refs, inputExecuted=true, and no OS/shared/system input side effects. It cannot claim L1/L2/L3 or userAcceptanceEligible=true."
-  },
-  "isolatedDesktopL1SmokeContract": {
-    "evidenceSchemaRef": "sciforge.computer-use.isolated-desktop-l1-smoke-evidence.v1",
-    "validationSchemaRef": "sciforge.computer-use.isolated-desktop-l1-smoke-evidence-validation.v1",
-    "builder": "sciforge_computer_use.isolated_desktop_l1_smoke_evidence.build_isolated_desktop_l1_smoke_evidence",
-    "validator": "sciforge_computer_use.isolated_desktop_l1_smoke_evidence.validate_isolated_desktop_l1_smoke_evidence",
-    "acceptanceTier": "l1-isolated-smoke",
-    "requiredRefs": [
-      "preflightRef",
-      "resultRef",
-      "traceRefs",
-      "screenshotRefs",
-      "initialScreenshotRef",
-      "finalScreenshotRef",
-      "viewerManifestRef",
-      "viewerHtmlRef",
-      "inputEventLogRef",
-      "pointerEventLogRef",
-      "keyboardEventLogRef",
-      "executorCommandEventLogRef",
-      "targetWindowRef",
-      "windowBoundPointerProofRef",
-      "processRef",
-      "resourceAllocationRef",
-      "sessionManifestRef",
-      "virtualDisplayRef",
-      "captureStreamRef",
-      "replayBundleRef",
-      "filesystemRootRef",
-      "noVncViewerRef",
-      "backendReadinessProofRef",
-      "evidenceLogRef",
-      "evidenceSnapshotRef",
-      "evidenceIndexRef",
-      "plannerBriefRef"
-    ],
-    "requiredFlags": {
-      "preflightStatus": "ready",
-      "backendKind": "linux-novnc-libreoffice-browser",
-      "targetEnvironmentKind": "linux-isolated-desktop-session",
-      "captureSource": "isolated-virtual-display",
-      "inputChannel": "remote-desktop-isolated-session",
-      "realWindowEvidence": true,
-      "diagnosticOnly": false,
-      "userAcceptanceEligible": true,
-      "inputExecuted": true,
-      "executeFailClosed": false,
-      "osInputExecuted": false,
-      "realOsInputExecuted": false,
-      "sharedSystemInputUsed": false,
-      "systemPointerMoved": false,
-      "systemKeyboardEventsSent": false,
-      "rawPayloadWritten": false,
-      "inlineImageWritten": false,
-      "secretsWritten": false
-    },
-    "workflowRequirements": {
-      "minimumActionCount": "at least 4 generic state-changing steps: open_app, click/focus input, type_text, click button/control",
-      "requiredInputModalities": ["pointer", "keyboard"],
-      "requiresCurrentStepScreenshots": true,
-      "forbidPriorRoundCompletionEvidence": true,
-      "requiresViewerRealFrames": "viewer validation must report at least two screenshot frames; placeholder-only viewers are diagnostic",
-      "requiresScreenshotContentChange": "initialScreenshotRef and finalScreenshotRef must point to non-empty local files with different sha256 content when existing refs validation is enabled",
-      "requiresStepwiseScreenshotContentChange": "each state-changing L1 step must have distinct before/after screenshot refs with different file content when existing refs validation is enabled",
-      "requiresPreflightPayloadValidation": "preflightRef must resolve to the isolated desktop backend probe schema with status=ready, Linux platform, matching backend kind, required observed components, noVncWebRoot and all preflightChecks ok; L1 permits backend-probe diagnosticOnly=true as dependency readiness only, but rejects readinessOnly, executeFailClosed and shape-only preflight payloads",
-      "requiresBackendReadinessProof": "backendReadinessProofRef must resolve to a ready linux-novnc-libreoffice-browser proof with localhost-only VNC endpoint, localhost noVNC HTTP viewer proof and no shared system input side effects",
-      "backendReadinessProofSchemaRef": "sciforge.computer-use.backend-readiness-proof.v2",
-      "requiresXDisplayReadinessProof": "backendReadinessProofRef.xDisplay must prove isolated DISPLAY is queryable through xdotool getdisplaygeometry, has positive geometry, matches the requested L1 viewport and has no shared/system input side effects",
-      "requiresBrowserWindowPageReadinessProof": "backendReadinessProofRef.desktopWindow and page must prove the browser exposed a visible ready window title through isolated xdotool search/getwindowgeometry before L1 input begins",
-      "requiresNoVncHttpViewerProof": "backendReadinessProofRef.novnc.httpViewer must prove GET /vnc.html from localhost returned 2xx/3xx HTML with noVNC marker, bytesRead, sha256 and rawPayloadWritten=false",
-      "requiresWindowBoundPointerProof": "targetWindowRef and windowBoundPointerProofRef must prove every pointer click is dispatched in window coordinate space with --window, target bounds hit-testing, command provenance and no shared/system input side effects",
-      "targetWindowSchemaRef": "sciforge.computer-use.isolated-target-window.v1",
-      "legacyTargetWindowSchemaRef": "sciforge.computer-use.l1-target-window.v1",
-      "requiresExecutorCommandProvenance": "executorCommandEventLogRef must resolve to package-local isolated input executor command events; every pointer/keyboard input event must cite a successful command event with matching actionIndex, modality and isolated DISPLAY",
-      "executorCommandEventLogSchemaRef": "sciforge.computer-use.executor-command-event-log.v1",
-      "executorCommandEventRequiredFields": ["id", "sequence", "timestamp", "role", "actionIndex", "actionKind", "inputModality", "args", "env.DISPLAY", "display", "returncode", "stdoutSummary", "stderrSummary"],
-      "inputEventCommandProvenanceFields": ["commandEventId", "commandEventRef", "commandEventLogRef"],
-      "executorCommandForbiddenRawFields": ["stdout", "stderr"],
-      "executorCommandForbiddenWrappers": ["sh", "bash", "zsh", "osascript", "cliclick", "xdg-open"],
-      "executorCommandSideEffectFlags": ["sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent"],
-      "requiresRuntimeProcessProof": "processRef must resolve to sciforge.computer-use.backend-processes.v1, match backendReadinessProofRef.processRef, cover virtual-display/window-manager/vnc-server/novnc-proxy/browser roles with existing stdoutLogRef and stderrLogRef files, bind to the isolated DISPLAY, match sessionId when session refs declare one and carry explicit false shared/system side-effect flags",
-      "requiresRuntimeResourceAllocation": "resourceAllocationRef must resolve to the isolated runtime allocation schema, prove per-run display plus VNC/noVNC localhost ports instead of fixed defaults, match backendReadinessProofRef VNC/noVNC ports when present, match sessionId when session refs declare one and carry explicit false shared/system side-effect flags",
-      "resourceAllocationSchemaRef": "sciforge.computer-use.isolated-runtime-resource-allocation.v1",
-      "legacyResourceAllocationSchemaRef": "sciforge.computer-use.l1-runtime-resource-allocation.v1",
-      "requiresProcessLogRefs": "long-running backend/browser process records must expose stdoutLogRef and stderrLogRef instead of undrained pipes",
-      "requiresContainerSafeBrowserLaunch": "Chromium-family source app launch must suppress first-run/background UI and use --no-sandbox when running as root in isolated containers",
-      "runnerCliOptions": ["--display", "--vnc-port", "--novnc-port", "--timeout-seconds", "--resource-lock-root"],
-      "requiresCurrentCompletionClaim": "evidence ledger must contain a current completion-claim whose supports are current records, including the final screenshot observation"
-    },
-    "blockedInputs": ["package-owned-target-bound-window", "target-bound-simulated-input", "isolated-window", "readiness-only-manifest", "placeholder-only-viewer", "prior-round-completion"],
-    "claimLimit": "Readiness manifests and package-owned target-bound diagnostics cannot satisfy L1. Completed L1 evidence must come from a real isolated Linux noVNC desktop run with remote-desktop isolated input, current screenshots, viewer refs, input logs, trace/result refs, evidence ledger refs, and side-effect flags proving no shared system input."
-  },
-  "isolatedDesktopL3WorkflowContract": {
-    "evidenceSchemaRef": "sciforge.computer-use.isolated-desktop-l3-workflow-evidence.v1",
-    "validationSchemaRef": "sciforge.computer-use.isolated-desktop-l3-workflow-evidence-validation.v1",
-    "builder": "sciforge_computer_use.isolated_desktop_l3_workflow_evidence.build_isolated_desktop_l3_workflow_evidence",
-    "validator": "sciforge_computer_use.isolated_desktop_l3_workflow_evidence.validate_isolated_desktop_l3_workflow_evidence",
-    "acceptanceTier": "l3-multi-app-workflow",
-    "requiredRefs": [
-      "preflightRef",
-      "resultRef",
-      "traceRefs",
-      "screenshotRefs",
-      "viewerManifestRef",
-      "viewerHtmlRef",
-      "inputEventLogRef",
-      "pointerEventLogRef",
-      "keyboardEventLogRef",
-      "backendReadinessProofRef",
-      "executorCommandEventLogRef",
-      "targetWindowRef",
-      "windowBoundPointerProofRef",
-      "processRef",
-      "resourceAllocationRef",
-      "sessionManifestRef",
-      "virtualDisplayRef",
-      "captureStreamRef",
-      "replayBundleRef",
-      "filesystemRootRef",
-      "noVncViewerRef",
-      "evidenceLogRef",
-      "evidenceSnapshotRef",
-      "evidenceIndexRef",
-      "plannerBriefRef",
-      "finalArtifactRef",
-      "artifactValidationRef",
-      "fileListArtifactRef",
-      "fileListDataRef",
-      "guiPresentRef"
-    ],
-    "requiredFlags": {
-      "preflightStatus": "ready",
-      "backendKind": "linux-novnc-libreoffice-browser",
-      "targetEnvironmentKind": "linux-isolated-desktop-session",
-      "captureSource": "isolated-virtual-display",
-      "inputChannel": "remote-desktop-isolated-session",
-      "realWindowEvidence": true,
-      "diagnosticOnly": false,
-      "userAcceptanceEligible": true,
-      "inputExecuted": true,
-      "executeFailClosed": false,
-      "osInputExecuted": false,
-      "realOsInputExecuted": false,
-      "sharedSystemInputUsed": false,
-      "systemPointerMoved": false,
-      "systemKeyboardEventsSent": false,
-      "rawPayloadWritten": false,
-      "inlineImageWritten": false,
-      "secretsWritten": false
-    },
-    "workflowRequirements": {
-      "workflowKind": "multi-app-document-artifact",
-      "minimumAppCount": 3,
-      "requiredApplicationRoles": ["source", "writer", "file-preview"],
-      "sameVirtualSession": true,
-      "requiredInputModalities": ["pointer", "keyboard"],
-      "requiresInputActionIndexCoverage": "pointer and keyboard input event logs must cite every workflow action index that uses the corresponding required modality",
-      "actionPlanSchemaRef": "sciforge.computer-use.isolated-desktop-l3-workflow-action-plan.v1",
-      "actionPlanBuilder": "sciforge_computer_use.isolated_desktop_l3_workflow_plan.build_isolated_desktop_l3_workflow_action_plan",
-      "actionPlanValidator": "sciforge_computer_use.isolated_desktop_l3_workflow_plan.validate_isolated_desktop_l3_workflow_action_plan",
-      "actionPlanPolicy": "L3 runners use a diagnostic-only refs-first source -> writer -> save -> preview -> validate action plan with monotonic actionIndex values, expected modalities, and required screenshot/observation refs before executing GUI input",
-      "completionAssemblySchemaRef": "sciforge.computer-use.isolated-desktop-l3-completion-assembly.v1",
-      "completionAssembler": "sciforge_computer_use.isolated_desktop_l3_workflow_result.assemble_isolated_desktop_l3_workflow_completion",
-      "completionAssemblyPolicy": "L3 runners must validate completed L3 evidence with require_existing_refs=true before writing completionEvidenceRef; blocked assembly manifests cannot complete L3 and partial namespace refs cannot be promoted",
-      "runnerExecutionBoundarySchemaRef": "sciforge.computer-use.isolated-desktop-l3-runner-execution-boundary.v1",
-      "runnerExecutionBoundaryPhases": ["launch-session", "capture-source", "write-artifact", "save-through-gui", "preview-directory", "validate-and-present"],
-      "runnerExecutionBoundaryPolicy": "when L3 --execute prerequisites are ready, the probe writes runnerExecutionBoundaryRef for GUI-only phase gates, artifact policy, input policy, same-session policy and required completed refs; success is promoted only after completed evidence validates",
-      "partialRunSchemaRef": "sciforge.computer-use.isolated-desktop-l3-partial-run.v1",
-      "partialRuntimeRefsPolicy": "partialRunRef and partialRuntimeRefs may prove same-session runtime launch only; they are diagnostic, not requiredRefs, and cannot satisfy completed L3 evidence. Partial executorCommandEventLogRef must remain a no-workflow-input diagnostic log with eventCount=0 and events=[]; file-preview process records may use launcher-completed only to show that a directory preview launcher request returned successfully.",
-      "forbidPartialRefsAsCompletedRefs": true,
-      "requiresPreflightPayloadValidation": "preflightRef must resolve to a ready Linux isolated desktop backend payload with backendKind, platform, observed backend components, noVNC web root and no diagnostic/readiness-only/fail-closed markers",
-      "requiresSameSessionRuntimeRefs": "sessionManifestRef, virtualDisplayRef, captureStreamRef, replayBundleRef and noVncViewerRef must share session/display identity; noVNC must be localhost-only and captureStreamRef.frameRefs must contain workflow screenshots",
-      "requiresSessionBoundRuntimeProofs": "processRef and resourceAllocationRef must include sessionId/display values that match sessionManifestRef and virtualDisplayRef",
-      "requiresBackendReadinessProof": "backendReadinessProofRef must resolve to ready Linux/noVNC runtime proof with localhost-only VNC/noVNC HTTP viewer, queryable isolated X display and no shared/system input side effects",
-      "backendReadinessProofSchemaRef": "sciforge.computer-use.backend-readiness-proof.v2",
-      "requiresExecutorCommandProvenance": "executorCommandEventLogRef must cite successful isolated input executor commands for every pointer/keyboard workflow action index, with matching modality, DISPLAY, returncode and no shared/system side-effect flags",
-      "executorCommandEventLogSchemaRef": "sciforge.computer-use.executor-command-event-log.v1",
-      "requiresRuntimeResourceAllocation": "resourceAllocationRef must prove per-run isolated DISPLAY plus VNC/noVNC localhost ports were allocated for this L3 run",
-      "resourceAllocationSchemaRef": "sciforge.computer-use.isolated-runtime-resource-allocation.v1",
-      "legacyResourceAllocationSchemaRef": "sciforge.computer-use.l1-runtime-resource-allocation.v1",
-      "requiresProcessLogRefs": "processRef must expose long-running backend/app process records with stdout/stderr log refs",
-      "requiresWindowBoundPointerProof": "targetWindowRef and windowBoundPointerProofRef must prove every L3 pointer click is dispatched in window coordinate space with --window, target bounds hit-testing, command provenance and no shared/system input side effects",
-      "targetWindowSchemaRef": "sciforge.computer-use.isolated-target-window.v1",
-      "requiresCurrentStepScreenshots": true,
-      "requiresScreenshotContentDiversity": "existing screenshot refs must contain at least three distinct file hashes across source, writer, and file-preview states",
-      "forbidPriorRoundCompletionEvidence": true,
-      "requiresDirectoryEvidence": true,
-      "requiresArtifactPreview": true,
-      "requiresGuiSavedArtifactCausality": "artifactCausality must cite finalArtifactRef, artifactValidationRef, savedThroughGui=true, shellDirectArtifactWrite=false and savedByCommandEventRef matching the keyboard save input event",
-      "requiresGuiDirectoryPreviewCausality": "directoryEvidence must cite previewedThroughGui=true, shellDirectoryListingOnly=false and previewedByActionIndex matching pointer input evidence for the file preview",
-      "requiresSourceFactCitations": true,
-      "requiresSupportedFactContentInArtifact": "supported source fact payloads must resolve to source-fact schema with non-empty fact text, and artifactValidationRef textRuns/normalized text must include every supported fact",
-      "sourceFactEvidenceSchemaRef": "sciforge.computer-use.source-fact-evidence.v1",
-      "sourceFactCompatSchemaRef": "sciforge.computer-use.source-fact.v1",
-      "sourceFactEvidenceBuilder": "sciforge_computer_use.source_fact_evidence.build_source_fact_evidence_payload",
-      "sourceFactEvidenceValidator": "sciforge_computer_use.source_fact_evidence.validate_source_fact_evidence_payload",
-      "sourceFactEvidencePolicy": "source fact helpers are refs-first diagnostics for source observation -> supported fact -> derived content; they cannot claim completion or user acceptance",
-      "artifactBundleEvidenceSchemaRef": "sciforge.computer-use.l3-artifact-bundle-evidence.v1",
-      "artifactBundleEvidenceBuilder": "sciforge_computer_use.l3_artifact_bundle_evidence.build_l3_artifact_bundle_evidence",
-      "artifactBundleEvidenceValidator": "sciforge_computer_use.l3_artifact_bundle_evidence.validate_l3_artifact_bundle_evidence",
-      "artifactBundleEvidencePolicy": "artifact bundle helpers are refs-first diagnostics for final artifact, artifact validation, file-list, preview and gui.present refs; they cannot claim completion or user acceptance",
-      "requiresCurrentCompletionClaim": true
-    },
-    "blockedInputs": ["package-owned-target-bound-window", "target-bound-simulated-input", "readiness-only-manifest", "partial-l3-runtime-refs", "partial-run-manifest", "runtime-launch-only-refs", "l1-smoke-only-evidence", "placeholder-only-viewer", "shape-only-refs", "prior-round-completion"],
-    "readinessProbe": "python -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir <dir> [--execute] [--display <display>] [--vnc-port <port>] [--novnc-port <port>] [--timeout-seconds <seconds>] [--resource-lock-root <dir>]",
-    "claimLimit": "This contract/validator governs real isolated L3 multi-app evidence. The L3 workflow probe may write completionEvidenceRef only when validate_isolated_desktop_l3_workflow_evidence(require_existing_refs=true) accepts existing refs from the same isolated virtual session; target-bound diagnostics, partialRunRef and partialRuntimeRefs cannot be copied into completed top-level requiredRefs or traceRefs. Completed L3 must load existing refs proving source reader, writer, file preview, artifact validation, directory evidence, visible viewer, input logs, window-bound pointer proof, runtime resource allocation proof, evidence ledger, and the same isolated virtual session."
-  },
-  "semanticVerifierProbeContract": {
-    "summarySchemaRef": "sciforge.computer-use.semantic-verifier-summary.v1",
-    "traceSchemaRef": "sciforge.computer-use.semantic-verifier-trace.v1",
-    "diagnosticsSchemaRef": "sciforge.computer-use.provider-diagnostics.v1",
-    "probe": "sciforge_computer_use.semantic_verifier_probe",
-    "legacyDirectProviderDiagnosticOnly": true,
-    "productModelRouterCallSurface": false,
-    "productDefaultAcceptanceAllowed": false,
-    "userAcceptanceEligible": false,
-    "configSourcePolicy": "Reads ignored local visionLLM config only; manifests may record config refs, model id, and URL origin but never API keys.",
-    "endpointResolution": {
-      "acceptedBaseUrlKinds": ["api-base", "chat-completions-endpoint", "responses-endpoint", "models-endpoint"],
-      "derivedEndpoints": ["models", "chatCompletions", "responses"],
-      "recordedEndpointFields": ["method", "path"],
-      "forbiddenEndpointFields": ["authorization", "query-secrets", "request-body", "data-url"]
-    },
-    "attemptStages": ["text-preflight", "multimodal-request"],
-    "textPreflightVariants": ["text-only", "text-only-minimal", "responses-text-only", "responses-text-only-no-temperature"],
-    "multimodalVariants": [
-      "chat-image-url-object",
-      "chat-image-url-string",
-      "responses-input-image",
-      "chat-image-url-object-no-temperature",
-      "chat-image-url-string-no-temperature",
-      "responses-input-image-no-temperature"
-    ],
-    "diagnosticRequests": ["originGet", "modelsGet", "textChat", "textResponses"],
-    "completionVerdictPolicy": "Provider output must parse to JSON with verdict=pass before the probe status can become completed; fail, unknown, or non-JSON output writes a blocked manifest.",
-    "diagnosticRecordFields": ["method", "path", "elapsedMs", "retryable", "errorCategory", "diagnosticTimeoutSeconds", "bodyKind", "bytesRead", "bodyTruncated", "modelCount", "configuredModelPresent"],
-    "modelsDiagnosticPolicy": "The /models diagnostic may summarize body kind, bytes read, model count, and whether the configured model is present; it must not persist raw model ids or raw response bodies.",
-    "projectEvidenceEligibilityFields": ["expectedProjectModelId", "expectedProjectModelIds", "responseModelId", "configuredModelMatchesProject", "responseModelMatchesConfigured", "modelPresenceVerified", "projectVerifierEvidenceEligible", "projectVerifierEvidenceBlockers"],
-    "projectEvidenceModels": ["sciforge-router", "model-router.capability.computer-use.verifier-translator", "sciforge-router-no-temperature"],
-    "projectEvidenceEligibilityPolicy": "A completed semantic verifier probe is a PROJECT verifier eligible evidence candidate only when the configured model is in projectEvidenceModels, the provider response model does not contradict it, and /models diagnostics verify configuredModelPresent=true.",
-    "transportFallback": "Uses a package-local raw HTTP/1.1 non-streaming transport for Chat/Responses candidates and diagnostics, with urllib retained as fallback for retryable raw transport failures.",
-    "responseCompatibilityHelper": "sciforge_computer_use.response_compat.extract_provider_text",
-    "responseCompatibilityHelpers": {
-      "textExtraction": "sciforge_computer_use.response_compat.extract_provider_text",
-      "responsesToChatCompletions": "sciforge_computer_use.response_compat.responses_to_chat_completions",
-      "chatCompletionsToResponses": "sciforge_computer_use.response_compat.chat_completions_to_responses"
-    },
-    "forbiddenInlinePayloads": ["apiKey", "rawProviderPayload", "requestBody", "data:image", "base64", "inlineImage"],
-    "claimLimit": "Package-local fake HTTP provider tests and provider diagnostics validate wire-shape and refs-first metadata; PROJECT verifier evidence is eligible only after a real projectEvidenceModels provider call returns a completed refs-first semantic verifier summary with model presence verified."
   },
   "verifierContract": {
     "required": true,
-    "defaultVerifierTypes": ["environment", "human"],
-    "requiredWhen": ["riskLevel=high", "status=completed", "external side effect"],
+    "defaultVerifierTypes": [
+      "environment",
+      "human"
+    ],
+    "requiredWhen": [
+      "riskLevel=high",
+      "status=completed",
+      "external side effect"
+    ],
     "requestShape": {
       "goal": "ComputerUseRequest.task",
       "traceRefs": "computer-use trace refs",
@@ -823,7 +706,14 @@
     "semanticVerifierPolicy": {
       "storagePolicy": "refs-first",
       "optional": true,
-      "forbiddenInlinePayloads": ["apiKey", "rawProviderPayload", "requestBody", "inlineImage", "data:image", "base64"],
+      "forbiddenInlinePayloads": [
+        "apiKey",
+        "rawProviderPayload",
+        "requestBody",
+        "inlineImage",
+        "data:image",
+        "base64"
+      ],
       "fakeOrDiagnosticOnlyClaimLimit": "A fake provider or diagnostic-only semantic summary cannot own execution, coordinates, completion, or artifact-producing success."
     }
   },
@@ -833,35 +723,54 @@
       "stage": "targeting",
       "recoverable": true,
       "description": "sense provider 无法把动作目标定位到观察坐标。",
-      "repairHints": ["重新观察目标窗口", "缩小目标区域", "请求更明确的目标描述"]
+      "repairHints": [
+        "重新观察目标窗口",
+        "缩小目标区域",
+        "请求更明确的目标描述"
+      ]
     },
     {
       "code": "execution-blocked",
       "stage": "execution",
       "recoverable": true,
       "description": "host adapter 拒绝执行或目标环境不可用。",
-      "repairHints": ["检查窗口绑定", "检查输入隔离", "切换到 dry-run 或请求用户介入"]
+      "repairHints": [
+        "检查窗口绑定",
+        "检查输入隔离",
+        "切换到 dry-run 或请求用户介入"
+      ]
     },
     {
       "code": "confirmation-required",
       "stage": "confirmation",
       "recoverable": true,
       "description": "动作风险等级需要显式确认。",
-      "repairHints": ["请求 human approval", "降低动作风险或改为只观察"]
+      "repairHints": [
+        "请求 human approval",
+        "降低动作风险或改为只观察"
+      ]
     },
     {
       "code": "verification-failed",
       "stage": "verification",
       "recoverable": true,
       "description": "执行后验证未通过或不确定。",
-      "repairHints": ["把 verification result 带入下一轮", "重新规划动作", "请求人类判断"]
+      "repairHints": [
+        "把 verification result 带入下一轮",
+        "重新规划动作",
+        "请求人类判断"
+      ]
     },
     {
       "code": "semantic-provider-unavailable",
       "stage": "verification/provider-diagnostic",
       "recoverable": true,
       "description": "可选 semantic vision provider 不可用、超时、认证失败或 endpoint 诊断被阻断。",
-      "repairHints": ["检查 ignored local visionLLM config", "查看 provider diagnostics 的 method/path/errorCategory", "保持 deterministic verifier 结果为主"]
+      "repairHints": [
+        "检查 ignored local visionLLM config",
+        "查看 provider diagnostics 的 method/path/errorCategory",
+        "保持 deterministic verifier 结果为主"
+      ]
     }
   ]
 }

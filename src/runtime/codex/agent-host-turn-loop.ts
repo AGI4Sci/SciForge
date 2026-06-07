@@ -82,6 +82,19 @@ export interface CodexAgentHostComputerUseCompletionTruth {
   reason?: string;
 }
 
+export interface CodexAgentHostBrowserCompletionTruth {
+  schemaVersion: 'sciforge.agent-host.completion-truth.v1';
+  scope: 'user-task' | 'workflow';
+  status: 'satisfied' | 'partial' | 'blocked';
+  evidenceRefs: string[];
+  validator: 'agent-host-browser-acceptance';
+  reason?: string;
+}
+
+type CodexAgentHostCompletionTruth =
+  | CodexAgentHostComputerUseCompletionTruth
+  | CodexAgentHostBrowserCompletionTruth;
+
 export type CodexAgentHostComputerUseActMaterializer =
   (input: CodexAgentHostComputerUseActMaterializerInput) =>
     Promise<CodexAgentHostComputerUseActMaterializerResult | undefined> | CodexAgentHostComputerUseActMaterializerResult | undefined;
@@ -1380,19 +1393,35 @@ function browserBoundedOperationTurnLoopResult(input: {
   })).slice(0, 12);
   const sourceSummaries = browserOperationSourceSummaries(operationValue);
   const evidenceCheck = browserOperationRequiredEvidenceCheck(operationValue, evidenceRefs);
-  const completed = input.operationResult.ok
-    && operationValue?.status === 'completed'
-    && evidenceRefs.length > 0
-    && evidenceCheck.ok;
   const operationKind = stringField(input.operationRequest.input?.operationKind) ?? 'browser.operation';
   const acceptanceSpec = browserOperationAcceptanceSpec({
     commandText: input.commandText,
     sourceSummaries,
   });
+  const acceptanceEvaluation = browserOperationAcceptanceEvaluation({
+    operationValue,
+    sourceSummaries,
+    evidenceRefs,
+    evidenceCheck,
+    acceptanceSpec,
+  });
+  const completed = input.operationResult.ok
+    && operationValue?.status === 'completed'
+    && acceptanceEvaluation.status === 'satisfied';
+  const completionTruth = browserOperationCompletionTruth({
+    acceptanceEvaluation,
+    evidenceRefs,
+  });
   const operationSlug = operationKind.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'browser-operation';
   const message = completed
     ? browserOperationFinalAnswer(sourceSummaries, evidenceRefs, acceptanceSpec)
-    : `Browser ${operationKind} is ${operationValue?.status ?? 'failed'}: ${operationValue?.blockedReason ?? input.operationResult.error ?? evidenceCheck.reason}.`;
+    : browserOperationBlockedMessage({
+      operationKind,
+      operationStatus: operationValue?.status,
+      blockedReason: operationValue?.blockedReason ?? input.operationResult.error,
+      acceptanceEvaluation,
+      evidenceCheck,
+    });
   const status = completed ? 'completed' : operationValue?.status === 'needs-confirmation' ? 'needs-confirmation' : 'blocked';
   const executionUnit = {
     id: `EU-${operationSlug}-${id}`,
@@ -1428,6 +1457,7 @@ function browserBoundedOperationTurnLoopResult(input: {
         ground: input.ground,
         selectedRuntime: 'module.invoke',
         acceptanceSpec,
+        acceptanceEvaluation,
         operation: {
           moduleId: input.operationRequest.moduleId,
           intent: input.operationRequest.intent,
@@ -1452,6 +1482,7 @@ function browserBoundedOperationTurnLoopResult(input: {
       executionUnits: [executionUnit],
       claims,
       evidenceRefs,
+      completionTruth,
     }),
   };
 }
@@ -1488,6 +1519,158 @@ function browserOperationRequiredEvidenceCheck(
   };
 }
 
+function browserOperationAcceptanceEvaluation(input: {
+  operationValue: BoundedOperationResultValue | undefined;
+  sourceSummaries: Array<{ title: string; url?: string; summary?: string; textRef?: string }>;
+  evidenceRefs: string[];
+  evidenceCheck: ReturnType<typeof browserOperationRequiredEvidenceCheck>;
+  acceptanceSpec: AgentHostAcceptanceSpec;
+}): AgentHostAcceptanceEvaluation {
+  const issues: AgentHostAcceptanceEvaluation['issues'] = [];
+  const repairHints: AgentHostAcceptanceEvaluation['repairHints'] = [];
+  const operationStatus = input.operationValue?.status;
+  if (operationStatus !== 'completed') {
+    issues.push({
+      code: 'operation-not-completed',
+      message: `Browser operation status is ${operationStatus ?? 'missing'}, not completed.`,
+      evidenceRefs: input.evidenceRefs,
+    });
+    repairHints.push({
+      action: 'repair-browser-operation',
+      reason: 'Agent Host can only mark browser completion truth satisfied after the bounded Browser operation completes.',
+    });
+  }
+  if (!input.evidenceCheck.ok) {
+    issues.push({
+      code: 'missing-required-evidence',
+      message: input.evidenceCheck.reason,
+      evidenceRefs: input.evidenceRefs,
+    });
+    repairHints.push({
+      action: 'open-task-relevant-source-pages',
+      reason: 'The answer candidate lacks current-run source page and page text refs required for user-level browser completion.',
+    });
+  }
+  if (!input.sourceSummaries.length) {
+    issues.push({
+      code: 'no-completion-source-pages',
+      message: 'Browser returned no non-discovery source pages that Agent Host can use as completion evidence.',
+      evidenceRefs: input.evidenceRefs,
+    });
+    repairHints.push({
+      action: 'open-concrete-result-pages',
+      reason: 'Discovery pages and search-result shells must be followed to concrete source pages before final synthesis.',
+    });
+  }
+  const lowInformationSources = input.sourceSummaries.filter(browserOperationSourceLooksLowInformation);
+  if (lowInformationSources.length === input.sourceSummaries.length && lowInformationSources.length > 0) {
+    issues.push({
+      code: 'low-information-source-pages',
+      message: 'Only low-information source pages such as home, login, account, help, or navigation pages were read.',
+      evidenceRefs: input.evidenceRefs,
+    });
+    repairHints.push({
+      action: 'repair-browser-search',
+      reason: 'Search again, translate or expand the query, and open task-specific result pages instead of homepage/login pages.',
+    });
+  }
+  const temporalIssue = browserOperationTemporalEvaluationIssue(input.sourceSummaries, input.acceptanceSpec);
+  if (temporalIssue) issues.push(temporalIssue);
+  const operationIncomplete = operationStatus !== 'completed';
+  const status: AgentHostAcceptanceEvaluationStatus = issues.length
+    ? !operationIncomplete && input.evidenceCheck.ok && input.sourceSummaries.some((source) => !browserOperationSourceLooksLowInformation(source))
+      ? 'partial'
+      : 'blocked'
+    : 'satisfied';
+  return {
+    schemaVersion: 'sciforge.agent-host.acceptance-evaluation.v1',
+    status,
+    issues,
+    repairHints,
+    satisfiedEvidenceRefs: status === 'satisfied' ? input.evidenceRefs : [],
+  };
+}
+
+function browserOperationTemporalEvaluationIssue(
+  sourceSummaries: Array<{ summary?: string }>,
+  acceptanceSpec: AgentHostAcceptanceSpec,
+): AgentHostAcceptanceEvaluation['issues'][number] | undefined {
+  const temporal = acceptanceSpec.constraints.temporal;
+  if (temporal.kind === 'none' || temporal.kind === 'latest-or-current') return undefined;
+  const datedItems = browserOperationStructuredDatedItems(sourceSummaries);
+  if (!datedItems.length) return undefined;
+  if (datedItems.some((item) => browserOperationDatedItemMatchesTemporalConstraint(item, temporal))) return undefined;
+  if (acceptanceSpec.failurePolicy.unsatisfiedTemporalConstraint === 'no-result-with-evidence') return undefined;
+  return {
+    code: 'temporal-constraint-unsatisfied',
+    message: `No structured dated item matched the requested time constraint: ${temporal.label}.`,
+  };
+}
+
+function browserOperationSourceLooksLowInformation(source: { title?: string; url?: string; summary?: string }): boolean {
+  const title = source.title ?? '';
+  const summary = source.summary ?? '';
+  const text = `${title} ${summary}`.replace(/\s+/g, ' ').trim();
+  if (browserOperationUrlLooksLowInformation(source.url)) return true;
+  if (/^\s*(?:log\s+in|sign\s+in|login)\b/i.test(title)) return true;
+  if (/\b(?:username|password|create account|forgot password|log in to|sign in to)\b/i.test(text)) return true;
+  if (/\bskip to main content\b/i.test(text)
+    && /\b(?:homepage|home page|navigation|open-access archive|free distribution service)\b/i.test(text)) return true;
+  return false;
+}
+
+function browserOperationUrlLooksLowInformation(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/\/+$/g, '') || '/';
+    if (path === '/' && !url.search && !url.hash) return true;
+    return /^\/(?:login|signin|sign-in|account|accounts|user|users|help|about|contact|privacy|terms)(?:\/|$)/i.test(path);
+  } catch {
+    return false;
+  }
+}
+
+function browserOperationCompletionTruth(input: {
+  acceptanceEvaluation: AgentHostAcceptanceEvaluation;
+  evidenceRefs: string[];
+}): CodexAgentHostBrowserCompletionTruth {
+  const reason = input.acceptanceEvaluation.issues.map((issue) => issue.message).join(' ');
+  return {
+    schemaVersion: 'sciforge.agent-host.completion-truth.v1',
+    scope: 'user-task',
+    status: input.acceptanceEvaluation.status === 'satisfied'
+      ? 'satisfied'
+      : input.acceptanceEvaluation.status === 'partial'
+        ? 'partial'
+        : 'blocked',
+    evidenceRefs: input.evidenceRefs,
+    validator: 'agent-host-browser-acceptance',
+    ...(reason ? { reason: boundedDiagnosticText(reason) } : {}),
+  };
+}
+
+function browserOperationBlockedMessage(input: {
+  operationKind: string;
+  operationStatus: string | undefined;
+  blockedReason: string | undefined;
+  acceptanceEvaluation: AgentHostAcceptanceEvaluation;
+  evidenceCheck: ReturnType<typeof browserOperationRequiredEvidenceCheck>;
+}): string {
+  const issueText = input.acceptanceEvaluation.issues
+    .map((issue) => `${issue.code}: ${issue.message}`)
+    .join(' ');
+  const repairText = input.acceptanceEvaluation.repairHints
+    .slice(0, 2)
+    .map((hint) => `${hint.action}: ${hint.reason}`)
+    .join(' ');
+  return [
+    `Browser ${input.operationKind} is ${input.operationStatus ?? 'failed'} but Agent Host could not verify task completion.`,
+    input.blockedReason ?? issueText ?? input.evidenceCheck.reason,
+    repairText ? `Repair hints: ${repairText}` : undefined,
+  ].filter((line): line is string => Boolean(line)).join(' ');
+}
+
 function browserOperationEvidenceRefs(value: BoundedOperationResultValue | undefined, envelopeRefs: string[] | undefined) {
   return uniqueStrings([
     ...(value?.sourceRefs ?? []),
@@ -1516,7 +1699,7 @@ function browserOperationFinalAnswer(
   const datedItems = browserOperationStructuredDatedItems(sourceSummaries);
   if (datedItems.length && acceptanceSpec.output.answerKind === 'dated-item-list') {
     const temporal = acceptanceSpec.constraints.temporal;
-    const matchingItems = temporal.kind === 'exact-date'
+    const matchingItems = temporal.kind === 'exact-date' || temporal.kind === 'relative-window'
       ? datedItems.filter((item) => browserOperationDatedItemMatchesTemporalConstraint(item, temporal))
       : [];
     if (temporal.kind === 'exact-date' && !matchingItems.length) {
@@ -1531,6 +1714,8 @@ function browserOperationFinalAnswer(
     const visibleItems = (matchingItems.length ? matchingItems : datedItems).slice(0, 6);
     const heading = temporal.kind === 'exact-date'
       ? `符合“${temporal.label}”时间约束的已读结果：`
+      : temporal.kind === 'relative-window'
+        ? `符合“${temporal.label}”时间窗口的已读结果：`
       : temporal.kind === 'latest-or-current'
         ? '基于已读来源页的最新/当前相关结果：'
         : '基于已读来源页的相关结果：';
@@ -1559,8 +1744,9 @@ function browserOperationFinalAnswer(
 type BrowserOperationEvidenceRequirement = 'source-page-ref' | 'page-text-ref';
 type BrowserOperationAnswerKind = 'source-summary' | 'dated-item-list';
 type BrowserOperationTemporalField = 'submitted' | 'published' | 'updated' | 'released' | 'observed';
-type BrowserOperationTemporalKind = 'none' | 'exact-date' | 'latest-or-current';
+type BrowserOperationTemporalKind = 'none' | 'exact-date' | 'relative-window' | 'latest-or-current';
 type BrowserOperationTemporalStrictness = 'must-match' | 'best-effort-with-disclosure';
+type AgentHostAcceptanceEvaluationStatus = 'satisfied' | 'repairable' | 'partial' | 'blocked' | 'not_required';
 
 interface AgentHostAcceptanceSpec {
   schemaVersion: 'sciforge.agent-host.acceptance-spec.v1';
@@ -1584,8 +1770,25 @@ interface AgentHostTemporalConstraint {
   kind: BrowserOperationTemporalKind;
   label: string;
   anchorDate?: string;
+  startDate?: string;
+  endDate?: string;
   evidenceFields: BrowserOperationTemporalField[];
   strictness: BrowserOperationTemporalStrictness;
+}
+
+interface AgentHostAcceptanceEvaluation {
+  schemaVersion: 'sciforge.agent-host.acceptance-evaluation.v1';
+  status: AgentHostAcceptanceEvaluationStatus;
+  issues: Array<{
+    code: string;
+    message: string;
+    evidenceRefs?: string[];
+  }>;
+  repairHints: Array<{
+    action: string;
+    reason: string;
+  }>;
+  satisfiedEvidenceRefs: string[];
 }
 
 interface BrowserOperationDatedItem {
@@ -1726,6 +1929,17 @@ function browserOperationTemporalConstraintFromIntent(commandText: string): Agen
     };
   }
   if (/(?:最新|当前|目前|近期|最近|本周|本月|latest|current|recent|newest|this\s+week|this\s+month)/iu.test(text)) {
+    const relativeWindow = browserOperationRelativeWindow(text);
+    if (relativeWindow) {
+      return {
+        kind: 'relative-window',
+        label: relativeWindow.label,
+        startDate: relativeWindow.startDate,
+        endDate: relativeWindow.endDate,
+        evidenceFields: [...BROWSER_OPERATION_TEMPORAL_FIELDS],
+        strictness: 'must-match',
+      };
+    }
     return {
       kind: 'latest-or-current',
       label: '最新/当前',
@@ -1755,6 +1969,32 @@ function browserOperationRelativeExactDate(commandText: string): { label: string
   return undefined;
 }
 
+function browserOperationRelativeWindow(commandText: string): { label: string; startDate: string; endDate: string } | undefined {
+  const today = new Date();
+  if (/(?:最近一周|近一周|过去一周|最近\s*7\s*天|过去\s*7\s*天|last\s+(?:week|7\s+days)|past\s+(?:week|7\s+days))/iu.test(commandText)) {
+    return {
+      label: /last|past/iu.test(commandText) ? 'last 7 days' : '最近一周',
+      startDate: localIsoDate(offsetDate(today, -7)),
+      endDate: localIsoDate(today),
+    };
+  }
+  if (/(?:本周|this\s+week)/iu.test(commandText)) {
+    return {
+      label: /this\s+week/iu.test(commandText) ? 'this week' : '本周',
+      startDate: localIsoDate(offsetDate(today, -7)),
+      endDate: localIsoDate(today),
+    };
+  }
+  if (/(?:本月|this\s+month)/iu.test(commandText)) {
+    return {
+      label: /this\s+month/iu.test(commandText) ? 'this month' : '本月',
+      startDate: localIsoDate(offsetDate(today, -31)),
+      endDate: localIsoDate(today),
+    };
+  }
+  return undefined;
+}
+
 function browserOperationExplicitDate(commandText: string): { label: string; anchorDate: string } | undefined {
   const isoMatch = /\b((?:19|20)\d{2})-(\d{1,2})-(\d{1,2})\b/u.exec(commandText);
   if (isoMatch) {
@@ -1777,9 +2017,18 @@ function browserOperationDatedItemMatchesTemporalConstraint(
   item: BrowserOperationDatedItem,
   temporal: AgentHostTemporalConstraint,
 ): boolean {
-  if (temporal.kind !== 'exact-date' || !temporal.anchorDate) return true;
-  return browserOperationDatedItemDateFacts(item, temporal.evidenceFields)
-    .some((fact) => dateLabelToIso(fact.value) === temporal.anchorDate);
+  if (temporal.kind === 'exact-date' && temporal.anchorDate) {
+    return browserOperationDatedItemDateFacts(item, temporal.evidenceFields)
+      .some((fact) => dateLabelToIso(fact.value) === temporal.anchorDate);
+  }
+  if (temporal.kind === 'relative-window' && temporal.startDate && temporal.endDate) {
+    return browserOperationDatedItemDateFacts(item, temporal.evidenceFields)
+      .some((fact) => {
+        const iso = dateLabelToIso(fact.value);
+        return Boolean(iso && iso >= temporal.startDate! && iso <= temporal.endDate!);
+      });
+  }
+  return true;
 }
 
 function browserOperationDatedItemLines(item: BrowserOperationDatedItem, index: number): string[] {
@@ -2305,7 +2554,7 @@ function structuredResult(input: {
   executionUnits: Array<Record<string, unknown>>;
   claims: Array<Record<string, unknown>>;
   evidenceRefs: string[];
-  completionTruth?: CodexAgentHostComputerUseCompletionTruth;
+  completionTruth?: CodexAgentHostCompletionTruth;
 }) {
   return {
     type: 'done',
@@ -2635,7 +2884,7 @@ function runtimeOwnedRuntimeTruthRef(ref: string): boolean {
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(trimmed)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(trimmed)) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|virtual-app-screen:|computer-use:|native-adapter:|desktop-native:|permission:|approval:|cancel:|stop:|lease:|adapter-registry:|window:|action-ledger:|evidence:|workEvidence:|native-host:|audit:)/i.test(trimmed);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-adapter:|desktop-native:|permission:|approval:|cancel:|stop:|lease:|adapter-registry:|window:|action-ledger:|evidence:|workEvidence:|native-host:|audit:)/i.test(trimmed);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

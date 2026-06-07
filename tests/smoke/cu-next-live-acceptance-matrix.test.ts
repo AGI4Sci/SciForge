@@ -81,7 +81,6 @@ test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform sm
     CU_NEXT_PRODUCT_SMOKE_CASES.map((item) => item.id),
     [
       'product-path-codex-native-plugin-sidecar',
-      'virtual-app-screen-user-acceptance',
       'real-single-app-input',
       'real-artifact-save',
       'high-risk-confirmation-stop',
@@ -120,8 +119,6 @@ test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform sm
     'codex-app-server-native-plugin-path',
     'sciforge-computer-use-provider',
     'platform-sidecar-isolation',
-    'virtual-app-screen-user-acceptance',
-    'virtual-app-screen-user-acceptance-manifest',
     'real-single-app-input',
     'real-artifact-save',
     'high-risk-confirmation-stop',
@@ -150,7 +147,6 @@ test('CU-NEXT live matrix dry-run classification covers actor/screen/queue cases
   assert.deepEqual(
     CU_NEXT_LIVE_MATRIX_CLASSIFICATION_CASES.map((item) => item.id).filter((id) => id.includes('screen') || id.includes('queue')),
     [
-      'virtual-app-screen-user-acceptance',
       'single-screen-single-actor',
       'single-screen-multi-actor',
       'multi-screen-single-actor',
@@ -165,132 +161,6 @@ test('CU-NEXT live matrix dry-run classification covers actor/screen/queue cases
     assert.equal(item.realBackendExecuted, false);
     assert.ok(item.notRunReason?.includes('opt-in'));
   }
-});
-
-test('CU-NEXT product smoke matrix accepts VirtualAppScreen user-level manifest as active gate', () => {
-  const manifestRef = ref('CU-NEXT-07', 'virtual-app-screen-user-acceptance-manifest.json');
-  const liveCase: CuNextProductSmokeCaseEvidence = {
-    id: 'virtual-app-screen-user-acceptance',
-    status: 'passed',
-    evidenceTier: 'product-smoke',
-    executionMode: 'opt-in-live-backend',
-    realBackendExecuted: true,
-    userAcceptanceGate: 'virtual-app-screen-user-acceptance',
-    userAcceptanceEligible: true,
-    productPath: {
-      entrypoint: 'Codex app-server native plugin',
-      hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'platform-sidecar'],
-      backendKind: 'platform-sidecar',
-      appServerRunRef: ref('CU-NEXT-07', 'app-server-run.json'),
-      nativePluginInvocationRef: ref('CU-NEXT-07', 'native-plugin-invocation.json'),
-      sciforgeComputerUseRunTaskRef: ref('CU-NEXT-07', 'run-task.json'),
-      platformSidecarIsolationReportRef: ref('CU-NEXT-07', 'sidecar-isolation.json'),
-    },
-    evidenceRefs: {
-      'virtual-app-screen-user-acceptance': [ref('CU-NEXT-07', 'evidence-ledger.json')],
-      'virtual-app-screen-user-acceptance-manifest': [manifestRef],
-      'viewer-real-frames': [ref('CU-NEXT-07', 'frames/after.png')],
-      'real-artifact-save': [ref('CU-NEXT-07', 'artifacts/research-note.md')],
-      'current-bundle-evidence': [ref('CU-NEXT-07', 'current-bundle.json')],
-    },
-    currentRunBundleRef: `.sciforge/vision-runs/${runId('CU-NEXT-07')}`,
-    acceptanceManifestRef: manifestRef,
-    virtualAppScreenUserAcceptanceManifestRef: manifestRef,
-  };
-
-  const result = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
-    cases: [
-      liveCase,
-      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
-    ],
-  }), {
-    refRecords: {
-      [manifestRef]: virtualAppScreenUserAcceptanceManifest('CU-NEXT-07'),
-    },
-  });
-
-  assert.equal(result.ok, true, result.issues.map((issue) => issue.reason).join('\n'));
-  assert.deepEqual(result.passedCaseIds, ['virtual-app-screen-user-acceptance']);
-
-  const m6SubstituteManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07', {
-    evidenceClaims: [
-      {
-        id: 'm6-only',
-        kind: 'm6-native-multi-screen',
-        completionEvidence: true,
-        userAcceptanceEligible: true,
-      },
-    ],
-    validation: {
-      ok: false,
-      issues: ['non-substitute evidence cannot be marked userAcceptanceEligible: m6-native-multi-screen.'],
-      missingRefs: [],
-      rejectedClaimKinds: ['m6-native-multi-screen'],
-    },
-  });
-  const rejected = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
-    cases: [
-      liveCase,
-      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
-    ],
-  }), {
-    refRecords: {
-      [manifestRef]: m6SubstituteManifest,
-    },
-  });
-
-  assert.equal(rejected.ok, false);
-  assert.ok(productSmokeIssue(rejected, 'invalid-virtual-app-screen-user-acceptance-validation'));
-  assert.ok(productSmokeIssue(rejected, 'virtual-app-screen-rejected-substitute-claims'));
-
-  const missingBlockedReasonManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07');
-  delete missingBlockedReasonManifest.blockedReason;
-  const missingBlockedReason = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
-    cases: [
-      liveCase,
-      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
-    ],
-  }), {
-    refRecords: {
-      [manifestRef]: missingBlockedReasonManifest,
-    },
-  });
-
-  assert.equal(missingBlockedReason.ok, false);
-  assert.ok(productSmokeIssue(missingBlockedReason, 'invalid-virtual-app-screen-user-acceptance-manifest'));
-
-  const missingLedgerActionsManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07');
-  delete missingLedgerActionsManifest.evidenceLedgerActions;
-  const missingLedgerActions = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
-    cases: [
-      liveCase,
-      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
-    ],
-  }), {
-    refRecords: {
-      [manifestRef]: missingLedgerActionsManifest,
-    },
-  });
-
-  assert.equal(missingLedgerActions.ok, false);
-  assert.ok(productSmokeIssue(missingLedgerActions, 'invalid-virtual-app-screen-evidence-ledger'));
-
-  const crossBundleLedgerManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07');
-  (crossBundleLedgerManifest.evidenceLedgerActions as Array<Record<string, unknown>>)[0].inputIntentRef =
-    ref('CU-NEXT-04', 'input-intents/highlight-title.json');
-  const crossBundleLedger = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
-    cases: [
-      liveCase,
-      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
-    ],
-  }), {
-    refRecords: {
-      [manifestRef]: crossBundleLedgerManifest,
-    },
-  });
-
-  assert.equal(crossBundleLedger.ok, false);
-  assert.ok(productSmokeIssue(crossBundleLedger, 'product-smoke-ref-outside-current-bundle'));
 });
 
 test('CU-NEXT product smoke matrix keeps M6 as historical native multi-screen regression', () => {
@@ -2649,116 +2519,18 @@ function withoutSciForgeChatOriginProof(evidence: Record<string, unknown>): Reco
   };
 }
 
-function virtualAppScreenUserAcceptanceManifest(
-  taskId: CuNextTaskId,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
-  const id = runId(taskId);
-  return deepMerge({
-    schemaVersion: 'sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1',
-    taskId: 'P0-CU-UA-FIRST-SCENARIO',
-    scenarioId: 'virtual-app-screen-local-research-note',
-    userIntent: 'Read local research notes in a background app screen, annotate a sentence, and produce research-note.md.',
-    status: 'passed',
-    createdAt: '2026-06-01T00:00:00.000Z',
-    targetAppRefs: [`app:${id}/browser-research-profile`],
-    targetWindowRefs: [`window:${id}/browser-research-profile/main`],
-    sessionRefs: [`computer-use-session:${id}-virtual-app-screen`],
-    adapterReadinessRefs: [ref(taskId, 'adapter-readiness.json')],
-    screenFrameRefs: [ref(taskId, 'frames/before.png'), ref(taskId, 'frames/after.png')],
-    inputIntentRefs: [ref(taskId, 'input-intents/highlight-title.json')],
-    executorEventRefs: [ref(taskId, 'executor-events/highlight-title.json')],
-    beforeAfterFrameRefs: [ref(taskId, 'before-after/highlight-title.json')],
-    annotationProposalRefs: [ref(taskId, 'annotation-proposals/highlight-title.json')],
-    artifactRefs: [ref(taskId, 'artifacts/research-note.md')],
-    verificationRefs: [ref(taskId, 'verifier/research-note.json')],
-    guiPresentRefs: [ref(taskId, 'gui-present/research-note.json')],
-    replayRef: ref(taskId, 'replay.json'),
-    evidenceLedgerRef: ref(taskId, 'evidence-ledger.json'),
-    isolationFlags: {
-      backgroundRenderable: true,
-      affectsPhysicalDisplay: false,
-      requiresFocusSteal: false,
-      sharedSystemInputUsed: false,
-      physicalDisplayPopup: false,
-      systemPointerMoved: false,
-      systemKeyboardEventsSent: false,
-      diagnosticOnly: false,
-    },
-    adapterReadinessRecords: [{
-      adapterKind: 'browser-runtime-window',
-      targetScope: 'window',
-      supportedActions: ['click', 'type', 'scroll', 'hotkey', 'annotate'],
-      captureSupported: true,
-      backgroundRenderable: true,
-      affectsPhysicalDisplay: false,
-      requiresFocusSteal: false,
-      sharedSystemInputUsed: false,
-      schemaRefs: ['schema:computer-use/action-adapter-readiness.v1'],
-    }],
-    evidenceClaims: [{
-      id: 'real-virtual-app-screen',
-      kind: 'real-virtual-app-screen',
-      status: 'present',
-      ref: ref(taskId, 'evidence-ledger.json'),
-      refs: [ref(taskId, 'replay.json')],
-      evidenceRefs: [ref(taskId, 'before-after/highlight-title.json')],
-      sessionRefs: [`computer-use-session:${id}-virtual-app-screen`],
-    }],
-    evidenceLedgerActions: [{
-      actionId: `${id}-highlight-title`,
-      sessionRef: `computer-use-session:${id}-virtual-app-screen`,
-      inputIntentRef: ref(taskId, 'input-intents/highlight-title.json'),
-      providerAdapterRef: ref(taskId, 'adapter-readiness.json'),
-      executorEventRef: ref(taskId, 'executor-events/highlight-title.json'),
-      beforeFrameRef: ref(taskId, 'frames/before.png'),
-      afterFrameRef: ref(taskId, 'frames/after.png'),
-      beforeAfterFrameRef: ref(taskId, 'before-after/highlight-title.json'),
-      verifierRef: ref(taskId, 'verifier/research-note.json'),
-      artifactRef: ref(taskId, 'artifacts/research-note.md'),
-      guiPresentRef: ref(taskId, 'gui-present/research-note.json'),
-    }],
-    diagnosticOnly: false,
-    userAcceptanceEligible: true,
-    blockedReason: null,
-    validation: {
-      ok: true,
-      issues: [],
-      missingRefs: [],
-      rejectedClaimKinds: [],
-    },
-  }, overrides);
-}
-
 function mappingFor(taskId: CuNextTaskId): typeof CU_NEXT_TASK_MAPPINGS[number] {
-  const mapping = CU_NEXT_TASK_MAPPINGS.find((candidate) => candidate.taskId === taskId);
-  assert.ok(mapping, `${taskId}: missing task mapping`);
+  const mapping = CU_NEXT_TASK_MAPPINGS.find((item) => item.taskId === taskId);
+  assert.ok(mapping, `missing CU-NEXT task mapping for ${taskId}`);
   return mapping;
 }
 
-function finalArtifactName(taskId: CuNextTaskId): string {
-  switch (taskId) {
-    case 'CU-NEXT-01':
-      return 'literature-briefing-deck.pptx';
-    case 'CU-NEXT-02':
-      return 'chart-report.odt';
-    case 'CU-NEXT-03':
-      return 'mail-draft.eml';
-    case 'CU-NEXT-04':
-      return 'file-index.md';
-    case 'CU-NEXT-05':
-      return 'submission-material.odt';
-    case 'CU-NEXT-06':
-      return 'approved-submission.txt';
-    case 'CU-NEXT-07':
-      return 'dense-grounding-export.csv';
-    case 'CU-NEXT-08':
-      return 'sciforge-computer-use-proof.txt';
-  }
+function ref(taskId: CuNextTaskId, path: string): string {
+  return `.sciforge/vision-runs/${runId(taskId)}/${path}`;
 }
 
-function ref(taskId: CuNextTaskId, name: string): string {
-  return `.sciforge/vision-runs/${runId(taskId)}/${name}`;
+function finalArtifactName(taskId: CuNextTaskId): string {
+  return `artifacts/${runId(taskId)}-final.md`;
 }
 
 function runId(taskId: CuNextTaskId): string {

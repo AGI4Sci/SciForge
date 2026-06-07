@@ -341,7 +341,7 @@ function selectedRuntimeSkillIds(
   }
   return uniqueStrings([
     ...overrideSkillIds,
-    `agentserver.generate.${skillDomain}`,
+    `generated-task.generate.${skillDomain}`,
   ]);
 }
 

@@ -32,7 +32,7 @@ export type ExpectedEscalation =
   | 'human-approval';
 
 export type AllowedTool =
-  | 'agentserver-generation'
+  | 'backend-generation'
   | 'artifact-resolver'
   | 'artifact-reader'
   | 'artifact-writer'

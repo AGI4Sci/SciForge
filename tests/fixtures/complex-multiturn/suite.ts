@@ -38,12 +38,12 @@ interface LifecycleDefinition {
   outcome: SuccessOutcome;
 }
 
-const researchTools: AllowedTool[] = ['agentserver-generation', 'literature-search', 'metadata-fetch', 'artifact-writer', 'artifact-resolver', 'verifier', 'background-continuation'];
-const codeTools: AllowedTool[] = ['agentserver-generation', 'workspace-read', 'workspace-write', 'command-runner', 'schema-validator', 'artifact-writer', 'verifier'];
-const runtimeTools: AllowedTool[] = ['agentserver-generation', 'runtime-state', 'execution-unit-reader', 'artifact-resolver', 'schema-validator', 'verifier', 'background-continuation'];
-const artifactTools: AllowedTool[] = ['agentserver-generation', 'artifact-resolver', 'artifact-reader', 'artifact-writer', 'schema-validator', 'verifier'];
-const dataTools: AllowedTool[] = ['agentserver-generation', 'workspace-read', 'python-task', 'artifact-writer', 'schema-validator', 'verifier'];
-const lifecycleTools: AllowedTool[] = ['agentserver-generation', 'runtime-state', 'execution-unit-reader', 'artifact-resolver', 'browser-session-state', 'schema-validator', 'verifier'];
+const researchTools: AllowedTool[] = ['backend-generation', 'literature-search', 'metadata-fetch', 'artifact-writer', 'artifact-resolver', 'verifier', 'background-continuation'];
+const codeTools: AllowedTool[] = ['backend-generation', 'workspace-read', 'workspace-write', 'command-runner', 'schema-validator', 'artifact-writer', 'verifier'];
+const runtimeTools: AllowedTool[] = ['backend-generation', 'runtime-state', 'execution-unit-reader', 'artifact-resolver', 'schema-validator', 'verifier', 'background-continuation'];
+const artifactTools: AllowedTool[] = ['backend-generation', 'artifact-resolver', 'artifact-reader', 'artifact-writer', 'schema-validator', 'verifier'];
+const dataTools: AllowedTool[] = ['backend-generation', 'workspace-read', 'python-task', 'artifact-writer', 'schema-validator', 'verifier'];
+const lifecycleTools: AllowedTool[] = ['backend-generation', 'runtime-state', 'execution-unit-reader', 'artifact-resolver', 'browser-session-state', 'schema-validator', 'verifier'];
 
 const fiveTurnDefinitions: FixtureDefinition[] = [
   { sourceTaskId: 'T5-01', title: 'Quick research to markdown report', scenarioKind: 'research', tools: researchTools, outcomes: ['partial', 'success'], failureModes: ['download_unavailable'] },
@@ -626,12 +626,12 @@ function stateDeltaFor(index: number, markers: ReturnType<typeof makeMarker>, fa
 }
 
 function toolsForTurn(tools: AllowedTool[], markers: ReturnType<typeof makeMarker>, failed: boolean): AllowedTool[] {
-  const required = new Set<AllowedTool>(['agentserver-generation']);
+  const required = new Set<AllowedTool>(['backend-generation']);
   if (markers.artifactReferenceFollowup || markers.artifactIdentityCheck) required.add('artifact-resolver');
   if (markers.recoveryAction || failed) required.add('schema-validator');
   if (markers.backgroundContinuation) required.add('background-continuation');
   for (const tool of tools.slice(0, 4)) required.add(tool);
-  return [...required].filter((tool) => tools.includes(tool) || tool === 'agentserver-generation');
+  return [...required].filter((tool) => tools.includes(tool) || tool === 'backend-generation');
 }
 
 function targetForFailure(mode: FailureInjectionMode): string {

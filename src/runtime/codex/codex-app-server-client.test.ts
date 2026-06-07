@@ -18,13 +18,6 @@ import {
 } from './codex-app-server-client.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import { SUBAGENT_MCP_ENV, SUBAGENT_MCP_SERVER_NAME } from './subagent-extension-manifest.js';
-import type { VirtualAppScreenRuntimeCommand } from '../computer-use/virtual-app-screen-command.js';
-import {
-  registerVirtualAppScreenSessionExecutor,
-  VIRTUAL_APP_SCREEN_SESSION_MANAGER_SCHEMA,
-  type VirtualAppScreenSessionManagerAttachResult,
-} from '../computer-use/virtual-app-screen-session-manager.js';
-import { resetVirtualAppScreenRuntimeExecutorsForTests } from '../computer-use/virtual-app-screen-runtime-executors.js';
 
 test('Codex app-server client registers runtime tools and serves sub-agent dynamic calls', async () => {
   const workspace = await tempWorkspace();
@@ -958,16 +951,6 @@ test('Computer Use native route rejects UI-generated right pane VirtualAppScreen
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   let spawnCalled = false;
-  let executorCalled = false;
-  const unregister = registerVirtualAppScreenSessionExecutor({
-    executorId: 'native-session-manager:codex-native-route-test',
-    providerId: 'provider:codex-native-route-test',
-    supportedProfiles: ['vscode-editor'],
-    attach: (command) => {
-      executorCalled = true;
-      return codexNativeRouteVirtualAppScreenAttachResult(command);
-    },
-  });
   const client = createCodexAppServerClient({
     env,
     spawnProcess() {
@@ -975,45 +958,39 @@ test('Computer Use native route rejects UI-generated right pane VirtualAppScreen
       throw new Error('app-server should not spawn for native Computer Use screen attach route');
     },
   });
-  try {
-    const commandText = [
-      [
-        '/computer-use screen attach',
-        '--source right-pane-screen',
-        '--profile "vscode-editor"',
-        '--target-app-ref "app:profile/vscode-editor"',
-        '--screen-ref "virtual-app-screen:codex-native-route/screen-request"',
-        '--activation-ref "computer-use:screen-activation/codex-native-route/attach-request.json"',
-        '--adapter-readiness-ref "computer-use:screen-activation/codex-native-route/provider-readiness.json"',
-        '--evidence-ledger-ref "ledger:computer-use/codex-native-route/screen-activation.json"',
-        '--gui-present-ref "gui.present:codex-native-route/screen-pane-activation"',
-      ].join(' '),
-      'Runtime resume context: continue the active Runtime Codex session only as transport/session context; the slash command above remains the terminal-equivalent task command.',
-      '[redacted]]]]',
-    ].join('\n\n');
+  const commandText = [
+    [
+      '/computer-use screen attach',
+      '--source right-pane-screen',
+      '--profile "vscode-editor"',
+      '--target-app-ref "app:profile/vscode-editor"',
+      '--screen-ref "virtual-app-screen:codex-native-route/screen-request"',
+      '--activation-ref "computer-use:screen-activation/codex-native-route/attach-request.json"',
+      '--adapter-readiness-ref "computer-use:screen-activation/codex-native-route/provider-readiness.json"',
+      '--evidence-ledger-ref "ledger:computer-use/codex-native-route/screen-activation.json"',
+      '--gui-present-ref "gui.present:codex-native-route/screen-pane-activation"',
+    ].join(' '),
+    'Runtime resume context: continue the active Runtime Codex session only as transport/session context; the slash command above remains the terminal-equivalent task command.',
+    '[redacted]]]]',
+  ].join('\n\n');
 
-    const stream = await client.startTurn({
-      commandText,
-      workspacePath: workspace,
-      commandId: 'native-cu-ui-screen-attach-command',
-      attemptId: 'attempt-1',
-      profile: 'assistant-fast',
-      guiExtension: { enabled: true },
-      runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
-    });
-    const events = await collect(stream.events) as Array<Record<string, unknown>>;
-    const failed = events.at(-1) as Record<string, unknown> | undefined;
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'native-cu-ui-screen-attach-command',
+    attemptId: 'attempt-1',
+    profile: 'assistant-fast',
+    guiExtension: { enabled: true },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+  const failed = events.at(-1) as Record<string, unknown> | undefined;
 
-    assert.equal(spawnCalled, false);
-    assert.equal(executorCalled, false);
-    assert.equal(failed?.type, 'failed');
-    assert.equal(failed?.status, 'failed');
-    assert.match(String(failed?.message ?? ''), /VirtualAppScreen.*retired|right pane screen attach.*retired/i);
-    assert.doesNotMatch(JSON.stringify(failed), /computer-use-virtual-screen|virtual-screen-viewer|currentFrameRef|liveSurfaceRef/);
-  } finally {
-    unregister();
-    resetVirtualAppScreenRuntimeExecutorsForTests();
-  }
+  assert.equal(spawnCalled, false);
+  assert.equal(failed?.type, 'failed');
+  assert.equal(failed?.status, 'failed');
+  assert.match(String(failed?.message ?? ''), /VirtualAppScreen.*retired|right pane screen attach.*retired/i);
+  assert.doesNotMatch(JSON.stringify(failed), /computer-use-virtual-screen|virtual-screen-viewer|currentFrameRef|liveSurfaceRef/);
 });
 
 test('Computer Use native route still requires Runtime Codex local configuration', async () => {
@@ -1125,103 +1102,6 @@ function assertMcpEntrypointArg(argv: string[], serverName: string, entrypointNa
   const argsConfig = argv.find((arg) => arg.startsWith(`mcp_servers.${serverName}.args=`));
   assert.ok(argsConfig);
   assert.match(argsConfig, new RegExp(`${entrypointName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(ts|js)`));
-}
-
-function codexNativeRouteVirtualAppScreenAttachResult(
-  command: VirtualAppScreenRuntimeCommand,
-): VirtualAppScreenSessionManagerAttachResult {
-  return {
-    schemaVersion: VIRTUAL_APP_SCREEN_SESSION_MANAGER_SCHEMA,
-    status: 'attached',
-    executorId: 'native-session-manager:codex-native-route-test',
-    providerId: 'provider:codex-native-route-test',
-    refs: {
-      currentRunRef: '.sciforge/vision-runs/codex-native-route-test/current-run.json',
-      sessionRef: 'computer-use:native-host/sessions/codex-native-route-test/session.json',
-      liveSurfaceRef: 'computer-use:native-host/surfaces/codex-native-route-test/live-surface.json',
-      surfaceTransportRef: 'computer-use:native-host/surfaces/codex-native-route-test/surface-transport.json',
-      frameStreamRef: 'computer-use:native-host/surfaces/codex-native-route-test/frame-stream.json',
-      currentFrameRef: 'computer-use:native-host/frames/codex-native-route-test/current.png',
-      currentRunPointerRef: 'computer-use:native-host/runs/codex-native-route-test/current-run-pointer.json',
-      minimalEvidenceReplayRefs: codexNativeRouteMinimalEvidenceReplayRefs(),
-      frameTransportContractRef: 'computer-use:native-host/surfaces/codex-native-route-test/frame-transport-contract.json',
-      frameTelemetryRef: 'computer-use:native-host/surfaces/codex-native-route-test/frame-telemetry.json',
-      mediaChannelRef: 'computer-use:native-host/surfaces/codex-native-route-test/native-frame-stream/live',
-      dataChannelRef: 'computer-use:native-host/surfaces/codex-native-route-test/native-frame-control-channel/control',
-      liveBindingAttachGrantRef: 'computer-use:native-host/grants/codex-native-route-test/live-binding-attach-grant.json',
-      grantValidationRef: 'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json/events/0004-grant.validated.json',
-      surfaceOwnerRef: 'computer-use:native-host/surfaces/codex-native-route-test/surface-owner.json',
-      displayOwnerRef: 'computer-use:native-host/surfaces/codex-native-route-test/display-owner.json',
-      screenRef: command.refs.screenRef,
-      targetAppRef: command.refs.targetAppRef,
-      targetWindowRef: 'window:codex-native-route-test/main',
-      inputLeaseRef: 'computer-use:native-host/input/codex-native-route-test/input-lease.json',
-      actionAdapterRef: 'computer-use:native-host/input/codex-native-route-test/action-adapter.json',
-      adapterReadinessRef: command.refs.readinessRef,
-      platformDriverRef: 'computer-use:native-host/platform-drivers/codex-native-route-test/platform-driver.json',
-      evidenceLedgerRef: 'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json',
-      hostEvidenceLedgerRef: 'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json',
-      guiPresentRef: command.refs.guiPresentRef,
-    },
-    evidence: {
-      providerExecuted: true,
-      mutatingActionExecuted: false,
-      nativeSessionCreated: true,
-      liveFrameAttached: true,
-      currentFrameMaterialized: true,
-      guiPresented: true,
-      isolationVerified: true,
-      platformDriverReady: true,
-      permissionRequired: false,
-      permissionGranted: true,
-      backgroundRenderable: true,
-      diagnosticOnly: false,
-      affectsPhysicalDisplay: false,
-      requiresFocusSteal: false,
-      sharedSystemInputUsed: false,
-      systemPointerMoved: false,
-      systemKeyboardEventsSent: false,
-      surfaceTransport: {
-        schemaVersion: 'sciforge.virtual-display.surface-transport.v1',
-        owner: 'VirtualDisplayProvider',
-        providerId: 'provider:codex-native-route-test',
-        transport: 'native-frame-stream',
-        surfaceTransportRef: 'computer-use:native-host/surfaces/codex-native-route-test/surface-transport.json',
-        liveSurfaceRef: 'computer-use:native-host/surfaces/codex-native-route-test/live-surface.json',
-        frameStreamRef: 'computer-use:native-host/surfaces/codex-native-route-test/frame-stream.json',
-        currentFrameRef: 'computer-use:native-host/frames/codex-native-route-test/current.png',
-        frameTransportContractRef: 'computer-use:native-host/surfaces/codex-native-route-test/frame-transport-contract.json',
-        frameTelemetryRef: 'computer-use:native-host/surfaces/codex-native-route-test/frame-telemetry.json',
-        mediaChannelRef: 'computer-use:native-host/surfaces/codex-native-route-test/native-frame-stream/live',
-        dataChannelRef: 'computer-use:native-host/surfaces/codex-native-route-test/native-frame-control-channel/control',
-        currentFrameSequence: 1,
-        diagnosticOnly: false,
-        productFallback: false,
-        singleInteractiveTruth: true,
-      },
-      evidenceRefs: [
-        'computer-use:native-host/surfaces/codex-native-route-test/surface-transport.json',
-        'computer-use:native-host/platform-drivers/codex-native-route-test/platform-driver.json',
-        'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json',
-        'computer-use:native-host/grants/codex-native-route-test/live-binding-attach-grant.json',
-        'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json/events/0004-grant.validated.json',
-        'computer-use:native-host/surfaces/codex-native-route-test/surface-owner.json',
-        'computer-use:native-host/surfaces/codex-native-route-test/display-owner.json',
-        'computer-use:native-host/frames/codex-native-route-test/current.png',
-        'computer-use:native-host/runs/codex-native-route-test/current-run-pointer.json',
-        ...codexNativeRouteMinimalEvidenceReplayRefs(),
-      ],
-    },
-  };
-}
-
-function codexNativeRouteMinimalEvidenceReplayRefs() {
-  return [
-    'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json/events/0001-session.created.json',
-    'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json/events/0003-surface.attached.json',
-    'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json/events/0004-grant.validated.json',
-    'computer-use:native-host/ledgers/codex-native-route-test/evidence-ledger.json/events/0005-frame.read.json',
-  ];
 }
 
 function fakeAppServer(options: {

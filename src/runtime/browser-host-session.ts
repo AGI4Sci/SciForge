@@ -1122,7 +1122,9 @@ export class BrowserHostSessionManager {
     });
     const derivedResults = browserHostSearchSourcePageDerivedResults(firstPass)
       .filter((derived) => normalizeBrowserHostUrl(derived.url) !== normalizeBrowserHostUrl(input.result.url));
-    if (!derivedResults.length || !sourcePageLooksLikeDiscoveryList(firstPass)) return firstPass;
+    const discoveryOnly = sourcePageLooksLikeDiscoveryList(firstPass);
+    if (!discoveryOnly) return firstPass;
+    if (!derivedResults.length && !sourcePageLooksLowInformation(firstPass)) return firstPass;
     return await persistBrowserHostSearchSourcePage({
       sessionId: input.session.id,
       sessionDir: browserHostSessionDir(input.session.workspacePath, input.session.id),
@@ -1272,14 +1274,17 @@ function sourceConstrainedResultIsLowInformation(
   try {
     const url = new URL(result.url);
     const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    const path = url.pathname.replace(/\/+$/, '') || '/';
     return constraints.some((constraint) => host === constraint.domain || host.endsWith(`.${constraint.domain}`))
-      && path === '/'
-      && !url.search
-      && !url.hash;
+      && sourceConstrainedUrlIsLowInformation(url);
   } catch {
     return false;
   }
+}
+
+function sourceConstrainedUrlIsLowInformation(url: URL): boolean {
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/' && !url.search && !url.hash) return true;
+  return /^\/(?:login|signin|sign-in|account|accounts|user|users|help|about|contact|privacy|terms)(?:\/|$)/i.test(path);
 }
 
 function sourceSiteSearchTopic(query: string, domain: string): string {
@@ -1420,8 +1425,23 @@ function safeBrowserHostUrlHost(value: string) {
 }
 
 function sourcePageLooksLikeDiscoveryList(page: BrowserHostSearchSourcePage): boolean {
-  return page.textArtifactKind === 'structured-summary'
+  return sourcePageLooksLowInformation(page)
+    || page.textArtifactKind === 'structured-summary'
     || /\bsearch\b|\bresults?\b|检索|搜索|列表/i.test(`${page.title} ${page.url} ${page.textPreview ?? ''}`);
+}
+
+function sourcePageLooksLowInformation(page: BrowserHostSearchSourcePage): boolean {
+  try {
+    if (sourceConstrainedUrlIsLowInformation(new URL(page.url))) return true;
+  } catch {
+    // Fall through to text checks.
+  }
+  const text = `${page.title} ${page.textPreview ?? ''}`.replace(/\s+/g, ' ').trim();
+  if (/^\s*(?:log\s+in|sign\s+in|login)\b/i.test(page.title)) return true;
+  if (/\b(?:username|password|create account|forgot password|log in to|sign in to)\b/i.test(text)) return true;
+  if (/\bskip to main content\b/i.test(text)
+    && /\b(?:homepage|home page|navigation|open-access archive|free distribution service)\b/i.test(text)) return true;
+  return false;
 }
 
 function mergePreferredSearchResults(

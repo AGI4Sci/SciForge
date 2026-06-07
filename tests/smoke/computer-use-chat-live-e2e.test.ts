@@ -419,8 +419,8 @@ test('Computer Use chat live product strict routes ordinary chat through host-ow
     env: readyEnv(),
     localConfigs: [],
     productStrict: true,
-    taskId: 'CU-NEXT-01',
-    scenarioId: 'CU-LONG-001',
+    taskId: 'CU-NEXT-08',
+    scenarioId: 'CU-LONG-005',
     now: () => new Date('2026-05-29T00:00:00.000Z'),
     fetchImpl: async (input, init) => {
       const url = String(input);
@@ -444,18 +444,26 @@ test('Computer Use chat live product strict routes ordinary chat through host-ow
       kind: 'computer-use-native-route',
       source: 'host-owned',
       computerUseNext: {
-        taskId: 'CU-NEXT-01',
+        taskId: 'CU-NEXT-08',
         title: 'Computer Use live task acceptance',
         requirements: [
           'chat-origin-current-run',
           'refs-first-evidence-bundle',
           'no-dom-playwright-accessibility-or-shell-file-write-substitute',
         ],
+        recommendedTargetMode: 'app-window',
+        recommendedTargetApp: 'TextEdit',
+        recommendedMaxSteps: 8,
+        semanticMarkers: ['desktop-file-save'],
       },
       computerUseLong: {
-        taskId: 'CU-NEXT-01',
-        scenarioId: 'CU-LONG-001',
+        taskId: 'CU-NEXT-08',
+        scenarioId: 'CU-LONG-005',
         title: 'Computer Use live task acceptance',
+        recommendedTargetMode: 'app-window',
+        recommendedTargetApp: 'TextEdit',
+        recommendedMaxSteps: 8,
+        semanticMarkers: ['desktop-file-save'],
         safetyBoundary: {
           noDomAccessibility: true,
           noShellDirectArtifactWrite: true,
@@ -536,14 +544,6 @@ test('Computer Use chat live E2E projects task bindings into Runtime Codex host 
       schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
       kind: 'computer-use-native-route',
       source: 'host-owned',
-      completionEvidencePolicy: {
-        schemaVersion: 'sciforge.completion-evidence-policy.v1',
-        producers: [{
-          id: 'computer-use.embedded-isolated-desktop-l3',
-          enabled: true,
-          trigger: 'on-completed-current-run',
-        }],
-      },
       computerUseNext: {
         taskId: 'CU-NEXT-07',
         title: 'Computer Use live task acceptance',
@@ -552,11 +552,17 @@ test('Computer Use chat live E2E projects task bindings into Runtime Codex host 
           'refs-first-evidence-bundle',
           'no-dom-playwright-accessibility-or-shell-file-write-substitute',
         ],
+        recommendedTargetMode: 'app-window',
+        recommendedTargetApp: 'Browser',
+        recommendedMaxSteps: 8,
       },
       computerUseLong: {
         taskId: 'CU-NEXT-07',
         scenarioId: 'CU-LONG-004',
         title: 'Computer Use live task acceptance',
+        recommendedTargetMode: 'app-window',
+        recommendedTargetApp: 'Browser',
+        recommendedMaxSteps: 8,
         safetyBoundary: {
           noDomAccessibility: true,
           noShellDirectArtifactWrite: true,
@@ -1727,10 +1733,11 @@ test('Computer Use chat live E2E surfaces sanitized package bridge process failu
           stdout: 'stdout summary provider_url=https://provider.example/v1 model=secret-model token=stdout-token bounded stdout',
           stderr: 'stderr summary Authorization: Bearer package-auth-token apiKey=sk-package-secret-123456 password=package-password bounded stderr',
           process: {
-            command: 'python',
+            command: 'node',
             args: [
-              '-m',
-              'sciforge_computer_use',
+              '--import',
+              'tsx',
+              'src/runtime/computer-use/package-bridge.ts',
               '--provider-url=https://provider.example/v1',
               '--api-key',
               'sk-package-secret-123456',

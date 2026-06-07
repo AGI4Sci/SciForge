@@ -2,8 +2,8 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "passed",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-06-07T00:16:01.835Z",
-  "commandId": "browser-ordinary-chat-local-9b5805f7b55b",
+  "observedAt": "2026-06-07T00:33:55.178Z",
+  "commandId": "browser-ordinary-chat-local-1cb793f9af53",
   "startedFromDefaultChatEntry": true,
   "submittedThroughRuntimeCodex": true,
   "providerModelProfileVisible": true,
@@ -23,10 +23,10 @@
     "expectedObservableResult": "module.invoke browser.search_read/open_read result with BrowserHostSession source-page and page-text refs plus a visible final answer",
     "actualResult": "ordinary-chat Runtime Codex Browser retrieval completed with current source refs and a final-answer artifact",
     "evidenceRefs": [
-      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-9b5805f7b55b/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-9b5805f7b55b",
+      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
+      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
+      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
+      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
       "artifact:runtime-codex-browser-acceptance/final-answer.md"
     ],
     "negativeChecks": [
@@ -43,24 +43,24 @@
     "userIntentSatisfied": true,
     "outputVerified": true,
     "evidenceRefs": [
-      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-9b5805f7b55b/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-9b5805f7b55b",
+      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
+      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
+      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
+      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
       "artifact:runtime-codex-browser-acceptance/final-answer.md"
     ]
   },
   "liveRuntimeCodexProof": {
     "messageProvenance": "live-runtime-codex",
-    "commandId": "browser-ordinary-chat-local-9b5805f7b55b",
+    "commandId": "browser-ordinary-chat-local-1cb793f9af53",
     "nativeDefaultChatAssistantAnswerRendered": true,
     "runtimeOutputObserved": true,
     "seedOrDemoExcluded": true,
     "eventEvidenceRefs": [
-      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-24eb450fe649/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-9b5805f7b55b/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-9b5805f7b55b",
+      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
+      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
+      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
+      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
       "artifact:runtime-codex-browser-acceptance/final-answer.md"
     ]
   },

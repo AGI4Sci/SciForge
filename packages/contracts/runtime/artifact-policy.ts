@@ -26,7 +26,7 @@ export const BIBLIOGRAPHIC_COMPONENT_IDS = ['paper-card-list'] as const;
 export const BIBLIOGRAPHIC_CAPABILITY_IDS = [
   'citation.verification',
   'literature.retrieval',
-  'agentserver.generate.literature',
+  'generated-task.generate.literature',
 ] as const;
 
 const BIBLIOGRAPHIC_ARTIFACT_TYPE_SET = new Set<string>(BIBLIOGRAPHIC_ARTIFACT_TYPES);

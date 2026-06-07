@@ -19,7 +19,7 @@ const expectedCounts: Record<ComplexFixtureTier, number> = {
 };
 
 const allowedTools: Set<AllowedTool> = new Set([
-  'agentserver-generation',
+  'backend-generation',
   'artifact-resolver',
   'artifact-reader',
   'artifact-writer',

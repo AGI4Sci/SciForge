@@ -5,7 +5,7 @@ import {
   completionTruthFromPackageBridgeWorkEvidence,
 } from './agent-host-package-bridge-completion-truth.js';
 
-test('package bridge completion adapter maps verified same-run workEvidence to workflow completionTruth', () => {
+test('package bridge completion adapter blocks verified legacy L3 workEvidence from workflow completionTruth', () => {
   const runDir = '.sciforge/vision-runs/package-bridge-complete';
   const truth = completionTruthFromPackageBridgeWorkEvidence({
     evidenceRefs: [
@@ -31,14 +31,13 @@ test('package bridge completion adapter maps verified same-run workEvidence to w
   assert.deepEqual(truth, {
     schemaVersion: 'sciforge.computer-use.completion-truth.v1',
     scope: 'workflow',
-    status: 'satisfied',
+    status: 'blocked',
     validator: 'current-run-live-acceptance-bundle',
     evidenceRefs: [
       `${runDir}/vision-trace.json`,
       `${runDir}/tui-host-run-task-chain.json`,
-      `${runDir}/cu-user-acceptance-manifest.json`,
-      `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
     ],
+    reason: 'Package bridge isolated L3 completion evidence is diagnostic-only and cannot satisfy Agent Host workflow completion truth. Computer Use completion-grade evidence',
   });
 });
 

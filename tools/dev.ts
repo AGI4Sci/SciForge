@@ -11,7 +11,6 @@ import {
 import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwnershipRecord } from './dev-process';
 import { normalizeInstanceName, parallelProfile } from '../src/runtime/parallel-instance-profile.js';
 import {
-  agentServerEnvFromLocalSettings,
   computerUseWorkspaceEnvFromLocalSettings,
   readLocalProviderSettings,
   runtimeCodexEnvFromLocalSettings,
@@ -23,29 +22,9 @@ const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
 const MODEL_ROUTER_PORT = Number(process.env.SCIFORGE_MODEL_ROUTER_PORT || process.env.SCIFORGE_PROXY_PORT || 3892);
-const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
 const children: ChildProcess[] = [];
 let shuttingDown = false;
-
-if (process.env.SCIFORGE_AGENT_SERVER_AUTOSTART !== '0') {
-  if (await isListening(AGENT_SERVER_PORT)) {
-    console.log(`AgentServer already running: http://127.0.0.1:${AGENT_SERVER_PORT}`);
-  } else if (existsSync(AGENT_SERVER_ROOT)) {
-    children.push(start('agentserver', ['run', 'dev'], AGENT_SERVER_ROOT, {
-      OPENTEAM_SERVER_PORT: String(AGENT_SERVER_PORT),
-      PORT: String(AGENT_SERVER_PORT),
-      NODE_OPTIONS: mergeNodeOptions(process.env.NODE_OPTIONS, '--max-old-space-size=8192'),
-      ...agentServerModelEnvFromLocalConfig(),
-    }, { restartOnFailure: true }));
-  } else {
-    console.warn(`AgentServer root not found at ${AGENT_SERVER_ROOT}; set SCIFORGE_AGENT_SERVER_ROOT or SCIFORGE_AGENT_SERVER_AUTOSTART=0.`);
-  }
-}
-
-function agentServerModelEnvFromLocalConfig() {
-  return agentServerEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
-}
 
 function computerUseWorkspaceEnvFromLocalConfig() {
   return computerUseWorkspaceEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
@@ -154,7 +133,6 @@ function start(
       if (index >= 0) children.splice(index, 1);
       setTimeout(async () => {
         if (shuttingDown) return;
-        if (label === 'agentserver' && await isListening(AGENT_SERVER_PORT)) return;
         console.log(`Restarting ${label} dev process...`);
         children.push(start(label, args, cwd, envPatch, options));
       }, 1000);

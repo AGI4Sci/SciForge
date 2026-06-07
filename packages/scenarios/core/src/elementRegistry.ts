@@ -39,10 +39,10 @@ function buildGeneratedCapabilitySkills(): SkillElement[] {
     const scenarioId = scenarioIdForDomain(domain);
     const baseArtifacts = SCENARIO_SPECS[scenarioId].outputArtifacts.map((artifact) => artifact.type);
     return {
-      id: `agentserver.generate.${domain}`,
+      id: `generated-task.generate.${domain}`,
       kind: 'skill',
       version: '1.0.0',
-      label: `Agent backend ${domain} generator`,
+      label: `Backend ${domain} generator`,
       description: `Use the configured TUI-native runtime/backend to synthesize a task plan, tool calls, artifacts, and report outputs for open-ended ${domain} scenarios.`,
       source: 'generated',
       skillDomains: [domain],
@@ -50,9 +50,9 @@ function buildGeneratedCapabilitySkills(): SkillElement[] {
         prompt: 'Natural-language scenario or task request compiled into a stable package contract.',
       },
       outputArtifactTypes: unique([...baseArtifacts, 'research-report', 'runtime-artifact']),
-      entrypointType: 'agentserver-generation',
+      entrypointType: 'backend-generation',
       requiredCapabilities: [
-        { capability: 'agentserver-generation', level: 'self-healing' },
+        { capability: 'backend-generation', level: 'self-healing' },
         { capability: 'code-generation', level: 'self-healing' },
         { capability: 'artifact-emission', level: 'schema-checked' },
       ],
@@ -62,7 +62,7 @@ function buildGeneratedCapabilitySkills(): SkillElement[] {
         '搜索、下载、阅读并总结最新论文为报告',
         'Build a stable workspace package for this analysis workflow',
       ],
-      tags: ['agent-backend', 'native-tools', 'generated-capability', domain],
+      tags: ['backend', 'native-tools', 'generated-capability', domain],
     };
   });
 }

@@ -1,17 +1,13 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { promisify } from 'node:util';
 
 import { capturePackageBridgePort } from './package-bridge-capture-port.js';
 import type { HostPortCall } from './package-bridge-stdio.js';
 import type { ComputerUseConfig, ScreenshotRef, WindowTargetResolution } from './types.js';
 import type { VirtualRemoteVisibleArtifact } from './virtual-remote-session.js';
-
-const execFileAsync = promisify(execFile);
 
 function baseConfig(runId: string): ComputerUseConfig {
   return {
@@ -192,18 +188,9 @@ test('capturePackageBridgePort materializes BrowserRuntime DOM/AX refs as observ
     assert.equal(browserObservation.guiActionSubstitute, false);
     assert.equal(browserObservation.artifactCausalitySubstitute, false);
     assert.equal(browserObservation.userLevelCompletionSubstitute, false);
-    const validationScript = [
-      'import json',
-      'import sys',
-      'from sciforge_computer_use.browser_runtime_dom_ax_observation import validate_browser_runtime_dom_ax_observation',
-      'print(json.dumps(validate_browser_runtime_dom_ax_observation(sys.argv[1])))',
-    ].join('; ');
-    const { stdout } = await execFileAsync('python3', ['-c', validationScript, join(workspace, metadata.browserRuntimeObservationRef)], {
-      cwd: process.cwd(),
-      env: { ...process.env, PYTHONPATH: 'packages/actions/computer-use' },
-    });
-    const pythonValidation = JSON.parse(stdout);
-    assert.equal(pythonValidation.ok, true, pythonValidation.errors?.map((error: any) => error.message).join('\n'));
+    assert.equal(browserObservation.stableElementRefs[0].signals.role, 'button');
+    assert.equal(browserObservation.stableElementRefs[0].signals.accessibleName, 'Save');
+    assert.equal(browserObservation.stableElementRefs[0].signals.bbox.width, 90);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

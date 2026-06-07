@@ -77,22 +77,7 @@ export function classifyCuNextEvidence(input: CuNextEvidenceClassificationInput)
     && input.diagnosticOnly === false
     && input.realWindowEvidence === true
     && blockedReasons.length === 0;
-  const hasSameSession = input.sameSession === true || input.l3Workflow?.sameSession === true;
-  const hasCausality = (
-    input.sourceToWriterToPreviewCausality === true
-    || input.l3Workflow?.sourceToWriterToPreviewCausality === true
-  );
-  const canCompleteL3Workflow = kind === 'isolated-L3'
-    && input.status === 'completed'
-    && input.userAcceptanceEligible === true
-    && input.diagnosticOnly === false
-    && input.realWindowEvidence === true
-    && hasCanonicalCompletionEvidenceRef
-    && input.validatorAcceptedL3 === true
-    && hasSameSession
-    && hasCausality
-    && input.l3Workflow?.completed === true
-    && blockedReasons.length === 0;
+  const canCompleteL3Workflow = false;
 
   if (kind !== 'isolated-L1' && kind !== 'isolated-L3') {
     blockedReasons.push(`${kind} evidence is diagnostic or candidate-only and cannot complete PROJECT top-level tasks.`);
@@ -109,7 +94,7 @@ export function classifyCuNextEvidence(input: CuNextEvidenceClassificationInput)
     if (input.validatorAcceptedL3 !== true) {
       blockedReasons.push('isolated-L3 completionEvidenceRef must be accepted by the completed L3 validator.');
     }
-    blockedReasons.push('isolated-L3 evidence must be completed in one same session with source -> writer -> file-preview causality.');
+    blockedReasons.push('isolated-L3 evidence is retained for historical diagnostics only; Agent Host completion requires WindowActionSession/Desktop native Host current evidence.');
   }
 
   return {
@@ -118,7 +103,7 @@ export function classifyCuNextEvidence(input: CuNextEvidenceClassificationInput)
     canCompleteL3Workflow,
     blockedReasons: unique(blockedReasons),
     rejectedShortcuts,
-    claimLimit: 'CU-NEXT fixture/package-local/target-bound evidence can prepare contracts only; PROJECT completion requires isolated-L1 backend evidence or same-session isolated-L3 workflow evidence.',
+    claimLimit: 'CU-NEXT fixture/package-local/target-bound/isolated-L3 evidence can prepare diagnostics only; PROJECT completion requires WindowActionSession/Desktop native Host current evidence owned by Agent Host.',
   };
 }
 

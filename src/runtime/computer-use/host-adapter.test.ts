@@ -264,6 +264,10 @@ test('gateway adapter projects generic planner acceptance contract from UI state
         failureRecord: ['failure diagnostics'],
         requiredPipeline: ['WindowTarget', 'RuntimeCodexPlanner'],
         safetyBoundary: { noDomAccessibility: true },
+        recommendedTargetMode: 'app-window',
+        recommendedTargetApp: 'TextEdit',
+        recommendedMaxSteps: 8,
+        semanticMarkers: ['desktop-file-save'],
         acceptanceProgress: {
           schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
           minimumScenarioActionCount: 20,
@@ -287,11 +291,15 @@ test('gateway adapter projects generic planner acceptance contract from UI state
     minimumScenarioActionCount: 20,
     suggestedCurrentRoundActionTarget: 5,
   });
+  assert.equal(contract.recommendedTargetMode, 'app-window');
+  assert.equal(contract.recommendedTargetApp, 'TextEdit');
+  assert.equal(contract.recommendedMaxSteps, 8);
+  assert.deepEqual(contract.semanticMarkers, ['desktop-file-save']);
   assert.deepEqual(contract.requirements, ['l3-workflow-refs', 'no-dom-playwright-accessibility']);
   assert.doesNotMatch(JSON.stringify(contract), /DOMSnapshot|accessibilityTree|data:image/);
 });
 
-test('gateway adapter projects sanitized completion evidence policy from UI state', () => {
+test('gateway adapter ignores retired completion evidence policy from UI state', () => {
   const request = gatewayRequestToComputerUseRequest({
     skillDomain: 'knowledge',
     prompt: '/computer-use run operate the target window',
@@ -325,16 +333,9 @@ test('gateway adapter projects sanitized completion evidence policy from UI stat
     },
   }, baseConfig, '/tmp/workspace');
 
-  assert.deepEqual(request.metadata.completionEvidencePolicy, {
-    schemaVersion: 'sciforge.completion-evidence-policy.v1',
-    producers: [{
-      id: 'computer-use.embedded-isolated-desktop-l3',
-      enabled: true,
-      trigger: 'on-completed-current-run',
-    }],
-  });
+  assert.equal('completionEvidencePolicy' in request.metadata, false);
   assert.doesNotMatch(
-    JSON.stringify(request.metadata.completionEvidencePolicy),
+    JSON.stringify(request.metadata),
     /SECRET_SHOULD_NOT_LEAK|SECRET_PRODUCER_KEY|MISSING_TRIGGER_SHOULD_NOT_LEAK|UNKNOWN_PRODUCER_SHOULD_NOT_LEAK|unknown-producer/,
   );
 });

@@ -25,7 +25,7 @@ const common = {
   workspacePath: '/tmp/sciforge-contract-workspace',
   artifacts: [{ id: 'ref-artifact', type: 'research-report', dataRef: '.sciforge/artifacts/ref-artifact.json' }],
   references: [{ id: 'ref-A', kind: 'artifact', ref: 'artifact:ref-artifact' }],
-  selectedSkillIds: ['agentserver.generate.literature'],
+  selectedSkillIds: ['generated-task.generate.literature'],
   selectedToolIds: ['local.pubchem-lookup'],
   selectedSenseIds: ['local.vision-sense'],
   selectedActionIds: ['workspace.write-report'],

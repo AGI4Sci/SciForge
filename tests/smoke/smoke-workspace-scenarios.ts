@@ -202,7 +202,7 @@ function generatedOmicsSkill(): SkillAvailability {
       skillDomains: ['omics'],
       inputContract: { prompt: 'string' },
       outputArtifactSchema: { type: 'runtime-artifact' },
-      entrypoint: { type: 'agentserver-generation' },
+      entrypoint: { type: 'backend-generation' },
       environment: { runtime: 'backend-generation' },
       validationSmoke: { mode: 'delegated' },
       examplePrompts: [],

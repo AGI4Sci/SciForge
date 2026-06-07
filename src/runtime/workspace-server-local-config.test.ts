@@ -204,7 +204,7 @@ test('isSciForgeRuntimeProviderProxyHealth rejects stale legacy healthz payloads
   }), true);
 });
 
-test('workspace Computer Use env keeps VirtualAppScreen native driver env diagnostic-only', async () => {
+test('workspace Computer Use env filters retired VirtualAppScreen native driver env', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-computer-use-env-'));
   const service = createWorkspaceLocalConfigService({
     configLocalPath: join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json'),
@@ -239,35 +239,6 @@ test('workspace Computer Use env keeps VirtualAppScreen native driver env diagno
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, undefined);
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, undefined);
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
-
-  const diagnosticService = createWorkspaceLocalConfigService({
-    configLocalPath: join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json'),
-    runtimeCodexPort: 18080,
-    workspaceWriterPort: 5174,
-    defaultWorkspacePath: join(root, 'workspace'),
-    cwd: root,
-    env: {
-      HOME: join(root, 'home'),
-      SCIFORGE_VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC: '1',
-    } as NodeJS.ProcessEnv,
-  });
-  const diagnosticEnv = await diagnosticService.runtimeCodexEnvFromLocalConfig({
-    apiKey: 'root-key',
-    baseUrl: 'https://provider.example/v1',
-    model: 'root-model',
-    computerUse: {
-      virtualAppScreen: {
-        env: {
-          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: true,
-          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'powerpoint',
-          SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS: true,
-        },
-      },
-    },
-  });
-  assert.equal(diagnosticEnv.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, '1');
-  assert.equal(diagnosticEnv.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, 'powerpoint');
-  assert.equal(diagnosticEnv.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
 });
 
 test('workspace runtime env uses config.local root fields over stale service env', async () => {

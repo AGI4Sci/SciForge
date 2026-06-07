@@ -56,10 +56,6 @@ import {
   type ContinuationEvidenceChecklist,
   type ContinuationSidecarHydrationProof,
 } from './computer-use-chat-live-e2e-contract.js';
-import {
-  COMPLETION_EVIDENCE_POLICY_SCHEMA,
-  COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN,
-} from '../src/runtime/computer-use/completion-evidence-policy.js';
 import { currentRunFinalArtifactRefValidation } from '../src/runtime/computer-use/package-bridge-final-artifacts.js';
 import {
   compactRecord,
@@ -87,6 +83,7 @@ import {
   validateComputerUseChatLiveE2EResponse,
   type LoadedApprovalEvidence,
 } from './computer-use-chat-live-manifest-validator.js';
+import { CU_NEXT_TASK_MAPPINGS } from '../packages/actions/computer-use/task-map.js';
 
 export { validateComputerUseChatLiveE2EResponse };
 export {
@@ -761,7 +758,7 @@ function computerUseChatInput(input: {
     ?? process.cwd();
   const workspaceWriterBaseUrl = input.options.workspaceWriterBaseUrl
     ?? workspaceWriterBaseUrlFromEnv(input.env);
-  const completionEvidencePolicy = completionEvidencePolicyForProducers(input.options.completionEvidenceProducerIds ?? []);
+  const taskMetadata = input.options.taskId ? computerUseTaskMetadata(input.options.taskId) : undefined;
   return {
     sessionId: input.options.sessionId ?? `computer-use-chat-live-e2e-${Date.now()}`,
     currentTurnId: input.options.currentTurnId,
@@ -803,7 +800,6 @@ function computerUseChatInput(input: {
       selectedToolIds: ['local.vision-sense'],
       selectedSenseIds: ['local.vision-sense'],
       selectedActionIds: ['action.sciforge.computer-use'],
-      ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
       ...(input.options.taskId ? {
         computerUseNext: {
           taskId: input.options.taskId,
@@ -813,12 +809,14 @@ function computerUseChatInput(input: {
             'refs-first-evidence-bundle',
             'no-dom-playwright-accessibility-or-shell-file-write-substitute',
           ],
+          ...(taskMetadata ? taskMetadata : {}),
         },
         computerUseLong: {
           cuNextTaskId: input.options.taskId,
           taskId: input.options.taskId,
           scenarioId: input.options.scenarioId,
           title: 'Computer Use live task acceptance',
+          ...(taskMetadata ? taskMetadata : {}),
           requiredEvidence: [
             'vision-trace.json',
             'tui-host-run-task-chain.json',
@@ -834,6 +832,24 @@ function computerUseChatInput(input: {
       } : {}),
     },
   };
+}
+
+function computerUseTaskMetadata(taskId: string): Record<string, unknown> | undefined {
+  const task = CU_NEXT_TASK_MAPPINGS.find((item) => item.taskId === taskId);
+  if (!task) return undefined;
+  return compactRecord({
+    recommendedTargetMode: task.recommendedTargetMode,
+    recommendedTargetApp: task.recommendedTargetApp,
+    recommendedMaxSteps: task.recommendedMaxSteps,
+    semanticMarkers: semanticMarkersForComputerUseTask(task),
+  });
+}
+
+function semanticMarkersForComputerUseTask(task: (typeof CU_NEXT_TASK_MAPPINGS)[number]): string[] | undefined {
+  const markers = [
+    task.slug === 'desktop-local-document-save' ? 'desktop-file-save' : undefined,
+  ].filter((item): item is string => Boolean(item));
+  return markers.length ? markers : undefined;
 }
 
 function promptWithComputerUseAcceptanceBinding(
@@ -858,19 +874,6 @@ function computerUseAcceptanceBindingId(value: string | undefined): string | und
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,80}$/.test(trimmed) ? trimmed : undefined;
-}
-
-function completionEvidencePolicyForProducers(producerIds: string[]): Record<string, unknown> | undefined {
-  const producers = uniqueStrings(producerIds).map((id) => ({
-    id,
-    enabled: true,
-    trigger: COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN,
-  }));
-  if (!producers.length) return undefined;
-  return {
-    schemaVersion: COMPLETION_EVIDENCE_POLICY_SCHEMA,
-    producers,
-  };
 }
 
 function suggestedPromptForExpectedStatus(expectedStatus: ComputerUseChatLiveE2EExpectedStatus) {

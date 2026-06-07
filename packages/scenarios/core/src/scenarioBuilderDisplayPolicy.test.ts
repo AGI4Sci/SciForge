@@ -119,7 +119,7 @@ describe('scenario builder display policy', () => {
     const reasons = scenarioBuilderRecommendationReasons({
       selection: {
         skillDomain: 'literature',
-        selectedSkillIds: ['agentserver.generate.literature'],
+        selectedSkillIds: ['generated-task.generate.literature'],
         selectedArtifactTypes: ['paper-list', 'research-report'],
       },
       scenario: {
@@ -203,7 +203,7 @@ describe('scenario builder display policy', () => {
       builderStep: 'publish',
       selection: {
         skillDomain: 'literature',
-        selectedSkillIds: ['agentserver.generate.literature'],
+        selectedSkillIds: ['generated-task.generate.literature'],
         selectedToolIds: ['tool.pubmed'],
         selectedComponentIds: ['paper-card-list'],
         selectedArtifactTypes: ['paper-list'],

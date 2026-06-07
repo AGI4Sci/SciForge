@@ -30,7 +30,7 @@ export interface SkillElement extends ElementManifestBase {
   skillDomains: SkillDomain[];
   inputContract: Record<string, unknown>;
   outputArtifactTypes: string[];
-  entrypointType: 'workspace-task' | 'inspector' | 'agentserver-generation' | 'markdown-skill';
+  entrypointType: 'workspace-task' | 'inspector' | 'backend-generation' | 'markdown-skill';
   requiredCapabilities: CapabilityRequirement[];
   failureModes: string[];
   examplePrompts: string[];

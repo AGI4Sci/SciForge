@@ -73,7 +73,7 @@ test('runtime artifact policy owns current-reference digest recovery payload sha
   const payload = buildCurrentReferenceDigestRecoveryPayload({
     prompt: 'summarize current refs',
     skillDomain: 'literature',
-    skillId: 'agentserver.generate.literature',
+    skillId: 'generated-task.generate.literature',
     failureReason: 'context window exceeded',
     uiManifest: [{ componentId: 'report-viewer', artifactRef: CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID }],
     sources: [{ sourceRef: 'reports/a.md', digestRef: '.sciforge/digests/a.md', text: '## Summary\nUseful result' }],

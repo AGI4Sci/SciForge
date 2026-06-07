@@ -184,7 +184,7 @@ export function recommendScenarioElements(
       .map((candidate) => candidate.skill)
       .slice(0, 4)
     : [];
-  const generatedSkill = registry.skills.find((skill) => skill.id === `agentserver.generate.${inferredDomain}`);
+  const generatedSkill = registry.skills.find((skill) => skill.id === `generated-task.generate.${inferredDomain}`);
   const selectedSkills = complexOpenEnded && generatedSkill
     ? [generatedSkill]
     : unique(matchedSkills).slice(0, 5);
@@ -507,7 +507,7 @@ function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
 function domainSemanticCandidates(text: string): Array<SemanticSignalCandidate<SkillDomain>> {
   const signals: Record<SkillDomain, { structured: RegExp[]; lexical: RegExp[] }> = {
     literature: {
-      structured: [/\b(pubmed|paper-list|semantic scholar|crossref|clinical trial|evidence matrix|文献|论文|证据矩阵|临床试验)\b/],
+      structured: [/\b(pubmed|paper-list|semantic scholar|crossref|clinical trial|evidence matrix|arxiv)\b|文献|论文|文章|证据矩阵|临床试验/],
       lexical: [/\b(paper|literature|evidence|review|trial)\b|综述|证据/],
     },
     structure: {
@@ -519,7 +519,10 @@ function domainSemanticCandidates(text: string): Array<SemanticSignalCandidate<S
       lexical: [/\b(spatial|screen|matrix|expression|integration)\b/],
     },
     knowledge: {
-      structured: [/\b(chembl|opentargets|drug|compound|disease|pathway|knowledge graph|knowledge[-\s]?graph|uniprot|知识图谱|疾病|化合物|药物|靶点)\b/],
+      structured: [
+        /\b(chembl|opentargets|drug|compound|disease|pathway|knowledge graph|knowledge[-\s]?graph|uniprot)\b|知识图谱|疾病|化合物|药物|靶点/,
+        /实体归一化|关系抽取|冲突关系|网络可视化/,
+      ],
       lexical: [/\b(target|gene|protein|network)\b/],
     },
   };
@@ -532,11 +535,11 @@ function domainSemanticCandidates(text: string): Array<SemanticSignalCandidate<S
 function artifactSemanticCandidates(text: string): Array<SemanticSignalCandidate<string>> {
   const signals: Record<string, { structured: RegExp[]; lexical: RegExp[] }> = {
     'research-report': {
-      structured: [/\b(research report|markdown report|pdf report|systematic review|总结报告|研究报告)\b/],
+      structured: [/\b(research report|markdown report|pdf report|systematic review)\b|总结报告|研究报告|系统性报告|系统性总结|可复现报告/],
       lexical: [/\b(report|summary|summari[sz]e|review|markdown|pdf|download|read)\b|阅读|总结|报告|综述|下载/],
     },
     'paper-list': {
-      structured: [/\b(paper-list|pubmed|semantic scholar|crossref|文献列表)\b/],
+      structured: [/\b(paper-list|pubmed|semantic scholar|crossref|arxiv)\b|文献列表|文献|论文|文章/],
       lexical: [/\b(paper|literature|arxiv|evidence)\b|文献|论文|文章|证据/],
     },
     'structure-summary': {
@@ -548,7 +551,7 @@ function artifactSemanticCandidates(text: string): Array<SemanticSignalCandidate
       lexical: [/\b(matrix|expression|screen|spatial)\b/],
     },
     'knowledge-graph': {
-      structured: [/\b(knowledge graph|knowledge[-\s]?graph|chembl|uniprot|opentargets|drug|compound|disease|pathway|知识图谱|疾病|化合物|药物|靶点|网络)\b/],
+      structured: [/\b(knowledge graph|knowledge[-\s]?graph|chembl|uniprot|opentargets|drug|compound|disease|pathway)\b|知识图谱|疾病|化合物|药物|靶点|网络/],
       lexical: [/\b(target|network|gene|protein)\b/],
     },
     'sequence-alignment': {

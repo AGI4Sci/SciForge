@@ -7,30 +7,13 @@ import {
   createDefaultCodexAgentHostBrowserActTimeStores,
   createDefaultCodexAgentHostRuntimeTruthResolver,
 } from './agent-host-runtime-truth-resolver.js';
-import { createDefaultVirtualAppScreenNativeHostActTimeTruthSource } from './agent-host-virtual-app-screen-diagnostic-act-time-source.js';
 import type { BrowserHostSessionManager } from '../browser-host-session.js';
 import { createActorCursor, createWindowActionSession } from '../window-action-session.js';
 import type { WindowActionSessionStore } from '../window-action-session-store.js';
 import {
-  recordVirtualAppScreenNativeHostSession,
-  resetVirtualAppScreenNativeHostSessionStoreForTests,
-  type VirtualAppScreenNativeHostSessionRecord,
-} from '../computer-use/virtual-app-screen-native-host-session-store.js';
-import {
-  recordVirtualAppScreenProviderSession,
-  resetVirtualAppScreenProviderSessionStoreForTests,
-} from '../computer-use/virtual-app-screen-provider-session-store.js';
-import {
   resolveCodexAgentHostRuntimeTruth,
   type NormalizedCodexAgentHostInput,
 } from './agent-host-turn-loop.js';
-import type {
-  NativeHostFrame,
-  NativeHostLiveSurface,
-  NativeHostReadinessRecord,
-  NativeHostSession,
-  NativeVirtualAppScreenHost,
-} from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 
 test('default Agent Host runtime truth resolver blocks UI-only readiness hints', async () => {
   const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({ env: {} });
@@ -720,10 +703,7 @@ test('default Agent Host runtime truth resolver fail-closes WindowActionSession 
 });
 
 test('default Agent Host runtime truth resolver ignores VirtualAppScreen Native Host refs', async () => {
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-  resetVirtualAppScreenProviderSessionStoreForTests();
   const now = '2026-06-06T00:05:00.000Z';
-  const record = recordProductVirtualAppScreenSession({ now, diagnosticOnly: false });
   const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({
     env: {},
     now: () => new Date(now),
@@ -733,20 +713,20 @@ test('default Agent Host runtime truth resolver ignores VirtualAppScreen Native 
     input: {},
     agentHostInput: normalizedAgentHostInput({
       refs: [
-        record.sessionRef,
-        record.screenRef!,
+        'computer-use:native-host/sessions/vas-product-session/session.json',
+        'virtual-app-screen:vas-product/screen',
         'gui.present:fake-virtual-screen',
       ],
       target: {
         refs: [
-          record.targetWindowRef!,
-          record.liveSurfaceRef!,
+          'window:vas-product/vscode/main',
+          'computer-use:native-host/surfaces/vas-product-surface/live-surface.json',
           'ui:fake-target',
         ],
       },
       observation: {
         refs: [
-          record.currentFrameRef!,
+          'computer-use:native-host/frames/vas-product-surface/current.png',
           'data:image/png;base64,AAAA',
         ],
       },
@@ -762,170 +742,12 @@ test('default Agent Host runtime truth resolver ignores VirtualAppScreen Native 
   assert.equal(truth?.target?.bound, false);
   assert.equal(truth?.observation?.fresh, false);
   assert.equal(truth?.permissions?.stopCancelPath, false);
-  assert.ok(!truth?.refs?.includes(record.currentRunPointerRef));
-  assert.ok(!truth?.refs?.includes(record.adapterReadinessRef));
-  assert.ok(!truth?.refs?.includes(record.actionAdapterRef!));
-  assert.ok(!truth?.refs?.includes(record.inputLeaseRef!));
+  assert.ok(!truth?.refs?.includes('computer-use:native-host/runs/vas-product-session/current-run-pointer.json'));
+  assert.ok(!truth?.refs?.includes('computer-use:native-host/readiness/vas-product-session/adapter.json'));
+  assert.ok(!truth?.refs?.includes('computer-use:native-host/adapters/vas-product-session/input.json'));
+  assert.ok(!truth?.refs?.includes('computer-use:native-host/leases/vas-product-session/input.json'));
   assert.ok(!truth?.refs?.some((ref) => /^computer-use:provider-session\/.+\/owner\.json$/u.test(ref)));
   assert.doesNotMatch(JSON.stringify(truth), /gui\.present|ui:|fixture:|replay:|data:image|base64/);
-
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-  resetVirtualAppScreenProviderSessionStoreForTests();
-});
-
-test('explicitly injected VirtualAppScreen diagnostic Act-time source keeps NativeHost evidence bounded', async () => {
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-  resetVirtualAppScreenProviderSessionStoreForTests();
-  const now = '2026-06-06T00:05:30.000Z';
-  const record = recordProductVirtualAppScreenSession({ now, diagnosticOnly: false });
-  const source = createDefaultVirtualAppScreenNativeHostActTimeTruthSource({
-    now: () => new Date(now),
-    stores: {
-      computerUseAdapterRegistry: {
-        async materializeBrowserHostAdapter() {
-          return undefined;
-        },
-        async materializeVirtualAppScreenNativeHostAdapter() {
-          return {
-            status: 'ready',
-            providerId: 'sciforge.virtual-app-screen.native-host-window-action',
-            refs: [
-              record.actionAdapterRef!,
-              record.adapterReadinessRef,
-              'ui:adapter-ready',
-              'http://example.invalid/adapter',
-            ],
-          };
-        },
-      },
-      permissionLedger: {
-        async materializeTurnPermission() {
-          return undefined;
-        },
-        async materializeVirtualAppScreenNativeHostTurnPermission() {
-          return {
-            status: 'ready',
-            refs: [
-              'permission:macos/screen-recording',
-              'approval:virtual-app-screen/granted',
-              'approval:token/should-not-leak',
-              'gui.ask_user:fake-approval',
-            ],
-            permissionRefs: [
-              'permission:turn/virtual-app-screen-bounded-evidence',
-              'ui:permission-ready',
-            ],
-          };
-        },
-      },
-      stopCancelTakeoverStore: {
-        async materializeForBrowserHostSession() {
-          return undefined;
-        },
-        async materializeForVirtualAppScreenNativeHostSession() {
-          return {
-            status: 'ready',
-            refs: [
-              'stop:computer-use/native-host/vas-product-session/stop',
-              'lease:computer-use/native-host/vas-product-session/pause',
-              'fixture:cancel-ready',
-              'native-host:cancel/token-should-not-leak',
-            ],
-          };
-        },
-      },
-    },
-  });
-  const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({
-    env: {},
-    now: () => new Date(now),
-    actTimeTruthSource: source,
-  });
-
-  const truth = await resolver({
-    input: {},
-    agentHostInput: normalizedAgentHostInput({
-      refs: [
-        record.sessionRef,
-        record.screenRef!,
-        'gui.present:fake-virtual-screen',
-        'https://example.invalid/input-ref',
-      ],
-      target: {
-        refs: [
-          record.targetWindowRef!,
-          record.liveSurfaceRef!,
-          'ui:fake-target',
-          'native-host:target/token-should-not-leak',
-        ],
-      },
-      observation: {
-        refs: [
-          record.currentFrameRef!,
-          'data:image/png;base64,CCCC',
-          'replay:fake-frame',
-        ],
-      },
-      permissions: {
-        refs: ['permission:ui-only', 'bearer:projected-token'],
-        stopCancelPath: true,
-      },
-    }),
-    commandText: 'Click the visible Problems tab in the VirtualAppScreen VS Code window.',
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-virtual-app-screen-bounded-evidence',
-    attemptId: 'codex-command-virtual-app-screen-bounded-evidence-attempt-1',
-  });
-
-  assert.equal(truth?.readiness?.windowActionSession, 'ready');
-  assert.equal(truth?.readiness?.computerUseAdapter, 'ready');
-  assert.ok(truth?.target?.refs?.includes(record.sessionRef));
-  assert.ok(truth?.target?.refs?.includes(record.screenRef!));
-  assert.ok(truth?.target?.refs?.includes(record.liveSurfaceRef!));
-  assert.ok(truth?.target?.refs?.includes(record.targetWindowRef!));
-  assert.ok(truth?.observation?.refs?.includes(record.currentFrameRef!));
-  assert.deepEqual(truth?.permissions?.refs, [
-    'permission:macos/screen-recording',
-    'approval:virtual-app-screen/granted',
-    'permission:turn/virtual-app-screen-bounded-evidence',
-  ]);
-  assert.equal(truth?.permissions?.stopCancelPath, true);
-  assert.doesNotMatch(JSON.stringify(truth), /gui(?:\.|:)|ui:|fixture:|replay:|https?:\/\/|data:image|base64|token|bearer/i);
-
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-  resetVirtualAppScreenProviderSessionStoreForTests();
-});
-
-test('default Agent Host runtime truth resolver blocks diagnostic-only VirtualAppScreen Native Host records', async () => {
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-  resetVirtualAppScreenProviderSessionStoreForTests();
-  const now = '2026-06-06T00:06:00.000Z';
-  const record = recordProductVirtualAppScreenSession({ now, diagnosticOnly: true });
-  const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({
-    env: {},
-    now: () => new Date(now),
-  });
-
-  const truth = await resolver({
-    input: {},
-    agentHostInput: normalizedAgentHostInput({
-      refs: [record.sessionRef, record.screenRef!],
-      target: { refs: [record.liveSurfaceRef!] },
-      observation: { refs: [record.currentFrameRef!] },
-    }),
-    commandText: 'Click the visible Problems tab in the VirtualAppScreen VS Code window.',
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-virtual-app-screen-diagnostic',
-    attemptId: 'codex-command-virtual-app-screen-diagnostic-attempt-1',
-  });
-
-  assert.equal(truth?.readiness?.windowActionSession, 'blocked');
-  assert.equal(truth?.readiness?.computerUseAdapter, 'blocked');
-  assert.equal(truth?.target?.bound, false);
-  assert.equal(truth?.observation?.fresh, false);
-
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-  resetVirtualAppScreenProviderSessionStoreForTests();
 });
 
 test('default Agent Host runtime truth resolver merges injected runtime-owner Act-time truth', async () => {
@@ -1197,196 +1019,6 @@ function browserHostSessionManager(state: Record<string, unknown>): BrowserHostS
       return state;
     },
   } as unknown as BrowserHostSessionManager;
-}
-
-function recordProductVirtualAppScreenSession(options: {
-  now: string;
-  diagnosticOnly: boolean;
-}): VirtualAppScreenNativeHostSessionRecord {
-  const readiness: NativeHostReadinessRecord = {
-    schemaVersion: 'sciforge.computer-use.native-virtual-app-screen-host.v1',
-    status: 'ready',
-    adapterKind: 'product-virtual-app-screen-adapter',
-    platform: 'darwin',
-    checkedAt: options.now,
-    adapterReadinessRef: 'computer-use:native-host/readiness/vas-product-session/adapter.json',
-    permissionRefs: ['permission:macos/screen-recording'],
-    driverRefs: ['computer-use:native-host/drivers/vas-product-session/platform-driver.json'],
-    providerRefs: ['computer-use:native-host/providers/vas-product-session/provider.json'],
-    capabilities: {
-      createDisplay: true,
-      launchApp: true,
-      attachWindow: true,
-      captureFrame: true,
-      streamFrames: true,
-      sendHumanInput: true,
-      executeAutomationIntent: true,
-      validateGrant: true,
-      writeEvidenceLedger: true,
-      backgroundRenderable: true,
-      affectsPhysicalDisplay: false,
-      requiresFocusSteal: false,
-      sharedSystemInputUsed: false,
-    },
-    diagnosticOnly: options.diagnosticOnly,
-  };
-  const session: NativeHostSession = {
-    schemaVersion: 'sciforge.computer-use.native-virtual-app-screen-host.v1',
-    sessionId: 'vas-product-session',
-    sessionRef: 'computer-use:native-host/sessions/vas-product-session/session.json',
-    hostId: 'native-virtual-app-screen-host.product',
-    status: 'surface-attached',
-    createdAt: options.now,
-    updatedAt: options.now,
-    profile: {
-      profileId: 'vscode-editor',
-      defaultSurfaceTransport: 'native-frame-stream',
-    },
-    permissions: {
-      allowBackgroundRendering: true,
-      allowSharedSystemInput: false,
-    },
-    evidenceContext: {
-      currentRunRef: 'computer-use:native-host/runs/vas-product-session/current-run.json',
-      evidenceRootRef: 'computer-use:native-host/evidence/vas-product-session',
-      currentRunPointerRef: 'computer-use:native-host/runs/vas-product-session/current-run-pointer.json',
-      guiPresentRef: 'gui.present:virtual-app-screen/product',
-    },
-    readiness,
-    app: {
-      appId: 'vscode',
-      appRef: 'computer-use:native-host/apps/vas-product-session/vscode.json',
-      title: 'VS Code',
-    },
-    ledgerRef: 'computer-use:native-host/ledgers/vas-product-session/evidence-ledger.json',
-    currentRunPointerRef: 'computer-use:native-host/runs/vas-product-session/current-run-pointer.json',
-  };
-  const surface: NativeHostLiveSurface = {
-    surfaceId: 'vas-product-surface',
-    screenRef: 'virtual-app-screen:vas-product/screen',
-    targetAppRef: 'computer-use:native-host/apps/vas-product-session/vscode.json',
-    targetWindowRef: 'window:vas-product/vscode/main',
-    sessionRef: session.sessionRef,
-    liveSurfaceRef: 'computer-use:native-host/surfaces/vas-product-surface/live-surface.json',
-    liveBindingAttachGrantRef: 'computer-use:native-host/grants/vas-product-surface/live-binding-attach-grant.json',
-    surfaceOwnerRef: 'computer-use:native-host/surfaces/vas-product-surface/surface-owner.json',
-    displayOwnerRef: 'computer-use:native-host/surfaces/vas-product-surface/display-owner.json',
-    surfaceTransport: 'native-frame-stream',
-    surfaceTransportRef: 'computer-use:native-host/surfaces/vas-product-surface/surface-transport.json',
-    frameStreamRef: 'computer-use:native-host/surfaces/vas-product-surface/frame-stream.json',
-    frameTransportContractRef: 'computer-use:native-host/surfaces/vas-product-surface/frame-transport-contract.json',
-    frameTelemetryRef: 'computer-use:native-host/surfaces/vas-product-surface/frame-telemetry.json',
-    currentFrameRef: 'computer-use:native-host/frames/vas-product-surface/current.png',
-    currentFrameHash: 'sha256:frame',
-    currentFrameSequence: 9,
-  };
-  const frame: NativeHostFrame = {
-    frameRef: 'computer-use:native-host/frames/vas-product-surface/current.png',
-    frameHash: 'sha256:frame',
-    frameSequence: 9,
-    liveSurfaceRef: surface.liveSurfaceRef,
-    frameStreamRef: surface.frameStreamRef,
-    readAt: options.now,
-  };
-  const record = recordVirtualAppScreenNativeHostSession({
-    host: {} as NativeVirtualAppScreenHost,
-    session,
-    surface,
-    frame,
-    refs: {
-      inputLeaseRef: 'computer-use:native-host/leases/vas-product-session/input.json',
-      actionAdapterRef: 'computer-use:native-host/adapters/vas-product-session/input.json',
-      adapterReadinessRef: readiness.adapterReadinessRef,
-      evidenceLedgerRef: session.ledgerRef,
-      currentRunPointerRef: session.currentRunPointerRef,
-      grantValidationRef: 'computer-use:native-host/ledgers/vas-product-session/evidence-ledger.json/events/0004-grant.validated.json',
-    },
-  });
-  recordVirtualAppScreenProviderSession({
-    source: 'right-pane-screen',
-    action: 'screen-attach',
-    profile: 'vscode-editor',
-    refs: {
-      readinessRef: readiness.adapterReadinessRef,
-      screenRef: surface.screenRef,
-      targetAppRef: surface.targetAppRef,
-      targetWindowRef: surface.targetWindowRef,
-      evidenceLedgerRef: session.ledgerRef,
-    },
-  }, {
-    schemaVersion: 'sciforge.computer-use.virtual-app-screen-session-manager.v1',
-    status: 'attached',
-    executorId: 'native-session-manager:vas-product',
-    providerId: 'native-virtual-app-screen-host.product',
-    refs: {
-      currentRunRef: session.evidenceContext.currentRunRef,
-      currentRunPointerRef: session.currentRunPointerRef,
-      sessionRef: session.sessionRef,
-      liveSurfaceRef: surface.liveSurfaceRef,
-      surfaceTransportRef: surface.surfaceTransportRef,
-      frameStreamRef: surface.frameStreamRef,
-      currentFrameRef: frame.frameRef,
-      frameTransportContractRef: surface.frameTransportContractRef,
-      frameTelemetryRef: surface.frameTelemetryRef,
-      liveBindingAttachGrantRef: surface.liveBindingAttachGrantRef,
-      grantValidationRef: 'computer-use:native-host/ledgers/vas-product-session/evidence-ledger.json/events/0004-grant.validated.json',
-      surfaceOwnerRef: surface.surfaceOwnerRef,
-      displayOwnerRef: surface.displayOwnerRef,
-      screenRef: surface.screenRef,
-      targetAppRef: surface.targetAppRef,
-      targetWindowRef: surface.targetWindowRef,
-      inputLeaseRef: 'computer-use:native-host/leases/vas-product-session/input.json',
-      actionAdapterRef: 'computer-use:native-host/adapters/vas-product-session/input.json',
-      adapterReadinessRef: readiness.adapterReadinessRef,
-      evidenceLedgerRef: session.ledgerRef,
-      guiPresentRef: session.evidenceContext.guiPresentRef,
-    },
-    evidence: {
-      providerExecuted: true,
-      mutatingActionExecuted: false,
-      nativeSessionCreated: true,
-      liveFrameAttached: true,
-      currentFrameMaterialized: true,
-      guiPresented: true,
-      isolationVerified: true,
-      providerSessionGrantValidated: true,
-      platformDriverReady: true,
-      permissionRequired: true,
-      permissionGranted: true,
-      backgroundRenderable: true,
-      diagnosticOnly: options.diagnosticOnly,
-      affectsPhysicalDisplay: false,
-      requiresFocusSteal: false,
-      sharedSystemInputUsed: false,
-      systemPointerMoved: false,
-      systemKeyboardEventsSent: false,
-      surfaceTransport: {
-        schemaVersion: 'sciforge.virtual-display.surface-transport.v1',
-        owner: 'VirtualDisplayProvider',
-        providerId: 'native-virtual-app-screen-host.product',
-        transport: 'native-frame-stream',
-        liveSurfaceRef: surface.liveSurfaceRef,
-        surfaceTransportRef: surface.surfaceTransportRef,
-        frameStreamRef: surface.frameStreamRef,
-        frameTransportContractRef: surface.frameTransportContractRef!,
-        frameTelemetryRef: surface.frameTelemetryRef,
-        currentFrameRef: frame.frameRef,
-        currentFrameSequence: frame.frameSequence,
-        diagnosticOnly: false,
-        productFallback: false,
-        singleInteractiveTruth: true,
-      },
-      evidenceRefs: [
-        session.sessionRef,
-        surface.liveSurfaceRef,
-        frame.frameRef,
-        session.ledgerRef,
-        session.currentRunPointerRef,
-        readiness.adapterReadinessRef,
-      ],
-    },
-  });
-  return record;
 }
 
 function normalizedAgentHostInput(

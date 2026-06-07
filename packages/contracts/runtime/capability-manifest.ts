@@ -339,14 +339,14 @@ function toolPrimitiveCapabilityManifest(input: {
   status?: CapabilityProviderManifest['status'];
 }): CapabilityManifest {
   const sideEffects = input.sideEffects ?? ['network', 'external-api'];
-  const source = input.source ?? 'agentserver';
-  const transport = input.transport ?? 'agentserver-worker';
+  const source = input.source ?? 'backend-native';
+  const transport = input.transport ?? 'backend-native';
   return {
     contract: CAPABILITY_MANIFEST_CONTRACT_ID,
     id: input.id,
     name: input.name,
     version: '0.1.0',
-    ownerPackage: input.sourceRef.startsWith('packages/') ? input.sourceRef.split('/').slice(0, 3).join('/') : 'AgentServer',
+    ownerPackage: input.sourceRef.startsWith('packages/') ? input.sourceRef.split('/').slice(0, 3).join('/') : 'SciForge backend',
     kind: 'action',
     brief: input.brief,
     routingTags: input.routingTags,

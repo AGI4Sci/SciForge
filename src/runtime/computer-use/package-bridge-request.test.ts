@@ -10,7 +10,6 @@ import {
   materializePackageBridgeRunTaskInvocation,
   materializePackageBridgeRuntimeSelectionDetail,
   materializePackageBridgeTraceRequest,
-  packageBridgeCompletionProducerRequestOptIn,
 } from './package-bridge-request.js';
 
 const baseConfig: ComputerUseConfig = {
@@ -87,16 +86,9 @@ test('package bridge materializes normalized action provider request for package
   assert.equal(actionProviderRequest.approvalRef, undefined);
   assert.equal(actionProviderRequest.providers.action, 'action.sciforge.computer-use');
   assert.equal(actionProviderRequest.providers.grounder, visionSenseModelRouterCapabilities.groundingTranslator);
-  assert.equal(actionProviderRequest.metadata.ignoredApprovalRef, 'approval:vision-sense-dry-run-smoke');
+  assert.equal('ignoredApprovalRef' in actionProviderRequest.metadata, false);
   assert.equal((actionProviderRequest.metadata.chatOrigin as Record<string, unknown>).entrypoint, 'sciforge-chat');
-  assert.deepEqual(actionProviderRequest.metadata.completionEvidencePolicy, {
-    schemaVersion: 'sciforge.completion-evidence-policy.v1',
-    producers: [{
-      id: 'computer-use.embedded-isolated-desktop-l3',
-      enabled: true,
-      trigger: 'on-completed-current-run',
-    }],
-  });
+  assert.equal('completionEvidencePolicy' in actionProviderRequest.metadata, false);
   assert.doesNotMatch(
     JSON.stringify(actionProviderRequest),
     /SECRET_SHOULD_NOT_LEAK|SECRET_PRODUCER_KEY|unknown-producer/,
@@ -138,12 +130,12 @@ test('package bridge materializes runTask invocation request and host ports toge
   assert.equal(invocation.hostPorts.schemaVersion, 'sciforge.computer-use.host-ports.v1');
   assert.ok(invocation.hostPorts.ports.capture);
   assert.ok(invocation.hostPorts.ports.verify);
-  assert.equal(invocation.completionProducerOptIn, true);
   assert.deepEqual(runtimeDetail.actionProviderRequest, invocation.request);
   assert.deepEqual(runtimeDetail.hostPorts, invocation.hostPorts);
   assert.equal(runtimeDetail.boundary, PACKAGE_BRIDGE_RUN_TASK_BOUNDARY);
   assert.equal(runtimeDetail.bridge, 'ts-package-host-port-loop');
-  assert.equal(runtimeDetail.completionProducerOptIn, true);
+  assert.equal('completionProducerOptIn' in runtimeDetail, false);
+  assert.equal('completionEvidencePolicy' in invocation.request.metadata, false);
   assert.doesNotMatch(
     JSON.stringify({ invocation, runtimeDetail }),
     /SECRET_SHOULD_NOT_LEAK|SECRET_PRODUCER_KEY|apiKey|secret/,
@@ -180,15 +172,11 @@ test('package bridge trace request reuses the normalized package invocation requ
   assert.deepEqual(traceRequest.computerUseRequest, actionProviderRequest);
   assert.equal(traceRequest.computerUseRequest.riskPolicy, 'fail-closed');
   assert.equal(traceRequest.computerUseRequest.approvalRef, undefined);
-  assert.equal(
-    (traceRequest.computerUseRequest.metadata as Record<string, unknown>).ignoredApprovalRef,
-    'approval:vision-sense-dry-run-smoke',
-  );
+  assert.equal('ignoredApprovalRef' in (traceRequest.computerUseRequest.metadata as Record<string, unknown>), false);
 });
 
-test('package bridge completion producer opt-in is request scoped and sanitized', () => {
-  assert.equal(packageBridgeCompletionProducerRequestOptIn(gatewayRequest()), false);
-  assert.equal(packageBridgeCompletionProducerRequestOptIn(gatewayRequest({
+test('package bridge ignores retired completion evidence producer policy', () => {
+  const invocation = materializePackageBridgeRunTaskInvocation(gatewayRequest({
     uiState: {
       completionEvidencePolicy: {
         schemaVersion: 'sciforge.completion-evidence-policy.v1',
@@ -196,32 +184,13 @@ test('package bridge completion producer opt-in is request scoped and sanitized'
           id: 'computer-use.embedded-isolated-desktop-l3',
           enabled: true,
           trigger: 'on-completed-current-run',
+          secret: 'SHOULD_NOT_LEAK',
         }],
       },
     },
-  })), true);
-  assert.equal(packageBridgeCompletionProducerRequestOptIn(gatewayRequest({
-    uiState: {
-      completionEvidencePolicy: {
-        schemaVersion: 'sciforge.completion-evidence-policy.v1',
-        producers: [{
-          id: 'computer-use.embedded-isolated-desktop-l3',
-          enabled: true,
-          secret: 'MISSING_TRIGGER_SHOULD_NOT_ENABLE',
-        }],
-      },
-    },
-  })), false);
-  assert.equal(packageBridgeCompletionProducerRequestOptIn(gatewayRequest({
-    uiState: {
-      completionEvidencePolicy: {
-        schemaVersion: 'sciforge.completion-evidence-policy.v1',
-        producers: [{
-          id: 'computer-use.unknown-producer',
-          enabled: true,
-          trigger: 'on-completed-current-run',
-        }],
-      },
-    },
-  })), false);
+  }), baseConfig, '/tmp/sciforge-workspace');
+
+  assert.equal('completionProducerOptIn' in invocation, false);
+  assert.equal('completionEvidencePolicy' in invocation.request.metadata, false);
+  assert.doesNotMatch(JSON.stringify(invocation), /embedded-isolated-desktop-l3|SHOULD_NOT_LEAK/);
 });

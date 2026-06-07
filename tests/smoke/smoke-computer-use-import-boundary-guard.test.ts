@@ -136,33 +136,6 @@ test('Computer Use ownership manifest carries import boundary and adapter classi
     'manifest validation should fail closed if GUI execution is allowed for Computer Use',
   );
 
-  const missingNativeTool = {
-    ...policy,
-    actionProviderPublicSurface: {
-      ...policy.actionProviderPublicSurface,
-      nativeToolsContract: {
-        ...policy.actionProviderPublicSurface.nativeToolsContract,
-        tools: new Set([...policy.actionProviderPublicSurface.nativeToolsContract.tools].filter((item) => item !== 'execute_scoped_action')),
-      },
-    },
-  };
-  assert.ok(
-    computerUseBoundaryManifestIssues(missingNativeTool).some((issue) => issue.includes('execute_scoped_action')),
-    'manifest validation should fail closed when the scoped executor public tool disappears',
-  );
-
-  const missingNativeMultiScreenProbe = {
-    ...policy,
-    actionProviderPublicSurface: {
-      ...policy.actionProviderPublicSurface,
-      diagnosticProbes: new Set([...policy.actionProviderPublicSurface.diagnosticProbes].filter((item) => item !== 'nativeMultiScreenLiveDemo')),
-    },
-  };
-  assert.ok(
-    computerUseBoundaryManifestIssues(missingNativeMultiScreenProbe).some((issue) => issue.includes('nativeMultiScreenLiveDemo')),
-    'manifest validation should fail closed when the M6 opt-in native live demo probe disappears',
-  );
-
   const missingNativeSidecarProtocolRefs = {
     ...policy,
     actionProviderPublicSurface: {
@@ -190,12 +163,12 @@ test('Computer Use ownership manifest carries import boundary and adapter classi
       ...policy.actionProviderPublicSurface,
       nativeProductGatePolicy: {
         ...policy.actionProviderPublicSurface.nativeProductGatePolicy,
-        requiredProvenance: new Set([...policy.actionProviderPublicSurface.nativeProductGatePolicy.requiredProvenance].filter((item) => item !== 'windowId')),
+        requiredProvenance: new Set([...policy.actionProviderPublicSurface.nativeProductGatePolicy.requiredProvenance].filter((item) => item !== 'windowActionSessionRef')),
       },
     },
   };
   assert.ok(
-    computerUseBoundaryManifestIssues(missingWindowProvenance).some((issue) => issue.includes('windowId')),
+    computerUseBoundaryManifestIssues(missingWindowProvenance).some((issue) => issue.includes('windowActionSessionRef')),
     'manifest validation should fail closed when window-scoped provenance disappears from the native product gate',
   );
 
@@ -211,20 +184,6 @@ test('Computer Use ownership manifest carries import boundary and adapter classi
     'manifest validation should fail closed when BrowserRuntime DOM/AX hint refs disappear',
   );
 
-  const legacyBackendActive = {
-    ...policy,
-    actionProviderPublicSurface: {
-      ...policy.actionProviderPublicSurface,
-      isolatedDesktopBackendRuntime: {
-        ...policy.actionProviderPublicSurface.isolatedDesktopBackendRuntime,
-        activeProductGateEligible: true,
-      },
-    },
-  };
-  assert.ok(
-    computerUseBoundaryManifestIssues(legacyBackendActive).some((issue) => issue.includes('legacy diagnostic/backend packaging only')),
-    'manifest validation should fail closed when Docker/noVNC/RDP becomes product-gate eligible',
-  );
 });
 
 function violation(edge: Omit<ImportEdge, 'line'>) {

@@ -17,7 +17,6 @@ import {
   validateBoundedOperationRequest,
 } from '../../../packages/contracts/runtime/modules.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
-import { sanitizeCompletionEvidencePolicy } from '../computer-use/completion-evidence-policy.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import {
   createCodexAgentHostBrowserBoundedOperationTurnLoopResult,
@@ -826,8 +825,10 @@ async function runtimeBrowserEvidenceFallback(input: {
 function shouldRunRuntimeBrowserEvidenceFallback(observation: RuntimeTurnObservation, commandText: string): boolean {
   if (!observation.sawTerminalDone && !observation.sawTerminalFailure) return false;
   if (observation.sawGuiCompletion || observation.sawBrowserEvidenceRef) return false;
-  if (observation.sawTerminalFailure && runtimeCommandNeedsBrowserEvidence(commandText)) return true;
+  const needsBrowserEvidence = runtimeCommandNeedsBrowserEvidence(commandText);
+  if (observation.sawTerminalFailure && needsBrowserEvidence) return true;
   const text = observation.assistantText.join('').replace(/\s+/g, ' ').trim();
+  if (needsBrowserEvidence && !text && !observation.sawToolLifecycle) return true;
   if (looksLikeUnsupportedBrowserEvidenceAnswer(text, commandText)) return true;
   if (observation.sawToolLifecycle) return false;
   return looksLikeBrowserToolIntentOnlyText(text);
@@ -1203,7 +1204,6 @@ const CODEX_RUNTIME_HOST_INTENT_ALLOWED_KEYS = new Set([
   'schemaVersion',
   'kind',
   'source',
-  'completionEvidencePolicy',
   'computerUseNext',
   'computerUseLong',
 ]);
@@ -1356,14 +1356,12 @@ function runtimeHostIntent(value: unknown): AgentCliStartTurnInput['runtimeInten
   if (value.schemaVersion !== 'sciforge.runtime-codex.host-intent.v1') return undefined;
   if (value.kind !== 'computer-use-native-route') return undefined;
   if (value.source !== 'host-owned') return undefined;
-  const completionEvidencePolicy = sanitizeCompletionEvidencePolicy(value.completionEvidencePolicy);
   const computerUseNext = sanitizeComputerUseNextBinding(value.computerUseNext);
   const computerUseLong = sanitizeComputerUseLongBinding(value.computerUseLong);
   return {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
     kind: 'computer-use-native-route',
     source: 'host-owned',
-    ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
     ...(computerUseNext ? { computerUseNext } : {}),
     ...(computerUseLong ? { computerUseLong } : {}),
   };

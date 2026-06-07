@@ -751,6 +751,31 @@ test('execution process folds runtime progress lifecycle rows even when they car
   assert.doesNotMatch(html, /Runtime Codex started|Runtime event recorded|structured details|run audit/);
 });
 
+test('execution process folds Runtime Codex public metadata rows without leaking workspace paths', () => {
+  const html = renderNativeStream([
+    nativeEvent('workspace-runtime-event', 'Runtime Codex 可见追踪元数据', {
+      rawType: 'runtime_metadata',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1',
+      commandId: 'codex-command-visible',
+      codexSessionId: 'codex-session-visible',
+      text: [
+        'provider sciforge-deepseek-proxy',
+        'model bailian/deepseek-v4-flash',
+        'profile sciforge-runtime-deepseek',
+        'workspace /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1',
+        'command codex-command-visible',
+      ].join(' · '),
+    }),
+    nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', filePath: 'PROJECT.md', text: 'PROJECT.md loaded' }),
+  ], 'zh-CN');
+
+  assert.match(html, /读取 PROJECT\.md/);
+  assert.doesNotMatch(html, /Runtime Codex 可见追踪元数据|sciforge-deepseek-proxy|bailian\/deepseek-v4-flash|sciforge-runtime-deepseek|\/Applications\/workspace|codex-command-visible|codex-session-visible/);
+});
+
 test('execution process folds user prompt commandText carriers out of Cursor actions', () => {
   const html = renderNativeStream([
     nativeEvent('workspace-runtime-event', 'Runtime prompt', {

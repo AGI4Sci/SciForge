@@ -164,9 +164,9 @@ assert.match(usage, /SCIFORGE_PROXY_UPSTREAM_BASE_URL|upstream base URL|upstream
 
 assert.match(computerUseManifest, /runTask|hostPorts|approvalRequest/, 'Computer Use manifest must expose runTask, host ports, and approval requests');
 assert.match(computerUseManifest, /refs-first|trace/i, 'Computer Use manifest must keep refs-first trace semantics');
-assert.match(computerUseReadme, /packages\/observe\/vision[\s\S]+observation/, 'Computer Use README must describe observe/vision as consumed observation input');
-assert.match(computerUseReadme, /vision-sense[\s\S]+不拥有 executor/, 'Computer Use README must keep vision-sense out of executor ownership');
-assert.match(computerUseReadme, /TUI-owned extension[\s\S]+GUI[\s\S]+gui\.present/, 'Computer Use README must keep GUI participation behind TUI Host presentation');
+assert.match(computerUseReadme, /TypeScript-only|TS-only/, 'Computer Use README must state the TS-only product path');
+assert.match(computerUseReadme, /WindowActionSession[\s\S]+current-run evidence bundle/, 'Computer Use README must describe WindowActionSession current evidence as the product path');
+assert.match(computerUseReadme, /retired[\s\S]+Python[\s\S]+VirtualAppScreen/, 'Computer Use README must keep retired Python and VirtualAppScreen out of product acceptance');
 
 assert.match(sciforgeToolsClient, /\/api\/sciforge\/tools\/run\/stream/, 'default chat /computer-use must route through the Workspace Gateway tools stream');
 const sciforgeToolsComputerUseTransport = `${sciforgeToolsClient}\n${sciforgeToolsClientComputerUseRequest}`;
@@ -177,7 +177,7 @@ assert.match(runtimeEvents, /computer-use\.tui-host-actions/, 'runtime event pro
 assert.match(runtimeEvents, /gui\.present/, 'runtime event projection must surface gui.present');
 assert.match(runtimeEvents, /gui\.ask_user/, 'runtime event projection must surface gui.ask_user');
 
-assert.match(packageBridge, /sciforge_computer_use|packages\/actions\/computer-use/, 'runtime bridge must call the package action provider');
+assert.match(packageBridge, /packages\/actions\/computer-use|action\.sciforge\.computer-use/, 'runtime bridge must call the TS package action provider');
 assert.match(packageBridge, /attachPackageResultHostActions|computer-use\.tui-host-actions|gui\.ask_user|gui\.present/, 'runtime bridge must preserve GUI intent metadata from package results');
 assert.match(packageBridgeTest, /gui\.ask_user|approvalRequest|package bridge/i, 'package bridge tests must cover high-risk confirmation projection');
 

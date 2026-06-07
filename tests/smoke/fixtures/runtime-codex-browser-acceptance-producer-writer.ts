@@ -10,12 +10,20 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
   commandId: string;
   attemptId: string;
 }): Promise<RuntimeCodexBrowserOrdinaryChatAcceptanceManifest> {
+  if (!/https:\/\/developers\.openai\.com\/api\/docs\/changelog/.test(options.commandText)) {
+    throw new Error('producer writer fixture requires the official OpenAI changelog open_read prompt');
+  }
   await mkdir(options.outputDir, { recursive: true });
   await mkdir(join(options.workspacePath, '.sciforge', 'browser-host', 'sessions', 'ordinary-chat-producer', 'source-pages'), { recursive: true });
   await Promise.all([
     writeFile(
       join(options.workspacePath, '.sciforge', 'browser-host', 'sessions', 'ordinary-chat-producer', 'source-pages', 'producer.source.json'),
-      '{"schemaVersion":"sciforge.browser-host-session.source-page.v1","status":"read"}\n',
+      JSON.stringify({
+        schemaVersion: 'sciforge.browser-host-session.source-page.v1',
+        status: 'read',
+        finalUrl: 'https://developers.openai.com/api/docs/changelog',
+        textRef: 'browser-host-session:ordinary-chat-producer/source-pages/producer.txt',
+      }, null, 2),
       'utf8',
     ),
     writeFile(
@@ -27,7 +35,7 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
 
   const evidenceRefs = [
     `action-ledger:browser.executeBoundedOperation/${options.commandId}/module.invoke`,
-    `runtime-truth:module.invoke/browser.search_read/${options.commandId}`,
+    `runtime-truth:module.invoke/browser.open_read/${options.commandId}`,
     'browser-host-session:ordinary-chat-producer',
     'browser-host-session:ordinary-chat-producer/source-pages/producer.source.json',
     'browser-host-session:ordinary-chat-producer/source-pages/producer.txt',

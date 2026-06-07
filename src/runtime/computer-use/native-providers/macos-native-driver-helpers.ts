@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
-import type { VirtualDisplayProviderProbeOptions } from '../virtual-display-provider.js';
+export interface MacosNativeDriverProbeOptions {
+  commandAvailability?: Record<string, boolean>;
+}
 
 export interface MacosTargetAppDiscoverySpec {
   kind?: string;
@@ -112,7 +114,7 @@ export const macosNativeDriverCommandRunner: MacosNativeDriverCommandRunner = {
 
 export function commandExists(
   command: string,
-  options: VirtualDisplayProviderProbeOptions = {},
+  options: MacosNativeDriverProbeOptions = {},
   runner: Pick<MacosNativeDriverCommandRunner, 'execFileSync'> = macosNativeDriverCommandRunner,
 ) {
   const injected = options.commandAvailability?.[command];
@@ -181,8 +183,8 @@ export async function captureMacosDisplayFrame(params: {
   runner?: Pick<MacosNativeDriverCommandRunner, 'execFile'>;
 }): Promise<MacosDisplayFrameCapture> {
   const runner = params.runner ?? macosNativeDriverCommandRunner;
-  const frameRef = `${params.runDirRef}/virtual-display-provider/frames/${params.phase}.json`;
-  const screenshotRef = `${params.runDirRef}/virtual-display-provider/frames/${params.phase}.png`;
+  const frameRef = `${params.runDirRef}/macos-native-driver/frames/${params.phase}.json`;
+  const screenshotRef = `${params.runDirRef}/macos-native-driver/frames/${params.phase}.png`;
   const screenshotPath = localPathForRef(params.outDir, params.runDirRef, screenshotRef);
   await mkdir(dirname(screenshotPath), { recursive: true });
   await runner.execFile('screencapture', ['-x', '-D', String(params.display.index), screenshotPath], { timeout: 15000 });
@@ -194,7 +196,7 @@ export async function captureMacosDisplayFrame(params: {
     ref: frameRef,
     role: params.phase,
     providerId: params.providerId,
-    screenRef: `${params.runDirRef}/virtual-display-provider/screen.json`,
+    screenRef: `${params.runDirRef}/macos-native-driver/screen.json`,
     screenshotRef,
     screenshotBytes: screenshotStat.size,
     screenshotSha256: digest,
@@ -443,7 +445,7 @@ export function defaultLaunchMacosTargetApp(
     stdio: 'ignore',
   });
   if (!child.pid) {
-    throw new Error(`macOS VirtualDisplayProvider could not start target command for ${spec.kind ?? spec.name ?? spec.command}.`);
+    throw new Error(`macOS native driver could not start target command for ${spec.kind ?? spec.name ?? spec.command}.`);
   }
   child.unref();
   return macosLaunchResult(spec, operationOptions, 'command', target, [child.pid], { argsCount: spec.args?.length ?? 0 });
@@ -566,7 +568,7 @@ function macosLaunchResult(
   return {
     pids: [...new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0))],
     targetAppRef: `app:macos-${launchMode}/${target}`,
-    launchRef: `.sciforge/vision-runs/${sanitizeMacosTargetId(operationOptions.runId || 'macos-virtual-display-driver')}/virtual-display-provider/launch.json`,
+    launchRef: `.sciforge/vision-runs/${sanitizeMacosTargetId(operationOptions.runId || 'macos-native-driver')}/macos-native-driver/launch.json`,
     details: {
       launchMode,
       targetKind: target,

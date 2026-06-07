@@ -365,7 +365,7 @@ export function minimalValidInteractiveToolPayloadExample(request: MinimalIntera
       { componentId: selectedComponent || 'unknown-artifact-inspector', artifactRef: artifactId, priority: 1 },
     ],
     executionUnits: [
-      { id: `${request.skillDomain}-task`, tool: 'agentserver.generated.task', status: 'done' },
+      { id: `${request.skillDomain}-task`, tool: 'backend.generated.task', status: 'done' },
     ],
     artifacts: [
       { id: artifactId, type: artifactType, data: { summary: 'Result content goes here.', rows: [] } },

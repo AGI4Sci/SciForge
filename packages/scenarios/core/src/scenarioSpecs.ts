@@ -218,7 +218,7 @@ export const SCENARIO_SPECS = {
     runtimeId: 'sciforge-omics-differential-exploration',
     mode: 'scenario-server',
     nativeTools: ['DESeq2', 'Scanpy', 'clusterProfiler'],
-    fallbackTools: ['workspace-csv-fixture', 'agentserver-task-generation'],
+    fallbackTools: ['workspace-csv-fixture', 'backend-task-generation'],
     inputContract: [
       { key: 'matrixRef', label: '表达矩阵', type: 'text', required: true, defaultValue: 'matrix.csv' },
       { key: 'metadataRef', label: '样本 metadata', type: 'text' },

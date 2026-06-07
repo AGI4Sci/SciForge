@@ -1,7 +1,12 @@
 {
   "schemaVersion": "sciforge.native-extension-ownership-map.v1",
   "principles": {
-    "guiCapabilityCommands": ["search", "expand", "plan", "explain"],
+    "guiCapabilityCommands": [
+      "search",
+      "expand",
+      "plan",
+      "explain"
+    ],
     "guiRankingAllowed": false,
     "runtimeRankingAllowed": false,
     "rawRuntimeOutputPlacement": "folded-audit-debug-only",
@@ -13,122 +18,379 @@
       "id": "capability-discovery",
       "status": "target",
       "owner": "codex-native-plugin-skill-tool-mcp",
-      "targetNativeSurfaces": ["Codex native capability discovery", "/capabilities search", "/capabilities expand", "/capabilities plan", "/capabilities explain"],
-      "currentImplementationPaths": ["src/runtime/capability-discovery.ts", "src/runtime/capability-broker.ts", "packages/skills"],
-      "targetImplementationPaths": ["packages/skills", "Codex native skill/plugin/tool/MCP registry"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
-      "allowedGuiCommandVerbs": ["search", "expand", "plan", "explain"],
-      "forbiddenOwners": ["React/UI ranking", "runtime gateway ranking"],
+      "targetNativeSurfaces": [
+        "Codex native capability discovery",
+        "/capabilities search",
+        "/capabilities expand",
+        "/capabilities plan",
+        "/capabilities explain"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/capability-discovery.ts",
+        "src/runtime/capability-broker.ts",
+        "packages/skills"
+      ],
+      "targetImplementationPaths": [
+        "packages/skills",
+        "Codex native skill/plugin/tool/MCP registry"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "allowedGuiCommandVerbs": [
+        "search",
+        "expand",
+        "plan",
+        "explain"
+      ],
+      "forbiddenOwners": [
+        "React/UI ranking",
+        "runtime gateway ranking"
+      ],
       "migrationNote": "GUI sends terminal-equivalent /capabilities text only; TUI-native discovery owns ranking and expansion."
     },
     {
       "id": "gui-presentation-catalog",
       "status": "target",
       "owner": "sciforge-gui-extension",
-      "targetNativeSurfaces": ["/gui/capabilities/presentation.json", "/gui/renderers/<componentId>.json", "gui.search(scope='/gui/capabilities')", "gui.present"],
-      "currentImplementationPaths": ["packages/presentation/components", "packages/presentation/interactive-views", "src/ui"],
-      "targetImplementationPaths": ["packages/presentation/components", "packages/presentation/interactive-views", "SciForge GUI extension surface"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["TUI task skill registry", "Codex capability ranking", "workspace/action/provider execution"],
+      "targetNativeSurfaces": [
+        "/gui/capabilities/presentation.json",
+        "/gui/renderers/<componentId>.json",
+        "gui.search(scope='/gui/capabilities')",
+        "gui.present"
+      ],
+      "currentImplementationPaths": [
+        "packages/presentation/components",
+        "packages/presentation/interactive-views",
+        "src/ui"
+      ],
+      "targetImplementationPaths": [
+        "packages/presentation/components",
+        "packages/presentation/interactive-views",
+        "SciForge GUI extension surface"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "TUI task skill registry",
+        "Codex capability ranking",
+        "workspace/action/provider execution"
+      ],
       "migrationNote": "Presentation packages expose renderer/viewer/workbench capability only; GUI may render, focus, and collect input, but does not register TUI task skills or execute providers."
     },
     {
       "id": "harness-policy-budget-repair",
       "status": "target",
       "owner": "codex-tui-native-extension",
-      "targetNativeSurfaces": ["Codex policy plugin", "Codex harness skill", "MCP verifier or repair tool"],
-      "currentImplementationPaths": ["packages/agent-harness", "src/runtime/gateway", "packages/contracts/runtime"],
-      "targetImplementationPaths": ["packages/agent-harness", "packages/verifiers", "Codex native policy/plugin surfaces"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["React/UI policy decisions", "GUI confidence inference"],
+      "targetNativeSurfaces": [
+        "Codex policy plugin",
+        "Codex harness skill",
+        "MCP verifier or repair tool"
+      ],
+      "currentImplementationPaths": [
+        "packages/agent-harness",
+        "src/runtime/gateway",
+        "packages/contracts/runtime"
+      ],
+      "targetImplementationPaths": [
+        "packages/agent-harness",
+        "packages/verifiers",
+        "Codex native policy/plugin surfaces"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "React/UI policy decisions",
+        "GUI confidence inference"
+      ],
       "migrationNote": "Policy, budget, confidence, repair, and completion gates remain TUI-native decisions; GUI may display state or collect confirmation only."
     },
     {
       "id": "provider-route",
       "status": "target",
       "owner": "codex-provider-mcp-tool-ecosystem",
-      "targetNativeSurfaces": ["Codex custom model provider", "MCP provider route", "native tool route"],
-      "currentImplementationPaths": ["src/runtime/gateway/agent-backend-config.ts", "src/runtime/gateway/capability-provider-preflight.ts", "packages/backend"],
-      "targetImplementationPaths": ["packages/backend", "Codex provider configuration", "MCP server manifests"],
-      "enforcementScripts": ["npm run smoke:runtime-provider-preflight", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["GUI provider selection", "silent OpenAI fallback"],
+      "targetNativeSurfaces": [
+        "Codex custom model provider",
+        "MCP provider route",
+        "native tool route"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/gateway/agent-backend-config.ts",
+        "src/runtime/gateway/capability-provider-preflight.ts",
+        "packages/backend"
+      ],
+      "targetImplementationPaths": [
+        "packages/backend",
+        "Codex provider configuration",
+        "MCP server manifests"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:runtime-provider-preflight",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "GUI provider selection",
+        "silent OpenAI fallback"
+      ],
       "migrationNote": "Provider routing must fail closed when the selected route is unavailable; no silent OpenAI fallback is allowed."
     },
     {
       "id": "verifier",
       "status": "target",
       "owner": "codex-native-verifier-tool-skill",
-      "targetNativeSurfaces": ["Codex verifier tool", "MCP verifier", "verifier skill"],
-      "currentImplementationPaths": ["packages/verifiers", "src/runtime/gateway/verification-policy.ts", "src/runtime/gateway/runtime-verifier-registry.ts"],
-      "targetImplementationPaths": ["packages/verifiers", "Codex native verifier surfaces"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["GUI completion inference", "raw log confidence inference"],
+      "targetNativeSurfaces": [
+        "Codex verifier tool",
+        "MCP verifier",
+        "verifier skill"
+      ],
+      "currentImplementationPaths": [
+        "packages/verifiers",
+        "src/runtime/gateway/verification-policy.ts",
+        "src/runtime/gateway/runtime-verifier-registry.ts"
+      ],
+      "targetImplementationPaths": [
+        "packages/verifiers",
+        "Codex native verifier surfaces"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "GUI completion inference",
+        "raw log confidence inference"
+      ],
       "migrationNote": "Verifier owns verdict, confidence, critique, and repair hints; GUI only renders explicit verifier output."
     },
     {
       "id": "skill-promotion",
       "status": "target",
       "owner": "codex-skill-plugin-mcp-promotion",
-      "targetNativeSurfaces": ["Codex skill", "Codex plugin", "MCP tool", "slash command"],
-      "currentImplementationPaths": ["src/runtime/skill-promotion.ts", "packages/skills"],
-      "targetImplementationPaths": ["packages/skills", "Codex native skill/plugin marketplace"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["GUI task skill registry", "presentation component promotion"],
+      "targetNativeSurfaces": [
+        "Codex skill",
+        "Codex plugin",
+        "MCP tool",
+        "slash command"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/skill-promotion.ts",
+        "packages/skills"
+      ],
+      "targetImplementationPaths": [
+        "packages/skills",
+        "Codex native skill/plugin marketplace"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "GUI task skill registry",
+        "presentation component promotion"
+      ],
       "migrationNote": "Workspace proposals are staging artifacts; final promotion target is Codex native."
     },
     {
       "id": "external-app-connectors",
       "status": "target",
       "owner": "codex-tui-native-connector-tool-mcp-worker",
-      "targetNativeSurfaces": ["packages/connectors", "Agent Host input intake", "ChannelMessageEnvelope", "Agent Host thread ledger projection", "MCP resources/tools", "tool-worker manifest/health/invoke", "/connectors terminal-equivalent text"],
-      "currentImplementationPaths": ["packages/connectors", "packages/contracts/tool-worker"],
-      "targetImplementationPaths": ["packages/connectors", "Codex native connector/tool/MCP/worker surfaces"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["GUI third-party SDK caller", "GUI connector CLI caller", "GUI desktop automation"],
+      "targetNativeSurfaces": [
+        "packages/connectors",
+        "Agent Host input intake",
+        "ChannelMessageEnvelope",
+        "Agent Host thread ledger projection",
+        "MCP resources/tools",
+        "tool-worker manifest/health/invoke",
+        "/connectors terminal-equivalent text"
+      ],
+      "currentImplementationPaths": [
+        "packages/connectors",
+        "packages/contracts/tool-worker"
+      ],
+      "targetImplementationPaths": [
+        "packages/connectors",
+        "Codex native connector/tool/MCP/worker surfaces"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "GUI third-party SDK caller",
+        "GUI connector CLI caller",
+        "GUI desktop automation"
+      ],
       "migrationNote": "External app connectors talk only to the TUI Host. They may ingest external messages as Agent Host input envelopes; admitted messages must be appended to the Agent Host thread ledger so Web chat can render first-class external user messages. Resource/action flows return refs, drafts, approval requests, and audit refs; GUI sends text, renders refs, and collects confirmation when it participates."
     },
     {
       "id": "browser-runtime",
       "status": "migrating",
       "owner": "codex-tui-observe-capability-plus-host-owned-browserhostsession-plus-gui-presentation",
-      "targetNativeSurfaces": ["packages/observe/web browser_runtime manifest/provider wrapper", "@sciforge-ui/runtime-contract/browser-runtime shared contract", "host-owned BrowserHostSession session/action/pointer/native-or-streaming live surface/search refs", "Workspace Writer browser-host-session/browser-host-search health capability and host routes", "BrowserHostSession computer-use-actions input channel", "BrowserHostSession desktop native embedded surface adapter", "BrowserHostSession non-desktop frame-stream websocket-binary owner transport", "BrowserHostSession browser_search atomic search tool", "Tauri/Electron/Web shell live-surface adapters only", "packages/presentation/components/browser-workbench", "/browser terminal-equivalent text"],
-      "currentImplementationPaths": ["packages/contracts/runtime/browser-runtime.ts", "packages/observe/web/browser-runtime.ts", "packages/observe/web/capabilities/browser_runtime.manifest.json", "packages/observe/web/capabilities/browser_search.manifest.json", "src/runtime/browser-host-session.ts", "src/runtime/browser-host-computer-use.ts", "src/runtime/workspace-server-browser-host.ts", "src/runtime/workspace-server-health.ts", "src/runtime/browser-host-search-runtime.ts", "src/desktop/browser-host-surface.ts", "src/desktop/main.ts", "src/desktop/preload.ts", "src/ui/src/api/workspaceClient.ts", "src/ui/src/app/results/browserPaneModel.ts", "src/ui/src/app/results/browserPaneHostAdapter.tsx", "src/ui/src/app/ResultsRenderer.tsx", "packages/presentation/components/browser-workbench"],
-      "targetImplementationPaths": ["packages/contracts/runtime/browser-runtime.ts", "packages/observe/web", "src/runtime/browser-host-session.ts", "src/runtime/browser-host-computer-use.ts", "src/runtime/workspace-server-browser-host.ts", "src/runtime/workspace-server-health.ts", "src/runtime/browser-host-search-runtime.ts", "src/desktop/browser-host-surface.ts", "src/ui/src/app/results/browserPaneModel.ts", "src/ui/src/app/results/browserPaneHostAdapter.tsx", "packages/presentation/components/browser-workbench", "src/ui host adapter only", "Tauri/Electron/Web shell live-surface adapters only"],
-      "enforcementScripts": ["npm run smoke:module-boundaries", "npm --workspace @sciforge-ui/components run packages:check", "node --import tsx --test packages/contracts/runtime/browser-runtime.test.ts packages/observe/web/browser-runtime.test.ts packages/presentation/components/browser-workbench/render.test.tsx"],
-      "forbiddenOwners": ["GUI provider routing", "GUI prompt assembly", "GUI import of @sciforge-observe/web/browser-runtime", "GUI-owned external HTML iframe/proxy live browser", "GUI-owned snapshot/proxy/document second browser truth", "GUI-owned browser replacement interaction path", "Electron <webview> as live browser owner", "Tauri/Web shell as live browser owner", "inline screenshot base64/full DOM/logs in GUI state"],
+      "targetNativeSurfaces": [
+        "packages/observe/web browser_runtime manifest/provider wrapper",
+        "@sciforge-ui/runtime-contract/browser-runtime shared contract",
+        "host-owned BrowserHostSession session/action/pointer/native-or-streaming live surface/search refs",
+        "Workspace Writer browser-host-session/browser-host-search health capability and host routes",
+        "BrowserHostSession computer-use-actions input channel",
+        "BrowserHostSession desktop native embedded surface adapter",
+        "BrowserHostSession non-desktop frame-stream websocket-binary owner transport",
+        "BrowserHostSession browser_search atomic search tool",
+        "Tauri/Electron/Web shell live-surface adapters only",
+        "packages/presentation/components/browser-workbench",
+        "/browser terminal-equivalent text"
+      ],
+      "currentImplementationPaths": [
+        "packages/contracts/runtime/browser-runtime.ts",
+        "packages/observe/web/browser-runtime.ts",
+        "packages/observe/web/capabilities/browser_runtime.manifest.json",
+        "packages/observe/web/capabilities/browser_search.manifest.json",
+        "src/runtime/browser-host-session.ts",
+        "src/runtime/browser-host-computer-use.ts",
+        "src/runtime/workspace-server-browser-host.ts",
+        "src/runtime/workspace-server-health.ts",
+        "src/runtime/browser-host-search-runtime.ts",
+        "src/desktop/browser-host-surface.ts",
+        "src/desktop/main.ts",
+        "src/desktop/preload.ts",
+        "src/ui/src/api/workspaceClient.ts",
+        "src/ui/src/app/results/browserPaneModel.ts",
+        "src/ui/src/app/results/browserPaneHostAdapter.tsx",
+        "src/ui/src/app/ResultsRenderer.tsx",
+        "packages/presentation/components/browser-workbench"
+      ],
+      "targetImplementationPaths": [
+        "packages/contracts/runtime/browser-runtime.ts",
+        "packages/observe/web",
+        "src/runtime/browser-host-session.ts",
+        "src/runtime/browser-host-computer-use.ts",
+        "src/runtime/workspace-server-browser-host.ts",
+        "src/runtime/workspace-server-health.ts",
+        "src/runtime/browser-host-search-runtime.ts",
+        "src/desktop/browser-host-surface.ts",
+        "src/ui/src/app/results/browserPaneModel.ts",
+        "src/ui/src/app/results/browserPaneHostAdapter.tsx",
+        "packages/presentation/components/browser-workbench",
+        "src/ui host adapter only",
+        "Tauri/Electron/Web shell live-surface adapters only"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:module-boundaries",
+        "npm --workspace @sciforge-ui/components run packages:check",
+        "node --import tsx --test packages/contracts/runtime/browser-runtime.test.ts packages/observe/web/browser-runtime.test.ts packages/presentation/components/browser-workbench/render.test.tsx"
+      ],
+      "forbiddenOwners": [
+        "GUI provider routing",
+        "GUI prompt assembly",
+        "GUI import of @sciforge-observe/web/browser-runtime",
+        "GUI-owned external HTML iframe/proxy live browser",
+        "GUI-owned snapshot/proxy/document second browser truth",
+        "GUI-owned browser replacement interaction path",
+        "Electron <webview> as live browser owner",
+        "Tauri/Web shell as live browser owner",
+        "inline screenshot base64/full DOM/logs in GUI state"
+      ],
       "migrationNote": "Browser runtime shared schema/helper code lives in runtime-contract; observe/web owns TUI provider-facing wrapper; BrowserHostSession is the only live browser owner for external HTTP/HTTPS navigation, click/double-click/mouse-down/mouse-move/mouse-up/drag/type/press/scroll/cursor-hit-test action input, native-or-streaming live surface, frame/state transports, screenshot/DOM/AX/console/network refs, takeover refs, and browser_search search-result refs. Desktop final live path is an Electron WebContentsView native embedded surface adapter reached through SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL by the workspace-server BrowserHostSession driver; the desktop shell only attaches bounds and forwards the same session surface, so it is not a second truth source. Workspace Writer exposes browser-host-session/browser-host-search in /health and owns /api/sciforge/browser-host/* routes, including /computer-use-actions for user and agent mouse/keyboard intent. Web shell frame-stream is a non-desktop owner stream/diagnostic/evidence transport, not a native desktop replacement; the /frame route is evidence/manual inspection only and must not become the Browser pane live view replacement. GUI may preflight health, start runtime services, switch to the effective writer URL, attach native surface bounds, and render host-returned cursor/caret/pointer projection, but remains a shell/adapter; preflight must reject stale Workspace Writers whose /health endpoints omit computer-use-actions or frame-stream instead of treating state-only refs as a live browser. Tauri, Electron, and Web are shell/adapter layers only. browser-workbench owns right-pane presentation. GUI sends /browser text, renders refs-first projections, and displays the one host-owned live surface. Same-origin proxy, static snapshots, PDFs, documents, old frames, Electron <webview>, system popups, and replay artifacts are evidence/artifacts or explicit handoff only and must not become a second interactive browser truth or replacement interaction path."
     },
     {
       "id": "right-pane-result-modules",
       "status": "target",
       "owner": "sciforge-gui-presentation-packages-plus-host-adapters",
-      "targetNativeSurfaces": ["packages/presentation/components/browser-workbench", "packages/presentation/components/terminal-session-viewer", "packages/presentation/components/workspace-file-viewer", "packages/presentation/interactive-views registry slot policy"],
-      "currentImplementationPaths": ["packages/presentation/components/browser-workbench", "packages/presentation/components/terminal-session-viewer", "packages/presentation/components/workspace-file-viewer", "packages/presentation/interactive-views", "src/ui/src/app/results-renderer-registry-slot.tsx", "src/ui/src/app/ResultsRenderer.tsx"],
-      "targetImplementationPaths": ["packages/presentation/components", "packages/presentation/interactive-views", "src/ui host adapter only"],
-      "enforcementScripts": ["npm --workspace @sciforge-ui/components run packages:check", "npm run smoke:module-boundaries", "node --import tsx --test packages/presentation/components/terminal-session-viewer/render.test.tsx packages/presentation/components/workspace-file-viewer/render.test.tsx packages/presentation/components/browser-workbench/render.test.tsx packages/presentation/interactive-views/index.test.ts src/ui/src/app/ResultsRenderer.test.ts"],
-      "forbiddenOwners": ["renderer-owned provider execution", "renderer-owned PTY/process", "renderer-owned workspace write", "right-pane raw runtime dump"],
+      "targetNativeSurfaces": [
+        "packages/presentation/components/browser-workbench",
+        "packages/presentation/components/terminal-session-viewer",
+        "packages/presentation/components/workspace-file-viewer",
+        "packages/presentation/interactive-views registry slot policy"
+      ],
+      "currentImplementationPaths": [
+        "packages/presentation/components/browser-workbench",
+        "packages/presentation/components/terminal-session-viewer",
+        "packages/presentation/components/workspace-file-viewer",
+        "packages/presentation/interactive-views",
+        "src/ui/src/app/results-renderer-registry-slot.tsx",
+        "src/ui/src/app/ResultsRenderer.tsx"
+      ],
+      "targetImplementationPaths": [
+        "packages/presentation/components",
+        "packages/presentation/interactive-views",
+        "src/ui host adapter only"
+      ],
+      "enforcementScripts": [
+        "npm --workspace @sciforge-ui/components run packages:check",
+        "npm run smoke:module-boundaries",
+        "node --import tsx --test packages/presentation/components/terminal-session-viewer/render.test.tsx packages/presentation/components/workspace-file-viewer/render.test.tsx packages/presentation/components/browser-workbench/render.test.tsx packages/presentation/interactive-views/index.test.ts src/ui/src/app/ResultsRenderer.test.ts"
+      ],
+      "forbiddenOwners": [
+        "renderer-owned provider execution",
+        "renderer-owned PTY/process",
+        "renderer-owned workspace write",
+        "right-pane raw runtime dump"
+      ],
       "migrationNote": "Browser, terminal, and workspace file surfaces are package-owned presentation modules. src/ui may connect host helpers and view-local events, but package renderers must remain presentation-only."
-    },
-    {
-      "id": "virtual-app-screen-native-host",
-      "status": "retired-for-default-runtime",
-      "owner": "packages-actions-computer-use-native-host-control-plane",
-      "targetNativeSurfaces": ["NativeVirtualAppScreenHost protocol", "host session/surface/input/grant/evidence refs", "platform adapter registry", "permission/preflight/isolation report", "native presented surface", "WebRTC/frame-stream transport", "human fire-and-release input queue", "automation barrier", "host-owned evidence writer"],
-      "currentImplementationPaths": ["packages/actions/computer-use/virtual-app-screen-host", "src/runtime/computer-use"],
-      "targetImplementationPaths": ["packages/actions/computer-use/virtual-app-screen-host", "packages/contracts/runtime", "src/runtime host adapter only"],
-      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership", "npm run smoke:module-boundaries", "npm run smoke:virtual-app-screen-native-host", "npm run smoke:computer-use-viewer", "npm run smoke:computer-use-provider-readiness", "npm run smoke:computer-use-fixtures", "npm run smoke:computer-use-user-acceptance-contract"],
-      "forbiddenOwners": ["React/UI Computer Use executor", "runtime-only host truth", "third-party virtual screen UI as product truth", "noVNC/RDP/VNC acceptance owner", "DeskPad/BetterDisplay/Mirage/Sunshine as host grant issuer", "GUI-owned live surface replacement", "snapshot/replay second interactive truth"],
-      "migrationNote": "VirtualAppScreen Native Host is retained as deprecated compatibility and historical regression context, not the active Computer Use product route. The current package boundary includes README, capability manifest, public API/session/error/ledger contracts, fail-closed/in-memory contract smoke, grant validation, host-owned ledger validators, viewer/runtime grant validation, and dogfood Native Host passed gates for nativeHost, humanInputHotPath, automationBarrierRefs, and backgroundEvidenceRefs. This proves compatibility contract/gate alignment only, not real platform provider completion or user-level pass. The active product path is Agent Host -> WindowActionSession / Desktop native Host -> Computer Use action loop -> current evidence bundle. Compatibility host code may still validate host grants, permission preflight, surface presentation, human fire-and-release input, automation barriers, live attach grants, and host-owned evidence writing, but platform providers and third-party virtual screen tools are adapters, references, benchmarks, or diagnostics only; they cannot bypass host grants, execute product input directly, or mint user-level acceptance."
     },
     {
       "id": "computer-use",
       "status": "migrating",
       "owner": "codex-tui-native-action-provider",
-      "targetNativeSurfaces": ["Codex app-server native tool/plugin/MCP production path", "Codex CLI/native plugin debug path", "module.invoke(moduleId='actions', intent='execute')", "packages/actions/computer-use runTask(request, hostPorts)", "WindowActionSession action router", "Desktop native Host / host adapter target refs", "current-run evidence bundle", "packages/actions/computer-use/virtual-app-screen-host legacy compatibility only", "packages/observe/vision sense provider", "desktop/remote/dry-run host ports", "GUI module replay/overlay presentation via refs only", "BrowserRuntime DOM/AX observation refs", "BrowserRuntime DOM/AX observation refs as hints", "virtual-app-screen-user-acceptance product gate", "virtual-app-screen-user-acceptance-manifest", "native multi-app workflow/live acceptance matrix", "native multi-screen/multi-actor cursor historical opt-in regression", "multi-screen live demo historical diagnostic"],
-      "currentImplementationPaths": ["packages/actions/computer-use", "packages/actions/computer-use/virtual-app-screen-host", "packages/observe/vision", "src/runtime/computer-use", "src/runtime/vision-sense", "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts", "src/ui/src/api/sciforgeToolsClient/client.ts"],
-      "targetImplementationPaths": ["packages/actions/computer-use", "packages/actions/computer-use/virtual-app-screen-host legacy compatibility only", "packages/observe/vision", "src/runtime host adapter only", "packages/presentation/components or src/ui host presentation for replay overlay only", "Codex app-server native Computer Use surface"],
-      "enforcementScripts": ["python -m pytest packages/actions/computer-use/tests", "npm run smoke:vision-sense-runtime", "npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership", "npm run smoke:module-boundaries"],
-      "forbiddenOwners": ["React/UI Computer Use executor", "GUI desktop bridge", "Playwright/DOM shortcut as Computer Use success", "snapshot/replay/PDF/document second Screen truth", "Computer Use as second L2 Root Agent Host", "runtime gateway as production Computer Use public API", "Workspace Gateway /computer-use as production entry", "Codex exec JSON as production fallback", "Docker/container as Computer Use concurrency model", "Docker/noVNC/RDP as active product gate or acceptance owner", "DeskPad/BetterDisplay/Mirage/Sunshine as host control plane or acceptance owner", "M6/native multi-screen evidence as user-level acceptance pass"],
+      "targetNativeSurfaces": [
+        "Codex app-server native tool/plugin/MCP production path",
+        "Codex CLI/native plugin debug path",
+        "module.invoke(moduleId='actions', intent='execute')",
+        "packages/actions/computer-use runTask(request, hostPorts)",
+        "WindowActionSession action router",
+        "Desktop native Host / host adapter target refs",
+        "current-run evidence bundle",
+        "packages/observe/vision sense provider",
+        "desktop/remote/dry-run host ports",
+        "GUI module replay/overlay presentation via refs only",
+        "BrowserRuntime DOM/AX observation refs",
+        "BrowserRuntime DOM/AX observation refs as hints",
+        "native multi-app workflow/live acceptance matrix",
+        "native multi-screen/multi-actor cursor historical opt-in regression",
+        "multi-screen live demo historical diagnostic"
+      ],
+      "currentImplementationPaths": [
+        "packages/actions/computer-use",
+        "packages/observe/vision",
+        "src/runtime/computer-use",
+        "src/runtime/vision-sense",
+        "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts",
+        "src/ui/src/api/sciforgeToolsClient/client.ts"
+      ],
+      "targetImplementationPaths": [
+        "packages/actions/computer-use",
+        "packages/observe/vision",
+        "src/runtime host adapter only",
+        "packages/presentation/components or src/ui host presentation for replay overlay only",
+        "Codex app-server native Computer Use surface"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:computer-use-product-path",
+        "npm run smoke:vision-sense-runtime",
+        "npm run smoke:package-runtime-boundary",
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:module-boundaries"
+      ],
+      "forbiddenOwners": [
+        "React/UI Computer Use executor",
+        "GUI desktop bridge",
+        "Playwright/DOM shortcut as Computer Use success",
+        "snapshot/replay/PDF/document second Screen truth",
+        "Computer Use as second L2 Root Agent Host",
+        "runtime gateway as production Computer Use public API",
+        "Workspace Gateway /computer-use as production entry",
+        "Codex exec JSON as production fallback",
+        "Docker/container as Computer Use concurrency model",
+        "Docker/noVNC/RDP as active product gate or acceptance owner",
+        "DeskPad/BetterDisplay/Mirage/Sunshine as host control plane or acceptance owner",
+        "M6/native multi-screen evidence as user-level acceptance pass",
+        "Python Computer Use package or pytest product route",
+        "VirtualAppScreen runtime/provider product fallback"
+      ],
       "ownershipLayers": [
         {
           "layer": "L2",
@@ -138,7 +400,7 @@
         },
         {
           "layer": "L1",
-          "owner": "packages/actions/computer-use resource/session adapter plus WindowActionSession host adapter; virtual-app-screen-host is legacy compatibility only",
+          "owner": "packages/actions/computer-use resource/session adapter plus WindowActionSession host adapter",
           "allowed": "target app/window/session refs, display group, screen, actor cursor, input queue, automation barrier, screen/window lease, evidence ledger, replay refs, adapter readiness, backend lifecycle, host grant validation, L0 routing, local GUI I/O enhancement",
           "forbidden": "planning, capability ranking, prompt route, workspace write policy, GUI renderer dependency, cross-module calls, user-level completion"
         },
@@ -158,19 +420,42 @@
       "importBoundaries": [
         "src/ui may import shared contract and GUI presentation only, never packages/actions/computer-use, packages/observe/vision provider implementation, src/runtime/computer-use bridge, executor, or scheduler",
         "packages/actions/computer-use may import shared contracts and host-port types, never React/UI, renderer registry, Workbench, AnnotationSidebar, or src/ui private state",
-        "packages/actions/computer-use/virtual-app-screen-host may import shared contracts and platform adapter host-port types, never React/UI, renderer registry, Workbench, AnnotationSidebar, or src/runtime private implementation",
         "packages/observe/vision remains read-only sense and grounding, never executor, scheduler, desktop bridge, or GUI dependency",
         "src/runtime/computer-use keeps host-port adaptation and legacy diagnostics only; generic Computer Use policy belongs in packages/actions/computer-use"
       ],
       "adapterClassifications": [
-        { "adapter": "CodexAppServerAdapter native tool/plugin/MCP", "classification": "production" },
-        { "adapter": "Codex CLI/native plugin", "classification": "debug-smoke" },
-        { "adapter": "Native/WebContents/WebView/offscreen/streaming live surface", "classification": "production-surface-adapter" },
-        { "adapter": "CodexExecJsonAdapter and exec-MCP", "classification": "legacy-test-only" },
-        { "adapter": "AgentServer and runtime gateway", "classification": "legacy-migration-shim" },
-        { "adapter": "GUI /computer-use Workspace Gateway", "classification": "diagnostic-shim" },
-        { "adapter": "Docker/container", "classification": "backend-packaging-not-concurrency-model" },
-        { "adapter": "Docker/noVNC/RDP backend bundles and sidecar probes", "classification": "legacy-diagnostic-backend-packaging" }
+        {
+          "adapter": "CodexAppServerAdapter native tool/plugin/MCP",
+          "classification": "production"
+        },
+        {
+          "adapter": "Codex CLI/native plugin",
+          "classification": "debug-smoke"
+        },
+        {
+          "adapter": "Native/WebContents/WebView/offscreen/streaming live surface",
+          "classification": "production-surface-adapter"
+        },
+        {
+          "adapter": "CodexExecJsonAdapter and exec-MCP",
+          "classification": "legacy-test-only"
+        },
+        {
+          "adapter": "AgentServer and runtime gateway",
+          "classification": "legacy-migration-shim"
+        },
+        {
+          "adapter": "GUI /computer-use Workspace Gateway",
+          "classification": "diagnostic-shim"
+        },
+        {
+          "adapter": "Docker/container",
+          "classification": "backend-packaging-not-concurrency-model"
+        },
+        {
+          "adapter": "Docker/noVNC/RDP backend bundles and sidecar probes",
+          "classification": "legacy-diagnostic-backend-packaging"
+        }
       ],
       "remainingMigrationSubtasks": [
         {
@@ -209,144 +494,155 @@
           "targetOwner": "packages/observe/vision for sense and packages/actions/computer-use for action handoff",
           "runtimeBoundary": "src/runtime keeps only provider process invocation and workspace file refs"
         },
-    {
-      "id": "CU-PKG-07-stale-policy-wrapper-cleanup",
-      "currentPath": "src/runtime/vision-sense/computer-use-policy-bridge.ts",
-      "targetOwner": "packages/observe/vision policy surface or deleted",
-      "runtimeBoundary": "unused compatibility wrappers are removed instead of kept as parallel policy paths"
-    },
-    {
-      "id": "CU-PKG-08-planner-text-policy",
-      "currentPath": "src/runtime/vision-sense/computer-use-plan.ts",
-      "targetOwner": "packages/actions/computer-use local controller policy contract plus packages/observe/vision compact observation and verifier feedback helpers",
-      "runtimeBoundary": "src/runtime may keep only a Runtime Codex local-controller host-port adapter. This controller selects the next generic GUI intent inside a bound target; Host owns user-level planning, retry/repair policy, approval decisions, completion evidence policy, and app-switch orchestration."
-    },
-    {
-      "id": "CU-PKG-09-capture-observation-visible-text",
-      "currentPath": "src/runtime/computer-use/capture.ts",
-      "targetOwner": "packages/observe/vision for screenshot/OCR/focus observation policy plus src/runtime for concrete macOS capture host implementation",
-      "runtimeBoundary": "src/runtime may keep macOS screencapture, Swift Vision OCR invocation, and workspace file refs as host implementation after observation policy and trace contracts are package/provider-owned"
-    },
         {
-      "id": "CU-PKG-10-independent-simulated-input-adapter",
+          "id": "CU-PKG-07-stale-policy-wrapper-cleanup",
+          "currentPath": "src/runtime/vision-sense/computer-use-policy-bridge.ts",
+          "targetOwner": "packages/observe/vision policy surface or deleted",
+          "runtimeBoundary": "unused compatibility wrappers are removed instead of kept as parallel policy paths"
+        },
+        {
+          "id": "CU-PKG-08-planner-text-policy",
+          "currentPath": "src/runtime/vision-sense/computer-use-plan.ts",
+          "targetOwner": "packages/actions/computer-use local controller policy contract plus packages/observe/vision compact observation and verifier feedback helpers",
+          "runtimeBoundary": "src/runtime may keep only a Runtime Codex local-controller host-port adapter. This controller selects the next generic GUI intent inside a bound target; Host owns user-level planning, retry/repair policy, approval decisions, completion evidence policy, and app-switch orchestration."
+        },
+        {
+          "id": "CU-PKG-09-capture-observation-visible-text",
+          "currentPath": "src/runtime/computer-use/capture.ts",
+          "targetOwner": "packages/observe/vision for screenshot/OCR/focus observation policy plus src/runtime for concrete macOS capture host implementation",
+          "runtimeBoundary": "src/runtime may keep macOS screencapture, Swift Vision OCR invocation, and workspace file refs as host implementation after observation policy and trace contracts are package/provider-owned"
+        },
+        {
+          "id": "CU-PKG-10-independent-simulated-input-adapter",
           "currentPath": "src/runtime/computer-use/executor.ts",
           "targetOwner": "packages/actions/computer-use executor adapter contract plus host-specific independent input provider",
-      "runtimeBoundary": "src/runtime may keep only the concrete platform host-port implementation; generic Computer Use policy must require an independent app/window-scoped live surface and input adapter for final user acceptance, actor cursors must remain collaboration/intent state until scheduled, and shared system input must remain diagnostic, blocked, or explicit handoff evidence until replaced"
-    },
-    {
-      "id": "CU-PKG-11-multi-screen-actor-cursor-contract",
-      "currentPath": "packages/actions/computer-use/vision_computer_use_agent_mvp.md",
-      "targetOwner": "packages/actions/computer-use session/input/trace contract plus GUI presentation renderer",
-      "runtimeBoundary": "packages/actions/computer-use owns display group, virtual screen, single live surface ref, actor cursor log, action proposal, scoped lease, and evidence provenance schemas; GUI may render multi-screen/multi-cursor overlays and collect confirmation, but must not execute Computer Use actions or create a second interactive truth from snapshot/replay"
-    },
-    {
-      "id": "CU-PKG-12-l0-l1-l2-boundary-contract",
-      "currentPath": "src/runtime/computer-use, packages/actions/computer-use",
-      "targetOwner": "Codex TUI Agent Host for L2, packages/actions/computer-use for L1/L0 Computer Use resource and action contracts",
-      "runtimeBoundary": "L2 owns cross-module planning, approval, repair, completion, and pipeline trace; L1 may manage only Computer Use session/resource refs and backend lifecycle; L0 handlers perform single actions such as capture, ground, execute, verify, writeTrace, or emitEvent"
-    },
-    {
-      "id": "CU-PKG-13-no-internal-task-brain",
-      "currentPath": "src/runtime/computer-use/package-bridge.ts, src/runtime/vision-sense/computer-use-plan.ts",
-      "targetOwner": "Codex TUI Agent Host for user-level task decisions, packages/actions/computer-use for domain-local action provider verdicts",
-      "runtimeBoundary": "Computer Use may return evidence, blocked state, approval request, repair hint, candidate completion refs, and compact result, but must not choose cross-module next steps, own retry/repair policy, directly invoke GUI, or treat domain-local completion as user-level success"
-    },
-    {
-      "id": "CU-PKG-14-codex-app-server-production-path",
-      "currentPath": "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts, src/runtime/vision-sense-runtime.ts",
-      "targetOwner": "Codex app-server native tool/plugin/MCP production path plus legacy/test-only adapters",
-      "runtimeBoundary": "GUI /computer-use Workspace Gateway, AgentServer, runtime gateway, and codex exec --json paths may remain only as diagnostic or migration shims; new production integration must target Codex app-server native surfaces"
-    },
-    {
-      "id": "CU-PKG-15-viewer-overlay-presentation-contract",
-      "currentPath": "src/ui, packages/presentation/components, src/runtime/computer-use/package-bridge.ts",
-      "targetOwner": "GUI presentation package for viewer overlay plus packages/actions/computer-use replay contract",
-      "runtimeBoundary": "viewer frames must be refs-first evidence for a single owner-owned live surface with screen id, liveSurfaceRef, screenshot ref, cursor overlay refs, proposal state, lease owner, input event refs, and source evidence refs; GUI renders overlays and confirmation only, and placeholder frames, snapshots, PDFs, documents, or replay cannot count as completion evidence, replacement interaction path, or a second interactive truth"
-    },
-    {
-      "id": "CU-PKG-16-validator-acceptance-contract",
-      "currentPath": "packages/actions/computer-use/tests, src/runtime/computer-use acceptance manifests",
-      "targetOwner": "packages/actions/computer-use validator and ownership smoke fixtures",
-      "runtimeBoundary": "validators must reject missing displayGroupId/screenId/actorId/cursorId/leaseScope/liveSurfaceRef, missing executor lease, naked global coordinates, shared system input final acceptance, placeholder-only viewer, replacement interaction path, second interactive truth from snapshot/replay/PDF/document/proxy, stale evidence, inline raw payloads, and cross-bundle refs"
-    },
-    {
-      "id": "CU-PKG-17-legacy-gateway-exec-diagnostic-shims",
-      "currentPath": "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts, src/runtime/vision-sense-runtime.ts, CodexExecJsonAdapter, AgentServer/runtime gateway paths",
-      "targetOwner": "legacy/test-only/diagnostic adapter classification",
-      "runtimeBoundary": "Workspace Gateway /computer-use, AgentServer, runtime gateway, exec-MCP, and codex exec --json may support fixture replay, old trace reads, and migration diagnostics only; they must not appear in new production public API or be documented as product fallback"
-    },
-    {
-      "id": "CU-PKG-18-docker-backend-packaging-only",
-      "currentPath": "Docker/container-backed Computer Use providers and live gate harnesses",
-      "targetOwner": "backend packaging and sandbox lifecycle adapter",
-      "runtimeBoundary": "Docker/container owns sandbox, dependencies, resource limits, filesystem/network policy, and backend lifecycle only; concurrency and collaboration semantics must come from display group, actor cursor, scheduler lease, executor adapter, and replay/evidence contracts"
-    },
-    {
-      "id": "CU-PKG-19-codex-app-server-adapter-smoke",
-      "currentPath": "src/runtime/codex, src/runtime/modules, packages/actions/computer-use",
-      "targetOwner": "Codex app-server production adapter plus Computer Use native tool/plugin/MCP manifest",
-      "runtimeBoundary": "production smoke must prove the app-server can call Computer Use through native tool/plugin/MCP or module.invoke(actions, execute), receive approval/blocked/result refs, and hand presentation to GUI module without using Workspace Gateway or codex exec JSON fallback"
-    },
-    {
-      "id": "CU-PKG-20-import-boundary-guard",
-      "currentPath": "src/ui, src/runtime/computer-use, packages/actions/computer-use, packages/observe/vision",
-      "targetOwner": "ownership smoke or package boundary guard",
-      "runtimeBoundary": "guards must prevent src/ui imports of Computer Use action provider/runtime bridge/observe provider implementation, L0 imports of GUI renderer or Workbench, and L1 imports of workspace policy, capability ranking, or cross-module planner"
-    },
-    {
-      "id": "CU-PKG-21-l1-allowed-forbidden-matrix",
-      "currentPath": "docs/NativeExtensionOwnershipMap.md, packages/actions/computer-use contracts",
-      "targetOwner": "packages/actions/computer-use L1 resource adapter contract",
-      "runtimeBoundary": "L1 allowed scope is display group, screen, actor cursor, lease, evidence, replay refs, adapter readiness, backend lifecycle, version compatibility, and L0 handler routing; forbidden scope is planning, capability ranking, prompt route, GUI renderer dependency, workspace write policy, cross-module calls, and user-level completion"
-    },
-    {
-      "id": "CU-PKG-22-legacy-virtual-app-screen-compatibility-diagnostic",
-      "currentPath": "docs/native-extension-ownership-map.json, packages/actions/computer-use/action-provider.manifest.json, tools/computer-use-next/product-smoke-matrix.ts",
-      "targetOwner": "Codex app-server native Computer Use surface plus WindowActionSession current-run acceptance contract; legacy virtual-app-screen naming remains only for compatibility diagnostics",
-      "runtimeBoundary": "legacy VirtualAppScreen user-acceptance labels are compatibility diagnostics only. Active product acceptance must prove Agent Host -> WindowActionSession / Desktop native Host -> Computer Use action loop -> current evidence bundle, with task/user intent, target app/window/session refs, liveSurfaceRef or native surface refs, adapter readiness, current screenshot/crop evidence refs, input intent, executor events, before/after evidence, artifact, verifier, backend completion truth, single-interactive-truth flags, permission/cancel refs, and no stale/diagnostic-only completion. M6/native multi-screen may be dependency readiness or historical regression evidence only and cannot by itself set userAcceptanceEligible=true"
-    },
-    {
-      "id": "CU-PKG-23-multi-screen-live-demo",
-      "currentPath": "packages/actions/computer-use visible viewer, GUI replay overlay, live demo manifests",
-      "targetOwner": "packages/actions/computer-use replay contract plus GUI presentation module",
-      "runtimeBoundary": "M6/native multi-screen live demo is retained as a historical opt-in regression and diagnostic for sidecar/replay/ref hardening; it must render real replay refs for screens, actor cursors, proposals, leases and input events, but it is not the active product gate and cannot satisfy VirtualAppScreen user-level acceptance without a separate virtual-app-screen-user-acceptance-manifest"
-    },
-    {
-      "id": "CU-PKG-24-browser-runtime-dom-ax-observation-refs",
-      "currentPath": "packages/contracts/runtime/browser-runtime.ts, packages/observe/web/browser-runtime.ts, packages/actions/computer-use observation inputs",
-      "targetOwner": "BrowserRuntime observe capability for DOM/AX refs and packages/actions/computer-use for consuming refs as hints only",
-      "runtimeBoundary": "BrowserRuntime DOM/AX snapshots may enter Computer Use only as observation refs, stable target hints, freshness evidence, or verifier context; BrowserHostSession/browser runtime may execute through a scoped Computer Use lease as the screen's live surface adapter, but raw DOM/AX/Playwright shortcuts must not bypass Computer Use evidence or count as Computer Use success"
-    },
-    {
-      "id": "CU-PKG-24B-native-virtual-app-screen-host",
-      "currentPath": "packages/actions/computer-use/virtual-app-screen-host contract/manifest/in-memory host plus src/runtime/computer-use native executor/provider/session manager and src/ui screen host adapter",
-      "targetOwner": "packages/actions/computer-use/virtual-app-screen-host NativeVirtualAppScreenHost package",
-      "runtimeBoundary": "package contract owns manifest/API/error/ledger smoke and rejects UI/fixture live truth; dogfood gates now require Native Host refs before a passed manifest; runtime keeps only workspace/current-run host adapter and process lifecycle until real default attach lands; package-owned host owns permission preflight, virtual display/app surface lifecycle, surface grants, human fire-and-release input, automation barriers, pause/resume/stop, and host-owned evidence writer"
-    },
-    {
-      "id": "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
-      "currentPath": "tests/smoke/cu-next-live-acceptance-matrix.test.ts, tools/computer-use-next/live-acceptance-validator.ts, tools/computer-use-next/product-smoke-matrix.ts",
-      "targetOwner": "Codex app-server/native plugin production path plus Computer Use live acceptance validator",
-      "runtimeBoundary": "native live acceptance matrix must cover source app, artifact editor, file preview or result presentation, high-risk confirmation stop, repair or continuation, current bundle artifact refs, verifier refs, gui.present refs, and no Workspace Gateway, codex exec JSON, Docker/noVNC/RDP product fallback"
-    },
-    {
-      "id": "CU-PKG-26-public-surface-parity-guard",
-      "currentPath": "tools/check-module-boundaries.ts, tests/smoke/smoke-computer-use-import-boundary-guard.test.ts, packages/actions/computer-use/action-provider.manifest.json",
-      "targetOwner": "module-boundary smoke guard",
-      "runtimeBoundary": "guard must keep ownership map active backlog, action-provider public native surface, forbidden public parameters, BrowserRuntime DOM/AX observation-only policy, and legacy Docker/noVNC/RDP backend packaging classification in parity"
-    }
-  ],
+          "runtimeBoundary": "src/runtime may keep only the concrete platform host-port implementation; generic Computer Use policy must require an independent app/window-scoped live surface and input adapter for final user acceptance, actor cursors must remain collaboration/intent state until scheduled, and shared system input must remain diagnostic, blocked, or explicit handoff evidence until replaced"
+        },
+        {
+          "id": "CU-PKG-11-multi-screen-actor-cursor-contract",
+          "currentPath": "packages/actions/computer-use/vision_computer_use_agent_mvp.md",
+          "targetOwner": "packages/actions/computer-use session/input/trace contract plus GUI presentation renderer",
+          "runtimeBoundary": "packages/actions/computer-use owns display group, virtual screen, single live surface ref, actor cursor log, action proposal, scoped lease, and evidence provenance schemas; GUI may render multi-screen/multi-cursor overlays and collect confirmation, but must not execute Computer Use actions or create a second interactive truth from snapshot/replay"
+        },
+        {
+          "id": "CU-PKG-12-l0-l1-l2-boundary-contract",
+          "currentPath": "src/runtime/computer-use, packages/actions/computer-use",
+          "targetOwner": "Codex TUI Agent Host for L2, packages/actions/computer-use for L1/L0 Computer Use resource and action contracts",
+          "runtimeBoundary": "L2 owns cross-module planning, approval, repair, completion, and pipeline trace; L1 may manage only Computer Use session/resource refs and backend lifecycle; L0 handlers perform single actions such as capture, ground, execute, verify, writeTrace, or emitEvent"
+        },
+        {
+          "id": "CU-PKG-13-no-internal-task-brain",
+          "currentPath": "src/runtime/computer-use/package-bridge.ts, src/runtime/vision-sense/computer-use-plan.ts",
+          "targetOwner": "Codex TUI Agent Host for user-level task decisions, packages/actions/computer-use for domain-local action provider verdicts",
+          "runtimeBoundary": "Computer Use may return evidence, blocked state, approval request, repair hint, candidate completion refs, and compact result, but must not choose cross-module next steps, own retry/repair policy, directly invoke GUI, or treat domain-local completion as user-level success"
+        },
+        {
+          "id": "CU-PKG-14-codex-app-server-production-path",
+          "currentPath": "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts, src/runtime/vision-sense-runtime.ts",
+          "targetOwner": "Codex app-server native tool/plugin/MCP production path plus legacy/test-only adapters",
+          "runtimeBoundary": "GUI /computer-use Workspace Gateway, AgentServer, runtime gateway, and codex exec --json paths may remain only as diagnostic or migration shims; new production integration must target Codex app-server native surfaces"
+        },
+        {
+          "id": "CU-PKG-15-viewer-overlay-presentation-contract",
+          "currentPath": "src/ui, packages/presentation/components, src/runtime/computer-use/package-bridge.ts",
+          "targetOwner": "GUI presentation package for viewer overlay plus packages/actions/computer-use replay contract",
+          "runtimeBoundary": "viewer frames must be refs-first evidence for a single owner-owned live surface with screen id, liveSurfaceRef, screenshot ref, cursor overlay refs, proposal state, lease owner, input event refs, and source evidence refs; GUI renders overlays and confirmation only, and placeholder frames, snapshots, PDFs, documents, or replay cannot count as completion evidence, replacement interaction path, or a second interactive truth"
+        },
+        {
+          "id": "CU-PKG-16-validator-acceptance-contract",
+          "currentPath": "packages/actions/computer-use fixtures and TS tests, src/runtime/computer-use acceptance manifests",
+          "targetOwner": "packages/actions/computer-use validator and ownership smoke fixtures",
+          "runtimeBoundary": "validators must reject missing displayGroupId/screenId/actorId/cursorId/leaseScope/liveSurfaceRef, missing executor lease, naked global coordinates, shared system input final acceptance, placeholder-only viewer, replacement interaction path, second interactive truth from snapshot/replay/PDF/document/proxy, stale evidence, inline raw payloads, and cross-bundle refs"
+        },
+        {
+          "id": "CU-PKG-17-legacy-gateway-exec-diagnostic-shims",
+          "currentPath": "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts, src/runtime/vision-sense-runtime.ts, CodexExecJsonAdapter, AgentServer/runtime gateway paths",
+          "targetOwner": "legacy/test-only/diagnostic adapter classification",
+          "runtimeBoundary": "Workspace Gateway /computer-use, AgentServer, runtime gateway, exec-MCP, and codex exec --json may support fixture replay, old trace reads, and migration diagnostics only; they must not appear in new production public API or be documented as product fallback"
+        },
+        {
+          "id": "CU-PKG-18-docker-backend-packaging-only",
+          "currentPath": "Docker/container-backed Computer Use providers and live gate harnesses",
+          "targetOwner": "backend packaging and sandbox lifecycle adapter",
+          "runtimeBoundary": "Docker/container owns sandbox, dependencies, resource limits, filesystem/network policy, and backend lifecycle only; concurrency and collaboration semantics must come from display group, actor cursor, scheduler lease, executor adapter, and replay/evidence contracts"
+        },
+        {
+          "id": "CU-PKG-19-codex-app-server-adapter-smoke",
+          "currentPath": "src/runtime/codex, src/runtime/modules, packages/actions/computer-use",
+          "targetOwner": "Codex app-server production adapter plus Computer Use native tool/plugin/MCP manifest",
+          "runtimeBoundary": "production smoke must prove the app-server can call Computer Use through native tool/plugin/MCP or module.invoke(actions, execute), receive approval/blocked/result refs, and hand presentation to GUI module without using Workspace Gateway or codex exec JSON fallback"
+        },
+        {
+          "id": "CU-PKG-20-import-boundary-guard",
+          "currentPath": "src/ui, src/runtime/computer-use, packages/actions/computer-use, packages/observe/vision",
+          "targetOwner": "ownership smoke or package boundary guard",
+          "runtimeBoundary": "guards must prevent src/ui imports of Computer Use action provider/runtime bridge/observe provider implementation, L0 imports of GUI renderer or Workbench, and L1 imports of workspace policy, capability ranking, or cross-module planner"
+        },
+        {
+          "id": "CU-PKG-21-l1-allowed-forbidden-matrix",
+          "currentPath": "docs/NativeExtensionOwnershipMap.md, packages/actions/computer-use contracts",
+          "targetOwner": "packages/actions/computer-use L1 resource adapter contract",
+          "runtimeBoundary": "L1 allowed scope is display group, screen, actor cursor, lease, evidence, replay refs, adapter readiness, backend lifecycle, version compatibility, and L0 handler routing; forbidden scope is planning, capability ranking, prompt route, GUI renderer dependency, workspace write policy, cross-module calls, and user-level completion"
+        },
+        {
+          "id": "CU-PKG-22-retired-virtual-app-screen-and-python-surface",
+          "currentPath": "packages/actions/computer-use action manifest plus src/runtime/computer-use TS host adapter",
+          "targetOwner": "Codex app-server native Computer Use surface plus WindowActionSession current-run acceptance contract",
+          "runtimeBoundary": "Legacy VirtualAppScreen runtime/provider/package paths and Python sciforge_computer_use paths are retired. Active product acceptance must prove Agent Host -> WindowActionSession / Desktop native Host -> Computer Use action loop -> current evidence bundle, with task/user intent, target app/window/session refs, liveSurfaceRef or native surface refs, adapter readiness, current screenshot/crop evidence refs, input intent, executor events, before/after evidence, artifact, verifier, backend completion truth, permission/cancel refs, and no stale/diagnostic-only completion."
+        },
+        {
+          "id": "CU-PKG-23-multi-screen-live-demo",
+          "currentPath": "GUI replay overlay and TS refs-first presentation diagnostics",
+          "targetOwner": "packages/actions/computer-use replay contract plus GUI presentation module",
+          "runtimeBoundary": "Replay/multi-screen presentation may remain as refs-first diagnostic UI, but Python M6/native multi-screen demos are retired and cannot satisfy product acceptance."
+        },
+        {
+          "id": "CU-PKG-24-browser-runtime-dom-ax-observation-refs",
+          "currentPath": "packages/contracts/runtime/browser-runtime.ts, packages/observe/web/browser-runtime.ts, packages/actions/computer-use observation inputs",
+          "targetOwner": "BrowserRuntime observe capability for DOM/AX refs and packages/actions/computer-use for consuming refs as hints only",
+          "runtimeBoundary": "BrowserRuntime DOM/AX snapshots may enter Computer Use only as observation refs, stable target hints, freshness evidence, or verifier context; BrowserHostSession/browser runtime may execute through a scoped Computer Use lease as the screen's live surface adapter, but raw DOM/AX/Playwright shortcuts must not bypass Computer Use evidence or count as Computer Use success"
+        },
+        {
+          "id": "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
+          "currentPath": "tests/smoke/cu-next-live-acceptance-matrix.test.ts, tools/computer-use-next/live-acceptance-validator.ts, tools/computer-use-next/product-smoke-matrix.ts",
+          "targetOwner": "Codex app-server/native plugin production path plus Computer Use live acceptance validator",
+          "runtimeBoundary": "native live acceptance matrix must cover source app, artifact editor, file preview or result presentation, high-risk confirmation stop, repair or continuation, current bundle artifact refs, verifier refs, gui.present refs, and no Workspace Gateway, codex exec JSON, Docker/noVNC/RDP product fallback"
+        },
+        {
+          "id": "CU-PKG-26-public-surface-parity-guard",
+          "currentPath": "tools/check-module-boundaries.ts, tests/smoke/smoke-computer-use-import-boundary-guard.test.ts, packages/actions/computer-use/action-provider.manifest.json",
+          "targetOwner": "module-boundary smoke guard",
+          "runtimeBoundary": "guard must keep ownership map active backlog, action-provider public native surface, forbidden public parameters, BrowserRuntime DOM/AX observation-only policy, and legacy Docker/noVNC/RDP backend packaging classification in parity"
+        }
+      ],
       "migrationNote": "Computer Use is a Codex/Agent Host callable GUI I/O augmentation action provider, not a second L2 Root Agent Host. It enhances input by combining observe/screenshot/crop/OCR/vision/AX-DOM/PTY/file/artifact/freshness evidence, and enhances output by grounding, binding, executing, verifying, writing action ledgers, and invalidating stale evidence. It consumes optional vision sense output, returns refs-first results, blocked state, approvalRequest/risk evidence, repair hints, or candidate completion refs; Host owns user-level task understanding, module/tool selection, approval decisions, repair, and completion. It models multi-screen/multi-cursor collaboration through actor cursors plus scoped executor scheduling, treats real OS multi-pointer only as an optional backend adapter, uses cheap evidence first with uncertainty-driven escalation, and never imports GUI implementation."
     },
     {
       "id": "dual-instance-self-repair",
       "status": "retired-for-default-runtime",
       "owner": "codex-native-repair-workflow",
-      "targetNativeSurfaces": ["Codex repair workflow", "external supervisor", "file-backed loop state"],
-      "currentImplementationPaths": ["src/runtime/repair-handoff-runner.ts", "tools/dev-dual.ts", "tools/worktree-dual.ts"],
-      "targetImplementationPaths": ["Codex native repair workflow", "external supervisor"],
-      "enforcementScripts": ["npm run smoke:dual-instance", "npm run smoke:dual-worktree-instance", "npm run smoke:native-extension-ownership"],
-      "forbiddenOwners": ["default two SciForge app instances as repair runtime"],
+      "targetNativeSurfaces": [
+        "Codex repair workflow",
+        "external supervisor",
+        "file-backed loop state"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/repair-handoff-runner.ts",
+        "tools/dev-dual.ts",
+        "tools/worktree-dual.ts"
+      ],
+      "targetImplementationPaths": [
+        "Codex native repair workflow",
+        "external supervisor"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:dual-instance",
+        "npm run smoke:dual-worktree-instance",
+        "npm run smoke:native-extension-ownership"
+      ],
+      "forbiddenOwners": [
+        "default two SciForge app instances as repair runtime"
+      ],
       "migrationNote": "The legacy dual-instance app loop is retired for default runtime; only Codex-native or externally supervised repair may re-enable it."
     }
   ]

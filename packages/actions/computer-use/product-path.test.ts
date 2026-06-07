@@ -13,7 +13,6 @@ type PackageJson = {
 
 const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as PackageJson;
 
-const legacyLabel = /\b(legacy|diagnostic|historical|opt-in)\b/i;
 const pythonProductPath = /\bpytest\b|\bpython3?\b.*\bsciforge_computer_use\b|\bPYTHONPATH=.*sciforge_computer_use\b/i;
 const retiredVirtualAppScreenPath = /VirtualAppScreen|virtual-app-screen|native-virtual-app-screen/i;
 
@@ -49,18 +48,17 @@ test('default Computer Use package checks stay on the TypeScript product path', 
 test('Computer Use product-named scripts do not route through retired Python or VirtualAppScreen paths', () => {
   const scripts = packageJson.scripts ?? {};
   const offenders = Object.entries(scripts).filter(([script, command]) => {
-    const isComputerUseProductAlias = /computer-use|cu-next|cu-l3/i.test(script) && !legacyLabel.test(`${script} ${command}`);
+    const isComputerUseProductAlias = /computer-use|cu-next|cu-l3/i.test(script);
     return isComputerUseProductAlias && (pythonProductPath.test(command) || retiredVirtualAppScreenPath.test(command));
   });
 
   assert.deepEqual(offenders, []);
 });
 
-test('retired Python and VirtualAppScreen scripts are explicitly legacy, diagnostic, historical, or opt-in', () => {
+test('retired Python and VirtualAppScreen scripts are absent', () => {
   const scripts = packageJson.scripts ?? {};
   const offenders = Object.entries(scripts).filter(([script, command]) => {
-    const usesRetiredPath = pythonProductPath.test(command) || retiredVirtualAppScreenPath.test(`${script} ${command}`);
-    return usesRetiredPath && !legacyLabel.test(`${script} ${command}`);
+    return pythonProductPath.test(command) || retiredVirtualAppScreenPath.test(`${script} ${command}`);
   });
 
   assert.deepEqual(offenders, []);
@@ -71,7 +69,6 @@ test('action-provider manifest advertises a TypeScript product entrypoint only',
     readFileSync(resolve(import.meta.dirname, 'action-provider.manifest.json'), 'utf8'),
   ) as {
     entrypoint?: Record<string, unknown>;
-    legacyPythonImplementation?: Record<string, unknown>;
     publicSurfaceParity?: {
       nativeProductGatePolicy?: Record<string, unknown>;
       claimLimit?: string;
@@ -80,7 +77,7 @@ test('action-provider manifest advertises a TypeScript product entrypoint only',
 
   assert.equal(manifest.entrypoint?.type, 'typescript-package');
   assert.match(String(manifest.entrypoint?.module), /\.ts$/);
-  assert.equal(manifest.legacyPythonImplementation?.productDefaultAcceptanceAllowed, false);
+  assert.equal('legacyPythonImplementation' in manifest, false);
   assert.doesNotMatch(JSON.stringify(manifest.entrypoint), pythonProductPath);
   assert.doesNotMatch(JSON.stringify(manifest.publicSurfaceParity?.nativeProductGatePolicy ?? {}), retiredVirtualAppScreenPath);
   assert.doesNotMatch(String(manifest.publicSurfaceParity?.claimLimit ?? ''), /active Computer Use product gate.*virtual-app-screen/i);

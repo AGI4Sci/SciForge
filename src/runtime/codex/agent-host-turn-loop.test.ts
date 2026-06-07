@@ -217,6 +217,171 @@ test('Agent Host Turn Loop records latest/current requests as AcceptanceSpec wit
   assert.doesNotMatch(message, /今天新增论文|今天新增|符合“今天”时间约束/);
 });
 
+test('Agent Host Turn Loop blocks browser answers when only low-information source pages are read', async () => {
+  const commandText = '搜索一下最近一周 arxiv 上 虚拟性细胞 相关的文章，并用中文总结，写一份系统的报告';
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-low-information-pages',
+    attemptId: 'codex-command-browser-low-information-pages-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: [
+        'browser-host-session:arxiv/source-pages/source-1.source.json',
+        'browser-host-session:arxiv/source-pages/source-2.source.json',
+      ],
+      evidenceRefs: [
+        'browser-host-session:arxiv/source-pages/source-1.source.json',
+        'browser-host-session:arxiv/source-pages/source-1.txt',
+        'browser-host-session:arxiv/source-pages/source-2.source.json',
+        'browser-host-session:arxiv/source-pages/source-2.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'arXiv.org e-Print archive',
+          finalUrl: 'https://arxiv.org/',
+          sourcePageRef: 'browser-host-session:arxiv/source-pages/source-1.source.json',
+          textRef: 'browser-host-session:arxiv/source-pages/source-1.txt',
+          textPreview: 'Skip to main content arXiv is a free distribution service and an open-access archive for scholarly articles.',
+        }, {
+          title: 'Log in to arXiv',
+          finalUrl: 'https://arxiv.org/login',
+          sourcePageRef: 'browser-host-session:arxiv/source-pages/source-2.source.json',
+          textRef: 'browser-host-session:arxiv/source-pages/source-2.txt',
+          textPreview: 'Log in to arXiv e-print repository with your username and password.',
+        }],
+      },
+    }),
+  });
+
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
+  assert.equal((result?.result.completionTruth as Record<string, unknown>).status, 'blocked');
+  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
+  const raw = result?.event.raw as Record<string, unknown>;
+  assert.equal((raw.acceptanceEvaluation as Record<string, unknown>)?.status, 'blocked');
+  assert.match(String(result?.result.message), /low-information|首页|登录|source pages/i);
+  assert.doesNotMatch(String(result?.result.message), /free distribution service|username and password|Skip to main content/);
+});
+
+test('Agent Host Turn Loop records relative-window temporal constraints for recent browser research', async () => {
+  const commandText = '搜索一下最近一周 arxiv 上 virtual cell 相关的文章，并用中文总结';
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-recent-week-acceptance-spec',
+    attemptId: 'codex-command-browser-recent-week-acceptance-spec-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: ['browser-host-session:arxiv/source-pages/source-1.source.json'],
+      evidenceRefs: [
+        'browser-host-session:arxiv/source-pages/source-1.source.json',
+        'browser-host-session:arxiv/source-pages/source-1.txt',
+      ],
+      value: {
+        sourcePages: [{
+          title: 'arXiv search: virtual cell',
+          finalUrl: 'https://arxiv.org/search/?query=virtual+cell',
+          sourcePageRef: 'browser-host-session:arxiv/source-pages/source-1.source.json',
+          textRef: 'browser-host-session:arxiv/source-pages/source-1.txt',
+          textSummary: [
+            '1. Virtual Cell Agent Models (authors: Ada Example; submitted: 6 June, 2026; link: https://arxiv.org/abs/2606.00001): Studies virtual cell simulation agents.',
+          ].join(' '),
+        }],
+      },
+    }),
+  });
+
+  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
+  const temporal = (acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>;
+  assert.equal(temporal?.kind, 'relative-window');
+  assert.equal(temporal?.label, '最近一周');
+  assert.equal(temporal?.startDate, expectedLocalIsoDate(expectedOffsetDate(-7)));
+  assert.equal(temporal?.endDate, expectedLocalIsoDate());
+});
+
+test('Agent Host Turn Loop emits satisfied browser completionTruth for task-relevant source pages', async () => {
+  const commandText = '搜索并总结本周前沿 AI 大模型进展';
+  const evidenceRefs = [
+    'browser-host-session:search/source-pages/source-1.source.json',
+    'browser-host-session:search/source-pages/source-1.txt',
+  ];
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-satisfied-completion-truth',
+    attemptId: 'codex-command-browser-satisfied-completion-truth-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'completed',
+      sourceRefs: [evidenceRefs[0] ?? ''],
+      evidenceRefs,
+      value: {
+        sourcePages: [{
+          title: 'Frontier model update',
+          finalUrl: 'https://example.test/frontier-model-update',
+          sourcePageRef: evidenceRefs[0],
+          textRef: evidenceRefs[1],
+          textPreview: '本周多个前沿模型进展集中在长上下文推理、工具使用代理和多模态效率提升。',
+        }],
+      },
+    }),
+  });
+
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
+  assert.deepEqual(result?.result.completionTruth, {
+    schemaVersion: 'sciforge.agent-host.completion-truth.v1',
+    scope: 'user-task',
+    status: 'satisfied',
+    evidenceRefs,
+    validator: 'agent-host-browser-acceptance',
+  });
+  assert.equal(((result?.event.raw as Record<string, unknown>).acceptanceEvaluation as Record<string, unknown>)?.status, 'satisfied');
+});
+
+test('Agent Host Turn Loop does not emit satisfied browser completionTruth for incomplete Browser operations', async () => {
+  const commandText = '搜索并总结本周前沿 AI 大模型进展';
+  const evidenceRefs = [
+    'browser-host-session:search/source-pages/source-1.source.json',
+    'browser-host-session:search/source-pages/source-1.txt',
+  ];
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyAgentHostInput(commandText),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-browser-partial-completion-truth',
+    attemptId: 'codex-command-browser-partial-completion-truth-attempt-1',
+    browserBoundedOperationInvoker: async () => boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.search_read',
+      status: 'partial',
+      sourceRefs: [evidenceRefs[0] ?? ''],
+      evidenceRefs,
+      value: {
+        sourcePages: [{
+          title: 'Frontier model update',
+          finalUrl: 'https://example.test/frontier-model-update',
+          sourcePageRef: evidenceRefs[0],
+          textRef: evidenceRefs[1],
+          textPreview: '本周多个前沿模型进展集中在长上下文推理、工具使用代理和多模态效率提升。',
+        }],
+      },
+    }),
+  });
+
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
+  assert.equal((result?.result.completionTruth as Record<string, unknown>).status, 'blocked');
+  assert.notEqual((result?.result.completionTruth as Record<string, unknown>).status, 'satisfied');
+  assert.equal(((result?.event.raw as Record<string, unknown>).acceptanceEvaluation as Record<string, unknown>)?.status, 'blocked');
+});
+
 test('Agent Host Turn Loop opens and reads explicit URL requests through browser.open_read bounded operation', async () => {
   const calls: ModuleInvokeRequest[] = [];
   const commandText = '打开并读取 https://example.test/source-page ，总结页面内容';
@@ -1207,6 +1372,12 @@ function expectedEnglishDateLabel(date = new Date()) {
     'December',
   ];
   return `${date.getDate()} ${months[date.getMonth()]}, ${date.getFullYear()}`;
+}
+
+function expectedOffsetDate(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date;
 }
 
 function escapeRegExp(value: string) {

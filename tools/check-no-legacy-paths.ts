@@ -439,8 +439,7 @@ async function computerUseProductDefaultPathErrors(): Promise<string[]> {
 
   for (const [name, command] of Object.entries(scripts)) {
     if (!isComputerUseScript(name, command) || !legacyCommandPattern.test(command)) continue;
-    if (isLegacyDiagnosticScriptLabel(name, command)) continue;
-    errors.push(`package.json script "${name}" references legacy Python/isolated Computer Use routes without an opt-in, diagnostic, or legacy label.`);
+    errors.push(`package.json script "${name}" references retired Python/isolated Computer Use routes; Computer Use is TS-only.`);
   }
 
   for (const name of productGraph) {
@@ -453,20 +452,19 @@ async function computerUseProductDefaultPathErrors(): Promise<string[]> {
   const actionManifestText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'action-provider.manifest.json'));
   const actionManifest = parseJsonRecord(actionManifestText);
   const entrypoint = asRecord(actionManifest?.entrypoint);
-  const legacyPython = asRecord(actionManifest?.legacyPythonImplementation);
   const entrypointText = JSON.stringify(entrypoint ?? {});
+  const actionManifestFullText = JSON.stringify(actionManifest ?? {});
   if (entrypoint?.type !== 'typescript-package') {
     errors.push('packages/actions/computer-use/action-provider.manifest.json entrypoint.type must be "typescript-package"; Python is legacy-obsolete and cannot be the product/default route.');
   }
   if (/\bpython3?\b|\bpytest\b|sciforge_computer_use|packages\/actions\/computer-use\/sciforge_computer_use/i.test(entrypointText)) {
-    errors.push('packages/actions/computer-use/action-provider.manifest.json entrypoint must not reference Python, pytest, or sciforge_computer_use; move those commands under legacy diagnostic metadata.');
+    errors.push('packages/actions/computer-use/action-provider.manifest.json entrypoint must not reference Python, pytest, or sciforge_computer_use.');
   }
-  if (
-    legacyPython?.legacyObsolete !== true
-    || legacyPython?.diagnosticOnly !== true
-    || legacyPython?.productDefaultAcceptanceAllowed !== false
-  ) {
-    errors.push('packages/actions/computer-use/action-provider.manifest.json must declare legacyPythonImplementation as legacyObsolete=true, diagnosticOnly=true, and productDefaultAcceptanceAllowed=false.');
+  if ('legacyPythonImplementation' in (actionManifest ?? {})) {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json must not declare legacyPythonImplementation; Computer Use is TS-only.');
+  }
+  if (/\bpython3?\b|\bpytest\b|sciforge_computer_use|packages\/actions\/computer-use\/sciforge_computer_use/i.test(actionManifestFullText)) {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json must not reference Python, pytest, or sciforge_computer_use anywhere.');
   }
   const mcpConfigText = await readTextIfExists(join(root, '.mcp.json'));
   const mcpConfig = parseJsonRecord(mcpConfigText);
@@ -479,59 +477,26 @@ async function computerUseProductDefaultPathErrors(): Promise<string[]> {
       errors.push('.mcp.json must not expose the retired Python sciforge-computer-use MCP server by default; keep that path manual legacy diagnostic only.');
     }
   }
-  if (actionManifest?.virtualAppScreenRuntimeProductFallbackAllowed !== false) {
-    errors.push('packages/actions/computer-use/action-provider.manifest.json must explicitly set virtualAppScreenRuntimeProductFallbackAllowed=false for product/default acceptance.');
+  if ('virtualAppScreenRuntimeProductFallbackAllowed' in (actionManifest ?? {})) {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json must not carry virtualAppScreenRuntimeProductFallbackAllowed; VirtualAppScreen runtime fallback has been retired.');
   }
 
   const readme = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'README.md'));
-  if (!/Python files are legacy-obsolete and cannot be referenced by product\/default acceptance/.test(readme)) {
-    errors.push('packages/actions/computer-use/README.md must state: "Python files are legacy-obsolete and cannot be referenced by product/default acceptance".');
+  if (!/Computer Use is TS-only|TypeScript-only/.test(readme)) {
+    errors.push('packages/actions/computer-use/README.md must state that Computer Use is TS-only.');
   }
-  const semanticVerifierProbeText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'sciforge_computer_use', 'semantic_verifier_probe.py'));
-  if (semanticVerifierProbeUsesDirectProvider(semanticVerifierProbeText)) {
-    if (
-      !/LEGACY_DIRECT_PROVIDER_DIAGNOSTIC_ONLY\s*=\s*True/.test(semanticVerifierProbeText)
-      || !/PRODUCT_MODEL_ROUTER_CALL_SURFACE\s*=\s*False/.test(semanticVerifierProbeText)
-      || !/PRODUCT_DEFAULT_ACCEPTANCE_ALLOWED\s*=\s*False/.test(semanticVerifierProbeText)
-      || !/USER_ACCEPTANCE_ELIGIBLE\s*=\s*False/.test(semanticVerifierProbeText)
-      || !/"legacyDirectProviderDiagnosticOnly"\s*:/.test(semanticVerifierProbeText)
-      || !/"productModelRouterCallSurface"\s*:/.test(semanticVerifierProbeText)
-    ) {
-      errors.push('packages/actions/computer-use/sciforge_computer_use/semantic_verifier_probe.py semantic verifier direct-provider probe must remain explicit legacy diagnostic-only and outside the product Model Router call surface.');
+  for (const rel of [
+    'packages/actions/computer-use/pyproject.toml',
+    'packages/actions/computer-use/sciforge_computer_use',
+    'packages/actions/computer-use/tests',
+    'packages/actions/computer-use/adapter-registry.manifest.json',
+  ]) {
+    try {
+      await access(join(root, rel));
+      errors.push(`${rel} must stay deleted; Computer Use is TS-only and the legacy VirtualAppScreen/Python surface is retired.`);
+    } catch {
+      // deleted is the expected state
     }
-    const semanticVerifierContract: Record<string, unknown> = asRecord(actionManifest?.semanticVerifierProbeContract) ?? {};
-    if (
-      semanticVerifierContract.legacyDirectProviderDiagnosticOnly !== true
-      || semanticVerifierContract.productModelRouterCallSurface !== false
-      || semanticVerifierContract.productDefaultAcceptanceAllowed !== false
-      || semanticVerifierContract.userAcceptanceEligible !== false
-    ) {
-      errors.push('packages/actions/computer-use/action-provider.manifest.json semanticVerifierProbeContract must declare legacyDirectProviderDiagnosticOnly=true, productModelRouterCallSurface=false, productDefaultAcceptanceAllowed=false, and userAcceptanceEligible=false.');
-    }
-    if (!/semantic verifier direct-provider probe is `legacyDirectProviderDiagnosticOnly=true`, `productModelRouterCallSurface=false`, and `productDefaultAcceptanceAllowed=false`/.test(readme)) {
-      errors.push('packages/actions/computer-use/README.md must state that the semantic verifier direct-provider probe is legacy diagnostic-only and outside the CU Model Router product call surface.');
-    }
-  }
-
-  const pythonMainText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'sciforge_computer_use', '__main__.py'));
-  const pythonCliText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'sciforge_computer_use', 'cli.py'));
-  const diagnosticEnvName = 'SCIFORGE_COMPUTER_USE_LEGACY_PYTHON_DIAGNOSTIC';
-  const diagnosticGateIndex = pythonCliText.indexOf('if not _legacy_python_diagnostic_enabled():');
-  const parserIndex = pythonCliText.indexOf('argparse.ArgumentParser');
-  if (!/from \.cli import main/.test(pythonMainText) || !/raise SystemExit\(main\(\)\)/.test(pythonMainText)) {
-    errors.push('packages/actions/computer-use/sciforge_computer_use/__main__.py must stay a thin module hook through cli.main().');
-  }
-  if (!pythonCliText.includes(diagnosticEnvName)) {
-    errors.push(`packages/actions/computer-use/sciforge_computer_use/cli.py must declare ${diagnosticEnvName} for explicit diagnostic-only Python CLI opt-in.`);
-  }
-  if (!/os\.environ\.get\(LEGACY_PYTHON_DIAGNOSTIC_ENV\)\s*==\s*["']1["']/.test(pythonCliText)) {
-    errors.push(`packages/actions/computer-use/sciforge_computer_use/cli.py must require ${diagnosticEnvName}=1 before the legacy Python CLI can run.`);
-  }
-  if (diagnosticGateIndex < 0 || parserIndex < 0 || diagnosticGateIndex > parserIndex) {
-    errors.push('packages/actions/computer-use/sciforge_computer_use/cli.py must enforce the legacy Python diagnostic env gate before argument parsing or default execution.');
-  }
-  if (!/failed_stage=LEGACY_PYTHON_DIAGNOSTIC_FAILURE_STAGE/.test(pythonCliText) || !/--host-port-stdio[\s\S]{0,160}_emit_protocol_final/.test(pythonCliText)) {
-    errors.push('packages/actions/computer-use/sciforge_computer_use/cli.py must fail closed with structured diagnostics for default and host-port stdio Python execution.');
   }
 
   const defaultMaterializerText = await readTextIfExists(join(root, 'src', 'runtime', 'codex', 'agent-host-computer-use-act-materializer.ts'));
@@ -556,12 +521,6 @@ async function readTextIfExists(path: string) {
   } catch {
     return '';
   }
-}
-
-function semanticVerifierProbeUsesDirectProvider(text: string) {
-  if (!text) return false;
-  return /visionLLM/.test(text)
-    && /urllib\.request|Authorization|chat[_-]?completions|\/chat\/completions|provider_endpoints/i.test(text);
 }
 
 function trackedMigration(file: string, rule: string) {

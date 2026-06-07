@@ -1330,6 +1330,101 @@ test('BrowserHostSession search retries relaxed constrained queries when strict 
   }
 });
 
+test('BrowserHostSession search treats arXiv root and login constrained results as low-information before source-site discovery', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-arxiv-low-info-discovery-'));
+  const arxivHomeUrl = 'https://arxiv.org/';
+  const arxivLoginUrl = 'https://arxiv.org/login';
+  const arxivSearchUrl = 'https://arxiv.org/search/?query=agentic+rl&searchtype=all';
+  const arxivAbsUrl = 'https://arxiv.org/abs/2606.05296';
+  const { factory } = fakeDriverFactory({
+    searchResultsByQuery: {
+      'site:arxiv.org agentic rl': [
+        { title: 'arXiv.org e-Print archive', url: arxivHomeUrl, snippet: 'Right host but only the home page' },
+        { title: 'Log in to arXiv', url: arxivLoginUrl, snippet: 'Right host but only login' },
+      ],
+    },
+    contentByUrl: {
+      [arxivHomeUrl]: [
+        '<html><body>',
+        '<form method="GET" action="/search">',
+        '<input type="text" name="query">',
+        '<select name="searchtype"><option value="all" selected>All fields</option></select>',
+        '<button>Search</button>',
+        '</form>',
+        '</body></html>',
+      ].join(''),
+      [arxivSearchUrl]: [
+        '<html><body>',
+        '<a href="/abs/2606.05296">Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents</a>',
+        '</body></html>',
+      ].join(''),
+    },
+    textByUrl: {
+      [arxivAbsUrl]: [
+        'Title: Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents',
+        'Authors: Dae Yon Hwang, Raunaq Suri',
+        '[Submitted on 3 Jun 2026]',
+        'Abstract: Simulates reinforcement learning-style exploration for black-box LLM agents.',
+      ].join('\n'),
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'site:arxiv.org agentic rl',
+      limit: 4,
+      sourcePageLimit: 2,
+    });
+
+    assert.deepEqual(output.results.map((result) => result.url), [arxivAbsUrl]);
+    assert.deepEqual(output.sourcePages?.filter((page) => !page.discoveryOnly).map((page) => page.url), [arxivAbsUrl]);
+    assert.equal(output.sourcePages?.some((page) => page.url === arxivHomeUrl || page.url === arxivLoginUrl), false);
+    assert.match(output.session.diagnostics.join('\n'), /low-information constrained search results/i);
+    assert.match(output.session.diagnostics.join('\n'), /source-site search form/i);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search marks arXiv root and login pages discoveryOnly when no task source is found', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-arxiv-low-info-pages-'));
+  const arxivHomeUrl = 'https://arxiv.org/';
+  const arxivLoginUrl = 'https://arxiv.org/login';
+  const { factory } = fakeDriverFactory({
+    searchResultsByQuery: {
+      'site:arxiv.org virtual cell': [
+        { title: 'arXiv.org e-Print archive', url: arxivHomeUrl, snippet: 'Right host but only the home page' },
+        { title: 'Log in to arXiv', url: arxivLoginUrl, snippet: 'Right host but only login' },
+      ],
+    },
+    contentByUrl: {
+      [arxivHomeUrl]: '<html><body><nav>arXiv home</nav></body></html>',
+      [arxivLoginUrl]: '<html><body><form><input name="username"><input name="password"></form></body></html>',
+    },
+    textByUrl: {
+      [arxivHomeUrl]: 'Skip to main content arXiv is a free distribution service and open-access archive.',
+      [arxivLoginUrl]: 'Log in to arXiv e-print repository username password.',
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'site:arxiv.org virtual cell',
+      limit: 4,
+      sourcePageLimit: 2,
+    });
+
+    assert.deepEqual(output.results.map((result) => result.url), [arxivHomeUrl, arxivLoginUrl]);
+    assert.deepEqual(output.sourcePages?.map((page) => [page.url, page.discoveryOnly]), [
+      [arxivHomeUrl, true],
+      [arxivLoginUrl, true],
+    ]);
+    assert.equal(output.sourcePages?.filter((page) => page.status === 'read' && !page.discoveryOnly).length, 0);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('BrowserHostSession search isolates source-page reads when visible search navigation stays on search page', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-isolated-source-read-'));
   const arxivSearchUrl = 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25';

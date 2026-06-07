@@ -613,11 +613,11 @@ function buildCodexRuntimeStreamRequest(input: {
 
 function computerUseRuntimeHostIntent(input: SendAgentMessageInput, commandText: string) {
   const scenario = input.scenarioOverride;
-  const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
   const taskBindings = sanitizedComputerUseTaskBindings(scenario);
-  if (!completionEvidencePolicy && !taskBindings) return undefined;
+  const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
+  if (!taskBindings && !completionEvidencePolicy) return undefined;
   const computerUseCommand = composerPromptIsComputerUseSlashCommand(commandText.trimStart());
-  if (!computerUseCommand && !taskBindings) return undefined;
+  if (!computerUseCommand && !taskBindings && !completionEvidencePolicy) return undefined;
   return {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
     kind: 'computer-use-native-route',

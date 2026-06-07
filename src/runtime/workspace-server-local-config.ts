@@ -54,7 +54,6 @@ const TOOL_PROVIDER_HEALTH_STATES = new Set([
   'unauthorized',
   'rate-limited',
 ]);
-const VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV = 'SCIFORGE_VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC';
 
 export function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
   const current = typeof currentValue === 'string' ? currentValue : '';
@@ -464,15 +463,11 @@ function completeDesktopSidecarLocalProviderSettings(
       forceNonStreamingUpstream: settings.forceNonStreamingUpstream,
       forceNonStreamingUpstreamSource: settings.forceNonStreamingUpstreamSource,
     } : {}),
-    ...(env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] === '1' && settings.virtualAppScreenEnv
-      ? { virtualAppScreenEnv: settings.virtualAppScreenEnv }
-      : {}),
   };
 }
 
 function workspaceComputerUseEnv(settings: LocalProviderSettings, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const localEnv = computerUseWorkspaceEnvFromLocalSettings(settings);
-  if (env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] === '1') return localEnv;
   return Object.fromEntries(
     Object.entries(localEnv).filter(([key]) => !key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_')),
   );

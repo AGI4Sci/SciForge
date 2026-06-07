@@ -156,7 +156,7 @@ test('skills runtime policy owns generated task retry and interface contract sem
 });
 
 test('skills runtime policy owns generated runner event and stable id policy', () => {
-  assert.equal(GENERATED_TASK_RETRY_EVENT_TYPE, 'agentserver-generation-retry');
+  assert.equal(GENERATED_TASK_RETRY_EVENT_TYPE, 'backend-generation-retry');
   assert.equal(GENERATED_TASK_MATERIALIZED_EVENT_TYPE, 'workspace-task-materialized');
   assert.equal(GENERATED_TASK_SUPPLEMENTAL_GENERATION_EVENT_TYPE, 'workspace-task-start');
   assert.equal(generatedTaskPayloadTaskDomain('omics / spatial'), 'omics-spatial');
@@ -232,7 +232,7 @@ test('skills runtime policy owns entrypoint route labels and profile ids', () =>
     selectedRuntime: 'backend-generation',
   });
   assert.deepEqual(skillRuntimeRoutePolicy({
-    entrypoint: { type: 'agentserver-generation' },
+    entrypoint: { type: 'backend-generation' },
     agentServerRuntimeProfileId: 'agentserver-openai',
   }), {
     runtimeProfileId: 'agentserver-openai',

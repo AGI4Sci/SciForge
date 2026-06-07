@@ -5,7 +5,6 @@ const PACKAGE_ROUTING_TAGS = new Set([
   '',
   'package',
   'backend-generation',
-  'agentserver-generation',
   'artifact-emission',
   'schema-checked',
   'self-healing',

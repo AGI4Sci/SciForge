@@ -374,6 +374,31 @@ test('production launcher shutdown terminates managed children and closes contro
   await assert.rejects(() => fetch(`${started.controlUrl}/ready`));
 });
 
+test('production launcher shutdown waits for managed children to exit before returning', async () => {
+  const root = await tempRoot();
+  const child = new AsyncExitFakeChild(1206);
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    services: [service('runtime-codex')],
+    spawnProcess: (() => child) as SpawnManagedProcess,
+  });
+  await launcher.start();
+
+  let settled = false;
+  const shutdown = launcher.shutdown().then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(child.killed, true);
+  assert.equal(settled, false, 'shutdown must not return before managed child exit/close');
+  child.finishExit(null, 'SIGTERM');
+  await shutdown;
+  assert.equal(settled, true);
+});
+
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
@@ -391,6 +416,18 @@ class FakeChild extends EventEmitter {
 
   exit(code: number | null, signal: NodeJS.Signals | null): void {
     this.emit('exit', code, signal);
+  }
+}
+
+class AsyncExitFakeChild extends FakeChild {
+  kill(): boolean {
+    this.killed = true;
+    return true;
+  }
+
+  finishExit(code: number | null, signal: NodeJS.Signals | null): void {
+    this.exit(code, signal);
+    this.emit('close', code, signal);
   }
 }
 

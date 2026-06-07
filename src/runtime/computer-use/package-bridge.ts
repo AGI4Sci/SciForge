@@ -27,10 +27,6 @@ import {
   promotePackageResultFinalArtifactRefs,
 } from './package-bridge-final-artifacts.js';
 import {
-  maybeProducePackageBridgeL3CompletionEvidence,
-  type PackageBridgeL3CompletionProducer,
-} from './package-bridge-l3.js';
-import {
   materializePackageBridgeRunTaskInvocation,
   materializePackageBridgeRuntimeSelectionDetail,
 } from './package-bridge-request.js';
@@ -95,7 +91,6 @@ type PackageBridgeState = {
 
 export type ComputerUsePackageBridgeOptions = {
   codexPlannerAdapter?: AgentCliAdapter;
-  l3CompletionProducer?: PackageBridgeL3CompletionProducer;
   packageProcessRunner?: ComputerUsePackageProcessRunner;
 };
 
@@ -256,21 +251,11 @@ export async function runComputerUsePackageBridge(
     finalVisibleScreenshotRef: materializedResult.finalVisibleScreenshotRef,
     createdAt: new Date().toISOString(),
   });
-  const l3CompletionProduction = await maybeProducePackageBridgeL3CompletionEvidence({
-    config,
-    defaultProducerOptIn: packageInvocation.completionProducerOptIn,
-    finalArtifactRef: materializedResult.finalArtifactRef,
-    packageResult,
-    producer: options.l3CompletionProducer,
-    state,
-    workspace,
-  });
   const completionGrade = await materializePackageBridgeCompletionGradeEvidence({
     actionProviderRequest: packageInvocation.request,
     config,
     packageResult,
     payload,
-    producerDiagnosticRef: l3CompletionProduction.producerDiagnosticRef,
     state,
     workspace,
   });

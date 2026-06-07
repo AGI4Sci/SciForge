@@ -540,34 +540,40 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
 function guiPresentVerificationState(
   result: Record<string, unknown>,
   presentation: ReturnType<typeof guiPresentationFromEvent>,
-  auditRefs: string[],
+  _auditRefs: string[],
 ): Record<string, unknown> {
-  const displayIntent = isRecord(result.displayIntent) ? result.displayIntent : {};
-  const protocolStatus = asString(displayIntent.protocolStatus);
-  const taskOutcome = asString(displayIntent.taskOutcome);
-  const resultStatus = asString(result.status);
-  const presentationStatus = asString(presentation.status);
-  const structuredSuccess = protocolStatus === 'protocol-success'
-    && taskOutcome === 'satisfied'
-    && (resultStatus === 'done' || resultStatus === 'completed' || resultStatus === 'success')
-    && !/^(?:blocked|failed|error|needs-confirmation)$/i.test(presentationStatus ?? '');
-  const hasCompletionEvidence = auditRefs.some(runtimeCompletionEvidenceRef);
-  if (structuredSuccess && hasCompletionEvidence) {
+  const completionTruth = isRecord(result.completionTruth) ? result.completionTruth : undefined;
+  const completionStatus = asString(completionTruth?.status);
+  const completionScope = asString(completionTruth?.scope);
+  const verifierRef = asString(completionTruth?.validator) ?? presentation.source;
+  if (completionStatus === 'satisfied' && (completionScope === 'user-task' || completionScope === 'workflow')) {
     return {
       status: 'verified',
       verdict: 'pass',
-      verifierRef: presentation.source,
+      verifierRef,
+    };
+  }
+  if (completionStatus === 'blocked') {
+    return {
+      status: 'failed',
+      verdict: 'fail',
+      verifierRef,
+    };
+  }
+  if (completionStatus === 'partial') {
+    return {
+      status: 'uncertain',
+      verdict: 'partial',
+      verifierRef,
+    };
+  }
+  if (completionStatus === 'needs-confirmation') {
+    return {
+      status: 'needs-human',
+      verifierRef,
     };
   }
   return { status: 'unverified', verifierRef: presentation.source };
-}
-
-function runtimeCompletionEvidenceRef(ref: string): boolean {
-  const text = ref.trim();
-  if (!text || text.length > 240) return false;
-  if (/^(?:audit:|stdout:|stderr:|raw:|log:)/i.test(text)) return false;
-  if (/raw-jsonl|stderr|stdout|diagnostic|debug/i.test(text)) return false;
-  return /^(?:browser-host-session:|window-action-session:|computer-use:|native-host:|action-ledger:|workEvidence:|runtime-truth:|evidence:|artifact:|file:)/i.test(text);
 }
 
 function isStructuredRuntimeDoneProjection(result: unknown): result is Record<string, unknown> {
@@ -2430,12 +2436,14 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const rawFallbackDetail = rawEventDetailFallback(record);
   const auditOnlyDetail = isRuntimeAuditOnlyEvent(record) ? runtimeAuditOnlyEventSummary(record) : undefined;
   const providerMessageDetail = runtimeCodexProviderMessageSummary(record);
+  const metadataDetail = runtimeCodexMetadataDetail(record, rawType);
   const computerUseGuiDetail = computerUseTuiHostActionsSummary(record);
   const textDeltaDetail = type === TEXT_DELTA_EVENT_TYPE ? safeVisibleDetail(record.text, rawFallbackDetail) : undefined;
   const toolLifecycleDetail = runtimeToolLifecycleDetail(record, type, toolName);
   const baseDetail = textDeltaDetail
     || auditOnlyDetail
     || providerMessageDetail
+    || metadataDetail
     || computerUseGuiDetail
     || toolLifecycleDetail
     || interactionProgress?.detail
@@ -2515,6 +2523,30 @@ function runtimeCodexProviderMessageSummary(record: Record<string, unknown>) {
   if (type !== 'message') return undefined;
   if (!isRuntimeCodexEventRecord(record)) return undefined;
   return 'Runtime Codex native assistant message recorded; the final assistant answer can render as the primary reply, while raw runtime events, stderr, and plugin diagnostics stay folded in the run audit.';
+}
+
+function runtimeCodexMetadataDetail(record: Record<string, unknown>, rawType: string) {
+  if (!isRuntimeCodexEventRecord(record)) return undefined;
+  const normalizedType = rawType.trim().toLowerCase().replace(/[-\s]+/g, '_');
+  const provider = publicRuntimeMetadataValue(record.provider, 'provider');
+  const model = publicRuntimeMetadataValue(record.model, 'model');
+  const profile = publicRuntimeMetadataValue(record.profile, 'profile');
+  const workspace = publicRuntimeMetadataValue(record.workspace, 'workspace');
+  const commandId = asString(record.commandId) ?? asString(record.command_id);
+  const codexSessionId = asString(record.codexSessionId) ?? asString(record.codex_session_id);
+  const metadataFieldCount = [provider, model, profile, workspace].filter(Boolean).length;
+  const metadataLikeType = /^(?:run_started|run_metadata|runtime_metadata|ready|done)$/.test(normalizedType);
+  if (!metadataLikeType && metadataFieldCount < 3) return undefined;
+  const fields = [
+    provider ? `provider=${provider}` : undefined,
+    model ? `model=${model}` : undefined,
+    profile ? `profile=${profile}` : undefined,
+    workspace ? `workspace=${workspace}` : undefined,
+    commandId ? `command=${commandId}` : undefined,
+    codexSessionId ? `session=${codexSessionId}` : undefined,
+  ].filter(Boolean);
+  if (!fields.length) return undefined;
+  return `Runtime Codex metadata: ${fields.join(' · ')}`;
 }
 
 function rawEventDetailFallback(record: Record<string, unknown>) {

@@ -8,7 +8,7 @@
   "source": "clawhub",
   "sourceUrl": "https://clawhub.ai/xejrax/pdf-extract",
   "kind": "installed",
-  "entrypointType": "agentserver-generation",
+  "entrypointType": "backend-generation",
   "requiredBinaries": [
     "pdftotext"
   ],

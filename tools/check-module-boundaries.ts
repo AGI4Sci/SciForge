@@ -53,25 +53,11 @@ export type ComputerUseActionProviderPublicSurface = {
     workspaceGatewayProductionFallbackAllowed?: boolean;
     codexExecJsonProductionFallbackAllowed?: boolean;
   };
-  nativeToolsContract: {
-    productionHost?: string;
-    tools: Set<string>;
-    forbiddenPublicParameters: Set<string>;
-    requiredProvenance: Set<string>;
-  };
   nativeMultiScreenSidecarProtocol: {
     requiredDiscoveryTools: Set<string>;
     requiredExecutionTools: Set<string>;
     completedRunRequiredRefs: Set<string>;
     completedRunRequiredCapabilities: Set<string>;
-  };
-  diagnosticProbes: Set<string>;
-  isolatedDesktopBackendRuntime: {
-    legacyDiagnosticOnly?: boolean;
-    activeProductGateEligible?: boolean;
-    backendPackagingOnly?: boolean;
-    legacyBackendKinds: Set<string>;
-    claimLimit?: string;
   };
 };
 
@@ -93,7 +79,7 @@ const requiredComputerUseAdapterClassifications = new Set([
   'legacy-diagnostic-backend-packaging',
 ]);
 const requiredComputerUseOwnershipProductSubtasks = new Set([
-  'CU-PKG-22-virtual-app-screen-user-acceptance-product-gate',
+  'CU-PKG-22-retired-virtual-app-screen-and-python-surface',
 ]);
 const requiredComputerUseActionProductBacklogIds = new Set([
   'CU-PKG-22-window-action-session-current-evidence-product-gate',
@@ -112,8 +98,6 @@ const requiredComputerUseBoundarySubtasks = new Set([
 const requiredComputerUseOwnershipNativeSurfaces = [
   'WindowActionSession action router',
   'current-run evidence bundle',
-  'virtual-app-screen-user-acceptance product gate',
-  'virtual-app-screen-user-acceptance-manifest',
   'BrowserRuntime DOM/AX observation refs',
   'native multi-app workflow/live acceptance matrix',
   'native multi-screen/multi-actor cursor historical opt-in regression',
@@ -124,7 +108,6 @@ const requiredComputerUseActionNativeSurfaces = [
   'computer-use-current-evidence-bundle manifest',
   'BrowserRuntime DOM/AX observation refs',
   'native multi-app workflow/live acceptance matrix',
-  'legacy VirtualAppScreen compatibility diagnostics',
   'native multi-screen/multi-actor cursor historical opt-in regression',
   'multi-screen live demo historical diagnostic',
 ];
@@ -185,40 +168,6 @@ const requiredCurrentEvidenceForbiddenSubstituteGateIds = new Set([
   'gui-executor',
   'shared-system-input',
 ]);
-const requiredComputerUseNativeTools = new Set([
-  'get_app_state',
-  'observe',
-  'click',
-  'type_text',
-  'scroll',
-  'press_key',
-  'propose_action',
-  'execute_scoped_action',
-  'get_replay_refs',
-]);
-const requiredForbiddenComputerUsePublicParameters = new Set([
-  'providerRoute',
-  'guiPrivateState',
-  'schedulerInternals',
-  'executorAdapterRef',
-  'leaseId',
-  'leaseScope',
-  'globalX',
-  'globalY',
-]);
-const requiredComputerUseNativeProvenance = new Set([
-  'displayGroupId',
-  'screenId',
-  'windowId',
-  'actorId',
-  'cursorId',
-  'schedulerLeaseRef',
-  'appStateRef',
-  'screenshotRef',
-  'groundingRefs',
-  'replayRefs',
-  'currentBundleRef',
-]);
 const requiredNativeMultiScreenSidecarDiscoveryTools = new Set(['capabilities', 'discover']);
 const requiredNativeMultiScreenSidecarExecutionTools = new Set(['preflight', 'capture', 'state', 'execute']);
 const requiredNativeMultiScreenSidecarCompletedRefs = new Set([
@@ -249,12 +198,6 @@ const requiredBrowserRuntimeObservationUses = new Set([
   'observe-before-mutate-hint',
   'grounding-hint',
 ]);
-const requiredLegacyBackendKinds = new Set([
-  'docker',
-  'linux-novnc',
-  'rdp',
-]);
-
 const knownPackagePrivateImportWarnings: WarningRule[] = [
   {
     id: 'legacy-object-reference-ui-domain-types',
@@ -520,22 +463,18 @@ export async function loadComputerUseBoundaryPolicy(workspaceRoot = root): Promi
     }>;
   };
   const actionManifest = JSON.parse(await readFile(actionManifestPath, 'utf8')) as {
-    nativeToolsContract?: unknown;
     publicSurfaceParity?: unknown;
-    isolatedDesktopBackendRuntime?: unknown;
     hostPortsContract?: unknown;
   };
   const computerUse = Array.isArray(manifest.entries)
     ? manifest.entries.find((entry) => entry.id === 'computer-use')
     : undefined;
-  const nativeToolsContract = asRecord(actionManifest.nativeToolsContract);
   const publicSurfaceParity = asRecord(actionManifest.publicSurfaceParity);
   const browserRuntimeObservationPolicy = asRecord(publicSurfaceParity?.browserRuntimeObservationPolicy);
   const legacyBackendPackaging = asRecord(publicSurfaceParity?.legacyBackendPackaging);
   const nativeProductGatePolicy = asRecord(publicSurfaceParity?.nativeProductGatePolicy);
   const hostPortsContract = asRecord(actionManifest.hostPortsContract);
   const nativeMultiScreenSidecarProtocol = asRecord(hostPortsContract?.nativeMultiScreenSidecarProtocol);
-  const isolatedDesktopBackendRuntime = asRecord(actionManifest.isolatedDesktopBackendRuntime);
   return {
     targetNativeSurfaces: stringArray(computerUse?.targetNativeSurfaces),
     forbiddenOwners: stringArray(computerUse?.forbiddenOwners),
@@ -565,25 +504,11 @@ export async function loadComputerUseBoundaryPolicy(workspaceRoot = root): Promi
         workspaceGatewayProductionFallbackAllowed: booleanField(nativeProductGatePolicy?.workspaceGatewayProductionFallbackAllowed),
         codexExecJsonProductionFallbackAllowed: booleanField(nativeProductGatePolicy?.codexExecJsonProductionFallbackAllowed),
       },
-      nativeToolsContract: {
-        productionHost: stringField(nativeToolsContract?.productionHost),
-        tools: new Set(stringArray(nativeToolsContract?.tools)),
-        forbiddenPublicParameters: new Set(stringArray(nativeToolsContract?.forbiddenPublicParameters)),
-        requiredProvenance: new Set(stringArray(nativeToolsContract?.requiredProvenance)),
-      },
       nativeMultiScreenSidecarProtocol: {
         requiredDiscoveryTools: new Set(stringArray(nativeMultiScreenSidecarProtocol?.requiredDiscoveryTools)),
         requiredExecutionTools: new Set(stringArray(nativeMultiScreenSidecarProtocol?.requiredExecutionTools)),
         completedRunRequiredRefs: new Set(stringArray(nativeMultiScreenSidecarProtocol?.completedRunRequiredRefs)),
         completedRunRequiredCapabilities: new Set(stringArray(nativeMultiScreenSidecarProtocol?.completedRunRequiredCapabilities)),
-      },
-      diagnosticProbes: new Set(Object.keys(asRecord(hostPortsContract?.diagnosticProbes) ?? {})),
-      isolatedDesktopBackendRuntime: {
-        legacyDiagnosticOnly: booleanField(isolatedDesktopBackendRuntime?.legacyDiagnosticOnly),
-        activeProductGateEligible: booleanField(isolatedDesktopBackendRuntime?.activeProductGateEligible),
-        backendPackagingOnly: booleanField(isolatedDesktopBackendRuntime?.backendPackagingOnly),
-        legacyBackendKinds: new Set(stringArray(isolatedDesktopBackendRuntime?.legacyBackendKinds)),
-        claimLimit: stringField(isolatedDesktopBackendRuntime?.claimLimit),
       },
     },
   };
@@ -666,24 +591,6 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
       issues.push(`Computer Use policy must retain ${historicalGate} only as a historical opt-in regression gate.`);
     }
   }
-  for (const tool of requiredComputerUseNativeTools) {
-    if (!policy.actionProviderPublicSurface.nativeToolsContract.tools.has(tool)) {
-      issues.push(`Computer Use native tool public surface is missing tool ${tool}.`);
-    }
-  }
-  for (const parameter of requiredForbiddenComputerUsePublicParameters) {
-    if (!policy.actionProviderPublicSurface.nativeToolsContract.forbiddenPublicParameters.has(parameter)) {
-      issues.push(`Computer Use native tool public surface must forbid parameter ${parameter}.`);
-    }
-  }
-  for (const provenance of requiredComputerUseNativeProvenance) {
-    if (!policy.actionProviderPublicSurface.nativeToolsContract.requiredProvenance.has(provenance)) {
-      issues.push(`Computer Use native tool public surface is missing required provenance ${provenance}.`);
-    }
-  }
-  if (!policy.actionProviderPublicSurface.diagnosticProbes.has('nativeMultiScreenLiveDemo')) {
-    issues.push('Computer Use diagnostic probes must expose nativeMultiScreenLiveDemo for opt-in M6 evidence collection.');
-  }
   const nativeMultiScreenProtocol = policy.actionProviderPublicSurface.nativeMultiScreenSidecarProtocol;
   for (const tool of requiredNativeMultiScreenSidecarDiscoveryTools) {
     if (!nativeMultiScreenProtocol.requiredDiscoveryTools.has(tool)) {
@@ -730,19 +637,6 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
     || nativePolicy.codexExecJsonProductionFallbackAllowed !== false
   ) {
     issues.push('Computer Use native product gate policy must fail closed for GUI execution, runtime bridge public production API, Workspace Gateway fallback, and codex exec JSON fallback.');
-  }
-  const legacyRuntime = policy.actionProviderPublicSurface.isolatedDesktopBackendRuntime;
-  if (
-    legacyRuntime.legacyDiagnosticOnly !== true
-    || legacyRuntime.activeProductGateEligible !== false
-    || legacyRuntime.backendPackagingOnly !== true
-  ) {
-    issues.push('Computer Use isolated desktop backend runtime must remain legacy diagnostic/backend packaging only and not active product gate eligible.');
-  }
-  for (const kind of requiredLegacyBackendKinds) {
-    if (!legacyRuntime.legacyBackendKinds.has(kind)) {
-      issues.push(`Computer Use isolated desktop backend runtime is missing legacy backend kind ${kind}.`);
-    }
   }
   return issues;
 }

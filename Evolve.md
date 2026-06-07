@@ -30,10 +30,10 @@ SciForge 的下一阶段演进只围绕两个产品生死问题，但判断标�
 | 能力 | 命令 | 当前状态 | 结论 |
 | --- | --- | --- | --- |
 | Computer Use 操纵真实软件 | `npm run smoke:desktop-computer-use-hard-confirm-product:strict --silent` | `product hard-confirm passed / real T1 blocked` | Electron Desktop 产品 shell、native host、Runtime Codex SSE、host-owned Computer Use package bridge、guard / hard-confirm surface 已有产品证据；真实 T1 仍缺 ordinary Desktop chat 当前运行的 scoped GUI 创建 / 保存 / 验证证据。 |
-| Runtime Codex 内置浏览器检索 | `npm run smoke:runtime-codex-browser-local-dogfood --silent` + `npm run smoke:runtime-codex-browser-acceptance --silent` | `local dogfood passed / release gate blocked` | BrowserHostSession 已能本地读取来源页并产出 source-page / page-text refs；strict release 仍被 service-env `SCIFORGE_RUNTIME_API_KEY` / upstream 策略阻断，普通聊天 release 验收还不能 claim。 |
+| Runtime Codex 内置浏览器检索 | `npm run smoke:runtime-codex-browser-local-dogfood --silent` + `npm run smoke:runtime-codex-browser-acceptance --silent` + `npm run smoke:runtime-codex-browser-acceptance:strict --silent` | `ordinary chat release passed` | Runtime Codex ordinary chat 已通过 `browser.open_read` 打开并读取 OpenAI 官方 API changelog，产出 BrowserHostSession source-page / page-text refs、`module.invoke` evidence 和 final-answer artifact；release/strict smoke 当前通过。 |
 | Desktop native Browser live | `npm run smoke:desktop-browser-native-live-acceptance --silent` | `passed` | Desktop native Browser live 已不再是 T2 的主要代码 blocker；下一步是 ordinary chat / Runtime Codex acceptance 在 service-env 策略下产生当前运行证据。 |
 
-这意味着：**当前不能对用户宣称 T1 已完成真实桌面软件任务，也不能把 T2 当作 release / ordinary-chat 完成。**  
+这意味着：**当前不能对用户宣称 T1 已完成真实桌面软件任务；T2 已有普通聊天 / Runtime Codex release 级当前运行证据。**  
 下一轮演进不是继续补边角功能，而是从真实任务出发，失败就只修阻塞真实任务的那个能力缺口。
 
 ## 真实任务通过标准

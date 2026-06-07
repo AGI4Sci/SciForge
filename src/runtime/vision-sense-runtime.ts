@@ -12,8 +12,6 @@ import { runComputerUsePackageBridge } from './computer-use/package-bridge.js';
 import { genericBridgeBlockedPayload } from './vision-sense/computer-use-trace-output.js';
 import { isRecord, toStringList, uniqueStrings } from './gateway-utils.js';
 
-const VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV = 'SCIFORGE_VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC';
-
 export async function tryRunVisionSenseRuntime(
   request: GatewayRequest,
   callbacks: WorkspaceRuntimeCallbacks = {},
@@ -26,11 +24,11 @@ export async function tryRunVisionSenseRuntime(
   const virtualAppScreenCommandText = looksLikeVirtualAppScreenRuntimeCommandText(request.prompt);
   const virtualAppScreenSilentBackgroundText = looksLikeVirtualAppScreenSilentBackgroundText(request);
   const virtualAppScreenDiagnosticRuntimeRequested = virtualAppScreenCommandText || virtualAppScreenSilentBackgroundText;
-  if (virtualAppScreenDiagnosticRuntimeRequested && !virtualAppScreenRuntimeDiagnosticEnabled()) {
+  if (virtualAppScreenDiagnosticRuntimeRequested) {
     return genericBridgeBlockedPayload(
       request,
       workspace,
-      `VirtualAppScreen runtime commands are retired from the default Computer Use product path; set ${VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV}=1 only for legacy diagnostic smoke runs.`,
+      'VirtualAppScreen runtime commands are retired from the Computer Use product path.',
       {
         selectedRuntime: VISION_SENSE_RUNTIME_ID,
         selectedToolId: VISION_TOOL_ID,
@@ -38,7 +36,6 @@ export async function tryRunVisionSenseRuntime(
           ? 'virtual-app-screen-silent-background'
           : virtualAppScreenCommandRoute(request.prompt),
         diagnosticOnly: true,
-        diagnosticOptInEnv: VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV,
         safetyVerifierContract: visionSenseSafetyVerifierContract,
       },
     );
@@ -64,12 +61,6 @@ export async function tryRunVisionSenseRuntime(
     }),
   });
 
-  if (virtualAppScreenDiagnosticRuntimeRequested) {
-    const { tryRunVirtualAppScreenDiagnosticRuntime } = await import('./vision-sense/virtual-app-screen-diagnostic-runtime.js');
-    const diagnosticPayload = await tryRunVirtualAppScreenDiagnosticRuntime({ request, workspace, config });
-    if (diagnosticPayload) return diagnosticPayload;
-  }
-
   if (!config.desktopBridgeEnabled) {
     return genericBridgeBlockedPayload(
       request,
@@ -84,10 +75,6 @@ export async function tryRunVisionSenseRuntime(
   }
 
   return runComputerUsePackageBridge(request, workspace, config, callbacks);
-}
-
-function virtualAppScreenRuntimeDiagnosticEnabled() {
-  return process.env[VIRTUAL_APP_SCREEN_RUNTIME_DIAGNOSTIC_ENV] === '1';
 }
 
 function looksLikeVirtualAppScreenRuntimeCommandText(prompt: string) {

@@ -18,6 +18,26 @@ test('Browser evidence query keeps source-constrained arXiv topic instead of low
   }
 });
 
+test('Browser evidence query routes recent-week arXiv research requests through browser search', () => {
+  const prompt = '搜索一下最近一周 arxiv 上 虚拟性细胞 相关的文章，并用中文总结，写一份系统的报告';
+
+  assert.equal(semanticBrowserSearchQueryFromPrompt(prompt), 'site:arxiv.org 虚拟性细胞');
+  const decision = evaluateBrowserEvidenceNeed({ prompt });
+
+  assert.equal(decision.decision, 'search');
+  if (decision.decision === 'search') {
+    assert.equal(decision.query, 'site:arxiv.org 虚拟性细胞');
+  }
+});
+
+test('Browser evidence query does not route local writing or debugging prompts from broad recent/article terms alone', () => {
+  const writing = evaluateBrowserEvidenceNeed({ prompt: '帮我写一篇文章，介绍这个项目的架构' });
+  const debugging = evaluateBrowserEvidenceNeed({ prompt: '最近这个函数总是失败，帮我 debug 一下' });
+
+  assert.equal(writing.decision, 'skip');
+  assert.equal(debugging.decision, 'skip');
+});
+
 test('Browser evidence query adds site constraint for explicit public domains and drops presentation instructions', () => {
   const prompt = '请搜索 example.com 上 pricing docs，并总结链接和来源';
 

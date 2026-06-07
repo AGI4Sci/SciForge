@@ -79,7 +79,7 @@ test('runtime bridge request detection does not treat legacy exec JSON as a prod
   assert.equal(codexRuntimeBridgeRequested({ useCodexRuntimeBridge: true }), true);
 });
 
-test('HTTP/SSE endpoint forwards sanitized Computer Use completion evidence policy as host intent metadata', async () => {
+test('HTTP/SSE endpoint forwards Computer Use task bindings without retired completion evidence policy', async () => {
   const adapter = new FakeAdapter();
   const server = createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
@@ -105,20 +105,6 @@ test('HTTP/SSE endpoint forwards sanitized Computer Use completion evidence poli
           schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
           kind: 'computer-use-native-route',
           source: 'host-owned',
-          completionEvidencePolicy: {
-            schemaVersion: 'sciforge.completion-evidence-policy.v1',
-            secret: 'SECRET_POLICY_SHOULD_NOT_LEAK',
-            producers: [{
-              id: 'computer-use.embedded-isolated-desktop-l3',
-              enabled: true,
-              trigger: 'on-completed-current-run',
-              token: 'SECRET_PRODUCER_SHOULD_NOT_LEAK',
-            }, {
-              id: 'computer-use.unknown-producer',
-              enabled: true,
-              trigger: 'on-completed-current-run',
-            }],
-          },
           computerUseNext: {
             taskId: 'CU-NEXT-01',
             scenarioId: 'CU-LONG-001',
@@ -147,14 +133,7 @@ test('HTTP/SSE endpoint forwards sanitized Computer Use completion evidence poli
     const text = await response.text();
 
     assert.match(text, /event: done/);
-    assert.deepEqual(adapter.lastInput?.runtimeIntent?.completionEvidencePolicy, {
-      schemaVersion: 'sciforge.completion-evidence-policy.v1',
-      producers: [{
-        id: 'computer-use.embedded-isolated-desktop-l3',
-        enabled: true,
-        trigger: 'on-completed-current-run',
-      }],
-    });
+    assert.equal('completionEvidencePolicy' in (adapter.lastInput?.runtimeIntent ?? {}), false);
     assert.deepEqual(adapter.lastInput?.runtimeIntent?.computerUseNext, {
       taskId: 'CU-NEXT-01',
       scenarioId: 'CU-LONG-001',
@@ -172,7 +151,7 @@ test('HTTP/SSE endpoint forwards sanitized Computer Use completion evidence poli
         noDomAccessibility: true,
       },
     });
-    assert.doesNotMatch(JSON.stringify(adapter.lastInput), /SECRET_POLICY_SHOULD_NOT_LEAK|SECRET_PRODUCER_SHOULD_NOT_LEAK|unknown-producer|SECRET_NEXT_SHOULD_NOT_LEAK|SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK|SECRET_LONG_SHOULD_NOT_LEAK|cuNextTaskId|requiredEvidence/);
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput), /embedded-isolated-desktop-l3|SECRET_NEXT_SHOULD_NOT_LEAK|SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK|SECRET_LONG_SHOULD_NOT_LEAK|cuNextTaskId|requiredEvidence/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -2089,6 +2068,78 @@ test('HTTP/SSE endpoint executes malformed function_calls Browser bounded operat
   }
 });
 
+test('HTTP/SSE endpoint falls back to Host-owned Browser when host-intent Browser evidence turn completes without visible projection', async () => {
+  const adapter = new EmptyTerminalDoneAdapter();
+  const calls: ModuleInvokeRequest[] = [];
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter, {
+      browserBoundedOperationInvoker: () => async (request) => {
+        calls.push(request);
+        return boundedOperationResult({
+          moduleId: 'browser',
+          operationKind: 'browser.search_read',
+          status: 'completed',
+          sourceRefs: ['browser-host-session:arxiv-virtual-cell/source-pages/source-1.source.json'],
+          evidenceRefs: [
+            'browser-host-session:arxiv-virtual-cell/source-pages/source-1.source.json',
+            'browser-host-session:arxiv-virtual-cell/source-pages/source-1.txt',
+          ],
+          value: {
+            sourcePages: [{
+              title: 'arXiv virtual cells recent results',
+              finalUrl: 'https://arxiv.org/search/?query=virtual+cell&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
+              textRef: 'browser-host-session:arxiv-virtual-cell/source-pages/source-1.txt',
+              textSummary: 'arXiv search page lists recent virtual cell related scholarly results with source text available for the final report.',
+            }],
+          },
+        });
+      },
+    });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+  const commandText = '搜索一下最近一周 arxiv 上 虚拟性细胞 相关的文章，并用中文总结，写一份系统的报告';
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText,
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-browser-empty-done-fallback',
+        attemptId: 'codex-command-browser-empty-done-fallback-attempt-1',
+        runtimeIntent: {
+          schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+          kind: 'computer-use-native-route',
+          source: 'host-owned',
+        },
+        agentHostInput: readyAgentHostInput(commandText),
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput?.runtimeIntent?.kind, 'computer-use-native-route');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.moduleId, 'browser');
+    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
+    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
+    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org 虚拟性细胞');
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /event: gui_present/);
+    assert.match(text, /arXiv search page lists recent virtual cell related scholarly results/);
+    assert.doesNotMatch(text, /gui-present-required|completed without gui\.present/);
+    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('HTTP/SSE endpoint replaces unsupported native Browser-evidence answers with Host Browser evidence', async () => {
   const adapter = new (unsupportedNativeBrowserEvidenceAdapterClass())();
   const calls: ModuleInvokeRequest[] = [];
@@ -3220,6 +3271,39 @@ class FailedBrowserEvidenceAdapter extends FakeAdapter {
       status: 'failed',
       message: 'Runtime service upstream-outage before Browser evidence could be collected.',
     };
+  }
+}
+
+class EmptyTerminalDoneAdapter extends FakeAdapter {
+  override async startTurn(input: AgentCliStartTurnInput) {
+    this.lastInput = input;
+    const commandId = input.commandId ?? 'codex-command-empty-done';
+    const attemptId = input.attemptId ?? 'codex-command-empty-done-attempt-1';
+    return {
+      turnId: commandId,
+      attemptId,
+      codexSessionId: input.codexSessionId,
+      events: this.emptyTerminalDoneEvents(commandId, attemptId),
+    };
+  }
+
+  private async *emptyTerminalDoneEvents(
+    commandId: string,
+    attemptId: string,
+  ): AsyncIterable<NormalizedAgentEvent> {
+    const base = {
+      schemaVersion: 'sciforge.codex.normalized-event.v1' as const,
+      timestamp: new Date().toISOString(),
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/workspace',
+      commandId,
+      attemptId,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${attemptId}:normalized-events`],
+    };
+    yield { ...base, type: 'run_started', message: 'started' };
+    yield { ...base, type: 'done', status: 'done' };
   }
 }
 

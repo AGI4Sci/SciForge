@@ -15,7 +15,7 @@ describe('element registry', () => {
     assert.equal(report.ok, true, JSON.stringify(report.issues, null, 2));
     assert.ok(registry.skills.some((skill) => skill.id === 'pdf-extract'));
     assert.ok(registry.skills.some((skill) => skill.id === 'scp.biomedical-web-search'));
-    assert.ok(registry.skills.some((skill) => skill.id === 'agentserver.generate.literature'));
+    assert.ok(registry.skills.some((skill) => skill.id === 'generated-task.generate.literature'));
     assert.ok(registry.skills.some((skill) => skill.id.startsWith('scp.')));
     assert.ok(registry.skills.filter((skill) => skill.id.startsWith('scp.')).every((skill) => skill.source === 'package'));
     assert.ok(registry.tools.some((tool) => tool.id === 'clawhub.playwright-mcp'));
