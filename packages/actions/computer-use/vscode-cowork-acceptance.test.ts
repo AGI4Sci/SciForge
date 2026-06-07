@@ -182,6 +182,7 @@ test('Host-side VSCode co-work requires confirmation before real-file save, bulk
     assert.equal(decision.primitive, undefined, operation);
     assert.equal(decision.action, undefined, operation);
     assert.equal(decision.confirmation?.riskActionHash, `risk:${operation}:paper`, operation);
+    assert.ok(decision.refs.includes(`risk:${operation}:paper`), operation);
   }
 
   const confirmedSave = decideVSCodeCoWorkNextPrimitive({
@@ -207,6 +208,8 @@ test('Host-side VSCode co-work requires confirmation before real-file save, bulk
     actionHash: 'risk:save-current-file:paper',
   });
   assert.equal(confirmedSave.approvalRef, 'approval:risk:save-current-file:paper:confirmed');
+  assert.ok(confirmedSave.refs.includes('risk:save-current-file:paper'));
+  assert.ok(confirmedSave.refs.includes('approval:risk:save-current-file:paper:confirmed'));
 });
 
 test('VSCode co-work cleanup validation requires release refs and focus/mouse restoration without killing user state', () => {

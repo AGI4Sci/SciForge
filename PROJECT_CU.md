@@ -299,7 +299,9 @@ Acceptance Gates：
 
 本轮补充：Host-side controller 和 native-route bridge 现在也把目标文件不明确作为 fail-closed 条件。对于 `insert-draft`、`save-current-file`、`bulk-replace`、`cross-file-modify` 和 `undo-last-action`，如果 current observe refs / window refs 中出现多个 visible file refs 且 Host 没有提供 selectedFileRef，则返回 `needs-confirmation`，不返回 primitive/action，并保留 candidate file refs。Host 提供的 selectedFileRef 必须来自当前 refs；不匹配时 blocked。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge 和 target-file ambiguity gate 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+本轮补充：真实文件保存的 route-level approval chain 也改为 refs-first。未确认的 `save-current-file` 在 native route 上保持 `needs-confirmation`，不返回 primitive/action，并把 `riskActionHash` 放进 evidenceRefs；带 matching confirmationRef 的保存才返回一个 Host 指定的 `app_command save` 原子 `act`，并把 `riskActionHash` 与 `approvalRef` 都保留到 evidenceRefs / execution unit。
+
+当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate 和 real-file save approval refs gate 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
 
 ## P10：论文修改 / 润色 GUI 协作
 

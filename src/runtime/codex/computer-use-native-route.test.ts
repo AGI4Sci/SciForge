@@ -341,6 +341,82 @@ test('Computer Use native route requires confirmation when VSCode target file is
   assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route keeps VSCode real-file save blocked until matching approval refs are present', async () => {
+  const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-unconfirmed',
+      attemptId: 'native-route-vscode-cowork-save-unconfirmed-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-unconfirmed',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:save-current-file:paper',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const unconfirmedDone = unconfirmedEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unconfirmedUnit = (unconfirmedDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(unconfirmedDone?.status, 'needs-confirmation');
+  assert.equal(unconfirmedUnit?.primitive, undefined);
+  assert.equal(unconfirmedUnit?.action, undefined);
+  assert.equal(unconfirmedUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+
+  const confirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-confirmed',
+      attemptId: 'native-route-vscode-cowork-save-confirmed-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-confirmed',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:save-current-file:paper',
+        confirmationRef: 'approval:risk:save-current-file:paper:confirmed',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const confirmedDone = confirmedEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const confirmedUnit = (confirmedDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(confirmedDone?.status, 'ready');
+  assert.equal(confirmedUnit?.primitive, 'act');
+  assert.deepEqual(confirmedUnit?.action, {
+    type: 'app_command',
+    command: 'save',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.deepEqual(confirmedUnit?.risk, {
+    level: 'high',
+    categories: ['user-real-file-change'],
+    actionHash: 'risk:save-current-file:paper',
+  });
+  assert.equal(confirmedUnit?.approvalRef, 'approval:risk:save-current-file:paper:confirmed');
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper:confirmed'));
+  assert.doesNotMatch(JSON.stringify(confirmedEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route keeps only safe task and scenario bindings', () => {
   const request = computerUseGatewayRequest({
     request: {
@@ -534,6 +610,32 @@ function vscodeNativeRouteWindow(input: {
     windowRef: input.windowRef,
     titleRef: input.titleRef ?? `${input.windowRef}:title`,
     frontmostRef: `${input.windowRef}:frontmost`,
+  };
+}
+
+function vscodeCoWorkRouteRequest(input: {
+  commandText: string;
+  commandId: string;
+  attemptId: string;
+  vscodeCoWork: Record<string, unknown>;
+}) {
+  return {
+    commandText: input.commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: input.commandId,
+    attemptId: input.attemptId,
+    runtimeIntent: {
+      schemaVersion: 'sciforge.runtime-codex.host-intent.v1' as const,
+      kind: 'computer-use-native-route' as const,
+      source: 'host-owned' as const,
+      computerUseNext: {
+        taskId: 'CU-NEXT-09',
+        recommendedTargetMode: 'active-window',
+        recommendedTargetApp: 'Visual Studio Code',
+        semanticMarkers: ['current-vscode-cowork', 'refs-first'],
+      },
+      vscodeCoWork: input.vscodeCoWork,
+    },
   };
 }
 

@@ -409,6 +409,8 @@ function refsForTargetAndObservation(
     targetWindow.titleRef,
     targetWindow.frontmostRef,
     input.selectedFileRef,
+    input.riskActionHash,
+    input.confirmationRef,
     ...(targetWindow.visibleFileRefs ?? []),
     observation.windowRef,
     observation.observationRef,
