@@ -380,6 +380,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   const accessibilityRefs = manifest.evidence.accessibilityRefs.filter(accessibilityRef);
   const textRefs = manifest.evidence.textRefs.filter(textRef);
   const hostDecisionRefs = manifest.evidence.hostDecisionRefs;
+  const controlRefs = manifest.evidence.controlRefs;
   if (screenshotRefs.length === 0) issues.push('invalid-evidence-ref:screenshot');
   if (screenshotRefs.length < 2) issues.push('missing-evidence-ref:before-after-screenshot');
   if (accessibilityRefs.length === 0) issues.push('invalid-evidence-ref:accessibility');
@@ -413,11 +414,27 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.afterObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-after-observe-ref:target-window');
   if (!manifest.evidence.afterObservationRefs.some(freshnessRef)) issues.push('missing-after-observe-ref:freshness');
   if (!manifest.evidence.controlRefs.some(controlRef)) issues.push('invalid-evidence-ref:control');
+  if (!controlRefs.some(sessionRef)) issues.push('missing-control-ref:session');
+  if (!controlRefs.some((ref) => releaseRefs.some((releaseRef) => scopedInputLeaseRef(ref) && sameRef(ref, releaseRef)))) {
+    issues.push('missing-control-ref:scoped-input-lease');
+  }
+  if (!controlRefs.some((ref) => releaseRefs.some((releaseRef) => inputAdapterRef(ref) && sameRef(ref, releaseRef)))) {
+    issues.push('missing-control-ref:input-adapter');
+  }
+  if (!controlRefs.some((ref) => releaseRefs.some((releaseRef) => cursorMarkerRef(ref) && sameRef(ref, releaseRef)))) {
+    issues.push('missing-control-ref:cursor-marker');
+  }
+  if (!controlRefs.some((ref) => restorationRefs.some((restorationRef) => frontAppRestoreRef(ref) && sameRef(ref, restorationRef)))) {
+    issues.push('missing-control-ref:front-app');
+  }
+  if (!controlRefs.some((ref) => restorationRefs.some((restorationRef) => mousePositionRestoreRef(ref) && sameRef(ref, restorationRef)))) {
+    issues.push('missing-control-ref:mouse-position');
+  }
   if (!hasRefPrefix(releaseRefs, 'scoped-input-lease:')) issues.push('missing-release-ref:scoped-input-lease');
   if (!hasRefPrefix(releaseRefs, 'input-adapter:')) issues.push('missing-release-ref:input-adapter');
   if (!releaseRefs.some((ref) => ref.startsWith('cursor-marker:') || ref.startsWith('cursor:'))) issues.push('missing-release-ref:cursor-marker');
-  if (!restorationRefs.some((ref) => /^front-app-restore:|^focus-restore:/i.test(ref))) issues.push('missing-restoration-ref:front-app');
-  if (!restorationRefs.some((ref) => /^mouse-position-restore:|^cursor-position-restore:/i.test(ref))) issues.push('missing-restoration-ref:mouse-position');
+  if (!restorationRefs.some(frontAppRestoreRef)) issues.push('missing-restoration-ref:front-app');
+  if (!restorationRefs.some(mousePositionRestoreRef)) issues.push('missing-restoration-ref:mouse-position');
   if (!manifest.cleanup.inputLeaseReleased) issues.push('cleanup-input-lease-not-released');
   if (!manifest.cleanup.cursorReleased) issues.push('cleanup-cursor-not-released');
   if (!manifest.cleanup.adapterReleased) issues.push('cleanup-adapter-not-released');
@@ -788,6 +805,14 @@ function hostDecisionRef(value: unknown): value is string {
 
 function controlRef(value: unknown): value is string {
   return structuredRef(value, ['control:']);
+}
+
+function frontAppRestoreRef(value: unknown): value is string {
+  return typeof value === 'string' && /^front-app-restore:|^focus-restore:/i.test(value.trim());
+}
+
+function mousePositionRestoreRef(value: unknown): value is string {
+  return typeof value === 'string' && /^mouse-position-restore:|^cursor-position-restore:/i.test(value.trim());
 }
 
 function staleInvalidationRef(value: unknown): value is string {

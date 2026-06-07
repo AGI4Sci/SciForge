@@ -954,6 +954,9 @@ test('VSCode co-work live manifest requires primitive chain, cleanup, restoratio
   assert.deepEqual(failed.issues, [
     'vscode-cowork-must-not-claim-product-ready',
     'vscode-cowork-live-primitive-chain-incomplete',
+    'missing-control-ref:scoped-input-lease',
+    'missing-control-ref:cursor-marker',
+    'missing-control-ref:mouse-position',
     'missing-release-ref:scoped-input-lease',
     'missing-release-ref:cursor-marker',
     'missing-restoration-ref:mouse-position',
@@ -1175,6 +1178,29 @@ test('VSCode co-work live manifest requires after observe refs to bind target wi
   assert.ok(failed.issues.includes('missing-after-observe-ref:freshness'));
 });
 
+test('VSCode co-work live manifest requires control refs to bind release and restoration evidence', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      controlRefs: ['control:vscode-cowork:release'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'missing-control-ref:session',
+    'missing-control-ref:scoped-input-lease',
+    'missing-control-ref:input-adapter',
+    'missing-control-ref:cursor-marker',
+    'missing-control-ref:front-app',
+    'missing-control-ref:mouse-position',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1246,7 +1272,15 @@ function vscodeCoWorkLiveManifest() {
         'stale-invalidation:vscode-cowork:before-observation',
       ],
       afterObservationRefs: ['observation:vscode:after', 'window:vscode:paper', 'freshness:vscode:after'],
-      controlRefs: ['control:vscode-cowork:release'],
+      controlRefs: [
+        'control:vscode-cowork:release',
+        'window-action-session:vscode-cowork:1',
+        'scoped-input-lease:vscode-cowork:1',
+        'input-adapter:vscode-cowork:1',
+        'cursor-marker:vscode-cowork:1',
+        'front-app-restore:vscode-cowork:1',
+        'mouse-position-restore:vscode-cowork:1',
+      ],
       screenshotRefs: ['image:vscode:before', 'image:vscode:after'],
       accessibilityRefs: ['accessibility:vscode:before', 'accessibility:vscode:after'],
       textRefs: ['text:vscode:visible-before', 'text:vscode:visible-after'],
