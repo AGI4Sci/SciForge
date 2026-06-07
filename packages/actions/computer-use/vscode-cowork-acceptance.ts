@@ -288,7 +288,7 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const riskEnvelopeBlock = realFileChangeRiskEnvelopeBlock(input, targetWindow, observation);
   if (riskEnvelopeBlock) return riskEnvelopeBlock;
 
-  if (realFileChangeNeedsConfirmation(input, observation)) {
+  if (realFileChangeNeedsConfirmation(input, targetWindow, observation)) {
     return {
       ...decisionBase('needs-confirmation', refsForTargetAndObservation(input, targetWindow, observation)),
       targetWindowRef,
@@ -889,12 +889,14 @@ function editorElementEvidenceRef(value: unknown): value is string {
 
 function realFileChangeNeedsConfirmation(
   input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
   observation: VSCodeCoWorkObservationRefs,
 ): boolean {
   if (!userRealFileChangeOperation(input, observation)) return false;
   if (!approvalRef(input.confirmationRef)) return true;
   if (!riskActionHashRef(input.riskActionHash)) return true;
-  return !approvalRefMatchesRiskActionHash(input.confirmationRef, input.riskActionHash);
+  const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
+  return !approvalRefMatchesRiskActionHashAndTargetFile(input.confirmationRef, input.riskActionHash, targetFileRef);
 }
 
 function userRealFileChangeOperation(
@@ -1069,8 +1071,22 @@ function windowCandidateIdentityRefsComplete(candidate: VSCodeCoWorkWindowCandid
     && frontmostRef(candidate.frontmostRef);
 }
 
-function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {
-  return approvalRef.startsWith(`approval:${riskActionHash}:`);
+function resolvedTargetFileRef(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): string | undefined {
+  if (fileRef(input.selectedFileRef)) return input.selectedFileRef.trim();
+  const candidateFileRefs = uniqueStrings([
+    ...(targetWindow.visibleFileRefs ?? []),
+    ...(observation.visibleFileRefs ?? []),
+  ].filter(fileRef));
+  return candidateFileRefs.length === 1 ? candidateFileRefs[0] : undefined;
+}
+
+function approvalRefMatchesRiskActionHashAndTargetFile(approvalRef: string, riskActionHash: string, targetFileRef: string | undefined): boolean {
+  if (!fileRef(targetFileRef)) return false;
+  return approvalRef.startsWith(`approval:${riskActionHash}:${targetFileRef}:`);
 }
 
 function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {

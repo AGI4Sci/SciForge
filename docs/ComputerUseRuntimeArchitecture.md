@@ -166,6 +166,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 real-file live manifest 的 approval evidence 还必须直接绑定同一个 selected `file-ref:`。Host 仍负责收集用户确认；manifest validator 只要求 confirmation evidence 同时保留 `risk:`、`approval:` 和目标文件 ref，避免确认证据与实际文件目标脱钩。
 
+补充：P9 Host-side controller / native route 的真实文件 `confirmationRef` 也必须绑定目标文件 ref。保存、撤销、替换选区、批量替换或跨文件修改只有在 approval token 同时绑定 `riskActionHash` 和当前 selected/唯一 visible `file-ref:` 时才会继续；只绑定 risk 的 approval 会保持 `needs-confirmation`，Computer Use core 仍不收集确认、不选择文件、不做 task planning。
+
 ## 职责边界
 
 ```text
