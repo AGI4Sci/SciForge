@@ -429,6 +429,42 @@ test('Computer Use native route blocks mixed raw and refs-first VSCode window ca
   assert.doesNotMatch(JSON.stringify(events), /Notes\.md|Visual Studio Code|Applications|frontmost VSCode|product-ready/i);
 });
 
+test('Computer Use native route blocks VSCode window candidates without bind identity refs', async () => {
+  const events = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '操作我已经打开的 VSCode，聚焦编辑器。',
+      commandId: 'native-route-vscode-cowork-missing-window-identity-refs',
+      attemptId: 'native-route-vscode-cowork-missing-window-identity-refs-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:missing-window-identity-refs',
+        operation: 'focus-editor',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [{
+          appRef: 'macos-app:com.microsoft.VSCode',
+          windowRef: 'window:vscode:paper',
+        }],
+        latestObservation: vscodeNativeRouteObservation(),
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_window_candidate_identity_refs_required');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:missing-window-identity-refs'));
+  assert.ok((done?.evidenceRefs as string[]).includes('macos-app:com.microsoft.VSCode'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(events), /product-ready/i);
+});
+
 test('Computer Use native route blocks raw selected VSCode target refs instead of ignoring them', async () => {
   const rawSelectedWindowEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({

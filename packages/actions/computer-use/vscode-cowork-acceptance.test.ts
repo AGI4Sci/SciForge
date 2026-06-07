@@ -102,6 +102,27 @@ test('Host-side VSCode co-work blocks raw window and observation refs before cho
   assert.doesNotMatch(JSON.stringify(rawObservation), /paper\.md|visible editor|raw AX|tmp\/paper-window|fresh observation/);
 });
 
+test('Host-side VSCode co-work blocks window candidates without bind identity refs', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:missing-window-identity-refs',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [{
+      appRef: 'macos-app:com.microsoft.VSCode',
+      windowRef: 'window:vscode:paper',
+    }],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.blockedReason, 'vscode_cowork_window_candidate_identity_refs_required');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.ok(decision.refs.includes('chat-request:vscode-cowork:missing-window-identity-refs'));
+  assert.ok(decision.refs.includes('macos-app:com.microsoft.VSCode'));
+  assert.ok(decision.refs.includes('window:vscode:paper'));
+});
+
 test('Host-side VSCode co-work blocks raw selected target refs instead of ignoring them', () => {
   const rawSelectedWindow = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:raw-selected-window',

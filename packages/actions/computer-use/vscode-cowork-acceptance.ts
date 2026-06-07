@@ -211,6 +211,18 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
     }]);
   }
 
+  const missingWindowIdentityRefs = validWindowCandidates.filter((candidate) => !windowCandidateIdentityRefsComplete(candidate));
+  if (missingWindowIdentityRefs.length > 0) {
+    return blocked(input, 'vscode_cowork_window_candidate_identity_refs_required', uniqueStrings([
+      ...requestRefs,
+      ...windowCandidateRefs(validWindowCandidates),
+    ]), [{
+      code: 'refresh-window-bind-identity-refs',
+      message: 'Host must bind each current VSCode window candidate with app, process, title, and frontmost refs before selecting a target.',
+      suggestedPrimitive: 'bind',
+    }]);
+  }
+
   if (!supportedVSCodeCoWorkOperation(input.operation)) {
     return blocked(input, 'vscode_cowork_operation_required', uniqueStrings([...requestRefs, ...windowCandidateRefs(validWindowCandidates)]), [{
       code: 'provide-host-selected-vscode-operation',
@@ -992,6 +1004,14 @@ function windowCandidateRefSafe(candidate: VSCodeCoWorkWindowCandidate): boolean
     && (candidate.processRef === undefined || processRef(candidate.processRef))
     && (candidate.titleRef === undefined || titleRef(candidate.titleRef))
     && (candidate.frontmostRef === undefined || frontmostRef(candidate.frontmostRef));
+}
+
+function windowCandidateIdentityRefsComplete(candidate: VSCodeCoWorkWindowCandidate): boolean {
+  return appRef(candidate.appRef)
+    && processRef(candidate.processRef)
+    && windowRef(candidate.windowRef)
+    && titleRef(candidate.titleRef)
+    && frontmostRef(candidate.frontmostRef);
 }
 
 function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {
