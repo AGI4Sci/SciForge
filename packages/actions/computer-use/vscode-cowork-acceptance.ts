@@ -315,7 +315,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => ref.startsWith('risk:'))) issues.push('missing-approval-ref:risk-action-hash');
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => ref.startsWith('approval:'))) issues.push('missing-approval-ref:approval');
-  if (manifest.evidence.approvalRefs.some(unsafeEvidenceRef)) issues.push('unsafe-evidence-ref:approval');
+  issues.push(...unsafeEvidenceRefIssues(manifest.evidence));
 
   return {
     ok: issues.length === 0,
@@ -539,6 +539,27 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function unsafeEvidenceRefIssues(evidence: VSCodeCoWorkLiveAcceptanceManifest['evidence']): string[] {
+  const groups: Array<[string, string[]]> = [
+    ['bind', evidence.bindRefs],
+    ['before-observe', evidence.beforeObservationRefs],
+    ['host-decision', evidence.hostDecisionRefs],
+    ['act', evidence.actionRefs],
+    ['after-observe', evidence.afterObservationRefs],
+    ['control', evidence.controlRefs],
+    ['screenshot', evidence.screenshotRefs],
+    ['accessibility', evidence.accessibilityRefs],
+    ['text', evidence.textRefs],
+    ['approval', evidence.approvalRefs],
+    ['release', evidence.releaseRefs],
+    ['restoration', evidence.restorationRefs],
+  ];
+
+  return groups.flatMap(([label, refs]) => (
+    refs.some(unsafeEvidenceRef) ? [`unsafe-evidence-ref:${label}`] : []
+  ));
 }
 
 function unsafeEvidenceRef(value: string): boolean {

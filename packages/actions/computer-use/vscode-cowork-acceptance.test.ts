@@ -323,6 +323,46 @@ test('VSCode co-work live manifest requires primitive chain, cleanup, restoratio
   ]);
 });
 
+test('VSCode co-work live manifest rejects unsafe refs across all evidence groups', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      bindRefs: [...base.evidence.bindRefs, 'providerPayload:secret-window-state'],
+      beforeObservationRefs: [...base.evidence.beforeObservationRefs, 'base64:before-observe'],
+      hostDecisionRefs: [...base.evidence.hostDecisionRefs, 'https://example.invalid/decision'],
+      actionRefs: [...base.evidence.actionRefs, 'secret:act-evidence'],
+      afterObservationRefs: [...base.evidence.afterObservationRefs, 'data:application/json;base64,eyJvayI6dHJ1ZX0='],
+      controlRefs: [...base.evidence.controlRefs, 'https://example.invalid/control'],
+      screenshotRefs: [...base.evidence.screenshotRefs, 'rawScreenshot:data:image/png;base64,abc123'],
+      accessibilityRefs: [...base.evidence.accessibilityRefs, 'providerPayload:ax-tree'],
+      textRefs: [...base.evidence.textRefs, 'text:secret:visible'],
+      approvalRefs: [...base.evidence.approvalRefs, 'token:approval-sidecar'],
+      releaseRefs: [...base.evidence.releaseRefs, 'token:release-evidence'],
+      restorationRefs: [...base.evidence.restorationRefs, 'password:restore-evidence'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'unsafe-evidence-ref:bind',
+    'unsafe-evidence-ref:before-observe',
+    'unsafe-evidence-ref:host-decision',
+    'unsafe-evidence-ref:act',
+    'unsafe-evidence-ref:after-observe',
+    'unsafe-evidence-ref:control',
+    'unsafe-evidence-ref:screenshot',
+    'unsafe-evidence-ref:accessibility',
+    'unsafe-evidence-ref:text',
+    'unsafe-evidence-ref:approval',
+    'unsafe-evidence-ref:release',
+    'unsafe-evidence-ref:restoration',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
