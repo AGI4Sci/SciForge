@@ -1259,6 +1259,24 @@ test('VSCode co-work live manifest requires Host decision refs to bind request, 
   }
 });
 
+test('VSCode co-work live manifest requires Host decision refs to bind the active session', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      hostDecisionRefs: base.evidence.hostDecisionRefs.map((ref) =>
+        ref.startsWith('window-action-session:')
+          ? 'window-action-session:vscode-cowork:other-decision'
+          : ref,
+      ),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-host-decision-ref:active-session'));
+});
+
 test('VSCode co-work live manifest requires after observe refs to bind target window and freshness', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1421,6 +1439,7 @@ function vscodeCoWorkLiveManifest() {
       ],
       hostDecisionRefs: [
         'decision:vscode-cowork:save-confirmed',
+        'window-action-session:vscode-cowork:1',
         'chat-request:vscode-cowork:save-confirmed',
         'window:vscode:paper',
         'file-ref:vscode:paper',

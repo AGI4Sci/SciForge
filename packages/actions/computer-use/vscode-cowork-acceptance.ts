@@ -413,6 +413,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   }
   if (!manifest.evidence.hostDecisionRefs.some(hostDecisionRef)) issues.push('invalid-evidence-ref:host-decision');
   if (!hostDecisionRefs.some(requestRef)) issues.push('missing-host-decision-ref:request');
+  if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(hostDecisionRefs, manifest.evidence.bindRefs, sessionRef)) {
+    issues.push('missing-host-decision-ref:active-session');
+  }
   if (!hostDecisionRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-host-decision-ref:target-window');
   if (!hostDecisionRefs.some((ref) => manifest.evidence.beforeObservationRefs.some((beforeRef) => observationRef(ref) && sameRef(ref, beforeRef)))) {
     issues.push('missing-host-decision-ref:before-observe');
