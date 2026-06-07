@@ -457,7 +457,7 @@ function realFileChangeRiskEnvelopeBlock(
 ): VSCodeCoWorkDecision | undefined {
   if (!realFileChangeOperation(input.operation)) return undefined;
   if (observation.userFile === false) return undefined;
-  if (nonEmptyString(input.riskActionHash)) return undefined;
+  if (riskActionHashRef(input.riskActionHash)) return undefined;
   return {
     ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
     targetWindowRef: targetWindow.windowRef,
@@ -516,8 +516,8 @@ function realFileChangeNeedsConfirmation(
 ): boolean {
   if (!realFileChangeOperation(input.operation)) return false;
   if (observation.userFile === false) return false;
-  if (!nonEmptyString(input.confirmationRef)) return true;
-  if (!nonEmptyString(input.riskActionHash)) return true;
+  if (!approvalRef(input.confirmationRef)) return true;
+  if (!riskActionHashRef(input.riskActionHash)) return true;
   return !approvalRefMatchesRiskActionHash(input.confirmationRef, input.riskActionHash);
 }
 
@@ -527,6 +527,14 @@ function draftTextRef(value: unknown): value is string {
 
 function fileRef(value: unknown): value is string {
   return typeof value === 'string' && /^file-ref:[^\s]+$/i.test(value.trim());
+}
+
+function riskActionHashRef(value: unknown): value is string {
+  return typeof value === 'string' && /^risk:[a-z0-9_-]+(?::[a-z0-9_-]+)*$/i.test(value.trim());
+}
+
+function approvalRef(value: unknown): value is string {
+  return typeof value === 'string' && /^approval:[a-z0-9_-]+(?::[a-z0-9_-]+)*$/i.test(value.trim());
 }
 
 function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {
@@ -579,8 +587,8 @@ function refsForTargetAndObservation(
     targetWindow.titleRef,
     targetWindow.frontmostRef,
     fileRef(input.selectedFileRef) ? input.selectedFileRef : undefined,
-    input.riskActionHash,
-    input.confirmationRef,
+    riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
+    approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
     observation.windowRef,
     observation.observationRef,

@@ -304,6 +304,54 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.equal(approvalWithoutRiskHash.action, undefined);
   assert.ok(approvalWithoutRiskHash.refs.includes('approval:save-current-file:paper:confirmed'));
 
+  const rawApprovalWithoutRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-raw-approval',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    confirmationRef: 'approval:/Users/example/paper.md:confirmed',
+  });
+
+  assert.equal(rawApprovalWithoutRiskHash.status, 'blocked');
+  assert.equal(rawApprovalWithoutRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
+  assert.equal(rawApprovalWithoutRiskHash.primitive, undefined);
+  assert.equal(rawApprovalWithoutRiskHash.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawApprovalWithoutRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
+
+  const rawRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-raw-risk',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'save /Users/example/paper.md',
+  });
+
+  assert.equal(rawRiskHash.status, 'blocked');
+  assert.equal(rawRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
+  assert.equal(rawRiskHash.primitive, undefined);
+  assert.equal(rawRiskHash.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
+
+  const prefixedRawPathRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-prefixed-raw-risk',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'risk:/Users/example/paper.md',
+  });
+
+  assert.equal(prefixedRawPathRiskHash.status, 'blocked');
+  assert.equal(prefixedRawPathRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
+  assert.equal(prefixedRawPathRiskHash.primitive, undefined);
+  assert.equal(prefixedRawPathRiskHash.action, undefined);
+  assert.doesNotMatch(JSON.stringify(prefixedRawPathRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
+
   const approvalWithEmbeddedRiskHash = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-approval-embedded-risk',
     operation: 'save-current-file',

@@ -681,6 +681,68 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(approvalWithoutRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
   assert.ok((approvalWithoutRiskDone?.evidenceRefs as string[]).includes('approval:save-current-file:paper:confirmed'));
 
+  const rawRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-raw-risk',
+      attemptId: 'native-route-vscode-cowork-save-raw-risk-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-raw-risk',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'save /Users/example/paper.md',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const rawRiskDone = rawRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawRiskUnit = (rawRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(rawRiskDone?.status, 'blocked');
+  assert.equal(rawRiskUnit?.primitive, undefined);
+  assert.equal(rawRiskUnit?.action, undefined);
+  assert.equal(rawRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
+  assert.doesNotMatch(JSON.stringify(rawRiskEvents), /\/Users\/example\/paper\.md|paper\.md|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
+  const prefixedRawRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-prefixed-raw-risk',
+      attemptId: 'native-route-vscode-cowork-save-prefixed-raw-risk-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-prefixed-raw-risk',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:/Users/example/paper.md',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const prefixedRawRiskDone = prefixedRawRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const prefixedRawRiskUnit = (prefixedRawRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(prefixedRawRiskDone?.status, 'blocked');
+  assert.equal(prefixedRawRiskUnit?.primitive, undefined);
+  assert.equal(prefixedRawRiskUnit?.action, undefined);
+  assert.equal(prefixedRawRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
+  assert.doesNotMatch(JSON.stringify(prefixedRawRiskEvents), /\/Users\/example\/paper\.md|paper\.md|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
   const embeddedRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '保存我当前打开的 VSCode 文件。',

@@ -99,8 +99,8 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     selectedFileRef: safeRuntimeRef(value.selectedFileRef, ['file-ref:']),
     latestObservation: sanitizeObservation(value.latestObservation),
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
-    riskActionHash: safeRuntimeString(value.riskActionHash),
-    confirmationRef: safeRuntimeString(value.confirmationRef),
+    riskActionHash: safeRuntimeRef(value.riskActionHash, ['risk:']),
+    confirmationRef: safeRuntimeRef(value.confirmationRef, ['approval:']),
   };
 }
 
