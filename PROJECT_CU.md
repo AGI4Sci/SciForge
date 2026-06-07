@@ -299,6 +299,8 @@ Acceptance Gates：
 
 本轮补充：Host-side controller 和 native-route bridge 现在也把目标文件不明确作为 fail-closed 条件。对于 `insert-draft`、`save-current-file`、`bulk-replace`、`cross-file-modify` 和 `undo-last-action`，如果 current observe refs / window refs 中出现多个 visible file refs 且 Host 没有提供 selectedFileRef，则返回 `needs-confirmation`，不返回 primitive/action，并保留 candidate file refs。Host 提供的 selectedFileRef 必须来自当前 refs；即使当前只看到一个 visible file ref，selectedFileRef 不匹配也会 blocked。
 
+本轮补充：`read-visible-text` 已作为 refs-only co-work 能力接入。Host 提供 fresh observe refs 后，controller/native route 返回 `ready` + `primitive=observe`，只保留 observation/text/AX refs，不返回 `act` action、不嵌入 visible text 原文，也不触发用户 VSCode 输入或文件修改。
+
 本轮补充：真实文件保存的 route-level approval chain 也改为 refs-first。未确认的 `save-current-file` 在 native route 上保持 `needs-confirmation`，不返回 primitive/action，并把 `riskActionHash` 放进 evidenceRefs；如果 Host 只提供 approvalRef 但没有先提供 `riskActionHash`，route 会 `blocked`，不返回 primitive/action；只有带 matching confirmationRef 的保存才返回一个 Host 指定的 `app_command save` 原子 `act`，并把 `riskActionHash` 与 `approvalRef` 都保留到 evidenceRefs / execution unit。
 
 本轮补充：新增 P9 co-work live acceptance manifest validator。一个 passed manifest 必须保持 `live-diagnostic` / `productReady=false`，记录 `bind -> observe -> act -> observe -> control(release)`，保留 bind / before observe / Host decision / act / after observe / control refs，包含 screenshot / AX / text refs，释放 input lease / cursor / adapter，恢复 front app 和 mouse position，并禁止杀用户 VSCode 或清 profile；真实文件操作还必须带 riskActionHash 与 approvalRef evidence refs。validator 会在所有 evidence group 拒绝 rawScreenshot、providerPayload、data URL、base64、URL、token/password/secret-like 值，只允许 refs-first 证据进入 live manifest。

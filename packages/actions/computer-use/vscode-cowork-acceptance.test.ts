@@ -189,6 +189,25 @@ test('Host-side VSCode co-work chooses the next primitive only from fresh observ
   assert.doesNotMatch(JSON.stringify(decision), /visibleText|rawScreenshot|base64|task|goal|planner/i);
 });
 
+test('Host-side VSCode co-work exposes visible text as refs-only observe decision', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:read-visible-text',
+    operation: 'read-visible-text',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(decision.status, 'ready');
+  assert.equal(decision.primitive, 'observe');
+  assert.equal(decision.action, undefined);
+  assert.equal(decision.targetWindowRef, 'window:vscode:paper');
+  assert.ok(decision.refs.includes('observation:vscode:current'));
+  assert.ok(decision.refs.includes('text:vscode:visible'));
+  assert.ok(decision.refs.includes('accessibility:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(decision), /visibleText|rawScreenshot|base64|task|goal|planner/i);
+});
+
 test('Host-side VSCode co-work requires confirmation before real-file save, bulk replace, or cross-file modification', () => {
   for (const operation of ['save-current-file', 'bulk-replace', 'cross-file-modify'] as const) {
     const decision = decideVSCodeCoWorkNextPrimitive({

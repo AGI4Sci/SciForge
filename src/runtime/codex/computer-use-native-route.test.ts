@@ -381,6 +381,41 @@ test('Computer Use native route blocks stale VSCode selected file refs', async (
   assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route returns refs-only observe decision for VSCode visible text reads', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      commandId: 'native-route-vscode-cowork-read-visible-text',
+      attemptId: 'native-route-vscode-cowork-read-visible-text-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:read-visible-text',
+        operation: 'read-visible-text',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'ready');
+  assert.equal(unit?.primitive, 'observe');
+  assert.equal(unit?.action, undefined);
+  assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
+  assert.ok((done?.evidenceRefs as string[]).includes('text:vscode:visible'));
+  assert.doesNotMatch(JSON.stringify(events), /visible text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route keeps VSCode real-file save blocked until matching approval refs are present', async () => {
   const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({

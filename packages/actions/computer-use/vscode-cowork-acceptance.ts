@@ -230,6 +230,15 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
     };
   }
 
+  if (input.operation === 'read-visible-text') {
+    return {
+      ...decisionBase('ready', refsForTargetAndObservation(input, targetWindow, observation)),
+      targetWindowRef,
+      primitive: 'observe',
+      repairHints: [],
+    };
+  }
+
   const action = actionForOperation(input, observation);
   if (!action) {
     return blocked(input, `vscode_cowork_unsupported_operation:${input.operation}`, refsForTargetAndObservation(input, targetWindow, observation), [{
