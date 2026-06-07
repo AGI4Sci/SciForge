@@ -1273,6 +1273,20 @@ test('VSCode co-work live manifest requires action refs to bind released input r
   }
 });
 
+test('VSCode co-work live manifest requires action refs to bind the active session', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      actionRefs: base.evidence.actionRefs.filter((ref) => !ref.startsWith('window-action-session:')),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-action-ref:session'));
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1343,6 +1357,7 @@ function vscodeCoWorkLiveManifest() {
       ],
       actionRefs: [
         'action:vscode-cowork:save',
+        'window-action-session:vscode-cowork:1',
         'executor-event:vscode-cowork:save',
         'input-event:vscode-cowork:save',
         'input-adapter:vscode-cowork:1',

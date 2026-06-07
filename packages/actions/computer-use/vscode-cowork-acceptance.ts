@@ -411,6 +411,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(riskActionHashRef)) issues.push('missing-host-decision-ref:risk-action-hash');
   if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(approvalRef)) issues.push('missing-host-decision-ref:approval');
   if (!manifest.evidence.actionRefs.some(actionRef)) issues.push('invalid-evidence-ref:act');
+  if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(actionRefs, manifest.evidence.bindRefs, sessionRef)) {
+    issues.push('missing-action-ref:session');
+  }
   if (!manifest.evidence.actionRefs.some(executorEventRef)) issues.push('missing-action-ref:executor-event');
   if (!manifest.evidence.actionRefs.some(inputEventRef)) issues.push('missing-action-ref:input-event');
   if (!manifest.evidence.actionRefs.some(inputAdapterRef)) issues.push('missing-action-ref:input-adapter');
