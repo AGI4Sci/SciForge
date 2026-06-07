@@ -1091,6 +1091,30 @@ test('VSCode co-work live manifest requires action input and stale invalidation 
   }
 });
 
+test('VSCode co-work live manifest requires before and after visual refs', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      screenshotRefs: ['observation:vscode:before'],
+      accessibilityRefs: ['image:vscode:after'],
+      textRefs: ['text:vscode:visible-before'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'invalid-evidence-ref:screenshot',
+    'missing-evidence-ref:before-after-screenshot',
+    'invalid-evidence-ref:accessibility',
+    'missing-evidence-ref:before-after-accessibility',
+    'missing-evidence-ref:before-after-text',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1150,7 +1174,7 @@ function vscodeCoWorkLiveManifest() {
       controlRefs: ['control:vscode-cowork:release'],
       screenshotRefs: ['image:vscode:before', 'image:vscode:after'],
       accessibilityRefs: ['accessibility:vscode:before', 'accessibility:vscode:after'],
-      textRefs: ['text:vscode:visible'],
+      textRefs: ['text:vscode:visible-before', 'text:vscode:visible-after'],
       approvalRefs: [
         'risk:save-current-file:paper',
         'approval:risk:save-current-file:paper:confirmed',

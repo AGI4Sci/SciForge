@@ -371,6 +371,15 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.screenshotRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:screenshot');
   if (!manifest.evidence.accessibilityRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:accessibility');
   if (!manifest.evidence.textRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:text');
+  const screenshotRefs = manifest.evidence.screenshotRefs.filter(imageRef);
+  const accessibilityRefs = manifest.evidence.accessibilityRefs.filter(accessibilityRef);
+  const textRefs = manifest.evidence.textRefs.filter(textRef);
+  if (screenshotRefs.length === 0) issues.push('invalid-evidence-ref:screenshot');
+  if (screenshotRefs.length < 2) issues.push('missing-evidence-ref:before-after-screenshot');
+  if (accessibilityRefs.length === 0) issues.push('invalid-evidence-ref:accessibility');
+  if (accessibilityRefs.length < 2) issues.push('missing-evidence-ref:before-after-accessibility');
+  if (textRefs.length === 0) issues.push('invalid-evidence-ref:text');
+  if (textRefs.length < 2) issues.push('missing-evidence-ref:before-after-text');
   if (!manifest.evidence.beforeObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:before-observe');
   if (!manifest.evidence.hostDecisionRefs.some(hostDecisionRef)) issues.push('invalid-evidence-ref:host-decision');
   if (!manifest.evidence.actionRefs.some(actionRef)) issues.push('invalid-evidence-ref:act');
