@@ -272,6 +272,8 @@ export function validateVSCodeCoWorkRunCleanup(manifest: VSCodeCoWorkCleanupMani
 
   if (manifest.maturity !== 'live-diagnostic') issues.push('vscode-cowork-capability-must-remain-live-diagnostic');
   if (manifest.productReady !== false) issues.push('vscode-cowork-must-not-claim-product-ready');
+  if (manifest.userProfileUsed !== true) issues.push('vscode-cowork-user-profile-must-be-marked-used');
+  if (manifest.sharedSystemInputUsed !== true) issues.push('vscode-cowork-shared-system-input-impact-required');
   if (!hasRefPrefix(releaseRefs, 'scoped-input-lease:')) issues.push('missing-release-ref:scoped-input-lease');
   if (!hasRefPrefix(releaseRefs, 'input-adapter:')) issues.push('missing-release-ref:input-adapter');
   if (!releaseRefs.some((ref) => ref.startsWith('cursor-marker:') || ref.startsWith('cursor:'))) issues.push('missing-release-ref:cursor-marker');
@@ -302,6 +304,8 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (manifest.status !== 'passed') issues.push('vscode-cowork-live-acceptance-not-passed');
   if (manifest.maturity !== 'live-diagnostic') issues.push('vscode-cowork-capability-must-remain-live-diagnostic');
   if (manifest.productReady !== false) issues.push('vscode-cowork-must-not-claim-product-ready');
+  if (manifest.userProfileUsed !== true) issues.push('vscode-cowork-user-profile-must-be-marked-used');
+  if (manifest.sharedSystemInputUsed !== true) issues.push('vscode-cowork-shared-system-input-impact-required');
   if (!primitiveChainMatches(manifest.primitiveChainObserved)) issues.push('vscode-cowork-live-primitive-chain-incomplete');
   if (!nonEmptyString(manifest.target.windowRef)) issues.push('missing-target-ref:window');
   if (!manifest.evidence.bindRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:bind');

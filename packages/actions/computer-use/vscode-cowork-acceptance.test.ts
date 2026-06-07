@@ -335,6 +335,53 @@ test('VSCode co-work cleanup validation requires release refs and focus/mouse re
   ]);
 });
 
+test('VSCode co-work validators require explicit user profile and shared input markers', () => {
+  const cleanup = validateVSCodeCoWorkRunCleanup({
+    maturity: 'live-diagnostic',
+    productReady: false,
+    userProfileUsed: false,
+    sharedSystemInputUsed: false,
+    evidence: {
+      releaseRefs: [
+        'scoped-input-lease:vscode-cowork:1',
+        'input-adapter:vscode-cowork:1',
+        'cursor-marker:vscode-cowork:1',
+      ],
+      restorationRefs: [
+        'front-app-restore:vscode-cowork:1',
+        'mouse-position-restore:vscode-cowork:1',
+      ],
+    },
+    cleanup: {
+      inputLeaseReleased: true,
+      cursorReleased: true,
+      adapterReleased: true,
+      frontAppRestored: true,
+      mousePositionRestored: true,
+      userVSCodeProcessKilled: false,
+      userProfileCleared: false,
+    },
+  });
+
+  assert.equal(cleanup.ok, false);
+  assert.deepEqual(cleanup.issues, [
+    'vscode-cowork-user-profile-must-be-marked-used',
+    'vscode-cowork-shared-system-input-impact-required',
+  ]);
+
+  const live = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...vscodeCoWorkLiveManifest(),
+    userProfileUsed: false,
+    sharedSystemInputUsed: false,
+  });
+
+  assert.equal(live.ok, false);
+  assert.deepEqual(live.issues, [
+    'vscode-cowork-user-profile-must-be-marked-used',
+    'vscode-cowork-shared-system-input-impact-required',
+  ]);
+});
+
 test('VSCode co-work live manifest requires primitive chain, cleanup, restoration, and approval refs', () => {
   const passed = validateVSCodeCoWorkLiveAcceptanceManifest(vscodeCoWorkLiveManifest());
 
