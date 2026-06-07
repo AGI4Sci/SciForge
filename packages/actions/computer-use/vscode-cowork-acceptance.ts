@@ -390,6 +390,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (textRefs.length === 0) issues.push('invalid-evidence-ref:text');
   if (textRefs.length < 2) issues.push('missing-evidence-ref:before-after-text');
   if (!manifest.evidence.beforeObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:before-observe');
+  if (!manifest.evidence.beforeObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-before-observe-ref:target-window');
   if (!manifest.evidence.beforeObservationRefs.some(freshnessRef)) issues.push('missing-evidence-ref:before-freshness');
   if (!refsContainBoundRef(beforeObservationRefs, screenshotRefs, imageRef)) issues.push('missing-before-observe-ref:screenshot');
   if (!refsContainBoundRef(beforeObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-before-observe-ref:accessibility');

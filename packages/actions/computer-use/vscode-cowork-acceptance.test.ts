@@ -1142,6 +1142,26 @@ test('VSCode co-work live manifest binds visual refs to before and after observe
   }
 });
 
+test('VSCode co-work live manifest requires before observe refs to bind the target window', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      beforeObservationRefs: [
+        'observation:vscode:before',
+        'freshness:vscode:before',
+        'image:vscode:before',
+        'accessibility:vscode:before',
+        'text:vscode:visible-before',
+      ],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-before-observe-ref:target-window'));
+});
+
 test('VSCode co-work live manifest requires refs-first bind target evidence', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1277,6 +1297,7 @@ function vscodeCoWorkLiveManifest() {
       ],
       beforeObservationRefs: [
         'observation:vscode:before',
+        'window:vscode:paper',
         'freshness:vscode:before',
         'image:vscode:before',
         'accessibility:vscode:before',
