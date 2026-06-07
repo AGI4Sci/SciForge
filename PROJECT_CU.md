@@ -301,6 +301,8 @@ Acceptance Gates：
 
 本轮补充：native-route bridge 现在不会把 raw selected target refs 静默丢成“未选择”。如果 Host 提供 raw VSCode window title 作为 selectedWindowRef，或 raw path / 裸文件名作为 selectedFileRef，即使当前只有一个合法 window/file 候选，也会返回 `blocked` / `vscode_cowork_selected_window_ref_invalid` 或 `vscode_cowork_selected_file_ref_invalid`，并只保留 requestRef 与当前合法候选 refs；不能自动选择唯一候选继续执行。
 
+本轮补充：Host-side controller 和 native-route bridge 现在也拒绝“合法 refs + raw payload”混用的 observe evidence。`textRefs` / `elementRefs` 中混入 raw visible text、raw AX/element label，或 current window / observe 的 visible file refs 中同时出现 `file-ref:` 与 raw path / 裸文件名时，会返回 `blocked` / `vscode_cowork_observe_refs_invalid` 或 `vscode_cowork_visible_file_refs_invalid`，不返回 primitive/action，并且 public events / decision refs 只保留 tokenized refs。纯 raw file target 仍按“没有 refs-first file refs”或“selectedFileRef 非法”处理，不能靠 sanitizer 静默丢弃 raw 后继续执行。
+
 本轮补充：`insert-draft` 的文本输入也被收紧为 refs-first。Host 必须提供当前 run 生成的 `text-ref:` 形态 `draftTextRef`，controller/native route 才会返回 `type` 原子 `act`；缺少 `draftTextRef` 或把 raw draft body 塞进该字段时返回 `blocked` / `vscode_cowork_draft_text_ref_required`，不返回可执行 action，也不允许把 raw draft text、clipboard payload 或 provider payload 嵌入 Computer Use decision。
 
 本轮补充：`read-visible-text` 已作为 refs-only co-work 能力接入。Host 提供 fresh observe refs 后，controller/native route 返回 `ready` + `primitive=observe`，只保留 observation/text/AX refs，不返回 `act` action、不嵌入 visible text 原文，也不触发用户 VSCode 输入或文件修改。
@@ -313,7 +315,7 @@ Acceptance Gates：
 
 本轮补充：P9 cleanup / live manifest validator 现在会 fail closed 校验用户 profile 与共享系统输入标记。manifest 若没有明确 `userProfileUsed=true` 或 `sharedSystemInputUsed=true`，即使 release refs、restoration refs 和 cleanup flags 都完整，也会返回 validation issue；这防止复用用户 VSCode profile / 共享键鼠输入的诊断路径被误写成 profile-isolated 或 product-ready 证据。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、real-file risk/approval refs gate 和 live-manifest validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、real-file risk/approval refs gate 和 live-manifest validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
 
 ## P10：论文修改 / 润色 GUI 协作
 

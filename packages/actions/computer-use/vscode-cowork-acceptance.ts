@@ -53,6 +53,7 @@ export interface VSCodeCoWorkWindowCandidate {
   titleRef?: string;
   frontmostRef?: string;
   visibleFileRefs?: string[];
+  invalidVisibleFileRefCount?: number;
 }
 
 export interface VSCodeCoWorkObservationRefs {
@@ -66,6 +67,8 @@ export interface VSCodeCoWorkObservationRefs {
   stale?: boolean;
   editorVisible?: boolean;
   visibleFileRefs?: string[];
+  invalidObservationRefCount?: number;
+  invalidVisibleFileRefCount?: number;
   userFile?: boolean;
 }
 
@@ -381,12 +384,26 @@ function observationRefsBlock(
     processRef(targetWindow.processRef) ? targetWindow.processRef : undefined,
     titleRef(targetWindow.titleRef) ? targetWindow.titleRef : undefined,
     frontmostRef(targetWindow.frontmostRef) ? targetWindow.frontmostRef : undefined,
-    ...(targetWindow.visibleFileRefs ?? []),
+    ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
   ]);
   if (!observation || observation.windowRef !== targetWindowRef || !hasCompleteObservationRefs(observation)) {
     return blocked(input, 'vscode_cowork_observe_refs_required', targetRefs, [{
       code: 'observe-selected-window',
       message: 'Host must call observe on the selected VSCode window and use current screenshot, AX, text, element, and freshness refs before choosing an action.',
+      suggestedPrimitive: 'observe',
+    }]);
+  }
+  if (invalidObservationRefCount(observation) > 0) {
+    return blocked(input, 'vscode_cowork_observe_refs_invalid', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'refresh-observe-refs',
+      message: 'Host must provide refs-first observation, text, and element refs only; raw observation payloads must not be dropped and ignored.',
+      suggestedPrimitive: 'observe',
+    }]);
+  }
+  if (invalidVisibleFileRefCount(targetWindow, observation) > 0) {
+    return blocked(input, 'vscode_cowork_visible_file_refs_invalid', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'refresh-visible-file-refs',
+      message: 'Visible VSCode file targets must be refs-first file-ref entries only; raw paths or titles must not be dropped and ignored.',
       suggestedPrimitive: 'observe',
     }]);
   }
@@ -681,6 +698,34 @@ function hasCompleteObservationRefs(observation: VSCodeCoWorkObservationRefs): b
     && freshnessRef(observation.freshnessRef)
     && observation.textRefs.some(textRef)
     && observation.elementRefs.some(elementRef);
+}
+
+function invalidObservationRefCount(observation: VSCodeCoWorkObservationRefs): number {
+  return (observation.invalidObservationRefCount ?? 0)
+    + invalidRefListItemCount(observation.textRefs, textRef)
+    + invalidRefListItemCount(observation.elementRefs, elementRef);
+}
+
+function invalidVisibleFileRefCount(
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): number {
+  const visibleFileRefs = [
+    ...(targetWindow.visibleFileRefs ?? []),
+    ...(observation.visibleFileRefs ?? []),
+  ];
+  if (!visibleFileRefs.some(fileRef)) return 0;
+  return (targetWindow.invalidVisibleFileRefCount ?? 0)
+    + (observation.invalidVisibleFileRefCount ?? 0)
+    + invalidRefListItemCount(targetWindow.visibleFileRefs, fileRef)
+    + invalidRefListItemCount(observation.visibleFileRefs, fileRef);
+}
+
+function invalidRefListItemCount(
+  values: readonly unknown[] | undefined,
+  predicate: (value: unknown) => value is string,
+): number {
+  return (values ?? []).filter((value) => !predicate(value)).length;
 }
 
 function editorOperation(operation: VSCodeCoWorkOperation): boolean {

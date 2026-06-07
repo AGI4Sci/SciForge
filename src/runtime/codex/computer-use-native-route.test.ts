@@ -550,6 +550,44 @@ test('Computer Use native route requires confirmation when VSCode target file is
   assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route blocks mixed raw and refs-first VSCode observe refs', async () => {
+  const events = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '操作我已经打开的 VSCode，聚焦编辑器。',
+      commandId: 'native-route-vscode-cowork-mixed-observe-refs',
+      attemptId: 'native-route-vscode-cowork-mixed-observe-refs-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:mixed-observe-refs',
+        operation: 'focus-editor',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: {
+          ...vscodeNativeRouteObservation(),
+          textRefs: ['text:vscode:visible', 'paper.md raw visible text'],
+          elementRefs: ['element:vscode:editor', 'raw editor element'],
+        },
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_observe_refs_invalid');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
+  assert.ok((done?.evidenceRefs as string[]).includes('text:vscode:visible'));
+  assert.doesNotMatch(JSON.stringify(events), /paper\.md raw visible text|raw editor element|product-ready/i);
+});
+
 test('Computer Use native route blocks stale VSCode selected file refs', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -588,6 +626,45 @@ test('Computer Use native route blocks stale VSCode selected file refs', async (
   assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
   assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:notes'));
   assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
+test('Computer Use native route blocks mixed raw and refs-first VSCode visible file refs', async () => {
+  const events = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '在我已经打开的 VSCode 里插入这段草稿。',
+      commandId: 'native-route-vscode-cowork-mixed-visible-file-refs',
+      attemptId: 'native-route-vscode-cowork-mixed-visible-file-refs-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:mixed-visible-file-refs',
+        operation: 'insert-draft',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          {
+            ...vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+            visibleFileRefs: ['file-ref:vscode:paper', '/Users/example/paper.md'],
+          },
+        ],
+        latestObservation: vscodeNativeRouteObservation({
+          visibleFileRefs: ['file-ref:vscode:paper', 'Paper.md'],
+        }),
+        draftTextRef: 'text-ref:vscode:draft',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_visible_file_refs_invalid');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(events), /\/Users\/example\/paper\.md|Paper\.md|paper\.md|product-ready/i);
 });
 
 test('Computer Use native route blocks VSCode file targets that are raw paths instead of refs', async () => {

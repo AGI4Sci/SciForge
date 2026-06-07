@@ -228,6 +228,28 @@ test('Host-side VSCode co-work blocks stale or incomplete observe refs before se
   assert.equal(editorHidden.action, undefined);
 });
 
+test('Host-side VSCode co-work blocks mixed raw and refs-first observe refs', () => {
+  const mixedObservation = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:mixed-observe-refs',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      textRefs: ['text:vscode:visible', 'paper.md raw visible text'],
+      elementRefs: ['element:vscode:editor', 'raw editor element'],
+    },
+  });
+
+  assert.equal(mixedObservation.status, 'blocked');
+  assert.equal(mixedObservation.blockedReason, 'vscode_cowork_observe_refs_invalid');
+  assert.equal(mixedObservation.primitive, undefined);
+  assert.equal(mixedObservation.action, undefined);
+  assert.ok(mixedObservation.refs.includes('observation:vscode:current'));
+  assert.ok(mixedObservation.refs.includes('text:vscode:visible'));
+  assert.doesNotMatch(JSON.stringify(mixedObservation), /paper\.md raw visible text|raw editor element/);
+});
+
 test('Host-side VSCode co-work asks for confirmation when the target file is ambiguous', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:ambiguous-file',
@@ -248,6 +270,30 @@ test('Host-side VSCode co-work asks for confirmation when the target file is amb
   assert.deepEqual(decision.confirmation?.candidateFileRefs, ['file-ref:vscode:paper', 'file-ref:vscode:notes']);
   assert.ok(decision.refs.includes('file-ref:vscode:paper'));
   assert.ok(decision.refs.includes('file-ref:vscode:notes'));
+});
+
+test('Host-side VSCode co-work blocks mixed raw and refs-first visible file refs', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:mixed-visible-file-refs',
+    operation: 'insert-draft',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [{
+      ...vscodeWindow({ windowRef: 'window:vscode:paper' }),
+      visibleFileRefs: ['file-ref:vscode:paper', '/Users/example/paper.md'],
+    }],
+    latestObservation: {
+      ...freshObservation(),
+      visibleFileRefs: ['file-ref:vscode:paper', 'Paper.md'],
+    },
+    draftTextRef: 'text-ref:vscode:draft',
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.blockedReason, 'vscode_cowork_visible_file_refs_invalid');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.ok(decision.refs.includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(decision), /\/Users\/example\/paper\.md|Paper\.md|paper\.md/);
 });
 
 test('Host-side VSCode co-work blocks file-target operations without refs-first file refs', () => {

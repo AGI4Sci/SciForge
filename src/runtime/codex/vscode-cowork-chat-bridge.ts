@@ -39,6 +39,11 @@ const SUPPORTED_OPERATIONS = new Set<VSCodeCoWorkOperation>([
   'undo-last-action',
 ]);
 
+interface SanitizedRuntimeRefList {
+  refs?: string[];
+  invalidCount: number;
+}
+
 export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput): VSCodeCoWorkChatBridge | undefined {
   const runtimeIntent = isRecord(input.runtimeIntent) ? input.runtimeIntent : undefined;
   if (!isVSCodeCoWorkTask(runtimeIntent)) return undefined;
@@ -140,6 +145,7 @@ function sanitizeWindowCandidates(value: unknown): {
     const processRef = safeRuntimeRef(item.processRef, ['process:']);
     const titleRef = safeRuntimeRef(item.titleRef, ['text:', 'window:']);
     const frontmostRef = safeRuntimeRef(item.frontmostRef, ['frontmost:', 'window:']);
+    const visibleFileRefs = sanitizeRuntimeRefList(item.visibleFileRefs, ['file-ref:']);
     const optionalRefInvalid =
       (item.processRef !== undefined && !processRef)
       || (item.titleRef !== undefined && !titleRef)
@@ -154,7 +160,8 @@ function sanitizeWindowCandidates(value: unknown): {
       processRef,
       titleRef,
       frontmostRef,
-      visibleFileRefs: safeRuntimeRefList(item.visibleFileRefs, ['file-ref:']),
+      visibleFileRefs: visibleFileRefs.refs,
+      invalidVisibleFileRefCount: visibleFileRefs.invalidCount,
     });
   }
   return { candidates, invalidCount };
@@ -164,17 +171,22 @@ function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | unde
   if (!isRecord(value)) return undefined;
   const windowRef = safeRuntimeRef(value.windowRef, ['window:']);
   if (!windowRef) return undefined;
+  const textRefs = sanitizeRuntimeRefList(value.textRefs, ['text:']);
+  const elementRefs = sanitizeRuntimeRefList(value.elementRefs, ['element:']);
+  const visibleFileRefs = sanitizeRuntimeRefList(value.visibleFileRefs, ['file-ref:']);
   return {
     windowRef,
     observationRef: safeRuntimeRef(value.observationRef, ['observation:']) ?? '',
     screenshotRef: safeRuntimeRef(value.screenshotRef, ['image:']) ?? '',
     accessibilityRef: safeRuntimeRef(value.accessibilityRef, ['accessibility:']) ?? '',
-    textRefs: safeRuntimeRefList(value.textRefs, ['text:']) ?? [],
-    elementRefs: safeRuntimeRefList(value.elementRefs, ['element:']) ?? [],
+    textRefs: textRefs.refs ?? [],
+    elementRefs: elementRefs.refs ?? [],
     freshnessRef: safeRuntimeRef(value.freshnessRef, ['freshness:']) ?? '',
     stale: booleanField(value.stale),
     editorVisible: booleanField(value.editorVisible),
-    visibleFileRefs: safeRuntimeRefList(value.visibleFileRefs, ['file-ref:']),
+    visibleFileRefs: visibleFileRefs.refs,
+    invalidObservationRefCount: textRefs.invalidCount + elementRefs.invalidCount,
+    invalidVisibleFileRefCount: visibleFileRefs.invalidCount,
     userFile: booleanField(value.userFile),
   };
 }
@@ -190,10 +202,23 @@ function safeRuntimeStringList(value: unknown): string[] | undefined {
   return refs.length ? refs : undefined;
 }
 
-function safeRuntimeRefList(value: unknown, prefixes: string[]): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const refs = [...new Set(value.map((item) => safeRuntimeRef(item, prefixes)).filter(nonEmptyString))];
-  return refs.length ? refs : undefined;
+function sanitizeRuntimeRefList(value: unknown, prefixes: string[]): SanitizedRuntimeRefList {
+  if (!Array.isArray(value)) return { invalidCount: 0 };
+  const refs: string[] = [];
+  let invalidCount = 0;
+  for (const item of value) {
+    const ref = safeRuntimeRef(item, prefixes);
+    if (ref) {
+      refs.push(ref);
+    } else {
+      invalidCount += 1;
+    }
+  }
+  const uniqueRefs = [...new Set(refs)];
+  return {
+    refs: uniqueRefs.length ? uniqueRefs : undefined,
+    invalidCount,
+  };
 }
 
 function safeRuntimeString(value: unknown): string | undefined {
