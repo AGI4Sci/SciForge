@@ -158,6 +158,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 live manifest 的 act evidence 还必须直接绑定同一个 target `window:` ref。active session 和 editor element ref 仍会保留，但 manifest 不能只靠间接关系证明实际 act 没有漂移到其它 VSCode 窗口；该检查继续属于 refs-first acceptance evidence，不给 Computer Use core 增加窗口选择或 task planning 权限。
 
+补充：P9 file-target live manifest 的 act evidence 还必须直接绑定同一个 selected `file-ref:`。Host decision 绑定文件目标仍然保留，但 actual act evidence 不能只靠 decision 间接证明目标文件；该检查属于 refs-first acceptance evidence，不让 Computer Use core 选择文件或做 task planning。
+
 ## 职责边界
 
 ```text
