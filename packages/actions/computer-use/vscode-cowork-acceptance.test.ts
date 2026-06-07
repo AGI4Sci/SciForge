@@ -1439,6 +1439,20 @@ test('VSCode co-work live manifest requires after observe refs to bind target wi
   assert.ok(failed.issues.includes('missing-after-observe-ref:freshness'));
 });
 
+test('VSCode co-work live manifest requires after observe refs to bind the editor element target', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      afterObservationRefs: base.evidence.afterObservationRefs.filter((ref) => !ref.startsWith('element:')),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-after-observe-ref:editor-element'));
+});
+
 test('VSCode co-work live manifest requires control refs to bind release and restoration evidence', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1614,6 +1628,7 @@ function vscodeCoWorkLiveManifest() {
         'window-action-session:vscode-cowork:1',
         'window:vscode:paper',
         'freshness:vscode:after',
+        'element:vscode:editor',
         'image:vscode:after',
         'accessibility:vscode:after',
         'text:vscode:visible-after',

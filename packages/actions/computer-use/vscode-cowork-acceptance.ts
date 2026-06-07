@@ -434,6 +434,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   const beforeObservationRefs = manifest.evidence.beforeObservationRefs;
   const afterObservationRefs = manifest.evidence.afterObservationRefs;
   const beforeEditorElementRefs = beforeObservationRefs.filter(editorElementEvidenceRef);
+  const afterEditorElementRefs = afterObservationRefs.filter(editorElementEvidenceRef);
   if (screenshotRefs.length === 0) issues.push('invalid-evidence-ref:screenshot');
   if (screenshotRefs.length < 2) issues.push('missing-evidence-ref:before-after-screenshot');
   if (accessibilityRefs.length === 0) issues.push('invalid-evidence-ref:accessibility');
@@ -499,6 +500,11 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.afterObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:after-observe');
   if (!manifest.evidence.afterObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-after-observe-ref:target-window');
   if (!manifest.evidence.afterObservationRefs.some(freshnessRef)) issues.push('missing-after-observe-ref:freshness');
+  if (afterEditorElementRefs.length === 0) {
+    issues.push('missing-after-observe-ref:editor-element');
+  } else if (beforeEditorElementRefs.length > 0 && !refsContainBoundRef(afterEditorElementRefs, beforeEditorElementRefs, editorElementEvidenceRef)) {
+    issues.push('missing-after-observe-ref:editor-element');
+  }
   if (!refsContainBoundRef(afterObservationRefs, screenshotRefs, imageRef)) issues.push('missing-after-observe-ref:screenshot');
   if (!refsContainBoundRef(afterObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-after-observe-ref:accessibility');
   if (!refsContainBoundRef(afterObservationRefs, textRefs, textRef)) issues.push('missing-after-observe-ref:text');
