@@ -164,8 +164,9 @@ export interface VSCodeCoWorkLiveAcceptanceManifest {
 }
 
 export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput): VSCodeCoWorkDecision {
-  const requestRefs = uniqueStrings([input.requestRef]);
-  const candidateRefs = input.windowCandidates.map((candidate) => candidate.windowRef).filter(nonEmptyString);
+  const requestRefs = uniqueStrings([requestRef(input.requestRef) ? input.requestRef : undefined]);
+  const validWindowCandidates = input.windowCandidates.filter(windowCandidateRefSafe);
+  const candidateRefs = validWindowCandidates.map((candidate) => candidate.windowRef).filter(windowRef);
 
   if (candidateRefs.length === 0) {
     return blocked(input, 'vscode_cowork_no_window_candidates', requestRefs, [{
@@ -193,7 +194,7 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   }
 
   const targetWindowRef = input.selectedWindowRef ?? candidateRefs[0];
-  const targetWindow = input.windowCandidates.find((candidate) => candidate.windowRef === targetWindowRef);
+  const targetWindow = validWindowCandidates.find((candidate) => candidate.windowRef === targetWindowRef);
   if (!targetWindow || !targetWindowRef) {
     return blocked(input, 'vscode_cowork_selected_window_not_found', uniqueStrings([...requestRefs, ...candidateRefs]), [{
       code: 'refresh-window-candidates',
@@ -350,12 +351,12 @@ function observationRefsBlock(
 ): VSCodeCoWorkDecision | undefined {
   const observation = input.latestObservation;
   const targetRefs = uniqueStrings([
-    input.requestRef,
-    targetWindow.windowRef,
-    targetWindow.appRef,
-    targetWindow.processRef,
-    targetWindow.titleRef,
-    targetWindow.frontmostRef,
+    requestRef(input.requestRef) ? input.requestRef : undefined,
+    windowRef(targetWindow.windowRef) ? targetWindow.windowRef : undefined,
+    appRef(targetWindow.appRef) ? targetWindow.appRef : undefined,
+    processRef(targetWindow.processRef) ? targetWindow.processRef : undefined,
+    titleRef(targetWindow.titleRef) ? targetWindow.titleRef : undefined,
+    frontmostRef(targetWindow.frontmostRef) ? targetWindow.frontmostRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []),
   ]);
   if (!observation || observation.windowRef !== targetWindowRef || !hasCompleteObservationRefs(observation)) {
@@ -479,7 +480,8 @@ function actionForOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
 ): ComputerUseAtomicAction | undefined {
-  const editorElementRef = observation.elementRefs.find((ref) => /editor/i.test(ref)) ?? observation.elementRefs[0];
+  const observedElementRefs = observation.elementRefs.filter(elementRef);
+  const editorElementRef = observedElementRefs.find((ref) => /editor/i.test(ref)) ?? observedElementRefs[0];
   if (input.operation === 'focus-editor') {
     return {
       type: 'key',
@@ -523,11 +525,11 @@ function realFileChangeNeedsConfirmation(
 }
 
 function draftTextRef(value: unknown): value is string {
-  return typeof value === 'string' && /^text-ref:[^\s]+$/i.test(value.trim());
+  return structuredRef(value, ['text-ref:']);
 }
 
 function fileRef(value: unknown): value is string {
-  return typeof value === 'string' && /^file-ref:[^\s]+$/i.test(value.trim());
+  return structuredRef(value, ['file-ref:']);
 }
 
 function riskActionHashRef(value: unknown): value is string {
@@ -536,6 +538,69 @@ function riskActionHashRef(value: unknown): value is string {
 
 function approvalRef(value: unknown): value is string {
   return typeof value === 'string' && /^approval:[a-z0-9_-]+(?::[a-z0-9_-]+)*$/i.test(value.trim());
+}
+
+function requestRef(value: unknown): value is string {
+  return structuredRef(value, ['chat-request:']);
+}
+
+function appRef(value: unknown): value is string {
+  return structuredRef(value, ['macos-app:']);
+}
+
+function processRef(value: unknown): value is string {
+  return structuredRef(value, ['process:']);
+}
+
+function windowRef(value: unknown): value is string {
+  return structuredRef(value, ['window:']);
+}
+
+function titleRef(value: unknown): value is string {
+  return structuredRef(value, ['text:', 'window:']);
+}
+
+function frontmostRef(value: unknown): value is string {
+  return structuredRef(value, ['frontmost:', 'window:']);
+}
+
+function observationRef(value: unknown): value is string {
+  return structuredRef(value, ['observation:']);
+}
+
+function imageRef(value: unknown): value is string {
+  return structuredRef(value, ['image:']);
+}
+
+function accessibilityRef(value: unknown): value is string {
+  return structuredRef(value, ['accessibility:']);
+}
+
+function textRef(value: unknown): value is string {
+  return structuredRef(value, ['text:']);
+}
+
+function elementRef(value: unknown): value is string {
+  return structuredRef(value, ['element:']);
+}
+
+function freshnessRef(value: unknown): value is string {
+  return structuredRef(value, ['freshness:']);
+}
+
+function structuredRef(value: unknown, prefixes: string[]): value is string {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  return /^[a-z][a-z0-9_-]*:[^\s/\\]+$/i.test(text)
+    && prefixes.some((prefix) => text.startsWith(prefix));
+}
+
+function windowCandidateRefSafe(candidate: VSCodeCoWorkWindowCandidate): boolean {
+  return appRef(candidate.appRef)
+    && windowRef(candidate.windowRef)
+    && (candidate.processRef === undefined || processRef(candidate.processRef))
+    && (candidate.titleRef === undefined || titleRef(candidate.titleRef))
+    && (candidate.frontmostRef === undefined || frontmostRef(candidate.frontmostRef));
 }
 
 function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {
@@ -563,12 +628,12 @@ function fileTargetOperation(operation: VSCodeCoWorkOperation): boolean {
 }
 
 function hasCompleteObservationRefs(observation: VSCodeCoWorkObservationRefs): boolean {
-  return nonEmptyString(observation.observationRef)
-    && nonEmptyString(observation.screenshotRef)
-    && nonEmptyString(observation.accessibilityRef)
-    && nonEmptyString(observation.freshnessRef)
-    && observation.textRefs.some(nonEmptyString)
-    && observation.elementRefs.some(nonEmptyString);
+  return observationRef(observation.observationRef)
+    && imageRef(observation.screenshotRef)
+    && accessibilityRef(observation.accessibilityRef)
+    && freshnessRef(observation.freshnessRef)
+    && observation.textRefs.some(textRef)
+    && observation.elementRefs.some(elementRef);
 }
 
 function editorOperation(operation: VSCodeCoWorkOperation): boolean {
@@ -581,23 +646,23 @@ function refsForTargetAndObservation(
   observation: VSCodeCoWorkObservationRefs,
 ): string[] {
   return uniqueStrings([
-    input.requestRef,
-    targetWindow.windowRef,
-    targetWindow.appRef,
-    targetWindow.processRef,
-    targetWindow.titleRef,
-    targetWindow.frontmostRef,
+    requestRef(input.requestRef) ? input.requestRef : undefined,
+    windowRef(targetWindow.windowRef) ? targetWindow.windowRef : undefined,
+    appRef(targetWindow.appRef) ? targetWindow.appRef : undefined,
+    processRef(targetWindow.processRef) ? targetWindow.processRef : undefined,
+    titleRef(targetWindow.titleRef) ? targetWindow.titleRef : undefined,
+    frontmostRef(targetWindow.frontmostRef) ? targetWindow.frontmostRef : undefined,
     fileRef(input.selectedFileRef) ? input.selectedFileRef : undefined,
     riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
     approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
-    observation.windowRef,
-    observation.observationRef,
-    observation.screenshotRef,
-    observation.accessibilityRef,
-    observation.freshnessRef,
-    ...(observation.textRefs ?? []),
-    ...(observation.elementRefs ?? []),
+    windowRef(observation.windowRef) ? observation.windowRef : undefined,
+    observationRef(observation.observationRef) ? observation.observationRef : undefined,
+    imageRef(observation.screenshotRef) ? observation.screenshotRef : undefined,
+    accessibilityRef(observation.accessibilityRef) ? observation.accessibilityRef : undefined,
+    freshnessRef(observation.freshnessRef) ? observation.freshnessRef : undefined,
+    ...(observation.textRefs ?? []).filter(textRef),
+    ...(observation.elementRefs ?? []).filter(elementRef),
     ...(observation.visibleFileRefs ?? []).filter(fileRef),
   ]);
 }
@@ -609,7 +674,7 @@ function blocked(
   repairHints: VSCodeCoWorkDecision['repairHints'],
 ): VSCodeCoWorkDecision {
   return {
-    ...decisionBase('blocked', uniqueStrings([input.requestRef, ...refs])),
+    ...decisionBase('blocked', uniqueStrings([requestRef(input.requestRef) ? input.requestRef : undefined, ...refs])),
     blockedReason,
     repairHints,
   };

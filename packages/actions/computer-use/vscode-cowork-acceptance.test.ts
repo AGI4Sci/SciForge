@@ -55,6 +55,53 @@ test('Host-side VSCode co-work asks for confirmation when multiple user windows 
   assert.equal(decision.maturity, 'live-diagnostic');
 });
 
+test('Host-side VSCode co-work blocks raw window and observation refs before choosing an action', () => {
+  const rawWindow = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:raw-window-ref',
+    operation: 'focus-editor',
+    selectedWindowRef: 'Paper.md - Visual Studio Code',
+    windowCandidates: [{
+      appRef: 'Visual Studio Code',
+      processRef: '/Applications/Visual Studio Code.app',
+      windowRef: 'Paper.md - Visual Studio Code',
+      titleRef: 'Paper.md - Visual Studio Code',
+      frontmostRef: 'frontmost VSCode window',
+    }],
+    latestObservation: {
+      ...freshObservation(),
+      windowRef: 'Paper.md - Visual Studio Code',
+    },
+  });
+
+  assert.equal(rawWindow.status, 'blocked');
+  assert.equal(rawWindow.blockedReason, 'vscode_cowork_no_window_candidates');
+  assert.equal(rawWindow.primitive, undefined);
+  assert.equal(rawWindow.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawWindow), /Paper\.md|Visual Studio Code|Applications/);
+
+  const rawObservation = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:raw-observation-ref',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      observationRef: 'visible editor with paper.md',
+      screenshotRef: '/tmp/paper-window.png',
+      accessibilityRef: 'raw AX tree for paper.md',
+      textRefs: ['paper.md visible text'],
+      elementRefs: ['editor element'],
+      freshnessRef: 'fresh observation',
+    },
+  });
+
+  assert.equal(rawObservation.status, 'blocked');
+  assert.equal(rawObservation.blockedReason, 'vscode_cowork_observe_refs_required');
+  assert.equal(rawObservation.primitive, undefined);
+  assert.equal(rawObservation.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawObservation), /paper\.md|visible editor|raw AX|tmp\/paper-window|fresh observation/);
+});
+
 test('Host-side VSCode co-work blocks stale or incomplete observe refs before selecting an action', () => {
   const stale = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:stale',

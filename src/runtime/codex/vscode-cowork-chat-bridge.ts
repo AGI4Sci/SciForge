@@ -92,10 +92,10 @@ interface SanitizedVSCodeCoWorkBinding {
 function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBinding {
   if (!isRecord(value)) return { windowCandidates: [] };
   return {
-    requestRef: safeRuntimeString(value.requestRef),
+    requestRef: safeRuntimeRef(value.requestRef, ['chat-request:']),
     operation: operationField(value.operation),
     windowCandidates: sanitizeWindowCandidates(value.windowCandidates),
-    selectedWindowRef: safeRuntimeString(value.selectedWindowRef),
+    selectedWindowRef: safeRuntimeRef(value.selectedWindowRef, ['window:']),
     selectedFileRef: safeRuntimeRef(value.selectedFileRef, ['file-ref:']),
     latestObservation: sanitizeObservation(value.latestObservation),
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
@@ -109,15 +109,15 @@ function sanitizeWindowCandidates(value: unknown): VSCodeCoWorkWindowCandidate[]
   const candidates: VSCodeCoWorkWindowCandidate[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
-    const appRef = safeRuntimeString(item.appRef);
-    const windowRef = safeRuntimeString(item.windowRef);
+    const appRef = safeRuntimeRef(item.appRef, ['macos-app:']);
+    const windowRef = safeRuntimeRef(item.windowRef, ['window:']);
     if (!appRef || !windowRef) continue;
     candidates.push({
       appRef,
       windowRef,
-      processRef: safeRuntimeString(item.processRef),
-      titleRef: safeRuntimeString(item.titleRef),
-      frontmostRef: safeRuntimeString(item.frontmostRef),
+      processRef: safeRuntimeRef(item.processRef, ['process:']),
+      titleRef: safeRuntimeRef(item.titleRef, ['text:', 'window:']),
+      frontmostRef: safeRuntimeRef(item.frontmostRef, ['frontmost:', 'window:']),
       visibleFileRefs: safeRuntimeRefList(item.visibleFileRefs, ['file-ref:']),
     });
   }
@@ -126,16 +126,16 @@ function sanitizeWindowCandidates(value: unknown): VSCodeCoWorkWindowCandidate[]
 
 function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | undefined {
   if (!isRecord(value)) return undefined;
-  const windowRef = safeRuntimeString(value.windowRef);
+  const windowRef = safeRuntimeRef(value.windowRef, ['window:']);
   if (!windowRef) return undefined;
   return {
     windowRef,
-    observationRef: safeRuntimeString(value.observationRef) ?? '',
-    screenshotRef: safeRuntimeString(value.screenshotRef) ?? '',
-    accessibilityRef: safeRuntimeString(value.accessibilityRef) ?? '',
-    textRefs: safeRuntimeStringList(value.textRefs) ?? [],
-    elementRefs: safeRuntimeStringList(value.elementRefs) ?? [],
-    freshnessRef: safeRuntimeString(value.freshnessRef) ?? '',
+    observationRef: safeRuntimeRef(value.observationRef, ['observation:']) ?? '',
+    screenshotRef: safeRuntimeRef(value.screenshotRef, ['image:']) ?? '',
+    accessibilityRef: safeRuntimeRef(value.accessibilityRef, ['accessibility:']) ?? '',
+    textRefs: safeRuntimeRefList(value.textRefs, ['text:']) ?? [],
+    elementRefs: safeRuntimeRefList(value.elementRefs, ['element:']) ?? [],
+    freshnessRef: safeRuntimeRef(value.freshnessRef, ['freshness:']) ?? '',
     stale: booleanField(value.stale),
     editorVisible: booleanField(value.editorVisible),
     visibleFileRefs: safeRuntimeRefList(value.visibleFileRefs, ['file-ref:']),
@@ -172,6 +172,7 @@ function safeRuntimeString(value: unknown): string | undefined {
 function safeRuntimeRef(value: unknown, prefixes: string[]): string | undefined {
   const text = safeRuntimeString(value);
   if (!text) return undefined;
+  if (!/^[a-z][a-z0-9_-]*:[^\s/\\]+$/i.test(text)) return undefined;
   return prefixes.some((prefix) => text.startsWith(prefix)) ? text : undefined;
 }
 

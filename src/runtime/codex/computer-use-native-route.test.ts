@@ -344,6 +344,51 @@ test('VSCode co-work bridge requires host-owned refs-first runtime intent marker
   assert.doesNotMatch(JSON.stringify(accepted), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route drops raw VSCode window and observation refs before public events', async () => {
+  const events = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '操作我已经打开的 VSCode，聚焦编辑器。',
+      commandId: 'native-route-vscode-cowork-raw-window-refs',
+      attemptId: 'native-route-vscode-cowork-raw-window-refs-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:raw-window-refs',
+        operation: 'focus-editor',
+        selectedWindowRef: 'Paper.md - Visual Studio Code',
+        windowCandidates: [{
+          appRef: 'Visual Studio Code',
+          processRef: '/Applications/Visual Studio Code.app',
+          windowRef: 'Paper.md - Visual Studio Code',
+          titleRef: 'Paper.md - Visual Studio Code',
+          frontmostRef: 'frontmost VSCode window',
+        }],
+        latestObservation: {
+          ...vscodeNativeRouteObservation(),
+          windowRef: 'Paper.md - Visual Studio Code',
+          observationRef: 'visible editor with paper.md',
+          screenshotRef: '/tmp/paper-window.png',
+          accessibilityRef: 'raw AX tree for paper.md',
+          textRefs: ['paper.md visible text'],
+          elementRefs: ['editor element'],
+          freshnessRef: 'fresh observation',
+        },
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_no_window_candidates');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /Paper\.md|Visual Studio Code|Applications|paper-window|raw AX|visible editor|fresh observation|product-ready/i);
+});
+
 test('Computer Use native route requires confirmation when VSCode target file is ambiguous', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {
