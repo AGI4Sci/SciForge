@@ -1245,6 +1245,24 @@ test('VSCode co-work live manifest requires control refs to bind release and res
   }
 });
 
+test('VSCode co-work live manifest requires control refs to bind the active session', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      controlRefs: base.evidence.controlRefs.map((ref) =>
+        ref.startsWith('window-action-session:')
+          ? 'window-action-session:vscode-cowork:other'
+          : ref,
+      ),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-control-ref:active-session'));
+});
+
 test('VSCode co-work live manifest requires action refs to bind released input resources', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({

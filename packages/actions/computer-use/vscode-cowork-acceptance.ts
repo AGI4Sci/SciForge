@@ -437,6 +437,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!refsContainBoundRef(afterObservationRefs, textRefs, textRef)) issues.push('missing-after-observe-ref:text');
   if (!manifest.evidence.controlRefs.some(controlRef)) issues.push('invalid-evidence-ref:control');
   if (!controlRefs.some(sessionRef)) issues.push('missing-control-ref:session');
+  if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(controlRefs, manifest.evidence.bindRefs, sessionRef)) {
+    issues.push('missing-control-ref:active-session');
+  }
   if (!controlRefs.some((ref) => releaseRefs.some((releaseRef) => scopedInputLeaseRef(ref) && sameRef(ref, releaseRef)))) {
     issues.push('missing-control-ref:scoped-input-lease');
   }
