@@ -1115,6 +1115,27 @@ test('VSCode co-work live manifest requires before and after visual refs', () =>
   }
 });
 
+test('VSCode co-work live manifest requires refs-first bind target evidence', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      bindRefs: ['window-action-session:vscode-cowork:1'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'missing-bind-ref:target-window',
+    'missing-bind-ref:app',
+    'missing-bind-ref:process',
+    'missing-bind-ref:frontmost',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1158,7 +1179,13 @@ function vscodeCoWorkLiveManifest() {
       selectedFileRef: 'file-ref:vscode:paper',
     },
     evidence: {
-      bindRefs: ['window-action-session:vscode-cowork:1'],
+      bindRefs: [
+        'window-action-session:vscode-cowork:1',
+        'window:vscode:paper',
+        'macos-app:com.microsoft.VSCode',
+        'process:vscode:paper',
+        'frontmost:vscode:paper',
+      ],
       beforeObservationRefs: ['observation:vscode:before'],
       hostDecisionRefs: ['decision:vscode-cowork:save-confirmed'],
       actionRefs: [

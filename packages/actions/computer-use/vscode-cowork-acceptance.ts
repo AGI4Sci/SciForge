@@ -363,6 +363,11 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
     }
   }
   if (!manifest.evidence.bindRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:bind');
+  if (!manifest.evidence.bindRefs.some(sessionRef)) issues.push('missing-bind-ref:session');
+  if (!manifest.evidence.bindRefs.some((ref) => ref.trim() === manifest.target.windowRef.trim())) issues.push('missing-bind-ref:target-window');
+  if (!manifest.evidence.bindRefs.some(appRef)) issues.push('missing-bind-ref:app');
+  if (!manifest.evidence.bindRefs.some(processRef)) issues.push('missing-bind-ref:process');
+  if (!manifest.evidence.bindRefs.some(frontmostRef)) issues.push('missing-bind-ref:frontmost');
   if (!manifest.evidence.beforeObservationRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:before-observe');
   if (!manifest.evidence.hostDecisionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:host-decision');
   if (!manifest.evidence.actionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:act');
@@ -734,6 +739,10 @@ function approvalRef(value: unknown): value is string {
 
 function actionRef(value: unknown): value is string {
   return structuredRef(value, ['action:', 'window-action:']);
+}
+
+function sessionRef(value: unknown): value is string {
+  return structuredRef(value, ['window-action-session:', 'computer-use-session:']);
 }
 
 function executorEventRef(value: unknown): value is string {
