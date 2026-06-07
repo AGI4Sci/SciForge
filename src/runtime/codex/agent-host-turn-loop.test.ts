@@ -102,9 +102,10 @@ test('Agent Host Turn Loop calls injected Computer Use Act materializer after re
 test('Agent Host Turn Loop routes ordinary chat through default Computer Use primitives for one low-risk WindowAction action', async () => {
   const now = '2026-06-03T00:00:00.000Z';
   const actionCalls: Array<{ action: unknown; delta: unknown; adapterRef: unknown }> = [];
+  const windowActionStore = readyWindowActionStore(now);
   const materializer = createDefaultComputerUseActMaterializer({
     windowAction: {
-      windowActionSessionStore: readyWindowActionStore(now),
+      windowActionSessionStore: windowActionStore,
       actionPlanner: async () => ({
         status: 'planned',
         message: 'Scroll the active desktop window.',
@@ -157,6 +158,12 @@ test('Agent Host Turn Loop routes ordinary chat through default Computer Use pri
   assert.doesNotMatch(String(result?.result.message), /Scroll the active desktop window\./);
   assert.ok((result?.result.evidenceRefs as string[]).includes('computer-use:primitive-trace/vscode-main/actions/codex-command-turn-loop-window-action-attempt-1'));
   assert.ok((result?.result.evidenceRefs as string[]).includes('app-native-command:vscode/actions/codex-command-turn-loop-window-action-attempt-1/scroll/input-event'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('action-ledger:window-action-session/vscode-main/control/remove/2026-06-03t00-00-00.000z'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('lease:window-action-session/vscode-main/control/remove'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('scoped-input-adapter:vscode-main/computer-use/app-native-command'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('actor-cursor:computer-use/vscode-main'));
+  assert.equal(windowActionStore.getActiveByRef('window-action-session:vscode-main'), undefined);
+  assert.match(String(result?.result.reasoningTrace), /computer_use\.control/i);
   assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|base64|raw-|\/raw|secret|token|password/i);
 });
 
