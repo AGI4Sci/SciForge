@@ -433,6 +433,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   const controlRefs = manifest.evidence.controlRefs;
   const beforeObservationRefs = manifest.evidence.beforeObservationRefs;
   const afterObservationRefs = manifest.evidence.afterObservationRefs;
+  const beforeEditorElementRefs = beforeObservationRefs.filter(editorElementEvidenceRef);
   if (screenshotRefs.length === 0) issues.push('invalid-evidence-ref:screenshot');
   if (screenshotRefs.length < 2) issues.push('missing-evidence-ref:before-after-screenshot');
   if (accessibilityRefs.length === 0) issues.push('invalid-evidence-ref:accessibility');
@@ -445,6 +446,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!refsContainBoundRef(beforeObservationRefs, screenshotRefs, imageRef)) issues.push('missing-before-observe-ref:screenshot');
   if (!refsContainBoundRef(beforeObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-before-observe-ref:accessibility');
   if (!refsContainBoundRef(beforeObservationRefs, textRefs, textRef)) issues.push('missing-before-observe-ref:text');
+  if (beforeEditorElementRefs.length === 0) issues.push('missing-before-observe-ref:editor-element');
   if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(beforeObservationRefs, manifest.evidence.bindRefs, sessionRef)) {
     issues.push('missing-before-observe-ref:active-session');
   }
@@ -459,6 +461,11 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   }
   if (!hostDecisionRefs.some((ref) => manifest.evidence.beforeObservationRefs.some((beforeRef) => freshnessRef(ref) && sameRef(ref, beforeRef)))) {
     issues.push('missing-host-decision-ref:freshness');
+  }
+  if (!hostDecisionRefs.some(editorElementEvidenceRef)) {
+    issues.push('missing-host-decision-ref:editor-element');
+  } else if (beforeEditorElementRefs.length > 0 && !refsContainBoundRef(hostDecisionRefs, beforeEditorElementRefs, editorElementEvidenceRef)) {
+    issues.push('missing-host-decision-ref:editor-element');
   }
   if (fileTargetOperation(manifest.operation) && !hostDecisionRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
     issues.push('missing-host-decision-ref:target-file');
@@ -475,6 +482,11 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.actionRefs.some(cursorMarkerRef)) issues.push('missing-action-ref:cursor-marker');
   if (!manifest.evidence.actionRefs.some(scopedInputLeaseRef)) issues.push('missing-action-ref:scoped-input-lease');
   if (!manifest.evidence.actionRefs.some(staleInvalidationRef)) issues.push('missing-action-ref:stale-invalidation');
+  if (!actionRefs.some(editorElementEvidenceRef)) {
+    issues.push('missing-action-ref:editor-element');
+  } else if (beforeEditorElementRefs.length > 0 && !refsContainBoundRef(actionRefs, beforeEditorElementRefs, editorElementEvidenceRef)) {
+    issues.push('missing-action-ref:editor-element');
+  }
   if (releaseRefs.some(scopedInputLeaseRef) && !refsContainBoundRef(actionRefs, releaseRefs, scopedInputLeaseRef)) {
     issues.push('missing-action-release-ref:scoped-input-lease');
   }
@@ -845,6 +857,10 @@ function editorElementRef(observation: VSCodeCoWorkObservationRefs): boolean {
 
 function editorElementRefForObservation(observation: VSCodeCoWorkObservationRefs): string | undefined {
   return observation.elementRefs.filter(elementRef).find((ref) => /editor/i.test(ref));
+}
+
+function editorElementEvidenceRef(value: unknown): value is string {
+  return elementRef(value) && /editor/i.test(value);
 }
 
 function realFileChangeNeedsConfirmation(

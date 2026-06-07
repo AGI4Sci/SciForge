@@ -1406,6 +1406,24 @@ test('VSCode co-work live manifest requires Host decision refs to bind the activ
   assert.ok(failed.issues.includes('missing-host-decision-ref:active-session'));
 });
 
+test('VSCode co-work live manifest requires Host decision and action refs to bind the editor element target', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      beforeObservationRefs: base.evidence.beforeObservationRefs.filter((ref) => !ref.startsWith('element:')),
+      hostDecisionRefs: base.evidence.hostDecisionRefs.filter((ref) => !ref.startsWith('element:')),
+      actionRefs: base.evidence.actionRefs.filter((ref) => !ref.startsWith('element:')),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-before-observe-ref:editor-element'));
+  assert.ok(failed.issues.includes('missing-host-decision-ref:editor-element'));
+  assert.ok(failed.issues.includes('missing-action-ref:editor-element'));
+});
+
 test('VSCode co-work live manifest requires after observe refs to bind target window and freshness', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1563,6 +1581,7 @@ function vscodeCoWorkLiveManifest() {
         'window-action-session:vscode-cowork:1',
         'window:vscode:paper',
         'freshness:vscode:before',
+        'element:vscode:editor',
         'image:vscode:before',
         'accessibility:vscode:before',
         'text:vscode:visible-before',
@@ -1575,12 +1594,14 @@ function vscodeCoWorkLiveManifest() {
         'file-ref:vscode:paper',
         'observation:vscode:before',
         'freshness:vscode:before',
+        'element:vscode:editor',
         'risk:save-current-file:paper',
         'approval:risk:save-current-file:paper:confirmed',
       ],
       actionRefs: [
         'action:vscode-cowork:save',
         'window-action-session:vscode-cowork:1',
+        'element:vscode:editor',
         'executor-event:vscode-cowork:save',
         'input-event:vscode-cowork:save',
         'input-adapter:vscode-cowork:1',
