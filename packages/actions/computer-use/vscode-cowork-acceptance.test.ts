@@ -1291,6 +1291,20 @@ test('VSCode co-work live manifest requires before observe refs to bind the targ
   assert.ok(failed.issues.includes('missing-before-observe-ref:target-window'));
 });
 
+test('VSCode co-work live manifest requires before observe refs to bind the selected file target', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      beforeObservationRefs: base.evidence.beforeObservationRefs.filter((ref) => ref !== base.target.selectedFileRef),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-before-observe-ref:target-file'));
+});
+
 test('VSCode co-work live manifest requires observe refs to bind the active session', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1651,6 +1665,7 @@ function vscodeCoWorkLiveManifest() {
         'observation:vscode:before',
         'window-action-session:vscode-cowork:1',
         'window:vscode:paper',
+        'file-ref:vscode:paper',
         'freshness:vscode:before',
         'element:vscode:editor',
         'image:vscode:before',

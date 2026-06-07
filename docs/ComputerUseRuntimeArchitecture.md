@@ -160,6 +160,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 file-target live manifest 的 act evidence 还必须直接绑定同一个 selected `file-ref:`。Host decision 绑定文件目标仍然保留，但 actual act evidence 不能只靠 decision 间接证明目标文件；该检查属于 refs-first acceptance evidence，不让 Computer Use core 选择文件或做 task planning。
 
+补充：P9 file-target live manifest 的 before observe evidence 还必须直接绑定同一个 selected `file-ref:`。Host 仍负责从 observe refs 选择目标文件；manifest 只是要求本次 before observe evidence 能证明该 file ref 来自当前观察，而不是只靠 target 字段或 decision 字段声明。
+
 ## 职责边界
 
 ```text
