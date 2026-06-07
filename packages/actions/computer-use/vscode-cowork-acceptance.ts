@@ -511,6 +511,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   }
   if (!manifest.evidence.afterObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:after-observe');
   if (!manifest.evidence.afterObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-after-observe-ref:target-window');
+  if (fileTargetOperation(manifest.operation) && !manifest.evidence.afterObservationRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
+    issues.push('missing-after-observe-ref:target-file');
+  }
   if (!manifest.evidence.afterObservationRefs.some(freshnessRef)) issues.push('missing-after-observe-ref:freshness');
   if (afterEditorElementRefs.length === 0) {
     issues.push('missing-after-observe-ref:editor-element');

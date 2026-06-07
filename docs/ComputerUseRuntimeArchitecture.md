@@ -162,6 +162,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 file-target live manifest 的 before observe evidence 还必须直接绑定同一个 selected `file-ref:`。Host 仍负责从 observe refs 选择目标文件；manifest 只是要求本次 before observe evidence 能证明该 file ref 来自当前观察，而不是只靠 target 字段或 decision 字段声明。
 
+补充：P9 file-target live manifest 的 after observe evidence 还必须直接绑定同一个 selected `file-ref:`。该检查只证明动作后观察仍对应 Host 选择的文件目标，不把“文件修改完成”的语义判断交给 Computer Use core。
+
 ## 职责边界
 
 ```text
