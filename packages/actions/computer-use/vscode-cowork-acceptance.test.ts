@@ -1160,6 +1160,21 @@ test('VSCode co-work live manifest requires Host decision refs to bind request, 
   }
 });
 
+test('VSCode co-work live manifest requires after observe refs to bind target window and freshness', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      afterObservationRefs: ['observation:vscode:after'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-after-observe-ref:target-window'));
+  assert.ok(failed.issues.includes('missing-after-observe-ref:freshness'));
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1230,7 +1245,7 @@ function vscodeCoWorkLiveManifest() {
         'scoped-input-lease:vscode-cowork:1',
         'stale-invalidation:vscode-cowork:before-observation',
       ],
-      afterObservationRefs: ['observation:vscode:after'],
+      afterObservationRefs: ['observation:vscode:after', 'window:vscode:paper', 'freshness:vscode:after'],
       controlRefs: ['control:vscode-cowork:release'],
       screenshotRefs: ['image:vscode:before', 'image:vscode:after'],
       accessibilityRefs: ['accessibility:vscode:before', 'accessibility:vscode:after'],

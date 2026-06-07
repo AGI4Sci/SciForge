@@ -410,6 +410,8 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.actionRefs.some(scopedInputLeaseRef)) issues.push('missing-action-ref:scoped-input-lease');
   if (!manifest.evidence.actionRefs.some(staleInvalidationRef)) issues.push('missing-action-ref:stale-invalidation');
   if (!manifest.evidence.afterObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:after-observe');
+  if (!manifest.evidence.afterObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-after-observe-ref:target-window');
+  if (!manifest.evidence.afterObservationRefs.some(freshnessRef)) issues.push('missing-after-observe-ref:freshness');
   if (!manifest.evidence.controlRefs.some(controlRef)) issues.push('invalid-evidence-ref:control');
   if (!hasRefPrefix(releaseRefs, 'scoped-input-lease:')) issues.push('missing-release-ref:scoped-input-lease');
   if (!hasRefPrefix(releaseRefs, 'input-adapter:')) issues.push('missing-release-ref:input-adapter');
