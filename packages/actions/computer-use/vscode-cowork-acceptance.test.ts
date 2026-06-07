@@ -1026,6 +1026,42 @@ test('VSCode co-work live manifest rejects raw path risk and approval evidence r
   assert.ok(failed.issues.includes('unsafe-evidence-ref:approval'));
 });
 
+test('VSCode co-work live manifest requires refs-first target window and file refs for user-file changes', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const rawWindow = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    target: {
+      ...base.target,
+      windowRef: 'Paper.md - Visual Studio Code',
+    },
+  });
+
+  assert.equal(rawWindow.ok, false);
+  assert.ok(rawWindow.issues.includes('invalid-target-ref:window'));
+
+  const missingFile = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    target: {
+      windowRef: 'window:vscode:paper',
+    },
+  });
+
+  assert.equal(missingFile.ok, false);
+  assert.ok(missingFile.issues.includes('missing-target-ref:file'));
+
+  const rawFile = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    target: {
+      windowRef: 'window:vscode:paper',
+      selectedFileRef: '/Users/example/paper.md',
+    },
+  });
+
+  assert.equal(rawFile.ok, false);
+  assert.ok(rawFile.issues.includes('invalid-target-ref:file'));
+  assert.doesNotMatch(JSON.stringify(rawFile), /\/Users\/example\/paper\.md|paper\.md/);
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;

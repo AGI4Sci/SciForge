@@ -350,7 +350,18 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (manifest.userProfileUsed !== true) issues.push('vscode-cowork-user-profile-must-be-marked-used');
   if (manifest.sharedSystemInputUsed !== true) issues.push('vscode-cowork-shared-system-input-impact-required');
   if (!primitiveChainMatches(manifest.primitiveChainObserved)) issues.push('vscode-cowork-live-primitive-chain-incomplete');
-  if (!nonEmptyString(manifest.target.windowRef)) issues.push('missing-target-ref:window');
+  if (!nonEmptyString(manifest.target.windowRef)) {
+    issues.push('missing-target-ref:window');
+  } else if (!windowRef(manifest.target.windowRef)) {
+    issues.push('invalid-target-ref:window');
+  }
+  if (fileTargetOperation(manifest.operation)) {
+    if (!nonEmptyString(manifest.target.selectedFileRef)) {
+      issues.push('missing-target-ref:file');
+    } else if (!fileRef(manifest.target.selectedFileRef)) {
+      issues.push('invalid-target-ref:file');
+    }
+  }
   if (!manifest.evidence.bindRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:bind');
   if (!manifest.evidence.beforeObservationRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:before-observe');
   if (!manifest.evidence.hostDecisionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:host-decision');
