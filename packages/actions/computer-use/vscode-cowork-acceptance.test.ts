@@ -505,6 +505,39 @@ test('VSCode co-work cleanup validation requires release refs and focus/mouse re
   ]);
 });
 
+test('VSCode co-work cleanup validation rejects unsafe release and restoration refs', () => {
+  const failed = validateVSCodeCoWorkRunCleanup({
+    maturity: 'live-diagnostic',
+    productReady: false,
+    userProfileUsed: true,
+    sharedSystemInputUsed: true,
+    evidence: {
+      releaseRefs: [
+        'scoped-input-lease:vscode-cowork:1',
+        'input-adapter:/Users/example/.vscode/profile',
+        'cursor-marker:vscode-cowork:1',
+      ],
+      restorationRefs: [
+        'front-app-restore:vscode-cowork:1',
+        'mouse-position-restore:/Users/example/.vscode/profile',
+      ],
+    },
+    cleanup: {
+      inputLeaseReleased: true,
+      cursorReleased: true,
+      adapterReleased: true,
+      frontAppRestored: true,
+      mousePositionRestored: true,
+      userVSCodeProcessKilled: false,
+      userProfileCleared: false,
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('unsafe-evidence-ref:release'));
+  assert.ok(failed.issues.includes('unsafe-evidence-ref:restoration'));
+});
+
 test('VSCode co-work validators require explicit user profile and shared input markers', () => {
   const cleanup = validateVSCodeCoWorkRunCleanup({
     maturity: 'live-diagnostic',

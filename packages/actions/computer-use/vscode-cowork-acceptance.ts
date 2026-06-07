@@ -289,6 +289,7 @@ export function validateVSCodeCoWorkRunCleanup(manifest: VSCodeCoWorkCleanupMani
   if (!manifest.cleanup.mousePositionRestored) issues.push('cleanup-mouse-position-not-restored');
   if (manifest.cleanup.userVSCodeProcessKilled) issues.push('cleanup-must-not-kill-user-vscode');
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
+  issues.push(...unsafeCleanupEvidenceRefIssues(manifest.evidence));
 
   return {
     ok: issues.length === 0,
@@ -650,6 +651,17 @@ function unsafeEvidenceRefIssues(evidence: VSCodeCoWorkLiveAcceptanceManifest['e
     ['accessibility', evidence.accessibilityRefs],
     ['text', evidence.textRefs],
     ['approval', evidence.approvalRefs],
+    ['release', evidence.releaseRefs],
+    ['restoration', evidence.restorationRefs],
+  ];
+
+  return groups.flatMap(([label, refs]) => (
+    refs.some(unsafeEvidenceRef) ? [`unsafe-evidence-ref:${label}`] : []
+  ));
+}
+
+function unsafeCleanupEvidenceRefIssues(evidence: VSCodeCoWorkCleanupManifest['evidence']): string[] {
+  const groups: Array<[string, string[]]> = [
     ['release', evidence.releaseRefs],
     ['restoration', evidence.restorationRefs],
   ];
