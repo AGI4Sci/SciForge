@@ -817,6 +817,72 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
   assert.doesNotMatch(JSON.stringify(events), /visible text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route requires refs-first VSCode cursor movement refs', async () => {
+  const rawCursorMoveEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '把我已经打开的 VSCode 光标移动到下一段。',
+      commandId: 'native-route-vscode-cowork-raw-cursor-move',
+      attemptId: 'native-route-vscode-cowork-raw-cursor-move-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:raw-cursor-move',
+        operation: 'move-cursor',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        cursorMoveRef: 'move to next paragraph',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const rawCursorMoveDone = rawCursorMoveEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawCursorMoveUnit = (rawCursorMoveDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(rawCursorMoveDone?.status, 'blocked');
+  assert.equal(rawCursorMoveUnit?.primitive, undefined);
+  assert.equal(rawCursorMoveUnit?.action, undefined);
+  assert.equal(rawCursorMoveUnit?.blockedReason, 'vscode_cowork_cursor_move_ref_required');
+  assert.doesNotMatch(JSON.stringify(rawCursorMoveEvents), /move to next paragraph|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
+  const readyEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '把我已经打开的 VSCode 光标向右移动一格。',
+      commandId: 'native-route-vscode-cowork-move-cursor-right',
+      attemptId: 'native-route-vscode-cowork-move-cursor-right-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:move-cursor-right',
+        operation: 'move-cursor',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        cursorMoveRef: 'cursor-move:vscode:right',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const readyDone = readyEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const readyUnit = (readyDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(readyDone?.status, 'ready');
+  assert.equal(readyUnit?.primitive, 'act');
+  assert.deepEqual(readyUnit?.action, {
+    type: 'key',
+    key: 'ArrowRight',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.ok((readyDone?.evidenceRefs as string[]).includes('cursor-move:vscode:right'));
+  assert.doesNotMatch(JSON.stringify(readyEvents), /move to next paragraph|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route keeps VSCode real-file save and undo blocked until matching approval refs are present', async () => {
   const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({

@@ -32,6 +32,7 @@ const BASE64ISH_RUNTIME_STRING_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
 const SUPPORTED_OPERATIONS = new Set<VSCodeCoWorkOperation>([
   'focus-editor',
   'read-visible-text',
+  'move-cursor',
   'insert-draft',
   'save-current-file',
   'bulk-replace',
@@ -60,6 +61,7 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
     selectedWindowRef: binding.selectedWindowRef,
     selectedFileRef: binding.selectedFileRef,
     latestObservation: binding.latestObservation,
+    cursorMoveRef: binding.cursorMoveRef,
     draftTextRef: binding.draftTextRef,
     riskActionHash: binding.riskActionHash,
     confirmationRef: binding.confirmationRef,
@@ -95,6 +97,7 @@ interface SanitizedVSCodeCoWorkBinding {
   selectedWindowRef?: string;
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
+  cursorMoveRef?: string;
   draftTextRef?: string;
   riskActionHash?: string;
   confirmationRef?: string;
@@ -122,6 +125,7 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     selectedWindowRef,
     selectedFileRef,
     latestObservation: sanitizeObservation(value.latestObservation),
+    cursorMoveRef: safeRuntimeRef(value.cursorMoveRef, ['cursor-move:']),
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
     riskActionHash: safeRuntimeRef(value.riskActionHash, ['risk:']),
     confirmationRef: safeRuntimeRef(value.confirmationRef, ['approval:']),

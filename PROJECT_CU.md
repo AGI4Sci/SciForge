@@ -307,6 +307,8 @@ Acceptance Gates：
 
 本轮补充：`read-visible-text` 已作为 refs-only co-work 能力接入。Host 提供 fresh observe refs 后，controller/native route 返回 `ready` + `primitive=observe`，只保留 observation/text/AX refs，不返回 `act` action、不嵌入 visible text 原文，也不触发用户 VSCode 输入或文件修改。
 
+本轮补充：`move-cursor` 已作为 Host-selected 单步光标移动接入。Host 必须先基于 fresh observe refs 选择一个 `cursor-move:` 形态 `cursorMoveRef`，controller/native route 才会返回单个 `key` 原子 `act`；缺少 cursorMoveRef、使用 raw 自然语言方向、或把移动计划塞入 runtime intent 时返回 `blocked` / `vscode_cowork_cursor_move_ref_required`，不返回可执行 action。该能力只表达一次明确 arrow-key movement，不做语义 locate、不规划多步路径，也不读取或保存用户文件。
+
 本轮补充：真实文件保存与撤销的 route-level approval chain 也改为 refs-first。未确认的 `save-current-file` / `undo-last-action` 在 native route 上保持 `needs-confirmation`，不返回 primitive/action，并只把 `risk:` 形态 `riskActionHash` 放进 evidenceRefs；如果 Host 只提供 approvalRef，或提供 raw path / 裸文件名 / 自然语言 riskActionHash 而没有先提供 `risk:` ref，route 会 `blocked`，不返回 primitive/action，也不会把原始文件路径写入 public events；只有带精确绑定的 confirmationRef（`approval:<riskActionHash>:` 前缀）的保存/撤销才返回一个 Host 指定的原子 `act`，并把 `riskActionHash` 与 `approvalRef` 都保留到 evidenceRefs / execution unit；仅仅在 approvalRef 中嵌入或包含 risk hash 不算授权。
 
 本轮补充：确认链不会把批量或跨文件请求升级成可执行批处理。`bulk-replace` / `cross-file-modify` 在缺少确认时仍是 `needs-confirmation`；即使 Host 提供匹配的 `risk:` riskActionHash 和 `approval:` confirmationRef，也会返回 `blocked` / `vscode_cowork_non_atomic_operation_requires_host_decomposition`，要求 Host 基于最新 observe refs 拆成明确的单步 editor primitive。Computer Use core 和 native-route bridge 不做批量编辑计划、不生成跨文件修改计划，也不返回可执行 batch action。
@@ -315,7 +317,7 @@ Acceptance Gates：
 
 本轮补充：P9 cleanup / live manifest validator 现在会 fail closed 校验用户 profile 与共享系统输入标记。manifest 若没有明确 `userProfileUsed=true` 或 `sharedSystemInputUsed=true`，即使 release refs、restoration refs 和 cleanup flags 都完整，也会返回 validation issue；这防止复用用户 VSCode profile / 共享键鼠输入的诊断路径被误写成 profile-isolated 或 product-ready 证据。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、real-file risk/approval refs gate 和 live-manifest validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、cursor movement refs gate、real-file risk/approval refs gate 和 live-manifest validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
 
 ## P10：论文修改 / 润色 GUI 协作
 

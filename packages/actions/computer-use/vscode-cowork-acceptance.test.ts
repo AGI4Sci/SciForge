@@ -424,6 +424,57 @@ test('Host-side VSCode co-work exposes visible text as refs-only observe decisio
   assert.doesNotMatch(JSON.stringify(decision), /visibleText|rawScreenshot|base64|task|goal|planner/i);
 });
 
+test('Host-side VSCode co-work requires refs-first cursor movement before moving the cursor', () => {
+  const missingCursorMove = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:missing-cursor-move-ref',
+    operation: 'move-cursor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(missingCursorMove.status, 'blocked');
+  assert.equal(missingCursorMove.blockedReason, 'vscode_cowork_cursor_move_ref_required');
+  assert.equal(missingCursorMove.primitive, undefined);
+  assert.equal(missingCursorMove.action, undefined);
+
+  const rawCursorMove = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:raw-cursor-move-ref',
+    operation: 'move-cursor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    cursorMoveRef: 'move to next paragraph',
+  });
+
+  assert.equal(rawCursorMove.status, 'blocked');
+  assert.equal(rawCursorMove.blockedReason, 'vscode_cowork_cursor_move_ref_required');
+  assert.equal(rawCursorMove.primitive, undefined);
+  assert.equal(rawCursorMove.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawCursorMove), /move to next paragraph|planner|task|goal/);
+});
+
+test('Host-side VSCode co-work moves the cursor only as one Host-selected atomic key action', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:move-cursor-right',
+    operation: 'move-cursor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    cursorMoveRef: 'cursor-move:vscode:right',
+  });
+
+  assert.equal(decision.status, 'ready');
+  assert.equal(decision.primitive, 'act');
+  assert.deepEqual(decision.action, {
+    type: 'key',
+    key: 'ArrowRight',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.ok(decision.refs.includes('cursor-move:vscode:right'));
+  assert.doesNotMatch(JSON.stringify(decision), /planner|task|goal|move to/);
+});
+
 test('Host-side VSCode co-work requires confirmation before real-file save, undo, bulk replace, or cross-file modification', () => {
   for (const operation of ['save-current-file', 'undo-last-action', 'bulk-replace', 'cross-file-modify'] as const) {
     const decision = decideVSCodeCoWorkNextPrimitive({

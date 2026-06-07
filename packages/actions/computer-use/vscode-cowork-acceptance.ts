@@ -40,6 +40,7 @@ export const VSCODE_COWORK_ACCEPTANCE_CAPABILITY = {
 export type VSCodeCoWorkOperation =
   | 'focus-editor'
   | 'read-visible-text'
+  | 'move-cursor'
   | 'insert-draft'
   | 'save-current-file'
   | 'bulk-replace'
@@ -82,6 +83,7 @@ export interface VSCodeCoWorkDecisionInput {
   selectedWindowRef?: string;
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
+  cursorMoveRef?: string;
   draftTextRef?: string;
   riskActionHash?: string;
   confirmationRef?: string;
@@ -233,6 +235,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
 
   const targetFileBlock = targetFileRefsBlock(input, targetWindow, observation);
   if (targetFileBlock) return targetFileBlock;
+
+  const cursorMoveRefBlock = cursorMoveRefRequiredBlock(input, targetWindow, observation);
+  if (cursorMoveRefBlock) return cursorMoveRefBlock;
 
   const draftTextRefBlock = draftTextRefRequiredBlock(input, targetWindow, observation);
   if (draftTextRefBlock) return draftTextRefBlock;
@@ -493,6 +498,25 @@ function draftTextRefRequiredBlock(
   };
 }
 
+function cursorMoveRefRequiredBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (input.operation !== 'move-cursor') return undefined;
+  if (cursorMoveRef(input.cursorMoveRef)) return undefined;
+  return {
+    ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+    targetWindowRef: targetWindow.windowRef,
+    blockedReason: 'vscode_cowork_cursor_move_ref_required',
+    repairHints: [{
+      code: 'provide-cursor-move-ref',
+      message: 'Host must provide a refs-first cursorMoveRef for one observe-derived cursor movement. Raw cursor directions or movement plans must not be embedded.',
+      suggestedPrimitive: 'act',
+    }],
+  };
+}
+
 function realFileChangeRiskEnvelopeBlock(
   input: VSCodeCoWorkDecisionInput,
   targetWindow: VSCodeCoWorkWindowCandidate,
@@ -548,6 +572,16 @@ function actionForOperation(
       elementRef: editorElementRef,
     };
   }
+  const cursorMoveKey = cursorMoveRef(input.cursorMoveRef)
+    ? cursorMoveKeyForRef(input.cursorMoveRef)
+    : undefined;
+  if (input.operation === 'move-cursor' && cursorMoveKey) {
+    return {
+      type: 'key',
+      key: cursorMoveKey,
+      elementRef: editorElementRef,
+    };
+  }
   if (input.operation === 'save-current-file') {
     return {
       type: 'app_command',
@@ -585,6 +619,20 @@ function realFileChangeNeedsConfirmation(
 
 function draftTextRef(value: unknown): value is string {
   return structuredRef(value, ['text-ref:']);
+}
+
+function cursorMoveRef(value: unknown): value is string {
+  return structuredRef(value, ['cursor-move:'])
+    && cursorMoveKeyForRef(value) !== undefined;
+}
+
+function cursorMoveKeyForRef(value: string): string | undefined {
+  const direction = value.trim().split(':').at(-1);
+  if (direction === 'left') return 'ArrowLeft';
+  if (direction === 'right') return 'ArrowRight';
+  if (direction === 'up') return 'ArrowUp';
+  if (direction === 'down') return 'ArrowDown';
+  return undefined;
 }
 
 function fileRef(value: unknown): value is string {
@@ -745,6 +793,7 @@ function refsForTargetAndObservation(
     titleRef(targetWindow.titleRef) ? targetWindow.titleRef : undefined,
     frontmostRef(targetWindow.frontmostRef) ? targetWindow.frontmostRef : undefined,
     fileRef(input.selectedFileRef) ? input.selectedFileRef : undefined,
+    cursorMoveRef(input.cursorMoveRef) ? input.cursorMoveRef : undefined,
     riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
     approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
