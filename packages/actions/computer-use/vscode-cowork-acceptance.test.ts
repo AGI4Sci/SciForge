@@ -137,6 +137,25 @@ test('Host-side VSCode co-work blocks raw selected target refs instead of ignori
   assert.doesNotMatch(JSON.stringify(rawSelectedFile), /\/Users\/example\/paper\.md|paper\.md/);
 });
 
+test('Host-side VSCode co-work blocks task-shaped operations before consuming observe refs', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:unsupported-operation',
+    operation: 'replace every TODO across this repo' as any,
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.blockedReason, 'vscode_cowork_operation_required');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.ok(decision.refs.includes('chat-request:vscode-cowork:unsupported-operation'));
+  assert.ok(decision.refs.includes('window:vscode:paper'));
+  assert.ok(!decision.refs.includes('observation:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(decision), /replace every TODO|across this repo|planner|product-ready/i);
+});
+
 test('Host-side VSCode co-work blocks mixed raw and refs-first window candidates', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:mixed-window-candidates',

@@ -497,6 +497,41 @@ test('Computer Use native route blocks raw selected VSCode target refs instead o
   assert.doesNotMatch(JSON.stringify(rawSelectedFileEvents), /\/Users\/example\/paper\.md|paper\.md|product-ready/i);
 });
 
+test('Computer Use native route blocks task-shaped VSCode operations before public events', async () => {
+  const events = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '把我已经打开的 VSCode 里所有 TODO 都替换掉。',
+      commandId: 'native-route-vscode-cowork-unsupported-operation',
+      attemptId: 'native-route-vscode-cowork-unsupported-operation-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:unsupported-operation',
+        operation: 'replace every TODO across this repo',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_operation_required');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:unsupported-operation'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.ok(!(done?.evidenceRefs as string[]).includes('observation:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(events), /replace every TODO|across this repo|planner|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route requires confirmation when VSCode target file is ambiguous', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {

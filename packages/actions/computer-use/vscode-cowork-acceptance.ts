@@ -48,6 +48,18 @@ export type VSCodeCoWorkOperation =
   | 'cross-file-modify'
   | 'undo-last-action';
 
+const SUPPORTED_VSCODE_COWORK_OPERATIONS = new Set<string>([
+  'focus-editor',
+  'read-visible-text',
+  'move-cursor',
+  'insert-draft',
+  'replace-selection',
+  'save-current-file',
+  'bulk-replace',
+  'cross-file-modify',
+  'undo-last-action',
+]);
+
 export interface VSCodeCoWorkWindowCandidate {
   appRef: string;
   processRef?: string;
@@ -195,6 +207,14 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
       code: 'refresh-window-candidate-refs',
       message: 'Host must provide refs-first window/app/process/title/frontmost refs for every VSCode window candidate before selecting a target.',
       suggestedPrimitive: 'bind',
+    }]);
+  }
+
+  if (!supportedVSCodeCoWorkOperation(input.operation)) {
+    return blocked(input, 'vscode_cowork_operation_required', uniqueStrings([...requestRefs, ...windowCandidateRefs(validWindowCandidates)]), [{
+      code: 'provide-host-selected-vscode-operation',
+      message: 'Host must choose one supported VSCode co-work operation from current observe refs before Computer Use primitive execution.',
+      suggestedPrimitive: 'observe',
     }]);
   }
 
@@ -813,6 +833,10 @@ function cursorMoveKeyForRef(value: string): string | undefined {
   return undefined;
 }
 
+function supportedVSCodeCoWorkOperation(value: unknown): value is VSCodeCoWorkOperation {
+  return typeof value === 'string' && SUPPORTED_VSCODE_COWORK_OPERATIONS.has(value);
+}
+
 function fileRef(value: unknown): value is string {
   return structuredRef(value, ['file-ref:']);
 }
@@ -1033,6 +1057,17 @@ function refsForTargetAndObservation(
     ...(observation.elementRefs ?? []).filter(elementRef),
     ...(observation.visibleFileRefs ?? []).filter(fileRef),
   ]);
+}
+
+function windowCandidateRefs(candidates: readonly VSCodeCoWorkWindowCandidate[]): string[] {
+  return uniqueStrings(candidates.flatMap((candidate) => [
+    appRef(candidate.appRef) ? candidate.appRef : undefined,
+    processRef(candidate.processRef) ? candidate.processRef : undefined,
+    windowRef(candidate.windowRef) ? candidate.windowRef : undefined,
+    titleRef(candidate.titleRef) ? candidate.titleRef : undefined,
+    frontmostRef(candidate.frontmostRef) ? candidate.frontmostRef : undefined,
+    ...(candidate.visibleFileRefs ?? []).filter(fileRef),
+  ]));
 }
 
 function blocked(
