@@ -407,7 +407,7 @@ function safeRuntimeOwnerRef(value: unknown): value is string {
   if (!ref || ref.length > 240) return false;
   if (/^(?:gui(?:\.|:)|ui:|gui-viewer:|screen-pane:|fixture:|replay:|replay-fixture:|snapshot-fixture:)/i.test(ref)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(ref)) return false;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|window-action-flow:|computer-use:|native-adapter:|desktop-native:|desktop-window:|desktop-annotation:|permission:|approval:|cancel:|stop:|lease:|input-lease:|focus-lease:|scoped-input-adapter:|actor-cursor:|adapter-registry:|window:|window-action-ref:|action-ledger:|evidence:|workEvidence:|native-host:|audit:|accessibility-ui-automation:|shared-system-input:|executor-event:)/i.test(ref);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|window-action-flow:|computer-use:|native-adapter:|desktop-native:|desktop-window:|desktop-annotation:|permission:|approval:|cancel:|stop:|lease:|input-lease:|focus-lease:|scoped-input-adapter:|actor-cursor:|adapter-registry:|window:|window-action-ref:|action-ledger:|evidence:|workEvidence:|native-host:|audit:|accessibility-ui-automation:|shared-system-input:|executor-event:|input-event:|appium-mac2:|app-native-command:|terminal-pty:|file-manager:)/i.test(ref);
 }
 
 function safeEvidenceKind(value: unknown): value is string {

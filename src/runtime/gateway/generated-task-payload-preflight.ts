@@ -370,7 +370,6 @@ function readyWebProviderRoutes(request?: GatewayRequest) {
     ...(request.selectedToolIds ?? []),
     'web_search',
     'web_fetch',
-    'browser_search',
     'browser_fetch',
   ]);
   if (requestNeedsPdfExtraction(request)) selectedToolIds.add('pdf_extract');
@@ -378,7 +377,7 @@ function readyWebProviderRoutes(request?: GatewayRequest) {
     .filter((route) => WEB_PROVIDER_CAPABILITY_IDS.includes(route.capabilityId) && route.status === 'ready');
 }
 
-const WEB_PROVIDER_CAPABILITY_IDS = ['web_search', 'web_fetch', 'browser_search', 'browser_fetch', 'pdf_extract'];
+const WEB_PROVIDER_CAPABILITY_IDS = ['web_search', 'web_fetch', 'browser_fetch', 'pdf_extract'];
 
 function providerFirstPolicyCapabilityIds(
   request: GatewayRequest | undefined,

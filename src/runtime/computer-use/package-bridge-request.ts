@@ -8,10 +8,10 @@ import {
 } from './host-adapter.js';
 import { normalizePackageBridgeApprovalRequest } from './package-bridge-approval.js';
 
-export const PACKAGE_BRIDGE_RUN_TASK_BOUNDARY = 'computer_use.runTask(request, hostPorts)';
+export const PACKAGE_BRIDGE_PRIMITIVE_BOUNDARY = 'computer_use.primitiveBridge(request, hostPorts)';
 
-export type PackageBridgeRunTaskInvocation = {
-  boundary: typeof PACKAGE_BRIDGE_RUN_TASK_BOUNDARY;
+export type PackageBridgePrimitiveInvocation = {
+  boundary: typeof PACKAGE_BRIDGE_PRIMITIVE_BOUNDARY;
   request: ComputerUseActionProviderRequest;
   hostPorts: ReturnType<typeof computerUseHostPortsContract>;
 };
@@ -23,20 +23,20 @@ export type PackageBridgeRuntimeSelectionDetailInput = {
   planner: string;
 };
 
-export function materializePackageBridgeRunTaskInvocation(
+export function materializePackageBridgePrimitiveInvocation(
   request: GatewayRequest,
   config: ComputerUseConfig,
   workspace: string,
-): PackageBridgeRunTaskInvocation {
+): PackageBridgePrimitiveInvocation {
   return {
-    boundary: PACKAGE_BRIDGE_RUN_TASK_BOUNDARY,
+    boundary: PACKAGE_BRIDGE_PRIMITIVE_BOUNDARY,
     request: materializePackageBridgeActionProviderRequest(request, config, workspace),
     hostPorts: computerUseHostPortsContract(config),
   };
 }
 
 export function materializePackageBridgeRuntimeSelectionDetail(
-  invocation: PackageBridgeRunTaskInvocation,
+  invocation: PackageBridgePrimitiveInvocation,
   detail: PackageBridgeRuntimeSelectionDetailInput,
 ) {
   return {

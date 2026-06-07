@@ -305,22 +305,26 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     const upstreamBaseUrl = settings.baseUrl!;
     const upstreamModel = settings.model!;
     const upstreamApiKey = settings.apiKey!;
+    const visionModel = settings.visionModel;
+    const visionBaseUrl = visionModel ? settings.visionBaseUrl ?? upstreamBaseUrl : undefined;
+    const visionApiKey = visionModel ? settings.visionApiKey ?? upstreamApiKey : undefined;
+    const visionProvider = visionModel ? settings.visionProvider ?? settings.provider : undefined;
     return {
       ...env,
       SCIFORGE_CONFIG_PATH: runtimeLlmConfigLocalPath(),
       ...localEnv,
       ...(settings.provider ? {
         SCIFORGE_TEXT_PROVIDER: settings.provider,
-        SCIFORGE_VISION_PROVIDER: settings.provider,
       } : {}),
+      ...(visionProvider ? { SCIFORGE_VISION_PROVIDER: visionProvider } : {}),
       SCIFORGE_PROXY_UPSTREAM_BASE_URL: upstreamBaseUrl,
       SCIFORGE_PROXY_DEFAULT_MODEL: upstreamModel,
       SCIFORGE_TEXT_BASE_URL: upstreamBaseUrl,
       SCIFORGE_TEXT_MODEL: upstreamModel,
       SCIFORGE_TEXT_API_KEY: upstreamApiKey,
-      SCIFORGE_VISION_BASE_URL: upstreamBaseUrl,
-      SCIFORGE_VISION_MODEL: upstreamModel,
-      SCIFORGE_VISION_API_KEY: upstreamApiKey,
+      ...(visionBaseUrl ? { SCIFORGE_VISION_BASE_URL: visionBaseUrl } : {}),
+      ...(visionModel ? { SCIFORGE_VISION_MODEL: visionModel } : {}),
+      ...(visionApiKey ? { SCIFORGE_VISION_API_KEY: visionApiKey } : {}),
       SCIFORGE_RUNTIME_PROVIDER: RUNTIME_PROVIDER,
       SCIFORGE_RUNTIME_MODEL: RUNTIME_MODEL,
       SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: RUNTIME_MODEL,
@@ -502,14 +506,15 @@ function localProviderSettingsFromDesktopSidecarEnv(env: NodeJS.ProcessEnv): Loc
     'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
     'SCIFORGE_TEXT_BASE_URL',
     'SCIFORGE_RUNTIME_BASE_URL',
-    'SCIFORGE_VISION_BASE_URL',
   ], (value) => value.replace(/\/+$/, ''));
   const model = firstEnvString(env, [
     'SCIFORGE_PROXY_DEFAULT_MODEL',
     'SCIFORGE_TEXT_MODEL',
     'SCIFORGE_RUNTIME_MODEL',
-    'SCIFORGE_VISION_MODEL',
   ], (value, key) => key === 'SCIFORGE_RUNTIME_MODEL' && value === RUNTIME_MODEL ? '' : value);
+  const visionApiKey = firstEnvString(env, ['SCIFORGE_VISION_API_KEY']);
+  const visionBaseUrl = firstEnvString(env, ['SCIFORGE_VISION_BASE_URL'], (value) => value.replace(/\/+$/, ''));
+  const visionModel = firstEnvString(env, ['SCIFORGE_VISION_MODEL']);
   const provider = firstEnvString(env, [
     'SCIFORGE_TEXT_PROVIDER',
     'SCIFORGE_VISION_PROVIDER',
@@ -523,6 +528,9 @@ function localProviderSettingsFromDesktopSidecarEnv(env: NodeJS.ProcessEnv): Loc
     ...(baseUrl ? { baseUrl: baseUrl.value, baseUrlSource: baseUrl.source } : {}),
     ...(model ? { model: model.value, modelSource: model.source } : {}),
     ...(provider ? { provider: provider.value, providerSource: provider.source } : {}),
+    ...(visionApiKey ? { visionApiKey: visionApiKey.value, visionApiKeySource: visionApiKey.source } : {}),
+    ...(visionBaseUrl ? { visionBaseUrl: visionBaseUrl.value, visionBaseUrlSource: visionBaseUrl.source } : {}),
+    ...(visionModel ? { visionModel: visionModel.value, visionModelSource: visionModel.source } : {}),
     ...(forceNonStreamingUpstream ? {
       forceNonStreamingUpstream: true,
       forceNonStreamingUpstreamSource: 'env:SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM',

@@ -27,7 +27,7 @@ import {
   promotePackageResultFinalArtifactRefs,
 } from './package-bridge-final-artifacts.js';
 import {
-  materializePackageBridgeRunTaskInvocation,
+  materializePackageBridgePrimitiveInvocation,
   materializePackageBridgeRuntimeSelectionDetail,
 } from './package-bridge-request.js';
 import { materializePackageBridgeResult } from './package-bridge-result.js';
@@ -142,7 +142,7 @@ export async function runComputerUsePackageBridge(
     missingPlannerAfterCaptured: false,
     visibleArtifacts: [],
   };
-  const packageInvocation = materializePackageBridgeRunTaskInvocation(request, config, workspace);
+  const packageInvocation = materializePackageBridgePrimitiveInvocation(request, config, workspace);
 
   emitWorkspaceRuntimeEvent(callbacks, {
     type: visionSenseRuntimeEventTypes.runtimeSelected,

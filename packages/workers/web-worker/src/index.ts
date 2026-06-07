@@ -3,7 +3,6 @@ export { startWebWorkerServer, type StartWebWorkerServerOptions } from './server
 export { createWebWorker, invokeWebTool } from './worker';
 export {
   browserFetch,
-  browserSearch,
   RetryableToolError,
   webFetch,
   webSearch,

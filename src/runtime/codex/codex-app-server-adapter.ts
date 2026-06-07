@@ -10,7 +10,7 @@ import {
   type CodexRuntimeMetadata,
   type NormalizedAgentEvent,
 } from './codex-event-normalizer.js';
-import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from './agent-cli-adapter.js';
+import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn, RuntimeInputObject } from './agent-cli-adapter.js';
 
 export interface CodexAppServerStartTurnRequest {
   threadId?: string;
@@ -20,6 +20,7 @@ export interface CodexAppServerStartTurnRequest {
   attemptId: string;
   profile?: string;
   allowOpenAiRuntime?: boolean;
+  inputObjects?: RuntimeInputObject[];
   runtimeIntent?: CodexRuntimeHostIntent;
   agentHostInput?: unknown;
   guiExtension?: {
@@ -88,6 +89,7 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       attemptId,
       profile: input.profile ?? this.options.profile,
       allowOpenAiRuntime: input.allowOpenAiRuntime,
+      inputObjects: input.inputObjects,
       runtimeIntent: input.runtimeIntent,
       guiExtension: input.guiExtension,
       humanApproval: input.humanApproval,

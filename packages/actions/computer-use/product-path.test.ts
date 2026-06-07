@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { validateCuNextLiveAcceptanceTaskEvidence } from './live-acceptance-validator.js';
+import { hasRequiredCuTuiHostChain } from './user-acceptance-manifest.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 
@@ -83,6 +84,59 @@ test('action-provider manifest advertises a TypeScript product entrypoint only',
   assert.doesNotMatch(String(manifest.publicSurfaceParity?.claimLimit ?? ''), /active Computer Use product gate.*virtual-app-screen/i);
 });
 
+test('primitive service exposes no legacy procedure host port escape hatch', () => {
+  const source = readFileSync(resolve(import.meta.dirname, 'index.ts'), 'utf8');
+
+  assert.doesNotMatch(source, /\brunProcedure\?\s*\(/);
+});
+
+test('manifest does not advertise run_procedure as a host port', () => {
+  const manifestText = readFileSync(resolve(import.meta.dirname, 'action-provider.manifest.json'), 'utf8');
+
+  assert.doesNotMatch(manifestText, /runProcedure\/control host port/i);
+  assert.doesNotMatch(manifestText, /register bind\/observe\/act\/runProcedure\/control/i);
+});
+
+test('manifest act action schema documents action-specific required fields', () => {
+  const manifest = JSON.parse(
+    readFileSync(resolve(import.meta.dirname, 'action-provider.manifest.json'), 'utf8'),
+  ) as {
+    actionSchema?: {
+      inputShape?: {
+        oneOf?: Array<{ properties?: Record<string, { const?: string; oneOf?: unknown[] }> }>;
+      };
+    };
+  };
+  const actInput = manifest.actionSchema?.inputShape?.oneOf?.find((branch) =>
+    branch.properties?.schemaVersion?.const === 'sciforge.computer-use.act-input.v1',
+  );
+  const action = actInput?.properties?.action as { oneOf?: unknown[] } | undefined;
+
+  assert.equal(action?.oneOf?.length, 8);
+});
+
+test('runtime package bridge request helper does not expose runTask as its boundary name', () => {
+  const source = readFileSync(resolve(repoRoot, 'src/runtime/computer-use/package-bridge-request.ts'), 'utf8');
+
+  assert.doesNotMatch(source, /RUN_TASK_BOUNDARY|RunTaskInvocation|materializePackageBridgeRunTaskInvocation|computer_use\.runTask/);
+});
+
+test('user acceptance host chain requires primitive session evidence instead of runTask', () => {
+  assert.equal(hasRequiredCuTuiHostChain([
+    { id: 'chat-origin', kind: 'sciForge-chat-origin', status: 'present', requestRef: '.sciforge/vision-runs/product-smoke/computer-use-request.json' },
+    { id: 'computer-use-primitive-session', kind: 'computer-use-primitive-session', status: 'present', sessionRef: 'computer-use:session:product-smoke', primitiveTraceRef: '.sciforge/vision-runs/product-smoke/primitive-trace.json' },
+    { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: '.sciforge/vision-runs/product-smoke/tool-payload.json' },
+  ]), true);
+  const legacyRunTaskChain = [
+    { id: 'chat-origin', kind: 'sciForge-chat-origin', status: 'present', requestRef: '.sciforge/vision-runs/product-smoke/computer-use-request.json' },
+    { id: 'tui-host-runTask', kind: 'tui-host-runTask', status: 'present', requestRef: '.sciforge/vision-runs/product-smoke/computer-use-request.json', hostPortsRef: '.sciforge/vision-runs/product-smoke/host-ports.json' },
+    { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: '.sciforge/vision-runs/product-smoke/tool-payload.json' },
+  ];
+  assert.equal(hasRequiredCuTuiHostChain(
+    legacyRunTaskChain as unknown as Parameters<typeof hasRequiredCuTuiHostChain>[0],
+  ), false);
+});
+
 test('product-smoke classification fail-closes without independent action ledger records', () => {
   const evidence = productSmokeEvidenceWithoutActionLedger();
   const result = validateCuNextLiveAcceptanceTaskEvidence({
@@ -97,6 +151,10 @@ test('product-smoke classification fail-closes without independent action ledger
       issue.id === 'missing-evidence-ledger-trace'
       && /evidence ledger/i.test(issue.reason)
     )),
+  );
+  assert.equal(
+    result.issues.some((issue) => issue.path === 'productPathClassification.sciforgeComputerUseRunTaskRef'),
+    false,
   );
 });
 
@@ -383,7 +441,7 @@ function productSmokeEvidenceWithoutActionLedger(): Record<string, unknown> {
       hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
       appServerRunRef: ref('codex-app-server-run.json'),
       nativePluginInvocationRef: ref('native-plugin-invocation.json'),
-      sciforgeComputerUseRunTaskRef: ref('tui-host-run-task-chain.json'),
+      sciforgeComputerUsePrimitiveTraceRef: ref('primitive-trace.json'),
       platformSidecarIsolationReportRef: ref('platform-sidecar-isolation-report.json'),
       currentBundleRef: `.sciforge/vision-runs/${runId}`,
       currentBundleOnly: true,
@@ -457,7 +515,7 @@ function productSmokeEvidenceWithoutActionLedger(): Record<string, unknown> {
     },
     tuiHostChain: [
       { id: 'chat-origin', kind: 'sciForge-chat-origin', status: 'present', requestRef: ref('computer-use-request.json'), origin: chatOrigin },
-      { id: 'tui-host-runTask', kind: 'tui-host-runTask', status: 'present', requestRef: ref('computer-use-request.json'), hostPortsRef: ref('host-ports.json') },
+      { id: 'computer-use-primitive-session', kind: 'computer-use-primitive-session', status: 'present', sessionRef: 'computer-use:session:product-smoke', primitiveTraceRef: ref('primitive-trace.json') },
       { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: ref('tool-payload.json') },
       { id: 'gui-present', kind: 'gui.present', status: 'present', recordRef: ref('gui-present.json') },
     ],

@@ -285,6 +285,7 @@ test('default Computer Use Act materializer routes WindowActionSession through t
               { kind: 'verification', ref: `window-action-session:vscode-main/actions/${actionId}/verification/verifier.json` },
               { kind: 'freshness-invalidation', ref: `window-action-session:vscode-main/actions/${actionId}/freshness-invalidation.json` },
             ],
+            inputEventRefs: [{ kind: 'input-event', ref: `app-native-command:vscode/actions/${actionId}/scroll/input-event` }],
             afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-frame' }],
           };
         },
@@ -307,6 +308,8 @@ test('default Computer Use Act materializer routes WindowActionSession through t
   assert.deepEqual(calls, [{ adapter: 'app-native-command', action: 'scroll', delta: { y: 180 } }]);
   assert.ok(result?.evidenceRefs.includes('adapter-registry:window-action-session/app-native-command/computer-use'));
   assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/action-state/codex-command-default-window-action-attempt-1'));
+  assert.ok(result?.evidenceRefs.includes('computer-use:primitive-trace/vscode-main/actions/codex-command-default-window-action-attempt-1'));
+  assert.ok(result?.evidenceRefs.includes('app-native-command:vscode/actions/codex-command-default-window-action-attempt-1/scroll/input-event'));
   assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/evidence/after-frame'));
   assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/actions/codex-command-default-window-action-attempt-1/verification/verifier.json'));
   assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/actions/codex-command-default-window-action-attempt-1/freshness-invalidation.json'));
@@ -627,7 +630,7 @@ function readyWindowActionStore() {
   store.upsert(session, {
     refs: ['action-ledger:window-action-session/vscode-main/upsert'],
     targetRefs: ['window-action-session:vscode-main'],
-    observationRefs: ['window-action-session:vscode-main/evidence/before-frame'],
+    observationRefs: windowActionObservationRefs(),
     timestamp: now,
   });
   return store;
@@ -665,7 +668,7 @@ function windowActionPreflight(): ComputerUsePreflightResult {
 function windowActionRuntimeTruth(): CodexAgentHostRuntimeTruth {
   return {
     ...runtimeTruth({
-      observationRefs: ['window-action-session:vscode-main/evidence/before-frame'],
+      observationRefs: windowActionObservationRefs(),
       permissionRefs: ['permission:turn/codex-command-default-window-action/ordinary-navigation'],
       scopedExecutorRefs: ['window-action-session:vscode-main/executor-scope'],
     }),
@@ -681,6 +684,15 @@ function windowActionRuntimeTruth(): CodexAgentHostRuntimeTruth {
       'cancel:runtime-turn/codex-command-default-window-action',
     ],
   };
+}
+
+function windowActionObservationRefs(): string[] {
+  return [
+    'window-action-session:vscode-main/evidence/before-frame',
+    'accessibility-ui-automation:vscode-main/state-snapshot-before',
+    'accessibility-ui-automation:vscode-main/text-before',
+    'desktop-window:vscode-main',
+  ];
 }
 
 function readyPreflight(): ComputerUsePreflightResult {

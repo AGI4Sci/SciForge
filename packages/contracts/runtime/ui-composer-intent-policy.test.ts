@@ -21,5 +21,6 @@ test('composer intent policy scopes exact terminal text computer-use commands', 
 test('composer intent policy detects relative modality references', () => {
   assert.equal(composerPromptMentionsRelativeModality('summarize the screenshot above'), true);
   assert.equal(composerPromptMentionsRelativeModality('分析上面的图片'), true);
+  assert.equal(composerPromptMentionsRelativeModality('请读取这张酒店凭证，回答主要字段'), true);
   assert.equal(composerPromptMentionsRelativeModality('summarize the current plan'), false);
 });

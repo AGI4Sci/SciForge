@@ -26,8 +26,7 @@ const BASE64ISH_APPROVAL_REF_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
 export function isComputerUseNativeRouteCommand(commandText: string): boolean {
   const text = computerUseNativeRouteCommandText(commandText);
   if (!text) return false;
-  if (!/^\/(?:computer-use|computer\s+use)\b/i.test(text)) return false;
-  return !/^\/(?:computer-use|computer\s+use)\s+diagnostic\b/i.test(text);
+  return /^\/(?:computer-use|computer\s+use)\s+diagnostic\b/i.test(text);
 }
 
 export function computerUseNativeRouteCommandText(commandText: string): string | undefined {
@@ -193,7 +192,8 @@ export function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): G
     expectedEvidenceKinds: [
       'computer-use-tui-host-actions',
       'vision-trace',
-      'tui-host-run-task-chain',
+      'computer-use-primitive-session',
+      'primitive-trace',
     ],
     uiState: {
       schemaVersion: 'sciforge.runtime-codex.computer-use-native-route.v1',

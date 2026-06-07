@@ -4,7 +4,29 @@ import { test } from 'node:test';
 import {
   computerUseGatewayRequest,
   createComputerUseNativeRouteStream,
+  isComputerUseNativeRouteCommand,
 } from './computer-use-native-route.js';
+
+test('Computer Use slash route is diagnostic-only unless Host supplies explicit runtime intent', () => {
+  assert.equal(isComputerUseNativeRouteCommand('/computer-use write a visible report'), false);
+  assert.equal(isComputerUseNativeRouteCommand('/computer use click Submit'), false);
+  assert.equal(isComputerUseNativeRouteCommand('/computer-use diagnostic --dry-run'), true);
+  assert.equal(isComputerUseNativeRouteCommand('Plan a GUI action: /computer-use click Submit'), false);
+
+  const plainSlashStream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '/computer-use write a visible report',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-plain-slash',
+      attemptId: 'attempt-1',
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+  assert.equal(plainSlashStream, undefined);
+});
 
 test('Computer Use native route ignores retired completion evidence policy and projects task bindings', () => {
   const request = computerUseGatewayRequest({
@@ -128,6 +150,12 @@ test('Computer Use native route accepts ordinary chat text when host-owned runti
   });
   assert.equal(request.prompt, 'Use the visible desktop from ordinary SciForge Desktop chat to complete the Computer Use acceptance task.');
   assert.deepEqual(request.uiState?.computerUseNext, { taskId: 'CU-NEXT-01' });
+  assert.deepEqual(request.expectedEvidenceKinds, [
+    'computer-use-tui-host-actions',
+    'vision-trace',
+    'computer-use-primitive-session',
+    'primitive-trace',
+  ]);
 });
 
 test('Computer Use native route can select opt-in TextEdit WindowActionSession bridge', async () => {

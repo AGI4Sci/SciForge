@@ -85,3 +85,63 @@ test('desktop dev shell starts Model Router instead of the legacy responses prox
   assert.equal(runtimeSidecar?.env.SCIFORGE_PROXY_BASE_URL, 'http://127.0.0.1:5175');
   assert.equal(runtimeSidecar?.env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
 });
+
+test('desktop dev shell does not infer Model Router vision role from text-only config', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-desktop-dev-model-router-text-only-'));
+  const configPath = join(root, 'config.local.json');
+  await writeFile(configPath, JSON.stringify({
+    llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-local-dev-secret',
+    },
+  }), 'utf8');
+
+  const plan = createDesktopDevShellPlan({
+    projectRoot: root,
+    workspacePath: join(root, 'workspace'),
+    configPath,
+    providerProxyUrl: 'http://127.0.0.1:5175',
+    env: {},
+  });
+
+  const providerSidecar = plan.processes.find((process) => process.id === 'provider-proxy');
+  assert.ok(providerSidecar);
+  assert.equal(providerSidecar.env.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+  assert.equal(providerSidecar.env.SCIFORGE_VISION_MODEL, undefined);
+  assert.equal(providerSidecar.env.SCIFORGE_VISION_BASE_URL, undefined);
+  assert.equal(providerSidecar.env.SCIFORGE_VISION_API_KEY, undefined);
+});
+
+test('desktop dev shell uses explicit visionLLM qwen3.7-plus for Model Router vision role', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-desktop-dev-model-router-vision-'));
+  const configPath = join(root, 'config.local.json');
+  await writeFile(configPath, JSON.stringify({
+    llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-local-dev-secret',
+    },
+    visionLLM: {
+      baseUrl: 'https://vision.example.test/openai-compatible',
+      model: 'qwen3.7-plus',
+      apiKey: 'sk-local-vision-secret',
+    },
+  }), 'utf8');
+
+  const plan = createDesktopDevShellPlan({
+    projectRoot: root,
+    workspacePath: join(root, 'workspace'),
+    configPath,
+    providerProxyUrl: 'http://127.0.0.1:5175',
+    env: {},
+  });
+
+  const providerSidecar = plan.processes.find((process) => process.id === 'provider-proxy');
+  assert.ok(providerSidecar);
+  assert.equal(providerSidecar.env.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+  assert.equal(providerSidecar.env.SCIFORGE_TEXT_API_KEY, 'sk-local-dev-secret');
+  assert.equal(providerSidecar.env.SCIFORGE_VISION_BASE_URL, 'https://vision.example.test/openai-compatible');
+  assert.equal(providerSidecar.env.SCIFORGE_VISION_MODEL, 'qwen3.7-plus');
+  assert.equal(providerSidecar.env.SCIFORGE_VISION_API_KEY, 'sk-local-vision-secret');
+});

@@ -578,8 +578,7 @@ function browserEvidenceSemanticSignals(prompt: string, combined: string) {
 }
 
 function explicitBrowserSearch(text: string) {
-  return hasAsciiToken(text, 'browser_search')
-    || /(?:^|[^A-Za-z0-9_])\/browser\s+search(?=$|[^A-Za-z0-9_])/i.test(text)
+  return /(?:^|[^A-Za-z0-9_])\/browser\s+search(?=$|[^A-Za-z0-9_])/i.test(text)
     || (browserSearchSurfaceMention(text) && browserSearchVerbMention(text))
     || hasAsciiToken(text, 'browser_runtime');
 }
@@ -635,7 +634,6 @@ function publicExternalTopicSignal(text: string) {
 
 function browserSearchQueryFromText(prompt: string): string | undefined {
   const patterns = [
-    /browser_search\s*\(\s*(?:query\s*[:=]\s*)?["“']([^"”']+)["”']\s*\)/i,
     /\/browser\s+search\s+["“']([^"”']+)["”']/i,
     /(?:browser\s+search|search|query|搜索|检索)\s*[:：]\s*["“']?([^"”'\n。；;]+)/i,
     /(?:请|帮我|帮忙|给我|麻烦)?\s*(?:通过|使用|用)?\s*(?:内置)?\s*(?:浏览器|网页|网络|互联网)?\s*(?:搜索|检索|查询|查找)\s*[:：]?\s*["“']?([^"”'\n。；;]+)/i,
@@ -644,9 +642,6 @@ function browserSearchQueryFromText(prompt: string): string | undefined {
     const match = pattern.exec(prompt);
     const value = cleanBrowserSearchQueryCandidate(match?.[1]);
     if (value) return compactText(value, 240);
-  }
-  if (hasAsciiToken(prompt, 'browser_search')) {
-    return compactText(prompt.replace(/browser_search/ig, '').replace(/["“”']/g, ' '), 240);
   }
   return undefined;
 }

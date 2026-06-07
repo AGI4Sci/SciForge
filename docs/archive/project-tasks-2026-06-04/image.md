@@ -140,4 +140,4 @@ candidates?       // bounded summary only
 - [`PROJECT_annotation.md`](PROJECT_annotation.md)
 - [`PROJECT_browser.md`](PROJECT_browser.md)
 - [`PROJECT_window_action.md`](PROJECT_window_action.md)
-- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
+- 已删除的历史 VirtualAppScreen 设计文档。

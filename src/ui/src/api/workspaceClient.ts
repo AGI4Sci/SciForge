@@ -303,11 +303,9 @@ export type WorkspaceTerminalStatus = 'starting' | 'running' | 'idle' | 'failed'
 export const WORKSPACE_TERMINAL_WEBSOCKET_PTY_CAPABILITY = 'workspace-terminal-websocket-pty';
 export const BROWSER_HOST_SESSION_CAPABILITY = 'browser-host-session';
 export const BROWSER_HOST_NATIVE_SURFACE_CAPABILITY = 'browser-host-native-surface';
-export const BROWSER_HOST_SEARCH_CAPABILITY = 'browser-host-search';
 const BROWSER_HOST_REQUIRED_CAPABILITIES = [
   BROWSER_HOST_SESSION_CAPABILITY,
   BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
-  BROWSER_HOST_SEARCH_CAPABILITY,
 ] as const;
 const BROWSER_HOST_SESSION_REQUIRED_ENDPOINT_TOKENS = [
   'start',
@@ -320,7 +318,6 @@ const BROWSER_HOST_NATIVE_SURFACE_REQUIRED_ENDPOINT_TOKENS = [
   'attach',
   'state',
 ] as const;
-const BROWSER_HOST_SEARCH_REQUIRED_ENDPOINT_TOKEN = 'browser-host/search';
 
 export interface WorkspaceTerminalSession {
   schemaVersion: 1;
@@ -562,29 +559,6 @@ export interface BrowserHostComputerUseActionResult {
     deltaY?: number;
   };
   session: BrowserHostSessionState;
-}
-
-export interface BrowserHostSearchResultItem {
-  title: string;
-  url: string;
-  snippet: string;
-}
-
-export interface BrowserHostSearchResult {
-  schemaVersion: 'sciforge.browser-host-session.search-result.v1';
-  query: string;
-  sessionId?: string;
-  engine: 'bing' | 'duckduckgo';
-  searchUrl: string;
-  finalUrl: string;
-  results: BrowserHostSearchResultItem[];
-  session: BrowserHostSessionState;
-  searchResultRef: string;
-  screenshotRef?: string;
-  domSnapshotRef?: string;
-  axSnapshotRef?: string;
-  consoleLogRef?: string;
-  networkLogRef?: string;
 }
 
 export async function loadFileBackedSciForgeConfig(config: SciForgeConfig): Promise<SciForgeConfig | undefined> {
@@ -1517,45 +1491,6 @@ export async function readBrowserHostSessionState(
   return withBrowserHostWriterUrl(json.session, operationConfig.workspaceWriterBaseUrl);
 }
 
-export async function searchWithBrowserHostSession(
-  config: SciForgeConfig,
-  input: {
-    query: string;
-    sessionId?: string;
-    limit?: number;
-    region?: string;
-    engine?: 'bing' | 'duckduckgo';
-    timeoutMs?: number;
-    workspacePath?: string;
-  },
-): Promise<BrowserHostSearchResult> {
-  const prepared = await prepareBrowserHostSessionWriter(config, {
-    timeoutMs: BROWSER_HOST_WRITER_START_PREFLIGHT_TIMEOUT_MS,
-    allowConfiguredOfflineFallback: true,
-  });
-  const searchConfig = prepared.config;
-  const response = await fetchWorkspace(searchConfig, 'browser host search', `${searchConfig.workspaceWriterBaseUrl}/api/sciforge/browser-host/search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      workspacePath: input.workspacePath || searchConfig.workspacePath,
-      query: input.query,
-      sessionId: input.sessionId,
-      limit: input.limit,
-      region: input.region,
-      engine: input.engine,
-      timeoutMs: input.timeoutMs,
-    }),
-  });
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `BrowserHostSession search failed: HTTP ${response.status}`));
-  const json = await response.json() as { search?: BrowserHostSearchResult };
-  if (!json.search) throw new Error('BrowserHostSession search returned no result.');
-  return {
-    ...json.search,
-    session: withBrowserHostWriterUrl(json.search.session, searchConfig.workspaceWriterBaseUrl),
-  };
-}
-
 export function browserHostSessionFrameUrl(config: SciForgeConfig, session: BrowserHostSessionState): string {
   const writerBaseUrl = session.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl;
   const url = new URL(`${writerBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(session.id)}/frame`);
@@ -1660,7 +1595,7 @@ function browserHostWriterUnavailableError(
     recoverActions: [
       '确认 Workspace Writer URL 指向 writer 服务而不是 Web UI',
       '启动 npm run workspace:server 或点击启动服务后重试',
-      '检查 /health 是否包含 browser-host-session、browser-host-native-surface、browser-host-search，以及 native surface health/attach/state endpoints',
+      '检查 /health 是否包含 browser-host-session、browser-host-native-surface，以及 native surface health/attach/state endpoints',
     ],
     diagnosticRef: preflight.diagnosticRef,
     cause,
@@ -2121,11 +2056,7 @@ function missingBrowserHostSessionRequirements(health: SciForgeWorkspaceWriterHe
       .filter((token) => !browserHostNativeSurfaceEndpoint.includes(token))
       .map((token) => `endpoint:browserHostNativeSurface.${token}`)
     : ['endpoint:browserHostNativeSurface'];
-  const browserHostSearchEndpoint = typeof endpoints.browserHostSearch === 'string' ? endpoints.browserHostSearch : '';
-  const missingSearchEndpoints = browserHostSearchEndpoint.includes(BROWSER_HOST_SEARCH_REQUIRED_ENDPOINT_TOKEN)
-    ? []
-    : ['endpoint:browserHostSearch'];
-  return [...missingCapabilities, ...missingSessionEndpoints, ...missingNativeSurfaceEndpoints, ...missingSearchEndpoints];
+  return [...missingCapabilities, ...missingSessionEndpoints, ...missingNativeSurfaceEndpoints];
 }
 
 function browserHostNativeSurfaceEndpointFromHealth(

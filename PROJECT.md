@@ -1,6 +1,6 @@
-# SciForge 当前需求：基本模块与用户级验收
+# SciForge 当前需求：模块化能力与用户级验收
 
-最后更新：2026-06-06
+最后更新：2026-06-07
 
 ## 用户真正要什么
 
@@ -21,7 +21,7 @@ SciForge 是 Codex backend 的 GUI / Browser / Desktop 能力面，不是第二�
   -> Codex backend Agent Host
      -> 理解用户任务
      -> 拆出局部目标、风险边界和证据要求
-     -> 调用 SciForge 模块
+     -> 调用 SciForge 模块 primitive
      -> 基于 evidence 形成 completion truth
      -> 生成用户可见 final answer
   -> SciForge UI 展示回答、证据、产物、确认和 blocked recovery
@@ -30,7 +30,7 @@ SciForge 是 Codex backend 的 GUI / Browser / Desktop 能力面，不是第二�
 Browser、Computer Use 和未来拓展模块只提供两类能力：
 
 - 信息输入：read / observe / search / capture / source evidence。
-- 局部操作执行：通过 `module.invoke(executeBoundedOperation)` 执行有边界的局部动作串。
+- 局部操作执行：模块自有 primitive，以及不承载智能的局部组合 primitive。
 
 模块不得拥有用户级 task plan、repair、completion truth 或 final answer。
 
@@ -40,28 +40,27 @@ Browser、Computer Use 和未来拓展模块只提供两类能力：
 
 P0 只包含：
 
-1. Bounded Operation 契约。
-2. Browser 基本模块：`browser.search_read`、`browser.open_read`。
-3. Computer Use 基本模块：`computer_use.perform_local_action`、`computer_use.fill_fields`。
-4. Codex backend 将 operation result 转成 completion truth 和 final answer。
+1. Browser source evidence：搜索、打开、读取来源，并返回 refs-first source/page evidence。
+2. Computer Use primitive：`computer_use.bind`、`computer_use.observe`、`computer_use.act`、`computer_use.run_procedure`、`computer_use.control`。
+3. Codex backend 将 source / action / artifact evidence 转成 completion truth 和 final answer。
 
 P1 只包含：
 
 1. 一页 PPT / artifact 用户级验收路径。
 
-## Bounded Operation 契约
+## Primitive 契约
 
-`executeBoundedOperation` 是 `module.invoke` 下的 typed intent，不是新顶层 API，也不是工作流引擎。
+模块 primitive 是 Host 调用的 typed intent，不是新顶层 API，也不是工作流引擎。
 
-每个 operation 必须满足：
+每次调用必须满足：
 
 - 一个 owner module。
 - 一个 target scope。
 - 一个局部目标。
-- 有 `allowedActions`、`maxSteps`、`maxTimeMs`、`maxModelCalls`、`riskPolicy`、`requiredEvidence`、`stopConditions`。
-- 内部不得调用另一个 `executeBoundedOperation`。
-- 配置不得表达 `if/else/loop` 工作流。
-- 模块只能返回 blocked reason / repair hint，不能自动 repair。
+- 有 `sessionRef`、`budget`、`riskPolicy`、`requiredEvidence` 和 `stopConditions`。
+- 不嵌套调用其它模块。
+- 配置不得表达跨模块 `if/else/loop` 工作流。
+- 模块只能返回 refs-first result、blocked reason 和 repair hint，不能自动 repair。
 
 统一返回状态：
 
@@ -73,9 +72,7 @@ needs-confirmation
 failed
 ```
 
-返回内容只能是 refs-first operation result，例如 evidence refs、action refs、artifact refs、approval request、blocked reasons 和 compact observation。
-
-Model Router 可以在 operation 内部做局部辅助，但只能用于：
+Model Router 可以在 primitive 内部做局部辅助，但只能用于：
 
 - 截图 / crop / 页面片段描述。
 - 候选目标消歧。
@@ -87,12 +84,7 @@ Model Router 不得改变 risk policy，不得决定跨模块下一步，不得�
 
 ## Browser 基本模块
 
-首批 operationKind：
-
-- `browser.search_read`：使用 Host 给定 query 获取 source page refs 和 page text refs。
-- `browser.open_read`：打开 Host 给定 URL / link ref 并读取页面 evidence。
-
-Browser 不做：
+Browser 返回 source page refs 和 page text refs。Browser 不做：
 
 - 开放式探索。
 - 查询改写。
@@ -102,7 +94,7 @@ Browser 不做：
 
 Browser 用户级验收：
 
-- 普通聊天请求“搜索并总结本周前沿 AI 大模型进展”能由 Codex backend 调用 `browser.search_read`。
+- 普通聊天请求“搜索并总结本周前沿 AI 大模型进展”能由 Codex backend 调用 Browser source evidence 能力。
 - Browser 返回实际打开并读取过的 source page refs / page text refs。
 - 搜索结果页本身不能作为完成证据。
 - Codex backend 基于 source evidence 生成 final answer，并在回答中给出来源。
@@ -111,22 +103,27 @@ Browser 用户级验收：
 
 ## Computer Use 基本模块
 
-首批 operationKind：
+Computer Use 当前只保留五个 primitive：
 
-- `computer_use.perform_local_action`：在 Host 绑定的 target scope 内执行一个低风险局部 GUI action。
-- `computer_use.fill_fields`：在同一窗口 / 表单 / 编辑区域内填写 Host 给定字段，但不提交。
+- `computer_use.bind`：绑定 Host 指定目标，建立 scoped session。
+- `computer_use.observe`：读取已绑定 target 的当前状态。
+- `computer_use.act`：在已绑定 target 上执行一个 Host 指定的原子动作。
+- `computer_use.run_procedure`：执行 Host 指定的无智能局部步骤序列，用来降低 Agent Host 往返成本。
+- `computer_use.control`：暂停、停止或释放 session。
 
 Computer Use 不做：
 
+- 用户任务理解。
 - PPT 内容设计。
-- 跨 app workflow。
+- 跨 app workflow planning。
 - 提交 / 发送 / 上传 / 删除 / 支付。
 - 用户级完成判断。
 
 Computer Use 用户级验收：
 
-- 普通聊天请求低风险 GUI 局部操作时，Codex backend 能调用 `computer_use.perform_local_action` 或 `computer_use.fill_fields`，不要求 `/computer-use`。
+- 普通聊天请求低风险 GUI 局部操作时，Codex backend 能调用 Computer Use primitive，不要求 `/computer-use`。
 - 每个改变界面的 action 都有 current target-bound before evidence、grounding refs、executor event、after evidence 和 stale invalidation。
+- 每个独立 Computer Use 会话有独立输入 adapter 和独立光标标志，不影响用户正常使用鼠标键盘。
 - final answer 由 Codex backend 基于 action evidence 生成，说明局部目标是否完成。
 - 高风险动作必须返回 `needs-confirmation`，由 GUI 收集确认；未确认不得执行。
 - 缺 native host、target binding、fresh evidence、permission refs、scoped executor 或 stop / cancel path 时，必须 blocked，并说明恢复路径。
@@ -163,6 +160,7 @@ provider proxy 还必须能解析 OpenAI-compatible upstream base URL，例如�
 
 ## 文档地图
 
-- [`docs/Architecture.md`](docs/Architecture.md)：总架构和 Bounded Operation 边界。
+- [`docs/Architecture.md`](docs/Architecture.md)：总架构边界。
 - [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：Browser 模块边界。
-- [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md)：Computer Use 模块边界。
+- [`docs/ComputerUseRuntimeArchitecture.md`](docs/ComputerUseRuntimeArchitecture.md)：Computer Use 模块边界。
+- [`PROJECT_CU.md`](PROJECT_CU.md)：Computer Use 分阶段任务清单。

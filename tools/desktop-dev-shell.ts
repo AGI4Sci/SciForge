@@ -111,11 +111,15 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
   const routerProfile = stringValue(env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE)
     ?? MODEL_ROUTER_DEFAULT_PROFILE;
   const textBaseUrl = stringValue(env.SCIFORGE_TEXT_BASE_URL) ?? upstreamBaseUrl;
-  const visionBaseUrl = stringValue(env.SCIFORGE_VISION_BASE_URL) ?? config.visionBaseUrl ?? upstreamBaseUrl;
   const textModel = stringValue(env.SCIFORGE_TEXT_MODEL) ?? providerModel;
-  const visionModel = stringValue(env.SCIFORGE_VISION_MODEL) ?? config.visionModel ?? providerModel;
+  const visionModel = stringValue(env.SCIFORGE_VISION_MODEL) ?? config.visionModel;
+  const visionBaseUrl = visionModel
+    ? stringValue(env.SCIFORGE_VISION_BASE_URL) ?? config.visionBaseUrl ?? upstreamBaseUrl
+    : undefined;
   const textApiKey = stringValue(env.SCIFORGE_TEXT_API_KEY) ?? apiKey;
-  const visionApiKey = stringValue(env.SCIFORGE_VISION_API_KEY) ?? apiKey;
+  const visionApiKey = visionModel
+    ? stringValue(env.SCIFORGE_VISION_API_KEY) ?? config.visionApiKey ?? apiKey
+    : undefined;
   const credentialFromEnv = Boolean(
     stringValue(env.SCIFORGE_RUNTIME_API_KEY)
     || stringValue(env.SCIFORGE_TEXT_API_KEY)
@@ -299,6 +303,7 @@ type DesktopDevShellConfig = {
   apiKey?: string;
   upstreamBaseUrl?: string;
   model?: string;
+  visionApiKey?: string;
   visionBaseUrl?: string;
   visionModel?: string;
   browserHostNativeAdapterUrl?: string;
@@ -313,7 +318,10 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
     const textLLM = recordField(parsed, 'textLLM');
     const textLLMEnv = recordField(textLLM, 'env');
     const codexProxy = recordField(parsed, 'codexProxy');
+    const visionLLM = recordField(parsed, 'visionLLM');
+    const visionLLMEnv = recordField(visionLLM, 'env');
     const visionSense = recordField(parsed, 'visionSense');
+    const visionSenseEnv = recordField(visionSense, 'env');
     const desktop = recordField(parsed, 'desktop');
     const desktopBrowserHost = recordField(desktop, 'browserHost');
     const browserHost = recordField(parsed, 'browserHost');
@@ -342,10 +350,30 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
         ?? stringValue(codexProxy.model)
         ?? stringValue(parsed.modelName)
         ?? stringValue(parsed.model),
-      visionBaseUrl: stringValue(visionSense.vlmBaseUrl)
+      visionApiKey: stringValue(visionLLM.apiKey)
+        ?? stringValue(visionLLMEnv.SCIFORGE_VISION_API_KEY)
+        ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_API_KEY)
+        ?? stringValue(visionSense.apiKey)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_API_KEY)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_API_KEY),
+      visionBaseUrl: stringValue(visionLLMEnv.SCIFORGE_VISION_BASE_URL)
+        ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_BASE_URL)
+        ?? stringValue(visionLLM.baseUrl)
+        ?? stringValue(visionLLM.upstreamBaseUrl)
+        ?? stringValue(visionLLM.modelBaseUrl)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_BASE_URL)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_BASE_URL)
+        ?? stringValue(visionSense.vlmBaseUrl)
         ?? stringValue(visionSense.baseUrl)
         ?? stringValue(visionSense.modelBaseUrl),
-      visionModel: stringValue(visionSense.vlmModel)
+      visionModel: stringValue(visionLLMEnv.SCIFORGE_VISION_MODEL)
+        ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_MODEL)
+        ?? stringValue(visionLLM.model)
+        ?? stringValue(visionLLM.modelName)
+        ?? stringValue(visionLLM.defaultModel)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_MODEL)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_MODEL)
+        ?? stringValue(visionSense.vlmModel)
         ?? stringValue(visionSense.model)
         ?? stringValue(visionSense.modelName),
       browserHostNativeAdapterUrl: stringValue(desktop.browserHostNativeAdapterUrl)

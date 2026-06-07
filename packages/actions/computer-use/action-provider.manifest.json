@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "kind": "action",
   "displayName": "SciForge Computer Use",
-  "summary": "面向 GUI 的 refs-first Computer Use action loop；真实桌面完成必须由 host-provided target-bound ports 和 evidence 证明。",
+  "summary": "Refs-first Computer Use primitive action provider for target binding, observation, atomic GUI actions, local procedures, and session control.",
   "domains": [
     "gui",
     "automation",
@@ -15,8 +15,10 @@
     "click",
     "type",
     "scroll",
+    "drag",
     "press key",
-    "window-bound action"
+    "window-bound action",
+    "local GUI procedure"
   ],
   "antiTriggers": [
     "vision-only question",
@@ -27,244 +29,490 @@
   "entrypoint": {
     "type": "typescript-package",
     "package": "@agi4sci/sciforge-computer-use-action-provider",
-    "module": "packages/actions/computer-use/host-adapter-contract.ts",
-    "symbol": "createComputerUseHostAdapter",
+    "module": "packages/actions/computer-use/index.ts",
+    "symbol": "createComputerUsePrimitiveService",
     "path": "packages/actions/computer-use",
-    "interface": "createComputerUseHostAdapter({ hostPorts, dispatchHostPort })",
-    "productRoute": "Agent Host -> WindowActionSession -> TypeScript host-port contract -> current evidence bundle",
-    "notes": "Computer Use product/default acceptance is TS-only and consumes refs-first host ports plus WindowAction evidence projection."
+    "interface": "createComputerUsePrimitiveService({ ports })",
+    "productRoute": "Agent Host -> Computer Use primitive service -> host-provided target-bound ports -> current evidence bundle",
+    "notes": "Computer Use product/default acceptance is TS-only. The primitive service owns schema validation and MCP-compatible dispatch; the Host owns task reasoning, approval collection, real ports, artifact validation, completion truth, and final answers."
   },
   "actionSchema": {
-    "schemaRef": "sciforge.computer-use.request.v1",
+    "schemaRef": "sciforge.computer-use.primitive-input.v1",
     "inputShape": {
       "type": "object",
       "required": [
-        "task"
+        "schemaVersion"
       ],
+      "additionalProperties": false,
       "properties": {
-        "schema_version": {
-          "const": "sciforge.computer-use.request.v1"
+        "schemaVersion": {
+          "enum": [
+            "sciforge.computer-use.bind-input.v1",
+            "sciforge.computer-use.observe-input.v1",
+            "sciforge.computer-use.act-input.v1",
+            "sciforge.computer-use.run-procedure-input.v1",
+            "sciforge.computer-use.control-input.v1"
+          ]
         },
-        "task": {
+        "target": {
+          "type": "object"
+        },
+        "sessionId": {
           "type": "string"
         },
-        "max_steps": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 12
+        "actionId": {
+          "type": "string"
         },
-        "risk_policy": {
+        "action": {
+          "type": "object"
+        },
+        "captureAfter": {
+          "type": "boolean"
+        },
+        "capture": {
+          "enum": [
+            "none",
+            "screenshot",
+            "accessibility",
+            "both"
+          ]
+        },
+        "includeTree": {
+          "type": "boolean"
+        },
+        "risk": {
+          "type": "object"
+        },
+        "riskPolicy": {
           "enum": [
             "fail-closed",
             "allow-confirmed"
           ]
         },
-        "approval_ref": {
+        "approvalRef": {
           "type": "string"
         },
-        "providers": {
-          "type": "object",
-          "properties": {
-            "sense": {
-              "type": "string"
-            },
-            "grounder": {
-              "type": "string"
-            },
-            "executor": {
-              "type": "string"
-            },
-            "verifier": {
-              "type": "string"
-            }
-          },
-          "additionalProperties": true
-        },
-        "window_target": {
-          "type": "object"
-        },
-        "metadata": {
-          "type": "object"
-        }
-      }
-    },
-    "outputShape": {
-      "type": "object",
-      "required": [
-        "schemaVersion",
-        "status",
-        "reason",
-        "steps",
-        "traceRefs",
-        "screenshotRefs",
-        "artifactRefs"
-      ],
-      "properties": {
-        "schemaVersion": {
-          "const": "sciforge.computer-use.result.v1"
-        },
-        "status": {
-          "enum": [
-            "completed",
-            "failed-with-reason",
-            "needs-confirmation",
-            "max-steps"
-          ]
-        },
-        "reason": {
-          "type": "string"
-        },
-        "message": {
+        "procedureRef": {
           "type": "string"
         },
         "steps": {
           "type": "array"
         },
-        "finalObservationRef": {
-          "type": [
-            "string",
-            "null"
+        "command": {
+          "enum": [
+            "pause",
+            "resume",
+            "cancel",
+            "release",
+            "stop"
           ]
         },
-        "final_observation": {
-          "type": [
-            "object",
-            "null"
+        "reasonRef": {
+          "type": "string"
+        },
+        "budget": {
+          "type": "object"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "schemaVersion",
+            "target"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "sciforge.computer-use.bind-input.v1"
+            },
+            "target": {
+              "type": "object"
+            },
+            "riskPolicy": {
+              "enum": [
+                "fail-closed",
+                "allow-confirmed"
+              ]
+            },
+            "approvalRef": {
+              "type": "string"
+            },
+            "budget": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "required": [
+            "schemaVersion",
+            "sessionId"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "sciforge.computer-use.observe-input.v1"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "capture": {
+              "enum": [
+                "none",
+                "screenshot",
+                "accessibility",
+                "both"
+              ]
+            },
+            "includeTree": {
+              "type": "boolean"
+            },
+            "budget": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "required": [
+            "schemaVersion",
+            "sessionId",
+            "action"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "sciforge.computer-use.act-input.v1"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "actionId": {
+              "type": "string"
+            },
+            "action": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "oneOf": [
+                {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "click"
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "required": [
+                        "elementRef"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "point"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "double_click"
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "required": [
+                        "elementRef"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "point"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "required": [
+                    "type",
+                    "textRef"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "type"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "key"
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "required": [
+                        "key"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "keys"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "required": [
+                    "type",
+                    "direction"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "scroll"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "type",
+                    "durationMs"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "wait"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "type",
+                    "command"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "app_command"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "type",
+                    "point",
+                    "toPoint"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "drag"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "type": {
+                  "enum": [
+                    "click",
+                    "double_click",
+                    "type",
+                    "key",
+                    "scroll",
+                    "wait",
+                    "app_command",
+                    "drag"
+                  ]
+                },
+                "elementRef": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "object"
+                },
+                "toPoint": {
+                  "type": "object"
+                },
+                "textRef": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "keys": {
+                  "type": "array"
+                },
+                "direction": {
+                  "enum": [
+                    "up",
+                    "down",
+                    "left",
+                    "right"
+                  ]
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "durationMs": {
+                  "type": "number"
+                },
+                "command": {
+                  "type": "string"
+                }
+              }
+            },
+            "captureAfter": {
+              "type": "boolean"
+            },
+            "risk": {
+              "type": "object"
+            },
+            "approvalRef": {
+              "type": "string"
+            },
+            "budget": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "required": [
+            "schemaVersion",
+            "sessionId",
+            "steps"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "sciforge.computer-use.run-procedure-input.v1"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "procedureRef": {
+              "type": "string"
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 1
+            },
+            "budget": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "required": [
+            "schemaVersion",
+            "sessionId",
+            "command"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "sciforge.computer-use.control-input.v1"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "command": {
+              "enum": [
+                "pause",
+                "resume",
+                "cancel",
+                "release",
+                "stop"
+              ]
+            },
+            "reasonRef": {
+              "type": "string"
+            },
+            "budget": {
+              "type": "object"
+            }
+          }
+        }
+      ]
+    },
+    "outputShape": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "moduleId",
+        "primitive",
+        "status",
+        "refs",
+        "diagnostics",
+        "budget"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "sciforge.computer-use.primitive-result.v1"
+        },
+        "moduleId": {
+          "const": "computer_use"
+        },
+        "primitive": {
+          "enum": [
+            "bind",
+            "observe",
+            "act",
+            "run_procedure",
+            "control"
           ]
         },
-        "traceRefs": {
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "blocked",
+            "needs-confirmation",
+            "failed"
+          ]
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "refs": {
           "type": "array",
           "items": {
             "type": "string"
           }
         },
-        "screenshotRefs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "artifactRefs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "finalArtifactRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "finalArtifactRefs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "approvalRequest": {
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "approval_request": {
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "failureDiagnostics": {
-          "type": "object"
-        },
-        "failure_diagnostics": {
-          "type": "object"
-        },
-        "targetPointerStateRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "targetKeyboardStateRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "targetInputEventLogRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "pointerEventLogRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "keyboardEventLogRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "inputEventLogRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "evidenceLogRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "evidenceSnapshotRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "evidenceIndexRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "plannerBriefRef": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "artifactMetadata": {
-          "type": "object"
-        },
-        "metrics": {
-          "type": "object"
-        },
-        "budgetDebits": {
+        "diagnostics": {
           "type": "array"
         },
-        "budgetDebitRefs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+        "budget": {
+          "type": "object"
+        },
+        "blockedReason": {
+          "type": "string"
+        },
+        "repairHints": {
+          "type": "array"
         }
       }
     },
     "examples": [
       {
-        "task": "点击目标窗口中可见的搜索框",
-        "max_steps": 3,
-        "risk_policy": "fail-closed",
-        "window_target": {
-          "titleContains": "SciForge"
-        }
+        "schemaVersion": "sciforge.computer-use.bind-input.v1",
+        "target": {
+          "kind": "window",
+          "windowRef": "window:macos/TextEdit/123"
+        },
+        "riskPolicy": "fail-closed"
+      },
+      {
+        "schemaVersion": "sciforge.computer-use.act-input.v1",
+        "sessionId": "cu-session-1",
+        "actionId": "host-action-1",
+        "action": {
+          "type": "click",
+          "elementRef": "element:save-button"
+        },
+        "captureAfter": true
       }
     ]
   },
@@ -301,7 +549,7 @@
       "external-send-without-approval"
     ],
     "requiresExplicitTarget": true,
-    "notes": "旧实现中 high risk action 在 fail-closed 策略下返回 needs-confirmation，不执行。"
+    "notes": "High-risk computer_use.act returns needs-confirmation unless the caller supplies an approvalRef bound to the same risk envelope."
   },
   "confirmationRules": {
     "requiredWhen": [
@@ -311,33 +559,31 @@
       "approvalPolicy missing"
     ],
     "approvalEvidence": [
-      "ComputerUseRequest.risk_policy=allow-confirmed",
-      "ComputerUseRequest.approval_ref"
+      "ComputerUseActInput.approvalRef",
+      "ComputerUseBindInput.approvalRef for target binding policies",
+      "caller-owned approval sidecar refs"
     ],
     "timeoutPolicy": "fail"
   },
   "hostPortsContract": {
     "schemaRef": "sciforge.computer-use.host-ports.v1",
-    "policySource": "packages/actions/computer-use/provider-policy.ts",
+    "policySource": "packages/actions/computer-use/index.ts",
     "requiredPorts": [
-      "capture",
-      "plan",
-      "locate",
-      "execute",
-      "verify"
+      "bind",
+      "observe",
+      "act",
+      "control"
     ],
     "optionalPorts": [
-      "crop",
-      "query",
+      "runProcedure",
       "writeTrace",
       "emitEvent"
     ],
     "realDesktopEvidenceRequiredPorts": [
-      "capture",
-      "plan",
-      "locate",
-      "execute",
-      "verify",
+      "bind",
+      "observe",
+      "act",
+      "control",
       "writeTrace",
       "emitEvent"
     ],
@@ -347,27 +593,24 @@
       "gui.ask_user"
     ],
     "providerIdPolicy": {
-      "capture": [
-        "display-capture",
-        "target-window-capture",
-        "historical-frame-evidence-reader"
+      "bind": [
+        "target-window-session-binder",
+        "app-window-session-binder",
+        "remote-desktop-session-binder"
       ],
-      "crop": "host-focus-region-crop",
-      "plan": "model-router.capability.computer-use.planner",
-      "locate": "model-router.capability.computer-use.grounding-translator",
-      "actionRequestExecutor": [
-        "dry-run-generic-gui-executor",
-        "package-target-bound-window-executor",
-        "<desktopPlatform>-host-port-executor"
+      "observe": [
+        "target-window-observation-provider",
+        "accessibility-observation-provider",
+        "screenshot-ref-observation-provider"
       ],
-      "execute": [
+      "act": [
         "dry-run-generic-gui-executor",
-        "virtual-input-state-executor",
         "target-bound-scoped-input-provider",
         "package-target-bound-window-executor",
         "<desktopPlatform>-generic-gui-executor"
       ],
-      "verify": "model-router.capability.computer-use.verifier-translator",
+      "runProcedure": "local-primitive-procedure-runner",
+      "control": "target-bound-session-control",
       "writeTrace": "workspace-file-ref-trace-writer",
       "emitEvent": "workspace-runtime-events"
     },
@@ -623,153 +866,110 @@
     },
     "claimLimit": "Computer Use is TS-only. WindowActionSession current evidence is the active product gate; removed legacy package routes, VirtualAppScreen, M6/native multi-screen, container viewers, remote desktop packaging, and retired desktop probes cannot satisfy product acceptance."
   },
-  "plannerContract": {
-    "schemaRef": "sciforge.computer-use.planner-action.v1",
-    "inputs": [
-      "task",
-      "compactObservation",
-      "visibleText",
-      "recentActions",
-      "verifierFeedback"
-    ],
-    "output": "exactly one generic action or done=true",
-    "supportedActions": [
-      "open_app",
-      "click",
-      "double_click",
-      "drag",
-      "type_text",
-      "press_key",
-      "hotkey",
-      "scroll",
-      "wait",
-      "focus",
-      "save"
-    ],
-    "rejectedIssues": [
-      "coordinate-output",
-      "app-private-shortcut",
-      "unsupported-action",
-      "empty-action"
-    ],
-    "coordinateOwner": "grounder-provider",
-    "notes": "Planner must not output coordinates, app-private shortcuts, unsupported action types, or empty action blocks."
-  },
   "traceContract": {
-    "schemaRef": "sciforge.computer-use.loop-trace.v1",
+    "schemaRef": "sciforge.computer-use.primitive-trace.v1",
     "storagePolicy": "ref-only",
     "eventTypes": [
+      "bind",
       "observe",
-      "plan",
-      "ground",
-      "execute",
-      "verify",
-      "complete",
-      "fail"
+      "act",
+      "run_procedure",
+      "control",
+      "needs-confirmation",
+      "blocked",
+      "failed"
     ],
     "redaction": [
-      "typedText",
+      "rawText",
       "credentials",
       "privateWindowTitle",
-      "rawScreenshot"
+      "rawScreenshot",
+      "rawAccessibilityTree",
+      "rawProviderPayload",
+      "base64",
+      "data:image"
     ],
-    "retention": "trace 只保存 refs、紧凑摘要和结构化步骤，大 payload 进入 artifact store。"
+    "retention": "Primitive trace only stores refs, compact diagnostics, structured step records, and invalidation refs. Raw screenshots, raw AX trees, raw provider payloads, and typed text stay outside the public primitive body."
   },
   "verifierContract": {
-    "required": true,
+    "required": false,
     "defaultVerifierTypes": [
       "environment",
       "human"
     ],
     "requiredWhen": [
-      "riskLevel=high",
-      "status=completed",
-      "external side effect"
+      "caller needs user-level completion truth",
+      "caller needs artifact validation",
+      "caller needs high-risk approval decision"
     ],
     "requestShape": {
-      "goal": "ComputerUseRequest.task",
-      "traceRefs": "computer-use trace refs",
-      "stateRefs": "before/after observation refs",
-      "riskLevel": "ActionPlan.risk_level"
+      "callerGoalRef": "owned by caller",
+      "primitiveRefs": "bind/observe/act/run_procedure/control refs",
+      "beforeAfterObservationRefs": "optional GUI evidence refs from primitives",
+      "artifactRefs": "owned by caller or artifact validator",
+      "riskEnvelopeRefs": "caller approval/verifier inputs"
     },
     "resultShape": {
-      "verdict": "pass | fail | uncertain | needs-human | unverified",
-      "reward": "number?",
-      "confidence": "number",
-      "critique": "string?",
-      "repairHints": "string[]",
-      "metadata": {
-        "semanticVerifier": "refs-first optional summary",
-        "endpointDiagnostics": "method/path/elapsed/retry/error-category only"
-      }
-    },
-    "semanticVerifierPolicy": {
-      "storagePolicy": "refs-first",
-      "optional": true,
-      "forbiddenInlinePayloads": [
-        "apiKey",
-        "rawProviderPayload",
-        "requestBody",
-        "inlineImage",
-        "data:image",
-        "base64"
-      ],
-      "fakeOrDiagnosticOnlyClaimLimit": "A fake provider or diagnostic-only semantic summary cannot own execution, coordinates, completion, or artifact-producing success."
+      "verdictRef": "owned by caller/verifier",
+      "artifactValidationRefs": "owned by artifact validator",
+      "repairHints": "caller-owned structured hints",
+      "completionTruth": "not produced by Computer Use primitives"
     }
   },
   "failureModes": [
     {
-      "code": "target-not-found",
+      "code": "target-binding-blocked",
       "stage": "targeting",
       "recoverable": true,
-      "description": "sense provider 无法把动作目标定位到观察坐标。",
+      "description": "Host 指定 target 无法绑定为 scoped Computer Use session。",
       "repairHints": [
-        "重新观察目标窗口",
-        "缩小目标区域",
-        "请求更明确的目标描述"
+        "重新选择 target ref",
+        "确认目标窗口、应用、显示器或远程会话仍然存在",
+        "重新调用 computer_use.bind"
       ]
     },
     {
-      "code": "execution-blocked",
-      "stage": "execution",
+      "code": "missing-host-port",
+      "stage": "environment",
       "recoverable": true,
-      "description": "host adapter 拒绝执行或目标环境不可用。",
+      "description": "primitive 对应的 Host port 未注册，Computer Use fail closed。",
       "repairHints": [
-        "检查窗口绑定",
-        "检查输入隔离",
-        "切换到 dry-run 或请求用户介入"
+        "注册 bind/observe/act/control primitive host ports；run_procedure 由 primitive service 本地顺序执行",
+        "确认调用方选择的是 MCP primitive public surface",
+        "不要回退到 legacy runTask 作为验收证据"
       ]
     },
     {
       "code": "confirmation-required",
       "stage": "confirmation",
       "recoverable": true,
-      "description": "动作风险等级需要显式确认。",
+      "description": "高风险原子动作缺少与当前 risk envelope 匹配的 approval ref。",
       "repairHints": [
-        "请求 human approval",
-        "降低动作风险或改为只观察"
+        "由调用方收集 approval ref",
+        "用同一 actionHash/risk envelope 重试 computer_use.act",
+        "如果用户未确认，保持 blocked 或 needs-confirmation"
       ]
     },
     {
-      "code": "verification-failed",
-      "stage": "verification",
+      "code": "procedure-step-blocked",
+      "stage": "execution",
       "recoverable": true,
-      "description": "执行后验证未通过或不确定。",
+      "description": "run_procedure 的某个 Host 指定 primitive step 被 blocked、failed 或 needs-confirmation。",
       "repairHints": [
-        "把 verification result 带入下一轮",
-        "重新规划动作",
-        "请求人类判断"
+        "读取 stepResults 中的 stepId、primitive、refs 和 blockedReason",
+        "由调用方决定是否 repair、重新 locate 或停止",
+        "不要把 run_procedure.status=completed 当作用户级 completion truth"
       ]
     },
     {
-      "code": "semantic-provider-unavailable",
-      "stage": "verification/provider-diagnostic",
+      "code": "raw-payload-rejected",
+      "stage": "execution",
       "recoverable": true,
-      "description": "可选 semantic vision provider 不可用、超时、认证失败或 endpoint 诊断被阻断。",
+      "description": "primitive input 或 diagnostics 试图携带 raw screenshot、raw tree、base64、data URL、provider payload 或 inline text payload。",
       "repairHints": [
-        "检查 ignored local visionLLM config",
-        "查看 provider diagnostics 的 method/path/errorCategory",
-        "保持 deterministic verifier 结果为主"
+        "先把大 payload 物化为 refs",
+        "对 type action 使用 textRef 而不是 raw text",
+        "只返回 compact diagnostics 和 refs-first evidence"
       ]
     }
   ]

@@ -1,6 +1,5 @@
 import browserFetchManifest from './capabilities/browser_fetch.manifest.json';
 import browserRuntimeManifest from './capabilities/browser_runtime.manifest.json';
-import browserSearchManifest from './capabilities/browser_search.manifest.json';
 import playwrightBrowserAutomationManifest from './capabilities/playwright_browser_automation.manifest.json';
 import playwrightEdgeBrowserManifest from './capabilities/playwright_edge_browser.manifest.json';
 import webFetchManifest from './capabilities/web_fetch.manifest.json';
@@ -95,7 +94,6 @@ export {
 export const webObserveCapabilityManifests = [
   webSearchManifest,
   webFetchManifest,
-  browserSearchManifest,
   browserFetchManifest,
   browserRuntimeManifest,
   playwrightBrowserAutomationManifest,

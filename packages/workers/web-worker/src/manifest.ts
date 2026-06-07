@@ -5,7 +5,7 @@ export const webWorkerManifest: ToolWorkerManifest = {
   workerId: 'sciforge.web-worker',
   workerVersion: '0.1.0',
   description: 'Read-only web search, fetch, PDF text extraction, and browser-rendered retrieval worker for SciForge agents.',
-  capabilities: ['web_search', 'web_fetch', 'browser_search', 'browser_fetch', 'pdf_extract', 'read_only_network', 'browser_automation'],
+  capabilities: ['web_search', 'web_fetch', 'browser_fetch', 'pdf_extract', 'read_only_network', 'browser_automation'],
   providers: [
     {
       providerId: 'sciforge.web-worker.web_search',
@@ -26,16 +26,6 @@ export const webWorkerManifest: ToolWorkerManifest = {
       manifestPath: '/manifest',
       permissions: ['network'],
       status: 'degraded',
-    },
-    {
-      providerId: 'sciforge.web-worker.browser_search',
-      capabilityId: 'browser_search',
-      transport: 'http',
-      invokePath: '/invoke',
-      healthPath: '/health',
-      manifestPath: '/manifest',
-      permissions: ['network', 'browser'],
-      status: 'available',
     },
     {
       providerId: 'sciforge.web-worker.browser_fetch',
@@ -98,27 +88,6 @@ export const webWorkerManifest: ToolWorkerManifest = {
       sideEffects: ['network'],
       timeoutMs: 20000,
       tags: ['web', 'fetch', 'research'],
-    },
-    {
-      id: 'browser_search',
-      name: 'Browser Search',
-      version: '0.1.0',
-      description: 'Search the public web through a headless Chromium browser and return rendered organic result records.',
-      inputSchema: {
-        query: { type: 'string', required: true, description: 'Search query.' },
-        limit: { type: 'number', description: 'Maximum number of results, from 1 to 10.', default: 5 },
-        region: { type: 'string', description: 'Optional DuckDuckGo region code, for example us-en.' },
-        engine: { type: 'string', description: 'Optional rendered search engine: bing or duckduckgo.', default: 'bing' },
-        timeoutMs: { type: 'number', description: 'Browser navigation timeout in milliseconds.', default: 25000 },
-      },
-      outputSchema: {
-        query: { type: 'string', required: true },
-        finalUrl: { type: 'string' },
-        results: { type: 'array', required: true },
-      },
-      sideEffects: ['network'],
-      timeoutMs: 30000,
-      tags: ['web', 'search', 'browser', 'rendered', 'research'],
     },
     {
       id: 'browser_fetch',

@@ -179,6 +179,7 @@ test('vision responses translate refs first, then ask the text reasoner for the 
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
       chatCompletion('vision-initial', 'Observation: the chart label is ATP concentration.'),
+      chatCompletion('vision-initial-ref', 'Observation: the microscopy panel is attached as context.'),
       chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The chart label is ATP concentration.' })),
     ]),
   });
@@ -204,15 +205,18 @@ test('vision responses translate refs first, then ask the text reasoner for the 
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.output_text, 'The chart label is ATP concentration.');
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
     assert.equal(calls[0]?.headers.authorization, 'Bearer vision-secret');
     assert.equal(calls[0]?.body.model, 'vision-model');
     assert.match(JSON.stringify(calls[0]?.body), /data:image\/png;base64/);
-    assert.match(JSON.stringify(calls[0]?.body), /artifact:microscopy-panel/);
-    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+    assert.doesNotMatch(JSON.stringify(calls[0]?.body), /artifact:microscopy-panel/);
+    assert.equal(calls[1]?.url, 'https://vision.example/v1/chat/completions');
+    assert.match(JSON.stringify(calls[1]?.body), /artifact:microscopy-panel/);
     assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
-    assert.match(JSON.stringify(calls[1]?.body), /Observation: the chart label is ATP concentration/);
+    assert.equal(calls[2]?.url, 'https://text.example/v1/chat/completions');
+    assert.doesNotMatch(JSON.stringify(calls[2]?.body), /data:image|base64|tiny-png/i);
+    assert.match(JSON.stringify(calls[2]?.body), /Observation: the chart label is ATP concentration/);
 
     const traceText = await readTraceBundle(workspaceRoot);
     assert.match(traceText, /"source":\s*"inline"/);
@@ -221,6 +225,118 @@ test('vision responses translate refs first, then ask the text reasoner for the 
     assert.doesNotMatch(traceText, /text-secret|vision-secret|data:image|base64|tiny-png/i);
     assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
     assert.match(traceText, /"roleAlias":\s*"translators\.vision"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses tool calls pass through the Model Router API without becoming text answers', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-call-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-tool-call', '', [{
+        id: 'call_gui_present_1',
+        type: 'function',
+        function: {
+          name: 'gui_present',
+          arguments: JSON.stringify({
+            intent: 'show-result',
+            content: { kind: 'markdown', value: 'Visible answer.' },
+          }),
+        },
+      }]),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Answer through gui.present.',
+        tools: [{
+          type: 'function',
+          name: 'gui_present',
+          description: 'Present the final answer.',
+          parameters: { type: 'object', properties: {} },
+        }],
+        tool_choice: 'auto',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as { output?: Array<Record<string, unknown>>; output_text?: string };
+    assert.equal(body.output_text, '');
+    assert.deepEqual(body.output, [{
+      id: body.output?.[0]?.id,
+      type: 'function_call',
+      status: 'completed',
+      call_id: 'call_gui_present_1',
+      name: 'gui_present',
+      arguments: JSON.stringify({
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'Visible answer.' },
+      }),
+    }]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.body.tool_choice, 'auto');
+    assert.equal((calls[0]?.body.tools as Array<{ function?: { name?: string } }> | undefined)?.[0]?.function?.name, 'gui_present');
+  } finally {
+    await server.close();
+  }
+});
+
+test('streaming responses emit function_call items when the text reasoner chooses a tool', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-stream-tool-call-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-tool-call-stream', '', [{
+        id: 'call_gui_present_stream',
+        type: 'function',
+        function: {
+          name: 'gui_present',
+          arguments: '{"intent":"show-result","content":{"kind":"markdown","value":"Stream visible answer."}}',
+        },
+      }]),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        stream: true,
+        input: 'Answer through gui.present.',
+        tools: [{ type: 'function', name: 'gui_present', parameters: { type: 'object', properties: {} } }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    const events = parseSseEvents(body);
+    assert.deepEqual(events.map((event) => event.type), [
+      'response.created',
+      'response.output_item.added',
+      'response.output_item.done',
+      'response.completed',
+    ]);
+    assert.equal(events[1]?.item?.type, 'function_call');
+    assert.equal(events[1]?.item?.name, 'gui_present');
+    assert.equal(events[1]?.item?.call_id, 'call_gui_present_stream');
+    assert.doesNotMatch(body, /response\.output_text\.delta/);
   } finally {
     await server.close();
   }
@@ -272,6 +388,115 @@ test('workspace image refs are materialized only as transient provider image pay
     assert.match(traceText, /"ref":\s*"images\/panel\.png"/);
     assert.doesNotMatch(traceText, /data:image|base64|local-ref-pixels/i);
     assert.doesNotMatch(traceText, /text-secret|vision-secret|text-provider|vision-provider|text-model|vision-model/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('local_image inputs are normalized as visual objects inside the Model Router', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-local-image-object-'));
+  const imageBytes = Buffer.from('local-image-pixels');
+  await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-local'), { recursive: true });
+  const imagePath = join(workspaceRoot, '.sciforge', 'uploads', 'session-local', 'hotel.jpg');
+  await writeFile(imagePath, imageBytes);
+  const expectedDataUrl = `data:image/jpeg;base64,${imageBytes.toString('base64')}`;
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the local image object is a hotel voucher.'),
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'It is a hotel voucher.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'What is this local image?' },
+            { type: 'local_image', path: imagePath, mime_type: 'image/jpeg', title: '酒店凭证.jpg' },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, 'It is a hotel voucher.');
+    assert.equal(calls.length, 2);
+    const visionBody = JSON.stringify(calls[0]?.body);
+    assert.match(visionBody, new RegExp(expectedDataUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"title":\s*"酒店凭证\.jpg"/);
+    assert.match(traceText, /"ref":\s*"\.sciforge\/uploads\/session-local\/hotel\.jpg"/);
+    assert.doesNotMatch(traceText, /data:image|base64|local-image-pixels/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('input_object refs are detected and translated inside the Model Router', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-input-object-'));
+  const imageBytes = Buffer.from('input-object-pixels');
+  await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-test'), { recursive: true });
+  await writeFile(join(workspaceRoot, '.sciforge', 'uploads', 'session-test', 'hotel.jpg'), imageBytes);
+  const expectedDataUrl = `data:image/jpeg;base64,${imageBytes.toString('base64')}`;
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the hotel voucher total is 421.15 yuan.'),
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The hotel voucher total is 421.15 yuan.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: '解释这张图' },
+            {
+              type: 'input_object',
+              ref: '.sciforge/uploads/session-test/hotel.jpg',
+              mimeType: 'image/jpeg',
+              title: '酒店凭证.jpg',
+            },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, 'The hotel voucher total is 421.15 yuan.');
+    assert.equal(calls.length, 2);
+    const visionBody = JSON.stringify(calls[0]?.body);
+    assert.match(visionBody, new RegExp(expectedDataUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    const textReasonerBody = JSON.stringify(calls[1]?.body);
+    assert.doesNotMatch(textReasonerBody, /data:image|base64|input-object-pixels/i);
+    assert.match(textReasonerBody, /Do not tell the user you cannot directly access or see the image/i);
+    assert.match(textReasonerBody, /Do not mention modality observations, visual observations, translators, or router internals/i);
+
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"source":\s*"ref"/);
+    assert.match(traceText, /"ref":\s*"\.sciforge\/uploads\/session-test\/hotel\.jpg"/);
+    assert.doesNotMatch(traceText, /data:image|base64|input-object-pixels/i);
   } finally {
     await server.close();
   }
@@ -670,93 +895,6 @@ test('default public model alias rejects unregistered request models', async () 
   }
 });
 
-test('strict supplement requests are bounded by the profile round budget', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-supplement-'));
-  const calls: CapturedFetch[] = [];
-  const server = await startModelRouterServer({
-    port: 0,
-    config: testConfig({ maxSupplementRounds: 1 }),
-    env: testEnv(),
-    workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('vision-initial', 'Observation: plotted points are visible but the legend is too small.'),
-      chatCompletion('text-need-more', JSON.stringify({
-        type: 'need_more_visual_info',
-        target: 'image_1',
-        question: 'Read the legend text only.',
-        reason: 'The first observation did not include the legend.',
-      })),
-      chatCompletion('vision-supplement', 'Supplement: the legend says treated cells.'),
-      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The legend says treated cells.' })),
-    ]),
-  });
-
-  try {
-    const response = await fetch(`${server.url}/v1/responses`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'sciforge-router',
-        input: [{ role: 'user', content: [{ type: 'input_text', text: 'Read the legend.' }, { type: 'input_image', image_url: pngDataUrl }] }],
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json() as Record<string, unknown>;
-    assert.equal(body.output_text, 'The legend says treated cells.');
-    assert.equal(calls.length, 4);
-    assert.match(JSON.stringify(calls[2]?.body), /Read the legend text only/);
-
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"round":\s*1/);
-    assert.doesNotMatch(traceText, /data:image|base64|tiny-png/i);
-    assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
-  } finally {
-    await server.close();
-  }
-});
-
-test('failed supplement observations are marked failed in trace bundles', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-supplement-failure-'));
-  const calls: CapturedFetch[] = [];
-  const server = await startModelRouterServer({
-    port: 0,
-    config: testConfig({ maxSupplementRounds: 1 }),
-    env: testEnv(),
-    workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('vision-initial', 'Observation: plotted points are visible but the legend is too small.'),
-      chatCompletion('text-need-more', JSON.stringify({
-        type: 'need_more_visual_info',
-        target: 'image_1',
-        question: 'Read the legend text only.',
-      })),
-      Response.json({ error: { message: 'vision unavailable' } }, { status: 503 }),
-      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'I could not inspect the legend.' })),
-    ]),
-  });
-
-  try {
-    const response = await fetch(`${server.url}/v1/responses`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'sciforge-router',
-        input: [{ role: 'user', content: [{ type: 'input_text', text: 'Read the legend.' }, { type: 'input_image', image_url: pngDataUrl }] }],
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    assert.equal(calls.length, 4);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"phase":\s*"supplement"/);
-    assert.match(traceText, /"status":\s*"failed"/);
-    assert.doesNotMatch(traceText, /"phase":\s*"supplement"[\s\S]{0,120}"status":\s*"ok"/);
-  } finally {
-    await server.close();
-  }
-});
-
 test('streaming vision responses expose only the final answer events', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-stream-'));
   const calls: CapturedFetch[] = [];
@@ -854,6 +992,8 @@ test('text reasoner HTTP failures still write sanitized refs-first trace summari
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
       chatCompletion('vision-initial', 'Observation: the referenced image is a plot.'),
+      chatCompletion('vision-initial-absolute-ref', 'Observation: the absolute private ref was unavailable.'),
+      chatCompletion('vision-initial-private-url-ref', 'Observation: the private URL ref was unavailable.'),
       Response.json({
         error: {
           message: 'provider failed with text-secret and raw prompt payload',
@@ -882,8 +1022,8 @@ test('text reasoner HTTP failures still write sanitized refs-first trace summari
     });
 
     assert.equal(response.status, 500);
-    assert.equal(calls.length, 2);
-    const visionPrompt = JSON.stringify(calls[0]?.body);
+    assert.equal(calls.length, 4);
+    const visionPrompt = calls.slice(0, 3).map((call) => JSON.stringify(call.body)).join('\n');
     assert.match(visionPrompt, /artifact:workspace\/plots\/figure-1\.png/);
     assert.match(visionPrompt, /sha256:[a-f0-9]{64}/);
     assert.doesNotMatch(visionPrompt, /\/Users|private\.example|absolute-secret|private-panel/i);
@@ -993,7 +1133,7 @@ type CapturedFetch = {
   body: Record<string, unknown>;
 };
 
-function testConfig(options: { maxSupplementRounds?: number; traceRoot?: string; publicModelAlias?: string | null } = {}): ModelRouterConfig {
+function testConfig(options: { traceRoot?: string; publicModelAlias?: string | null } = {}): ModelRouterConfig {
   const config: ModelRouterConfig = {
     defaultProfile: 'default',
     publicModelAlias: options.publicModelAlias === undefined ? 'sciforge-router' : undefined,
@@ -1012,7 +1152,6 @@ function testConfig(options: { maxSupplementRounds?: number; traceRoot?: string;
             baseUrl: 'https://vision.example/v1',
             apiKeyEnv: 'SCIFORGE_VISION_API_KEY',
             model: 'vision-model',
-            maxSupplementRounds: options.maxSupplementRounds,
           },
         },
       },
@@ -1050,22 +1189,35 @@ function parseSseEvents(body: string): Array<Record<string, any>> {
     .map((payload) => JSON.parse(payload) as Record<string, any>);
 }
 
-function chatCompletion(id: string, content: string) {
+function chatCompletion(id: string, content: string, toolCalls?: Array<Record<string, unknown>>) {
   return Response.json({
     id,
     object: 'chat.completion',
     created: 1_717_171_717,
     model: id.includes('vision') ? 'vision-model' : 'text-model',
-    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content,
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      },
+      finish_reason: toolCalls ? 'tool_calls' : 'stop',
+    }],
   });
 }
 
 async function readTraceBundle(workspaceRoot: string) {
   const root = join(workspaceRoot, '.sciforge/model-router-traces');
   const days = await readdir(root);
-  const runs = await readdir(join(root, days[0] ?? 'missing'));
-  const files = await readdir(join(root, days[0] ?? 'missing', runs[0] ?? 'missing'));
-  const contents = await Promise.all(files.map((file) => readFile(join(root, days[0] ?? 'missing', runs[0] ?? 'missing', file), 'utf8')));
+  const contents: string[] = [];
+  for (const day of days.sort()) {
+    const runs = await readdir(join(root, day));
+    for (const run of runs.sort()) {
+      const files = await readdir(join(root, day, run));
+      contents.push(...await Promise.all(files.sort().map((file) => readFile(join(root, day, run, file), 'utf8'))));
+    }
+  }
   return contents.join('\n');
 }
 

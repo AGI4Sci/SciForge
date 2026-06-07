@@ -87,6 +87,34 @@ test('ensureRuntimeHome rewrites stale non-router config to the managed Model Ro
   assert.doesNotMatch(config, /model_provider = "native"|bailian\/deepseek-v4-flash|127\.0\.0\.1:5175/);
 });
 
+test('ensureRuntimeHome rewrites managed config missing Runtime Codex plugin disables', async () => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-stale-feature-config-'));
+  const codexHome = join(runtimeRoot, 'codex-home');
+  const paths = getRuntimeHomePaths({
+    runtimeRoot,
+    codexHome,
+    env: {},
+  });
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(
+    paths.configPath,
+    runtimeConfigToml().replace(/\nplugins = false\nremote_plugin = false\n/, '\n'),
+    'utf8',
+  );
+
+  await ensureRuntimeHome({
+    proxyBaseUrl: DEFAULT_PROXY_BASE_URL,
+    paths: {
+      runtimeRoot,
+      codexHome,
+      env: {},
+    },
+  });
+
+  const config = await readFile(paths.configPath, 'utf8');
+  assert.match(config, /\[features\]\s+memories = true\s+prevent_idle_sleep = true\s+plugins = false\s+remote_plugin = false/);
+});
+
 test('runtime provider env ignores legacy user-facing native provider id', () => {
   assert.equal(runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'native' }), RUNTIME_PROVIDER);
   assert.equal(runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'sciforge-custom-runtime' }), 'sciforge-custom-runtime');

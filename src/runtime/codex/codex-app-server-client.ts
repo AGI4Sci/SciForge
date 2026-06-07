@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import type { ModuleDescription, ModuleInvokeRequest, ModuleQueryRequest, ModuleReadRequest } from '@sciforge-ui/runtime-contract/modules';
@@ -20,9 +21,12 @@ import {
   type AgentHostLocalToolActDecision,
 } from './agent-host-local-tool-act-orchestrator.js';
 import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
-import { createBrowserBoundedOperationModuleHandler } from '../modules/bounded-operation-module-handlers.js';
+import { createBrowserRuntimeModuleHandler } from '../modules/bounded-operation-module-handlers.js';
+import { createGuiModuleDescription, createGuiModuleHandler } from '../modules/gui-module-handler.js';
 import { callSubagentMcpTool } from './subagent-mcp-tools.js';
 import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
+import { createFileBackedGuiProtocolController } from './gui-extension-state.js';
+import { callGuiMcpTool } from './gui-mcp-tools.js';
 import {
   createComputerUseNativeRouteStream,
   isComputerUseNativeRouteCommand,
@@ -153,12 +157,13 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       cwd: config.workspace,
       env,
       spawnProcess: this.options.spawnProcess ?? spawn,
-      dispatcher: this.options.dispatcher ?? createCodexAppServerRuntimeModuleDispatcher(config.workspace),
+      dispatcher: this.options.dispatcher ?? createCodexAppServerRuntimeModuleDispatcher(config.workspace, guiInjection?.statePath),
       agentHostRuntimeTruth: request.agentHostRuntimeTruth,
       transcriptRoot,
       clientInfo: this.options.clientInfo,
       parentCommandId: commandId,
       parentAttemptId: attemptId,
+      guiExtensionStatePath: guiInjection?.statePath,
       sandbox,
       approvalPolicy,
       profile: config.profile,
@@ -188,7 +193,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
 
     const turnId = await session.startTurn({
       threadId,
-      input: [{ type: 'text', text: request.commandText, text_elements: [] }],
+      input: codexAppServerTurnInputItems(request.commandText, request.inputObjects, config.workspace),
       cwd: config.workspace,
       model: config.model,
       approvalPolicy,
@@ -283,6 +288,63 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
   }
 }
 
+function codexAppServerTurnInputItems(
+  commandText: string,
+  inputObjects: CodexAppServerStartTurnRequest['inputObjects'] | undefined,
+  workspacePath: string,
+) {
+  const objects = inputObjects ?? [];
+  return [
+    { type: 'text', text: commandText, text_elements: [] },
+    ...(objects.length ? [{
+      type: 'text',
+      text: codexAppServerInputObjectMetadataText(objects),
+      text_elements: [],
+    }] : []),
+    ...objects.flatMap((object) => codexAppServerInputObjectMediaItems(object, workspacePath)),
+  ];
+}
+
+function codexAppServerInputObjectMetadataText(inputObjects: NonNullable<CodexAppServerStartTurnRequest['inputObjects']>) {
+  return [
+    'SciForge input_object attachments:',
+    ...inputObjects.map((object, index) => [
+      `${index + 1}. title=${object.title ?? object.ref}`,
+      `   ref=${object.ref}`,
+      object.mimeType ? `   mimeType=${object.mimeType}` : undefined,
+      `   source=${object.source}`,
+    ].filter(Boolean).join('\n')),
+  ].join('\n');
+}
+
+function codexAppServerInputObjectMediaItems(
+  object: NonNullable<CodexAppServerStartTurnRequest['inputObjects']>[number],
+  workspacePath: string,
+) {
+  if (!isImageInputObject(object)) return [];
+  const path = localImagePathForInputObject(object.ref, workspacePath);
+  return path ? [{ type: 'localImage', path }] : [];
+}
+
+function isImageInputObject(object: NonNullable<CodexAppServerStartTurnRequest['inputObjects']>[number]) {
+  if (/^image\//i.test(object.mimeType ?? '')) return true;
+  return /\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic)(?:$|[?#])/i.test(object.ref);
+}
+
+function localImagePathForInputObject(ref: string, workspacePath: string) {
+  if (!isConservativeWorkspaceRef(ref)) return undefined;
+  const workspace = resolve(workspacePath);
+  const absolutePath = resolve(workspace, ref);
+  if (absolutePath !== workspace && !absolutePath.startsWith(`${workspace}${sep}`)) return undefined;
+  return absolutePath;
+}
+
+function isConservativeWorkspaceRef(value: string) {
+  if (!/^[A-Za-z0-9._@/-]+$/.test(value)) return false;
+  if (value.startsWith('/') || value.startsWith('~') || value.includes(':') || value.includes('\\') || value.includes('//')) return false;
+  return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..');
+}
+
 interface CodexAppServerJsonRpcSessionOptions {
   command: string;
   args: string[];
@@ -292,6 +354,7 @@ interface CodexAppServerJsonRpcSessionOptions {
   dispatcher: RuntimeModuleDispatcher;
   agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;
   transcriptRoot: string;
+  guiExtensionStatePath?: string;
   clientInfo?: {
     name: string;
     title?: string | null;
@@ -315,6 +378,7 @@ class CodexAppServerJsonRpcSession {
   private nextRequestId = 1;
   private closed = false;
   private stderrTail = '';
+  private lastTurnStartInput: Record<string, unknown> = {};
 
   constructor(private readonly options: CodexAppServerJsonRpcSessionOptions) {
     this.process = options.spawnProcess(options.command, options.args, {
@@ -401,6 +465,7 @@ class CodexAppServerJsonRpcSession {
   }
 
   async startTurn(input: Record<string, unknown>): Promise<string> {
+    this.lastTurnStartInput = input;
     const result = await this.request('turn/start', input);
     const resultRecord = isRecord(result) ? result : undefined;
     const turnId = stringAt(recordAt(resultRecord, 'turn'), 'id');
@@ -438,10 +503,37 @@ class CodexAppServerJsonRpcSession {
   }
 
   async *eventsUntilTurnComplete(threadId: string, turnId: string, cleanup: () => void): AsyncIterable<unknown> {
+    let currentTurnId = turnId;
+    let sawGuiCompletion = false;
+    let sawSufficientGuiCompletion = false;
+    let insufficientGuiPresentationReason: string | undefined;
+    let repairAttempts = 0;
     try {
       for await (const event of this.queue) {
+        const guiCompletion = guiCompletionEventDetails(event);
+        if (guiCompletion) {
+          sawGuiCompletion = true;
+          const reason = insufficientGuiCompletionReason(guiCompletion, this.lastTurnStartInput);
+          if (reason) insufficientGuiPresentationReason = reason;
+          else sawSufficientGuiCompletion = true;
+        }
         yield event;
-        if (isTerminalTurnEvent(event, threadId, turnId)) break;
+        if (!isTerminalTurnEvent(event, threadId, currentTurnId)) continue;
+        const repairReason = guiProtocolRepairReason({
+          sawGuiCompletion,
+          sawSufficientGuiCompletion,
+          insufficientGuiPresentationReason,
+        });
+        if (repairReason && this.options.guiExtensionStatePath && repairAttempts < 1 && isSuccessfulTerminalTurnEvent(event)) {
+          repairAttempts += 1;
+          yield codexAppServerGuiProtocolRepairEvent(threadId, currentTurnId, repairAttempts, repairReason);
+          currentTurnId = await this.startTurn(guiProtocolRepairTurnStartInput(threadId, this.lastTurnStartInput, repairReason));
+          sawGuiCompletion = false;
+          sawSufficientGuiCompletion = false;
+          insufficientGuiPresentationReason = undefined;
+          continue;
+        }
+        break;
       }
     } finally {
       cleanup();
@@ -494,6 +586,8 @@ class CodexAppServerJsonRpcSession {
   private async respondToServerRequest(request: JsonRpcRequest) {
     try {
       const result = await this.handleServerRequest(request);
+      const syntheticEvent = syntheticGuiToolCompletionEvent(request, result);
+      if (syntheticEvent) this.queue.push(syntheticEvent);
       this.write({ id: request.id, result });
     } catch (error) {
       this.write({
@@ -540,6 +634,15 @@ class CodexAppServerJsonRpcSession {
           parentCommandId: this.options.parentCommandId,
           parentAttemptId: this.options.parentAttemptId,
         });
+      } else if (isGuiDynamicToolName(toolName)) {
+        if (!this.options.guiExtensionStatePath) {
+          success = false;
+          result = { ok: false, error: `gui_extension_unavailable:${toolName}` };
+        } else {
+          const { controller, flush } = await createFileBackedGuiProtocolController(this.options.guiExtensionStatePath);
+          result = callGuiMcpTool(controller, canonicalGuiDynamicToolName(toolName), args);
+          await flush();
+        }
       } else if (isModuleToolName(toolName)) {
         const moduleToolName = canonicalModuleToolName(toolName);
         if (!moduleToolName) {
@@ -613,6 +716,24 @@ class CodexAppServerJsonRpcSession {
 function isSubagentSpawnToolName(value: string): boolean {
   return value === SUBAGENT_SPAWN_AGENT_TOOL_NAME
     || value === providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
+}
+
+const GUI_DYNAMIC_TOOL_NAMES = [
+  'gui.present',
+  'gui.ask_user',
+] as const;
+
+type GuiDynamicToolName = typeof GUI_DYNAMIC_TOOL_NAMES[number];
+
+function isGuiDynamicToolName(value: string): boolean {
+  return GUI_DYNAMIC_TOOL_NAMES.some((name) => name === value || providerSafeDynamicToolAlias(name) === value);
+}
+
+function canonicalGuiDynamicToolName(value: string): GuiDynamicToolName {
+  const name = GUI_DYNAMIC_TOOL_NAMES.find((candidate) =>
+    candidate === value || providerSafeDynamicToolAlias(candidate) === value);
+  if (!name) throw new Error(`unsupported_gui_dynamic_tool:${value}`);
+  return name;
 }
 
 class AsyncEventQueue<T> implements AsyncIterable<T> {
@@ -742,10 +863,31 @@ function isHostOwnedComputerUseRuntimeIntent(value: unknown): boolean {
     && value.source === 'host-owned';
 }
 
-function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string): RuntimeModuleDispatcher {
+function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string, guiExtensionStatePath?: string): RuntimeModuleDispatcher {
   return createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
-    browser: createBrowserBoundedOperationModuleHandler({ workspacePath }),
+    browser: createBrowserRuntimeModuleHandler({ workspacePath }),
+    ...(guiExtensionStatePath ? { gui: createFileBackedGuiModuleHandler(guiExtensionStatePath) } : {}),
   }));
+}
+
+function createFileBackedGuiModuleHandler(statePath: string) {
+  return {
+    describe: createGuiModuleDescription,
+    query: async (request: ModuleQueryRequest) => {
+      const { controller } = await createFileBackedGuiProtocolController(statePath);
+      return createGuiModuleHandler(controller).query(request);
+    },
+    read: async (request: ModuleReadRequest) => {
+      const { controller } = await createFileBackedGuiProtocolController(statePath);
+      return createGuiModuleHandler(controller).read(request);
+    },
+    invoke: async (request: ModuleInvokeRequest) => {
+      const { controller, flush } = await createFileBackedGuiProtocolController(statePath);
+      const result = createGuiModuleHandler(controller).invoke(request);
+      await flush();
+      return result;
+    },
+  };
 }
 
 function runtimeDeveloperInstructions(
@@ -759,16 +901,21 @@ function runtimeDeveloperInstructions(
   const subagentToolAlias = providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
   const moduleDescribeAlias = providerSafeDynamicToolAlias('module.describe');
   const moduleInvokeAlias = providerSafeDynamicToolAlias('module.invoke');
+  const guiPresentAlias = providerSafeDynamicToolAlias('gui.present');
+  const guiAskUserAlias = providerSafeDynamicToolAlias('gui.ask_user');
   const lines = [
     'SciForge Agent Host delegation protocol:',
+    '- User-visible completion protocol: every final answer, blocker, repair-needed summary, and needs-human transition must be emitted through gui.present or gui.ask_user. Native assistant prose is progress only and is not a valid final answer.',
+    `- Prefer GUI presentation through ${moduleInvokeAlias} with moduleId "gui" and intent "present"/"ask_user"; provider-safe direct aliases ${guiPresentAlias} and ${guiAskUserAlias} are equivalent when exposed. Do not finish the turn until the GUI tool call succeeds or reports a blocker.`,
+    '- For gui.present, include the complete user-facing answer in content.value as markdown, plus stable refs already returned by tools when available. The title field is optional display metadata and cannot substitute for the answer body. Do not ask the UI to synthesize or complete the answer.',
     '- Use SciForge module tools for Host-owned capabilities; do not replace Browser, Computer Use, files, artifacts, or verifier modules with model-memory guesses.',
     `- Dynamic module call names: prefer the provider-safe functions ${moduleDescribeAlias} and ${moduleInvokeAlias}. Canonical names module.describe and module.invoke are equivalent only when the runtime exposes namespaced dynamic tools.`,
     '- Never print or simulate tool-call protocol as prose or markup: no XML/HTML tags, DSML snippets, fenced pseudo-calls, or JSON objects whose function/moduleId/intent fields describe a tool call.',
     '- If a module is needed, make an actual dynamic tool/function call and wait for the tool result. If no dynamic call is possible, say the module call is unavailable; do not output the call payload as text.',
     `- For current, latest, today, external-web, citation, source-verification, or time-sensitive facts, first use ${moduleDescribeAlias} for the relevant module when needed, then collect bounded evidence before synthesizing the answer.`,
-    `- Browser evidence path: call ${moduleInvokeAlias} with moduleId "browser", intent "executeBoundedOperation", input.operationKind "browser.search_read" for searches or "browser.open_read" for known URLs, input.ownerModuleId "browser", targetScope.query or targetScope.url, and explicit config allowedActions/maxSteps/maxTimeMs/maxModelCalls/requiredEvidence/stopConditions.`,
-    '- Browser bounded config must use nonzero maxSteps, maxTimeMs, and maxModelCalls budgets, allow only the requested low-risk actions such as search/open/read, and require source-page-ref plus page-text-ref evidence; if the module returns blocked, partial, or needs-confirmation, report the blocker and repair hint instead of fabricating current facts.',
-    `- Computer Use evidence path: call ${moduleInvokeAlias} with moduleId "computer_use" and executeBoundedOperation only for target-bound local GUI actions; respect required evidence, hard confirmation, and blocked readiness.`,
+    `- Browser primitive path: call ${moduleInvokeAlias} with moduleId "browser" and primitive intents browser.search, browser.navigate, browser.observe, browser.read, browser.extract, and browser.download. Compose these primitives yourself: search discovers candidates only; navigate opens or reuses a session; observe returns session state; read materializes page text/source refs; extract parses refs; download writes session-scoped artifacts.`,
+    '- Browser calls must use nonzero budgets when a budget field is present, low-risk actions only, and refs-first evidence; if the module returns blocked, partial, failed, or needs-confirmation, use the blocker/repair hint for the next Host decision instead of fabricating current facts.',
+    `- Computer Use primitive path: call ${moduleInvokeAlias} with moduleId "computer_use" and primitive intents computer_use.bind, computer_use.observe, computer_use.act, computer_use.run_procedure, and computer_use.control. Host owns task understanding, target choice, semantic locate, approval, artifact validation, completion truth, and final answer; run_procedure only executes Host-specified local primitive steps and does not prove the user task is complete.`,
     '- After a module returns refs or source pages, answer from that evidence and cite stable refs or source URLs present in the returned payload; runtime audit streams, provider payloads, local paths, and credentials stay out of the user-visible answer.',
     '- Treat GUI composer choices as public declared intents only; keep the user turn input as the source of task content.',
     `- When the user asks for delegation, or when Multitask mode is declared and the work can be split into independent subtasks, call the ${SUBAGENT_SPAWN_AGENT_TOOL_NAME} tool to create child agents.`,
@@ -889,6 +1036,47 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
       };
     }),
     {
+      name: providerSafeDynamicToolAlias('gui.present'),
+      description: 'Provider-safe alias for gui.present; present the complete final user-facing answer or artifact intent in SciForge GUI. Final answers must put the full answer body in content.value; title is display metadata only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          intent: { type: 'string' },
+          ref: { type: 'string' },
+          content: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string' },
+              value: {},
+            },
+            required: ['kind', 'value'],
+            additionalProperties: true,
+          },
+          title: { type: 'string' },
+          hint: { type: 'string' },
+          displayedRefs: { type: 'array', items: { type: 'string' } },
+          target: { type: 'object', additionalProperties: true },
+        },
+        required: ['content'],
+        additionalProperties: true,
+      },
+    },
+    {
+      name: providerSafeDynamicToolAlias('gui.ask_user'),
+      description: 'Provider-safe alias for gui.ask_user; ask the user for confirmation, input, or a choice through SciForge GUI.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string' },
+          title: { type: 'string' },
+          message: { type: 'string' },
+          choices: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          submitCommandTemplate: { type: 'string' },
+        },
+        additionalProperties: true,
+      },
+    },
+    {
       namespace: 'multi_agent_v1',
       name: 'spawn_agent',
       description: 'Spawn a local SciForge Runtime Codex delegated worker and return safe transcript/result refs.',
@@ -969,6 +1157,246 @@ function isRetryableCodexAppServerTerminalEvent(
     ?? stringAt(event, 'message')
     ?? stringAt(error, 'message');
   return Boolean(message && isCodexSamplingRetryMessage(message));
+}
+
+function isSuccessfulTerminalTurnEvent(event: unknown): boolean {
+  if (!isRecord(event)) return false;
+  const method = (stringAt(event, 'method') ?? stringAt(event, 'type') ?? '').trim().toLowerCase().replace(/\./g, '/');
+  const params = recordAt(event, 'params') ?? event;
+  const turn = recordAt(params, 'turn');
+  const status = (stringAt(params, 'status') ?? stringAt(turn, 'status') ?? '').trim().toLowerCase();
+  if (/failed|failure|error|cancel/.test(method)) return false;
+  if (status === 'failed' || status === 'failure' || status === 'error' || status === 'cancelled' || status === 'canceled') return false;
+  return method === 'turn/completed'
+    || method === 'turn/done'
+    || method === 'turn/finished'
+    || status === 'completed'
+    || status === 'complete'
+    || status === 'done'
+    || status === 'finished';
+}
+
+interface GuiCompletionEventDetails {
+  name: 'gui.present' | 'gui.ask_user';
+  title?: string;
+  contentText?: string;
+  fallbackText?: string;
+  hasContent: boolean;
+}
+
+function guiCompletionEventDetails(event: unknown): GuiCompletionEventDetails | undefined {
+  if (!isRecord(event)) return undefined;
+  const type = (stringAt(event, 'type') ?? stringAt(event, 'event') ?? stringAt(event, 'method') ?? '').trim();
+  const params = recordAt(event, 'params') ?? event;
+  if (type === 'gui_present' || type === 'gui_ask_user') {
+    const name = type === 'gui_present' ? 'gui.present' : 'gui.ask_user';
+    return guiCompletionDetailsFromPayload(name, params);
+  }
+  if (!/completed|done/i.test(type)) return undefined;
+  const guiIntent = guiIntentFromToolCallParams(params);
+  if (!guiIntent) return undefined;
+  return guiCompletionDetailsFromPayload(guiIntent.name, guiIntent.rawArgs);
+}
+
+function guiCompletionDetailsFromPayload(
+  name: 'gui.present' | 'gui.ask_user',
+  rawPayload: Record<string, unknown>,
+): GuiCompletionEventDetails {
+  const payload = guiPresentationPayloadFromArgs(rawPayload);
+  const title = stringAt(payload, 'title');
+  const contentText = guiPresentationContentText(payload);
+  const fallbackText = firstNonEmptyString(
+    contentText,
+    stringAt(payload, 'message'),
+    stringAt(payload, 'text'),
+    title,
+  );
+  return {
+    name,
+    title,
+    contentText,
+    fallbackText,
+    hasContent: Boolean(contentText?.trim()),
+  };
+}
+
+function guiPresentationPayloadFromArgs(args: Record<string, unknown>): Record<string, unknown> {
+  return parseJsonRecord(args.input) ?? args;
+}
+
+function guiPresentationContentText(payload: Record<string, unknown>): string | undefined {
+  const content = recordAt(payload, 'content');
+  if (!content) return undefined;
+  const value = content.value;
+  if (typeof value === 'string') return value.trim() || undefined;
+  if (value === undefined || value === null) return undefined;
+  return JSON.stringify(value);
+}
+
+function firstNonEmptyString(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function insufficientGuiCompletionReason(
+  completion: GuiCompletionEventDetails,
+  previousInput: Record<string, unknown>,
+): string | undefined {
+  if (completion.name === 'gui.ask_user') return undefined;
+  if (!turnRequiresSubstantiveGuiPresentation(previousInput)) return undefined;
+  const contentText = completion.contentText?.trim() ?? '';
+  if (!contentText) return 'previous gui.present did not include answer content; title/ref-only presentation cannot answer the multimodal user request.';
+  if (isTitleOnlyGuiPresentation(contentText, completion.title)) {
+    return 'previous gui.present content was title-only and did not answer the multimodal user request.';
+  }
+  if (visibleAnswerCharacterCount(contentText) < 24) {
+    return 'previous gui.present content was too short to answer the multimodal user request.';
+  }
+  return undefined;
+}
+
+function turnRequiresSubstantiveGuiPresentation(previousInput: Record<string, unknown>): boolean {
+  const input = previousInput.input;
+  if (!Array.isArray(input)) return false;
+  return input.some((item) => {
+    if (!isRecord(item)) return false;
+    const type = stringAt(item, 'type');
+    if (type && type !== 'text') return true;
+    const text = stringAt(item, 'text') ?? '';
+    return /^SciForge input_object attachments:/m.test(text);
+  });
+}
+
+function isTitleOnlyGuiPresentation(contentText: string, title?: string): boolean {
+  const normalizedContent = normalizeVisibleAnswerText(contentText);
+  const normalizedTitle = normalizeVisibleAnswerText(title ?? '');
+  if (!normalizedContent) return true;
+  if (normalizedTitle && normalizedContent === normalizedTitle) return true;
+  return false;
+}
+
+function visibleAnswerCharacterCount(value: string): number {
+  return normalizeVisibleAnswerText(value).length;
+}
+
+function normalizeVisibleAnswerText(value: string): string {
+  return value
+    .replace(/[`*_#>\-[\]().:：。，“”,、\s]/g, '')
+    .trim();
+}
+
+function guiProtocolRepairReason(input: {
+  sawGuiCompletion: boolean;
+  sawSufficientGuiCompletion: boolean;
+  insufficientGuiPresentationReason?: string;
+}): string | undefined {
+  if (!input.sawGuiCompletion) return 'missing-gui-present';
+  if (!input.sawSufficientGuiCompletion && input.insufficientGuiPresentationReason) {
+    return input.insufficientGuiPresentationReason;
+  }
+  return undefined;
+}
+
+function syntheticGuiToolCompletionEvent(request: JsonRpcRequest, result: unknown): Record<string, unknown> | undefined {
+  if (request.method !== 'item/tool/call') return undefined;
+  const params = isRecord(request.params) ? request.params : {};
+  const resultRecord = isRecord(result) ? result : {};
+  if (resultRecord.success === false) return undefined;
+  const guiIntent = guiIntentFromToolCallParams(params);
+  if (!guiIntent) return undefined;
+  return {
+    method: 'item/tool/completed',
+    params: {
+      ...params,
+      ...(guiIntent.kind === 'direct'
+        ? { namespace: undefined, tool: providerSafeDynamicToolAlias(guiIntent.name) }
+        : { namespace: 'module', tool: 'invoke' }),
+      arguments: guiIntent.rawArgs,
+      result,
+      output: result,
+      status: 'completed',
+    },
+  };
+}
+
+function guiIntentFromToolCallParams(params: Record<string, unknown>): {
+  name: 'gui.present' | 'gui.ask_user';
+  rawArgs: Record<string, unknown>;
+  kind: 'direct' | 'module';
+} | undefined {
+  const namespace = stringAt(params, 'namespace');
+  const tool = stringAt(params, 'tool') ?? '';
+  const toolName = namespace ? `${namespace}.${tool}` : tool;
+  const args = parseJsonRecord(params.arguments) ?? {};
+  if (isGuiDynamicToolName(toolName)) {
+    return {
+      name: canonicalGuiDynamicToolName(toolName),
+      rawArgs: args,
+      kind: 'direct',
+    };
+  }
+  const moduleToolName = canonicalModuleToolName(toolName);
+  if (moduleToolName !== 'module.invoke') return undefined;
+  const moduleId = stringAt(args, 'moduleId') ?? stringAt(args, 'module_id');
+  if (moduleId !== 'gui') return undefined;
+  const intent = stringAt(args, 'intent');
+  const rawArgs = parseJsonRecord(args.input) ?? {};
+  if (intent === 'present') return { name: 'gui.present', rawArgs: args, kind: 'module' };
+  if (intent === 'ask_user') return { name: 'gui.ask_user', rawArgs: args, kind: 'module' };
+  return undefined;
+}
+
+function guiProtocolRepairTurnStartInput(
+  threadId: string,
+  previousInput: Record<string, unknown>,
+  reason: string,
+): Record<string, unknown> {
+  const missingGui = reason === 'missing-gui-present';
+  return {
+    ...previousInput,
+    threadId,
+    input: [{
+      type: 'text',
+      text: [
+        'SciForge runtime protocol repair:',
+        missingGui
+          ? 'Your previous turn ended without a successful gui.present or gui.ask_user tool call.'
+          : `Your previous gui.present was not accepted: ${reason}`,
+        'Continue the same user request in this same thread. This is not a new user task.',
+        'Do not finish with native assistant prose. Use the available module tools and MCP actions required by the user request.',
+        'If multimodal evidence or object descriptions are already present in this thread, synthesize from that existing context; do not re-inspect the same object unless the available evidence is insufficient.',
+        'For external, current, latest, browser, source, citation, or verification needs, gather bounded evidence through the browser primitives before synthesizing.',
+        'When ready, call gui.present with the complete markdown answer in content.value and stable refs. The title field is optional metadata and cannot substitute for the answer body.',
+        'If blocked or user input is required, call gui.ask_user or gui.present with a blocker summary.',
+      ].join('\n'),
+      text_elements: [],
+    }],
+  };
+}
+
+function codexAppServerGuiProtocolRepairEvent(
+  threadId: string,
+  turnId: string,
+  attempt: number,
+  reason: string,
+): Record<string, unknown> {
+  const message = reason === 'missing-gui-present'
+    ? 'Runtime Codex ended without gui.present/gui.ask_user; continuing the same Agent Host session with one protocol repair attempt.'
+    : 'Runtime Codex produced an insufficient gui.present answer; continuing the same Agent Host session with one protocol repair attempt.';
+  return {
+    method: 'sciforge/gui_protocol_repair',
+    params: {
+      threadId,
+      turnId,
+      status: 'repairing',
+      attempt,
+      reason,
+      message,
+    },
+  };
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {

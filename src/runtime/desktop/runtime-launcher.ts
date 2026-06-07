@@ -466,6 +466,7 @@ type NonSecretProxyConfig = {
 
 type LocalRuntimeConfig = NonSecretProxyConfig & {
   apiKey?: string;
+  visionApiKey?: string;
   visionBaseUrl?: string;
   visionModel?: string;
   inputAdapter?: string;
@@ -475,10 +476,11 @@ type LocalRuntimeConfig = NonSecretProxyConfig & {
 function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.ProcessEnv): Record<string, string> {
   const output: Record<string, string> = {};
   const upstreamBaseUrl = config.upstreamBaseUrl ?? config.baseUrl;
-  const visionBaseUrl = config.visionBaseUrl ?? upstreamBaseUrl;
   const defaultModel = config.defaultModel ?? config.model;
-  const visionModel = config.visionModel ?? defaultModel;
+  const visionModel = config.visionModel;
+  const visionBaseUrl = visionModel ? config.visionBaseUrl ?? upstreamBaseUrl : undefined;
   const apiKey = env.SCIFORGE_RUNTIME_API_KEY ?? config.apiKey;
+  const visionApiKey = visionModel ? config.visionApiKey ?? apiKey : undefined;
   const inputAdapter = nonSecretComputerUseInputAdapter(config.inputAdapter);
   const independentInputAdapterProvider = nonSecretComputerUseInputAdapterProvider(config.independentInputAdapterProvider);
   if (!env.SCIFORGE_RUNTIME_API_KEY && config.apiKey) output.SCIFORGE_RUNTIME_API_KEY = config.apiKey;
@@ -491,7 +493,7 @@ function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.Proce
   if (!env.SCIFORGE_TEXT_MODEL && defaultModel) output.SCIFORGE_TEXT_MODEL = defaultModel;
   if (!env.SCIFORGE_VISION_MODEL && visionModel) output.SCIFORGE_VISION_MODEL = visionModel;
   if (!env.SCIFORGE_TEXT_API_KEY && apiKey) output.SCIFORGE_TEXT_API_KEY = apiKey;
-  if (!env.SCIFORGE_VISION_API_KEY && apiKey) output.SCIFORGE_VISION_API_KEY = apiKey;
+  if (!env.SCIFORGE_VISION_API_KEY && visionApiKey) output.SCIFORGE_VISION_API_KEY = visionApiKey;
   if (!env.SCIFORGE_PROXY_DEFAULT_MODEL && defaultModel) output.SCIFORGE_PROXY_DEFAULT_MODEL = defaultModel;
   if (!env.SCIFORGE_VISION_INPUT_ADAPTER && inputAdapter) output.SCIFORGE_VISION_INPUT_ADAPTER = inputAdapter;
   if (!env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER && independentInputAdapterProvider) {
@@ -556,7 +558,10 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
     const textLLM = isRecord(parsed.textLLM) ? parsed.textLLM : {};
     const textLLMEnv = isRecord(textLLM.env) ? textLLM.env : {};
+    const visionLLM = isRecord(parsed.visionLLM) ? parsed.visionLLM : {};
+    const visionLLMEnv = isRecord(visionLLM.env) ? visionLLM.env : {};
     const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
+    const visionSenseEnv = isRecord(visionSense.env) ? visionSense.env : {};
     const computerUse = isRecord(parsed.computerUse) ? parsed.computerUse : {};
     const upstreamBaseUrl = stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
       ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
@@ -585,10 +590,30 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
       ?? stringValue(llm.apiKey)
       ?? stringValue(codexProxy.apiKey)
       ?? stringValue(parsed.apiKey);
-    const visionBaseUrl = stringValue(visionSense.vlmBaseUrl)
+    const visionApiKey = stringValue(visionLLM.apiKey)
+      ?? stringValue(visionLLMEnv.SCIFORGE_VISION_API_KEY)
+      ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_API_KEY)
+      ?? stringValue(visionSense.apiKey)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_API_KEY)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_API_KEY);
+    const visionBaseUrl = stringValue(visionLLMEnv.SCIFORGE_VISION_BASE_URL)
+      ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_BASE_URL)
+      ?? stringValue(visionLLM.baseUrl)
+      ?? stringValue(visionLLM.upstreamBaseUrl)
+      ?? stringValue(visionLLM.modelBaseUrl)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_BASE_URL)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_BASE_URL)
+      ?? stringValue(visionSense.vlmBaseUrl)
       ?? stringValue(visionSense.baseUrl)
       ?? stringValue(visionSense.modelBaseUrl);
-    const visionModel = stringValue(visionSense.vlmModel)
+    const visionModel = stringValue(visionLLMEnv.SCIFORGE_VISION_MODEL)
+      ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_MODEL)
+      ?? stringValue(visionLLM.model)
+      ?? stringValue(visionLLM.modelName)
+      ?? stringValue(visionLLM.defaultModel)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_MODEL)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_MODEL)
+      ?? stringValue(visionSense.vlmModel)
       ?? stringValue(visionSense.model)
       ?? stringValue(visionSense.modelName);
     const inputAdapter = stringValue(visionSense.inputAdapter)
@@ -602,6 +627,7 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
       ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
       ...(defaultModel ? { defaultModel } : {}),
       ...(apiKey ? { apiKey } : {}),
+      ...(visionApiKey ? { visionApiKey } : {}),
       ...(visionBaseUrl ? { visionBaseUrl } : {}),
       ...(visionModel ? { visionModel } : {}),
       ...(inputAdapter ? { inputAdapter } : {}),

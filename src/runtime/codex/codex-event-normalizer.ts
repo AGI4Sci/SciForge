@@ -571,6 +571,8 @@ function guiIntentFromToolCall(
 ): { name?: string; args: Record<string, unknown>; source?: string } {
   // Legacy gui.* names are normalized only for event compatibility; module.invoke is canonical.
   if (toolName === 'gui.present' || toolName === 'gui.ask_user') return { name: toolName, args };
+  if (toolName === 'gui_present') return { name: 'gui.present', args, source: 'gui.present:gui_present' };
+  if (toolName === 'gui_ask_user') return { name: 'gui.ask_user', args, source: 'gui.ask_user:gui_ask_user' };
   if (toolName !== 'module.invoke') return { args };
   const moduleId = stringField(args.moduleId);
   const intent = stringField(args.intent);

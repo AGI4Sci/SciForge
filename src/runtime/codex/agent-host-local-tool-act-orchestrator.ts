@@ -87,6 +87,16 @@ export function evaluateAgentHostLocalToolAct(input: AgentHostLocalToolActInput)
       evidenceRefs,
     });
   }
+  if (moduleId === 'computer_use' && intentName === 'executeBoundedOperation') {
+    return blocked(input, {
+      reason: 'Legacy bounded Computer Use execution is blocked in the generic local tool path; Computer Use execution must enter the Agent Host Computer Use primitive runtime.',
+      moduleId,
+      functionName,
+      intent: intentName,
+      sideEffect: 'local',
+      evidenceRefs,
+    });
+  }
   const description = input.moduleDescription;
   const intent = description ? moduleIntent(description, intentName) : undefined;
   if (!intent) {

@@ -8,11 +8,11 @@ export type DesktopStaticAssetCopy = {
 };
 
 const desktopStaticFiles: DesktopStaticAssetCopy[] = [
+  { from: 'packages/actions/browser-runtime/action-provider.manifest.json' },
   { from: 'packages/actions/computer-use/action-provider.manifest.json' },
   { from: 'packages/actions/computer-use/native-window-capability.manifest.json' },
   { from: 'packages/observe/web/capabilities/web_search.manifest.json' },
   { from: 'packages/observe/web/capabilities/web_fetch.manifest.json' },
-  { from: 'packages/observe/web/capabilities/browser_search.manifest.json' },
   { from: 'packages/observe/web/capabilities/browser_fetch.manifest.json' },
   { from: 'packages/observe/web/capabilities/browser_runtime.manifest.json' },
   { from: 'packages/observe/web/capabilities/playwright_browser_automation.manifest.json' },

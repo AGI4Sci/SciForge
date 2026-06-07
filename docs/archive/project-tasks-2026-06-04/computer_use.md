@@ -66,7 +66,7 @@ annotation refs + mutating user intent
 
 ## 相关文档
 
-- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
+- 已删除的历史 VirtualAppScreen 设计文档。
 - [`PROJECT_annotation.md`](PROJECT_annotation.md)
 - [`PROJECT_image.md`](PROJECT_image.md)
 - [`PROJECT_window_action.md`](PROJECT_window_action.md)

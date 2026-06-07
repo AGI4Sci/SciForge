@@ -209,7 +209,7 @@ test('CodexAppServerAdapter preserves Computer Use native-route workspace events
                   title: 'Computer Use result',
                   status: 'needs-confirmation',
                   traceRefs: ['.sciforge/vision-runs/native-route/vision-trace.json'],
-                  runTaskChainRefs: ['.sciforge/vision-runs/native-route/tui-host-run-task-chain.json'],
+                  primitiveTraceRefs: ['.sciforge/vision-runs/native-route/primitive-trace.json'],
                 },
               }],
             }),

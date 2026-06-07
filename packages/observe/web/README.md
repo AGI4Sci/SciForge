@@ -6,7 +6,7 @@ It answers what SciForge can ask from web providers:
 
 - `web_search`: search public web or configured search indexes and return ranked result refs with provider diagnostics.
 - `web_fetch`: fetch a public URL or search result URL through a configured network provider and return durable content refs.
-- `browser_search` / `browser_fetch`: use a real browser provider when rendered JavaScript pages or browser-only entry points are required.
+- `browser_fetch`: use a real browser provider when rendered JavaScript pages or browser-only entry points are required.
 - `browser_runtime`: define the Codex-like browser session/tab/action/snapshot/trace contract that GUI can present but not route or reason about.
 - `playwright_browser_automation`: use the official Playwright MCP server with a headless, isolated browser for TUI agent web observation that does not attach to the human user's active browser.
 - `playwright_edge_browser`: use the official Playwright MCP server with visible Microsoft Edge, a dedicated persistent profile, and structured browser actions for search, clicking, scrolling, forms, downloads, and login handoff.

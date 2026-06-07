@@ -5,591 +5,23 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
-  EXECUTE_BOUNDED_OPERATION_INTENT,
-  boundedOperationResult,
-  type ModuleInvokeRequest,
-} from '../../../packages/contracts/runtime/modules.js';
-import { evaluateCodexAgentHostTurnLoop, resolveCodexAgentHostRuntimeTruth } from './agent-host-turn-loop.js';
+  evaluateCodexAgentHostTurnLoop,
+  resolveCodexAgentHostRuntimeTruth,
+  type CodexAgentHostRuntimeTruth,
+  type CodexAgentHostTurnLoopInput,
+} from './agent-host-turn-loop.js';
+import { createDefaultComputerUseActMaterializer } from './agent-host-computer-use-act-materializer.js';
+import {
+  createActorCursor,
+  createWindowActionSession,
+  enterWindowActionSession,
+} from '../window-action-session.js';
+import { createInMemoryWindowActionSessionStore } from '../window-action-session-store.js';
 import { writeBundleLocalCuNext07Acceptance } from '../../../tests/smoke/helpers/cu-next-runner-fixtures.js';
-
-test('Agent Host Turn Loop answers ordinary frontier AI search from browser.search_read bounded operation refs', async () => {
-  const calls: ModuleInvokeRequest[] = [];
-  const commandText = '搜索并总结本周前沿 AI 大模型进展';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-bounded-search',
-    attemptId: 'codex-command-browser-bounded-search-attempt-1',
-    browserBoundedOperationInvoker: async (request) => {
-      calls.push(request);
-      return boundedOperationResult({
-        moduleId: 'browser',
-        operationKind: 'browser.search_read',
-        status: 'completed',
-        sourceRefs: ['browser-host-session:search/source-pages/source-1.source.json'],
-        evidenceRefs: [
-          'browser-host-session:search/source-pages/source-1.source.json',
-          'browser-host-session:search/source-pages/source-1.txt',
-        ],
-        value: {
-          sourcePages: [{
-            title: 'Frontier model update',
-            finalUrl: 'https://example.test/frontier-model-update',
-            textRef: 'browser-host-session:search/source-pages/source-1.txt',
-            textPreview: '本周多个前沿模型进展集中在长上下文推理、工具使用代理和多模态效率提升。',
-          }],
-          searchResultSnippet: '诱饵：不要使用搜索结果页摘要。',
-        },
-      });
-    },
-  });
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.moduleId, 'browser');
-  assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-  assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-  assert.equal(calls[0]?.input?.ownerModuleId, 'browser');
-  assert.equal((calls[0]?.input?.targetScope as Record<string, unknown>).kind, 'web-search');
-  assert.match(String((calls[0]?.input?.targetScope as Record<string, unknown>).query), /AI|大模型|前沿/);
-  assert.deepEqual((calls[0]?.input?.config as Record<string, unknown>).requiredEvidence, ['source-page-ref', 'page-text-ref']);
-
-  assert.equal(result?.event.provider, 'sciforge-agent-host');
-  assert.equal(result?.event.model, 'codex-agent-host-turn-loop');
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-  assert.match(String(result?.result.message), /长上下文推理|工具使用代理|多模态效率/);
-  assert.match(String(result?.result.message), /https:\/\/example\.test\/frontier-model-update/);
-  assert.doesNotMatch(String(result?.result.message), /诱饵/);
-  assert.deepEqual(result?.result.evidenceRefs, [
-    'browser-host-session:search/source-pages/source-1.source.json',
-    'browser-host-session:search/source-pages/source-1.txt',
-  ]);
-  assert.deepEqual((result?.result.claims as Array<Record<string, unknown>>)[0]?.supportingRefs, result?.result.evidenceRefs);
-  const serialized = JSON.stringify(result);
-  assert.doesNotMatch(serialized, /browser_search|browser-host-search-runtime|answerEvidenceState|browser-search-results|browser-host-projection|fixture:|diagnostic|gui\.present:|replay:|history:/);
-});
-
-test('Agent Host Turn Loop formats structured arXiv source summaries into dated paper answers', async () => {
-  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-arxiv-structured-answer',
-    attemptId: 'codex-command-browser-arxiv-structured-answer-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: ['browser-host-session:arxiv/source-pages/source-1.source.json'],
-      evidenceRefs: [
-        'browser-host-session:arxiv/source-pages/source-1.source.json',
-        'browser-host-session:arxiv/source-pages/source-1.txt',
-      ],
-      value: {
-        sourcePages: [{
-          title: 'arXiv search: agentic rl',
-          finalUrl: 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
-          textRef: 'browser-host-session:arxiv/source-pages/source-1.txt',
-          textSummary: [
-            'arXiv search page reports: 1–25 of 6,080 results for all: agentic rl.',
-            '1. Thinking with Imagination: Agentic Visual Spatial Reasoning with World Simulators (categories: cs.CV; authors: Chenming Zhu, Jingli Lin, Yilin Long; submitted: 4 June, 2026; announced: June 2026; comments: Project page; link: https://arxiv.org/abs/2606.06476): Astra lets VLM agents actively acquire imagined visual evidence from a world simulator during reasoning.',
-            '2. Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents (categories: cs.LG cs.AI; authors: Dae Yon Hwang, Raunaq Suri; submitted: 3 June, 2026; announced: June 2026; comments: Accepted by ICML 2026; link: https://arxiv.org/abs/2606.05296): Simulates reinforcement learning-style exploration for black-box LLM agents.',
-            '3. TAPO: Tool-Aware Policy Optimization via Credit Transfer for Multimodal Search Agents (categories: cs.AI; authors: Chengqi Dong, Chuhuai Yue; submitted: 4 June, 2026; announced: June 2026; link: https://arxiv.org/abs/2606.05784): It identifies credit misassignment in GRPO for tool-augmented multimodal search agents.',
-          ].join(' '),
-        }],
-      },
-    }),
-  });
-
-  const message = String(result?.result.message);
-  const todayIso = expectedLocalIsoDate();
-  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
-  assert.equal(acceptanceSpec?.schemaVersion, 'sciforge.agent-host.acceptance-spec.v1');
-  assert.deepEqual((acceptanceSpec?.evidence as Record<string, unknown>)?.required, ['source-page-ref', 'page-text-ref']);
-  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.kind, 'exact-date');
-  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.anchorDate, todayIso);
-  assert.deepEqual(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.evidenceFields, ['submitted', 'published', 'updated', 'released', 'observed']);
-  assert.equal((acceptanceSpec?.output as Record<string, unknown>)?.answerKind, 'dated-item-list');
-  assert.match(message, new RegExp(`未在已读来源页中看到符合今天（${escapeRegExp(todayIso)}）时间约束的日期字段`));
-  assert.match(message, /没有找到符合“今天”时间约束的可验证结果/);
-  assert.match(message, /不符合时间约束的已读候选（仅作排除依据）/);
-  assert.doesNotMatch(message, /今天新增论文：/);
-  assert.doesNotMatch(message, /已读页面中的最新相关论文：/);
-  assert.match(message, /Thinking with Imagination: Agentic Visual Spatial Reasoning with World Simulators/);
-  assert.match(message, /作者：Chenming Zhu, Jingli Lin, Yilin Long/);
-  assert.match(message, /https:\/\/arxiv\.org\/abs\/2606\.06476/);
-  assert.match(message, /一句话结论：Astra lets VLM agents actively acquire imagined visual evidence/);
-  assert.match(message, /Agentic Monte Carlo: Simulating Reinforcement Learning for Black-Box Agents/);
-  assert.match(message, /3\. 标题：TAPO: Tool-Aware Policy Optimization via Credit Transfer for Multimodal Search Agents/);
-  assert.doesNotMatch(message, /Simulates reinforcement learning-style exploration.*3\. TAPO/s);
-  assert.doesNotMatch(message, /\(cate 来源|Skip to main content/);
-});
-
-test('Agent Host Turn Loop applies AcceptanceSpec exact-date constraints to non-arXiv published items', async () => {
-  const commandText = '搜索一下今天 example.test 上发布的安全公告，并列出标题、发布方、链接和一句话结论。';
-  const todayIso = expectedLocalIsoDate();
-  const todayLabel = expectedEnglishDateLabel();
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-generic-published-answer',
-    attemptId: 'codex-command-browser-generic-published-answer-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: ['browser-host-session:security/source-pages/source-1.source.json'],
-      evidenceRefs: [
-        'browser-host-session:security/source-pages/source-1.source.json',
-        'browser-host-session:security/source-pages/source-1.txt',
-      ],
-      value: {
-        sourcePages: [{
-          title: 'Example security advisories',
-          finalUrl: 'https://example.test/security',
-          sourcePageRef: 'browser-host-session:security/source-pages/source-1.source.json',
-          textRef: 'browser-host-session:security/source-pages/source-1.txt',
-          textSummary: [
-            `1. Critical TLS Advisory (publisher: Example Security Team; published: ${todayLabel}; link: https://example.test/security/tls): Recommends immediate rotation for impacted TLS certificates.`,
-            '2. Historical SSH Advisory (publisher: Example Security Team; published: 3 June, 2026; link: https://example.test/security/ssh): Documents a previously fixed SSH configuration issue.',
-          ].join(' '),
-        }],
-      },
-    }),
-  });
-
-  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
-  assert.equal(acceptanceSpec?.schemaVersion, 'sciforge.agent-host.acceptance-spec.v1');
-  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.kind, 'exact-date');
-  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.anchorDate, todayIso);
-  assert.equal((acceptanceSpec?.output as Record<string, unknown>)?.answerKind, 'dated-item-list');
-  const message = String(result?.result.message);
-  assert.match(message, /符合“今天”时间约束的已读结果/);
-  assert.match(message, /标题：Critical TLS Advisory/);
-  assert.match(message, /发布方：Example Security Team/);
-  assert.match(message, new RegExp(`发布：${escapeRegExp(todayLabel)}`));
-  assert.match(message, /https:\/\/example\.test\/security\/tls/);
-  assert.match(message, /一句话结论：Recommends immediate rotation/);
-  assert.doesNotMatch(message, /Historical SSH Advisory/);
-  assert.doesNotMatch(message, /论文/);
-});
-
-test('Agent Host Turn Loop records latest/current requests as AcceptanceSpec without exact-date filtering', async () => {
-  const commandText = 'What is the latest Python release? Please cite source URLs.';
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-latest-python-acceptance-spec',
-    attemptId: 'codex-command-browser-latest-python-acceptance-spec-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: ['browser-host-session:python/source-pages/source-1.source.json'],
-      evidenceRefs: [
-        'browser-host-session:python/source-pages/source-1.source.json',
-        'browser-host-session:python/source-pages/source-1.txt',
-      ],
-      value: {
-        sourcePages: [{
-          title: 'Python release page',
-          finalUrl: 'https://example.test/python/releases',
-          sourcePageRef: 'browser-host-session:python/source-pages/source-1.source.json',
-          textRef: 'browser-host-session:python/source-pages/source-1.txt',
-          textPreview: 'Python 3.14.0 is the latest stable release on this page. Released: 7 October 2025.',
-        }],
-      },
-    }),
-  });
-
-  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
-  assert.equal(acceptanceSpec?.schemaVersion, 'sciforge.agent-host.acceptance-spec.v1');
-  assert.equal(((acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>)?.kind, 'latest-or-current');
-  assert.equal((acceptanceSpec?.output as Record<string, unknown>)?.answerKind, 'source-summary');
-  const message = String(result?.result.message);
-  assert.match(message, /Python 3\.14\.0 is the latest stable release/);
-  assert.match(message, /https:\/\/example\.test\/python\/releases/);
-  assert.doesNotMatch(message, /今天新增论文|今天新增|符合“今天”时间约束/);
-});
-
-test('Agent Host Turn Loop blocks browser answers when only low-information source pages are read', async () => {
-  const commandText = '搜索一下最近一周 arxiv 上 虚拟性细胞 相关的文章，并用中文总结，写一份系统的报告';
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-low-information-pages',
-    attemptId: 'codex-command-browser-low-information-pages-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: [
-        'browser-host-session:arxiv/source-pages/source-1.source.json',
-        'browser-host-session:arxiv/source-pages/source-2.source.json',
-      ],
-      evidenceRefs: [
-        'browser-host-session:arxiv/source-pages/source-1.source.json',
-        'browser-host-session:arxiv/source-pages/source-1.txt',
-        'browser-host-session:arxiv/source-pages/source-2.source.json',
-        'browser-host-session:arxiv/source-pages/source-2.txt',
-      ],
-      value: {
-        sourcePages: [{
-          title: 'arXiv.org e-Print archive',
-          finalUrl: 'https://arxiv.org/',
-          sourcePageRef: 'browser-host-session:arxiv/source-pages/source-1.source.json',
-          textRef: 'browser-host-session:arxiv/source-pages/source-1.txt',
-          textPreview: 'Skip to main content arXiv is a free distribution service and an open-access archive for scholarly articles.',
-        }, {
-          title: 'Log in to arXiv',
-          finalUrl: 'https://arxiv.org/login',
-          sourcePageRef: 'browser-host-session:arxiv/source-pages/source-2.source.json',
-          textRef: 'browser-host-session:arxiv/source-pages/source-2.txt',
-          textPreview: 'Log in to arXiv e-print repository with your username and password.',
-        }],
-      },
-    }),
-  });
-
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
-  assert.equal((result?.result.completionTruth as Record<string, unknown>).status, 'blocked');
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
-  const raw = result?.event.raw as Record<string, unknown>;
-  assert.equal((raw.acceptanceEvaluation as Record<string, unknown>)?.status, 'blocked');
-  assert.match(String(result?.result.message), /low-information|首页|登录|source pages/i);
-  assert.doesNotMatch(String(result?.result.message), /free distribution service|username and password|Skip to main content/);
-});
-
-test('Agent Host Turn Loop records relative-window temporal constraints for recent browser research', async () => {
-  const commandText = '搜索一下最近一周 arxiv 上 virtual cell 相关的文章，并用中文总结';
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-recent-week-acceptance-spec',
-    attemptId: 'codex-command-browser-recent-week-acceptance-spec-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: ['browser-host-session:arxiv/source-pages/source-1.source.json'],
-      evidenceRefs: [
-        'browser-host-session:arxiv/source-pages/source-1.source.json',
-        'browser-host-session:arxiv/source-pages/source-1.txt',
-      ],
-      value: {
-        sourcePages: [{
-          title: 'arXiv search: virtual cell',
-          finalUrl: 'https://arxiv.org/search/?query=virtual+cell',
-          sourcePageRef: 'browser-host-session:arxiv/source-pages/source-1.source.json',
-          textRef: 'browser-host-session:arxiv/source-pages/source-1.txt',
-          textSummary: [
-            '1. Virtual Cell Agent Models (authors: Ada Example; submitted: 6 June, 2026; link: https://arxiv.org/abs/2606.00001): Studies virtual cell simulation agents.',
-          ].join(' '),
-        }],
-      },
-    }),
-  });
-
-  const acceptanceSpec = (result?.event.raw as Record<string, unknown>).acceptanceSpec as Record<string, unknown>;
-  const temporal = (acceptanceSpec?.constraints as Record<string, unknown>)?.temporal as Record<string, unknown>;
-  assert.equal(temporal?.kind, 'relative-window');
-  assert.equal(temporal?.label, '最近一周');
-  assert.equal(temporal?.startDate, expectedLocalIsoDate(expectedOffsetDate(-7)));
-  assert.equal(temporal?.endDate, expectedLocalIsoDate());
-});
-
-test('Agent Host Turn Loop emits satisfied browser completionTruth for task-relevant source pages', async () => {
-  const commandText = '搜索并总结本周前沿 AI 大模型进展';
-  const evidenceRefs = [
-    'browser-host-session:search/source-pages/source-1.source.json',
-    'browser-host-session:search/source-pages/source-1.txt',
-  ];
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-satisfied-completion-truth',
-    attemptId: 'codex-command-browser-satisfied-completion-truth-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: [evidenceRefs[0] ?? ''],
-      evidenceRefs,
-      value: {
-        sourcePages: [{
-          title: 'Frontier model update',
-          finalUrl: 'https://example.test/frontier-model-update',
-          sourcePageRef: evidenceRefs[0],
-          textRef: evidenceRefs[1],
-          textPreview: '本周多个前沿模型进展集中在长上下文推理、工具使用代理和多模态效率提升。',
-        }],
-      },
-    }),
-  });
-
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-  assert.deepEqual(result?.result.completionTruth, {
-    schemaVersion: 'sciforge.agent-host.completion-truth.v1',
-    scope: 'user-task',
-    status: 'satisfied',
-    evidenceRefs,
-    validator: 'agent-host-browser-acceptance',
-  });
-  assert.equal(((result?.event.raw as Record<string, unknown>).acceptanceEvaluation as Record<string, unknown>)?.status, 'satisfied');
-});
-
-test('Agent Host Turn Loop does not emit satisfied browser completionTruth for incomplete Browser operations', async () => {
-  const commandText = '搜索并总结本周前沿 AI 大模型进展';
-  const evidenceRefs = [
-    'browser-host-session:search/source-pages/source-1.source.json',
-    'browser-host-session:search/source-pages/source-1.txt',
-  ];
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-partial-completion-truth',
-    attemptId: 'codex-command-browser-partial-completion-truth-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'partial',
-      sourceRefs: [evidenceRefs[0] ?? ''],
-      evidenceRefs,
-      value: {
-        sourcePages: [{
-          title: 'Frontier model update',
-          finalUrl: 'https://example.test/frontier-model-update',
-          sourcePageRef: evidenceRefs[0],
-          textRef: evidenceRefs[1],
-          textPreview: '本周多个前沿模型进展集中在长上下文推理、工具使用代理和多模态效率提升。',
-        }],
-      },
-    }),
-  });
-
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
-  assert.equal((result?.result.completionTruth as Record<string, unknown>).status, 'blocked');
-  assert.notEqual((result?.result.completionTruth as Record<string, unknown>).status, 'satisfied');
-  assert.equal(((result?.event.raw as Record<string, unknown>).acceptanceEvaluation as Record<string, unknown>)?.status, 'blocked');
-});
-
-test('Agent Host Turn Loop opens and reads explicit URL requests through browser.open_read bounded operation', async () => {
-  const calls: ModuleInvokeRequest[] = [];
-  const commandText = '打开并读取 https://example.test/source-page ，总结页面内容';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-bounded-open-read',
-    attemptId: 'codex-command-browser-bounded-open-read-attempt-1',
-    browserBoundedOperationInvoker: async (request) => {
-      calls.push(request);
-      return boundedOperationResult({
-        moduleId: 'browser',
-        operationKind: 'browser.open_read',
-        status: 'completed',
-        sourceRefs: ['browser-host-session:open/source-pages/source-1.source.json'],
-        evidenceRefs: [
-          'browser-host-session:open/source-pages/source-1.source.json',
-          'browser-host-session:open/source-pages/source-1.txt',
-        ],
-        value: {
-          sourcePages: [{
-            title: 'Explicit source page',
-            finalUrl: 'https://example.test/source-page',
-            textRef: 'browser-host-session:open/source-pages/source-1.txt',
-            textPreview: '这个页面介绍了 bounded operation 的 request、result 和 refs-first evidence。',
-          }],
-          searchResultSnippet: '诱饵：open_read 不应使用搜索结果摘要。',
-        },
-      });
-    },
-  });
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.moduleId, 'browser');
-  assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-  assert.equal(calls[0]?.input?.operationKind, 'browser.open_read');
-  assert.equal(calls[0]?.input?.ownerModuleId, 'browser');
-  assert.equal((calls[0]?.input?.targetScope as Record<string, unknown>).kind, 'url');
-  assert.equal((calls[0]?.input?.targetScope as Record<string, unknown>).url, 'https://example.test/source-page');
-  assert.deepEqual((calls[0]?.input?.config as Record<string, unknown>).allowedActions, ['open', 'read']);
-  assert.deepEqual((calls[0]?.input?.config as Record<string, unknown>).requiredEvidence, ['source-page-ref', 'page-text-ref']);
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-  assert.match(String(result?.result.message), /bounded operation 的 request、result 和 refs-first evidence/);
-  assert.match(String(result?.result.message), /https:\/\/example\.test\/source-page/);
-  assert.doesNotMatch(String(result?.result.message), /诱饵/);
-  assert.deepEqual(result?.result.evidenceRefs, [
-    'browser-host-session:open/source-pages/source-1.source.json',
-    'browser-host-session:open/source-pages/source-1.txt',
-  ]);
-});
-
-test('Agent Host Turn Loop routes in-app Browser open-source retrieval prompts to browser.search_read before GUI operation', async () => {
-  const calls: ModuleInvokeRequest[] = [];
-  const commandText = '请用 SciForge 内置浏览器打开 OpenAI 官方 changelog，读取页面内容，用中文总结最近的产品更新，并列出来源链接。';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-open-source-search-read',
-    attemptId: 'codex-command-browser-open-source-search-read-attempt-1',
-    browserBoundedOperationInvoker: async (request) => {
-      calls.push(request);
-      return boundedOperationResult({
-        moduleId: 'browser',
-        operationKind: 'browser.search_read',
-        status: 'completed',
-        sourceRefs: ['browser-host-session:changelog/source-pages/source-1.source.json'],
-        evidenceRefs: [
-          'browser-host-session:changelog/source-pages/source-1.source.json',
-          'browser-host-session:changelog/source-pages/source-1.txt',
-        ],
-        value: {
-          sourcePages: [{
-            title: 'OpenAI API changelog',
-            finalUrl: 'https://platform.openai.com/docs/changelog',
-            textRef: 'browser-host-session:changelog/source-pages/source-1.txt',
-            textPreview: 'Jun 4 Feature Added moderation scores to the Responses API and Chat Completions API.',
-          }],
-        },
-      });
-    },
-  });
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-  assert.match(String((calls[0]?.input?.targetScope as Record<string, unknown>).query), /OpenAI|changelog|产品更新/);
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-});
-
-test('Agent Host Turn Loop blocks Browser completion without both source page and page text refs', async () => {
-  const commandText = 'What is the current Python release? Please cite source URLs.';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-insufficient-evidence',
-    attemptId: 'codex-command-browser-insufficient-evidence-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: ['browser-host-session:search/source-pages/source-1.source.json'],
-      evidenceRefs: ['browser-host-session:search/source-pages/source-1.source.json'],
-      value: {
-        sourcePages: [{
-          title: 'Python release search result',
-          finalUrl: 'https://example.test/python-release',
-          textPreview: 'This should not be enough without a page text ref.',
-        }],
-      },
-    }),
-  });
-
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
-  assert.match(String(result?.result.message), /missing current-run source\/page text evidence|source-page-ref|page-text-ref/i);
-  assert.doesNotMatch(String(result?.result.message), /This should not be enough/);
-  assert.deepEqual(result?.result.evidenceRefs, [
-    'browser-host-session:search/source-pages/source-1.source.json',
-  ]);
-});
-
-test('Agent Host Turn Loop does not accept discovery-only Browser pages as completion evidence', async () => {
-  const commandText = 'Search arXiv and summarize current papers with source links.';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-discovery-only-evidence',
-    attemptId: 'codex-command-browser-discovery-only-evidence-attempt-1',
-    browserBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.search_read',
-      status: 'completed',
-      sourceRefs: ['browser-host-session:search/source-pages/source-1.source.json'],
-      evidenceRefs: [
-        'browser-host-session:search/source-pages/source-1.source.json',
-        'browser-host-session:search/source-pages/source-1.txt',
-      ],
-      value: {
-        sourcePages: [{
-          title: 'arXiv search: agentic rl',
-          finalUrl: 'https://arxiv.org/search/?query=agentic+rl',
-          sourcePageRef: 'browser-host-session:search/source-pages/source-1.source.json',
-          textRef: 'browser-host-session:search/source-pages/source-1.txt',
-          discoveryOnly: true,
-          textSummary: '1. Example Paper (authors: Ada Example; submitted: 1 January, 2000; link: https://arxiv.org/abs/0001.00001): Listing summary.',
-        }],
-      },
-    }),
-  });
-
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
-  assert.match(String(result?.result.message), /missing current-run source\/page text evidence|source-page-ref|page-text-ref/i);
-  assert.doesNotMatch(String(result?.result.message), /Example Paper/);
-});
-
-test('Agent Host Turn Loop fails closed instead of falling back to legacy browser_search when Browser module is unavailable', async () => {
-  const commandText = 'Search the web for current Python release notes and cite the source.';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-module-missing',
-    attemptId: 'codex-command-browser-module-missing-attempt-1',
-  });
-
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'browser-module-unavailable');
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
-  assert.match(String(result?.result.message), /Browser bounded operation invoker is unavailable|browser\.search_read|browser\.open_read/);
-  assert.doesNotMatch(JSON.stringify(result), /browser_search|browser-host-search-runtime|answerEvidenceState|browser-search-results|browser-host-projection/);
-});
-
-test('Agent Host Turn Loop explains no-network Browser skip without invoking Browser', async () => {
-  let browserCalled = false;
-  const commandText = 'Do not use the internet. Summarize the current Python release from local notes only.';
-
-  const result = await evaluateCodexAgentHostTurnLoop({
-    input: readyAgentHostInput(commandText),
-    commandText,
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-browser-no-network',
-    attemptId: 'codex-command-browser-no-network-attempt-1',
-    browserBoundedOperationInvoker: async () => {
-      browserCalled = true;
-      throw new Error('Browser must not be invoked for local-only/no-network requests');
-    },
-  });
-
-  assert.equal(browserCalled, false);
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'agent-host-browser-skip');
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
-  assert.match(String(result?.result.message), /not call Browser|不调用 Browser|local-only|no-network/i);
-  assert.match(String(result?.result.message), /local notes|本地/i);
-  assert.doesNotMatch(JSON.stringify(result), /module\.invoke|browser\.search_read|browser\.open_read|browser-host-search-runtime/);
-});
 
 test('Agent Host Turn Loop creates one-page PPT artifact with validator refs from ordinary chat', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-agent-host-ppt-artifact-'));
   const commandText = '做一页 PPT，主题是 SciForge bounded modules';
-  let computerUseCalled = false;
   try {
     const result = await evaluateCodexAgentHostTurnLoop({
       input: readyAgentHostInput(commandText),
@@ -597,13 +29,8 @@ test('Agent Host Turn Loop creates one-page PPT artifact with validator refs fro
       workspacePath,
       commandId: 'codex-command-one-page-ppt',
       attemptId: 'codex-command-one-page-ppt-attempt-1',
-      computerUseBoundedOperationInvoker: async () => {
-        computerUseCalled = true;
-        throw new Error('PPT artifact path must not call Computer Use bounded operation');
-      },
     });
 
-    assert.equal(computerUseCalled, false);
     assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'agent-host-artifact-generator');
     assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
     const evidenceRefs = result?.result.evidenceRefs as string[];
@@ -672,6 +99,67 @@ test('Agent Host Turn Loop calls injected Computer Use Act materializer after re
   assert.doesNotMatch(JSON.stringify(result), /ready-for-act/);
 });
 
+test('Agent Host Turn Loop routes ordinary chat through default Computer Use primitives for one low-risk WindowAction action', async () => {
+  const now = '2026-06-03T00:00:00.000Z';
+  const actionCalls: Array<{ action: unknown; delta: unknown; adapterRef: unknown }> = [];
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(now),
+      actionPlanner: async () => ({
+        status: 'planned',
+        message: 'Scroll the active desktop window.',
+        nextAction: { type: 'scroll', direction: 'down', amount: 160 },
+        evidenceRefs: ['action-ledger:planner/turn-loop-window-scroll'],
+      }),
+      adapterHandlers: {
+        'app-native-command': async ({ input, scopedInputAdapter }) => {
+          actionCalls.push({
+            action: input.action,
+            delta: input.delta,
+            adapterRef: scopedInputAdapter.ref,
+          });
+          const actionId = String(input.actionId ?? 'missing-action-id');
+          return {
+            status: 'completed',
+            evidenceRefs: [
+              { kind: 'executor-event', ref: `app-native-command:vscode/actions/${actionId}/executor-event` },
+              { kind: 'verification', ref: `window-action-session:vscode-main/actions/${actionId}/verification/verifier.json` },
+              { kind: 'freshness-invalidation', ref: `window-action-session:vscode-main/actions/${actionId}/freshness-invalidation.json` },
+            ],
+            inputEventRefs: [{ kind: 'input-event', ref: `app-native-command:vscode/actions/${actionId}/scroll/input-event` }],
+            afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-scroll' }],
+          };
+        },
+      },
+      now: () => new Date(now),
+    },
+  });
+
+  const commandText = 'Scroll the active desktop window.';
+  const result = await evaluateCodexAgentHostTurnLoop({
+    input: readyWindowActionAgentHostInput(commandText, now),
+    commandText,
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-turn-loop-window-action',
+    attemptId: 'codex-command-turn-loop-window-action-attempt-1',
+    runtimeTruth: readyWindowActionRuntimeTruth(now),
+    computerUseActMaterializer: materializer,
+  });
+
+  assert.deepEqual(actionCalls, [{
+    action: 'scroll',
+    delta: { y: 160 },
+    adapterRef: 'scoped-input-adapter:vscode-main/computer-use/app-native-command',
+  }]);
+  assert.equal((result?.event.raw as Record<string, unknown> | undefined)?.stage, 'Act / Answer');
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
+  assert.match(String(result?.result.message), /current target-bound action evidence refs/i);
+  assert.doesNotMatch(String(result?.result.message), /Scroll the active desktop window\./);
+  assert.ok((result?.result.evidenceRefs as string[]).includes('computer-use:primitive-trace/vscode-main/actions/codex-command-turn-loop-window-action-attempt-1'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('app-native-command:vscode/actions/codex-command-turn-loop-window-action-attempt-1/scroll/input-event'));
+  assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|base64|raw-|\/raw|secret|token|password/i);
+});
+
 test('Agent Host Turn Loop blocks completed Act materializer results without full action evidence refs', async () => {
   const result = await evaluateCodexAgentHostTurnLoop({
     input: readyAgentHostInput('Scroll the current browser page to inspect visible results.'),
@@ -693,57 +181,25 @@ test('Agent Host Turn Loop blocks completed Act materializer results without ful
   assert.doesNotMatch(String(result?.result.message), /Computer Use action executed through BrowserHostSession/);
 });
 
-test('Agent Host Turn Loop can route ready Computer Use Guard into bounded perform_local_action operation', async () => {
-  const calls: ModuleInvokeRequest[] = [];
+test('Agent Host Turn Loop does not route ready Computer Use Guard through legacy bounded operations', async () => {
+  let legacyInvokerCalled = false;
   const result = await evaluateCodexAgentHostTurnLoop({
     input: readyAgentHostInput('Scroll the current browser page to inspect visible results.'),
     commandText: 'Scroll the current browser page to inspect visible results.',
     workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-cu-bounded-operation',
-    attemptId: 'codex-command-cu-bounded-operation-attempt-1',
-    computerUseBoundedOperationInvoker: async (request) => {
-      calls.push(request);
-      return boundedOperationResult({
-        moduleId: 'computer_use',
-        operationKind: 'computer_use.perform_local_action',
-        status: 'completed',
-        evidenceRefs: [
-          'computer-use:evidence:before-scroll',
-          'computer-use:grounding:scroll-region',
-          'computer-use:executor:event-scroll',
-          'computer-use:evidence:after-scroll',
-          'computer-use:evidence:before-scroll#stale',
-        ],
-        actionRefs: ['computer-use:executor:event-scroll'],
-      });
+    commandId: 'codex-command-cu-no-bounded-operation',
+    attemptId: 'codex-command-cu-no-bounded-operation-attempt-1',
+    computerUseBoundedOperationInvoker: async () => {
+      legacyInvokerCalled = true;
+      throw new Error('legacy bounded operation invoker must not be called');
     },
-  });
+  } as CodexAgentHostTurnLoopInput & { computerUseBoundedOperationInvoker: () => never });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.moduleId, 'computer_use');
-  assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-  assert.equal(calls[0]?.input?.operationKind, 'computer_use.perform_local_action');
-  assert.equal(calls[0]?.input?.ownerModuleId, 'computer_use');
-  assert.deepEqual((calls[0]?.input?.config as Record<string, unknown>).allowedActions, ['scroll']);
-  assert.deepEqual((calls[0]?.input?.config as Record<string, unknown>).requiredEvidence, [
-    'before-evidence-ref',
-    'grounding-ref',
-    'executor-event-ref',
-    'after-evidence-ref',
-    'stale-invalidation-ref',
-  ]);
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-  assert.match(String(result?.result.message), /local GUI action|局部|bounded operation/i);
-  assert.deepEqual(result?.result.evidenceRefs, [
-    'computer-use:evidence:before-scroll',
-    'computer-use:grounding:scroll-region',
-    'computer-use:executor:event-scroll',
-    'computer-use:evidence:after-scroll',
-    'computer-use:evidence:before-scroll#stale',
-  ]);
-  assert.notEqual((result?.result.completionTruth as Record<string, unknown> | undefined)?.scope, 'user-task');
-  assert.doesNotMatch(JSON.stringify(result), /taskOutcome":"satisfied".*workflow|gui\.present:|fixture:|replay:|history:/);
+  assert.equal(legacyInvokerCalled, false);
+  assert.equal((result?.event.raw as Record<string, unknown>).stage, 'Guard');
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'ready-for-act');
+  assert.match(String(result?.result.message), /Act is waiting for a refs-first action runner\/materializer/i);
+  assert.doesNotMatch(JSON.stringify(result), /executeBoundedOperation|computer_use\.perform_local_action|computer_use\.fill_fields|bounded operation/i);
 });
 
 test('Agent Host Turn Loop blocks ordinary chat Computer Use when any user-level guard evidence is missing and explains recovery', async () => {
@@ -836,10 +292,6 @@ test('Agent Host Turn Loop blocks ordinary chat Computer Use when any user-level
       workspacePath: '/tmp/workspace',
       commandId: `codex-command-cu-blocker-${entry.name.replace(/\s+/g, '-')}`,
       attemptId: `codex-command-cu-blocker-${entry.name.replace(/\s+/g, '-')}-attempt-1`,
-      computerUseBoundedOperationInvoker: async () => {
-        executorCalled = true;
-        throw new Error(`Computer Use executor must not run when ${entry.name} is missing`);
-      },
     });
 
     assert.equal(executorCalled, false, entry.name);
@@ -858,21 +310,19 @@ test('Agent Host Turn Loop blocks Computer Use completion without full local act
     workspacePath: '/tmp/workspace',
     commandId: 'codex-command-cu-incomplete-action-evidence',
     attemptId: 'codex-command-cu-incomplete-action-evidence-attempt-1',
-    computerUseBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'computer_use',
-      operationKind: 'computer_use.perform_local_action',
+    computerUseActMaterializer: async () => ({
       status: 'completed',
+      message: 'Computer Use action executed through legacy-shaped evidence.',
       evidenceRefs: [
         'computer-use:evidence:before-scroll',
         'computer-use:grounding:scroll-region',
         'computer-use:executor:event-scroll',
         'computer-use:evidence:after-scroll',
       ],
-      actionRefs: ['computer-use:executor:event-scroll'],
     }),
   });
 
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
+  assert.equal((result?.event.raw as Record<string, unknown>).stage, 'Act / Answer');
   assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
   assert.match(String(result?.result.message), /missing current target-bound action evidence/i);
   assert.match(String(result?.result.message), /stale-invalidation-ref/);
@@ -885,38 +335,43 @@ test('Agent Host Turn Loop blocks Computer Use completion without full local act
 });
 
 test('Agent Host Turn Loop does not treat Computer Use PPT local action evidence as final artifact completion', async () => {
-  const commandText = 'Open PowerPoint and create one-page PPT about bounded operation contracts.';
+  const commandText = 'Open PowerPoint and create one-page PPT about primitive action contracts.';
   const result = await evaluateCodexAgentHostTurnLoop({
     input: readyAgentHostInput(commandText),
     commandText,
     workspacePath: '/tmp/workspace',
     commandId: 'codex-command-cu-ppt-local-action-only',
     attemptId: 'codex-command-cu-ppt-local-action-only-attempt-1',
-    computerUseBoundedOperationInvoker: async () => boundedOperationResult({
-      moduleId: 'computer_use',
-      operationKind: 'computer_use.perform_local_action',
+    computerUseActMaterializer: async () => ({
       status: 'completed',
+      message: 'Computer Use clicked PowerPoint controls but did not provide artifact validation.',
+      claimType: 'product-workflow-completion',
       evidenceRefs: [
         'computer-use:evidence:before-ppt',
         'computer-use:grounding:ppt-window',
         'computer-use:executor:event-ppt-click',
         'computer-use:evidence:after-ppt',
-        'computer-use:evidence:before-ppt#stale',
+        'computer-use:evidence:before-ppt/freshness-invalidation.json',
       ],
-      actionRefs: ['computer-use:executor:event-ppt-click'],
+      claims: [{
+        id: 'claim-ppt-local-action-only',
+        type: 'product-completion',
+        text: 'The PowerPoint deck workflow is complete.',
+        supportingRefs: ['computer-use:executor:event-ppt-click'],
+      }],
     }),
   });
 
-  assert.equal((result?.event.raw as Record<string, unknown>).selectedRuntime, 'module.invoke');
+  assert.equal((result?.event.raw as Record<string, unknown>).stage, 'Act / Answer');
   assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
   assert.equal((result?.result.displayIntent as Record<string, unknown>).taskOutcome, 'needs-work');
-  assert.match(String(result?.result.message), /artifact refs and validator refs/i);
+  assert.match(String(result?.result.message), /current-run completion evidence/i);
   assert.deepEqual(result?.result.evidenceRefs, [
     'computer-use:evidence:before-ppt',
     'computer-use:grounding:ppt-window',
     'computer-use:executor:event-ppt-click',
     'computer-use:evidence:after-ppt',
-    'computer-use:evidence:before-ppt#stale',
+    'computer-use:evidence:before-ppt/freshness-invalidation.json',
   ]);
   assert.equal(result?.result.completionTruth, undefined);
   assert.doesNotMatch(JSON.stringify(result), /taskOutcome":"satisfied|workflow complete|artifact complete|finalArtifactRef|artifactValidationRef|gui\.present:|fixture:|replay:|history:/);
@@ -1039,7 +494,7 @@ test('Agent Host Turn Loop blocks workflow completion refs when current-run bund
       evidenceRefs: [
         'action-ledger:browser-host-session/visible/type-1',
         `${runDir}/vision-trace.json`,
-        `${runDir}/tui-host-run-task-chain.json`,
+        `${runDir}/primitive-trace.json`,
         `${runDir}/current-run.json`,
         `${runDir}/cu-user-acceptance-manifest.json`,
         `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
@@ -1058,7 +513,7 @@ test('Agent Host Turn Loop blocks workflow completion refs when current-run bund
   assert.match(String(result?.result.reasoningTrace), /validated current-run workflow completion evidence/i);
 });
 
-test('Agent Host Turn Loop allows workflow completion claims with validated current-run bundle evidence', async () => {
+test('Agent Host Turn Loop blocks historical isolated-L3 workflow completion bundles', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agent-host-completion-bundle-'));
   try {
     await writeBundleLocalCuNext07Acceptance(workspace);
@@ -1077,7 +532,7 @@ test('Agent Host Turn Loop allows workflow completion claims with validated curr
         evidenceRefs: [
           'action-ledger:browser-host-session/visible/type-1',
           `${runDir}/vision-trace.json`,
-          `${runDir}/tui-host-run-task-chain.json`,
+          `${runDir}/primitive-trace.json`,
           `${runDir}/cu-user-acceptance-manifest.json`,
           `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
         ],
@@ -1090,8 +545,9 @@ test('Agent Host Turn Loop allows workflow completion claims with validated curr
       }),
     });
 
-  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-  assert.equal(result?.result.claimType, 'product-workflow-completion');
+  assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
+  assert.equal(result?.result.claimType, 'runtime-diagnostic');
+  assert.match(String(result?.result.message), /isolated-L3 evidence is retained for historical diagnostics only|current-run completion evidence/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -1125,7 +581,7 @@ test('Agent Host Turn Loop blocks explicit completionTruth when refs are GUI pro
   assert.doesNotMatch(JSON.stringify(result), /gui\.present:fake-completion/);
 });
 
-test('Agent Host Turn Loop exposes validated explicit completionTruth for user-level completion', async () => {
+test('Agent Host Turn Loop blocks explicit completionTruth backed by historical isolated-L3 evidence', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agent-host-explicit-completion-truth-'));
   try {
     await writeBundleLocalCuNext07Acceptance(workspace);
@@ -1144,7 +600,7 @@ test('Agent Host Turn Loop exposes validated explicit completionTruth for user-l
         evidenceRefs: [
           'action-ledger:browser-host-session/visible/type-1',
           `${runDir}/vision-trace.json`,
-          `${runDir}/tui-host-run-task-chain.json`,
+          `${runDir}/primitive-trace.json`,
         ],
         completionTruth: {
           schemaVersion: 'sciforge.computer-use.completion-truth.v1',
@@ -1159,29 +615,24 @@ test('Agent Host Turn Loop exposes validated explicit completionTruth for user-l
       }),
     });
 
-    assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
+    assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
     assert.doesNotMatch(JSON.stringify(result), /gui\.present/);
-    assert.deepEqual(result?.result.completionTruth, {
-      schemaVersion: 'sciforge.computer-use.completion-truth.v1',
-      scope: 'workflow',
-      status: 'satisfied',
-      validator: 'current-run-live-acceptance-bundle',
-      evidenceRefs: [
-        `${runDir}/cu-user-acceptance-manifest.json`,
-        `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
-      ],
-      currentRun: {
-        runDirRef: runDir,
-        acceptanceManifestRef: `${runDir}/cu-user-acceptance-manifest.json`,
-        completionEvidenceRef: `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
-      },
-    });
+    const completionTruth = result?.result.completionTruth as Record<string, unknown>;
+    assert.equal(completionTruth.schemaVersion, 'sciforge.computer-use.completion-truth.v1');
+    assert.equal(completionTruth.scope, 'workflow');
+    assert.equal(completionTruth.status, 'blocked');
+    assert.equal(completionTruth.validator, 'current-run-live-acceptance-bundle');
+    assert.deepEqual(completionTruth.evidenceRefs, [
+      `${runDir}/cu-user-acceptance-manifest.json`,
+      `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
+    ]);
+    assert.match(String(completionTruth.reason), /isolated-L3 evidence is retained for historical diagnostics only|current-run completion evidence/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test('Agent Host Turn Loop maps package bridge workEvidence to validated workflow completionTruth', async () => {
+test('Agent Host Turn Loop blocks package bridge workEvidence backed by historical isolated-L3 evidence', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agent-host-package-bridge-completion-truth-'));
   try {
     await writeBundleLocalCuNext07Acceptance(workspace);
@@ -1200,7 +651,7 @@ test('Agent Host Turn Loop maps package bridge workEvidence to validated workflo
         evidenceRefs: [
           'action-ledger:browser-host-session/visible/type-1',
           `${runDir}/vision-trace.json`,
-          `${runDir}/tui-host-run-task-chain.json`,
+          `${runDir}/primitive-trace.json`,
         ],
         workEvidence: [{
           kind: 'validate',
@@ -1216,24 +667,9 @@ test('Agent Host Turn Loop maps package bridge workEvidence to validated workflo
       }),
     });
 
-    assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'completed');
-    assert.deepEqual(result?.result.completionTruth, {
-      schemaVersion: 'sciforge.computer-use.completion-truth.v1',
-      scope: 'workflow',
-      status: 'satisfied',
-      validator: 'current-run-live-acceptance-bundle',
-      evidenceRefs: [
-        `${runDir}/vision-trace.json`,
-        `${runDir}/tui-host-run-task-chain.json`,
-        `${runDir}/cu-user-acceptance-manifest.json`,
-        `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
-      ],
-      currentRun: {
-        runDirRef: runDir,
-        acceptanceManifestRef: `${runDir}/cu-user-acceptance-manifest.json`,
-        completionEvidenceRef: `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
-      },
-    });
+    assert.equal((result?.result.displayIntent as Record<string, unknown>).status, 'blocked');
+    assert.equal((result?.result.completionTruth as Record<string, unknown> | undefined)?.status, 'blocked');
+    assert.match(String(result?.result.message), /isolated-L3 evidence is retained for historical diagnostics only|current-run completion evidence/i);
     assert.doesNotMatch(JSON.stringify(result), /gui\.present:fake-completion/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -1318,6 +754,112 @@ test('Agent Host runtime truth sanitizer preserves bounded human takeover contro
   assert.doesNotMatch(JSON.stringify(truth), /gui(?:\.|:)|ui:|fixture:|https?:\/\/|token/);
 });
 
+function readyWindowActionStore(now: string) {
+  const store = createInMemoryWindowActionSessionStore({ now: () => new Date(now) });
+  const session = enterWindowActionSession(createWindowActionSession({
+    id: 'vscode-main',
+    windowRef: 'window:vscode:main',
+    app: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code', kind: 'editor' },
+    bounds: { x: 20, y: 30, width: 1200, height: 800 },
+    scale: 2,
+    screenId: 'screen-built-in',
+    evidenceRefs: [{ kind: 'session', ref: 'window-action-session:vscode-main' }],
+    timestamp: now,
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now, actorCursorRef: 'actor-cursor:agent-runtime-1/cursor-runtime-1' });
+  store.upsert(session, {
+    refs: ['action-ledger:window-action-session/vscode-main/upsert'],
+    targetRefs: ['window-action-session:vscode-main'],
+    observationRefs: windowActionObservationRefs(),
+    timestamp: now,
+  });
+  return store;
+}
+
+function readyWindowActionAgentHostInput(intentText: string, now: string) {
+  return {
+    ...readyAgentHostInput(intentText),
+    target: {
+      bound: true,
+      summary: 'Verified active desktop window',
+      refs: ['window-action-session:vscode-main'],
+    },
+    observation: {
+      fresh: true,
+      refs: windowActionObservationRefs(),
+      observedAt: now,
+      capturedAt: now,
+      freshnessCheckedAt: now,
+      freshnessCheck: {
+        status: 'current',
+        observedAt: now,
+        checkedAt: now,
+        maxAgeMs: 30_000,
+      },
+    },
+    permissions: {
+      refs: ['permission:turn/turn-loop-window-action/ordinary-navigation'],
+      scopedExecutorRefs: ['window-action-session:vscode-main/executor-scope'],
+      stopCancelPath: true,
+    },
+    refs: ['window-action-session:vscode-main'],
+  };
+}
+
+function readyWindowActionRuntimeTruth(now: string): CodexAgentHostRuntimeTruth {
+  return {
+    schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+    source: 'test',
+    readiness: {
+      browserHostSession: 'ready',
+      nativeBridge: 'ready',
+      nativeSurface: 'ready',
+      windowActionSession: 'ready',
+      computerUseAdapter: 'ready',
+    },
+    target: {
+      bound: true,
+      summary: 'Verified active desktop window',
+      refs: ['window-action-session:vscode-main'],
+    },
+    observation: {
+      fresh: true,
+      refs: windowActionObservationRefs(),
+      observedAt: now,
+      capturedAt: now,
+      freshnessCheckedAt: now,
+      freshnessCheck: {
+        status: 'current',
+        observedAt: now,
+        checkedAt: now,
+        maxAgeMs: 30_000,
+      },
+    },
+    permissions: {
+      refs: ['permission:turn/turn-loop-window-action/ordinary-navigation'],
+      scopedExecutorRefs: ['window-action-session:vscode-main/executor-scope'],
+      stopCancelPath: true,
+    },
+    refs: [
+      'window-action-session:vscode-main',
+      'adapter-registry:window-action-session/app-native-command/computer-use',
+      'cancel:runtime-turn/codex-command-turn-loop-window-action',
+    ],
+  };
+}
+
+function windowActionObservationRefs(): string[] {
+  return [
+    'window-action-session:vscode-main/evidence/before-frame',
+    'accessibility-ui-automation:vscode-main/state-snapshot-before',
+    'accessibility-ui-automation:vscode-main/text-before',
+    'desktop-window:vscode-main',
+  ];
+}
+
 function readyAgentHostInput(intentText: string) {
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
@@ -1347,39 +889,4 @@ function readyAgentHostInput(intentText: string) {
       stopCancelPath: true,
     },
   };
-}
-
-function expectedLocalIsoDate(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function expectedEnglishDateLabel(date = new Date()) {
-  const months = [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
-  ];
-  return `${date.getDate()} ${months[date.getMonth()]}, ${date.getFullYear()}`;
-}
-
-function expectedOffsetDate(days: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -1,55 +1,68 @@
 # SciForge 架构
 
-最后更新：2026-06-06
+最后更新：2026-06-07
 
-## 北极星
+## 唯一产品链路
 
-SciForge 是 Codex backend 的 GUI / Browser / Desktop 能力面，不是 Agent Host。
+SciForge 是 Codex backend 的 GUI / Browser / Desktop 能力面，不是 Agent Host，也不是第二条智能链路。
 
-Codex backend 拥有：
+系统层级必须保持为：
+
+```text
+SciForge UI
+  -> CodexAppServerAdapter
+  -> Codex / Agent Host  唯一智能载体
+      -> 调用 MCP tools / actions
+      -> 需要模型时统一走 Model Router /v1/responses
+      -> 基于证据和 verifier 决策
+      -> gui.present 最终回答
+```
+
+`CodexAppServerAdapter` 是 SciForge 与 Codex / Agent Host 的唯一桥接层。`Model Router /v1/responses` 是 Codex 使用的多模态模型 API 服务层，不是与 `CodexAppServerAdapter` 并列的任务上游，也不是可以直接生成用户可见回答的第二个 Agent Host。
+
+## 所有权
+
+Codex / Agent Host 拥有：
 
 - 用户意图理解。
 - task plan。
+- MCP tools / actions 调用。
 - tool / module 选择。
 - approval / risk policy。
 - repair。
-- completion truth。
-- final answer。
+- verifier 选择和 completion truth。
+- `gui.present` 最终回答。
 
 SciForge 拥有：
 
 - GUI 输入与展示。
-- BrowserHostSession。
-- Computer Use / WindowActionSession。
-- refs-first evidence。
-- hard-confirm / stop / cancel / blocked recovery 投影。
+- Browser / Computer Use / Desktop 能力面。
+- refs-first evidence、artifact refs、action refs。
+- hard-confirm / stop / cancel / blocked recovery 的 UI 投影。
+- 把用户输入、附件对象和上下文交给 `CodexAppServerAdapter`。
 
-## 默认产品流
+Model Router 拥有：
 
-```text
-用户普通聊天 turn
-  -> Codex backend Agent Host
-     -> Ground：理解任务并收集 refs / readiness / evidence
-     -> Guard：风险、权限、确认、blocked 判断
-     -> Act：调用模块
-     -> Completion truth：基于 evidence 判断结果
-     -> Final answer：给用户可检查的回答
-  -> SciForge UI 展示回答、证据、产物和确认界面
-```
+- `/v1/responses` 兼容的多模态模型服务。
+- text reasoner、vision translator 或其它注册 provider 的受控调用。
+- `input_object` 的模态识别、读取、翻译和内部 descriptor 缓存。
+- refs-first trace 和 provider-safe diagnostics。
 
-普通聊天是唯一产品入口。Browser Search、Computer Use、runtime gateway、slash command 或 GUI 控件都不能成为任务入口。
+## 禁止链路
 
-## 模块公共语义
+以下链路都不允许作为产品路径保留：
 
-所有模块都通过同一组语义暴露给 Codex backend：
+- `SciForge UI -> Model Router -> 用户可见 final answer`。
+- `Runtime Codex -> Model Router -> message/done 直答`。
+- `Agent Host 外部的视觉/音频/文档 translator 旁路`。
+- `Browser / Computer Use / GUI 控件 -> 自行总结并回答用户`。
+- `slash command / runtime gateway / module fallback -> 绕过 Codex / Agent Host 完成任务`。
 
-```text
-module.describe
-module.read / observe
-module.invoke
-```
+多模态对象必须作为结构化 `input_object` 进入 Codex turn。Codex / Agent Host 需要模型能力时，再通过统一 Model Router 服务读取或补充模态证据。外部层不得通过专门 prompt、专门视觉链路或附件顺序猜测来完成模态翻译。
 
-模块只返回：
+## 模块边界
+
+Browser、Computer Use、Desktop 和其它模块只能作为 Codex / Agent Host 可调用的 tools / actions。模块返回：
 
 - operation result。
 - evidence refs。
@@ -59,68 +72,11 @@ module.invoke
 - blocked reason。
 - compact observation。
 
-模块不得返回用户可见 final answer，也不得声明用户级 completion truth。
-
-## Bounded Operation
-
-`executeBoundedOperation` 是 `module.invoke` 下的 typed intent，用于模块内部执行一个有边界的局部动作串。它不是新顶层 API，不是工作流引擎，也不是第二个 Agent Host。
-
-Host 发起 operation 时必须给出：
-
-```text
-operationKind
-ownerModule
-targetScope
-localObjective
-allowedActions
-riskPolicy
-requiredEvidence
-maxSteps
-maxTimeMs
-maxModelCalls
-stopConditions
-```
-
-模块内部只能运行窄状态机：
-
-```text
-observe
-  -> decide local next intent
-  -> local guard
-  -> locate / bind
-  -> execute atomic adapter action
-  -> verify
-  -> write evidence
-  -> completed / partial / blocked / needs-confirmation / failed
-```
-
-硬规则：
-
-- 一个 operation 只能有一个 owner module。
-- 一个 operation 只能有一个 target scope。
-- operation 内部不得调用另一个 `executeBoundedOperation`。
-- 配置只声明边界，不能表达 `if/else/loop` 工作流。
-- 内部步骤只能调用 owner adapter 的原子 read / action / verify。
-- 自动 repair 禁止；模块只能返回 blocked reason / repair hint。
-- 跨模块、跨 target、高风险动作、证据冲突或预算耗尽必须返回 Host。
-
-## Model Router 边界
-
-模块内部可以直接调用 Model Router，但只能用于局部辅助：
-
-- 截图 / crop / 页面片段描述。
-- 候选目标消歧。
-- 候选 next intent。
-- before / after 比较。
-- 不确定性解释。
-
-Model Router 不得改变 risk policy，不得决定跨模块下一步，不得绕过 confirmation，不得自动 repair，不得产出 completion truth 或 final answer。
-
-可执行 binding、坐标、input lease、真实动作和文件写入必须来自 owner adapter / Host port。
+模块不得返回用户级 final answer，也不得声明用户级 completion truth。
 
 ## 用户级验收
 
-用户级验收只能由 Codex backend 产出。
+用户级验收只能由 Codex / Agent Host 产出，并通过 `gui.present` 投影给 SciForge UI。
 
 完成必须有同一 current run 的 evidence 支撑：
 
@@ -133,6 +89,6 @@ tool 文本、GUI projection、旧截图、历史 run、fixture、package probe 
 
 ## 相关文档
 
-- [`../PROJECT.md`](../PROJECT.md)：当前用户需求和验收标准。
-- [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md)：Browser 模块。
-- [`../packages/actions/computer-use/vision_computer_use_agent_mvp.md`](../packages/actions/computer-use/vision_computer_use_agent_mvp.md)：Computer Use 模块。
+- [`ModelRouterArchitecture.md`](ModelRouterArchitecture.md)：Model Router 服务层边界。
+- [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md)：Browser 能力面。
+- [`ComputerUseRuntimeArchitecture.md`](ComputerUseRuntimeArchitecture.md)：Computer Use 能力面。

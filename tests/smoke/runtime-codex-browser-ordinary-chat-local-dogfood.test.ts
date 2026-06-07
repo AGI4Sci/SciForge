@@ -60,7 +60,7 @@ test('Runtime Codex browser ordinary-chat local dogfood wraps the acceptance wri
             userIntentSatisfied: true,
             outputVerified: true,
             evidenceRefs: [
-              'runtime-truth:module.invoke/browser.open_read/local-ordinary-chat',
+              'runtime-truth:module.invoke/browser.read/local-ordinary-chat',
               'browser-host-session:ordinary/source-pages/source-1.source.json',
               'browser-host-session:ordinary/source-pages/source-1.txt',
               'artifact:runtime-codex-browser-acceptance/final-answer.md',
@@ -73,7 +73,7 @@ test('Runtime Codex browser ordinary-chat local dogfood wraps the acceptance wri
             runtimeOutputObserved: true,
             seedOrDemoExcluded: true,
             eventEvidenceRefs: [
-              'runtime-truth:module.invoke/browser.open_read/local-ordinary-chat',
+              'runtime-truth:module.invoke/browser.read/local-ordinary-chat',
               'browser-host-session:ordinary/source-pages/source-1.source.json',
               'browser-host-session:ordinary/source-pages/source-1.txt',
             ],
@@ -94,7 +94,7 @@ test('Runtime Codex browser ordinary-chat local dogfood wraps the acceptance wri
     assert.equal(calls[0]?.workspacePath, workspace);
     assert.equal(calls[0]?.outputDir, join(outputDir, 'ordinary-chat-acceptance'));
     assert.match(calls[0]?.commandId ?? '', /^browser-ordinary-chat-local-/);
-    assert.ok(calls[0]?.browserBoundedOperationPorts?.manager);
+    assert.ok(calls[0]?.browserRuntimeModulePorts?.manager);
     assert.doesNotMatch(manifestText, new RegExp(secret));
     assert.doesNotMatch(manifestText, /provider\.example\.invalid|http:\/\/|https:\/\/provider/i);
   } finally {

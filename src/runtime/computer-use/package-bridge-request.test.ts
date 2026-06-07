@@ -5,9 +5,9 @@ import type { GatewayRequest } from '../runtime-types.js';
 import type { ComputerUseConfig } from './types.js';
 import { visionSenseModelRouterCapabilities } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import {
-  PACKAGE_BRIDGE_RUN_TASK_BOUNDARY,
+  PACKAGE_BRIDGE_PRIMITIVE_BOUNDARY,
   materializePackageBridgeActionProviderRequest,
-  materializePackageBridgeRunTaskInvocation,
+  materializePackageBridgePrimitiveInvocation,
   materializePackageBridgeRuntimeSelectionDetail,
   materializePackageBridgeTraceRequest,
 } from './package-bridge-request.js';
@@ -95,7 +95,7 @@ test('package bridge materializes normalized action provider request for package
   );
 });
 
-test('package bridge materializes runTask invocation request and host ports together', () => {
+test('package bridge materializes primitive invocation request and host ports together', () => {
   const request = gatewayRequest({
     uiState: {
       completionEvidencePolicy: {
@@ -111,7 +111,7 @@ test('package bridge materializes runTask invocation request and host ports toge
     },
   });
 
-  const invocation = materializePackageBridgeRunTaskInvocation(
+  const invocation = materializePackageBridgePrimitiveInvocation(
     request,
     baseConfig,
     '/tmp/sciforge-workspace',
@@ -123,7 +123,7 @@ test('package bridge materializes runTask invocation request and host ports toge
     planner: visionSenseModelRouterCapabilities.computerUsePlanner,
   });
 
-  assert.equal(invocation.boundary, PACKAGE_BRIDGE_RUN_TASK_BOUNDARY);
+  assert.equal(invocation.boundary, PACKAGE_BRIDGE_PRIMITIVE_BOUNDARY);
   assert.equal(invocation.request.schemaVersion, 'sciforge.computer-use.request.v1');
   assert.equal(invocation.request.task, '/computer-use run create the visible report');
   assert.equal(invocation.request.providers.action, 'action.sciforge.computer-use');
@@ -132,7 +132,7 @@ test('package bridge materializes runTask invocation request and host ports toge
   assert.ok(invocation.hostPorts.ports.verify);
   assert.deepEqual(runtimeDetail.actionProviderRequest, invocation.request);
   assert.deepEqual(runtimeDetail.hostPorts, invocation.hostPorts);
-  assert.equal(runtimeDetail.boundary, PACKAGE_BRIDGE_RUN_TASK_BOUNDARY);
+  assert.equal(runtimeDetail.boundary, PACKAGE_BRIDGE_PRIMITIVE_BOUNDARY);
   assert.equal(runtimeDetail.bridge, 'ts-package-host-port-loop');
   assert.equal('completionProducerOptIn' in runtimeDetail, false);
   assert.equal('completionEvidencePolicy' in invocation.request.metadata, false);
@@ -176,7 +176,7 @@ test('package bridge trace request reuses the normalized package invocation requ
 });
 
 test('package bridge ignores retired completion evidence producer policy', () => {
-  const invocation = materializePackageBridgeRunTaskInvocation(gatewayRequest({
+  const invocation = materializePackageBridgePrimitiveInvocation(gatewayRequest({
     uiState: {
       completionEvidencePolicy: {
         schemaVersion: 'sciforge.completion-evidence-policy.v1',

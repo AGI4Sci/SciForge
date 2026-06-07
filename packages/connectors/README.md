@@ -2,7 +2,7 @@
 
 `packages/connectors` is reserved for TUI-side adapters that connect SciForge tasks to third-party apps and accounts, such as Feishu, WeChat, enterprise chat, local CLIs, or desktop bridges.
 
-Connectors are channel plugins, not GUI plugins. See `../../docs/ChannelPluginArchitecture.md` for the canonical channel plugin contract. They can serve three different roles:
+Connectors are channel plugins, not GUI plugins. They can serve three different roles:
 
 - input intake: normalize external messages, mentions, chat commands, webhooks, and attachments into Agent Host input envelopes, equivalent to a user submitting text through a web or GUI composer
 - resource/action access: expose Codex-native tools, MCP resources/tools, or worker adapters for search, read, draft, send, upload, sync, or admin operations

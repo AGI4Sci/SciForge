@@ -196,7 +196,7 @@ blocked         // 权限、窗口枚举或截图能力阻断
 
 ## 相关文档
 
-- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
+- 已删除的历史 VirtualAppScreen 设计文档。
 - [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)
 - [`PROJECT_browser.md`](PROJECT_browser.md)
 - [`PROJECT_image.md`](PROJECT_image.md)

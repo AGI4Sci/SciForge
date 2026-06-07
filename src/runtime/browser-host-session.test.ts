@@ -1756,7 +1756,7 @@ test('BrowserHostSession keeps ready state with placeholder evidence refs when s
   }
 });
 
-test('BrowserHostSession HTTP routes expose start, state, action, search, and missing frame responses', async () => {
+test('BrowserHostSession HTTP routes expose session/action routes and reject legacy search/open-read responses', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-routes-'));
   const manager = createRouteManager(workspacePath);
   const routeOptions = {
@@ -1858,32 +1858,17 @@ test('BrowserHostSession HTTP routes expose start, state, action, search, and mi
     assert.equal(computerUseAction.result.hostAction.action, 'click');
     assert.equal(computerUseAction.result.hostAction.capture, 'none');
 
-    const search = await postJson(`${baseUrl}/api/sciforge/browser-host/search`, {
-      workspacePath,
-      query: 'query text',
-      sessionId: 'route-session',
-      limit: 2,
+    const searchResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspacePath,
+        query: 'query text',
+        sessionId: 'route-session',
+        limit: 2,
+      }),
     });
-    assert.equal(search.search.schemaVersion, BROWSER_HOST_SEARCH_SCHEMA);
-    assert.equal(search.search.session.id, 'route-session');
-    assert.equal(search.search.results.length, 1);
-
-    const openRead = await postJson(`${baseUrl}/api/sciforge/browser-host/open-read`, {
-      workspacePath,
-      url: 'https://example.org/open-read',
-      sessionId: 'route-session',
-      title: 'Route Open Read',
-      timeoutMs: 1234,
-    });
-    assert.equal(openRead.ok, true);
-    assert.equal(openRead.openRead.session.id, 'route-session');
-    assert.equal(openRead.openRead.sourcePage.status, 'read');
-    assert.equal(openRead.openRead.sourcePage.title, 'Route Open Read');
-    assert.match(openRead.openRead.sourcePage.sourcePageRef ?? '', /^browser-host-session:route-session\/source-pages\/source-1-route\.source\.json$/);
-    assert.match(openRead.openRead.sourcePage.textRef ?? '', /^browser-host-session:route-session\/source-pages\/source-1-route\.txt$/);
-    assert.equal(manager.openReadInputs[0]?.input.title, 'Route Open Read');
-    assert.equal(manager.openReadInputs[0]?.input.timeoutMs, 1234);
-    assert.doesNotMatch(JSON.stringify(openRead), /FULL_ROUTE_PAGE_TEXT_SHOULD_NOT_INLINE|rawHtml|secret-value/i);
+    assert.equal(searchResponse.status, 404);
 
     const invalidOpenReadResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/open-read`, {
       method: 'POST',
@@ -1895,11 +1880,11 @@ test('BrowserHostSession HTTP routes expose start, state, action, search, and mi
         rawHtml: '<html>secret-value</html>',
       }),
     });
-    assert.equal(invalidOpenReadResponse.status, 400);
+    assert.equal(invalidOpenReadResponse.status, 404);
     const invalidOpenRead = await invalidOpenReadResponse.json() as { ok: boolean; error?: string };
     assert.equal(invalidOpenRead.ok, false);
-    assert.match(invalidOpenRead.error ?? '', /open_read url is required/);
-    assert.equal(manager.openReadInputs.length, 1);
+    assert.match(invalidOpenRead.error ?? '', /not found/);
+    assert.equal(manager.openReadInputs.length, 0);
 
     const missingFrame = await fetch(`${baseUrl}/api/sciforge/browser-host/sessions/route-session/frame?workspacePath=${encodeURIComponent(workspacePath)}`);
     assert.equal(missingFrame.status, 404);
@@ -3012,7 +2997,7 @@ function createRouteManager(
           status: 'read',
           sourcePageRef: `browser-host-session:${session.id}/source-pages/source-1-route.source.json`,
           textRef: `browser-host-session:${session.id}/source-pages/source-1-route.txt`,
-          textPreview: 'Route open_read page text evidence',
+          textPreview: 'Route browser.read page text evidence',
           textArtifactKind: 'page-text',
           textCharCount: 34,
         },

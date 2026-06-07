@@ -16,13 +16,14 @@ Computer Use action provider 消费本包输出时的目标链路：
 
 ```text
 TUI Host
-  -> packages/actions/computer-use.runTask(request, hostPorts)
+  -> packages/actions/computer-use primitive refs
   -> optional packages/observe/vision observation / focus-region / verifier feedback
-  -> optional Model Router grounding translator coordinates
-  -> Computer Use generic action validation
-  -> hostPorts executor
-  -> refs-first trace/result
+  -> caller selects target / elementRef / point / textRef
+  -> computer_use.bind / observe / act / run_procedure / control
+  -> refs-first primitive evidence
 ```
+
+`vision-sense` 只能提供 observation / grounding hints；它不拥有 Computer Use plan、executor、approval、repair、completion truth 或 final answer。旧 `computer_use.runTask(request, hostPorts)` 只作为历史迁移口径，不是新的产品链路。
 
 ## Agent 契约
 

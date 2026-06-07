@@ -2,9 +2,19 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { extname, resolve, sep, join } from 'node:path';
+import { extname, isAbsolute, relative, resolve, sep, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { makeId, messageOutputItem, type JsonObject, type JsonValue } from '../../../backend/src/response-compat';
+import {
+  chatCompletionToResponse,
+  chatToolNameAliasesFromResponsesTools,
+  makeId,
+  messageOutputItem,
+  responsesToChatCompletions,
+  type JsonObject,
+  type JsonValue,
+  type ResponsesRequest,
+} from '../../../backend/src/response-compat';
 import { modelRouterManifest } from './manifest';
 import { redactTraceText } from './trace-redaction';
 
@@ -15,15 +25,11 @@ export interface ModelRouterProviderConfig {
   model: string;
 }
 
-export interface ModelRouterVisionTranslatorConfig extends ModelRouterProviderConfig {
-  maxSupplementRounds?: number;
-}
-
 export interface ModelRouterProfile {
   traceRoot: string;
   textReasoner: ModelRouterProviderConfig;
   translators: {
-    vision?: ModelRouterVisionTranslatorConfig;
+    vision?: ModelRouterProviderConfig;
   };
 }
 
@@ -55,11 +61,14 @@ type ModalityRef = {
   kind: ModalityKind;
   source: 'inline' | 'url' | 'ref';
   mime?: string;
+  title?: string;
   semanticSignal: SemanticModalitySignal;
   sha256: string;
+  contentSha256?: string;
   byteLength?: number;
   safeRef?: string;
   urlSha256?: string;
+  materializationPath?: string;
   transientProviderPart?: JsonObject;
 };
 
@@ -84,14 +93,12 @@ type RoutedResponse = {
   responseId: string;
   model: string;
   outputText: string;
+  outputItems: JsonObject[];
   traceRef: string;
 };
 
-type TextControl =
-  | { type: 'final_answer'; content: string }
-  | { type: 'need_more_visual_info'; target: string; question: string; reason?: string };
+type TextControl = { type: 'final_answer'; content: string };
 
-const DEFAULT_MAX_SUPPLEMENT_ROUNDS = 2;
 const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export function createModelRouterServer(options: ModelRouterServerOptions): Server {
@@ -239,6 +246,8 @@ async function routeResponsesRequest(
   const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
   const traceRedactionSecrets = [textSecret, visionSecret]
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const textReasonerRequestOptions = chatRequestOptionsFromResponsesRequest(request, profile.textReasoner.model);
+  const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
 
   // Lexical detectors must not become routing truth; final routing must use structured semantic signals and refs-first evidence.
   const visionModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind === 'vision.image');
@@ -266,96 +275,66 @@ async function routeResponsesRequest(
     if (!profile.translators.vision || !visionSecret) {
       throw routerError(400, 'missing_vision_translator', 'Active Model Router profile does not have a usable vision translator.');
     }
-    const initial = await callVisionTranslator({
-      profile,
-      secret: visionSecret,
-      fetchImpl: context.fetchImpl,
-      instruction: extracted.userText || 'Describe the provided visual input.',
-      modalities: visionModalities,
-      phase: 'vision-initial',
-      calls,
-    }).catch((error: unknown) => {
-      degraded = true;
-      const summary = error instanceof Error ? error.message : String(error);
-      calls.push(failedCallRecord(profile.translators.vision!, 'visionTranslator', 'vision-initial', summary, traceRedactionSecrets));
-      return `visual_input=${visionModalities.map((item) => item.id).join(',')}\nstatus=unavailable\nreason=${summary}\ninstruction=Answer from text-only context and explicitly state that the image could not be inspected.`;
-    });
-    observations.push(initial);
-    await writeTraceJson(trace, `vision-initial-${visionModalities[0]?.id ?? 'image'}.json`, {
-      schemaVersion: 'sciforge.model-router.vision-observation.v1',
-      phase: 'initial',
-      status: degraded ? 'failed' : 'ok',
-      targetIds: visionModalities.map((item) => item.id),
-      observationSummary: boundedTraceText(initial, profile, publicModelAlias, traceRedactionSecrets),
-    });
+    for (const modality of visionModalities) {
+      let observationStatus: 'ok' | 'failed' = 'ok';
+      let observation: string;
+      try {
+        observation = await callVisionTranslator({
+          profile,
+          secret: visionSecret,
+          fetchImpl: context.fetchImpl,
+          instruction: visionTranslatorInstruction(extracted.userText || 'Describe the provided visual input.', modality),
+          modality,
+          phase: 'vision-initial',
+          calls,
+        });
+      } catch (error) {
+        degraded = true;
+        observationStatus = 'failed';
+        const summary = traceErrorSummary(error);
+        observation = [
+          `modality_input=${modality.id}`,
+          'kind=vision.image',
+          'status=unavailable',
+          `reason=${summary}`,
+          'instruction=Answer from text-only context and explicitly state that the image could not be inspected.',
+        ].join('\n');
+      }
+      observations.push(formatVisionObservation(modality, observation, observationStatus));
+      await writeTraceJson(trace, `vision-initial-${modality.id}.json`, {
+        schemaVersion: 'sciforge.model-router.vision-observation.v1',
+        phase: 'initial',
+        status: observationStatus,
+        targetIds: [modality.id],
+        observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
+      });
+    }
   }
 
-  const maxSupplementRounds = profile.translators.vision?.maxSupplementRounds ?? DEFAULT_MAX_SUPPLEMENT_ROUNDS;
   let outputText = '';
+  let outputItems: JsonObject[] = [];
   let controlError: string | undefined;
   try {
-    for (let round = 0; round <= maxSupplementRounds; round += 1) {
-      const textContent = await callTextReasoner({
-        profile,
-        secret: textSecret,
-        fetchImpl: context.fetchImpl,
-        userText: extracted.userText,
-        observations,
-        controlError,
-        visualFailure: degraded,
-        calls,
-      });
-      const control = parseTextControl(textContent);
-      if (!control) {
-        outputText = publicProviderOutputText(textContent, profile, publicModelAlias, traceRedactionSecrets);
-        break;
-      }
-      if (control.type === 'final_answer') {
-        outputText = publicProviderOutputText(control.content, profile, publicModelAlias, traceRedactionSecrets);
-        break;
-      }
-      if (round >= maxSupplementRounds) {
-        controlError = `Supplement round budget exceeded for target ${control.target}.`;
-        continue;
-      }
-      const target = visionModalities.find((item) => item.id === control.target);
-      if (!target) {
-        controlError = `Supplement target ${control.target} is not an available vision modality ref.`;
-        continue;
-      }
-      if (!profile.translators.vision || !visionSecret) {
-        controlError = 'Vision translator unavailable for supplement request.';
-        continue;
-      }
-      let supplementStatus: 'ok' | 'failed' = 'ok';
-      let supplementErrorSummary: string | undefined;
-      const supplement = await callVisionTranslator({
-        profile,
-        secret: visionSecret,
-        fetchImpl: context.fetchImpl,
-        instruction: control.question,
-        modalities: [target],
-        phase: `vision-supplement-${round + 1}`,
-        calls,
-      }).catch((error: unknown) => {
-        const summary = traceErrorSummary(error);
-        supplementStatus = 'failed';
-        supplementErrorSummary = summary;
-        return `visual_input=${target.id}\nstatus=supplement_unavailable\nreason=${summary}`;
-      });
-      observations.push(supplement);
-      await writeTraceJson(trace, `vision-supplement-${round + 1}-${target.id}.json`, {
-        schemaVersion: 'sciforge.model-router.vision-observation.v1',
-        phase: 'supplement',
-        round: round + 1,
-        status: supplementStatus,
-        targetIds: [target.id],
-        questionSummary: boundedTraceText(control.question, profile, publicModelAlias, traceRedactionSecrets),
-        reasonSummary: boundedTraceText(control.reason ?? '', profile, publicModelAlias, traceRedactionSecrets),
-        observationSummary: boundedTraceText(supplement, profile, publicModelAlias, traceRedactionSecrets),
-        ...(supplementErrorSummary ? { errorSummary: boundedTraceText(supplementErrorSummary, profile, publicModelAlias, traceRedactionSecrets) } : {}),
-      });
-      controlError = undefined;
+    const textResult = await callTextReasoner({
+      profile,
+      secret: textSecret,
+      fetchImpl: context.fetchImpl,
+      userText: extracted.userText,
+      observations,
+      controlError,
+      visualFailure: degraded,
+      calls,
+      request,
+      requestOptions: textReasonerRequestOptions,
+      toolNameAliases,
+    });
+    const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
+    if (hasToolCall) {
+      outputText = textResult.outputText;
+      outputItems = textResult.outputItems;
+    } else {
+      const control = parseTextControl(textResult.outputText);
+      outputText = publicProviderOutputText(control?.content ?? textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
     }
   } catch (error) {
     await writeRoutingTrace({
@@ -375,13 +354,16 @@ async function routeResponsesRequest(
   }
 
   if (!outputText) {
-    outputText = degraded
-      ? `${degradedUnavailablePrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
-      : 'The request could not be completed because the internal visual supplement protocol did not produce a final answer.';
+    if (!outputItems.length) {
+      outputText = degraded
+        ? `${degradedUnavailablePrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
+        : '';
+    }
   }
   if (degraded && !mentionsModalityUnavailable(outputText)) {
     outputText = `${degradedUnavailablePrefix(extracted.modalities)} ${outputText}`;
   }
+  if (!outputItems.length) outputItems = outputText ? [messageOutputItem(outputText)] : [];
 
   await writeRoutingTrace({
     trace,
@@ -401,6 +383,7 @@ async function routeResponsesRequest(
     responseId,
     model: context.config.publicModelAlias ?? 'sciforge-model-router',
     outputText,
+    outputItems,
     traceRef: trace.relativeDir,
   };
 }
@@ -496,7 +479,9 @@ function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, 
   if (!kind) return undefined;
   const id = `${modalityIdPrefix(kind)}_${ordinal}`;
   const mime = stringField(value.mime_type) ?? stringField(value.mimeType);
-  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef);
+  const title = stringField(value.title) ?? stringField(value.name) ?? stringField(value.filename) ?? stringField(value.fileName);
+  const localPath = stringField(value.path);
+  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? localPath;
   if (imageUrl?.startsWith('data:image/')) {
     const semanticSignal = signal ?? makeSemanticSignal(kind, ['image-url'], false);
     const payload = imageUrl.split(',', 2)[1] ?? '';
@@ -506,6 +491,7 @@ function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, 
       kind,
       source: 'inline',
       mime: mime ?? mimeFromDataUrl(imageUrl),
+      title,
       semanticSignal,
       sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
       byteLength: bytes.byteLength,
@@ -519,6 +505,7 @@ function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, 
       kind,
       source: 'url',
       mime,
+      title,
       semanticSignal,
       sha256: hashForTrace(imageUrl),
       urlSha256: hashForTrace(imageUrl),
@@ -533,9 +520,11 @@ function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, 
       kind,
       source: 'ref',
       mime,
+      title,
       semanticSignal: signal,
       sha256: hashForTrace(ref),
       safeRef: providerRef,
+      materializationPath: localPath,
       transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
     };
   }
@@ -544,28 +533,36 @@ function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, 
 
 async function materializeWorkspaceImageRefs(modalities: ModalityRef[], workspaceRoot: string): Promise<ModalityRef[]> {
   return await Promise.all(modalities.map(async (item) => {
-    if (item.kind !== 'vision.image' || item.source !== 'ref' || !item.safeRef) return item;
-    const materialized = await transientWorkspaceImagePart(item.safeRef, workspaceRoot, item.mime);
+    if (item.kind !== 'vision.image' || item.source !== 'ref' || (!item.safeRef && !item.materializationPath)) return item;
+    const materialized = await transientWorkspaceImagePart(item, workspaceRoot);
     return materialized
-      ? { ...item, mime: materialized.mime, byteLength: materialized.byteLength, transientProviderPart: materialized.part }
+      ? {
+          ...item,
+          mime: materialized.mime,
+          sha256: materialized.sha256,
+          contentSha256: materialized.sha256,
+          byteLength: materialized.byteLength,
+          safeRef: materialized.safeRef,
+          transientProviderPart: materialized.part,
+        }
       : item;
   }));
 }
 
-async function transientWorkspaceImagePart(ref: string, workspaceRoot: string, explicitMime: string | undefined) {
-  const refPath = traceRefPath(ref);
-  const mime = imageMimeForRef(refPath, explicitMime);
-  if (!mime || !isConservativeTraceRefPath(refPath)) return undefined;
-  const workspace = resolve(workspaceRoot);
-  const absolutePath = resolve(workspace, refPath);
-  if (absolutePath !== workspace && !absolutePath.startsWith(`${workspace}${sep}`)) return undefined;
+async function transientWorkspaceImagePart(item: ModalityRef, workspaceRoot: string) {
+  const target = workspaceImageTarget(item, workspaceRoot);
+  if (!target) return undefined;
+  const mime = imageMimeForRef(target.absolutePath, item.mime) ?? imageMimeForRef(target.relativeRef, item.mime);
+  if (!mime) return undefined;
   try {
-    const stats = await stat(absolutePath);
+    const stats = await stat(target.absolutePath);
     if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TRANSIENT_PROVIDER_IMAGE_BYTES) return undefined;
-    const bytes = await readFile(absolutePath);
+    const bytes = await readFile(target.absolutePath);
     return {
       mime,
       byteLength: bytes.byteLength,
+      sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      safeRef: isConservativeTraceRefPath(target.relativeRef) ? target.relativeRef : safeTraceRef(target.relativeRef),
       part: {
         type: 'image_url',
         image_url: { url: `data:${mime};base64,${bytes.toString('base64')}` },
@@ -574,6 +571,38 @@ async function transientWorkspaceImagePart(ref: string, workspaceRoot: string, e
   } catch {
     return undefined;
   }
+}
+
+function workspaceImageTarget(item: ModalityRef, workspaceRoot: string): { absolutePath: string; relativeRef: string } | undefined {
+  const workspace = resolve(workspaceRoot);
+  const candidate = item.materializationPath
+    ? filesystemPathFromLocalCandidate(item.materializationPath)
+    : item.safeRef
+      ? traceRefPath(item.safeRef)
+      : undefined;
+  if (!candidate) return undefined;
+  if (!item.materializationPath && !isConservativeTraceRefPath(candidate)) return undefined;
+  const absolutePath = isAbsolute(candidate) ? resolve(candidate) : resolve(workspace, candidate);
+  if (!isPathInsideWorkspace(absolutePath, workspace)) return undefined;
+  const relativeRef = relative(workspace, absolutePath).replace(/\\/g, '/');
+  return { absolutePath, relativeRef };
+}
+
+function filesystemPathFromLocalCandidate(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^file:/i.test(trimmed)) {
+    try {
+      return fileURLToPath(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  return trimmed;
+}
+
+function isPathInsideWorkspace(absolutePath: string, workspace: string) {
+  return absolutePath === workspace || absolutePath.startsWith(`${workspace}${sep}`);
 }
 
 function imageMimeForRef(refPath: string, explicitMime: string | undefined) {
@@ -598,6 +627,29 @@ function imageMimeForRef(refPath: string, explicitMime: string | undefined) {
     default:
       return undefined;
   }
+}
+
+function visionTranslatorInstruction(userInstruction: string, modality: ModalityRef) {
+  return [
+    `User request: ${userInstruction}`,
+    `Target modality_input: ${modality.id}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    'Translate this visual input into concise textual evidence for the Agent Host.',
+    'Include visible text, salient fields, spatial relationships, and uncertainty when relevant.',
+    'Do not claim task completion and do not mention router internals.',
+  ].filter(Boolean).join('\n');
+}
+
+function formatVisionObservation(modality: ModalityRef, observation: string, status: 'ok' | 'failed') {
+  return [
+    `Target modality_input: ${modality.id}`,
+    'kind=vision.image',
+    `status=${status}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    observation,
+  ].filter(Boolean).join('\n');
 }
 
 function extractTextualModalityRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
@@ -719,20 +771,19 @@ async function callVisionTranslator(options: {
   secret: string;
   fetchImpl: typeof fetch;
   instruction: string;
-  modalities: ModalityRef[];
+  modality: ModalityRef;
   phase: string;
   calls: ProviderCallRecord[];
 }) {
   const translator = options.profile.translators.vision;
   if (!translator) throw new Error('Vision translator is not configured.');
-  const providerParts = options.modalities
-    .map((item) => item.transientProviderPart)
+  const providerParts = [options.modality.transientProviderPart]
     .filter((part): part is JsonObject => Boolean(part));
   const content: JsonObject[] = [
     { type: 'text', text: options.instruction },
     ...providerParts,
   ];
-  return await callChatProvider({
+  const result = await callChatProvider({
     provider: translator,
     secret: options.secret,
     fetchImpl: options.fetchImpl,
@@ -741,7 +792,12 @@ async function callVisionTranslator(options: {
       messages: [
         {
           role: 'system',
-          content: 'You are a SciForge vision translator. Convert the instruction and visual ref into a concise text observation. Do not claim task completion.',
+          content: [
+            'You are a SciForge vision translator.',
+            'Convert the instruction and visual input into concise textual evidence for the Agent Host.',
+            'Include visible text, important fields, layout cues, and uncertainty when relevant.',
+            'Do not claim task completion.',
+          ].join(' '),
         },
         { role: 'user', content },
       ],
@@ -750,6 +806,7 @@ async function callVisionTranslator(options: {
     phase: options.phase,
     calls: options.calls,
   });
+  return result.outputText;
 }
 
 async function callTextReasoner(options: {
@@ -761,12 +818,18 @@ async function callTextReasoner(options: {
   controlError?: string;
   visualFailure: boolean;
   calls: ProviderCallRecord[];
+  request: Record<string, unknown>;
+  requestOptions: Record<string, unknown>;
+  toolNameAliases: Record<string, string>;
 }) {
   const controlInstruction = options.observations.length
     ? [
       'You are the text reasoner for SciForge Model Router.',
-      'Use the supplied modality observations as text-only context.',
-      'For internal control, return strict JSON only: {"type":"final_answer","content":"..."} or {"type":"need_more_visual_info","target":"image_1","question":"...","reason":"..."}.',
+      'Use the supplied modality observations as internal multimodal evidence for the final answer.',
+      'Do not tell the user you cannot directly access or see the image when a modality observation is available.',
+      'Do not mention modality observations, visual observations, translators, or router internals in the final answer.',
+      'When answering with text instead of a tool call, return strict JSON only: {"type":"final_answer","content":"..."}.',
+      'If the request provides tools and the Agent Host protocol requires one, use the provider tool-call protocol instead of describing the tool call in text.',
       'If any modality_input or visual_input is unavailable, the final answer must explicitly state that the referenced modality could not be inspected.',
     ].join(' ')
     : undefined;
@@ -776,7 +839,7 @@ async function callTextReasoner(options: {
       role: 'user',
       content: [
         options.userText ? `User request:\n${options.userText}` : 'User request is empty.',
-        'Visual observations:',
+        'Modality evidence:',
         ...options.observations.map((observation, index) => `Observation ${index + 1}:\n${observation}`),
         options.controlError ? `Router control error:\n${options.controlError}` : '',
         options.visualFailure ? 'Router degradation: at least one referenced modality could not be inspected.' : '',
@@ -790,10 +853,13 @@ async function callTextReasoner(options: {
     body: {
       model: options.profile.textReasoner.model,
       messages,
+      ...options.requestOptions,
     },
     role: 'textReasoner',
     phase: options.observations.length ? 'text-control-or-final' : 'text-direct',
     calls: options.calls,
+    responseRequest: options.request,
+    toolNameAliases: options.toolNameAliases,
   });
 }
 
@@ -801,10 +867,12 @@ async function callChatProvider(options: {
   provider: ModelRouterProviderConfig;
   secret: string;
   fetchImpl: typeof fetch;
-  body: JsonObject;
+  body: Record<string, unknown>;
   role: ProviderCallRecord['role'];
   phase: string;
   calls: ProviderCallRecord[];
+  responseRequest?: Pick<ResponsesRequest, 'model'>;
+  toolNameAliases?: Record<string, string>;
 }) {
   const startedAt = Date.now();
   let response: Response;
@@ -845,7 +913,7 @@ async function callChatProvider(options: {
     wireApi: 'chat.completions',
     latencyMs,
   });
-  return chatCompletionText(payload);
+  return chatCompletionResult(payload, options.responseRequest, options.toolNameAliases);
 }
 
 function recordFailedProviderCall(
@@ -871,6 +939,38 @@ function recordFailedProviderCall(
   });
 }
 
+function chatRequestOptionsFromResponsesRequest(request: Record<string, unknown>, defaultModel: string): Record<string, unknown> {
+  const chatRequest = responsesToChatCompletions({
+    ...request,
+    model: defaultModel,
+    input: '',
+  }, { defaultModel });
+  return Object.fromEntries(Object.entries({
+    tools: chatRequest.tools,
+    tool_choice: chatRequest.tool_choice,
+    temperature: chatRequest.temperature,
+    top_p: chatRequest.top_p,
+    max_tokens: chatRequest.max_tokens,
+    parallel_tool_calls: chatRequest.parallel_tool_calls,
+    metadata: chatRequest.metadata,
+  }).filter(([, value]) => value !== undefined));
+}
+
+function chatCompletionResult(
+  payload: unknown,
+  request: Pick<ResponsesRequest, 'model'> = {},
+  toolNameAliases: Record<string, string> = {},
+): { outputText: string; outputItems: JsonObject[] } {
+  const response = chatCompletionToResponse(payload, request, toolNameAliases);
+  const outputItems = Array.isArray(response.output)
+    ? response.output.filter(isRecord) as JsonObject[]
+    : [];
+  const outputText = typeof response.output_text === 'string'
+    ? response.output_text
+    : chatCompletionText(payload);
+  return { outputText, outputItems };
+}
+
 function chatCompletionText(payload: unknown) {
   const completion = isRecord(payload) ? payload : {};
   const choices = Array.isArray(completion.choices) ? completion.choices : [];
@@ -893,14 +993,6 @@ function parseTextControl(content: string): TextControl | undefined {
     if (parsed.type === 'final_answer' && typeof parsed.content === 'string') {
       return { type: 'final_answer', content: parsed.content };
     }
-    if (parsed.type === 'need_more_visual_info' && typeof parsed.target === 'string' && typeof parsed.question === 'string') {
-      return {
-        type: 'need_more_visual_info',
-        target: parsed.target,
-        question: parsed.question,
-        reason: stringField(parsed.reason),
-      };
-    }
   } catch {
     return undefined;
   }
@@ -908,13 +1000,14 @@ function parseTextControl(content: string): TextControl | undefined {
 }
 
 function responseObject(result: RoutedResponse, messageItemId?: string): JsonObject {
+  const output = responseOutputItems(result, messageItemId);
   return {
     id: result.responseId,
     object: 'response',
     created_at: Math.floor(Date.now() / 1000),
     model: result.model,
     status: 'completed',
-    output: [messageOutputItem(result.outputText, messageItemId)],
+    output,
     output_text: result.outputText,
     metadata: {
       traceRef: result.traceRef,
@@ -922,17 +1015,46 @@ function responseObject(result: RoutedResponse, messageItemId?: string): JsonObj
   };
 }
 
+function responseOutputItems(result: RoutedResponse, messageItemId?: string): JsonObject[] {
+  if (messageItemId && result.outputItems.length === 1 && result.outputItems[0]?.type === 'message') {
+    return [{ ...result.outputItems[0], id: messageItemId }];
+  }
+  if (result.outputItems.length) return result.outputItems;
+  return result.outputText ? [messageOutputItem(result.outputText, messageItemId)] : [];
+}
+
 function sendResponseStream(response: ServerResponse, result: RoutedResponse) {
   const outputIndex = 0;
   const contentIndex = 0;
   const messageItemId = makeId('msg');
-  const completedMessage = messageOutputItem(result.outputText, messageItemId);
+  const outputItems = responseOutputItems(result, messageItemId);
+  const completedMessage = outputItems.length === 1 && outputItems[0]?.type === 'message'
+    ? outputItems[0]
+    : undefined;
   response.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
   writeSse(response, 'response.created', { type: 'response.created', response: { id: result.responseId, model: result.model, status: 'in_progress' } });
+  if (!completedMessage) {
+    outputItems.forEach((item, index) => {
+      writeSse(response, 'response.output_item.added', {
+        type: 'response.output_item.added',
+        output_index: index,
+        item,
+      });
+      writeSse(response, 'response.output_item.done', {
+        type: 'response.output_item.done',
+        output_index: index,
+        item,
+      });
+    });
+    writeSse(response, 'response.completed', { type: 'response.completed', response: responseObject(result) });
+    response.write('data: [DONE]\n\n');
+    response.end();
+    return;
+  }
   writeSse(response, 'response.output_item.added', {
     type: 'response.output_item.added',
     output_index: outputIndex,
@@ -1066,7 +1188,9 @@ function publicModalityRef(ref: ModalityRef): JsonObject {
     kind: ref.kind,
     source: ref.source,
     mime: ref.mime,
+    title: ref.title,
     sha256: ref.sha256,
+    contentSha256: ref.contentSha256,
     byteLength: ref.byteLength,
     ref: ref.safeRef,
     urlSha256: ref.urlSha256,
@@ -1204,7 +1328,7 @@ function semanticSignalFromRecord(value: Record<string, unknown>): SemanticModal
   const genericTypeKind = modalityKindFromGenericType(stringField(value.type));
   if (genericTypeKind) return makeSemanticSignal(genericTypeKind, ['structured-type'], true);
 
-  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? '';
+  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? stringField(value.path) ?? '';
   const extensionKind = modalityKindFromTextualRefExtension(ref);
   if (extensionKind) return makeSemanticSignal(extensionKind, ['ref-extension', ...lexicalRefFeatures(ref)], true);
 
@@ -1226,7 +1350,7 @@ function finalModalityRoutingSignal(item: ModalityRef): SemanticModalitySignal {
 function modalityKindFromSpecificType(type: string | undefined): ModalityKind | undefined {
   const normalized = type?.trim().toLowerCase().replace(/_/g, '-');
   if (!normalized) return undefined;
-  if (normalized === 'input-image' || normalized === 'image') return 'vision.image';
+  if (normalized === 'input-image' || normalized === 'local-image' || normalized === 'image') return 'vision.image';
   if (normalized === 'input-audio' || normalized === 'audio') return 'audio';
   if (normalized === 'input-video' || normalized === 'video') return 'video';
   if (normalized === 'input-table' || normalized === 'table' || normalized === 'spreadsheet') return 'table';

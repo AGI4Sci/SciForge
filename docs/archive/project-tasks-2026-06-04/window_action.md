@@ -171,4 +171,4 @@ agentSession
 - [`PROJECT_annotation.md`](PROJECT_annotation.md)
 - [`PROJECT_image.md`](PROJECT_image.md)
 - [`PROJECT_desktop.md`](PROJECT_desktop.md)
-- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
+- 已删除的历史 VirtualAppScreen 设计文档。

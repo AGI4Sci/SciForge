@@ -294,6 +294,12 @@ async function readWorkspaceToolSse(
         result = withStructuredRuntimeDoneProjection(data);
         return;
       }
+      if (isRecord(data) && isRuntimeCodexDoneEvent(data)) {
+        const failed = runtimeCodexMissingGuiPresentFailure(data);
+        onEvent(failed);
+        error = failed.message;
+        return;
+      }
       const agentHostMessage = isRecord(data) ? agentHostTurnLoopDoneMessage(data) : undefined;
       if (agentHostMessage) {
         result = withAssistantMessageRuntimeResult(data, agentHostMessage);
@@ -2336,15 +2342,15 @@ function hasAgentHostBrowserEvidenceCompletion(data: Record<string, unknown>) {
   const artifacts = recordList(data.artifacts);
   const refs = asStringArray(data.evidenceRefs) ?? [];
   const hasBrowserExecution = executionUnits.some((unit) => {
-    return asString(unit.selectedRuntime) === 'browser-host-search-runtime'
-      || asString(unit.runtimeProfileId) === 'browser-host-session'
-      || asString(unit.tool) === 'browser_search';
+    return asString(unit.runtimeProfileId) === 'browser-host-session'
+      || asString(unit.moduleId) === 'browser'
+      || /^browser\./.test(asString(unit.intent) ?? '')
+      || /^browser\./.test(asString(unit.tool) ?? '');
   });
   const hasBrowserArtifact = artifacts.some((artifact) => {
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
     return asString(artifact.type) === 'browser-search-results'
       || asString(artifact.schemaVersion) === 'sciforge.browser-host-session.search-result.v1'
-      || asString(metadata.source) === 'browser_search'
       || Boolean(asString(metadata.browserSessionRef)?.startsWith('browser-host-session:'));
   });
   const hasBrowserRef = refs.some((ref) => ref.startsWith('browser-host-session:'));

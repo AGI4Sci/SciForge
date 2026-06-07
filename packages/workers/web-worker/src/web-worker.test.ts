@@ -5,12 +5,14 @@ import { startWebWorkerServer } from './server';
 import { setBrowserAutomationForTests, setPdfTextExtractionAvailableForTests, setPdfTextExtractionForTests, webFetch, webSearch } from './web-tools';
 import { createWebWorker } from './worker';
 
-test('web worker manifest exposes fetch/search and browser-rendered tools', () => {
+test('web worker manifest exposes unified web search/fetch and browser-rendered fetch tools only', () => {
   const worker = createWebWorker();
   assert.deepEqual(
     worker.manifest.tools.map((tool) => tool.id),
-    ['web_search', 'web_fetch', 'browser_search', 'browser_fetch', 'pdf_extract'],
+    ['web_search', 'web_fetch', 'browser_fetch', 'pdf_extract'],
   );
+  assert.equal((worker.manifest.capabilities ?? []).includes('browser_search'), false);
+  assert.equal((worker.manifest.providers ?? []).some((provider) => provider.capabilityId === 'browser_search'), false);
 });
 
 test('web worker validates unknown tools through invoke', async () => {
@@ -21,7 +23,15 @@ test('web worker validates unknown tools through invoke', async () => {
   }
 });
 
-test('browser tools route through the browser automation provider', async () => {
+test('legacy browser_search is not exposed as a worker tool', async () => {
+  const response = await createWebWorker().invoke({ toolId: 'browser_search', input: { query: 'dynamic page' } });
+  assert.equal(response.ok, false);
+  if (!response.ok) {
+    assert.equal(response.error.code, 'tool_not_found');
+  }
+});
+
+test('browser_fetch routes through the browser automation provider', async () => {
   setBrowserAutomationForTests({
     async search(input) {
       return {
@@ -47,14 +57,6 @@ test('browser tools route through the browser automation provider', async () => 
   });
   try {
     const worker = createWebWorker();
-    const search = await worker.invoke({ toolId: 'browser_search', input: { query: 'dynamic page', limit: 1 } });
-    assert.equal(search.ok, true);
-    if (search.ok) {
-      const output = search.output as Record<string, unknown>;
-      assert.equal(output.provider, 'test-browser');
-      assert.equal((output.results as Array<Record<string, unknown>>)[0]?.title, 'Rendered result');
-    }
-
     const fetch = await worker.invoke({ toolId: 'browser_fetch', input: { url: 'https://example.test/page' } });
     assert.equal(fetch.ok, true);
     if (fetch.ok) {

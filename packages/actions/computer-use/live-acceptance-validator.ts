@@ -393,16 +393,19 @@ function validateRequiredRefs(
     }
   }
 
-  const runTaskLink = tuiHostChain.find((link) => link.kind === 'tui-host-runTask' && link.status === 'present');
-  if (!runTaskLink) {
+  const primitiveSessionLink = tuiHostChain.find((link) => (
+    link.kind === 'computer-use-primitive-session'
+    && link.status === 'present'
+  ));
+  if (!primitiveSessionLink) {
     issues.push({
       id: 'missing-required-ref',
       path: 'tuiHostChain',
-      reason: 'tuiHostChain must include a present tui-host-runTask link.',
+      reason: 'tuiHostChain must include a present computer-use-primitive-session link.',
     });
   } else {
-    requireRef(issues, 'tuiHostChain[tui-host-runTask].requestRef', stringValue(runTaskLink.requestRef));
-    requireRef(issues, 'tuiHostChain[tui-host-runTask].hostPortsRef', stringValue(runTaskLink.hostPortsRef));
+    requireRef(issues, 'tuiHostChain[computer-use-primitive-session].sessionRef', stringValue(primitiveSessionLink.sessionRef));
+    requireRef(issues, 'tuiHostChain[computer-use-primitive-session].primitiveTraceRef', stringValue(primitiveSessionLink.primitiveTraceRef));
   }
 
   const providerLink = tuiHostChain.find((link) => (
@@ -1729,7 +1732,7 @@ function validateProductPathClassification(evidence: Record<string, unknown>): C
   }
   requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.appServerRunRef', stringValue(classification.appServerRunRef));
   requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.nativePluginInvocationRef', stringValue(classification.nativePluginInvocationRef));
-  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.sciforgeComputerUseRunTaskRef', stringValue(classification.sciforgeComputerUseRunTaskRef));
+  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.sciforgeComputerUsePrimitiveTraceRef', stringValue(classification.sciforgeComputerUsePrimitiveTraceRef));
   requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.platformSidecarIsolationReportRef', stringValue(classification.platformSidecarIsolationReportRef));
   requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.currentBundleRef', stringValue(classification.currentBundleRef));
   return issues;

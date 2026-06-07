@@ -1,151 +1,502 @@
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import {
-  EXECUTE_BOUNDED_OPERATION_INTENT,
-  boundedOperationResult,
   createModuleDescription,
   moduleResult,
-  validateBoundedOperationRequest,
-  type BoundedOperationRequestInput,
-  type BoundedOperationResultInput,
   type ModuleDescription,
-  type ModuleInvokeRequest,
 } from '@sciforge-ui/runtime-contract/modules';
 import {
+  BROWSER_PRIMITIVE_INTENTS,
+  BROWSER_PRIMITIVE_NAMES,
+  browserPrimitiveModuleDescription,
+  createBrowserPrimitiveService,
+  type BrowserDownloadInput,
+  type BrowserDownloadOutput,
+  type BrowserExtractInput,
+  type BrowserExtractOutput,
+  type BrowserNavigateInput,
+  type BrowserNavigateOutput,
+  type BrowserObserveInput,
+  type BrowserObserveOutput,
+  type BrowserPrimitiveIntent,
+  type BrowserPrimitiveName,
+  type BrowserPrimitivePorts,
+  type BrowserPrimitivePortResult,
+  type BrowserReadInput,
+  type BrowserReadOutput,
+  type BrowserSearchInput as BrowserPrimitiveSearchInput,
+  type BrowserSearchOutput as BrowserPrimitiveSearchOutput,
+} from '../../../packages/actions/browser-runtime/index.js';
+import {
+  browserHostSessionDir,
   defaultBrowserHostSessionManager,
-  type BrowserHostOpenReadInput,
-  type BrowserHostSearchInput,
   type BrowserHostSessionManager,
+  type BrowserHostSessionState,
 } from '../browser-host-session.js';
 import type { RuntimeModuleHandler } from './dispatcher.js';
 
-export interface BrowserReadEvidence {
-  sourceRefs: string[];
-  pageTextRefs: string[];
-  searchResultRefs?: string[];
-  sourcePages?: unknown[];
-}
-
-export interface BrowserBoundedOperationPorts {
-  searchRead?(input: BoundedOperationRequestInput): Promise<BrowserReadEvidence> | BrowserReadEvidence;
-  openRead?(input: BoundedOperationRequestInput): Promise<BrowserReadEvidence> | BrowserReadEvidence;
+export interface BrowserRuntimeModulePorts {
+  primitivePorts?: BrowserPrimitivePorts;
   workspacePath?: string;
   manager?: BrowserHostSessionManager;
 }
 
-export interface ComputerUseActionEvidence {
-  beforeEvidenceRef?: string;
-  groundingRefs?: string[];
-  executorEventRef?: string;
-  afterEvidenceRef?: string;
-  staleInvalidationRefs?: string[];
-}
-
-export interface ComputerUseBoundedOperationPorts {
-  modelRouterCandidate?(
-    input: BoundedOperationRequestInput,
-  ): Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
-  executeLocalAction?(input: BoundedOperationRequestInput): Promise<ComputerUseActionEvidence> | ComputerUseActionEvidence;
-  fillFields?(input: BoundedOperationRequestInput): Promise<ComputerUseActionEvidence> | ComputerUseActionEvidence;
-}
-
-export function createBrowserBoundedOperationModuleHandler(ports: BrowserBoundedOperationPorts = {}): RuntimeModuleHandler {
+export function createBrowserRuntimeModuleHandler(ports: BrowserRuntimeModulePorts = {}): RuntimeModuleHandler {
+  const primitiveService = createBrowserPrimitiveService({
+    ports: browserPrimitivePortsFromHost(ports),
+  });
   return {
     describe: browserModuleDescription,
     invoke: async (request) => {
-      const parsed = parseBoundedOperationRequest('browser', request);
-      if (!parsed.ok) return parsed.result;
-      const input = parsed.input;
-      const budgetBlock = exhaustedBudgetResult('browser', input);
-      if (budgetBlock) return budgetBlock;
-      const allowedBlock = browserAllowedActionBlock(input);
-      if (allowedBlock) {
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: input.operationKind,
-          status: 'blocked',
-          blockedReason: allowedBlock,
-          repairHint: 'Ask the Host to declare only the bounded Browser actions this operation may perform.',
-        });
+      if (isBrowserPrimitiveIntent(request.intent)) {
+        return primitiveService.invoke(request);
       }
-      const evidence = input.operationKind === 'browser.search_read'
-        ? await (ports.searchRead?.(input) ?? browserSearchReadWithManager(ports, input))
-        : input.operationKind === 'browser.open_read'
-          ? await (ports.openRead?.(input) ?? browserOpenReadWithManager(ports, input))
-          : undefined;
-      if (!evidence) {
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: input.operationKind,
-          status: 'blocked',
-          blockedReason: `unsupported_operation_kind:${input.operationKind}`,
-          repairHint: 'Ask the Host to invoke browser.search_read or browser.open_read inside a bounded operation.',
-        });
-      }
-      const sourceRefs = uniqueStrings(evidence.sourceRefs);
-      const pageTextRefs = uniqueStrings(evidence.pageTextRefs);
-      const evidenceRefs = uniqueStrings([...sourceRefs, ...pageTextRefs]);
-      const missing = missingRequiredEvidence(input, {
-        'source-page-ref': sourceRefs,
-        'page-text-ref': pageTextRefs,
-      });
-      return boundedOperationResult({
+      return moduleResult({
         moduleId: 'browser',
-        operationKind: input.operationKind,
-        status: missing.length ? 'blocked' : 'completed',
-        sourceRefs,
-        evidenceRefs,
-        value: { sourcePages: evidence.sourcePages ?? [] },
-        blockedReason: missing.length ? `missing_required_evidence:${missing.join(',')}` : undefined,
-        repairHint: missing.length ? 'Open and read actual source pages in the current run before synthesizing an answer.' : undefined,
+        ok: false,
+        error: `unsupported_intent:${request.intent}`,
       });
     },
   };
 }
 
-async function browserSearchReadWithManager(
-  ports: BrowserBoundedOperationPorts,
-  input: BoundedOperationRequestInput,
-): Promise<BrowserReadEvidence | undefined> {
-  if (!ports.workspacePath) return undefined;
-  const query = string(input.targetScope.query);
-  if (!query) return undefined;
-  const manager = ports.manager ?? defaultBrowserHostSessionManager();
-  const output = await manager.search(ports.workspacePath, browserSearchInput(input, query));
-  const readSourcePages = (output.sourcePages ?? []).filter((page) => page.status === 'read' && page.textRef);
-  const pageTextRefs = uniqueStrings(readSourcePages.map((page) => page.textRef));
-  const sourceRefs = uniqueStrings(readSourcePages.map((page) => page.sourcePageRef ?? browserSourcePageRef(page.textRef)));
+function browserPrimitivePortsFromHost(ports: BrowserRuntimeModulePorts): BrowserPrimitivePorts {
   return {
-    sourceRefs,
-    pageTextRefs,
-    searchResultRefs: output.searchResultRef ? [output.searchResultRef] : [],
-    sourcePages: readSourcePages,
+    search: ports.primitivePorts?.search ?? ((input) => browserPrimitiveSearchWithManager(ports, input)),
+    navigate: ports.primitivePorts?.navigate ?? ((input) => browserPrimitiveNavigateWithManager(ports, input)),
+    observe: ports.primitivePorts?.observe ?? ((input) => browserPrimitiveObserveWithManager(ports, input)),
+    read: ports.primitivePorts?.read ?? ((input) => browserPrimitiveReadWithManager(ports, input)),
+    extract: ports.primitivePorts?.extract ?? ((input) => browserPrimitiveExtractWithWorkspace(ports, input)),
+    download: ports.primitivePorts?.download ?? ((input) => browserPrimitiveDownloadWithWorkspace(ports, input)),
   };
 }
 
-async function browserOpenReadWithManager(
-  ports: BrowserBoundedOperationPorts,
-  input: BoundedOperationRequestInput,
-): Promise<BrowserReadEvidence | undefined> {
-  if (!ports.workspacePath) return undefined;
-  const url = browserOpenReadUrl(input);
-  if (!url) return undefined;
+async function browserPrimitiveSearchWithManager(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserPrimitiveSearchInput,
+): Promise<BrowserPrimitivePortResult<BrowserPrimitiveSearchOutput>> {
+  if (!ports.workspacePath) return browserPrimitiveBlocked('search', 'missing_workspace_path');
   const manager = ports.manager ?? defaultBrowserHostSessionManager();
-  const output = await manager.openRead(ports.workspacePath, browserOpenReadInput(input, url));
-  const readSourcePages = output.sourcePage.status === 'read' && output.sourcePage.textRef
-    ? [output.sourcePage]
-    : [];
-  const sourceRefs = uniqueStrings(readSourcePages.map((page) => page.sourcePageRef ?? browserSourcePageRef(page.textRef)));
-  const pageTextRefs = uniqueStrings(readSourcePages.map((page) => page.textRef));
+  const output = await manager.search(ports.workspacePath, {
+    query: input.query,
+    engine: input.engine,
+    region: input.region,
+    limit: input.limit,
+    sourcePageLimit: 0,
+    timeoutMs: numericBudget(Number(input.budget?.maxTimeMs ?? 30_000), 1_000, 120_000),
+  });
+  const refs = browserSessionRefs(output.session, [output.searchResultRef]);
   return {
-    sourceRefs,
-    pageTextRefs,
-    sourcePages: readSourcePages,
+    status: output.results.length ? 'completed' : 'partial',
+    refs,
+    output: {
+      query: output.query,
+      queryUsed: output.query,
+      engine: output.engine,
+      searchUrl: output.searchUrl,
+      searchedAt: output.searchedAt,
+      results: output.results.map((result, index) => ({
+        rank: index + 1,
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+      })),
+      searchResultRef: output.searchResultRef,
+    },
+    diagnostics: output.session.diagnostics.map((message) => ({
+      code: 'browser-host-session-diagnostic',
+      message,
+      severity: 'warning' as const,
+      retryable: true,
+    })),
+    budget: input.budget,
   };
 }
 
-function browserOpenReadUrl(input: BoundedOperationRequestInput): string | undefined {
-  return string(input.targetScope.url)
-    ?? string(input.targetScope.href)
-    ?? string(input.targetScope.targetUrl);
+async function browserPrimitiveNavigateWithManager(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserNavigateInput,
+): Promise<BrowserPrimitivePortResult<BrowserNavigateOutput>> {
+  if (!ports.workspacePath) return browserPrimitiveBlocked('navigate', 'missing_workspace_path');
+  const manager = ports.manager ?? defaultBrowserHostSessionManager();
+  const capture = browserPrimitiveCaptureToHost(input.capture);
+  let session: BrowserHostSessionState;
+  if (input.sessionId) {
+    try {
+      session = await manager.act(ports.workspacePath, input.sessionId, {
+        action: 'navigate',
+        url: input.url,
+        capture,
+        timeoutMs: input.timeoutMs,
+      });
+    } catch {
+      session = await manager.openSession(ports.workspacePath, {
+        url: input.url,
+        sessionId: input.sessionId,
+        timeoutMs: input.timeoutMs,
+      });
+    }
+  } else {
+    session = await manager.openSession(ports.workspacePath, {
+      url: input.url,
+      timeoutMs: input.timeoutMs,
+    });
+  }
+  const refs = browserSessionRefs(session);
+  return {
+    status: session.status === 'failed' ? 'failed' : 'completed',
+    refs,
+    output: {
+      sessionId: session.id,
+      sessionRef: `browser-host-session:${session.id}`,
+      requestedUrl: input.url,
+      finalUrl: session.url,
+      title: session.title,
+      openedAt: session.updatedAt,
+      navigation: {
+        redirected: session.url !== input.url,
+        blockedByLogin: false,
+        blockedByConsent: false,
+        errorCode: session.status === 'failed' ? 'navigation-failed' : undefined,
+      },
+      frameRef: session.frameRef,
+      screenshotRef: session.screenshotRef,
+      domSnapshotRef: session.domSnapshotRef,
+      axSnapshotRef: session.axSnapshotRef,
+    },
+    diagnostics: browserSessionDiagnostics(session),
+    blockedReason: session.status === 'failed' ? 'navigation_failed' : undefined,
+  };
+}
+
+async function browserPrimitiveObserveWithManager(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserObserveInput,
+): Promise<BrowserPrimitivePortResult<BrowserObserveOutput>> {
+  if (!ports.workspacePath) return browserPrimitiveBlocked('observe', 'missing_workspace_path');
+  const manager = ports.manager ?? defaultBrowserHostSessionManager();
+  const session = input.capture && input.capture !== 'none'
+    ? (await manager.captureFrameIfIdle(ports.workspacePath, input.sessionId, { quietWindowMs: 80 })).session
+    : await manager.sessionState(ports.workspacePath, input.sessionId);
+  if (!session) return browserPrimitiveBlocked('observe', 'browser_session_not_found');
+  return {
+    status: session.status === 'failed' ? 'failed' : 'completed',
+    refs: browserSessionRefs(session),
+    output: {
+      sessionId: session.id,
+      url: session.url,
+      title: session.title,
+      status: session.status,
+      stateRef: `browser-host-session:${session.id}/session.json`,
+      frameRef: session.frameRef,
+      screenshotRef: session.screenshotRef,
+      domSnapshotRef: session.domSnapshotRef,
+      axSnapshotRef: session.axSnapshotRef,
+      consoleLogRef: session.consoleLogRef,
+      networkLogRef: session.networkLogRef,
+      diagnostics: session.diagnostics,
+    },
+    diagnostics: browserSessionDiagnostics(session),
+    blockedReason: session.status === 'failed' ? 'browser_session_failed' : undefined,
+  };
+}
+
+async function browserPrimitiveReadWithManager(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserReadInput,
+): Promise<BrowserPrimitivePortResult<BrowserReadOutput>> {
+  if (!ports.workspacePath) return browserPrimitiveBlocked('read', 'missing_workspace_path');
+  const manager = ports.manager ?? defaultBrowserHostSessionManager();
+  const session = input.sessionId ? await manager.sessionState(ports.workspacePath, input.sessionId) : undefined;
+  const url = input.url ?? session?.url;
+  if (!url) return browserPrimitiveBlocked('read', 'missing_read_url');
+  const output = await manager.openRead(ports.workspacePath, {
+    url,
+    sessionId: input.sessionId,
+    timeoutMs: input.timeoutMs,
+  });
+  const sourcePage = output.sourcePage;
+  const sourceRefs = uniqueStrings([sourcePage.sourcePageRef]);
+  const pageTextRefs = uniqueStrings([sourcePage.textRef]);
+  return {
+    status: sourcePage.status === 'read' ? 'completed' : 'blocked',
+    refs: uniqueStrings([...sourceRefs, ...pageTextRefs, ...browserSessionRefs(output.session)]),
+    output: sourcePage.status === 'read'
+      ? {
+          sessionId: output.session.id,
+          url: sourcePage.url,
+          finalUrl: sourcePage.finalUrl,
+          title: sourcePage.title,
+          sourcePageRef: sourcePage.sourcePageRef ?? browserSourcePageRef(sourcePage.textRef) ?? '',
+          pageTextRef: sourcePage.textRef,
+          textPreview: sourcePage.textPreview,
+          textCharCount: sourcePage.textCharCount,
+          textSha1: sourcePage.textSha1,
+        }
+      : undefined,
+    diagnostics: [
+      ...browserSessionDiagnostics(output.session),
+      ...(sourcePage.error ? [{
+        code: 'source-page-read-failed',
+        message: sourcePage.error,
+        severity: 'error' as const,
+        retryable: true,
+      }] : []),
+    ],
+    blockedReason: sourcePage.status === 'read' ? undefined : 'source_page_read_failed',
+  };
+}
+
+async function browserPrimitiveExtractWithWorkspace(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserExtractInput,
+): Promise<BrowserPrimitivePortResult<BrowserExtractOutput>> {
+  if (!ports.workspacePath) return browserPrimitiveBlocked('extract', 'missing_workspace_path');
+  const filePath = browserHostFilePathForRef(ports.workspacePath, input.ref);
+  if (!filePath) return browserPrimitiveBlocked('extract', 'unsupported_ref_for_extract');
+  const text = await readFile(filePath, 'utf8');
+  const limited = text.slice(0, 2_000_000);
+  const output: BrowserExtractOutput = { ref: input.ref };
+  const maxItems = input.maxItems ?? 200;
+  if (input.extract.includes('links')) output.links = extractLinks(limited, maxItems);
+  if (input.extract.includes('dates')) output.dates = extractDates(limited, maxItems);
+  if (input.extract.includes('metadata')) output.metadata = extractMetadata(limited);
+  if (input.extract.includes('resultItems')) output.resultItems = extractResultItems(limited, maxItems);
+  if (input.extract.includes('forms')) output.forms = extractForms(limited, maxItems);
+  return {
+    status: 'completed',
+    refs: [input.ref],
+    output,
+    diagnostics: [],
+  };
+}
+
+async function browserPrimitiveDownloadWithWorkspace(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserDownloadInput,
+): Promise<BrowserPrimitivePortResult<BrowserDownloadOutput>> {
+  if (!ports.workspacePath) return browserPrimitiveBlocked('download', 'missing_workspace_path');
+  if (!input.url) return browserPrimitiveBlocked('download', 'download_selector_requires_host_browser_port');
+  const response = await fetch(input.url, { signal: AbortSignal.timeout(input.timeoutMs ?? 30_000) });
+  if (!response.ok) {
+    return {
+      status: 'failed',
+      refs: [],
+      blockedReason: `download_http_status:${response.status}`,
+      diagnostics: [{
+        code: 'download-http-status',
+        message: `Download failed with HTTP ${response.status}.`,
+        severity: 'error',
+        retryable: response.status >= 500,
+      }],
+    };
+  }
+  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  if (input.maxBytes && contentLength > input.maxBytes) return browserPrimitiveBlocked('download', 'download_content_length_exceeds_budget');
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (input.maxBytes && bytes.byteLength > input.maxBytes) return browserPrimitiveBlocked('download', 'download_bytes_exceed_budget');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const filename = safeBrowserArtifactFilename(input.filenameHint ?? (basename(new URL(input.url).pathname) || 'download.bin'));
+  const sessionId = safeBrowserArtifactSegment(input.sessionId ?? 'downloads');
+  const fileName = `${sha256.slice(0, 12)}-${filename}`;
+  const dir = join(browserHostSessionDir(ports.workspacePath, sessionId), 'downloads');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, fileName), bytes);
+  const artifactRef = `browser-host-session:${sessionId}/downloads/${fileName}`;
+  return {
+    status: 'completed',
+    refs: [artifactRef],
+    output: {
+      artifactRef,
+      filename,
+      mimeType: response.headers.get('content-type') ?? undefined,
+      byteLength: bytes.byteLength,
+      sha256,
+      finalUrl: response.url || input.url,
+    },
+    diagnostics: [],
+  };
+}
+
+function isBrowserPrimitiveIntent(intent: string): intent is BrowserPrimitiveIntent {
+  return Object.values(BROWSER_PRIMITIVE_INTENTS).includes(intent as BrowserPrimitiveIntent);
+}
+
+function browserPrimitiveBlocked(
+  primitive: BrowserPrimitiveName,
+  blockedReason: string,
+): BrowserPrimitivePortResult<never> {
+  return {
+    status: 'blocked',
+    refs: [],
+    blockedReason,
+    diagnostics: [{
+      code: blockedReason.replace(/_/g, '-'),
+      message: `Browser primitive ${primitive} is blocked: ${blockedReason}.`,
+      severity: 'error',
+      retryable: true,
+    }],
+    repairHints: [{
+      code: 'host-repair-required',
+      message: 'Agent Host should choose a different primitive, provide the missing input, or register a host port.',
+      suggestedPrimitive: primitive,
+    }],
+  };
+}
+
+function browserPrimitiveCaptureToHost(capture: BrowserNavigateInput['capture']) {
+  if (capture === 'none') return 'none' as const;
+  if (capture === 'screenshot') return 'full' as const;
+  return 'frame' as const;
+}
+
+function browserSessionRefs(session: BrowserHostSessionState, extraRefs: Array<string | undefined> = []) {
+  return uniqueStrings([
+    `browser-host-session:${session.id}`,
+    `browser-host-session:${session.id}/session.json`,
+    session.liveSurfaceRef,
+    session.frameStreamRef,
+    session.frameRef,
+    session.screenshotRef,
+    session.domSnapshotRef,
+    session.axSnapshotRef,
+    session.consoleLogRef,
+    session.networkLogRef,
+    session.searchResultRef,
+    ...extraRefs,
+  ]);
+}
+
+function browserSessionDiagnostics(session: BrowserHostSessionState) {
+  return session.diagnostics.map((message) => ({
+    code: 'browser-host-session-diagnostic',
+    message,
+    severity: session.status === 'failed' ? 'error' as const : 'warning' as const,
+    retryable: true,
+  }));
+}
+
+function browserHostFilePathForRef(workspacePath: string, ref: string): string | undefined {
+  const match = /^browser-host-session:([^/]+)\/(.+)$/.exec(ref);
+  if (!match) return undefined;
+  const sessionId = safeBrowserArtifactSegment(match[1] ?? '');
+  const relativePath = match[2] ?? '';
+  if (!sessionId || !/^[a-zA-Z0-9._:-]+(?:\/[a-zA-Z0-9._:-]+)*$/.test(relativePath)) return undefined;
+  return join(browserHostSessionDir(workspacePath, sessionId), relativePath);
+}
+
+function extractLinks(text: string, maxItems: number) {
+  const links = new Map<string, { url: string; text?: string; rel?: string; confidence?: number }>();
+  const hrefPattern = /<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/giu;
+  for (const match of text.matchAll(hrefPattern)) {
+    const url = cleanExtractedUrl(match[1]);
+    if (!url || links.has(url)) continue;
+    links.set(url, {
+      url,
+      text: cleanExtractedText(stripTags(match[2] ?? '')).slice(0, 240) || undefined,
+      confidence: 0.9,
+    });
+    if (links.size >= maxItems) return [...links.values()];
+  }
+  const bareUrlPattern = /\bhttps?:\/\/[^\s<>"'`)\]]+/giu;
+  for (const match of text.matchAll(bareUrlPattern)) {
+    const url = cleanExtractedUrl(match[0]);
+    if (!url || links.has(url)) continue;
+    links.set(url, { url, confidence: 0.6 });
+    if (links.size >= maxItems) break;
+  }
+  return [...links.values()];
+}
+
+function extractDates(text: string, maxItems: number) {
+  const dates: Array<{ value: string; context?: string }> = [];
+  const pattern = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]+,\s+\d{4}|[A-Za-z]+\s+\d{1,2},\s+\d{4})\b/gu;
+  for (const match of text.matchAll(pattern)) {
+    const value = match[0];
+    dates.push({
+      value,
+      context: cleanExtractedText(text.slice(Math.max(0, match.index - 80), Math.min(text.length, match.index + value.length + 80))).slice(0, 240),
+    });
+    if (dates.length >= maxItems) break;
+  }
+  return dates;
+}
+
+function extractMetadata(text: string) {
+  const metadata: Record<string, string> = {};
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/iu.exec(text)?.[1];
+  if (title) metadata.title = cleanExtractedText(stripTags(title)).slice(0, 500);
+  for (const match of text.matchAll(/<meta\b[^>]*?\bname\s*=\s*["']([^"']+)["'][^>]*?\bcontent\s*=\s*["']([^"']*)["'][^>]*>/giu)) {
+    const key = cleanExtractedText(match[1] ?? '').slice(0, 120);
+    const value = cleanExtractedText(match[2] ?? '').slice(0, 1_000);
+    if (key && value) metadata[key] = value;
+  }
+  return metadata;
+}
+
+function extractResultItems(text: string, maxItems: number) {
+  const links = extractLinks(text, maxItems);
+  return links.map((link) => ({
+    title: link.text,
+    url: link.url,
+  }));
+}
+
+function extractForms(text: string, maxItems: number) {
+  const forms: Array<{
+    action?: string;
+    method?: 'get' | 'post';
+    controls: Array<{ name?: string; type?: string; value?: string }>;
+  }> = [];
+  const formPattern = /<form\b([^>]*)>([\s\S]*?)<\/form>/giu;
+  for (const formMatch of text.matchAll(formPattern)) {
+    const attrs = formMatch[1] ?? '';
+    const body = formMatch[2] ?? '';
+    const method = attr(attrs, 'method')?.toLowerCase();
+    const controls = [...body.matchAll(/<(?:input|textarea|select)\b([^>]*)>/giu)]
+      .slice(0, 50)
+      .map((control) => ({
+        name: attr(control[1] ?? '', 'name'),
+        type: attr(control[1] ?? '', 'type'),
+        value: attr(control[1] ?? '', 'value'),
+      }));
+    forms.push({
+      action: attr(attrs, 'action'),
+      method: method === 'post' ? 'post' : method === 'get' ? 'get' : undefined,
+      controls,
+    });
+    if (forms.length >= maxItems) break;
+  }
+  return forms;
+}
+
+function attr(attrs: string, name: string) {
+  return new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'iu').exec(attrs)?.[1];
+}
+
+function cleanExtractedUrl(value: string | undefined) {
+  if (!value) return undefined;
+  const trimmed = value.trim().replace(/[.,;:]+$/u, '');
+  if (!/^https?:\/\//i.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function stripTags(value: string) {
+  return value.replace(/<[^>]*>/gu, ' ');
+}
+
+function cleanExtractedText(value: string) {
+  return value.replace(/\s+/gu, ' ').trim();
+}
+
+function safeBrowserArtifactSegment(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '') || 'artifact';
+}
+
+function safeBrowserArtifactFilename(value: string) {
+  const clean = value.trim().replace(/[/\\?%*:|"<>]+/g, '-').replace(/\s+/g, '-').replace(/^-+|-+$/g, '');
+  return clean || 'download.bin';
 }
 
 function browserSourcePageRef(textRef: string | undefined): string | undefined {
@@ -153,419 +504,28 @@ function browserSourcePageRef(textRef: string | undefined): string | undefined {
   return textRef.replace(/(?:-[a-f0-9]{10})?\.txt$/i, '.source.json');
 }
 
-function browserAllowedActionBlock(input: BoundedOperationRequestInput): string | undefined {
-  const required = input.operationKind === 'browser.search_read'
-    ? ['search', 'open', 'read']
-    : input.operationKind === 'browser.open_read'
-      ? ['open', 'read']
-      : [];
-  const missing = required.find((action) => !input.config.allowedActions.includes(action));
-  return missing ? `action_not_allowed:${missing}` : undefined;
-}
-
-function browserSearchInput(input: BoundedOperationRequestInput, query: string): BrowserHostSearchInput {
-  return {
-    query,
-    limit: numericBudget(input.config.maxSteps, 1, 10),
-    sourcePageLimit: numericBudget(input.config.maxSteps, 0, 5),
-    timeoutMs: numericBudget(input.config.maxTimeMs, 1_000, 120_000),
-  };
-}
-
-function browserOpenReadInput(input: BoundedOperationRequestInput, url: string): BrowserHostOpenReadInput {
-  return {
-    url,
-    sessionId: string(input.targetScope.sessionId),
-    title: string(input.targetScope.title),
-    timeoutMs: numericBudget(input.config.maxTimeMs, 1_000, 120_000),
-  };
-}
-
-export function createComputerUseBoundedOperationModuleHandler(
-  ports: ComputerUseBoundedOperationPorts = {},
-): RuntimeModuleHandler {
-  return {
-    describe: computerUseModuleDescription,
-    invoke: async (request) => {
-      const parsed = parseBoundedOperationRequest('computer_use', request);
-      if (!parsed.ok) return parsed.result;
-      const input = parsed.input;
-      const budgetBlock = exhaustedBudgetResult('computer_use', input);
-      if (budgetBlock) return budgetBlock;
-      if (!['computer_use.perform_local_action', 'computer_use.fill_fields'].includes(input.operationKind)) {
-        return blockedComputerUse(input, `unsupported_operation_kind:${input.operationKind}`);
-      }
-
-      const actualActionKind = computerUseActualActionKind(input);
-      if (actualActionKind && !input.config.allowedActions.includes(actualActionKind)) {
-        return blockedComputerUse(input, `action_not_allowed:${actualActionKind}`);
-      }
-
-      const modelRouterCandidate = record(input, 'modelRouterCandidate') ?? await ports.modelRouterCandidate?.(input);
-      const candidateBlock = computerUseCandidatePolicyBlock(input, modelRouterCandidate);
-      if (candidateBlock) return blockedComputerUse(input, candidateBlock);
-
-      if (!hasTargetBinding(input)) {
-        return blockedComputerUse(input, 'missing_target_binding', 'Bind a current native target scope before executing Computer Use.');
-      }
-
-      const targetEvidence = computerUseTargetEvidence(input);
-      const targetEvidenceRefs = computerUseTargetEvidenceRefs(targetEvidence);
-      const missingTargetEvidence = missingRequiredEvidence(input, {
-        'native-host-ref': targetEvidence.nativeHostRefs,
-        'permission-ref': targetEvidence.permissionRefs,
-        'scoped-executor-ref': targetEvidence.scopedExecutorRefs,
-        'stop-cancel-ref': targetEvidence.stopCancelRefs,
-      });
-      if (missingTargetEvidence.length) {
-        return blockedComputerUse(
-          input,
-          `missing_required_evidence:${missingTargetEvidence.join(',')}`,
-          'Provide current native host, permission refs, scoped executor, and stop/cancel path before retrying.',
-          targetEvidenceRefs,
-        );
-      }
-
-      if (requiresConfirmation(input) && !request.approvalToken) {
-        return boundedOperationResult({
-          moduleId: 'computer_use',
-          operationKind: input.operationKind,
-          status: 'needs-confirmation',
-          evidenceRefs: targetEvidenceRefs,
-          approvalRequest: {
-            moduleId: 'computer_use',
-            intent: EXECUTE_BOUNDED_OPERATION_INTENT,
-            operationKind: input.operationKind,
-            reason: 'confirmation_required',
-          },
-          blockedReason: 'confirmation_required',
-          repairHint: 'Collect explicit user confirmation, then retry with the Host approval token.',
-        });
-      }
-
-      const run = input.operationKind === 'computer_use.fill_fields' ? ports.fillFields : ports.executeLocalAction;
-      const evidence = await run?.(input);
-      if (!evidence) return blockedComputerUse(input, 'missing_executor_port', undefined, targetEvidenceRefs);
-
-      const beforeEvidenceRef = computerUseRef(evidence.beforeEvidenceRef, 'computer-use:evidence:');
-      const groundingRefs = computerUseRefs(evidence.groundingRefs, 'computer-use:grounding:');
-      const executorEventRef = computerUseRef(evidence.executorEventRef, 'computer-use:executor:');
-      const afterEvidenceRef = computerUseRef(evidence.afterEvidenceRef, 'computer-use:evidence:');
-      const staleInvalidationRefs = computerUseRefs(evidence.staleInvalidationRefs, 'computer-use:evidence:');
-      const evidenceRefs = uniqueStrings([
-        ...targetEvidenceRefs,
-        beforeEvidenceRef,
-        ...groundingRefs,
-        executorEventRef,
-        afterEvidenceRef,
-        ...staleInvalidationRefs,
-      ]);
-      const missing = missingRequiredEvidence(input, {
-        'native-host-ref': targetEvidence.nativeHostRefs,
-        'permission-ref': targetEvidence.permissionRefs,
-        'scoped-executor-ref': targetEvidence.scopedExecutorRefs,
-        'stop-cancel-ref': targetEvidence.stopCancelRefs,
-        'before-evidence-ref': beforeEvidenceRef ? [beforeEvidenceRef] : [],
-        'grounding-ref': groundingRefs,
-        'executor-event-ref': executorEventRef ? [executorEventRef] : [],
-        'after-evidence-ref': afterEvidenceRef ? [afterEvidenceRef] : [],
-        'stale-invalidation-ref': staleInvalidationRefs,
-      });
-      return boundedOperationResult({
-        moduleId: 'computer_use',
-        operationKind: input.operationKind,
-        status: missing.length ? 'blocked' : 'completed',
-        evidenceRefs,
-        actionRefs: executorEventRef ? [executorEventRef] : [],
-        blockedReason: missing.length ? `missing_required_evidence:${missing.join(',')}` : undefined,
-        repairHint: missing.length ? 'Refresh target-bound evidence and rerun the scoped local action.' : undefined,
-      });
-    },
-  };
-}
-
 function browserModuleDescription(): ModuleDescription {
+  const primitives = browserPrimitiveModuleDescription();
   return createModuleDescription({
     moduleId: 'browser',
     title: 'Browser',
-    summary: 'Bounded browser read module; Host owns source choice, answer synthesis, completion truth, and repair.',
+    summary: 'Browser primitive module; Host owns source choice, repair, verification, final synthesis, and completion truth.',
     resources: [
       { kind: 'browser-source-page', refPrefix: 'browser:source-page:', queryable: false, readable: true },
       { kind: 'browser-page-text', refPrefix: 'browser:page-text:', queryable: false, readable: true },
+      { kind: 'browser-host-session', refPrefix: 'browser-host-session:', queryable: false, readable: true },
+      ...(primitives.resources ?? []).filter((resource) =>
+        !['browser:source-page:', 'browser:page-text:'].includes(resource.refPrefix),
+      ),
     ],
-    intents: [
-      {
-        name: EXECUTE_BOUNDED_OPERATION_INTENT,
-        sideEffect: 'local',
-        returnsOperation: true,
-        summary: 'Typed module.invoke intent for browser.search_read and browser.open_read only.',
-      },
-    ],
-    facets: { refs: true },
+    intents: primitives.intents ?? [],
+    facets: { refs: true, events: true },
     limits: { maxInlineBytes: 16_000, expectedLatencyMs: 500 },
-  });
-}
-
-function computerUseModuleDescription(): ModuleDescription {
-  return createModuleDescription({
-    moduleId: 'computer_use',
-    title: 'Computer Use',
-    summary: 'Bounded local GUI action module; Host owns task plan, confirmation, completion truth, repair, and final answer.',
-    resources: [
-      { kind: 'computer-use-evidence', refPrefix: 'computer-use:evidence:', queryable: false, readable: true },
-      { kind: 'computer-use-grounding', refPrefix: 'computer-use:grounding:', queryable: false, readable: true },
-      { kind: 'computer-use-executor-event', refPrefix: 'computer-use:executor:', queryable: false, readable: true },
-    ],
-    intents: [
-      {
-        name: EXECUTE_BOUNDED_OPERATION_INTENT,
-        sideEffect: 'local',
-        returnsOperation: true,
-        summary: 'Typed module.invoke intent for computer_use.perform_local_action and computer_use.fill_fields only.',
-      },
-    ],
-    facets: { refs: true, approval: true, events: true },
-    limits: { maxInlineBytes: 16_000, expectedLatencyMs: 500 },
-  });
-}
-
-function parseBoundedOperationRequest(moduleId: string, request: ModuleInvokeRequest):
-  | { ok: true; input: BoundedOperationRequestInput }
-  | { ok: false; result: ReturnType<typeof moduleResult> } {
-  const validation = validateBoundedOperationRequest(request);
-  if (!validation.ok) {
-    return {
-      ok: false,
-      result: moduleResult({ moduleId, ok: false, error: validation.errors.join(';') }),
-    };
-  }
-  return { ok: true, input: request.input as unknown as BoundedOperationRequestInput };
-}
-
-function missingRequiredEvidence(input: BoundedOperationRequestInput, refsByRequirement: Record<string, string[]>) {
-  return input.config.requiredEvidence.filter((requirement) => (
-    requirement in refsByRequirement && !refsByRequirement[requirement]?.length
-  ));
-}
-
-function computerUseCandidatePolicyBlock(
-  input: BoundedOperationRequestInput,
-  candidate: Record<string, unknown> | undefined,
-): string | undefined {
-  if (!candidate) return undefined;
-  const action = record(candidate, 'action');
-  const actionKind = string(action?.kind);
-  if (actionKind && !input.config.allowedActions.includes(actionKind)) {
-    return `candidate_action_not_allowed:${actionKind}`;
-  }
-  if (candidate.riskPolicy !== undefined && candidate.riskPolicy !== input.config.riskPolicy) {
-    return 'candidate_risk_policy_change_forbidden';
-  }
-  if (recordContainsAnyKey(candidate, ['finalAnswer', 'completionTruth'])) {
-    return 'candidate_completion_boundary_forbidden';
-  }
-  if (candidateCrossModuleNextStep(input, candidate)) {
-    return 'candidate_cross_module_next_step_forbidden';
-  }
-  if (recordContainsAnyKey(candidate, ['approvalToken', 'bypassConfirmation', 'confirmationBypass'])) {
-    return 'candidate_confirmation_bypass_forbidden';
-  }
-  if (recordContainsAnyKey(candidate, ['autoRepair', 'retryWith', 'repairAction'])) {
-    return 'candidate_auto_repair_forbidden';
-  }
-  if (candidateExecutableBinding(candidate)) {
-    return 'candidate_executable_binding_forbidden';
-  }
-  if (action && !record(input, 'action')) {
-    return 'candidate_action_requires_host_binding';
-  }
-  if (candidateFreshEvidenceInvalid(candidate)) {
-    return 'candidate_fresh_evidence_invalid';
-  }
-  return undefined;
-}
-
-function candidateCrossModuleNextStep(
-  input: BoundedOperationRequestInput,
-  candidate: Record<string, unknown>,
-) {
-  const candidateOwners = [
-    string(candidate.moduleId),
-    string(candidate.ownerModuleId),
-    string(record(candidate, 'nextStep')?.moduleId),
-    string(record(candidate, 'nextStep')?.ownerModuleId),
-    string(record(candidate, 'nextIntent')?.moduleId),
-    string(record(candidate, 'nextIntent')?.ownerModuleId),
-  ].filter((value): value is string => Boolean(value));
-  return candidateOwners.some((owner) => owner !== input.ownerModuleId);
-}
-
-function candidateExecutableBinding(candidate: Record<string, unknown>) {
-  const executableBindingKeys = [
-    'targetBindingRef',
-    'windowRef',
-    'inputLeaseRef',
-    'inputLeaseRefs',
-    'coordinates',
-    'coordinate',
-    'screenPoint',
-    'writeFile',
-    'fileWrite',
-    'filePath',
-  ];
-  return recordContainsAnyKey(candidate, executableBindingKeys);
-}
-
-function candidateFreshEvidenceInvalid(candidate: Record<string, unknown>) {
-  const freshness = record(candidate, 'freshness');
-  const freshnessStatus = string(freshness?.status);
-  const refs = candidateEvidenceRefs(candidate);
-  if (freshnessStatus && freshnessStatus !== 'current') return true;
-  if (refs.length && freshnessStatus !== 'current') return true;
-  return refs.some((ref) => !computerUseRef(ref, 'computer-use:evidence:'));
-}
-
-function candidateEvidenceRefs(candidate: Record<string, unknown>) {
-  return uniqueStrings([
-    ...stringList(candidate.evidenceRef),
-    ...stringList(candidate.evidenceRefs),
-    ...stringList(candidate.freshEvidenceRef),
-    ...stringList(candidate.freshEvidenceRefs),
-    ...stringList(candidate.beforeEvidenceRef),
-    ...stringList(candidate.beforeEvidenceRefs),
-    ...stringList(candidate.afterEvidenceRef),
-    ...stringList(candidate.afterEvidenceRefs),
-  ]);
-}
-
-function recordContainsAnyKey(record: Record<string, unknown>, keys: string[]): boolean {
-  const wanted = new Set(keys);
-  const visit = (value: unknown): boolean => {
-    if (!value || typeof value !== 'object') return false;
-    if (Array.isArray(value)) return value.some(visit);
-    return Object.entries(value as Record<string, unknown>).some(([key, child]) => wanted.has(key) || visit(child));
-  };
-  return visit(record);
-}
-
-function computerUseActualActionKind(input: BoundedOperationRequestInput): string | undefined {
-  const action = record(input, 'action');
-  return string(action?.kind);
-}
-
-function exhaustedBudgetResult(moduleId: string, input: BoundedOperationRequestInput) {
-  const exhausted = [
-    input.config.maxSteps === 0 ? 'maxSteps' : undefined,
-    input.config.maxTimeMs === 0 ? 'maxTimeMs' : undefined,
-    input.config.maxModelCalls === 0 ? 'maxModelCalls' : undefined,
-  ].filter((value): value is string => Boolean(value));
-  if (!exhausted.length) return undefined;
-  return boundedOperationResult({
-    moduleId,
-    operationKind: input.operationKind,
-    status: 'blocked',
-    blockedReason: `budget_exhausted:${exhausted.join(',')}`,
-    repairHint: 'Ask the Host for a nonzero explicit bounded operation budget.',
-    budgets: {
-      maxSteps: input.config.maxSteps,
-      maxTimeMs: input.config.maxTimeMs,
-      maxModelCalls: input.config.maxModelCalls,
-      exhausted,
-    },
-  });
-}
-
-function hasTargetBinding(input: BoundedOperationRequestInput) {
-  return Boolean(string(input.targetScope.targetBindingRef) || string(input.targetScope.windowRef));
-}
-
-function computerUseTargetEvidence(input: BoundedOperationRequestInput) {
-  return {
-    nativeHostRefs: computerUseRefs(scopeRefs(input.targetScope, ['nativeHostRef', 'nativeHostRefs']), 'computer-use:native-host'),
-    permissionRefs: computerUseRefs(scopeRefs(input.targetScope, ['permissionRef', 'permissionRefs']), 'computer-use:permission'),
-    scopedExecutorRefs: computerUseRefs(scopeRefs(input.targetScope, ['scopedExecutorRef', 'scopedExecutorRefs']), 'computer-use:executor-scope'),
-    stopCancelRefs: computerUseRefs(scopeRefs(input.targetScope, [
-      'stopCancelRef',
-      'stopCancelRefs',
-      'stopCancelPathRef',
-      'stopCancelPathRefs',
-      'stopPathRef',
-      'cancelPathRef',
-    ]), 'computer-use:stop-cancel'),
-  };
-}
-
-function computerUseTargetEvidenceRefs(evidence: ReturnType<typeof computerUseTargetEvidence>) {
-  return uniqueStrings([
-    ...evidence.nativeHostRefs,
-    ...evidence.permissionRefs,
-    ...evidence.scopedExecutorRefs,
-    ...evidence.stopCancelRefs,
-  ]);
-}
-
-function scopeRefs(scope: Record<string, unknown>, fields: string[]) {
-  return fields.flatMap((field) => stringList(scope[field]));
-}
-
-function computerUseRefs(values: unknown, prefix: string) {
-  return uniqueStrings(stringList(values).map((value) => computerUseRef(value, prefix)));
-}
-
-function computerUseRef(value: unknown, prefix: string) {
-  const ref = string(value);
-  if (!ref || forbiddenComputerUseEvidenceRef(ref)) return undefined;
-  return ref.startsWith(prefix) ? ref : undefined;
-}
-
-function forbiddenComputerUseEvidenceRef(ref: string) {
-  return /^(?:data:|raw:|fixture:|history:|replay:|gui-projection:)/i.test(ref)
-    || /;base64\b/i.test(ref);
-}
-
-function requiresConfirmation(input: BoundedOperationRequestInput) {
-  const action = record(input, 'action');
-  return input.config.riskPolicy === 'confirmation-required'
-    || string(action?.risk) === 'high'
-    || string(action?.kind) === 'submit';
-}
-
-function blockedComputerUse(
-  input: BoundedOperationRequestInput,
-  blockedReason: string,
-  repairHint = 'Provide current target binding, fresh evidence, allowed action, and scoped executor before retrying.',
-  evidenceRefs: string[] = [],
-) {
-  return boundedOperationResult({
-    moduleId: 'computer_use',
-    operationKind: input.operationKind,
-    status: 'blocked',
-    evidenceRefs,
-    blockedReason,
-    repairHint,
   });
 }
 
 function uniqueStrings(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map((value) => value.trim()))];
-}
-
-function record(parent: unknown, key: string) {
-  if (!parent || typeof parent !== 'object' || Array.isArray(parent)) return undefined;
-  const value = (parent as Record<string, unknown>)[key];
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function string(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function stringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap((entry) => string(entry) ? [string(entry) as string] : []);
-  const single = string(value);
-  return single ? [single] : [];
 }
 
 function numericBudget(value: number, min: number, max: number) {

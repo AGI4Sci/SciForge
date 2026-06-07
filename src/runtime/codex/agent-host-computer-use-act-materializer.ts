@@ -438,7 +438,7 @@ function runtimeOwnedRef(ref: string): boolean {
     || /provider[-_/]?(?:payload|input|request|response)/i.test(trimmed)
   ) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|audit:)/i.test(trimmed);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function safeContractText(value: unknown): string {

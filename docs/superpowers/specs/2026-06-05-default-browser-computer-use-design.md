@@ -7,6 +7,6 @@
 - [`../../../PROJECT.md`](../../../PROJECT.md)：当前唯一需求入口。
 - [`../../Architecture.md`](../../Architecture.md)：总架构和 Bounded Operation 契约。
 - [`../../BrowserRuntimeArchitecture.md`](../../BrowserRuntimeArchitecture.md)：Browser 模块边界。
-- [`../../../packages/actions/computer-use/vision_computer_use_agent_mvp.md`](../../../packages/actions/computer-use/vision_computer_use_agent_mvp.md)：Computer Use 模块边界。
+- [`../../ComputerUseRuntimeArchitecture.md`](../../ComputerUseRuntimeArchitecture.md)：Computer Use 模块边界。
 
 后续 agent 不应从本文恢复旧路线。若本文与上述文档冲突，以上述文档为准。

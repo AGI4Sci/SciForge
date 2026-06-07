@@ -53,7 +53,6 @@ export function capabilityIdsFromProviderPromptPolicy(input: {
   if (input.externalIoRequired === true) ids.add('web_search');
   if (scholarlySearchProviderIntent(prompt)) ids.add('web_search');
   if (!wantsHeadlessBrowserAutomation && !wantsVisibleEdgeAutomation && browserProviderIntent(prompt, selected)) {
-    ids.add('browser_search');
     ids.add('browser_fetch');
   }
   if (pdfFullTextProviderIntent(prompt, selected)) ids.add('pdf_extract');
@@ -78,7 +77,6 @@ export function capabilityIdsForGeneratedTaskProviderRoutes(input: {
   }
   const text = `${input.prompt ?? ''} ${expectedArtifacts.join(' ')}`;
   if (generatedTaskBrowserProviderRoutesRequested(text)) {
-    ids.add('browser_search');
     ids.add('browser_fetch');
   }
   if (generatedTaskPdfProviderRouteRequested(text)) ids.add('pdf_extract');

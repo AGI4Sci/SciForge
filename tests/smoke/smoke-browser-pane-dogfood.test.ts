@@ -15,7 +15,6 @@ const DOGFOOD_SCHEMA = 'sciforge.browser-pane-dogfood.v1';
 const REAL_EXTERNAL_DOGFOOD_SCHEMA = 'sciforge.browser-pane-real-external-dogfood.v1';
 const DOGFOOD_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES = [
   'browser-host-native-surface',
-  'browser-host-search',
   'browser-host-session',
 ] as const;
 const fixtureHost = 'sciforge-browser-dogfood.test';
@@ -59,7 +58,6 @@ type DogfoodNativeAttachPreflightEvidence = {
     capabilities: {
       browserHostSession: 'ready' | 'missing';
       nativeSurface: 'ready' | 'missing';
-      browserHostSearch: 'ready' | 'missing';
     };
     nativeSurfaceEndpoint: 'present' | 'missing';
     endpointKeys: string[];
@@ -251,10 +249,9 @@ test('Browser pane dogfood blocked manifests include typed native attach preflig
     writerHealth: {
       ok: true,
       service: 'sciforge-workspace-writer',
-      capabilities: ['workspace-files', 'browser-host-session', 'browser-host-search'],
+      capabilities: ['workspace-files', 'browser-host-session'],
       endpoints: {
         browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
-        browserHostSearch: '/api/sciforge/browser-host/search',
       },
     },
     rightPane: {
@@ -286,7 +283,6 @@ test('Browser pane dogfood blocked manifests include typed native attach preflig
   assert.equal(nativeAttachPreflight.writerHealth.capabilities.nativeSurface, 'missing');
   assert.deepEqual(nativeAttachPreflight.writerHealth.capabilitySummary, [
     'browser-host-native-surface:missing',
-    'browser-host-search:ready',
     'browser-host-session:ready',
   ]);
   assert.equal(nativeAttachPreflight.rightPaneBridge.available, false);
@@ -913,7 +909,6 @@ function buildDogfoodNativeAttachPreflightEvidence(input: {
       capabilities: {
         browserHostSession: capabilityState('browser-host-session'),
         nativeSurface: capabilityState('browser-host-native-surface'),
-        browserHostSearch: capabilityState('browser-host-search'),
       },
       nativeSurfaceEndpoint,
       endpointKeys,
@@ -1492,7 +1487,6 @@ function assertNativeAttachPreflightEvidence(preflight: DogfoodNativeAttachPrefl
   assert.equal(typeof preflight.writerHealth.available, 'boolean');
   assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSession));
   assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.nativeSurface));
-  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSearch));
   assert.ok(['present', 'missing'].includes(preflight.writerHealth.nativeSurfaceEndpoint));
   assert.ok(preflight.writerHealth.capabilitySummary.length <= DOGFOOD_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES.length);
   assert.ok(preflight.writerHealth.endpointKeys.length <= 16);

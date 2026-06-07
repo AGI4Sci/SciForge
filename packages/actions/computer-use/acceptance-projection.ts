@@ -329,7 +329,7 @@ function isFinalArtifactEvidenceRef(ref: string): boolean {
   const text = ref.trim();
   if (!text) return false;
   if (/\.(png|jpe?g|webp)$/i.test(text)) return false;
-  if (/\/?(vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|approval-request|risk-audit|confirmed-request|blocked-manifest|repair-hint|continuation-request|directory-listing|tui-host-run-task-chain|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) {
+  if (/\/?(vision-trace|primitive-trace|host-ports|tool-payload|gui-present|gui-ask-user|approval-request|risk-audit|confirmed-request|blocked-manifest|repair-hint|continuation-request|directory-listing|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) {
     return false;
   }
   return /^(artifact|file|workEvidence|ref):/i.test(text)

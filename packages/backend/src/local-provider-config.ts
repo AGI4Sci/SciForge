@@ -10,6 +10,14 @@ export type LocalProviderSettings = {
   baseUrlSource?: string;
   model?: string;
   modelSource?: string;
+  visionApiKey?: string;
+  visionApiKeySource?: string;
+  visionProvider?: string;
+  visionProviderSource?: string;
+  visionBaseUrl?: string;
+  visionBaseUrlSource?: string;
+  visionModel?: string;
+  visionModelSource?: string;
   forceNonStreamingUpstream?: boolean;
   forceNonStreamingUpstreamSource?: string;
 };
@@ -139,11 +147,53 @@ export function localProviderSettings(
     candidate(root, ['codexProxy', 'forceNonStreamingUpstream'], prefix),
     candidate(root, ['runtimeCodexProxy', 'forceNonStreamingUpstream'], prefix),
   ].find((item) => item.value === true);
+  const visionProvider = firstString([
+    candidate(root, ['visionLLM', 'provider'], prefix),
+    candidate(root, ['visionLLM', 'runtimeProvider'], prefix),
+    candidate(root, ['visionSense', 'provider'], prefix),
+    candidate(root, ['visionSense', 'runtimeProvider'], prefix),
+  ]);
+  const visionApiKey = firstString([
+    candidate(root, ['visionLLM', 'apiKey'], prefix),
+    candidate(root, ['visionLLM', 'env', 'SCIFORGE_VISION_API_KEY'], prefix),
+    candidate(root, ['visionLLM', 'env', 'SCIFORGE_VISION_VLM_API_KEY'], prefix),
+    candidate(root, ['visionSense', 'apiKey'], prefix),
+    candidate(root, ['visionSense', 'env', 'SCIFORGE_VISION_API_KEY'], prefix),
+    candidate(root, ['visionSense', 'env', 'SCIFORGE_VISION_VLM_API_KEY'], prefix),
+  ]);
+  const visionBaseUrl = firstString([
+    candidate(root, ['visionLLM', 'baseUrl'], prefix),
+    candidate(root, ['visionLLM', 'upstreamBaseUrl'], prefix),
+    candidate(root, ['visionLLM', 'modelBaseUrl'], prefix),
+    candidate(root, ['visionLLM', 'env', 'SCIFORGE_VISION_BASE_URL'], prefix),
+    candidate(root, ['visionLLM', 'env', 'SCIFORGE_VISION_VLM_BASE_URL'], prefix),
+    candidate(root, ['visionSense', 'vlmBaseUrl'], prefix),
+    candidate(root, ['visionSense', 'baseUrl'], prefix),
+    candidate(root, ['visionSense', 'modelBaseUrl'], prefix),
+    candidate(root, ['visionSense', 'env', 'SCIFORGE_VISION_BASE_URL'], prefix),
+    candidate(root, ['visionSense', 'env', 'SCIFORGE_VISION_VLM_BASE_URL'], prefix),
+  ], normalizeOpenAiCompatibleBaseUrl);
+  const visionModel = firstString([
+    candidate(root, ['visionLLM', 'model'], prefix),
+    candidate(root, ['visionLLM', 'modelName'], prefix),
+    candidate(root, ['visionLLM', 'defaultModel'], prefix),
+    candidate(root, ['visionLLM', 'env', 'SCIFORGE_VISION_MODEL'], prefix),
+    candidate(root, ['visionLLM', 'env', 'SCIFORGE_VISION_VLM_MODEL'], prefix),
+    candidate(root, ['visionSense', 'vlmModel'], prefix),
+    candidate(root, ['visionSense', 'model'], prefix),
+    candidate(root, ['visionSense', 'modelName'], prefix),
+    candidate(root, ['visionSense', 'env', 'SCIFORGE_VISION_MODEL'], prefix),
+    candidate(root, ['visionSense', 'env', 'SCIFORGE_VISION_VLM_MODEL'], prefix),
+  ]);
   return {
     ...(apiKey ? { apiKey: apiKey.value, apiKeySource: apiKey.source } : {}),
     ...(provider ? { provider: provider.value, providerSource: provider.source } : {}),
     ...(baseUrl ? { baseUrl: baseUrl.value, baseUrlSource: baseUrl.source } : {}),
     ...(model ? { model: model.value, modelSource: model.source } : {}),
+    ...(visionApiKey ? { visionApiKey: visionApiKey.value, visionApiKeySource: visionApiKey.source } : {}),
+    ...(visionProvider ? { visionProvider: visionProvider.value, visionProviderSource: visionProvider.source } : {}),
+    ...(visionBaseUrl ? { visionBaseUrl: visionBaseUrl.value, visionBaseUrlSource: visionBaseUrl.source } : {}),
+    ...(visionModel ? { visionModel: visionModel.value, visionModelSource: visionModel.source } : {}),
     ...(forceNonStreamingUpstream ? {
       forceNonStreamingUpstream: true,
       forceNonStreamingUpstreamSource: forceNonStreamingUpstream.source,

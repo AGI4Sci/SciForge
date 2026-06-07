@@ -1,6 +1,6 @@
 # 历史运行手册：VirtualAppScreen Dogfood
 
-最后更新：2026-06-06
+最后更新：2026-06-07
 
 本文只保留旧 VirtualAppScreen / Screen pane dogfood 的历史口径。它不再作为当前 Computer Use P0 的任务来源，也不再定义用户级验收。
 
@@ -8,27 +8,30 @@
 
 - [`../../PROJECT.md`](../../PROJECT.md)
 - [`../Architecture.md`](../Architecture.md)
-- [`../../packages/actions/computer-use/vision_computer_use_agent_mvp.md`](../../packages/actions/computer-use/vision_computer_use_agent_mvp.md)
+- [`../ComputerUseRuntimeArchitecture.md`](../ComputerUseRuntimeArchitecture.md)
 
 ## 当前口径
 
 Computer Use 是 SciForge 暴露给 Codex backend 的 Desktop / GUI 能力模块，不是第二个 Agent Host。
 
-首批只实现两个 operation kind：
+当前 Computer Use product 口径只保留五个 primitive：
 
-- `computer_use.perform_local_action`：在已绑定目标上执行低风险局部动作。
-- `computer_use.fill_fields`：填写字段、选择选项、修改可见输入，但默认不提交。
+- `computer_use.bind`：绑定 Host 指定目标，建立 scoped session。
+- `computer_use.observe`：读取已绑定 target 的当前状态。
+- `computer_use.act`：在已绑定 target 上执行一个 Host 指定的原子动作。
+- `computer_use.run_procedure`：执行 Host 指定的无智能局部步骤序列。
+- `computer_use.control`：暂停、停止或释放 session。
 
-Computer Use operation 只返回 refs-first result，例如 observation refs、before/after refs、action refs、target refs、blocked reason、approval request 和 compact observation。它不负责用户级 task plan、跨模块 repair、artifact 完成判断或 final answer。
+旧的 `computer_use.perform_local_action`、`computer_use.fill_fields`、`computer_use.runTask(request, hostPorts)`、`plan`、`locate` 和 `verify` 只能作为兼容包装或迁移期诊断存在。Computer Use primitive 只返回 refs-first result，例如 target refs、observation refs、action refs、executor event refs、blocked reason、approval request 和 compact diagnostics。它不负责用户级 task plan、跨模块 repair、artifact 完成判断或 final answer。
 
 ## 局部动作范围
 
-Computer Use 可以在一个 operation 内执行一串局部动作，例如“定位输入框 -> 填写三个字段 -> 读取填写后状态”。这串动作必须有硬边界：
+Computer Use 不能在一个 operation 内执行任务级动作串，例如“做完整 PPT / 完整调研 / 完整办公 workflow”。调用方可以把已明确的局部步骤交给 `run_procedure`，但该 procedure 不承载 plan / locate / verify / repair / completion truth。每个 primitive 必须有硬边界：
 
 - 一个 owner module：Computer Use。
 - 一个 target scope：当前窗口、当前应用、当前表单或当前页面区域。
-- 一个局部目标：不能把“做完整 PPT / 完整调研 / 完整办公 workflow”塞进单个 operation。
-- 有 `allowedActions`、`maxSteps`、`maxTimeMs`、`maxModelCalls`、`riskPolicy`、`requiredEvidence` 和 `stopConditions`。
+- 一个局部目标：不能把“做完整 PPT / 完整调研 / 完整办公 workflow”塞进单个 primitive。
+- 有 `sessionRef`、`budget`、`riskPolicy` 和 refs-first evidence。
 - 不嵌套调用 Browser、artifact、workspace 或其它 module operation。
 - 不自动 repair；只能返回 blocked reason 和 repair hint。
 

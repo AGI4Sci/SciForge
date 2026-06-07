@@ -264,6 +264,50 @@ test('runtime codex env keeps VirtualAppScreen native driver env out of the app-
   });
 });
 
+test('local provider settings keep vision translator config explicit and separate from text model', () => {
+  const textOnly = localProviderSettings({
+    llm: {
+      apiKey: 'root-key',
+      baseUrl: 'https://provider.example/v1',
+      model: 'bailian/deepseek-v4-flash',
+    },
+  });
+
+  assert.equal(textOnly.visionBaseUrl, undefined);
+  assert.equal(textOnly.visionModel, undefined);
+  assert.deepEqual(providerEnvFromLocalSettings(textOnly), {
+    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_RUNTIME_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
+    SCIFORGE_PROXY_DEFAULT_MODEL: 'bailian/deepseek-v4-flash',
+  });
+
+  const multimodal = localProviderSettings({
+    llm: {
+      apiKey: 'root-key',
+      baseUrl: 'https://provider.example/v1',
+      model: 'bailian/deepseek-v4-flash',
+    },
+    visionLLM: {
+      apiKey: 'vision-key',
+      baseUrl: 'https://vision.example/v1/',
+      model: 'qwen3.7-plus',
+    },
+  });
+
+  assert.equal(multimodal.visionApiKey, 'vision-key');
+  assert.equal(multimodal.visionBaseUrl, 'https://vision.example/v1');
+  assert.equal(multimodal.visionModel, 'qwen3.7-plus');
+  assert.deepEqual(providerEnvFromLocalSettings(multimodal), {
+    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_RUNTIME_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
+    SCIFORGE_PROXY_DEFAULT_MODEL: 'bailian/deepseek-v4-flash',
+  });
+});
+
 test('local provider api key candidate paths include textLLM env and runtimeCodexProxy', () => {
   assert.ok(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'textLLM.env.SCIFORGE_RUNTIME_API_KEY'));
   assert.ok(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'runtimeCodexProxy.apiKey'));

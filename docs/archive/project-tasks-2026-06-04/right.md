@@ -87,4 +87,4 @@ Terminal pane 可以连接 Workspace Writer 管理的 shell PTY，输入、resiz
 - [`PROJECT_annotation.md`](PROJECT_annotation.md)
 - [`PROJECT_window_action.md`](PROJECT_window_action.md)
 - [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)
-- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
+- 已删除的历史 VirtualAppScreen 设计文档。

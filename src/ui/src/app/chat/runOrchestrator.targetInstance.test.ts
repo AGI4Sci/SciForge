@@ -128,7 +128,7 @@ describe('runPromptOrchestrator target instance guard', () => {
         return streamResponse([{
           result: {
             message: 'Backend searched Daily Papers.',
-            executionUnits: [{ id: 'unit-browser-search', tool: 'browser_search', status: 'done' }],
+            executionUnits: [{ id: 'unit-browser-search', moduleId: 'browser', intent: 'browser.search', tool: 'browser.search', status: 'done' }],
             artifacts: [],
           },
         }]);
@@ -143,7 +143,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(result.status, 'completed');
     assert.equal(fetched.some((url) => url.includes(CODEX_RUNTIME_STREAM_PATH)), true);
     assert.equal(result.finalResponse.message.content, 'Backend searched Daily Papers.');
-    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'browser_search');
+    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'browser.search');
   });
 
   it('forwards annotation quick-action lane metadata so runtime transport starts fresh', async () => {

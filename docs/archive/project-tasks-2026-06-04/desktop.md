@@ -116,4 +116,4 @@ Desktop Electron native host 是 M1 真实产品能力的承载层。它负责�
 - [`PROJECT_image.md`](PROJECT_image.md)
 - [`PROJECT_window_action.md`](PROJECT_window_action.md)
 - [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)
-- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
+- 已删除的历史 VirtualAppScreen 设计文档。

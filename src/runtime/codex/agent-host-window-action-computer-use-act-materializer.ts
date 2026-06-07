@@ -1,7 +1,6 @@
 import { parseGenericActions } from '../computer-use/actions.js';
 import type { GenericVisionAction } from '../computer-use/types.js';
 import {
-  dispatchWindowAction,
   routeWindowAction,
   type WindowActionAdapterHandlers,
   type WindowActionDispatchInput,
@@ -17,11 +16,26 @@ import {
   type ComputerUseTextPlannerOptions,
 } from './computer-use-text-planner.js';
 import {
+  COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS,
+  COMPUTER_USE_PRIMITIVE_INTENTS,
+  COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
+  createComputerUsePrimitiveService,
+  type ComputerUseActOutput,
+  type ComputerUseAtomicAction,
+  type ComputerUseBindOutput,
+  type ComputerUseControlOutput,
+  type ComputerUseObserveOutput,
+  type ComputerUsePrimitiveEnvelope,
+} from '../../../packages/actions/computer-use/index.js';
+import {
   createAppiumMac2WindowActionAdapter,
   type AppiumMac2WindowActionClient,
 } from './appium-mac2-window-action-adapter.js';
 import { createAppiumMac2WebDriverClient } from './appium-mac2-webdriver-client.js';
 import { createTextEditSavedArtifactValidator } from './textedit-saved-artifact-validator.js';
+import {
+  createWindowActionSessionComputerUsePrimitivePorts,
+} from './window-action-computer-use-primitive-ports.js';
 import type {
   CodexAgentHostComputerUseActMaterializer,
   CodexAgentHostComputerUseActMaterializerInput,
@@ -101,6 +115,14 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
         sessionRef,
       ]);
     }
+    const staleRuntimeObservation = staleRuntimeObservationReason(input, now());
+    if (staleRuntimeObservation) {
+      return blockedResult(input, `WindowActionSession Computer Use Act materializer blocked: runtime observation is stale or not fresh. ${staleRuntimeObservation}`, [
+        'action-ledger:window-action-session/stale-observation',
+        ...beforeRefs,
+        sessionRef,
+      ]);
+    }
 
     const plan = await planner(input);
     const planRefs = runtimeOwnedRefs(plan.evidenceRefs ?? []);
@@ -161,56 +183,151 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
       ]);
     }
 
-    const dispatched = await dispatchWindowAction(entry.session, dispatchInput, adapterHandlers, {
-      agentId: entry.session.actorCursor?.agentId,
-      actorCursorRef: entry.session.actorCursor?.cursorId
-        ? `actor-cursor:${safeToken(entry.session.actorCursor.agentId)}/${safeToken(entry.session.actorCursor.cursorId)}`
-        : undefined,
+    const primitiveAction = primitiveActionFromPlannerAction(action, actionId);
+    if (!primitiveAction.action) {
+      return blockedResult(input, `WindowActionSession Computer Use Act materializer blocked: action "${action.type}" is not supported by the Computer Use primitive adapter.`, [
+        'action-ledger:window-action-session/action-unsupported',
+        ...planRefs,
+        sessionRef,
+      ]);
+    }
+    store.upsert(entry.session, {
+      refs: runtimeOwnedRefs([
+        ...beforeRefs,
+        ...permissionRefs(input),
+        sessionRef,
+      ]),
+      targetRefs: [sessionRef],
+      observationRefs: beforeRefs,
       timestamp: dispatchTimestamp,
     });
-    const adapterEvidenceRefs = windowActionEvidenceRefs(dispatched.adapterResult.evidenceRefs);
-    const afterRefs = windowActionEvidenceRefs(dispatched.adapterResult.afterEvidenceRefs);
+
     const sessionId = safeToken(entry.session.id) || safeRefPartFromSessionRef(sessionRef);
-    const persisted = persistDispatchedSession(store, dispatched.session, {
-      sessionRef,
-      sessionId,
-      actionId,
-      timestamp: dispatchTimestamp,
-      beforeRefs,
-      adapterEvidenceRefs,
-      afterRefs,
+    const textPayloads = new Map<string, string>(primitiveAction.textPayload ? [primitiveAction.textPayload] : []);
+    const service = createComputerUsePrimitiveService({
+      now: () => now().getTime(),
+      ports: createWindowActionSessionComputerUsePrimitivePorts({
+        windowActionSessionStore: store,
+        adapterHandlers,
+        terminalWorkflowSelected: explicitTerminalWorkflowSelected(input),
+        resolveTextRef: (ref) => textPayloads.get(ref),
+        now,
+      }),
     });
-    if (persisted.status !== 'ready') {
-      return blockedResult(input, 'WindowActionSession Computer Use Act materializer blocked: post-dispatch WindowActionSession persistence failed.', [
-        'action-ledger:window-action-session/post-dispatch-persistence-blocked',
-        ...adapterEvidenceRefs,
+
+    const bind = await service.invoke({
+      moduleId: COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+        target: {
+          kind: 'window',
+          targetRef: sessionRef,
+        },
+      },
+    });
+    const bindEnvelope = primitiveEnvelope<ComputerUseBindOutput>(bind.value);
+    if (!bind.ok || bindEnvelope?.status !== 'completed' || !bindEnvelope.output?.sessionId) {
+      return blockedResult(input, primitiveBlockedMessage('bind', bind), [
+        'action-ledger:window-action-session/primitive-bind-blocked',
+        ...primitiveEnvelopeRefs(bindEnvelope, bind.refs),
         ...planRefs,
         sessionRef,
       ]);
     }
-    if (dispatched.adapterResult.status !== 'completed') {
-      const observeBlockedReason = observeBeforeMutateBlockedReason(dispatched.adapterResult.evidenceRefs);
-      const adapterBlockedReason = dispatched.adapterResult.blockedReason
-        ? ` ${dispatched.adapterResult.blockedReason}`
-        : observeBlockedReason
-          ? ` observe-before-mutate freshness check failed: ${observeBlockedReason}`
-          : '';
-      return blockedResult(input, `WindowActionSession Computer Use Act materializer blocked during adapter execution: ${dispatched.adapterResult.status ?? 'blocked'}.${adapterBlockedReason}`, [
+
+    const observed = await service.invoke({
+      moduleId: COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+        sessionId: bindEnvelope.output.sessionId,
+        capture: 'both',
+        includeTree: true,
+      },
+    });
+    const observeEnvelope = primitiveEnvelope<ComputerUseObserveOutput>(observed.value);
+    if (!observed.ok || observeEnvelope?.status !== 'completed' || !observeEnvelope.output?.observationRef) {
+      return blockedResult(input, primitiveBlockedMessage('observe', observed), [
+        'action-ledger:window-action-session/primitive-observe-blocked',
+        ...primitiveEnvelopeRefs(observeEnvelope, observed.refs),
+        ...planRefs,
+        sessionRef,
+      ]);
+    }
+
+    const acted = await service.invoke({
+      moduleId: COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+        sessionId: bindEnvelope.output.sessionId,
+        actionId,
+        action: primitiveAction.action,
+        captureAfter: true,
+        risk: {
+          level: 'low',
+          categories: [input.preflight.risk.category],
+          actionHash: actionId,
+        },
+      },
+    });
+    textPayloads.clear();
+    const actEnvelope = primitiveEnvelope<ComputerUseActOutput>(acted.value);
+    const actRefs = primitiveEnvelopeRefs(actEnvelope, acted.refs);
+    const released = await service.invoke({
+      moduleId: COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+        sessionId: bindEnvelope.output.sessionId,
+        command: 'release',
+        reasonRef: `action-ledger:window-action-session/${sessionId}/actions/${actionId}/release-after-act`,
+      },
+    });
+    const releaseEnvelope = primitiveEnvelope<ComputerUseControlOutput>(released.value);
+    const releaseRefs = primitiveEnvelopeRefs(releaseEnvelope, released.refs);
+    if (!released.ok || releaseEnvelope?.status !== 'completed' || !releaseEnvelope.output) {
+      return blockedResult(input, primitiveBlockedMessage('control', released), [
+        'action-ledger:window-action-session/primitive-release-blocked',
+        ...observeBeforeMutateBlockedRefs(actRefs),
+        ...actRefs,
+        ...releaseRefs,
+        ...planRefs,
+        sessionRef,
+      ]);
+    }
+    const releaseOutput = releaseEnvelope.output;
+    if (!acted.ok || actEnvelope?.status !== 'completed' || !actEnvelope.output) {
+      return blockedResult(input, primitiveBlockedMessage('act', acted), [
         'action-ledger:window-action-session/execution-blocked',
-        ...windowActionEvidenceRefs(dispatched.adapterResult.evidenceRefs),
-        ...observeBeforeMutateBlockedRefs(dispatched.adapterResult.evidenceRefs),
+        ...observeBeforeMutateBlockedRefs(actRefs),
+        ...actRefs,
+        ...releaseRefs,
         ...planRefs,
         sessionRef,
       ]);
     }
+    const actOutput = actEnvelope.output;
+    const afterRefs = runtimeOwnedRefs([actOutput.afterObservationRef]);
     if (afterRefs.length === 0) {
       return blockedResult(input, 'WindowActionSession Computer Use Act materializer blocked: after evidence is missing for the mutating action.', [
         'action-ledger:window-action-session/missing-after-evidence',
+        ...actRefs,
+        ...releaseRefs,
         ...planRefs,
         sessionRef,
       ]);
     }
-    const currentAdapterEvidenceRefs = windowActionCurrentActionRefs(adapterEvidenceRefs, actionId);
+    const bindRefs = primitiveEnvelopeRefs(bindEnvelope, bind.refs);
+    const observeRefs = primitiveEnvelopeRefs(observeEnvelope, observed.refs);
+    const primitiveRefs = runtimeOwnedRefs([
+      ...bindRefs,
+      ...observeRefs,
+      ...actRefs,
+      ...releaseRefs,
+    ]);
+    const currentAdapterEvidenceRefs = windowActionCurrentActionRefs(primitiveRefs, actionId);
     const completionEvidence = windowActionCompletionEvidenceRefs([...currentAdapterEvidenceRefs, ...afterRefs], actionId);
     const missingCompletionEvidence = windowActionMissingCompletionEvidence(completionEvidence);
     if (windowActionRequiresCompletionEvidence(dispatchInput.action) && missingCompletionEvidence) {
@@ -218,58 +335,69 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
         'action-ledger:window-action-session/missing-completion-evidence',
         ...currentAdapterEvidenceRefs,
         ...afterRefs,
+        ...releaseRefs,
         ...planRefs,
         sessionRef,
       ]);
     }
 
+    const adapter = adapterFromInputAdapterRef(actOutput.inputAdapterRef) ?? selectedAdapter;
+    const primitiveTraceRef = `computer-use:primitive-trace/${sessionId}/actions/${actionId}`;
     const evidenceRefs = runtimeOwnedRefs([
       ...beforeRefs,
       ...planRefs,
       ...permissionRefs(input),
       `window-action-session:${sessionId}/action-state/${actionId}`,
-      `adapter-registry:window-action-session/${dispatched.route.adapter}/computer-use`,
-      `action-ledger:window-action-session/${sessionId}/actions/${actionId}/executor-event`,
+      primitiveTraceRef,
+      `adapter-registry:window-action-session/${adapter}/computer-use`,
+      actOutput.executorEventRef,
+      actOutput.inputEventRef,
       ...currentAdapterEvidenceRefs,
       ...afterRefs,
+      ...releaseRefs,
       sessionRef,
     ]);
     return {
       status: 'completed',
-      message: `Computer Use action executed through WindowActionSession: ${action.type}.`,
+      message: `Computer Use action executed through WindowActionSession primitive: ${action.type}.`,
       confidence: 0.8,
       claimType: 'runtime-action',
-      reasoningTrace: 'SciForge executed one low-risk Computer Use action through the runtime-owned WindowActionSession adapter after Guard readiness passed.',
+      reasoningTrace: 'SciForge executed one low-risk Computer Use action through computer_use.bind, computer_use.observe, computer_use.act, and computer_use.control(release) after Guard readiness passed.',
       evidenceRefs,
-      executionUnits: [executionUnit(input, entry.session, dispatched.route.adapter, action.type, 'done', evidenceRefs[1], actionId)],
+      executionUnits: [executionUnit(input, entry.session, adapter, action.type, 'done', actOutput.actionRef, actionId)],
       artifacts: [{
         id: `window-action-computer-use-action-${safeToken(actionId) || 'action'}`,
         type: 'computer-use-action-result',
         metadata: {
           source: TOOL_ID,
           sessionRef,
-          adapter: dispatched.route.adapter,
+          adapter,
         },
         data: {
           schemaVersion: 'sciforge.window-action-session.computer-use-action-summary.v1',
-          inputChannel: 'window-action-session',
+          inputChannel: 'computer-use-primitive',
           actionType: action.type,
-          sharedSystemInputUsed: dispatched.route.adapter === 'system-input',
+          sharedSystemInputUsed: adapter === 'system-input',
+          primitiveTraceRef,
           evidence: {
             beforeRefs,
             groundingRefs: planRefs,
             executorRefs: runtimeOwnedRefs([
-              `adapter-registry:window-action-session/${dispatched.route.adapter}/computer-use`,
-              `action-ledger:window-action-session/${sessionId}/actions/${actionId}/executor-event`,
+              `adapter-registry:window-action-session/${adapter}/computer-use`,
+              actOutput.executorEventRef,
+              actOutput.inputEventRef,
             ]),
             afterRefs,
             verificationRefs: completionEvidence.verificationRefs,
             staleInvalidationRefs: completionEvidence.staleInvalidationRefs,
+            controlRefs: runtimeOwnedRefs([releaseOutput.controlRef, ...releaseRefs]),
+            releasedRefs: runtimeOwnedRefs(releaseOutput.releasedRefs ?? []),
+            primitiveRefs,
           },
           evidenceRefs,
         },
       }],
-      claims: [claim(input, `WindowActionSession executed ${action.type}.`, evidenceRefs, 'runtime-action')],
+      claims: [claim(input, `WindowActionSession primitive executed ${action.type}.`, evidenceRefs, 'runtime-action')],
     };
   };
 }
@@ -362,6 +490,97 @@ function plannerResultFromText(text: string): WindowActionSessionComputerUseActi
     nextAction: actions[0],
     evidenceRefs: ['action-ledger:planner/next-action'],
   };
+}
+
+function primitiveActionFromPlannerAction(
+  action: GenericVisionAction,
+  actionId: string,
+): {
+  action?: ComputerUseAtomicAction;
+  textPayload?: [string, string];
+} {
+  if (action.type === 'click' || action.type === 'double_click') {
+    const targetDescription = stringField(action.targetDescription) ?? stringField(action.targetRegionDescription);
+    const point = typeof action.x === 'number' && typeof action.y === 'number'
+      ? { x: action.x, y: action.y, coordinateSpace: 'window' as const }
+      : undefined;
+    if (!point && !targetDescription) return {};
+    return {
+      action: {
+        type: action.type,
+        ...(point ? { point } : {}),
+        ...(targetDescription ? { elementRef: targetDescription } : {}),
+      },
+    };
+  }
+  if (action.type === 'scroll') {
+    return {
+      action: {
+        type: 'scroll',
+        direction: action.direction,
+        amount: Math.max(1, Math.round(action.amount ?? 300)),
+      },
+    };
+  }
+  if (action.type === 'type_text') {
+    const textRef = `computer-use:text/${safeToken(actionId) || 'action'}`;
+    return {
+      action: {
+        type: 'type',
+        textRef,
+      },
+      textPayload: [textRef, action.text],
+    };
+  }
+  if (action.type === 'save') {
+    return {
+      action: {
+        type: 'app_command',
+        command: 'save',
+      },
+    };
+  }
+  if (action.type === 'wait') {
+    return {
+      action: {
+        type: 'wait',
+        durationMs: Math.max(1, Math.round(action.ms ?? 1000)),
+      },
+    };
+  }
+  return {};
+}
+
+function primitiveEnvelope<T>(value: unknown): ComputerUsePrimitiveEnvelope<T> | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.moduleId !== COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID) return undefined;
+  if (value.schemaVersion !== 'sciforge.computer-use.primitive-result.v1') return undefined;
+  return value as unknown as ComputerUsePrimitiveEnvelope<T>;
+}
+
+function primitiveEnvelopeRefs(
+  envelope: ComputerUsePrimitiveEnvelope | undefined,
+  fallbackRefs: unknown,
+): string[] {
+  return runtimeOwnedRefs([
+    ...(Array.isArray(fallbackRefs) ? fallbackRefs.filter((ref): ref is string => typeof ref === 'string') : []),
+    ...(envelope?.refs ?? []),
+  ]);
+}
+
+function primitiveBlockedMessage(
+  primitive: 'bind' | 'observe' | 'act' | 'control',
+  result: { error?: string; value?: unknown },
+): string {
+  const envelope = primitiveEnvelope(result.value);
+  const reason = safeContractText(result.error ?? envelope?.blockedReason ?? envelope?.diagnostics?.[0]?.message ?? envelope?.status ?? 'blocked');
+  return `WindowActionSession Computer Use Act materializer blocked during computer_use.${primitive}: ${reason}`;
+}
+
+function adapterFromInputAdapterRef(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  const match = /^scoped-input-adapter:[^/]+\/computer-use\/([^/]+)$/i.exec(ref.trim());
+  return match?.[1];
 }
 
 function dispatchInputFromAction(
@@ -670,6 +889,27 @@ function preflightNotReady(input: CodexAgentHostComputerUseActMaterializerInput)
   return undefined;
 }
 
+function staleRuntimeObservationReason(
+  input: CodexAgentHostComputerUseActMaterializerInput,
+  checkedAt: Date,
+): string | undefined {
+  const observation = input.runtimeTruth?.observation;
+  if (!isRecord(observation)) return undefined;
+  const observationRecord = observation as Record<string, unknown>;
+  const freshness = isRecord(observationRecord.freshnessCheck) ? observationRecord.freshnessCheck : undefined;
+  const status = stringField(freshness?.status) ?? stringField(observationRecord.status);
+  if (status && status !== 'current') return `freshness status is ${status}.`;
+  const observedAt = stringField(observationRecord.observedAt)
+    ?? stringField(observationRecord.capturedAt)
+    ?? stringField(freshness?.observedAt);
+  const maxAgeMs = numberField(freshness?.maxAgeMs);
+  if (!observedAt || maxAgeMs === undefined) return undefined;
+  const observedAtMs = Date.parse(observedAt);
+  if (!Number.isFinite(observedAtMs)) return 'observedAt timestamp is invalid.';
+  if (checkedAt.getTime() - observedAtMs > maxAgeMs) return `freshness age exceeds ${Math.round(maxAgeMs)}ms.`;
+  return undefined;
+}
+
 function windowActionSessionRefFromInput(input: CodexAgentHostComputerUseActMaterializerInput): string | undefined {
   return allCandidateRefs(input)
     .filter(runtimeOwnedRef)
@@ -828,7 +1068,7 @@ function runtimeOwnedRef(ref: string): boolean {
   ) {
     return false;
   }
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function scrollDelta(direction: 'up' | 'down' | 'left' | 'right', amount: number): { x?: number; y?: number } {
@@ -856,6 +1096,16 @@ function safeToken(value: unknown): string | undefined {
   if (!trimmed || trimmed.length > 160) return undefined;
   const cleaned = trimmed.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 120);
   return cleaned || undefined;
+}
+
+function safeContractText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/https?:\/\/\S+/gi, '[url]')
+    .replace(/(?:secret|token|password|api[-_]?key|bearer)\S*/gi, '[redacted]')
+    .replace(/(?:data:image|base64)[^\s]*/gi, '[binary-ref]')
+    .slice(0, 240)
+    .trim();
 }
 
 function stringField(value: unknown): string | undefined {

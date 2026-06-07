@@ -219,7 +219,7 @@ test('Computer Use Act loop can require user-level completion truth instead of a
   assert.ok(result?.evidenceRefs.includes('action-ledger:base/action-only-2'));
 });
 
-test('Computer Use Act loop maps verified package bridge workEvidence before ending', async () => {
+test('Computer Use Act loop keeps verified package bridge workEvidence diagnostic-only before ending', async () => {
   let baseCalls = 0;
   const runDir = '.sciforge/vision-runs/act-loop-package-bridge-complete';
   const baseTruth = readyRuntimeTruth('package-bridge');
@@ -228,7 +228,7 @@ test('Computer Use Act loop maps verified package bridge workEvidence before end
     refs: [
       ...(baseTruth.refs ?? []),
       `${runDir}/vision-trace.json`,
-      `${runDir}/tui-host-run-task-chain.json`,
+      `${runDir}/primitive-trace.json`,
     ],
   };
   const materializer = createComputerUseActLoopMaterializer({
@@ -259,13 +259,11 @@ test('Computer Use Act loop maps verified package bridge workEvidence before end
   assert.equal(baseCalls, 1);
   assert.equal(result?.status, 'completed');
   assert.equal(result?.completionTruth?.scope, 'workflow');
-  assert.equal(result?.completionTruth?.status, 'satisfied');
+  assert.equal(result?.completionTruth?.status, 'blocked');
   assert.equal(result?.completionTruth?.validator, 'current-run-live-acceptance-bundle');
   assert.deepEqual(result?.completionTruth?.evidenceRefs, [
     `${runDir}/vision-trace.json`,
-    `${runDir}/tui-host-run-task-chain.json`,
-    `${runDir}/cu-user-acceptance-manifest.json`,
-    `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
+    `${runDir}/primitive-trace.json`,
   ]);
 });
 

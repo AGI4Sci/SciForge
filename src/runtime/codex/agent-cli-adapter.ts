@@ -72,6 +72,16 @@ export interface AgentHostGroundingSnapshot {
   refs: string[];
 }
 
+export type RuntimeInputObjectSource = 'explicit-reference' | 'recent-visible-message' | 'recent-artifact';
+
+export interface RuntimeInputObject {
+  schemaVersion: 'sciforge.runtime.input-object.v1';
+  ref: string;
+  source: RuntimeInputObjectSource;
+  mimeType?: string;
+  title?: string;
+}
+
 export interface AgentCliStartTurnInput {
   commandText: string;
   workspacePath: string;
@@ -83,6 +93,7 @@ export interface AgentCliStartTurnInput {
   codexSessionId?: string;
   abortSignal?: AbortSignal;
   allowOpenAiRuntime?: boolean;
+  inputObjects?: RuntimeInputObject[];
   runtimeIntent?: {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1';
     kind: 'computer-use-native-route';

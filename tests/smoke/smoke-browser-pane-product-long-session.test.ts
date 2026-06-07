@@ -28,7 +28,6 @@ const TRUE_LONG_SESSION_MINUTES = 30;
 const MAX_PRODUCT_LONG_SESSION_MANIFEST_BYTES = 96_000;
 const PRODUCT_LONG_SESSION_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES = [
   'browser-host-native-surface',
-  'browser-host-search',
   'browser-host-session',
 ] as const;
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-product-long-session');
@@ -359,7 +358,6 @@ type ProductLongSessionNativeAttachPreflightEvidence = {
     capabilities: {
       browserHostSession: 'ready' | 'missing';
       nativeSurface: 'ready' | 'missing';
-      browserHostSearch: 'ready' | 'missing';
     };
     nativeSurfaceEndpoint: 'present' | 'missing';
     endpointKeys: string[];
@@ -1171,10 +1169,9 @@ test('product long-session native attach preflight blocks stale writer health be
     writerHealth: {
       ok: true,
       service: 'sciforge-workspace-writer',
-      capabilities: ['workspace-files', 'browser-host-session', 'browser-host-search'],
+      capabilities: ['workspace-files', 'browser-host-session'],
       endpoints: {
         browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
-        browserHostSearch: '/api/sciforge/browser-host/search',
       },
     },
     rightPane: productLongSessionEmptyRightPaneEvidence(),
@@ -1202,7 +1199,6 @@ test('product long-session native attach preflight blocks stale writer health be
   assert.equal(preflight.writerHealth.capabilities.nativeSurface, 'missing');
   assert.deepEqual(preflight.writerHealth.capabilitySummary, [
     'browser-host-native-surface:missing',
-    'browser-host-search:ready',
     'browser-host-session:ready',
   ]);
   assert.equal(preflight.rightPaneBridge.available, false);
@@ -3064,7 +3060,6 @@ function buildNativeAttachPreflightEvidence(input: {
       capabilities: {
         browserHostSession: capabilityState('browser-host-session'),
         nativeSurface: capabilityState('browser-host-native-surface'),
-        browserHostSearch: capabilityState('browser-host-search'),
       },
       nativeSurfaceEndpoint,
       endpointKeys,
@@ -3273,7 +3268,6 @@ function assertNativeAttachPreflightEvidence(preflight: ProductLongSessionNative
   assert.equal(typeof preflight.writerHealth.available, 'boolean');
   assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSession));
   assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.nativeSurface));
-  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSearch));
   assert.ok(['present', 'missing'].includes(preflight.writerHealth.nativeSurfaceEndpoint));
   assert.ok(preflight.writerHealth.capabilitySummary.length <= PRODUCT_LONG_SESSION_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES.length);
   assert.ok(preflight.writerHealth.endpointKeys.length <= 16);

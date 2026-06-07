@@ -8,8 +8,6 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import {
-  EXECUTE_BOUNDED_OPERATION_INTENT,
-  boundedOperationResult,
   type ModuleInvokeRequest,
 } from '../../../packages/contracts/runtime/modules.js';
 import {
@@ -77,6 +75,59 @@ test('runtime bridge request detection does not treat legacy exec JSON as a prod
   assert.equal(codexRuntimeBridgeRequested({ runtimeBridge: 'codex-exec-json' }), false);
   assert.equal(codexRuntimeBridgeRequested({ uiState: { runtimeBridge: 'codex-exec-json' } }), false);
   assert.equal(codexRuntimeBridgeRequested({ useCodexRuntimeBridge: true }), true);
+});
+
+test('HTTP/SSE endpoint forwards inputObjects to Codex app-server instead of calling Model Router directly', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '请读取这张酒店凭证图片的内容',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-input-object-router',
+        attemptId: 'codex-command-input-object-router-attempt-1',
+        profile: 'sciforge-runtime-default',
+        inputObjects: [{
+          schemaVersion: 'sciforge.runtime.input-object.v1',
+          ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+          mimeType: 'image/jpeg',
+          title: '酒店凭证.jpg',
+          source: 'recent-artifact',
+        }],
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput?.commandText, '请读取这张酒店凭证图片的内容');
+    assert.deepEqual(adapter.lastInput?.inputObjects?.map((object) => ({
+      ref: object.ref,
+      mimeType: object.mimeType,
+      title: object.title,
+      source: object.source,
+    })), [{
+      ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+      mimeType: 'image/jpeg',
+      title: '酒店凭证.jpg',
+      source: 'recent-artifact',
+    }]);
+    assert.match(text, /event: done/);
+    assert.doesNotMatch(text, /丽柏酒店\(天津空港滨海国际机场店\)|model-router\.responses|resp_input_object/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('HTTP/SSE endpoint forwards Computer Use task bindings without retired completion evidence policy', async () => {
@@ -260,7 +311,7 @@ test('HTTP/SSE endpoint scrubs approval provenance sidecars before adapter', asy
   }
 });
 
-test('HTTP/SSE endpoint derives host-owned Computer Use runtime intent from command text', async () => {
+test('HTTP/SSE endpoint does not derive host-owned Computer Use runtime intent from ordinary command text', async () => {
   const adapter = new FakeAdapter();
   const server = createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
@@ -287,11 +338,7 @@ test('HTTP/SSE endpoint derives host-owned Computer Use runtime intent from comm
     const text = await response.text();
 
     assert.match(text, /event: done/);
-    assert.deepEqual(adapter.lastInput?.runtimeIntent, {
-      schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
-      kind: 'computer-use-native-route',
-      source: 'host-owned',
-    });
+    assert.equal(adapter.lastInput?.runtimeIntent, undefined);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -1521,7 +1568,11 @@ function assertRuntimeTurnRoutedToUpstreamAdapter({
 }) {
   const localAgentHostIndex = text.indexOf('event: agent_host_turn_loop');
   const adapterTurnIndex = text.indexOf('event: turn');
-  const finalDoneIndex = text.lastIndexOf('event: done');
+  const terminalEventIndex = Math.max(
+    text.lastIndexOf('event: done'),
+    text.lastIndexOf('event: failed'),
+    text.lastIndexOf('event: cancelled'),
+  );
 
   assert.equal(
     localAgentHostIndex,
@@ -1531,7 +1582,7 @@ function assertRuntimeTurnRoutedToUpstreamAdapter({
   assert.notEqual(adapter.lastInput, undefined, `${label}: expected adapter.startTurn to receive the runtime turn`);
   assert.equal(adapter.lastInput?.commandText, commandText);
   assert.notEqual(adapterTurnIndex, -1, `${label}: expected upstream adapter turn event`);
-  assert.ok(adapterTurnIndex < finalDoneIndex, `${label}: adapter turn event should precede final done`);
+  assert.ok(adapterTurnIndex < terminalEventIndex, `${label}: adapter turn event should precede terminal event`);
 }
 
 function assertRuntimeTurnHandledByLocalAgentHost({
@@ -1553,58 +1604,6 @@ function assertRuntimeTurnHandledByLocalAgentHost({
   assert.notEqual(finalDoneIndex, -1, `${label}: expected final done event`);
   assert.ok(localAgentHostIndex < guiPresentIndex, `${label}: Agent Host event should precede gui_present`);
   assert.ok(guiPresentIndex < finalDoneIndex, `${label}: gui_present should precede done`);
-}
-
-function completedBrowserSearchReadResult(input: {
-  sessionId: string;
-  title: string;
-  finalUrl: string;
-  summary: string;
-}) {
-  return boundedOperationResult({
-    moduleId: 'browser',
-    operationKind: 'browser.search_read',
-    status: 'completed',
-    sourceRefs: [`browser-host-session:${input.sessionId}/source-pages/source-1.source.json`],
-    evidenceRefs: [
-      `browser-host-session:${input.sessionId}/source-pages/source-1.source.json`,
-      `browser-host-session:${input.sessionId}/source-pages/source-1.txt`,
-    ],
-    value: {
-      sourcePages: [{
-        title: input.title,
-        finalUrl: input.finalUrl,
-        textRef: `browser-host-session:${input.sessionId}/source-pages/source-1.txt`,
-        textSummary: input.summary,
-      }],
-    },
-  });
-}
-
-function completedBrowserOpenReadResult(input: {
-  sessionId: string;
-  title: string;
-  finalUrl: string;
-  summary: string;
-}) {
-  return boundedOperationResult({
-    moduleId: 'browser',
-    operationKind: 'browser.open_read',
-    status: 'completed',
-    sourceRefs: [`browser-host-session:${input.sessionId}/source-pages/source-1.source.json`],
-    evidenceRefs: [
-      `browser-host-session:${input.sessionId}/source-pages/source-1.source.json`,
-      `browser-host-session:${input.sessionId}/source-pages/source-1.txt`,
-    ],
-    value: {
-      sourcePages: [{
-        title: input.title,
-        finalUrl: input.finalUrl,
-        textRef: `browser-host-session:${input.sessionId}/source-pages/source-1.txt`,
-        textSummary: input.summary,
-      }],
-    },
-  });
 }
 
 test('HTTP/SSE endpoint routes one-page PPT requests to upstream adapter instead of local artifact finalization', async () => {
@@ -1646,685 +1645,6 @@ test('HTTP/SSE endpoint routes one-page PPT requests to upstream adapter instead
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(workspacePath, { recursive: true, force: true });
-  }
-});
-
-test('HTTP/SSE endpoint routes current external fact requests through local browser.search_read', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:python-release/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:python-release/source-pages/source-1.source.json',
-            'browser-host-session:python-release/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'Python release source',
-              finalUrl: 'https://www.python.org/downloads/',
-              textRef: 'browser-host-session:python-release/source-pages/source-1.txt',
-              textSummary: 'Python.org downloads page says Python 3.14.0 is the current stable release. Source URL: https://www.python.org/downloads/',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = 'What is the current Python release? cite source URLs.';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser',
-        attemptId: 'codex-command-agent-host-browser-attempt-1',
-        agentHostInput: {
-          schemaVersion: 'sciforge.codex-agent-host-input.v1',
-          source: 'ui-normal-composer-transport',
-          intentText: commandText,
-          authorizationProfileId: 'high-autonomy',
-          policyOwner: 'codex-agent-host-runtime',
-        },
-      }),
-    });
-    const text = await response.text();
-
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'current external fact request',
-      text,
-      adapter,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.match(text, /Python 3\.14\.0/);
-    assert.match(text, /browser-host-session:python-release\/source-pages\/source-1\.txt/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|browser_search|answerEvidenceState|browser-search-results|browser-host-projection/);
-    assert.doesNotMatch(text, /raw DOM|base64|data:image/i);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint routes Chinese Browser search requests through local bounded operation', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:iran/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:iran/source-pages/source-1.source.json',
-            'browser-host-session:iran/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'Iran situation source',
-              finalUrl: 'https://example.test/iran-situation',
-              textRef: 'browser-host-session:iran/source-pages/source-1.txt',
-              textSummary: 'Source-backed summary of the current Iran situation.',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '通过内置浏览器搜索伊朗局势';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-cn',
-        attemptId: 'codex-command-agent-host-browser-cn-attempt-1',
-        agentHostInput: {
-          schemaVersion: 'sciforge.codex-agent-host-input.v1',
-          source: 'ui-normal-composer-transport',
-          intentText: commandText,
-          authorizationProfileId: 'high-autonomy',
-          policyOwner: 'codex-agent-host-runtime',
-        },
-      }),
-    });
-    const text = await response.text();
-
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'Chinese Browser search request',
-      text,
-      adapter,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.match(text, /Source-backed summary of the current Iran situation/);
-    assert.match(text, /browser-host-session:iran\/source-pages\/source-1\.txt/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|browser_search|answerEvidenceState|browser-search-results|browser-host-projection/);
-    assert.doesNotMatch(text, /<Function:\s*browser_search>/i);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint falls back to Host-owned Browser when upstream only emits tool-intent prose', async () => {
-  const adapter = new ToolIntentOnlyAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json',
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'Agentic RL papers',
-              finalUrl: 'https://arxiv.org/search/?query=agentic+rl',
-              textRef: 'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-              textSummary: 'arXiv search page reports latest agentic RL results. 1. Example Agentic RL Paper (authors: Ada Example; submitted: 1 January, 2000; link: https://arxiv.org/abs/0001.00001): A source-backed example result.',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-browser-tool-intent-fallback',
-        attemptId: 'codex-command-browser-tool-intent-fallback-attempt-1',
-        agentHostInput: readyAgentHostInput(commandText),
-      }),
-    });
-    const text = await response.text();
-
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'direct Host-owned Browser evidence request',
-      text,
-      adapter,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.moduleId, 'browser');
-    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org agentic rl');
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /event: gui_present/);
-    assert.match(text, /Example Agentic RL Paper/);
-    assert.match(text, /未在已读来源页中看到符合今天（\d{4}-\d{2}-\d{2}）时间约束的日期字段/);
-    assert.match(text, /"acceptanceSpec":\{"schemaVersion":"sciforge\.agent-host\.acceptance-spec\.v1"/);
-    assert.match(text, /https:\/\/arxiv\.org\/abs\/0001\.00001/);
-    assert.match(text, /browser-host-session:arxiv-agentic-rl\/source-pages\/source-1\.txt/);
-    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint falls back to Host-owned Browser when upstream fails on Browser evidence turns', async () => {
-  const adapter = new FailedBrowserEvidenceAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json',
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'arXiv search: agentic rl',
-              finalUrl: 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
-              textRef: 'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-              textSummary: 'arXiv search page reports latest agentic RL results from official arxiv.org only.',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-browser-upstream-failed-fallback',
-        attemptId: 'codex-command-browser-upstream-failed-fallback-attempt-1',
-        agentHostInput: readyAgentHostInput(commandText),
-      }),
-    });
-    const text = await response.text();
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.moduleId, 'browser');
-    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org agentic rl');
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /event: gui_present/);
-    assert.match(text, /official arxiv\.org only/);
-    assert.doesNotMatch(text, /upstream-outage|event: failed/);
-    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint executes safe textual module_invoke Browser bounded operations through Host', async () => {
-  const adapter = new ModuleInvokeProtocolOnlyAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json',
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'arXiv agentic reinforcement learning',
-              finalUrl: 'https://arxiv.org/abs/2606.00001',
-              textRef: 'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-              textPreview: 'arXiv 论文页提供标题、作者、摘要和提交日期，可用于判断今天是否新增。',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-browser-module-invoke-fallback',
-        attemptId: 'codex-command-browser-module-invoke-fallback-attempt-1',
-        agentHostInput: readyAgentHostInput(commandText),
-      }),
-    });
-    const text = await response.text();
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.moduleId, 'browser');
-    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org agentic rl');
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /event: gui_present/);
-    assert.match(text, /arXiv 论文页提供标题、作者、摘要和提交日期/);
-    assert.match(text, /https:\/\/arxiv\.org\/abs\/2606\.00001/);
-    assert.doesNotMatch(text, /module_invoke|Searching arXiv for today/);
-    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint executes malformed function_calls Browser bounded operations through Host', async () => {
-  const adapter = new MalformedFunctionCallsProtocolOnlyAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json',
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'arXiv agentic reinforcement learning',
-              finalUrl: 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
-              textRef: 'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-              textPreview: 'arXiv 官方搜索页提供最新 agentic RL 相关论文列表。',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-browser-malformed-module-invoke-fallback',
-        attemptId: 'codex-command-browser-malformed-module-invoke-fallback-attempt-1',
-        agentHostInput: readyAgentHostInput(commandText),
-      }),
-    });
-    const text = await response.text();
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.moduleId, 'browser');
-    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org agentic rl');
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /event: gui_present/);
-    assert.match(text, /arXiv 官方搜索页提供最新 agentic RL 相关论文列表/);
-    assert.doesNotMatch(text, /name="module_invoke"|<function_calls>|arxiv\.org agentic reinforcement learning 2026/i);
-    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint falls back to Host-owned Browser when host-intent Browser evidence turn completes without visible projection', async () => {
-  const adapter = new EmptyTerminalDoneAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:arxiv-virtual-cell/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:arxiv-virtual-cell/source-pages/source-1.source.json',
-            'browser-host-session:arxiv-virtual-cell/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'arXiv virtual cells recent results',
-              finalUrl: 'https://arxiv.org/search/?query=virtual+cell&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
-              textRef: 'browser-host-session:arxiv-virtual-cell/source-pages/source-1.txt',
-              textSummary: 'arXiv search page lists recent virtual cell related scholarly results with source text available for the final report.',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '搜索一下最近一周 arxiv 上 虚拟性细胞 相关的文章，并用中文总结，写一份系统的报告';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-browser-empty-done-fallback',
-        attemptId: 'codex-command-browser-empty-done-fallback-attempt-1',
-        runtimeIntent: {
-          schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
-          kind: 'computer-use-native-route',
-          source: 'host-owned',
-        },
-        agentHostInput: readyAgentHostInput(commandText),
-      }),
-    });
-    const text = await response.text();
-
-    assert.equal(adapter.lastInput?.runtimeIntent?.kind, 'computer-use-native-route');
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.moduleId, 'browser');
-    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org 虚拟性细胞');
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /event: gui_present/);
-    assert.match(text, /arXiv search page lists recent virtual cell related scholarly results/);
-    assert.doesNotMatch(text, /gui-present-required|completed without gui\.present/);
-    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint replaces unsupported native Browser-evidence answers with Host Browser evidence', async () => {
-  const adapter = new (unsupportedNativeBrowserEvidenceAdapterClass())();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return boundedOperationResult({
-          moduleId: 'browser',
-          operationKind: 'browser.search_read',
-          status: 'completed',
-          sourceRefs: ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json'],
-          evidenceRefs: [
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.source.json',
-            'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-          ],
-          value: {
-            sourcePages: [{
-              title: 'arXiv search: agentic rl',
-              finalUrl: 'https://arxiv.org/search/?query=agentic+rl&searchtype=all&abstracts=show&order=-announced_date_first&size=25',
-              textRef: 'browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt',
-              textPreview: 'arXiv 官方搜索页按 announced date 展示 agentic RL 相关结果，可用于继续核对今日新增。',
-            }],
-          },
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-browser-unsupported-native-answer-fallback',
-        attemptId: 'codex-command-browser-unsupported-native-answer-fallback-attempt-1',
-        agentHostInput: readyAgentHostInput(commandText),
-      }),
-    });
-    const text = await response.text();
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.moduleId, 'browser');
-    assert.equal(calls[0]?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.equal((calls[0]?.input?.targetScope as { query?: string } | undefined)?.query, 'site:arxiv.org agentic rl');
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /event: gui_present/);
-    assert.match(text, /arXiv 官方搜索页按 announced date 展示 agentic RL/);
-    assert.doesNotMatch(text, /AgentQ|Reasoning-Augmented|我已经通过 arxiv API|arxiv 今日 Agentic RL 相关论文总结/);
-    assert.equal([...text.matchAll(/^event: done$/gm)].length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint routes explicit URL Browser requests through local open_read', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return completedBrowserOpenReadResult({
-          sessionId: 'open',
-          title: 'Explicit source page',
-          finalUrl: 'https://example.test/source-page',
-          summary: 'The explicit source page was opened and read before the answer was synthesized.',
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = 'Open and read https://example.test/source-page, then summarize it with refs.';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-open-read',
-        attemptId: 'codex-command-agent-host-browser-open-read-attempt-1',
-        agentHostInput: {
-          schemaVersion: 'sciforge.codex-agent-host-input.v1',
-          source: 'ui-normal-composer-transport',
-          intentText: commandText,
-          authorizationProfileId: 'high-autonomy',
-          policyOwner: 'codex-agent-host-runtime',
-        },
-      }),
-    });
-    const text = await response.text();
-
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'explicit URL Browser request',
-      text,
-      adapter,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.open_read');
-    assert.match(text, /The explicit source page was opened and read before the answer was synthesized/);
-    assert.match(text, /browser-host-session:open\/source-pages\/source-1\.source\.json|browser-host-session:open\/source-pages\/source-1\.txt/);
-    assert.doesNotMatch(text, /Bait: search results|browser-host-search-runtime|browser_search|answerEvidenceState|browser-search-results|browser-host-projection/);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint routes Browser source-evidence cases through local Browser', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return completedBrowserSearchReadResult({
-          sessionId: 'blocked',
-          title: 'Python release source',
-          finalUrl: 'https://www.python.org/downloads/',
-          summary: 'Python current release evidence came from an opened and read source page.',
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = 'What is the current Python release? Please cite source URLs.';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-blocked',
-        attemptId: 'codex-command-agent-host-browser-blocked-attempt-1',
-        agentHostInput: {
-          schemaVersion: 'sciforge.codex-agent-host-input.v1',
-          source: 'ui-normal-composer-transport',
-          intentText: commandText,
-          authorizationProfileId: 'high-autonomy',
-          policyOwner: 'codex-agent-host-runtime',
-        },
-      }),
-    });
-    const text = await response.text();
-
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'Browser source evidence case',
-      text,
-      adapter,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.doesNotMatch(text, /missing current-run source\/page text evidence/);
-    assert.match(text, /"required":\["source-page-ref","page-text-ref"\]/);
-    assert.match(text, /browser-host-session:blocked\/source-pages\/source-1\.source\.json/);
-    assert.doesNotMatch(text, /Do not turn this preview into a final answer/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|answerEvidenceState|browser-search-results|browser-host-projection/);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
@@ -2375,22 +1695,11 @@ test('HTTP/SSE endpoint routes local-only Browser requests to upstream adapter w
   }
 });
 
-test('HTTP/SSE endpoint routes ambiguous BrowserHost search requests through local Browser policy', async () => {
+test('HTTP/SSE endpoint does not run local Browser evidence bypass for ordinary current-fact requests', async () => {
   const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
   const server = createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return completedBrowserSearchReadResult({
-          sessionId: 'hf-papers',
-          title: 'Hugging Face daily papers',
-          finalUrl: 'https://huggingface.co/papers',
-          summary: 'Daily Papers source page lists current Hugging Face research work.',
-        });
-      },
-    });
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -2398,7 +1707,7 @@ test('HTTP/SSE endpoint routes ambiguous BrowserHost search requests through loc
   assert.notEqual(address, null);
   if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
   const port = (address as AddressInfo).port;
-  const commandText = 'ask --ref artifact:hf-papers-report "搜索今天 huggingface 上最火的论文"';
+  const commandText = 'What is the current Python release? cite source URLs.';
 
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
@@ -2407,50 +1716,30 @@ test('HTTP/SSE endpoint routes ambiguous BrowserHost search requests through loc
       body: JSON.stringify({
         commandText,
         workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-clarification',
-        attemptId: 'codex-command-agent-host-browser-clarification-attempt-1',
-        agentHostInput: {
-          schemaVersion: 'sciforge.codex-agent-host-input.v1',
-          source: 'ui-normal-composer-transport',
-          intentText: '搜索今天 huggingface 上最火的论文',
-          authorizationProfileId: 'high-autonomy',
-          policyOwner: 'codex-agent-host-runtime',
-        },
+        commandId: 'codex-command-no-local-browser-bypass',
+        attemptId: 'codex-command-no-local-browser-bypass-attempt-1',
+        agentHostInput: readyAgentHostInput(commandText),
       }),
     });
     const text = await response.text();
 
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'ambiguous BrowserHost search request',
+    assertRuntimeTurnRoutedToUpstreamAdapter({
+      label: 'ordinary current-fact request',
       text,
       adapter,
+      commandText,
     });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.doesNotMatch(JSON.stringify(calls[0]?.input), /artifact:hf-papers-report/);
-    assert.match(text, /Daily Papers source page lists current Hugging Face research work/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|search-results|BrowserHostSession browser_search/i);
+    assert.doesNotMatch(text, /agent_host_turn_loop|local-browser-bypass-should-not-run|browser-host-session:/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-test('HTTP/SSE endpoint handles malformed Agent Host input Browser requests with command-text fallback', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
+test('HTTP/SSE endpoint does not run Host Browser fallback when upstream emits Browser tool-intent prose', async () => {
+  const adapter = new ToolIntentOnlyAdapter();
   const server = createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return completedBrowserSearchReadResult({
-          sessionId: 'hf-papers-malformed',
-          title: 'Hugging Face daily papers',
-          finalUrl: 'https://huggingface.co/papers',
-          summary: 'Daily Papers source page was read even though the incoming Agent Host input was malformed.',
-        });
-      },
-    });
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -2458,7 +1747,7 @@ test('HTTP/SSE endpoint handles malformed Agent Host input Browser requests with
   assert.notEqual(address, null);
   if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
   const port = (address as AddressInfo).port;
-  const commandText = 'ask --ref artifact:hf-papers-report "搜索今天 huggingface 上最火的论文"';
+  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
 
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
@@ -2467,46 +1756,31 @@ test('HTTP/SSE endpoint handles malformed Agent Host input Browser requests with
       body: JSON.stringify({
         commandText,
         workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-clarification-malformed',
-        attemptId: 'codex-command-agent-host-browser-clarification-malformed-attempt-1',
-        agentHostInput: {
-          source: 'malformed-without-schema',
-          intentText: '',
-        },
+        commandId: 'codex-command-browser-tool-intent-no-fallback',
+        attemptId: 'codex-command-browser-tool-intent-no-fallback-attempt-1',
+        agentHostInput: readyAgentHostInput(commandText),
       }),
     });
     const text = await response.text();
 
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'malformed Agent Host input request',
+    assertRuntimeTurnRoutedToUpstreamAdapter({
+      label: 'Browser tool-intent prose without fallback',
       text,
       adapter,
+      commandText,
     });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.match(text, /Daily Papers source page was read/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|search-results|BrowserHostSession browser_search/i);
+    assert.match(text, /使用 Browser 模块搜索 arxiv/);
+    assert.doesNotMatch(text, /event: agent_host_turn_loop|event: gui_present|browser-host-session:|Example Agentic RL Paper/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-test('HTTP/SSE endpoint resolves quoted command drift before local Browser search', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
+test('HTTP/SSE endpoint preserves upstream Browser-evidence failures without Host Browser fallback', async () => {
+  const adapter = new FailedBrowserEvidenceAdapter();
   const server = createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return completedBrowserSearchReadResult({
-          sessionId: 'hf-papers-drift',
-          title: 'Hugging Face daily papers',
-          finalUrl: 'https://huggingface.co/papers',
-          summary: 'Daily Papers source page was read from the quoted command, not the stale intentText.',
-        });
-      },
-    });
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -2514,7 +1788,7 @@ test('HTTP/SSE endpoint resolves quoted command drift before local Browser searc
   assert.notEqual(address, null);
   if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
   const port = (address as AddressInfo).port;
-  const commandText = 'ask --ref "artifact:hf-papers-report" "搜索今天 huggingface 上最火的论文"';
+  const commandText = '搜索一下今天 arxiv 上 agentic rl 相关的文章，并用中文总结今天新增的论文标题、作者、链接和一句话结论。';
 
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
@@ -2523,82 +1797,22 @@ test('HTTP/SSE endpoint resolves quoted command drift before local Browser searc
       body: JSON.stringify({
         commandText,
         workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-clarification-drift',
-        attemptId: 'codex-command-agent-host-browser-clarification-drift-attempt-1',
-        agentHostInput: {
-          schemaVersion: 'sciforge.codex-agent-host-input.v1',
-          source: 'ui-normal-composer-transport',
-          intentText: 'Summarize current context.',
-          authorizationProfileId: 'high-autonomy',
-          policyOwner: 'codex-agent-host-runtime',
-        },
+        commandId: 'codex-command-browser-failed-no-fallback',
+        attemptId: 'codex-command-browser-failed-no-fallback-attempt-1',
+        agentHostInput: readyAgentHostInput(commandText),
       }),
     });
     const text = await response.text();
 
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'quoted command drift request',
+    assertRuntimeTurnRoutedToUpstreamAdapter({
+      label: 'Browser evidence failure without fallback',
       text,
       adapter,
+      commandText,
     });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.doesNotMatch(JSON.stringify(calls[0]?.input), /Summarize current context/);
-    assert.match(text, /Daily Papers source page was read from the quoted command/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|search-results|BrowserHostSession browser_search/i);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
-
-test('HTTP/SSE endpoint routes browser search requests that omit Agent Host input through local Browser', async () => {
-  const adapter = new FakeAdapter();
-  const calls: ModuleInvokeRequest[] = [];
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    void handleCodexRuntimeRoutes(req, res, url, adapter, {
-      browserBoundedOperationInvoker: () => async (request) => {
-        calls.push(request);
-        return completedBrowserSearchReadResult({
-          sessionId: 'iran-fallback',
-          title: 'Iran situation source',
-          finalUrl: 'https://example.test/iran-situation',
-          summary: 'Source-backed fallback search result for the Iran situation.',
-        });
-      },
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.notEqual(address, null);
-  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
-  const port = (address as AddressInfo).port;
-  const commandText = '通过内置浏览器搜索伊朗局势';
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        commandText,
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-agent-host-browser-cn-fallback',
-        attemptId: 'codex-command-agent-host-browser-cn-fallback-attempt-1',
-      }),
-    });
-    const text = await response.text();
-
-    assertRuntimeTurnHandledByLocalAgentHost({
-      label: 'Browser search request without Agent Host input',
-      text,
-      adapter,
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.input?.operationKind, 'browser.search_read');
-    assert.match(text, /browser-host-session:iran-fallback\/source-pages\/source-1\.txt/);
-    assert.doesNotMatch(text, /browser-host-search-runtime|browser_search|answerEvidenceState|browser-search-results|browser-host-projection/);
-    assert.doesNotMatch(text, /<[^>]*DSML[^>]*tool_calls/i);
+    assert.match(text, /event: failed/);
+    assert.match(text, /upstream-outage/);
+    assert.doesNotMatch(text, /event: agent_host_turn_loop|event: gui_present|browser-host-session:/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -3344,23 +2558,13 @@ class ModuleInvokeProtocolOnlyAdapter extends FakeAdapter {
         '',
         '<module_invoke>',
         JSON.stringify({
-          moduleId: 'browser',
-          intent: 'executeBoundedOperation',
-          input: {
-            operationKind: 'browser.search_read',
-            ownerModuleId: 'browser',
-            targetScope: {
-              query: 'site:arxiv.org/abs agentic reinforcement learning 2026-06-07',
-            },
-            config: {
-              allowedActions: ['search', 'open', 'read'],
-              maxSteps: 5,
-              maxTimeMs: 30_000,
-              maxModelCalls: 10,
-              requiredEvidence: ['source-page-ref', 'page-text-ref'],
-              stopConditions: ['content_collected'],
-            },
-          },
+	          moduleId: 'browser',
+	          intent: 'browser.search',
+	          input: {
+	            schemaVersion: 'sciforge.browser-runtime.search-input.v1',
+	            query: 'site:arxiv.org/abs agentic reinforcement learning 2026-06-07',
+	            limit: 5,
+	          },
         }, null, 2),
         '</module_invoke>',
       ].join('\n'),
@@ -3402,9 +2606,9 @@ class MalformedFunctionCallsProtocolOnlyAdapter extends FakeAdapter {
       ...base,
       type: 'message',
       text: [
-        `name="module_invoke">browser executeBoundedOperation {'operationKind': 'browser.search_read', 'ownerModuleId': 'browser', 'targetScope': {'query': 'arxiv.org agentic reinforcement learning 2026'}, 'config': {'allowedActions': ['search', 'open', 'read'], 'maxSteps': 8, 'maxTimeMs': 30000, 'maxModelCalls': 5, 'requiredEvidence': ['source-page-ref', 'page-text-ref'], 'stopConditions': ['sufficient-information']}} Search ArXiv for latest agentic RL papers`,
-        '<function_calls>',
-        `browser executeBoundedOperation {'operationKind': 'browser.search_read', 'ownerModuleId': 'browser', 'targetScope': {'query': 'arxiv.org agentic reinforcement learning 2026'}, 'config': {'allowedActions': ['search', 'open', 'read'], 'maxSteps': 8, 'maxTimeMs': 30000, 'maxModelCalls': 5, 'requiredEvidence': ['source-page-ref', 'page-text-ref'], 'stopConditions': ['sufficient-information']}}`,
+	        `name="module_invoke">browser.search {'schemaVersion': 'sciforge.browser-runtime.search-input.v1', 'query': 'arxiv.org agentic reinforcement learning 2026', 'limit': 5} Search ArXiv for latest agentic RL papers`,
+	        '<function_calls>',
+	        `browser.search {'schemaVersion': 'sciforge.browser-runtime.search-input.v1', 'query': 'arxiv.org agentic reinforcement learning 2026', 'limit': 5}`,
         '</function_calls>',
       ].join('\n'),
     };
@@ -3459,6 +2663,10 @@ class UnsupportedNativeBrowserEvidenceAdapter extends FakeAdapter {
 
 function unsupportedNativeBrowserEvidenceAdapterClass() {
   return UnsupportedNativeBrowserEvidenceAdapter;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 class BlockingAdapter extends FakeAdapter {

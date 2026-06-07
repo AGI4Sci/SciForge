@@ -13,8 +13,9 @@ export type CuUserAcceptanceStatus =
 
 export type CuEvidenceClaimKind =
   | 'sciForge-chat-origin'
-  | 'real-computer-use'
   | 'tui-host-runTask'
+  | 'real-computer-use'
+  | 'computer-use-primitive-session'
   | 'desktop-bridge-ack'
   | 'shared-input-ack'
   | 'independent-input-adapter'
@@ -56,8 +57,9 @@ export interface CuTuiHostChainLink {
   id: string;
   kind:
     | 'sciForge-chat-origin'
-    | 'gui-terminal-equivalent-text'
     | 'tui-host-runTask'
+    | 'gui-terminal-equivalent-text'
+    | 'computer-use-primitive-session'
     | 'computer-use-action-provider'
     | 'host-ports-injected'
     | 'gui.present'
@@ -65,6 +67,9 @@ export interface CuTuiHostChainLink {
   status: 'present' | 'missing' | 'blocked';
   requestRef?: string;
   hostPortsRef?: string;
+  sessionRef?: string;
+  primitiveTraceRef?: string;
+  traceRef?: string;
   toolPayloadRef?: string;
   recordRef?: string;
   origin?: Record<string, unknown>;
@@ -390,7 +395,7 @@ export function evaluateCuUserAcceptanceAntiShortcutGuard(
     rejectedKinds: ['dom', 'playwright', 'accessibility', 'generated-file-only'],
     rejectedClaims,
     rule:
-      'CU-05 user acceptance pass evidence must come from TUI Host -> computer_use.runTask(request, hostPorts), screenshot-grounded Computer Use execution, and refs-first DOM/AX/Playwright observation hints only; DOM, Playwright, accessibility, or generated-file-only substitutes cannot be completion evidence.',
+      'CU-05 user acceptance pass evidence must come from Host-routed computer_use.bind/observe/act/run_procedure/control primitive sessions, screenshot-grounded Computer Use execution, and refs-first DOM/AX/Playwright observation hints only; DOM, Playwright, accessibility, or generated-file-only substitutes cannot be completion evidence.',
   };
 }
 
@@ -430,10 +435,10 @@ function isBundleLocalRef(ref: string): boolean {
 
 export function hasRequiredCuTuiHostChain(tuiHostChain: CuTuiHostChainLink[]): boolean {
   return tuiHostChain.some((link) => (
-    link.kind === 'tui-host-runTask'
+    link.kind === 'computer-use-primitive-session'
     && link.status === 'present'
-    && Boolean(link.requestRef)
-    && Boolean(link.hostPortsRef)
+    && Boolean(link.sessionRef)
+    && Boolean(link.primitiveTraceRef)
   )) && tuiHostChain.some((link) => (
     link.kind === 'computer-use-action-provider'
     && link.status === 'present'
@@ -463,7 +468,7 @@ function missingReason(input: {
 }): string {
   const missing: string[] = [];
   if (!input.antiShortcutPassed) missing.push('shortcut substitute evidence was supplied');
-  if (!input.hostChainReady) missing.push('TUI Host runTask chain');
+  if (!input.hostChainReady) missing.push('Host-routed Computer Use primitive session chain');
   if (!input.hasRealComputerUseEvidence) missing.push('real Computer Use evidence claim');
   if (input.level === 'L3' && !input.hasIndependentInputAdapterEvidence) {
     if (!input.hasIndependentInputAdapterClaim) {

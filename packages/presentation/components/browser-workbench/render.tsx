@@ -141,7 +141,7 @@ export interface BrowserWorkbenchAnnotationRequest {
 }
 
 const BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX = 240;
-const BROWSER_WORKBENCH_HEALTH_CAPABILITIES = ['browser-host-session', 'browser-host-native-surface', 'browser-host-search'] as const;
+const BROWSER_WORKBENCH_HEALTH_CAPABILITIES = ['browser-host-session', 'browser-host-native-surface'] as const;
 
 export interface BrowserWorkbenchPayload {
   projection?: BrowserRuntimeProjection;

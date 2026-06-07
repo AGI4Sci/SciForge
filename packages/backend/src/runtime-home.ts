@@ -229,7 +229,9 @@ function managedRuntimeConfigMatches(currentConfig: string, desiredConfig: strin
     && current.provider === desired.provider
     && current.providerBaseUrl === desired.providerBaseUrl
     && current.providerEnvKey === desired.providerEnvKey
-    && current.providerWireApi === desired.providerWireApi;
+    && current.providerWireApi === desired.providerWireApi
+    && current.plugins === desired.plugins
+    && current.remotePlugin === desired.remotePlugin;
 }
 
 function applyRuntimeKeyFromLocalProviderConfig(env: NodeJS.ProcessEnv, configLocalPath?: string): void {
@@ -246,6 +248,7 @@ function runtimeConfigSignature(config: string) {
   const profileConfig = profile ? tableBlock(config, `profiles.${profile}`) : '';
   const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(config, 'model_provider');
   const providerConfig = provider ? tableBlock(config, `model_providers.${provider}`) : '';
+  const featuresConfig = tableBlock(config, 'features');
   return {
     profile,
     model: valueForKey(profileConfig, 'model') ?? valueForKey(config, 'model'),
@@ -253,6 +256,8 @@ function runtimeConfigSignature(config: string) {
     providerBaseUrl: valueForKey(providerConfig, 'base_url'),
     providerEnvKey: valueForKey(providerConfig, 'env_key'),
     providerWireApi: valueForKey(providerConfig, 'wire_api'),
+    plugins: valueForKey(featuresConfig, 'plugins'),
+    remotePlugin: valueForKey(featuresConfig, 'remote_plugin'),
   };
 }
 
@@ -271,8 +276,8 @@ function tableBlock(config: string, table: string): string {
 
 function valueForKey(config: string, key: string): string | undefined {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`^\\s*${escaped}\\s*=\\s*"([^"]+)"`, 'm').exec(config);
-  return match?.[1];
+  const match = new RegExp(`^\\s*${escaped}\\s*=\\s*(?:"([^"]+)"|([^\\s#]+))`, 'm').exec(config);
+  return match?.[1] ?? match?.[2];
 }
 
 function tomlString(value: string): string {

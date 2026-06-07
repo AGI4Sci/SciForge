@@ -729,7 +729,7 @@ test('browser-workbench renders reachable native-surface route with unavailable 
   assert.match(html, /data-browser-right-pane-bridge="false"/);
   assert.match(html, /data-browser-native-surface-bridge-status="native-bridge-unavailable"/);
   assert.match(html, /nativeSurfaceBridge<\/dt><dd>native-bridge-unavailable:route=reachable,capability=missing,rightPaneBridge=false/);
-  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
+  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing/);
   assert.match(html, /data-browser-state-action="retry"/);
   assert.doesNotMatch(html, /data-browser-state-action="handoff"|\/browser open-external/);
   assert.match(html, /data-browser-command-id="annotate"/);
@@ -843,12 +843,12 @@ test('browser-workbench renders bounded actionable diagnostics for blocked host 
   assert.match(html, /data-status="error"/);
   assert.match(html, /browser-workbench-viewer-diagnostics/);
   assert.match(html, /data-browser-writer-url="configured"/);
-  assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing"/);
+  assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-native-surface:missing"/);
   assert.match(html, /data-browser-native-adapter-url="configured"/);
   assert.match(html, /data-browser-diagnostic-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-last-action-timing="click:130ms:failed"/);
   assert.match(html, /writerUrl<\/dt><dd>configured/);
-  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
+  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing/);
   assert.match(html, /nativeAdapterUrl<\/dt><dd>configured/);
   assert.match(html, /blockedReason<\/dt><dd>Native adapter blocked \[url-redacted\]/);
   assert.match(html, /diagnostics<\/dt><dd>Retry same native surface through \[url-redacted\]/);

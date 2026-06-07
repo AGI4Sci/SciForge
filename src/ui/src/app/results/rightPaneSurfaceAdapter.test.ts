@@ -252,7 +252,7 @@ test('right pane surface adapter routes Browser presentation while preserving co
   assert.doesNotMatch(html, /data:image|base64|providerRoute|executorLease/);
 });
 
-test('right pane browser product flow renders native browser_search projection with one host session owner', () => {
+test('right pane browser product flow renders native browser.search projection with one host session owner', () => {
   const hostSessionId = 'browser-search-session-1';
   const finalUrl = 'https://search.example.test/results?q=host+owned';
   const focusedObjectReference: ObjectReference = {
@@ -281,7 +281,7 @@ test('right pane browser product flow renders native browser_search projection w
         producerScenario: 'literature-evidence-review',
         schemaVersion: 'sciforge.browser-runtime.projection.v1',
         metadata: {
-          source: 'browser_search',
+          source: 'browser.search',
           browserSessionRef: `browser-host-session:${hostSessionId}`,
           finalUrl,
         },
@@ -361,7 +361,7 @@ test('right pane browser product flow keeps legacy host-stream projection ref-on
         producerScenario: 'literature-evidence-review',
         schemaVersion: 'sciforge.browser-runtime.projection.v1',
         metadata: {
-          source: 'browser_search',
+          source: 'browser.search',
           browserSessionRef: `browser-host-session:${hostSessionId}`,
           finalUrl,
         },

@@ -31,7 +31,6 @@ const VERIFICATION_COMMAND = 'npm run smoke:browser-pane-bottleneck-audit --sile
 const BOTTLENECK_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES = [
   'browser-host-session',
   'browser-host-native-surface',
-  'browser-host-search',
 ] as const;
 const INPUT_TEXT = [
   'SciForge Browser pane bottleneck audit continuous input route',
@@ -150,7 +149,6 @@ type BottleneckNativeAttachPreflightEvidence = {
     capabilities: {
       browserHostSession: 'ready' | 'missing';
       nativeSurface: 'ready' | 'missing';
-      browserHostSearch: 'ready' | 'missing';
     };
     nativeSurfaceEndpoint: 'present' | 'missing';
     endpointKeys: string[];
@@ -911,10 +909,9 @@ test('blocked bottleneck manifest carries typed native attach preflight evidence
         ok: true,
         service: 'sciforge-workspace-writer',
         status: 'ok',
-        capabilities: ['browser-host-session', 'browser-host-search'],
+        capabilities: ['browser-host-session'],
         endpoints: {
           browserHostSession: '/api/sciforge/browser-host/sessions',
-          browserHostSearch: '/api/sciforge/browser-host/search',
         },
       },
       rightPane: emptyRightPaneEvidence(),
@@ -929,7 +926,6 @@ test('blocked bottleneck manifest carries typed native attach preflight evidence
   assert.deepEqual(manifest.nativeAttachPreflight.writerHealth.capabilitySummary, [
     'browser-host-session:ready',
     'browser-host-native-surface:missing',
-    'browser-host-search:ready',
   ]);
   assert.equal(manifest.nativeAttachPreflight.writerHealth.nativeSurfaceEndpoint, 'missing');
   assert.equal(manifest.nativeAttachPreflight.rightPaneBridge.available, false);
@@ -986,11 +982,10 @@ test('bottleneck manifest does not claim pass from native attach without pass-gr
         ok: true,
         service: 'sciforge-workspace-writer',
         status: 'ok',
-        capabilities: ['browser-host-session', 'browser-host-native-surface', 'browser-host-search'],
+        capabilities: ['browser-host-session', 'browser-host-native-surface'],
         endpoints: {
           browserHostSession: '/api/sciforge/browser-host/sessions',
           browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/health',
-          browserHostSearch: '/api/sciforge/browser-host/search',
         },
       },
       rightPane,
@@ -1397,7 +1392,6 @@ function buildBottleneckNativeAttachPreflightEvidence(input: {
       capabilities: {
         browserHostSession: capabilityState('browser-host-session'),
         nativeSurface: capabilityState('browser-host-native-surface'),
-        browserHostSearch: capabilityState('browser-host-search'),
       },
       nativeSurfaceEndpoint,
       endpointKeys,
@@ -2380,7 +2374,6 @@ function assertNativeAttachPreflightEvidence(preflight: BottleneckNativeAttachPr
   assert.equal(typeof preflight.writerHealth.available, 'boolean');
   assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSession));
   assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.nativeSurface));
-  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSearch));
   assert.ok(['present', 'missing'].includes(preflight.writerHealth.nativeSurfaceEndpoint));
   assert.ok(preflight.writerHealth.capabilitySummary.length <= BOTTLENECK_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES.length);
   assert.ok(preflight.writerHealth.endpointKeys.length <= 16);

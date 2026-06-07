@@ -395,6 +395,7 @@ function eventWithTrace(
   const payload = recordField(raw.payload) ?? recordField(raw.params) ?? raw;
   const item = recordField(raw.item) ?? recordField(payload.item) ?? recordField(raw.tool) ?? {};
   const fields = commonFields(raw, payload, item);
+  const guiFields = guiIntentVisibleFields(type, raw, item);
   const toolName = toolNameFromRaw(raw, item);
   const fileFields = backendFileFields(raw, payload, item, toolName);
   const event = backendEvent(backend, type, raw, options, {
@@ -407,7 +408,10 @@ function eventWithTrace(
     exitCode: exitCodeFromRaw(raw, item),
     approvalId: approvalIdFromRaw(raw),
     status: fields.status ?? statusForEventType(type),
-    text: textFromRaw(raw) ?? textFromRaw(payload) ?? textFromRaw(item),
+    text: guiFields.text ?? textFromRaw(raw) ?? textFromRaw(payload) ?? textFromRaw(item),
+    message: guiFields.message,
+    ref: fields.ref ?? guiFields.ref,
+    refs: fields.refs ?? guiFields.refs,
   });
   const traceStep = traceStepFromTool({
     backend,
@@ -624,6 +628,60 @@ function guiEventTypeFromTool(raw: Record<string, unknown>, item: Record<string,
   if (intent === 'present') return 'gui_present';
   if (intent === 'ask_user') return 'gui_ask_user';
   return undefined;
+}
+
+function guiIntentVisibleFields(
+  type: BackendNeutralEventType,
+  raw: Record<string, unknown>,
+  item: Record<string, unknown>,
+): Partial<Pick<BackendNormalizedEvent, 'text' | 'message' | 'ref' | 'refs'>> {
+  if (type !== 'gui_present' && type !== 'gui_ask_user') return {};
+  const toolName = toolNameFromRaw(raw, item);
+  const input = parseJsonRecord(toolInputFromRaw(raw, item)) ?? {};
+  const guiIntent = guiIntentFromBackendToolCall(toolName, input);
+  if (type === 'gui_present' && guiIntent.name === 'gui.present') {
+    const content = recordField(guiIntent.args.content) ?? {};
+    const text = stringField(content.value)
+      ?? stringField(guiIntent.args.text)
+      ?? stringField(guiIntent.args.message)
+      ?? stringField(guiIntent.args.title)
+      ?? (stringField(guiIntent.args.ref) ? `Presented ${stringField(guiIntent.args.ref)}.` : undefined);
+    const ref = safeBackendRef(stringField(guiIntent.args.ref));
+    const refs = safeBackendRefs([
+      ...(stringArrayField(guiIntent.args.displayedRefs) ?? []),
+      ...(ref ? [ref] : []),
+    ]);
+    return {
+      text,
+      message: text,
+      ref,
+      refs,
+    };
+  }
+  if (type === 'gui_ask_user' && guiIntent.name === 'gui.ask_user') {
+    const title = stringField(guiIntent.args.title);
+    const message = [title, stringField(guiIntent.args.message)].filter(Boolean).join('\n\n') || undefined;
+    return {
+      text: message,
+      message,
+    };
+  }
+  return {};
+}
+
+function guiIntentFromBackendToolCall(
+  toolName: string | undefined,
+  args: Record<string, unknown>,
+): { name?: 'gui.present' | 'gui.ask_user'; args: Record<string, unknown> } {
+  if (toolName === 'gui.present' || toolName === 'gui.ask_user') return { name: toolName, args };
+  if (toolName !== 'module.invoke') return { args };
+  const moduleId = stringField(args.moduleId) ?? stringField(args.module_id);
+  const intent = stringField(args.intent);
+  if (moduleId !== 'gui' || !intent) return { args };
+  const input = parseJsonRecord(args.input) ?? {};
+  if (intent === 'present') return { name: 'gui.present', args: input };
+  if (intent === 'ask_user') return { name: 'gui.ask_user', args: input };
+  return { args };
 }
 
 function commonFields(
@@ -908,6 +966,8 @@ function toolNameFromRaw(raw: Record<string, unknown>, item: Record<string, unkn
 
 function normalizeBackendToolName(value: string | undefined): string | undefined {
   if (value === 'multi_agent_v1_spawn_agent') return 'multi_agent_v1.spawn_agent';
+  if (value === 'gui_present') return 'gui.present';
+  if (value === 'gui_ask_user') return 'gui.ask_user';
   return value;
 }
 

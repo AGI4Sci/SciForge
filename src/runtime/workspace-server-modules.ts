@@ -9,9 +9,9 @@ import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, scrubTraceT
 import { createFilesModuleHandler } from './modules/files-module-handler.js';
 import { createAutomationsModuleHandler } from './modules/automations-module-handler.js';
 import {
-  createBrowserBoundedOperationModuleHandler,
-  createComputerUseBoundedOperationModuleHandler,
+  createBrowserRuntimeModuleHandler,
 } from './modules/bounded-operation-module-handlers.js';
+import { createComputerUsePrimitiveService } from '../../packages/actions/computer-use/index.js';
 
 export interface RuntimeModuleRouteOptions {
   workspaceRootFromBodyOrRequest(body: Record<string, unknown>, url: URL): Promise<string>;
@@ -37,8 +37,8 @@ export async function handleWorkspaceModuleRoutes(
     const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
       files: createFilesModuleHandler({ workspacePath: root }),
       automations: createAutomationsModuleHandler({ workspacePath: root }),
-      browser: createBrowserBoundedOperationModuleHandler({ workspacePath: root }),
-      computer_use: createComputerUseBoundedOperationModuleHandler(),
+      browser: createBrowserRuntimeModuleHandler({ workspacePath: root }),
+      computer_use: createComputerUsePrimitiveService(),
     }));
     const functionName = match[1];
     const result = functionName === 'describe'

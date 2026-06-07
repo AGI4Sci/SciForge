@@ -111,7 +111,7 @@ test('browser host adapter does not route pane input through Computer Use execut
   const workspaceClientSource = readFileSync(new URL('../../api/workspaceClient.ts', import.meta.url), 'utf8');
 
   assert.match(adapterSource, /sendBrowserHostSessionAction/);
-  assert.match(workspaceClientSource, /export async function searchWithBrowserHostSession/);
+  assert.doesNotMatch(workspaceClientSource, /export async function searchWithBrowserHostSession/);
   assert.match(workspaceClientSource, /export async function sendBrowserHostComputerUseAction/);
   assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|searchWithBrowserHostSession|browserHostComputerUseActionFromHostAction|onHostActionRequest/);
   assert.doesNotMatch(adapterSource, /onHostActionRequest:\s*|onHostActionRequest=\{/);
@@ -154,7 +154,7 @@ test('browser host adapter promotes Browser annotations as pending composer refs
   assert.match(rendererSource, /onExternalReferenceRequest\?: \(reference: SciForgeReference\) => void/);
   assert.match(workbenchSource, /onExternalReferenceRequest\(reference\)/);
   assert.match(chatPanelSource, /addPendingReferenceToComposer\(externalReferenceRequest\.reference\)/);
-  assert.match(chatPanelSource, /await runPrompt\(prompt, activeSessionRef\.current, references\)/);
+  assert.match(chatPanelSource, /if \(!externalReferenceRequest\) return;[\s\S]*addPendingReferenceToComposer\(externalReferenceRequest\.reference\);[\s\S]*onExternalReferenceConsumed\?\.\(externalReferenceRequest\.id\)/);
   assert.match(modelSource, /annotationRef[\s\S]*targetRef[\s\S]*cropRef[\s\S]*screenshotRef/);
   assert.match(modelSource, /SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL/);
   assert.match(modelSource, /sourceKind: 'browser'/);

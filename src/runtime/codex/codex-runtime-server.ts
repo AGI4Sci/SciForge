@@ -1,29 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import type { AgentCliAdapter, AgentCliStartTurnInput } from './agent-cli-adapter.js';
+import type { AgentCliAdapter, AgentCliStartTurnInput, RuntimeInputObject } from './agent-cli-adapter.js';
 import {
   createCodexAgentHostGroundingSnapshot,
   resolveCodexAgentHostRuntimeTruth,
   type CodexAgentHostRuntimeTruth,
   type CodexAgentHostRuntimeTruthResolver,
 } from './agent-host-grounding.js';
-import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
-import {
-  EXECUTE_BOUNDED_OPERATION_INTENT,
-  type BoundedOperationResultValue,
-  type ModuleInvokeRequest,
-  type ModuleInvokeResult,
-  validateBoundedOperationRequest,
-} from '../../../packages/contracts/runtime/modules.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
-import {
-  createCodexAgentHostBrowserBoundedOperationTurnLoopResult,
-  evaluateCodexAgentHostTurnLoop,
-  type CodexAgentHostBrowserBoundedOperationInvoker,
-  type CodexAgentHostTurnLoopResult,
-} from './agent-host-turn-loop.js';
 import {
   CODEX_RUNTIME_STREAM_PATH,
   CODEX_RUNTIME_WEBSOCKET_PATH,
@@ -33,15 +19,6 @@ import {
   normalizeCodexRealtimeClientControl,
   type CodexRealtimeClientControl,
 } from '@sciforge-ui/runtime-contract/codex-realtime-session';
-import {
-  createRuntimeModuleDispatcher,
-  createRuntimeModuleRegistry,
-} from '../modules/dispatcher.js';
-import { createBrowserBoundedOperationModuleHandler } from '../modules/bounded-operation-module-handlers.js';
-import {
-  evaluateBrowserEvidenceNeed,
-  semanticBrowserSearchQueryFromPrompt,
-} from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
 
 const CODEX_RUNTIME_HEARTBEAT_MS = 5_000;
 const CODEX_REALTIME_CANCEL_TIMEOUT_MS = 500;
@@ -51,11 +28,6 @@ const codexRuntimeWss = new WebSocketServer({ noServer: true });
 
 export interface CodexRuntimeRouteOptions {
   agentHostRuntimeTruthResolver?: CodexAgentHostRuntimeTruthResolver;
-  browserBoundedOperationInvoker?: (input: {
-    workspacePath: string;
-    commandId?: string;
-    attemptId?: string;
-  }) => CodexAgentHostBrowserBoundedOperationInvoker | undefined;
 }
 
 export async function handleCodexRuntimeRoutes(
@@ -213,6 +185,7 @@ async function runCodexRuntimeTurn(
   if (!workspacePath) throw new Error('workspacePath is required');
   const commandId = stringField(body.commandId);
   const attemptId = stringField(body.attemptId);
+  const inputObjects = runtimeInputObjectsFromBody(body.inputObjects);
   const realtimeSession = normalizeRealtimeSessionEnvelope(body, { commandId, attemptId });
   if (realtimeSession.eventTransport !== output.expectedTransport) {
     throw new Error(`Runtime Codex realtime session eventTransport must be ${output.expectedTransport} for this endpoint.`);
@@ -246,32 +219,6 @@ async function runCodexRuntimeTurn(
       resolver: options.agentHostRuntimeTruthResolver,
     });
     const agentHostGrounding = createCodexAgentHostGroundingSnapshot(agentHostInput, { runtimeTruth: agentHostRuntimeTruth });
-    const directBrowserEvidence = output.shouldContinue()
-      ? await runtimeDirectBrowserEvidenceTurn({
-        agentHostInput,
-        commandText,
-        workspacePath,
-        commandId,
-        attemptId,
-        auditMetadata: body.auditMetadata,
-        agentHostRuntimeTruth,
-        runtimeIntent,
-        abortSignal,
-        options,
-      })
-      : undefined;
-    if (directBrowserEvidence) {
-      output.emit('agent_host_turn_loop', directBrowserEvidence.event);
-      output.emit('gui_present', runtimeGuiPresentEventFromTurnLoopResult({
-        turnLoop: directBrowserEvidence,
-        commandText,
-        workspacePath,
-        commandId,
-        attemptId,
-      }));
-      output.emit('done', directBrowserEvidence.result);
-      return;
-    }
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,
@@ -280,6 +227,7 @@ async function runCodexRuntimeTurn(
       profile: stringField(body.profile),
       codexSessionId: realtimeSession.codexSessionId ?? stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
       allowOpenAiRuntime: body.allowOpenAiRuntime === true,
+      inputObjects: inputObjects.length ? inputObjects : undefined,
       runtimeIntent,
       guiExtension: isRecord(body.guiExtension)
         ? {
@@ -301,577 +249,14 @@ async function runCodexRuntimeTurn(
     });
     lastRuntimeEventAt = Date.now();
     output.emit('turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
-    const observation = createRuntimeTurnObservation();
-    const terminalEvents: NormalizedAgentEvent[] = [];
     for await (const event of turn.events) {
       lastRuntimeEventAt = Date.now();
       if (!output.shouldContinue()) break;
-      observeRuntimeTurnEvent(observation, event);
-      if (isRuntimeTurnTerminalEvent(event)) {
-        terminalEvents.push(event);
-        continue;
-      }
-      if (shouldWithholdRuntimeTextEvent(event, commandText)) continue;
       output.emit(event.type, event);
-    }
-    const fallback = output.shouldContinue()
-      ? await runtimeStructuredModuleInvokeFallback({
-        observation,
-        agentHostInput,
-        commandText,
-        workspacePath,
-        commandId,
-        attemptId,
-        auditMetadata: body.auditMetadata,
-        agentHostRuntimeTruth,
-        abortSignal,
-        options,
-      })
-      : undefined;
-    const browserFallback = fallback ?? (output.shouldContinue()
-      ? await runtimeBrowserEvidenceFallback({
-        observation,
-        agentHostInput,
-        commandText,
-        workspacePath,
-        commandId,
-        attemptId,
-        auditMetadata: body.auditMetadata,
-        agentHostRuntimeTruth,
-        abortSignal,
-        options,
-      })
-      : undefined);
-    if (browserFallback) {
-      output.emit('agent_host_turn_loop', browserFallback.event);
-      output.emit('gui_present', runtimeGuiPresentEventFromTurnLoopResult({
-        turnLoop: browserFallback,
-        commandText,
-        workspacePath,
-        commandId,
-        attemptId,
-      }));
-      output.emit('done', browserFallback.result);
-    } else {
-      for (const event of terminalEvents) {
-        if (!output.shouldContinue()) break;
-        output.emit(event.type, event);
-      }
     }
   } finally {
     clearInterval(heartbeat);
   }
-}
-
-interface RuntimeTurnObservation {
-  assistantText: string[];
-  sawToolLifecycle: boolean;
-  sawGuiCompletion: boolean;
-  sawBrowserEvidenceRef: boolean;
-  sawTerminalDone: boolean;
-  sawTerminalFailure: boolean;
-}
-
-function createRuntimeTurnObservation(): RuntimeTurnObservation {
-  return {
-    assistantText: [],
-    sawToolLifecycle: false,
-    sawGuiCompletion: false,
-    sawBrowserEvidenceRef: false,
-    sawTerminalDone: false,
-    sawTerminalFailure: false,
-  };
-}
-
-function observeRuntimeTurnEvent(observation: RuntimeTurnObservation, event: NormalizedAgentEvent): void {
-  if (event.type === 'message' || event.type === 'message_delta') {
-    const text = typeof event.text === 'string' ? event.text : typeof event.message === 'string' ? event.message : undefined;
-    if (text) observation.assistantText.push(text);
-  }
-  if (event.type === 'done') {
-    const doneEvent = event as unknown as { finalText?: unknown };
-    const finalText = typeof doneEvent.finalText === 'string' ? doneEvent.finalText : undefined;
-    const message = typeof event.message === 'string' ? event.message : undefined;
-    const text = finalText ?? message;
-    if (text) observation.assistantText.push(text);
-  }
-  if (event.type === 'tool_started' || event.type === 'tool_completed') observation.sawToolLifecycle = true;
-  if (event.type === 'gui_present' || event.type === 'gui_ask_user') observation.sawGuiCompletion = true;
-  if ((event.evidenceRefs ?? []).some((ref) => ref.startsWith('browser-host-session:'))) {
-    observation.sawBrowserEvidenceRef = true;
-  }
-  if (event.type === 'done') observation.sawTerminalDone = true;
-  if (event.type === 'failed' || event.type === 'cancelled') observation.sawTerminalFailure = true;
-}
-
-function isRuntimeTurnTerminalEvent(event: NormalizedAgentEvent): boolean {
-  return event.type === 'done' || event.type === 'failed' || event.type === 'cancelled';
-}
-
-function shouldWithholdRuntimeTextEvent(event: NormalizedAgentEvent, commandText: string): boolean {
-  if (event.type !== 'message' && event.type !== 'message_delta') return false;
-  const text = typeof event.text === 'string' ? event.text : typeof event.message === 'string' ? event.message : '';
-  if (looksRuntimeModuleInvokeProtocolText(text)) return true;
-  return looksLikeUnsupportedBrowserEvidenceAnswer(text, commandText)
-    && !(event.evidenceRefs ?? []).some((ref) => ref.startsWith('browser-host-session:'));
-}
-
-async function runtimeDirectBrowserEvidenceTurn(input: {
-  agentHostInput: unknown;
-  commandText: string;
-  workspacePath: string;
-  commandId?: string;
-  attemptId?: string;
-  auditMetadata?: unknown;
-  agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;
-  runtimeIntent?: AgentCliStartTurnInput['runtimeIntent'];
-  abortSignal: AbortSignal;
-  options: CodexRuntimeRouteOptions;
-}): Promise<CodexAgentHostTurnLoopResult | undefined> {
-  if (!shouldRunRuntimeDirectBrowserEvidenceTurn(input.commandText, input.runtimeIntent)) return undefined;
-  const invokerFactory = input.options.browserBoundedOperationInvoker ?? defaultRuntimeBrowserBoundedOperationInvoker;
-  const browserBoundedOperationInvoker = invokerFactory({
-    workspacePath: input.workspacePath,
-    commandId: input.commandId,
-    attemptId: input.attemptId,
-  });
-  if (!browserBoundedOperationInvoker) return undefined;
-  return evaluateCodexAgentHostTurnLoop({
-    input: input.agentHostInput,
-    commandText: input.commandText,
-    workspacePath: input.workspacePath,
-    commandId: input.commandId,
-    attemptId: input.attemptId,
-    auditMetadata: input.auditMetadata,
-    runtimeTruth: input.agentHostRuntimeTruth,
-    browserBoundedOperationInvoker,
-    abortSignal: input.abortSignal,
-  });
-}
-
-function shouldRunRuntimeDirectBrowserEvidenceTurn(
-  commandText: string,
-  runtimeIntent?: AgentCliStartTurnInput['runtimeIntent'],
-): boolean {
-  if (runtimeIntent) return false;
-  if (looksLikeSideEffectCommand(commandText)) return false;
-  return runtimeCommandNeedsBrowserEvidence(commandText);
-}
-
-function looksLikeSideEffectCommand(commandText: string): boolean {
-  const text = userIntentTextFromCommandText(commandText).replace(/\s+/g, ' ').trim();
-  return /\b(?:pay|send|submit|delete|remove|upload|change|update|sign|deploy|purchase|buy|book|cancel|create|post|publish|email|message|form|invoice|token|contract|production)\b/i.test(text)
-    || /(?:支付|付款|发送|提交|删除|移除|上传|修改|更改|签署|签名|部署|购买|预订|取消|创建|发布|邮件|表单|发票|令牌|合同)/u.test(text);
-}
-
-async function runtimeStructuredModuleInvokeFallback(input: {
-  observation: RuntimeTurnObservation;
-  agentHostInput: unknown;
-  commandText: string;
-  workspacePath: string;
-  commandId?: string;
-  attemptId?: string;
-  auditMetadata?: unknown;
-  agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;
-  abortSignal: AbortSignal;
-  options: CodexRuntimeRouteOptions;
-}): Promise<CodexAgentHostTurnLoopResult | undefined> {
-  if (!shouldRunRuntimeStructuredModuleInvokeFallback(input.observation)) return undefined;
-  const request = safeBrowserModuleInvokeRequestFromAssistantText(
-    input.observation.assistantText.join('\n'),
-    input.commandText,
-  );
-  if (!request) return undefined;
-  const invokerFactory = input.options.browserBoundedOperationInvoker ?? defaultRuntimeBrowserBoundedOperationInvoker;
-  const browserBoundedOperationInvoker = invokerFactory({
-    workspacePath: input.workspacePath,
-    commandId: input.commandId,
-    attemptId: input.attemptId,
-  });
-  if (!browserBoundedOperationInvoker) return undefined;
-  const operationResult = await browserBoundedOperationInvoker(request);
-  return createCodexAgentHostBrowserBoundedOperationTurnLoopResult({
-    commandText: input.commandText,
-    workspacePath: input.workspacePath,
-    commandId: input.commandId,
-    attemptId: input.attemptId,
-    operationRequest: request,
-    operationResult,
-  });
-}
-
-function shouldRunRuntimeStructuredModuleInvokeFallback(observation: RuntimeTurnObservation): boolean {
-  if (!observation.sawTerminalDone || observation.sawTerminalFailure) return false;
-  if (observation.sawToolLifecycle || observation.sawGuiCompletion || observation.sawBrowserEvidenceRef) return false;
-  return looksRuntimeModuleInvokeProtocolText(observation.assistantText.join('\n'));
-}
-
-function safeBrowserModuleInvokeRequestFromAssistantText(
-  text: string,
-  commandText: string,
-): ModuleInvokeRequest | undefined {
-  if (!text.trim() || text.length > 20_000) return undefined;
-  const tagPattern = /<\s*(?:module[_.-]?invoke|module_invoke)\b[^>]*>([\s\S]{1,8000}?)<\s*\/\s*(?:module[_.-]?invoke|module_invoke)\s*>/giu;
-  let match: RegExpExecArray | null;
-  while ((match = tagPattern.exec(text))) {
-    const request = safeBrowserModuleInvokeRequestFromValue(parseJsonObject(match[1]), commandText);
-    if (request) return request;
-  }
-  for (const objectText of boundedOperationObjectLiteralsFromText(text)) {
-    const request = safeBrowserModuleInvokeRequestFromValue(parseJsonObject(objectText), commandText)
-      ?? safeBrowserModuleInvokeRequestFromOperationText(objectText, commandText);
-    if (request) return request;
-  }
-  return undefined;
-}
-
-function looksRuntimeModuleInvokeProtocolText(text: string): boolean {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  if (!compact) return false;
-  return /<\s*(?:module[_.-]?invoke|module_invoke)\b/i.test(compact)
-    || /\bname\s*=\s*["']module[_.-]?invoke["']\s*>/i.test(compact)
-    || /\bmodule[_.-]?invoke\b/i.test(compact) && /\bexecuteBoundedOperation\b/i.test(compact)
-    || /<\s*function_calls?\b/i.test(compact) && /\bbrowser\s+executeBoundedOperation\b/i.test(compact);
-}
-
-function boundedOperationObjectLiteralsFromText(text: string): string[] {
-  const objects: string[] = [];
-  const markerPattern = /executeBoundedOperation/giu;
-  let match: RegExpExecArray | null;
-  while ((match = markerPattern.exec(text))) {
-    const objectStart = text.indexOf('{', markerPattern.lastIndex);
-    if (objectStart < 0) continue;
-    const object = balancedObjectLiteralAt(text, objectStart, 8_000);
-    if (object) objects.push(object);
-  }
-  return objects;
-}
-
-function balancedObjectLiteralAt(text: string, start: number, maxLength: number): string | undefined {
-  let depth = 0;
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-  const endLimit = Math.min(text.length, start + maxLength);
-  for (let index = start; index < endLimit; index += 1) {
-    const char = text[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === '{') {
-      depth += 1;
-      continue;
-    }
-    if (char !== '}') continue;
-    depth -= 1;
-    if (depth === 0) return text.slice(start, index + 1);
-  }
-  return undefined;
-}
-
-function safeBrowserModuleInvokeRequestFromValue(value: unknown, commandText: string): ModuleInvokeRequest | undefined {
-  if (!isRecord(value)) return undefined;
-  const moduleId = stringField(value.moduleId);
-  const intent = stringField(value.intent);
-  if (moduleId !== 'browser' || intent !== EXECUTE_BOUNDED_OPERATION_INTENT) return undefined;
-  const input = isRecord(value.input) ? value.input : {};
-  const operationKind = stringField(input.operationKind);
-  const targetScope = isRecord(input.targetScope) ? input.targetScope : {};
-  if (operationKind === 'browser.open_read') {
-    const url = safeRuntimeBrowserUrl(targetScope.url);
-    if (!url) return undefined;
-    return validatedRuntimeBrowserModuleRequest(runtimeBrowserOpenReadOperationRequest(commandText, url));
-  }
-  if (operationKind === 'browser.search_read') {
-    const query = preferredRuntimeBrowserSearchQuery(commandText, stringField(targetScope.query));
-    if (!query) return undefined;
-    return validatedRuntimeBrowserModuleRequest(runtimeBrowserSearchReadOperationRequest(commandText, query));
-  }
-  return undefined;
-}
-
-function safeBrowserModuleInvokeRequestFromOperationText(
-  objectText: string,
-  commandText: string,
-): ModuleInvokeRequest | undefined {
-  if (!objectText.trim() || objectText.length > 8_000) return undefined;
-  const operationKind = quotedObjectStringField(objectText, 'operationKind');
-  const query = quotedObjectStringField(objectText, 'query');
-  const url = quotedObjectStringField(objectText, 'url');
-  if (operationKind === 'browser.open_read' || (!operationKind && url && !query)) {
-    const safeUrl = safeRuntimeBrowserUrl(url);
-    if (!safeUrl) return undefined;
-    return validatedRuntimeBrowserModuleRequest(runtimeBrowserOpenReadOperationRequest(commandText, safeUrl));
-  }
-  if (operationKind === 'browser.search_read' || (!operationKind && query)) {
-    const safeQuery = preferredRuntimeBrowserSearchQuery(commandText, query);
-    if (!safeQuery) return undefined;
-    return validatedRuntimeBrowserModuleRequest(runtimeBrowserSearchReadOperationRequest(commandText, safeQuery));
-  }
-  return undefined;
-}
-
-function quotedObjectStringField(objectText: string, key: string): string | undefined {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(String.raw`(?:["']?${escaped}["']?)\s*:\s*(["'])([\s\S]*?)\1`, 'iu');
-  const match = pattern.exec(objectText);
-  const value = match?.[2]?.replace(/\\(["'\\])/g, '$1').replace(/\s+/g, ' ').trim();
-  return value || undefined;
-}
-
-function preferredRuntimeBrowserSearchQuery(commandText: string, protocolQuery: string | undefined): string | undefined {
-  const semanticQuery = semanticBrowserSearchQueryFromPrompt(commandText);
-  const safeProtocolQuery = safeRuntimeBrowserSearchQuery(protocolQuery);
-  const safeSemanticQuery = safeRuntimeBrowserSearchQuery(semanticQuery);
-  if (safeSemanticQuery && semanticQueryShouldOverrideProtocolQuery(safeSemanticQuery, safeProtocolQuery)) {
-    return safeSemanticQuery;
-  }
-  return safeProtocolQuery ?? safeSemanticQuery;
-}
-
-function semanticQueryShouldOverrideProtocolQuery(semanticQuery: string, protocolQuery: string | undefined): boolean {
-  const semanticSite = siteConstraintRoot(semanticQuery);
-  if (!semanticSite) return false;
-  const protocolSite = siteConstraintRoot(protocolQuery);
-  return !protocolSite || protocolSite === semanticSite;
-}
-
-function siteConstraintRoot(query: string | undefined): string | undefined {
-  const value = /\bsite:([^\s]+)/i.exec(query ?? '')?.[1];
-  if (!value) return undefined;
-  return value.split('/')[0]?.replace(/^www\./i, '').toLowerCase() || undefined;
-}
-
-function runtimeBrowserSearchReadOperationRequest(prompt: string, query: string): ModuleInvokeRequest {
-  return {
-    moduleId: 'browser',
-    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
-    input: {
-      operationKind: 'browser.search_read',
-      ownerModuleId: 'browser',
-      targetScope: {
-        kind: 'web-search',
-        query,
-        prompt: userIntentTextFromCommandText(prompt).slice(0, 2_000),
-      },
-      config: {
-        allowedActions: ['search', 'open', 'read'],
-        maxSteps: 4,
-        maxTimeMs: 45_000,
-        maxModelCalls: 1,
-        riskPolicy: 'low',
-        requiredEvidence: ['source-page-ref', 'page-text-ref'],
-        stopConditions: ['enough-source-pages'],
-      },
-    },
-  };
-}
-
-function runtimeBrowserOpenReadOperationRequest(prompt: string, url: string): ModuleInvokeRequest {
-  return {
-    moduleId: 'browser',
-    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
-    input: {
-      operationKind: 'browser.open_read',
-      ownerModuleId: 'browser',
-      targetScope: {
-        kind: 'url',
-        url,
-        prompt: userIntentTextFromCommandText(prompt).slice(0, 2_000),
-      },
-      config: {
-        allowedActions: ['open', 'read'],
-        maxSteps: 2,
-        maxTimeMs: 45_000,
-        maxModelCalls: 1,
-        riskPolicy: 'low',
-        requiredEvidence: ['source-page-ref', 'page-text-ref'],
-        stopConditions: ['page-read'],
-      },
-    },
-  };
-}
-
-function validatedRuntimeBrowserModuleRequest(request: ModuleInvokeRequest): ModuleInvokeRequest | undefined {
-  return validateBoundedOperationRequest(request).ok ? request : undefined;
-}
-
-function safeRuntimeBrowserSearchQuery(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const query = value.replace(/\s+/g, ' ').trim();
-  if (!query || query.length > 300) return undefined;
-  if (/[\u0000-\u001f<>]|(?:data:|javascript:|file:|blob:|authorization|bearer|api[_-]?key|password|secret|token|<html)/i.test(query)) {
-    return undefined;
-  }
-  return query;
-}
-
-function safeRuntimeBrowserUrl(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const text = value.trim();
-  if (!text || text.length > 2_048) return undefined;
-  try {
-    const url = new URL(text);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
-    if (url.username || url.password) return undefined;
-    if (/[\u0000-\u001f<>]|(?:authorization|bearer|api[_-]?key|password|secret|token|<html)/i.test(text)) return undefined;
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
-function parseJsonObject(value: string | undefined): unknown {
-  if (!value) return undefined;
-  const text = value.trim();
-  if (!text.startsWith('{') || !text.endsWith('}')) return undefined;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function runtimeGuiPresentEventFromTurnLoopResult(input: {
-  turnLoop: CodexAgentHostTurnLoopResult;
-  commandText: string;
-  workspacePath: string;
-  commandId?: string;
-  attemptId?: string;
-}): NormalizedAgentEvent {
-  const event = input.turnLoop.event;
-  const result = input.turnLoop.result;
-  const commandId = stringField(result.commandId) ?? input.commandId ?? event.commandId;
-  const attemptId = stringField(result.attemptId) ?? input.attemptId ?? event.attemptId;
-  const message = stringField(result.message) ?? stringField(event.message) ?? 'Runtime Codex produced a structured presentation.';
-  const evidenceRefs = uniqueStringFields([
-    ...stringArrayField(result.evidenceRefs),
-    ...stringArrayField(event.evidenceRefs),
-  ]).slice(0, 24);
-  const source = commandId ? `gui.present:${commandId}:agent-host` : 'gui.present:agent-host';
-  const displayIntent = isRecord(result.displayIntent) ? result.displayIntent : {};
-  const status = stringField(displayIntent.status) ?? stringField(result.status) ?? stringField(event.status);
-  return {
-    schemaVersion: 'sciforge.codex.normalized-event.v1',
-    timestamp: new Date().toISOString(),
-    type: 'gui_present',
-    status,
-    text: message,
-    provider: stringField(event.provider) ?? 'sciforge-agent-host',
-    model: stringField(event.model) ?? 'codex-agent-host-turn-loop',
-    profile: stringField(event.profile) ?? 'sciforge-runtime-default',
-    workspace: stringField(event.workspace) ?? input.workspacePath,
-    commandId,
-    attemptId,
-    evidenceRefs,
-    raw: {
-      source,
-      presentation: {
-        source,
-        text: message,
-        ref: evidenceRefs[0],
-        title: 'Runtime answer',
-        hint: 'markdown',
-        status,
-        displayedRefs: evidenceRefs.slice(0, 12),
-      },
-    },
-  };
-}
-
-async function runtimeBrowserEvidenceFallback(input: {
-  observation: RuntimeTurnObservation;
-  agentHostInput: unknown;
-  commandText: string;
-  workspacePath: string;
-  commandId?: string;
-  attemptId?: string;
-  auditMetadata?: unknown;
-  agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;
-  abortSignal: AbortSignal;
-  options: CodexRuntimeRouteOptions;
-}): Promise<CodexAgentHostTurnLoopResult | undefined> {
-  if (!shouldRunRuntimeBrowserEvidenceFallback(input.observation, input.commandText)) return undefined;
-  const invokerFactory = input.options.browserBoundedOperationInvoker ?? defaultRuntimeBrowserBoundedOperationInvoker;
-  const browserBoundedOperationInvoker = invokerFactory({
-    workspacePath: input.workspacePath,
-    commandId: input.commandId,
-    attemptId: input.attemptId,
-  });
-  if (!browserBoundedOperationInvoker) return undefined;
-  return evaluateCodexAgentHostTurnLoop({
-    input: input.agentHostInput,
-    commandText: input.commandText,
-    workspacePath: input.workspacePath,
-    commandId: input.commandId,
-    attemptId: input.attemptId,
-    auditMetadata: input.auditMetadata,
-    runtimeTruth: input.agentHostRuntimeTruth,
-    browserBoundedOperationInvoker,
-    abortSignal: input.abortSignal,
-  });
-}
-
-function shouldRunRuntimeBrowserEvidenceFallback(observation: RuntimeTurnObservation, commandText: string): boolean {
-  if (!observation.sawTerminalDone && !observation.sawTerminalFailure) return false;
-  if (observation.sawGuiCompletion || observation.sawBrowserEvidenceRef) return false;
-  const needsBrowserEvidence = runtimeCommandNeedsBrowserEvidence(commandText);
-  if (observation.sawTerminalFailure && needsBrowserEvidence) return true;
-  const text = observation.assistantText.join('').replace(/\s+/g, ' ').trim();
-  if (needsBrowserEvidence && !text && !observation.sawToolLifecycle) return true;
-  if (looksLikeUnsupportedBrowserEvidenceAnswer(text, commandText)) return true;
-  if (observation.sawToolLifecycle) return false;
-  return looksLikeBrowserToolIntentOnlyText(text);
-}
-
-function runtimeCommandNeedsBrowserEvidence(commandText: string): boolean {
-  const decision = evaluateBrowserEvidenceNeed({ prompt: userIntentTextFromCommandText(commandText) });
-  return decision.decision === 'search' || decision.decision === 'open';
-}
-
-function looksLikeUnsupportedBrowserEvidenceAnswer(text: string, commandText: string): boolean {
-  if (!runtimeCommandNeedsBrowserEvidence(commandText)) return false;
-  const compact = text.replace(/\s+/g, ' ').trim();
-  if (!compact) return false;
-  if (/(?:browser-host-session:|source-page-ref|page-text-ref)/i.test(compact)) return false;
-  if (looksLikeBrowserToolIntentOnlyText(compact)) return true;
-  if (compact.length < 180) return false;
-  const claimsLookup = /(?:我(?:已经|已|来|将|会|尝试|正在|先|再|最后)?.{0,12}(?:搜索|检索|查询|查看|使用浏览器|使用 Browser)|(?:搜索|检索|查询|查看).{0,16}(?:结果|论文|文章|页面|API)|I(?:'ve| have| will| am| was)?.{0,20}(?:search|looked up|queried|browse)|(?:search|lookup|query|browser|Browser|API).{0,20}(?:result|paper|article|source))/iu.test(compact);
-  const presentsExternalAnswer = /(?:标题|作者|链接|论文|文章|新增|今天|今日|最新|结果|来源|摘要|结论|paper|papers|article|articles|author|authors|title|titles|link|links|today|latest|recent|result|results|source|sources|summary|summar)/iu.test(compact);
-  return claimsLookup && presentsExternalAnswer;
-}
-
-function looksLikeBrowserToolIntentOnlyText(text: string): boolean {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  if (!compact || compact.length > 700) return false;
-  if (/(?:https?:\/\/|browser-host-session:|source-page-ref|page-text-ref|arxiv\.org|doi\.org|artifact:|file:)/i.test(compact)) return false;
-  const mentionsBrowser = /\bBrowser\b|\bbrowser\b|浏览器|内置浏览器/u.test(compact);
-  if (!mentionsBrowser) return false;
-  const intentVerb = /(?:使用|调用|通过|借助|打开|搜索|检索|查询|查找|浏览|读取|总结|我将|我会|准备|正在|将会|use|using|call|invoke|search|look\s*up|open|browse|read|summari[sz]e)/iu;
-  const toolNoun = /(?:模块|工具|module|tool|bounded operation|executeBoundedOperation)/iu;
-  const startsAsAction = /^(?:使用|调用|通过|借助|打开|搜索|检索|查询|查找|浏览|读取|总结|use|using|call|invoke|search|look\s*up|open|browse|read)\b/iu.test(compact);
-  const firstPersonPlan = /(?:我(?:将|会|来|准备)|接下来|现在|I(?:'ll| will| am going to)|Let me)\s*(?:use|call|invoke|search|look\s*up|open|browse|使用|调用|搜索|检索|查询|打开|浏览)/iu.test(compact);
-  return intentVerb.test(compact) && (toolNoun.test(compact) || startsAsAction || firstPersonPlan);
-}
-
-function defaultRuntimeBrowserBoundedOperationInvoker(input: {
-  workspacePath: string;
-}): CodexAgentHostBrowserBoundedOperationInvoker {
-  const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
-    browser: createBrowserBoundedOperationModuleHandler({ workspacePath: input.workspacePath }),
-  }));
-  return async (request): Promise<ModuleInvokeResult<BoundedOperationResultValue>> =>
-    dispatcher.invoke(request) as Promise<ModuleInvokeResult<BoundedOperationResultValue>>;
 }
 
 async function resolveAgentHostRuntimeTruthForTurn(
@@ -1143,14 +528,53 @@ function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function stringArrayField(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    : [];
+function runtimeInputObjectsFromBody(value: unknown): RuntimeInputObject[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error('Runtime Codex inputObjects must be an array.');
+  return value.map((item, index): RuntimeInputObject => {
+    if (!isRecord(item)) throw new Error(`Runtime Codex inputObjects[${index}] must be an object.`);
+    if (item.schemaVersion !== 'sciforge.runtime.input-object.v1') {
+      throw new Error(`Runtime Codex inputObjects[${index}] has an unsupported schemaVersion.`);
+    }
+    const ref = stringField(item.ref);
+    const source = knownRuntimeInputObjectSource(item.source);
+    if (!ref || !source || !safeRuntimeInputObjectRef(ref)) {
+      throw new Error(`Runtime Codex inputObjects[${index}] is not a safe structured input object.`);
+    }
+    const mimeType = safeRuntimeInputObjectOptionalString(item.mimeType, 120);
+    const title = safeRuntimeInputObjectOptionalString(item.title, 160);
+    return {
+      schemaVersion: 'sciforge.runtime.input-object.v1',
+      ref,
+      source,
+      ...(mimeType ? { mimeType } : {}),
+      ...(title ? { title } : {}),
+    };
+  }).slice(0, 16);
 }
 
-function uniqueStringFields(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+function knownRuntimeInputObjectSource(value: unknown): RuntimeInputObject['source'] | undefined {
+  return typeof value === 'string' && ['explicit-reference', 'recent-visible-message', 'recent-artifact'].includes(value)
+    ? value as RuntimeInputObject['source']
+    : undefined;
+}
+
+function safeRuntimeInputObjectOptionalString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text || text.length > maxLength) return undefined;
+  if (/[\u0000-\u001f<>]|(?:data:|javascript:|file:|blob:|authorization|bearer|api[_-]?key|password|secret|token|<html)/i.test(text)) return undefined;
+  return text;
+}
+
+function safeRuntimeInputObjectRef(ref: string) {
+  if (ref.length > 600) return false;
+  if (/^(?:data|https?|blob|javascript|file):/i.test(ref)) return false;
+  return /^[A-Za-z0-9._:@/-]+$/.test(ref)
+    && !ref.startsWith('/')
+    && !ref.startsWith('~')
+    && !ref.includes('\\')
+    && !ref.includes('//');
 }
 
 export function codexRuntimeBridgeRequested(body: Record<string, unknown>): boolean {
@@ -1172,6 +596,7 @@ const CODEX_RUNTIME_REQUEST_ALLOWED_KEYS = new Set([
   'codexSessionId',
   'nativeSessionId',
   'allowOpenAiRuntime',
+  'inputObjects',
   'runtimeIntent',
   'guiExtension',
   'humanApproval',
@@ -1270,6 +695,7 @@ function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Recor
   if (body.runtimeIntent !== undefined && !runtimeHostIntent(body.runtimeIntent)) {
     throw new Error('Runtime Codex runtimeIntent must be a host-owned Computer Use native route intent.');
   }
+  if (body.inputObjects !== undefined) runtimeInputObjectsFromBody(body.inputObjects);
   if (isRecord(body.humanApproval) || isRecord(body.uiState)) {
     assertCodexRuntimeApprovalMetadata(body);
   }

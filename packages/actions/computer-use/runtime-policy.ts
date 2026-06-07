@@ -516,7 +516,7 @@ function looksLikeComputerUseEvidenceReportText(text: string) {
   return fileLikeTokens.every((token) => (
     /^\.sciforge\/vision-runs\/[^/\s]+\/[^,\s)]+$/i.test(token)
     || /^step-\d{3}-(?:before|after)(?:-[A-Za-z0-9]+)*\.(?:png|jpe?g|webp)$/i.test(token)
-    || /^(?:vision-trace|tool-payload|gui-present|tui-host-run-task-chain|computer-use-request|host-ports|directory-listing)\.json$/i.test(token)
+    || /^(?:vision-trace|primitive-trace|tool-payload|gui-present|computer-use-request|host-ports|directory-listing)\.json$/i.test(token)
   ));
 }
 

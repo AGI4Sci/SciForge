@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  EXECUTE_BOUNDED_OPERATION_INTENT,
   moduleResult,
   type ModuleDescription,
 } from '@sciforge-ui/runtime-contract/modules';
+import {
+  COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS,
+  COMPUTER_USE_PRIMITIVE_INTENTS,
+  COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA,
+  type ComputerUsePrimitiveEnvelope,
+} from '../../../packages/actions/computer-use/index.js';
 import { createGuiProtocolController } from '../../ui/src/app/guiProtocol.js';
 import { createGuiModuleHandler, guiResourceRef } from './gui-module-handler.js';
 import {
@@ -111,12 +116,23 @@ test('actions module invoke fail-closes undeclared Computer Use intents', async 
   assert.equal(execute.approvalRequest?.sideEffect, 'workspace');
 });
 
-test('bounded Computer Use confirmation is handled by module operation result, not dispatcher approval gate', async () => {
+test('runtime computer_use module exposes primitive intents and rejects legacy bounded operations', async () => {
   const dispatcher = createRuntimeModuleDispatcher();
 
-  const result = await dispatcher.invoke({
+  const describe = await dispatcher.describe({ moduleId: 'computer_use' });
+  assert.equal(describe.ok, true);
+  const description = describe.value as ModuleDescription;
+  assert.deepEqual(description.intents?.map((intent) => intent.name), [
+    COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    COMPUTER_USE_PRIMITIVE_INTENTS.runProcedure,
+    COMPUTER_USE_PRIMITIVE_INTENTS.control,
+  ]);
+
+  const legacy = await dispatcher.invoke({
     moduleId: 'computer_use',
-    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+    intent: 'executeBoundedOperation',
     input: {
       operationKind: 'computer_use.perform_local_action',
       ownerModuleId: 'computer_use',
@@ -133,12 +149,25 @@ test('bounded Computer Use confirmation is handled by module operation result, n
       action: { kind: 'submit', risk: 'high' },
     },
   });
+  assert.equal(legacy.moduleId, 'computer_use');
+  assert.equal(legacy.ok, false);
+  assert.match(legacy.error ?? '', /unsupported_intent:executeBoundedOperation/);
 
-  assert.equal(result.moduleId, 'computer_use');
-  assert.equal(result.ok, false);
-  assert.equal((result.value as { status?: string }).status, 'needs-confirmation');
-  assert.equal(result.approvalRequest?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
-  assert.doesNotMatch(result.error ?? '', /^approval_required:/);
+  const primitive = await dispatcher.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId: 'cu-session-missing-port',
+    },
+  });
+  assert.equal(primitive.moduleId, 'computer_use');
+  assert.equal(primitive.ok, false);
+  const value = primitive.value as ComputerUsePrimitiveEnvelope;
+  assert.equal(value.schemaVersion, COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA);
+  assert.equal(value.primitive, 'observe');
+  assert.equal(value.status, 'blocked');
+  assert.equal(value.blockedReason, 'missing_computer_use_primitive_port:observe');
 });
 
 test('runtime module dispatcher records scrubbed trace summaries and timing', async () => {

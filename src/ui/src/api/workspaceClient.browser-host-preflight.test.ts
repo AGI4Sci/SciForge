@@ -4,7 +4,6 @@ import { afterEach, describe, it } from 'node:test';
 import type { SciForgeConfig } from '../domain';
 import {
   BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
-  BROWSER_HOST_SEARCH_CAPABILITY,
   BROWSER_HOST_SESSION_CAPABILITY,
   browserHostSessionFrameStreamUrl,
   browserHostSessionWebRtcSignalingUrl,
@@ -168,7 +167,7 @@ describe('browser host session writer preflight', () => {
     assert.equal(result.status, 'missing-browser-host-capability');
     assert.match(result.message, /browser-host-session/);
     assert.match(result.message, /browser-host-native-surface/);
-    assert.match(result.message, /browser-host-search/);
+    assert.doesNotMatch(result.message, /browser-host-search/);
   });
 
   it('blocks stale Workspace Writers that only advertise diagnostic frame transports without native surface endpoints', async () => {
@@ -176,7 +175,6 @@ describe('browser host session writer preflight', () => {
       currentBrowserHostCapabilities(),
       {
         browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
-        browserHostSearch: '/api/sciforge/browser-host/search',
       },
     ))) as typeof fetch;
 
@@ -195,7 +193,6 @@ describe('browser host session writer preflight', () => {
       {
         browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
         browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
-        browserHostSearch: '/api/sciforge/browser-host/search',
       },
     ))) as typeof fetch;
 
@@ -242,10 +239,8 @@ describe('browser host session writer preflight', () => {
         return jsonResponse(healthAttempts === 1
           ? writerHealth([
               BROWSER_HOST_SESSION_CAPABILITY,
-              BROWSER_HOST_SEARCH_CAPABILITY,
             ], {
               browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
-              browserHostSearch: '/api/sciforge/browser-host/search',
             })
           : writerHealth(currentBrowserHostCapabilities()));
       }
@@ -478,7 +473,6 @@ describe('browser host session writer preflight', () => {
       {
         browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
         browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
-        browserHostSearch: '/api/sciforge/browser-host/search',
       },
     ))) as typeof fetch;
 
@@ -511,7 +505,6 @@ function writerHealth(capabilities: string[], endpoints: Record<string, string> 
   browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
   browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
   browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
-  browserHostSearch: '/api/sciforge/browser-host/search',
 }) {
   return {
     ok: true,
@@ -526,7 +519,6 @@ function currentBrowserHostCapabilities() {
   return [
     BROWSER_HOST_SESSION_CAPABILITY,
     BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
-    BROWSER_HOST_SEARCH_CAPABILITY,
   ];
 }
 

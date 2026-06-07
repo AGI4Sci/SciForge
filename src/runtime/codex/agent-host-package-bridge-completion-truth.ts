@@ -9,7 +9,7 @@ const ACCEPTANCE_INPUT = 'cu-user-acceptance-input.json';
 const COMPLETION_EVIDENCE = 'isolated-desktop-l3-workflow-evidence.json';
 const COMPLETION_DIAGNOSTIC = 'completion-grade-diagnostics.json';
 const VISION_TRACE = 'vision-trace.json';
-const TUI_HOST_RUN_TASK_CHAIN = 'tui-host-run-task-chain.json';
+const PRIMITIVE_TRACE = 'primitive-trace.json';
 
 export function completionTruthFromPackageBridgeWorkEvidence(input: {
   evidenceRefs?: string[];
@@ -25,7 +25,7 @@ export function completionTruthFromPackageBridgeWorkEvidence(input: {
   const sameRunRefs = currentRunDir
     ? uniqueStrings([...baseRefs, ...evidenceRefs].filter((ref) => ref.startsWith(`${currentRunDir}/`)))
     : [];
-  const anchorRefs = sameRunRefs.filter((ref) => ref.endsWith(`/${VISION_TRACE}`) || ref.endsWith(`/${TUI_HOST_RUN_TASK_CHAIN}`));
+  const anchorRefs = sameRunRefs.filter((ref) => ref.endsWith(`/${VISION_TRACE}`) || ref.endsWith(`/${PRIMITIVE_TRACE}`));
   const manifestRef = sameRunRefs.find((ref) => ref.endsWith(`/${ACCEPTANCE_MANIFEST}`));
   const completionEvidenceRef = sameRunRefs.find((ref) => ref.endsWith(`/${COMPLETION_EVIDENCE}`));
 
@@ -68,9 +68,9 @@ function isPackageBridgeCompletionWorkEvidence(value: unknown): value is Record<
 
 function currentRunDirFromRefs(refs: string[]): string | undefined {
   const anchorRef = refs.find((ref) => ref.endsWith(`/${VISION_TRACE}`))
-    ?? refs.find((ref) => ref.endsWith(`/${TUI_HOST_RUN_TASK_CHAIN}`));
+    ?? refs.find((ref) => ref.endsWith(`/${PRIMITIVE_TRACE}`));
   if (!anchorRef) return undefined;
-  const marker = anchorRef.endsWith(`/${VISION_TRACE}`) ? `/${VISION_TRACE}` : `/${TUI_HOST_RUN_TASK_CHAIN}`;
+  const marker = anchorRef.endsWith(`/${VISION_TRACE}`) ? `/${VISION_TRACE}` : `/${PRIMITIVE_TRACE}`;
   return anchorRef.slice(0, -marker.length);
 }
 
@@ -120,7 +120,7 @@ function runtimeOwnedCompletionRef(ref: string): boolean {
     COMPLETION_EVIDENCE,
     COMPLETION_DIAGNOSTIC,
     VISION_TRACE,
-    TUI_HOST_RUN_TASK_CHAIN,
+    PRIMITIVE_TRACE,
   ].some((fileName) => trimmed.endsWith(`/${fileName}`));
 }
 

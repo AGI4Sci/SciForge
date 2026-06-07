@@ -36,24 +36,28 @@ function runtimeCodexEnvFromLocalConfig() {
 
 function modelRouterEnvFromLocalConfig() {
   const settings = readLocalProviderSettings(CONFIG_LOCAL_PATH);
+  const visionModel = settings.visionModel;
+  const visionBaseUrl = visionModel ? settings.visionBaseUrl ?? settings.baseUrl : undefined;
+  const visionApiKey = visionModel ? settings.visionApiKey ?? settings.apiKey : undefined;
+  const visionProvider = visionModel ? settings.visionProvider ?? settings.provider : undefined;
   return {
     ...runtimeCodexEnvFromLocalSettings(settings),
     ...(settings.provider ? {
       SCIFORGE_TEXT_PROVIDER: settings.provider,
-      SCIFORGE_VISION_PROVIDER: settings.provider,
     } : {}),
     ...(settings.baseUrl ? {
       SCIFORGE_TEXT_BASE_URL: settings.baseUrl,
-      SCIFORGE_VISION_BASE_URL: settings.baseUrl,
     } : {}),
     ...(settings.model ? {
       SCIFORGE_TEXT_MODEL: settings.model,
-      SCIFORGE_VISION_MODEL: settings.model,
     } : {}),
     ...(settings.apiKey ? {
       SCIFORGE_TEXT_API_KEY: settings.apiKey,
-      SCIFORGE_VISION_API_KEY: settings.apiKey,
     } : {}),
+    ...(visionProvider ? { SCIFORGE_VISION_PROVIDER: visionProvider } : {}),
+    ...(visionBaseUrl ? { SCIFORGE_VISION_BASE_URL: visionBaseUrl } : {}),
+    ...(visionModel ? { SCIFORGE_VISION_MODEL: visionModel } : {}),
+    ...(visionApiKey ? { SCIFORGE_VISION_API_KEY: visionApiKey } : {}),
   };
 }
 

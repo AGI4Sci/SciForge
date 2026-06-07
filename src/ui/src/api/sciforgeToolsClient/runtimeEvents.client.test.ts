@@ -731,7 +731,7 @@ test('Runtime Codex BrowserHostSession Agent Host candidate result asks for sour
           evidenceRefs: [`audit:codex-agent-host-turn-loop:${commandId}:${attemptId}`],
           raw: {
             schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
-            selectedRuntime: 'browser-host-search-runtime',
+            runtimeProfileId: 'browser-host-session',
           },
         })}\n\n`,
         'event: done\n',
@@ -755,9 +755,10 @@ test('Runtime Codex BrowserHostSession Agent Host candidate result asks for sour
           }],
           executionUnits: [{
             id: 'EU-browser-host-search',
-            tool: 'browser_search',
+            tool: 'browser.search',
             status: 'needs-human',
-            selectedRuntime: 'browser-host-search-runtime',
+            moduleId: 'browser',
+            intent: 'browser.search',
             outputRef: 'browser-host-session:browser-host-test/search-results.json',
           }],
           artifacts: [{
@@ -766,7 +767,7 @@ test('Runtime Codex BrowserHostSession Agent Host candidate result asks for sour
             producerScenario: 'knowledge',
             schemaVersion: 'sciforge.browser-host-session.search-result.v1',
             metadata: {
-              source: 'browser_search',
+              source: 'browser.search',
               browserSessionRef: 'browser-host-session:browser-host-test',
               searchResultRef: 'browser-host-session:browser-host-test/search-results.json',
             },
@@ -841,9 +842,10 @@ test('Runtime Codex BrowserHostSession repair-needed diagnostics stay visible wi
           }],
           executionUnits: [{
             id: 'EU-browser-host-search',
-            tool: 'browser_search',
+            tool: 'browser.search',
             status: 'repair-needed',
-            selectedRuntime: 'browser-host-search-runtime',
+            moduleId: 'browser',
+            intent: 'browser.search',
             runtimeProfileId: 'browser-host-session',
             outputRef: 'browser-host-session:browser-host-test/search-results.json',
           }],
@@ -853,7 +855,7 @@ test('Runtime Codex BrowserHostSession repair-needed diagnostics stay visible wi
             producerScenario: 'knowledge',
             schemaVersion: 'sciforge.browser-host-session.search-result.v1',
             metadata: {
-              source: 'browser_search',
+              source: 'browser.search',
               browserSessionRef: 'browser-host-session:browser-host-test',
               searchResultRef: 'browser-host-session:browser-host-test/search-results.json',
             },
@@ -910,9 +912,10 @@ test('Runtime Codex BrowserHostSession done message fails closed when it contain
           },
           executionUnits: [{
             id: 'EU-browser-host-search',
-            tool: 'browser_search',
+            tool: 'browser.search',
             status: 'needs-human',
-            selectedRuntime: 'browser-host-search-runtime',
+            moduleId: 'browser',
+            intent: 'browser.search',
             outputRef: 'browser-host-session:browser-host-test/search-results.json',
           }],
           artifacts: [{
@@ -920,7 +923,7 @@ test('Runtime Codex BrowserHostSession done message fails closed when it contain
             type: 'browser-search-results',
             schemaVersion: 'sciforge.browser-host-session.search-result.v1',
             metadata: {
-              source: 'browser_search',
+              source: 'browser.search',
               browserSessionRef: 'browser-host-session:browser-host-test',
               searchResultRef: 'browser-host-session:browser-host-test/search-results.json',
             },
@@ -1431,7 +1434,7 @@ test('Runtime Codex provider preflight falls back from UI origin to desktop writ
   }
 });
 
-test('Runtime Codex command text resolves relative modality requests from recent visible refs', async () => {
+test('Runtime Codex request resolves relative image refs as structured input objects', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
   try {
@@ -1491,9 +1494,20 @@ test('Runtime Codex command text resolves relative modality requests from recent
   }
 
   const commandText = String(bodies[0]?.commandText ?? '');
-  assert.match(commandText, /--ref "?\.sciforge\/uploads\/session-1\/upload-image-1-microscopy\.png"?/);
-  assert.match(commandText, /解释上面的图片/);
-  assert.doesNotMatch(commandText, /data:image|base64|iVBORw0KGgo/i);
+  assert.equal(commandText, '解释上面的图片');
+  assert.doesNotMatch(commandText, /--ref|\.sciforge\/uploads\/session-1\/upload-image-1-microscopy\.png|data:image|base64|iVBORw0KGgo/i);
+  assert.equal(bodies[0]?.modalityRefs, undefined);
+  assert.deepEqual((bodies[0]?.inputObjects as Array<Record<string, unknown>>).map((object) => ({
+    ref: object.ref,
+    mimeType: object.mimeType,
+    title: object.title,
+    source: object.source,
+  })), [{
+    ref: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+    mimeType: 'image/png',
+    title: 'microscopy.png',
+    source: 'recent-visible-message',
+  }]);
 });
 
 test('Runtime Codex foreground final message uses gui.present provenance', async () => {
@@ -1977,7 +1991,7 @@ test('Runtime Codex stream request carries command text, Agent Host input, and a
   assert.doesNotMatch(JSON.stringify(body), /raw-terminal|raw-bytes/);
 });
 
-test('Runtime Codex stream request carries uploaded image refs for Model Router vision without inline bytes', async () => {
+test('Runtime Codex stream request carries uploaded image refs as input objects without inline bytes', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
   try {
@@ -2040,11 +2054,171 @@ test('Runtime Codex stream request carries uploaded image refs for Model Router 
   const body = bodies[0]!;
   const commandText = String(body.commandText ?? '');
   const serialized = JSON.stringify(body);
-  assert.match(commandText, /ask --ref "\.sciforge\/uploads\/session-test\/upload-image-1-microscopy\.png"/);
-  assert.match(commandText, /What does this microscopy image show\?/);
+  assert.equal(commandText, 'What does this microscopy image show?');
+  assert.doesNotMatch(commandText, /ask --ref|\.sciforge\/uploads\/session-test\/upload-image-1-microscopy\.png/);
+  assert.equal(body.modalityRefs, undefined);
+  assert.deepEqual((body.inputObjects as Array<Record<string, unknown>>).map((object) => ({
+    ref: object.ref,
+    mimeType: object.mimeType,
+    title: object.title,
+    source: object.source,
+  })), [{
+    ref: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+    mimeType: 'image/png',
+    title: 'microscopy.png',
+    source: 'explicit-reference',
+  }]);
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  assert.equal(agentHostInput.inputObjects, undefined);
   assert.match(serialized, /sciforge-runtime-default|sciforge-model-router|sciforge-router/);
   assert.doesNotMatch(serialized, /data:image|base64|iVBORw0KGgo|rawProviderPayload/i);
   assert.deepEqual(recursiveForbiddenKeys(body, ['artifacts', 'references', 'messages', 'uiState']), []);
+});
+
+test('Runtime Codex relative image follow-up carries recent uploaded artifacts as input objects', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '介绍一下上一张上传的图片',
+      references: [],
+      messages: [{
+        id: 'msg-upload-image',
+        role: 'system',
+        content: '已上传 1 个文件作为引用：酒店凭证.jpg',
+        createdAt: '2026-06-07T00:00:00.000Z',
+        status: 'completed',
+      }],
+      artifacts: [{
+        id: 'upload-image-hotel',
+        type: 'uploaded-image',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        path: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+        dataRef: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+        metadata: {
+          title: '酒店凭证.jpg',
+          mimeType: 'image/jpeg',
+          storage: 'workspace-file',
+        },
+        previewDescriptor: {
+          kind: 'image',
+          source: 'path',
+          ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+          mimeType: 'image/jpeg',
+          inlinePolicy: 'stream',
+          actions: ['open-inline', 'make-thumbnail'],
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const commandText = String(body.commandText ?? '');
+  const serialized = JSON.stringify(body);
+  assert.equal(commandText, '介绍一下上一张上传的图片');
+  assert.doesNotMatch(commandText, /ask --ref|\.sciforge\/uploads\/session-test\/upload-image-hotel\.jpg/);
+  assert.equal(body.modalityRefs, undefined);
+  assert.deepEqual((body.inputObjects as Array<Record<string, unknown>>).map((object) => ({
+    ref: object.ref,
+    mimeType: object.mimeType,
+    title: object.title,
+    source: object.source,
+  })), [{
+    ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+    mimeType: 'image/jpeg',
+    title: '酒店凭证.jpg',
+    source: 'recent-artifact',
+  }]);
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  assert.equal(agentHostInput.inputObjects, undefined);
+  assert.doesNotMatch(serialized, /data:image|base64|rawProviderPayload/i);
+  assert.deepEqual(recursiveForbiddenKeys(body, ['artifacts', 'references', 'messages', 'uiState']), []);
+});
+
+test('Runtime Codex named image follow-up carries only the matching uploaded input object', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '只读取名为“酒店凭证.jpg”的图片，不要分析其他图片。',
+      references: [],
+      messages: [{
+        id: 'msg-upload-hotel',
+        role: 'system',
+        content: '已上传 1 个文件作为引用：酒店凭证.jpg',
+        createdAt: '2026-06-07T00:00:00.000Z',
+        status: 'completed',
+      }, {
+        id: 'msg-upload-desktop',
+        role: 'system',
+        content: '已上传 1 个文件作为引用：WX20260605-091908@2x.png',
+        createdAt: '2026-06-07T00:01:00.000Z',
+        status: 'completed',
+      }],
+      artifacts: [{
+        id: 'upload-image-hotel',
+        type: 'uploaded-image',
+        schemaVersion: '1',
+        path: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+        dataRef: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+        producerScenario: 'uploaded-input',
+        metadata: {
+          title: '酒店凭证.jpg',
+          mimeType: 'image/jpeg',
+          storage: 'workspace-file',
+        },
+      }, {
+        id: 'upload-image-desktop',
+        type: 'uploaded-image',
+        schemaVersion: '1',
+        path: '.sciforge/uploads/session-test/upload-image-desktop.png',
+        dataRef: '.sciforge/uploads/session-test/upload-image-desktop.png',
+        producerScenario: 'uploaded-input',
+        metadata: {
+          title: 'WX20260605-091908@2x.png',
+          mimeType: 'image/png',
+          storage: 'workspace-file',
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  assert.deepEqual((body.inputObjects as Array<Record<string, unknown>>).map((object) => ({
+    ref: object.ref,
+    mimeType: object.mimeType,
+    title: object.title,
+    source: object.source,
+  })), [{
+    ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+    mimeType: 'image/jpeg',
+    title: '酒店凭证.jpg',
+    source: 'recent-artifact',
+  }]);
+  assert.doesNotMatch(JSON.stringify(body), /upload-image-desktop\.png|WX20260605-091908/i);
 });
 
 test('Runtime Codex commandText carries explicit selected message content as bounded terminal-equivalent context', async () => {

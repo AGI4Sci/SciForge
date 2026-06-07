@@ -1,17 +1,30 @@
-# Browser 模块设计
+# Browser Runtime 设计
 
 最后更新：2026-06-07
 
+## 文档目的与约束
+
+这份文档只记录 Browser Runtime 本身的最新设计原则和沟通口径，目标是让人类和 agent 读完后能快速理解 Browser 是什么、能做什么、不能做什么。
+
+原则约束：
+
+- 保持简洁，避免把文档写成 TypeScript contract、JSON schema 或测试用例。
+- 文档只描述 Browser 自身的稳定边界、primitive、证据原则和迁移原则。
+- 外部系统只在解释边界时短提，不展开外部编排、界面呈现、模型路由或产品工作流设计。
+- 精确字段、schema、MCP tool definition、validator 和测试真相源放在 `packages/actions/browser-runtime`。
+- 历史路径只保留必要迁移口径，不作为新设计的主叙事。
+- 如果实现细节变复杂，优先更新 package contract 和测试；本文件只补能帮助沟通和理解需求的原则。
+
 ## 定位
 
-Browser 是 Codex backend 可调用的网页信息输入与局部浏览器操作模块，不是 Browser agent，也不是搜索总结工具。
+Browser 是可调用的网页信息输入与局部浏览器操作 runtime，不是 Browser agent，也不是搜索总结工具。
 
 Browser 只负责：
 
-- 执行 Host 明确请求的原子浏览器能力：search、open、read、extract、download。
-- 返回结构化 observation、diagnostics 和 refs-first evidence。
+- 执行调用方明确请求的浏览器 primitive。
 - 维护 BrowserHostSession / tab scope、页面状态、导航状态和可审计 artifact。
-- 对危险或越界动作 fail closed，并把 blocked reason 返回 Host。
+- 返回结构化 observation、diagnostics 和 refs-first evidence。
+- 对危险、越界、预算不足或证据不足的请求 fail closed。
 
 Browser 不负责：
 
@@ -24,331 +37,113 @@ Browser 不负责：
 - 判断用户意图是否完成。
 - 根据特定站点、语言或领域写场景策略。
 
-## 产品入口
+## 外部边界
 
-用户仍然只从普通聊天进入：
+Browser 不直接面向用户表达的完整任务。调用方必须先给出明确 query、URL、session、ref、budget、risk policy 或下载约束。
 
-```text
-用户请求网页事实
-  -> Codex backend 判断需要 Browser evidence
-  -> Agent Host 生成 AcceptanceSpec / action budget
-  -> Agent Host 调用 Browser primitive tools
-  -> Browser 返回 observation / refs / diagnostics
-  -> Agent Host 基于 verifier 反馈继续 search/open/read/extract/download
-  -> Agent Host 生成 completion truth 和 final answer
-```
+Browser 返回网页状态、页面内容 refs、下载 artifact refs、diagnostics、blocked reason 和 repair hints；调用方负责继续推理、修复、验证和生成最终答复。
 
-Browser pane 只是 BrowserHostSession 的展示和控制面板，不是任务入口。
+Browser pane 只能作为 BrowserHostSession 的展示和控制面板，不能成为 Browser 的任务语义入口。
 
-## 原子能力边界
+## Primitive Surface
 
-Browser module 对 Agent Host 暴露的基础能力必须是原子操作。原子操作只描述“浏览器看到了什么、做了什么、产出了哪些 refs”，不描述“这个用户任务是否完成”。
+Browser 新 public surface 只暴露这些 primitive：
 
-| primitive | 作用 | 不允许做的事 | 主要输出 |
-| --- | --- | --- | --- |
-| `browser.search` | 用 Host 给定 query 做候选发现。 | 不打开结果页、不总结答案、不改写 query。 | search result list、search URL、search result ref、diagnostics。 |
-| `browser.open` | 打开 Host 给定 URL / link，建立或复用 session。 | 不读取长正文、不判断来源是否满足任务。 | session ref、requested/final URL、title、navigation state、frame/screenshot refs。 |
-| `browser.read` | 读取当前页面或给定 URL 的网页内容。 | 不下载文件、不抽象成最终结论、不跨页面继续搜索。 | source page ref、page text ref、HTML ref、text preview、content metadata。 |
-| `browser.extract` | 对已读 refs 做纯解析。 | 不访问网络、不决定下一步、不做任务级语义验收。 | links、forms、dates、metadata、result items、structured observations。 |
-| `browser.download` | 把 Host 指定的远程资源下载为受控 artifact。 | 不保存到任意本地路径、不自动执行/打开文件、不总结文件内容。 | file ref、filename、mime type、byte size、hash、final URL、diagnostics。 |
+| primitive | 作用 | 边界 |
+| --- | --- | --- |
+| `browser.search` | 用调用方给定 query 做候选发现。 | 不打开结果页、不总结答案、不改写 query。 |
+| `browser.navigate` | 将调用方给定 URL 绑定到一个 BrowserHostSession，并执行一次导航。 | 不读取长正文、不判断来源是否满足任务、不代表用户级完成。 |
+| `browser.observe` | 观察现有 session 当前状态。 | 不导航、不读取长正文、不完成任务级判断。 |
+| `browser.read` | 读取当前页面或给定 URL 的网页内容并物化 refs。 | 不下载文件、不抽象成最终结论、不跨页面继续搜索。 |
+| `browser.extract` | 对已读 refs 做纯结构解析。 | 不访问网络、不决定下一步、不做任务级语义验收。 |
+| `browser.download` | 把调用方指定的远程资源下载为受控 artifact。 | 不保存到任意本地路径、不自动执行/打开文件、不总结文件内容。 |
 
-旧的 `browser.search_read` / `browser.open_read` 只能作为兼容或测试期便捷封装存在。产品语义上它们不得承载查询改写、来源选择、跨语言策略、特定站点 repair 或 completion truth。
+所有 primitive 都必须使用 refs-first envelope。未知字段默认拒绝或进入 diagnostics，不能静默改变语义。
 
-## Primitive Contract
+旧的 `browser.search_read`、`browser.open_read`、`browser.open` 和 `executeBoundedOperation` 浏览器组合入口已经退出 public surface。新实现必须拒绝这些 intent，不能把它们作为兼容 alias、内部兜底或产品 truth。
 
-所有 Browser primitive 都使用 refs-first envelope。字段命名必须稳定，未知字段默认拒绝或进入 diagnostics，不能静默改变语义。
+## Session 与 Artifact 原则
 
-```ts
-type BrowserPrimitiveStatus =
-  | "completed"
-  | "partial"
-  | "blocked"
-  | "needs-confirmation"
-  | "failed";
+- 每个 primitive 只绑定一个 BrowserHostSession / tab scope，除非输入明确要求新建 session。
+- `search` 只产出候选结果和 search refs；搜索结果页不是用户级完成证据。
+- `navigate` 只证明导航尝试和当前 session 状态。
+- `read` 只证明页面内容已被物化为 source page / page text refs。
+- `extract` 只解析已有 refs，不访问网络。
+- `download` 只能写入受控 session artifact scope，并返回 hash、大小、MIME 和 artifact refs。
+- 下载后的内容理解属于后续 reader / parser / verifier，不属于 Browser。
 
-type BrowserDiagnostic = {
-  code: string;
-  message: string;
-  severity: "info" | "warning" | "error";
-  refs?: string[];
-  retryable?: boolean;
-};
+## 风险与确认
 
-type BrowserPrimitiveBudget = {
-  maxTimeMs: number;
-  elapsedMs?: number;
-  maxBytes?: number;
-  bytesRead?: number;
-};
+Browser 可以识别浏览器动作风险并返回 `needs-confirmation`，但不能自己决定高风险动作是否应该执行。
 
-type BrowserPrimitiveEnvelope<T> = {
-  schemaVersion: "sciforge.browser-runtime.primitive-result.v1";
-  moduleId: "browser";
-  primitive: "search" | "open" | "read" | "extract" | "download";
-  status: BrowserPrimitiveStatus;
-  value?: T;
-  refs: string[];
-  diagnostics: BrowserDiagnostic[];
-  budget: BrowserPrimitiveBudget;
-  blockedReason?: string;
-  repairHints?: BrowserRepairHint[];
-};
+必须返回 `needs-confirmation` 的典型情况：
 
-type BrowserRepairHint = {
-  code: string;
-  message: string;
-  suggestedPrimitive?: "search" | "open" | "read" | "extract" | "download";
-  machineReadable?: Record<string, unknown>;
-};
-```
+- 跨站点表单提交。
+- credential-like 输入。
+- 上传、删除、支付、账号或安全设置变更。
+- 下载超过调用方声明的预算或类型约束。
+- 调用方没有提供有效 approval ref。
 
-`repairHints` 是给 Agent Host 的反馈，不是 Browser 自己继续执行的指令。Browser primitive 不得自动 repair。
+确认由调用方收集。Browser 只验证 approval ref 是否匹配当前 action risk envelope。
 
-### `browser.search`
+## Evidence 原则
 
-`search` 只发现候选页面。query 的生成、翻译、放宽、站点选择和多轮搜索策略由 Agent Host 决定。
+Browser evidence 必须 refs-first。可作为局部证据的对象包括：
 
-```ts
-type BrowserSearchInput = {
-  schemaVersion: "sciforge.browser-runtime.search-input.v1";
-  query: string;
-  engine?: "bing" | "duckduckgo";
-  locale?: string;
-  region?: string;
-  limit: number;
-  budget: BrowserPrimitiveBudget;
-  constraints?: {
-    allowedDomains?: string[];
-    blockedDomains?: string[];
-    safeSearch?: "off" | "moderate" | "strict";
-  };
-};
+- search result refs。
+- session / navigation refs。
+- frame / screenshot / DOM / AX refs。
+- source page / page text / HTML refs。
+- download artifact refs。
+- console / network diagnostics refs。
 
-type BrowserSearchOutput = {
-  queryUsed: string;
-  engine: string;
-  searchUrl: string;
-  searchedAt: string;
-  results: Array<{
-    rank: number;
-    title: string;
-    url: string;
-    snippet?: string;
-    displayedUrl?: string;
-  }>;
-  refs: {
-    searchResultRef: string;
-  };
-};
-```
+raw HTML 大 payload、cookies、credentials、downloaded bytes、raw screenshot、data URL、base64、API key 和 secret 不得进入 primitive body 或 public diagnostics。
 
-### `browser.open`
+## 局部感知原则
 
-`open` 只负责导航和 session 状态，不负责读取长正文。
+Browser primitive 默认不做任务级语义判断。
 
-```ts
-type BrowserOpenInput = {
-  schemaVersion: "sciforge.browser-runtime.open-input.v1";
-  url: string;
-  sessionId?: string;
-  timeoutMs: number;
-  capture?: "none" | "frame" | "screenshot";
-  constraints?: {
-    allowedDomains?: string[];
-    requireUserConfirmationForCrossOrigin?: boolean;
-  };
-};
+如果某个 adapter 需要模型或其它感知组件做局部辅助，它只能输出 refs-first observation，例如页面片段摘要、候选结果质量解释、视觉 / 文本消歧或 before / after 差异说明。
 
-type BrowserOpenOutput = {
-  sessionRef: string;
-  requestedUrl: string;
-  finalUrl: string;
-  title?: string;
-  openedAt: string;
-  navigation: {
-    redirected: boolean;
-    blockedByLogin?: boolean;
-    blockedByConsent?: boolean;
-    errorCode?: string;
-  };
-  refs: {
-    frameRef?: string;
-    screenshotRef?: string;
-    domSnapshotRef?: string;
-    axSnapshotRef?: string;
-  };
-};
-```
+这类局部感知组件不能在 Browser 内部：
 
-### `browser.read`
+- 改写 query。
+- 决定下一页要打开什么。
+- 判断何时停止。
+- 改变 risk policy。
+- 自动 repair。
+- 产出 completion truth。
+- 生成 final answer。
 
-`read` 读取网页内容并物化 refs。它可以从现有 session 读取，也可以读取给定 URL，但不能把文件下载当作网页正文。
+调用方可以读取 Browser refs 后自行调用模型或 verifier；这不属于 Browser primitive 内部职责。
 
-```ts
-type BrowserReadInput = {
-  schemaVersion: "sciforge.browser-runtime.read-input.v1";
-  sessionId?: string;
-  url?: string;
-  includeText: boolean;
-  includeHtml?: boolean;
-  maxTextChars: number;
-  timeoutMs: number;
-};
+## 迁移口径
 
-type BrowserReadOutput = {
-  page: {
-    url: string;
-    finalUrl: string;
-    title?: string;
-    contentType?: string;
-    textCharCount?: number;
-    textSha1?: string;
-  };
-  textPreview?: string;
-  refs: {
-    sourcePageRef: string;
-    pageTextRef?: string;
-    htmlRef?: string;
-  };
-};
-```
+历史路径包括 `executeBoundedOperation` 浏览器组合入口、`browser.search_read`、`browser.open_read`、`browser.open`、Browser pane dogfood、iframe / proxy render、snapshot replay 和历史 browser pane runbook。
 
-### `browser.extract`
+迁移目标：
 
-`extract` 是纯解析能力。输入必须是 Browser 或其他受信模块产生的 ref；它不能访问网络。
+- 搜索和读取拆为 `search` / `navigate` / `read` / `extract`。
+- 下载进入 `download`，不能混在 `read` 或页面解析里。
+- Browser pane 只展示和控制 session，不承载任务智能。
+- 旧组合路径必须删除或显式拒绝，不能转译为 primitive chain，也不能作为产品 truth。
+- 查询策略、来源取舍、停止条件、验证和最终总结都移到调用方。
 
-```ts
-type BrowserExtractInput = {
-  schemaVersion: "sciforge.browser-runtime.extract-input.v1";
-  ref: string;
-  extract: Array<"links" | "forms" | "dates" | "metadata" | "resultItems">;
-  maxItems?: number;
-};
-
-type BrowserExtractOutput = {
-  sourceRef: string;
-  links?: Array<{
-    url: string;
-    text?: string;
-    rel?: string;
-    confidence?: number;
-  }>;
-  forms?: Array<{
-    action?: string;
-    method?: "get" | "post";
-    controls: Array<{ name?: string; type?: string; value?: string }>;
-  }>;
-  dates?: Array<{
-    value: string;
-    label?: string;
-    context?: string;
-  }>;
-  metadata?: Record<string, string>;
-  resultItems?: Array<{
-    title?: string;
-    url?: string;
-    snippet?: string;
-    date?: string;
-  }>;
-};
-```
-
-是否需要“轻量语义抽取”由 Agent Host 决定。默认 `browser.extract` 只做通用结构抽取；不根据用户任务做语义取舍。
-
-### `browser.download`
-
-`download` 是受控远程资源获取。它必须产出本地 artifact ref，不允许让 Agent Host 指定任意文件系统路径。
-
-```ts
-type BrowserDownloadInput = {
-  schemaVersion: "sciforge.browser-runtime.download-input.v1";
-  url?: string;
-  sessionId?: string;
-  linkSelector?: string;
-  expectedMimeTypes?: string[];
-  maxBytes: number;
-  saveScope: "session-artifacts";
-  filenameHint?: string;
-  requireUserConfirmation?: boolean;
-};
-
-type BrowserDownloadOutput = {
-  requestedUrl?: string;
-  finalUrl?: string;
-  fileRef?: string;
-  filename?: string;
-  mimeType?: string;
-  byteSize?: number;
-  sha256?: string;
-  contentDisposition?: string;
-  refs: {
-    fileRef?: string;
-    downloadRecordRef: string;
-  };
-};
-```
-
-下载后的内容理解属于后续模块，例如 files、PDF、documents、spreadsheets 或专门 parser。`browser.download` 不总结文件内容。
-
-## Agent Host 闭环
-
-Agent Host 是唯一的网页任务智能控制器：
-
-```text
-用户请求
-  -> Agent Host 生成 AcceptanceSpec
-  -> Agent Host 选择 primitive + 输入 contract
-  -> Browser 返回 observation / diagnostics / refs
-  -> Verifier 根据 AcceptanceSpec 判断 satisfied / partial / blocked
-  -> Agent Host 根据 verifier 反馈继续行动或停止
-  -> Agent Host 生成 completionTruth / final answer
-```
-
-Agent Host 可以基于反馈动态决定：
-
-- 改写、翻译、放宽或收紧 query。
-- 打开哪个结果。
-- 读取多少页面。
-- 是否抽取链接、日期、表单或 result items。
-- 是否下载远程文件。
-- 何时停止并给出 blocked / partial / satisfied。
-
-这些策略不得下沉到 Browser primitive。
-
-## 边界规则
-
-- 每个 primitive 调用只绑定一个 BrowserHostSession / tab scope，除非输入 contract 明确声明新建 session。
-- 输入 contract 只声明当前 primitive 所需字段、预算、风险和约束。
-- 不允许配置 `if/else/loop` 工作流。
-- primitive 内部不得调用另一个 primitive 来完成任务级目标。
-- 搜索结果页不是用户级完成证据；必须由 Agent Host 决定是否继续 open/read。
-- 登录、跨站点高风险动作、提交、上传、删除、支付和账号 / 安全动作必须停止并返回 Host。
-- 下载必须走 `browser.download`，并受 `maxBytes`、MIME、hash、saveScope 和 confirmation policy 约束。
-- 自动 repair 禁止；打不开页面、来源不相关、结果不足或证据冲突时，只返回 diagnostics / repair hints。
-- Browser 返回的 screenshot、DOM、AX、HTML、page text、download record 都是 evidence，不是 completion truth。
-
-## Model Router 使用
-
-Browser 可以调用 Model Router 做局部辅助：
-
-- 页面片段摘要。
-- 候选结果质量解释。
-- 视觉 / 文本消歧。
-- before / after 差异说明。
-
-Model Router 不能生成用户最终总结，不能决定继续扩大搜索，不能改变 risk policy，不能产出 completion truth。
+迁移期如果遇到旧调用，唯一允许行为是 fail closed，并返回 unsupported intent / repair hint；不允许静默兼容。
 
 ## 用户级验收
 
-检索类用户级验收必须满足：
+Browser 只能提供网页局部证据，不能单独提供用户级验收。
 
-- 普通聊天请求触发 Agent Host 使用 Browser primitive，而不是直接进入 Browser agent。
-- Browser 返回当前 run 产生的 search refs、source page refs、page text refs、download refs 或 diagnostics。
-- Agent Host 基于 refs-first evidence 和 verifier 结论生成 final answer，并给出来源。
-- 来源不足、页面打不开、证据冲突或结果不相关时，final answer 必须是 partial / blocked，不能编造完成。
-- 用户禁止联网或要求只用本地上下文时，不调用 Browser。
+可作为 Browser 局部证据的对象：
 
-## 禁止作为产品 truth 的对象
+- current-run search / navigation / read / extract / download refs。
+- source page refs 和 page text refs。
+- download artifact refs。
+- diagnostics 和 blocked reason refs。
+- 必要时由调用方关联的 verifier refs。
+
+禁止把这些对象当作产品 truth：
 
 - iframe。
 - proxy render。
@@ -357,10 +152,20 @@ Model Router 不能生成用户最终总结，不能决定继续扩大搜索，�
 - 系统外部浏览器。
 - 历史 run。
 - 只读搜索结果页。
+- Browser primitive 的 `status=completed`，除非调用方另有 current-run completion truth 和必要 source / verifier refs。
 
-这些对象只能作为 diagnostic、evidence 或 handoff，不能证明 Browser 产品通过。
+## 契约真相源
+
+长期 contract、MCP-compatible tool schema、validator 和测试应放在：
+
+- `packages/actions/browser-runtime/index.ts`
+- `packages/actions/browser-runtime/mcp.ts`
+- `packages/actions/browser-runtime/action-provider.manifest.json`
+- `packages/actions/browser-runtime/*.test.ts`
+
+本文件只保留设计原则和迁移口径。
 
 ## 相关文档
 
-- [`../PROJECT.md`](../PROJECT.md)：当前需求和验收标准。
-- [`Architecture.md`](Architecture.md)：总架构和 Bounded Operation。
+- [`ComputerUseRuntimeArchitecture.md`](ComputerUseRuntimeArchitecture.md)：Computer Use primitive runtime 的同构设计。
+- [`Architecture.md`](Architecture.md)：总架构和 Browser 上下游边界。

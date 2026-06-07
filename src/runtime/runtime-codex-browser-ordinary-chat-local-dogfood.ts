@@ -2,9 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { readRequiredLocalProviderSettings, type LocalProviderSettings } from '../../packages/backend/src/local-provider-config.js';
-import type { BrowserHostSessionManager } from './browser-host-session.js';
 import {
-  createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager,
   writeRuntimeCodexBrowserOrdinaryChatAcceptance,
   type RuntimeCodexBrowserOrdinaryChatAcceptanceManifest,
   type RuntimeCodexBrowserOrdinaryChatAcceptanceOptions,
@@ -86,8 +84,6 @@ export async function runRuntimeCodexBrowserOrdinaryChatLocalDogfood(
     });
   }
 
-  const manager = createLocalOrdinaryChatDogfoodBrowserHostSessionManager();
-  let refsToClose: string[] = [];
   try {
     const writer = options.writer ?? writeRuntimeCodexBrowserOrdinaryChatAcceptance;
     const acceptance = await writer({
@@ -96,15 +92,11 @@ export async function runRuntimeCodexBrowserOrdinaryChatLocalDogfood(
       commandText,
       commandId,
       attemptId,
-      browserBoundedOperationPorts: {
-        manager,
-      },
     });
     const evidenceRefs = boundedRefs([
       ...(acceptance.actualTaskResult?.evidenceRefs ?? []),
       ...(acceptance.liveRuntimeCodexProof?.eventEvidenceRefs ?? []),
     ]);
-    refsToClose = evidenceRefs;
     const status = acceptance.status === 'passed' ? 'passed' : 'failed';
     return writeLocalManifest(outputDir, {
       ...baseManifest({ observedAt, commandId, commandText, settings }),
@@ -127,8 +119,6 @@ export async function runRuntimeCodexBrowserOrdinaryChatLocalDogfood(
       status: 'failed',
       blockedReason: 'Ordinary-chat local dogfood writer failed without producing acceptance evidence.',
     });
-  } finally {
-    await closeLocalDogfoodBrowserSessions(manager, workspacePath, refsToClose);
   }
 }
 
@@ -208,26 +198,4 @@ function safeReason(value: string | undefined): string {
   if (!value) return 'no blocked reason was recorded';
   if (/missing .*source|BrowserHostSession|final-answer|ordinary-chat/i.test(value)) return value;
   return 'acceptance writer returned a blocked result';
-}
-
-function createLocalOrdinaryChatDogfoodBrowserHostSessionManager(): BrowserHostSessionManager {
-  return createRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager();
-}
-
-async function closeLocalDogfoodBrowserSessions(
-  manager: BrowserHostSessionManager,
-  workspacePath: string,
-  refs: string[],
-): Promise<void> {
-  const sessionIds = browserHostSessionIdsFromRefs(refs);
-  await Promise.all(sessionIds.map((sessionId) => (
-    manager.act(workspacePath, sessionId, { action: 'close', capture: 'none', timeoutMs: 5_000 }).catch(() => undefined)
-  )));
-}
-
-function browserHostSessionIdsFromRefs(refs: string[]): string[] {
-  return [...new Set(refs.flatMap((ref) => {
-    const match = /^browser-host-session:([^/]+)/.exec(ref);
-    return match?.[1] ? [match[1]] : [];
-  }))];
 }

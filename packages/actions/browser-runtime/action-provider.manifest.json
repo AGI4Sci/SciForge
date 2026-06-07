@@ -1,0 +1,265 @@
+{
+  "schemaVersion": "sciforge.action-provider.manifest.v1",
+  "id": "sciforge.browser-runtime",
+  "version": "0.1.0",
+  "kind": "action",
+  "displayName": "SciForge Browser Runtime",
+  "summary": "Refs-first browser primitive action provider for search, navigation, observation, reading, extraction, and controlled downloads.",
+  "domains": [
+    "browser",
+    "web",
+    "automation"
+  ],
+  "triggers": [
+    "web search",
+    "open URL",
+    "read web page",
+    "extract links",
+    "download remote resource",
+    "browser session"
+  ],
+  "antiTriggers": [
+    "final answer synthesis",
+    "task completion judgement",
+    "domain-specific research strategy",
+    "UI rendering"
+  ],
+  "integrationLevel": "schema-adapter",
+  "entrypoint": {
+    "type": "typescript-package",
+    "package": "@agi4sci/sciforge-browser-runtime-action-provider",
+    "module": "packages/actions/browser-runtime/index.ts",
+    "symbol": "createBrowserPrimitiveService",
+    "path": "packages/actions/browser-runtime",
+    "notes": "Host supplies browser ports; the package owns primitive contracts and MCP-compatible dispatch only."
+  },
+  "actionSchema": {
+    "schemaRef": "sciforge.browser-runtime.primitive-result.v1",
+    "inputShape": {
+      "type": "object",
+      "required": [
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "enum": [
+            "sciforge.browser-runtime.search-input.v1",
+            "sciforge.browser-runtime.navigate-input.v1",
+            "sciforge.browser-runtime.observe-input.v1",
+            "sciforge.browser-runtime.read-input.v1",
+            "sciforge.browser-runtime.extract-input.v1",
+            "sciforge.browser-runtime.download-input.v1"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "extract": {
+          "type": "array"
+        },
+        "saveScope": {
+          "const": "session-artifacts"
+        }
+      },
+      "additionalProperties": true
+    },
+    "outputShape": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "moduleId",
+        "primitive",
+        "status",
+        "refs",
+        "diagnostics",
+        "budget"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "sciforge.browser-runtime.primitive-result.v1"
+        },
+        "moduleId": {
+          "const": "browser"
+        },
+        "primitive": {
+          "enum": [
+            "search",
+            "navigate",
+            "observe",
+            "read",
+            "extract",
+            "download"
+          ]
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "blocked",
+            "needs-confirmation",
+            "failed"
+          ]
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnostics": {
+          "type": "array"
+        },
+        "budget": {
+          "type": "object"
+        }
+      }
+    },
+    "examples": [
+      {
+        "intent": "browser.navigate",
+        "input": {
+          "schemaVersion": "sciforge.browser-runtime.navigate-input.v1",
+          "url": "https://example.com"
+        }
+      }
+    ]
+  },
+  "environmentTargets": [
+    {
+      "type": "browser",
+      "coordinatePolicy": "provider-defined",
+      "sideEffects": [
+        "network-navigation",
+        "session-state",
+        "session-artifact"
+      ],
+      "isolation": "host-provided browser session and session-scoped artifact storage"
+    },
+    {
+      "type": "filesystem",
+      "coordinatePolicy": "workspace-bound",
+      "sideEffects": [
+        "session-artifact-write"
+      ],
+      "isolation": "download artifacts must stay under session-artifacts refs"
+    }
+  ],
+  "safetyGates": {
+    "riskClass": "medium",
+    "defaultPolicy": "allow",
+    "highRiskPolicy": "fail-closed",
+    "supportsDryRun": false,
+    "blockedActions": [
+      "arbitrary-local-file-write",
+      "credential-entry",
+      "payment",
+      "destructive-browser-action",
+      "execute-downloaded-file"
+    ],
+    "requiresExplicitTarget": true,
+    "notes": "Agent Host chooses goals and verifier policy. Browser Runtime only executes declared primitives and returns refs-first evidence."
+  },
+  "confirmationRules": {
+    "requiredWhen": [
+      "cross-origin form submission",
+      "credential-like input",
+      "download exceeding Host-declared byte budget"
+    ],
+    "approvalEvidence": [
+      "host-approval-ref"
+    ],
+    "timeoutPolicy": "fail"
+  },
+  "traceContract": {
+    "schemaRef": "sciforge.browser-runtime.primitive-result.v1",
+    "storagePolicy": "ref-only",
+    "eventTypes": [
+      "browser.search",
+      "browser.navigate",
+      "browser.observe",
+      "browser.read",
+      "browser.extract",
+      "browser.download"
+    ],
+    "redaction": [
+      "raw-html-large-payload",
+      "cookies",
+      "credentials",
+      "downloaded-file-bytes"
+    ],
+    "retention": "session-scoped artifacts with refs-first summaries"
+  },
+  "verifierContract": {
+    "required": false,
+    "defaultVerifierTypes": [
+      "agent",
+      "schema-test"
+    ],
+    "requiredWhen": [
+      "Host acceptance spec requires external evidence",
+      "answer cites web sources",
+      "downloaded artifact must be inspected"
+    ],
+    "requestShape": {
+      "type": "object",
+      "properties": {
+        "acceptanceSpecRef": {
+          "type": "string"
+        },
+        "primitiveResultRefs": {
+          "type": "array"
+        }
+      }
+    },
+    "resultShape": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "satisfied",
+            "unsatisfied",
+            "inconclusive"
+          ]
+        },
+        "repairHints": {
+          "type": "array"
+        }
+      }
+    }
+  },
+  "failureModes": [
+    {
+      "code": "invalid-contract-input",
+      "stage": "planning",
+      "recoverable": true,
+      "description": "The Host invoked a primitive with unsupported intent, schema version, field, URL, or budget."
+    },
+    {
+      "code": "navigation-blocked",
+      "stage": "execution",
+      "recoverable": true,
+      "description": "The browser could not reach or load the requested URL within declared policy."
+    },
+    {
+      "code": "missing-evidence-ref",
+      "stage": "execution",
+      "recoverable": true,
+      "description": "The primitive completed without the evidence refs required by its contract."
+    },
+    {
+      "code": "download-policy-blocked",
+      "stage": "execution",
+      "recoverable": true,
+      "description": "The requested download did not fit session artifact scope, budget, or safety policy."
+    }
+  ]
+}

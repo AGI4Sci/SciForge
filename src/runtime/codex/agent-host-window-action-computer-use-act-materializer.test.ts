@@ -23,14 +23,22 @@ import type { CodexAgentHostRuntimeTruth, NormalizedCodexAgentHostInput } from '
 const now = '2026-06-03T00:00:00.000Z';
 const sessionRef = 'window-action-session:vscode-main';
 const beforeRef = 'window-action-session:vscode-main/evidence/before-frame';
+const beforeAccessibilityRef = 'accessibility-ui-automation:vscode-main/state-snapshot-before';
+const beforeTextRef = 'accessibility-ui-automation:vscode-main/text-before';
+const beforeElementRef = 'desktop-window:vscode-main';
 const permissionRef = 'permission:turn/codex-window-action/ordinary-navigation';
 const verificationRef = 'window-action-session:vscode-main/actions/codex-window-action-attempt-1/verification/verifier.json';
 const freshnessInvalidationRef = 'window-action-session:vscode-main/actions/codex-window-action-attempt-1/freshness-invalidation.json';
+const releaseControlRef = 'action-ledger:window-action-session/vscode-main/control/remove/2026-06-03t00-00-00.000z';
+const releaseLeaseRef = 'lease:window-action-session/vscode-main/control/remove';
+const releasedInputAdapterRef = 'scoped-input-adapter:vscode-main/computer-use/app-native-command';
+const releasedCursorRef = 'actor-cursor:computer-use/vscode-main';
 
-test('WindowActionSession Computer Use Act materializer executes one low-risk action through dispatchWindowAction', async () => {
+test('WindowActionSession Computer Use Act materializer executes one low-risk action through Computer Use primitives', async () => {
   const calls: Array<{ adapter: string; action: unknown; delta: unknown }> = [];
+  const store = readyStore();
   const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
-    windowActionSessionStore: readyStore(),
+    windowActionSessionStore: store,
     actionPlanner: async () => ({
       status: 'planned',
       message: 'Scroll the editor.',
@@ -47,6 +55,7 @@ test('WindowActionSession Computer Use Act materializer executes one low-risk ac
             { kind: 'verification', ref: verificationRef },
             { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
           ],
+          inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/input-event' }],
           afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-frame' }],
         };
       },
@@ -62,7 +71,13 @@ test('WindowActionSession Computer Use Act materializer executes one low-risk ac
   assert.ok(result?.evidenceRefs.includes(beforeRef), 'includes before evidence');
   assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/action-state/codex-window-action-attempt-1'), 'includes action-state ref');
   assert.ok(result?.evidenceRefs.includes('adapter-registry:window-action-session/app-native-command/computer-use'), 'includes adapter ref');
-  assert.ok(result?.evidenceRefs.includes('action-ledger:window-action-session/vscode-main/actions/codex-window-action-attempt-1/executor-event'), 'includes executor ref');
+  assert.ok(result?.evidenceRefs.includes('app-native-command:vscode/scroll/executor-event'), 'includes executor ref');
+  assert.ok(result?.evidenceRefs.includes('app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/input-event'), 'includes input event ref');
+  assert.ok(result?.evidenceRefs.includes('computer-use:primitive-trace/vscode-main/actions/codex-window-action-attempt-1'), 'includes primitive trace ref');
+  assert.ok(result?.evidenceRefs.includes(releaseControlRef), 'includes release control ref');
+  assert.ok(result?.evidenceRefs.includes(releaseLeaseRef), 'includes release lease ref');
+  assert.ok(result?.evidenceRefs.includes(releasedInputAdapterRef), 'includes released input adapter ref');
+  assert.ok(result?.evidenceRefs.includes(releasedCursorRef), 'includes released cursor ref');
   assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/evidence/after-frame'), 'includes after evidence');
   assert.ok(result?.evidenceRefs.includes(verificationRef), 'includes verifier evidence');
   assert.ok(result?.evidenceRefs.includes(freshnessInvalidationRef), 'includes freshness invalidation evidence');
@@ -70,6 +85,9 @@ test('WindowActionSession Computer Use Act materializer executes one low-risk ac
   assert.equal(result?.completionTruth, undefined);
   assert.ok(result?.evidenceRefs.includes(permissionRef), 'includes permission ref');
   assert.equal(result?.executionUnits?.[0]?.status, 'done');
+  assert.equal(store.getActiveByRef(sessionRef), undefined, 'release removes the active WindowActionSession');
+  assert.match(String(result?.reasoningTrace), /computer_use\.control/i);
+  assert.match(JSON.stringify(result?.artifacts), /releasedRefs/);
   assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|base64|raw-|\/raw|secret|token|password/i);
 });
 
@@ -97,6 +115,7 @@ test('WindowActionSession Computer Use Act materializer dispatches planner targe
             { kind: 'verification', ref: verificationRef },
             { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
           ],
+          inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/click/input-event' }],
           afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-click' }],
         };
       },
@@ -138,6 +157,7 @@ test('WindowActionSession Computer Use Act materializer dispatches type_text tex
             { kind: 'verification', ref: verificationRef },
             { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
           ],
+          inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/type/input-event' }],
           afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-type' }],
         };
       },
@@ -276,7 +296,7 @@ test('WindowActionSession Computer Use Act materializer uses actual observation 
   assert.ok(result?.evidenceRefs.includes('action-ledger:window-action-session/stale-observation'));
 });
 
-test('WindowActionSession Computer Use Act materializer persists post-dispatch session lifecycle', async () => {
+test('WindowActionSession Computer Use Act materializer releases post-dispatch session lifecycle', async () => {
   const store = readyStore();
   const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
     windowActionSessionStore: store,
@@ -289,13 +309,14 @@ test('WindowActionSession Computer Use Act materializer persists post-dispatch s
     adapterHandlers: {
       'app-native-command': async () => ({
         status: 'completed',
-        evidenceRefs: [
-          { kind: 'executor-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/executor-event' },
-          { kind: 'verification', ref: verificationRef },
-          { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
-        ],
-        afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-persisted-scroll' }],
-      }),
+          evidenceRefs: [
+            { kind: 'executor-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/executor-event' },
+            { kind: 'verification', ref: verificationRef },
+            { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
+          ],
+          inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/input-event' }],
+          afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-persisted-scroll' }],
+        }),
     },
     now: () => new Date(now),
   });
@@ -304,11 +325,42 @@ test('WindowActionSession Computer Use Act materializer persists post-dispatch s
   const stored = store.getActiveByRef(sessionRef);
 
   assert.equal(result?.status, 'completed', result?.message);
-  assert.equal(stored?.session.events.at(-1)?.type, 'scroll');
-  assert.equal(stored?.session.events.at(-1)?.status, 'completed');
-  assert.equal(stored?.session.observation.status, 'stale');
-  assert.deepEqual(stored?.session.observation.stale.reasons, ['scroll']);
-  assert.ok(stored?.refs.includes('action-ledger:window-action-session/vscode-main/actions/codex-window-action-attempt-1/store-persisted'));
+  assert.equal(stored, undefined);
+  assert.ok(result?.evidenceRefs.includes(releaseControlRef));
+  assert.ok(result?.evidenceRefs.includes(releaseLeaseRef));
+  assert.ok(result?.evidenceRefs.includes(releasedInputAdapterRef));
+  assert.ok(result?.evidenceRefs.includes(releasedCursorRef));
+});
+
+test('WindowActionSession Computer Use Act materializer releases session when primitive act is blocked', async () => {
+  const store = readyStore();
+  const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
+    windowActionSessionStore: store,
+    actionPlanner: async () => ({
+      status: 'planned',
+      message: 'Scroll and release after blocked act.',
+      nextAction: { type: 'scroll', direction: 'down', amount: 240 },
+      evidenceRefs: ['action-ledger:planner/blocked-window-scroll'],
+    }),
+    adapterHandlers: {
+      'app-native-command': async () => ({
+        status: 'blocked',
+        blockedReason: 'adapter_fixture_blocked',
+        evidenceRefs: [{ kind: 'executor-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/blocked/executor-event' }],
+      }),
+    },
+    now: () => new Date(now),
+  });
+
+  const result = await materializer(readyMaterializerInput());
+
+  assert.equal(result?.status, 'blocked');
+  assert.match(result?.message ?? '', /adapter_fixture_blocked/);
+  assert.equal(store.getActiveByRef(sessionRef), undefined);
+  assert.ok(result?.evidenceRefs.includes(releaseControlRef));
+  assert.ok(result?.evidenceRefs.includes(releaseLeaseRef));
+  assert.ok(result?.evidenceRefs.includes(releasedInputAdapterRef));
+  assert.ok(result?.evidenceRefs.includes(releasedCursorRef));
 });
 
 test('WindowActionSession Computer Use Act materializer fails closed when mutating action lacks verifier or freshness invalidation evidence', async () => {
@@ -324,6 +376,7 @@ test('WindowActionSession Computer Use Act materializer fails closed when mutati
       'app-native-command': async () => ({
         status: 'completed',
         evidenceRefs: [{ kind: 'executor-event', ref: 'app-native-command:vscode/scroll/executor-event' }],
+        inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/input-event' }],
         afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-frame' }],
       }),
     },
@@ -356,6 +409,7 @@ test('WindowActionSession Computer Use Act materializer ignores verifier and fre
           { kind: 'verification', ref: 'window-action-session:vscode-main/actions/previous-action-attempt/verification/verifier.json' },
           { kind: 'freshness-invalidation', ref: 'window-action-session:vscode-main/actions/previous-action-attempt/freshness-invalidation.json' },
         ],
+        inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/input-event' }],
         afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-frame' }],
       }),
     },
@@ -487,6 +541,7 @@ test('WindowActionSession Computer Use Act materializer blocks terminal artifact
             { kind: 'verification', ref: verificationRef },
             { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
           ],
+          inputEventRefs: [{ kind: 'input-event', ref: 'terminal-pty:vscode-main/actions/codex-window-action-attempt-1/input-event' }],
           afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-terminal' }],
           commandIntentRefs: [{ kind: 'command-intent', ref: 'terminal-pty:vscode-main/actions/codex-window-action-attempt-1/intent' }],
           visibleTerminalSessionRefs: [{ kind: 'visible-terminal-session', ref: 'terminal-pty:vscode-main/visible' }],
@@ -532,6 +587,7 @@ test('WindowActionSession Computer Use Act materializer allows explicit terminal
             { kind: 'verification', ref: verificationRef },
             { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
           ],
+          inputEventRefs: [{ kind: 'input-event', ref: 'terminal-pty:vscode-main/actions/codex-window-action-attempt-1/input-event' }],
           afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-terminal' }],
           commandIntentRefs: [{ kind: 'command-intent', ref: 'terminal-pty:vscode-main/actions/codex-window-action-attempt-1/intent' }],
           visibleTerminalSessionRefs: [{ kind: 'visible-terminal-session', ref: 'terminal-pty:vscode-main/visible' }],
@@ -758,7 +814,7 @@ function readyStore(options: {
   store.upsert(session, {
     refs: ['action-ledger:window-action-session/vscode-main/upsert'],
     targetRefs: [sessionRef],
-    observationRefs: [beforeRef],
+    observationRefs: beforeObservationRefs(),
     timestamp: now,
   });
   return store;
@@ -854,7 +910,7 @@ function runtimeTruth(options: {
   const freshnessCheckedAt = options.observationFreshnessCheckedAt ?? observedAt;
   const observation = {
     fresh: options.observationFresh ?? true,
-    refs: options.observationRefs ?? [beforeRef],
+    refs: options.observationRefs ?? beforeObservationRefs(),
     observedAt,
     capturedAt: observedAt,
     freshnessCheckedAt,
@@ -891,6 +947,10 @@ function runtimeTruth(options: {
       'cancel:runtime-turn/codex-window-action',
     ],
   };
+}
+
+function beforeObservationRefs(): string[] {
+  return [beforeRef, beforeAccessibilityRef, beforeTextRef, beforeElementRef];
 }
 
 async function startAppiumMac2WebDriverFixture() {

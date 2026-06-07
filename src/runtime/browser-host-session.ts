@@ -740,7 +740,7 @@ export class BrowserHostSessionManager {
       return { sourcePage, session: publicBrowserHostSessionState(active) };
     } catch (error) {
       const message = browserHostErrorMessage(error);
-      active.diagnostics.push(`BrowserHostSession open_read browser text extraction failed: ${message}`);
+      active.diagnostics.push(`BrowserHostSession browser.read text extraction failed: ${message}`);
       const fallback = await this.openReadWithSourceTextFetcher(active, result, requestedUrl, openedAt, input.timeoutMs);
       if (fallback) return fallback;
       return {
@@ -748,7 +748,7 @@ export class BrowserHostSessionManager {
           result,
           resultIndex: 0,
           openedAt,
-          error: 'open_read source text unavailable',
+          error: 'browser.read source text unavailable',
         }),
         session: publicBrowserHostSessionState(active),
       };
@@ -778,7 +778,7 @@ export class BrowserHostSessionManager {
     try {
       const fetched = await (this.options.sourceTextFetcher ?? defaultBrowserHostSourceTextFetcher)(requestedUrl, { timeoutMs: timeoutMsValue });
       if (!fetched.text.trim()) throw new Error(`source page text unavailable for ${safeBrowserHostUrlHost(requestedUrl)}`);
-      session.diagnostics.push(`BrowserHostSession open_read recovered with public source text fetch for ${safeBrowserHostUrlHost(requestedUrl)}`);
+      session.diagnostics.push(`BrowserHostSession browser.read recovered with public source text fetch for ${safeBrowserHostUrlHost(requestedUrl)}`);
       const sourcePage = await persistBrowserHostSearchSourcePage({
         sessionId: session.id,
         sessionDir: browserHostSessionDir(session.workspacePath, session.id),
@@ -802,7 +802,7 @@ export class BrowserHostSessionManager {
       return { sourcePage, session: publicBrowserHostSessionState(session) };
     } catch (fetchError) {
       const fetchMessage = browserHostErrorMessage(fetchError);
-      session.diagnostics.push(`BrowserHostSession open_read failed: ${fetchMessage}`);
+      session.diagnostics.push(`BrowserHostSession browser.read failed: ${fetchMessage}`);
       session.updatedAt = new Date().toISOString();
       await persistBrowserHostSession(session);
       return undefined;

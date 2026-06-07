@@ -17,10 +17,8 @@ import {
 import { createResourceModuleHandlers } from './resource-modules.js';
 import { createFilesModuleHandler } from './files-module-handler.js';
 import { createAutomationsModuleHandler } from './automations-module-handler.js';
-import {
-  createBrowserBoundedOperationModuleHandler,
-  createComputerUseBoundedOperationModuleHandler,
-} from './bounded-operation-module-handlers.js';
+import { createBrowserRuntimeModuleHandler } from './bounded-operation-module-handlers.js';
+import { createComputerUsePrimitiveService } from '../../../packages/actions/computer-use/index.js';
 
 export interface RuntimeModuleHandler {
   describe(): ModuleDescription | Promise<ModuleDescription>;
@@ -72,8 +70,8 @@ export function createRuntimeModuleRegistry(
     files: createFilesModuleHandler(),
     automations: createAutomationsModuleHandler(),
     capabilities: resourceHandlers.capabilities,
-    browser: createBrowserBoundedOperationModuleHandler(),
-    computer_use: createComputerUseBoundedOperationModuleHandler(),
+    browser: createBrowserRuntimeModuleHandler(),
+    computer_use: createComputerUsePrimitiveService(),
   };
   const merged = new Map<string, RuntimeModuleHandler>();
   for (const moduleId of RUNTIME_MODULE_IDS) {

@@ -1,7 +1,7 @@
 import type { ToolInvokeRequest, ToolInvokeResponse, ToolWorker } from '../../../contracts/tool-worker/src/index';
 import { validateToolInput } from '../../../contracts/tool-worker/src/index';
 import { webWorkerManifest } from './manifest';
-import { browserFetch, browserSearch, pdfExtract, pdfTextExtractorHealth, RetryableToolError, webFetch, webSearch } from './web-tools';
+import { browserFetch, pdfExtract, pdfTextExtractorHealth, RetryableToolError, webFetch, webSearch } from './web-tools';
 
 export function createWebWorker(): ToolWorker {
   return {
@@ -16,7 +16,6 @@ export function createWebWorker(): ToolWorker {
           toolStatus: {
             web_search: 'available',
             web_fetch: 'available',
-            browser_search: 'available',
             browser_fetch: 'available',
             pdf_extract: pdfHealth.available ? 'available' : 'unavailable',
           },
@@ -58,7 +57,6 @@ export async function invokeWebTool(request: ToolInvokeRequest): Promise<ToolInv
 async function invokeWebToolHandler(toolId: string, input: ToolInvokeRequest['input']) {
   if (toolId === 'web_search') return webSearch(input);
   if (toolId === 'web_fetch') return webFetch(input);
-  if (toolId === 'browser_search') return browserSearch(input);
   if (toolId === 'browser_fetch') return browserFetch(input);
   if (toolId === 'pdf_extract') return pdfExtract(input);
   throw new Error(`Unknown tool: ${toolId}`);

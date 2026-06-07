@@ -68,6 +68,10 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'module' && tool.name === 'invoke'));
   assert.ok(dynamicTools.some((tool) => tool.name === 'module_invoke'), 'provider-safe module.invoke alias should be registered');
+  assert.ok(dynamicTools.some((tool) => tool.name === 'gui_present'), 'provider-safe gui.present alias should be registered');
+  assert.ok(dynamicTools.some((tool) => tool.name === 'gui_ask_user'), 'provider-safe gui.ask_user alias should be registered');
+  const guiPresentTool = dynamicTools.find((tool) => tool.name === 'gui_present');
+  assert.deepEqual((guiPresentTool?.inputSchema as { required?: string[] } | undefined)?.required, ['content']);
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
   const spawnTool = dynamicTools.find((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent');
   const spawnAliasTool = dynamicTools.find((tool) => tool.name === 'multi_agent_v1_spawn_agent');
@@ -92,21 +96,10 @@ test('Codex app-server client serves provider-safe module dynamic tool aliases',
     toolCall: {
       tool: 'module_invoke',
       arguments: {
-        moduleId: 'browser',
-        intent: 'executeBoundedOperation',
+        moduleId: 'memory',
+        intent: 'lookup',
         input: {
-          operationKind: 'browser.search_read',
-          ownerModuleId: 'browser',
-          targetScope: { query: 'agentic rl' },
-          config: {
-            allowedActions: ['search', 'open', 'read'],
-            maxSteps: 1,
-            maxTimeMs: 1000,
-            maxModelCalls: 1,
-            riskPolicy: 'low',
-            requiredEvidence: ['source-page-ref', 'page-text-ref'],
-            stopConditions: ['read-source-pages-before-synthesis'],
-          },
+          ref: 'memory:project/agentic-rl',
         },
       },
     },
@@ -115,18 +108,18 @@ test('Codex app-server client serves provider-safe module dynamic tool aliases',
     env,
     dispatcher: {
       describe: async () => moduleResult({
-        moduleId: 'browser',
+        moduleId: 'memory',
         ok: true,
         value: createModuleDescription({
-          moduleId: 'browser',
-          title: 'Browser',
-          summary: 'Bounded browser read module.',
-          intents: [{ name: 'executeBoundedOperation', sideEffect: 'local', returnsOperation: true }],
+          moduleId: 'memory',
+          title: 'Memory',
+          summary: 'Read-only memory module.',
+          intents: [{ name: 'lookup', sideEffect: 'none', returnsOperation: false }],
           facets: { refs: true },
         }),
       }),
-      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
-      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      query: async () => moduleResult({ moduleId: 'memory', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'memory', ok: true, value: {} }),
       invoke: async (request) => {
         invoked = request;
         return moduleResult({ moduleId: request.moduleId, ok: true, value: { routed: true } });
@@ -148,11 +141,126 @@ test('Codex app-server client serves provider-safe module dynamic tool aliases',
   });
   await collect(stream.events);
 
-  assert.equal(invoked?.moduleId, 'browser');
-  assert.equal(invoked?.intent, 'executeBoundedOperation');
+  assert.equal(invoked?.moduleId, 'memory');
+  assert.equal(invoked?.intent, 'lookup');
   assert.equal(appServer.toolCallResponse?.success, true);
   const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
   assert.match(text, /"routed":true/);
+});
+
+test('Codex app-server client projects provider-safe GUI dynamic tool aliases as completion events', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'Visible answer from gui_present.' },
+        displayedRefs: ['source:search-result-1'],
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Present the final answer through GUI.',
+    workspacePath: workspace,
+    commandId: 'provider-safe-gui-present-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  const syntheticGuiCompletion = events.find((event) => event.method === 'item/tool/completed') as Record<string, unknown> | undefined;
+  const completionParams = syntheticGuiCompletion?.params as Record<string, unknown> | undefined;
+  assert.equal(appServer.toolCallResponse?.success, true);
+  assert.equal(completionParams?.tool, 'gui_present');
+  assert.equal((completionParams?.arguments as Record<string, unknown> | undefined)?.content && ((completionParams.arguments as Record<string, unknown>).content as Record<string, unknown>).value, 'Visible answer from gui_present.');
+});
+
+test('Codex app-server client gives missing gui.present turns one bounded protocol repair attempt', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Answer through the unified GUI path.',
+    workspacePath: workspace,
+    commandId: 'missing-gui-protocol-repair-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  assert.equal(appServer.turnStartParamsHistory.length, 2);
+  assert.equal(((appServer.turnStartParamsHistory[0]?.input as Array<Record<string, unknown>>)[0]?.text), 'Answer through the unified GUI path.');
+  assert.match(String(((appServer.turnStartParamsHistory[1]?.input as Array<Record<string, unknown>>)[0]?.text) ?? ''), /runtime protocol repair/i);
+  assert.equal(events.filter((event) => event.method === 'sciforge/gui_protocol_repair').length, 1);
+  assert.equal(events.filter((event) => event.method === 'turn/completed').length, 2);
+});
+
+test('Codex app-server client repairs multimodal turns when gui.present is only a title', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    toolCalls: [{
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        title: '酒店凭证解析',
+        content: { kind: 'markdown', value: '酒店凭证解析' },
+      },
+    }, {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        title: '酒店凭证解析',
+        content: {
+          kind: 'markdown',
+          value: '这张酒店凭证包含酒店名称、入住人、联系方式、入住时间、离店时间、房型、支付金额、支付方式、订单号和服务商等字段。',
+        },
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '解释这张图',
+    workspacePath: workspace,
+    commandId: 'title-only-multimodal-gui-repair-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    inputObjects: [{
+      schemaVersion: 'sciforge.runtime.input-object.v1',
+      ref: '.sciforge/uploads/session-test/upload-hotel-voucher.jpg',
+      source: 'recent-artifact',
+      mimeType: 'image/jpeg',
+      title: '酒店凭证.jpg',
+    }],
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  assert.equal(appServer.turnStartParamsHistory.length, 2);
+  assert.match(String(((appServer.turnStartParamsHistory[1]?.input as Array<Record<string, unknown>>)[0]?.text) ?? ''), /gui\.present.*(?:title-only|too short)|(?:title-only|too short).*gui\.present/i);
+  assert.equal(events.filter((event) => event.method === 'sciforge/gui_protocol_repair').length, 1);
+  assert.equal(events.filter((event) => event.method === 'item/tool/completed').length, 2);
 });
 
 test('Codex app-server client binds default Browser module dispatcher to the turn workspace', async () => {
@@ -165,20 +273,12 @@ test('Codex app-server client binds default Browser module dispatcher to the tur
       tool: 'module_invoke',
       arguments: {
         moduleId: 'browser',
-        intent: 'executeBoundedOperation',
+        intent: 'browser.read',
         input: {
-          operationKind: 'browser.open_read',
-          ownerModuleId: 'browser',
-          targetScope: { url: 'https://example.org/current-source' },
-          config: {
-            allowedActions: ['open', 'read'],
-            maxSteps: 1,
-            maxTimeMs: 1000,
-            maxModelCalls: 1,
-            riskPolicy: 'low',
-            requiredEvidence: ['source-page-ref', 'page-text-ref'],
-            stopConditions: ['read-source-page-before-synthesis'],
-          },
+          schemaVersion: 'sciforge.browser-runtime.read-input.v1',
+          url: 'https://example.org/current-source',
+          navigationMode: 'ephemeral',
+          includeText: true,
         },
       },
     },
@@ -205,8 +305,7 @@ test('Codex app-server client binds default Browser module dispatcher to the tur
   }
 
   const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
-  assert.match(text, /missing_required_evidence|BrowserHostSession adapter/i);
-  assert.doesNotMatch(text, /unsupported_operation_kind:browser\.open_read/);
+  assert.doesNotMatch(text, /unsupported_browser_primitive_intent|unsupported_operation_kind|browser\.open_read|browser\.search_read/);
 });
 
 test('Codex app-server client serves provider-safe sub-agent dynamic tool aliases', async () => {
@@ -319,12 +418,12 @@ test('Codex app-server client treats GUI spawn_agent text as ordinary app-server
 
   assert.equal(appServer.mcpToolCallParams, undefined);
   assert.equal(stream.turnId, 'turn-1');
-  assert.deepEqual(appServer.turnStartParams.input, [{
+  assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{
     type: 'text',
     text: 'Please call multi_agent_v1.spawn_agent exactly once to inspect PROJECT.md.',
     text_elements: [],
   }]);
-  assert.deepEqual(events.map((event) => event.method), ['turn/completed']);
+  assert.deepEqual(events.map((event) => event.method), ['turn/completed', 'sciforge/gui_protocol_repair', 'turn/completed']);
 });
 
 test('Codex app-server client keeps streaming after retryable provider error notifications', async () => {
@@ -463,7 +562,7 @@ test('Codex app-server client projects Multitask declared intent into app-server
   });
   await collect(stream.events);
 
-  assert.deepEqual(appServer.turnStartParams.input, [{
+  assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{
     type: 'text',
     text: 'Compare the runtime and UI paths, then summarize the blockers.',
     text_elements: [],
@@ -474,7 +573,7 @@ test('Codex app-server client projects Multitask declared intent into app-server
   assert.match(developerInstructions, /hard confirmation/i);
   assert.match(developerInstructions, /multi_agent_v1\.spawn_agent/);
   assert.match(developerInstructions, /multi_agent_v1_spawn_agent/);
-  assert.doesNotMatch(appServer.turnStartParams.input[0]?.text as string, /\/multitask|multi_agent_v1\.spawn_agent/i);
+  assert.doesNotMatch((appServer.turnStartParamsHistory[0]?.input as Array<{ text?: string }> | undefined)?.[0]?.text ?? '', /\/multitask|multi_agent_v1\.spawn_agent/i);
   assert.doesNotMatch(developerInstructions, /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr|Applications\/workspace/i);
 });
 
@@ -534,7 +633,7 @@ test('Codex app-server client injects bounded Agent Host grounding facts into de
   });
   await collect(stream.events);
 
-  assert.deepEqual(appServer.turnStartParams.input, [{
+  assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{
     type: 'text',
     text: 'Summarize the local plan from provided refs only.',
     text_elements: [],
@@ -603,14 +702,29 @@ test('Codex app-server client instructs models to route current external evidenc
   assert.match(developerInstructions, /module\.invoke/);
   assert.match(developerInstructions, /module_describe/);
   assert.match(developerInstructions, /module_invoke/);
-  assert.match(developerInstructions, /executeBoundedOperation/);
-  assert.match(developerInstructions, /browser\.search_read/);
-  assert.match(developerInstructions, /browser\.open_read/);
+  assert.match(developerInstructions, /Browser primitive path/);
+  assert.match(developerInstructions, /browser\.search/);
+  assert.match(developerInstructions, /browser\.navigate/);
+  assert.match(developerInstructions, /browser\.observe/);
+  assert.match(developerInstructions, /browser\.read/);
+  assert.match(developerInstructions, /browser\.extract/);
+  assert.match(developerInstructions, /browser\.download/);
+  assert.match(developerInstructions, /Computer Use primitive path/);
+  assert.match(developerInstructions, /computer_use\.bind/);
+  assert.match(developerInstructions, /computer_use\.observe/);
+  assert.match(developerInstructions, /computer_use\.act/);
+  assert.match(developerInstructions, /computer_use\.run_procedure/);
+  assert.match(developerInstructions, /computer_use\.control/);
+  assert.doesNotMatch(developerInstructions, /executeBoundedOperation/);
+  assert.doesNotMatch(developerInstructions, /perform_local_action|fill_fields/);
+  assert.doesNotMatch(developerInstructions, /compatibility fallback/);
+  assert.doesNotMatch(developerInstructions, /browser\.search_read/);
+  assert.doesNotMatch(developerInstructions, /browser\.open_read/);
   assert.match(developerInstructions, /Never print or simulate tool-call protocol/);
   assert.match(developerInstructions, /do not output the call payload as text/i);
   assert.doesNotMatch(developerInstructions, /<module_invoke>|<tool_call>|<\{"function"/i);
   assert.match(developerInstructions, /current|latest|today|external|citations/i);
-  assert.match(developerInstructions, /nonzero maxSteps, maxTimeMs, and maxModelCalls/);
+  assert.match(developerInstructions, /nonzero budgets/);
   assert.doesNotMatch(developerInstructions, /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr|Applications\/workspace/i);
 });
 
@@ -663,6 +777,53 @@ test('Codex app-server client preserves runtime dynamic tools when resuming a th
   const dynamicTools = appServer.threadResumeParams.dynamicTools as Array<Record<string, unknown>>;
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'module' && tool.name === 'read'));
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
+});
+
+test('Codex app-server client encodes image inputObjects as app-server compatible local images', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '请读取这张图片',
+    workspacePath: workspace,
+    commandId: 'input-object-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+    inputObjects: [{
+      schemaVersion: 'sciforge.runtime.input-object.v1',
+      ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+      source: 'recent-artifact',
+      mimeType: 'image/jpeg',
+      title: '酒店凭证.jpg',
+    }],
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(appServer.turnStartParams.input, [{
+    type: 'text',
+    text: '请读取这张图片',
+    text_elements: [],
+  }, {
+    type: 'text',
+    text: [
+      'SciForge input_object attachments:',
+      '1. title=酒店凭证.jpg',
+      '   ref=.sciforge/uploads/session-test/upload-image-hotel.jpg',
+      '   mimeType=image/jpeg',
+      '   source=recent-artifact',
+    ].join('\n'),
+    text_elements: [],
+  }, {
+    type: 'localImage',
+    path: join(workspace, '.sciforge/uploads/session-test/upload-image-hotel.jpg'),
+  }]);
 });
 
 test('Codex app-server client treats GUI /computer-use text as ordinary app-server input', async () => {
@@ -720,8 +881,8 @@ test('Codex app-server client treats GUI /computer-use text as ordinary app-serv
   assert.equal(runnerCalled, false);
   assert.equal(spawnCalled, true);
   assert.equal(stream.turnId, 'turn-1');
-  assert.deepEqual(appServer.turnStartParams.input, [{ type: 'text', text: commandText, text_elements: [] }]);
-  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed']);
+  assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{ type: 'text', text: commandText, text_elements: [] }]);
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed', 'sciforge/gui_protocol_repair', 'turn/completed']);
 });
 
 test('Codex app-server client routes host-owned Computer Use runtime intents through native package bridge', async () => {
@@ -1054,10 +1215,10 @@ test('Codex app-server subprocess does not inherit VirtualAppScreen native drive
   assert.equal(spawnedEnv?.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON, undefined);
 });
 
-test('Computer Use native route only claims top-level slash commands', () => {
-  assert.equal(isComputerUseNativeRouteCommand('  /computer-use click the guarded Submit button'), true);
-  assert.equal(isComputerUseNativeRouteCommand('/computer-use approve --approval-ref approval:computer-use:test'), true);
-  assert.equal(isComputerUseNativeRouteCommand('/computer-use diagnostic --dry-run'), false);
+test('Computer Use native route only claims diagnostic slash commands', () => {
+  assert.equal(isComputerUseNativeRouteCommand('  /computer-use click the guarded Submit button'), false);
+  assert.equal(isComputerUseNativeRouteCommand('/computer-use approve --approval-ref approval:computer-use:test'), false);
+  assert.equal(isComputerUseNativeRouteCommand('/computer-use diagnostic --dry-run'), true);
   assert.equal(isComputerUseNativeRouteCommand('Plan a GUI action for this task: /computer-use click Submit'), false);
   assert.equal(isComputerUseNativeRouteCommand('ask --ref "prior" "/computer-use approve --approval-ref approval:computer-use:test"'), false);
 });
@@ -1116,6 +1277,7 @@ function fakeAppServer(options: {
   terminalStatus?: string;
   autoToolCall?: boolean;
   toolCall?: { namespace?: string; tool: string; arguments?: Record<string, unknown> };
+  toolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
   turnEvents?: Array<Record<string, unknown>>;
 } = {}) {
   const emitter = new EventEmitter();
@@ -1126,12 +1288,14 @@ function fakeAppServer(options: {
     threadStartParams: Record<string, unknown>;
     threadResumeParams: Record<string, unknown>;
     turnStartParams: Record<string, unknown>;
+    turnStartParamsHistory: Array<Record<string, unknown>>;
     toolCallResponse?: Record<string, unknown>;
     mcpToolCallParams?: Record<string, unknown>;
   } = {
     threadStartParams: {},
     threadResumeParams: {},
     turnStartParams: {},
+    turnStartParamsHistory: [],
   };
   let killed = false;
   let buffer = '';
@@ -1185,10 +1349,14 @@ function fakeAppServer(options: {
     if (message.method === 'turn/start') {
       const params = message.params as Record<string, unknown>;
       state.turnStartParams = params;
+      state.turnStartParamsHistory.push(params);
       const threadId = typeof params.threadId === 'string' ? params.threadId : 'thread-1';
       write({ id: message.id, result: { turn: { id: 'turn-1' } } });
       if (options.autoToolCall !== false) {
-        const toolCall = options.toolCall ?? { namespace: 'multi_agent_v1', tool: 'spawn_agent' };
+        const toolCallIndex = state.turnStartParamsHistory.length - 1;
+        const toolCall = options.toolCalls?.[toolCallIndex]
+          ?? options.toolCall
+          ?? { namespace: 'multi_agent_v1', tool: 'spawn_agent' };
         setTimeout(() => write({
           id: 'server-tool-call-1',
           method: 'item/tool/call',
@@ -1280,6 +1448,9 @@ function fakeAppServer(options: {
     },
     get turnStartParams() {
       return state.turnStartParams;
+    },
+    get turnStartParamsHistory() {
+      return state.turnStartParamsHistory;
     },
     get toolCallResponse() {
       return state.toolCallResponse;

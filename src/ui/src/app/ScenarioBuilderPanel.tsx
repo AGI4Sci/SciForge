@@ -31,7 +31,6 @@ import {
 } from '@sciforge-ui/runtime-contract';
 import browserFetchManifest from '@sciforge-observe/web/browser_fetch';
 import browserRuntimeManifest from '@sciforge-observe/web/browser_runtime';
-import browserSearchManifest from '@sciforge-observe/web/browser_search';
 import playwrightBrowserAutomationManifest from '@sciforge-observe/web/playwright_browser_automation';
 import playwrightEdgeBrowserManifest from '@sciforge-observe/web/playwright_edge_browser';
 import webFetchManifest from '@sciforge-observe/web/web_fetch';
@@ -49,7 +48,6 @@ const coreProviderCapabilityIds = ['web_search', 'web_fetch', 'pdf_extract'];
 const webObserveCapabilityManifests = [
   webSearchManifest,
   webFetchManifest,
-  browserSearchManifest,
   browserFetchManifest,
   browserRuntimeManifest,
   playwrightBrowserAutomationManifest,

@@ -6,9 +6,19 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   EXECUTE_BOUNDED_OPERATION_INTENT,
-  type BoundedOperationResultValue,
   type ModuleResultEnvelope,
 } from '@sciforge-ui/runtime-contract/modules';
+import {
+  BROWSER_PRIMITIVE_INTENTS,
+  BROWSER_PRIMITIVE_RESULT_SCHEMA,
+  type BrowserPrimitiveEnvelope,
+} from '../../packages/actions/browser-runtime/index.js';
+import {
+  COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS,
+  COMPUTER_USE_PRIMITIVE_INTENTS,
+  COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA,
+  type ComputerUsePrimitiveEnvelope,
+} from '../../packages/actions/computer-use/index.js';
 import { handleWorkspaceModuleRoutes } from './workspace-server-modules.js';
 
 test('workspace module routes dispatch files query/read/invoke through Agent Host module contract', async () => {
@@ -84,7 +94,7 @@ test('workspace module routes dispatch automations through Agent Host module con
   }
 });
 
-test('workspace module routes expose bounded Browser and Computer Use operation intents through module.invoke', async () => {
+test('workspace module routes expose Browser and Computer Use primitives while rejecting legacy bounded operation intents', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-modules-'));
   const server = await startModuleRouteServer(root);
   try {
@@ -92,7 +102,7 @@ test('workspace module routes expose bounded Browser and Computer Use operation 
       moduleId: 'browser',
       intent: EXECUTE_BOUNDED_OPERATION_INTENT,
       input: {
-        operationKind: 'browser.search_read',
+        operationKind: 'browser.unsupported',
         ownerModuleId: 'browser',
         targetScope: { kind: 'web-search', query: 'frontier AI model progress this week' },
         config: {
@@ -102,14 +112,32 @@ test('workspace module routes expose bounded Browser and Computer Use operation 
           maxModelCalls: 1,
           riskPolicy: 'low',
           requiredEvidence: ['source-page-ref', 'page-text-ref'],
+          stopConditions: ['route-smoke'],
         },
       },
     });
     assert.equal(browser.result.moduleId, 'browser');
     assert.equal(browser.result.ok, false);
-    assert.equal((browser.result.value as BoundedOperationResultValue).status, 'blocked');
-    assert.match((browser.result.value as BoundedOperationResultValue).blockedReason ?? '', /unsupported_operation_kind|missing_required_evidence/);
+    assert.match(browser.result.error ?? '', /unsupported_intent:executeBoundedOperation/);
+    assert.equal(browser.result.value, undefined);
     assert.equal(JSON.stringify(browser.result).includes('base64'), false);
+
+    const browserPrimitive = await postModule(server, 'invoke', {
+      moduleId: 'browser',
+      intent: BROWSER_PRIMITIVE_INTENTS.extract,
+      input: {
+        schemaVersion: 'sciforge.browser-runtime.extract-input.v1',
+        ref: 'file:src/app.ts',
+        extract: ['links'],
+      },
+    });
+    assert.equal(browserPrimitive.result.moduleId, 'browser');
+    assert.equal(browserPrimitive.result.ok, false);
+    const primitiveValue = browserPrimitive.result.value as BrowserPrimitiveEnvelope;
+    assert.equal(primitiveValue.schemaVersion, BROWSER_PRIMITIVE_RESULT_SCHEMA);
+    assert.equal(primitiveValue.primitive, 'extract');
+    assert.equal(primitiveValue.status, 'blocked');
+    assert.match(primitiveValue.blockedReason ?? '', /unsupported_ref_for_extract/);
 
     const computerUse = await postModule(server, 'invoke', {
       moduleId: 'computer_use',
@@ -121,19 +149,35 @@ test('workspace module routes expose bounded Browser and Computer Use operation 
         config: {
           allowedActions: ['click'],
           maxSteps: 1,
+          maxTimeMs: 10_000,
           maxModelCalls: 1,
           riskPolicy: 'low',
           requiredEvidence: ['before-evidence-ref', 'grounding-ref', 'executor-event-ref', 'after-evidence-ref'],
+          stopConditions: ['route-smoke'],
         },
         action: { kind: 'click', target: 'Save' },
       },
     });
     assert.equal(computerUse.result.moduleId, 'computer_use');
     assert.equal(computerUse.result.ok, false);
-    const value = computerUse.result.value as BoundedOperationResultValue;
-    assert.equal(value.status, 'blocked');
-    assert.equal(value.blockedReason, 'missing_target_binding');
-    assert.deepEqual(value.evidenceRefs, []);
+    assert.match(computerUse.result.error ?? '', /unsupported_intent:executeBoundedOperation/);
+    assert.equal(computerUse.result.value, undefined);
+
+    const computerUsePrimitive = await postModule(server, 'invoke', {
+      moduleId: 'computer_use',
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+        sessionId: 'cu-session-route-smoke',
+      },
+    });
+    assert.equal(computerUsePrimitive.result.moduleId, 'computer_use');
+    assert.equal(computerUsePrimitive.result.ok, false);
+    const computerUseValue = computerUsePrimitive.result.value as ComputerUsePrimitiveEnvelope;
+    assert.equal(computerUseValue.schemaVersion, COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA);
+    assert.equal(computerUseValue.primitive, 'observe');
+    assert.equal(computerUseValue.status, 'blocked');
+    assert.equal(computerUseValue.blockedReason, 'missing_computer_use_primitive_port:observe');
   } finally {
     await closeServer(server);
     await rm(root, { recursive: true, force: true });

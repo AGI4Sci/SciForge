@@ -5,12 +5,39 @@ import {
   completionTruthFromPackageBridgeWorkEvidence,
 } from './agent-host-package-bridge-completion-truth.js';
 
+test('package bridge completion adapter anchors current run on primitive trace evidence', () => {
+  const runDir = '.sciforge/vision-runs/package-bridge-primitive-trace';
+  const truth = completionTruthFromPackageBridgeWorkEvidence({
+    evidenceRefs: [
+      `${runDir}/primitive-trace.json`,
+      `${runDir}/tui-host-run-task-chain.json`,
+    ],
+    workEvidence: [{
+      kind: 'validate',
+      provider: 'computer-use-package-bridge',
+      status: 'verified',
+      outputSummary: 'Computer Use completion-grade evidence',
+      evidenceRefs: [
+        `${runDir}/cu-user-acceptance-manifest.json`,
+        `${runDir}/isolated-desktop-l3-workflow-evidence.json`,
+      ],
+      recoverActions: [],
+    }],
+  });
+
+  assert.deepEqual(truth?.evidenceRefs, [
+    `${runDir}/primitive-trace.json`,
+  ]);
+  assert.doesNotMatch(JSON.stringify(truth), /tui-host-run-task-chain/);
+  assert.doesNotMatch(String(truth?.reason), /current-run trace refs/);
+});
+
 test('package bridge completion adapter blocks verified legacy L3 workEvidence from workflow completionTruth', () => {
   const runDir = '.sciforge/vision-runs/package-bridge-complete';
   const truth = completionTruthFromPackageBridgeWorkEvidence({
     evidenceRefs: [
       `${runDir}/vision-trace.json`,
-      `${runDir}/tui-host-run-task-chain.json`,
+      `${runDir}/primitive-trace.json`,
       'gui.present:fake-screen',
     ],
     workEvidence: [{
@@ -35,7 +62,7 @@ test('package bridge completion adapter blocks verified legacy L3 workEvidence f
     validator: 'current-run-live-acceptance-bundle',
     evidenceRefs: [
       `${runDir}/vision-trace.json`,
-      `${runDir}/tui-host-run-task-chain.json`,
+      `${runDir}/primitive-trace.json`,
     ],
     reason: 'Package bridge isolated L3 completion evidence is diagnostic-only and cannot satisfy Agent Host workflow completion truth. Computer Use completion-grade evidence',
   });
@@ -46,7 +73,7 @@ test('package bridge completion adapter keeps blocked workEvidence from satisfyi
   const truth = completionTruthFromPackageBridgeWorkEvidence({
     evidenceRefs: [
       `${runDir}/vision-trace.json`,
-      `${runDir}/tui-host-run-task-chain.json`,
+      `${runDir}/primitive-trace.json`,
     ],
     workEvidence: [{
       kind: 'validate',
@@ -66,7 +93,7 @@ test('package bridge completion adapter keeps blocked workEvidence from satisfyi
   assert.equal(truth?.scope, 'workflow');
   assert.deepEqual(truth?.evidenceRefs, [
     `${runDir}/vision-trace.json`,
-    `${runDir}/tui-host-run-task-chain.json`,
+    `${runDir}/primitive-trace.json`,
     `${runDir}/completion-grade-diagnostics.json`,
   ]);
   assert.doesNotMatch(JSON.stringify(truth), /token|gui\.present/);
@@ -77,7 +104,7 @@ test('package bridge completion adapter blocks verified workEvidence without sam
   const truth = completionTruthFromPackageBridgeWorkEvidence({
     evidenceRefs: [
       `${runDir}/vision-trace.json`,
-      `${runDir}/tui-host-run-task-chain.json`,
+      `${runDir}/primitive-trace.json`,
     ],
     workEvidence: [{
       kind: 'validate',
@@ -102,7 +129,7 @@ test('package bridge completion adapter ignores non-package artifact workEvidenc
   const truth = completionTruthFromPackageBridgeWorkEvidence({
     evidenceRefs: [
       `${runDir}/vision-trace.json`,
-      `${runDir}/tui-host-run-task-chain.json`,
+      `${runDir}/primitive-trace.json`,
     ],
     workEvidence: [{
       kind: 'generated-task-artifact',

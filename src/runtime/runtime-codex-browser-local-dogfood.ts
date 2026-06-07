@@ -8,7 +8,6 @@ import {
   defaultBrowserHostSessionManager,
   type BrowserHostSearchOutput,
 } from './browser-host-session.js';
-import { browserHostSearchAnswerFromOutput } from './browser-host-search-answer.js';
 import { sha1 } from './workspace-task-runner.js';
 
 export const RUNTIME_CODEX_BROWSER_LOCAL_DOGFOOD_SCHEMA_VERSION = 'sciforge.runtime-codex.browser-local-dogfood.v1' as const;
@@ -117,22 +116,16 @@ export async function runRuntimeCodexBrowserLocalDogfood(
         prompt,
         settings,
         output,
-        blockedReason: 'BrowserHostSession search_read did not return any non-empty official source page text refs.',
+        blockedReason: 'BrowserHostSession browser.search + browser.read did not return any non-empty official source page text refs.',
       });
       await writeLocalDogfoodArtifacts(outputDir, manifest);
       await closeOwnedSession?.(output.session.id);
       return manifest;
     }
 
-    const answer = browserHostSearchAnswerFromOutput({
-      prompt,
-      output: { ...output, sourcePages: readPages },
-      maxResults: 5,
-    });
     const finalAnswer = localDogfoodFinalAnswer({
       query,
       readPages,
-      fallbackMessage: answer.message,
     });
     const finalAnswerRef = await writeFinalAnswer(outputDir, finalAnswer);
     const manifest: RuntimeCodexBrowserLocalDogfoodManifest = {
@@ -259,7 +252,6 @@ function officialOpenAiReadSourcePages(output: BrowserHostSearchOutput) {
 function localDogfoodFinalAnswer(input: {
   query: string;
   readPages: NonNullable<BrowserHostSearchOutput['sourcePages']>;
-  fallbackMessage: string;
 }) {
   const summaryLines = conciseOpenAiSourceSummaries(input.readPages).slice(0, 5);
   const headline = `我已用 SciForge 内置浏览器搜索“${cleanText(input.query)}”，并打开、读取了 OpenAI 官方来源页面。`;
@@ -269,7 +261,7 @@ function localDogfoodFinalAnswer(input: {
         '',
         ...summaryLines.map((line) => `- ${line}`),
       ].join('\n')
-    : input.fallbackMessage;
+    : `${headline}\n\n读取到官方来源页面，但本地 dogfood 未生成面向用户的任务答案；最终回答必须由 Codex / Agent Host 基于 refs 和 verifier 决策后通过 gui.present 产生。`;
   return [
     summary,
     '',

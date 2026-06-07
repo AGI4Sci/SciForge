@@ -135,7 +135,7 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
   }
 
   try {
-    const browserResponse = await browserSearch({ query, rawQuery, limit, region });
+    const browserResponse = await renderedBrowserSearch({ query, rawQuery, limit, region });
     const browserResults = Array.isArray(browserResponse.results)
       ? browserResponse.results as unknown as WebSearchResult[]
       : [];
@@ -149,9 +149,9 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
         results: browserResults,
       };
     }
-    fallbackErrors.push('playwright-chromium browser_search returned no parseable results');
+    fallbackErrors.push('playwright-chromium rendered search returned no parseable results');
   } catch (error) {
-    fallbackErrors.push(`playwright-chromium browser_search: ${errorMessage(error)}`);
+    fallbackErrors.push(`playwright-chromium rendered search: ${errorMessage(error)}`);
   }
 
   try {
@@ -191,7 +191,7 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
   throw new RetryableToolError(`All search providers failed or returned no records: ${fallbackErrors.join('; ')}`);
 }
 
-export async function browserSearch(input: JsonObject): Promise<JsonObject> {
+async function renderedBrowserSearch(input: JsonObject): Promise<JsonObject> {
   const rawQuery = requiredString(input.rawQuery ?? input.query, 'query');
   const query = normalizeSearchQuery(requiredString(input.query ?? rawQuery, 'query'));
   const limit = clampNumber(input.limit ?? input.maxResults, 5, 1, 10);
@@ -707,7 +707,7 @@ async function browserArxivSearchResults(
   };
   for (const engine of ['bing', 'duckduckgo'] as const) {
     try {
-      const searchResponse = await browserSearch({ ...request, engine });
+      const searchResponse = await renderedBrowserSearch({ ...request, engine });
       const results = Array.isArray(searchResponse.results)
         ? searchResponse.results.filter(isRecord) as WebSearchResult[]
         : [];

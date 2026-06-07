@@ -95,7 +95,7 @@ SciForge 的长期模块范式是 Agent Host Semantic Pipeline：所有模块统
 
 ### Computer Use
 
-用视觉优先的方式观察窗口、定位界面元素，并通过 action loop 操作目标环境完成任务。当前严格边界是 package-owned / host-provided target-bound window execution：输入必须隔离到声明目标，result/trace/evidence 只写 refs，shared/system/global input 默认 fail closed。action package 已有 isolated desktop L1/L3 probe/evidence contract、executor command provenance validator、window-bound pointer proof validator 和 Linux/noVNC Docker bundle spec；Docker gate 支持 base image、Debian apt mirror/retry 和 host evidence dir override，并已产出真实 Linux/noVNC completed L1 run 与 same-session completed L3 run。L3 `--execute` 在 isolated session 中完成 source browser -> LibreOffice Writer GUI DOCX save -> Chromium/file-preview directory preview，并由 completed evidence validator 复验；partial/blocked refs 仍不能作为 completed refs。未来可以组合 OCR、窗口元数据、浏览器状态、远程桌面帧和更多 sense provider，真实完成声明仍必须有当前截图、target binding、trace/result refs 和文件证据支撑。
+Computer Use 是可迁移的 GUI primitive runtime，不是独立 agent 或 workflow engine。当前 public surface 只保留 `bind`、`observe`、`act`、`run_procedure`、`control`：Host 负责理解用户任务、选择 target、收集确认、验证产物和生成 final answer；Computer Use 负责 target-bound session、session-local input adapter / cursor refs、原子动作执行和 refs-first evidence。旧 Linux/noVNC、VirtualAppScreen、fixture 和历史 run 只能作为诊断或迁移材料，不能声明当前 product-ready。设计原则见 [`docs/ComputerUseRuntimeArchitecture.md`](docs/ComputerUseRuntimeArchitecture.md)，当前阶段任务见 [`PROJECT_CU.md`](PROJECT_CU.md)。
 
 ### 自定义科研场景
 
@@ -260,7 +260,7 @@ packages/agent-harness/  规划中的 agent 行为治理策略、阶段 hooks �
 packages/scenarios/      scenario 编译、校验和 runtime smoke fixtures
 packages/observe/        只读观察能力：environment/modality -> observation
 packages/actions/        会改变环境的 action provider
-packages/actions/computer-use/   Computer Use action loop、target-bound window host、isolated executor、evidence/preflight/probe contracts
+packages/actions/computer-use/   Computer Use primitive contract、MCP adapter、refs-first evidence 和验收 harness
 packages/presentation/components/  科学 artifact 交互视图注册表
 packages/support/        preview/reference helpers 和迁移兼容支撑
 packages/skills/         可复用科研 skill 与 skill catalog

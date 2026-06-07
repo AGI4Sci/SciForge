@@ -281,9 +281,9 @@ test('workspace runtime env uses config.local root fields over stale service env
   assert.equal(env.SCIFORGE_TEXT_BASE_URL, 'https://root-provider.example/v1');
   assert.equal(env.SCIFORGE_TEXT_MODEL, 'root-local-model');
   assert.equal(env.SCIFORGE_TEXT_API_KEY, 'root-local-secret');
-  assert.equal(env.SCIFORGE_VISION_BASE_URL, 'https://root-provider.example/v1');
-  assert.equal(env.SCIFORGE_VISION_MODEL, 'root-local-model');
-  assert.equal(env.SCIFORGE_VISION_API_KEY, 'root-local-secret');
+  assert.equal(env.SCIFORGE_VISION_BASE_URL, undefined);
+  assert.equal(env.SCIFORGE_VISION_MODEL, undefined);
+  assert.equal(env.SCIFORGE_VISION_API_KEY, undefined);
   assert.equal(env.SCIFORGE_RUNTIME_PROVIDER, 'sciforge-model-router');
   assert.equal(env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
 });
@@ -424,7 +424,9 @@ test('workspace runtime config uses public Model Router alias while preserving r
     assert.equal(env.SCIFORGE_TEXT_BASE_URL, 'http://provider.example/v1');
     assert.equal(env.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
     assert.equal(env.SCIFORGE_TEXT_API_KEY, 'local-secret');
-    assert.equal(env.SCIFORGE_VISION_API_KEY, 'local-secret');
+    assert.equal(env.SCIFORGE_VISION_BASE_URL, undefined);
+    assert.equal(env.SCIFORGE_VISION_MODEL, undefined);
+    assert.equal(env.SCIFORGE_VISION_API_KEY, undefined);
 
     const config = await readFile(join(codexHome, 'config.toml'), 'utf8');
     assert.match(config, /model = "sciforge-router"/);

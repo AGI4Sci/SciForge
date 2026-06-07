@@ -477,6 +477,56 @@ test('normal composer submit exposes only intent text refs and Autonomy profile 
   assert.doesNotMatch(JSON.stringify(body), /computer-use click|native-click-action|executor-params|private-click|private-button|window:private|sk-provider-secret|DO_NOT_SEND|data:image|base64|private\/model/i);
 });
 
+test('normal composer submit registers recent uploaded multimodal objects for Agent Host follow-up turns', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        message: 'Codex Runtime result ready.',
+        executionUnits: [{ id: 'unit-agent-host-input-object-followup', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: '请读取这张酒店凭证，回答酒店名称。',
+    references: [],
+    messages: [{
+      id: 'message-uploaded-voucher',
+      role: 'system',
+      content: '已上传 1 个文件作为引用：酒店凭证.jpg',
+      createdAt: '2026-06-07T00:00:00.000Z',
+      objectReferences: [{
+        id: 'obj-upload-voucher',
+        kind: 'artifact',
+        ref: 'artifact:upload-voucher',
+        title: '酒店凭证.jpg',
+        artifactType: 'uploaded-image',
+        status: 'available',
+        provenance: {
+          path: '.sciforge/uploads/session-test/upload-voucher.jpg',
+          dataRef: '.sciforge/uploads/session-test/upload-voucher.jpg',
+        },
+      }],
+    }],
+  }));
+
+  const body = bodies[0]!;
+  const inputObjects = body.inputObjects as Array<Record<string, unknown>>;
+  assert.equal(inputObjects.length, 1);
+  assert.deepEqual(inputObjects[0], {
+    schemaVersion: 'sciforge.runtime.input-object.v1',
+    ref: '.sciforge/uploads/session-test/upload-voucher.jpg',
+    source: 'recent-visible-message',
+    mimeType: 'image/jpeg',
+    title: '酒店凭证.jpg',
+  });
+  assert.equal(String(body.commandText), '请读取这张酒店凭证，回答酒店名称。');
+  assert.doesNotMatch(JSON.stringify(body), /input_object/);
+});
+
 test('normal composer transport does not rewrite historical messages while adding new capability truth', async () => {
   globalThis.fetch = (async () => streamResponse([{
     result: {

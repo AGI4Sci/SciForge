@@ -32,7 +32,7 @@ export async function validateCurrentRunLiveAcceptanceBundle(
   if (!runDirRef) {
     return {
       status: 'missing',
-      issues: ['completion-grade: current Computer Use run dir could not be inferred from vision-trace.json or tui-host-run-task-chain.json refs.'],
+      issues: ['completion-grade: current Computer Use run dir could not be inferred from cu-user-acceptance-manifest.json, primitive-trace.json, or vision-trace.json refs.'],
       missingRefs: ['cu-user-acceptance-manifest.json'],
     };
   }
@@ -107,7 +107,7 @@ export async function validateCurrentRunLiveAcceptanceBundle(
 }
 
 function currentRunDirRef(refs: string[]) {
-  const ref = refs.find((candidate) => /(?:^|\/)(?:vision-trace|tui-host-run-task-chain)\.json$/i.test(candidate));
+  const ref = refs.find((candidate) => /(?:^|\/)(?:cu-user-acceptance-manifest|primitive-trace|vision-trace)\.json$/i.test(candidate));
   if (!ref || !isLocalFileEvidenceRef(ref)) return undefined;
   return ref.replace(/\/[^/]+$/, '');
 }

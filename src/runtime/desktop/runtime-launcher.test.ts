@@ -357,6 +357,118 @@ test('production launcher maps local provider config into Model Router role env 
   }
 });
 
+test('production launcher does not configure Model Router vision role from text-only config', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    codexProxy: {
+      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
+      defaultModel: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-local-dev-secret',
+    },
+  }), 'utf8');
+  const envKeys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_VISION_API_KEY',
+    'SCIFORGE_VISION_BASE_URL',
+    'SCIFORGE_VISION_MODEL',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const child = new FakeChild(1205);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    requestedProviderProxyPort: 0,
+    services: [service('provider-proxy')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    await launcher.start();
+    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_MODEL, undefined);
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_BASE_URL, undefined);
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_API_KEY, undefined);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await launcher.shutdown();
+  }
+});
+
+test('production launcher uses explicit visionLLM qwen3.7-plus for Model Router vision role', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    codexProxy: {
+      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
+      defaultModel: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-local-dev-secret',
+    },
+    visionLLM: {
+      baseUrl: 'https://vision.example.test/openai-compatible',
+      model: 'qwen3.7-plus',
+      apiKey: 'sk-local-vision-secret',
+    },
+  }), 'utf8');
+  const envKeys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_VISION_API_KEY',
+    'SCIFORGE_VISION_BASE_URL',
+    'SCIFORGE_VISION_MODEL',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const child = new FakeChild(1206);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    requestedProviderProxyPort: 0,
+    services: [service('provider-proxy')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    await launcher.start();
+    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_API_KEY, 'sk-local-dev-secret');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_BASE_URL, 'https://vision.example.test/openai-compatible');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_MODEL, 'qwen3.7-plus');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_API_KEY, 'sk-local-vision-secret');
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await launcher.shutdown();
+  }
+});
+
 test('production launcher shutdown terminates managed children and closes control server', async () => {
   const root = await tempRoot();
   const child = new FakeChild(1202);

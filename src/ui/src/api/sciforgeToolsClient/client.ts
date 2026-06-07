@@ -13,7 +13,7 @@ import { createCodexRealtimeSessionEnvelope } from '@sciforge-ui/runtime-contrac
 import {
   composerComputerUseCommandRequiresExactTerminalText,
   composerPromptIsComputerUseSlashCommand,
-  composerPromptMentionsRelativeModality,
+  composerPromptMentionsRelativeModality as composerPromptMentionsRelativeObject,
 } from '@sciforge-ui/runtime-contract/ui-composer-intent-policy';
 import {
   buildSilentStreamDecisionRecord,
@@ -64,6 +64,16 @@ const RUNTIME_PROVIDER_PREFLIGHT_EVIDENCE_REF = 'runtime-provider-preflight:curr
 const CODEX_RUNTIME_SELECTED_MESSAGE_CONTEXT_LIMIT = 2;
 const CODEX_RUNTIME_SELECTED_MESSAGE_TEXT_LIMIT = 2_000;
 const MULTITASK_SUMMARY_GUIDANCE = 'Use Multitask for parallel research, long commands, or independent verification. Keep strongly coupled same-file edits or full-chat-history work with the main agent.';
+
+type RuntimeInputObjectSource = 'explicit-reference' | 'recent-visible-message' | 'recent-artifact';
+
+interface RuntimeInputObject {
+  schemaVersion: 'sciforge.runtime.input-object.v1';
+  ref: string;
+  source: RuntimeInputObjectSource;
+  mimeType?: string;
+  title?: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -558,7 +568,11 @@ function buildCodexRuntimeStreamRequest(input: {
   const provider = runtimeProviderForVisibleMetadata(config.modelProvider);
   const model = runtimeModelForVisibleMetadata(config.modelName);
   const codexSessionId = codexSessionIdForRuntimeResume(input.input);
-  const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
+  const inputObjects = runtimeInputObjectsForRuntimeRequest(input.input, input.referenceSummary);
+  const commandText = buildCodexRuntimeCommandText(input, {
+    resumeRequested: Boolean(codexSessionId),
+    inputObjects,
+  });
   const attemptId = `${input.commandId}-attempt-1`;
   const computerUseApproval = computerUseApprovalRuntimeMetadata(input.input, commandText, input.referenceSummary);
   const runtimeIntent = computerUseRuntimeHostIntent(input.input, commandText);
@@ -577,6 +591,7 @@ function buildCodexRuntimeStreamRequest(input: {
     profile,
     codexSessionId,
     allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+    ...(inputObjects.length ? { inputObjects } : {}),
     agentHostInput,
     guiExtension: {
       enabled: true,
@@ -627,7 +642,10 @@ function computerUseRuntimeHostIntent(input: SendAgentMessageInput, commandText:
   };
 }
 
-function buildCodexAgentHostInput(input: SendAgentMessageInput, referenceSummary: Array<Record<string, unknown>>) {
+function buildCodexAgentHostInput(
+  input: SendAgentMessageInput,
+  referenceSummary: Array<Record<string, unknown>>,
+) {
   const authorization = safeComposerDeclaredIntents(input.composerDeclaredIntents)?.authorization
     ?? defaultComposerDeclaredAuthorization();
   const readiness = buildCodexAgentHostRuntimeReadinessProjection(input.runtimeHealth);
@@ -986,15 +1004,15 @@ function assertCodexRuntimeApprovalMetadataBoundary(request: ReturnType<typeof b
 
 function buildCodexRuntimeCommandText(
   input: Parameters<typeof buildCodexRuntimeStreamRequest>[0],
-  options: { resumeRequested?: boolean } = {},
+  options: { resumeRequested?: boolean; inputObjects?: RuntimeInputObject[] } = {},
 ) {
   const prompt = input.input.prompt.trim();
+  const inputObjectRefSet = new Set((options.inputObjects ?? runtimeInputObjectsForRuntimeRequest(input.input, input.referenceSummary)).map((ref) => ref.ref));
   const readableRefs = uniqueRuntimeStringList(input.referenceSummary.flatMap((reference) => {
     const readableRefs = [reference.dataRef, reference.path, reference.ref].filter((value): value is string => Boolean(asString(value)));
     return readableRefs.length ? readableRefs : [reference.id];
-  }));
-  const modalityRefs = routerModalityRefsForRuntimeCommand(input.input, input.referenceSummary);
-  const refs = uniqueRuntimeStringList([...modalityRefs, ...readableRefs]).slice(0, 12);
+  })).filter((ref) => !inputObjectRefSet.has(ref));
+  const refs = uniqueRuntimeStringList(readableRefs).slice(0, 12);
   const computerUseCommand = composerPromptIsComputerUseSlashCommand(prompt);
   const exactComputerUseCommand = composerComputerUseCommandRequiresExactTerminalText(prompt);
   if (exactComputerUseCommand) return prompt;
@@ -1031,30 +1049,44 @@ function buildCodexRuntimeCommandText(
   ].filter(Boolean).join('\n\n');
 }
 
-function routerModalityRefsForRuntimeCommand(
+function runtimeInputObjectsForRuntimeRequest(
   input: SendAgentMessageInput,
   referenceSummary: Array<Record<string, unknown>>,
 ) {
-  const explicit = routerModalityRefsFromReferenceLikeRecords(referenceSummary);
-  const relative = composerPromptMentionsRelativeModality(input.prompt)
-    ? recentVisibleRouterModalityRefs(input)
+  const explicit = runtimeInputObjectsFromReferenceLikeRecords(referenceSummary, 'explicit-reference');
+  const named = namedRuntimeInputObjects(input);
+  const relative = !named.length && composerPromptMentionsRelativeObject(input.prompt)
+    ? [
+        ...recentVisibleRuntimeInputObjects(input),
+        ...recentArtifactRuntimeInputObjects(input),
+      ]
     : [];
-  return uniqueRuntimeStringList([...explicit, ...relative]).slice(0, 8);
+  return uniqueRuntimeInputObjects([...explicit, ...named, ...relative]).slice(0, 8);
 }
 
-function recentVisibleRouterModalityRefs(input: SendAgentMessageInput) {
-  const refs: string[] = [];
+function recentVisibleRuntimeInputObjects(input: SendAgentMessageInput) {
+  const refs: RuntimeInputObject[] = [];
   for (const message of [...(input.messages ?? [])].reverse()) {
     if (isSeedDemoOrFixtureMessage(message)) continue;
-    refs.push(...routerModalityRefsFromReferenceLikeRecords(message.references ?? []));
-    refs.push(...routerModalityRefsFromObjectReferences(message.objectReferences ?? []));
+    refs.push(...runtimeInputObjectsFromReferenceLikeRecords(message.references ?? [], 'recent-visible-message'));
+    refs.push(...runtimeInputObjectsFromObjectReferences(message.objectReferences ?? [], 'recent-visible-message'));
     if (refs.length >= 8) break;
   }
-  return uniqueRuntimeStringList(refs).slice(0, 8);
+  return uniqueRuntimeInputObjects(refs).slice(0, 8);
 }
 
-function routerModalityRefsFromReferenceLikeRecords(records: unknown[]) {
-  return uniqueRuntimeStringList(records.flatMap((record) => {
+function allVisibleRuntimeInputObjects(input: SendAgentMessageInput) {
+  const refs: RuntimeInputObject[] = [];
+  for (const message of [...(input.messages ?? [])].reverse()) {
+    if (isSeedDemoOrFixtureMessage(message)) continue;
+    refs.push(...runtimeInputObjectsFromReferenceLikeRecords(message.references ?? [], 'recent-visible-message'));
+    refs.push(...runtimeInputObjectsFromObjectReferences(message.objectReferences ?? [], 'recent-visible-message'));
+  }
+  return uniqueRuntimeInputObjects(refs);
+}
+
+function runtimeInputObjectsFromReferenceLikeRecords(records: unknown[], source: RuntimeInputObjectSource) {
+  return uniqueRuntimeInputObjects(records.flatMap((record) => {
     if (!isRecord(record)) return [];
     const payload = isRecord(record.payload) ? record.payload : {};
     const metadata = isRecord(payload.metadata) ? payload.metadata : {};
@@ -1062,51 +1094,198 @@ function routerModalityRefsFromReferenceLikeRecords(records: unknown[]) {
     const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
     const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
     return [
-      routerModalityRefCandidate(record, metadata),
-      routerModalityRefCandidate(record, provenance),
-      routerModalityRefCandidate(currentReference, isRecord(currentReference.provenance) ? currentReference.provenance : {}),
-      routerModalityRefCandidate(objectReference, isRecord(objectReference.provenance) ? objectReference.provenance : {}),
+      runtimeInputObjectCandidate(record, metadata, source),
+      runtimeInputObjectCandidate(record, provenance, source),
+      runtimeInputObjectCandidate(currentReference, isRecord(currentReference.provenance) ? currentReference.provenance : {}, source),
+      runtimeInputObjectCandidate(objectReference, isRecord(objectReference.provenance) ? objectReference.provenance : {}, source),
     ];
   }));
 }
 
-function routerModalityRefsFromObjectReferences(records: unknown[]) {
-  return uniqueRuntimeStringList(records.flatMap((record) => {
+function runtimeInputObjectsFromObjectReferences(records: unknown[], source: RuntimeInputObjectSource) {
+  return uniqueRuntimeInputObjects(records.flatMap((record) => {
     if (!isRecord(record)) return [];
-    return [routerModalityRefCandidate(record, isRecord(record.provenance) ? record.provenance : {})];
+    return [runtimeInputObjectCandidate(record, isRecord(record.provenance) ? record.provenance : {}, source)];
   }));
 }
 
-function routerModalityRefCandidate(record: Record<string, unknown>, auxiliary: Record<string, unknown> = {}) {
+function recentArtifactRuntimeInputObjects(input: SendAgentMessageInput) {
+  const refs: RuntimeInputObject[] = [];
+  for (const artifact of [...(input.artifacts ?? [])].reverse()) {
+    if (!isRecord(artifact)) continue;
+    refs.push(...runtimeInputObjectsFromArtifactRecord(artifact));
+    if (refs.length >= 8) break;
+  }
+  return uniqueRuntimeInputObjects(refs).slice(0, 8);
+}
+
+function allArtifactRuntimeInputObjects(input: SendAgentMessageInput) {
+  const refs: RuntimeInputObject[] = [];
+  for (const artifact of [...(input.artifacts ?? [])].reverse()) {
+    if (!isRecord(artifact)) continue;
+    refs.push(...runtimeInputObjectsFromArtifactRecord(artifact));
+  }
+  return uniqueRuntimeInputObjects(refs);
+}
+
+function runtimeInputObjectsFromArtifactRecord(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const previewDescriptor = isRecord(artifact.previewDescriptor) ? artifact.previewDescriptor : {};
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  const candidates = [
+    runtimeInputObjectCandidate(artifact, metadata, 'recent-artifact'),
+    runtimeInputObjectCandidate(artifact, previewDescriptor, 'recent-artifact'),
+    runtimeInputObjectCandidate(previewDescriptor, { ...metadata, type: artifact.type, artifactType: artifact.type }, 'recent-artifact'),
+    runtimeInputObjectCandidate(data, { ...metadata, type: artifact.type, artifactType: artifact.type }, 'recent-artifact'),
+  ];
+  return uniqueRuntimeInputObjects(candidates);
+}
+
+function namedRuntimeInputObjects(input: SendAgentMessageInput) {
+  const prompt = normalizedRuntimeInputObjectName(input.prompt);
+  if (!prompt) return [];
+  return uniqueRuntimeInputObjects([
+    ...allVisibleRuntimeInputObjects(input),
+    ...allArtifactRuntimeInputObjects(input),
+  ].filter((object) => runtimeInputObjectNameMentionedInPrompt(object, prompt))).slice(0, 8);
+}
+
+function runtimeInputObjectNameMentionedInPrompt(object: RuntimeInputObject, normalizedPrompt: string) {
+  return runtimeInputObjectNameCandidates(object)
+    .map(normalizedRuntimeInputObjectName)
+    .filter((candidate): candidate is string => Boolean(candidate && candidate.length >= 3))
+    .some((candidate) => normalizedPrompt.includes(candidate));
+}
+
+function runtimeInputObjectNameCandidates(object: RuntimeInputObject) {
+  const title = object.title;
+  const basename = runtimeInputObjectRefBasename(object.ref);
+  return uniqueRuntimeStringList([
+    title,
+    runtimeInputObjectNameStem(title),
+    basename,
+    runtimeInputObjectNameStem(basename),
+  ]);
+}
+
+function runtimeInputObjectRefBasename(ref: string) {
+  const clean = ref.split(/[?#]/, 1)[0] ?? ref;
+  const basename = clean.split('/').filter(Boolean).pop() ?? clean;
+  try {
+    return decodeURIComponent(basename);
+  } catch {
+    return basename;
+  }
+}
+
+function runtimeInputObjectNameStem(value: string | undefined) {
+  if (!value) return undefined;
+  return value.replace(/\.[A-Za-z0-9]{1,10}$/u, '');
+}
+
+function normalizedRuntimeInputObjectName(value: string | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[\s"'“”‘’「」『』《》【】()[\]{}]+/g, '');
+}
+
+function runtimeInputObjectCandidate(
+  record: Record<string, unknown>,
+  auxiliary: Record<string, unknown> = {},
+  source: RuntimeInputObjectSource,
+): RuntimeInputObject | undefined {
   const ref = asString(auxiliary.path)
     ?? asString(auxiliary.dataRef)
     ?? asString(auxiliary.workspacePath)
+    ?? asString(auxiliary.ref)
     ?? asString(record.path)
     ?? asString(record.dataRef)
     ?? asString(record.workspacePath)
     ?? asString(record.ref);
-  if (!ref || !routerModalityRefLooksSupported(ref, record, auxiliary)) return undefined;
-  return ref;
-}
-
-function routerModalityRefLooksSupported(ref: string, record: Record<string, unknown>, auxiliary: Record<string, unknown>) {
-  if (!safeRouterModalityRef(ref)) return false;
-  const descriptor = [
+  if (!ref || !safeRuntimeInputObjectRef(ref)) return undefined;
+  const mimeType = runtimeInputObjectMimeType(ref, record, auxiliary);
+  if (!runtimeInputObjectHasMaterializableShape(ref, mimeType)) return undefined;
+  const title = asString(auxiliary.title)
+    ?? asString(record.title)
+    ?? asString(auxiliary.name)
+    ?? asString(record.name);
+  return {
+    schemaVersion: 'sciforge.runtime.input-object.v1',
     ref,
-    asString(record.kind),
-    asString(record.title),
-    asString(record.summary),
-    asString(record.artifactType),
-    asString(record.type),
-    asString(auxiliary.mimeType),
-    asString(auxiliary.mime_type),
-    asString(record.mimeType),
-    asString(record.mime_type),
-  ].filter(Boolean).join(' ');
-  return /(?:^|\b)(?:image|uploaded-image|screenshot|figure|fig|chart|plot|diagram|photo|picture|audio|video|table|spreadsheet|csv|tsv|xlsx?|document|pdf|docx?|pptx?)(?:\b|$)|\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic|mp3|wav|m4a|flac|mp4|mov|webm|csv|tsv|xlsx?|pdf|docx?|pptx?)(?:$|[?#])/i.test(descriptor);
+    source,
+    ...(mimeType ? { mimeType } : {}),
+    ...(title ? { title: title.slice(0, 160) } : {}),
+  };
 }
 
-function safeRouterModalityRef(ref: string) {
+function runtimeInputObjectMimeType(ref: string, record: Record<string, unknown>, auxiliary: Record<string, unknown>) {
+  const explicit = asString(auxiliary.mimeType)
+    ?? asString(auxiliary.mime_type)
+    ?? asString(record.mimeType)
+    ?? asString(record.mime_type);
+  if (explicit) return explicit;
+  switch (ref.split(/[?#]/, 1)[0]?.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1]) {
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    case 'gif':
+      return 'image/gif';
+    case 'tif':
+    case 'tiff':
+      return 'image/tiff';
+    case 'bmp':
+      return 'image/bmp';
+    case 'heic':
+      return 'image/heic';
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'wav':
+      return 'audio/wav';
+    case 'm4a':
+      return 'audio/mp4';
+    case 'flac':
+      return 'audio/flac';
+    case 'mp4':
+      return 'video/mp4';
+    case 'mov':
+      return 'video/quicktime';
+    case 'webm':
+      return 'video/webm';
+    case 'csv':
+      return 'text/csv';
+    case 'tsv':
+      return 'text/tab-separated-values';
+    case 'pdf':
+      return 'application/pdf';
+    default:
+      return undefined;
+  }
+}
+
+function runtimeInputObjectHasMaterializableShape(ref: string, mimeType: string | undefined) {
+  if (/^(?:artifact|ref|run):/i.test(ref) && !/\.[A-Za-z0-9]+(?:$|[?#])/i.test(ref)) return false;
+  return typeof mimeType === 'string' && /^image\//i.test(mimeType);
+}
+
+function uniqueRuntimeInputObjects(values: Array<RuntimeInputObject | undefined>) {
+  const seen = new Set<string>();
+  const out: RuntimeInputObject[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value.ref)) continue;
+    seen.add(value.ref);
+    out.push(value);
+  }
+  return out;
+}
+
+function safeRuntimeInputObjectRef(ref: string) {
   if (ref.length > 600) return false;
   if (/^(?:data|https?|blob|javascript|file):/i.test(ref)) return false;
   return /^[A-Za-z0-9._:@/-]+$/.test(ref)

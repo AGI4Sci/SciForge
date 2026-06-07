@@ -1,0 +1,29 @@
+{
+  "name": "@agi4sci/sciforge-computer-use-action-provider",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge portable Computer Use primitive action provider contracts and MCP-compatible service.",
+  "exports": {
+    ".": "./index.ts",
+    "./mcp": "./mcp.ts",
+    "./action-provider.manifest.json": "./action-provider.manifest.json"
+  },
+  "files": [
+    "index.ts",
+    "mcp.ts",
+    "action-provider.manifest.json",
+    "README.md",
+    "package.json"
+  ],
+  "dependencies": {
+    "@sciforge-ui/runtime-contract": "^1.0.0"
+  },
+  "sciforge": {
+    "lifecycleLayer": "actions",
+    "skillFacing": false,
+    "sideEffects": "runtime",
+    "publicContract": true,
+    "runtimeAdapter": false
+  }
+}

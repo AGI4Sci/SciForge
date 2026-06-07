@@ -51,32 +51,30 @@ test('Agent Host local tool Act policy requires confirmation for workspace mutat
   });
 });
 
-test('Agent Host local tool Act policy lets bounded module operations decide completion and confirmation', () => {
-  for (const moduleId of ['browser', 'computer_use']) {
-    const decision = evaluateAgentHostLocalToolAct({
-      toolName: 'module.invoke',
-      args: {
-        moduleId,
-        intent: 'executeBoundedOperation',
-        input: {
-          operationKind: moduleId === 'browser' ? 'browser.search_read' : 'computer_use.perform_local_action',
-          ownerModuleId: moduleId,
-        },
+test('Agent Host local tool Act policy blocks legacy Computer Use bounded operations', () => {
+  const decision = evaluateAgentHostLocalToolAct({
+    toolName: 'module.invoke',
+    args: {
+      moduleId: 'computer_use',
+      intent: 'executeBoundedOperation',
+      input: {
+        operationKind: 'computer_use.perform_local_action',
+        ownerModuleId: 'computer_use',
       },
-      moduleDescription: createModuleDescription({
-        moduleId,
-        title: moduleId,
-        summary: 'Bounded operation module.',
-        intents: [{ name: 'executeBoundedOperation', sideEffect: 'local', returnsOperation: true }],
-        facets: { approval: true, refs: true },
-      }),
-      commandId: `codex-command-${moduleId}-bounded`,
-      attemptId: 'attempt-1',
-    });
+    },
+    moduleDescription: createModuleDescription({
+      moduleId: 'computer_use',
+      title: 'computer_use',
+      summary: 'Bounded operation module.',
+      intents: [{ name: 'executeBoundedOperation', sideEffect: 'local', returnsOperation: true }],
+      facets: { approval: true, refs: true },
+    }),
+    commandId: 'codex-command-computer-use-bounded',
+    attemptId: 'attempt-1',
+  });
 
-    assert.equal(decision.status, 'auto', moduleId);
-    assert.match(decision.reason, /bounded/i);
-  }
+  assert.equal(decision.status, 'blocked');
+  assert.match(decision.reason, /Computer Use primitive runtime|legacy bounded/i);
 });
 
 test('Agent Host local tool Act policy allows approved workspace mutations only with runtime control path', () => {

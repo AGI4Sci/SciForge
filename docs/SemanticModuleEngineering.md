@@ -1,10 +1,10 @@
 # Semantic Module Engineering
 
-最后更新：2026-06-06
+最后更新：2026-06-07
 
 ## 目的
 
-本文只保留当前模块工程原则。当前实现以 [`Architecture.md`](Architecture.md) 中的 Bounded Operation 为最小落点。
+本文只保留当前模块工程原则。具体模块以各自 runtime architecture 文档定义 public primitive。
 
 ## 模块是什么
 
@@ -28,13 +28,13 @@ module.invoke
 
 ## 当前最小模式
 
-复杂模块先不要实现通用 workflow engine。当前只实现：
+复杂模块先不要实现通用 workflow engine。当前只实现 Host 调用的模块 primitive：
 
 ```text
-module.invoke(executeBoundedOperation)
+module.invoke(module-owned primitive)
 ```
 
-它表示一个 owner module 在一个 target scope 内执行一个有边界的局部动作串。
+Computer Use 的当前 primitive 是 `bind / observe / act / run_procedure / control`。其中 `run_procedure` 只执行 Host 给定的无智能局部步骤序列，用来降低 Host 往返成本，不做 plan / repair / completion truth。
 
 ## 禁止事项
 
@@ -46,4 +46,5 @@ module.invoke(executeBoundedOperation)
 ## 相关文档
 
 - [`../PROJECT.md`](../PROJECT.md)：当前需求和验收标准。
-- [`Architecture.md`](Architecture.md)：Bounded Operation 总契约。
+- [`Architecture.md`](Architecture.md)：总架构。
+- [`ComputerUseRuntimeArchitecture.md`](ComputerUseRuntimeArchitecture.md)：Computer Use primitive 边界。
