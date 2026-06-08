@@ -6,6 +6,7 @@ export type CuNextRequirement =
   | 'l2-artifact-refs'
   | 'l3-workflow-refs'
   | 'approval-chain'
+  | 'full-access-permission-envelope'
   | 'repair-continuity'
   | 'dense-grounding'
   | 'user-control-refs'
@@ -140,7 +141,7 @@ export const DEFAULT_CU_NEXT_TASK_MAP = {
       priority: 9,
       primaryScenarioId: 'CU-LONG-006',
       longScenarioIds: ['CU-LONG-006', 'CU-LONG-008'],
-      requirements: ['l3-workflow-refs', 'approval-chain', 'repair-continuity', 'user-control-refs', 'observe-before-mutate-refs', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      requirements: ['l3-workflow-refs', 'full-access-permission-envelope', 'repair-continuity', 'user-control-refs', 'observe-before-mutate-refs', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
       recommendedTargetMode: 'active-window',
       recommendedTargetApp: 'Visual Studio Code',
       recommendedMaxSteps: 6,

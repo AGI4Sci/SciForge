@@ -68,6 +68,7 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
     draftTextRef: binding.draftTextRef,
     riskActionHash: binding.riskActionHash,
     confirmationRef: binding.confirmationRef,
+    permissionRef: binding.permissionRef,
   };
   const decision = binding.operation
     ? decideVSCodeCoWorkNextPrimitive(decisionInput)
@@ -106,6 +107,7 @@ interface SanitizedVSCodeCoWorkBinding {
   draftTextRef?: string;
   riskActionHash?: string;
   confirmationRef?: string;
+  permissionRef?: string;
 }
 
 function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBinding {
@@ -136,6 +138,7 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
     riskActionHash: safeRuntimeRef(value.riskActionHash, ['risk:']),
     confirmationRef: safeRuntimeRef(value.confirmationRef, ['approval:']),
+    permissionRef: safeRuntimeRef(value.permissionRef, ['permission:']),
   };
 }
 
@@ -322,6 +325,7 @@ function payloadForDecision(decision: VSCodeCoWorkDecision): VSCodeCoWorkRoutePa
       action: decision.action,
       risk: decision.risk,
       approvalRef: decision.approvalRef,
+      permissionRef: decision.permissionRef,
       blockedReason: decision.blockedReason,
       confirmation: decision.confirmation,
       repairHints: decision.repairHints,

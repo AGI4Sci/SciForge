@@ -15,7 +15,7 @@ export const VSCODE_COWORK_ACCEPTANCE_CAPABILITY = {
     'task-understanding',
     'target-choice',
     'next-primitive-choice-from-observe-refs',
-    'approval-collection',
+    'permission-envelope',
     'completion-truth',
     'final-answer',
   ],
@@ -104,6 +104,7 @@ export interface VSCodeCoWorkDecisionInput {
   draftTextRef?: string;
   riskActionHash?: string;
   confirmationRef?: string;
+  permissionRef?: string;
 }
 
 export interface VSCodeCoWorkDecision {
@@ -117,6 +118,7 @@ export interface VSCodeCoWorkDecision {
   action?: ComputerUseAtomicAction;
   risk?: ComputerUseActionRisk;
   approvalRef?: string;
+  permissionRef?: string;
   refs: string[];
   blockedReason?: string;
   confirmation?: {
@@ -181,7 +183,8 @@ export interface VSCodeCoWorkLiveAcceptanceManifest {
     screenshotRefs: string[];
     accessibilityRefs: string[];
     textRefs: string[];
-    approvalRefs: string[];
+    permissionRefs?: string[];
+    approvalRefs?: string[];
     releaseRefs: string[];
     restorationRefs: string[];
   };
@@ -282,29 +285,8 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const draftTextRefBlock = draftTextRefRequiredBlock(input, targetWindow, observation);
   if (draftTextRefBlock) return draftTextRefBlock;
 
-  const nonUserFileScopeRefBlock = nonUserFileScopeRefRequiredBlock(input, targetWindow, observation);
-  if (nonUserFileScopeRefBlock) return nonUserFileScopeRefBlock;
-
-  const riskEnvelopeBlock = realFileChangeRiskEnvelopeBlock(input, targetWindow, observation);
-  if (riskEnvelopeBlock) return riskEnvelopeBlock;
-
-  if (realFileChangeNeedsConfirmation(input, targetWindow, observation)) {
-    return {
-      ...decisionBase('needs-confirmation', refsForTargetAndObservation(input, targetWindow, observation)),
-      targetWindowRef,
-      blockedReason: 'vscode_cowork_real_file_change_needs_confirmation',
-      confirmation: {
-        reason: 'Replacing selected text, saving, undoing, bulk replacement, or cross-file modification against a user file requires Host-collected confirmation.',
-        riskActionHash: input.riskActionHash,
-        approvalScope: input.operation,
-      },
-      repairHints: [{
-        code: 'collect-real-file-change-confirmation',
-        message: 'Show a preview or confirmation outside Computer Use, then retry the same Host-chosen primitive with a matching confirmationRef.',
-        suggestedPrimitive: 'act',
-      }],
-    };
-  }
+  const permissionEnvelopeBlock = realFileChangePermissionEnvelopeBlock(input, targetWindow, observation);
+  if (permissionEnvelopeBlock) return permissionEnvelopeBlock;
 
   const nonAtomicFileChangeBlock = nonAtomicFileChangeOperationBlock(input, targetWindow, observation);
   if (nonAtomicFileChangeBlock) return nonAtomicFileChangeBlock;
@@ -334,11 +316,11 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
     action,
     ...(userRealFileChangeOperation(input, observation) ? {
       risk: {
-        level: 'high' as const,
+        level: 'low' as const,
         categories: ['user-real-file-change'],
-        actionHash: input.riskActionHash,
+        actionHash: riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
       },
-      approvalRef: input.confirmationRef,
+      permissionRef: input.permissionRef,
     } : {}),
     repairHints: [],
   };
@@ -479,16 +461,21 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (fileTargetOperation(manifest.operation) && !hostDecisionRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
     issues.push('missing-host-decision-ref:target-file');
   }
-  const hostDecisionRiskRefs = hostDecisionRefs.filter(riskActionHashRef);
-  if (realFileChangeOperation(manifest.operation) && hostDecisionRiskRefs.length === 0) {
-    issues.push('missing-host-decision-ref:risk-action-hash');
+  const activeSessionRefs = manifest.evidence.bindRefs.filter(sessionRef);
+  const hostDecisionPermissionRefs = hostDecisionRefs.filter(permissionRef);
+  if (realFileChangeOperation(manifest.operation) && hostDecisionPermissionRefs.length === 0) {
+    issues.push('missing-host-decision-ref:permission');
   } else if (
     realFileChangeOperation(manifest.operation)
-    && !hostDecisionRiskRefs.some((ref) => riskActionHashRefMatchesTargetFile(ref, manifest.target.selectedFileRef))
+    && activeSessionRefs.length > 0
+    && !hostDecisionPermissionRefs.some((permission) =>
+      activeSessionRefs.some((activeSession) =>
+        fullAccessPermissionRefMatchesTargetFileAndSession(permission, manifest.target.selectedFileRef, activeSession),
+      ),
+    )
   ) {
-    issues.push('missing-host-decision-ref:risk-action-hash-target-file');
+    issues.push('missing-host-decision-ref:permission-target-session');
   }
-  if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(approvalRef)) issues.push('missing-host-decision-ref:approval');
   if (!manifest.evidence.actionRefs.some(actionRef)) issues.push('invalid-evidence-ref:act');
   if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(actionRefs, manifest.evidence.bindRefs, sessionRef)) {
     issues.push('missing-action-ref:session');
@@ -507,6 +494,20 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
     issues.push('missing-action-ref:editor-element');
   } else if (beforeEditorElementRefs.length > 0 && !refsContainBoundRef(actionRefs, beforeEditorElementRefs, editorElementEvidenceRef)) {
     issues.push('missing-action-ref:editor-element');
+  }
+  const actionPermissionRefs = actionRefs.filter(permissionRef);
+  if (realFileChangeOperation(manifest.operation) && actionPermissionRefs.length === 0) {
+    issues.push('missing-action-ref:permission');
+  } else if (
+    realFileChangeOperation(manifest.operation)
+    && activeSessionRefs.length > 0
+    && !actionPermissionRefs.some((permission) =>
+      activeSessionRefs.some((activeSession) =>
+        fullAccessPermissionRefMatchesTargetFileAndSession(permission, manifest.target.selectedFileRef, activeSession),
+      ),
+    )
+  ) {
+    issues.push('missing-action-ref:permission-target-session');
   }
   if (releaseRefs.some(scopedInputLeaseRef) && !refsContainBoundRef(actionRefs, releaseRefs, scopedInputLeaseRef)) {
     issues.push('missing-action-release-ref:scoped-input-lease');
@@ -566,38 +567,22 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.cleanup.mousePositionRestored) issues.push('cleanup-mouse-position-not-restored');
   if (manifest.cleanup.userVSCodeProcessKilled) issues.push('cleanup-must-not-kill-user-vscode');
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
-  const approvalRiskRefs = manifest.evidence.approvalRefs.filter(riskActionHashRef);
-  if (realFileChangeOperation(manifest.operation) && approvalRiskRefs.length === 0) {
-    issues.push('missing-approval-ref:risk-action-hash');
-  } else if (
-    realFileChangeOperation(manifest.operation)
-    && !approvalRiskRefs.some((ref) => riskActionHashRefMatchesTargetFile(ref, manifest.target.selectedFileRef))
-  ) {
-    issues.push('missing-approval-ref:risk-action-hash-target-file');
-  }
-  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(approvalRef)) issues.push('missing-approval-ref:approval');
-  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
-    issues.push('missing-approval-ref:target-file');
-  }
-  const activeSessionRefs = manifest.evidence.bindRefs.filter(sessionRef);
-  const approvalTokenRefs = manifest.evidence.approvalRefs.filter(approvalRef);
+  const permissionEvidenceRefs = manifest.evidence.permissionRefs ?? [];
   if (
     realFileChangeOperation(manifest.operation)
+    && !permissionEvidenceRefs.some(permissionRef)
+  ) {
+    issues.push('missing-permission-ref:full-access');
+  } else if (
+    realFileChangeOperation(manifest.operation)
     && activeSessionRefs.length > 0
-    && !approvalTokenRefs.some((approval) =>
-      approvalRiskRefs.some((risk) =>
-        activeSessionRefs.some((activeSession) =>
-          approvalRefMatchesRiskActionHashTargetFileAndSession(
-            approval,
-            risk,
-            manifest.target.selectedFileRef,
-            activeSession,
-          ),
-        ),
+    && !permissionEvidenceRefs.some((permission) =>
+      activeSessionRefs.some((activeSession) =>
+        fullAccessPermissionRefMatchesTargetFileAndSession(permission, manifest.target.selectedFileRef, activeSession),
       ),
     )
   ) {
-    issues.push('missing-approval-ref:active-session');
+    issues.push('missing-permission-ref:target-file-active-session');
   }
   issues.push(...unsafeEvidenceRefIssues(manifest.evidence));
 
@@ -795,27 +780,26 @@ function selectionReplacementRefsRequiredBlock(
   return undefined;
 }
 
-function realFileChangeRiskEnvelopeBlock(
+function realFileChangePermissionEnvelopeBlock(
   input: VSCodeCoWorkDecisionInput,
   targetWindow: VSCodeCoWorkWindowCandidate,
   observation: VSCodeCoWorkObservationRefs,
 ): VSCodeCoWorkDecision | undefined {
   if (!realFileChangeOperation(input.operation)) return undefined;
-  if (observation.userFile === false) return undefined;
-  if (riskActionHashRef(input.riskActionHash)) {
-    const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
-    if (riskActionHashRefMatchesTargetFile(input.riskActionHash, targetFileRef)) return undefined;
+  const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
+  if (fullAccessPermissionRef(input.permissionRef)) {
+    if (fullAccessPermissionRefMatchesTargetFileAndSession(input.permissionRef, targetFileRef, observation.sessionRef)) return undefined;
     return {
       ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
       targetWindowRef: targetWindow.windowRef,
-      blockedReason: 'vscode_cowork_real_file_change_risk_hash_target_ref_required',
+      blockedReason: 'vscode_cowork_full_access_permission_ref_target_session_required',
       confirmation: {
-        reason: 'Replacing selected text, saving, undoing, bulk replacement, or cross-file modification against a user file requires a riskActionHash bound to the selected file ref before confirmation can authorize the action.',
+        reason: 'VSCode co-work file mutation requires a full-access permission ref bound to the current active session and selected file ref.',
         approvalScope: input.operation,
       },
       repairHints: [{
-        code: 'bind-real-file-risk-action-hash-to-target-file',
-        message: 'Host must bind the riskActionHash to the same selected fileRef before collecting confirmation for the user-file mutation.',
+        code: 'bind-full-access-permission-to-session-and-file',
+        message: 'Host must bind the full-access permission envelope to the active observe session and selected fileRef before choosing this primitive.',
         suggestedPrimitive: 'act',
       }],
     };
@@ -823,48 +807,15 @@ function realFileChangeRiskEnvelopeBlock(
   return {
     ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
     targetWindowRef: targetWindow.windowRef,
-    blockedReason: 'vscode_cowork_real_file_change_risk_hash_required',
+    blockedReason: 'vscode_cowork_full_access_permission_ref_required',
     confirmation: {
-      reason: 'Replacing selected text, saving, undoing, bulk replacement, or cross-file modification against a user file requires a Host-computed riskActionHash before confirmation can authorize the action.',
+      reason: 'VSCode co-work file mutation requires a Host-owned full-access permission envelope; real-file, save, bulk, and cross-file categories do not by themselves require approval.',
       approvalScope: input.operation,
     },
     repairHints: [{
-      code: 'provide-real-file-risk-action-hash',
-      message: 'Compute a refs-first riskActionHash for the exact user-file mutation, collect confirmation bound to that hash, then retry the Host-chosen primitive.',
+      code: 'provide-full-access-permission-ref',
+      message: 'Provide a refs-first permissionRef for the current VSCode co-work session, then retry the same Host-chosen primitive.',
       suggestedPrimitive: 'act',
-    }],
-  };
-}
-
-function nonUserFileScopeRefRequiredBlock(
-  input: VSCodeCoWorkDecisionInput,
-  targetWindow: VSCodeCoWorkWindowCandidate,
-  observation: VSCodeCoWorkObservationRefs,
-): VSCodeCoWorkDecision | undefined {
-  if (!realFileChangeOperation(input.operation)) return undefined;
-  if (observation.userFile !== false) return undefined;
-  if (!nonUserFileScopeRef(observation.nonUserFileScopeRef)) {
-    return {
-      ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
-      targetWindowRef: targetWindow.windowRef,
-      blockedReason: 'vscode_cowork_non_user_file_scope_ref_required',
-      repairHints: [{
-        code: 'provide-non-user-file-scope-ref',
-        message: 'Host must provide a refs-first non-user file scope ref before treating a VSCode file mutation as exempt from user-file confirmation.',
-        suggestedPrimitive: 'observe',
-      }],
-    };
-  }
-  const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
-  if (nonUserFileScopeRefMatchesTargetFile(observation.nonUserFileScopeRef, targetFileRef)) return undefined;
-  return {
-    ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
-    targetWindowRef: targetWindow.windowRef,
-    blockedReason: 'vscode_cowork_non_user_file_scope_target_ref_required',
-    repairHints: [{
-      code: 'bind-non-user-file-scope-to-target-file',
-      message: 'Host must bind the non-user file scope ref to the same selected fileRef before treating a VSCode mutation as exempt from user-file confirmation.',
-      suggestedPrimitive: 'observe',
     }],
   };
 }
@@ -953,28 +904,12 @@ function editorElementEvidenceRef(value: unknown): value is string {
   return elementRef(value) && /editor/i.test(value);
 }
 
-function realFileChangeNeedsConfirmation(
-  input: VSCodeCoWorkDecisionInput,
-  targetWindow: VSCodeCoWorkWindowCandidate,
-  observation: VSCodeCoWorkObservationRefs,
-): boolean {
-  if (!userRealFileChangeOperation(input, observation)) return false;
-  if (!approvalRef(input.confirmationRef)) return true;
-  if (!riskActionHashRef(input.riskActionHash)) return true;
-  const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
-  return !approvalRefMatchesRiskActionHashTargetFileAndSession(
-    input.confirmationRef,
-    input.riskActionHash,
-    targetFileRef,
-    observation.sessionRef,
-  );
-}
-
 function userRealFileChangeOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
 ): boolean {
-  return realFileChangeOperation(input.operation) && observation.userFile !== false;
+  void observation;
+  return realFileChangeOperation(input.operation);
 }
 
 function draftTextRef(value: unknown): value is string {
@@ -1019,8 +954,14 @@ function riskActionHashRef(value: unknown): value is string {
   return typeof value === 'string' && /^risk:[a-z0-9_-]+(?::[a-z0-9_-]+)*$/i.test(value.trim());
 }
 
-function approvalRef(value: unknown): value is string {
-  return typeof value === 'string' && /^approval:[a-z0-9_-]+(?::[a-z0-9_-]+)*$/i.test(value.trim());
+function permissionRef(value: unknown): value is string {
+  return structuredRef(value, ['permission:']);
+}
+
+function fullAccessPermissionRef(value: unknown): value is string {
+  return permissionRef(value)
+    && refContainsToken(value, 'current-vscode-cowork')
+    && refContainsToken(value, 'full-access');
 }
 
 function actionRef(value: unknown): value is string {
@@ -1155,27 +1096,16 @@ function resolvedTargetFileRef(
   return candidateFileRefs.length === 1 ? candidateFileRefs[0] : undefined;
 }
 
-function approvalRefMatchesRiskActionHashTargetFileAndSession(
-  approvalRef: string,
-  riskActionHash: string,
+function fullAccessPermissionRefMatchesTargetFileAndSession(
+  permissionRef: string,
   targetFileRef: string | undefined,
   activeSessionRef: string | undefined,
 ): boolean {
   if (!fileRef(targetFileRef)) return false;
   if (!sessionRef(activeSessionRef)) return false;
-  return approvalRef.startsWith(`approval:${riskActionHash}:${activeSessionRef}:${targetFileRef}:`);
-}
-
-function riskActionHashRefMatchesTargetFile(riskActionHash: string, targetFileRef: string | undefined): boolean {
-  if (!fileRef(targetFileRef)) return false;
-  const text = riskActionHash.trim();
-  const targetToken = `:${targetFileRef}`;
-  return text.endsWith(targetToken) || text.includes(`${targetToken}:`);
-}
-
-function nonUserFileScopeRefMatchesTargetFile(scopeRef: string, targetFileRef: string | undefined): boolean {
-  if (!fileRef(targetFileRef)) return false;
-  return scopeRef.startsWith(`non-user-file-scope:${targetFileRef}:`);
+  return fullAccessPermissionRef(permissionRef)
+    && refContainsToken(permissionRef, activeSessionRef)
+    && refContainsToken(permissionRef, targetFileRef);
 }
 
 function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
@@ -1259,7 +1189,7 @@ function refsForTargetAndObservation(
     selectionRef(input.selectionRef) ? input.selectionRef : undefined,
     replacementTextRef(input.replacementTextRef) ? input.replacementTextRef : undefined,
     riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
-    approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
+    fullAccessPermissionRef(input.permissionRef) ? input.permissionRef : undefined,
     nonUserFileScopeRef(observation.nonUserFileScopeRef) ? observation.nonUserFileScopeRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
     windowRef(observation.windowRef) ? observation.windowRef : undefined,
@@ -1347,7 +1277,8 @@ function unsafeEvidenceRefIssues(evidence: VSCodeCoWorkLiveAcceptanceManifest['e
     ['screenshot', evidence.screenshotRefs],
     ['accessibility', evidence.accessibilityRefs],
     ['text', evidence.textRefs],
-    ['approval', evidence.approvalRefs],
+    ['permission', evidence.permissionRefs ?? []],
+    ['approval', evidence.approvalRefs ?? []],
     ['release', evidence.releaseRefs],
     ['restoration', evidence.restorationRefs],
   ];
@@ -1370,4 +1301,8 @@ function unsafeCleanupEvidenceRefIssues(evidence: VSCodeCoWorkCleanupManifest['e
 
 function unsafeEvidenceRef(value: string): boolean {
   return /(?:rawScreenshot|providerPayload|data:[^,\s]+;base64,|base64|secret|token|password|https?:\/\/|(?:^|[:\s])(?:~\/|\/(?:Users|Applications|tmp|var|private|Volumes)\/|[A-Za-z]:[\\/]))/i.test(value);
+}
+
+function refContainsToken(ref: string, token: string): boolean {
+  return ref === token || ref.startsWith(`${token}:`) || ref.endsWith(`:${token}`) || ref.includes(`:${token}:`);
 }

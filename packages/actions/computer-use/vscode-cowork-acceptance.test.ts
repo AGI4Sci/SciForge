@@ -27,9 +27,10 @@ test('CU-NEXT task map registers P9 current VSCode co-work without product-ready
   assert.equal(mapping.slug, 'current-vscode-cowork');
   assert.equal(mapping.recommendedTargetMode, 'active-window');
   assert.equal(mapping.recommendedTargetApp, 'Visual Studio Code');
-  assert.ok(mapping.requirements.includes('observe-before-mutate-refs'));
-  assert.ok(mapping.requirements.includes('approval-chain'));
-  assert.ok(mapping.requirements.includes('user-control-refs'));
+  const requirements = mapping.requirements as readonly string[];
+  assert.ok(requirements.includes('observe-before-mutate-refs'));
+  assert.ok(requirements.includes('full-access-permission-envelope'));
+  assert.ok(requirements.includes('user-control-refs'));
   assert.doesNotMatch(JSON.stringify(mapping), /product-ready/i);
 });
 
@@ -622,9 +623,9 @@ test('Host-side VSCode co-work requires refs-first selection and replacement ref
   assert.doesNotMatch(JSON.stringify(rawReplacement), /replace with this raw body|planner|task|goal/);
 });
 
-test('Host-side VSCode co-work requires confirmation before replacing selected user-file text', () => {
-  const unconfirmed = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:replace-selection-unconfirmed',
+test('Host-side VSCode co-work requires full-access permission before replacing selected user-file text', () => {
+  const missingPermission = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-missing-permission',
     operation: 'replace-selection',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
@@ -635,19 +636,41 @@ test('Host-side VSCode co-work requires confirmation before replacing selected u
     riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
   });
 
-  assert.equal(unconfirmed.status, 'needs-confirmation');
-  assert.equal(unconfirmed.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.equal(unconfirmed.primitive, undefined);
-  assert.equal(unconfirmed.action, undefined);
-  assert.equal(unconfirmed.confirmation?.riskActionHash, 'risk:replace-selection:file-ref:vscode:paper');
-  assert.ok(unconfirmed.refs.includes('selection-ref:vscode:current'));
-  assert.ok(unconfirmed.refs.includes('text-ref:vscode:replacement'));
-  assert.ok(unconfirmed.refs.includes('risk:replace-selection:file-ref:vscode:paper'));
+  assert.equal(missingPermission.status, 'blocked');
+  assert.equal(missingPermission.blockedReason, 'vscode_cowork_full_access_permission_ref_required');
+  assert.equal(missingPermission.primitive, undefined);
+  assert.equal(missingPermission.action, undefined);
+  assert.ok(missingPermission.refs.includes('selection-ref:vscode:current'));
+  assert.ok(missingPermission.refs.includes('text-ref:vscode:replacement'));
+  assert.ok(missingPermission.refs.includes('risk:replace-selection:file-ref:vscode:paper'));
 });
 
-test('Host-side VSCode co-work replaces selected user-file text only after matching confirmation', () => {
+test('Host-side VSCode co-work allows real-file save with full-access permission envelope and no approval', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:replace-selection-confirmed',
+    requestRef: 'chat-request:vscode-cowork:save-full-access',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+  });
+
+  assert.equal(decision.status, 'ready');
+  assert.equal(decision.primitive, 'act');
+  assert.deepEqual(decision.action, {
+    type: 'app_command',
+    command: 'save',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.equal(decision.approvalRef, undefined);
+  assert.ok(decision.refs.includes('permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(decision), /needs-confirmation|approval:|\/Users\/example|planner|task|goal/);
+});
+
+test('Host-side VSCode co-work replaces selected user-file text with full-access permission and no approval', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-full-access',
     operation: 'replace-selection',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
@@ -656,7 +679,7 @@ test('Host-side VSCode co-work replaces selected user-file text only after match
     selectionRef: 'selection-ref:vscode:current',
     replacementTextRef: 'text-ref:vscode:replacement',
     riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:replace-selection:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed',
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
   });
 
   assert.equal(decision.status, 'ready');
@@ -667,13 +690,16 @@ test('Host-side VSCode co-work replaces selected user-file text only after match
     elementRef: 'element:vscode:editor',
   });
   assert.equal(decision.risk?.actionHash, 'risk:replace-selection:file-ref:vscode:paper');
-  assert.equal(decision.approvalRef, 'approval:risk:replace-selection:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed');
+  assert.equal(decision.risk?.level, 'low');
+  assert.equal(decision.approvalRef, undefined);
+  assert.equal(decision.permissionRef, 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper');
   assert.ok(decision.refs.includes('selection-ref:vscode:current'));
   assert.ok(decision.refs.includes('text-ref:vscode:replacement'));
-  assert.doesNotMatch(JSON.stringify(decision), /raw body|planner|task|goal/);
+  assert.ok(decision.refs.includes('permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(decision), /approval:|raw body|planner|task|goal/);
 });
 
-test('Host-side VSCode co-work requires confirmation before real-file save, undo, bulk replace, or cross-file modification', () => {
+test('Host-side VSCode co-work requires full-access permission before real-file save, undo, bulk replace, or cross-file modification', () => {
   for (const operation of ['save-current-file', 'undo-last-action', 'bulk-replace', 'cross-file-modify'] as const) {
     const decision = decideVSCodeCoWorkNextPrimitive({
       requestRef: `chat-request:vscode-cowork:${operation}`,
@@ -684,54 +710,48 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
       riskActionHash: `risk:${operation}:file-ref:vscode:paper`,
     });
 
-    assert.equal(decision.status, 'needs-confirmation', operation);
-    assert.equal(decision.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation', operation);
+    assert.equal(decision.status, 'blocked', operation);
+    assert.equal(decision.blockedReason, 'vscode_cowork_full_access_permission_ref_required', operation);
     assert.equal(decision.primitive, undefined, operation);
     assert.equal(decision.action, undefined, operation);
-    assert.equal(decision.confirmation?.riskActionHash, `risk:${operation}:file-ref:vscode:paper`, operation);
     assert.ok(decision.refs.includes(`risk:${operation}:file-ref:vscode:paper`), operation);
   }
 
-  const bareNonUserFileFlag = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-non-user-without-scope-ref',
+  const unboundPermission = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-unbound-permission',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: {
-      ...freshObservation(),
-      userFile: false,
-    },
+    latestObservation: freshObservation(),
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:other:file-ref:vscode:paper',
   });
 
-  assert.equal(bareNonUserFileFlag.status, 'blocked');
-  assert.equal(bareNonUserFileFlag.blockedReason, 'vscode_cowork_non_user_file_scope_ref_required');
-  assert.equal(bareNonUserFileFlag.primitive, undefined);
-  assert.equal(bareNonUserFileFlag.action, undefined);
-  assert.ok(bareNonUserFileFlag.refs.includes('file-ref:vscode:paper'));
+  assert.equal(unboundPermission.status, 'blocked');
+  assert.equal(unboundPermission.blockedReason, 'vscode_cowork_full_access_permission_ref_target_session_required');
+  assert.equal(unboundPermission.primitive, undefined);
+  assert.equal(unboundPermission.action, undefined);
+  assert.ok(unboundPermission.refs.includes('file-ref:vscode:paper'));
+  assert.ok(unboundPermission.refs.includes('permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:other:file-ref:vscode:paper'));
 
-  const unboundNonUserFileScope = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-non-user-unbound-scope',
+  const rawPermission = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-raw-permission',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: {
-      ...freshObservation(),
-      userFile: false,
-      nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch',
-    },
+    latestObservation: freshObservation(),
+    permissionRef: 'permission:/Users/example/paper.md:full-access',
   });
 
-  assert.equal(unboundNonUserFileScope.status, 'blocked');
-  assert.equal(unboundNonUserFileScope.blockedReason, 'vscode_cowork_non_user_file_scope_target_ref_required');
-  assert.equal(unboundNonUserFileScope.primitive, undefined);
-  assert.equal(unboundNonUserFileScope.action, undefined);
-  assert.ok(unboundNonUserFileScope.refs.includes('file-ref:vscode:paper'));
-  assert.ok(unboundNonUserFileScope.refs.includes('non-user-file-scope:vscode:scratch'));
+  assert.equal(rawPermission.status, 'blocked');
+  assert.equal(rawPermission.blockedReason, 'vscode_cowork_full_access_permission_ref_required');
+  assert.equal(rawPermission.primitive, undefined);
+  assert.equal(rawPermission.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawPermission), /\/Users\/example\/paper\.md|paper\.md/);
 
-  const scopedNonUserFile = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-non-user-scoped',
+  const nonUserFileWithPermission = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-non-user-full-access',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
@@ -741,44 +761,15 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
       userFile: false,
       nonUserFileScopeRef: 'non-user-file-scope:file-ref:vscode:paper:scratch',
     },
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
   });
 
-  assert.equal(scopedNonUserFile.status, 'ready');
-  assert.equal(scopedNonUserFile.primitive, 'act');
-  assert.equal(scopedNonUserFile.risk, undefined);
-  assert.equal(scopedNonUserFile.approvalRef, undefined);
-  assert.ok(scopedNonUserFile.refs.includes('non-user-file-scope:file-ref:vscode:paper:scratch'));
-
-  const approvalWithoutRiskHash = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-approval-without-risk',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    confirmationRef: 'approval:save-current-file:paper:confirmed',
-  });
-
-  assert.equal(approvalWithoutRiskHash.status, 'blocked');
-  assert.equal(approvalWithoutRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
-  assert.equal(approvalWithoutRiskHash.primitive, undefined);
-  assert.equal(approvalWithoutRiskHash.action, undefined);
-  assert.ok(approvalWithoutRiskHash.refs.includes('approval:save-current-file:paper:confirmed'));
-
-  const rawApprovalWithoutRiskHash = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-raw-approval',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    selectedFileRef: 'file-ref:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    confirmationRef: 'approval:/Users/example/paper.md:confirmed',
-  });
-
-  assert.equal(rawApprovalWithoutRiskHash.status, 'blocked');
-  assert.equal(rawApprovalWithoutRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
-  assert.equal(rawApprovalWithoutRiskHash.primitive, undefined);
-  assert.equal(rawApprovalWithoutRiskHash.action, undefined);
-  assert.doesNotMatch(JSON.stringify(rawApprovalWithoutRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
+  assert.equal(nonUserFileWithPermission.status, 'ready');
+  assert.equal(nonUserFileWithPermission.primitive, 'act');
+  assert.equal(nonUserFileWithPermission.risk?.level, 'low');
+  assert.equal(nonUserFileWithPermission.approvalRef, undefined);
+  assert.equal(nonUserFileWithPermission.permissionRef, 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper');
+  assert.ok(nonUserFileWithPermission.refs.includes('non-user-file-scope:file-ref:vscode:paper:scratch'));
 
   const rawRiskHash = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-raw-risk',
@@ -788,183 +779,97 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
     riskActionHash: 'save /Users/example/paper.md',
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
   });
 
-  assert.equal(rawRiskHash.status, 'blocked');
-  assert.equal(rawRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
-  assert.equal(rawRiskHash.primitive, undefined);
-  assert.equal(rawRiskHash.action, undefined);
+  assert.equal(rawRiskHash.status, 'ready');
+  assert.equal(rawRiskHash.primitive, 'act');
+  assert.equal(rawRiskHash.risk?.actionHash, undefined);
   assert.doesNotMatch(JSON.stringify(rawRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
 
-  const prefixedRawPathRiskHash = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-prefixed-raw-risk',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    selectedFileRef: 'file-ref:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    riskActionHash: 'risk:/Users/example/paper.md',
-  });
-
-  assert.equal(prefixedRawPathRiskHash.status, 'blocked');
-  assert.equal(prefixedRawPathRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
-  assert.equal(prefixedRawPathRiskHash.primitive, undefined);
-  assert.equal(prefixedRawPathRiskHash.action, undefined);
-  assert.doesNotMatch(JSON.stringify(prefixedRawPathRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
-
-  const unboundTargetRiskHash = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-unbound-target-risk',
+  const permissionWithRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-full-access-with-risk',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
     riskActionHash: 'risk:save-current-file:paper',
-    confirmationRef: 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
   });
 
-  assert.equal(unboundTargetRiskHash.status, 'blocked');
-  assert.equal(unboundTargetRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_target_ref_required');
-  assert.equal(unboundTargetRiskHash.primitive, undefined);
-  assert.equal(unboundTargetRiskHash.action, undefined);
-  assert.ok(unboundTargetRiskHash.refs.includes('file-ref:vscode:paper'));
-  assert.ok(unboundTargetRiskHash.refs.includes('risk:save-current-file:paper'));
-  assert.ok(unboundTargetRiskHash.refs.includes('approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed'));
+  assert.equal(permissionWithRiskHash.status, 'ready');
+  assert.equal(permissionWithRiskHash.primitive, 'act');
+  assert.equal(permissionWithRiskHash.risk?.actionHash, 'risk:save-current-file:paper');
+  assert.equal(permissionWithRiskHash.approvalRef, undefined);
+  assert.ok(permissionWithRiskHash.refs.includes('risk:save-current-file:paper'));
 
-  const approvalWithEmbeddedRiskHash = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-approval-embedded-risk',
+  const fullAccessSave = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-full-access',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
     riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper-old:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed',
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
   });
 
-  assert.equal(approvalWithEmbeddedRiskHash.status, 'needs-confirmation');
-  assert.equal(approvalWithEmbeddedRiskHash.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.equal(approvalWithEmbeddedRiskHash.primitive, undefined);
-  assert.equal(approvalWithEmbeddedRiskHash.action, undefined);
-  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
-  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper-old:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed'));
-
-  const approvalWithoutConfirmationSuffix = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-approval-without-confirmation-suffix',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
-  });
-
-  assert.equal(approvalWithoutConfirmationSuffix.status, 'needs-confirmation');
-  assert.equal(approvalWithoutConfirmationSuffix.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.equal(approvalWithoutConfirmationSuffix.primitive, undefined);
-  assert.equal(approvalWithoutConfirmationSuffix.action, undefined);
-  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
-  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper'));
-
-  const approvalWithoutFileTarget = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-approval-without-file-target',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    selectedFileRef: 'file-ref:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:confirmed',
-  });
-
-  assert.equal(approvalWithoutFileTarget.status, 'needs-confirmation');
-  assert.equal(approvalWithoutFileTarget.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.equal(approvalWithoutFileTarget.primitive, undefined);
-  assert.equal(approvalWithoutFileTarget.action, undefined);
-  assert.ok(approvalWithoutFileTarget.refs.includes('file-ref:vscode:paper'));
-  assert.ok(approvalWithoutFileTarget.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:confirmed'));
-
-  const approvalWithoutActiveSession = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-approval-without-active-session',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    selectedFileRef: 'file-ref:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
-  });
-
-  assert.equal(approvalWithoutActiveSession.status, 'needs-confirmation');
-  assert.equal(approvalWithoutActiveSession.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.equal(approvalWithoutActiveSession.primitive, undefined);
-  assert.equal(approvalWithoutActiveSession.action, undefined);
-  assert.ok(approvalWithoutActiveSession.refs.includes('window-action-session:vscode-cowork:1'));
-  assert.ok(approvalWithoutActiveSession.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed'));
-
-  const confirmedSave = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-confirmed',
-    operation: 'save-current-file',
-    selectedWindowRef: 'window:vscode:paper',
-    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
-    latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed',
-  });
-
-  assert.equal(confirmedSave.status, 'ready');
-  assert.equal(confirmedSave.primitive, 'act');
-  assert.deepEqual(confirmedSave.action, {
+  assert.equal(fullAccessSave.status, 'ready');
+  assert.equal(fullAccessSave.primitive, 'act');
+  assert.deepEqual(fullAccessSave.action, {
     type: 'app_command',
     command: 'save',
     elementRef: 'element:vscode:editor',
   });
-  assert.deepEqual(confirmedSave.risk, {
-    level: 'high',
+  assert.deepEqual(fullAccessSave.risk, {
+    level: 'low',
     categories: ['user-real-file-change'],
     actionHash: 'risk:save-current-file:file-ref:vscode:paper',
   });
-  assert.equal(confirmedSave.approvalRef, 'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed');
-  assert.ok(confirmedSave.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
-  assert.ok(confirmedSave.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed'));
+  assert.equal(fullAccessSave.approvalRef, undefined);
+  assert.equal(fullAccessSave.permissionRef, 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper');
+  assert.ok(fullAccessSave.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok(fullAccessSave.refs.includes('permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper'));
 
-  const confirmedUndo = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:undo-confirmed',
+  const fullAccessUndo = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:undo-full-access',
     operation: 'undo-last-action',
     selectedWindowRef: 'window:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
     riskActionHash: 'risk:undo-last-action:file-ref:vscode:paper',
-    confirmationRef: 'approval:risk:undo-last-action:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed',
+    permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
   });
 
-  assert.equal(confirmedUndo.status, 'ready');
-  assert.equal(confirmedUndo.primitive, 'act');
-  assert.deepEqual(confirmedUndo.action, {
+  assert.equal(fullAccessUndo.status, 'ready');
+  assert.equal(fullAccessUndo.primitive, 'act');
+  assert.deepEqual(fullAccessUndo.action, {
     type: 'key',
     key: 'Command+Z',
     elementRef: 'element:vscode:editor',
   });
-  assert.deepEqual(confirmedUndo.risk, {
-    level: 'high',
+  assert.deepEqual(fullAccessUndo.risk, {
+    level: 'low',
     categories: ['user-real-file-change'],
     actionHash: 'risk:undo-last-action:file-ref:vscode:paper',
   });
-  assert.equal(confirmedUndo.approvalRef, 'approval:risk:undo-last-action:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed');
-  assert.ok(confirmedUndo.refs.includes('risk:undo-last-action:file-ref:vscode:paper'));
-  assert.ok(confirmedUndo.refs.includes('approval:risk:undo-last-action:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed'));
+  assert.equal(fullAccessUndo.approvalRef, undefined);
+  assert.equal(fullAccessUndo.permissionRef, 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper');
+  assert.ok(fullAccessUndo.refs.includes('risk:undo-last-action:file-ref:vscode:paper'));
+  assert.ok(fullAccessUndo.refs.includes('permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper'));
 });
 
-test('Host-side VSCode co-work blocks confirmed bulk and cross-file requests until Host decomposes them', () => {
+test('Host-side VSCode co-work blocks full-access bulk and cross-file requests until Host decomposes them', () => {
   for (const operation of ['bulk-replace', 'cross-file-modify'] as const) {
     const decision = decideVSCodeCoWorkNextPrimitive({
-      requestRef: `chat-request:vscode-cowork:${operation}-confirmed`,
+      requestRef: `chat-request:vscode-cowork:${operation}-full-access`,
       operation,
       selectedWindowRef: 'window:vscode:paper',
       selectedFileRef: 'file-ref:vscode:paper',
       windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
       latestObservation: freshObservation(),
       riskActionHash: `risk:${operation}:file-ref:vscode:paper`,
-      confirmationRef: `approval:risk:${operation}:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed`,
+      permissionRef: 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
     });
 
     assert.equal(decision.status, 'blocked', operation);
@@ -972,7 +877,7 @@ test('Host-side VSCode co-work blocks confirmed bulk and cross-file requests unt
     assert.equal(decision.primitive, undefined, operation);
     assert.equal(decision.action, undefined, operation);
     assert.ok(decision.refs.includes(`risk:${operation}:file-ref:vscode:paper`), operation);
-    assert.ok(decision.refs.includes(`approval:risk:${operation}:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed`), operation);
+    assert.ok(decision.refs.includes('permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper'), operation);
     assert.deepEqual(decision.repairHints, [{
       code: 'decompose-file-change-into-atomic-primitives',
       message: 'Host must decompose bulk replacement or cross-file modification into explicit refs-first atomic editor primitives; Computer Use core must not plan or execute a batch edit.',
@@ -1127,7 +1032,7 @@ test('VSCode co-work validators require explicit user profile and shared input m
   ]);
 });
 
-test('VSCode co-work live manifest requires primitive chain, cleanup, restoration, and approval refs', () => {
+test('VSCode co-work live manifest requires primitive chain, cleanup, restoration, and permission refs', () => {
   const passed = validateVSCodeCoWorkLiveAcceptanceManifest(vscodeCoWorkLiveManifest());
 
   assert.equal(passed.ok, true);
@@ -1140,7 +1045,7 @@ test('VSCode co-work live manifest requires primitive chain, cleanup, restoratio
     primitiveChainObserved: ['bind', 'observe', 'act'],
     evidence: {
       ...vscodeCoWorkLiveManifest().evidence,
-      approvalRefs: [],
+      permissionRefs: [],
       releaseRefs: ['input-adapter:vscode-cowork:1'],
       restorationRefs: ['front-app-restore:vscode-cowork:1'],
     },
@@ -1169,10 +1074,7 @@ test('VSCode co-work live manifest requires primitive chain, cleanup, restoratio
     'cleanup-mouse-position-not-restored',
     'cleanup-must-not-kill-user-vscode',
     'cleanup-must-not-clear-user-profile',
-    'missing-approval-ref:risk-action-hash',
-    'missing-approval-ref:approval',
-    'missing-approval-ref:target-file',
-    'missing-approval-ref:active-session',
+    'missing-permission-ref:full-access',
   ]);
 });
 
@@ -1191,7 +1093,8 @@ test('VSCode co-work live manifest rejects unsafe refs across all evidence group
       screenshotRefs: [...base.evidence.screenshotRefs, 'rawScreenshot:data:image/png;base64,abc123'],
       accessibilityRefs: [...base.evidence.accessibilityRefs, 'providerPayload:ax-tree'],
       textRefs: [...base.evidence.textRefs, 'text:secret:visible'],
-      approvalRefs: [...base.evidence.approvalRefs, 'token:approval-sidecar'],
+      permissionRefs: [...base.evidence.permissionRefs, 'token:permission-sidecar'],
+      approvalRefs: ['token:approval-sidecar'],
       releaseRefs: [...base.evidence.releaseRefs, 'token:release-evidence'],
       restorationRefs: [...base.evidence.restorationRefs, 'password:restore-evidence'],
     },
@@ -1208,6 +1111,7 @@ test('VSCode co-work live manifest rejects unsafe refs across all evidence group
     'unsafe-evidence-ref:screenshot',
     'unsafe-evidence-ref:accessibility',
     'unsafe-evidence-ref:text',
+    'unsafe-evidence-ref:permission',
     'unsafe-evidence-ref:approval',
     'unsafe-evidence-ref:release',
     'unsafe-evidence-ref:restoration',
@@ -1216,77 +1120,74 @@ test('VSCode co-work live manifest rejects unsafe refs across all evidence group
   }
 });
 
-test('VSCode co-work live manifest rejects raw path risk and approval evidence refs', () => {
+test('VSCode co-work live manifest rejects raw path permission evidence refs', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
     ...base,
     evidence: {
       ...base.evidence,
-      approvalRefs: [
-        'risk:/Users/example/paper.md',
-        'approval:/Users/example/paper.md:confirmed',
+      permissionRefs: [
+        'permission:/Users/example/paper.md:full-access',
       ],
     },
   });
 
   assert.equal(failed.ok, false);
-  assert.ok(failed.issues.includes('missing-approval-ref:risk-action-hash'));
-  assert.ok(failed.issues.includes('missing-approval-ref:approval'));
-  assert.ok(failed.issues.includes('unsafe-evidence-ref:approval'));
+  assert.ok(failed.issues.includes('missing-permission-ref:full-access'));
+  assert.ok(failed.issues.includes('unsafe-evidence-ref:permission'));
 });
 
-test('VSCode co-work live manifest requires approval refs to bind the selected file target', () => {
+test('VSCode co-work live manifest requires permission refs to bind the selected file target', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
     ...base,
     evidence: {
       ...base.evidence,
-      approvalRefs: base.evidence.approvalRefs.filter((ref) => ref !== base.target.selectedFileRef),
+      permissionRefs: [
+        'window-action-session:vscode-cowork:1',
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:other',
+      ],
     },
   });
 
   assert.equal(failed.ok, false);
-  assert.ok(failed.issues.includes('missing-approval-ref:target-file'));
+  assert.ok(failed.issues.includes('missing-permission-ref:target-file-active-session'));
 });
 
-test('VSCode co-work live manifest requires risk refs to bind the selected file target', () => {
+test('VSCode co-work live manifest does not use risk refs as the real-file permission gate', () => {
   const base = vscodeCoWorkLiveManifest();
   const boundRiskRef = 'risk:save-current-file:file-ref:vscode:paper';
   const unboundRiskRef = 'risk:save-current-file:paper';
-  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+  const passed = validateVSCodeCoWorkLiveAcceptanceManifest({
     ...base,
     evidence: {
       ...base.evidence,
       hostDecisionRefs: base.evidence.hostDecisionRefs.map((ref) =>
         ref === boundRiskRef ? unboundRiskRef : ref,
       ),
-      approvalRefs: base.evidence.approvalRefs.map((ref) =>
-        ref === boundRiskRef ? unboundRiskRef : ref,
-      ),
     },
   });
 
-  assert.equal(failed.ok, false);
-  assert.ok(failed.issues.includes('missing-host-decision-ref:risk-action-hash-target-file'));
-  assert.ok(failed.issues.includes('missing-approval-ref:risk-action-hash-target-file'));
+  assert.equal(passed.ok, true);
+  assert.deepEqual(passed.issues, []);
 });
 
-test('VSCode co-work live manifest requires approval refs to bind the active session', () => {
+test('VSCode co-work live manifest requires permission refs to bind the active session', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
     ...base,
     evidence: {
       ...base.evidence,
-      approvalRefs: base.evidence.approvalRefs.map((ref) =>
-        ref === 'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed'
-          ? 'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed'
+      permissionRefs: base.evidence.permissionRefs.map((ref) =>
+        ref === 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper'
+          ? 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:other:file-ref:vscode:paper'
           : ref,
       ),
     },
   });
 
   assert.equal(failed.ok, false);
-  assert.ok(failed.issues.includes('missing-approval-ref:active-session'));
+  assert.ok(failed.issues.includes('missing-permission-ref:target-file-active-session'));
 });
 
 test('VSCode co-work live manifest requires refs-first target window and file refs for user-file changes', () => {
@@ -1509,13 +1410,13 @@ test('VSCode co-work live manifest requires bind refs to assign released input r
   }
 });
 
-test('VSCode co-work live manifest requires Host decision refs to bind request, observe, target, and approval evidence', () => {
+test('VSCode co-work live manifest requires Host decision refs to bind request, observe, target, and permission evidence', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
     ...base,
     evidence: {
       ...base.evidence,
-      hostDecisionRefs: ['decision:vscode-cowork:save-confirmed'],
+      hostDecisionRefs: ['decision:vscode-cowork:save-full-access'],
     },
   });
 
@@ -1527,8 +1428,7 @@ test('VSCode co-work live manifest requires Host decision refs to bind request, 
     'missing-host-decision-ref:freshness',
     'missing-host-decision-ref:action',
     'missing-host-decision-ref:target-file',
-    'missing-host-decision-ref:risk-action-hash',
-    'missing-host-decision-ref:approval',
+    'missing-host-decision-ref:permission',
   ]) {
     assert.ok(failed.issues.includes(issue), issue);
   }
@@ -1818,9 +1718,9 @@ function vscodeCoWorkLiveManifest() {
         'text:vscode:visible-before',
       ],
       hostDecisionRefs: [
-        'decision:vscode-cowork:save-confirmed',
+        'decision:vscode-cowork:save-full-access',
         'window-action-session:vscode-cowork:1',
-        'chat-request:vscode-cowork:save-confirmed',
+        'chat-request:vscode-cowork:save-full-access',
         'action:vscode-cowork:save',
         'window:vscode:paper',
         'file-ref:vscode:paper',
@@ -1828,7 +1728,7 @@ function vscodeCoWorkLiveManifest() {
         'freshness:vscode:before',
         'element:vscode:editor',
         'risk:save-current-file:file-ref:vscode:paper',
-        'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed',
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
       ],
       actionRefs: [
         'action:vscode-cowork:save',
@@ -1842,6 +1742,7 @@ function vscodeCoWorkLiveManifest() {
         'cursor-marker:vscode-cowork:1',
         'scoped-input-lease:vscode-cowork:1',
         'stale-invalidation:vscode-cowork:before-observation',
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
       ],
       afterObservationRefs: [
         'observation:vscode:after',
@@ -1866,10 +1767,10 @@ function vscodeCoWorkLiveManifest() {
       screenshotRefs: ['image:vscode:before', 'image:vscode:after'],
       accessibilityRefs: ['accessibility:vscode:before', 'accessibility:vscode:after'],
       textRefs: ['text:vscode:visible-before', 'text:vscode:visible-after'],
-      approvalRefs: [
-        'risk:save-current-file:file-ref:vscode:paper',
+      permissionRefs: [
         'file-ref:vscode:paper',
-        'approval:risk:save-current-file:file-ref:vscode:paper:window-action-session:vscode-cowork:1:file-ref:vscode:paper:confirmed',
+        'window-action-session:vscode-cowork:1',
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
       ],
       releaseRefs: [
         'scoped-input-lease:vscode-cowork:1',

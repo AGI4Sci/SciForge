@@ -95,6 +95,7 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
   if (agentHostInput?.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
   const target = isRecord(agentHostInput.target) ? agentHostInput.target : undefined;
   const observation = isRecord(agentHostInput.observation) ? agentHostInput.observation : undefined;
+  const permissions = isRecord(agentHostInput.permissions) ? agentHostInput.permissions : undefined;
   const hostBinding = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
   const latestObservation = isRecord(observation?.vscodeCoWork) ? observation.vscodeCoWork : undefined;
   if (!hostBinding && !latestObservation) return undefined;
@@ -114,6 +115,7 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
     vscodeCoWork: compactRecord({
       ...(hostBinding ?? {}),
       operation,
+      permissionRef: stringField(hostBinding, 'permissionRef') ?? firstPermissionRef(permissions?.refs),
       latestObservation: latestObservation ?? (isRecord(hostBinding?.latestObservation) ? hostBinding.latestObservation : undefined),
     }),
   };
@@ -490,6 +492,14 @@ function stringField(value: unknown, key: string) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const item = (value as Record<string, unknown>)[key];
   return typeof item === 'string' && item.trim() ? item : undefined;
+}
+
+function firstPermissionRef(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.find((item): item is string => (
+    typeof item === 'string'
+    && /^permission:[^\s/\\]+$/i.test(item.trim())
+  ))?.trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
