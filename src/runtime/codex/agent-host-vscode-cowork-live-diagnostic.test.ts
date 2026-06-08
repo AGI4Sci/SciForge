@@ -17,6 +17,7 @@ import {
 } from './agent-host-vscode-cowork-act-materializer.js';
 import {
   produceVSCodeCoWorkAgentHostLiveInput,
+  runVSCodeCoWorkFocusEditorLiveDiagnostic,
   runVSCodeCoWorkInsertDraftLiveDiagnostic,
   runVSCodeCoWorkReadVisibleTextLiveDiagnostic,
 } from './agent-host-vscode-cowork-live-diagnostic.js';
@@ -234,6 +235,107 @@ test('VSCode co-work live diagnostic needs confirmation for ambiguous target win
   assert.doesNotMatch(JSON.stringify(result), /observe:2|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('VSCode co-work focus-editor live diagnostic accepts Host-owned evidence verifier refs', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper', { omitFocusedEditor: true });
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+
+  const result = await runVSCodeCoWorkFocusEditorLiveDiagnostic({
+    service,
+    commandText: '聚焦我当前打开的 VSCode 编辑器。',
+    commandId: 'codex-command-vscode-live-focus',
+    attemptId: 'codex-command-vscode-live-focus-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    focusedEditorEvidenceVerifier: (input) => {
+      calls.push(`verify-focus:${input.afterObservationRef}`);
+      assert.ok(input.afterObserveRefs.includes('image:vscode:current-2'));
+      assert.ok(input.afterObserveRefs.includes('accessibility:vscode:current-2'));
+      assert.ok(input.afterObserveRefs.includes('element:vscode:editor'));
+      assert.ok(input.actionRefs.includes('action:vscode-cowork:focus-editor'));
+      return {
+        status: 'satisfied',
+        focusedEditorRef: 'focused-editor:vscode:host-evidence:paper',
+        verifierRef: 'verifier:vscode-cowork:codex-command-vscode-live-focus-attempt-1:focus-editor',
+        evidenceRefs: [
+          'image:vscode:current-2',
+          'accessibility:vscode:current-2',
+          'element:vscode:editor',
+          'text:vscode:visible-2',
+        ],
+      };
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(calls, [
+    'bind',
+    'observe:1',
+    'act:key:Command+1:element:vscode:editor',
+    'observe:2',
+    'verify-focus:observation:vscode:current-2',
+    'control:release',
+  ]);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)']);
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.completionTruth?.status, 'satisfied');
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:host-evidence:paper'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:codex-command-vscode-live-focus-attempt-1:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('image:vscode:current-2'));
+  assert.ok(result.evidenceRefs.includes('accessibility:vscode:current-2'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('VSCode co-work focus-editor live diagnostic blocks unsafe Host verifier refs', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper', { omitFocusedEditor: true });
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+
+  const result = await runVSCodeCoWorkFocusEditorLiveDiagnostic({
+    service,
+    commandText: '聚焦我当前打开的 VSCode 编辑器。',
+    commandId: 'codex-command-vscode-live-focus-unsafe',
+    attemptId: 'codex-command-vscode-live-focus-unsafe-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    focusedEditorEvidenceVerifier: () => ({
+      status: 'satisfied',
+      focusedEditorRef: 'raw focused editor',
+      verifierRef: 'https://example.invalid/verifier',
+      evidenceRefs: ['data:image/png;base64,abc', '/tmp/raw-screenshot.png', 'providerPayload:raw'],
+    }),
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /focused-editor/i);
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.ok(!result.evidenceRefs.some((ref) => ref.startsWith('focused-editor:')));
+  assert.ok(!result.evidenceRefs.some((ref) => ref.startsWith('verifier:') && ref.includes('focus-editor')));
+  assert.deepEqual(calls, [
+    'bind',
+    'observe:1',
+    'act:key:Command+1:element:vscode:editor',
+    'observe:2',
+    'control:release',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /raw focused editor|example\.invalid|data:image|base64|raw-screenshot|providerPayload|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('VSCode co-work live diagnostic lets Host choose insert-draft act then observes and releases', async () => {
   const calls: string[] = [];
   const refs = vscodeRefs('paper');
@@ -395,6 +497,40 @@ function vscodePrimitivePorts(input: {
       };
     },
     act: (actInput) => {
+      if (actInput.action.type === 'key') {
+        input.calls.push(`act:key:${actInput.action.key}:${actInput.action.elementRef}`);
+        return {
+          status: 'completed',
+          output: {
+            sessionId: actInput.sessionId,
+            actionRef: 'action:vscode-cowork:focus-editor',
+            executorEventRef: 'executor-event:vscode-cowork:focus-editor',
+            inputAdapterRef: actInput.inputAdapterRef,
+            cursorRef: actInput.cursorRef,
+            scopedInputLeaseRef: actInput.scopedInputLeaseRef,
+            inputEventRef: 'input-event:vscode-cowork:focus-editor',
+            beforeObservationRef: 'observation:vscode:current-1',
+            afterObservationRef: 'observation:vscode:after-act',
+            invalidatedRefs: ['stale-invalidation:vscode-cowork:focus-editor'],
+          } satisfies ComputerUseActOutput,
+          refs: [
+            'computer-use-session:vscode:live',
+            'window-action-session:vscode-cowork:live',
+            'window:vscode:paper',
+            'file-ref:vscode:paper',
+            'element:vscode:editor',
+            'action:vscode-cowork:focus-editor',
+            'executor-event:vscode-cowork:focus-editor',
+            'input-event:vscode-cowork:focus-editor',
+            'stale-invalidation:vscode-cowork:focus-editor',
+            'scoped-input-lease:vscode:live',
+            'scoped-input-adapter:vscode:live',
+            'cursor-marker:vscode:live',
+            'observation:vscode:current-1',
+            'observation:vscode:after-act',
+          ],
+        };
+      }
       input.calls.push(`act:${actInput.action.type}:${actInput.action.textRef}:${actInput.action.elementRef}`);
       return {
         status: 'completed',
@@ -498,6 +634,7 @@ async function bindAndObserve(service: ComputerUsePrimitiveService): Promise<{
 
 function vscodeRefs(name: string, options: {
   omitObservationWindow?: boolean;
+  omitFocusedEditor?: boolean;
 } = {}): string[] {
   return [
     'macos-app:com.microsoft.VSCode',
@@ -513,7 +650,7 @@ function vscodeRefs(name: string, options: {
     'accessibility:vscode:current',
     'text:vscode:visible',
     'element:vscode:editor',
-    `focused-editor:vscode:${name}`,
+    ...(options.omitFocusedEditor ? [] : [`focused-editor:vscode:${name}`]),
     'freshness:vscode:current',
   ];
 }

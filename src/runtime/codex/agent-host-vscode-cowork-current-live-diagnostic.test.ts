@@ -251,6 +251,130 @@ test('current VSCode co-work focus-editor diagnostic runs one Host-selected focu
   assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work focus-editor diagnostic accepts Host verifier evidence without focused-editor observe ref', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-verifier-wrapper',
+      windowRef: 'window:vscode:focus-verifier-wrapper',
+      titleRef: 'text:title:focus-verifier-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-verifier-wrapper',
+      fileRefs: ['file-ref:vscode:focus-verifier-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-verifier-wrapper-bind',
+      visibleTextSha256Ref: 'text:vscode:focus-verifier-wrapper-bind-sha256',
+      screenshotRef: 'image:vscode:focus-verifier-wrapper-bind',
+      accessibilityRef: 'accessibility:vscode:focus-verifier-wrapper-bind',
+      freshnessRef: 'freshness:vscode:focus-verifier-wrapper-bind',
+      observationRef: 'observation:vscode:focus-verifier-wrapper-bind',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-verifier-wrapper',
+      windowRef: 'window:vscode:focus-verifier-wrapper',
+      titleRef: 'text:title:focus-verifier-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-verifier-wrapper',
+      fileRefs: ['file-ref:vscode:focus-verifier-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-verifier-wrapper-before',
+      visibleTextSha256Ref: 'text:vscode:focus-verifier-wrapper-before-sha256',
+      screenshotRef: 'image:vscode:focus-verifier-wrapper-before',
+      accessibilityRef: 'accessibility:vscode:focus-verifier-wrapper-before',
+      freshnessRef: 'freshness:vscode:focus-verifier-wrapper-before',
+      observationRef: 'observation:vscode:focus-verifier-wrapper-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-verifier-wrapper',
+      windowRef: 'window:vscode:focus-verifier-wrapper',
+      titleRef: 'text:title:focus-verifier-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-verifier-wrapper',
+      fileRefs: ['file-ref:vscode:focus-verifier-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-verifier-wrapper-act-after',
+      visibleTextSha256Ref: 'text:vscode:focus-verifier-wrapper-act-after-sha256',
+      screenshotRef: 'image:vscode:focus-verifier-wrapper-act-after',
+      accessibilityRef: 'accessibility:vscode:focus-verifier-wrapper-act-after',
+      freshnessRef: 'freshness:vscode:focus-verifier-wrapper-act-after',
+      observationRef: 'observation:vscode:focus-verifier-wrapper-act-after',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-verifier-wrapper',
+      windowRef: 'window:vscode:focus-verifier-wrapper',
+      titleRef: 'text:title:focus-verifier-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-verifier-wrapper',
+      fileRefs: ['file-ref:vscode:focus-verifier-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-verifier-wrapper-after',
+      visibleTextSha256Ref: 'text:vscode:focus-verifier-wrapper-after-sha256',
+      screenshotRef: 'image:vscode:focus-verifier-wrapper-after',
+      accessibilityRef: 'accessibility:vscode:focus-verifier-wrapper-after',
+      freshnessRef: 'freshness:vscode:focus-verifier-wrapper-after',
+      observationRef: 'observation:vscode:focus-verifier-wrapper-after',
+    },
+  ];
+
+  const result = await runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-focus-verifier-wrapper',
+    commandText: '聚焦我当前打开的 VSCode 编辑器。',
+    commandId: 'current-vscode-host-focus-verifier',
+    attemptId: 'current-vscode-host-focus-verifier-attempt-1',
+    workspacePath: '/tmp/workspace',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+    },
+    focusedEditorEvidenceVerifier: (input) => {
+      calls.push(`verify-focus:${input.afterObservationRef}`);
+      assert.ok(input.afterObserveRefs.includes('image:vscode:focus-verifier-wrapper-after'));
+      assert.ok(input.afterObserveRefs.includes('accessibility:vscode:focus-verifier-wrapper-after'));
+      assert.ok(input.editorElementRefs.includes('element:vscode:editor'));
+      assert.ok(input.actionRefs.includes('action:current-vscode-cowork:unit-current-vscode-focus-verifier-wrapper:focus-editor'));
+      return {
+        status: 'satisfied',
+        focusedEditorRef: 'focused-editor:vscode:host-evidence:focus-verifier-wrapper',
+        verifierRef: 'verifier:vscode-cowork:current-vscode-host-focus-verifier-attempt-1:focus-editor',
+        evidenceRefs: [
+          'image:vscode:focus-verifier-wrapper-after',
+          'accessibility:vscode:focus-verifier-wrapper-after',
+          'element:vscode:editor',
+        ],
+      };
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Command+1:observation:vscode:focus-verifier-wrapper-before',
+    'read-current-window',
+    'read-current-window',
+    'verify-focus:observation:vscode:focus-verifier-wrapper-after',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-focus-verifier-wrapper',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-focus-verifier-wrapper',
+  ]);
+  assert.equal(result.agentHostFinalAnswer?.completionTruth?.status, 'satisfied');
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:host-evidence:focus-verifier-wrapper'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:current-vscode-host-focus-verifier-attempt-1:focus-editor'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-focus-verifier-wrapper'));
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work insert-draft diagnostic resolves textRef, types, observes after state, and releases', async () => {
   const calls: string[] = [];
   const observations = [

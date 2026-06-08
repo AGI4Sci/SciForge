@@ -37,11 +37,37 @@ export interface VSCodeCoWorkLiveDiagnosticInput {
   attemptId: string;
   target: ComputerUseTargetBinding;
   authorizationProfileId?: string;
+  focusedEditorEvidenceVerifier?: VSCodeCoWorkFocusedEditorEvidenceVerifier;
 }
 
 export interface VSCodeCoWorkInsertDraftLiveDiagnosticInput extends VSCodeCoWorkLiveDiagnosticInput {
   draftTextRef: string;
 }
+
+export interface VSCodeCoWorkFocusedEditorEvidenceVerifierInput {
+  commandId: string;
+  attemptId: string;
+  decisionRef: string;
+  beforeObservationRef?: string;
+  afterObservationRef?: string;
+  beforeObserveRefs: string[];
+  afterObserveRefs: string[];
+  actionRefs: string[];
+  targetRefs: string[];
+  editorElementRefs: string[];
+}
+
+export interface VSCodeCoWorkFocusedEditorEvidenceVerifierResult {
+  status: 'satisfied' | 'blocked';
+  focusedEditorRef?: string;
+  verifierRef?: string;
+  evidenceRefs?: string[];
+  reason?: string;
+}
+
+export type VSCodeCoWorkFocusedEditorEvidenceVerifier = (
+  input: VSCodeCoWorkFocusedEditorEvidenceVerifierInput,
+) => Promise<VSCodeCoWorkFocusedEditorEvidenceVerifierResult> | VSCodeCoWorkFocusedEditorEvidenceVerifierResult;
 
 export interface VSCodeCoWorkAgentHostLiveProducerInput
   extends VSCodeCoWorkLiveDiagnosticContext {
@@ -352,8 +378,13 @@ export async function runVSCodeCoWorkFocusEditorLiveDiagnostic(
   if (afterObserve.status !== 'completed' || !afterObserve.output) {
     return finish('blocked', afterObserve.blockedReason ?? 'VSCode co-work focus-editor live diagnostic blocked: after observe failed.');
   }
-  const focusVerifierRef = focusEditorVerifierRef(input.attemptId, afterObserve);
-  if (!focusVerifierRef) {
+  const focusVerification = await verifyFocusedEditorEvidence(input, {
+    beforeObserve,
+    afterObserve,
+    act,
+    decisionRef,
+  });
+  if (focusVerification.status !== 'satisfied') {
     materializerResult = {
       ...materializerResult,
       completionTruth: {
@@ -365,13 +396,14 @@ export async function runVSCodeCoWorkFocusEditorLiveDiagnostic(
           ...(materializerResult.evidenceRefs ?? []),
           ...(act.refs ?? []),
           ...(afterObserve.refs ?? []),
+          ...focusVerification.evidenceRefs,
         ]),
-        reason: 'missing-focused-editor-ref',
+        reason: focusVerification.reason ?? 'missing-focused-editor-ref',
       },
     };
     return finish('blocked', 'VSCode co-work focus-editor live diagnostic blocked: after observe did not produce focused-editor evidence.');
   }
-  mergeRefs(aggregate.evidenceRefs, [focusVerifierRef]);
+  mergeRefs(aggregate.evidenceRefs, focusVerification.evidenceRefs);
   runtimeTruth = buildRuntimeTruth(input, bindOutput, bind.refs ?? [], afterObserve, agentHostInput);
   materializerResult = {
     ...materializerResult,
@@ -384,7 +416,7 @@ export async function runVSCodeCoWorkFocusEditorLiveDiagnostic(
         ...(materializerResult.evidenceRefs ?? []),
         ...(act.refs ?? []),
         ...(afterObserve.refs ?? []),
-        focusVerifierRef,
+        ...focusVerification.evidenceRefs,
       ]),
     },
   };
@@ -930,13 +962,122 @@ function insertDraftMutationVerifierRef(
     : undefined;
 }
 
-function focusEditorVerifierRef(
-  attemptId: string,
-  afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
-): string | undefined {
-  return observationFocusedEditorRefs(afterObserve).length > 0
-    ? `verifier:vscode-cowork:${safeToken(attemptId) || 'attempt'}:focus-editor`
-    : undefined;
+async function verifyFocusedEditorEvidence(
+  context: VSCodeCoWorkLiveDiagnosticInput,
+  input: {
+    beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
+    afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
+    act: PrimitiveEnvelope<ComputerUseActOutput>;
+    decisionRef: string;
+  },
+): Promise<VSCodeCoWorkFocusedEditorEvidenceVerifierResult & { evidenceRefs: string[] }> {
+  const verifierInput = focusedEditorEvidenceVerifierInput(context, input);
+  const verifier = context.focusedEditorEvidenceVerifier ?? defaultFocusedEditorEvidenceVerifier;
+  const result = await verifier(verifierInput);
+  return normalizeFocusedEditorEvidenceVerifierResult(result);
+}
+
+function focusedEditorEvidenceVerifierInput(
+  context: VSCodeCoWorkLiveDiagnosticInput,
+  input: {
+    beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
+    afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
+    act: PrimitiveEnvelope<ComputerUseActOutput>;
+    decisionRef: string;
+  },
+): VSCodeCoWorkFocusedEditorEvidenceVerifierInput {
+  const beforeObserveRefs = runtimeOwnedLiveRefs(input.beforeObserve.refs ?? []);
+  const afterObserveRefs = runtimeOwnedLiveRefs(input.afterObserve.refs ?? []);
+  const actionRefs = runtimeOwnedLiveRefs(input.act.refs ?? []);
+  return {
+    commandId: context.commandId,
+    attemptId: context.attemptId,
+    decisionRef: input.decisionRef,
+    beforeObservationRef: input.beforeObserve.output?.observationRef
+      ?? firstRefWithPrefix(beforeObserveRefs, ['observation:']),
+    afterObservationRef: input.afterObserve.output?.observationRef
+      ?? firstRefWithPrefix(afterObserveRefs, ['observation:']),
+    beforeObserveRefs,
+    afterObserveRefs,
+    actionRefs,
+    targetRefs: runtimeOwnedLiveRefs([
+      ...beforeObserveRefs,
+      ...afterObserveRefs,
+      ...actionRefs,
+    ].filter((ref) => /^(?:window:|file-ref:|frontmost:|process:|macos-app:)/i.test(ref))),
+    editorElementRefs: runtimeOwnedLiveRefs([
+      ...beforeObserveRefs,
+      ...afterObserveRefs,
+      ...actionRefs,
+    ].filter((ref) => /^element:/i.test(ref))),
+  };
+}
+
+function defaultFocusedEditorEvidenceVerifier(
+  input: VSCodeCoWorkFocusedEditorEvidenceVerifierInput,
+): VSCodeCoWorkFocusedEditorEvidenceVerifierResult {
+  const focusedEditorRef = input.afterObserveRefs.find((ref) => /^focused-editor:/i.test(ref));
+  if (!focusedEditorRef) {
+    return {
+      status: 'blocked',
+      reason: 'missing-focused-editor-ref',
+      evidenceRefs: input.afterObserveRefs,
+    };
+  }
+  return {
+    status: 'satisfied',
+    focusedEditorRef,
+    verifierRef: `verifier:vscode-cowork:${safeToken(input.attemptId) || 'attempt'}:focus-editor`,
+    evidenceRefs: [
+      focusedEditorRef,
+      input.decisionRef,
+      ...input.actionRefs,
+      ...input.afterObserveRefs,
+    ],
+  };
+}
+
+function normalizeFocusedEditorEvidenceVerifierResult(
+  result: VSCodeCoWorkFocusedEditorEvidenceVerifierResult,
+): VSCodeCoWorkFocusedEditorEvidenceVerifierResult & { evidenceRefs: string[] } {
+  const evidenceRefs = runtimeOwnedLiveRefs([
+    result.focusedEditorRef,
+    result.verifierRef,
+    ...(result.evidenceRefs ?? []),
+  ]);
+  if (result.status !== 'satisfied') {
+    return {
+      status: 'blocked',
+      reason: result.reason ?? 'focused-editor-evidence-verifier-blocked',
+      evidenceRefs,
+    };
+  }
+  const focusedEditorRef = evidenceRefs.find((ref) => /^focused-editor:/i.test(ref));
+  if (!focusedEditorRef) {
+    return {
+      status: 'blocked',
+      reason: 'missing-focused-editor-ref',
+      evidenceRefs,
+    };
+  }
+  const verifierRef = evidenceRefs.find((ref) => /^verifier:.*:focus-editor$/i.test(ref));
+  if (!verifierRef) {
+    return {
+      status: 'blocked',
+      reason: 'missing-focus-editor-verifier-ref',
+      evidenceRefs,
+    };
+  }
+  return {
+    status: 'satisfied',
+    focusedEditorRef,
+    verifierRef,
+    evidenceRefs: runtimeOwnedLiveRefs([
+      focusedEditorRef,
+      verifierRef,
+      ...evidenceRefs,
+    ]),
+  };
 }
 
 function observationTextRefs(observe: PrimitiveEnvelope<ComputerUseObserveOutput>): string[] {
@@ -944,10 +1085,6 @@ function observationTextRefs(observe: PrimitiveEnvelope<ComputerUseObserveOutput
     ...(observe.output?.textRefs ?? []),
     ...(observe.refs ?? []).filter((ref) => /^text:/i.test(ref)),
   ]);
-}
-
-function observationFocusedEditorRefs(observe: PrimitiveEnvelope<ComputerUseObserveOutput>): string[] {
-  return runtimeOwnedLiveRefs((observe.refs ?? []).filter((ref) => /^focused-editor:/i.test(ref)));
 }
 
 function firstRefWithPrefix(refs: string[], prefixes: string[]): string | undefined {
