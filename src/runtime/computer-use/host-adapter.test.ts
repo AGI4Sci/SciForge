@@ -574,6 +574,7 @@ test('host ports contract exposes platform ports and forbids direct GUI calls', 
 test('result adapter presents refs-first Computer Use trace summaries through TUI host action metadata', () => {
   const actions = computerUseResultToTuiHostActions({
     message: 'Computer Use action provider completed 1 action(s). Trace: .sciforge/vision-runs/run-1/vision-trace.json.',
+    reason: 'Blocked on /Users/alice/private.txt with sk-title-secret.',
     executionUnits: [{
       id: 'EU-computer-use-run-1',
       status: 'done',
@@ -601,7 +602,7 @@ test('result adapter presents refs-first Computer Use trace summaries through TU
             windowId: 4242,
             bundleId: 'com.example.Editor',
             appName: 'Example Editor',
-            title: 'Experiment.md',
+            title: '/Users/alice/private.txt - sk-title-secret',
             displayId: 2,
             inputIsolation: 'require-focused-target',
           },
@@ -624,7 +625,8 @@ test('result adapter presents refs-first Computer Use trace summaries through TU
   assert.equal(actions[0]?.payload.targetAppRef, 'app:com.example.Editor');
   assert.equal(actions[0]?.payload.targetWindowRef, 'window:4242');
   assert.equal(actions[0]?.payload.currentFrameRef, '.sciforge/vision-runs/run-1/before.png');
-  assert.deepEqual(actions[0]?.payload.screen, { width: 1440, height: 900, label: 'Experiment.md' });
+  assert.deepEqual(actions[0]?.payload.screen, { width: 1440, height: 900, label: 'Example Editor' });
+  assert.doesNotMatch(JSON.stringify(actions), /sk-title-secret|\/Users\/alice|private\.txt/i);
   assert.deepEqual(actions[0]?.payload.isolationFlags, {
     requiresFocusSteal: true,
     backgroundRenderable: false,
@@ -645,9 +647,14 @@ test('result adapter maps approvalRequest to gui.ask_user while preserving relat
     },
     approvalRequest: {
       id: 'approval:computer-use:run-2',
-      prompt: 'Allow Computer Use to click the visible Submit button?',
+      approvalRef: 'approval:computer-use:run-2',
+      prompt: 'Allow Computer Use to click the visible Submit button with sk-secret?',
+      confirmationText: 'Click Submit for /Users/alice/private.txt',
+      rawProviderPayload: { token: 'Bearer rawProviderPayload-secret' },
+      rawVisibleText: 'Visible text that must remain in evidence refs.',
       riskLevel: 'high',
       actionRef: 'ref:planned-action:submit',
+      evidenceRefs: ['evidence:computer-use:run-2'],
     },
   });
 
@@ -661,10 +668,15 @@ test('result adapter maps approvalRequest to gui.ask_user while preserving relat
   assert.equal(actions[1]?.target, 'computer-use.approval-request');
   assert.deepEqual(actions[1]?.payload.approvalRequest, {
     id: 'approval:computer-use:run-2',
-    prompt: 'Allow Computer Use to click the visible Submit button?',
+    approvalRef: 'approval:computer-use:run-2',
     riskLevel: 'high',
     actionRef: 'ref:planned-action:submit',
+    evidenceRefs: ['evidence:computer-use:run-2'],
   });
+  assert.doesNotMatch(
+    JSON.stringify(actions),
+    /sk-secret|Bearer|rawProviderPayload|rawVisibleText|\/Users\/alice|confirmationText|visible Submit button/i,
+  );
   assert.deepEqual(actions[1]?.payload.relatedRefs, [
     '.sciforge/vision-runs/run-2/vision-trace.json',
     '.sciforge/vision-runs/run-2/gui-ask-user.json',

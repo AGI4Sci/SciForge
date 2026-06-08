@@ -181,7 +181,17 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 - blocked、partial 和 error path 也必须走同一 sanitizer，只能输出 safe summary、reason refs、evidence refs、artifact refs 或 compact observation refs。
 - sanitizer 只能作为 deterministic projection guard，不能生成 final answer，也不能判断 completion truth。
 
-第一批 product-facing 接入点是 `CodexAppServerAdapter` 的 host-owned public projection、`computer-use-native-route` 的 `workspaceRuntimeEvent` / `doneEvent` / `failedEvent`，以及 `codex-runtime-gateway` 的 public events 和 missing-final-answer payload。后续 public projection 收口应继续覆盖 app module readiness、Computer Use package result、package bridge presentation 和 UI runtime event persistence，而不是新增局部旁路 sanitizer。
+第一批 product-facing 接入点是 `CodexAppServerAdapter` 的 host-owned public projection、`computer-use-native-route` 的 `workspaceRuntimeEvent` / `doneEvent` / `failedEvent`，以及 `codex-runtime-gateway` 的 public events 和 missing-final-answer payload。
+
+当前 public projection 收口状态：
+
+- App module readiness validator 使用共享 forbidden raw detector，Agent Host readiness materializer 的 public result 使用共享 sanitizer。
+- Computer Use primitive `moduleResult` 使用共享 sanitizer 清洗 `output`、`diagnostics`、`repairHints` 和 refs。
+- Computer Use TUI host action projection 对 `approvalRequest` 使用白名单投影，对 summary `message`、window title、frame label、blocked reason 使用 safe summary 字符串。
+- Package bridge presentation 只调用 `computerUseResultToTuiHostActions`，同一份已收口 actions 再写入 objectReferences、logs 和 runtime event detail。
+- `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation 和 primitive package result；新增 public projection surface 必须接共享 sanitizer / detector 或明确白名单投影。
+
+后续 UI runtime event persistence 仍属于 P2 旁路删除与 fail-closed 的重点，不能新增局部 sanitizer 或本地 final-answer 生成路径。
 
 ### App Module Contract 约束
 

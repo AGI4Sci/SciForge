@@ -1,3 +1,4 @@
+import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 import {
   createComputerUseAppModuleRegistry,
   validateComputerUseAppModuleReadiness,
@@ -86,7 +87,7 @@ function readinessResult(
   ]);
   const outputRef = refs[0] ?? `runtime-truth:computer-use-app-module/${safeToken(context.operation) || 'operation'}`;
   if (readiness.status === 'ready') {
-    return {
+    return sanitizeReadinessResult({
       status: 'completed',
       message: 'Computer Use app module selected one Host-requested primitive candidate from current refs.',
       confidence: 0.76,
@@ -104,9 +105,9 @@ function readinessResult(
         supportingRefs: refs.slice(0, 12),
         opposingRefs: [],
       }],
-    };
+    });
   }
-  return {
+  return sanitizeReadinessResult({
     status: readiness.status,
     message: readiness.status === 'needs-confirmation'
       ? 'Computer Use app module needs Host target confirmation before returning a primitive candidate.'
@@ -119,7 +120,13 @@ function readinessResult(
     evidenceRefs: refs.length ? refs : [outputRef],
     executionUnits: [executionUnit(input, readiness.status, outputRef, context, undefined)],
     artifacts: [readinessArtifact(input, readiness, context, refs)],
-  };
+  });
+}
+
+function sanitizeReadinessResult(
+  result: CodexAgentHostComputerUseActMaterializerResult,
+): CodexAgentHostComputerUseActMaterializerResult {
+  return sanitizePublicEvent(result) as CodexAgentHostComputerUseActMaterializerResult;
 }
 
 function executionUnit(

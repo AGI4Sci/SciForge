@@ -58,6 +58,7 @@ test('package bridge presentation refs include blocked repair and continuation r
 
 test('attachPackageResultHostActions writes payload object references, logs, and runtime event', () => {
   const toolPayload = payload();
+  toolPayload.message = 'Package bridge finished with sk-package-secret and /Users/alice/private.txt';
   const events: WorkspaceRuntimeEvent[] = [];
   const actions = attachPackageResultHostActions(toolPayload, {
     schemaVersion: 'sciforge.computer-use.result.v1',
@@ -66,8 +67,14 @@ test('attachPackageResultHostActions writes payload object references, logs, and
     approvalRequest: {
       id: 'approval-request:run-1',
       approvalRef: 'approval:computer-use:run-1',
+      prompt: 'Allow Computer Use to click Submit with Bearer token?',
+      confirmationText: 'Click Submit for /Users/alice/private.txt',
+      rawProviderPayload: { token: 'Bearer rawProviderPayload-secret' },
+      rawVisibleText: 'Raw visible text must remain in refs.',
       actionKind: 'click',
       riskLevel: 'high',
+      actionRef: 'ref:planned-action:submit',
+      evidenceRefs: ['evidence:computer-use:run-1'],
     },
   }, {
     onEvent: (event) => events.push(event),
@@ -103,4 +110,9 @@ test('attachPackageResultHostActions writes payload object references, logs, and
   assert.equal(events[0]?.toolName, 'local.vision-sense');
   assert.match(String(events[0]?.detail), /gui\.present/);
   assert.match(String(events[0]?.detail), /gui\.ask_user/);
+
+  const unsafePattern = /sk-package-secret|Bearer|rawProviderPayload|rawVisibleText|\/Users\/alice|confirmationText|click Submit/i;
+  assert.doesNotMatch(JSON.stringify(hostActionsRef.data), unsafePattern);
+  assert.doesNotMatch(JSON.stringify(auditLog), unsafePattern);
+  assert.doesNotMatch(String(events[0]?.detail), unsafePattern);
 });

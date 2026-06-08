@@ -1,3 +1,5 @@
+import { publicEventHasForbiddenRaw } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
+
 export type ComputerUseAppModuleReadinessStatus = 'ready' | 'blocked' | 'needs-confirmation';
 
 export interface ComputerUseAppModuleResolveInput {
@@ -104,7 +106,7 @@ export function validateComputerUseAppModuleReadiness(
   if (hasForbiddenFinalAnswerFieldDeep(readiness)) {
     return blocked('blocked:computer-use-app-module:final-answer-not-allowed', safeStringList(readiness.evidenceRefs));
   }
-  if (containsRawPayload(readiness)) {
+  if (containsRawPayload(readiness) || publicEventHasForbiddenRaw(readiness)) {
     return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', safeStringList(readiness.evidenceRefs));
   }
   if (readiness.status === 'ready') {

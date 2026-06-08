@@ -256,3 +256,53 @@ test('Computer Use no-bypass guard blocks raw public event payload literals', ()
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /missing-public-event-sanitizer|forbidden-public-event-raw-payload/);
 });
+
+test('Computer Use no-bypass guard blocks raw app module readiness public payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts', [
+    'export function readinessArtifact() {',
+    '  return {',
+    "    type: 'computer-use-app-module-readiness',",
+    "    data: { rawCommand: 'npm test', providerPayload: { requestBody: 'SECRET_PROVIDER_PAYLOAD' } },",
+    '  };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard blocks raw package bridge presentation payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/computer-use/package-bridge-presentation.ts', [
+    'export function attachPackageResultHostActions(payload: { objectReferences?: unknown[]; logs?: unknown[] }) {',
+    "  payload.objectReferences = [{ data: { actions: [{ payload: { rawPath: '/Users/example/private.txt' } }] } }];",
+    "  payload.logs = [{ kind: 'computer-use-tui-host-actions', providerPayload: { token: 'SECRET_PROVIDER_TOKEN' } }];",
+    "  emitWorkspaceRuntimeEvent({}, { type: 'computer-use.tui-host-actions', detail: JSON.stringify({ screenshotBase64: 'data:image/png;base64,SECRET' }) });",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard blocks raw primitive package result payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'packages/actions/computer-use/index.ts', [
+    'export function primitiveModuleResult() {',
+    '  return moduleResult({',
+    "    value: { output: { stdout: 'SECRET_STDOUT', commandText: 'npm test', workspacePath: '/Applications/workspace/private' } },",
+    "    diagnostics: [{ requestBody: 'SECRET_REQUEST_BODY' }],",
+    '  });',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});

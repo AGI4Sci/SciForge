@@ -5,6 +5,7 @@ import {
   type ModuleInvokeRequest,
   type ModuleInvokeResult,
 } from '@sciforge-ui/runtime-contract/modules';
+import { PUBLIC_EVENT_REDACTED, sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 
 export const COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID = 'computer_use' as const;
 export const COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA = 'sciforge.computer-use.primitive-result.v1' as const;
@@ -769,8 +770,8 @@ function primitiveModuleResult(
   primitive: ComputerUsePrimitiveName,
   input: ComputerUsePrimitivePortResult,
 ): ModuleInvokeResult<ComputerUsePrimitiveEnvelope> {
-  const refs = uniqueStrings(input.refs ?? []);
-  const value: ComputerUsePrimitiveEnvelope = {
+  const refs = safePublicStringList(uniqueStrings(input.refs ?? []));
+  const value = sanitizePublicEvent({
     schemaVersion: COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA,
     moduleId: COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
     primitive,
@@ -781,7 +782,7 @@ function primitiveModuleResult(
     budget: input.budget ?? {},
     blockedReason: input.blockedReason,
     repairHints: input.repairHints,
-  };
+  }) as ComputerUsePrimitiveEnvelope;
   const ok = isSuccessfulStatus(input.status);
   return moduleResult({
     moduleId: COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID,
@@ -790,6 +791,12 @@ function primitiveModuleResult(
     refs,
     error: ok ? undefined : input.blockedReason ?? input.status,
   });
+}
+
+function safePublicStringList(values: string[]): string[] {
+  return uniqueStrings(values
+    .map((value) => sanitizePublicEvent(value))
+    .filter((value): value is string => typeof value === 'string' && value !== PUBLIC_EVENT_REDACTED));
 }
 
 function validateBindInput(input: Record<string, unknown>, errors: string[]) {

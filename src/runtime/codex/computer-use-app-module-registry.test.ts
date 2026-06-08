@@ -180,6 +180,22 @@ test('readiness rejects forbidden fields nested in blocked diagnostics', () => {
   assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:final-answer-not-allowed');
 });
 
+test('readiness rejects public-event raw log payloads through shared sanitizer rules', () => {
+  const unsafe = validateComputerUseAppModuleReadiness({
+    status: 'blocked',
+    reasonRef: 'blocked:vscode-app-module:diagnostic',
+    evidenceRefs: ['module:vscode', 'observation:vscode:current'],
+    logs: [{
+      stdout: 'SECRET_STDOUT_SHOULD_NOT_LEAK',
+    }],
+  });
+
+  assert.equal(unsafe.status, 'blocked');
+  assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:raw-ref-not-allowed');
+  assert.deepEqual(unsafe.evidenceRefs, ['module:vscode', 'observation:vscode:current']);
+  assert.doesNotMatch(JSON.stringify(unsafe), /SECRET_STDOUT|stdout|logs/i);
+});
+
 test('readiness rejects final-answer aliases with snake or kebab case', () => {
   for (const key of ['final_answer', 'final-answer', 'completion_truth', 'completion-truth']) {
     const unsafe = validateComputerUseAppModuleReadiness({

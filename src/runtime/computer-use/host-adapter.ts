@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
+import { PUBLIC_EVENT_REDACTED, sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import type { ComputerUseConfig, WindowTarget } from './types.js';
@@ -859,7 +860,7 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
     ...refsFromUnknown(result, sidecarRefKey('approval-source-risk-audit.json', /sourceRiskAuditRef/i)),
   ]);
   const status = stringAt(result, 'status') ?? firstExecutionUnitStatus(result.executionUnits);
-  const message = stringAt(result, 'message');
+  const message = safePublicString(result, 'message');
   const virtualScreen = computerUseVirtualScreenFromResult(result, { traceRefs, status });
   const virtualScreenRefs = computerUseVirtualScreenRefs(virtualScreen);
   const hasRefs = traceRefs.length > 0
@@ -906,9 +907,37 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
 
 function approvalRequestFromResult(result: Record<string, unknown>): Record<string, unknown> | undefined {
   const direct = recordAt(result, 'approvalRequest') ?? recordAt(result, 'approval_request');
-  if (direct) return direct;
+  if (direct) return publicApprovalRequestProjection(direct);
   const refs = recordAt(result, 'refs');
-  return refs ? recordAt(refs, 'approvalRequest') ?? recordAt(refs, 'approval_request') : undefined;
+  const nested = refs ? recordAt(refs, 'approvalRequest') ?? recordAt(refs, 'approval_request') : undefined;
+  return nested ? publicApprovalRequestProjection(nested) : undefined;
+}
+
+function publicApprovalRequestProjection(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const publicProjection = recordAt(value, 'publicProjection') ?? recordAt(value, 'public_projection');
+  const projected = compactRecord({
+    id: safePublicString(value, 'id'),
+    approvalRef: safePublicString(value, 'approvalRef') ?? safePublicString(value, 'approval_ref'),
+    actionRef: safePublicString(value, 'actionRef') ?? safePublicString(value, 'action_ref'),
+    riskLevel: safePublicString(value, 'riskLevel') ?? safePublicString(value, 'risk_level'),
+    publicProjection: publicProjection ? sanitizePublicEvent(publicProjection) : undefined,
+    evidenceRefs: safePublicStringList(value.evidenceRefs ?? value.evidence_refs),
+  });
+  return Object.keys(projected).length ? projected : undefined;
+}
+
+function safePublicString(record: Record<string, unknown>, key: string) {
+  const value = stringAt(record, key);
+  if (!value) return undefined;
+  const sanitized = sanitizePublicEvent(value);
+  return typeof sanitized === 'string' && sanitized !== PUBLIC_EVENT_REDACTED ? sanitized : undefined;
+}
+
+function safePublicStringList(value: unknown) {
+  const refs = toStringList(value)
+    .map((ref) => sanitizePublicEvent(ref))
+    .filter((ref): ref is string => typeof ref === 'string' && ref !== PUBLIC_EVENT_REDACTED);
+  return uniqueStrings(refs);
 }
 
 function summaryRefs(summary: ComputerUsePresentationSummary) {
@@ -1029,8 +1058,8 @@ function computerUseVirtualScreenFromResult(
     ?? (displayId !== undefined ? `screen:${displayId}` : undefined);
   const targetAppRef = virtualScreenTargetAppRef(windowTarget);
   const targetWindowRef = virtualScreenTargetWindowRef(windowTarget);
-  const screenLabel = stringAt(windowTarget, 'title')
-    ?? stringAt(windowTarget, 'appName')
+  const screenLabel = safePublicString(windowTarget ?? {}, 'title')
+    ?? safePublicString(windowTarget ?? {}, 'appName')
     ?? screenRef;
   const frames = screenshots
     .map((screenshot, index) => {
@@ -1041,7 +1070,7 @@ function computerUseVirtualScreenFromResult(
         frameRef: ref,
         screenshotRef: ref,
         screenRef: stringAt(screenshot, 'screenId') ?? screenRef,
-        label: ref === currentFrameRef ? screenLabel : stringAt(screenshot, 'id') ?? `frame-${index + 1}`,
+        label: ref === currentFrameRef ? screenLabel : safePublicString(screenshot, 'id') ?? `frame-${index + 1}`,
         status: ref === currentFrameRef ? 'current' : undefined,
         evidenceRef: context.traceRefs[0],
       });
@@ -1062,7 +1091,7 @@ function computerUseVirtualScreenFromResult(
     replayRef: context.traceRefs[0],
     screenCount: screenRef || targetWindowRef || targetAppRef ? 1 : undefined,
     frameCount: frameRefs.length || undefined,
-    blockedReason: stringAt(result, 'reason') ?? stringAt(recordAt(result, 'failureDiagnostics'), 'reason'),
+    blockedReason: safePublicString(result, 'reason') ?? safePublicString(recordAt(result, 'failureDiagnostics') ?? {}, 'reason'),
   });
   return compactRecord({
     attachState: currentFrameRef ? 'observe-only' : 'no-session',

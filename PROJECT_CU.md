@@ -182,17 +182,17 @@ open-command-palette
 
 目标：先把会进入聊天、runtime event、TUI/GUI projection、artifact metadata 的结果面收干净。
 
-- [ ] 写 app module readiness 红测：nested `stdout` / `commandText` / `requestBody` / `workspacePath` 不能进入 readiness public result。
-- [ ] app module readiness validator 使用共享 sanitizer 或共享 forbidden raw detector。
-- [ ] 写 Computer Use action/procedure result 红测：`approvalRequest`、host action metadata、package presentation event 不能泄漏 raw prompt、token、URL、raw path、base64、provider payload。
-- [ ] Computer Use action/procedure public projection 白名单化：只保留 status、safe summary、reason refs、evidence refs、artifact refs、action refs、approval refs。
-- [ ] `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation。
+- [x] 写 app module readiness 红测：nested `stdout` / `commandText` / `requestBody` / `workspacePath` 不能进入 readiness public result。
+- [x] app module readiness validator 使用共享 sanitizer 或共享 forbidden raw detector。
+- [x] 写 Computer Use action/procedure result 红测：`approvalRequest`、host action metadata、package presentation event 不能泄漏 raw prompt、token、URL、raw path、base64、provider payload。
+- [x] Computer Use action/procedure public projection 白名单化：只保留 status、safe summary、reason refs、evidence refs、artifact refs、action refs、approval refs。
+- [x] `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation。
 
 验收：
 
-- [ ] app module readiness 单测证明 nested raw action payload 被拒绝或 sanitized。
-- [ ] Computer Use result 单测证明 objectReferences、logs、runtime event detail 三个出口都无 raw payload。
-- [ ] static guard 证明新增 public projection surface 不能绕过共享 sanitizer / detector。
+- [x] app module readiness 单测证明 nested raw action payload 被拒绝或 sanitized。
+- [x] Computer Use result 单测证明 objectReferences、logs、runtime event detail 三个出口都无 raw payload。
+- [x] static guard 证明新增 public projection surface 不能绕过共享 sanitizer / detector。
 
 ### P2：旧旁路删除与 fail-closed
 

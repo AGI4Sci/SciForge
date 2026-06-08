@@ -740,6 +740,94 @@ describe('computer use primitive service', () => {
     assert.deepEqual(calls, []);
   });
 
+  it('sanitizes primitive action result public projection before returning module output', async () => {
+    const service = createComputerUsePrimitiveService({
+      ports: {
+        bind: async () => ({
+          status: 'completed',
+          output: {
+            sessionId: 'cu-session-public-projection',
+            sessionRef: 'computer-use:session:public-projection',
+            targetRef: 'window:public-projection',
+            inputAdapterRef: 'input-adapter:public-projection',
+            cursorRef: 'cursor:public-projection',
+            scopedInputLeaseRef: 'scoped-input-lease:public-projection',
+          },
+          refs: [
+            'computer-use:session:public-projection',
+            'window:public-projection',
+            'input-adapter:public-projection',
+            'cursor:public-projection',
+            'scoped-input-lease:public-projection',
+          ],
+        }),
+        act: async () => ({
+          status: 'completed',
+          output: {
+            sessionId: 'cu-session-public-projection',
+            actionRef: 'window-action:public-projection',
+            executorEventRef: 'executor-event:public-projection',
+            inputEventRef: 'input-event:public-projection',
+            beforeObservationRef: 'observation:before:public-projection',
+            afterObservationRef: 'observation:after:public-projection',
+            invalidatedRefs: ['observation:before:public-projection'],
+            rawPath: '/Users/alice/private.txt',
+            providerPayload: { requestBody: 'SECRET_PROVIDER_PAYLOAD' },
+            workspacePath: '/Applications/workspace/private',
+          } as never,
+          refs: [
+            'window-action:public-projection',
+            'executor-event:public-projection',
+            'input-event:public-projection',
+            'observation:before:public-projection',
+            'observation:after:public-projection',
+          ],
+          diagnostics: [{
+            code: 'raw-diagnostic',
+            message: 'raw stdout at /Users/alice/private.txt',
+            severity: 'warning',
+            stdout: 'SECRET_STDOUT',
+            requestBody: 'SECRET_REQUEST_BODY',
+          } as never],
+          repairHints: [{
+            code: 'raw-repair',
+            message: 'repair using Bearer token',
+            machineReadable: {
+              providerPayload: 'SECRET_PROVIDER_PAYLOAD',
+              rawCommand: 'cat /Users/alice/private.txt',
+            },
+          }],
+        }),
+      },
+    });
+
+    const bind = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        windowRef: 'window:public-projection',
+      },
+    }));
+    assert.equal(bind.ok, true);
+
+    const act = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.act, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId: 'cu-session-public-projection',
+      action: {
+        type: 'click',
+        elementRef: 'element:public-projection',
+      },
+    }));
+
+    assert.equal(act.ok, true);
+    assert.equal(act.value?.status, 'completed');
+    assert.ok(act.refs?.includes('window-action:public-projection'));
+    assert.doesNotMatch(
+      JSON.stringify(act),
+      /SECRET_|rawPath|providerPayload|workspacePath|stdout|requestBody|rawCommand|\/Users\/alice|Bearer/i,
+    );
+  });
+
   it('fails closed when an act port reports adapter or cursor refs outside the bound session scope', async () => {
     const service = createComputerUsePrimitiveService({
       ports: {

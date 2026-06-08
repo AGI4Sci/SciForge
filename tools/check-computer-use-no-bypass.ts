@@ -28,10 +28,16 @@ const publicProjectionSurfaceFiles = new Set([
   'src/runtime/codex/codex-app-server-adapter.ts',
   'src/runtime/codex/computer-use-native-route.ts',
   'src/runtime/codex/codex-runtime-gateway.ts',
+  'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts',
+  'src/runtime/codex/computer-use-app-module-registry.ts',
+  'src/runtime/computer-use/host-adapter.ts',
+  'src/runtime/computer-use/package-bridge-presentation.ts',
+  'packages/actions/computer-use/index.ts',
 ]);
-const publicProjectionActivation = /\b(?:emitWorkspaceRuntimeEvent|publicHostOwnedRuntimeEvent|workspaceRuntimeEvent|doneEvent|failedEvent|runtimeCodexMissingFinalAnswerPayload|publicRuntimeMode|sanitizePublicEvent)\b/;
+const publicProjectionActivation = /\b(?:emitWorkspaceRuntimeEvent|publicHostOwnedRuntimeEvent|workspaceRuntimeEvent|doneEvent|failedEvent|runtimeCodexMissingFinalAnswerPayload|publicRuntimeMode|sanitizePublicEvent|publicEventHasForbiddenRaw|validateComputerUseAppModuleReadiness|readinessArtifact|readinessResult|computerUseResultToTuiHostActions|computerUsePresentationSummary|approvalRequestFromResult|attachPackageResultHostActions|primitiveModuleResult|moduleResult|objectReferences|payload\.logs|computer-use\.tui-host-actions)\b/;
 const publicEventSanitizerImport = /@sciforge-ui\/runtime-contract\/public-event-sanitizer/;
-const unsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawCommand|rawPath)\b\s*:|data:image\/|;base64,)/i;
+const alwaysUnsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawProviderPayload|rawVisibleText|rawSelectedText|rawCommand|rawPath)\b\s*:|data:image\/|;base64,)/i;
+const guardedUnsafePublicEventPayloadLiteral = /\b(?:commandText|terminalCommand|workspacePath|filePath|targetPath|stdout|stderr|requestBody|responseBody)\b\s*:/i;
 
 async function main() {
   const files = [
@@ -47,7 +53,7 @@ async function main() {
     if (isTestFile(rel)) continue;
     const text = await readFile(file, 'utf8');
     const lines = text.split(/\r?\n/);
-    if (isActivePublicProjectionSurface(rel, text) && !publicEventSanitizerImport.test(text)) {
+    if (isActivePublicProjectionSurface(rel, text) && !hasPublicProjectionGuard(rel, text)) {
       findings.push({
         file: rel,
         line: 1,
@@ -203,11 +209,23 @@ function isActivePublicProjectionSurface(file: string, text: string): boolean {
   return publicProjectionSurfaceFiles.has(file) && publicProjectionActivation.test(text);
 }
 
+function hasPublicProjectionGuard(file: string, text: string): boolean {
+  if (publicEventSanitizerImport.test(text)) return true;
+  return file === 'src/runtime/computer-use/package-bridge-presentation.ts'
+    && /computerUseResultToTuiHostActions/.test(text);
+}
+
 function isUnsafePublicEventPayloadLine(file: string, fileText: string, line: string): boolean {
   if (!isActivePublicProjectionSurface(file, fileText)) return false;
   const code = line.replace(/\/\/.*$/, '');
   if (/UNSAFE_|FORBIDDEN_|REDACT|sanitize|Sanitizer/i.test(code)) return false;
-  return unsafePublicEventPayloadLiteral.test(code);
+  if (alwaysUnsafePublicEventPayloadLiteral.test(code)) return true;
+  if (!guardedUnsafePublicEventPayloadLiteral.test(code)) return false;
+  if (hasPublicProjectionGuard(file, fileText)) return false;
+  if (/\b(?:commandText|terminalCommand|workspacePath|filePath|targetPath|stdout|stderr|requestBody|responseBody)\b\s*:\s*(?:string|number|boolean|unknown|Record\b|Array\b|readonly\b)/i.test(code)) {
+    return false;
+  }
+  return true;
 }
 
 async function structuredManifestFindings(): Promise<Finding[]> {

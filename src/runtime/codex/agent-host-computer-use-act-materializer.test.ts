@@ -526,6 +526,44 @@ test('default Computer Use Act materializer rejects app module readiness raw/fin
   assert.doesNotMatch(JSON.stringify(result), /I handled the task|raw-provider-object|iVBORw0KGgo/);
 });
 
+test('default Computer Use Act materializer sanitizes unsafe app module identifiers from public readiness results', async () => {
+  const unsafeModuleId = 'https://example.invalid/SECRET_MODULE_ID';
+  const unsafeModule: ComputerUseAppModule = {
+    moduleId: unsafeModuleId,
+    canHandle: ({ refs }) => refs.includes('macos-app:unsafe-module-id'),
+    normalizeObservation: ({ refs }) => ({ refs }),
+    getCapabilities: () => ['read-visible-text'],
+    checkReadiness: () => ({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.observe',
+        inputRefs: ['window:unsafe-module-id:main'],
+      },
+      evidenceRefs: ['module:unsafe-module-id', 'observation:unsafe-module-id:current'],
+    }),
+  };
+  const materializer = createDefaultComputerUseActMaterializer({
+    appModules: [unsafeModule],
+  });
+
+  const result = await materializer({
+    agentHostInput: appModuleAgentHostInput('read-visible-text', ['macos-app:unsafe-module-id', 'window:unsafe-module-id:main']),
+    preflight: appModulePreflight(['macos-app:unsafe-module-id', 'window:unsafe-module-id:main']),
+    commandText: 'do not expose module identifiers',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-app-module-unsafe-id',
+    attemptId: 'codex-command-default-app-module-unsafe-id-attempt-1',
+    runtimeTruth: appModuleRuntimeTruth(['macos-app:unsafe-module-id', 'window:unsafe-module-id:main']),
+  });
+
+  const serialized = JSON.stringify(result);
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.equal(result?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.ok(result?.evidenceRefs.includes('module:unsafe-module-id'));
+  assert.ok(result?.evidenceRefs.includes('observation:unsafe-module-id:current'));
+  assert.doesNotMatch(serialized, /SECRET_MODULE_ID|example\.invalid|https:\/\//i);
+});
+
 test('default Computer Use Act materializer does not treat terminal, palette, or action refs as completion truth', async () => {
   const materializer = createDefaultComputerUseActMaterializer();
 
