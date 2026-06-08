@@ -410,6 +410,9 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
     provider: 'sciforge-provider',
     model: 'sciforge-model',
     profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticOptions: {
+      activateCurrentVSCodeIfNeeded: true,
+    },
     currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
       runnerCalls.push(input);
       return {
@@ -551,6 +554,7 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
   assert.equal(runnerCalls[0]?.commandId, 'native-route-vscode-cowork-ordinary-live');
   assert.equal(runnerCalls[0]?.attemptId, 'native-route-vscode-cowork-ordinary-live-attempt-1');
   assert.equal(runnerCalls[0]?.workspacePath, '/tmp/workspace');
+  assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
   assert.equal(done?.status, 'completed');
   assert.equal(done?.maturity, 'live-diagnostic');
   assert.equal(done?.productReady, false);
@@ -590,6 +594,9 @@ test('Computer Use native route can start current VSCode live diagnostic from na
     provider: 'sciforge-provider',
     model: 'sciforge-model',
     profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticOptions: {
+      activateCurrentVSCodeIfNeeded: true,
+    },
     currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
       runnerCalls.push(input);
       return {
@@ -624,6 +631,7 @@ test('Computer Use native route can start current VSCode live diagnostic from na
   assert.equal(runnerCalls[0]?.commandText, '操作我已经打开的 VSCode，读取当前可见文本。');
   assert.equal(runnerCalls[0]?.commandId, 'native-route-vscode-cowork-narrow-ordinary-live');
   assert.equal(runnerCalls[0]?.attemptId, 'native-route-vscode-cowork-narrow-ordinary-live-attempt-1');
+  assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
   assert.equal(runnerCalls[0]?.agentHostInput, undefined);
   assert.equal(runnerCalls[0]?.runtimeIntent, undefined);
   assert.equal(done?.status, 'completed');

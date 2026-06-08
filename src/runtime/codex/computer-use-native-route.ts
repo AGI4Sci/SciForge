@@ -22,6 +22,9 @@ export interface ComputerUseNativeRouteInput {
   abortSignal?: AbortSignal;
   textEditAppiumMac2Client?: AppiumMac2WindowActionClient;
   currentVSCodeCoWorkLiveDiagnosticRunner?: CurrentVSCodeCoWorkLiveDiagnosticRunner;
+  currentVSCodeCoWorkLiveDiagnosticOptions?: {
+    activateCurrentVSCodeIfNeeded?: boolean;
+  };
 }
 
 const NORMALIZED_SCHEMA_VERSION = 'sciforge.codex.normalized-event.v1' as const;
@@ -37,6 +40,7 @@ export type CurrentVSCodeCoWorkLiveDiagnosticRunner = (input: {
   authorizationProfileId?: string;
   runtimeIntent?: unknown;
   agentHostInput?: unknown;
+  activateCurrentVSCodeIfNeeded?: boolean;
 }) => Promise<VSCodeCoWorkLiveDiagnosticResult> | VSCodeCoWorkLiveDiagnosticResult;
 
 export function isComputerUseNativeRouteCommand(commandText: string): boolean {
@@ -275,6 +279,7 @@ async function tryRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(
     authorizationProfileId: stringField(input.request.agentHostInput, 'authorizationProfileId'),
     runtimeIntent: input.request.runtimeIntent,
     agentHostInput: input.request.agentHostInput,
+    activateCurrentVSCodeIfNeeded: shouldActivateCurrentVSCodeForLiveDiagnostic(input),
   });
   queue.push(doneEvent(metadata, currentVSCodeCoWorkLiveDiagnosticPayload(result)));
   return true;
@@ -317,8 +322,15 @@ async function tryRunCurrentVSCodeCoWorkLiveDiagnostic(
     authorizationProfileId: stringField(input.request.agentHostInput, 'authorizationProfileId'),
     runtimeIntent: input.request.runtimeIntent,
     agentHostInput: input.request.agentHostInput,
+    activateCurrentVSCodeIfNeeded: shouldActivateCurrentVSCodeForLiveDiagnostic(input),
   });
   return currentVSCodeCoWorkLiveDiagnosticPayload(result);
+}
+
+function shouldActivateCurrentVSCodeForLiveDiagnostic(input: ComputerUseNativeRouteInput): boolean | undefined {
+  return input.currentVSCodeCoWorkLiveDiagnosticOptions?.activateCurrentVSCodeIfNeeded === true
+    ? true
+    : undefined;
 }
 
 function shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(input: ComputerUseNativeRouteInput): boolean {
