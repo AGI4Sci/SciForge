@@ -34,6 +34,7 @@ export interface RunCurrentVSCodeCoWorkInsertDraftLiveDiagnosticInput
   authorizationProfileId?: string;
   draftTextRef: string;
   focusedEditorContextRefs?: string[];
+  focusedEditorEvidenceVerifier?: VSCodeCoWorkFocusedEditorEvidenceVerifier;
 }
 
 export interface RunCurrentVSCodeCoWorkFocusEditorLiveDiagnosticInput
@@ -188,6 +189,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(
     authorizationProfileId: input.authorizationProfileId,
     draftTextRef: input.draftTextRef,
     focusedEditorContextRefs: input.focusedEditorContextRefs,
+    focusedEditorEvidenceVerifier: input.focusedEditorEvidenceVerifier,
     target: {
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',

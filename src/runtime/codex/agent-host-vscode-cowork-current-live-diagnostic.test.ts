@@ -625,6 +625,137 @@ test('current VSCode co-work insert-draft diagnostic accepts Host supplied focus
   assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work insert-draft diagnostic derives focus context from Host evidence verifier', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-provider',
+      windowRef: 'window:vscode:insert-provider',
+      titleRef: 'text:title:insert-provider',
+      frontmostRef: 'frontmost:vscode:insert-provider',
+      fileRefs: ['file-ref:vscode:insert-provider'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-provider-bind',
+      visibleTextSha256Ref: 'text:vscode:insert-provider-bind-sha256',
+      screenshotRef: 'image:vscode:insert-provider-bind',
+      accessibilityRef: 'accessibility:vscode:insert-provider-bind',
+      freshnessRef: 'freshness:vscode:insert-provider-bind',
+      observationRef: 'observation:vscode:insert-provider-bind',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-provider',
+      windowRef: 'window:vscode:insert-provider',
+      titleRef: 'text:title:insert-provider',
+      frontmostRef: 'frontmost:vscode:insert-provider',
+      fileRefs: ['file-ref:vscode:insert-provider'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-provider-before',
+      visibleTextSha256Ref: 'text:vscode:insert-provider-before-sha256',
+      screenshotRef: 'image:vscode:insert-provider-before',
+      accessibilityRef: 'accessibility:vscode:insert-provider-before',
+      freshnessRef: 'freshness:vscode:insert-provider-before',
+      observationRef: 'observation:vscode:insert-provider-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-provider',
+      windowRef: 'window:vscode:insert-provider',
+      titleRef: 'text:title:insert-provider',
+      frontmostRef: 'frontmost:vscode:insert-provider',
+      fileRefs: ['file-ref:vscode:insert-provider'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-provider-act-after',
+      visibleTextSha256Ref: 'text:vscode:insert-provider-act-after-sha256',
+      screenshotRef: 'image:vscode:insert-provider-act-after',
+      accessibilityRef: 'accessibility:vscode:insert-provider-act-after',
+      freshnessRef: 'freshness:vscode:insert-provider-act-after',
+      observationRef: 'observation:vscode:insert-provider-act-after',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-provider',
+      windowRef: 'window:vscode:insert-provider',
+      titleRef: 'text:title:insert-provider',
+      frontmostRef: 'frontmost:vscode:insert-provider',
+      fileRefs: ['file-ref:vscode:insert-provider'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-provider-after',
+      visibleTextSha256Ref: 'text:vscode:insert-provider-after-sha256',
+      screenshotRef: 'image:vscode:insert-provider-after',
+      accessibilityRef: 'accessibility:vscode:insert-provider-after',
+      freshnessRef: 'freshness:vscode:insert-provider-after',
+      observationRef: 'observation:vscode:insert-provider-after',
+    },
+  ];
+
+  const result = await runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-insert-provider',
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'current-vscode-host-insert-provider',
+    attemptId: 'current-vscode-host-insert-provider-attempt-1',
+    workspacePath: '/tmp/workspace',
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+    focusedEditorEvidenceVerifier: (input) => {
+      calls.push(`verify-insert-focus:${input.afterObservationRef}:${input.actionRefs.length}`);
+      assert.ok(input.afterObserveRefs.includes('image:vscode:insert-provider-before'));
+      assert.ok(input.afterObserveRefs.includes('accessibility:vscode:insert-provider-before'));
+      assert.ok(input.editorElementRefs.includes('element:vscode:editor'));
+      assert.equal(input.actionRefs.length, 0);
+      return {
+        status: 'satisfied',
+        focusedEditorRef: 'focused-editor:vscode:host-evidence:insert-provider',
+        verifierRef: 'verifier:vscode-cowork:current-vscode-host-insert-provider-attempt-1:focus-editor',
+        evidenceRefs: [
+          'image:vscode:insert-provider-before',
+          'accessibility:vscode:insert-provider-before',
+          'element:vscode:editor',
+        ],
+      };
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:draft'
+        ? 'draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.focusedEditorRef}:${input.beforeObservationRef}`);
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'verify-insert-focus:observation:vscode:insert-provider-before:0',
+    'resolve-text:text-ref:current-vscode-cowork:draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:draft:focused-editor:vscode:host-evidence:insert-provider:observation:vscode:insert-provider-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-insert-provider',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-insert-provider',
+  ]);
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:host-evidence:insert-provider'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:current-vscode-host-insert-provider-attempt-1:focus-editor'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-insert-provider'));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work live diagnostic can observe the real current VSCode window', {
   skip: currentVSCodeLiveEnabled
     ? undefined

@@ -528,13 +528,33 @@ export async function runVSCodeCoWorkInsertDraftLiveDiagnostic(
     return finish('blocked', 'VSCode co-work insert-draft live diagnostic blocked: Host act decision did not include a valid atomic action.');
   }
 
+  const focusedEditorContext = await insertDraftFocusedEditorContext(input, beforeObserve, decisionRef);
+  mergeRefs(aggregate.evidenceRefs, focusedEditorContext.evidenceRefs);
+  if (focusedEditorContext.status !== 'satisfied') {
+    materializerResult = {
+      ...materializerResult,
+      completionTruth: {
+        schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+        scope: 'action',
+        status: 'blocked',
+        validator: 'vscode-cowork-focused-editor-context-provider',
+        evidenceRefs: runtimeOwnedLiveRefs([
+          ...(materializerResult.evidenceRefs ?? []),
+          ...focusedEditorContext.evidenceRefs,
+        ]),
+        reason: focusedEditorContext.reason ?? 'focused-editor-context-provider-blocked',
+      },
+    };
+    return finish('blocked', 'VSCode co-work insert-draft live diagnostic blocked: Host focused-editor evidence verifier did not produce safe focus context.');
+  }
+
   const act = await actSession(
     input.service,
     sessionId,
     action,
     aggregate,
     'insert-draft',
-    insertDraftActContextRefs(input, beforeObserve, decisionRef),
+    focusedEditorContext.evidenceRefs,
   );
   if (act.status !== 'completed' || !act.output) {
     return finish('blocked', act.blockedReason ?? 'VSCode co-work insert-draft live diagnostic blocked: selected act primitive failed.');
@@ -633,10 +653,12 @@ function insertDraftActContextRefs(
   input: VSCodeCoWorkInsertDraftLiveDiagnosticInput,
   beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
   decisionRef: string,
+  focusedEditorContextRefs: string[] = [],
 ): string[] {
   return runtimeOwnedLiveRefs([
     decisionRef,
     ...(input.focusedEditorContextRefs ?? []),
+    ...focusedEditorContextRefs,
     ...(beforeObserve.refs ?? []).filter((ref) =>
       /^(?:focused-editor:|verifier:.*:focus-editor$|observation:|element:|window:|file-ref:|accessibility:|image:|freshness:)/i.test(ref)
     ),
@@ -645,6 +667,44 @@ function insertDraftActContextRefs(
     beforeObserve.output?.accessibilityRef,
     ...(beforeObserve.output?.elementRefs ?? []),
   ]);
+}
+
+async function insertDraftFocusedEditorContext(
+  input: VSCodeCoWorkInsertDraftLiveDiagnosticInput,
+  beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
+  decisionRef: string,
+): Promise<{
+  status: 'satisfied' | 'blocked';
+  evidenceRefs: string[];
+  reason?: string;
+}> {
+  const baseRefs = insertDraftActContextRefs(input, beforeObserve, decisionRef);
+  if (!input.focusedEditorEvidenceVerifier) {
+    return {
+      status: 'satisfied',
+      evidenceRefs: baseRefs,
+    };
+  }
+  const focusedEditorVerification = await verifyFocusedEditorEvidence(input, {
+    beforeObserve,
+    afterObserve: beforeObserve,
+    decisionRef,
+  });
+  const evidenceRefs = runtimeOwnedLiveRefs([
+    ...baseRefs,
+    ...focusedEditorVerification.evidenceRefs,
+  ]);
+  if (focusedEditorVerification.status !== 'satisfied') {
+    return {
+      status: 'blocked',
+      evidenceRefs,
+      reason: focusedEditorVerification.reason ?? 'focused-editor-evidence-verifier-blocked',
+    };
+  }
+  return {
+    status: 'satisfied',
+    evidenceRefs,
+  };
 }
 
 async function releaseSession(
@@ -995,7 +1055,7 @@ async function verifyFocusedEditorEvidence(
   input: {
     beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
     afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
-    act: PrimitiveEnvelope<ComputerUseActOutput>;
+    act?: PrimitiveEnvelope<ComputerUseActOutput>;
     decisionRef: string;
   },
 ): Promise<VSCodeCoWorkFocusedEditorEvidenceVerifierResult & { evidenceRefs: string[] }> {
@@ -1010,13 +1070,13 @@ function focusedEditorEvidenceVerifierInput(
   input: {
     beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
     afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>;
-    act: PrimitiveEnvelope<ComputerUseActOutput>;
+    act?: PrimitiveEnvelope<ComputerUseActOutput>;
     decisionRef: string;
   },
 ): VSCodeCoWorkFocusedEditorEvidenceVerifierInput {
   const beforeObserveRefs = runtimeOwnedLiveRefs(input.beforeObserve.refs ?? []);
   const afterObserveRefs = runtimeOwnedLiveRefs(input.afterObserve.refs ?? []);
-  const actionRefs = runtimeOwnedLiveRefs(input.act.refs ?? []);
+  const actionRefs = runtimeOwnedLiveRefs(input.act?.refs ?? []);
   return {
     commandId: context.commandId,
     attemptId: context.attemptId,
