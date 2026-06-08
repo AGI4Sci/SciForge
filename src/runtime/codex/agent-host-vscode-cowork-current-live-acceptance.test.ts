@@ -14,11 +14,16 @@ import {
 test('current VSCode co-work readonly live acceptance writes blocked manifest without explicit env', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-readonly-live-blocked-'));
   try {
+    let runnerCalled = false;
     const manifest = await runCurrentVSCodeCoWorkReadonlyLiveAcceptance({
       workspacePath: workspace,
       outputDir: join(workspace, 'out'),
       env: {},
       now: () => new Date('2026-06-08T00:00:00.000Z'),
+      runReadVisibleTextLiveDiagnostic: async () => {
+        runnerCalled = true;
+        throw new Error('read-only runner should not run without env');
+      },
     });
     const persisted = JSON.parse(await readFile(join(workspace, 'out', 'manifest.json'), 'utf8')) as typeof manifest;
 
@@ -35,6 +40,7 @@ test('current VSCode co-work readonly live acceptance writes blocked manifest wi
     assert.deepEqual(manifest.primitiveChainObserved, []);
     assert.ok(manifest.blockedReasons.includes(`missing-env:${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}`));
     assert.equal(persisted.status, 'blocked');
+    assert.equal(runnerCalled, false);
     assert.doesNotMatch(JSON.stringify(persisted), /\/tmp|raw-|providerPayload|base64|secret|token|product-ready|kill-vscode|clear-profile/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });

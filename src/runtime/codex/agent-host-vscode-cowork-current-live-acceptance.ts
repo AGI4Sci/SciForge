@@ -260,6 +260,7 @@ async function runReadonlyLiveDiagnosticThroughOrdinaryChatNativeRoute(input: {
       workspacePath: input.workspacePath,
       commandId: 'current-vscode-cowork-readonly-live',
       attemptId: 'current-vscode-cowork-readonly-live-attempt-1',
+      agentHostInput: currentVSCodeReadonlyAgentHostInput(input.commandText),
     },
     workspace: input.workspacePath,
     provider: 'host-owned-runtime',
@@ -346,6 +347,75 @@ function readinessSummary(env: Record<string, string | undefined>): CurrentVSCod
   return {
     requiredEnv,
     missing: requiredEnv.filter((item) => !item.present).map((item) => `missing-env:${item.name}`),
+  };
+}
+
+function currentVSCodeReadonlyAgentHostInput(commandText: string): Record<string, unknown> {
+  const sessionRef = 'window-action-session:current-vscode-cowork:readonly-live';
+  const windowRef = 'window:vscode:readonly-live';
+  const fileRef = 'file-ref:vscode:readonly-live';
+  const requestRef = 'chat-request:vscode-cowork:readonly-live';
+  const permissionRef = `permission:current-vscode-cowork:full-access:${sessionRef}:${fileRef}`;
+  const targetRefs = [
+    'macos-app:vscode:readonly-live',
+    'process:vscode:readonly-live',
+    windowRef,
+    'text:title:vscode:readonly-live',
+    'frontmost:vscode:readonly-live',
+    fileRef,
+  ];
+  const observationRefs = [
+    sessionRef,
+    windowRef,
+    'observation:vscode:readonly-live-before-read',
+    'image:vscode:readonly-live-before-read',
+    'accessibility:vscode:readonly-live-before-read',
+    'text:vscode:visible-readonly-live',
+    'element:vscode:editor-readonly-live',
+    'freshness:vscode:readonly-live-before-read',
+    fileRef,
+  ];
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'current-vscode-cowork-readonly-live-acceptance',
+    intentText: commandText,
+    authorizationProfileId: 'high-autonomy',
+    policyOwner: 'codex-agent-host-runtime',
+    refs: [
+      'intent:current-vscode-cowork',
+      requestRef,
+      ...targetRefs,
+      ...observationRefs,
+      permissionRef,
+    ],
+    readiness: {
+      nativeBridge: 'ready',
+      nativeSurface: 'ready',
+      windowActionSession: 'ready',
+      computerUseAdapter: 'ready',
+    },
+    target: {
+      kind: 'current-vscode-cowork',
+      refs: targetRefs,
+      vscodeCoWork: {
+        operation: 'read-visible-text',
+        refs: [requestRef, windowRef, fileRef],
+      },
+    },
+    observation: {
+      fresh: true,
+      refs: observationRefs,
+      vscodeCoWork: {
+        windowRef,
+        selectedFileRef: fileRef,
+        refs: observationRefs,
+      },
+    },
+    permissions: {
+      refs: [permissionRef],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
   };
 }
 

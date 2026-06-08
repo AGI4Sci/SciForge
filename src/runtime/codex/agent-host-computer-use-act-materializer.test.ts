@@ -630,6 +630,52 @@ test('default Computer Use Act materializer does not treat terminal, palette, or
   assert.doesNotMatch(JSON.stringify(result), /taskOutcome":"satisfied|completionTruth|user-task|workflow complete/i);
 });
 
+test('default Computer Use Act materializer propagates VSCode app module ambiguity without WindowAction fallback', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'WindowAction must not handle ambiguous VSCode app module targets.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-ambiguity-fallback'],
+        };
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('focus-editor', [
+      'editor-group:vscode:main:1',
+      'editor-group:vscode:main:2',
+      'element:vscode:editor:monaco:2',
+    ]),
+    preflight: vscodeAppModulePreflight([
+      'editor-group:vscode:main:1',
+      'editor-group:vscode:main:2',
+      'element:vscode:editor:monaco:2',
+    ]),
+    commandText: 'This ambiguous VSCode target must not fall back.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-ambiguity',
+    attemptId: 'codex-command-default-vscode-ambiguity-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth([
+      'editor-group:vscode:main:1',
+      'editor-group:vscode:main:2',
+      'element:vscode:editor:monaco:2',
+    ]),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(result?.status, 'needs-confirmation', result?.message);
+  assert.equal(result?.claimType, 'computer-use-app-module-needs-confirmation');
+  assert.match(JSON.stringify(result), /needs-confirmation:vscode-app-module:target-editor-ambiguous/);
+  assert.equal(result?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /WindowAction must not handle|taskOutcome":"satisfied|workflow complete/i);
+});
+
 test('default Computer Use Act materializer preserves first-step WindowAction evidence when workflow loop needs runtime truth refresh', async () => {
   const materializer = createDefaultComputerUseActMaterializer({
     maxActLoopSteps: 2,
@@ -1183,7 +1229,7 @@ function vscodeAppModuleObservationRefs(extraRefs: string[] = []): string[] {
     'observation:vscode:current',
     'image:vscode:current',
     'accessibility:vscode:current',
-    'text:vscode:visible',
+    'text:vscode:visible:paper',
     'element:vscode:editor:monaco:1',
     'freshness:vscode:current',
     'file-ref:vscode:paper',

@@ -24,6 +24,7 @@ interface VSCodeTestObservation {
   editorGroupRefs: string[];
   cursorRefs: string[];
   selectionRefs: string[];
+  visibleTextRefs: string[];
   workspaceRefs: string[];
   problemsPanelRefs: string[];
   terminalRefs: string[];
@@ -144,6 +145,7 @@ test('VSCode readiness requires a Host structured operation ref instead of natur
     'observation:vscode:main:1',
     'file-ref:vscode:current:paper',
     'element:vscode:editor:monaco:1',
+    'text:vscode:visible:main:1',
     'freshness:vscode:main:1',
     'message:please read visible text',
     'commandText:read visible text',
@@ -361,6 +363,29 @@ test('readiness asks for confirmation when multiple VSCode windows remain possib
   assert.equal(readiness.reasonRef, 'needs-confirmation:vscode-app-module:target-window-ambiguous');
 });
 
+test('readiness blocks or asks when frontmost refs conflict for one VSCode target', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    refs: [
+      'window-action-session:vscode:1',
+      'window:vscode:main',
+      'macos-app:vscode',
+      'process:vscode:main',
+      'frontmost:vscode:main',
+      'frontmost:vscode:other',
+      'observation:vscode:main:1',
+      'element:vscode:editor:monaco:1',
+      'file-ref:vscode:current:paper',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'needs-confirmation');
+  assert.equal(readiness.reasonRef, 'needs-confirmation:vscode-app-module:target-window-ambiguous');
+});
+
 test('unknown VSCode webview does not satisfy editor or terminal readiness', () => {
   const vscode = createHostStructuredVSCodeAppModule();
 
@@ -376,7 +401,117 @@ test('unknown VSCode webview does not satisfy editor or terminal readiness', () 
   });
 
   assert.equal(readiness.status, 'blocked');
-  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:editor-ref-required');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:unknown-webview-target-unresolved');
+});
+
+test('unknown VSCode webview beside an editor blocks read-visible-text instead of guessing editor target', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'element:vscode:webview:opaque-webview',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'blocked');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:unknown-webview-target-unresolved');
+  assert.ok(readiness.evidenceRefs.includes('element:vscode:webview:opaque-webview'));
+});
+
+test('region ambiguity blocks editor diagnostics and palette item targets instead of guessing first refs', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const editor = vscode.checkReadiness({
+    operation: 'focus-editor',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'editor-group:vscode:main:1',
+      'editor-group:vscode:main:2',
+      'element:vscode:editor:monaco:1',
+      'element:vscode:editor:monaco:2',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(editor.status, 'needs-confirmation');
+  assert.equal(editor.reasonRef, 'needs-confirmation:vscode-app-module:target-editor-ambiguous');
+
+  const diagnostics = vscode.checkReadiness({
+    operation: 'read-diagnostics',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'diagnostics:vscode:problems:1',
+      'diagnostics:vscode:problems:2',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(diagnostics.status, 'needs-confirmation');
+  assert.equal(diagnostics.reasonRef, 'needs-confirmation:vscode-app-module:target-diagnostics-ambiguous');
+
+  const paletteItem = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'command-palette:vscode:main',
+      'command-palette-item:vscode:main:item-a',
+      'command-palette-item:vscode:main:item-b',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(paletteItem.status, 'needs-confirmation');
+  assert.equal(paletteItem.reasonRef, 'needs-confirmation:vscode-app-module:target-palette-item-ambiguous');
+});
+
+test('unknown VSCode webview beside a terminal blocks terminal target readiness instead of guessing', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'focus-terminal',
+    operationRef: 'operation-ref:vscode:focus-terminal:test',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'text:title:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'terminal:vscode:integrated:1',
+      'element:vscode:webview:extension-host:1',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'blocked');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:unknown-webview-target-unresolved');
+  assert.ok(readiness.evidenceRefs.includes('element:vscode:webview:extension-host:1'));
 });
 
 test('read-visible-text readiness requires session, window identity, file, editor and freshness refs', () => {
@@ -393,6 +528,7 @@ test('read-visible-text readiness requires session, window identity, file, edito
       'observation:vscode:main:1',
       'file-ref:vscode:current:paper',
       'element:vscode:editor:monaco:1',
+      'text:vscode:visible:main:1',
       'freshness:vscode:main:1',
     ],
   });
@@ -401,6 +537,57 @@ test('read-visible-text readiness requires session, window identity, file, edito
   assert.equal(readiness.primitive.name, 'computer_use.observe');
   assert.ok(readiness.primitive.inputRefs.includes('window-action-session:vscode:1'));
   assert.ok(readiness.primitive.inputRefs.includes('file-ref:vscode:current:paper'));
+});
+
+test('read-visible-text readiness requires a visible text ref before selecting observe', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    operationRef: 'operation-ref:vscode:read-visible-text:test',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'text:title:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'blocked');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:visible-text-ref-required');
+  assert.doesNotMatch(JSON.stringify(readiness), /raw text|\/Users\/|https?:\/\/|providerPayload|base64/i);
+});
+
+test('read-visible-text dry-run binds safe visible-text refs without raw text payloads', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'text:vscode:visible:editor-viewport',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'ready');
+  assert.equal(readiness.primitive.name, 'computer_use.observe');
+  assert.ok(readiness.primitive.inputRefs.includes('text:vscode:visible:editor-viewport'));
+  assert.ok(readiness.evidenceRefs.includes('text:vscode:visible:editor-viewport'));
+  assert.doesNotMatch(JSON.stringify(readiness), /raw-visible-text|SECRET|paper body|\/Users\/|https?:\/\//i);
 });
 
 test('read-visible-text readiness blocks stale or sessionless observations', () => {
@@ -467,6 +654,49 @@ test('read-diagnostics readiness is refs-only and does not require editor focus'
   assert.equal(readiness.status, 'ready');
   assert.equal(readiness.primitive.name, 'computer_use.observe');
   assert.ok(readiness.primitive.inputRefs.includes('diagnostics:vscode:problems:1'));
+  assert.doesNotMatch(JSON.stringify(readiness), /raw|diagnostic text|\/Users\/|https?:\/\/|providerPayload|base64/i);
+});
+
+test('show-problems readiness is refs-only and rejects raw diagnostics payloads', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const ready = vscode.checkReadiness({
+    operation: 'show-problems',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'diagnostics:vscode:problems:1',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.primitive.name, 'computer_use.observe');
+  assert.ok(ready.primitive.inputRefs.includes('diagnostics:vscode:problems:1'));
+  assert.doesNotMatch(JSON.stringify(ready), /raw|diagnostic text|\/Users\/|https?:\/\/|providerPayload|base64/i);
+
+  const raw = vscode.checkReadiness({
+    operation: 'show-problems',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'diagnostics:vscode:problems:1',
+      'diagnostics:vscode:raw:SECRET diagnostic text',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(raw.status, 'blocked');
+  assert.equal(raw.reasonRef, 'blocked:vscode-app-module:raw-ref-not-allowed');
+  assert.doesNotMatch(JSON.stringify(raw), /SECRET|diagnostic text/i);
 });
 
 test('focus-editor readiness returns one Host-selected act primitive without completion truth', () => {
@@ -492,6 +722,8 @@ test('focus-editor readiness returns one Host-selected act primitive without com
     kind: 'key',
     key: 'Meta+1',
   });
+  assert.ok(readiness.primitive.inputRefs.includes('action:vscode-app-module:focus-editor:meta-1'));
+  assert.ok(readiness.evidenceRefs.includes('action:vscode-app-module:focus-editor:meta-1'));
   assert.equal(Object.hasOwn(readiness, 'completionTruth'), false);
 });
 

@@ -14,12 +14,18 @@ import {
 test('current VSCode co-work insert-draft live acceptance writes blocked manifest without explicit env', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-insert-draft-live-blocked-'));
   try {
+    let runnerCalled = false;
     const manifest = await runCurrentVSCodeCoWorkInsertDraftLiveAcceptance({
       workspacePath: workspace,
       outputDir: join(workspace, 'out'),
       env: {},
       draftTextRef: 'text-ref:current-vscode-cowork:draft:p9c',
+      resolveDraftTextRef: () => 'private draft body hidden behind text ref',
       now: () => new Date('2026-06-08T00:00:00.000Z'),
+      runInsertDraftLiveDiagnostic: async () => {
+        runnerCalled = true;
+        throw new Error('insert runner should not run without env');
+      },
     });
     const persisted = JSON.parse(await readFile(join(workspace, 'out', 'manifest.json'), 'utf8')) as typeof manifest;
 
@@ -37,6 +43,7 @@ test('current VSCode co-work insert-draft live acceptance writes blocked manifes
     assert.deepEqual(manifest.primitiveChainObserved, []);
     assert.ok(manifest.blockedReasons.includes(`missing-env:${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}`));
     assert.equal(persisted.status, 'blocked');
+    assert.equal(runnerCalled, false);
     assert.doesNotMatch(JSON.stringify(persisted), /draft body|raw-|providerPayload|base64|secret|token|product-ready|kill-vscode|clear-profile/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });

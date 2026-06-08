@@ -321,7 +321,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
         };
       }
       const afterObserved = await readCurrentWindow();
-      lastObservationRef = afterObserved.observationRef;
+      lastFocusedEditorRef = afterObserved.focusedEditorRef ?? lastFocusedEditorRef;
       return {
         status: 'completed',
         output: {
@@ -334,7 +334,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           inputEventRef,
           beforeObservationRef,
           afterObservationRef: afterObserved.observationRef,
-          invalidatedRefs: [invalidatedRef],
+          invalidatedRefs: uniqueRefs([beforeObservationRef, invalidatedRef]),
         } satisfies ComputerUseActOutput,
         refs: uniqueRefs([
           actionRef,

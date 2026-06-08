@@ -15,11 +15,16 @@ import {
 test('current VSCode co-work read-only HTTP/SSE acceptance writes blocked manifest without explicit env', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-readonly-http-sse-blocked-'));
   try {
+    let adapterFactoryCalled = false;
     const manifest = await runCurrentVSCodeCoWorkReadonlyHttpSseAcceptance({
       workspacePath: workspace,
       outputDir: join(workspace, 'out'),
       env: {},
       now: () => new Date('2026-06-08T00:00:00.000Z'),
+      createAdapter: () => {
+        adapterFactoryCalled = true;
+        throw new Error('HTTP/SSE adapter should not be created without env');
+      },
     });
     const persisted = JSON.parse(await readFile(join(workspace, 'out', 'manifest.json'), 'utf8')) as typeof manifest;
 
@@ -37,6 +42,7 @@ test('current VSCode co-work read-only HTTP/SSE acceptance writes blocked manife
     assert.equal(manifest.userProfileCleared, false);
     assert.ok(manifest.blockedReasons.includes(`missing-env:${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}`));
     assert.equal(persisted.status, 'blocked');
+    assert.equal(adapterFactoryCalled, false);
     assert.doesNotMatch(JSON.stringify(persisted), /raw-|providerPayload|base64|secret|token|product-ready|kill-vscode|clear-profile/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });

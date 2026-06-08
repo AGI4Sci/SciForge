@@ -388,10 +388,13 @@ Computer Use primitive 默认不调用模型。
 - P5 VSCode identity 与 concept normalization 是 `unit-proven`：VSCode readiness 需要 app / process / window / title / frontmost、session、current observation 和 freshness refs；editor、workspace、selected file、terminal、command palette、problems panel 与 unknown webview 只归一化为 tokenized concept refs、safe summary、reason refs 和 evidence refs。
 - VSCode freshness gate 是 `unit-proven`：缺少 current observation / freshness refs、refs 内含 stale invalidation，或 Agent Host runtime observation metadata 标记 stale 时，Agent Host app-module path 必须 blocked，不能返回 primitive candidate。
 - VSCode raw payload guard 是 `unit-proven`：normalizeObservation / readiness 不回显 raw visible text、raw path、URL、provider payload、base64、secret，也拒绝在 tokenized ref 后夹带真实路径或大对象 payload。
+- P6 VSCode ambiguity gate 是 `unit-proven`：多 VSCode window / 多 frontmost、editor group / terminal / palette item 多目标、unknown webview 与 editor / terminal 并存、或 target refs 冲突时必须 `needs-confirmation` / `blocked`，默认 act materializer 传播该状态，不能回退到 WindowAction fallback。
+- P6 VSCode read-only readiness 是 `unit-proven`：`read-visible-text` 只接受并输出 `text:vscode:visible:*` refs，`focus-editor` 只输出 target / editor / action refs，`show-problems` / `read-diagnostics` 只输出 diagnostics refs；证据不足、目标不唯一或 stale 时 blocked-safe。
 - Agent Host app-module dry-run materializer 是 `unit-proven`：它能根据 current-run identity refs 和 structured operation refs 选择 VSCode module 并返回 primitive candidate，也能对 unknown / ambiguous app fail closed。
 - Computer Use no-bypass static guard 是 `unit-proven`：它禁止 GUI completion surface、retired runtime `gui` module surface、legacy Computer Use public surface、ordinary/native direct app module 或 act materializer imports，以及 VSCode app module 直接 import / call Computer Use executor、MCP adapter、desktop controller 或 shared system input。
 - Runtime `gui` module handler 已删除；默认 module registry 不列出 `gui`，外部注入 `gui` handler 也会 fail closed。
-- VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
+- P6 current VSCode read / focus live harness 是 `live-diagnostic` 且默认关闭：缺少 env 时返回 blocked skip manifest，poison runner / adapter 不会被调用；mocked env-on path 会记录 before refs、after refs、action refs、release refs 和 cleanup refs，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
+- VSCode diagnostics 当前保持 app-module dry-run refs-only；没有新增共享系统输入 diagnostics 旁路，不能声明 `product-ready`。
 - 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
 - 论文 preview、narrow apply unit path 和 narrow apply diagnostic 仍待实现。

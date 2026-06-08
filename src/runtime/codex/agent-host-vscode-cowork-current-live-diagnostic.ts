@@ -95,7 +95,6 @@ export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',
       targetRef: 'current-vscode-cowork',
-      appId: 'com.microsoft.VSCode',
     },
   });
 }
@@ -147,7 +146,6 @@ export async function runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic(
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',
       targetRef: 'current-vscode-cowork',
-      appId: 'com.microsoft.VSCode',
     },
   });
 }
@@ -312,7 +310,6 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',
       targetRef: 'current-vscode-cowork',
-      appId: 'com.microsoft.VSCode',
     },
   });
 }

@@ -310,7 +310,10 @@ test('current VSCode co-work primitive ports execute refs-first type action and 
   assert.equal(output?.inputEventRef, 'input-event:current-vscode-cowork:unit-current-vscode-act:insert-draft');
   assert.equal(output?.beforeObservationRef, 'observation:vscode:before');
   assert.equal(output?.afterObservationRef, 'observation:vscode:after');
-  assert.deepEqual(output?.invalidatedRefs, ['stale-invalidation:current-vscode-cowork:unit-current-vscode-act:insert-draft']);
+  assert.deepEqual(output?.invalidatedRefs, [
+    'observation:vscode:before',
+    'stale-invalidation:current-vscode-cowork:unit-current-vscode-act:insert-draft',
+  ]);
   assert.equal(output?.inputAdapterRef, 'scoped-input-adapter:current-vscode-cowork:unit-current-vscode-act');
   assert.equal(output?.cursorRef, 'cursor-marker:current-vscode-cowork:unit-current-vscode-act');
   assert.equal(output?.scopedInputLeaseRef, 'scoped-input-lease:current-vscode-cowork:unit-current-vscode-act');

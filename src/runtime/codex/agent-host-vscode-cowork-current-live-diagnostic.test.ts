@@ -91,6 +91,68 @@ test('current VSCode co-work live diagnostic stays blocked without explicit env'
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work wrappers do not touch live ports without explicit env', async () => {
+  const liveCalls: string[] = [];
+  const readCurrentWindow = async () => {
+    liveCalls.push('read-current-window');
+    throw new Error('live port should not run without env');
+  };
+  const pressKeyInCurrentVSCode = async () => {
+    liveCalls.push('press-key');
+    throw new Error('focus port should not run without env');
+  };
+  const resolveTextRef = async () => {
+    liveCalls.push('resolve-text');
+    throw new Error('text resolver should not run without env');
+  };
+  const typeResolvedText = async () => {
+    liveCalls.push('type-text');
+    throw new Error('type port should not run without env');
+  };
+  const restoreFocus = async () => {
+    liveCalls.push('restore-focus');
+  };
+  const restoreMouse = async () => {
+    liveCalls.push('restore-mouse');
+  };
+
+  const read = await runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-read-default-off',
+    readCurrentWindow,
+    restoreFocus,
+    restoreMouse,
+  });
+  const focus = await runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-focus-default-off',
+    readCurrentWindow,
+    pressKeyInCurrentVSCode,
+    restoreFocus,
+    restoreMouse,
+  });
+  const insert = await runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-insert-default-off',
+    draftTextRef: 'text-ref:current-vscode-cowork:default-off',
+    readCurrentWindow,
+    resolveTextRef,
+    typeResolvedText,
+    restoreFocus,
+    restoreMouse,
+  });
+
+  for (const result of [read, focus, insert]) {
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.maturity, 'live-diagnostic');
+    assert.equal(result.productReady, false);
+    assert.deepEqual(result.primitiveChainObserved, []);
+    assert.match(result.message, /missing-env/);
+    assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload/i);
+  }
+  assert.deepEqual(liveCalls, []);
+});
+
 test('current VSCode co-work live diagnostic preserves restoration refs when bind cannot observe VSCode', async () => {
   const calls: string[] = [];
   const result = await runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic({
