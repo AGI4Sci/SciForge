@@ -141,7 +141,8 @@ export async function runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic(
     attemptId: input.attemptId ?? `current-vscode-cowork-${Date.now()}`,
     authorizationProfileId: input.authorizationProfileId,
     focusedEditorEvidenceVerifier: input.focusedEditorEvidenceVerifier,
-    focusedEditorEvidenceProvider: input.focusedEditorEvidenceProvider,
+    focusedEditorEvidenceProvider: input.focusedEditorEvidenceProvider
+      ?? (input.focusedEditorEvidenceVerifier ? undefined : createCurrentVSCodeCoWorkFocusedEditorEvidenceProvider()),
     target: {
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',
@@ -149,6 +150,118 @@ export async function runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic(
       appId: 'com.microsoft.VSCode',
     },
   });
+}
+
+export function createCurrentVSCodeCoWorkFocusedEditorEvidenceProvider(): VSCodeCoWorkFocusedEditorEvidenceProvider {
+  return (input) => {
+    const afterObserveRefs = uniqueSafeRefs(input.afterObserveRefs);
+    const nativeFocusedEditorRef = afterObserveRefs.find((ref) => ref.startsWith('focused-editor:'));
+    if (nativeFocusedEditorRef) {
+      return {
+        status: 'satisfied',
+        focusedEditorRef: nativeFocusedEditorRef,
+        verifierRef: `verifier:vscode-cowork:${currentVSCodeEvidenceToken(input.attemptId)}:focus-editor`,
+        evidenceRefs: [
+          nativeFocusedEditorRef,
+          input.decisionRef,
+          ...afterObserveRefs,
+        ],
+      };
+    }
+
+    const actionRefs = uniqueSafeRefs(input.actionRefs);
+    const hasFocusActionEvidence = actionRefs.some((ref) => /^action:.*:focus-editor$/i.test(ref))
+      && actionRefs.some((ref) => /^executor-event:.*:focus-editor$/i.test(ref))
+      && actionRefs.some((ref) => /^input-event:.*:focus-editor$/i.test(ref));
+    if (!hasFocusActionEvidence) {
+      return {
+        status: 'blocked',
+        reason: 'focus-editor-action-evidence-required',
+        evidenceRefs: input.evidenceRefs,
+      };
+    }
+
+    const windowRefs = refsWithPrefix(afterObserveRefs, 'window:');
+    const frontmostRefs = refsWithPrefix(afterObserveRefs, 'frontmost:');
+    const fileRefs = refsWithPrefix(afterObserveRefs, 'file-ref:');
+    const editorElementRefs = afterObserveRefs.filter((ref) => /^element:vscode:editor(?::|$)/i.test(ref));
+    const observationRefs = refsWithPrefix(afterObserveRefs, 'observation:');
+    const freshnessRefs = refsWithPrefix(afterObserveRefs, 'freshness:');
+    const perceptionRefs = afterObserveRefs.filter((ref) =>
+      /^(?:accessibility:|image:|text:title:|text:vscode:)/i.test(ref)
+    );
+    const blockedReason = currentVSCodeFocusedEditorProviderBlockedReason({
+      windowRefs,
+      frontmostRefs,
+      fileRefs,
+      editorElementRefs,
+      observationRefs,
+      freshnessRefs,
+      perceptionRefs,
+    });
+    if (blockedReason) {
+      return {
+        status: 'blocked',
+        reason: blockedReason,
+        evidenceRefs: input.evidenceRefs,
+      };
+    }
+
+    const focusedEditorRef = `focused-editor:vscode:sciforge-provider:${currentVSCodeEvidenceToken(input.attemptId)}`;
+    return {
+      status: 'satisfied',
+      focusedEditorRef,
+      verifierRef: `verifier:vscode-cowork:${currentVSCodeEvidenceToken(input.attemptId)}:focus-editor`,
+      evidenceRefs: [
+        focusedEditorRef,
+        input.decisionRef,
+        ...actionRefs,
+        ...windowRefs,
+        ...frontmostRefs,
+        ...fileRefs,
+        ...editorElementRefs,
+        ...observationRefs,
+        ...freshnessRefs,
+        ...perceptionRefs,
+      ],
+    };
+  };
+}
+
+function currentVSCodeFocusedEditorProviderBlockedReason(input: {
+  windowRefs: string[];
+  frontmostRefs: string[];
+  fileRefs: string[];
+  editorElementRefs: string[];
+  observationRefs: string[];
+  freshnessRefs: string[];
+  perceptionRefs: string[];
+}): string | undefined {
+  if (input.windowRefs.length !== 1) return 'focused-editor-window-ref-unique-required';
+  if (input.frontmostRefs.length === 0) return 'focused-editor-frontmost-ref-required';
+  if (input.fileRefs.length === 0) return 'focused-editor-file-ref-required';
+  if (input.editorElementRefs.length === 0) return 'focused-editor-editor-element-ref-required';
+  if (input.observationRefs.length === 0) return 'focused-editor-observation-ref-required';
+  if (input.freshnessRefs.length === 0) return 'focused-editor-freshness-ref-required';
+  if (input.perceptionRefs.length === 0) return 'focused-editor-observation-evidence-ref-required';
+  return undefined;
+}
+
+function refsWithPrefix(refs: string[], prefix: string): string[] {
+  return refs.filter((ref) => ref.startsWith(prefix));
+}
+
+function uniqueSafeRefs(refs: string[] | undefined): string[] {
+  return [...new Set((refs ?? []).filter((ref) => typeof ref === 'string' && ref.length > 0))];
+}
+
+function currentVSCodeEvidenceToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96) || 'attempt';
 }
 
 export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(

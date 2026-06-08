@@ -375,6 +375,74 @@ test('current VSCode co-work focus-editor diagnostic accepts Host verifier evide
   assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work focus-editor diagnostic uses default refs-first provider after focus act', async () => {
+  const calls: string[] = [];
+  const observation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:focus-default-provider',
+    windowRef: 'window:vscode:focus-default-provider',
+    titleRef: 'text:title:focus-default-provider',
+    frontmostRef: 'frontmost:vscode:focus-default-provider',
+    fileRefs: ['file-ref:vscode:focus-default-provider'],
+    editorElementRef: 'element:vscode:editor:focus-default-provider',
+    visibleTextRef: `text:vscode:focus-default-provider-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:focus-default-provider-${suffix}-sha256`,
+    screenshotRef: `image:vscode:focus-default-provider-${suffix}`,
+    accessibilityRef: `accessibility:vscode:focus-default-provider-${suffix}`,
+    freshnessRef: `freshness:vscode:focus-default-provider-${suffix}`,
+    observationRef: `observation:vscode:focus-default-provider-${suffix}`,
+  });
+  const observations = [
+    observation('bind'),
+    observation('before'),
+    observation('act-after'),
+    observation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-focus-default-provider',
+    commandText: '聚焦我当前打开的 VSCode 编辑器。',
+    commandId: 'current-vscode-host-focus-default-provider',
+    attemptId: 'current-vscode-host-focus-default-provider-attempt-1',
+    workspacePath: '/tmp/workspace',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Command+1:observation:vscode:focus-default-provider-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-focus-default-provider',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-focus-default-provider',
+  ]);
+  assert.equal(result.agentHostFinalAnswer?.completionTruth?.status, 'satisfied');
+  assert.ok(result.evidenceRefs.includes('action:current-vscode-cowork:unit-current-vscode-focus-default-provider:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:sciforge-provider:current-vscode-host-focus-default-provider-attempt-1'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:current-vscode-host-focus-default-provider-attempt-1:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('accessibility:vscode:focus-default-provider-after'));
+  assert.ok(result.evidenceRefs.includes('element:vscode:editor:focus-default-provider'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-focus-default-provider'));
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work insert-draft diagnostic resolves textRef, types, observes after state, and releases', async () => {
   const calls: string[] = [];
   const observations = [
