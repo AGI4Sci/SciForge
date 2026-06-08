@@ -12,11 +12,18 @@ Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理�
 
 ## 不可变原则
 
+- [x] 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
+- [x] 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
+- [x] 大对象必须 refs-first；截图、图片、provider payload、trace、日志和 artifact 不得作为 raw/base64 长期进入聊天正文或主上下文。
+- [x] LLM API 配置使用 `/Applications/workspace/ailab/research/app/SciForge/config.local.json`。
+- [x] 在能提高时间效率的前提下，尽可能使用 sub agent 并行推进；并行任务必须拆清边界，避免不同 worker 修改同一文件造成冲突。
+- [x] SciForge对话、工作链路需要统一，不要额外生出旁路。
+- [x] **符合docs/Architecture.md设计原则, 如果继续推进会导致混乱、衍生旁路、设计方案不合理、有相互冲突的点、有更简洁通用的实现方案，需要停下来和用户讨论，澄清需求。**
 - [x] SciForge 是 Codex / Agent Host 的 GUI / Browser / Desktop 能力面，不是第二条智能链路。
 - [x] Computer Use core 只保留 primitive：`bind`、`observe`、`act`、`run_procedure`、`control`。
 - [x] `run_procedure` 只执行 Host 已明确给出的局部结构化步骤，不接受自然语言 task / goal / instruction。
 - [x] Host 根据 current-run observe refs 决定下一步单个 primitive；Computer Use core 不做 task planning、semantic locate、repair、verification 或 final answer。
-- [x] 所有大对象 refs-first；raw screenshot、raw AX tree、raw visible text、raw command、raw path、provider payload、URL、base64、secret 不得进入 public result。
+- [x] raw screenshot、raw AX tree、raw visible text、raw command、raw path、provider payload、URL、base64、secret 不得进入 public result。
 - [x] 多窗口、目标不唯一、证据冲突或 observation stale 时必须 `needs-confirmation` / `blocked`。
 - [x] 不要求每一步都视觉验证；AX、text、title、image、file、editor、action、freshness 等证据足够即可。
 - [x] 当前 VSCode co-work session 采用 Agent full-access 口径；保存真实文件、批量替换、跨文件修改本身不作为 confirmation gate。
@@ -25,6 +32,35 @@ Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理�
 - [x] 不杀用户 VSCode，不清用户 VSCode profile。
 - [x] 共享系统输入路径只能标 `live-diagnostic`，不能宣称 `product-ready`。
 - [x] 如果设计继续推进会产生旁路、职责混乱或更复杂的 core，先停下来和用户讨论。
+
+## 聊天旁路防线
+
+VSCode App Module、terminal 和 command palette 会服务普通聊天里的 co-work 任务，但不能衍生出新的聊天旁路。唯一用户级智能载体仍然是 Codex / Agent Host；唯一用户级回答仍然来自 Agent Host final answer，并通过 Codex App Server protocol 进入 SciForge。
+
+禁止链路：
+
+- [x] `SciForge UI -> VSCode module -> 用户可见 final answer`。
+- [x] `ordinary chat hook / native route -> VSCode module -> done payload 直答`。
+- [x] `VSCode module -> Model Router -> message/done 直答`。
+- [x] `terminal output / command palette result -> 自动总结成用户级 completion`。
+- [x] `Computer Use act.status=completed` 或 `run_procedure.status=completed` 直接升级成用户任务完成。
+- [x] `module fallback`、`runtime gateway`、`slash command` 或旧 diagnostic runner 绕过 Codex / Agent Host 完成任务。
+
+允许链路：
+
+- [x] 普通聊天进入 Codex / Agent Host。
+- [x] Agent Host 基于用户意图和 current-run refs 选择 app module。
+- [x] App module 只返回 `ready` / `blocked` / `needs-confirmation`、primitive candidate、evidence refs 和 reason refs。
+- [x] Computer Use core 只执行 Host 指定的一个 primitive，并返回 action / observe / cleanup refs。
+- [x] Agent Host 基于 current-run evidence 和 verifier 判断是否继续、阻塞或生成 final answer。
+
+旁路风险判断：
+
+- [x] 如果 VSCode module 开始接受自然语言任务，它正在变成第二个 agent。
+- [x] 如果 VSCode module 或 native route 能生成用户可见回答，它正在变成聊天旁路。
+- [x] 如果 terminal / command palette 的 output 被模块直接解释为 completion truth，它正在绕过 Host。
+- [x] 如果 ordinary chat hook 从裸 commandText 推断多步计划、权限或目标，它正在绕过 Host。
+- [x] 如果发现上述趋势，必须停下来和用户讨论，而不是继续叠兼容层。
 
 ## 当前架构决策
 
