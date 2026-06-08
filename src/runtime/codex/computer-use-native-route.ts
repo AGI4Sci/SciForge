@@ -99,7 +99,10 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
   const latestObservation = isRecord(observation?.vscodeCoWork) ? observation.vscodeCoWork : undefined;
   if (!isCurrentVSCodeCoWorkHostInput(agentHostInput, target)) return undefined;
   const explicitHostBinding = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
-  const hostBinding = explicitHostBinding ?? genericVSCodeCoWorkBindingFromHostInput(agentHostInput, target, latestObservation);
+  const genericHostBinding = genericVSCodeCoWorkBindingFromHostInput(agentHostInput, target, latestObservation);
+  const hostBinding = explicitHostBinding && genericHostBinding
+    ? compactRecord({ ...genericHostBinding, ...explicitHostBinding })
+    : explicitHostBinding ?? genericHostBinding;
   if (!hostBinding && !latestObservation) return undefined;
   const intentText = stringField(agentHostInput, 'intentText') ?? request.commandText;
   const operation = stringField(hostBinding, 'operation') ?? lowRiskVSCodeCoWorkOperationFromText(intentText);

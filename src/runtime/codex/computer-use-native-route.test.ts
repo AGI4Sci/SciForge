@@ -454,6 +454,70 @@ test('Computer Use native route derives P9b VSCode co-work intent from generic H
   assert.doesNotMatch(JSON.stringify(events), /private-paper|Paper Draft - raw|\/Users\/example|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route merges Host-selected operation with generic VSCode target refs', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-generic-host-operation',
+      attemptId: 'native-route-vscode-cowork-generic-host-operation-attempt-1',
+      agentHostInput: {
+        schemaVersion: 'sciforge.codex-agent-host-input.v1',
+        source: 'ordinary-chat',
+        intentText: '读取我当前打开的 VSCode 可见文本。',
+        singleTurnOverride: false,
+        refs: ['intent:current-vscode-cowork', 'chat-request:vscode-cowork:generic-host-operation'],
+        target: {
+          kind: 'current-vscode-cowork',
+          refs: [
+            'macos-app:com.microsoft.VSCode',
+            'process:vscode:paper',
+            'window:vscode:paper',
+            'text:title:paper',
+            'frontmost:vscode:paper',
+            'file-ref:vscode:paper',
+          ],
+          vscodeCoWork: {
+            requestRef: 'chat-request:vscode-cowork:generic-host-operation',
+            operation: 'focus-editor',
+          },
+        },
+        observation: {
+          fresh: true,
+          vscodeCoWork: vscodeNativeRouteObservation(),
+        },
+        permissions: {
+          refs: [VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF],
+          scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+          stopCancelPath: true,
+        },
+      },
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
+
+  assert.equal(done?.status, 'ready');
+  assert.equal(unit?.primitive, 'act');
+  assert.equal(unit?.targetWindowRef, 'window:vscode:paper');
+  assert.deepEqual(unit?.action, {
+    type: 'key',
+    key: 'Command+1',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:generic-host-operation'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('Computer Use native route fails closed on ambiguous generic Host window refs', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {
