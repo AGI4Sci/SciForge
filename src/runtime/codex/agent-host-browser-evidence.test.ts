@@ -4,6 +4,8 @@ import test from 'node:test';
 import {
   agentHostBrowserCompletionTruthFromEvaluation,
   agentHostBrowserAcceptanceSpecFromPrompt,
+  agentHostBrowserSearchPlanFromPrompt,
+  agentHostBrowserUserPromptFromCommandText,
   createAgentHostBrowserEvidenceLedger,
   evaluateAgentHostBrowserEvidence,
   recordAgentHostBrowserRefs,
@@ -125,6 +127,55 @@ test('Agent Host Browser acceptance spec records relative-window temporal constr
   assert.equal(spec.temporal?.startDate, '2026-06-01');
   assert.equal(spec.temporal?.endDate, '2026-06-08');
   assert.ok(spec.topicalTerms.includes('伊朗局势'));
+});
+
+test('Agent Host Browser acceptance spec strips Runtime Codex continuation scaffolding before topic extraction', () => {
+  const prompt = [
+    'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.',
+    '',
+    '搜索一下伊朗局势',
+  ].join('\n');
+  const spec = agentHostBrowserAcceptanceSpecFromPrompt(prompt);
+
+  assert.equal(agentHostBrowserUserPromptFromCommandText(prompt), '搜索一下伊朗局势');
+  assert.deepEqual(spec.topicalTerms, ['伊朗局势']);
+  assert.doesNotMatch(spec.taskSummary ?? '', /Continue the active Runtime Codex session|Interpret relative references/);
+});
+
+test('Agent Host Browser search plan extracts task query and source requirements without workflow scaffolding', () => {
+  const plan = agentHostBrowserSearchPlanFromPrompt(
+    [
+      'Continue the active Runtime Codex session. Interpret relative references such as "previous turn" against the immediately preceding exchange.',
+      '',
+      '请使用 SciForge 内置 Browser 搜索并读取 OpenAI 官方最近发布的一条产品更新，用中文简短总结，并列出实际读取来源链接。',
+    ].join('\n'),
+    { now: new Date('2026-06-08T12:00:00.000Z') },
+  );
+
+  assert.equal(plan.schemaVersion, 'sciforge.agent-host.browser-search-plan.v1');
+  assert.equal(plan.search.primaryQuery, 'OpenAI 官方 产品更新');
+  assert.deepEqual(plan.search.queryCandidates.slice(0, 2), [
+    'site:openai.com OpenAI 官方 产品更新',
+    'site:platform.openai.com OpenAI 官方 产品更新',
+  ]);
+  assert.equal(plan.search.maxDiscoveryAttemptsBeforeRead, 1);
+  assert.ok(plan.acceptanceSpec.source.preferredDomains.includes('openai.com'));
+  assert.ok(plan.acceptanceSpec.source.preferredDomains.includes('platform.openai.com'));
+  assert.equal(plan.acceptanceSpec.temporal?.kind, 'latest');
+  assert.deepEqual(plan.acceptanceSpec.topicalTerms, ['OpenAI', '产品更新']);
+  assert.doesNotMatch(plan.search.primaryQuery, /SciForge|Browser|搜索|读取|来源链接|Continue the active Runtime Codex session/);
+});
+
+test('Agent Host Browser search plan requires multiple sources for comparison and verification tasks', () => {
+  const plan = agentHostBrowserSearchPlanFromPrompt('对比两家媒体关于伊朗局势的最新报道，给出来源。', {
+    now: new Date('2026-06-08T12:00:00.000Z'),
+  });
+
+  assert.equal(plan.acceptanceSpec.source.minReadSources, 2);
+  assert.equal(plan.acceptanceSpec.source.requireIndependentSources, true);
+  assert.equal(plan.search.maxDiscoveryAttemptsBeforeRead, 1);
+  assert.ok(plan.search.primaryQuery.includes('伊朗局势'));
+  assert.ok(plan.search.primaryQuery.includes('媒体'));
 });
 
 test('Agent Host Browser acceptance spec ignores generic English Browser workflow words', () => {

@@ -261,7 +261,7 @@ function localDogfoodFinalAnswer(input: {
         '',
         ...summaryLines.map((line) => `- ${line}`),
       ].join('\n')
-    : `${headline}\n\n读取到官方来源页面，但本地 dogfood 未生成面向用户的任务答案；最终回答必须由 Codex / Agent Host 基于 refs 和 verifier 决策后通过 gui.present 产生。`;
+    : `${headline}\n\n读取到官方来源页面，但本地 dogfood 未生成面向用户的任务答案；最终回答必须由 Codex / Agent Host 基于 refs 和 verifier 决策后投影为 FinalAnswerEnvelope。`;
   return [
     summary,
     '',

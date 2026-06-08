@@ -33,8 +33,8 @@ SciForge 的下一阶段演进只围绕两个产品生死问题，但判断标�
 | Runtime Codex / Model Router Browser 边界 | `npm run smoke:runtime-provider-preflight --silent` + `node --import tsx tests/smoke/smoke-model-router-no-active-legacy-proxy.ts` | `Router-only / legacy proxy blocked` | Runtime Codex 已指向 Model Router `/v1` public alias，`config.local.json` 只给 Router 成员模型供 env；active scripts 和 desktop sidecar bundle 不再启动 legacy proxy。local dogfood 仍只能作为 diagnostic，不能替代桌面 product proof。 |
 | Desktop native Browser live | 三类 desktop ordinary-chat UI run + `npm run smoke:browser-runtime-live-download-chain:opt-in --silent` | `P7 product proof passed / P3-P6 live diagnostic passed` | P7 已有三类普通聊天正向产品证据：普通网页、arXiv/论文、新闻/最新动态，均通过 Codex App Server assistant final message -> `FinalAnswerEnvelope` 投影，并带 current-run BrowserHostSession source/page-text refs。P3/P6 native live diagnostic 已通过 search/read/extract/download、CSV/PDF hash/size/MIME、PDF source-read blocked、HTTP 401 auth-wall surrogate、HTTP 403 forbidden surrogate、`.invalid` network source-read blocked、CSV overbudget/domain blocked；剩余缺口是 robots/login 语义 detector 以及这些 blocked/partial negative case 的最终 assistant-message 收束和 release/product 级门槛，不能把 CLI diagnostic 升级成 product proof。 |
 
-这意味着：**当前不能对用户宣称 T1 已完成真实桌面软件任务；T2 的正向桌面普通聊天搜索产品证据已成立，但 Browser download/blocked negative live 诊断和 release 门槛仍要继续补。**
-下一轮演进不是继续补边角功能，而是从真实任务出发，失败就只修阻塞真实任务的那个能力缺口，尤其是 live blocked/partial 收束、download policy negative cases 和 release/service-env 证据。
+这意味着：**当前不能对用户宣称 T1 已完成真实桌面软件任务；T2 的正向桌面普通聊天搜索产品证据已成立，P3/P6 Browser download/source-read negative live diagnostic 也已成立，但 blocked/partial final-message 收束和 release 门槛仍要继续补。**
+下一轮演进不是继续补边角功能，而是从真实任务出发，失败就只修阻塞真实任务的那个能力缺口，尤其是 live blocked/partial final-message 收束、robots/login semantic detector 和 release/service-env 证据。
 
 ## 真实任务通过标准
 
@@ -332,4 +332,4 @@ docs/evolve/runs/YYYY-MM-DD-t1-desktop-software-task.md
 当前最小下一步：
 
 - T1: 将 Appium Mac2 作为 WindowActionSession 的 target-bound scoped executor 继续推进；没有 Mac2 server URL 或 executor 注册时必须 fail closed，不能回退成 shared system input 或 workspace file writer。
-- T2: 继续补 Browser blocked/partial negative live diagnostics 和 Runtime Codex release acceptance；要求当前运行的 Browser primitive `module.invoke` evidence、BrowserHostSession source-page refs、page-text refs、download artifact refs/hash/MIME/size 和用户级 final answer。历史 `browser.executeBoundedOperation` 只能作为旧 trace 诊断线索，不能作为当前 product acceptance 条件。strict release 如果仍被 service-env 策略阻断，记录为 release blocker。
+- T2: 继续补 Browser blocked/partial negative case 的 app-server / desktop ordinary-chat final-message 收束，以及 Runtime Codex release acceptance；P3/P6 native live diagnostic 已覆盖 download/source-read negative cases，后续 product proof 必须要求当前运行的 Browser primitive evidence、BrowserHostSession source-page refs、page-text refs、download artifact refs/hash/MIME/size 和用户级 final answer。历史 `browser.executeBoundedOperation` 只能作为旧 trace 诊断线索，不能作为当前 product acceptance 条件。strict release 如果仍被 service-env 策略阻断，记录为 release blocker。

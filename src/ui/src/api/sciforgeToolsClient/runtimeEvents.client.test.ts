@@ -2025,7 +2025,7 @@ test('Runtime Codex stream request carries command text, Agent Host input, and a
   assert.equal(realtimeSession.resumeRequested, false);
   assert.match(String(body.commandId), /^codex-command-/);
   assert.match(String(body.attemptId), /^codex-command-.*-attempt-1$/);
-  assert.deepEqual(body.guiExtension, { enabled: true });
+  assert.deepEqual(body.guiExtension, { enabled: false });
   assert.equal(typeof body.auditMetadata, 'object');
 
   const forbiddenKeys = [

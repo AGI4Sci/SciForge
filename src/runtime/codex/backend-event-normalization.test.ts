@@ -761,7 +761,7 @@ test('normalizes sub-agent refs from MCP content text envelopes without structur
   ]);
 });
 
-test('promotes app-server GUI module completions into GUI events', () => {
+test('does not promote app-server GUI module or tool completions into GUI events', () => {
   const normalized = normalizeBackendEvents([
     {
       type: 'tool.completed',
@@ -787,7 +787,8 @@ test('promotes app-server GUI module completions into GUI events', () => {
     },
   ], { backend: 'codex-app-server', now: fixedNow });
 
-  assert.deepEqual(normalized.events.map((event) => event.type), ['gui_present', 'gui_ask_user']);
+  assert.deepEqual(normalized.events.map((event) => event.type), ['tool_completed', 'tool_completed']);
+  assert.equal(normalized.events.some((event) => event.type === 'gui_present' || event.type === 'gui_ask_user'), false);
   assert.equal(normalized.traceSteps[0]?.moduleId, 'gui');
   assert.equal(normalized.traceSteps[0]?.intent, 'present');
   assert.equal(normalized.traceSteps[1]?.moduleId, 'gui');

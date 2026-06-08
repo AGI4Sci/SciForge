@@ -479,7 +479,7 @@ test('maps terminal native Codex error payload messages into failed events', () 
   assert.match(events[1]?.message ?? '', /502 Bad Gateway/);
 });
 
-test('maps completed gui.present tool calls into explicit completion events', () => {
+test('does not map completed gui.present tool calls into explicit completion events', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.completed',
     item: {
@@ -500,15 +500,12 @@ test('maps completed gui.present tool calls into explicit completion events', ()
   }, metadata);
 
   assert.equal(events[0]?.type, 'audit');
-  assert.equal(events[1]?.type, 'gui_present');
-  assert.equal(events[1]?.text, 'VISIBLE_GUI_PRESENT_RESULT');
-  assert.equal(events[1]?.message, 'VISIBLE_GUI_PRESENT_RESULT');
-  assert.equal((events[1]?.raw as { boundary?: string }).boundary, 'gui-present-completion');
-  assert.equal(((events[1]?.raw as { presentation?: { source?: string } }).presentation)?.source, 'gui.present:codex-test');
-  assert.equal(((events[1]?.raw as { presentation?: { hint?: string } }).presentation)?.hint, 'markdown');
+  assert.equal(events[1]?.type, 'tool_completed');
+  assert.equal(events[1]?.toolName, 'gui.present');
+  assert.equal(events.some((event) => event.type === 'gui_present'), false);
 });
 
-test('maps completed gui.ask_user tool calls into explicit confirmation events', () => {
+test('does not map completed gui.ask_user tool calls into explicit confirmation events', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.completed',
     item: {
@@ -538,19 +535,12 @@ test('maps completed gui.ask_user tool calls into explicit confirmation events',
   }, metadata);
 
   assert.equal(events[0]?.type, 'audit');
-  assert.equal(events[1]?.type, 'gui_ask_user');
-  assert.equal(events[1]?.status, 'needs-confirmation');
-  assert.match(events[1]?.text ?? '', /Confirmation required/);
-  assert.match(events[1]?.text ?? '', /Risk: High/);
-  assert.doesNotMatch(events[1]?.text ?? '', /Computer Use|approval-1/);
-  assert.equal((events[1]?.raw as { boundary?: string }).boundary, 'gui-ask-user-confirmation');
-  const askUser = (events[1]?.raw as { askUser?: { source?: string; relatedRefs?: string[]; choices?: Array<{ commandText?: string }> } }).askUser;
-  assert.equal(askUser?.source, 'gui.ask_user:codex-test');
-  assert.deepEqual(askUser?.relatedRefs, ['.sciforge/vision-runs/run-1/vision-trace.json']);
-  assert.equal(askUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref approval-1');
+  assert.equal(events[1]?.type, 'tool_completed');
+  assert.equal(events[1]?.toolName, 'gui.ask_user');
+  assert.equal(events.some((event) => event.type === 'gui_ask_user'), false);
 });
 
-test('maps completed module.invoke gui present into the same visible GUI event', () => {
+test('does not map completed module.invoke gui present into a visible GUI event', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.completed',
     item: {
@@ -580,12 +570,12 @@ test('maps completed module.invoke gui present into the same visible GUI event',
   }, metadata);
 
   assert.equal(events[0]?.type, 'audit');
-  assert.equal(events[1]?.type, 'gui_present');
-  assert.equal(events[1]?.text, 'VISIBLE_MODULE_GUI_PRESENT_RESULT');
-  assert.equal(((events[1]?.raw as { presentation?: { source?: string } }).presentation)?.source, 'gui.present:module.invoke');
+  assert.equal(events[1]?.type, 'tool_completed');
+  assert.equal(events[1]?.toolName, 'module.invoke');
+  assert.equal(events.some((event) => event.type === 'gui_present'), false);
 });
 
-test('maps completed module.invoke gui ask_user into the same visible confirmation event', () => {
+test('does not map completed module.invoke gui ask_user into a visible confirmation event', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.completed',
     item: {
@@ -617,9 +607,9 @@ test('maps completed module.invoke gui ask_user into the same visible confirmati
   }, metadata);
 
   assert.equal(events[0]?.type, 'audit');
-  assert.equal(events[1]?.type, 'gui_ask_user');
-  assert.match(events[1]?.text ?? '', /Choose next step/);
-  assert.equal(((events[1]?.raw as { askUser?: { source?: string } }).askUser)?.source, 'gui.ask_user:module.invoke');
+  assert.equal(events[1]?.type, 'tool_completed');
+  assert.equal(events[1]?.toolName, 'module.invoke');
+  assert.equal(events.some((event) => event.type === 'gui_ask_user'), false);
 });
 
 test('does not treat gui.present start as completion', () => {

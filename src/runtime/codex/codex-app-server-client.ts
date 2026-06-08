@@ -33,7 +33,8 @@ import {
   type AgentHostLocalToolActDecision,
 } from './agent-host-local-tool-act-orchestrator.js';
 import {
-  agentHostBrowserAcceptanceSpecFromPrompt,
+  agentHostBrowserSearchPlanFromPrompt,
+  agentHostBrowserUserPromptFromCommandText,
   createAgentHostBrowserEvidenceLedger,
   evaluateAgentHostBrowserEvidence,
   recordAgentHostBrowserRefs,
@@ -41,6 +42,7 @@ import {
   type AgentHostBrowserCompletionTruth,
   type AgentHostBrowserEvidenceEvaluation,
   type AgentHostBrowserEvidenceLedger,
+  type AgentHostBrowserSearchPlan,
 } from './agent-host-browser-evidence.js';
 import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
 import { createBrowserRuntimeModuleHandler } from '../modules/bounded-operation-module-handlers.js';
@@ -98,7 +100,7 @@ export interface CodexAppServerJsonRpcClientOptions {
 type CodexAppServerApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 type RequestId = number | string;
 const BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT = 3;
-const BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT = 2;
+const BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT = 0;
 const BROWSER_HOST_FINALIZE_AFTER_FINAL_REQUIRED_LIMIT = 3;
 
 interface JsonRpcRequest {
@@ -1124,9 +1126,13 @@ class CodexAppServerJsonRpcSession {
     if (!isBrowserDiscoveryPrimitive(primitive)) return undefined;
     const hasReadEvidence = browserLedgerHasReadEvidence(this.browserEvidenceLedger);
     if (hasReadEvidence && this.browserEvidenceEvaluationForFinalizer().status === 'satisfied') return undefined;
+    const searchPlan = this.browserSearchPlan();
     if (hasReadEvidence) {
       if (this.browserDiscoveryAttemptsAfterRead < BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT) return undefined;
-    } else if (this.browserDiscoveryAttemptsWithoutRead < BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT) return undefined;
+    } else if (
+      this.browserDiscoveryAttemptsWithoutRead
+        < Math.max(1, searchPlan.search.maxDiscoveryAttemptsBeforeRead || BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT)
+    ) return undefined;
     const candidates = browserReadRepairCandidates(this.browserEvidenceLedger);
     if (candidates.length === 0) return undefined;
     const candidate = candidates[0];
@@ -1140,8 +1146,12 @@ class CodexAppServerJsonRpcSession {
   private browserEvidenceEvaluationForFinalizer(): AgentHostBrowserEvidenceEvaluation {
     return evaluateAgentHostBrowserEvidence(
       recordAgentHostBrowserRefs(this.browserEvidenceLedger, [`codex.app-server.final-answer:${this.options.parentCommandId}`]),
-      { acceptanceSpec: agentHostBrowserAcceptanceSpecFromPrompt(turnQuestionText(this.lastTurnStartInput)) },
+      { acceptanceSpec: this.browserSearchPlan().acceptanceSpec },
     );
+  }
+
+  private browserSearchPlan(): AgentHostBrowserSearchPlan {
+    return agentHostBrowserSearchPlanFromPrompt(turnQuestionText(this.lastTurnStartInput));
   }
 
   private async evaluateLocalToolAct(
@@ -1491,7 +1501,7 @@ function browserFinalLead(input: {
   title: string;
   evidenceText?: string;
 }): string {
-  const prompt = input.prompt ?? '';
+  const prompt = agentHostBrowserUserPromptFromCommandText(input.prompt) ?? '';
   const excerpt = browserFinalEvidenceExcerpt(input.evidenceText, input.title);
   if (/新闻|最新动态|最新情况|release\s*notes?|news|changelog|updates?/i.test(prompt)) {
     return excerpt
@@ -1502,6 +1512,11 @@ function browserFinalLead(input: {
     return excerpt
       ? `根据已通过 Browser 读取的页面，这篇论文的主题可概括为：${excerpt}`
       : `根据已通过 Browser 读取的页面，已读取论文来源是“${input.title}”。`;
+  }
+  if (/搜索|搜一下|查询|查一下|\bsearch\b|\blook\s+up\b/i.test(prompt)) {
+    return excerpt
+      ? `根据已通过 Browser 读取的页面，简要总结：${excerpt}`
+      : `根据已通过 Browser 读取的页面，已读取来源是“${input.title}”。当前可见证据不足以直接概括完整结论。`;
   }
   const topic = browserFinalTopic(prompt);
   return topic

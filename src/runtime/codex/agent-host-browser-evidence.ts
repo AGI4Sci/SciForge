@@ -29,6 +29,19 @@ export interface AgentHostBrowserEvidenceRepairHint {
   reason: string;
 }
 
+export interface AgentHostBrowserSearchPlan {
+  schemaVersion: 'sciforge.agent-host.browser-search-plan.v1';
+  taskSummary?: string;
+  search: {
+    primaryQuery: string;
+    queryCandidates: string[];
+    preferredDomains: string[];
+    avoidedDomains: string[];
+    maxDiscoveryAttemptsBeforeRead: number;
+  };
+  acceptanceSpec: AgentHostBrowserAcceptanceSpec;
+}
+
 export interface AgentHostBrowserAcceptanceSpec {
   schemaVersion: 'sciforge.agent-host.browser-acceptance-spec.v1';
   taskSummary?: string;
@@ -37,6 +50,9 @@ export interface AgentHostBrowserAcceptanceSpec {
     requirePageTextRefs: true;
     minReadSources: number;
     rejectLowInformationSources: true;
+    requireIndependentSources: boolean;
+    preferredDomains: string[];
+    avoidedDomains: string[];
   };
   topicalTerms: string[];
   temporal?: AgentHostBrowserTemporalConstraint;
@@ -136,21 +152,72 @@ export function agentHostBrowserAcceptanceSpecFromPrompt(
   prompt: string | undefined,
   options: { now?: Date } = {},
 ): AgentHostBrowserAcceptanceSpec {
+  return agentHostBrowserSearchPlanFromPrompt(prompt, options).acceptanceSpec;
+}
+
+export function agentHostBrowserSearchPlanFromPrompt(
+  prompt: string | undefined,
+  options: { now?: Date } = {},
+): AgentHostBrowserSearchPlan {
   const now = options.now ?? new Date();
   const referenceDate = isoDate(now);
-  const temporal = temporalConstraintFromPrompt(prompt, now, referenceDate);
-  return {
+  const userPrompt = agentHostBrowserUserPromptFromCommandText(prompt);
+  const temporal = temporalConstraintFromPrompt(userPrompt, now, referenceDate);
+  const baseTopicalTerms = topicalTermsFromPrompt(userPrompt);
+  const queryTerms = searchQueryTermsFromPrompt(userPrompt, baseTopicalTerms);
+  const topicalTerms = acceptanceTopicalTerms(baseTopicalTerms, queryTerms);
+  const primaryQuery = queryTerms.join(' ') || compactPlanQuery(userPrompt) || topicalTerms.join(' ');
+  const preferredDomains = preferredDomainsFromPrompt(userPrompt, queryTerms);
+  const avoidedDomains = avoidedDomainsFromPrompt(userPrompt);
+  const minReadSources = minReadSourcesFromPrompt(userPrompt);
+  const queryCandidates = searchQueryCandidates(primaryQuery, preferredDomains);
+  const acceptanceSpec: AgentHostBrowserAcceptanceSpec = {
     schemaVersion: 'sciforge.agent-host.browser-acceptance-spec.v1',
-    taskSummary: prompt?.trim().slice(0, 500) || undefined,
+    taskSummary: userPrompt?.trim().slice(0, 500) || undefined,
     source: {
       requireSourcePageRefs: true,
       requirePageTextRefs: true,
-      minReadSources: 1,
+      minReadSources,
       rejectLowInformationSources: true,
+      requireIndependentSources: minReadSources > 1,
+      preferredDomains,
+      avoidedDomains,
     },
-    topicalTerms: topicalTermsFromPrompt(prompt),
+    topicalTerms,
     ...(temporal ? { temporal } : {}),
   };
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-search-plan.v1',
+    taskSummary: userPrompt?.trim().slice(0, 500) || undefined,
+    search: {
+      primaryQuery,
+      queryCandidates,
+      preferredDomains,
+      avoidedDomains,
+      maxDiscoveryAttemptsBeforeRead: 1,
+    },
+    acceptanceSpec,
+  };
+}
+
+export function agentHostBrowserUserPromptFromCommandText(prompt: string | undefined): string | undefined {
+  const text = prompt?.replace(/\r\n?/g, '\n').trim();
+  if (!text) return undefined;
+  const currentRequest = /\nCurrent request:\s*\n+/i.exec(text);
+  if (currentRequest) {
+    const request = text.slice(currentRequest.index + currentRequest[0].length).trim();
+    if (request) return request;
+  }
+  return text
+    .replace(
+      /^Continue the active Runtime Codex session\.\s+Interpret relative references such as [\s\S]*?(?:\n\s*\n|$)/i,
+      '',
+    )
+    .replace(
+      /^Same-chat continuity context for relative references\.[\s\S]*?(?:\nCurrent request:\s*\n+|\n\s*\n)/i,
+      '',
+    )
+    .trim() || text;
 }
 
 export function evaluateAgentHostBrowserEvidence(
@@ -339,6 +406,31 @@ function acceptanceEvaluationForReadSources(
       evidenceRefs: completionEligibleSourceRefs,
     });
   }
+  if (spec.source.requireIndependentSources) {
+    const independentDomains = uniqueStrings(readResources
+      .map((resource) => browserResourceDomain(resource))
+      .filter(Boolean));
+    if (independentDomains.length < spec.source.minReadSources) {
+      issues.push({
+        code: 'browser-source-independent-count-insufficient',
+        message: `Browser acceptance requires at least ${spec.source.minReadSources} independent source domain(s).`,
+        evidenceRefs: readResources.map((resource) => resource.ref),
+      });
+    }
+  }
+  if (spec.source.preferredDomains.length > 0) {
+    const hasPreferredDomain = readResources.some((resource) => {
+      const domain = browserResourceDomain(resource);
+      return domain ? domainMatchesAny(domain, spec.source.preferredDomains) : false;
+    });
+    if (!hasPreferredDomain) {
+      issues.push({
+        code: 'browser-source-authority-gap',
+        message: 'Browser read refs were materialized, but none match the Agent Host preferred source domains for this task.',
+        evidenceRefs: readResources.map((resource) => resource.ref),
+      });
+    }
+  }
 
   const textualResources = readResources
     .map((resource) => normalizeText(browserResourceSearchText(resource)))
@@ -502,10 +594,77 @@ function temporalConstraintFromPrompt(
   return undefined;
 }
 
+function minReadSourcesFromPrompt(prompt: string | undefined): number {
+  const text = prompt ?? '';
+  if (/对比|比较|交叉验证|核验|多方|多个来源|两家|多家|compare|cross[-\s]?check|verify|multiple\s+sources/i.test(text)) {
+    return 2;
+  }
+  return 1;
+}
+
+function searchQueryTermsFromPrompt(prompt: string | undefined, topicalTerms: string[]): string[] {
+  const text = prompt ?? '';
+  const terms: string[] = [];
+  if (/\bOpenAI\b/i.test(text)) terms.push('OpenAI');
+  if (/官方|official/i.test(text)) terms.push('官方');
+  if (/产品更新|product\s+updates?|release\s+notes?/i.test(text)) terms.push('产品更新');
+  if (/伊朗局势/u.test(text)) terms.push('伊朗局势');
+  if (/媒体|media|press/i.test(text)) terms.push('媒体');
+  for (const term of topicalTerms) {
+    if (/^(?:一条|的一条|发布|官方)$/u.test(term)) continue;
+    terms.push(term);
+  }
+  return uniqueStrings(terms).slice(0, 8);
+}
+
+function acceptanceTopicalTerms(topicalTerms: readonly string[], queryTerms: readonly string[]): string[] {
+  return uniqueStrings([
+    ...topicalTerms,
+    ...queryTerms.filter((term) => /产品更新|product\s+updates?/i.test(term)),
+  ]).slice(0, 12);
+}
+
+function preferredDomainsFromPrompt(prompt: string | undefined, queryTerms: readonly string[]): string[] {
+  const text = prompt ?? '';
+  const joined = queryTerms.join(' ');
+  const domains: string[] = [];
+  if (/\bOpenAI\b/i.test(joined) && /官方|official|产品更新|product\s+updates?|release\s+notes?/i.test(text)) {
+    domains.push('openai.com', 'platform.openai.com', 'developers.openai.com');
+  }
+  domains.push(...siteDomainsFromPrompt(text));
+  return uniqueStrings(domains);
+}
+
+function avoidedDomainsFromPrompt(prompt: string | undefined): string[] {
+  const text = prompt ?? '';
+  const domains: string[] = [];
+  for (const match of text.matchAll(/(?:不要|排除|avoid|exclude)\s+(?:site:)?([a-z0-9.-]+\.[a-z]{2,})/gi)) {
+    domains.push(match[1]);
+  }
+  return uniqueStrings(domains);
+}
+
+function siteDomainsFromPrompt(prompt: string): string[] {
+  return uniqueStrings(Array.from(prompt.matchAll(/\bsite:([a-z0-9.-]+\.[a-z]{2,})\b/gi)).map((match) => match[1]));
+}
+
+function searchQueryCandidates(primaryQuery: string, preferredDomains: readonly string[]): string[] {
+  const scoped = preferredDomains.map((domain) => `site:${domain} ${primaryQuery}`);
+  return uniqueStrings([...scoped, primaryQuery].filter(Boolean)).slice(0, 5);
+}
+
+function compactPlanQuery(prompt: string | undefined): string {
+  const text = prompt ?? '';
+  return normalizeText(text
+    .replace(/不要只凭记忆回答|不要只给搜索结果|不要只给|凭记忆回答|引用编号|最近一周|近一周|过去一周|今天|今日|最新|最近|当前|来源链接|来源|链接|搜索|搜一下|查询|查一下|总结|回答|请你|请|帮我|帮忙|麻烦|一下|并列出|列出|必须先调用|调用|网页正文|实际读取|验收标记/gu, ' ')
+    .replace(/\b(?:sciforge|search|read|answer|summarize|summary|source|sources|refs?|latest|recent|current|today|week|links?|browser|evidence|and|from|with|for|the|this|that|user|task|cite|list|provide)\b/giu, ' '))
+    .slice(0, 120);
+}
+
 function topicalTermsFromPrompt(prompt: string | undefined): string[] {
   if (!prompt?.trim()) return [];
   const text = prompt
-    .replace(/不要只凭记忆回答|不要只给搜索结果|不要只给|凭记忆回答|引用编号|最近一周|近一周|过去一周|今天|今日|最新|最近|当前|来源链接|来源|链接|搜索|搜一下|查询|查一下|总结|回答|请你|请|帮我|帮忙|麻烦|一下|并列出|列出|必须先调用|调用|网页正文|实际读取|验收标记/gu, ' ')
+    .replace(/不要只凭记忆回答|不要只给搜索结果|不要只给|凭记忆回答|引用编号|最近一周|近一周|过去一周|今天|今日|最新|最近|当前|官方|发布|产品更新|一条|的一条|来源链接|来源|链接|搜索|搜一下|查询|查一下|总结|回答|请你|请|帮我|帮忙|麻烦|一下|并列出|列出|必须先调用|调用|网页正文|实际读取|验收标记/gu, ' ')
     .replace(/\b(?:sciforge|search|read|answer|summarize|summary|source|sources|refs?|latest|recent|current|today|week|links?|browser|evidence|and|from|with|for|the|this|that|user|task|cite|list|provide)\b/giu, ' ');
   const cjkTerms = (text.match(/[\p{Script=Han}]{2,}/gu) ?? [])
     .map((term) => term.replace(/^[或和与及]+/u, '').replace(/[的是了]+$/u, ''))
@@ -513,6 +672,24 @@ function topicalTermsFromPrompt(prompt: string | undefined): string[] {
   const latinTerms = (text.match(/[a-z0-9][a-z0-9-]{2,}/giu) ?? [])
     .filter((term) => !/^(?:search|read|browser|source|refs?|sciforge)$/i.test(term));
   return uniqueStrings([...latinTerms, ...cjkTerms]).slice(0, 12);
+}
+
+function browserResourceDomain(resource: BrowserResource): string | undefined {
+  const url = stringFromRecord(resource.locator, 'url') ?? stringFromRecord(resource.metadata, 'finalUrl');
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return undefined;
+  }
+}
+
+function domainMatchesAny(domain: string, preferredDomains: readonly string[]): boolean {
+  const normalized = domain.toLowerCase().replace(/^www\./, '');
+  return preferredDomains.some((preferred) => {
+    const candidate = preferred.toLowerCase().replace(/^www\./, '');
+    return normalized === candidate || normalized.endsWith(`.${candidate}`);
+  });
 }
 
 function isoDate(value: Date): string {

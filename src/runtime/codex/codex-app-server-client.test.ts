@@ -234,6 +234,11 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
   const invoked: ModuleInvokeRequest[] = [];
   const sourceRef = 'browser-host-session:auto/source-pages/source.source.json';
   const textRef = 'browser-host-session:auto/source-pages/source.txt';
+  const commandText = [
+    'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.',
+    '',
+    '搜索一下 OpenAI Codex plugin sharing。必须先调用 browser_search，再调用 browser_read 读取网页正文/source refs，然后用中文简短总结，并列出实际读取来源链接。不要只凭记忆回答，不要只给搜索结果或引用编号。',
+  ].join('\n');
   const browserNewsPreview = `${new Date().toISOString().slice(0, 10)} OpenAI ChatGPT Enterprise/EDU adds default plugin sharing in Codex for eligible workspaces, letting teammates install shared local plugins. Workspace admins can disable plugin sharing.`;
   const appServer = fakeAppServer({
     turnToolCalls: [
@@ -369,7 +374,7 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
   });
 
   const stream = await client.startTurn({
-    commandText: '请使用 SciForge 内置 Browser 搜索并读取一个最近的新闻来源页面，主题是 OpenAI 或人工智能的最新动态。必须先调用 browser_search，再调用 browser_read 读取网页正文/source refs，然后用中文简短总结这一条新闻，并列出实际读取来源链接。不要只凭记忆回答，不要只给搜索结果或引用编号。',
+    commandText,
     workspacePath: workspace,
     commandId: 'browser-search-loop-command',
     attemptId: 'attempt-1',
@@ -377,7 +382,7 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
   });
   const events = await collect(stream.events);
 
-  assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 5);
+  assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 1);
   assert.equal(invoked.filter((request) => request.intent === 'browser.read').length, 1);
   const readInvoke = invoked.find((request) => request.intent === 'browser.read');
   assert.deepEqual(readInvoke?.input, {
@@ -385,8 +390,8 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
     resourceRef: 'browser:resource:web_page:source',
     includeText: true,
   });
-  const autoReadText = (appServer.toolCallResponses[3]?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
-  assert.equal(appServer.toolCallResponses[3]?.success, true);
+  const autoReadText = (appServer.toolCallResponses[1]?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponses[1]?.success, true);
   assert.match(autoReadText, /browser-auto-read-result/);
   assert.match(autoReadText, /browser_read/);
   assert.match(autoReadText, /browser:resource:web_page:source/);
@@ -409,9 +414,11 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
     && /agent-host-browser-finalizer/.test(JSON.stringify(event.raw)));
   assert.ok(hostFinalMessage);
   const hostFinalText = String(hostFinalMessage.text ?? '');
+  assert.match(hostFinalText, /简要总结/);
   assert.match(hostFinalText, /Source/);
   assert.match(hostFinalText, /plugin sharing in Codex|共享本地插件|install shared local plugins/);
   assert.match(hostFinalText, /source\.source\.json/);
+  assert.doesNotMatch(hostFinalText, /Continue the active Runtime Codex session|Interpret relative references/);
   assert.doesNotMatch(hostFinalText, /OpenAI API 文档首页/);
   assert.ok(events.some((event) =>
     isRecord(event)
@@ -565,15 +572,15 @@ test('Codex app-server client requires browser_read after repeated Browser modul
   });
   await collect(stream.events);
 
-  assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 3);
+  assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 1);
   assert.equal(invoked.at(-1)?.intent, 'browser.read');
   assert.deepEqual(invoked.at(-1)?.input, {
     schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
     resourceRef: 'browser:resource:web_page:openai-docs',
     includeText: true,
   });
-  assert.equal(appServer.toolCallResponses.at(-1)?.success, true);
-  const text = (appServer.toolCallResponses.at(-1)?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponses[1]?.success, true);
+  const text = (appServer.toolCallResponses[1]?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
   assert.match(text, /browser-auto-read-result/);
   assert.match(text, /browser_read/);
   assert.match(text, /browser:resource:web_page:openai-docs/);
@@ -782,6 +789,141 @@ test('Codex app-server client rejects legacy GUI completion after search-only Br
   assert.equal(guiResponse?.success, false);
   assert.match(guiText, /unsupported_dynamic_tool:gui_present/);
   assert.doesNotMatch(guiText, /browser-source-page-refs-missing|completionTruth|"status":"satisfied"/);
+});
+
+test('Codex app-server client auto-reads a discovered Browser candidate before repeated discovery', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const sourceRef = 'browser-host-session:current/source-pages/source-1.source.json';
+  const textRef = 'browser-host-session:current/source-pages/source-1.txt';
+  const invokeRequests: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'browser_search',
+      arguments: { query: 'OpenAI latest news 2026', limit: 5 },
+    }, {
+      tool: 'browser_search',
+      arguments: { query: 'OpenAI latest news June 2026', limit: 5 },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invokeRequests.push(request);
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: request.intent === 'browser.search'
+            ? {
+                schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+                moduleId: 'browser',
+                primitive: 'search',
+                status: 'completed',
+                output: {
+                  query: 'OpenAI latest news 2026',
+                  results: [{ title: 'OpenAI News | OpenAI', url: 'https://openai.com/news/' }],
+                  searchResultRef: 'browser:search-result:turn-1',
+                },
+                resources: [{
+                  ref: 'browser:resource:web_page:openai-news',
+                  kind: 'web_page',
+                  status: 'discovered',
+                  originTool: 'browser.search',
+                  locator: { url: 'https://openai.com/news/' },
+                  title: 'OpenAI News | OpenAI',
+                  confidence: 'candidate',
+                }],
+                evidenceState: {
+                  completed: ['Discovered 1 candidate web page resource(s).'],
+                  unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+                  boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+                },
+                refs: ['browser:search-result:turn-1'],
+                diagnostics: [],
+                budget: {},
+              }
+            : {
+                schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+                moduleId: 'browser',
+                primitive: 'read',
+                status: 'completed',
+                output: {
+                  finalUrl: 'https://openai.com/news/',
+                  title: 'OpenAI News | OpenAI',
+                  sourcePageRef: sourceRef,
+                  pageTextRef: textRef,
+                  textCharCount: 420,
+                },
+                resources: [{
+                  ref: sourceRef,
+                  kind: 'source_page',
+                  status: 'read',
+                  originTool: 'browser.read',
+                  locator: { url: 'https://openai.com/news/' },
+                  title: 'OpenAI News | OpenAI',
+                  metadata: { textPreview: 'June 8, 2026 OpenAI product news and updates.' },
+                  confidence: 'materialized',
+                }, {
+                  ref: textRef,
+                  kind: 'page_text',
+                  status: 'read',
+                  originTool: 'browser.read',
+                  locator: { url: 'https://openai.com/news/' },
+                  title: 'OpenAI News | OpenAI',
+                  metadata: { textPreview: 'June 8, 2026 OpenAI product news and updates.' },
+                  confidence: 'materialized',
+                }],
+                evidenceState: {
+                  completed: ['Materialized page content as source/page text refs.'],
+                  unknown: ['Task-level synthesis remains outside Browser Runtime.'],
+                  boundary: 'Read refs are Browser evidence; only Agent Host can decide completion.',
+                },
+                refs: [sourceRef, textRef],
+                diagnostics: [],
+                budget: {},
+              },
+          refs: request.intent === 'browser.read' ? [sourceRef, textRef] : ['browser:search-result:turn-1'],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '请搜索 OpenAI 官方最近发布的一条产品更新并列出来源。',
+    workspacePath: workspace,
+    commandId: 'browser-auto-read-after-one-search-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(invokeRequests.map((request) => request.intent), ['browser.search', 'browser.read']);
+  const secondResponseText = (appServer.toolCallResponses.at(1)?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(secondResponseText, /sciforge\.agent-host\.browser-auto-read-result\.v1/);
+  assert.match(secondResponseText, /browser_read/);
+  assert.doesNotMatch(secondResponseText, /OpenAI latest news June 2026/);
 });
 
 test('Codex app-server client rejects legacy GUI completion after materialized Browser read evidence', async () => {

@@ -289,6 +289,103 @@ async function legacyStructuralErrors(files: string[]): Promise<string[]> {
   }
   errors.push(...await computerUseLegacyStructuralErrors(files));
   errors.push(...await browserLegacyStructuralErrors());
+  errors.push(...await generatedLegacyArtifactErrors());
+  errors.push(...await modelRouterOnlyStructuralErrors(files));
+  return errors;
+}
+
+async function modelRouterOnlyStructuralErrors(files: string[]): Promise<string[]> {
+  const errors: string[] = [];
+  const retiredOpenAiRuntimeEnv = /\bSCIFORGE_(?:COMPUTER_USE_PLANNER_)?ALLOW_OPENAI_RUNTIME\b/;
+  for (const file of files) {
+    const rel = relative(root, file).replaceAll('\\', '/');
+    if (rel === 'tools/check-no-legacy-paths.ts') continue;
+    const lines = (await readFile(file, 'utf8')).split(/\r?\n/);
+    const lineIndex = lines.findIndex((line) => retiredOpenAiRuntimeEnv.test(line));
+    if (lineIndex >= 0) {
+      errors.push(`${rel}:${lineIndex + 1} Runtime/API services must use Model Router only; retired OpenAI runtime opt-in env must not appear in active source.`);
+    }
+  }
+
+  for (const [name, command] of Object.entries(await packageScripts())) {
+    if (retiredOpenAiRuntimeEnv.test(command)) {
+      errors.push(`package.json script "${name}" must not set retired OpenAI runtime opt-in env; Runtime/API services must use Model Router.`);
+    }
+  }
+  return errors;
+}
+
+async function generatedLegacyArtifactErrors(): Promise<string[]> {
+  const errors: string[] = [];
+  const retiredGeneratedPatterns: Array<{ id: string; pattern: RegExp; message: string }> = [
+    {
+      id: 'retired-gui-mcp-server-name',
+      pattern: /\bsciforge_gui\b/,
+      message: 'generated desktop artifacts must not retain the retired GUI MCP server name.',
+    },
+    {
+      id: 'retired-gui-extension-state-env',
+      pattern: /\bSCIFORGE_GUI_EXTENSION_STATE\b/,
+      message: 'generated desktop artifacts must not retain the retired GUI extension state env.',
+    },
+    {
+      id: 'retired-gui-extension-module',
+      pattern: /\bgui-extension-manifest\b/,
+      message: 'generated desktop artifacts must not retain the retired GUI extension manifest import/path.',
+    },
+    {
+      id: 'retired-codex-responses-proxy-server',
+      pattern: /\b(?:createCodexResponsesProxyServer|codex-responses-proxy|sciforge\.codex-responses-proxy)\b/,
+      message: 'generated desktop artifacts must not retain the retired Codex Responses proxy server.',
+    },
+  ];
+  for (const file of await collectGeneratedFilesIfExists(join(root, 'dist-desktop'))) {
+    const rel = relative(root, file).replaceAll('\\', '/');
+    const lines = (await readFile(file, 'utf8')).split(/\r?\n/);
+    for (const rule of retiredGeneratedPatterns) {
+      const lineIndex = lines.findIndex((line) => rule.pattern.test(line));
+      if (lineIndex >= 0) errors.push(`${rel}:${lineIndex + 1} ${rule.message} (${rule.id}).`);
+    }
+  }
+
+  const retiredGeneratedFiles = [
+    'dist-desktop/src/runtime/codex/gui-extension-manifest.js',
+    'dist-desktop/src/runtime/codex/gui-extension-state.js',
+    'dist-desktop/src/runtime/codex/gui-mcp-server.js',
+    'dist-desktop/src/runtime/codex/gui-mcp-tools.js',
+    'dist-desktop/src/runtime/codex/gui-present-cli.js',
+    'dist-desktop/packages/backend/src/proxy.js',
+  ];
+  for (const rel of retiredGeneratedFiles) {
+    if (await pathExists(join(root, rel))) {
+      errors.push(`${rel} must stay deleted; run npm run desktop:clean before rebuilding desktop artifacts so retired GUI/proxy sources cannot survive as stale generated JavaScript.`);
+    }
+  }
+
+  const runtimeGuiExtensionDir = 'packages/backend/.codex-runtime/gui-extension';
+  if (await pathExists(join(root, runtimeGuiExtensionDir))) {
+    errors.push(`${runtimeGuiExtensionDir} must stay deleted; Runtime Codex must not expose the retired gui.present shim bin or GUI extension state directory.`);
+  }
+
+  const generatedPatternChecks: Array<{ rel: string; pattern: RegExp; message: string }> = [
+    {
+      rel: 'dist-desktop/src/runtime/codex/codex-exec-json-adapter.js',
+      pattern: /\b(?:SCIFORGE_GUI_EXTENSION_STATE|sciforge_gui|gui-mcp-server|gui-extension-manifest|gui-present-cli)\b/,
+      message: 'compiled Codex exec adapter must not inject the retired GUI MCP/shim extension.',
+    },
+    {
+      rel: 'dist-desktop/packages/backend/src/proxy.js',
+      pattern: /\b(?:createCodexResponsesProxyServer|codex-responses-proxy|sciforge\.codex-responses-proxy)\b/,
+      message: 'compiled backend artifacts must not retain the retired Codex Responses proxy server.',
+    },
+  ];
+  for (const check of generatedPatternChecks) {
+    const text = await readTextIfExists(join(root, check.rel));
+    if (!text) continue;
+    const lineIndex = text.split(/\r?\n/).findIndex((line) => check.pattern.test(line));
+    if (lineIndex >= 0) errors.push(`${check.rel}:${lineIndex + 1} ${check.message}`);
+  }
+
   return errors;
 }
 
@@ -567,6 +664,15 @@ async function readTextIfExists(path: string) {
   }
 }
 
+async function pathExists(path: string) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function trackedMigration(file: string, rule: string) {
   const key = `${file}#${rule}`;
   if (trackedBaselineCounts[key] === undefined) return undefined;
@@ -729,6 +835,30 @@ async function collectSourceFilesIfExists(dir: string): Promise<string[]> {
   return collectFiles(dir);
 }
 
+async function collectGeneratedFilesIfExists(dir: string): Promise<string[]> {
+  try {
+    await access(dir);
+  } catch {
+    return [];
+  }
+  return collectGeneratedFiles(dir);
+}
+
+async function collectGeneratedFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (ignoredDirs.has(entry.name)) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...await collectGeneratedFiles(full));
+      continue;
+    }
+    if (entry.isFile() && isGeneratedArtifactScanFile(full)) out.push(full);
+  }
+  return out.sort();
+}
+
 async function collectFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const out: string[] = [];
@@ -747,6 +877,10 @@ async function collectFiles(dir: string): Promise<string[]> {
 function isTestFile(file: string) {
   const rel = relative(root, file).replaceAll('\\', '/');
   return /(^|\/)(tests?|__tests__|fixtures)\//.test(rel) || /\.(test|spec)\.[^.]+$/.test(rel);
+}
+
+function isGeneratedArtifactScanFile(file: string) {
+  return ['.js', '.cjs', '.mjs', '.json'].includes(extname(file));
 }
 
 main().catch((error) => {
