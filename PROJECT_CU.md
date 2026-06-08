@@ -149,7 +149,8 @@ open-command-palette
 - VSCode stable concept model、sanitizer、readiness gate 和 atomic capability catalog 已 unit-proven。
 - read-only、focus、editor mutation、terminal、command palette readiness 已 unit-proven。
 - Agent Host dry-run materializer 已 unit-proven：它不会从裸 `commandText`、terminal output、palette item 或 act completed status 推断 operation / completion。
-- 普通聊天 / native route 无旁路接线、public event sanitizer、VSCode live diagnostic、Host-owned preview / apply workflow 仍待实现。
+- 无旁路静态护栏已 unit-proven：GUI completion surface、retired runtime `gui` module、legacy Computer Use public surface、ordinary/native direct import 和 readiness final-answer/raw payload 泄漏都会 fail closed。
+- 普通聊天 / native route 接线审计、public event sanitizer、VSCode live diagnostic、Host-owned preview / apply workflow 仍待实现。
 
 ## 新任务路线
 
@@ -178,16 +179,21 @@ Acceptance Gates：
 
 Build Tasks：
 
-- [ ] 静态检查禁止 `gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` / `moduleId=gui` completion surface。
-- [ ] 静态检查禁止 `runTask` / `perform_local_action` / `fill_fields` 进入 Computer Use public surface。
-- [ ] 静态检查禁止 ordinary chat / native route 直接 import VSCode module 或直接调用 Computer Use act materializer。
-- [ ] readiness validator 递归拒绝 final-answer、completion truth、raw/base64/provider payload。
+- [x] 静态检查禁止 `gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` completion surface。
+- [x] 删除 retired runtime `gui` module handler；默认 registry 不再列出 `gui`，外部注入 `gui` handler 也会忽略。
+- [x] 静态检查禁止 runtime modules 重新暴露 `moduleId=gui` / `RUNTIME_MODULE_IDS=['gui']`。
+- [x] 静态检查禁止 `runTask` / `perform_local_action` / `fill_fields` / `executeBoundedOperation` 进入 Computer Use public surface。
+- [x] 静态检查禁止 ordinary chat / native route 直接 import VSCode module 或直接调用 Computer Use act materializer。
+- [x] readiness validator 递归拒绝 final-answer、completion truth、raw/base64/provider payload，并覆盖 snake_case / kebab-case alias。
+- [x] readiness validator 拒绝裸 base64、HTML/DOM、本地绝对路径等 raw value。
 
 Acceptance Gates：
 
-- [ ] Static tests 覆盖 forbidden completion surface。
-- [ ] Static tests 覆盖 forbidden legacy Computer Use public surface。
-- [ ] Unit tests 证明 readiness result 不能直接成为 final answer。
+- [x] Static tests 覆盖 forbidden completion surface。
+- [x] Static tests 覆盖 forbidden retired runtime `gui` module surface。
+- [x] Static tests 覆盖 forbidden legacy Computer Use public surface，包括 `executeBoundedOperation`。
+- [x] Unit tests 证明 `module.invoke gui.present` fail closed。
+- [x] Unit tests 证明 readiness result 和 app module materializer 不能直接携带 final answer 或 raw payload。
 
 ### P2：入口路由审计
 

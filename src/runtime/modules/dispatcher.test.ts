@@ -10,8 +10,6 @@ import {
   COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA,
   type ComputerUsePrimitiveEnvelope,
 } from '../../../packages/actions/computer-use/index.js';
-import { createGuiProtocolController } from '../../ui/src/app/guiProtocol.js';
-import { createGuiModuleHandler, guiResourceRef } from './gui-module-handler.js';
 import {
   createRuntimeModuleDispatcher,
   createRuntimeModuleRegistry,
@@ -19,16 +17,14 @@ import {
 } from './dispatcher.js';
 
 test('runtime module registry describes all Agent Host boundary modules', async () => {
-  const registry = createRuntimeModuleRegistry({
-    gui: createGuiModuleHandler(createGuiProtocolController()),
-  });
+  const registry = createRuntimeModuleRegistry();
   const dispatcher = createRuntimeModuleDispatcher(registry);
 
   const result = await dispatcher.describe();
   assert.equal(result.ok, true);
   const modules = (result.value as { modules: ModuleDescription[] }).modules;
   assert.deepEqual(modules.map((description) => description.moduleId), [...RUNTIME_MODULE_IDS]);
-  assert.ok(modules.find((description) => description.moduleId === 'gui')?.intents?.some((intent) => intent.name === 'present'));
+  assert.equal(modules.some((description) => description.moduleId === 'gui'), false);
   assert.ok(modules.find((description) => description.moduleId === 'capabilities')?.intents?.some((intent) => intent.name === 'plan'));
 });
 
@@ -59,15 +55,11 @@ test('actions module describe declares Computer Use L1/L0 boundary metadata', as
 });
 
 test('runtime module dispatcher routes read by ref prefix and fails closed', async () => {
-  const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
-    gui: createGuiModuleHandler(createGuiProtocolController({ revision: 8 })),
-  }));
+  const dispatcher = createRuntimeModuleDispatcher();
 
-  const read = await dispatcher.read({ ref: guiResourceRef('/gui/shell.json'), includeMeta: true });
-  assert.equal(read.ok, true);
-  assert.equal(read.moduleId, 'gui');
-  assert.equal((read.value as { path: string; meta: { readonly: boolean } }).path, '/gui/shell.json');
-  assert.equal((read.value as { meta: { readonly: boolean } }).meta.readonly, true);
+  const unroutable = await dispatcher.read({ ref: 'gui:/gui/shell.json', includeMeta: true });
+  assert.equal(unroutable.ok, false);
+  assert.match(unroutable.error ?? '', /unroutable_ref:gui:\/gui\/shell\.json/);
 
   const missing = await dispatcher.query({ moduleId: 'missing', query: 'x' });
   assert.equal(missing.ok, false);
@@ -76,6 +68,34 @@ test('runtime module dispatcher routes read by ref prefix and fails closed', asy
   const unsupported = await dispatcher.invoke({ moduleId: 'skills', intent: 'execute', input: {} });
   assert.equal(unsupported.ok, false);
   assert.match(unsupported.error ?? '', /unsupported_function|unsupported_intent/);
+});
+
+test('runtime module registry ignores retired gui handlers and module.invoke gui fails closed', async () => {
+  const registry = createRuntimeModuleRegistry({
+    gui: {
+      describe: async () => ({
+        schemaVersion: 'sciforge.module-contract.v1',
+        moduleId: 'gui',
+        title: 'Retired GUI',
+        summary: 'Should not be registered.',
+        functions: { describe: true, query: true, read: true, invoke: true },
+        intents: [{ name: 'present', sideEffect: 'local' }],
+      }),
+      invoke: async () => moduleResult({ moduleId: 'gui', ok: true, value: { bypass: true } }),
+    },
+  });
+  const dispatcher = createRuntimeModuleDispatcher(registry);
+
+  assert.equal(registry.moduleIds().includes('gui'), false);
+
+  const result = await dispatcher.invoke({
+    moduleId: 'gui',
+    intent: 'present',
+    input: { text: 'do not present from runtime module' },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /module_not_found:gui/);
 });
 
 test('runtime module dispatcher returns approval request before approved side effects', async () => {

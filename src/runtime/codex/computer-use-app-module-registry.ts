@@ -101,8 +101,11 @@ export function validateComputerUseAppModuleReadiness(
   if (!isRecord(readiness)) {
     return blocked('blocked:computer-use-app-module:readiness-invalid');
   }
-  if (hasForbiddenFinalAnswerField(readiness)) {
+  if (hasForbiddenFinalAnswerFieldDeep(readiness)) {
     return blocked('blocked:computer-use-app-module:final-answer-not-allowed', safeStringList(readiness.evidenceRefs));
+  }
+  if (containsRawPayload(readiness)) {
+    return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', safeStringList(readiness.evidenceRefs));
   }
   if (readiness.status === 'ready') {
     const primitive = isRecord(readiness.primitive) ? readiness.primitive : undefined;
@@ -116,12 +119,6 @@ export function validateComputerUseAppModuleReadiness(
       return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', evidenceRefs);
     }
     const action = Object.hasOwn(primitive, 'action') ? primitive.action : undefined;
-    if (hasForbiddenFinalAnswerFieldDeep(action)) {
-      return blocked('blocked:computer-use-app-module:final-answer-not-allowed', evidenceRefs);
-    }
-    if (containsRawPayloadString(action)) {
-      return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', evidenceRefs);
-    }
     return {
       status: 'ready',
       primitive: {
@@ -163,10 +160,9 @@ function blocked(reasonRef: string, evidenceRefs: string[] = []): ComputerUseApp
 }
 
 function hasForbiddenFinalAnswerField(value: Record<string, unknown>): boolean {
-  return Object.hasOwn(value, 'finalAnswer')
-    || Object.hasOwn(value, 'answer')
-    || Object.hasOwn(value, 'message')
-    || Object.hasOwn(value, 'completionTruth');
+  return Object.keys(value).some((key) =>
+    FORBIDDEN_FINAL_ANSWER_KEYS.has(normalizeReadinessKey(key)),
+  );
 }
 
 function hasForbiddenFinalAnswerFieldDeep(value: unknown): boolean {
@@ -186,17 +182,92 @@ function containsRawRef(refs: string[]): boolean {
   return refs.some((ref) => /(^|:)raw[-:]|base64|data:image|providerPayload|provider-payload|screenshot-path|file:\/\/|https?:\/\//i.test(ref));
 }
 
-function containsRawPayloadString(value: unknown): boolean {
+function containsRawPayload(value: unknown): boolean {
   if (typeof value === 'string') {
-    return containsRawRef([value]);
+    return isForbiddenRawPayloadString(value);
   }
   if (Array.isArray(value)) {
-    return value.some(containsRawPayloadString);
+    return value.some(containsRawPayload);
   }
   if (!isRecord(value)) {
     return false;
   }
-  return Object.values(value).some(containsRawPayloadString);
+  for (const [key, nested] of Object.entries(value)) {
+    if (isForbiddenRawPayloadKey(key)) return true;
+    if (containsRawPayload(nested)) return true;
+  }
+  return false;
+}
+
+function isForbiddenRawPayloadKey(key: string): boolean {
+  return FORBIDDEN_RAW_PAYLOAD_KEYS.has(normalizeReadinessKey(key));
+}
+
+const FORBIDDEN_FINAL_ANSWER_KEYS = new Set([
+  'finalanswer',
+  'answer',
+  'message',
+  'completiontruth',
+]);
+
+const FORBIDDEN_RAW_PAYLOAD_KEYS = new Set([
+  'raw',
+  'rawscreenshot',
+  'rawimage',
+  'rawpayload',
+  'rawproviderpayload',
+  'rawaccessibilitytree',
+  'rawaxtree',
+  'rawvisibletext',
+  'rawcommand',
+  'rawpath',
+  'providerpayload',
+  'providerrawpayload',
+  'providerrequestbody',
+  'providerresponsebody',
+  'dataurl',
+  'imagebase64',
+  'screenshotbase64',
+  'screenshotpath',
+  'rawscreenshotpath',
+  'url',
+  'href',
+  'base64',
+  'bytes',
+  'buffer',
+  'accessibilitytree',
+  'axtree',
+  'visibletext',
+]);
+
+function normalizeReadinessKey(key: string): string {
+  return key.replace(/[-_\s]/g, '').toLowerCase();
+}
+
+function isForbiddenRawPayloadString(value: string): boolean {
+  return containsRawRef([value])
+    || looksLikeNakedBase64(value)
+    || looksLikeRawMarkup(value)
+    || looksLikeLocalAbsolutePath(value);
+}
+
+function looksLikeNakedBase64(value: string): boolean {
+  const compact = value.replace(/\s+/g, '');
+  if (/^(?:iVBORw0KGgo|\/9j\/|R0lGODlh|R0lGODdh|UklGR)/.test(compact)) return true;
+  return compact.length >= 80
+    && compact.length % 4 === 0
+    && /^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+    && /[A-Z]/.test(compact)
+    && /[a-z]/.test(compact)
+    && /\d/.test(compact);
+}
+
+function looksLikeRawMarkup(value: string): boolean {
+  return /<\s*(?:!doctype\s+html|html|body|head|script|style|svg|div|span|input|button|textarea|section|main)\b/i.test(value);
+}
+
+function looksLikeLocalAbsolutePath(value: string): boolean {
+  return /(^|[\s"'([{<])(?:file:)?(?:(?:\/(?:Applications|Users|private|var|tmp|etc|opt|home)\/[^\s"'<>),;\]}]+)|(?:[A-Za-z]:\\[^\s"'<>),;\]}]+))/i.test(value);
 }
 
 function safeStringList(value: unknown): string[] {

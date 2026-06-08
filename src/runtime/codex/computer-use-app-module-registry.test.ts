@@ -138,3 +138,110 @@ test('readiness rejects raw payload strings nested in primitive actions', () => 
   assert.equal(unsafe.status, 'blocked');
   assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:raw-ref-not-allowed');
 });
+
+test('readiness rejects nested provider payload objects even when their values are opaque', () => {
+  const unsafe = validateComputerUseAppModuleReadiness({
+    status: 'ready',
+    primitive: {
+      name: 'computer_use.act',
+      inputRefs: ['window:vscode:1'],
+      action: {
+        kind: 'type',
+        textRef: 'text-ref:vscode:draft',
+        providerPayload: {
+          request: {
+            opaque: 'stored-outside-public-context',
+          },
+        },
+      },
+    },
+    evidenceRefs: ['module:vscode'],
+  });
+
+  assert.equal(unsafe.status, 'blocked');
+  assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:raw-ref-not-allowed');
+});
+
+test('readiness rejects forbidden fields nested in blocked diagnostics', () => {
+  const unsafe = validateComputerUseAppModuleReadiness({
+    status: 'blocked',
+    reasonRef: 'blocked:vscode-app-module:diagnostic',
+    evidenceRefs: ['module:vscode'],
+    diagnostics: [{
+      detail: {
+        completionTruth: {
+          status: 'satisfied',
+        },
+      },
+    }],
+  });
+
+  assert.equal(unsafe.status, 'blocked');
+  assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:final-answer-not-allowed');
+});
+
+test('readiness rejects final-answer aliases with snake or kebab case', () => {
+  for (const key of ['final_answer', 'final-answer', 'completion_truth', 'completion-truth']) {
+    const unsafe = validateComputerUseAppModuleReadiness({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.observe',
+        inputRefs: ['window:vscode:1'],
+        action: {
+          [key]: 'I handled it',
+        },
+      },
+      evidenceRefs: ['module:vscode'],
+    });
+
+    assert.equal(unsafe.status, 'blocked', key);
+    assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:final-answer-not-allowed', key);
+  }
+});
+
+test('readiness rejects raw payload key aliases with snake, kebab, and generic byte carriers', () => {
+  for (const key of ['raw_payload', 'provider-payload', 'raw_command', 'raw-path', 'screenshotBase64', 'screenshot_base64', 'base64', 'bytes', 'buffer']) {
+    const unsafe = validateComputerUseAppModuleReadiness({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.act',
+        inputRefs: ['window:vscode:1'],
+        action: {
+          kind: 'app_command',
+          [key]: 'opaque',
+        },
+      },
+      evidenceRefs: ['module:vscode'],
+    });
+
+    assert.equal(unsafe.status, 'blocked', key);
+    assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:raw-ref-not-allowed', key);
+  }
+});
+
+test('readiness rejects raw payload values without explicit raw markers', () => {
+  const pngBase64 = `iVBORw0KGgo${'A'.repeat(70)}12==`;
+  const cases = [
+    pngBase64,
+    '<html><body><button>Run</button></body></html>',
+    '/Users/example/Library/Application Support/Code/User/settings.json',
+  ];
+
+  for (const value of cases) {
+    const unsafe = validateComputerUseAppModuleReadiness({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.act',
+        inputRefs: ['window:vscode:1'],
+        action: {
+          kind: 'app_command',
+          textRef: value,
+        },
+      },
+      evidenceRefs: ['module:vscode'],
+    });
+
+    assert.equal(unsafe.status, 'blocked', value);
+    assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:raw-ref-not-allowed', value);
+  }
+});

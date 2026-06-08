@@ -148,6 +148,8 @@ ordinary chat 只是进入 Codex / Agent Host 的用户输入桥，不是 VSCode
 
 native route 只做确定性投影：它可以投影 sanitized refs、blocked / partial 状态和 Host-owned final answer envelope。没有 same-run Host final-answer evidence 时，native route 必须返回 `blocked` / `partial`，不能用 Computer Use action result、app module readiness、`run_procedure.status=completed`、runtime ack 或 fallback text 自行 `done`。
 
+Runtime `gui` module 已退役。`gui_present` / `gui_ask_user` 只能作为 Agent Host public event projection 或 refs-first evidence metadata 出现，不能作为 `module.invoke gui.present` / `module.invoke gui.ask_user` 的 runtime module surface、dynamic tool surface 或 completion surface。
+
 普通聊天接线必须满足：
 
 - Host bridge 只构造 Agent Host input envelope。
@@ -167,7 +169,7 @@ native route 只做确定性投影：它可以投影 sanitized refs、blocked / 
 - `blocked` + reason ref + evidence refs。
 - `needs-confirmation` + reason ref + evidence refs。
 
-readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
+readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。key 检测必须覆盖 camelCase、snake_case 和 kebab-case alias；value 检测必须覆盖裸 base64、HTML/DOM、本地绝对路径等 raw payload。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
 阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑：
 
@@ -335,8 +337,10 @@ Computer Use primitive 默认不调用模型。
 - App Module Registry contract 是 `unit-proven`。
 - VSCode App Module skeleton、read-only、focus、editor mutation、terminal 和 command palette readiness 是 `unit-proven`。
 - Agent Host app-module dry-run materializer 是 `unit-proven`：它能根据 current-run refs 选择 VSCode module 并返回 primitive candidate，也能对 unknown / ambiguous app fail closed。
+- Computer Use no-bypass static guard 是 `unit-proven`：它禁止 GUI completion surface、retired runtime `gui` module surface、legacy Computer Use public surface，以及 ordinary/native direct app module 或 act materializer imports。
+- Runtime `gui` module handler 已删除；默认 module registry 不列出 `gui`，外部注入 `gui` handler 也会 fail closed。
 - VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
-- 普通聊天 / native route 无旁路接线仍待完成，必须先于真实 VSCode live matrix。
+- 普通聊天 / native route 接线审计仍待完成，必须先于真实 VSCode live matrix。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
 - 论文 preview、narrow apply unit path 和 narrow apply diagnostic 仍待实现。
 
@@ -344,7 +348,7 @@ Computer Use primitive 默认不调用模型。
 
 旧逻辑和最终目标冲突时，删除旧逻辑，直接实现新版本；不新增 legacy alias、compatibility wrapper、fallback shortcut 或历史 run 转译路径。
 
-旧路径包括 `executeBoundedOperation`、`computer_use.perform_local_action`、`computer_use.fill_fields`、`computer_use.runTask(request, hostPorts)`、`plan`、`locate`、`verify` 等。
+旧路径包括 runtime `gui` module / `module.invoke gui.*`、`executeBoundedOperation`、`computer_use.perform_local_action`、`computer_use.fill_fields`、`computer_use.runTask(request, hostPorts)`、`plan`、`locate`、`verify` 等。
 
 清理目标：
 

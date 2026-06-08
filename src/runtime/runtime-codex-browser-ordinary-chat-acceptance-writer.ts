@@ -138,6 +138,12 @@ function passedManifest(
   proof: BrowserOrdinaryChatProof,
 ): RuntimeCodexBrowserOrdinaryChatAcceptanceManifest {
   const evidenceRefs = proof.refs.slice(0, 32);
+  const realBrowserConclusion = proof.passed
+    && proof.guiPresentObserved
+    && proof.completionTruthSatisfied
+    && proof.completedTools.includes('browser_search')
+    && proof.completedTools.includes('browser_read')
+    && evidenceRefs.length > 0;
   return {
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'passed',
@@ -153,7 +159,7 @@ function passedManifest(
     rawAuditFoldedByDefault: true,
     automationSubstituteUsed: false,
     seedDemoFixtureEvidenceUsed: false,
-    acceptanceConclusionFromRealBrowser: true,
+    acceptanceConclusionFromRealBrowser: realBrowserConclusion,
     seedOrDemoMessagesExcluded: true,
     liveAcceptanceScope: 'non-seed-runtime-codex-messages-only',
     releaseBlocking: false,

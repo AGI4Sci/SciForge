@@ -484,6 +484,48 @@ test('default Computer Use Act materializer rejects app module readiness that ca
   assert.doesNotMatch(JSON.stringify(result), /I handled the task|taskOutcome":"satisfied/i);
 });
 
+test('default Computer Use Act materializer rejects app module readiness raw/final aliases before artifact write', async () => {
+  const unsafeModule: ComputerUseAppModule = {
+    moduleId: 'unsafe-alias',
+    canHandle: ({ refs }) => refs.includes('macos-app:unsafe-alias'),
+    normalizeObservation: ({ refs }) => ({ refs }),
+    getCapabilities: () => ['read-visible-text'],
+    checkReadiness: () => ({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.act',
+        inputRefs: ['window:unsafe-alias:main'],
+        action: {
+          kind: 'app_command',
+          final_answer: 'I handled the task',
+          raw_payload: { secret: 'raw-provider-object' },
+          screenshot_base64: 'iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA12==',
+        },
+      },
+      evidenceRefs: ['module:unsafe-alias'],
+    }),
+  };
+  const materializer = createDefaultComputerUseActMaterializer({
+    appModules: [unsafeModule],
+  });
+
+  const result = await materializer({
+    agentHostInput: appModuleAgentHostInput('read-visible-text', ['macos-app:unsafe-alias', 'window:unsafe-alias:main']),
+    preflight: appModulePreflight(['macos-app:unsafe-alias', 'window:unsafe-alias:main']),
+    commandText: 'do not expose module alias payloads',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-app-module-unsafe-alias',
+    attemptId: 'codex-command-default-app-module-unsafe-alias-attempt-1',
+    runtimeTruth: appModuleRuntimeTruth(['macos-app:unsafe-alias', 'window:unsafe-alias:main']),
+  });
+
+  assert.equal(result?.status, 'blocked');
+  assert.equal(result?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(result?.evidenceRefs.includes('blocked:computer-use-app-module:final-answer-not-allowed'));
+  assert.equal(result?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /I handled the task|raw-provider-object|iVBORw0KGgo/);
+});
+
 test('default Computer Use Act materializer does not treat terminal, palette, or action refs as completion truth', async () => {
   const materializer = createDefaultComputerUseActMaterializer();
 

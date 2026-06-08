@@ -45,7 +45,6 @@ export interface RuntimeModuleDispatcher {
 }
 
 export const RUNTIME_MODULE_IDS = [
-  'gui',
   'skills',
   'memory',
   'files',
@@ -59,6 +58,8 @@ export const RUNTIME_MODULE_IDS = [
 ] as const;
 
 export type RuntimeModuleId = typeof RUNTIME_MODULE_IDS[number];
+
+const RETIRED_RUNTIME_MODULE_IDS = new Set(['gui']);
 
 export function createRuntimeModuleRegistry(
   handlers: Partial<Record<string, RuntimeModuleHandler>> = {},
@@ -78,6 +79,7 @@ export function createRuntimeModuleRegistry(
     merged.set(moduleId, handlers[moduleId] ?? defaults[moduleId] ?? describeOnlyModuleHandler(defaultModuleDescription(moduleId)));
   }
   for (const [moduleId, handler] of Object.entries(handlers)) {
+    if (RETIRED_RUNTIME_MODULE_IDS.has(moduleId)) continue;
     if (handler) merged.set(moduleId, handler);
   }
 
@@ -230,24 +232,6 @@ function describeOnlyModuleHandler(description: ModuleDescription): RuntimeModul
 }
 
 function defaultModuleDescription(moduleId: RuntimeModuleId): ModuleDescription {
-  if (moduleId === 'gui') {
-    return createModuleDescription({
-      moduleId,
-      title: 'GUI',
-      summary: 'Presentation-only GUI module alias for semantic resources and local presentation intents.',
-      resources: [{ kind: 'gui-resource', refPrefix: 'gui:', queryable: true, readable: true }],
-      intents: [
-        { name: 'present', sideEffect: 'local' },
-        { name: 'ask_user', sideEffect: 'local' },
-        { name: 'notify', sideEffect: 'local' },
-        { name: 'set_status', sideEffect: 'local' },
-        { name: 'apply_batch', sideEffect: 'local' },
-        { name: 'watch', sideEffect: 'none', returnsOperation: true },
-      ],
-      facets: { refs: true, events: true, subscription: true, batch: true },
-      limits: { maxInlineBytes: 64_000, expectedLatencyMs: 100 },
-    });
-  }
   if (moduleId === 'skills') {
     return createModuleDescription({
       moduleId,
