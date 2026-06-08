@@ -17,6 +17,7 @@ import {
 } from './agent-host-vscode-cowork-act-materializer.js';
 import type {
   CodexAgentHostComputerUseActMaterializerResult,
+  CodexAgentHostComputerUseCompletionTruth,
   CodexAgentHostRuntimeTruth,
   NormalizedCodexAgentHostInput,
 } from './agent-host-turn-loop.js';
@@ -44,6 +45,23 @@ export interface VSCodeCoWorkLiveDiagnosticResult {
   agentHostInput?: NormalizedCodexAgentHostInput;
   runtimeTruth?: CodexAgentHostRuntimeTruth;
   materializerResult?: CodexAgentHostComputerUseActMaterializerResult;
+  agentHostFinalAnswer?: VSCodeCoWorkAgentHostFinalAnswer;
+}
+
+export interface VSCodeCoWorkAgentHostFinalAnswer {
+  schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1';
+  source: 'codex-agent-host-vscode-cowork-live-diagnostic';
+  status: VSCodeCoWorkLiveDiagnosticStatus;
+  text: string;
+  maturity: 'live-diagnostic';
+  productReady: false;
+  hostOwnsFinalAnswer: true;
+  computerUseCorePlanning: false;
+  primitiveChainObserved: string[];
+  evidenceRefs: string[];
+  cleanupRefs: string[];
+  materializerClaimType?: string;
+  completionTruth?: CodexAgentHostComputerUseCompletionTruth;
 }
 
 type PrimitiveEnvelope<T> = ComputerUsePrimitiveEnvelope<T>;
@@ -63,17 +81,29 @@ export async function runVSCodeCoWorkReadVisibleTextLiveDiagnostic(
     message: string,
   ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
     if (sessionId) await releaseSession(input.service, sessionId, aggregate);
+    const evidenceRefs = runtimeOwnedLiveRefs(aggregate.evidenceRefs);
+    const cleanupRefs = runtimeOwnedLiveRefs(aggregate.cleanupRefs);
+    const primitiveChainObserved = [...aggregate.primitiveChainObserved];
+    const agentHostFinalAnswer = buildAgentHostFinalAnswer({
+      status,
+      message,
+      primitiveChainObserved,
+      evidenceRefs,
+      cleanupRefs,
+      materializerResult,
+    });
     return {
       status,
       message,
       maturity: 'live-diagnostic',
       productReady: false,
-      primitiveChainObserved: aggregate.primitiveChainObserved,
-      evidenceRefs: runtimeOwnedLiveRefs(aggregate.evidenceRefs),
-      cleanupRefs: runtimeOwnedLiveRefs(aggregate.cleanupRefs),
+      primitiveChainObserved,
+      evidenceRefs,
+      cleanupRefs,
       ...(agentHostInput ? { agentHostInput } : {}),
       ...(runtimeTruth ? { runtimeTruth } : {}),
       ...(materializerResult ? { materializerResult } : {}),
+      agentHostFinalAnswer,
     };
   };
 
@@ -446,6 +476,70 @@ function cleanupRefsFromPrimitive(refs: string[]): string[] {
   return runtimeOwnedLiveRefs(refs.filter((ref) =>
     /^(?:control:|scoped-input-lease:|input-adapter:|scoped-input-adapter:|cursor-marker:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:)/i.test(ref)
   ));
+}
+
+function buildAgentHostFinalAnswer(input: {
+  status: VSCodeCoWorkLiveDiagnosticStatus;
+  message: string;
+  primitiveChainObserved: string[];
+  evidenceRefs: string[];
+  cleanupRefs: string[];
+  materializerResult: CodexAgentHostComputerUseActMaterializerResult | undefined;
+}): VSCodeCoWorkAgentHostFinalAnswer {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+    source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+    status: input.status,
+    text: agentHostFinalAnswerText(input),
+    maturity: 'live-diagnostic',
+    productReady: false,
+    hostOwnsFinalAnswer: true,
+    computerUseCorePlanning: false,
+    primitiveChainObserved: input.primitiveChainObserved,
+    evidenceRefs: input.evidenceRefs,
+    cleanupRefs: input.cleanupRefs,
+    ...(input.materializerResult?.claimType ? { materializerClaimType: input.materializerResult.claimType } : {}),
+    ...(input.materializerResult?.completionTruth ? { completionTruth: input.materializerResult.completionTruth } : {}),
+  };
+}
+
+function agentHostFinalAnswerText(input: {
+  status: VSCodeCoWorkLiveDiagnosticStatus;
+  message: string;
+  primitiveChainObserved: string[];
+  evidenceRefs: string[];
+  cleanupRefs: string[];
+}): string {
+  const chain = input.primitiveChainObserved.join(' -> ') || 'none';
+  const evidence = input.evidenceRefs.slice(0, 8).join(', ') || 'no-evidence-refs';
+  const cleanup = input.cleanupRefs.slice(0, 6).join(', ') || 'no-cleanup-refs';
+  if (input.status === 'completed') {
+    return [
+      'Host completed the current VSCode read-visible-text live diagnostic from refs-first evidence.',
+      `Primitive chain: ${chain}.`,
+      `Evidence refs: ${evidence}.`,
+      `Cleanup refs: ${cleanup}.`,
+      'Computer Use core executed only Host-selected primitives and did not plan the task.',
+    ].join(' ');
+  }
+  if (input.status === 'needs-confirmation') {
+    return [
+      'Host needs confirmation before continuing the current VSCode co-work diagnostic.',
+      input.message,
+      `Primitive chain: ${chain}.`,
+      `Evidence refs: ${evidence}.`,
+      `Cleanup refs: ${cleanup}.`,
+      'Computer Use core did not choose a target or next task.',
+    ].join(' ');
+  }
+  return [
+    'Host blocked the current VSCode co-work diagnostic before claiming completion.',
+    input.message,
+    `Primitive chain: ${chain}.`,
+    `Evidence refs: ${evidence}.`,
+    `Cleanup refs: ${cleanup}.`,
+    'Computer Use core did not plan the task.',
+  ].join(' ');
 }
 
 function uniqueStrings(values: string[]): string[] {

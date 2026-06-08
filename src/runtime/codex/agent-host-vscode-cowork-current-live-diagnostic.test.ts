@@ -52,6 +52,11 @@ test('current VSCode co-work live diagnostic uses real primitive ports shape and
   assert.equal(result.productReady, false);
   assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
   assert.equal(result.materializerResult?.claimType, 'computer-use-vscode-cowork-observe-decision');
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.ok(result.agentHostFinalAnswer?.evidenceRefs.includes('observation:vscode:current'));
+  assert.ok(result.agentHostFinalAnswer?.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-host'));
   assert.ok(result.agentHostInput?.refs.includes('intent:current-vscode-cowork'));
   assert.ok(result.runtimeTruth?.target?.refs?.includes('window:vscode:paper'));
   assert.ok(result.runtimeTruth?.observation?.refs?.includes('element:vscode:editor'));
@@ -149,5 +154,8 @@ test('current VSCode co-work live diagnostic can observe the real current VSCode
   assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('cursor-marker:current-vscode-cowork:')));
   assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('front-app-restore:current-vscode-cowork:')));
   assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('mouse-position-restore:current-vscode-cowork:')));
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
   assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });

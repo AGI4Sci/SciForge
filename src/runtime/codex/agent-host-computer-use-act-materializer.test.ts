@@ -359,6 +359,63 @@ test('default Computer Use Act materializer produces a current VSCode co-work ob
   assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner/i);
 });
 
+test('default Computer Use Act materializer auto-selects the unique VSCode window proven by observe refs', async () => {
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        throw new Error('generic planner must not handle VSCode co-work');
+      },
+    },
+  });
+  const targetRefs = [
+    ...vscodeCoWorkTargetRefs(),
+    'process:vscode:notes',
+    'window:vscode:notes',
+    'text:title:notes',
+    'frontmost:vscode:notes',
+  ];
+  const agentHostInput = vscodeCoWorkAgentHostInput();
+  agentHostInput.target = {
+    kind: 'current-vscode-cowork',
+    refs: targetRefs,
+  };
+  agentHostInput.refs = [
+    ...agentHostInput.refs,
+    ...targetRefs,
+  ];
+  const runtimeTruth = vscodeCoWorkRuntimeTruth();
+  runtimeTruth.target = {
+    bound: true,
+    summary: 'Current VSCode co-work window candidates',
+    refs: targetRefs,
+  };
+  runtimeTruth.refs = [
+    ...(runtimeTruth.refs ?? []),
+    ...targetRefs,
+  ];
+
+  const result = await materializer({
+    agentHostInput,
+    preflight: vscodeCoWorkPreflight(),
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-cowork-multi-window-observed',
+    attemptId: 'codex-command-default-vscode-cowork-multi-window-observed-attempt-1',
+    runtimeTruth,
+  });
+
+  const unit = result?.executionUnits?.find((item) => item.tool === 'vscode-cowork.agent-host-producer');
+
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.equal(result?.claimType, 'computer-use-vscode-cowork-observe-decision');
+  assert.equal(unit?.primitive, 'observe');
+  assert.equal(unit?.targetWindowRef, 'window:vscode:paper');
+  assert.ok(result?.evidenceRefs.includes('window:vscode:paper'));
+  assert.ok(result?.evidenceRefs.includes('observation:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(result), /needs-confirmation|generic planner|product-ready|providerPayload|base64/i);
+});
+
 test('default Computer Use Act materializer preserves first-step WindowAction evidence when workflow loop needs runtime truth refresh', async () => {
   const materializer = createDefaultComputerUseActMaterializer({
     maxActLoopSteps: 2,

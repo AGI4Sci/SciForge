@@ -40,6 +40,17 @@ test('VSCode co-work live diagnostic lets Host choose refs-only observe then rel
   assert.deepEqual(calls, ['bind', 'observe:1', 'observe:2', 'control:release']);
   assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
   assert.equal(result.materializerResult?.claimType, 'computer-use-vscode-cowork-observe-decision');
+  assert.equal(result.agentHostFinalAnswer?.schemaVersion, 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1');
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.equal(result.agentHostFinalAnswer?.productReady, false);
+  assert.match(result.agentHostFinalAnswer?.text ?? '', /read-visible-text/i);
+  assert.deepEqual(result.agentHostFinalAnswer?.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
+  assert.ok(result.agentHostFinalAnswer?.evidenceRefs.includes('observation:vscode:current-2'));
+  assert.ok(result.agentHostFinalAnswer?.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.equal(result.agentHostFinalAnswer?.completionTruth?.scope, 'action');
+  assert.equal(result.agentHostFinalAnswer?.completionTruth?.status, 'satisfied');
   assert.equal(result.agentHostInput?.target.kind, 'current-vscode-cowork');
   assert.ok(result.agentHostInput?.refs.includes('intent:current-vscode-cowork'));
   assert.ok(result.runtimeTruth?.target?.refs?.includes('window:vscode:paper'));
@@ -79,6 +90,13 @@ test('VSCode co-work live diagnostic needs confirmation for ambiguous target win
   });
 
   assert.equal(result.status, 'needs-confirmation', result.message);
+  assert.equal(result.agentHostFinalAnswer?.status, 'needs-confirmation');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.match(result.agentHostFinalAnswer?.text ?? '', /needs confirmation|needs-confirmation/i);
+  assert.ok(result.agentHostFinalAnswer?.evidenceRefs.includes('window:vscode:paper'));
+  assert.ok(result.agentHostFinalAnswer?.evidenceRefs.includes('window:vscode:notes'));
+  assert.ok(result.agentHostFinalAnswer?.cleanupRefs.includes('scoped-input-lease:vscode:live'));
   assert.deepEqual(calls, ['bind', 'observe:1', 'control:release']);
   assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'control(release)']);
   assert.equal(result.materializerResult?.status, 'needs-confirmation');
