@@ -72,6 +72,37 @@ test('current VSCode co-work window snapshot omits focused editor refs for non-e
   assert.doesNotMatch(JSON.stringify(observation), /main\.tex|Explorer|SCALE|Visual Studio Code/);
 });
 
+test('current VSCode co-work window snapshot accepts Monaco editor focus context', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'main.tex\nMonaco Editor\nEditor Groups',
+    focusedRole: 'AXGroup',
+    focusedName: 'Monaco Editor',
+    focusedValue: 'Code editor',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  assert.equal(observation.focusedEditorRef, `focused-editor:vscode:current:${observation.windowRef.split(':').at(-1)}`);
+  assert.doesNotMatch(JSON.stringify(observation), /main\.tex|Monaco|Code editor|SCALE|Visual Studio Code/);
+});
+
+test('current VSCode co-work window snapshot refuses terminal text areas as editor focus evidence', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'Terminal\nzsh\nmain.tex',
+    focusedRole: 'AXTextArea',
+    focusedName: 'Terminal',
+    focusedValue: 'zsh',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  assert.equal(observation.focusedEditorRef, undefined);
+  assert.ok(observation.editorElementRef.startsWith('element:vscode:editor:'));
+  assert.doesNotMatch(JSON.stringify(observation), /main\.tex|Terminal|SCALE|Visual Studio Code|zsh/);
+});
+
 test('current VSCode co-work primitive ports bind current window, observe refs, and release restoration refs', async () => {
   const calls: string[] = [];
   const service = createComputerUsePrimitiveService({

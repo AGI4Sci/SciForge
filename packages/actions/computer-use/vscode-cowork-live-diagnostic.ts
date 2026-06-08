@@ -56,6 +56,8 @@ export interface CurrentVSCodeCoWorkWindowSnapshot {
   focusedRole?: string;
   focusedName?: string;
   focusedValue?: string;
+  focusedDescription?: string;
+  focusedContext?: string;
   observedAtMs?: number;
 }
 
@@ -520,6 +522,20 @@ async function readCurrentVSCodeWindowRefs(input: {
   activateIfNotFrontmost?: boolean;
 } = {}): Promise<CurrentVSCodeCoWorkWindowObservation> {
   const { stdout } = await execFileAsync('osascript', ['-e', `
+on singleLine(valueText)
+  set previousDelimiters to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to linefeed
+  set lineParts to text items of (valueText as text)
+  set AppleScript's text item delimiters to " "
+  set lineText to lineParts as text
+  set AppleScript's text item delimiters to return
+  set returnParts to text items of lineText
+  set AppleScript's text item delimiters to " "
+  set returnText to returnParts as text
+  set AppleScript's text item delimiters to previousDelimiters
+  return returnText
+end singleLine
+
 on run argv
   set shouldActivate to false
   if (count of argv) > 0 and item 1 of argv is "1" then set shouldActivate to true
@@ -554,30 +570,69 @@ on run argv
     set focusedRole to ""
     set focusedName to ""
     set focusedValue to ""
+    set focusedDescription to ""
+    set focusedContext to ""
     try
       set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
       try
-        set focusedRole to role of focusedElement as text
+        set focusedRole to my singleLine(role of focusedElement as text)
       end try
       try
-        set focusedName to name of focusedElement as text
+        set focusedName to my singleLine(name of focusedElement as text)
         if focusedName is not "" then set collectedText to collectedText & linefeed & focusedName
       end try
       try
-        set focusedValue to value of focusedElement as text
+        set focusedValue to my singleLine(value of focusedElement as text)
         if focusedValue is not "" then set collectedText to collectedText & linefeed & focusedValue
       end try
+      try
+        set focusedDescription to my singleLine(description of focusedElement as text)
+        if focusedDescription is not "" then set collectedText to collectedText & linefeed & focusedDescription
+      end try
+      set currentElement to focusedElement
+      repeat with ancestorIndex from 1 to 6
+        try
+          set currentElement to value of attribute "AXParent" of currentElement
+          set ancestorRole to ""
+          set ancestorName to ""
+          set ancestorDescription to ""
+          try
+            set ancestorRole to my singleLine(role of currentElement as text)
+          end try
+          try
+            set ancestorName to my singleLine(name of currentElement as text)
+          end try
+          try
+            set ancestorDescription to my singleLine(description of currentElement as text)
+          end try
+          set focusedContext to focusedContext & " | " & ancestorRole & " " & ancestorName & " " & ancestorDescription
+        on error
+          exit repeat
+        end try
+      end repeat
     end try
-    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & focusedRole & linefeed & focusedName & linefeed & collectedText
+    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & focusedRole & linefeed & focusedName & linefeed & focusedValue & linefeed & focusedDescription & linefeed & focusedContext & linefeed & collectedText
   end tell
 end run
 `, input.activateIfNotFrontmost ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
-  const [pid = 'unknown', title = 'untitled', focusedRole = '', focusedName = '', ...textParts] = stdout.trim().replace(/\r/g, '\n').split('\n');
+  const [
+    pid = 'unknown',
+    title = 'untitled',
+    focusedRole = '',
+    focusedName = '',
+    focusedValue = '',
+    focusedDescription = '',
+    focusedContext = '',
+    ...textParts
+  ] = stdout.trim().replace(/\r/g, '\n').split('\n');
   return currentVSCodeCoWorkWindowObservationFromSnapshot({
     pid,
     windowTitle: title,
     focusedRole,
     focusedName,
+    focusedValue,
+    focusedDescription,
+    focusedContext,
     collectedText: textParts.join('\n'),
   });
 }
@@ -699,8 +754,50 @@ function focusedEditorRefFromSnapshot(
   input: CurrentVSCodeCoWorkWindowSnapshot,
   titleToken: string,
 ): string | undefined {
-  if (!/AXTextArea/i.test(input.focusedRole ?? '')) return undefined;
+  if (!hasFocusedEditorEvidence(input)) return undefined;
   return `focused-editor:vscode:current:${titleToken}`;
+}
+
+function hasFocusedEditorEvidence(input: CurrentVSCodeCoWorkWindowSnapshot): boolean {
+  const focusFields = [
+    input.focusedRole,
+    input.focusedName,
+    input.focusedValue,
+    input.focusedDescription,
+    input.focusedContext,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (focusFields.length === 0) return false;
+  if (hasBlockedVSCodeFocusTarget(focusFields)) return false;
+  if (/AXTextArea/i.test(input.focusedRole ?? '')) return true;
+  return hasMonacoEditorFocusEvidence(focusFields);
+}
+
+function hasMonacoEditorFocusEvidence(focusFields: string[]): boolean {
+  const focusText = focusFields.join('\n');
+  return /(?:monaco|code editor|text editor|editor group|editor part|editor pane|workbench\.parts\.editor|inputarea|view-lines|source code)/i.test(focusText);
+}
+
+function hasBlockedVSCodeFocusTarget(focusFields: string[]): boolean {
+  const normalizedFields = focusFields.map((field) => field.trim().toLowerCase()).filter(Boolean);
+  const exactBlockedTargets = new Set([
+    'chat',
+    'command palette',
+    'debug console',
+    'explorer',
+    'extensions',
+    'notifications',
+    'output',
+    'problems',
+    'quick open',
+    'search',
+    'settings',
+    'source control',
+    'terminal',
+  ]);
+  if (normalizedFields.some((field) => exactBlockedTargets.has(field))) return true;
+  return normalizedFields.some((field) => (
+    /(?:integrated terminal|terminal panel|terminal view|debug console|command palette|quick open|source control|search view|extensions view)/i.test(field)
+  ));
 }
 
 function uniqueRefs(refs: Array<string | undefined>): string[] {
