@@ -2,18 +2,141 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS,
+  COMPUTER_USE_PRIMITIVE_INTENTS,
   createComputerUsePrimitiveService,
   type ComputerUseActOutput,
   type ComputerUseBindOutput,
   type ComputerUseObserveOutput,
+  type ComputerUsePrimitiveEnvelope,
   type ComputerUsePrimitivePorts,
+  type ComputerUsePrimitiveService,
 } from '../../../packages/actions/computer-use/index.js';
 import {
+  createDefaultVSCodeCoWorkComputerUseActMaterializer,
+} from './agent-host-vscode-cowork-act-materializer.js';
+import {
+  produceVSCodeCoWorkAgentHostLiveInput,
   runVSCodeCoWorkInsertDraftLiveDiagnostic,
   runVSCodeCoWorkReadVisibleTextLiveDiagnostic,
 } from './agent-host-vscode-cowork-live-diagnostic.js';
 
 const now = '2026-06-08T00:00:00.000Z';
+
+test('VSCode co-work Host live producer builds read-visible-text Host input from primitive observe refs', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper');
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+  const captured = await bindAndObserve(service);
+
+  const produced = produceVSCodeCoWorkAgentHostLiveInput({
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    commandId: 'codex-command-vscode-producer-read',
+    attemptId: 'codex-command-vscode-producer-read-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    bindOutput: captured.bindOutput,
+    bindRefs: captured.bindRefs,
+    observe: captured.observe,
+  });
+
+  assert.equal(produced.status, 'ready', produced.blockedReason);
+  assert.equal(produced.operation, 'read-visible-text');
+  assert.equal(produced.agentHostInput?.target.kind, 'current-vscode-cowork');
+  assert.equal(
+    (produced.agentHostInput?.target.vscodeCoWork as Record<string, unknown> | undefined)?.operation,
+    'read-visible-text',
+  );
+  assert.ok(produced.agentHostInput?.refs.includes('intent:current-vscode-cowork'));
+  assert.ok(produced.agentHostInput?.refs.includes('window:vscode:paper'));
+  assert.ok(produced.agentHostInput?.refs.includes('file-ref:vscode:paper'));
+  assert.ok(produced.runtimeTruth?.target?.refs?.includes('window:vscode:paper'));
+  assert.ok(produced.runtimeTruth?.observation?.refs?.includes('observation:vscode:current-1'));
+  assert.ok(produced.preflight?.guardRefs);
+  assert.ok(produced.preflight.guardRefs.observationRefs.includes('observation:vscode:current-1'));
+  assert.ok(produced.preflight.guardRefs.permissionRefs.some((ref) => ref.startsWith('permission:current-vscode-cowork:full-access:')));
+
+  const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
+  const materializerResult = await materializer({
+    agentHostInput: produced.agentHostInput!,
+    preflight: produced.preflight!,
+    commandText: 'This raw fallback must not choose the operation.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-vscode-producer-read',
+    attemptId: 'codex-command-vscode-producer-read-attempt-1',
+    runtimeTruth: produced.runtimeTruth,
+  });
+
+  assert.equal(materializerResult?.status, 'completed', materializerResult?.message);
+  assert.equal(materializerResult?.claimType, 'computer-use-vscode-cowork-observe-decision');
+  assert.equal(materializerResult?.executionUnits?.[0]?.primitive, 'observe');
+  assert.doesNotMatch(JSON.stringify({ produced, materializerResult }), /raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('VSCode co-work Host live producer builds insert-draft Host input without leaking raw draft text', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper');
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+  const captured = await bindAndObserve(service);
+
+  const produced = produceVSCodeCoWorkAgentHostLiveInput({
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'codex-command-vscode-producer-insert',
+    attemptId: 'codex-command-vscode-producer-insert-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    bindOutput: captured.bindOutput,
+    bindRefs: captured.bindRefs,
+    observe: captured.observe,
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+  });
+
+  assert.equal(produced.status, 'ready', produced.blockedReason);
+  assert.equal(produced.operation, 'insert-draft');
+  assert.ok(produced.agentHostInput?.refs.includes('text-ref:current-vscode-cowork:draft'));
+  assert.equal(
+    (produced.agentHostInput?.target.vscodeCoWork as Record<string, unknown> | undefined)?.draftTextRef,
+    'text-ref:current-vscode-cowork:draft',
+  );
+
+  const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
+  const materializerResult = await materializer({
+    agentHostInput: produced.agentHostInput!,
+    preflight: produced.preflight!,
+    commandText: 'This raw fallback must not choose the operation.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-vscode-producer-insert',
+    attemptId: 'codex-command-vscode-producer-insert-attempt-1',
+    runtimeTruth: produced.runtimeTruth,
+  });
+
+  assert.equal(materializerResult?.status, 'completed', materializerResult?.message);
+  assert.equal(materializerResult?.claimType, 'computer-use-vscode-cowork-act-decision');
+  assert.equal(materializerResult?.executionUnits?.[0]?.primitive, 'act');
+  assert.deepEqual(materializerResult?.executionUnits?.[0]?.action, {
+    type: 'type',
+    elementRef: 'element:vscode:editor',
+    textRef: 'text-ref:current-vscode-cowork:draft',
+  });
+  assert.doesNotMatch(
+    JSON.stringify({ produced, materializerResult }),
+    /draft body|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i,
+  );
+});
 
 test('VSCode co-work live diagnostic lets Host choose refs-only observe then releases input resources', async () => {
   const calls: string[] = [];
@@ -281,6 +404,47 @@ function vscodePrimitivePorts(input: {
         ],
       };
     },
+  };
+}
+
+async function bindAndObserve(service: ComputerUsePrimitiveService): Promise<{
+  bindOutput: ComputerUseBindOutput;
+  bindRefs: string[];
+  observe: ComputerUsePrimitiveEnvelope<ComputerUseObserveOutput>;
+}> {
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        targetRef: 'window-action-session:vscode-cowork:live',
+        appRef: 'macos-app:com.microsoft.VSCode',
+      },
+    },
+  });
+  assert.equal(bind.ok, true, bind.error);
+  assert.equal(bind.value?.status, 'completed');
+  assert.ok(bind.value?.output);
+  const bindOutput = bind.value.output as ComputerUseBindOutput;
+  const observe = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId: bindOutput.sessionId,
+      capture: 'both',
+      includeTree: true,
+    },
+  });
+  assert.equal(observe.ok, true, observe.error);
+  assert.equal(observe.value?.status, 'completed');
+  assert.ok(observe.value?.output);
+  return {
+    bindOutput,
+    bindRefs: bind.value.refs ?? [],
+    observe: observe.value as ComputerUsePrimitiveEnvelope<ComputerUseObserveOutput>,
   };
 }
 

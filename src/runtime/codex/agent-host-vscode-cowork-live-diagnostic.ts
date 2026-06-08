@@ -25,6 +25,9 @@ import type {
 } from './agent-host-turn-loop.js';
 
 type VSCodeCoWorkLiveDiagnosticStatus = 'completed' | 'blocked' | 'needs-confirmation';
+type VSCodeCoWorkLiveProducerStatus = 'ready' | 'blocked';
+type VSCodeCoWorkLiveProducerOperation = 'read-visible-text' | 'insert-draft';
+type VSCodeCoWorkLiveDiagnosticContext = Omit<VSCodeCoWorkLiveDiagnosticInput, 'service'>;
 
 export interface VSCodeCoWorkLiveDiagnosticInput {
   service: ComputerUsePrimitiveService;
@@ -38,6 +41,25 @@ export interface VSCodeCoWorkLiveDiagnosticInput {
 
 export interface VSCodeCoWorkInsertDraftLiveDiagnosticInput extends VSCodeCoWorkLiveDiagnosticInput {
   draftTextRef: string;
+}
+
+export interface VSCodeCoWorkAgentHostLiveProducerInput
+  extends VSCodeCoWorkLiveDiagnosticContext {
+  bindOutput: ComputerUseBindOutput;
+  bindRefs: string[];
+  observe: PrimitiveEnvelope<ComputerUseObserveOutput>;
+  operation?: VSCodeCoWorkLiveProducerOperation;
+  draftTextRef?: string;
+}
+
+export interface VSCodeCoWorkAgentHostLiveProducerResult {
+  status: VSCodeCoWorkLiveProducerStatus;
+  operation?: VSCodeCoWorkLiveProducerOperation;
+  blockedReason?: string;
+  evidenceRefs: string[];
+  agentHostInput?: NormalizedCodexAgentHostInput;
+  runtimeTruth?: CodexAgentHostRuntimeTruth;
+  preflight?: ComputerUsePreflightResult;
 }
 
 export interface VSCodeCoWorkLiveDiagnosticResult {
@@ -71,6 +93,46 @@ export interface VSCodeCoWorkAgentHostFinalAnswer {
 }
 
 type PrimitiveEnvelope<T> = ComputerUsePrimitiveEnvelope<T>;
+
+export function produceVSCodeCoWorkAgentHostLiveInput(
+  input: VSCodeCoWorkAgentHostLiveProducerInput,
+): VSCodeCoWorkAgentHostLiveProducerResult {
+  if (input.observe.status !== 'completed' || !input.observe.output) {
+    return blockedProducerResult('current-vscode-cowork-live-producer-observe-required', input);
+  }
+  const operation = input.operation ?? inferVSCodeCoWorkLiveOperation(input.commandText, input.draftTextRef);
+  if (!operation) {
+    return blockedProducerResult('current-vscode-cowork-live-producer-intent-unsupported', input);
+  }
+  if (operation === 'insert-draft' && !input.draftTextRef?.startsWith('text-ref:')) {
+    return blockedProducerResult('current-vscode-cowork-live-producer-draft-text-ref-required', input);
+  }
+
+  const agentHostInput = buildAgentHostInput(
+    input,
+    input.bindOutput,
+    input.bindRefs,
+    input.observe,
+    {
+      operation,
+      draftTextRef: operation === 'insert-draft' ? input.draftTextRef : undefined,
+    },
+  );
+  const runtimeTruth = buildRuntimeTruth(input, input.bindOutput, input.bindRefs, input.observe, agentHostInput);
+  const preflight = readyPreflight(input, agentHostInput, runtimeTruth);
+  return {
+    status: 'ready',
+    operation,
+    evidenceRefs: runtimeOwnedLiveRefs([
+      ...agentHostInput.refs,
+      ...(runtimeTruth.refs ?? []),
+      ...preflight.evidenceRefs,
+    ]),
+    agentHostInput,
+    runtimeTruth,
+    preflight,
+  };
+}
 
 export async function runVSCodeCoWorkReadVisibleTextLiveDiagnostic(
   input: VSCodeCoWorkLiveDiagnosticInput,
@@ -131,12 +193,23 @@ export async function runVSCodeCoWorkReadVisibleTextLiveDiagnostic(
     return finish('blocked', beforeObserve.blockedReason ?? 'VSCode co-work live diagnostic blocked: before observe failed.');
   }
 
-  agentHostInput = buildAgentHostInput(input, bindOutput, bind.refs ?? [], beforeObserve);
-  runtimeTruth = buildRuntimeTruth(input, bindOutput, bind.refs ?? [], beforeObserve, agentHostInput);
+  const produced = produceVSCodeCoWorkAgentHostLiveInput({
+    ...input,
+    bindOutput,
+    bindRefs: bind.refs ?? [],
+    observe: beforeObserve,
+    operation: 'read-visible-text',
+  });
+  if (produced.status !== 'ready' || !produced.agentHostInput || !produced.runtimeTruth || !produced.preflight) {
+    mergeRefs(aggregate.evidenceRefs, produced.evidenceRefs);
+    return finish('blocked', produced.blockedReason ?? 'VSCode co-work live diagnostic blocked: Host producer could not build refs-first input.');
+  }
+  agentHostInput = produced.agentHostInput;
+  runtimeTruth = produced.runtimeTruth;
   const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
   materializerResult = await materializer({
     agentHostInput,
-    preflight: readyPreflight(input, agentHostInput, runtimeTruth),
+    preflight: produced.preflight,
     commandText: input.commandText,
     workspacePath: input.workspacePath,
     commandId: input.commandId,
@@ -227,15 +300,24 @@ export async function runVSCodeCoWorkInsertDraftLiveDiagnostic(
     return finish('blocked', beforeObserve.blockedReason ?? 'VSCode co-work insert-draft live diagnostic blocked: before observe failed.');
   }
 
-  agentHostInput = buildAgentHostInput(input, bindOutput, bind.refs ?? [], beforeObserve, {
+  const produced = produceVSCodeCoWorkAgentHostLiveInput({
+    ...input,
+    bindOutput,
+    bindRefs: bind.refs ?? [],
+    observe: beforeObserve,
     operation: 'insert-draft',
     draftTextRef: input.draftTextRef,
   });
-  runtimeTruth = buildRuntimeTruth(input, bindOutput, bind.refs ?? [], beforeObserve, agentHostInput);
+  if (produced.status !== 'ready' || !produced.agentHostInput || !produced.runtimeTruth || !produced.preflight) {
+    mergeRefs(aggregate.evidenceRefs, produced.evidenceRefs);
+    return finish('blocked', produced.blockedReason ?? 'VSCode co-work insert-draft live diagnostic blocked: Host producer could not build refs-first input.');
+  }
+  agentHostInput = produced.agentHostInput;
+  runtimeTruth = produced.runtimeTruth;
   const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
   materializerResult = await materializer({
     agentHostInput,
-    preflight: readyPreflight(input, agentHostInput, runtimeTruth),
+    preflight: produced.preflight,
     commandText: input.commandText,
     workspacePath: input.workspacePath,
     commandId: input.commandId,
@@ -351,12 +433,12 @@ async function releaseSession(
 }
 
 function buildAgentHostInput(
-  input: VSCodeCoWorkLiveDiagnosticInput,
+  input: VSCodeCoWorkLiveDiagnosticContext,
   bindOutput: ComputerUseBindOutput,
   bindRefs: string[],
   observe: PrimitiveEnvelope<ComputerUseObserveOutput>,
   options: {
-    operation?: 'insert-draft';
+    operation?: VSCodeCoWorkLiveProducerOperation;
     draftTextRef?: string;
   } = {},
 ): NormalizedCodexAgentHostInput {
@@ -401,7 +483,7 @@ function buildAgentHostInput(
 }
 
 function buildRuntimeTruth(
-  input: VSCodeCoWorkLiveDiagnosticInput,
+  input: VSCodeCoWorkLiveDiagnosticContext,
   bindOutput: ComputerUseBindOutput,
   bindRefs: string[],
   observe: PrimitiveEnvelope<ComputerUseObserveOutput>,
@@ -483,7 +565,7 @@ function buildRuntimeTruth(
 }
 
 function targetRefsFromLive(
-  input: VSCodeCoWorkLiveDiagnosticInput,
+  input: VSCodeCoWorkLiveDiagnosticContext,
   bindOutput: ComputerUseBindOutput,
   bindRefs: string[],
   observeRefs: string[],
@@ -525,7 +607,7 @@ function permissionRefFromLive(targetRefs: string[], observationRefs: string[]):
 }
 
 function readyPreflight(
-  input: VSCodeCoWorkLiveDiagnosticInput,
+  input: VSCodeCoWorkLiveDiagnosticContext,
   agentHostInput: NormalizedCodexAgentHostInput,
   runtimeTruth: CodexAgentHostRuntimeTruth,
 ): ComputerUsePreflightResult {
@@ -562,6 +644,39 @@ function readyPreflight(
       reason: 'refs-only VSCode visible text observation is allowed by the selected autonomy profile',
     },
     blockers: [],
+  };
+}
+
+function inferVSCodeCoWorkLiveOperation(
+  commandText: string,
+  draftTextRef: string | undefined,
+): VSCodeCoWorkLiveProducerOperation | undefined {
+  if (draftTextRef?.startsWith('text-ref:') && /(?:插入|写入|草稿|insert|draft)/i.test(commandText)) {
+    return 'insert-draft';
+  }
+  if (/(?:读取|查看|看看|可见文本|read|visible\s+text)/i.test(commandText)) {
+    return 'read-visible-text';
+  }
+  return undefined;
+}
+
+function blockedProducerResult(
+  blockedReason: string,
+  input: VSCodeCoWorkAgentHostLiveProducerInput,
+): VSCodeCoWorkAgentHostLiveProducerResult {
+  return {
+    status: 'blocked',
+    blockedReason,
+    evidenceRefs: runtimeOwnedLiveRefs([
+      `runtime-truth:vscode-cowork/live-producer/${safeToken(input.commandId) || 'command'}/${safeToken(input.attemptId) || 'attempt'}`,
+      ...(input.bindRefs ?? []),
+      ...(input.observe.refs ?? []),
+      input.bindOutput.sessionRef,
+      input.bindOutput.windowActionSessionRef,
+      input.bindOutput.inputAdapterRef,
+      input.bindOutput.cursorRef,
+      input.bindOutput.scopedInputLeaseRef,
+    ]),
   };
 }
 
