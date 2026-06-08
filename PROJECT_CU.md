@@ -283,7 +283,7 @@ P8 当前口径已按用户 co-work 要求从“临时 user data dir 隔离验�
 - `P9c full-access single-file mutation live-diagnostic`：在 Agent Host 明确目标、范围和用户请求后，对当前单文件做一个小范围 GUI 修改 / 可选保存，并用 before/after refs 与补充 validator 证明。
 - `P9d product-ready adapter gap`：session-local / focus-free adapter 通过真实 co-work 验收前，不把 P9 宣称为 `product-ready`；这不是 P9 live-diagnostic 的阻塞条件。
 
-本轮决策：SciForge / Agent Host 应拥有当前 co-work 的完整访问权限；P9 不再把 macOS/TCC 权限、VSCode profile 权限、真实文件可访问性、保存、批量替换或跨文件修改本身当作 confirmation 阶段阻塞。完整访问权限不改变 refs-first 约束：Host 仍必须绑定当前 window / session / editor / file refs，声明权限 envelope 和 action evidence，并在每一步只给 Computer Use 一个 primitive；批量 / 跨文件修改不作为 batch action 交给 Computer Use core，而由 Agent Host 基于每次 observe refs 拆成多次单步 primitive 调用。提交、发布、删除、支付、外部发送或其它不可逆外部副作用仍沿用 P5 hard-confirm policy。
+本轮决策：SciForge / Agent Host 应拥有当前 co-work 的完整访问权限；该 full-access permission envelope 覆盖本地文件系统、用户 VSCode profile 和用户已打开工作区的正常编辑协作，P9 不再把 macOS/TCC 权限、VSCode profile 权限、真实文件可访问性、保存、批量替换或跨文件修改本身当作 confirmation 阶段阻塞。完整访问权限不改变 refs-first 约束：Host 仍必须绑定当前 window / session / editor / file refs，声明权限 envelope 和 action evidence，并在每一步只给 Computer Use 一个 primitive；批量 / 跨文件修改不作为 batch action 交给 Computer Use core，而由 Agent Host 基于每次 observe refs 拆成多次单步 primitive 调用。提交、发布、删除、支付、外部发送或其它不可逆外部副作用仍沿用 P5 hard-confirm policy；目标窗口、文件、编辑范围或用户意图不明确时，先用 SciForge 视觉 / AX / text / title / visible file / editor refs 尝试确认唯一目标，证据不足或冲突时才 `needs-confirmation` / `blocked`。
 
 Build Tasks：
 

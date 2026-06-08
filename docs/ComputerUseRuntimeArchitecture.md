@@ -211,7 +211,7 @@ Computer Use owns:
 
 Computer Use 可以识别动作风险并返回 `needs-confirmation`，但不能自己决定高风险动作是否应该执行。
 
-P9 full-access co-work profile 下，保存用户真实文件、撤销用户编辑、批量替换或跨文件修改不再因为真实文件 / 保存 / 批量 / 跨文件本身要求 confirmation；它们必须绑定当前 session、目标 refs、Host decision/action evidence 和 full-access permission envelope。批量 / 跨文件仍不能作为 Computer Use core batch plan 执行，必须由 Host 拆成多次单步 primitive。
+P9 full-access co-work profile 下，本地文件系统、用户 VSCode profile 和用户已打开工作区属于 Agent/SciForge 的正常协作权限范围。保存用户真实文件、撤销用户编辑、批量替换或跨文件修改不再因为真实文件 / 保存 / 批量 / 跨文件本身要求 confirmation；它们必须绑定当前 session、目标 refs、Host decision/action evidence 和 full-access permission envelope。批量 / 跨文件仍不能作为 Computer Use core batch plan 执行，必须由 Host 拆成多次单步 primitive。
 
 必须返回 `needs-confirmation` 的典型情况：
 
