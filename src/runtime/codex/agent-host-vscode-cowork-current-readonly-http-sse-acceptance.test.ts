@@ -47,21 +47,31 @@ test('current VSCode co-work read-only HTTP/SSE acceptance persists refs-first e
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-readonly-http-sse-'));
   try {
     const adapter = new ReadonlyHttpSseAdapter();
+    let adapterFactoryInput: Record<string, unknown> | undefined;
     const manifest = await runCurrentVSCodeCoWorkReadonlyHttpSseAcceptance({
       workspacePath: workspace,
       outputDir: join(workspace, 'out'),
       env: {
         [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
       },
+      activateCurrentVSCodeIfNeeded: true,
       now: () => new Date('2026-06-08T00:00:00.000Z'),
-      createAdapter: () => adapter,
+      createAdapter: (input) => {
+        adapterFactoryInput = input as unknown as Record<string, unknown>;
+        return adapter;
+      },
     });
     const persistedText = await readFile(join(workspace, 'out', 'manifest.json'), 'utf8');
 
     assert.equal(adapter.startTurnInputs.length, 1);
+    assert.equal(typeof adapterFactoryInput?.currentVSCodeCoWorkLiveDiagnosticRunner, 'function');
+    assert.equal((adapterFactoryInput?.currentVSCodeCoWorkLiveDiagnosticOptions as Record<string, unknown> | undefined)?.activateCurrentVSCodeIfNeeded, true);
     assert.match(adapter.startTurnInputs[0]?.commandText ?? '', /VSCode/);
     assert.equal((adapter.startTurnInputs[0]?.agentHostInput as Record<string, unknown> | undefined)?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
-    assert.equal(((adapter.startTurnInputs[0]?.agentHostInput as Record<string, unknown>)?.target as Record<string, unknown> | undefined)?.kind, 'current-vscode-cowork');
+    const target = ((adapter.startTurnInputs[0]?.agentHostInput as Record<string, unknown>)?.target as Record<string, unknown> | undefined);
+    assert.equal(target?.kind, 'current-vscode-cowork');
+    assert.ok(Array.isArray(target?.refs) && target.refs.includes('text:vscode:http-sse-title'));
+    assert.ok(Array.isArray(target?.refs) && target.refs.includes('frontmost:vscode:http-sse-readonly'));
     assert.equal(manifest.status, 'passed');
     assert.equal(manifest.passClaim, true);
     assert.equal(manifest.productReady, false);

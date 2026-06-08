@@ -14,6 +14,12 @@ import {
   handleCodexRuntimeRoutes,
 } from './codex-runtime-server.js';
 import type { VSCodeCoWorkLiveDiagnosticResult } from './agent-host-vscode-cowork-live-diagnostic.js';
+import {
+  runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
+} from './agent-host-vscode-cowork-current-live-diagnostic.js';
+import type {
+  CurrentVSCodeCoWorkLiveDiagnosticRunner,
+} from './computer-use-native-route.js';
 
 export const CURRENT_VSCODE_COWORK_READONLY_HTTP_SSE_ACCEPTANCE_SCHEMA_VERSION =
   'sciforge.current-vscode-cowork-readonly-http-sse-acceptance.v1' as const;
@@ -102,8 +108,17 @@ export interface RunCurrentVSCodeCoWorkReadonlyHttpSseAcceptanceOptions {
   outputDir?: string;
   env?: Record<string, string | undefined>;
   commandText?: string;
+  activateCurrentVSCodeIfNeeded?: boolean;
   now?: () => Date;
-  createAdapter?: () => AgentCliAdapter;
+  createAdapter?: (input: CurrentVSCodeCoWorkReadonlyHttpSseAdapterFactoryInput) => AgentCliAdapter;
+}
+
+export interface CurrentVSCodeCoWorkReadonlyHttpSseAdapterFactoryInput {
+  env: NodeJS.ProcessEnv;
+  currentVSCodeCoWorkLiveDiagnosticRunner: CurrentVSCodeCoWorkLiveDiagnosticRunner;
+  currentVSCodeCoWorkLiveDiagnosticOptions: {
+    activateCurrentVSCodeIfNeeded?: boolean;
+  };
 }
 
 export async function runCurrentVSCodeCoWorkReadonlyHttpSseAcceptance(
@@ -126,7 +141,23 @@ export async function runCurrentVSCodeCoWorkReadonlyHttpSseAcceptance(
   const commandId = 'current-vscode-cowork-readonly-http-sse-live';
   const attemptId = 'current-vscode-cowork-readonly-http-sse-live-attempt-1';
   const agentHostInput = currentVSCodeReadonlyAgentHostInput(commandText);
-  const adapter = options.createAdapter?.() ?? createCodexAppServerRuntimeAdapter({ env: env as NodeJS.ProcessEnv });
+  const liveRunner: CurrentVSCodeCoWorkLiveDiagnosticRunner = (runnerInput) => runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic({
+    env,
+    commandText: runnerInput.commandText,
+    workspacePath: runnerInput.workspacePath,
+    commandId: runnerInput.commandId,
+    attemptId: runnerInput.attemptId,
+    authorizationProfileId: runnerInput.authorizationProfileId,
+    activateCurrentVSCodeIfNeeded: runnerInput.activateCurrentVSCodeIfNeeded === true,
+  });
+  const adapterFactoryInput: CurrentVSCodeCoWorkReadonlyHttpSseAdapterFactoryInput = {
+    env: env as NodeJS.ProcessEnv,
+    currentVSCodeCoWorkLiveDiagnosticRunner: liveRunner,
+    currentVSCodeCoWorkLiveDiagnosticOptions: {
+      ...(options.activateCurrentVSCodeIfNeeded === true ? { activateCurrentVSCodeIfNeeded: true } : {}),
+    },
+  };
+  const adapter = options.createAdapter?.(adapterFactoryInput) ?? createCodexAppServerRuntimeAdapter(adapterFactoryInput);
   const httpRun = await runHttpSseRuntimeTurn({
     adapter,
     workspacePath,
@@ -307,7 +338,14 @@ function currentVSCodeReadonlyAgentHostInput(commandText: string) {
     },
     target: {
       kind: 'current-vscode-cowork',
-      refs: [windowRef, fileRef, 'macos-app:vscode:http-sse-readonly', 'process:vscode:http-sse-readonly'],
+      refs: [
+        windowRef,
+        fileRef,
+        'macos-app:vscode:http-sse-readonly',
+        'process:vscode:http-sse-readonly',
+        'text:vscode:http-sse-title',
+        'frontmost:vscode:http-sse-readonly',
+      ],
       vscodeCoWork: {
         operation: 'read-visible-text',
         refs: [requestRef, windowRef, fileRef],

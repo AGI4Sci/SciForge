@@ -1308,6 +1308,62 @@ test('Codex app-server client routes refs-first ordinary VSCode co-work Host inp
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
 });
 
+test('Codex app-server client passes current VSCode live diagnostic options into native package bridge', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const liveRunner = async () => ({
+    status: 'completed' as const,
+    message: 'not used by this test',
+    maturity: 'live-diagnostic' as const,
+    productReady: false as const,
+    primitiveChainObserved: [],
+    evidenceRefs: [],
+    cleanupRefs: [],
+  });
+  let runnerMatches = false;
+  let activateCurrentVSCodeIfNeeded: unknown;
+  const client = createCodexAppServerClient({
+    env,
+    currentVSCodeCoWorkLiveDiagnosticRunner: liveRunner,
+    currentVSCodeCoWorkLiveDiagnosticOptions: {
+      activateCurrentVSCodeIfNeeded: true,
+    },
+    computerUseNativeRouteRunner(input) {
+      runnerMatches = input.currentVSCodeCoWorkLiveDiagnosticRunner === liveRunner;
+      activateCurrentVSCodeIfNeeded = input.currentVSCodeCoWorkLiveDiagnosticOptions?.activateCurrentVSCodeIfNeeded;
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([{
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          timestamp: new Date().toISOString(),
+          commandId: input.request.commandId,
+          attemptId: input.request.attemptId,
+          status: 'completed',
+          message: 'native route completed',
+        }]),
+      };
+    },
+  });
+  const commandText = '读取我当前打开的 VSCode 可见文本。';
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'app-server-client-vscode-live-options',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    agentHostInput: p9bVSCodeCoWorkAgentHostInput(commandText),
+  });
+  await collect(stream.events);
+
+  assert.equal(runnerMatches, true);
+  assert.equal(activateCurrentVSCodeIfNeeded, true);
+});
+
 test('Computer Use native route strips private runtime fields from public events', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();

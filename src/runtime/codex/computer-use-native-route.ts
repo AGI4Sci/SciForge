@@ -116,7 +116,8 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
   const target = isRecord(agentHostInput.target) ? agentHostInput.target : undefined;
   const observation = isRecord(agentHostInput.observation) ? agentHostInput.observation : undefined;
   const permissions = isRecord(agentHostInput.permissions) ? agentHostInput.permissions : undefined;
-  const latestObservation = isRecord(observation?.vscodeCoWork) ? observation.vscodeCoWork : undefined;
+  const rawLatestObservation = isRecord(observation?.vscodeCoWork) ? observation.vscodeCoWork : undefined;
+  const latestObservation = structuredVSCodeCoWorkObservationFromHostInput(agentHostInput, observation, rawLatestObservation);
   if (!isCurrentVSCodeCoWorkHostInput(agentHostInput, target)) return undefined;
   const explicitHostBinding = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
   const genericHostBinding = genericVSCodeCoWorkBindingFromHostInput(agentHostInput, target, latestObservation);
@@ -143,6 +144,53 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
       latestObservation: latestObservation ?? (isRecord(hostBinding?.latestObservation) ? hostBinding.latestObservation : undefined),
     }),
   };
+}
+
+function structuredVSCodeCoWorkObservationFromHostInput(
+  agentHostInput: Record<string, unknown>,
+  observation: Record<string, unknown> | undefined,
+  rawLatestObservation: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!observation && !rawLatestObservation) return undefined;
+  const refs = uniqueRouteStrings([
+    ...safeHostInputRefs(observation?.refs),
+    ...safeHostInputRefs(rawLatestObservation?.refs),
+  ]);
+  const sessionRefs = uniqueRouteStrings([
+    ...refs,
+    ...refsWithPrefix(safeHostInputRefs(agentHostInput.refs), ['window-action-session:', 'computer-use-session:']),
+  ]);
+  const windowRef = safeHostInputRef(rawLatestObservation?.windowRef, ['window:'])
+    ?? firstRefWithPrefix(refs, ['window:']);
+  if (!windowRef) return rawLatestObservation;
+
+  return compactRecord({
+    ...(rawLatestObservation ?? {}),
+    windowRef,
+    sessionRef: safeHostInputRef(rawLatestObservation?.sessionRef, ['window-action-session:', 'computer-use-session:'])
+      ?? firstRefWithPrefix(sessionRefs, ['window-action-session:', 'computer-use-session:']),
+    observationRef: safeHostInputRef(rawLatestObservation?.observationRef, ['observation:'])
+      ?? firstRefWithPrefix(refs, ['observation:']),
+    screenshotRef: safeHostInputRef(rawLatestObservation?.screenshotRef, ['image:'])
+      ?? firstRefWithPrefix(refs, ['image:']),
+    accessibilityRef: safeHostInputRef(rawLatestObservation?.accessibilityRef, ['accessibility:'])
+      ?? firstRefWithPrefix(refs, ['accessibility:']),
+    textRefs: nonEmptyRefs(uniqueRouteStrings([
+      ...refsWithPrefix(safeHostInputRefs(rawLatestObservation?.textRefs), ['text:']),
+      ...refsWithPrefix(refs, ['text:']),
+    ])),
+    elementRefs: nonEmptyRefs(uniqueRouteStrings([
+      ...refsWithPrefix(safeHostInputRefs(rawLatestObservation?.elementRefs), ['element:']),
+      ...refsWithPrefix(refs, ['element:']),
+    ])),
+    freshnessRef: safeHostInputRef(rawLatestObservation?.freshnessRef, ['freshness:'])
+      ?? firstRefWithPrefix(refs, ['freshness:']),
+    visibleFileRefs: nonEmptyRefs(uniqueRouteStrings([
+      ...refsWithPrefix(safeHostInputRefs(rawLatestObservation?.visibleFileRefs), ['file-ref:']),
+      ...refsWithPrefix(refs, ['file-ref:']),
+    ])),
+    nonUserFileScopeRef: safeHostInputRef(rawLatestObservation?.nonUserFileScopeRef, ['non-user-file-scope:']),
+  });
 }
 
 function genericVSCodeCoWorkBindingFromHostInput(

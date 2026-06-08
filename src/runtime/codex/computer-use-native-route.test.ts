@@ -708,6 +708,124 @@ test('Computer Use native route derives P9b VSCode co-work intent from generic H
   assert.doesNotMatch(JSON.stringify(events), /private-paper|Paper Draft - raw|\/Users\/example|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route structures generic observation refs before current VSCode live diagnostic', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-generic-observation-live',
+      attemptId: 'native-route-vscode-cowork-generic-observation-live-attempt-1',
+      agentHostInput: {
+        schemaVersion: 'sciforge.codex-agent-host-input.v1',
+        source: 'ordinary-chat',
+        intentText: '读取我当前打开的 VSCode 可见文本。',
+        singleTurnOverride: false,
+        refs: [
+          'intent:current-vscode-cowork',
+          'chat-request:vscode-cowork:generic-observation-live',
+          'window-action-session:vscode-cowork:1',
+        ],
+        readiness: {
+          nativeBridge: 'ready',
+          nativeSurface: 'ready',
+          windowActionSession: 'ready',
+          computerUseAdapter: 'ready',
+        },
+        target: {
+          kind: 'current-vscode-cowork',
+          refs: [
+            'macos-app:com.microsoft.VSCode',
+            'process:vscode:paper',
+            'window:vscode:paper',
+            'text:title:paper',
+            'frontmost:vscode:paper',
+            'file-ref:vscode:paper',
+          ],
+          vscodeCoWork: {
+            requestRef: 'chat-request:vscode-cowork:generic-observation-live',
+            operation: 'read-visible-text',
+          },
+        },
+        observation: {
+          fresh: true,
+          refs: [
+            'window:vscode:paper',
+            'file-ref:vscode:paper',
+            'observation:vscode:current',
+            'image:vscode:current',
+            'accessibility:vscode:current',
+            'text:vscode:visible',
+            'element:vscode:editor',
+            'freshness:vscode:current',
+          ],
+          vscodeCoWork: {
+            windowRef: 'window:vscode:paper',
+            selectedFileRef: 'file-ref:vscode:paper',
+            refs: [
+              'observation:vscode:current',
+              'text:vscode:visible',
+              'element:vscode:editor',
+            ],
+          },
+        },
+        permissions: {
+          refs: [VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF],
+          scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+          stopCancelPath: true,
+        },
+      },
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'Current VSCode co-work live diagnostic completed from structured generic observation refs.',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+        evidenceRefs: [
+          'chat-request:vscode-cowork:generic-observation-live',
+          'window:vscode:paper',
+          'observation:vscode:current-live',
+          'text:vscode:visible-live',
+        ],
+        cleanupRefs: [
+          'scoped-input-lease:current-vscode-cowork:generic-observation-live',
+          'input-adapter:current-vscode-cowork:generic-observation-live',
+          'cursor-marker:current-vscode-cowork:generic-observation-live',
+          'front-app-restore:current-vscode-cowork:generic-observation-live',
+          'mouse-position-restore:current-vscode-cowork:generic-observation-live',
+        ],
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const runtimeIntent = runnerCalls[0]?.runtimeIntent as Record<string, unknown> | undefined;
+  const vscodeCoWork = runtimeIntent?.vscodeCoWork as Record<string, unknown> | undefined;
+  const latestObservation = vscodeCoWork?.latestObservation as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(done?.status, 'completed');
+  assert.equal(latestObservation?.windowRef, 'window:vscode:paper');
+  assert.equal(latestObservation?.sessionRef, 'window-action-session:vscode-cowork:1');
+  assert.equal(latestObservation?.observationRef, 'observation:vscode:current');
+  assert.equal(latestObservation?.screenshotRef, 'image:vscode:current');
+  assert.equal(latestObservation?.accessibilityRef, 'accessibility:vscode:current');
+  assert.deepEqual(latestObservation?.textRefs, ['text:vscode:visible']);
+  assert.deepEqual(latestObservation?.elementRefs, ['element:vscode:editor']);
+  assert.equal(latestObservation?.freshnessRef, 'freshness:vscode:current');
+  assert.deepEqual(latestObservation?.visibleFileRefs, ['file-ref:vscode:paper']);
+  assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('Computer Use native route merges Host-selected operation with generic VSCode target refs', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {

@@ -75,6 +75,8 @@ export interface CodexAppServerJsonRpcClientOptions {
   serviceName?: string;
   dispatcher?: RuntimeModuleDispatcher;
   computerUseNativeRouteRunner?: (input: ComputerUseNativeRouteInput) => CodexAppServerTurnStream | undefined | Promise<CodexAppServerTurnStream | undefined>;
+  currentVSCodeCoWorkLiveDiagnosticRunner?: ComputerUseNativeRouteInput['currentVSCodeCoWorkLiveDiagnosticRunner'];
+  currentVSCodeCoWorkLiveDiagnosticOptions?: ComputerUseNativeRouteInput['currentVSCodeCoWorkLiveDiagnosticOptions'];
   transcriptRoot?: string;
   clientInfo?: {
     name: string;
@@ -273,6 +275,8 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       model: config.model,
       profile: request.profile ?? baseEnv.SCIFORGE_RUNTIME_PROFILE ?? 'computer-use-native-route',
       abortSignal: nativeAbort.signal,
+      currentVSCodeCoWorkLiveDiagnosticRunner: this.options.currentVSCodeCoWorkLiveDiagnosticRunner,
+      currentVSCodeCoWorkLiveDiagnosticOptions: this.options.currentVSCodeCoWorkLiveDiagnosticOptions,
     });
     if (nativeRouteStream) {
       const nativeTurnId = nativeRouteStream.turnId ?? commandId;
