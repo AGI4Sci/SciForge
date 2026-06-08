@@ -53,6 +53,7 @@ export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
   const service = createComputerUsePrimitiveService({
     ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
       runId: input.runId,
+      activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded,
       readCurrentWindow: input.readCurrentWindow,
       performAction: input.performAction,
       resolveTextRef: input.resolveTextRef,
@@ -100,6 +101,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(
   const service = createComputerUsePrimitiveService({
     ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
       runId: input.runId,
+      activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded,
       readCurrentWindow: input.readCurrentWindow,
       performAction: input.performAction,
       resolveTextRef: input.resolveTextRef,

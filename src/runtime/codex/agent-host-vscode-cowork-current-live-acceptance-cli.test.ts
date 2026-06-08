@@ -9,8 +9,16 @@ import test from 'node:test';
 import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
+import {
+  parseArgs,
+} from '../../../tools/current-vscode-cowork-readonly-live-acceptance.js';
 
 const execFileAsync = promisify(execFile);
+
+test('current VSCode co-work readonly live acceptance CLI keeps VSCode activation opt-in', () => {
+  assert.equal(parseArgs([]).activateCurrentVSCodeIfNeeded, false);
+  assert.equal(parseArgs(['--activate-vscode']).activateCurrentVSCodeIfNeeded, true);
+});
 
 test('current VSCode co-work readonly live acceptance CLI writes blocked manifest by default', async () => {
   const repoRoot = resolve(import.meta.dirname, '../../..');

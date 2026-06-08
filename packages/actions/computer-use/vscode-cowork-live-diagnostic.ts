@@ -80,6 +80,7 @@ export interface CurrentVSCodeCoWorkLiveResolvedTextExecution
 
 export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   runId?: string;
+  activateCurrentVSCodeIfNeeded?: boolean;
   readCurrentWindow?: () => Promise<CurrentVSCodeCoWorkWindowObservation>;
   performAction?: (input: CurrentVSCodeCoWorkLiveActionExecution) => Promise<void> | void;
   resolveTextRef?: (textRef: string) => Promise<string | undefined> | string | undefined;
@@ -149,7 +150,10 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
   const scopedInputLeaseRef = `scoped-input-lease:current-vscode-cowork:${runId}`;
   const frontAppRestoreRef = `front-app-restore:current-vscode-cowork:${runId}`;
   const mousePositionRestoreRef = `mouse-position-restore:current-vscode-cowork:${runId}`;
-  const readCurrentWindow = options.readCurrentWindow ?? readCurrentVSCodeWindowRefs;
+  const readCurrentWindow = options.readCurrentWindow
+    ?? (() => readCurrentVSCodeWindowRefs({
+      activateIfNotFrontmost: options.activateCurrentVSCodeIfNeeded === true,
+    }));
   const shouldUseDesktopRestoration = !options.readCurrentWindow;
   const captureRestorationState = options.captureRestorationState
     ?? (shouldUseDesktopRestoration ? captureCurrentRestorationState : undefined);
@@ -451,34 +455,56 @@ end run
   }
 }
 
-async function readCurrentVSCodeWindowRefs(): Promise<CurrentVSCodeCoWorkWindowObservation> {
+async function readCurrentVSCodeWindowRefs(input: {
+  activateIfNotFrontmost?: boolean;
+} = {}): Promise<CurrentVSCodeCoWorkWindowObservation> {
   const { stdout } = await execFileAsync('osascript', ['-e', `
-tell application "System Events"
-  set vscodeProcesses to application processes whose bundle identifier is "com.microsoft.VSCode"
-  if (count of vscodeProcesses) is 0 then error "current-vscode-process-missing"
-  repeat with vscodeProcess in vscodeProcesses
-    if frontmost of vscodeProcess is true then
-      if (count of windows of vscodeProcess) is 0 then error "current-vscode-window-missing"
-      set targetWindow to front window of vscodeProcess
-      set windowTitle to name of targetWindow as text
-      set collectedText to windowTitle
-      try
-        set focusedElement to value of attribute "AXFocusedUIElement" of vscodeProcess
-        try
-          set focusedName to name of focusedElement as text
-          if focusedName is not "" then set collectedText to collectedText & linefeed & focusedName
-        end try
-        try
-          set focusedValue to value of focusedElement as text
-          if focusedValue is not "" then set collectedText to collectedText & linefeed & focusedValue
-        end try
-      end try
-      return (unix id of vscodeProcess as text) & linefeed & windowTitle & linefeed & collectedText
+on run argv
+  set shouldActivate to false
+  if (count of argv) > 0 and item 1 of argv is "1" then set shouldActivate to true
+
+  tell application "System Events"
+    set vscodeProcesses to (application processes whose bundle identifier is "com.microsoft.VSCode")
+    set vscodeProcessCount to count of vscodeProcesses
+    if vscodeProcessCount is 0 then error "current-vscode-process-missing"
+
+    set targetProcess to missing value
+    repeat with vscodeProcess in vscodeProcesses
+      if frontmost of vscodeProcess is true then
+        set targetProcess to vscodeProcess
+        exit repeat
+      end if
+    end repeat
+
+    if targetProcess is missing value then
+      if shouldActivate is false then error "current-vscode-not-frontmost"
+      if vscodeProcessCount is not 1 then error "current-vscode-process-ambiguous"
+      set candidateProcess to item 1 of vscodeProcesses
+      if (count of windows of candidateProcess) is not 1 then error "current-vscode-window-ambiguous"
+      set frontmost of candidateProcess to true
+      delay 0.2
+      set targetProcess to candidateProcess
     end if
-  end repeat
-end tell
-error "current-vscode-not-frontmost"
-`], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+
+    if (count of windows of targetProcess) is 0 then error "current-vscode-window-missing"
+    set targetWindow to front window of targetProcess
+    set windowTitle to name of targetWindow as text
+    set collectedText to windowTitle
+    try
+      set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+      try
+        set focusedName to name of focusedElement as text
+        if focusedName is not "" then set collectedText to collectedText & linefeed & focusedName
+      end try
+      try
+        set focusedValue to value of focusedElement as text
+        if focusedValue is not "" then set collectedText to collectedText & linefeed & focusedValue
+      end try
+    end try
+    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & collectedText
+  end tell
+end run
+`, input.activateIfNotFrontmost ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
   const [pid = 'unknown', title = 'untitled', ...textParts] = stdout.trim().replace(/\r/g, '\n').split('\n');
   const titleToken = tokenHash(title);
   const textToken = tokenHash(textParts.join('\n'));

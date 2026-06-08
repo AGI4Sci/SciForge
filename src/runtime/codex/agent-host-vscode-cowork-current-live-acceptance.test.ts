@@ -43,17 +43,21 @@ test('current VSCode co-work readonly live acceptance writes blocked manifest wi
 test('current VSCode co-work readonly live acceptance persists refs-first Host evidence and cleanup refs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-readonly-live-'));
   try {
-    const runnerCalls: Array<{ commandText?: string }> = [];
+    const runnerCalls: Array<{ commandText?: string; activateCurrentVSCodeIfNeeded?: boolean }> = [];
     const manifest = await runCurrentVSCodeCoWorkReadonlyLiveAcceptance({
       workspacePath: workspace,
       outputDir: join(workspace, 'out'),
       env: {
         [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
       },
+      activateCurrentVSCodeIfNeeded: true,
       now: () => new Date('2026-06-08T00:00:00.000Z'),
       runReadVisibleTextLiveDiagnostic: async (input) => {
         assert.ok(input);
-        runnerCalls.push({ commandText: input.commandText });
+        runnerCalls.push({
+          commandText: input.commandText,
+          activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded,
+        });
         return {
           status: 'completed',
           message: 'Current VSCode read-only live diagnostic completed from refs-first evidence.',
@@ -185,6 +189,7 @@ test('current VSCode co-work readonly live acceptance persists refs-first Host e
 
     assert.equal(runnerCalls.length, 1);
     assert.equal(runnerCalls[0]?.commandText, 'read visible text from the current VSCode window');
+    assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
     assert.equal(manifest.status, 'passed');
     assert.equal(manifest.passClaim, true);
     assert.equal(manifest.finalAnswer.hostOwnsFinalAnswer, true);

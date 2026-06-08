@@ -80,6 +80,7 @@ export interface RunCurrentVSCodeCoWorkReadonlyLiveAcceptanceOptions {
   outputDir?: string;
   env?: Record<string, string | undefined>;
   commandText?: string;
+  activateCurrentVSCodeIfNeeded?: boolean;
   now?: () => Date;
   runReadVisibleTextLiveDiagnostic?: (
     input: Parameters<typeof runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic>[0],
@@ -110,6 +111,7 @@ export async function runCurrentVSCodeCoWorkReadonlyLiveAcceptance(
     workspacePath,
     commandId: 'current-vscode-cowork-readonly-live',
     attemptId: 'current-vscode-cowork-readonly-live-attempt-1',
+    activateCurrentVSCodeIfNeeded: options.activateCurrentVSCodeIfNeeded === true,
   });
 
   const evidenceRefs = safeRefs([
@@ -372,7 +374,7 @@ function safeReason(value: unknown): string | undefined {
 function nextActions(): string[] {
   return [
     `Set ${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}=1 only when the user is ready to run the current VSCode read-only live diagnostic.`,
-    'Keep VSCode frontmost and visible before running; if evidence cannot identify one target, return needs-confirmation or blocked.',
+    'Keep VSCode frontmost and visible, or pass --activate-vscode only when exactly one VSCode window is the intended target; if evidence cannot identify one target, return needs-confirmation or blocked.',
   ];
 }
 

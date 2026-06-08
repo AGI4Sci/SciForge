@@ -9,6 +9,7 @@ interface CliArgs {
   workspacePath?: string;
   outputDir?: string;
   commandText?: string;
+  activateCurrentVSCodeIfNeeded: boolean;
   json: boolean;
   help: boolean;
 }
@@ -28,6 +29,7 @@ export async function runCurrentVSCodeCoWorkReadonlyLiveAcceptanceCli(
     workspacePath,
     outputDir,
     commandText: args.commandText,
+    activateCurrentVSCodeIfNeeded: args.activateCurrentVSCodeIfNeeded,
     env: process.env,
   });
   const manifestPath = join(outputDir, 'manifest.json');
@@ -53,6 +55,7 @@ export async function runCurrentVSCodeCoWorkReadonlyLiveAcceptanceCli(
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
+    activateCurrentVSCodeIfNeeded: false,
     json: false,
     help: false,
   };
@@ -67,6 +70,8 @@ export function parseArgs(argv: string[]): CliArgs {
     } else if (arg === '--command-text') {
       args.commandText = requiredValue(argv, index, arg);
       index += 1;
+    } else if (arg === '--activate-vscode') {
+      args.activateCurrentVSCodeIfNeeded = true;
     } else if (arg === '--json') {
       args.json = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -86,10 +91,11 @@ function requiredValue(argv: string[], index: number, arg: string): string {
 
 function usage(): string {
   return [
-    'Usage: tsx tools/current-vscode-cowork-readonly-live-acceptance.ts [--workspace PATH] [--out DIR] [--command-text TEXT] [--json]',
+    'Usage: tsx tools/current-vscode-cowork-readonly-live-acceptance.ts [--workspace PATH] [--out DIR] [--command-text TEXT] [--activate-vscode] [--json]',
     '',
     'Writes docs/test-artifacts/current-vscode-cowork-readonly-live/manifest.json by default.',
     'Without SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC=1 it writes a blocked manifest and does not touch the desktop.',
+    '--activate-vscode may only be used for live diagnostic runs; it mechanically activates a unique VSCode window and the runner restores focus/mouse on release.',
   ].join('\n');
 }
 
