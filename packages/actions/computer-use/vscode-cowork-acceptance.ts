@@ -579,6 +579,26 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
     issues.push('missing-approval-ref:target-file');
   }
+  const activeSessionRefs = manifest.evidence.bindRefs.filter(sessionRef);
+  const approvalTokenRefs = manifest.evidence.approvalRefs.filter(approvalRef);
+  if (
+    realFileChangeOperation(manifest.operation)
+    && activeSessionRefs.length > 0
+    && !approvalTokenRefs.some((approval) =>
+      approvalRiskRefs.some((risk) =>
+        activeSessionRefs.some((activeSession) =>
+          approvalRefMatchesRiskActionHashTargetFileAndSession(
+            approval,
+            risk,
+            manifest.target.selectedFileRef,
+            activeSession,
+          ),
+        ),
+      ),
+    )
+  ) {
+    issues.push('missing-approval-ref:active-session');
+  }
   issues.push(...unsafeEvidenceRefIssues(manifest.evidence));
 
   return {
@@ -942,7 +962,12 @@ function realFileChangeNeedsConfirmation(
   if (!approvalRef(input.confirmationRef)) return true;
   if (!riskActionHashRef(input.riskActionHash)) return true;
   const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
-  return !approvalRefMatchesRiskActionHashAndTargetFile(input.confirmationRef, input.riskActionHash, targetFileRef);
+  return !approvalRefMatchesRiskActionHashTargetFileAndSession(
+    input.confirmationRef,
+    input.riskActionHash,
+    targetFileRef,
+    observation.sessionRef,
+  );
 }
 
 function userRealFileChangeOperation(
@@ -1130,9 +1155,15 @@ function resolvedTargetFileRef(
   return candidateFileRefs.length === 1 ? candidateFileRefs[0] : undefined;
 }
 
-function approvalRefMatchesRiskActionHashAndTargetFile(approvalRef: string, riskActionHash: string, targetFileRef: string | undefined): boolean {
+function approvalRefMatchesRiskActionHashTargetFileAndSession(
+  approvalRef: string,
+  riskActionHash: string,
+  targetFileRef: string | undefined,
+  activeSessionRef: string | undefined,
+): boolean {
   if (!fileRef(targetFileRef)) return false;
-  return approvalRef.startsWith(`approval:${riskActionHash}:${targetFileRef}:`);
+  if (!sessionRef(activeSessionRef)) return false;
+  return approvalRef.startsWith(`approval:${riskActionHash}:${activeSessionRef}:${targetFileRef}:`);
 }
 
 function riskActionHashRefMatchesTargetFile(riskActionHash: string, targetFileRef: string | undefined): boolean {
