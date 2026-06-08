@@ -351,6 +351,7 @@ function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagno
   const cleanupRefs = safeHostInputRefs(result.cleanupRefs);
   const primitiveChainObserved = safePrimitiveChain(result.primitiveChainObserved);
   const agentHostFinalAnswer = safeAgentHostFinalAnswer(result.agentHostFinalAnswer);
+  const hostProducerEvidence = safeHostProducerEvidence(result);
   return compactRecord({
     status,
     message: result.message,
@@ -362,6 +363,7 @@ function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagno
     primitiveChainObserved,
     evidenceRefs,
     cleanupRefs,
+    hostProducerEvidence,
     agentHostFinalAnswer,
     completionTruth: agentHostFinalAnswer?.completionTruth,
     claims: [{
@@ -373,6 +375,7 @@ function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagno
       computerUseCorePlanning: false,
       primitiveChainObserved,
       supportingRefs: evidenceRefs.slice(0, 12),
+      hostProducerEvidenceRefs: hostProducerEvidence?.evidenceRefs,
     }],
     uiManifest: [{
       kind: 'computer-use-vscode-cowork-live-diagnostic',
@@ -381,6 +384,7 @@ function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagno
       productReady: false,
       refsOnly: true,
       cleanupRefs,
+      hostProducerEvidenceRefs: hostProducerEvidence?.evidenceRefs,
     }],
     executionUnits: [{
       id: 'computer-use.current-vscode-cowork.live-diagnostic',
@@ -392,6 +396,7 @@ function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagno
       outputRef: evidenceRefs[0],
       evidenceRefs,
       cleanupRefs,
+      hostProducerEvidenceRefs: hostProducerEvidence?.evidenceRefs,
     }],
     artifacts: [],
     logs: [{
@@ -400,8 +405,160 @@ function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagno
       status,
       evidenceRefs,
       cleanupRefs,
+      hostProducerEvidenceRefs: hostProducerEvidence?.evidenceRefs,
     }],
   });
+}
+
+function safeHostProducerEvidence(result: VSCodeCoWorkLiveDiagnosticResult): Record<string, unknown> | undefined {
+  const agentHostInput = safeAgentHostInputProducerEvidence(result.agentHostInput);
+  const runtimeTruth = safeRuntimeTruthProducerEvidence(result.runtimeTruth);
+  if (!agentHostInput && !runtimeTruth) return undefined;
+
+  const agentHostInputRefs = refsFromRecord(agentHostInput, 'agentHostInputRefs');
+  const targetRefs = uniqueRouteStrings([
+    ...refsFromRecord(agentHostInput, 'targetRefs'),
+    ...refsFromRecord(runtimeTruth, 'targetRefs'),
+  ]);
+  const observationRefs = uniqueRouteStrings([
+    ...refsFromRecord(agentHostInput, 'observationRefs'),
+    ...refsFromRecord(runtimeTruth, 'observationRefs'),
+  ]);
+  const permissionRefs = uniqueRouteStrings([
+    ...refsFromRecord(agentHostInput, 'permissionRefs'),
+    ...refsFromRecord(runtimeTruth, 'permissionRefs'),
+  ]);
+  const sessionReadyRefs = refsFromRecord(runtimeTruth, 'sessionReadyRefs');
+  const inputLeaseRefs = refsFromRecord(runtimeTruth, 'inputLeaseRefs');
+  const actorCursorRefs = refsFromRecord(runtimeTruth, 'actorCursorRefs');
+  const adapterRefs = refsFromRecord(runtimeTruth, 'adapterRefs');
+  const runtimeTruthRefs = refsFromRecord(runtimeTruth, 'runtimeTruthRefs');
+  const evidenceRefs = uniqueRouteStrings([
+    ...agentHostInputRefs,
+    ...targetRefs,
+    ...observationRefs,
+    ...permissionRefs,
+    ...sessionReadyRefs,
+    ...inputLeaseRefs,
+    ...actorCursorRefs,
+    ...adapterRefs,
+    ...runtimeTruthRefs,
+  ]);
+
+  return compactRecord({
+    schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-live-producer-evidence.v1',
+    source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+    targetKind: stringField(agentHostInput, 'targetKind'),
+    operation: stringField(agentHostInput, 'operation'),
+    agentHostInputRefs: nonEmptyRefs(agentHostInputRefs),
+    targetRefs: nonEmptyRefs(targetRefs),
+    observationRefs: nonEmptyRefs(observationRefs),
+    permissionRefs: nonEmptyRefs(permissionRefs),
+    sessionReadyRefs: nonEmptyRefs(sessionReadyRefs),
+    inputLeaseRefs: nonEmptyRefs(inputLeaseRefs),
+    actorCursorRefs: nonEmptyRefs(actorCursorRefs),
+    adapterRefs: nonEmptyRefs(adapterRefs),
+    runtimeTruthRefs: nonEmptyRefs(runtimeTruthRefs),
+    evidenceRefs: nonEmptyRefs(evidenceRefs),
+  });
+}
+
+function safeAgentHostInputProducerEvidence(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  const observation = isRecord(value.observation) ? value.observation : undefined;
+  const permissions = isRecord(value.permissions) ? value.permissions : undefined;
+  const agentHostInputRefs = safeHostInputRefs(value.refs);
+  const targetRefs = safeHostInputRefs(target?.refs);
+  const observationRefs = safeHostInputRefs(observation?.refs);
+  const permissionRefs = uniqueRouteStrings([
+    ...safeHostInputRefs(permissions?.refs),
+    ...safeHostInputRefs(permissions?.permissionRefs),
+  ]);
+  const scopedExecutorRefs = safeHostInputRefs(permissions?.scopedExecutorRefs);
+  const targetKind = target?.kind === 'current-vscode-cowork' ? 'current-vscode-cowork' : undefined;
+  const operation = safeVSCodeCoWorkLiveOperation(vscodeCoWork?.operation);
+  if (!targetKind && !operation && !agentHostInputRefs.length && !targetRefs.length && !observationRefs.length && !permissionRefs.length) {
+    return undefined;
+  }
+  return compactRecord({
+    targetKind,
+    operation,
+    agentHostInputRefs: nonEmptyRefs(agentHostInputRefs),
+    targetRefs: nonEmptyRefs(targetRefs),
+    observationRefs: nonEmptyRefs(observationRefs),
+    permissionRefs: nonEmptyRefs(permissionRefs),
+    scopedExecutorRefs: nonEmptyRefs(scopedExecutorRefs),
+  });
+}
+
+function safeRuntimeTruthProducerEvidence(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.agent-host.runtime-truth.v1') return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const observation = isRecord(value.observation) ? value.observation : undefined;
+  const permissions = isRecord(value.permissions) ? value.permissions : undefined;
+  const sessions = isRecord(value.sessions) ? value.sessions : undefined;
+  const adapter = isRecord(value.adapter) ? value.adapter : undefined;
+  const inputIsolation = isRecord(adapter?.inputIsolation) ? adapter.inputIsolation : undefined;
+  const permissionRefs = uniqueRouteStrings([
+    ...safeHostInputRefs(permissions?.refs),
+    ...safeHostInputRefs(permissions?.permissionRefs),
+  ]);
+  const runtimeTruthRefs = safeHostInputRefs(value.refs);
+  const targetRefs = safeHostInputRefs(target?.refs);
+  const observationRefs = uniqueRouteStrings([
+    ...safeHostInputRefs(observation?.refs),
+    ...safeHostInputRefs(sessions?.observationRefs),
+  ]);
+  const sessionReadyRefs = safeHostInputRefs(sessions?.sessionReadyRefs);
+  const inputLeaseRefs = uniqueRouteStrings([
+    ...safeHostInputRefs(sessions?.inputLeaseRefs),
+    ...safeHostInputRefs(inputIsolation?.refs).filter((ref) => ref.startsWith('scoped-input-lease:') || ref.startsWith('input-lease:')),
+  ]);
+  const actorCursorRefs = uniqueRouteStrings([
+    ...safeHostInputRefs(sessions?.actorCursorRefs),
+    ...safeHostInputRefs(inputIsolation?.refs).filter((ref) => ref.startsWith('cursor-marker:') || ref.startsWith('actor-cursor:')),
+  ]);
+  const adapterRefs = safeHostInputRefs(adapter?.refs);
+  if (
+    !runtimeTruthRefs.length
+    && !targetRefs.length
+    && !observationRefs.length
+    && !permissionRefs.length
+    && !sessionReadyRefs.length
+    && !inputLeaseRefs.length
+    && !actorCursorRefs.length
+    && !adapterRefs.length
+  ) {
+    return undefined;
+  }
+  return compactRecord({
+    runtimeTruthRefs: nonEmptyRefs(runtimeTruthRefs),
+    targetRefs: nonEmptyRefs(targetRefs),
+    observationRefs: nonEmptyRefs(observationRefs),
+    permissionRefs: nonEmptyRefs(permissionRefs),
+    sessionReadyRefs: nonEmptyRefs(sessionReadyRefs),
+    inputLeaseRefs: nonEmptyRefs(inputLeaseRefs),
+    actorCursorRefs: nonEmptyRefs(actorCursorRefs),
+    adapterRefs: nonEmptyRefs(adapterRefs),
+  });
+}
+
+function safeVSCodeCoWorkLiveOperation(value: unknown): 'read-visible-text' | 'insert-draft' | undefined {
+  return value === 'read-visible-text' || value === 'insert-draft' ? value : undefined;
+}
+
+function refsFromRecord(value: unknown, key: string): string[] {
+  if (!isRecord(value)) return [];
+  const refs = value[key];
+  return Array.isArray(refs) ? refs.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+function nonEmptyRefs(refs: string[]): string[] | undefined {
+  return refs.length ? refs : undefined;
 }
 
 async function tryRunTextEditWindowActionBridge(

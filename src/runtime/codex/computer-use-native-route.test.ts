@@ -434,6 +434,91 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
           'mouse-position-restore:current-vscode-cowork:ordinary-live',
           'raw-cleanup-ref:SECRET_SHOULD_NOT_LEAK',
         ],
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'vscode-cowork-live-diagnostic',
+          intentText: 'SECRET_PROVIDER_PAYLOAD raw intent text should not leave the live runner.',
+          authorizationProfileId: 'high-autonomy',
+          singleTurnOverride: false,
+          refs: [
+            'intent:current-vscode-cowork',
+            'chat-request:vscode-cowork:ordinary-host-input-live',
+            'window:vscode:paper',
+            'observation:vscode:current-live',
+            'text:vscode:visible-live',
+            'https://example.invalid/SECRET_AGENT_HOST_REF',
+            'raw-agent-host-ref:SECRET_SHOULD_NOT_LEAK',
+          ],
+          readiness: {},
+          target: {
+            kind: 'current-vscode-cowork',
+            refs: ['window:vscode:paper', 'file-ref:vscode:paper', '/Users/example/private-paper.md'],
+            vscodeCoWork: {
+              operation: 'read-visible-text',
+              rawOperation: 'read SECRET_PROVIDER_PAYLOAD',
+            },
+          },
+          observation: {
+            fresh: true,
+            refs: ['observation:vscode:current-live', 'text:vscode:visible-live', 'data:image/png;base64,SECRET_IMAGE'],
+          },
+          permissions: {
+            refs: [VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF, 'api-key:SECRET_SHOULD_NOT_LEAK'],
+            scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+            stopCancelPath: true,
+          },
+        },
+        runtimeTruth: {
+          schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+          source: 'vscode-cowork-live-diagnostic',
+          target: {
+            bound: true,
+            summary: 'SECRET raw window summary should not leave the live runner.',
+            refs: ['window:vscode:paper', 'file-ref:vscode:paper', '/Users/example/private-paper.md'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['observation:vscode:current-live', 'text:vscode:visible-live', 'raw-observation:SECRET_SHOULD_NOT_LEAK'],
+          },
+          permissions: {
+            refs: [VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF],
+            permissionRefs: [VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF],
+            scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+            stopCancelPath: true,
+          },
+          sessions: {
+            sessionReadyRefs: [
+              'computer-use-session:vscode:ordinary-live',
+              'window-action-session:vscode-cowork:1',
+              'scoped-input-lease:current-vscode-cowork:ordinary-live',
+            ],
+            targetRefs: ['window:vscode:paper'],
+            inputLeaseRefs: ['scoped-input-lease:current-vscode-cowork:ordinary-live'],
+            observationRefs: ['observation:vscode:current-live'],
+          },
+          adapter: {
+            providerId: 'sciforge.vscode-cowork.live-diagnostic',
+            refs: ['scoped-input-adapter:current-vscode-cowork:ordinary-live'],
+            capabilityRefs: ['runtime-truth:computer-use-capability/current-vscode-cowork'],
+            inputIsolation: {
+              mode: 'shared-system-input-live-diagnostic',
+              refsOnly: true,
+              sharedSystemInput: true,
+              requiresFocusLease: true,
+              refs: [
+                'scoped-input-lease:current-vscode-cowork:ordinary-live',
+                'cursor-marker:current-vscode-cowork:ordinary-live',
+              ],
+            },
+          },
+          refs: [
+            'intent:current-vscode-cowork',
+            'window:vscode:paper',
+            'observation:vscode:current-live',
+            'computer-use-session:vscode:ordinary-live',
+            'raw-runtime-truth:SECRET_SHOULD_NOT_LEAK',
+          ],
+        },
         agentHostFinalAnswer: {
           schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
           source: 'codex-agent-host-vscode-cowork-live-diagnostic',
@@ -457,6 +542,7 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
   const liveSelected = events.find((event) => String(event.message).includes('current VSCode co-work live diagnostic'));
   const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
+  const hostProducerEvidence = done?.hostProducerEvidence as Record<string, unknown> | undefined;
 
   assert.ok(selected);
   assert.ok(liveSelected);
@@ -474,6 +560,18 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
   assert.match(String((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.text), /omitted because it was not refs-first safe/);
   assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current-live'));
   assert.ok((done?.cleanupRefs as string[]).includes('scoped-input-lease:current-vscode-cowork:ordinary-live'));
+  assert.equal(hostProducerEvidence?.schemaVersion, 'sciforge.codex-agent-host.current-vscode-cowork-live-producer-evidence.v1');
+  assert.equal(hostProducerEvidence?.targetKind, 'current-vscode-cowork');
+  assert.equal(hostProducerEvidence?.operation, 'read-visible-text');
+  assert.ok((hostProducerEvidence?.agentHostInputRefs as string[]).includes('intent:current-vscode-cowork'));
+  assert.ok((hostProducerEvidence?.agentHostInputRefs as string[]).includes('chat-request:vscode-cowork:ordinary-host-input-live'));
+  assert.ok((hostProducerEvidence?.targetRefs as string[]).includes('window:vscode:paper'));
+  assert.ok((hostProducerEvidence?.observationRefs as string[]).includes('observation:vscode:current-live'));
+  assert.ok((hostProducerEvidence?.permissionRefs as string[]).includes(VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF));
+  assert.ok((hostProducerEvidence?.runtimeTruthRefs as string[]).includes('computer-use-session:vscode:ordinary-live'));
+  assert.ok((hostProducerEvidence?.inputLeaseRefs as string[]).includes('scoped-input-lease:current-vscode-cowork:ordinary-live'));
+  assert.ok((hostProducerEvidence?.adapterRefs as string[]).includes('scoped-input-adapter:current-vscode-cowork:ordinary-live'));
+  assert.ok((hostProducerEvidence?.evidenceRefs as string[]).includes('text:vscode:visible-live'));
   assert.equal(unit?.tool, 'current-vscode-cowork-live-diagnostic');
   assert.equal(unit?.status, 'done');
   assert.doesNotMatch(JSON.stringify(events), /SECRET|example\.invalid|raw-live|raw-cleanup|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
