@@ -76,20 +76,20 @@ test('module result envelopes carry the contract schema version', () => {
 
 test('bounded operation request is a typed module.invoke intent with boundary-only config', () => {
   const validation = validateBoundedOperationRequest({
-    moduleId: 'browser',
+    moduleId: 'knowledge',
     intent: 'executeBoundedOperation',
     input: {
-      operationKind: 'browser.search_read',
-      ownerModuleId: 'browser',
-      targetScope: { kind: 'web-search', query: 'frontier AI model progress this week' },
+      operationKind: 'knowledge.collect_evidence',
+      ownerModuleId: 'knowledge',
+      targetScope: { kind: 'topic', query: 'frontier AI model progress this week' },
       config: {
-        allowedActions: ['search', 'open', 'read'],
+        allowedActions: ['query', 'read', 'summarize'],
         maxSteps: 4,
         maxTimeMs: 10_000,
         maxModelCalls: 1,
         riskPolicy: 'low',
-        requiredEvidence: ['source-page-ref', 'page-text-ref'],
-        stopConditions: ['enough-source-pages'],
+        requiredEvidence: ['source-ref', 'summary-ref'],
+        stopConditions: ['enough-evidence'],
       },
     },
   });
@@ -192,10 +192,10 @@ test('bounded operation result covers canonical statuses and keeps evidence refs
 
   for (const status of statuses) {
     const result = boundedOperationResult({
-      moduleId: 'browser',
-      operationKind: 'browser.open_read',
+      moduleId: 'knowledge',
+      operationKind: 'knowledge.read_source',
       status,
-      evidenceRefs: [`browser:evidence:${status}`],
+      evidenceRefs: [`knowledge:evidence:${status}`],
       value: {
         status,
         screenshotBase64: 'raw-data-must-not-stay-inline',
@@ -208,7 +208,7 @@ test('bounded operation result covers canonical statuses and keeps evidence refs
 
     const sanitized = sanitizeBoundedOperationResult(result);
     assert.equal(sanitized.value?.status, status);
-    assert.deepEqual(sanitized.refs, [`browser:evidence:${status}`]);
+    assert.deepEqual(sanitized.refs, [`knowledge:evidence:${status}`]);
     assert.equal(JSON.stringify(sanitized).includes('raw-data-must-not-stay-inline'), false);
     assert.equal(JSON.stringify(sanitized).includes('large raw provider response'), false);
     assert.equal((sanitized.value?.payload as { nested?: { useful?: string } }).nested?.useful, 'kept');
@@ -235,19 +235,19 @@ test('bounded operation result reports budget exhaustion without automatic repai
 
 test('bounded operation result filters inline, fixture, replay, and historical refs from evidence', () => {
   const result = boundedOperationResult({
-    moduleId: 'browser',
-    operationKind: 'browser.search_read',
+    moduleId: 'knowledge',
+    operationKind: 'knowledge.collect_evidence',
     status: 'completed',
     evidenceRefs: [
-      'browser-host-session:current/source-pages/source-1.txt',
+      'knowledge:current/source-pages/source-1.txt',
       'data:image/png;base64,abc',
-      'fixture:browser/source-page',
+      'fixture:knowledge/source-page',
       'history:run-123/evidence',
-      'replay:old-gui-projection',
+      'replay:old-module-projection',
       'raw:provider-payload',
     ],
   });
 
-  assert.deepEqual(result.refs, ['browser-host-session:current/source-pages/source-1.txt']);
-  assert.deepEqual(result.value?.evidenceRefs, ['browser-host-session:current/source-pages/source-1.txt']);
+  assert.deepEqual(result.refs, ['knowledge:current/source-pages/source-1.txt']);
+  assert.deepEqual(result.value?.evidenceRefs, ['knowledge:current/source-pages/source-1.txt']);
 });

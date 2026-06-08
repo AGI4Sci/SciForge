@@ -7,7 +7,8 @@ import { writeJson } from '../server/http.js';
 const port = Number(process.env.SCIFORGE_RUNTIME_CODEX_PORT || 0);
 const host = process.env.SCIFORGE_RUNTIME_CODEX_HOST || '127.0.0.1';
 const startedAt = new Date().toISOString();
-const agentHostRuntimeTruthResolver = createDefaultCodexAgentHostRuntimeTruthResolver({ env: process.env });
+const runtimeEnv = sanitizedRuntimeCodexEnv(process.env);
+const agentHostRuntimeTruthResolver = createDefaultCodexAgentHostRuntimeTruthResolver({ env: runtimeEnv });
 
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -31,14 +32,14 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: process.env }), {
+  if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
     agentHostRuntimeTruthResolver,
   })) return;
   writeJson(res, 404, { ok: false, error: 'not found' });
 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: process.env }), {
+  if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
     agentHostRuntimeTruthResolver,
   })) socket.destroy();
 });
@@ -53,4 +54,12 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     server.close(() => process.exit(0));
   });
+}
+
+function sanitizedRuntimeCodexEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const output = { ...env };
+  for (const key of Object.keys(output)) {
+    if (key === 'SCIFORGE_RUNTIME_BASE_URL' || key.startsWith('SCIFORGE_PROXY_')) delete output[key];
+  }
+  return output;
 }

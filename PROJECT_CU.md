@@ -22,10 +22,11 @@ Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理�
 - [x] 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
 - [x] 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
 - [x] 大对象必须 refs-first；截图、图片、provider payload、trace、日志和 artifact 不得作为 raw/base64 长期进入聊天正文或主上下文。
-- [x] 业务代码单文件超过约 2000 行时，必须拆分或登记拆分任务。
 - [x] 不使用 `git reset --hard` 或 `git checkout --` 擦除用户改动。
 - [x] LLM API 配置使用 `/Applications/workspace/ailab/research/app/SciForge/config.local.json`。
 - [x] 在能提高时间效率的前提下，尽可能使用 sub agent 并行推进；并行任务必须拆清边界，避免不同 worker 修改同一文件造成冲突。
+- [x] SciForge对话、工作链路需要统一，不要额外生出旁路
+- [x] **符合docs/Architecture.md设计原则, 如果你觉得继续推进会导致混乱、衍生旁路、设计方案不合理、有相互冲突的点、有更简洁通用的实现方案，需要停下来和用户讨论，澄清需求**
 
 ## 简化架构
 

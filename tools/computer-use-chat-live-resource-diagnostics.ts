@@ -11,7 +11,7 @@ const RESOURCE_ENV_KEYS = [
   'SCIFORGE_WORKSPACE_PORT',
   'SCIFORGE_AGENT_SERVER_PORT',
   'SCIFORGE_RUNTIME_CODEX_PORT',
-  'SCIFORGE_PROXY_PORT',
+  'SCIFORGE_MODEL_ROUTER_PORT',
   'SCIFORGE_RUN_REAL_L3_WORKFLOW',
   'SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND',
   'SCIFORGE_RUN_REAL_L3_WORKFLOW_TIMEOUT',
@@ -27,7 +27,7 @@ const RESOURCE_PORT_ENV_KEYS = [
   'SCIFORGE_WORKSPACE_PORT',
   'SCIFORGE_AGENT_SERVER_PORT',
   'SCIFORGE_RUNTIME_CODEX_PORT',
-  'SCIFORGE_PROXY_PORT',
+  'SCIFORGE_MODEL_ROUTER_PORT',
   'SCIFORGE_RUN_REAL_L3_WORKFLOW_VNC_PORT',
   'SCIFORGE_RUN_REAL_L3_WORKFLOW_NOVNC_PORT',
 ] as const;
@@ -70,7 +70,7 @@ export interface ComputerUseChatLiveResourceDiagnostics {
 
 export interface ResourcePortDiagnostic {
   port: number;
-  kind: 'ui' | 'workspace-writer' | 'runtime-codex' | 'provider-proxy' | 'vnc' | 'novnc' | 'unknown';
+  kind: 'ui' | 'workspace-writer' | 'runtime-codex' | 'model-router' | 'vnc' | 'novnc' | 'unknown';
   source: string;
 }
 
@@ -202,7 +202,7 @@ class ResourceCollector {
     this.collectPort(env, 'SCIFORGE_WORKSPACE_PORT', 'workspace-writer', 'env');
     this.collectPort(env, 'SCIFORGE_AGENT_SERVER_PORT', 'runtime-codex', 'env');
     this.collectPort(env, 'SCIFORGE_RUNTIME_CODEX_PORT', 'runtime-codex', 'env');
-    this.collectPort(env, 'SCIFORGE_PROXY_PORT', 'provider-proxy', 'env');
+    this.collectPort(env, 'SCIFORGE_MODEL_ROUTER_PORT', 'model-router', 'env');
     this.collectPort(env, 'SCIFORGE_RUN_REAL_L3_WORKFLOW_VNC_PORT', 'vnc', 'env');
     this.collectPort(env, 'SCIFORGE_RUN_REAL_L3_WORKFLOW_NOVNC_PORT', 'novnc', 'env');
     const stagingDir = env.SCIFORGE_RUN_REAL_L3_WORKFLOW_RESOURCE_LOCK_ROOT;
@@ -326,7 +326,8 @@ class ResourceCollector {
     this.collectPort(runnerOptions, 'workspacePort', 'workspace-writer', source);
     this.collectPort(runnerOptions, 'runtimeCodexPort', 'runtime-codex', source);
     this.collectPort(runnerOptions, 'agentServerPort', 'runtime-codex', source);
-    this.collectPort(runnerOptions, 'proxyPort', 'provider-proxy', source);
+    this.collectPort(runnerOptions, 'modelRouterPort', 'model-router', source);
+    this.collectPort(runnerOptions, 'proxyPort', 'model-router', source);
     const dockerImage = stringAt(runnerOptions, 'dockerImage');
     if (dockerImage) {
       this.containers.set(`image:${dockerImage}:${source}`, {
@@ -479,7 +480,7 @@ function portKind(value: Record<string, unknown>): ResourcePortDiagnostic['kind'
   const raw = `${stringAt(value, 'kind') ?? ''} ${stringAt(value, 'label') ?? ''} ${stringAt(value, 'service') ?? ''} ${stringAt(value, 'command') ?? ''}`.toLowerCase();
   if (raw.includes('workspace')) return 'workspace-writer';
   if (raw.includes('codex') || raw.includes('agent')) return 'runtime-codex';
-  if (raw.includes('proxy')) return 'provider-proxy';
+  if (raw.includes('model-router') || raw.includes('router') || raw.includes('proxy')) return 'model-router';
   if (raw.includes('novnc')) return 'novnc';
   if (raw.includes('vnc')) return 'vnc';
   if (raw.includes('ui') || raw.includes('vite')) return 'ui';

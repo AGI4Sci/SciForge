@@ -12,11 +12,11 @@ const serverCwd = join(workspace, 'server-cwd');
 const port = 24200 + Math.floor(Math.random() * 1000);
 const configPath = join(workspace, 'config.local.json');
 let child: ReturnType<typeof spawn> | undefined;
-let proxyHealthServer: Server | undefined;
+let modelRouterHealthServer: Server | undefined;
 
 try {
-  const proxyHealth = await startProxyHealthFixture();
-  proxyHealthServer = proxyHealth.server;
+  const modelRouterHealth = await startModelRouterHealthFixture();
+  modelRouterHealthServer = modelRouterHealth.server;
   await mkdir(join(workspace, '.sciforge'), { recursive: true });
   await mkdir(join(serverCwd, 'docs', 'test-artifacts', 'runtime-provider-preflight'), { recursive: true });
   await mkdir(join(serverCwd, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance'), { recursive: true });
@@ -39,9 +39,11 @@ try {
       SCIFORGE_LOG_DIR: join(workspace, '.sciforge', 'server-logs'),
       SCIFORGE_WORKSPACE_PATH: workspace,
       SCIFORGE_RUNTIME_API_KEY: 'test-runtime-api-key',
-      SCIFORGE_PROXY_API_KEY_ENV: 'SCIFORGE_RUNTIME_API_KEY',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1',
-      SCIFORGE_PROXY_BASE_URL: `${proxyHealth.url}/v1`,
+      SCIFORGE_MODEL_ROUTER_API_KEY: 'test-runtime-api-key',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: `${modelRouterHealth.url}/v1`,
+      SCIFORGE_TEXT_BASE_URL: 'http://provider.example/v1',
+      SCIFORGE_TEXT_MODEL: 'test-member-model',
+      SCIFORGE_TEXT_API_KEY: 'test-member-api-key',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -961,7 +963,7 @@ try {
   console.log('[ok] workspace instance manifest, feedback persistence, and handoff repair APIs expose structured confirmation gates');
 } finally {
   child?.kill('SIGTERM');
-  await closeServer(proxyHealthServer);
+  await closeServer(modelRouterHealthServer);
   await rm(workspace, { recursive: true, force: true });
 }
 
@@ -1053,19 +1055,19 @@ function runtimeProviderPreflightManifest() {
     category: 'config-secret-source',
     owner: 'environment',
     policyViolations: ['config-file-secret-fallback-cannot-satisfy-browser-release-acceptance'],
-    missingEnv: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
+    missingEnv: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_TEXT_BASE_URL'],
     evidenceMode: 'current-env-diagnostic-only',
     nextActions: [
       {
-        label: 'Set SCIFORGE_RUNTIME_API_KEY in the service environment that launches Runtime Codex/provider proxy.',
+        label: 'Set SCIFORGE_RUNTIME_API_KEY in the service environment that launches Runtime Codex through Model Router.',
         writesRepo: false,
       },
       {
-        label: 'Keep ignored config apiKey only for local proxy debugging; it cannot satisfy browser/release acceptance.',
+        label: 'Keep ignored config apiKey only for local Model Router member-model debugging; it cannot satisfy browser/release acceptance.',
         writesRepo: false,
       },
       {
-        label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL in service env or a non-secret ignored config upstreamBaseUrl.',
+        label: 'Set SCIFORGE_TEXT_BASE_URL in service env or a non-secret ignored config member-model baseUrl.',
         writesRepo: false,
       },
       {
@@ -1108,9 +1110,9 @@ function runtimeCodexBrowserAcceptanceManifest() {
   };
 }
 
-async function startProxyHealthFixture(): Promise<{ server: Server; url: string }> {
+async function startModelRouterHealthFixture(): Promise<{ server: Server; url: string }> {
   const server = createServer((request, response) => {
-    if (request.method === 'GET' && request.url?.startsWith('/healthz')) {
+    if (request.method === 'GET' && (request.url?.startsWith('/health') || request.url?.startsWith('/healthz'))) {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({
         ok: true,

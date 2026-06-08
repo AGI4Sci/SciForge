@@ -8,8 +8,6 @@
     "src/runtime/capability-discovery.ts#domain-default-routing": 1,
     "src/runtime/codex/computer-use-native-route.ts#domain-default-routing": 1,
     "src/runtime/codex/computer-use-text-planner.ts#domain-prompt-regex": 4,
-    "src/runtime/codex/gui-extension-manifest.ts#domain-prompt-regex": 1,
-    "src/runtime/codex/gui-mcp-server.ts#domain-prompt-regex": 1,
     "src/runtime/codex/subagent-mcp-tools.ts#domain-prompt-regex": 1,
     "src/runtime/codex/subagent-runner.ts#domain-prompt-regex": 1,
     "src/runtime/codex/subagent-runtime-store.ts#domain-prompt-regex": 1,

@@ -11,7 +11,6 @@ import type {
 } from './contracts.js';
 import { loadComputerUseLongTaskPool, prepareComputerUseLongRun, validateComputerUseLongTaskPool } from './task-pool.js';
 import { runComputerUseLongScenario, validateComputerUseLongRun } from './run-core.js';
-import { localProviderSettings } from '../../packages/backend/src/local-provider-config.js';
 import {
   executableIndependentInputAdapter,
   independentInputAdapterExecutionBoundary,
@@ -497,7 +496,6 @@ export async function preflightComputerUseLong(options: {
     await readOptionalJson(resolve(workspacePath, '.sciforge', 'config.json')),
     await readOptionalJson(resolve(workspacePath, '.sciforge', 'config.local.json')),
   ].filter(isRecord);
-  const localProviderCandidates = configCandidates.map((config) => localProviderSettings(config));
   const checks: ComputerUseLongPreflightResult['checks'] = [];
   for (const issue of poolIssues) {
     checks.push({
@@ -648,13 +646,13 @@ export async function preflightComputerUseLong(options: {
       getConfigString(config, ['visionSense', 'plannerProfile']),
     ]),
   );
-  const runtimeApiKeyReady = Boolean(runtimeCodexApiKey(localProviderCandidates));
-  const runtimeUpstreamBaseUrlReady = Boolean(runtimeCodexUpstreamBaseUrl(configCandidates, localProviderCandidates));
+  const runtimeApiKeyReady = Boolean(runtimeCodexApiKey(configCandidates));
+  const modelRouterEndpointReady = Boolean(modelRouterEndpoint(configCandidates));
   const missingRuntimePlannerConfig = [
     runtimeApiKeyReady ? undefined : 'SCIFORGE_RUNTIME_API_KEY',
-    runtimeUpstreamBaseUrlReady ? undefined : 'SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL',
+    modelRouterEndpointReady ? undefined : 'SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT',
   ].filter((item): item is string => Boolean(item));
-  const runtimeCodexReady = runtimeApiKeyReady && runtimeUpstreamBaseUrlReady;
+  const runtimeCodexReady = runtimeApiKeyReady && modelRouterEndpointReady;
   checks.push(runtimeCodexReady ? {
     id: 'runtime-codex-planner',
     status: hasTestActionFixtures ? 'warn' : 'pass',
@@ -669,8 +667,8 @@ export async function preflightComputerUseLong(options: {
     message: `Runtime Codex text planner config is incomplete: missing ${missingRuntimePlannerConfig.join(', ')}.`,
     repairAction: [
       'Set SCIFORGE_RUNTIME_API_KEY in the service environment or ignored local config.',
-      'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL in the service environment or ignored local config.',
-      'Start or verify the provider proxy with SCIFORGE_PROXY_PORT=3891.',
+      'Set SCIFORGE_MODEL_ROUTER_BASE_URL to the Model Router /v1 endpoint, or set SCIFORGE_MODEL_ROUTER_URL/SCIFORGE_MODEL_ROUTER_PORT.',
+      'Start or verify the Model Router with SCIFORGE_MODEL_ROUTER_PORT=3892.',
       'Then rerun computer-use-next:preflight without --actions-json before attempting a real CU-NEXT scenario.',
     ].join(' '),
   });
@@ -708,33 +706,50 @@ export async function preflightComputerUseLong(options: {
   return { ok, scenarioIds, dryRun, checks, reportPath };
 }
 
-function runtimeCodexApiKey(localProviderCandidates: Array<ReturnType<typeof localProviderSettings>>) {
+function runtimeCodexApiKey(configCandidates: Array<Record<string, unknown>>) {
   if (process.env.SCIFORGE_RUNTIME_API_KEY !== undefined) {
     return firstString(process.env.SCIFORGE_RUNTIME_API_KEY);
   }
-  return firstString(...localProviderCandidates.map((settings) => settings.apiKey));
+  return firstString(
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['runtimeApiKey']),
+      getConfigString(config, ['runtimeCodex', 'apiKey']),
+      getConfigString(config, ['runtimeCodex', 'runtimeApiKey']),
+      getConfigString(config, ['runtimeCodex', 'env', 'SCIFORGE_RUNTIME_API_KEY']),
+      getConfigString(config, ['modelRouter', 'apiKey']),
+      getConfigString(config, ['modelRouter', 'runtimeApiKey']),
+      getConfigString(config, ['modelRouter', 'env', 'SCIFORGE_RUNTIME_API_KEY']),
+    ]),
+  );
 }
 
-function runtimeCodexUpstreamBaseUrl(
-  configCandidates: Array<Record<string, unknown>>,
-  localProviderCandidates: Array<ReturnType<typeof localProviderSettings>>,
-) {
-  if (process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL !== undefined) {
-    return firstString(process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL);
-  }
-  if (process.env.SCIFORGE_RUNTIME_BASE_URL !== undefined) {
-    return firstString(process.env.SCIFORGE_RUNTIME_BASE_URL);
+function modelRouterEndpoint(configCandidates: Array<Record<string, unknown>>) {
+  if (
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL !== undefined
+    || process.env.SCIFORGE_MODEL_ROUTER_URL !== undefined
+    || process.env.SCIFORGE_MODEL_ROUTER_PORT !== undefined
+  ) {
+    return firstString(
+      process.env.SCIFORGE_MODEL_ROUTER_BASE_URL,
+      process.env.SCIFORGE_MODEL_ROUTER_URL,
+      process.env.SCIFORGE_MODEL_ROUTER_PORT,
+    );
   }
   return firstString(
     ...configCandidates.flatMap((config) => [
-      getConfigString(config, ['llm', 'baseUrl']),
-      getConfigString(config, ['llm', 'upstreamBaseUrl']),
-      getConfigString(config, ['codexProxy', 'upstreamBaseUrl']),
-      getConfigString(config, ['codexProxy', 'baseUrl']),
-      getConfigString(config, ['runtimeCodexProxy', 'upstreamBaseUrl']),
-      getConfigString(config, ['runtimeCodexProxy', 'baseUrl']),
+      getConfigString(config, ['modelRouter', 'baseUrl']),
+      getConfigString(config, ['modelRouter', 'url']),
+      getConfigString(config, ['modelRouter', 'port']),
+      getConfigString(config, ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_BASE_URL']),
+      getConfigString(config, ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_URL']),
+      getConfigString(config, ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_PORT']),
+      getConfigString(config, ['runtimeCodex', 'modelRouterBaseUrl']),
+      getConfigString(config, ['runtimeCodex', 'modelRouterUrl']),
+      getConfigString(config, ['runtimeCodex', 'modelRouterPort']),
+      getConfigString(config, ['runtimeCodex', 'env', 'SCIFORGE_MODEL_ROUTER_BASE_URL']),
+      getConfigString(config, ['runtimeCodex', 'env', 'SCIFORGE_MODEL_ROUTER_URL']),
+      getConfigString(config, ['runtimeCodex', 'env', 'SCIFORGE_MODEL_ROUTER_PORT']),
     ]),
-    ...localProviderCandidates.map((settings) => settings.baseUrl),
   );
 }
 

@@ -11,7 +11,7 @@ test('classifyRuntimeFailure maps provider auth failures without leaking raw det
     failureKind: 'provider-auth',
     ownerLayer: 'provider-config',
     retryable: false,
-    publicFailureReason: 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.',
+    publicFailureReason: 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured Model Router member model credentials.',
   });
 });
 
@@ -26,7 +26,7 @@ test('classifyRuntimeFailure maps retryable gateway and network failures', () =>
     failureKind: 'external-network',
     ownerLayer: 'external-network',
     retryable: true,
-    publicFailureReason: 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.',
+    publicFailureReason: 'Runtime Codex provider network request failed. Check network access and the configured Model Router member model endpoint.',
   });
 });
 

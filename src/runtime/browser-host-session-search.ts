@@ -1,13 +1,13 @@
 import { Buffer } from 'node:buffer';
 
 import type {
-  BrowserHostSearchEngine,
-  BrowserHostSearchOutput,
-  BrowserHostSearchResult,
+  BrowserHostDiscoveryEngine,
+  BrowserHostDiscoveryOutput,
+  BrowserHostDiscoveryResult,
   BrowserHostSessionDriver,
 } from './browser-host-session-types.js';
 
-export function browserHostSearchUrl(engine: BrowserHostSearchEngine, query: string, region = 'us-en'): string {
+export function browserHostDiscoveryUrl(engine: BrowserHostDiscoveryEngine, query: string, region = 'us-en'): string {
   if (engine === 'duckduckgo') {
     const url = new URL('https://duckduckgo.com/html/');
     url.searchParams.set('q', query);
@@ -26,7 +26,7 @@ export function browserHostSearchUrl(engine: BrowserHostSearchEngine, query: str
   return url.toString();
 }
 
-export function browserHostSearchSummary(output: BrowserHostSearchOutput, maxResults = 5): string {
+export function browserHostDiscoverySummary(output: BrowserHostDiscoveryOutput, maxResults = 5): string {
   const lines = output.results.slice(0, maxResults).map((result, index) => (
     `${index + 1}. ${result.title} - ${result.url}${result.snippet ? `\n   ${result.snippet}` : ''}`
   ));
@@ -43,7 +43,7 @@ export function browserHostSearchSummary(output: BrowserHostSearchOutput, maxRes
   ].join('\n');
 }
 
-export async function genericSearchResultsFromDriver(driver: BrowserHostSessionDriver, limit: number): Promise<BrowserHostSearchResult[]> {
+export async function genericSearchResultsFromDriver(driver: BrowserHostSessionDriver, limit: number): Promise<BrowserHostDiscoveryResult[]> {
   const text = await driver.text().catch(() => '');
   return text
     .split('\n')
@@ -53,7 +53,7 @@ export async function genericSearchResultsFromDriver(driver: BrowserHostSessionD
     .map((line, index) => ({ title: line.slice(0, 120), url: driver.url(), snippet: index === 0 ? line : '' }));
 }
 
-export function browserHostSearchResultExtractionScript(limit: number): string {
+export function browserHostDiscoveryResultExtractionScript(limit: number): string {
   const safeLimit = Math.max(1, Math.min(10, Math.floor(limit || 5)));
   return `(() => {
     const limit = ${JSON.stringify(safeLimit)};
@@ -111,7 +111,7 @@ export function browserHostSearchResultExtractionScript(limit: number): string {
   })()`;
 }
 
-export function nativeSearchResult(value: unknown): BrowserHostSearchResult {
+export function nativeSearchResult(value: unknown): BrowserHostDiscoveryResult {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
     title: cleanText(typeof record.title === 'string' ? record.title : ''),
@@ -135,9 +135,9 @@ export function decodeSearchRedirect(value: string) {
   }
 }
 
-export function boundedSearchResults(rows: Array<Partial<BrowserHostSearchResult>>, limit: number): BrowserHostSearchResult[] {
+export function boundedSearchResults(rows: Array<Partial<BrowserHostDiscoveryResult>>, limit: number): BrowserHostDiscoveryResult[] {
   const seen = new Set<string>();
-  const results: BrowserHostSearchResult[] = [];
+  const results: BrowserHostDiscoveryResult[] = [];
   for (const row of rows) {
     const url = typeof row.url === 'string' ? decodeSearchRedirect(row.url.trim()) : '';
     const title = cleanText(String(row.title ?? ''));

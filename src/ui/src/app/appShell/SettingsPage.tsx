@@ -10,12 +10,6 @@ import {
   updatePeerInstanceAt,
 } from './ShellPanels.settingsModel';
 import {
-  modelCatalogPlaceholder,
-  modelCatalogStatusText,
-  refreshModelCatalog,
-  type ModelCatalogState,
-} from './settingsModelCatalog';
-import {
   SUPPORTED_LOCALES,
   localeText,
   normalizeLocale,
@@ -73,7 +67,6 @@ export function SettingsPage({
   const healthItems = useRuntimeHealth(config);
   const peerInstances = config.peerInstances ?? [];
   const peerValidationErrors = validatePeerInstances(peerInstances);
-  const [modelCatalog, setModelCatalog] = useState<ModelCatalogState>({ status: 'idle', models: [] });
 
   useEffect(() => {
     setActiveSection(initialSection);
@@ -86,18 +79,6 @@ export function SettingsPage({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onBack]);
-
-  useEffect(() => {
-    if (activeSection !== 'models') return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      void refreshModelCatalog(config, setModelCatalog, controller.signal);
-    }, 250);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [activeSection, config.modelProvider, config.modelBaseUrl, config.apiKey]);
 
   const updatePeerInstance = (index: number, patch: Partial<PeerInstance>) => {
     onChange({ peerInstances: updatePeerInstanceAt(peerInstances, index, patch) });
@@ -302,26 +283,19 @@ export function SettingsPage({
               <div className="wide settings-peer-section" aria-label="Runtime provider settings">
                 <div className="settings-peer-section-head">
                   <span>{t({ 'zh-CN': 'Runtime Provider', 'en-US': 'Runtime Provider' })}</span>
-                  <code>{config.apiKey.trim()
-                    ? t({ 'zh-CN': 'API key 已配置：是（已隐藏）', 'en-US': 'API key configured: yes (masked)' })
-                    : t({ 'zh-CN': 'API key 已配置：否', 'en-US': 'API key configured: no' })}</code>
+                  <code>{t({ 'zh-CN': 'Model Router', 'en-US': 'Model Router' })}</code>
                 </div>
                 <p className="settings-peer-empty">
                   {t({
-                    'zh-CN': '主对话和 repair 流程使用 Codex app-server 路径，并复用这里的模型端点和 API key。本地兼容管线不会暴露在聊天界面中。',
-                    'en-US': 'Main chat and repair flows use the Codex app-server path with this model endpoint and API key. Local compatibility plumbing stays hidden from the chat surface.',
+                    'zh-CN': '主对话和 repair 流程使用 Codex app-server，并通过 Model Router profile 调用模型。config.local.json 中的 API key 只作为 Router 成员模型配置，不会从 UI 直连 provider。',
+                    'en-US': 'Main chat and repair flows use Codex app-server and call models through a Model Router profile. API keys in config.local.json are Router member-model config only and are not sent from this UI to providers.',
                   })}
                 </p>
               </div>
               <label>
                 <span>Runtime Adapter</span>
-                <select value={config.agentBackend} onChange={(event) => onChange({ agentBackend: event.target.value })}>
+                <select value="codex" disabled>
                   <option value="codex">Codex app-server</option>
-                  <option value="openteam_agent">OpenTeam Agent</option>
-                  <option value="claude-code">Claude Code</option>
-                  <option value="hermes-agent">Hermes Agent</option>
-                  <option value="openclaw">OpenClaw</option>
-                  <option value="gemini">Gemini</option>
                 </select>
               </label>
               <label>
@@ -335,17 +309,13 @@ export function SettingsPage({
                 <small id="settings-runtime-profile-status">{publicConfigPresenceLabel(config.runtimeProfile, 'Runtime profile')}</small>
               </label>
               <label>
-                <span>Model Provider</span>
-                <select value={config.modelProvider} onChange={(event) => onChange({ modelProvider: event.target.value })}>
-                  <option value="native">native user endpoint</option>
-                  <option value="openai-compatible">openai-compatible</option>
-                  <option value="openrouter">openrouter</option>
-                  <option value="codex-chatgpt">codex-chatgpt</option>
-                  <option value="gemini">gemini</option>
+                <span>Model Router Provider</span>
+                <select value="sciforge-model-router" disabled>
+                  <option value="sciforge-model-router">sciforge-model-router</option>
                 </select>
               </label>
               <label>
-                <span>Model</span>
+                <span>Model Alias</span>
                 <input
                   defaultValue=""
                   onChange={(event) => onChange({ modelName: event.target.value })}
@@ -353,73 +323,6 @@ export function SettingsPage({
                   aria-describedby="settings-model-status"
                 />
                 <small id="settings-model-status">{publicConfigPresenceLabel(config.modelName, 'Model')}</small>
-              </label>
-              <div className="wide settings-model-catalog">
-                <div className="settings-peer-section-head">
-                  <span>Provider Models</span>
-                  <ActionButton
-                    icon={RefreshCw}
-                    variant="secondary"
-                    onClick={() => void refreshModelCatalog(config, setModelCatalog)}
-                    disabled={modelCatalog.status === 'loading'}
-                  >
-                    {modelCatalog.status === 'loading'
-                      ? t({ 'zh-CN': '加载中', 'en-US': 'Loading' })
-                      : t({ 'zh-CN': '刷新模型', 'en-US': 'Refresh models' })}
-                  </ActionButton>
-                </div>
-                <div className="settings-model-picker">
-                  <label>
-                    <span>Available models</span>
-                    <select
-                      value={modelCatalog.models.includes(config.modelName) ? config.modelName : ''}
-                      onChange={(event) => {
-                        if (event.target.value) onChange({ modelName: event.target.value });
-                      }}
-                      disabled={!modelCatalog.models.length}
-                    >
-                      <option value="">{modelCatalogPlaceholder(modelCatalog, locale)}</option>
-                      {modelCatalog.models.map((model) => (
-                        <option key={model} value={model}>{model}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className={cx('settings-model-catalog-status', modelCatalog.status === 'error' ? 'error' : undefined)}>
-                    {modelCatalogStatusText(modelCatalog, locale)}
-                  </p>
-                </div>
-              </div>
-              <label>
-                <span>Provider Base URL</span>
-                <input
-                  defaultValue=""
-                  onChange={(event) => onChange({ modelBaseUrl: event.target.value })}
-                  placeholder={publicConfigInputPlaceholder(config.modelBaseUrl, 'Enter provider base URL')}
-                  aria-describedby="settings-provider-base-url-status"
-                />
-                <small id="settings-provider-base-url-status">{publicConfigPresenceLabel(config.modelBaseUrl, 'Provider Base URL')}</small>
-              </label>
-              <label>
-                <span>API Key</span>
-                <div className="settings-secret-input">
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    defaultValue=""
-                    onChange={(event) => onChange({ apiKey: event.target.value })}
-                    placeholder={secretInputPlaceholder(config.apiKey, t({ 'zh-CN': '存储在本地 config.json', 'en-US': 'stored in local config.json' }), locale)}
-                    aria-describedby="settings-api-key-status"
-                  />
-                </div>
-                <small id="settings-api-key-status">{secretPresenceLabel(config.apiKey, 'API key', locale)}</small>
-              </label>
-              <label className="wide settings-check-row">
-                <input
-                  type="checkbox"
-                  checked={config.allowOpenAiRuntime === true}
-                  onChange={(event) => onChange({ allowOpenAiRuntime: event.target.checked })}
-                />
-                <span>{t({ 'zh-CN': '显式允许 OpenAI 作为 runtime provider', 'en-US': 'Explicitly allow OpenAI as a runtime provider' })}</span>
               </label>
             </div>
           ) : null}

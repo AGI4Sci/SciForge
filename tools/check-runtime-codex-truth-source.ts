@@ -160,11 +160,18 @@ if (/['"]smoke:agentserver-/i.test(realTaskMatrixText)) {
 }
 
 for (const [file, text] of docs) {
-  if (!/SCIFORGE_RUNTIME_API_KEY/.test(text) || !/SCIFORGE_PROXY_UPSTREAM_BASE_URL|upstream base URL|upstreamBaseUrl/.test(text)) {
+  if (!/SCIFORGE_RUNTIME_API_KEY/.test(text) || !/SCIFORGE_MODEL_ROUTER_BASE_URL|SCIFORGE_MODEL_ROUTER_URL|SCIFORGE_MODEL_ROUTER_PORT|Model Router \/v1 base URL|Router URL|Router port/i.test(text)) {
     findings.push({
       file,
       rule: 'runtime-codex-config-docs',
-      message: 'Runtime Codex docs must mention both the API key and provider proxy upstream requirement.',
+      message: 'Runtime Codex docs must mention both the API key and Model Router base URL/URL/PORT requirement.',
+    });
+  }
+  if (/SCIFORGE_PROXY_UPSTREAM_BASE_URL|SCIFORGE_RUNTIME_BASE_URL/.test(text)) {
+    findings.push({
+      file,
+      rule: 'runtime-codex-legacy-upstream-docs',
+      message: 'Runtime Codex docs must not require legacy upstream env; Runtime/API services must point at Model Router.',
     });
   }
   if (/LEGACY-CLEANUP-20260519/.test(text)) {

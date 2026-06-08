@@ -2019,6 +2019,14 @@ test('product Runtime Codex entries do not wire local Computer Use Act materiali
   assert.doesNotMatch(compositeSource, /createDefaultVirtualAppScreenComputerUseActMaterializer|VirtualAppScreen/i);
 });
 
+test('Runtime Codex standalone server sanitizes legacy proxy env before app-server adapter', async () => {
+  const source = await readFile(new URL('./codex-runtime-standalone-server.ts', import.meta.url), 'utf8');
+  assert.match(source, /sanitizedRuntimeCodexEnv\(process\.env\)/);
+  assert.match(source, /key\.startsWith\('SCIFORGE_PROXY_'\)/);
+  assert.match(source, /SCIFORGE_RUNTIME_BASE_URL/);
+  assert.doesNotMatch(source, /createCodexAppServerRuntimeAdapter\(\{ env: process\.env \}\)/);
+});
+
 test('HTTP/SSE endpoint fails closed when the Codex app-server adapter is unavailable', async () => {
   const adapter: AgentCliAdapter = {
     async startTurn() {

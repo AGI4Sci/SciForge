@@ -9,7 +9,7 @@ import { ensureWorkspaceBrowserProfileDir, normalizeWorkspaceRootPath } from './
 import {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
-  BROWSER_HOST_SEARCH_SCHEMA,
+  BROWSER_HOST_DISCOVERY_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
   BROWSER_HOST_SESSION_SCHEMA,
 } from './browser-host-session-types.js';
@@ -17,13 +17,13 @@ import type {
   BrowserHostFrameCaptureResult,
   BrowserHostMouseButton,
   BrowserHostMousePoint,
-  BrowserHostOpenReadInput,
-  BrowserHostOpenReadOutput,
-  BrowserHostSearchEngine,
-  BrowserHostSearchInput,
-  BrowserHostSearchOutput,
-  BrowserHostSearchResult,
-  BrowserHostSearchSourcePage,
+  BrowserHostPageReadInput,
+  BrowserHostPageReadOutput,
+  BrowserHostDiscoveryEngine,
+  BrowserHostDiscoveryInput,
+  BrowserHostDiscoveryOutput,
+  BrowserHostDiscoveryResult,
+  BrowserHostSourcePage,
   BrowserHostSessionActorCursor,
   BrowserHostSessionActorCursorInput,
   BrowserHostSessionAction,
@@ -58,23 +58,23 @@ import {
 } from './browser-host-session-timing.js';
 import {
   boundedSearchResults,
-  browserHostSearchUrl,
-  browserHostSearchResultExtractionScript,
+  browserHostDiscoveryUrl,
+  browserHostDiscoveryResultExtractionScript,
   decodeSearchRedirect,
   genericSearchResultsFromDriver,
   nativeSearchResult,
 } from './browser-host-session-search.js';
 import {
-  browserHostSearchSourcePageDerivedResults,
-  browserHostSearchSourcePageLimit,
-  failedBrowserHostSearchSourcePage,
-  persistBrowserHostSearchSourcePage,
+  browserHostSourcePageDerivedResults,
+  browserHostSourcePageLimit,
+  failedBrowserHostSourcePage,
+  persistBrowserHostSourcePage,
 } from './browser-host-session-source-pages.js';
 
 export {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
-  BROWSER_HOST_SEARCH_SCHEMA,
+  BROWSER_HOST_DISCOVERY_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
   BROWSER_HOST_SESSION_SCHEMA,
 } from './browser-host-session-types.js';
@@ -82,12 +82,12 @@ export type {
   BrowserHostFrameCaptureResult,
   BrowserHostMouseButton,
   BrowserHostMousePoint,
-  BrowserHostOpenReadInput,
-  BrowserHostOpenReadOutput,
-  BrowserHostSearchEngine,
-  BrowserHostSearchInput,
-  BrowserHostSearchOutput,
-  BrowserHostSearchResult,
+  BrowserHostPageReadInput,
+  BrowserHostPageReadOutput,
+  BrowserHostDiscoveryEngine,
+  BrowserHostDiscoveryInput,
+  BrowserHostDiscoveryOutput,
+  BrowserHostDiscoveryResult,
   BrowserHostSessionAction,
   BrowserHostSessionActionRiskType,
   BrowserHostSessionActionInput,
@@ -119,8 +119,8 @@ export interface BrowserHostSourceTextFetchResult {
 export type BrowserHostSourceTextFetcher =
   (url: string, input?: { timeoutMs?: number }) => Promise<BrowserHostSourceTextFetchResult>;
 export {
-  browserHostSearchSummary,
-  browserHostSearchUrl,
+  browserHostDiscoverySummary,
+  browserHostDiscoveryUrl,
 } from './browser-host-session-search.js';
 
 const BROWSER_HOST_CAPTURE_FALLBACK_PNG = Buffer.from(
@@ -572,13 +572,13 @@ export class BrowserHostSessionManager {
     return { session: await this.captureFrame(workspacePath, sessionId), captured: true };
   }
 
-  async search(workspacePath: string, input: BrowserHostSearchInput): Promise<BrowserHostSearchOutput> {
+  async search(workspacePath: string, input: BrowserHostDiscoveryInput): Promise<BrowserHostDiscoveryOutput> {
     const query = requiredString(input.query, 'query').replace(/\s+/g, ' ').trim();
     const engine = input.engine === 'duckduckgo' ? 'duckduckgo' : 'bing';
     const limit = clamp(input.limit, 5, 1, 10);
-    const searchAttempts = browserHostSearchAttempts(engine, query);
+    const searchAttempts = browserHostDiscoveryAttempts(engine, query);
     const firstAttempt = searchAttempts[0] ?? { engine, query, reason: 'initial' as const };
-    let searchUrl = browserHostSearchUrl(firstAttempt.engine, firstAttempt.query, input.region);
+    let searchUrl = browserHostDiscoveryUrl(firstAttempt.engine, firstAttempt.query, input.region);
     let outputEngine = firstAttempt.engine;
     const session = input.sessionId && this.sessions.has(input.sessionId)
       ? await this.act(workspacePath, input.sessionId, { action: 'navigate', url: searchUrl, capture: 'frame', timeoutMs: input.timeoutMs })
@@ -598,7 +598,7 @@ export class BrowserHostSessionManager {
       : [];
     if (!results.length && active?.driver) {
       for (const attempt of searchAttempts.slice(1)) {
-        const retrySearchUrl = browserHostSearchUrl(attempt.engine, attempt.query, input.region);
+        const retrySearchUrl = browserHostDiscoveryUrl(attempt.engine, attempt.query, input.region);
         if (retrySearchUrl === searchUrl) continue;
         active.diagnostics.push(`BrowserHostSession search retry with ${attempt.reason} after no usable results for ${query}.`);
         await this.act(workspacePath, active.id, { action: 'navigate', url: retrySearchUrl, capture: 'frame', timeoutMs: input.timeoutMs });
@@ -635,8 +635,8 @@ export class BrowserHostSessionManager {
         includeLogs: true,
       });
     }
-    const resultRef = await persistBrowserHostSearchResults(active ?? session, {
-      schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
+    const resultRef = await persistBrowserHostDiscoveryResults(active ?? session, {
+      schemaVersion: BROWSER_HOST_DISCOVERY_SCHEMA,
       query,
       engine: outputEngine,
       searchedAt,
@@ -668,7 +668,7 @@ export class BrowserHostSessionManager {
     }
     const state = active ? publicBrowserHostSessionState(active) : session;
     return {
-      schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
+      schemaVersion: BROWSER_HOST_DISCOVERY_SCHEMA,
       query,
       engine: outputEngine,
       searchedAt,
@@ -687,7 +687,7 @@ export class BrowserHostSessionManager {
     };
   }
 
-  async openRead(workspacePath: string, input: BrowserHostOpenReadInput): Promise<BrowserHostOpenReadOutput> {
+  async readPage(workspacePath: string, input: BrowserHostPageReadInput): Promise<BrowserHostPageReadOutput> {
     const requestedUrl = normalizeBrowserHostUrl(requiredString(input.url, 'url'));
     const openedAt = new Date().toISOString();
     const session = input.sessionId && this.sessions.has(input.sessionId)
@@ -698,7 +698,7 @@ export class BrowserHostSessionManager {
           timeoutMs: input.timeoutMs,
         });
     const active = this.sessions.get(session.id);
-    const result: BrowserHostSearchResult = {
+    const result: BrowserHostDiscoveryResult = {
       title: input.title || active?.title || session.title || requestedUrl,
       url: requestedUrl,
       snippet: '',
@@ -707,10 +707,10 @@ export class BrowserHostSessionManager {
       const noDriverMessage = `BrowserHostSession has no active browser driver: ${session.id}`;
       active?.diagnostics.push(noDriverMessage);
       const fallback = active
-        ? await this.openReadWithSourceTextFetcher(active, result, requestedUrl, openedAt, input.timeoutMs)
+        ? await this.readPageWithSourceTextFetcher(active, result, requestedUrl, openedAt, input.timeoutMs)
         : undefined;
       return fallback ?? {
-        sourcePage: failedBrowserHostSearchSourcePage({
+        sourcePage: failedBrowserHostSourcePage({
           result,
           resultIndex: 0,
           openedAt,
@@ -722,7 +722,7 @@ export class BrowserHostSessionManager {
     try {
       const text = await active.driver.text();
       if (!text.trim()) throw new Error(`source page text unavailable for ${safeBrowserHostUrlHost(requestedUrl)}`);
-      const sourcePage = await persistBrowserHostSearchSourcePage({
+      const sourcePage = await persistBrowserHostSourcePage({
         sessionId: active.id,
         sessionDir: browserHostSessionDir(active.workspacePath, active.id),
         result,
@@ -741,10 +741,10 @@ export class BrowserHostSessionManager {
     } catch (error) {
       const message = browserHostErrorMessage(error);
       active.diagnostics.push(`BrowserHostSession browser.read text extraction failed: ${message}`);
-      const fallback = await this.openReadWithSourceTextFetcher(active, result, requestedUrl, openedAt, input.timeoutMs);
+      const fallback = await this.readPageWithSourceTextFetcher(active, result, requestedUrl, openedAt, input.timeoutMs);
       if (fallback) return fallback;
       return {
-        sourcePage: failedBrowserHostSearchSourcePage({
+        sourcePage: failedBrowserHostSourcePage({
           result,
           resultIndex: 0,
           openedAt,
@@ -768,18 +768,18 @@ export class BrowserHostSessionManager {
     return this.options.driverFactory ?? defaultNativeBrowserHostDriverFactory();
   }
 
-  private async openReadWithSourceTextFetcher(
+  private async readPageWithSourceTextFetcher(
     session: ActiveBrowserHostSession,
-    result: BrowserHostSearchResult,
+    result: BrowserHostDiscoveryResult,
     requestedUrl: string,
     openedAt: string,
     timeoutMsValue: number | undefined,
-  ): Promise<BrowserHostOpenReadOutput | undefined> {
+  ): Promise<BrowserHostPageReadOutput | undefined> {
     try {
       const fetched = await (this.options.sourceTextFetcher ?? defaultBrowserHostSourceTextFetcher)(requestedUrl, { timeoutMs: timeoutMsValue });
       if (!fetched.text.trim()) throw new Error(`source page text unavailable for ${safeBrowserHostUrlHost(requestedUrl)}`);
       session.diagnostics.push(`BrowserHostSession browser.read recovered with public source text fetch for ${safeBrowserHostUrlHost(requestedUrl)}`);
-      const sourcePage = await persistBrowserHostSearchSourcePage({
+      const sourcePage = await persistBrowserHostSourcePage({
         sessionId: session.id,
         sessionDir: browserHostSessionDir(session.workspacePath, session.id),
         result,
@@ -1001,21 +1001,21 @@ export class BrowserHostSessionManager {
 
   private async readSearchResultSourcePages(
     session: ActiveBrowserHostSession,
-    results: BrowserHostSearchResult[],
-    input: BrowserHostSearchInput,
+    results: BrowserHostDiscoveryResult[],
+    input: BrowserHostDiscoveryInput,
     searchLimit: number,
-  ): Promise<BrowserHostSearchSourcePage[]> {
+  ): Promise<BrowserHostSourcePage[]> {
     if (!session.driver) return [];
-    const limit = browserHostSearchSourcePageLimit(input, searchLimit);
+    const limit = browserHostSourcePageLimit(input, searchLimit);
     if (!limit) return [];
-    const pages: BrowserHostSearchSourcePage[] = [];
+    const pages: BrowserHostSourcePage[] = [];
     for (const [index, result] of results.slice(0, limit).entries()) {
       const openedAt = new Date().toISOString();
       try {
         const page = await this.readSearchResultSourcePage(session, result, index, openedAt, input);
         pages.push(page);
         if (page.discoveryOnly && page.status === 'read') {
-          for (const derivedResult of browserHostSearchSourcePageDerivedResults(page)) {
+          for (const derivedResult of browserHostSourcePageDerivedResults(page)) {
             if (pages.filter((candidate) => candidate.status === 'read' && !candidate.discoveryOnly).length >= limit) break;
             const derivedOpenedAt = new Date().toISOString();
             try {
@@ -1025,7 +1025,7 @@ export class BrowserHostSessionManager {
             } catch (error) {
               const message = browserHostErrorMessage(error);
               session.diagnostics.push(`BrowserHostSession derived source page read failed: ${message}`);
-              pages.push(failedBrowserHostSearchSourcePage({
+              pages.push(failedBrowserHostSourcePage({
                 result: derivedResult,
                 resultIndex: pages.length,
                 openedAt: derivedOpenedAt,
@@ -1037,7 +1037,7 @@ export class BrowserHostSessionManager {
       } catch (error) {
         const message = browserHostErrorMessage(error);
         session.diagnostics.push(`BrowserHostSession source page read failed: ${message}`);
-        pages.push(failedBrowserHostSearchSourcePage({
+        pages.push(failedBrowserHostSourcePage({
           result,
           resultIndex: index,
           openedAt,
@@ -1051,12 +1051,12 @@ export class BrowserHostSessionManager {
 
   private async readSearchResultSourcePage(
     session: ActiveBrowserHostSession,
-    result: BrowserHostSearchResult,
+    result: BrowserHostDiscoveryResult,
     resultIndex: number,
     openedAt: string,
-    input: BrowserHostSearchInput,
+    input: BrowserHostDiscoveryInput,
     options: { resultIndex?: number } = {},
-  ): Promise<BrowserHostSearchSourcePage> {
+  ): Promise<BrowserHostSourcePage> {
     try {
       await session.driver?.goto(result.url, input.timeoutMs ?? 45_000);
       await this.refreshNavigationState(session);
@@ -1085,11 +1085,11 @@ export class BrowserHostSessionManager {
 
   private async readSearchResultSourcePageWithSourceTextFetcher(
     session: ActiveBrowserHostSession,
-    result: BrowserHostSearchResult,
+    result: BrowserHostDiscoveryResult,
     resultIndex: number,
     openedAt: string,
-    input: BrowserHostSearchInput,
-  ): Promise<BrowserHostSearchSourcePage> {
+    input: BrowserHostDiscoveryInput,
+  ): Promise<BrowserHostSourcePage> {
     const fetcher = this.options.sourceTextFetcher ?? defaultBrowserHostSourceTextFetcher;
     const fetched = await fetcher(result.url, { timeoutMs: input.timeoutMs });
     session.diagnostics.push(`BrowserHostSession source page read recovered with public source text fetch for ${safeBrowserHostUrlHost(result.url)}`);
@@ -1105,13 +1105,13 @@ export class BrowserHostSessionManager {
 
   private async persistSearchResultSourcePage(input: {
     session: ActiveBrowserHostSession;
-    result: BrowserHostSearchResult;
+    result: BrowserHostDiscoveryResult;
     resultIndex: number;
     finalUrl: string;
     openedAt: string;
     text: string;
-  }): Promise<BrowserHostSearchSourcePage> {
-    const firstPass = await persistBrowserHostSearchSourcePage({
+  }): Promise<BrowserHostSourcePage> {
+    const firstPass = await persistBrowserHostSourcePage({
       sessionId: input.session.id,
       sessionDir: browserHostSessionDir(input.session.workspacePath, input.session.id),
       result: input.result,
@@ -1120,12 +1120,12 @@ export class BrowserHostSessionManager {
       openedAt: input.openedAt,
       text: input.text,
     });
-    const derivedResults = browserHostSearchSourcePageDerivedResults(firstPass)
+    const derivedResults = browserHostSourcePageDerivedResults(firstPass)
       .filter((derived) => normalizeBrowserHostUrl(derived.url) !== normalizeBrowserHostUrl(input.result.url));
     const discoveryOnly = sourcePageLooksLikeDiscoveryList(firstPass);
     if (!discoveryOnly) return firstPass;
     if (!derivedResults.length && !sourcePageLooksLowInformation(firstPass)) return firstPass;
-    return await persistBrowserHostSearchSourcePage({
+    return await persistBrowserHostSourcePage({
       sessionId: input.session.id,
       sessionDir: browserHostSessionDir(input.session.workspacePath, input.session.id),
       result: input.result,
@@ -1140,11 +1140,11 @@ export class BrowserHostSessionManager {
 
   private async readSearchResultSourcePageInIsolatedSession(
     parentSession: ActiveBrowserHostSession,
-    result: BrowserHostSearchResult,
+    result: BrowserHostDiscoveryResult,
     resultIndex: number,
     openedAt: string,
-    input: BrowserHostSearchInput,
-  ): Promise<BrowserHostSearchSourcePage> {
+    input: BrowserHostDiscoveryInput,
+  ): Promise<BrowserHostSourcePage> {
     const readerSessionId = safeSessionId(`${parentSession.id}-source-${resultIndex + 1}-${sha1(result.url).slice(0, 8)}`);
     const state = await this.openSession(parentSession.workspacePath, {
       url: result.url,
@@ -1198,9 +1198,9 @@ export class BrowserHostSessionManager {
   private async searchSourceSiteForms(
     session: ActiveBrowserHostSession,
     query: string,
-    input: BrowserHostSearchInput,
+    input: BrowserHostDiscoveryInput,
     limit: number,
-  ): Promise<{ session: ActiveBrowserHostSession; results: BrowserHostSearchResult[]; searchUrl: string }> {
+  ): Promise<{ session: ActiveBrowserHostSession; results: BrowserHostDiscoveryResult[]; searchUrl: string }> {
     let active = session;
     const constraints = siteConstraintsFromSearchQuery(query);
     for (const constraint of constraints.slice(0, 2)) {
@@ -1260,7 +1260,7 @@ function isSearchEngineUrl(value: string) {
   }
 }
 
-function sourceConstrainedSearchNeedsSourceSiteDiscovery(query: string, results: BrowserHostSearchResult[]): boolean {
+function sourceConstrainedSearchNeedsSourceSiteDiscovery(query: string, results: BrowserHostDiscoveryResult[]): boolean {
   const constraints = siteConstraintsFromSearchQuery(query);
   if (!constraints.length) return false;
   if (!results.length) return true;
@@ -1268,7 +1268,7 @@ function sourceConstrainedSearchNeedsSourceSiteDiscovery(query: string, results:
 }
 
 function sourceConstrainedResultIsLowInformation(
-  result: BrowserHostSearchResult,
+  result: BrowserHostDiscoveryResult,
   constraints: Array<{ domain: string }>,
 ): boolean {
   try {
@@ -1334,7 +1334,7 @@ function sourceSiteSearchUrlVariants(url: URL): string[] {
   return variants;
 }
 
-function sourceSiteSearchResultsMatchTopic(topic: string, results: BrowserHostSearchResult[]): boolean {
+function sourceSiteSearchResultsMatchTopic(topic: string, results: BrowserHostDiscoveryResult[]): boolean {
   if (!results.length) return false;
   const tokens = topic.toLowerCase().split(/[^a-z0-9]+/i).filter((token) => token.length >= 3);
   if (!tokens.length) return true;
@@ -1350,9 +1350,9 @@ function sourceSiteSearchResultsFromHtml(
   topic: string,
   filterQuery: string,
   limit: number,
-): BrowserHostSearchResult[] {
+): BrowserHostDiscoveryResult[] {
   const tokens = topic.toLowerCase().split(/[^a-z0-9]+/i).filter((token) => token.length >= 3);
-  const rows: BrowserHostSearchResult[] = [];
+  const rows: BrowserHostDiscoveryResult[] = [];
   for (const anchorMatch of html.matchAll(/<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi)) {
     const href = htmlDecode(anchorMatch[1] ?? anchorMatch[2] ?? anchorMatch[3] ?? '').trim();
     const title = cleanSourceSiteAnchorText(anchorMatch[4] ?? '');
@@ -1424,13 +1424,13 @@ function safeBrowserHostUrlHost(value: string) {
   }
 }
 
-function sourcePageLooksLikeDiscoveryList(page: BrowserHostSearchSourcePage): boolean {
+function sourcePageLooksLikeDiscoveryList(page: BrowserHostSourcePage): boolean {
   return sourcePageLooksLowInformation(page)
     || page.textArtifactKind === 'structured-summary'
     || /\bsearch\b|\bresults?\b|检索|搜索|列表/i.test(`${page.title} ${page.url} ${page.textPreview ?? ''}`);
 }
 
-function sourcePageLooksLowInformation(page: BrowserHostSearchSourcePage): boolean {
+function sourcePageLooksLowInformation(page: BrowserHostSourcePage): boolean {
   try {
     if (sourceConstrainedUrlIsLowInformation(new URL(page.url))) return true;
   } catch {
@@ -1445,10 +1445,10 @@ function sourcePageLooksLowInformation(page: BrowserHostSearchSourcePage): boole
 }
 
 function mergePreferredSearchResults(
-  preferredResults: BrowserHostSearchInput['preferredResults'] | undefined,
-  searchResults: BrowserHostSearchResult[],
+  preferredResults: BrowserHostDiscoveryInput['preferredResults'] | undefined,
+  searchResults: BrowserHostDiscoveryResult[],
   limit: number,
-): BrowserHostSearchResult[] {
+): BrowserHostDiscoveryResult[] {
   const preferred = boundedSearchResults(preferredResults ?? [], limit);
   if (!preferred.length) return searchResults;
   return boundedSearchResults([...preferred, ...searchResults], limit);
@@ -1457,15 +1457,15 @@ function mergePreferredSearchResults(
 async function browserHostFilteredSearchResults(
   driver: BrowserHostSessionDriver,
   input: {
-    preferredResults: BrowserHostSearchInput['preferredResults'] | undefined;
+    preferredResults: BrowserHostDiscoveryInput['preferredResults'] | undefined;
     filterQuery: string;
     limit: number;
   },
-): Promise<BrowserHostSearchResult[]> {
+): Promise<BrowserHostDiscoveryResult[]> {
   const rawLimit = siteConstraintsFromSearchQuery(input.filterQuery).length
     ? Math.min(25, Math.max(input.limit * 5, input.limit))
     : input.limit;
-  let results: BrowserHostSearchResult[] = [];
+  let results: BrowserHostDiscoveryResult[] = [];
   if (driver.searchResults) {
     results = boundedSearchResults(await driver.searchResults(rawLimit), rawLimit);
   }
@@ -1476,22 +1476,22 @@ async function browserHostFilteredSearchResults(
   return boundedSearchResults(filterSearchResultsBySiteConstraints(input.filterQuery, results), input.limit);
 }
 
-type BrowserHostSearchAttemptReason = 'initial' | 'relaxed constrained query';
+type BrowserHostDiscoveryAttemptReason = 'initial' | 'relaxed constrained query';
 
-function browserHostSearchAttempts(
-  engine: BrowserHostSearchEngine,
+function browserHostDiscoveryAttempts(
+  engine: BrowserHostDiscoveryEngine,
   query: string,
-): Array<{ engine: BrowserHostSearchEngine; query: string; reason: BrowserHostSearchAttemptReason }> {
-  const attempts: Array<{ engine: BrowserHostSearchEngine; query: string; reason: BrowserHostSearchAttemptReason }> = [];
-  addBrowserHostSearchAttempt(attempts, { engine, query, reason: 'initial' });
+): Array<{ engine: BrowserHostDiscoveryEngine; query: string; reason: BrowserHostDiscoveryAttemptReason }> {
+  const attempts: Array<{ engine: BrowserHostDiscoveryEngine; query: string; reason: BrowserHostDiscoveryAttemptReason }> = [];
+  addBrowserHostDiscoveryAttempt(attempts, { engine, query, reason: 'initial' });
   const relaxedQuery = relaxedConstrainedSearchQuery(query);
-  if (relaxedQuery) addBrowserHostSearchAttempt(attempts, { engine, query: relaxedQuery, reason: 'relaxed constrained query' });
+  if (relaxedQuery) addBrowserHostDiscoveryAttempt(attempts, { engine, query: relaxedQuery, reason: 'relaxed constrained query' });
   return attempts;
 }
 
-function addBrowserHostSearchAttempt(
-  attempts: Array<{ engine: BrowserHostSearchEngine; query: string; reason: BrowserHostSearchAttemptReason }>,
-  attempt: { engine: BrowserHostSearchEngine; query: string; reason: BrowserHostSearchAttemptReason },
+function addBrowserHostDiscoveryAttempt(
+  attempts: Array<{ engine: BrowserHostDiscoveryEngine; query: string; reason: BrowserHostDiscoveryAttemptReason }>,
+  attempt: { engine: BrowserHostDiscoveryEngine; query: string; reason: BrowserHostDiscoveryAttemptReason },
 ): void {
   const normalized = attempt.query.replace(/\s+/g, ' ').trim();
   if (!normalized) return;
@@ -1510,13 +1510,13 @@ function relaxedConstrainedSearchQuery(query: string): string | undefined {
   return relaxed && relaxed !== query ? relaxed : undefined;
 }
 
-function filterSearchResultsBySiteConstraints(query: string, results: BrowserHostSearchResult[]): BrowserHostSearchResult[] {
+function filterSearchResultsBySiteConstraints(query: string, results: BrowserHostDiscoveryResult[]): BrowserHostDiscoveryResult[] {
   const constraints = siteConstraintsFromSearchQuery(query);
   if (!constraints.length) return results;
   return results.filter((result) => searchResultMatchesSiteConstraints(result, constraints));
 }
 
-function searchResultMatchesSiteConstraints(result: BrowserHostSearchResult, constraints: Array<{ domain: string }>): boolean {
+function searchResultMatchesSiteConstraints(result: BrowserHostDiscoveryResult, constraints: Array<{ domain: string }>): boolean {
   try {
     const host = new URL(result.url).hostname.toLowerCase();
     return constraints.some((constraint) => host === constraint.domain || host.endsWith(`.${constraint.domain}`));
@@ -1880,7 +1880,7 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
     return JSON.parse(await readFile(outputPath, 'utf8'));
   }
 
-  async searchResults(limit: number): Promise<BrowserHostSearchResult[]> {
+  async searchResults(limit: number): Promise<BrowserHostDiscoveryResult[]> {
     const json = await this.get<{ results?: unknown }>(`/sessions/${encodeURIComponent(this.sessionId)}/search-results?limit=${encodeURIComponent(String(limit))}`);
     return boundedSearchResults(Array.isArray(json.results) ? json.results.map(nativeSearchResult) : [], limit);
   }
@@ -2297,9 +2297,9 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
     }
   }
 
-  async searchResults(limit: number): Promise<BrowserHostSearchResult[]> {
+  async searchResults(limit: number): Promise<BrowserHostDiscoveryResult[]> {
     const rows = await this.page.evaluate<Array<{ title: string; url: string; snippet: string }>>(
-      browserHostSearchResultExtractionScript(limit),
+      browserHostDiscoveryResultExtractionScript(limit),
     );
     return boundedSearchResults(rows.map((row) => ({
       title: cleanText(row.title),
@@ -2743,9 +2743,9 @@ async function readStoredBrowserHostSession(workspacePath: string, sessionId: st
   }
 }
 
-async function persistBrowserHostSearchResults(
+async function persistBrowserHostDiscoveryResults(
   session: Pick<ActiveBrowserHostSession, 'workspacePath' | 'id'>,
-  output: Omit<BrowserHostSearchOutput, 'session' | 'searchResultRef' | 'screenshotRef' | 'domSnapshotRef' | 'axSnapshotRef' | 'consoleLogRef' | 'networkLogRef'>,
+  output: Omit<BrowserHostDiscoveryOutput, 'session' | 'searchResultRef' | 'screenshotRef' | 'domSnapshotRef' | 'axSnapshotRef' | 'consoleLogRef' | 'networkLogRef'>,
 ) {
   const fileName = `search-results-${Date.now()}-${sha1(output.query).slice(0, 8)}.json`;
   const path = join(browserHostSessionDir(session.workspacePath, session.id), fileName);

@@ -14,7 +14,7 @@ import {
 import { buildDesktopAppDataLayout, type DesktopAppDataLayout } from './app-data-layout.js';
 
 export type RuntimeLauncherPortBinding = {
-  name: 'control' | 'ui' | 'workspace-writer' | 'provider-proxy' | 'runtime-codex';
+  name: 'control' | 'ui' | 'workspace-writer' | 'model-router' | 'runtime-codex';
   requested?: number;
   actual: number;
   url: string;
@@ -31,7 +31,7 @@ export type RuntimeLauncherAuditEvent = {
 
 export type ManagedRuntimeServiceSpec = {
   id: string;
-  role: 'workspace-writer' | 'provider-proxy' | 'runtime-codex' | 'custom';
+  role: 'workspace-writer' | 'model-router' | 'runtime-codex' | 'custom';
   command: string;
   args?: string[];
   cwd?: string;
@@ -59,7 +59,7 @@ export type RuntimeLauncherOptions = {
   requestedControlPort?: number;
   requestedUiPort?: number;
   requestedWorkspacePort?: number;
-  requestedProviderProxyPort?: number;
+  requestedModelRouterPort?: number;
   requestedRuntimeCodexPort?: number;
   services?: ManagedRuntimeServiceSpec[];
   spawnProcess?: SpawnManagedProcess;
@@ -220,7 +220,7 @@ export class ProductionRuntimeLauncher {
       const spawnProcess = this.options.spawnProcess ?? defaultSpawnManagedProcess;
       const child = spawnProcess(service.command, service.args ?? [], {
         cwd: resolve(service.cwd ?? process.cwd()),
-        env: { ...process.env, ...this.sidecarEnv(), ...service.env },
+        env: this.serviceEnv(service),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       this.children.set(service.id, child);
@@ -276,7 +276,7 @@ export class ProductionRuntimeLauncher {
   private portBindings(): RuntimeLauncherPortBinding[] {
     const bindings: RuntimeLauncherPortBinding[] = [];
     if (this.controlPort) bindings.push(this.controlPort);
-    for (const name of ['ui', 'workspace-writer', 'provider-proxy', 'runtime-codex'] as const) {
+    for (const name of ['ui', 'workspace-writer', 'model-router', 'runtime-codex'] as const) {
       const binding = this.sidecarPorts.get(name);
       if (binding) bindings.push(binding);
     }
@@ -287,7 +287,7 @@ export class ProductionRuntimeLauncher {
     await Promise.all([
       this.resolveSidecarPort('ui', this.options.requestedUiPort),
       this.resolveSidecarPort('workspace-writer', this.options.requestedWorkspacePort),
-      this.resolveSidecarPort('provider-proxy', this.options.requestedProviderProxyPort),
+      this.resolveSidecarPort('model-router', this.options.requestedModelRouterPort),
       this.resolveSidecarPort('runtime-codex', this.options.requestedRuntimeCodexPort),
     ]);
   }
@@ -304,11 +304,11 @@ export class ProductionRuntimeLauncher {
     });
   }
 
-  private sidecarEnv(): Record<string, string> {
+  private sidecarEnv(service?: ManagedRuntimeServiceSpec): Record<string, string> {
     const env: Record<string, string> = {};
     const ui = this.sidecarPorts.get('ui');
     const workspace = this.sidecarPorts.get('workspace-writer');
-    const providerProxy = this.sidecarPorts.get('provider-proxy');
+    const modelRouter = this.sidecarPorts.get('model-router');
     const runtimeCodex = this.sidecarPorts.get('runtime-codex');
     if (this.appData) {
       env.SCIFORGE_DESKTOP_SIDECAR = '1';
@@ -321,15 +321,19 @@ export class ProductionRuntimeLauncher {
       env.SCIFORGE_RUNTIME_DEFAULT_WORKSPACE = resolve(this.options.workspacePath);
       env.SCIFORGE_WORKSPACE_PATH = resolve(this.options.workspacePath);
     }
-    Object.assign(env, this.localRuntimeEnv);
+    const runtimeRouterApiKey = runtimeRouterApiKeyFromEnv(process.env);
+    if (!process.env.SCIFORGE_RUNTIME_API_KEY) env.SCIFORGE_RUNTIME_API_KEY = runtimeRouterApiKey;
+    if (!process.env.SCIFORGE_MODEL_ROUTER_API_KEY) env.SCIFORGE_MODEL_ROUTER_API_KEY = runtimeRouterApiKey;
+    Object.assign(env, this.localRuntimeEnvForService(service));
     if (ui) env.SCIFORGE_UI_PORT = String(ui.actual);
     if (workspace) {
       env.SCIFORGE_WORKSPACE_PORT = String(workspace.actual);
       env.SCIFORGE_WORKSPACE_WRITER_URL = workspace.url;
     }
-    if (providerProxy) {
-      env.SCIFORGE_PROXY_PORT = String(providerProxy.actual);
-      env.SCIFORGE_PROXY_BASE_URL = providerProxy.url;
+    if (modelRouter) {
+      env.SCIFORGE_MODEL_ROUTER_HOST = '127.0.0.1';
+      env.SCIFORGE_MODEL_ROUTER_PORT = String(modelRouter.actual);
+      env.SCIFORGE_MODEL_ROUTER_BASE_URL = `${modelRouter.url}/v1`;
     }
     if (runtimeCodex) {
       env.SCIFORGE_RUNTIME_CODEX_PORT = String(runtimeCodex.actual);
@@ -338,11 +342,27 @@ export class ProductionRuntimeLauncher {
     return env;
   }
 
+  private localRuntimeEnvForService(service: ManagedRuntimeServiceSpec | undefined): Record<string, string> {
+    if (service?.role === 'model-router') return this.localRuntimeEnv;
+    const env = { ...this.localRuntimeEnv };
+    for (const key of MODEL_ROUTER_MEMBER_MODEL_ENV_KEYS) delete env[key];
+    return env;
+  }
+
+  private serviceEnv(service: ManagedRuntimeServiceSpec): NodeJS.ProcessEnv {
+    const env = { ...process.env, ...this.sidecarEnv(service), ...service.env };
+    stripLegacyDirectProviderEnv(env);
+    if (service.role !== 'model-router') {
+      for (const key of MODEL_ROUTER_MEMBER_MODEL_ENV_KEYS) delete env[key];
+    }
+    return env;
+  }
+
   private async prepareRuntimeCodexHome(): Promise<void> {
     if (!this.appData) return;
-    const providerProxy = this.sidecarPorts.get('provider-proxy');
+    const modelRouter = this.sidecarPorts.get('model-router');
     await ensureRuntimeHome({
-      proxyBaseUrl: providerProxy ? `${providerProxy.url}/v1` : undefined,
+      proxyBaseUrl: modelRouter ? `${modelRouter.url}/v1` : undefined,
       overwrite: true,
       paths: {
         runtimeRoot: this.appData.runtimeCodexRoot,
@@ -358,12 +378,9 @@ export class ProductionRuntimeLauncher {
       ?? await readLocalRuntimeConfig(resolve(process.cwd(), 'config.local.json'));
     this.localRuntimeEnv = source ? localRuntimeEnvFromConfig(source, process.env) : {};
     if (!source) return;
-    const nonSecretProxy = nonSecretProxyConfigFromLocalRuntimeConfig(source);
     const nonSecretComputerUse = nonSecretComputerUseConfigFromLocalRuntimeConfig(source);
-    if (!nonSecretProxy && !nonSecretComputerUse) return;
     const target = join(this.appData.configDir, 'config.local.json');
     await writeFile(target, `${JSON.stringify({
-      ...(nonSecretProxy ? { codexProxy: nonSecretProxy } : {}),
       ...(nonSecretComputerUse ? { visionSense: nonSecretComputerUse } : {}),
     }, null, 2)}\n`, 'utf8');
   }
@@ -457,16 +474,17 @@ function writeJson(res: { writeHead(status: number, headers: Record<string, stri
   res.end(JSON.stringify(body));
 }
 
-type NonSecretProxyConfig = {
+type LocalRuntimeConfig = {
+  provider?: string;
   upstreamBaseUrl?: string;
   baseUrl?: string;
   defaultModel?: string;
   model?: string;
-};
-
-type LocalRuntimeConfig = NonSecretProxyConfig & {
   apiKey?: string;
+  visionProvider?: string;
   visionApiKey?: string;
+  textApiKeyEnv?: string;
+  visionApiKeyEnv?: string;
   visionBaseUrl?: string;
   visionModel?: string;
   inputAdapter?: string;
@@ -479,22 +497,23 @@ function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.Proce
   const defaultModel = config.defaultModel ?? config.model;
   const visionModel = config.visionModel;
   const visionBaseUrl = visionModel ? config.visionBaseUrl ?? upstreamBaseUrl : undefined;
-  const apiKey = env.SCIFORGE_RUNTIME_API_KEY ?? config.apiKey;
+  const apiKey = config.apiKey;
   const visionApiKey = visionModel ? config.visionApiKey ?? apiKey : undefined;
   const inputAdapter = nonSecretComputerUseInputAdapter(config.inputAdapter);
   const independentInputAdapterProvider = nonSecretComputerUseInputAdapterProvider(config.independentInputAdapterProvider);
-  if (!env.SCIFORGE_RUNTIME_API_KEY && config.apiKey) output.SCIFORGE_RUNTIME_API_KEY = config.apiKey;
   if (!env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS) output.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS = RUNTIME_MODEL;
   if (!env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE) output.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE = RUNTIME_PROFILE;
   if (!env.SCIFORGE_RUNTIME_MODEL) output.SCIFORGE_RUNTIME_MODEL = RUNTIME_MODEL;
-  if (!env.SCIFORGE_PROXY_UPSTREAM_BASE_URL && upstreamBaseUrl) output.SCIFORGE_PROXY_UPSTREAM_BASE_URL = upstreamBaseUrl;
+  if (!env.SCIFORGE_TEXT_PROVIDER && config.provider) output.SCIFORGE_TEXT_PROVIDER = config.provider;
+  if (!env.SCIFORGE_VISION_PROVIDER && visionModel && config.visionProvider) output.SCIFORGE_VISION_PROVIDER = config.visionProvider;
   if (!env.SCIFORGE_TEXT_BASE_URL && upstreamBaseUrl) output.SCIFORGE_TEXT_BASE_URL = upstreamBaseUrl;
   if (!env.SCIFORGE_VISION_BASE_URL && visionBaseUrl) output.SCIFORGE_VISION_BASE_URL = visionBaseUrl;
   if (!env.SCIFORGE_TEXT_MODEL && defaultModel) output.SCIFORGE_TEXT_MODEL = defaultModel;
   if (!env.SCIFORGE_VISION_MODEL && visionModel) output.SCIFORGE_VISION_MODEL = visionModel;
   if (!env.SCIFORGE_TEXT_API_KEY && apiKey) output.SCIFORGE_TEXT_API_KEY = apiKey;
+  if (!env.SCIFORGE_TEXT_API_KEY_ENV && config.textApiKeyEnv) output.SCIFORGE_TEXT_API_KEY_ENV = config.textApiKeyEnv;
   if (!env.SCIFORGE_VISION_API_KEY && visionApiKey) output.SCIFORGE_VISION_API_KEY = visionApiKey;
-  if (!env.SCIFORGE_PROXY_DEFAULT_MODEL && defaultModel) output.SCIFORGE_PROXY_DEFAULT_MODEL = defaultModel;
+  if (!env.SCIFORGE_VISION_API_KEY_ENV && config.visionApiKeyEnv) output.SCIFORGE_VISION_API_KEY_ENV = config.visionApiKeyEnv;
   if (!env.SCIFORGE_VISION_INPUT_ADAPTER && inputAdapter) output.SCIFORGE_VISION_INPUT_ADAPTER = inputAdapter;
   if (!env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER && independentInputAdapterProvider) {
     output.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER = independentInputAdapterProvider;
@@ -502,14 +521,36 @@ function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.Proce
   return output;
 }
 
-function nonSecretProxyConfigFromLocalRuntimeConfig(config: LocalRuntimeConfig): NonSecretProxyConfig | undefined {
-  const upstreamBaseUrl = config.upstreamBaseUrl ?? config.baseUrl;
-  const defaultModel = config.defaultModel ?? config.model;
-  if (!upstreamBaseUrl && !defaultModel) return undefined;
-  return {
-    ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
-    ...(defaultModel ? { defaultModel } : {}),
-  };
+const LOCAL_MODEL_ROUTER_API_KEY = 'sciforge-local-model-router';
+
+const MODEL_ROUTER_MEMBER_MODEL_ENV_KEYS = new Set([
+  'SCIFORGE_TEXT_PROVIDER',
+  'SCIFORGE_TEXT_BASE_URL',
+  'SCIFORGE_TEXT_MODEL',
+  'SCIFORGE_TEXT_API_KEY',
+  'SCIFORGE_TEXT_API_KEY_ENV',
+  'SCIFORGE_VISION_PROVIDER',
+  'SCIFORGE_VISION_BASE_URL',
+  'SCIFORGE_VISION_MODEL',
+  'SCIFORGE_VISION_API_KEY',
+  'SCIFORGE_VISION_API_KEY_ENV',
+  'SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS',
+]);
+
+const LEGACY_DIRECT_PROVIDER_ENV_KEYS = new Set([
+  'SCIFORGE_RUNTIME_BASE_URL',
+]);
+
+function stripLegacyDirectProviderEnv(env: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('SCIFORGE_PROXY_') || LEGACY_DIRECT_PROVIDER_ENV_KEYS.has(key)) delete env[key];
+  }
+}
+
+function runtimeRouterApiKeyFromEnv(env: NodeJS.ProcessEnv): string {
+  return stringValue(env.SCIFORGE_MODEL_ROUTER_API_KEY)
+    ?? stringValue(env.SCIFORGE_RUNTIME_API_KEY)
+    ?? LOCAL_MODEL_ROUTER_API_KEY;
 }
 
 function nonSecretComputerUseConfigFromLocalRuntimeConfig(config: LocalRuntimeConfig): {
@@ -550,12 +591,8 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
   try {
     const parsed = JSON.parse(await readFile(configPath, 'utf8')) as unknown;
     if (!isRecord(parsed)) return undefined;
-    const codexProxy = isRecord(parsed.codexProxy)
-      ? parsed.codexProxy
-      : isRecord(parsed.runtimeCodexProxy)
-        ? parsed.runtimeCodexProxy
-        : {};
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
+    const llmEnv = isRecord(llm.env) ? llm.env : {};
     const textLLM = isRecord(parsed.textLLM) ? parsed.textLLM : {};
     const textLLMEnv = isRecord(textLLM.env) ? textLLM.env : {};
     const visionLLM = isRecord(parsed.visionLLM) ? parsed.visionLLM : {};
@@ -563,39 +600,53 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
     const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
     const visionSenseEnv = isRecord(visionSense.env) ? visionSense.env : {};
     const computerUse = isRecord(parsed.computerUse) ? parsed.computerUse : {};
-    const upstreamBaseUrl = stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
+    const provider = stringValue(textLLMEnv.SCIFORGE_TEXT_PROVIDER)
+      ?? stringValue(textLLM.provider)
+      ?? stringValue(llmEnv.SCIFORGE_TEXT_PROVIDER)
+      ?? stringValue(llm.provider)
+      ?? stringValue(parsed.provider);
+    const upstreamBaseUrl = stringValue(textLLMEnv.SCIFORGE_TEXT_BASE_URL)
       ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
       ?? stringValue(textLLM.baseUrl)
+      ?? stringValue(textLLM.upstreamBaseUrl)
       ?? stringValue(textLLM.modelBaseUrl)
+      ?? stringValue(llmEnv.SCIFORGE_TEXT_BASE_URL)
+      ?? stringValue(llmEnv.SCIFORGE_MODEL_BASE_URL)
       ?? stringValue(llm.baseUrl)
       ?? stringValue(llm.upstreamBaseUrl)
       ?? stringValue(llm.modelBaseUrl)
-      ?? stringValue(codexProxy.upstreamBaseUrl)
-      ?? stringValue(codexProxy.baseUrl)
       ?? stringValue(parsed.modelBaseUrl);
-    const defaultModel = stringValue(textLLMEnv.SCIFORGE_RUNTIME_MODEL)
-      ?? stringValue(textLLMEnv.SCIFORGE_PROXY_DEFAULT_MODEL)
+    const defaultModel = stringValue(textLLMEnv.SCIFORGE_TEXT_MODEL)
       ?? stringValue(textLLM.model)
       ?? stringValue(textLLM.modelName)
       ?? stringValue(textLLM.defaultModel)
+      ?? stringValue(llmEnv.SCIFORGE_TEXT_MODEL)
       ?? stringValue(llm.model)
       ?? stringValue(llm.modelName)
       ?? stringValue(llm.defaultModel)
-      ?? stringValue(codexProxy.defaultModel)
-      ?? stringValue(codexProxy.model)
       ?? stringValue(parsed.modelName)
       ?? stringValue(parsed.model);
-    const apiKey = stringValue(textLLMEnv.SCIFORGE_RUNTIME_API_KEY)
+    const apiKey = stringValue(textLLMEnv.SCIFORGE_TEXT_API_KEY)
       ?? stringValue(textLLM.apiKey)
+      ?? stringValue(llmEnv.SCIFORGE_TEXT_API_KEY)
       ?? stringValue(llm.apiKey)
-      ?? stringValue(codexProxy.apiKey)
       ?? stringValue(parsed.apiKey);
+    const textApiKeyEnv = stringValue(textLLMEnv.SCIFORGE_TEXT_API_KEY_ENV)
+      ?? stringValue(llmEnv.SCIFORGE_TEXT_API_KEY_ENV);
+    const visionProvider = stringValue(visionLLMEnv.SCIFORGE_VISION_PROVIDER)
+      ?? stringValue(visionLLM.provider)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_PROVIDER)
+      ?? stringValue(visionSense.provider);
     const visionApiKey = stringValue(visionLLM.apiKey)
       ?? stringValue(visionLLMEnv.SCIFORGE_VISION_API_KEY)
       ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_API_KEY)
       ?? stringValue(visionSense.apiKey)
       ?? stringValue(visionSenseEnv.SCIFORGE_VISION_API_KEY)
       ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_API_KEY);
+    const visionApiKeyEnv = stringValue(visionLLMEnv.SCIFORGE_VISION_API_KEY_ENV)
+      ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_API_KEY_ENV)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_API_KEY_ENV)
+      ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_API_KEY_ENV);
     const visionBaseUrl = stringValue(visionLLMEnv.SCIFORGE_VISION_BASE_URL)
       ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_BASE_URL)
       ?? stringValue(visionLLM.baseUrl)
@@ -622,12 +673,16 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
       ?? stringValue(visionSense.inputAdapterProvider)
       ?? stringValue(computerUse.independentInputAdapterProvider)
       ?? stringValue(computerUse.inputAdapterProvider);
-    if (!upstreamBaseUrl && !defaultModel && !apiKey && !visionBaseUrl && !visionModel && !inputAdapter && !independentInputAdapterProvider) return undefined;
+    if (!provider && !upstreamBaseUrl && !defaultModel && !apiKey && !textApiKeyEnv && !visionProvider && !visionBaseUrl && !visionModel && !visionApiKeyEnv && !inputAdapter && !independentInputAdapterProvider) return undefined;
     return {
+      ...(provider ? { provider } : {}),
       ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
       ...(defaultModel ? { defaultModel } : {}),
       ...(apiKey ? { apiKey } : {}),
+      ...(textApiKeyEnv ? { textApiKeyEnv } : {}),
+      ...(visionProvider ? { visionProvider } : {}),
       ...(visionApiKey ? { visionApiKey } : {}),
+      ...(visionApiKeyEnv ? { visionApiKeyEnv } : {}),
       ...(visionBaseUrl ? { visionBaseUrl } : {}),
       ...(visionModel ? { visionModel } : {}),
       ...(inputAdapter ? { inputAdapter } : {}),

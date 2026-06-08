@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-06-07T16:23:10.106Z",
+  "observedAt": "2026-06-08T00:19:16.036Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrlEvidence": {
@@ -24,8 +24,8 @@
     "sha256": "06f2700939355f29a921c67f9c5087c2c73c6e275377b3c0c87551ab46aa43cd"
   },
   "profile": "sciforge-runtime-default",
-  "provider": "sciforge-model-router",
-  "model": "sciforge-router",
+  "provider": "native",
+  "model": "bailian/deepseek-v4-flash",
   "startedFromDefaultChatEntry": false,
   "submittedThroughRuntimeCodex": false,
   "providerModelProfileVisible": false,
@@ -41,7 +41,7 @@
   "acceptanceRubric": {
     "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
     "expectedObservableResult": "Gui.present projection or native Runtime Codex assistant answer rendered in default chat with provider/model/profile/workspace/command id and folded audit logs.",
-    "actualResult": "Blocked before release acceptance: Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "actualResult": "Blocked before release acceptance: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidenceRefs": [
       "docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json",
       "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
@@ -66,12 +66,12 @@
     "rawStdoutJsonlRejected": true,
     "nativeAnswerOutsideDefaultChatRejected": true
   },
-  "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
-  "blocker": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+  "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
+  "blocker": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
   "blockedOn": [
-    "Runtime Codex service environment secret configuration",
-    "config-file debug secret fallback must not satisfy release acceptance",
-    "Codex in-app browser execution"
+    "provider proxy upstream availability",
+    "visible Runtime Codex answer not produced",
+    "selected artifact follow-up not reached"
   ],
   "currentRunEvidenceScope": "preflight-only",
   "priorEvidenceRefs": [
@@ -86,25 +86,11 @@
     "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
     "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
   ],
-  "failureClass": "config-secret-source",
-  "owner": "environment",
-  "policyViolations": [
-    "config-file-secret-fallback-cannot-satisfy-browser-release-acceptance"
-  ],
-  "missingEnv": [
-    "SCIFORGE_RUNTIME_API_KEY"
-  ],
+  "failureClass": "runtime-bridge",
+  "owner": "repo",
+  "policyViolations": [],
+  "missingEnv": [],
   "nextActions": [
-    {
-      "label": "Set Runtime Codex provider key in the service environment that launches Runtime Codex/provider proxy.",
-      "expected": "Runtime preflight no longer reports missing SCIFORGE_RUNTIME_API_KEY.",
-      "writesRepo": false
-    },
-    {
-      "label": "Keep config-file apiKey fields as local proxy debug fallback only, and do not count them as browser/release acceptance credentials.",
-      "expected": "Acceptance manifest reports service environment secret presence instead of config-file secret fallback.",
-      "writesRepo": false
-    },
     {
       "label": "Rerun default browser acceptance, then strict release acceptance only after a visible second-turn answer appears.",
       "command": "npm run smoke:runtime-codex-browser-acceptance && SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance",
@@ -115,15 +101,15 @@
   "expectedRetestCommand": "npm run smoke:runtime-codex-browser-acceptance",
   "providerPreflightRef": "docs/test-artifacts/runtime-provider-preflight/manifest.json",
   "providerPreflightCategory": "ready",
-  "providerPreflightCheckedAt": "2026-06-07T00:43:12.709Z",
+  "providerPreflightCheckedAt": "2026-06-08T00:18:32.604Z",
   "providerPreflightReleaseAcceptance": "not-evaluated",
   "providerPreflightEvidenceMode": "current-env-diagnostic-only",
   "runtimeApiKeyPresentInServiceEnv": true,
   "upstreamBaseUrlPresent": true,
   "upstreamKeySourceKind": "env",
   "upstreamBaseUrlSourceKind": "env",
-  "configPathsCheckedCount": 3,
-  "configSecretFallbackCount": 3,
+  "configPathsCheckedCount": 2,
+  "configSecretFallbackCount": 2,
   "currentPortStatus": {
     "ui": {
       "host": "127.0.0.1",
@@ -182,7 +168,7 @@
     "SCIFORGE_RUNTIME_API_KEY=\"${SCIFORGE_RUNTIME_API_KEY:?set in service env}\" SCIFORGE_PROXY_UPSTREAM_BASE_URL=\"${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}\" npm run smoke:runtime-provider-preflight && SCIFORGE_RUNTIME_API_KEY=\"${SCIFORGE_RUNTIME_API_KEY:?set in service env}\" SCIFORGE_PROXY_UPSTREAM_BASE_URL=\"${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}\" SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance"
   ],
   "strictRetestCommand": "SCIFORGE_RUNTIME_API_KEY=\"${SCIFORGE_RUNTIME_API_KEY:?set in service env}\" SCIFORGE_PROXY_UPSTREAM_BASE_URL=\"${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}\" npm run smoke:runtime-provider-preflight && SCIFORGE_RUNTIME_API_KEY=\"${SCIFORGE_RUNTIME_API_KEY:?set in service env}\" SCIFORGE_PROXY_UPSTREAM_BASE_URL=\"${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}\" SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance",
-  "configFallbackWarning": "Ignored config secret fallback count=3; config-file secrets can help local proxy diagnostics but cannot satisfy Runtime Codex browser/release acceptance.",
+  "configFallbackWarning": "Ignored config secret fallback count=2; config-file secrets can help local proxy diagnostics but cannot satisfy Runtime Codex browser/release acceptance.",
   "releaseBlocking": true,
   "releaseEligible": false,
   "singleTurn": {
@@ -195,7 +181,7 @@
     "providerModelProfileVisible": false,
     "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidence": {
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
@@ -210,7 +196,7 @@
     "providerModelProfileVisible": false,
     "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidence": {
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
@@ -225,7 +211,7 @@
     "providerModelProfileVisible": false,
     "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass. Checked config path count: 2. Runtime secret-like keys were found in ignored config file count=2; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidence": {
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     },

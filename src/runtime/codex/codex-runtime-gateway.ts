@@ -60,7 +60,8 @@ export async function tryRunCodexRuntimeGateway(
 
 function allowOpenAiRuntime(request: GatewayRequest): boolean {
   const uiState = request.uiState && typeof request.uiState === 'object' ? request.uiState : {};
-  return (uiState as Record<string, unknown>).allowOpenAiRuntime === true;
+  void uiState;
+  return false;
 }
 
 function codexSessionIdFromRequest(request: GatewayRequest): string | undefined {

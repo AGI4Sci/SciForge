@@ -94,7 +94,7 @@ test('Runtime Codex browser ordinary-chat local dogfood wraps the acceptance wri
     assert.equal(calls[0]?.workspacePath, workspace);
     assert.equal(calls[0]?.outputDir, join(outputDir, 'ordinary-chat-acceptance'));
     assert.match(calls[0]?.commandId ?? '', /^browser-ordinary-chat-local-/);
-    assert.ok(calls[0]?.browserRuntimeModulePorts?.manager);
+    assert.equal((calls[0] as unknown as Record<string, unknown> | undefined)?.browserRuntimeModulePorts, undefined);
     assert.doesNotMatch(manifestText, new RegExp(secret));
     assert.doesNotMatch(manifestText, /provider\.example\.invalid|http:\/\/|https:\/\/provider/i);
   } finally {

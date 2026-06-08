@@ -162,7 +162,7 @@ export function FeedbackCodexTerminalPanel({
         workspacePath: config.workspacePath,
         initialMessage: inputText.trim() || undefined,
         runtimeProfile: config.runtimeProfile,
-        allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+        allowOpenAiRuntime: false,
         gitMode,
         launchSurface,
         cols: terminal?.cols,

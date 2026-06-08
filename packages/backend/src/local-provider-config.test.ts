@@ -29,8 +29,8 @@ test('local provider settings preserve dev launcher precedence across root llm t
       baseUrl: 'https://text.example/v1',
       model: 'text-model',
       env: {
-        SCIFORGE_RUNTIME_API_KEY: 'text-env-key',
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://text-env.example/v1',
+        SCIFORGE_TEXT_API_KEY: 'text-env-key',
+        SCIFORGE_TEXT_BASE_URL: 'https://text-env.example/v1',
       },
     },
     codexProxy: {
@@ -45,13 +45,13 @@ test('local provider settings preserve dev launcher precedence across root llm t
   assert.equal(settings.model, 'root-model');
 });
 
-test('local provider settings read textLLM env fallback before codex proxy', () => {
+test('local provider settings read textLLM env as Model Router member config', () => {
   const settings = localProviderSettings({
     textLLM: {
       env: {
-        SCIFORGE_RUNTIME_API_KEY: 'text-env-key',
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://text-env.example/v1/',
-        SCIFORGE_PROXY_DEFAULT_MODEL: 'text-env-model',
+        SCIFORGE_TEXT_API_KEY: 'text-env-key',
+        SCIFORGE_TEXT_BASE_URL: 'https://text-env.example/v1/',
+        SCIFORGE_TEXT_MODEL: 'text-env-model',
       },
     },
     codexProxy: {
@@ -65,16 +65,21 @@ test('local provider settings read textLLM env fallback before codex proxy', () 
   assert.equal(settings.baseUrl, 'https://text-env.example/v1');
   assert.equal(settings.model, 'text-env-model');
   assert.deepEqual(providerEnvFromLocalSettings(settings), {
-    SCIFORGE_RUNTIME_API_KEY: 'text-env-key',
-    SCIFORGE_RUNTIME_BASE_URL: 'https://text-env.example/v1',
-    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://text-env.example/v1',
-    SCIFORGE_RUNTIME_MODEL: 'text-env-model',
-    SCIFORGE_PROXY_DEFAULT_MODEL: 'text-env-model',
+    SCIFORGE_TEXT_API_KEY: 'text-env-key',
+    SCIFORGE_TEXT_BASE_URL: 'https://text-env.example/v1',
+    SCIFORGE_TEXT_MODEL: 'text-env-model',
   });
 });
 
-test('local provider settings read runtimeCodexProxy env aliases', () => {
+test('local provider settings ignores legacy proxy config aliases', () => {
   const settings = localProviderSettings({
+    llm: {
+      env: {
+        SCIFORGE_TEXT_API_KEY: 'member-env-key',
+        SCIFORGE_TEXT_BASE_URL: 'https://member-env.example',
+        SCIFORGE_TEXT_MODEL: 'member-env-model',
+      },
+    },
     runtimeCodexProxy: {
       env: {
         SCIFORGE_RUNTIME_API_KEY: 'runtime-env-key',
@@ -84,9 +89,9 @@ test('local provider settings read runtimeCodexProxy env aliases', () => {
     },
   });
 
-  assert.equal(settings.apiKey, 'runtime-env-key');
-  assert.equal(settings.baseUrl, 'https://runtime-env.example/v1');
-  assert.equal(settings.model, 'runtime-env-model');
+  assert.equal(settings.apiKey, 'member-env-key');
+  assert.equal(settings.baseUrl, 'https://member-env.example/v1');
+  assert.equal(settings.model, 'member-env-model');
 });
 
 test('local provider settings normalize bare upstream base URL to openai compatible v1 path', () => {
@@ -128,7 +133,7 @@ test('local provider settings fail closed when config.local cannot be read', () 
   );
 });
 
-test('root local provider fields generate complete runtime upstream env', () => {
+test('root local provider fields generate Model Router member env only', () => {
   const settings = localProviderSettings({
     provider: 'openai-compatible',
     apiKey: 'root-key',
@@ -141,42 +146,46 @@ test('root local provider fields generate complete runtime upstream env', () => 
   assert.equal(settings.baseUrl, 'https://root-provider.example/openai-compatible');
   assert.equal(settings.model, 'root-model');
   assert.deepEqual(providerEnvFromLocalSettings(settings), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
-    SCIFORGE_RUNTIME_PROVIDER: 'openai-compatible',
-    SCIFORGE_RUNTIME_BASE_URL: 'https://root-provider.example/openai-compatible',
-    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://root-provider.example/openai-compatible',
-    SCIFORGE_RUNTIME_MODEL: 'root-model',
-    SCIFORGE_PROXY_DEFAULT_MODEL: 'root-model',
+    SCIFORGE_TEXT_API_KEY: 'root-key',
+    SCIFORGE_TEXT_PROVIDER: 'openai-compatible',
+    SCIFORGE_TEXT_BASE_URL: 'https://root-provider.example/openai-compatible',
+    SCIFORGE_TEXT_MODEL: 'root-model',
   });
 });
 
-test('local provider settings support runtimeCodexProxy alias and source metadata', () => {
+test('local provider settings support text member env and source metadata', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sciforge-local-provider-'));
   const configPath = join(dir, 'config.local.json');
   writeFileSync(configPath, JSON.stringify({
     runtimeProvider: 'openai-compatible',
-    runtimeCodexProxy: {
-      apiKey: 'runtime-proxy-key',
-      baseUrl: 'https://runtime-proxy.example/v1',
-      model: 'runtime-proxy-model',
-      forceNonStreamingUpstream: true,
+    textLLM: {
+      env: {
+        SCIFORGE_TEXT_API_KEY: 'text-member-key',
+        SCIFORGE_TEXT_BASE_URL: 'https://text-member.example/v1',
+        SCIFORGE_TEXT_MODEL: 'text-member-model',
+      },
     },
   }));
 
   const settings = readLocalProviderSettings(configPath);
 
-  assert.equal(settings.apiKey, 'runtime-proxy-key');
-  assert.equal(settings.apiKeySource, `${configPath}:runtimeCodexProxy.apiKey`);
+  assert.equal(settings.apiKey, 'text-member-key');
+  assert.equal(settings.apiKeySource, `${configPath}:textLLM.env.SCIFORGE_TEXT_API_KEY`);
   assert.equal(settings.provider, 'openai-compatible');
-  assert.equal(settings.baseUrl, 'https://runtime-proxy.example/v1');
-  assert.equal(settings.model, 'runtime-proxy-model');
-  assert.equal(settings.forceNonStreamingUpstream, true);
+  assert.equal(settings.baseUrl, 'https://text-member.example/v1');
+  assert.equal(settings.model, 'text-member-model');
+  assert.equal(settings.forceNonStreamingUpstream, undefined);
 });
 
-test('local provider settings fall back from empty codexProxy fields to runtimeCodexProxy', () => {
+test('local provider settings ignore legacy proxy fields instead of falling back to them', () => {
   const settings = localProviderSettings({
     llm: {
       provider: 'llm-provider',
+      env: {
+        SCIFORGE_TEXT_API_KEY: 'llm-member-key',
+        SCIFORGE_TEXT_BASE_URL: 'https://llm-member.example/v1',
+        SCIFORGE_TEXT_MODEL: 'llm-member-model',
+      },
     },
     codexProxy: {},
     runtimeCodexProxy: {
@@ -187,9 +196,9 @@ test('local provider settings fall back from empty codexProxy fields to runtimeC
   });
 
   assert.equal(settings.provider, 'llm-provider');
-  assert.equal(settings.apiKey, 'runtime-proxy-key');
-  assert.equal(settings.baseUrl, 'https://runtime-proxy.example/v1');
-  assert.equal(settings.model, 'runtime-model');
+  assert.equal(settings.apiKey, 'llm-member-key');
+  assert.equal(settings.baseUrl, 'https://llm-member.example/v1');
+  assert.equal(settings.model, 'llm-member-model');
 });
 
 test('local provider settings ignore retired VirtualAppScreen native driver env', () => {
@@ -216,7 +225,13 @@ test('local provider settings ignore retired VirtualAppScreen native driver env'
     },
   });
 
-  assert.deepEqual(computerUseWorkspaceEnvFromLocalSettings(settings), {});
+  assert.deepEqual(computerUseWorkspaceEnvFromLocalSettings(settings), {
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-local-model-router',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_RUNTIME_PROVIDER: 'sciforge-model-router',
+  });
 });
 
 test('local provider settings ignore root VirtualAppScreen env aliases', () => {
@@ -231,10 +246,14 @@ test('local provider settings ignore root VirtualAppScreen env aliases', () => {
   });
 
   assert.deepEqual(computerUseWorkspaceEnvFromLocalSettings(settings), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-local-model-router',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_RUNTIME_PROVIDER: 'sciforge-model-router',
   });
   assert.deepEqual(providerEnvFromLocalSettings(settings), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_TEXT_API_KEY: 'root-key',
   });
 });
 
@@ -253,14 +272,18 @@ test('runtime codex env keeps VirtualAppScreen native driver env out of the app-
   });
 
   assert.deepEqual(runtimeCodexEnvFromLocalSettings(settings), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
-    SCIFORGE_RUNTIME_MODEL: 'root-model',
-    SCIFORGE_PROXY_DEFAULT_MODEL: 'root-model',
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-local-model-router',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_RUNTIME_PROVIDER: 'sciforge-model-router',
   });
   assert.deepEqual(computerUseWorkspaceEnvFromLocalSettings(settings), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
-    SCIFORGE_RUNTIME_MODEL: 'root-model',
-    SCIFORGE_PROXY_DEFAULT_MODEL: 'root-model',
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-local-model-router',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_RUNTIME_PROVIDER: 'sciforge-model-router',
   });
 });
 
@@ -276,11 +299,9 @@ test('local provider settings keep vision translator config explicit and separat
   assert.equal(textOnly.visionBaseUrl, undefined);
   assert.equal(textOnly.visionModel, undefined);
   assert.deepEqual(providerEnvFromLocalSettings(textOnly), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
-    SCIFORGE_RUNTIME_BASE_URL: 'https://provider.example/v1',
-    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example/v1',
-    SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
-    SCIFORGE_PROXY_DEFAULT_MODEL: 'bailian/deepseek-v4-flash',
+    SCIFORGE_TEXT_API_KEY: 'root-key',
+    SCIFORGE_TEXT_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_TEXT_MODEL: 'bailian/deepseek-v4-flash',
   });
 
   const multimodal = localProviderSettings({
@@ -300,15 +321,17 @@ test('local provider settings keep vision translator config explicit and separat
   assert.equal(multimodal.visionBaseUrl, 'https://vision.example/v1');
   assert.equal(multimodal.visionModel, 'qwen3.7-plus');
   assert.deepEqual(providerEnvFromLocalSettings(multimodal), {
-    SCIFORGE_RUNTIME_API_KEY: 'root-key',
-    SCIFORGE_RUNTIME_BASE_URL: 'https://provider.example/v1',
-    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example/v1',
-    SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
-    SCIFORGE_PROXY_DEFAULT_MODEL: 'bailian/deepseek-v4-flash',
+    SCIFORGE_TEXT_API_KEY: 'root-key',
+    SCIFORGE_TEXT_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_TEXT_MODEL: 'bailian/deepseek-v4-flash',
+    SCIFORGE_VISION_API_KEY: 'vision-key',
+    SCIFORGE_VISION_BASE_URL: 'https://vision.example/v1',
+    SCIFORGE_VISION_MODEL: 'qwen3.7-plus',
   });
 });
 
-test('local provider api key candidate paths include textLLM env and runtimeCodexProxy', () => {
-  assert.ok(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'textLLM.env.SCIFORGE_RUNTIME_API_KEY'));
-  assert.ok(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'runtimeCodexProxy.apiKey'));
+test('local provider api key candidate paths include text member env and exclude legacy proxy config', () => {
+  assert.ok(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'textLLM.env.SCIFORGE_TEXT_API_KEY'));
+  assert.ok(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'llm.env.SCIFORGE_TEXT_API_KEY'));
+  assert.equal(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS.some((path) => path.join('.') === 'runtimeCodexProxy.apiKey'), false);
 });

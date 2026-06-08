@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import type { ViteDevServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, readFileSync } from 'node:fs';
+import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -11,16 +11,14 @@ import { join, resolve } from 'node:path';
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
-const CODEX_PROXY_PORT = Number(process.env.SCIFORGE_PROXY_PORT || 3891);
-const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
-const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
+const MODEL_ROUTER_PORT = Number(process.env.SCIFORGE_MODEL_ROUTER_PORT || 3892);
 const RUNTIME_LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || 'workspace/.sciforge/logs');
 const runtimeChildren = new Map<string, ReturnType<typeof spawn>>();
 const STARTUP_TIMEOUT_MS = Number(process.env.SCIFORGE_RUNTIME_START_TIMEOUT_MS || 30_000);
 const BROWSER_HOST_SESSION_RUNTIME_ENDPOINT_TOKENS = ['start', 'state', 'actions', 'computer-use-actions'] as const;
 const BROWSER_HOST_SESSION_NATIVE_ENDPOINT_TOKENS = ['start', 'state', 'actions', 'computer-use-actions'] as const;
 const BROWSER_HOST_NATIVE_SURFACE_ENDPOINT_TOKENS = ['health', 'attach', 'state'] as const;
-const BROWSER_HOST_SEARCH_ENDPOINT_TOKENS = ['search'] as const;
+const BROWSER_HOST_DISCOVERY_ENDPOINT_TOKENS = ['search'] as const;
 
 export default defineConfig({
   base: './',
@@ -79,7 +77,7 @@ function sciForgeRuntimeLauncher() {
           return;
         }
         try {
-          const response = await fetch(`http://127.0.0.1:${CODEX_PROXY_PORT}/v1/models`, {
+          const response = await fetch(`${modelRouterBaseUrl()}/models`, {
             headers: { Accept: 'application/json' },
             signal: AbortSignal.timeout(8_000),
           });
@@ -137,31 +135,18 @@ function sciForgeRuntimeLauncher() {
         try {
           const body = await readJsonBody(req);
           const requireBrowserHostNativeSurface = body.requireBrowserHostNativeSurface === true;
-          const [workspace, agentserver] = await Promise.all([
-            ensureRuntimeProcess({
-              id: 'workspace',
-              label: 'Workspace Writer',
-              port: WORKSPACE_PORT,
-              healthUrl: `http://127.0.0.1:${WORKSPACE_PORT}/health`,
-              cwd: process.cwd(),
-              args: ['run', 'workspace:server'],
-              requiredCapabilities: browserRuntimeWorkspaceCapabilities(requireBrowserHostNativeSurface),
-              requiredEndpoints: browserRuntimeWorkspaceEndpoints(requireBrowserHostNativeSurface),
-              startupBlocked: requireBrowserHostNativeSurface ? browserRuntimeNativeSurfaceStartupBlocker : undefined,
-            }),
-            ensureRuntimeProcess({
-              id: 'agentserver',
-              label: 'AgentServer',
-              port: AGENT_SERVER_PORT,
-              healthUrl: `http://127.0.0.1:${AGENT_SERVER_PORT}/health`,
-              cwd: AGENT_SERVER_ROOT,
-              args: ['run', 'dev'],
-              env: agentServerEnv(),
-              enabled: existsSync(AGENT_SERVER_ROOT),
-              missingReason: `AgentServer root not found at ${AGENT_SERVER_ROOT}`,
-            }),
-          ]);
-          writeJson(res, 200, { ok: workspace.ok && agentserver.ok, services: [workspace, agentserver] });
+          const workspace = await ensureRuntimeProcess({
+            id: 'workspace',
+            label: 'Workspace Writer',
+            port: WORKSPACE_PORT,
+            healthUrl: `http://127.0.0.1:${WORKSPACE_PORT}/health`,
+            cwd: process.cwd(),
+            args: ['run', 'workspace:server'],
+            requiredCapabilities: browserRuntimeWorkspaceCapabilities(requireBrowserHostNativeSurface),
+            requiredEndpoints: browserRuntimeWorkspaceEndpoints(requireBrowserHostNativeSurface),
+            startupBlocked: requireBrowserHostNativeSurface ? browserRuntimeNativeSurfaceStartupBlocker : undefined,
+          });
+          writeJson(res, 200, { ok: workspace.ok, services: [workspace] });
         } catch (error) {
           writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
         }
@@ -252,37 +237,17 @@ async function stopRuntimeChild(id: string, child: ReturnType<typeof spawn>) {
   runtimeChildren.delete(id);
 }
 
-function agentServerEnv() {
-  return {
-    OPENTEAM_SERVER_PORT: String(AGENT_SERVER_PORT),
-    PORT: String(AGENT_SERVER_PORT),
-    NODE_OPTIONS: mergeNodeOptions(process.env.NODE_OPTIONS, '--max-old-space-size=8192'),
-    ...agentServerModelEnvFromLocalConfig(),
-  };
-}
-
-function agentServerModelEnvFromLocalConfig() {
-  try {
-    const parsed = JSON.parse(readFileSync(CONFIG_LOCAL_PATH, 'utf8'));
-    const llm = isRecord(parsed?.llm) ? parsed.llm : {};
-    const provider = typeof llm.provider === 'string' ? llm.provider.trim() : '';
-    const baseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';
-    const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey.trim() : '';
-    const model = typeof llm.model === 'string' ? llm.model.trim() : typeof llm.modelName === 'string' ? llm.modelName.trim() : '';
-    return {
-      ...(provider ? { AGENT_SERVER_MODEL_PROVIDER: provider, AGENT_SERVER_ADAPTER_LLM_PROVIDER: provider } : {}),
-      ...(baseUrl ? { AGENT_SERVER_MODEL_BASE_URL: baseUrl, AGENT_SERVER_ADAPTER_LLM_BASE_URL: baseUrl } : {}),
-      ...(apiKey ? { AGENT_SERVER_MODEL_API_KEY: apiKey, AGENT_SERVER_ADAPTER_LLM_API_KEY: apiKey } : {}),
-      ...(model ? { AGENT_SERVER_MODEL: model, AGENT_SERVER_MODEL_NAME: model, AGENT_SERVER_ADAPTER_LLM_MODEL: model } : {}),
-    };
-  } catch {
-    return {};
-  }
-}
-
 function mergeNodeOptions(existing: string | undefined, required: string) {
   const current = existing?.trim() ?? '';
   return current.includes('--max-old-space-size') ? current : [current, required].filter(Boolean).join(' ');
+}
+
+function modelRouterBaseUrl() {
+  const configured = process.env.SCIFORGE_MODEL_ROUTER_BASE_URL
+    || process.env.SCIFORGE_MODEL_ROUTER_URL
+    || `http://127.0.0.1:${MODEL_ROUTER_PORT}/v1`;
+  const trimmed = configured.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
 }
 
 async function handleBrowserProxyRequest(req: IncomingMessage, res: ServerResponse) {
@@ -702,7 +667,7 @@ function runtimeHealthSatisfiesRequirements(
 
 function browserRuntimeWorkspaceCapabilities(requireBrowserHostNativeSurface: boolean): readonly string[] {
   return requireBrowserHostNativeSurface
-    ? ['browser-host-session', 'browser-host-native-surface', 'browser-host-search']
+    ? ['browser-host-session', 'browser-host-native-surface', 'browser-host-discovery']
     : ['browser-host-session'];
 }
 
@@ -714,8 +679,8 @@ function browserRuntimeWorkspaceEndpoints(requireBrowserHostNativeSurface: boole
     key: 'browserHostNativeSurface',
     tokens: BROWSER_HOST_NATIVE_SURFACE_ENDPOINT_TOKENS,
   }, {
-    key: 'browserHostSearch',
-    tokens: BROWSER_HOST_SEARCH_ENDPOINT_TOKENS,
+    key: 'browserHostDiscovery',
+    tokens: BROWSER_HOST_DISCOVERY_ENDPOINT_TOKENS,
   }] : [{
     key: 'browserHostSession',
     tokens: BROWSER_HOST_SESSION_RUNTIME_ENDPOINT_TOKENS,

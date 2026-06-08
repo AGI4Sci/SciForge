@@ -13,7 +13,6 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./codex-responses-proxy": "./src/proxy.ts",
     "./codex-compatibility-gate": "./src/codex-compatibility-gate.ts",
     "./runtime-home": "./src/runtime-home.ts",
     "./response-compat": "./src/response-compat.ts"
@@ -25,7 +24,7 @@
     "README.md"
   ],
   "scripts": {
-    "codex:proxy": "tsx src/cli.ts",
+    "codex:proxy": "node -e \"console.error('legacy codex:proxy is disabled for active SciForge Runtime/Browser paths; use the workspace backend:model-router script instead.'); process.exit(2)\"",
     "codex:runtime:setup": "tsx src/setup-runtime-home.ts",
     "codex:runtime:exec": "tsx src/exec-runtime-codex.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""

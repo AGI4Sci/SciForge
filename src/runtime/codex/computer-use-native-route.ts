@@ -695,7 +695,7 @@ export function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): G
       selectedToolIds: [VISION_TOOL_ID],
       selectedSenseIds: [VISION_TOOL_ID],
       selectedActionIds: [COMPUTER_USE_ACTION_PROVIDER_ID],
-      allowOpenAiRuntime: input.request.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       entrypoint: 'runtime-codex-commandText',
       terminalEquivalentText: true,
       computerUseApprovalRef: approvalRef,

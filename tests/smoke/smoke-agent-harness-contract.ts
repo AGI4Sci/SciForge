@@ -8,6 +8,7 @@ import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import { progressModelFromEvent } from '../../src/ui/src/processProgress.js';
 import { agentHarnessRepairPolicyBridgeFromRuntimeState } from '../../src/runtime/gateway/validation-repair-audit-bridge.js';
+import { agentHarnessHandoffMetadata } from '../../src/runtime/gateway/agent-harness-shadow.js';
 
 type CapturedDispatch = {
   url: string;
@@ -17,8 +18,11 @@ type CapturedDispatch = {
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agent-harness-contract-'));
 const dispatches: CapturedDispatch[] = [];
+const legacyRequests: string[] = [];
+const harnessPrompt = 'Summarize harness policy shadow behavior in a metadata-only audit.';
 
 const server = createServer(async (req, res) => {
+  legacyRequests.push(`${req.method ?? 'UNKNOWN'} ${String(req.url ?? '')}`);
   if (req.method === 'GET' && String(req.url).includes('/api/agent-server/agents/') && String(req.url).endsWith('/context')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -98,7 +102,7 @@ try {
     agentHarnessContinuityDecisionDisabled: true,
   });
 
-  assert.equal(first.result.message, 'Harness shadow smoke completed.');
+  assertRetiredLegacyRuntimeBoundary(first);
   assert.equal(first.event.status, 'completed');
   assert.equal(first.summary.profileId, 'balanced-default');
   assert.equal(first.contract.schemaVersion, 'sciforge.agent-harness-contract.v1');
@@ -109,25 +113,26 @@ try {
   assert.equal(first.progressEvents.length, 1, 'progressPlan projection should emit a structured progress event by default');
   assert.equal(first.progressEvents[0]?.type, 'process-progress');
   assert.equal(isRecord(first.progressEvents[0]?.raw) ? first.progressEvents[0]?.raw.reason : undefined, 'progress-plan-projection');
-  assert.equal(dispatches[0]?.metadata.harnessProfileId, 'balanced-default');
-  assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
-  assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
-  assert.equal(dispatches[0]?.metadata.harnessDecisionOwner, 'AgentServer');
-  const defaultContinuityDecision = (dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>).continuityDecision as Record<string, unknown>;
+  const firstMetadata = harnessMetadataForRun(first) as Record<string, unknown>;
+  assert.equal(firstMetadata.harnessProfileId, 'balanced-default');
+  assert.equal(firstMetadata.harnessContractRef, first.summary.contractRef);
+  assert.equal(firstMetadata.harnessTraceRef, first.summary.traceRef);
+  assert.equal(firstMetadata.harnessDecisionOwner, 'AgentServer');
+  const handoff = isRecord(firstMetadata.agentHarnessHandoff) ? firstMetadata.agentHarnessHandoff : {};
+  const defaultContinuityDecision = isRecord(handoff.continuityDecision) ? handoff.continuityDecision : {};
   assert.equal(defaultContinuityDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
   assert.equal(defaultContinuityDecision.shadowMode, true);
-  assert.equal(defaultContinuityDecision.decisionOwner, 'AgentServer');
+  assert.equal(defaultContinuityDecision.decisionOwner, 'AgentHost');
   assert.equal(defaultContinuityDecision.decision, 'fresh');
   assert.equal(defaultContinuityDecision.useContinuity, false);
-  const defaultBackendSelectionDecision = (dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>).backendSelectionDecision as Record<string, unknown>;
-  assert.equal(defaultBackendSelectionDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
+  const defaultBackendSelectionDecision = isRecord(handoff.backendSelectionDecision) ? handoff.backendSelectionDecision : {};
+  assert.equal(defaultBackendSelectionDecision.schemaVersion, 'sciforge.backend-selection-decision.v1');
   assert.equal(defaultBackendSelectionDecision.shadowMode, true);
-  assert.equal(defaultBackendSelectionDecision.decisionOwner, 'AgentServer');
+  assert.equal(defaultBackendSelectionDecision.decisionOwner, 'AgentHost');
   assert.equal(defaultBackendSelectionDecision.harnessStage, 'beforeAgentDispatch');
   assert.equal(defaultBackendSelectionDecision.backend, 'openteam_agent');
-  assert.ok(isRecord(dispatches[0]?.metadata.harnessBudgetSummary), 'harness budget summary should be attached to payload metadata');
-  assert.ok(isRecord(dispatches[0]?.metadata.agentHarnessHandoff), 'structured harness handoff metadata should be attached');
-  const handoff = dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>;
+  assert.ok(isRecord(firstMetadata.harnessBudgetSummary), 'harness budget summary should be available from offline metadata');
+  assert.ok(isRecord(firstMetadata.agentHarnessHandoff), 'structured harness handoff metadata should be reconstructable offline');
   assert.equal(handoff.schemaVersion, 'sciforge.agent-harness-handoff.v1');
   assert.equal(handoff.harnessProfileId, 'balanced-default');
   assert.equal(handoff.harnessContractRef, first.summary.contractRef);
@@ -135,8 +140,8 @@ try {
   assert.equal(handoff.decisionOwner, 'AgentServer');
   assert.deepEqual(handoff.continuityDecision, defaultContinuityDecision);
   assert.deepEqual(handoff.backendSelectionDecision, defaultBackendSelectionDecision);
-  assert.equal(dispatches[0]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity audit should not be duplicated outside canonical handoff');
-  assert.equal(dispatches[0]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection audit should not be duplicated outside canonical handoff');
+  assert.equal(firstMetadata.agentHarnessContinuityDecision, undefined, 'continuity audit should not be duplicated outside canonical handoff');
+  assert.equal(firstMetadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection audit should not be duplicated outside canonical handoff');
   const generatedHandoffEnvelope = buildContextEnvelope({
     skillDomain: 'literature',
     prompt: 'Render the generated harness handoff through the compact broker payload.',
@@ -184,14 +189,9 @@ try {
     undefined,
     'repair policy audit kill switch should suppress default handoff projection',
   );
-  assert.equal(dispatches[0]?.metadata.purpose, dispatches[2]?.metadata.purpose);
-  assert.equal(dispatches[0]?.url, dispatches[2]?.url);
-  assert.equal(dispatches[0]?.text.includes('"harnessInputAudit"'), true, 'fresh prompt should carry compact broker harness input audit');
-  assert.equal(dispatches[0]?.text.includes(first.summary.contractRef as string), true, 'compact broker harness audit should carry the contract ref');
-  assert.equal(dispatches[0]?.text.includes(first.summary.traceRef as string), true, 'compact broker harness audit should carry the trace ref');
-  assert.equal(dispatches[0]?.text.includes('"agentHarness"'), false, 'fresh prompt text must not inline harness shadow payload');
-  assert.equal(dispatches[0]?.text.includes('"promptDirectives"'), false, 'fresh prompt text must not inline full harness contract');
-  assert.equal(dispatches[0]?.text.includes('"stages"'), false, 'fresh prompt text must not inline full harness trace');
+  assertRetiredLegacyRuntimeBoundary(second);
+  assertRetiredLegacyRuntimeBoundary(fast);
+  assertRetiredLegacyRuntimeBoundary(research);
   assert.notDeepEqual(fast.contract, research.contract);
   assert.equal(fast.contract.profileId, 'fast-answer');
   assert.equal(research.contract.profileId, 'research-grade');
@@ -208,24 +208,29 @@ try {
   assert.equal(progressAudit.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
   assert.equal(progressAudit.contractRef, progressOptIn.summary.contractRef);
   assert.equal(progressAudit.source, 'request.uiState.agentHarness.contract.progressPlan');
-  const progressHandoff = dispatches[4]?.metadata.agentHarnessHandoff as Record<string, unknown>;
-  const continuityDecision = progressHandoff.continuityDecision as Record<string, unknown>;
+  const progressMetadata = harnessMetadataForRun(progressOptIn, {
+    agentHarnessProgressPlanEnabled: true,
+    agentHarnessContinuityAuditEnabled: true,
+    agentHarnessBackendSelectionAuditEnabled: true,
+  }) as Record<string, unknown>;
+  const progressHandoff = isRecord(progressMetadata.agentHarnessHandoff) ? progressMetadata.agentHarnessHandoff : {};
+  const continuityDecision = isRecord(progressHandoff.continuityDecision) ? progressHandoff.continuityDecision : {};
   assert.equal(continuityDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
   assert.equal(continuityDecision.shadowMode, true);
-  assert.equal(continuityDecision.decisionOwner, 'AgentServer');
+  assert.equal(continuityDecision.decisionOwner, 'AgentHost');
   assert.equal(continuityDecision.decision, 'fresh');
   assert.equal(continuityDecision.useContinuity, false);
   assert.deepEqual(progressHandoff.continuityDecision, continuityDecision);
-  const backendSelectionDecision = progressHandoff.backendSelectionDecision as Record<string, unknown>;
-  assert.equal(backendSelectionDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
+  const backendSelectionDecision = isRecord(progressHandoff.backendSelectionDecision) ? progressHandoff.backendSelectionDecision : {};
+  assert.equal(backendSelectionDecision.schemaVersion, 'sciforge.backend-selection-decision.v1');
   assert.equal(backendSelectionDecision.shadowMode, true);
-  assert.equal(backendSelectionDecision.decisionOwner, 'AgentServer');
+  assert.equal(backendSelectionDecision.decisionOwner, 'AgentHost');
   assert.equal(backendSelectionDecision.harnessStage, 'beforeAgentDispatch');
   assert.equal(backendSelectionDecision.decision, 'openteam_agent');
   assert.equal(backendSelectionDecision.backend, 'openteam_agent');
-  assert.equal(backendSelectionDecision.source, 'llmEndpoint.baseUrl');
+  assert.equal(backendSelectionDecision.source, 'request.agentBackend');
   const backendSignals = isRecord(backendSelectionDecision.runtimeSignals) ? backendSelectionDecision.runtimeSignals : {};
-  assert.equal(backendSignals.llmEndpointConfigured, true);
+  assert.equal(backendSignals.llmEndpointConfigured, false);
   const backendHarnessSignals = isRecord(backendSelectionDecision.harnessSignals) ? backendSelectionDecision.harnessSignals : {};
   assert.equal(backendHarnessSignals.contractRef, progressOptIn.summary.contractRef);
   assert.equal(backendHarnessSignals.traceRef, progressOptIn.summary.traceRef);
@@ -242,19 +247,28 @@ try {
   assert.equal(backendTraceHarness.externalHookDeclaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
   assert.equal(backendTraceHarness.externalHookDeclared, true);
   assert.deepEqual(progressHandoff.backendSelectionDecision, backendSelectionDecision);
-  assert.equal(dispatches[4]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity audit should not be duplicated outside canonical handoff');
-  assert.equal(dispatches[4]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection audit should not be duplicated outside canonical handoff');
+  assert.equal(progressMetadata.agentHarnessContinuityDecision, undefined, 'continuity audit should not be duplicated outside canonical handoff');
+  assert.equal(progressMetadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection audit should not be duplicated outside canonical handoff');
   const uiProgress = progressModelFromEvent(projected as unknown as Parameters<typeof progressModelFromEvent>[0]);
   assert.ok(String(projectedRaw.phase || ''), 'projected progress event should expose a contract phase');
   assert.ok(String(uiProgress?.phase || ''), 'UI progress should preserve a visible phase');
   assert.equal(uiProgress?.status, 'running');
   assert.equal(uiProgress?.reason, 'progress-plan-projection');
   assert.equal(backendDecisionDisabled.event.status, 'completed');
-  assert.equal(((dispatches[5]?.metadata.agentHarnessHandoff as Record<string, unknown>)?.backendSelectionDecision), undefined, 'explicit kill switch should omit backend selection decision audit');
+  assert.equal(
+    (harnessMetadataForRun(backendDecisionDisabled, { agentHarnessBackendSelectionDecisionDisabled: true }).agentHarnessHandoff as Record<string, unknown>)?.backendSelectionDecision,
+    undefined,
+    'explicit kill switch should omit backend selection decision audit',
+  );
   assert.equal(continuityDecisionDisabled.event.status, 'completed');
-  assert.equal(((dispatches[6]?.metadata.agentHarnessHandoff as Record<string, unknown>)?.continuityDecision), undefined, 'explicit kill switch should omit continuity decision audit');
-  assert.equal(dispatches.length, 7);
-  console.log('[ok] agent harness shadow contract is stable, traced, profiled, and metadata-only');
+  assert.equal(
+    (harnessMetadataForRun(continuityDecisionDisabled, { agentHarnessContinuityDecisionDisabled: true }).agentHarnessHandoff as Record<string, unknown>)?.continuityDecision,
+    undefined,
+    'explicit kill switch should omit continuity decision audit',
+  );
+  assert.equal(dispatches.length, 0, 'legacy AgentServer run endpoint must not be called');
+  assert.deepEqual(legacyRequests, [], 'legacy AgentServer context/run endpoints must not be called');
+  console.log('[ok] agent harness shadow contract is stable, traced, metadata-only, and fails closed without legacy AgentServer dispatch');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
@@ -263,9 +277,10 @@ async function runHarnessRequest(profileId: string, uiStateOverrides: Record<str
   const events: Array<Record<string, unknown>> = [];
   const result = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
-    prompt: 'Summarize harness shadow contract behavior in a report.',
+    prompt: harnessPrompt,
     workspacePath: workspace,
     agentServerBaseUrl: baseUrl,
+    agentBackend: 'openteam_agent',
     expectedArtifactTypes: ['research-report'],
     selectedComponentIds: ['report-viewer'],
     uiState: {
@@ -286,6 +301,7 @@ async function runHarnessRequest(profileId: string, uiStateOverrides: Record<str
   const contract = isRecord(raw.contract) ? raw.contract : {};
   const trace = isRecord(raw.trace) ? raw.trace : {};
   const progressEvents = events.filter((item) => item.type === 'process-progress' && isRecord(item.raw) && isRecord(item.raw.agentHarnessProgressPlan));
+  const stageAudits = events.filter((item) => item.type === 'gateway-pipeline-stage-audit');
   return {
     result,
     event,
@@ -294,7 +310,55 @@ async function runHarnessRequest(profileId: string, uiStateOverrides: Record<str
     contract,
     trace,
     progressEvents,
+    stageAudits,
   };
+}
+
+function harnessMetadataForRun(run: Awaited<ReturnType<typeof runHarnessRequest>>, uiStateOverrides: Record<string, unknown> = {}) {
+  const profileId = typeof run.summary.profileId === 'string'
+    ? run.summary.profileId
+    : typeof uiStateOverrides.harnessProfileId === 'string'
+      ? uiStateOverrides.harnessProfileId
+      : 'balanced-default';
+  return agentHarnessHandoffMetadata({
+    skillDomain: 'literature',
+    prompt: harnessPrompt,
+    workspacePath: workspace,
+    agentServerBaseUrl: baseUrl,
+    agentBackend: 'openteam_agent',
+    expectedArtifactTypes: ['research-report'],
+    selectedComponentIds: ['report-viewer'],
+    uiState: {
+      forceAgentServerGeneration: true,
+      harnessProfileId: profileId,
+      expectedArtifactTypes: ['research-report'],
+      selectedComponentIds: ['report-viewer'],
+      ...uiStateOverrides,
+      agentHarness: {
+        schemaVersion: 'sciforge.agent-harness-shadow.v1',
+        shadowMode: true,
+        profileId,
+        contractRef: run.summary.contractRef,
+        traceRef: run.summary.traceRef,
+        summary: run.summary,
+        contract: run.contract,
+        trace: run.trace,
+      },
+    },
+    artifacts: [],
+  } as Parameters<typeof agentHarnessHandoffMetadata>[0]) as Record<string, unknown>;
+}
+
+function assertRetiredLegacyRuntimeBoundary(run: Awaited<ReturnType<typeof runHarnessRequest>>) {
+  assert.match(run.result.message, /Runtime Codex|没有回落到旧 AgentServer generation|legacy AgentServer generation fallback is retired/);
+  assert.equal(run.result.artifacts[0]?.id, 'runtime-unhandled');
+  assert.equal(run.result.executionUnits[0]?.tool, 'sciforge.runtime-codex');
+  const serialized = JSON.stringify(run.result);
+  assert.equal(serialized.includes('computer-use-preflight'), false, 'harness smoke prompt must not trigger Computer Use product proof');
+  assert.equal(serialized.includes('Harness shadow smoke completed.'), false, 'mock AgentServer completion must not satisfy this smoke');
+  assert.ok(run.stageAudits.some((item) => isRecord(item.raw) && item.raw.stage === 'runtime-unhandled' && item.raw.shortCircuit === true));
+  assert.equal(run.stageAudits.some((item) => isRecord(item.raw) && item.raw.stage === 'browser-computer-use-capability-truth' && item.raw.shortCircuit === true), false);
+  assert.equal(run.stageAudits.some((item) => /agentserver/i.test(String(isRecord(item.raw) ? item.raw.stage : ''))), false);
 }
 
 async function readJson(req: IncomingMessage) {

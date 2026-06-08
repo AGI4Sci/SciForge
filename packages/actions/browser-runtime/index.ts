@@ -61,12 +61,36 @@ export interface BrowserRepairHint {
   machineReadable?: Record<string, unknown>;
 }
 
+export type BrowserResourceStatus = 'discovered' | 'accessed' | 'observed' | 'read' | 'extracted' | 'downloaded' | 'blocked' | 'failed';
+export type BrowserResourceConfidence = 'candidate' | 'observed' | 'materialized';
+
+export interface BrowserResource {
+  ref: string;
+  kind: string;
+  status: BrowserResourceStatus;
+  originTool: BrowserPrimitiveIntent;
+  locator?: Record<string, unknown>;
+  title?: string;
+  snippet?: string;
+  refs?: string[];
+  confidence?: BrowserResourceConfidence;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BrowserEvidenceState {
+  completed: string[];
+  unknown: string[];
+  boundary: string;
+}
+
 export interface BrowserPrimitiveEnvelope<T = unknown> {
   schemaVersion: typeof BROWSER_PRIMITIVE_RESULT_SCHEMA;
   moduleId: typeof BROWSER_PRIMITIVE_SERVICE_MODULE_ID;
   primitive: BrowserPrimitiveName;
   status: BrowserPrimitiveStatus;
   output?: T;
+  resources: BrowserResource[];
+  evidenceState: BrowserEvidenceState;
   refs: string[];
   diagnostics: BrowserDiagnostic[];
   budget: BrowserPrimitiveBudget;
@@ -98,14 +122,6 @@ export interface BrowserSearchResultItem {
   url: string;
   snippet?: string;
   displayedUrl?: string;
-  readInput?: BrowserSearchResultReadInput;
-}
-
-export interface BrowserSearchResultReadInput {
-  schemaVersion: typeof BROWSER_PRIMITIVE_INPUT_SCHEMAS.read;
-  url: string;
-  navigationMode: 'ephemeral';
-  includeText: true;
 }
 
 export interface BrowserSearchOutput {
@@ -170,6 +186,7 @@ export interface BrowserObserveOutput {
 
 export interface BrowserReadInput {
   schemaVersion: typeof BROWSER_PRIMITIVE_INPUT_SCHEMAS.read;
+  resourceRef?: string;
   sessionId?: string;
   url?: string;
   navigationMode?: BrowserReadNavigationMode;
@@ -222,6 +239,7 @@ export interface BrowserDownloadInput {
   maxBytes?: number;
   timeoutMs?: number;
   filenameHint?: string;
+  constraints?: BrowserPrimitiveConstraints;
 }
 
 export interface BrowserDownloadOutput {
@@ -252,6 +270,8 @@ export interface BrowserPrimitivePortResult<T = unknown> {
   status: BrowserPrimitiveStatus;
   output?: T;
   refs?: string[];
+  resources?: BrowserResource[];
+  evidenceState?: BrowserEvidenceState;
   diagnostics?: BrowserDiagnostic[];
   budget?: BrowserPrimitiveBudget;
   blockedReason?: string;
@@ -284,6 +304,7 @@ const INTENT_TO_PRIMITIVE = new Map<BrowserPrimitiveIntent, BrowserPrimitiveName
 export function createBrowserPrimitiveService(options: BrowserPrimitiveServiceOptions = {}): BrowserPrimitiveService {
   const ports = options.ports ?? {};
   const now = options.now ?? Date.now;
+  const resourceLedger = new Map<string, BrowserResource>();
   return {
     describe: browserPrimitiveModuleDescription,
     invoke: async (request) => {
@@ -297,7 +318,23 @@ export function createBrowserPrimitiveService(options: BrowserPrimitiveServiceOp
         });
       }
       const primitive = validation.primitive;
-      const input = validation.input;
+      const input = primitive === 'read'
+        ? resolveBrowserReadInput(validation.input as BrowserReadInput, resourceLedger)
+        : validation.input;
+      if (!input) {
+        return primitiveModuleResult(primitive, {
+          status: 'blocked',
+          blockedReason: 'browser_resource_ref_unresolved',
+          refs: [],
+          diagnostics: [{
+            code: 'browser-resource-ref-unresolved',
+            message: 'The requested Browser resourceRef is not known to this Browser Runtime service or does not contain a readable URL locator.',
+            severity: 'error',
+            retryable: false,
+          }],
+          budget: elapsedBudget(validation.input, startedAt, now()),
+        }, resourceLedger);
+      }
       const port = ports[primitive] as ((input: BrowserPrimitiveInput) => Promise<BrowserPrimitivePortResult> | BrowserPrimitivePortResult) | undefined;
       if (!port) {
         return primitiveModuleResult(primitive, {
@@ -316,14 +353,14 @@ export function createBrowserPrimitiveService(options: BrowserPrimitiveServiceOp
             message: 'Register a Browser Runtime host port for this primitive before invoking it.',
             suggestedPrimitive: primitive,
           }],
-        });
+        }, resourceLedger);
       }
       try {
         const result = await port(input);
         return primitiveModuleResult(primitive, {
           ...result,
           budget: mergeBudget(elapsedBudget(input, startedAt, now()), result.budget),
-        });
+        }, resourceLedger);
       } catch (error) {
         return primitiveModuleResult(primitive, {
           status: 'failed',
@@ -336,7 +373,7 @@ export function createBrowserPrimitiveService(options: BrowserPrimitiveServiceOp
             retryable: true,
           }],
           budget: elapsedBudget(input, startedAt, now()),
-        });
+        }, resourceLedger);
       }
     },
   };
@@ -376,6 +413,7 @@ export function browserPrimitiveModuleDescription(): ModuleDescription {
     title: 'Browser Runtime',
     summary: 'Refs-first browser primitive module. Agent Host owns intent, repair, verification, and final synthesis.',
     resources: [
+      { kind: 'browser-resource', refPrefix: 'browser:resource:', queryable: false, readable: true },
       { kind: 'browser-session', refPrefix: 'browser:session:', queryable: false, readable: true },
       { kind: 'browser-search-result', refPrefix: 'browser:search-result:', queryable: false, readable: true },
       { kind: 'browser-source-page', refPrefix: 'browser:source-page:', queryable: false, readable: true },
@@ -396,23 +434,29 @@ export function browserPrimitiveModuleDescription(): ModuleDescription {
 function primitiveModuleResult(
   primitive: BrowserPrimitiveName,
   input: BrowserPrimitivePortResult,
+  resourceLedger?: Map<string, BrowserResource>,
 ): ModuleInvokeResult<BrowserPrimitiveEnvelope> {
   const refs = uniqueStrings(input.refs ?? []);
-  const output = primitive === 'search' ? actionableBrowserSearchOutput(input.output) : input.output;
-  const repairHints = primitive === 'search'
-    ? searchRepairHints(input.repairHints, output)
-    : input.repairHints;
+  const output = input.output;
+  const resources = uniqueBrowserResources([
+    ...(input.resources ?? []),
+    ...browserResourcesForPrimitive(primitive, output, refs),
+  ]);
+  registerBrowserResources(resourceLedger, resources);
+  const evidenceState = input.evidenceState ?? browserEvidenceStateForPrimitive(primitive, input.status, resources);
   const value: BrowserPrimitiveEnvelope = {
     schemaVersion: BROWSER_PRIMITIVE_RESULT_SCHEMA,
     moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
     primitive,
     status: input.status,
     output,
+    resources,
+    evidenceState,
     refs,
     diagnostics: input.diagnostics ?? [],
     budget: input.budget ?? {},
     blockedReason: input.blockedReason,
-    repairHints,
+    repairHints: input.repairHints,
   };
   return moduleResult({
     moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
@@ -425,66 +469,354 @@ function primitiveModuleResult(
   });
 }
 
-function actionableBrowserSearchOutput(output: unknown): unknown {
-  const searchOutput = record(output);
-  if (!searchOutput || !Array.isArray(searchOutput.results)) return output;
+function resolveBrowserReadInput(
+  input: BrowserReadInput,
+  resourceLedger: Map<string, BrowserResource>,
+): BrowserReadInput | undefined {
+  if (input.url || input.sessionId) return input;
+  if (!input.resourceRef) return input;
+  const resource = resourceLedger.get(input.resourceRef);
+  if (!resource || resource.kind !== 'web_page') return undefined;
+  const url = stringAt(resource.locator, 'url') ?? stringAt(resource.locator, 'finalUrl');
+  if (!url || !isHttpUrl(url)) return undefined;
   return {
-    ...searchOutput,
-    results: searchOutput.results.map((item) => actionableBrowserSearchResultItem(item)),
+    ...input,
+    url,
+    navigationMode: input.navigationMode ?? 'ephemeral',
   };
 }
 
-function actionableBrowserSearchResultItem(item: unknown): unknown {
-  const result = record(item);
-  if (!result) return item;
-  const url = typeof result.url === 'string' ? result.url : '';
-  const readInput = browserSearchResultReadInput(url);
-  if (!readInput) return result;
-  return {
-    ...result,
-    readInput: record(result.readInput) ?? readInput,
-  };
-}
-
-function searchRepairHints(
-  existing: BrowserRepairHint[] | undefined,
+function browserResourcesForPrimitive(
+  primitive: BrowserPrimitiveName,
   output: unknown,
-): BrowserRepairHint[] | undefined {
-  if (existing?.length) return existing;
-  const candidateReadInputs = candidateReadInputsFromSearchOutput(output);
-  if (!candidateReadInputs.length) return existing;
+  refs: string[],
+): BrowserResource[] {
+  const originTool = BROWSER_PRIMITIVE_INTENTS[primitive];
+  if (primitive === 'search') return browserResourcesForSearch(output, originTool);
+  if (primitive === 'navigate') return browserResourcesForNavigate(output, originTool, refs);
+  if (primitive === 'observe') return browserResourcesForObserve(output, originTool, refs);
+  if (primitive === 'read') return browserResourcesForRead(output, originTool, refs);
+  if (primitive === 'extract') return browserResourcesForExtract(output, originTool, refs);
+  return browserResourcesForDownload(output, originTool, refs);
+}
+
+function browserResourcesForSearch(output: unknown, originTool: BrowserPrimitiveIntent): BrowserResource[] {
+  const searchOutput = record(output);
+  if (!searchOutput) return [];
+  const resources: BrowserResource[] = [];
+  const searchResultRef = stringAt(searchOutput, 'searchResultRef');
+  if (searchResultRef) {
+    resources.push({
+      ref: searchResultRef,
+      kind: 'search_result_set',
+      status: 'discovered',
+      originTool,
+      locator: {
+        query: stringAt(searchOutput, 'queryUsed') ?? stringAt(searchOutput, 'query'),
+        searchUrl: stringAt(searchOutput, 'searchUrl'),
+      },
+      refs: [searchResultRef],
+      confidence: 'candidate',
+    });
+  }
+  for (const item of toRecordList(searchOutput.results)) {
+    const url = stringAt(item, 'url');
+    if (!url || !isHttpUrl(url)) continue;
+    resources.push({
+      ref: browserResourceRef('web_page', url),
+      kind: 'web_page',
+      status: 'discovered',
+      originTool,
+      locator: { url },
+      title: stringAt(item, 'title'),
+      snippet: stringAt(item, 'snippet'),
+      confidence: 'candidate',
+      metadata: {
+        rank: typeof item.rank === 'number' ? item.rank : undefined,
+        displayedUrl: stringAt(item, 'displayedUrl'),
+      },
+    });
+  }
+  return resources;
+}
+
+function browserResourcesForNavigate(
+  output: unknown,
+  originTool: BrowserPrimitiveIntent,
+  refs: string[],
+): BrowserResource[] {
+  const navigateOutput = record(output);
+  if (!navigateOutput) return [];
+  const resources: BrowserResource[] = [];
+  const sessionId = stringAt(navigateOutput, 'sessionId');
+  const sessionRef = stringAt(navigateOutput, 'sessionRef') ?? (sessionId ? `browser:resource:browser_session:${safeBrowserResourceSegment(sessionId)}` : undefined);
+  const finalUrl = stringAt(navigateOutput, 'finalUrl');
+  if (sessionRef) {
+    resources.push({
+      ref: sessionRef,
+      kind: 'browser_session',
+      status: 'accessed',
+      originTool,
+      locator: { sessionId, url: finalUrl },
+      title: stringAt(navigateOutput, 'title'),
+      refs,
+      confidence: 'observed',
+    });
+  }
+  if (finalUrl && isHttpUrl(finalUrl)) {
+    resources.push({
+      ref: browserResourceRef('web_page', finalUrl),
+      kind: 'web_page',
+      status: 'accessed',
+      originTool,
+      locator: { url: finalUrl, requestedUrl: stringAt(navigateOutput, 'requestedUrl') },
+      title: stringAt(navigateOutput, 'title'),
+      refs,
+      confidence: 'observed',
+    });
+  }
+  return resources;
+}
+
+function browserResourcesForObserve(
+  output: unknown,
+  originTool: BrowserPrimitiveIntent,
+  refs: string[],
+): BrowserResource[] {
+  const observeOutput = record(output);
+  if (!observeOutput) return [];
+  const sessionId = stringAt(observeOutput, 'sessionId');
+  const stateRef = stringAt(observeOutput, 'stateRef');
+  const url = stringAt(observeOutput, 'url');
+  const resources: BrowserResource[] = [];
+  if (sessionId) {
+    resources.push({
+      ref: stateRef ?? `browser:resource:browser_session:${safeBrowserResourceSegment(sessionId)}`,
+      kind: 'browser_session',
+      status: 'observed',
+      originTool,
+      locator: { sessionId, url },
+      title: stringAt(observeOutput, 'title'),
+      refs,
+      confidence: 'observed',
+    });
+  }
+  if (url && isHttpUrl(url)) {
+    resources.push({
+      ref: browserResourceRef('web_page', url),
+      kind: 'web_page',
+      status: 'observed',
+      originTool,
+      locator: { url },
+      title: stringAt(observeOutput, 'title'),
+      refs,
+      confidence: 'observed',
+    });
+  }
+  return resources;
+}
+
+function browserResourcesForRead(
+  output: unknown,
+  originTool: BrowserPrimitiveIntent,
+  refs: string[],
+): BrowserResource[] {
+  const readOutput = record(output);
+  if (!readOutput) return [];
+  const finalUrl = stringAt(readOutput, 'finalUrl') ?? stringAt(readOutput, 'url');
+  const title = stringAt(readOutput, 'title');
+  const sourcePageRef = stringAt(readOutput, 'sourcePageRef');
+  const pageTextRef = stringAt(readOutput, 'pageTextRef');
+  const resources: BrowserResource[] = [];
+  if (finalUrl && isHttpUrl(finalUrl)) {
+    resources.push({
+      ref: browserResourceRef('web_page', finalUrl),
+      kind: 'web_page',
+      status: 'read',
+      originTool,
+      locator: { url: finalUrl },
+      title,
+      refs,
+      confidence: 'materialized',
+    });
+  }
+  if (sourcePageRef) {
+    resources.push({
+      ref: sourcePageRef,
+      kind: 'source_page',
+      status: 'read',
+      originTool,
+      locator: { url: finalUrl },
+      title,
+      refs: [sourcePageRef],
+      confidence: 'materialized',
+    });
+  }
+  if (pageTextRef) {
+    resources.push({
+      ref: pageTextRef,
+      kind: 'page_text',
+      status: 'read',
+      originTool,
+      locator: { url: finalUrl },
+      title,
+      refs: [pageTextRef],
+      confidence: 'materialized',
+      metadata: {
+        textCharCount: typeof readOutput.textCharCount === 'number' ? readOutput.textCharCount : undefined,
+        textSha1: stringAt(readOutput, 'textSha1'),
+        textPreview: stringAt(readOutput, 'textPreview'),
+        textSummary: stringAt(readOutput, 'textSummary'),
+      },
+    });
+  }
+  return resources;
+}
+
+function browserResourcesForExtract(
+  output: unknown,
+  originTool: BrowserPrimitiveIntent,
+  refs: string[],
+): BrowserResource[] {
+  const extractOutput = record(output);
+  if (!extractOutput) return [];
+  const resources: BrowserResource[] = [];
+  for (const link of toRecordList(extractOutput.links)) {
+    const url = stringAt(link, 'url');
+    if (!url || !isHttpUrl(url)) continue;
+    resources.push({
+      ref: browserResourceRef('web_page', url),
+      kind: 'web_page',
+      status: 'discovered',
+      originTool,
+      locator: { url },
+      title: stringAt(link, 'text'),
+      refs,
+      confidence: 'candidate',
+      metadata: {
+        confidence: typeof link.confidence === 'number' ? link.confidence : undefined,
+        sourceRef: stringAt(extractOutput, 'ref'),
+      },
+    });
+  }
+  return resources;
+}
+
+function browserResourcesForDownload(
+  output: unknown,
+  originTool: BrowserPrimitiveIntent,
+  refs: string[],
+): BrowserResource[] {
+  const downloadOutput = record(output);
+  if (!downloadOutput) return [];
+  const artifactRef = stringAt(downloadOutput, 'artifactRef');
+  if (!artifactRef) return [];
   return [{
-    code: 'search-results-require-read',
-    message: 'Search results are candidates only. Use browser.read with one or more candidateReadInputs before citing or summarizing page content.',
-    suggestedPrimitive: 'read',
-    machineReadable: { candidateReadInputs },
+    ref: artifactRef,
+    kind: 'download_artifact',
+    status: 'downloaded',
+    originTool,
+    locator: { url: stringAt(downloadOutput, 'finalUrl') },
+    title: stringAt(downloadOutput, 'filename'),
+    refs,
+    confidence: 'materialized',
+    metadata: {
+      mimeType: stringAt(downloadOutput, 'mimeType'),
+      byteLength: typeof downloadOutput.byteLength === 'number' ? downloadOutput.byteLength : undefined,
+      sha256: stringAt(downloadOutput, 'sha256'),
+    },
   }];
 }
 
-function candidateReadInputsFromSearchOutput(output: unknown): BrowserSearchResultReadInput[] {
-  const searchOutput = record(output);
-  if (!searchOutput || !Array.isArray(searchOutput.results)) return [];
-  return searchOutput.results
-    .map((item) => {
-      const result = record(item);
-      const existing = record(result?.readInput);
-      if (existing && typeof existing.url === 'string' && existing.navigationMode === 'ephemeral') {
-        return existing as unknown as BrowserSearchResultReadInput;
-      }
-      const url = typeof result?.url === 'string' ? result.url : '';
-      return browserSearchResultReadInput(url);
-    })
-    .filter((input): input is BrowserSearchResultReadInput => Boolean(input));
+function browserEvidenceStateForPrimitive(
+  primitive: BrowserPrimitiveName,
+  status: BrowserPrimitiveStatus,
+  resources: BrowserResource[],
+): BrowserEvidenceState {
+  if (status === 'blocked' || status === 'failed' || status === 'needs-confirmation') {
+    return {
+      completed: [],
+      unknown: [`${BROWSER_PRIMITIVE_INTENTS[primitive]} did not complete successfully.`],
+      boundary: 'A blocked, failed, or needs-confirmation Browser primitive is not user-level completion evidence.',
+    };
+  }
+  if (primitive === 'search') {
+    return {
+      completed: [`Discovered ${resources.filter((resource) => resource.kind === 'web_page').length} candidate web page resource(s).`],
+      unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+      boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+    };
+  }
+  if (primitive === 'navigate') {
+    return {
+      completed: ['Navigated a browser session and recorded session/navigation refs.'],
+      unknown: ['Full page text has not been materialized unless browser.read is called.'],
+      boundary: 'Navigation proves browser state, not source-page textual evidence or task completion.',
+    };
+  }
+  if (primitive === 'observe') {
+    return {
+      completed: ['Observed current browser session state and available visual/DOM refs.'],
+      unknown: ['Long page content may still be unread.'],
+      boundary: 'Observation refs describe current browser state; they are not a synthesized answer.',
+    };
+  }
+  if (primitive === 'read') {
+    return {
+      completed: ['Materialized page content as source/page text refs.'],
+      unknown: ['Task-level synthesis and verifier acceptance remain outside Browser Runtime.'],
+      boundary: 'Read refs are Browser evidence; only Agent Host can decide how they support the user request.',
+    };
+  }
+  if (primitive === 'extract') {
+    return {
+      completed: ['Parsed an existing Browser ref into structured local fields.'],
+      unknown: ['Extracted links or remote resources have not been read or downloaded unless separate primitives are called.'],
+      boundary: 'Extraction is local structure parsing, not network access or task completion.',
+    };
+  }
+  return {
+    completed: ['Downloaded a Host-selected resource into session-scoped artifacts.'],
+    unknown: ['Downloaded bytes have not been interpreted by a parser, reader, or verifier.'],
+    boundary: 'Download artifact refs prove controlled retrieval, not semantic understanding of file contents.',
+  };
 }
 
-function browserSearchResultReadInput(url: string): BrowserSearchResultReadInput | undefined {
-  if (!isHttpUrl(url)) return undefined;
-  return {
-    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
-    url,
-    navigationMode: 'ephemeral',
-    includeText: true,
-  };
+function registerBrowserResources(resourceLedger: Map<string, BrowserResource> | undefined, resources: BrowserResource[]) {
+  if (!resourceLedger) return;
+  for (const resource of resources) resourceLedger.set(resource.ref, resource);
+  const overflow = resourceLedger.size - 500;
+  if (overflow <= 0) return;
+  for (const key of [...resourceLedger.keys()].slice(0, overflow)) resourceLedger.delete(key);
+}
+
+function uniqueBrowserResources(resources: BrowserResource[]): BrowserResource[] {
+  const byRef = new Map<string, BrowserResource>();
+  for (const resource of resources) {
+    if (!resource.ref.trim()) continue;
+    byRef.set(resource.ref, {
+      ...resource,
+      refs: uniqueStrings(resource.refs ?? []),
+    });
+  }
+  return [...byRef.values()];
+}
+
+function browserResourceRef(kind: string, locator: string): string {
+  return `browser:resource:${safeBrowserResourceSegment(kind)}:${stableBrowserResourceHash(locator)}`;
+}
+
+function stableBrowserResourceHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const char of value) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36).padStart(7, '0');
+}
+
+function safeBrowserResourceSegment(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '') || 'resource';
 }
 
 function validateSearchInput(input: Record<string, unknown>, errors: string[]) {
@@ -519,16 +851,21 @@ function validateObserveInput(input: Record<string, unknown>, errors: string[]) 
 
 function validateReadInput(input: Record<string, unknown>, errors: string[]) {
   validateSchema(input, BROWSER_PRIMITIVE_INPUT_SCHEMAS.read, errors);
-  rejectUnknownFields(input, ['schemaVersion', 'sessionId', 'url', 'navigationMode', 'includeText', 'includeHtml', 'maxTextChars', 'timeoutMs'], errors);
+  rejectUnknownFields(input, ['schemaVersion', 'resourceRef', 'sessionId', 'url', 'navigationMode', 'includeText', 'includeHtml', 'maxTextChars', 'timeoutMs'], errors);
+  const hasResourceRef = nonEmptyString(input.resourceRef);
   const hasSession = nonEmptyString(input.sessionId);
   const hasUrl = nonEmptyString(input.url);
-  if (!hasSession && !hasUrl) errors.push('missing_read_source:sessionId_or_url');
+  if (!hasResourceRef && !hasSession && !hasUrl) errors.push('missing_read_source:resourceRef_or_sessionId_or_url');
+  if ([hasResourceRef, hasSession, hasUrl].filter(Boolean).length > 1) errors.push('ambiguous_read_source:choose_one_of_resourceRef_sessionId_url');
   if (hasUrl) {
     validateHttpUrl(input.url, 'url', errors);
     if (input.navigationMode !== 'ephemeral') errors.push('read_url_requires_navigationMode_ephemeral');
+  } else if (hasResourceRef) {
+    validateOptionalEnum(input.navigationMode, ['ephemeral'], 'navigationMode', errors);
   } else {
     validateOptionalEnum(input.navigationMode, ['none'], 'navigationMode', errors);
   }
+  validateOptionalString(input.resourceRef, 'resourceRef', errors);
   validateOptionalString(input.sessionId, 'sessionId', errors);
   validateOptionalBoolean(input.includeText, 'includeText', errors);
   validateOptionalBoolean(input.includeHtml, 'includeHtml', errors);
@@ -546,10 +883,11 @@ function validateExtractInput(input: Record<string, unknown>, errors: string[]) 
 
 function validateDownloadInput(input: Record<string, unknown>, errors: string[]) {
   validateSchema(input, BROWSER_PRIMITIVE_INPUT_SCHEMAS.download, errors);
-  rejectUnknownFields(input, ['schemaVersion', 'url', 'sessionId', 'linkSelector', 'saveScope', 'maxBytes', 'timeoutMs', 'filenameHint'], errors);
+  rejectUnknownFields(input, ['schemaVersion', 'url', 'sessionId', 'linkSelector', 'saveScope', 'maxBytes', 'timeoutMs', 'filenameHint', 'constraints'], errors);
   const hasUrl = nonEmptyString(input.url);
   const hasSessionLink = nonEmptyString(input.sessionId) && nonEmptyString(input.linkSelector);
   if (!hasUrl && !hasSessionLink) errors.push('missing_download_source:url_or_session_linkSelector');
+  if (hasUrl && hasSessionLink) errors.push('ambiguous_download_source:choose_url_or_session_linkSelector');
   if (hasUrl) validateHttpUrl(input.url, 'url', errors);
   validateOptionalString(input.sessionId, 'sessionId', errors);
   validateOptionalString(input.linkSelector, 'linkSelector', errors);
@@ -557,6 +895,7 @@ function validateDownloadInput(input: Record<string, unknown>, errors: string[])
   validateRequiredLiteral(input.saveScope, 'session-artifacts', 'saveScope', errors);
   validateOptionalFinitePositiveNumber(input.maxBytes, 'maxBytes', errors);
   validateOptionalFinitePositiveNumber(input.timeoutMs, 'timeoutMs', errors);
+  validateOptionalConstraints(input.constraints, errors);
 }
 
 function validateSchema(input: Record<string, unknown>, schemaVersion: string, errors: string[]) {
@@ -701,6 +1040,15 @@ function mergeBudget(base: BrowserPrimitiveBudget, override: BrowserPrimitiveBud
 function record(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+function stringAt(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const item = value?.[key];
+  return typeof item === 'string' && item.trim() ? item.trim() : undefined;
+}
+
+function toRecordList(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(record(item))) : [];
 }
 
 function nonEmptyString(value: unknown): value is string {

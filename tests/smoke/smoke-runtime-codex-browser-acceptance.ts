@@ -5,8 +5,13 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { createConnection } from 'node:net';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { CODEX_RUNTIME_STREAM_PATH as SHARED_CODEX_RUNTIME_STREAM_PATH } from '@sciforge-ui/runtime-contract/codex-realtime-session';
-import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import { normalizeInstanceName, parallelProfile } from '../../src/runtime/parallel-instance-profile.js';
+import {
+  agentHostBrowserCompletionTruthFromEvaluation,
+  createAgentHostBrowserEvidenceLedger,
+  evaluateAgentHostBrowserEvidence,
+  recordAgentHostBrowserRefs,
+} from '../../src/runtime/codex/agent-host-browser-evidence.js';
 import { writeRuntimeCodexBrowserOrdinaryChatAcceptance as writeRealRuntimeCodexBrowserOrdinaryChatAcceptance } from '../../src/runtime/runtime-codex-browser-ordinary-chat-acceptance-writer.js';
 import { blockedOnForReason } from './helpers/runtime-codex-browser-acceptance-blockers.js';
 import { assertRuntimeCodexBrowserAcceptanceNegativeFixtures } from './helpers/runtime-codex-browser-acceptance-negative-fixtures.js';
@@ -53,6 +58,7 @@ type BrowserAcceptanceManifest = {
   acceptanceRubric?: AcceptanceRubric;
   actualTaskResult?: ActualTaskResult;
   liveRuntimeCodexProof?: LiveRuntimeCodexProof;
+  diagnosticProtocolProof?: DiagnosticProtocolProof;
   negativeChecks?: NegativeChecks;
   reason?: string;
   blocker?: string;
@@ -225,6 +231,14 @@ type LiveRuntimeCodexProof = {
   eventEvidenceRefs?: string[];
 };
 
+type DiagnosticProtocolProof = {
+  status: 'protocol-only';
+  source: 'test-producer-fixture';
+  releaseAcceptance: 'not-evaluated';
+  reason: string;
+  evidenceRefs: string[];
+};
+
 type NegativeChecks = {
   fakePassedStatusRejected?: boolean;
   missingDomOrScreenshotRejected?: boolean;
@@ -236,7 +250,7 @@ type NegativeChecks = {
   nativeAnswerOutsideDefaultChatRejected?: boolean;
 };
 
-const DEFAULT_PROVIDER_PROXY_PORT = 3891;
+const DEFAULT_MODEL_ROUTER_PORT = 3891;
 const root = process.cwd();
 const requestedInstance = normalizeInstanceName(process.env.SCIFORGE_INSTANCE_ID ?? process.env.SCIFORGE_PARALLEL_INSTANCE);
 const instanceProfile = parallelProfile(requestedInstance);
@@ -266,10 +280,10 @@ const requestedRuntimeCodexPort = portFromEnv(
   process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_RUNTIME_CODEX_PORT`],
   Number(instanceProfile.runtimeCodexPort),
 );
-const requestedProviderProxyPort = portFromEnv(
-  process.env.SCIFORGE_PROXY_PORT,
-  process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_PROXY_PORT`],
-  DEFAULT_PROVIDER_PROXY_PORT,
+const requestedModelRouterPort = portFromEnv(
+  process.env.SCIFORGE_MODEL_ROUTER_PORT,
+  process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_MODEL_ROUTER_PORT`],
+  DEFAULT_MODEL_ROUTER_PORT,
 );
 const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH ?? resolve(root, instanceProfile.workspacePath);
 const actualUrl = `http://127.0.0.1:${requestedRolePort}/`;
@@ -349,7 +363,7 @@ if (blockedReason) {
   }
   if (manifest.status !== 'passed') {
     const currentReason = currentBrowserEvidenceBlockedReason();
-    if (stalePreflightOnlyManifest(manifest) || currentBlockedManifestNeedsRefresh(manifest, currentReason)) {
+    if (!testProducerWriterEnabled() && (stalePreflightOnlyManifest(manifest) || currentBlockedManifestNeedsRefresh(manifest, currentReason))) {
       manifest = await writeBlockedAcceptanceManifest(currentReason);
     }
     assertBrowserAcceptanceManifest(manifest);
@@ -378,6 +392,9 @@ async function writeOrdinaryChatBrowserAcceptanceManifest(): Promise<BrowserAcce
     return writeBlockedAcceptanceManifest(
       `Current Runtime Codex provider preflight is ready, but ordinary-chat Browser acceptance did not pass: ${ordinary.reason ?? 'unknown'}`,
     );
+  }
+  if (testProducerWriterEnabled()) {
+    return writeProducerProtocolOnlyBlockedAcceptanceManifest(ordinary);
   }
   const releaseNotesPath = await writeOrdinaryChatReleaseNotes(ordinary);
   const manifest: BrowserAcceptanceManifest = {
@@ -411,14 +428,42 @@ function evidencePathFromOutputDir(path: string | undefined): string | undefined
 async function writeRuntimeCodexBrowserOrdinaryChatAcceptanceForSmoke(
   options: Parameters<typeof writeRealRuntimeCodexBrowserOrdinaryChatAcceptance>[0],
 ): ReturnType<typeof writeRealRuntimeCodexBrowserOrdinaryChatAcceptance> {
-  if (
-    process.env.NODE_ENV === 'test'
-    && process.env.SCIFORGE_BROWSER_ACCEPTANCE_TEST_PRODUCER_WRITER === '1'
-  ) {
+  if (testProducerWriterEnabled()) {
     const fixture = await import('./fixtures/runtime-codex-browser-acceptance-producer-writer.js');
     return fixture.writeRuntimeCodexBrowserOrdinaryChatAcceptance(options);
   }
   return writeRealRuntimeCodexBrowserOrdinaryChatAcceptance(options);
+}
+
+function testProducerWriterEnabled(): boolean {
+  return process.env.NODE_ENV === 'test'
+    && process.env.SCIFORGE_BROWSER_ACCEPTANCE_TEST_PRODUCER_WRITER === '1';
+}
+
+async function writeProducerProtocolOnlyBlockedAcceptanceManifest(
+  ordinary: BrowserAcceptanceManifest,
+): Promise<BrowserAcceptanceManifest> {
+  const reason = 'Producer fixture protocol-only diagnostic is blocked from release/live acceptance; rerun the real app-server or desktop ordinary-chat writer for product proof.';
+  const manifest = await writeBlockedAcceptanceManifest(reason);
+  const evidenceRefs = uniqueStrings([
+    ...(ordinary.acceptanceRubric?.evidenceRefs ?? []),
+    ...(ordinary.actualTaskResult?.evidenceRefs ?? []),
+    ...(ordinary.liveRuntimeCodexProof?.eventEvidenceRefs ?? []),
+  ]);
+  manifest.diagnosticProtocolProof = {
+    status: 'protocol-only',
+    source: 'test-producer-fixture',
+    releaseAcceptance: 'not-evaluated',
+    reason,
+    evidenceRefs,
+  };
+  manifest.priorEvidenceRefs = uniqueStrings([
+    ...(manifest.priorEvidenceRefs ?? []),
+    ...evidenceRefs,
+  ]);
+  await writeManifest(manifest);
+  assertBrowserAcceptanceManifest(manifest);
+  return manifest;
 }
 
 async function writeOrdinaryChatReleaseNotes(manifest: BrowserAcceptanceManifest): Promise<string> {
@@ -439,7 +484,7 @@ async function writeOrdinaryChatReleaseNotes(manifest: BrowserAcceptanceManifest
     '',
     'Acceptance rubric:',
     '- User intent: ordinary Runtime Codex chat must run SciForge Browser retrieval and answer from current source pages.',
-    '- Expected observable result: module.invoke browser.search_read/open_read with BrowserHostSession source-page and page-text refs plus final answer evidence.',
+    '- Expected observable result: direct browser_search plus browser_read with BrowserHostSession source-page and page-text refs plus gui.present final-answer evidence.',
     `- Actual result: ${manifest.actualTaskResult?.summary ?? 'ordinary-chat Browser acceptance passed'}`,
     `- Evidence refs: ${refs.slice(0, 12).join(', ')}`,
     '- Negative checks: fake pass, missing source refs, missing final answer, seed/demo evidence, and native answer outside default chat remain rejected.',
@@ -495,7 +540,7 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     negativeChecks: builtInNegativeChecks(),
     reason: blockedReason,
     blocker: blockedReason,
-    blockedOn: blockedOnForReason(blockedReason),
+    blockedOn: blockedOnForReason(blockedReason).map(modelRouterBlockedOnLabel),
     currentRunEvidenceScope: preflightOnly ? 'preflight-only' : 'live-browser-current-run',
     priorEvidenceRefs: preflightOnly ? priorBrowserEvidence.priorEvidenceRefs : undefined,
     staleEvidenceRefs: preflightOnly ? priorBrowserEvidence.staleEvidenceRefs : undefined,
@@ -518,17 +563,17 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     configSecretFallbackCount: providerPreflight.configSecretFallbackCount,
     currentPortStatus,
     serviceEnvRequired: {
-      required: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
+      required: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_MODEL_ROUTER_BASE_URL'],
       missing: providerPreflight.missingEnv,
       runtimeApiKeySource: 'service-env-required',
-      note: 'Runtime Codex browser/release acceptance requires the Runtime API key in the service process environment; ignored config-file secret fallbacks are diagnostic-only.',
+      note: 'Runtime Codex browser/release acceptance requires a Runtime API key in the service process environment and a Model Router /v1 base URL; config-file member-model secrets are diagnostic-only.',
     },
     runtimeServiceEnvAcceptance: runtimeServiceEnvAcceptanceDiagnostic(providerPreflight, preflightOnly ? 'preflight-only' : 'live-browser-current-run'),
     liveRerunEligibility: runtimeLiveRerunEligibilityDiagnostic(providerPreflight, preflightOnly ? 'preflight-only' : 'live-browser-current-run'),
     exactStartCommands: exactCommands.start,
     exactRetestCommands: exactCommands.retest,
     strictRetestCommand: exactCommands.strictRetest,
-    configFallbackWarning: `Ignored config secret fallback count=${providerPreflight.configSecretFallbackCount}; config-file secrets can help local proxy diagnostics but cannot satisfy Runtime Codex browser/release acceptance.`,
+    configFallbackWarning: `Ignored config secret fallback count=${providerPreflight.configSecretFallbackCount}; config-file secrets can configure Model Router member models but cannot satisfy Runtime Codex browser/release acceptance.`,
     releaseBlocking: true,
     releaseEligible: false,
     singleTurn: blockedScenario(
@@ -570,7 +615,7 @@ async function probeCurrentPortStatus(): Promise<Record<string, PortStatus>> {
     ui: await probeTcpPort(host, requestedRolePort),
     workspaceWriter: await probeTcpPort(host, requestedWorkspaceWriterPort),
     runtimeCodex: await probeTcpPort(host, requestedRuntimeCodexPort),
-    providerProxy: await probeTcpPort(host, requestedProviderProxyPort),
+    modelRouter: await probeTcpPort(host, requestedModelRouterPort),
   };
   return statuses;
 }
@@ -600,21 +645,32 @@ function exactServiceEnvCommands(): {
   retest: string[];
   strictRetest: string;
 } {
+  const modelRouterBaseUrl = `http://127.0.0.1:${requestedModelRouterPort}/v1`;
+  const runtimeKeyGuard = 'SCIFORGE_RUNTIME_API_KEY="${SCIFORGE_RUNTIME_API_KEY:?set in Runtime Codex service env}"';
   const serviceEnvGuard = [
-    'SCIFORGE_RUNTIME_API_KEY="${SCIFORGE_RUNTIME_API_KEY:?set in service env}"',
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL="${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}"',
+    runtimeKeyGuard,
+    'SCIFORGE_MODEL_ROUTER_BASE_URL="${SCIFORGE_MODEL_ROUTER_BASE_URL:?set Model Router /v1 base URL}"',
   ].join(' ');
-  const proxyCommand = [
-    serviceEnvGuard,
-    'SCIFORGE_PROXY_HOST=<loopback-host>',
-    `SCIFORGE_PROXY_PORT=${requestedProviderProxyPort}`,
-    'npm run backend:codex-proxy -- --host <loopback-host> --port <provider-proxy-port> --upstream-base-url "$SCIFORGE_PROXY_UPSTREAM_BASE_URL" --api-key-env SCIFORGE_RUNTIME_API_KEY',
+  const runtimeSetupCommand = [
+    'SCIFORGE_RUNTIME_PROVIDER=sciforge-model-router',
+    'SCIFORGE_RUNTIME_MODEL=sciforge-router',
+    `npm run backend:codex-runtime:setup -- --overwrite --model-router-base-url ${modelRouterBaseUrl}`,
+  ].join(' ');
+  const modelRouterCommand = [
+    'SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS=sciforge-router',
+    'SCIFORGE_MODEL_ROUTER_HOST=127.0.0.1',
+    `SCIFORGE_MODEL_ROUTER_PORT=${requestedModelRouterPort}`,
+    'SCIFORGE_MODEL_ROUTER_CONFIG=<model-router-member-config>',
+    `npm run backend:model-router -- --host 127.0.0.1 --port ${requestedModelRouterPort} --workspace-root <workspace-root>`,
   ].join(' ');
   const devCommand = [
     'SCIFORGE_AGENT_SERVER_AUTOSTART=0',
     'SCIFORGE_CONFIG_PATH=<no-secret-runtime-config>',
-    serviceEnvGuard,
-    `SCIFORGE_PROXY_PORT=${requestedProviderProxyPort}`,
+    'SCIFORGE_RUNTIME_PROVIDER=sciforge-model-router',
+    'SCIFORGE_RUNTIME_MODEL=sciforge-router',
+    `SCIFORGE_MODEL_ROUTER_BASE_URL=${modelRouterBaseUrl}`,
+    runtimeKeyGuard,
+    `SCIFORGE_MODEL_ROUTER_PORT=${requestedModelRouterPort}`,
     `SCIFORGE_INSTANCE_ID=${instanceProfile.id}`,
     `SCIFORGE_UI_PORT=${requestedRolePort}`,
     `SCIFORGE_WORKSPACE_PORT=${requestedWorkspaceWriterPort}`,
@@ -627,8 +683,8 @@ function exactServiceEnvCommands(): {
   const strictRetest = `${providerPreflightRetest} && ${serviceEnvGuard} SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance`;
   return {
     start: [
-      'npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url <loopback-provider-proxy-v1-url>',
-      proxyCommand,
+      runtimeSetupCommand,
+      modelRouterCommand,
       devCommand,
     ],
     retest: [
@@ -716,11 +772,11 @@ function runtimeCodexEnvironmentBlockedReason(): string | undefined {
   const credentials = runtimeCredentialPresence();
   const blockers: string[] = [];
   if (!credentials.runtimeApiKey) blockers.push('SCIFORGE_RUNTIME_API_KEY');
-  if (!credentials.proxyUpstreamBaseUrl) {
-    blockers.push('provider proxy upstream base URL');
+  if (!credentials.modelRouterBaseUrl) {
+    blockers.push('SCIFORGE_MODEL_ROUTER_BASE_URL');
   }
   if (!credentials.runtimeApiKey && credentials.configSecretPaths.length > 0) {
-    blockers.push('Runtime Codex secret must be supplied by service environment, not config file debug fallback');
+    blockers.push('Runtime Codex secret must be supplied by service environment, not config file member-model fallback');
   }
   if (blockers.length === 0) return undefined;
   const missing = blockers.join(' and ');
@@ -728,25 +784,22 @@ function runtimeCodexEnvironmentBlockedReason(): string | undefined {
     ? ` Checked config path count: ${credentials.checkedConfigPaths.length}.`
     : '';
   const configSecretNote = credentials.configSecretPaths.length > 0
-    ? ` Runtime secret-like keys were found in ignored config file count=${credentials.configSecretPaths.length}; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.`
+    ? ` Runtime secret-like keys were found in ignored config file count=${credentials.configSecretPaths.length}; they may configure Model Router member models but cannot satisfy Runtime Codex browser/release acceptance.`
     : '';
-  return `Runtime Codex environment is not fully configured; missing ${missing}. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass.${checked}${configSecretNote}`;
+  return `Runtime Codex environment is not fully configured; missing ${missing}. Set SCIFORGE_RUNTIME_API_KEY in the Runtime Codex service environment, and set SCIFORGE_MODEL_ROUTER_BASE_URL to the Model Router /v1 endpoint before live browser E2E can pass.${checked}${configSecretNote}`;
 }
 
 function runtimeCredentialPresence(): {
   runtimeApiKey: boolean;
-  proxyUpstreamBaseUrl: boolean;
+  modelRouterBaseUrl: boolean;
   checkedConfigPaths: string[];
   configSecretPaths: string[];
 } {
   const checkedConfigPaths = runtimeConfigCandidatePaths().filter((path) => existsSync(resolve(root, path)));
-  const runtimeApiKey = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY);
+  const runtimeApiKey = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY?.trim());
   const configSecretPaths = checkedConfigPaths.filter((path) => runtimeApiKeyPresentInConfig(path));
-  const proxyUpstreamBaseUrl = checkedConfigPaths.some((path) => {
-    const options = resolveProxyCliOptions([], { ...process.env, SCIFORGE_CONFIG_PATH: path });
-    return Boolean(options.upstreamBaseUrl);
-  }) || Boolean(resolveProxyCliOptions([], process.env).upstreamBaseUrl);
-  return { runtimeApiKey, proxyUpstreamBaseUrl, checkedConfigPaths, configSecretPaths };
+  const modelRouterBaseUrl = Boolean(modelRouterBaseUrlFromEnv(process.env));
+  return { runtimeApiKey, modelRouterBaseUrl, checkedConfigPaths, configSecretPaths };
 }
 
 function runtimeConfigCandidatePaths(): string[] {
@@ -755,6 +808,16 @@ function runtimeConfigCandidatePaths(): string[] {
     instanceProfile.configPath,
     'config.local.json',
   ].flatMap((path) => typeof path === 'string' && path.trim() ? [path.trim()] : []));
+}
+
+function modelRouterBaseUrlFromEnv(env: NodeJS.ProcessEnv): string | undefined {
+  const explicit = stringValue(env.SCIFORGE_MODEL_ROUTER_BASE_URL)
+    || stringValue(env.SCIFORGE_MODEL_ROUTER_URL);
+  if (explicit) return explicit;
+  const port = stringValue(env.SCIFORGE_MODEL_ROUTER_PORT);
+  if (!port) return undefined;
+  const host = stringValue(env.SCIFORGE_MODEL_ROUTER_HOST) || '127.0.0.1';
+  return `http://${host}:${port}/v1`;
 }
 
 function readRuntimeCodexIdentity(): { profile?: string; provider?: string; model?: string; wireApi?: string } {
@@ -777,12 +840,10 @@ function runtimeApiKeyPresentInConfig(path: string): boolean {
     const parsed = JSON.parse(readFileSync(resolve(root, path), 'utf8')) as unknown;
     if (!isRecord(parsed)) return false;
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
-    const codexProxy = isRecord(parsed.codexProxy) ? parsed.codexProxy : {};
     return Boolean(
       stringValue(parsed.apiKey)
       || stringValue(llm.apiKey)
-      || stringValue(llm.upstreamApiKey)
-      || stringValue(codexProxy.apiKey),
+      || stringValue(llm.upstreamApiKey),
     );
   } catch {
     return false;
@@ -858,7 +919,8 @@ function isOrdinaryChatBrowserAcceptanceManifest(manifest: BrowserAcceptanceMani
     && manifest.multiTurn === undefined
     && Boolean(manifest.actualTaskResult)
     && Boolean(manifest.liveRuntimeCodexProof)
-    && browserAcceptanceRuntimeRefs(manifest).some((ref) => /browser\.(?:search_read|open_read)/i.test(ref));
+    && browserAcceptanceRuntimeRefs(manifest).some((ref) => /\bbrowser_search\b/i.test(ref))
+    && browserAcceptanceRuntimeRefs(manifest).some((ref) => /\bbrowser_read\b/i.test(ref));
 }
 
 function assertOrdinaryChatPassedManifest(manifest: BrowserAcceptanceManifest): void {
@@ -882,7 +944,7 @@ function assertOrdinaryChatPassedManifest(manifest: BrowserAcceptanceManifest): 
   assertEvidenceExists(manifest.evidence, 'manifest evidence');
   assertRuntimeCodexBrowserSourceEvidence(manifest, 'manifest browser source evidence');
   const evidenceText = readEvidenceText(manifest.evidence, { includeNotes: true });
-  assert.match(evidenceText, /Browser bounded operation|来源页|source/i, 'ordinary-chat evidence must include the visible Browser answer or audit');
+  assert.match(evidenceText, /direct Browser|来源页|source/i, 'ordinary-chat evidence must include the visible Browser answer or audit');
   assertDoesNotUseSeedDemoOrRawEvidence(evidenceText, 'manifest evidence');
 }
 
@@ -966,7 +1028,7 @@ function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceMan
     ['ui', manifest.actualPort],
     ['workspaceWriter', manifest.actualWorkspaceWriterPort],
     ['runtimeCodex', manifest.actualRuntimeCodexPort],
-    ['providerProxy', requestedProviderProxyPort],
+    ['modelRouter', requestedModelRouterPort],
   ] as const) {
     const status = currentPortStatus[label];
     assert.ok(status, `blocked/failed/partial manifest must record currentPortStatus.${label}`);
@@ -977,26 +1039,30 @@ function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceMan
   const serviceEnv = manifest.serviceEnvRequired;
   assert.ok(serviceEnv, 'blocked/failed/partial manifest must record serviceEnvRequired');
   assert.ok(serviceEnv.required.includes('SCIFORGE_RUNTIME_API_KEY'), 'serviceEnvRequired must require SCIFORGE_RUNTIME_API_KEY');
-  assert.ok(serviceEnv.required.includes('SCIFORGE_PROXY_UPSTREAM_BASE_URL'), 'serviceEnvRequired must require SCIFORGE_PROXY_UPSTREAM_BASE_URL');
+  assert.ok(serviceEnv.required.includes('SCIFORGE_MODEL_ROUTER_BASE_URL'), 'serviceEnvRequired must require SCIFORGE_MODEL_ROUTER_BASE_URL');
   assert.equal(serviceEnv.runtimeApiKeySource, 'service-env-required', 'Runtime API key must be sourced from service env for release acceptance');
   assert.match(serviceEnv.note, /service process environment/i, 'serviceEnvRequired note must name the service environment requirement');
+  assert.match(serviceEnv.note, /Model Router/i, 'serviceEnvRequired note must name the Model Router requirement');
   assert.match(serviceEnv.note, /diagnostic-only/i, 'serviceEnvRequired note must keep config fallbacks diagnostic-only');
 
   const exactStartCommands = manifest.exactStartCommands ?? [];
-  assert.ok(exactStartCommands.length >= 3, 'blocked/failed/partial manifest must record exact no-secret setup/proxy/dev start commands');
+  assert.ok(exactStartCommands.length >= 3, 'blocked/failed/partial manifest must record exact no-secret setup/router/dev start commands');
   assert.ok(exactStartCommands.some((command) => /backend:codex-runtime:setup/.test(command)), 'exactStartCommands must include Runtime Codex setup');
-  assert.ok(exactStartCommands.some((command) => /backend:codex-proxy/.test(command)), 'exactStartCommands must include provider proxy start');
+  assert.ok(exactStartCommands.some((command) => /backend:model-router/.test(command)), 'exactStartCommands must include Model Router start');
+  assert.ok(exactStartCommands.some((command) => /--model-router-base-url http:\/\/127\.0\.0\.1:\d+\/v1/.test(command)), 'exactStartCommands must configure Runtime Codex to the Model Router /v1 endpoint');
+  assert.ok(exactStartCommands.some((command) => /SCIFORGE_RUNTIME_MODEL=sciforge-router/.test(command)), 'exactStartCommands must use the public sciforge-router model alias');
+  assert.ok(exactStartCommands.every((command) => !/backend:codex-proxy/.test(command)), 'exactStartCommands must not include the legacy codex proxy');
   assert.ok(exactStartCommands.some((command) => /npm run dev/.test(command)), 'exactStartCommands must include dev server start');
   assert.ok(exactStartCommands.every((command) => !/sk-[A-Za-z0-9_-]+/.test(command)), 'exactStartCommands must not contain literal secrets');
   assert.ok(exactStartCommands.every((command) => !/api[_-]?key=(?!env\b)[^ "$']+/i.test(command)), 'exactStartCommands must pass API keys by env name, not literal value');
   assert.match(manifest.configFallbackWarning ?? '', /diagnostic-only|cannot satisfy/i, 'blocked/failed/partial manifest must warn config fallback is diagnostic-only');
-  if (manifest.runtimeApiKeyPresentInServiceEnv !== true || (manifest.missingEnv ?? []).includes('SCIFORGE_RUNTIME_API_KEY')) {
+  if ((manifest.serviceEnvRequired?.missing ?? []).length > 0) {
     assert.deepEqual(manifest.runtimeServiceEnvAcceptance, {
       typedBlocked: true,
-      runtimeApiKeyPresentInServiceEnv: false,
+      runtimeApiKeyPresentInServiceEnv: manifest.runtimeApiKeyPresentInServiceEnv === true,
       canClaimRightPaneBrowserLivePass: false,
       evidenceScope: manifest.currentRunEvidenceScope,
-      missingEnv: ['SCIFORGE_RUNTIME_API_KEY'],
+      missingEnv: manifest.serviceEnvRequired?.missing ?? [],
     }, 'missing service env must stay typed blocked and cannot claim right-pane Browser live pass');
   }
   const liveRerun = manifest.liveRerunEligibility;
@@ -1050,6 +1116,17 @@ function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, l
 
 function assertRuntimeCodexBrowserSourceEvidence(manifest: BrowserAcceptanceManifest, label: string): void {
   const refs = browserAcceptanceRuntimeRefs(manifest);
+  const browserEvidenceEvaluation = evaluateAgentHostBrowserEvidence(recordAgentHostBrowserRefs(createAgentHostBrowserEvidenceLedger(), refs));
+  assert.equal(
+    browserEvidenceEvaluation.status,
+    'satisfied',
+    `${label} must satisfy Agent Host Browser evidence evaluation; issues=${browserEvidenceEvaluation.issues.map((issue) => issue.code).join(',')}`,
+  );
+  assert.equal(
+    agentHostBrowserCompletionTruthFromEvaluation(browserEvidenceEvaluation).status,
+    'satisfied',
+    `${label} must be eligible for Agent Host Browser completionTruth`,
+  );
   const text = [
     readEvidenceText(manifest.evidence, { includeNotes: true }),
     readEvidenceText(manifest.singleTurn?.evidence, { includeNotes: true }),
@@ -1057,13 +1134,23 @@ function assertRuntimeCodexBrowserSourceEvidence(manifest: BrowserAcceptanceMani
     readEvidenceText(manifest.multiTurn?.evidence, { includeNotes: true }),
   ].join('\n');
   const haystack = `${refs.join('\n')}\n${text}`;
-  assert.ok(
-    /module\.invoke|executeBoundedOperation/i.test(haystack),
-    `${label} must prove Browser came through module.invoke(executeBoundedOperation)`,
+  assert.doesNotMatch(
+    haystack,
+    /executeBoundedOperation|module\.invoke[^\n]*(?:browser\.)?(?:search_read|open_read)/i,
+    `${label} must not claim Browser came through legacy executeBoundedOperation/search_read/open_read evidence`,
+  );
+  assert.doesNotMatch(
+    haystack,
+    /browser\.(?:search_read|open_read)|\b(?:search_read|open_read)\b/i,
+    `${label} must not claim browser.search_read or browser.open_read was requested`,
   );
   assert.ok(
-    /browser\.(?:search_read|open_read)/i.test(haystack),
-    `${label} must prove browser.search_read or browser.open_read was requested`,
+    refs.some((ref) => /\bbrowser_search\b/i.test(ref)),
+    `${label} must prove direct browser_search was requested`,
+  );
+  assert.ok(
+    refs.some((ref) => /\bbrowser_read\b/i.test(ref)),
+    `${label} must prove direct browser_read was requested`,
   );
   assert.ok(
     refs.some((ref) => /^browser-host-session:/i.test(ref)),
@@ -1081,7 +1168,52 @@ function assertRuntimeCodexBrowserSourceEvidence(manifest: BrowserAcceptanceMani
     refs.some((ref) => /final[-_/]?answer/i.test(ref)),
     `${label} must include final-answer evidence refs`,
   );
+  assert.ok(
+    refs.some((ref) => /gui\.present[:/]final-answer/i.test(ref)),
+    `${label} must include gui.present final-answer evidence refs`,
+  );
   assertEvidenceRefsExist(refs, label);
+  assertBrowserHostSourceArtifactsMaterialized(refs, manifest.observedAt, label);
+}
+
+function assertBrowserHostSourceArtifactsMaterialized(refs: string[], observedAt: string | undefined, label: string): void {
+  assert.ok(observedAt, `${label} observedAt is required for BrowserHostSession source artifact validation`);
+  const observedAtMs = Date.parse(observedAt);
+  assert.ok(Number.isFinite(observedAtMs), `${label} observedAt must be parseable for BrowserHostSession source artifact validation`);
+  const sourceRefs = refs.filter((ref) => /^browser-host-session:[^/]+\/source-pages\/.+\.source\.json$/i.test(ref));
+  assert.ok(sourceRefs.length > 0, `${label} must include BrowserHostSession source artifact refs`);
+  for (const sourceRef of sourceRefs) {
+    const sourcePath = browserHostSourceArtifactPath(sourceRef);
+    assert.ok(sourcePath, `${label} BrowserHostSession source ref is invalid: ${sourceRef}`);
+    assert.ok(existsSync(sourcePath), `${label} BrowserHostSession source artifact is missing: ${sourceRef}`);
+    const source = JSON.parse(readFileSync(sourcePath, 'utf8')) as unknown;
+    assert.ok(isRecord(source), `${label} BrowserHostSession source artifact must be an object: ${sourceRef}`);
+    assert.equal(source.schemaVersion, 'sciforge.browser-host-session.source-page.v1', `${label} source artifact schema mismatch: ${sourceRef}`);
+    assert.equal(source.status, 'read', `${label} source artifact must be read: ${sourceRef}`);
+    const openedAt = stringValue(source.openedAt);
+    const openedAtMs = Date.parse(openedAt);
+    assert.ok(Number.isFinite(openedAtMs), `${label} source artifact openedAt must be parseable: ${sourceRef}`);
+    assert.ok(openedAtMs >= observedAtMs - evidenceMtimeToleranceMs, `${label} source artifact openedAt is stale relative to manifest observedAt: ${sourceRef}`);
+    assert.ok(stringValue(source.finalUrl), `${label} source artifact finalUrl is required: ${sourceRef}`);
+    const textRef = stringValue(source.textRef);
+    assert.ok(refs.includes(textRef), `${label} source artifact textRef must be included in manifest evidence refs: ${sourceRef}`);
+    const textPath = browserHostSourceArtifactPath(textRef);
+    assert.ok(textPath, `${label} BrowserHostSession text ref is invalid: ${textRef}`);
+    assert.ok(existsSync(textPath), `${label} BrowserHostSession text artifact is missing: ${textRef}`);
+    const text = readFileSync(textPath, 'utf8');
+    assert.ok(text.trim(), `${label} BrowserHostSession text artifact is empty: ${textRef}`);
+    const textSha1 = stringValue(source.textSha1);
+    assert.match(textSha1, /^[a-f0-9]{40}$/i, `${label} source artifact textSha1 is required: ${sourceRef}`);
+    assert.equal(createHash('sha1').update(text).digest('hex'), textSha1.toLowerCase(), `${label} source artifact textSha1 mismatch: ${sourceRef}`);
+  }
+}
+
+function browserHostSourceArtifactPath(ref: string): string | undefined {
+  const match = /^browser-host-session:([^/]+)\/(.+)$/.exec(ref);
+  if (!match?.[1] || !match[2]) return undefined;
+  if (match[2].includes('..') || match[2].startsWith('/')) return undefined;
+  if (!/^source-pages\/[a-zA-Z0-9._:-]+(?:\.source\.json|\.txt)$/u.test(match[2])) return undefined;
+  return resolve(workspacePath, '.sciforge', 'browser-host', 'sessions', match[1], match[2]);
 }
 
 function browserAcceptanceRuntimeRefs(manifest: BrowserAcceptanceManifest): string[] {
@@ -1278,7 +1410,7 @@ function stalePreflightOnlyManifest(manifest: BrowserAcceptanceManifest): boolea
     || manifest.providerPreflightCategory !== 'ready'
     || manifest.runtimeApiKeyPresentInServiceEnv !== true
     || manifest.upstreamBaseUrlPresent !== true
-    || /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file debug fallback|provider proxy upstream base URL/i.test(reason);
+    || /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file (?:debug|member-model) fallback|Model Router \/v1 base URL|SCIFORGE_MODEL_ROUTER_BASE_URL|Model Router member model base URL/i.test(reason);
 }
 
 function currentBlockedManifestNeedsRefresh(manifest: BrowserAcceptanceManifest, currentReason: string): boolean {
@@ -1396,9 +1528,9 @@ function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPrefl
     `Provider preflight checked at: ${providerPreflight.checkedAt}`,
     `Provider preflight release acceptance: ${providerPreflight.releaseAcceptance}`,
     `Runtime key in service env: ${providerPreflight.runtimeApiKeyPresentInServiceEnv ? 'present' : 'missing'}`,
-    `Provider upstream base URL: ${providerPreflight.upstreamBaseUrlPresent ? 'present' : 'missing'}`,
+    `Model Router base URL: ${providerPreflight.upstreamBaseUrlPresent ? 'present' : 'missing'}`,
     `Runtime key source: ${providerPreflight.upstreamKeySourceKind}`,
-    `Upstream URL source: ${providerPreflight.upstreamBaseUrlSourceKind}`,
+    `Model Router URL source: ${providerPreflight.upstreamBaseUrlSourceKind}`,
     'Acceptance scope: non-seed Runtime Codex messages only; seed/demo/fixture messages are excluded from success criteria.',
     '',
     'Acceptance rubric:',
@@ -1407,15 +1539,15 @@ function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPrefl
     `- Actual result: blocked before release acceptance because ${reason}`,
     '- Current evidence refs: manifest.json plus blocked notes. Prior or stale browser screenshots/DOM refs are diagnostic only and cannot count as current release evidence.',
     '- Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.',
-    '- Required key: set SCIFORGE_RUNTIME_API_KEY in the service environment; do not store it in repository files.',
-    '- Config-file apiKey fallback: accepted only for local provider proxy debugging, and rejected as browser/release acceptance evidence.',
-    '- Required provider proxy upstream: set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config so the local proxy has an upstream OpenAI-compatible endpoint.',
-    '- Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json records the current non-secret service-env/upstream diagnostic and remains diagnostic-only, not browser/release acceptance.',
-    '- Required Runtime Codex config: active profile, provider, model, env_key SCIFORGE_RUNTIME_API_KEY, and responses wire_api must be resolved from the local runtime config.',
+    '- Required key: set SCIFORGE_RUNTIME_API_KEY in the Runtime Codex service environment; do not store it in repository files.',
+    '- Config-file apiKey fallback: accepted only as Model Router member-model configuration, and rejected as Runtime Codex browser/release acceptance credentials.',
+    '- Required Model Router endpoint: set SCIFORGE_MODEL_ROUTER_BASE_URL to the Model Router /v1 endpoint and start it with npm run backend:model-router.',
+    '- Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json records the current non-secret Runtime key and Model Router diagnostic and remains diagnostic-only, not browser/release acceptance.',
+    '- Required Runtime Codex config: active profile, provider sciforge-model-router, model sciforge-router, env_key SCIFORGE_RUNTIME_API_KEY, and responses wire_api must be resolved from the local runtime config.',
     `- Re-run provider preflight command evidence: length=${boundedTextEvidence(exactCommands.retest[0]).length}; sha256=${boundedTextEvidence(exactCommands.retest[0]).sha256}`,
     `- Re-run default browser acceptance command evidence: length=${boundedTextEvidence(exactCommands.retest[1]).length}; sha256=${boundedTextEvidence(exactCommands.retest[1]).sha256}`,
     `- Re-run strict release acceptance command evidence: length=${boundedTextEvidence(exactCommands.strictRetest).length}; sha256=${boundedTextEvidence(exactCommands.strictRetest).sha256}`,
-    '- Remaining risk: live browser acceptance still requires configured Runtime Codex credentials/upstream and visible second-turn answer.',
+    '- Remaining risk: live browser acceptance still requires configured Runtime Codex service credentials, Model Router /v1 availability, and visible second-turn answer.',
     '',
     'No passed user-level conclusion is claimed.',
   ].join('\n') + '\n';
@@ -1489,7 +1621,9 @@ function assertBoundedManifestValue(value: unknown, path: string): void {
     assert.doesNotMatch(value, /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i, `${path} must not embed base64/data-url payloads`);
     assert.doesNotMatch(value, /(?:<!doctype\s+html|<html[\s>]|<body[\s>])/i, `${path} must not embed raw DOM/HTML payloads`);
     assert.doesNotMatch(value, /\b(?:rawProviderBody|providerRawBody|raw_provider_body)\b/i, `${path} must not embed provider payload labels`);
-    assert.doesNotMatch(value, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i, `${path} must store loopback URLs as bounded digest evidence`);
+    if (!/^manifest\.exactStartCommands\[\d+\]$/.test(path)) {
+      assert.doesNotMatch(value, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i, `${path} must store loopback URLs as bounded digest evidence`);
+    }
     assert.doesNotMatch(value, /\/(?:Applications|Users)\/[^\s"']+/i, `${path} must store local absolute paths as bounded digest evidence`);
     assert.doesNotMatch(value, /\bconfig\.local\.json\b/i, `${path} must not name local config files as acceptance evidence`);
     assert.doesNotMatch(value, /SCIFORGE-CODEX-BROWSER-(?:SINGLE|MT)-[A-Z0-9-]+/i, `${path} must store prompt/answer markers as bounded digest evidence`);
@@ -1604,26 +1738,32 @@ function blockedAcceptanceRubric(reason: string): AcceptanceRubric {
       'seed/demo evidence rejected',
       'blocked/failed/partial status rejected in strict mode',
     ],
-    remainingRisks: 'Live browser acceptance still requires SCIFORGE_RUNTIME_API_KEY, provider proxy upstream base URL, the Runtime Codex profile/config below, and a visible second-turn answer.',
+    remainingRisks: 'Live browser acceptance still requires SCIFORGE_RUNTIME_API_KEY, Model Router /v1 availability, the sciforge-router Runtime Codex profile/config below, and a visible second-turn answer.',
   };
 }
 
 function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPreflightManifest {
-  const existing = readCurrentProviderPreflightManifest();
-  if (existing) return existing;
   const credentials = runtimeCredentialPresence();
   const runtimeApiKeyPresentInServiceEnv = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY?.trim());
-  const upstreamBaseUrlPresent = credentials.proxyUpstreamBaseUrl;
+  const upstreamBaseUrlPresent = credentials.modelRouterBaseUrl;
   const upstreamKeySourceKind: CurrentEnvProviderPreflightManifest['upstreamKeySourceKind'] = runtimeApiKeyPresentInServiceEnv
     ? 'env'
     : credentials.configSecretPaths.length > 0
       ? 'config-debug-fallback'
       : 'missing';
-  const upstreamBaseUrlSourceKind: CurrentEnvProviderPreflightManifest['upstreamBaseUrlSourceKind'] = process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL?.trim()
+  const upstreamBaseUrlSourceKind: CurrentEnvProviderPreflightManifest['upstreamBaseUrlSourceKind'] = upstreamBaseUrlPresent
     ? 'env'
-    : upstreamBaseUrlPresent
-      ? 'config'
-      : 'missing';
+    : 'missing';
+  const existing = readCurrentProviderPreflightManifest();
+  if (
+    existing
+    && existing.runtimeApiKeyPresentInServiceEnv === runtimeApiKeyPresentInServiceEnv
+    && existing.upstreamBaseUrlPresent === upstreamBaseUrlPresent
+    && existing.upstreamKeySourceKind === upstreamKeySourceKind
+    && existing.upstreamBaseUrlSourceKind === upstreamBaseUrlSourceKind
+  ) {
+    return existing;
+  }
   const category = !runtimeApiKeyPresentInServiceEnv && credentials.configSecretPaths.length > 0
     ? 'config-secret-source'
     : !runtimeApiKeyPresentInServiceEnv
@@ -1648,7 +1788,7 @@ function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPrefli
       : [],
     missingEnv: [
       ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
-      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
+      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_MODEL_ROUTER_BASE_URL']),
     ],
     checkedInference: runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
       ? {
@@ -1715,9 +1855,9 @@ function runtimeServiceEnvAcceptanceDiagnostic(
   evidenceScope: RuntimeServiceEnvAcceptanceDiagnostic['evidenceScope'],
 ): RuntimeServiceEnvAcceptanceDiagnostic {
   const runtimeApiKeyPresentInServiceEnv = providerPreflight.runtimeApiKeyPresentInServiceEnv;
-  const missingEnv = runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY'];
+  const missingEnv = providerPreflight.missingEnv;
   return {
-    typedBlocked: !runtimeApiKeyPresentInServiceEnv,
+    typedBlocked: missingEnv.length > 0,
     runtimeApiKeyPresentInServiceEnv,
     canClaimRightPaneBrowserLivePass: false,
     evidenceScope,
@@ -1743,7 +1883,7 @@ function runtimeLiveRerunEligibilityDiagnostic(
 }
 
 function isPreflightOnlyBlockedReason(reason: string): boolean {
-  return /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file debug fallback|provider proxy upstream base URL|Runtime Codex home config|env_key|wire_api|profile|provider preflight is (?:missing|not ready)|ordinary-chat Browser acceptance did not pass|browser acceptance (?:is incomplete|evidence is missing|evidence is incomplete or stale)/i.test(reason);
+  return /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file (?:debug|member-model) fallback|Model Router \/v1 base URL|SCIFORGE_MODEL_ROUTER_BASE_URL|Model Router member model base URL|Runtime Codex home config|env_key|wire_api|profile|provider preflight is (?:missing|not ready)|ordinary-chat Browser acceptance did not pass|producer fixture protocol-only diagnostic|browser acceptance (?:is incomplete|evidence is missing|evidence is incomplete or stale)/i.test(reason);
 }
 
 function blockedDiagnosticsForReason(reason: string): Pick<
@@ -1755,8 +1895,8 @@ function blockedDiagnosticsForReason(reason: string): Pick<
   const nextActions: BlockedNextAction[] = [];
   const missingClause = /missing ([^.]+)\./i.exec(reason)?.[1] ?? '';
   const hasRuntimeKeyIssue = /SCIFORGE_RUNTIME_API_KEY|API key/i.test(missingClause);
-  const hasConfigSecretFallback = /config file debug fallback|secret-like keys were found|not config file/i.test(reason);
-  const hasUpstreamIssue = /provider proxy upstream base URL|SCIFORGE_PROXY_UPSTREAM_BASE_URL/i.test(missingClause);
+  const hasConfigSecretFallback = /config file (?:debug|member-model) fallback|secret-like keys were found|not config file/i.test(reason);
+  const hasUpstreamIssue = /Model Router \/v1 base URL|SCIFORGE_MODEL_ROUTER_BASE_URL|Model Router member model base URL|SCIFORGE_TEXT_BASE_URL/i.test(missingClause);
   const hasProviderOutage = /502|Bad Gateway|429|timeout|DNS|provider outage|upstream returned|upstream availability/i.test(reason);
   const hasProviderPreflightGap = /provider preflight is (?:missing|not ready)|current category=/i.test(reason);
   const hasSelectedArtifactGap = /selected[- ]artifact|selected ref|artifact follow-up/i.test(reason);
@@ -1764,7 +1904,7 @@ function blockedDiagnosticsForReason(reason: string): Pick<
   if (hasRuntimeKeyIssue) {
     missingEnv.push('SCIFORGE_RUNTIME_API_KEY');
     nextActions.push({
-      label: 'Set Runtime Codex provider key in the service environment that launches Runtime Codex/provider proxy.',
+      label: 'Set Runtime Codex provider key in the service environment that launches Runtime Codex.',
       expected: 'Runtime preflight no longer reports missing SCIFORGE_RUNTIME_API_KEY.',
       writesRepo: false,
     });
@@ -1772,16 +1912,17 @@ function blockedDiagnosticsForReason(reason: string): Pick<
   if (hasConfigSecretFallback) {
     policyViolations.push('config-file-secret-fallback-cannot-satisfy-browser-release-acceptance');
     nextActions.push({
-      label: 'Keep config-file apiKey fields as local proxy debug fallback only, and do not count them as browser/release acceptance credentials.',
-      expected: 'Acceptance manifest reports service environment secret presence instead of config-file secret fallback.',
+      label: 'Keep config-file apiKey fields as Model Router member-model configuration only, and do not count them as Runtime Codex browser/release credentials.',
+      expected: 'Acceptance manifest reports service environment secret presence instead of config-file member-model fallback.',
       writesRepo: false,
     });
   }
   if (hasUpstreamIssue) {
-    missingEnv.push('SCIFORGE_PROXY_UPSTREAM_BASE_URL');
+    missingEnv.push('SCIFORGE_MODEL_ROUTER_BASE_URL');
     nextActions.push({
-      label: 'Set provider proxy upstream URL in service env or ignored non-secret config.',
-      expected: 'Runtime preflight can resolve an upstream OpenAI-compatible endpoint.',
+      label: 'Start SciForge Model Router and set Runtime Codex to its public /v1 endpoint.',
+      command: `npm run backend:codex-runtime:setup -- --overwrite --model-router-base-url http://127.0.0.1:${requestedModelRouterPort}/v1`,
+      expected: 'Runtime preflight resolves the Model Router endpoint, not a member model upstream.',
       writesRepo: false,
     });
   }
@@ -1833,6 +1974,13 @@ function blockedDiagnosticsForReason(reason: string): Pick<
     nextActions,
     expectedRetestCommand: 'npm run smoke:runtime-codex-browser-acceptance',
   };
+}
+
+function modelRouterBlockedOnLabel(label: string): string {
+  return label
+    .replace(/provider proxy upstream availability/gi, 'Model Router member model availability')
+    .replace(/provider proxy upstream base URL/gi, 'Model Router member model base URL')
+    .replace(/raw upstream/gi, 'Model Router member model');
 }
 
 function firstExisting(paths: string[]): string | undefined {

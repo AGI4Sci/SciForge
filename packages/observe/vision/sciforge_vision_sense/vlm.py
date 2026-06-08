@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 import urllib.error
@@ -13,9 +14,10 @@ from typing import Any, Mapping, Sequence
 
 @dataclass(frozen=True)
 class VisionVlmConfig:
-    base_url: str
-    api_key: str
-    model: str = "sciforge-router"
+    base_url: str = field(default_factory=lambda: _default_router_base_url())
+    api_key: str = field(default_factory=lambda: _default_router_api_key())
+    model: str = field(default_factory=lambda: _default_router_model())
+    profile: str = field(default_factory=lambda: _default_router_profile())
     timeout_seconds: float = 60.0
     max_retries: int = 2
     headers: Mapping[str, str] = field(default_factory=dict)
@@ -52,6 +54,7 @@ class VisionVlmClient:
             raise ValueError("VisionVlmConfig.base_url is required")
         if not config.api_key:
             raise ValueError("VisionVlmConfig.api_key is required")
+        _normalize_router_base_url(config.base_url)
         self.config = config
 
     def complete(
@@ -66,10 +69,13 @@ class VisionVlmClient:
             temperature=temperature,
             response_format=response_format,
         )
+        content = response.get("output_text")
+        if isinstance(content, str):
+            return content
         try:
             return response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise VisionVlmError("vision verifier response did not contain choices[0].message.content") from exc
+            raise VisionVlmError("vision verifier response did not contain output_text") from exc
 
     def chat_completions(
         self,
@@ -80,7 +86,8 @@ class VisionVlmClient:
     ) -> Mapping[str, Any]:
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "messages": list(messages),
+            "input": responses_input_from_messages(messages),
+            "metadata": {"profile": self.config.profile},
             "temperature": temperature,
         }
         if response_format is not None:
@@ -88,7 +95,7 @@ class VisionVlmClient:
 
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            self._chat_completions_url(),
+            self._responses_url(),
             data=body,
             method="POST",
             headers={
@@ -120,11 +127,11 @@ class VisionVlmClient:
     ) -> dict[str, Any]:
         return build_user_message_with_image(text, image_base64=image_base64, mime_type=mime_type)
 
+    def _responses_url(self) -> str:
+        return f"{_normalize_router_base_url(self.config.base_url)}/responses"
+
     def _chat_completions_url(self) -> str:
-        base_url = self.config.base_url.rstrip("/")
-        if base_url.endswith("/chat/completions"):
-            return base_url
-        return f"{base_url}/chat/completions"
+        return self._responses_url()
 
 
 def encode_image_file(path: str | Path) -> str:
@@ -140,13 +147,116 @@ def build_user_message_with_image(
     return {
         "role": "user",
         "content": [
-            {"type": "text", "text": text},
+            {"type": "input_text", "text": text},
             {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                "type": "input_image",
+                "image_url": f"data:{mime_type};base64,{image_base64}",
+                "mime_type": mime_type,
             },
         ],
     }
+
+
+def responses_input_from_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [_responses_message(message) for message in messages]
+
+
+def _responses_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    role = message.get("role", "user")
+    content = message.get("content", "")
+    return {
+        "role": role if isinstance(role, str) else "user",
+        "content": _responses_content(content),
+    }
+
+
+def _responses_content(content: Any) -> list[Any]:
+    if isinstance(content, str):
+        return [{"type": "input_text", "text": content}]
+    if isinstance(content, Sequence) and not isinstance(content, (bytes, bytearray, str)):
+        return [_responses_content_part(part) for part in content]
+    return [{"type": "input_text", "text": str(content)}]
+
+
+def _responses_content_part(part: Any) -> Any:
+    if not isinstance(part, Mapping):
+        return part
+    part_type = part.get("type")
+    if part_type in ("input_text", "text"):
+        text = part.get("text", part.get("content", ""))
+        return {"type": "input_text", "text": text if isinstance(text, str) else str(text)}
+    if part_type in ("input_image", "image_url") or "image_url" in part:
+        image_url = _image_url_value(part.get("image_url"))
+        if image_url:
+            converted: dict[str, Any] = {"type": "input_image", "image_url": image_url}
+            mime_type = part.get("mime_type", part.get("mimeType")) or _mime_type_from_data_url(image_url)
+            if isinstance(mime_type, str) and mime_type:
+                converted["mime_type"] = mime_type
+            return converted
+    return dict(part)
+
+
+def _default_router_base_url() -> str:
+    explicit = (
+        os.environ.get("SCIFORGE_MODEL_ROUTER_BASE_URL")
+        or os.environ.get("SCIFORGE_MODEL_ROUTER_URL")
+    )
+    if explicit:
+        return _normalize_router_base_url(explicit)
+    port = os.environ.get("SCIFORGE_MODEL_ROUTER_PORT")
+    if port and port.isdigit():
+        host = os.environ.get("SCIFORGE_MODEL_ROUTER_HOST") or "127.0.0.1"
+        return f"http://{host}:{int(port)}/v1"
+    return ""
+
+
+def _default_router_api_key() -> str:
+    return (
+        os.environ.get("SCIFORGE_RUNTIME_API_KEY")
+        or os.environ.get("SCIFORGE_MODEL_ROUTER_API_KEY")
+        or ""
+    )
+
+
+def _default_router_model() -> str:
+    return os.environ.get("SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS") or "sciforge-router"
+
+
+def _default_router_profile() -> str:
+    return (
+        os.environ.get("SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE")
+        or os.environ.get("SCIFORGE_MODEL_ROUTER_PROFILE")
+        or "sciforge-runtime-default"
+    )
+
+
+def _normalize_router_base_url(value: str) -> str:
+    base_url = value.strip().rstrip("/")
+    if not base_url:
+        return ""
+    if re.search(r"/chat/completions$", base_url, re.IGNORECASE):
+        raise ValueError(
+            "VisionVlmConfig.base_url must point to the Model Router /v1 endpoint, not /chat/completions"
+        )
+    if re.search(r"/v1/responses$", base_url, re.IGNORECASE):
+        return re.sub(r"/responses$", "", base_url, flags=re.IGNORECASE)
+    if re.search(r"/v1$", base_url, re.IGNORECASE):
+        return base_url
+    return f"{base_url}/v1"
+
+
+def _image_url_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        url = value.get("url")
+        return url if isinstance(url, str) else ""
+    return ""
+
+
+def _mime_type_from_data_url(value: str) -> str:
+    match = re.match(r"^data:([^;,]+)", value)
+    return match.group(1) if match else ""
 
 
 def parse_completion_check_response(response_text: str) -> ParsedCompletionCheck:

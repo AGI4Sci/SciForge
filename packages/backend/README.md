@@ -4,18 +4,18 @@ Small backend utilities for connecting CLI agent runtimes to provider endpoints 
 
 See [`CODEX_COMPATIBILITY.md`](CODEX_COMPATIBILITY.md) for the Codex CLI integration boundary, provider compatibility notes, and the upgrade checklist.
 
-## Codex Responses Proxy
+## Model Router
 
-`codex-responses-proxy` exposes an OpenAI-compatible `/v1/responses` endpoint for Codex CLI and forwards requests to an upstream `/v1/chat/completions` provider. It is intended for providers that support Chat Completions but do not yet implement the Responses API shape expected by recent Codex CLI releases.
+Runtime Codex defaults to the SciForge Model Router public alias/profile. Product UI, Browser acceptance, and runtime audit surfaces should show only the router alias/profile, capabilities, role coverage, and readiness. Provider URLs, raw model slugs, and member-model API keys remain private Model Router configuration.
 
-Runtime Codex defaults to the SciForge Model Router public alias/profile. The compatibility proxy can still be used behind the router or for local diagnostics, but product UI and runtime audit surfaces should show only the router alias/profile, capabilities, role coverage, and readiness.
-
-The proxy keeps API keys out of repository files. Provide the key through an environment variable and point Codex at the local proxy:
+Start the Model Router with member-model configuration in environment variables:
 
 ```bash
-export SCIFORGE_RUNTIME_API_KEY="..."
-export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://provider-compatible-endpoint.example/v1"
-npm run backend:codex-proxy
+export SCIFORGE_RUNTIME_API_KEY="sciforge-local-model-router"
+export SCIFORGE_TEXT_BASE_URL="https://provider-compatible-endpoint.example/v1"
+export SCIFORGE_TEXT_MODEL="private-text-model"
+export SCIFORGE_TEXT_API_KEY="..."
+npm run backend:model-router -- --host 127.0.0.1 --port 3892
 ```
 
 Codex profile example:
@@ -34,17 +34,17 @@ env_key = "SCIFORGE_RUNTIME_API_KEY"
 wire_api = "responses"
 ```
 
+The legacy Codex Responses proxy CLI is disabled for active Runtime/Browser paths. Use Model Router for local diagnostics and product acceptance.
+
 Useful options:
 
 ```bash
-npm run backend:codex-proxy -- \
+npm run backend:model-router -- \
   --host 127.0.0.1 \
-  --port 3891 \
-  --upstream-base-url https://provider-compatible-endpoint.example/v1 \
-  --api-key-env SCIFORGE_RUNTIME_API_KEY
+  --port 3892
 ```
 
-For Runtime Codex browser acceptance, the key source is stricter than local proxy debugging: `SCIFORGE_RUNTIME_API_KEY` must be present in the service environment that starts the proxy/runtime process. A key found in `config.local.json` or `.sciforge/**/config.local.json` is diagnostic-only fallback for local proxy troubleshooting and cannot satisfy release acceptance.
+For Runtime Codex browser acceptance, `SCIFORGE_RUNTIME_API_KEY` must be present in the service environment that starts Runtime Codex/Model Router, and `SCIFORGE_MODEL_ROUTER_BASE_URL` (or Router URL/PORT) must point to the router `/v1` endpoint. A member-model key found in `config.local.json` or `.sciforge/**/config.local.json` cannot satisfy release acceptance by itself.
 
 ## Isolated Runtime Codex Home
 
@@ -120,8 +120,8 @@ export SCIFORGE_VISION_BASE_URL="https://vision-provider-compatible-endpoint.exa
 export SCIFORGE_VISION_MODEL="<private-vision-translator-model>"
 export SCIFORGE_VISION_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
 
-npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3892/v1
 npm run backend:model-router -- --host 127.0.0.1 --port 3892
+npm run backend:codex-runtime:setup -- --overwrite --model-router-base-url http://127.0.0.1:3892/v1
 SCIFORGE_WORKSPACE_PORT=6173 npm run workspace:server
 SCIFORGE_RUNTIME_CODEX_PORT=18080 node --import tsx src/runtime/codex/codex-runtime-standalone-server.ts
 npm run dev:ui -- --host 127.0.0.1 --port 5173 --strictPort

@@ -52,8 +52,8 @@ function routePolicyForRequest(request?: GatewayRequest, skill?: SkillAvailabili
   return skillRuntimeRoutePolicy({
     entrypoint: skill?.manifest.entrypoint,
     scenarioPackageSource: request?.scenarioPackageRef?.source,
-    backendRuntimeProfileId: request ? `backend-${selectedAgentBackend(request, request.llmEndpoint)}` : undefined,
-    agentServerRuntimeProfileId: request ? `agentserver-${selectedAgentBackend(request, request.llmEndpoint)}` : undefined,
+    backendRuntimeProfileId: request ? `backend-${selectedAgentBackend(request)}` : undefined,
+    agentServerRuntimeProfileId: request ? `agentserver-${selectedAgentBackend(request)}` : undefined,
   });
 }
 

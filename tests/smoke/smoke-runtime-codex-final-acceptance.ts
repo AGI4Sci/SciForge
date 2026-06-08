@@ -72,7 +72,7 @@ const config = runtimeConfigToml();
 assertRuntimeProfileFailClosed(config);
 assert.equal(runtimeProviderAllowed({ provider: RUNTIME_PROVIDER, allowOpenAiRuntime: false }), true);
 assert.equal(runtimeProviderAllowed({ provider: 'openai', allowOpenAiRuntime: false }), false);
-assert.equal(runtimeProviderAllowed({ provider: 'openai', allowOpenAiRuntime: true }), true);
+assert.equal(runtimeProviderAllowed({ provider: 'openai', allowOpenAiRuntime: true }), false);
 assert.throws(() => assertRuntimeProfileFailClosed(withoutRuntimeProfile(config)), /missing runtime profile/);
 assert.throws(() => assertRuntimeProfileFailClosed(withoutRuntimeKeyEnv(config)), /missing runtime key env/);
 
@@ -104,7 +104,7 @@ assert.doesNotMatch(surface.mainAnswerDom, /RAW_STDERR_SHOULD_STAY_FOLDED|RAW_JS
 assert.equal(surface.auditPanel.foldedByDefault, true);
 assert.match(JSON.stringify(surface.auditPanel.events), /RAW_STDERR_SHOULD_STAY_FOLDED|RAW_JSONL_SHOULD_STAY_FOLDED/);
 
-console.log('[ok] Runtime Codex final acceptance contracts cover mock JSONL delta/done/failed/stderr/audit/cancel, fail-closed profile config, OpenAI opt-in, provider/model/profile audit visibility, GUI resources, intent result schema, and audit folding');
+console.log('[ok] Runtime Codex final acceptance contracts cover mock JSONL delta/done/failed/stderr/audit/cancel, fail-closed profile config, OpenAI provider blocking, provider/model/profile audit visibility, GUI resources, intent result schema, and audit folding');
 
 function normalizeCodexFixtureRecord(
   record: CodexFixtureRecord,
@@ -149,7 +149,8 @@ function withoutRuntimeKeyEnv(config: string): string {
 }
 
 function runtimeProviderAllowed(input: { provider: string; allowOpenAiRuntime: boolean }): boolean {
-  if (/^openai(?:$|-|_|\.)/i.test(input.provider)) return input.allowOpenAiRuntime;
+  void input.allowOpenAiRuntime;
+  if (/^openai(?:$|-|_|\.)/i.test(input.provider)) return false;
   return true;
 }
 

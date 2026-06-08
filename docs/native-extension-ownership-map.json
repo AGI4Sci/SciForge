@@ -10,7 +10,7 @@
     "guiRankingAllowed": false,
     "runtimeRankingAllowed": false,
     "rawRuntimeOutputPlacement": "folded-audit-debug-only",
-    "runtimeOpenAiFallback": "explicit-opt-in-only",
+    "runtimeOpenAiFallback": "disabled-fail-closed",
     "singleInteractiveSurfaceTruth": true
   },
   "entries": [
@@ -53,12 +53,11 @@
     {
       "id": "gui-presentation-catalog",
       "status": "target",
-      "owner": "sciforge-gui-extension",
+      "owner": "sciforge-ui-projection",
       "targetNativeSurfaces": [
         "/gui/capabilities/presentation.json",
         "/gui/renderers/<componentId>.json",
-        "gui.search(scope='/gui/capabilities')",
-        "gui.present"
+        "FinalAnswerEnvelope/result presentation refs"
       ],
       "currentImplementationPaths": [
         "packages/presentation/components",
@@ -68,7 +67,7 @@
       "targetImplementationPaths": [
         "packages/presentation/components",
         "packages/presentation/interactive-views",
-        "SciForge GUI extension surface"
+        "SciForge UI projection surface"
       ],
       "enforcementScripts": [
         "npm run smoke:package-runtime-boundary",
@@ -605,7 +604,7 @@
           "id": "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
           "currentPath": "tests/smoke/cu-next-live-acceptance-matrix.test.ts, tools/computer-use-next/live-acceptance-validator.ts, tools/computer-use-next/product-smoke-matrix.ts",
           "targetOwner": "Codex app-server/native plugin production path plus Computer Use live acceptance validator",
-          "runtimeBoundary": "native live acceptance matrix must cover source app, artifact editor, file preview or result presentation, high-risk confirmation stop, repair or continuation, current bundle artifact refs, verifier refs, gui.present refs, and no Workspace Gateway, codex exec JSON, Docker/noVNC/RDP product fallback"
+          "runtimeBoundary": "native live acceptance matrix must cover source app, artifact editor, file preview or result presentation, high-risk confirmation stop, repair or continuation, current bundle artifact refs, verifier refs, UI projection refs, and no Workspace Gateway, codex exec JSON, Docker/noVNC/RDP product fallback"
         },
         {
           "id": "CU-PKG-26-public-surface-parity-guard",

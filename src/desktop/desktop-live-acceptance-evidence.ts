@@ -18,7 +18,7 @@ export type DesktopRejectedLaunchMode =
   | 'packaging-preflight-contract-only'
   | 'unknown';
 
-export type DesktopSidecarRole = 'workspace-server' | 'provider-proxy' | 'runtime-codex';
+export type DesktopSidecarRole = 'workspace-server' | 'model-router' | 'runtime-codex';
 export type DesktopLifecycleOwner = 'electron-main' | 'electron-platform-service';
 
 export type DesktopLivePortEvidence = {
@@ -47,7 +47,7 @@ export type DesktopLiveRuntimeTaskEvidence = {
   model: string;
   workspacePath: string;
   commandId: string;
-  providerProxyUsed: true;
+  modelRouterUsed: true;
   providerAuditVisible: true;
   answerVisibleInRenderer: true;
   rawPreflightOnly: false;
@@ -121,7 +121,7 @@ export type DesktopLiveAcceptanceRequirementId =
   | 'materialized-evidence-files'
   | 'selected-artifact-followup'
   | 'sidecar-lifecycle-owned-by-main'
-  | 'provider-proxy-and-runtime-sidecars'
+  | 'model-router-and-runtime-sidecars'
   | 'logs-and-app-data-paths'
   | 'dynamic-ports-no-fixed-dev-port'
   | 'clean-shutdown'
@@ -174,7 +174,7 @@ export function createDesktopLiveAcceptancePlan(): DesktopLiveAcceptancePlan {
           'runtime-codex-real-task',
           'audit-ref-lineage-and-scope',
           'materialized-evidence-files',
-          'provider-proxy-and-runtime-sidecars',
+          'model-router-and-runtime-sidecars',
           'sidecar-lifecycle-owned-by-main',
           'logs-and-app-data-paths',
         ],
@@ -230,7 +230,7 @@ export function validateDesktopLiveAcceptanceEvidence(
         evidence.runtimeTask.model.trim().length > 0 &&
         isNonEmptyAbsolutePath(evidence.runtimeTask.workspacePath) &&
         /^codex-command-[a-z0-9-]+$/i.test(evidence.runtimeTask.commandId) &&
-        evidence.runtimeTask.providerProxyUsed === true &&
+        evidence.runtimeTask.modelRouterUsed === true &&
         evidence.runtimeTask.providerAuditVisible === true &&
         evidence.runtimeTask.answerVisibleInRenderer === true &&
         evidence.runtimeTask.rawPreflightOnly === false &&
@@ -275,11 +275,11 @@ export function validateDesktopLiveAcceptanceEvidence(
       'Sidecar lifecycle must be owned by Electron main or the platform service, including startup, health, logs, and shutdown.',
     ),
     check(
-      'provider-proxy-and-runtime-sidecars',
+      'model-router-and-runtime-sidecars',
       hasSidecar(evidence, 'workspace-server') &&
-        hasSidecar(evidence, 'provider-proxy') &&
+        hasSidecar(evidence, 'model-router') &&
         hasSidecar(evidence, 'runtime-codex'),
-      'Workspace server, provider proxy, and Runtime Codex sidecars must all be present.',
+      'Workspace server, Model Router, and Runtime Codex sidecars must all be present.',
     ),
     check(
       'logs-and-app-data-paths',

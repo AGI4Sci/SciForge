@@ -288,6 +288,46 @@ async function legacyStructuralErrors(files: string[]): Promise<string[]> {
     errors.push('agent-backend-config.ts must not treat a plain llmEndpoint/baseUrl as AgentServer generation opt-in.');
   }
   errors.push(...await computerUseLegacyStructuralErrors(files));
+  errors.push(...await browserLegacyStructuralErrors());
+  return errors;
+}
+
+async function browserLegacyStructuralErrors(): Promise<string[]> {
+  const errors: string[] = [];
+  const guardedFiles = [
+    'src/runtime/codex/codex-app-server-client.ts',
+    'packages/actions/browser-runtime/mcp.ts',
+    'packages/actions/browser-runtime/README.md',
+    'docs/BrowserRuntimeArchitecture.md',
+  ];
+  const bannedPatterns: Array<{ id: string; pattern: RegExp; message: string }> = [
+    {
+      id: 'browser-read-input-repair-path',
+      pattern: /\b(?:readInput|candidateReadInputs|search-results-require-read)\b/,
+      message: 'Browser product surfaces must use resources/evidenceState/resourceRef instead of readInput/candidateReadInputs repair paths',
+    },
+    {
+      id: 'browser-search-only-budget-guard',
+      pattern: /\bbrowser_search_only_budget_exhausted\b|\bBROWSER_SEARCH_ONLY_CALL_BUDGET\b|\bBrowserToolProgress\b/,
+      message: 'Host adapter must not own a Browser search-only progress guard; Agent Host/verifier decides replanning from evidence',
+    },
+  ];
+  for (const rel of guardedFiles) {
+    const text = await readTextIfExists(join(root, rel));
+    if (!text) continue;
+    const lines = text.split(/\r?\n/);
+    for (const rule of bannedPatterns) {
+      const lineIndex = lines.findIndex((line) => rule.pattern.test(line));
+      if (lineIndex >= 0) errors.push(`${rel}:${lineIndex + 1} ${rule.message} (${rule.id}).`);
+    }
+  }
+
+  const hostAdapterText = await readTextIfExists(join(root, 'src', 'runtime', 'codex', 'codex-app-server-client.ts'));
+  for (const legacy of ['browser.search_read', 'browser.open_read', 'browser.open']) {
+    if (hostAdapterText.includes(legacy)) {
+      errors.push(`src/runtime/codex/codex-app-server-client.ts must not mention legacy Browser intent ${legacy}; direct tools route only to six primitives.`);
+    }
+  }
   return errors;
 }
 
@@ -438,13 +478,13 @@ async function computerUseProductDefaultPathErrors(): Promise<string[]> {
   const legacyCommandPattern = /\bpython3?\b|\bpytest\b|sciforge_computer_use|packages\/actions\/computer-use\/sciforge_computer_use|embedded-isolated-desktop|isolated[_-]desktop|novnc|noVNC|docker\s+build[\s\S]*computer-use/i;
 
   for (const [name, command] of Object.entries(scripts)) {
-    if (!isComputerUseScript(name, command) || !legacyCommandPattern.test(command)) continue;
+    if (!isComputerUseScript(name, command) || !legacyCommandPattern.test(stripCurrentCompletionEvidenceProducer(command))) continue;
     errors.push(`package.json script "${name}" references retired Python/isolated Computer Use routes; Computer Use is TS-only.`);
   }
 
   for (const name of productGraph) {
     const command = scripts[name] ?? '';
-    if (legacyCommandPattern.test(command)) {
+    if (legacyCommandPattern.test(stripCurrentCompletionEvidenceProducer(command))) {
       errors.push(`product/default script "${name}" must stay TS-only and must not reference Python, pytest, sciforge_computer_use, Docker/noVNC, or isolated Computer Use routes.`);
     }
   }
@@ -513,6 +553,10 @@ async function computerUseProductDefaultPathErrors(): Promise<string[]> {
   }
 
   return errors;
+}
+
+function stripCurrentCompletionEvidenceProducer(command: string): string {
+  return command.replace(/\s+--completion-evidence-producer\s+computer-use\.embedded-isolated-desktop-l3\b/g, '');
 }
 
 async function readTextIfExists(path: string) {

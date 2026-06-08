@@ -27,7 +27,7 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
   return [
     {
       name: browserRuntimeMcpToolName('search'),
-      description: 'Discover candidate web pages for a Host-provided query. Does not read result pages. Use returned readInput/candidateReadInputs with browser_read before citing or summarizing page content.',
+      description: 'Discover candidate web pages for a Host-provided query. Returns resources/evidenceState with candidate web_page resources, but does not read result pages. Use browser_read with a web_page resourceRef to materialize source/page text refs before citing or summarizing page content.',
       inputSchema: objectSchema(['query'], {
         query: { type: 'string', minLength: 1 },
         engine: { enum: ['bing', 'duckduckgo'] },
@@ -60,8 +60,9 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
     },
     {
       name: browserRuntimeMcpToolName('read'),
-      description: 'Materialize page content from a session or explicitly ephemeral URL into refs-first source evidence.',
+      description: 'Materialize page content from a candidate web_page resourceRef, session, or explicitly ephemeral URL into refs-first source/page text evidence.',
       inputSchema: objectSchema([], {
+        resourceRef: { type: 'string', minLength: 1 },
         sessionId: { type: 'string' },
         url: { type: 'string', format: 'uri' },
         navigationMode: { enum: ['none', 'ephemeral'] },
@@ -86,7 +87,7 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
     },
     {
       name: browserRuntimeMcpToolName('download'),
-      description: 'Download a Host-selected remote resource into session-scoped artifacts.',
+      description: 'Download an explicit URL or a current-session linkSelector target into session-scoped artifacts.',
       inputSchema: objectSchema([], {
         url: { type: 'string', format: 'uri' },
         sessionId: { type: 'string' },
@@ -95,6 +96,7 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
         maxBytes: { type: 'number', exclusiveMinimum: 0 },
         timeoutMs: { type: 'number', exclusiveMinimum: 0 },
         filenameHint: { type: 'string' },
+        constraints: constraintsSchema(),
       }),
     },
   ];

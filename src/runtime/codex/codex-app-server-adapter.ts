@@ -89,7 +89,7 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       commandId,
       attemptId,
       profile: input.profile ?? this.options.profile,
-      allowOpenAiRuntime: input.allowOpenAiRuntime,
+      allowOpenAiRuntime: false,
       inputObjects: input.inputObjects,
       runtimeIntent: input.runtimeIntent,
       guiExtension: input.guiExtension,

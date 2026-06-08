@@ -70,18 +70,13 @@ test('runtime agent backend policy owns context source and model window normaliz
   assert.equal(estimateRuntimeAgentBackendModelContextWindow('gemini-2.0-pro'), 1_000_000);
 });
 
-test('runtime agent backend policy owns LLM endpoint normalization', () => {
-  assert.deepEqual(normalizeRuntimeLlmEndpoint({
+test('runtime agent backend policy rejects raw LLM endpoint normalization', () => {
+  assert.equal(normalizeRuntimeLlmEndpoint({
     provider: '  openai-compatible  ',
     baseUrl: ' http://llm.example.test/v1/// ',
     apiKey: ' test-secret ',
     modelName: ' qwen-test ',
-  }), {
-    provider: 'openai-compatible',
-    baseUrl: 'http://llm.example.test/v1',
-    apiKey: 'test-secret',
-    modelName: 'qwen-test',
-  });
+  }), undefined);
   assert.equal(normalizeRuntimeLlmEndpoint({ provider: ' native ' }), undefined);
   assert.equal(normalizeRuntimeLlmEndpoint(null), undefined);
 });
@@ -107,9 +102,9 @@ test('runtime agent backend policy owns workspace event context source aliases',
 });
 
 test('runtime agent backend policy owns failure classification and recovery text', () => {
-  assert.equal(runtimeAgentBackendConfigurationFailureIsBlocking('Model Provider is missing'), true);
-  assert.ok(runtimeAgentBackendConfigurationRecoverActions('Model Provider is missing')?.some((action) => /Model Base URL/.test(action)));
-  assert.match(runtimeAgentBackendConfigurationNextStep('llmEndpoint missing') ?? '', /user-side model endpoint/);
+  assert.equal(runtimeAgentBackendConfigurationFailureIsBlocking('Local AgentServer raw LLM dispatch is disabled.'), true);
+  assert.ok(runtimeAgentBackendConfigurationRecoverActions('Local AgentServer raw LLM dispatch is disabled.')?.some((action) => /Model Router profile/.test(action)));
+  assert.match(runtimeAgentBackendConfigurationNextStep('llmEndpoint ignored') ?? '', /Model Router-backed Runtime Codex/);
   assert.deepEqual(runtimeAgentBackendFailureCategories('model provider returned empty completion response', undefined), ['model']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('contextWindowExceeded after provider retryResult=failed', undefined), ['context-window']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('maximum context length reached because input is too long and tokens exceeded', undefined), ['context-window']);

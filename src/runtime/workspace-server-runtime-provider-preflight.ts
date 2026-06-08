@@ -9,7 +9,7 @@ export interface RuntimeProviderProxyHealthzDiagnostic {
 export type RuntimeProviderProxyInferenceDiagnostic = RuntimeProviderProxyHealthzDiagnostic;
 
 export interface RuntimeProviderProxyInferenceRequestCandidate {
-  endpoint: '/v1/responses' | '/v1/chat/completions';
+  endpoint: '/v1/responses';
   body: Record<string, unknown>;
 }
 
@@ -30,21 +30,14 @@ export function buildRuntimeProviderPreflightManifest(input: RuntimeProviderPref
   const runtimeApiKeyPresentInServiceEnv = Boolean(stringValue(input.serviceEnv.SCIFORGE_RUNTIME_API_KEY));
   const runtimeApiKeyPresentInLocalConfig = !runtimeApiKeyPresentInServiceEnv
     && Boolean(stringValue(input.runtimeEnv.SCIFORGE_RUNTIME_API_KEY));
-  const upstreamBaseUrlPresent = Boolean(input.proxyOptions.upstreamBaseUrl);
+  const upstreamBaseUrlPresentInServiceEnv = Boolean(modelRouterBaseUrlFromEnv(input.serviceEnv));
+  const upstreamBaseUrlPresent = upstreamBaseUrlPresentInServiceEnv;
   const upstreamKeySourceKind = runtimeApiKeyPresentInServiceEnv
     ? 'env'
     : runtimeApiKeyPresentInLocalConfig
       ? 'config-debug-fallback'
       : 'missing';
-  const upstreamBaseUrlPresentInServiceEnv = Boolean(
-    stringValue(input.serviceEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
-    || stringValue(input.serviceEnv.SCIFORGE_RUNTIME_BASE_URL),
-  );
-  const upstreamBaseUrlSourceKind = upstreamBaseUrlPresentInServiceEnv
-    ? 'env'
-    : upstreamBaseUrlPresent
-      ? 'config'
-      : 'missing';
+  const upstreamBaseUrlSourceKind = upstreamBaseUrlPresentInServiceEnv ? 'env' : 'missing';
   const category = runtimeProviderPreflightCategory({
     runtimeApiKeyPresentInServiceEnv,
     upstreamBaseUrlPresent,
@@ -64,7 +57,7 @@ export function buildRuntimeProviderPreflightManifest(input: RuntimeProviderPref
     policyViolations: [],
     missingEnv: [
       ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
-      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
+      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_MODEL_ROUTER_BASE_URL']),
     ],
     evidenceMode: 'current-env-diagnostic-only',
     checkedHealthz: input.checkedHealthz,
@@ -107,14 +100,6 @@ export function runtimeProviderProxyInferenceRequestCandidates(model: string): R
       stream: false,
       max_output_tokens: 8,
     },
-  }, {
-    endpoint: '/v1/chat/completions',
-    body: {
-      model: selectedModel,
-      messages: [{ role: 'user', content: 'Reply with exactly OK.' }],
-      stream: false,
-      max_tokens: 8,
-    },
   }];
 }
 
@@ -134,19 +119,24 @@ export function normalizeRuntimeProviderProxyHealthzResponse(
 }
 
 export function runtimeProviderProxyBaseUrl(env: NodeJS.ProcessEnv, defaultProxyBaseUrl: string) {
-  const configured = stringValue(env.SCIFORGE_PROXY_BASE_URL)
-    || proxyBaseUrlFromPortEnv(env)
+  const configured = modelRouterBaseUrlFromEnv(env)
     || defaultProxyBaseUrl;
   const trimmed = configured.replace(/\/+$/, '');
   return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
 }
 
-function proxyBaseUrlFromPortEnv(env: NodeJS.ProcessEnv) {
-  const port = stringValue(env.SCIFORGE_PROXY_PORT);
+function modelRouterBaseUrlFromEnv(env: NodeJS.ProcessEnv) {
+  return stringValue(env.SCIFORGE_MODEL_ROUTER_BASE_URL)
+    || stringValue(env.SCIFORGE_MODEL_ROUTER_URL)
+    || proxyBaseUrlFromPortEnv(env, 'SCIFORGE_MODEL_ROUTER_PORT', 'SCIFORGE_MODEL_ROUTER_HOST');
+}
+
+function proxyBaseUrlFromPortEnv(env: NodeJS.ProcessEnv, portKey: string, hostKey: string) {
+  const port = stringValue(env[portKey]);
   if (!port || !/^\d+$/.test(port)) return undefined;
   const parsedPort = Number(port);
   if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65_535) return undefined;
-  const configuredHost = stringValue(env.SCIFORGE_PROXY_HOST);
+  const configuredHost = stringValue(env[hostKey]);
   const host = !configuredHost || configuredHost === '0.0.0.0' || configuredHost === '::'
     ? '127.0.0.1'
     : configuredHost;
@@ -206,7 +196,7 @@ function runtimeProviderPreflightNextActions(input: {
   }
   if (!input.upstreamBaseUrlPresent) {
     actions.push({
-      label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or ignored local provider base URL for the Runtime Codex proxy.',
+      label: 'Set SCIFORGE_MODEL_ROUTER_BASE_URL to the Model Router /v1 endpoint for Runtime Codex.',
       writesRepo: false,
     });
   }

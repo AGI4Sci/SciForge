@@ -5,25 +5,25 @@ import { test } from 'node:test';
 const settingsPageSource = readFileSync(new URL('./SettingsPage.tsx', import.meta.url), 'utf8');
 const catalogSource = readFileSync(new URL('./settingsModelCatalog.ts', import.meta.url), 'utf8');
 
-test('settings API key is write-only and cannot be revealed in the GUI', () => {
+test('settings does not expose runtime provider API keys or base URLs in the GUI', () => {
   assert.doesNotMatch(settingsPageSource, /apiKeyVisible/);
   assert.doesNotMatch(settingsPageSource, /Show API key|显示 API key|Hide API key|隐藏 API key/);
   assert.doesNotMatch(settingsPageSource, /maskedSecretValue\(config\.apiKey\)/);
-  assert.match(settingsPageSource, /type="password"/);
-  assert.match(settingsPageSource, /defaultValue=""/);
-  assert.match(settingsPageSource, /secretPresenceLabel\(config\.apiKey, 'API key'/);
+  assert.doesNotMatch(settingsPageSource, /onChange\(\{ apiKey: event\.target\.value \}\)/);
+  assert.doesNotMatch(settingsPageSource, /onChange\(\{ modelBaseUrl: event\.target\.value \}\)/);
+  assert.doesNotMatch(settingsPageSource, /Provider Base URL/);
+  assert.doesNotMatch(settingsPageSource, />API Key</);
 });
 
-test('settings copy states main chat and repair share the same LLM provider config', () => {
-  assert.match(settingsPageSource, /Main chat and repair flows use the Codex app-server path with this model endpoint and API key/);
-  assert.match(settingsPageSource, /Local compatibility plumbing stays hidden from the chat surface/);
+test('settings copy states main chat and repair use Model Router instead of raw provider config', () => {
+  assert.match(settingsPageSource, /call models through a Model Router profile/);
+  assert.match(settingsPageSource, /Router member-model config only/);
 });
 
-test('settings exposes provider model catalog refresh and selection', () => {
-  assert.match(settingsPageSource, /Provider Models/);
-  assert.match(settingsPageSource, /refreshModelCatalog\(config, setModelCatalog/);
+test('settings does not expose provider model catalog refresh as a direct endpoint path', () => {
+  assert.doesNotMatch(settingsPageSource, /Provider Models/);
+  assert.doesNotMatch(settingsPageSource, /refreshModelCatalog\(config, setModelCatalog/);
   assert.match(catalogSource, /modelCatalogUrl\(config\)/);
-  assert.match(settingsPageSource, /onChange\(\{ modelName: event\.target\.value \}\)/);
   assert.match(catalogSource, /\/api\/sciforge\/provider-models/);
 });
 

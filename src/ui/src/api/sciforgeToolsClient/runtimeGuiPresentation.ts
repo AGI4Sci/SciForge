@@ -108,13 +108,47 @@ export function attachRuntimeGuiPresentationToResponse(
       },
     };
   }
+  const finalAnswer = isRecord(result) && isRecord(result.finalAnswerEnvelope)
+    ? result.finalAnswerEnvelope
+    : undefined;
+  const finalAnswerSource = asString(finalAnswer?.source);
+  if (finalAnswer && finalAnswerSource?.startsWith('codex.app-server.final-answer:')) {
+    const finalLiveAcceptanceEligible = typeof finalAnswer.liveAcceptanceEligible === 'boolean'
+      ? finalAnswer.liveAcceptanceEligible
+      : runtimeNativeMessageLiveAcceptanceEligible(asString(finalAnswer.text) ?? response.message.content, result);
+    return {
+      ...response,
+      message: {
+        ...response.message,
+        provenance: {
+          ...(response.message.provenance ?? {}),
+          kind: 'live-runtime-codex',
+          source: finalAnswerSource,
+          runtimeRequestEligible: false,
+          liveAcceptanceEligible: finalLiveAcceptanceEligible,
+          commandId: asString(finalAnswer?.commandId),
+          attemptId: asString(finalAnswer?.attemptId),
+          provider: asString(finalAnswer?.provider),
+          model: asString(finalAnswer?.model),
+          profile: asString(finalAnswer?.profile),
+        },
+      },
+      run: {
+        ...response.run,
+        raw: {
+          ...(isRecord(response.run.raw) ? response.run.raw : {}),
+          finalAnswerEnvelope: finalAnswer,
+        },
+      },
+    };
+  }
   const nativeMessage = isRecord(result) && isRecord(result.nativeCodexMessage)
     ? result.nativeCodexMessage
     : isRecord(result) && isRecord(result.output) && isRecord(result.output.nativeCodexMessage)
       ? result.output.nativeCodexMessage
       : undefined;
   const nativeSource = asString(nativeMessage?.source);
-  if (!nativeMessage || !nativeSource?.startsWith('codex.native-message:')) return response;
+  if (!nativeMessage || (!nativeSource?.startsWith('codex.native-message:') && !nativeSource?.startsWith('codex.app-server.final-answer:'))) return response;
   const nativeLiveAcceptanceEligible = typeof nativeMessage.liveAcceptanceEligible === 'boolean'
     ? nativeMessage.liveAcceptanceEligible
     : runtimeNativeMessageLiveAcceptanceEligible(asString(nativeMessage.text) ?? response.message.content, result);

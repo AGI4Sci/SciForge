@@ -40,11 +40,11 @@ test('R-DESK Electron window options load dist-ui with isolated preload only', (
   assert.doesNotMatch(plan.renderer.loadStrategy.fileUrl, /localhost:517/);
 });
 
-test('R-DESK default production sidecars include workspace, provider proxy, and Runtime Codex commands', () => {
+test('R-DESK default production sidecars include workspace, Model Router, and Runtime Codex commands', () => {
   const services = createDefaultDesktopManagedServices(process.cwd());
 
-	  assert.deepEqual(services.map((service) => service.id), ['workspace-server', 'provider-proxy', 'runtime-codex']);
-	  assert.deepEqual(services.map((service) => service.role), ['workspace-writer', 'provider-proxy', 'runtime-codex']);
+	  assert.deepEqual(services.map((service) => service.id), ['workspace-server', 'model-router', 'runtime-codex']);
+	  assert.deepEqual(services.map((service) => service.role), ['workspace-writer', 'model-router', 'runtime-codex']);
 	  assert.ok(services.every((service) => service.command === process.execPath));
 	  assert.ok(services.some((service) => service.args?.some((arg) => /dist-desktop\/src\/runtime\/workspace-server\.js$/.test(arg))));
 		  assert.ok(services.some((service) => service.args?.some((arg) => /dist-desktop\/packages\/workers\/model-router\/src\/cli\.js$/.test(arg))));

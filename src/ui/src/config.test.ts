@@ -77,9 +77,9 @@ describe('SciForge config persistence', () => {
     assert.equal(defaultSciForgeConfig.allowOpenAiRuntime, false);
   });
 
-  it('显式配置 allowOpenAiRuntime 才会允许 Runtime Codex 使用 OpenAI provider', () => {
+  it('ignores legacy allowOpenAiRuntime config so Runtime Codex stays on Model Router', () => {
     assert.equal(normalizeConfig({}).allowOpenAiRuntime, false);
-    assert.equal(normalizeConfig({ allowOpenAiRuntime: true }).allowOpenAiRuntime, true);
+    assert.equal(normalizeConfig({ allowOpenAiRuntime: true }).allowOpenAiRuntime, false);
     assert.equal(normalizeConfig({ allowOpenAiRuntime: 'true' }).allowOpenAiRuntime, false);
   });
 
@@ -144,7 +144,7 @@ describe('SciForge config persistence', () => {
             runtimeCodexBaseUrl: 'http://127.0.0.1:18080',
             workspacePath: '/tmp/sciforge-workspace',
             ports: [
-              { name: 'provider-proxy', url: 'http://127.0.0.1:3891' },
+              { name: 'model-router', url: 'http://127.0.0.1:3891' },
               { name: 'runtime-codex', url: 'http://127.0.0.1:18080' },
             ],
           }),
@@ -388,10 +388,10 @@ describe('SciForge config persistence', () => {
     assert.equal(updateConfig(defaultSciForgeConfig, { workspacePath: `${root}/.sciforge/tasks/run-1` }).workspacePath, root);
   });
 
-  it('preserves gemini as a selectable AgentBackend', () => {
+  it('normalizes legacy non-Codex AgentBackend selections back to Codex', () => {
     const config = updateConfig(defaultSciForgeConfig, { agentBackend: 'gemini' });
 
-    assert.equal(config.agentBackend, 'gemini');
+    assert.equal(config.agentBackend, 'codex');
   });
 
   it('normalizes user context window limits', () => {

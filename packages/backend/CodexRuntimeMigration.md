@@ -12,7 +12,7 @@ SciForge 长期只支持 Codex backend。生产 runtime 的默认入口必须是
 2. **Adapter boundary：`AgentCliAdapter`**
    `AgentCliAdapter` 只隔离 runtime 进程、JSON-RPC/event normalization 和测试替身；它不得把 `codex exec --json` 重新引入产品默认路径。
 
-`CodexExecJsonAdapter` / `codex exec --json` 只保留为 legacy/test-only 兼容和历史证据。新产品入口不能自动 fallback 到 exec；缺 app-server、runtime profile、provider proxy 或必要配置时必须 fail closed。
+`CodexExecJsonAdapter` / `codex exec --json` 只保留为 legacy/test-only 兼容和历史证据。新产品入口不能自动 fallback 到 exec；缺 app-server、runtime profile、Model Router 或必要配置时必须 fail closed。
 
 ## 不 Fork Codex
 
@@ -80,10 +80,10 @@ wire_api = "responses"
 这个文件由本地 setup 命令生成或刷新：
 
 ```bash
-npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url <model-router-responses-url>
+npm run backend:codex-runtime:setup -- --overwrite --model-router-base-url <local-model-router-v1-url>
 ```
 
-用于 browser/release acceptance 的 `SCIFORGE_RUNTIME_API_KEY` 不写入 `config.toml`、`config.local.json` 或仓库文件。只在启动 Runtime Codex / provider proxy 的 service 环境里设置；ignored local config 中的 key 只能作为本机 provider proxy 调试 fallback，不能满足 acceptance：
+用于 browser/release acceptance 的 `SCIFORGE_RUNTIME_API_KEY` 不写入 `config.toml`、`config.local.json` 或仓库文件。只在启动 Runtime Codex / Model Router 的 service 环境里设置；ignored local config 中的 LLM key 只能作为 Model Router 成员模型配置，不能满足 Runtime Codex acceptance：
 
 ```bash
 export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
@@ -111,42 +111,56 @@ SciForge runtime bridge 必须做成本保护：
 - 缺少 `SCIFORGE_RUNTIME_API_KEY`、Model Router service route、runtime profile 或 runtime provider table 时 fail closed。
 - 当前 smoke gate 要求 provider `sciforge-model-router`、model alias `textReasoner`、`env_key = "SCIFORGE_RUNTIME_API_KEY"` 和 `wire_api = "responses"`。
 - 不允许自动 fallback 到 OpenAI provider。
-- 只有用户显式设置 `allowOpenAiRuntime=true` 时才允许 OpenAI provider。
+- 不提供 `allowOpenAiRuntime` 绕过；OpenAI 或其它成员模型只能作为 Model Router 成员配置。
 - 每个 run 的 provider、model、profile、workspace、command id 必须写入 audit event，并在 GUI 可见。
 
-## Provider Proxy Upstream
+## Model Router Runtime Endpoint
 
-`packages/backend` 的 provider proxy / Model Router 对外暴露 OpenAI-compatible `/v1/responses`。Runtime Codex profile 的 `base_url` 指向 service-managed router endpoint；provider URL 和 raw model slug 由 router profile 解析，不作为产品默认公开契约。
+`packages/backend` 的 Model Router 对外暴露 OpenAI-compatible `/v1/responses`。Runtime Codex profile 的 `base_url` 指向 service-managed router endpoint；provider URL 和 raw model slug 由 router profile 解析，不作为产品默认公开契约。
 
 解析顺序：
 
-1. `npm run backend:codex-proxy -- --upstream-base-url <url>`
-2. `SCIFORGE_PROXY_UPSTREAM_BASE_URL`
-3. `config.local.json` 的 `codexProxy.upstreamBaseUrl` / `codexProxy.baseUrl`
-4. `config.local.json` 的 `llm.upstreamBaseUrl` / `llm.baseUrl`
+1. `SCIFORGE_MODEL_ROUTER_BASE_URL`
+2. `SCIFORGE_MODEL_ROUTER_URL`
+3. `SCIFORGE_MODEL_ROUTER_PORT`，解析为 `http://127.0.0.1:<router>/v1`
+4. 开发 shell 托管的默认 Router 端口，不解析 Runtime 直连 provider URL
 
 推荐 no-secret setup：
 
 ```bash
-export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
-export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
-npm run backend:codex-proxy
+export SCIFORGE_RUNTIME_API_KEY="<runtime-api-key>"
+export SCIFORGE_MODEL_ROUTER_BASE_URL="http://127.0.0.1:<router>/v1"
+npm run backend:model-router -- --host 127.0.0.1 --port <router>
 ```
 
-或者只把非 secret upstream 写进 `config.local.json`：
+`config.local.json` 只作为 Model Router 成员模型配置来源：
 
 ```json
 {
-  "codexProxy": {
-    "upstreamBaseUrl": "https://your-openai-compatible-endpoint.example/v1",
-    "defaultModel": "textReasoner"
+  "modelRouter": {
+    "profiles": {
+      "sciforge-runtime-default": {
+        "text": {
+          "provider": "openai-compatible",
+          "baseUrlEnv": "SCIFORGE_TEXT_BASE_URL",
+          "apiKeyEnv": "SCIFORGE_TEXT_API_KEY",
+          "modelEnv": "SCIFORGE_TEXT_MODEL"
+        },
+        "vision": {
+          "provider": "openai-compatible",
+          "baseUrlEnv": "SCIFORGE_VISION_BASE_URL",
+          "apiKeyEnv": "SCIFORGE_VISION_API_KEY",
+          "modelEnv": "SCIFORGE_VISION_MODEL"
+        }
+      }
+    }
   }
 }
 ```
 
-本地 parser 仍能读取 `codexProxy.apiKey` / `llm.apiKey` 作为显式调试 fallback，但 release acceptance 和团队文档路径不得依赖明文 secret 文件。Browser acceptance gate 会显式拒绝只存在于 `config.local.json` 或 `.sciforge/**/config.local.json` 的 secret-like key；没有 upstream URL 时，proxy CLI 会退出；没有 service 环境 `SCIFORGE_RUNTIME_API_KEY` 时，Runtime Codex wrapper 和 browser acceptance gate 都必须 fail closed。
+本地 parser 仍能读取成员模型配置作为显式调试 fallback，但 release acceptance 和团队文档路径不得依赖明文 secret 文件。Browser acceptance gate 会显式拒绝只存在于 `config.local.json` 或 `.sciforge/**/config.local.json` 的 secret-like key；没有 Model Router `/v1` base URL 时，Runtime/API 服务必须 blocked；没有 service 环境 `SCIFORGE_RUNTIME_API_KEY` 时，Runtime Codex wrapper 和 browser acceptance gate 都必须 fail closed。
 
-Provider proxy 的 `GET /healthz?check=upstream` 和 `npm run smoke:runtime-provider-preflight` 只做 live default-chat 前分诊：它会以短超时检查 upstream `/models`，输出 `config-missing` / `provider-auth` / `rate-limited` / `upstream-outage` / `repo-bug` / `ready`，并 scrub raw provider body、header 和 token。`verify:single-agent-final` 与 `verify:single-agent-release` 会在 browser acceptance 前运行该 preflight，但结果的 `releaseAcceptance` 固定为 `not-evaluated`，不能替代 Codex in-app browser strict acceptance。
+Model Router 的 `GET /healthz` 和 `npm run smoke:runtime-provider-preflight` 只做 live default-chat 前分诊：它会以短超时检查 Router readiness，输出 `config-missing` / `provider-auth` / `rate-limited` / `upstream-outage` / `repo-bug` / `ready`，并 scrub raw provider body、header 和 token。`verify:single-agent-final` 与 `verify:single-agent-release` 会在 browser acceptance 前运行该 preflight，但结果的 `releaseAcceptance` 固定为 `not-evaluated`，不能替代 Codex in-app browser strict acceptance。
 
 ## Phase 1 Adapter
 
@@ -190,7 +204,7 @@ Adapter 只抽象 runtime host 细节，不扩展 backend 范围：
 短期 POC 必须证明：
 
 - Electron main 可以加载 `vite build` 产物，而不是启动 Vite dev server。
-- Electron main 可以启动、停止并观测 workspace server、`packages/backend` provider proxy 和 Runtime Codex 进程。
+- Electron main 可以启动、停止并观测 workspace server、Model Router 和 Runtime Codex 进程。
 - Renderer 只通过稳定 IPC 或 loopback API 发送用户命令、读取 normalized events 和 audit events。
 - 一次真实 Codex-backed run 能在桌面窗口内完成，并展示 provider/model/profile/workspace/command id。
 

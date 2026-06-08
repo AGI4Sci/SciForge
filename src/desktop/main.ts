@@ -190,7 +190,7 @@ export function createDefaultDesktopManagedServices(
   ];
   return [
     compiledJsService('workspace-server', 'workspace-writer', join(root, 'dist-desktop', 'src', 'runtime', 'workspace-server.js'), sidecarCwd, command, [], env),
-    compiledJsService('provider-proxy', 'provider-proxy', join(root, 'dist-desktop', 'packages', 'workers', 'model-router', 'src', 'cli.js'), sidecarCwd, command, modelRouterArgs, env),
+    compiledJsService('model-router', 'model-router', join(root, 'dist-desktop', 'packages', 'workers', 'model-router', 'src', 'cli.js'), sidecarCwd, command, modelRouterArgs, env),
     compiledJsService('runtime-codex', 'runtime-codex', join(root, 'dist-desktop', 'src', 'runtime', 'codex', 'codex-runtime-standalone-server.js'), sidecarCwd, command, [], env),
   ];
 }
@@ -243,7 +243,7 @@ export function createElectronDesktopMainController(
       requestedControlPort: 0,
       requestedUiPort: 0,
       requestedWorkspacePort: 0,
-      requestedProviderProxyPort: 0,
+      requestedModelRouterPort: 0,
       requestedRuntimeCodexPort: 0,
       services: createDefaultDesktopManagedServices(appPaths.appRoot, {
         sidecarCwd: appPaths.sidecarCwd,
@@ -1622,7 +1622,7 @@ function createDesktopRuntimeConfig(input: {
 	  schemaVersion: 'sciforge.desktop.runtime-config.v1',
 	  runtimeControlUrl: input.launcherResult.controlUrl,
 	  workspaceWriterBaseUrl: portUrl(input.launcherResult, 'workspace-writer'),
-	  modelBaseUrl: `${portUrl(input.launcherResult, 'provider-proxy')}/v1`,
+	  modelBaseUrl: `${portUrl(input.launcherResult, 'model-router')}/v1`,
 	  runtimeCodexBaseUrl: portUrl(input.launcherResult, 'runtime-codex'),
 	  workspacePath: input.workspacePath,
 	  appDataRoot: input.appDataRoot,

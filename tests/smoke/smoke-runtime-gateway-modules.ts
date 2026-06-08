@@ -64,6 +64,7 @@ try {
   });
 
   assert.equal(request.agentServerBaseUrl, 'http://127.0.0.1:3000');
+  assert.equal(request.llmEndpoint, undefined);
   assert.deepEqual(request.selectedVerifierIds, ['schema.verifier']);
   assert.equal(request.verificationPolicy, undefined);
   const rateLimitDiagnostic = classifyBackendFailure('429 retry-after: 2 api_key=sk-secret1234567890', {
@@ -278,7 +279,7 @@ try {
   assert.ok(processProgress.events.every((event) => event.type === 'process-progress'));
 
   const skill = runtimeGatewaySkill();
-  const backendRuntimeProfileId = `backend-${selectedAgentBackend(request, request.llmEndpoint)}`;
+  const backendRuntimeProfileId = `backend-${selectedAgentBackend(request)}`;
   assert.equal(runtimeProfileIdForRequest(request, skill), backendRuntimeProfileId);
   assert.equal(selectedRuntimeForSkill(skill), 'backend-generation');
   const routingRefs = attemptPlanRefs(request, skill, 'smoke fallback');

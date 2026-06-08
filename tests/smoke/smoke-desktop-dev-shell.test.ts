@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -14,13 +14,8 @@ import {
 import {
   buildDesktopNativeReadiness,
 } from '../../src/desktop/native-readiness.js';
-import {
-  ProductionRuntimeLauncher,
-  type ManagedRuntimeServiceSpec,
-  type SpawnManagedProcess,
-} from '../../src/runtime/desktop/runtime-launcher.js';
 
-test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sanitized native readiness', async () => {
+test('P1-DESK dev shell plans Model Router sidecar env without legacy Runtime provider injection', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-desktop-dev-shell-plan-'));
   const configPath = join(root, 'config.local.json');
   await writeFile(configPath, JSON.stringify({
@@ -29,6 +24,16 @@ test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sa
       baseUrl: 'https://provider.example.test/v1',
       model: 'bailian/deepseek-v4-flash',
     },
+    codexProxy: {
+      apiKey: 'sk-codex-member-secret',
+      upstreamBaseUrl: 'https://codex-member.example.test/v1',
+      defaultModel: 'codex/member-model',
+    },
+    visionLLM: {
+      apiKey: 'sk-local-vision-secret',
+      baseUrl: 'https://vision-provider.example.test/v1',
+      model: 'qwen3.7-plus',
+    },
   }), 'utf8');
 
   const plan = createDesktopDevShellPlan({
@@ -36,7 +41,9 @@ test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sa
     workspacePath: join(root, 'workspace'),
     configPath,
     env: {
-      SCIFORGE_RUNTIME_API_KEY: 'env-secret-wins',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://legacy-env.example.test/v1',
+      SCIFORGE_RUNTIME_BASE_URL: 'https://legacy-runtime.example.test/v1',
+      SCIFORGE_PROXY_DEFAULT_MODEL: 'legacy-direct-model',
     },
     nativeAdapterUrl: 'http://127.0.0.1:61337/native?apiKey=sk-native-secret',
   });
@@ -48,29 +55,49 @@ test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sa
   assert.deepEqual(plan.processes.map((process) => process.id), [
     'vite',
     'workspace-writer',
-    'provider-proxy',
+    'model-router',
     'runtime-codex',
     'electron',
   ]);
 
   const vite = plan.processes.find((process) => process.id === 'vite');
   const workspace = plan.processes.find((process) => process.id === 'workspace-writer');
-  const providerProxy = plan.processes.find((process) => process.id === 'provider-proxy');
+  const modelRouter = plan.processes.find((process) => process.id === 'model-router');
   const runtimeCodex = plan.processes.find((process) => process.id === 'runtime-codex');
   const electron = plan.processes.find((process) => process.id === 'electron');
   assert.ok(vite);
   assert.ok(workspace);
-  assert.ok(providerProxy);
+  assert.ok(modelRouter);
   assert.ok(runtimeCodex);
   assert.ok(electron);
 
   assert.equal(vite.env.VITE_SCIFORGE_DEFAULT_WORKSPACE_WRITER_URL, 'http://127.0.0.1:5174');
   assert.equal(vite.env.SCIFORGE_RUNTIME_API_KEY, undefined);
-  for (const process of [workspace, providerProxy, runtimeCodex]) {
-    assert.equal(process.env.SCIFORGE_RUNTIME_API_KEY, 'env-secret-wins');
-    assert.equal(process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, 'https://provider.example.test/v1');
-    assert.equal(process.env.SCIFORGE_RUNTIME_MODEL, 'bailian/deepseek-v4-flash');
+  for (const process of [workspace, modelRouter, runtimeCodex]) {
+    assert.equal(process.env.SCIFORGE_RUNTIME_API_KEY, 'sciforge-local-model-router');
+    assert.equal(process.env.SCIFORGE_MODEL_ROUTER_API_KEY, 'sciforge-local-model-router');
+    assert.equal(process.env.SCIFORGE_MODEL_ROUTER_BASE_URL, 'http://127.0.0.1:5175/v1');
+    assert.equal(process.env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
+    assert.equal(process.env.SCIFORGE_PROXY_BASE_URL, undefined);
+    assert.equal(process.env.SCIFORGE_PROXY_PORT, undefined);
+    assert.equal(process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, undefined);
+    assert.equal(process.env.SCIFORGE_RUNTIME_BASE_URL, undefined);
+    assert.equal(process.env.SCIFORGE_PROXY_DEFAULT_MODEL, undefined);
     assert.equal(process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61337');
+  }
+  assert.equal(modelRouter.env.SCIFORGE_TEXT_API_KEY, 'sk-local-config-secret');
+  assert.equal(modelRouter.env.SCIFORGE_TEXT_BASE_URL, 'https://provider.example.test/v1');
+  assert.equal(modelRouter.env.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+  assert.equal(modelRouter.env.SCIFORGE_VISION_API_KEY, 'sk-local-vision-secret');
+  assert.equal(modelRouter.env.SCIFORGE_VISION_BASE_URL, 'https://vision-provider.example.test/v1');
+  assert.equal(modelRouter.env.SCIFORGE_VISION_MODEL, 'qwen3.7-plus');
+  for (const process of [workspace, runtimeCodex]) {
+    assert.equal(process.env.SCIFORGE_TEXT_API_KEY, undefined);
+    assert.equal(process.env.SCIFORGE_TEXT_BASE_URL, undefined);
+    assert.equal(process.env.SCIFORGE_TEXT_MODEL, undefined);
+    assert.equal(process.env.SCIFORGE_VISION_API_KEY, undefined);
+    assert.equal(process.env.SCIFORGE_VISION_BASE_URL, undefined);
+    assert.equal(process.env.SCIFORGE_VISION_MODEL, undefined);
   }
   assert.equal(electron.env.SCIFORGE_DESKTOP_RENDERER_URL, 'http://127.0.0.1:5173');
   assert.equal(electron.env.SCIFORGE_DESKTOP_APP_ROOT, process.cwd());
@@ -85,7 +112,11 @@ test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sa
   assert.ok(!electron.args.some((arg) => /src\/desktop\/main\.ts$/.test(arg)));
 
   const diagnosticsText = JSON.stringify(plan.diagnostics);
-  assert.doesNotMatch(diagnosticsText, /env-secret-wins|sk-local-config-secret|sk-native-secret|apiKey/);
+  assert.doesNotMatch(diagnosticsText, /sk-local-config-secret|sk-codex-member-secret|sk-local-vision-secret|sk-native-secret|apiKey/);
+  assert.equal(plan.diagnostics.config.memberCredentialSource, 'config');
+  assert.equal(plan.diagnostics.config.textBaseUrlConfigured, true);
+  assert.equal(plan.diagnostics.config.textModelConfigured, true);
+  assert.equal(plan.diagnostics.config.visionModelConfigured, true);
   assert.equal(plan.diagnostics.nativeReadiness.capabilities.browser.status, 'ready');
   assert.equal(plan.diagnostics.nativeReadiness.capabilities.browser.loopbackTrusted, true);
   assert.equal(plan.diagnostics.nativeReadiness.capabilities.annotation.status, 'unavailable');
@@ -97,6 +128,27 @@ test('P1-DESK dev shell controller starts planned processes through injected spa
   const root = await mkdtemp(join(tmpdir(), 'sciforge-desktop-dev-shell-controller-'));
   const spawned: Array<{ command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
   const children: FakeDevShellChild[] = [];
+  const legacyEnvKeys = [
+    'SCIFORGE_PROXY_API_KEY_ENV',
+    'SCIFORGE_PROXY_HOST',
+    'SCIFORGE_PROXY_QUIET',
+    'SCIFORGE_PROXY_URL',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_RUNTIME_BASE_URL',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_RUNTIME_MODEL',
+    'SCIFORGE_TEXT_API_KEY',
+  ];
+  const previousEnv = new Map(legacyEnvKeys.map((key) => [key, process.env[key]]));
+  process.env.SCIFORGE_PROXY_API_KEY_ENV = 'SCIFORGE_STALE_PROXY_KEY';
+  process.env.SCIFORGE_PROXY_HOST = '0.0.0.0';
+  process.env.SCIFORGE_PROXY_QUIET = '1';
+  process.env.SCIFORGE_PROXY_URL = 'http://127.0.0.1:3891/healthz';
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'https://inherited-legacy.example.test/v1';
+  process.env.SCIFORGE_RUNTIME_BASE_URL = 'https://inherited-runtime.example.test/v1';
+  process.env.SCIFORGE_PROXY_DEFAULT_MODEL = 'inherited-direct-model';
+  process.env.SCIFORGE_RUNTIME_MODEL = 'inherited-private-model';
+  process.env.SCIFORGE_TEXT_API_KEY = 'sk-inherited-member-secret';
   const spawnProcess: DesktopDevShellSpawn = (command, args, options) => {
     const child = new FakeDevShellChild(4100 + children.length);
     children.push(child);
@@ -107,25 +159,53 @@ test('P1-DESK dev shell controller starts planned processes through injected spa
     projectRoot: process.cwd(),
     workspacePath: join(root, 'workspace'),
     nativeAdapterUrl: 'http://127.0.0.1:61338',
+    env: {
+      SCIFORGE_TEXT_BASE_URL: 'https://router-member.example.test/v1',
+      SCIFORGE_TEXT_MODEL: 'router-member-model',
+      SCIFORGE_TEXT_API_KEY: 'sk-router-member-secret',
+    },
     spawnProcess,
   });
 
-  const started = await controller.start();
-  await controller.shutdown();
+  try {
+    const started = await controller.start();
+    await controller.shutdown();
 
-  assert.deepEqual(started.processes.map((process) => process.id), [
-    'vite',
-    'workspace-writer',
-    'provider-proxy',
-    'runtime-codex',
-    'electron',
-  ]);
-  assert.deepEqual(spawned.map((process) => process.command), ['npm', 'npm', 'npm', 'npm', 'npx']);
-  assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_RENDERER_URL, 'http://127.0.0.1:5173');
-  assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_APP_ROOT, process.cwd());
-  assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_WORKSPACE_PATH, join(root, 'workspace'));
-  assert.equal(spawned[1]?.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61338');
-  assert.equal(children.every((child) => child.killed), true);
+    assert.deepEqual(started.processes.map((process) => process.id), [
+      'vite',
+      'workspace-writer',
+      'model-router',
+      'runtime-codex',
+      'electron',
+    ]);
+    assert.deepEqual(spawned.map((process) => process.command), ['npm', 'npm', 'npm', 'npm', 'npx']);
+    for (const process of spawned) {
+      assert.equal(process.env.SCIFORGE_PROXY_API_KEY_ENV, undefined);
+      assert.equal(process.env.SCIFORGE_PROXY_HOST, undefined);
+      assert.equal(process.env.SCIFORGE_PROXY_QUIET, undefined);
+      assert.equal(process.env.SCIFORGE_PROXY_URL, undefined);
+      assert.equal(process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, undefined);
+      assert.equal(process.env.SCIFORGE_RUNTIME_BASE_URL, undefined);
+      assert.equal(process.env.SCIFORGE_PROXY_DEFAULT_MODEL, undefined);
+    }
+    assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_RENDERER_URL, 'http://127.0.0.1:5173');
+    assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_APP_ROOT, process.cwd());
+    assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_WORKSPACE_PATH, join(root, 'workspace'));
+    assert.equal(spawned[1]?.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61338');
+    assert.equal(spawned[3]?.env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
+    assert.equal(spawned[3]?.env.SCIFORGE_RUNTIME_API_KEY, 'sciforge-local-model-router');
+    assert.equal(spawned[3]?.env.SCIFORGE_TEXT_API_KEY, undefined);
+    assert.equal(spawned[2]?.env.SCIFORGE_TEXT_API_KEY, 'sk-router-member-secret');
+    assert.equal(spawned[2]?.env.SCIFORGE_MODEL_ROUTER_BASE_URL, 'http://127.0.0.1:5175/v1');
+    assert.equal(spawned[2]?.env.SCIFORGE_PROXY_BASE_URL, undefined);
+    assert.equal(spawned[2]?.env.SCIFORGE_PROXY_PORT, undefined);
+    assert.equal(children.every((child) => child.killed), true);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('P1-DESK native readiness normalizes four native capabilities without raw payloads or secrets', () => {
@@ -160,58 +240,6 @@ test('P1-DESK native readiness normalizes four native capabilities without raw p
   assert.ok(serialized.length < 5000);
 });
 
-test('P1-DESK runtime launcher injects config.local API settings into desktop sidecars without exposing secrets in health or copied config', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'sciforge-desktop-launcher-secret-fallback-'));
-  const sourceConfig = join(root, 'config.local.json');
-  await writeFile(sourceConfig, JSON.stringify({
-    textLLM: {
-      env: {
-        SCIFORGE_RUNTIME_API_KEY: 'sk-config-fallback-secret',
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example.test/v1',
-      },
-      model: 'bailian/deepseek-v4-flash',
-    },
-  }), 'utf8');
-  const previousConfigPath = process.env.SCIFORGE_CONFIG_PATH;
-  const previousApiKey = process.env.SCIFORGE_RUNTIME_API_KEY;
-  delete process.env.SCIFORGE_RUNTIME_API_KEY;
-  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
-
-  const capturedEnv: NodeJS.ProcessEnv[] = [];
-  const child = new FakeManagedChild(5200);
-  const launcher = new ProductionRuntimeLauncher({
-    workspacePath: join(root, 'workspace'),
-    appDataRoot: join(root, 'app-data'),
-    requestedControlPort: 0,
-    requestedProviderProxyPort: 0,
-    services: [managedService('provider-proxy')],
-    spawnProcess: ((_command, _args, options) => {
-      capturedEnv.push(options.env);
-      return child;
-    }) as SpawnManagedProcess,
-  });
-
-  try {
-    const started = await launcher.start();
-    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_API_KEY, 'sk-config-fallback-secret');
-    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_UPSTREAM_BASE_URL, 'https://provider.example.test/v1');
-    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_MODEL, 'bailian/deepseek-v4-flash');
-    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_DEFAULT_MODEL, 'bailian/deepseek-v4-flash');
-
-    const health = await fetchJson(`${started.controlUrl}/health`);
-    const copiedConfig = await readFile(join(root, 'app-data', 'config', 'config.local.json'), 'utf8');
-    assert.doesNotMatch(JSON.stringify(health), /sk-config-fallback-secret|apiKey/);
-    assert.doesNotMatch(copiedConfig, /sk-config-fallback-secret|apiKey/);
-    assert.match(copiedConfig, /provider\.example\.test/);
-  } finally {
-    await launcher.shutdown();
-    if (previousConfigPath === undefined) delete process.env.SCIFORGE_CONFIG_PATH;
-    else process.env.SCIFORGE_CONFIG_PATH = previousConfigPath;
-    if (previousApiKey === undefined) delete process.env.SCIFORGE_RUNTIME_API_KEY;
-    else process.env.SCIFORGE_RUNTIME_API_KEY = previousApiKey;
-  }
-});
-
 class FakeDevShellChild extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
@@ -226,35 +254,4 @@ class FakeDevShellChild extends EventEmitter {
     this.emit('exit', null, 'SIGTERM');
     return true;
   }
-}
-
-class FakeManagedChild extends EventEmitter {
-  stdout = new PassThrough();
-  stderr = new PassThrough();
-  killed = false;
-
-  constructor(readonly pid: number) {
-    super();
-  }
-
-  kill(): boolean {
-    this.killed = true;
-    this.emit('exit', null, 'SIGTERM');
-    return true;
-  }
-}
-
-function managedService(id: string): ManagedRuntimeServiceSpec {
-  return {
-    id,
-    role: id === 'runtime-codex' ? 'runtime-codex' : id === 'provider-proxy' ? 'provider-proxy' : 'workspace-writer',
-    command: 'node',
-    args: ['service.js'],
-  };
-}
-
-async function fetchJson(url: string): Promise<unknown> {
-  const response = await fetch(url);
-  assert.equal(response.ok, true);
-  return response.json();
 }

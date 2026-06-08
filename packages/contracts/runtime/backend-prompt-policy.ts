@@ -1,4 +1,4 @@
-import { normalizeRuntimeLlmEndpoint, type RuntimeLlmEndpointConfig } from './agent-backend-policy';
+import type { RuntimeLlmEndpointConfig } from './agent-backend-policy';
 
 export interface ConfiguredBackendLlmEndpoint {
   modelProvider?: string;
@@ -20,29 +20,7 @@ export function normalizeConfiguredBackendLlmEndpoint(
   value: unknown,
   source: string,
 ): ConfiguredBackendLlmEndpoint | undefined {
-  if (!isRuntimePolicyRecord(value)) return undefined;
-  const llm = isRuntimePolicyRecord(value.llm) ? value.llm : value;
-  const provider = trimmedPolicyString(llm.provider);
-  const modelName = trimmedPolicyString(llm.modelName) ?? trimmedPolicyString(llm.model);
-  const endpoint = normalizeRuntimeLlmEndpoint({
-    provider,
-    baseUrl: llm.baseUrl,
-    apiKey: llm.apiKey,
-    modelName,
-  });
-  if (!endpoint) return undefined;
-  return {
-    modelProvider: provider ?? endpoint.provider,
-    modelName: modelName ?? endpoint.modelName,
-    llmEndpoint: endpoint,
-    llmEndpointSource: source,
-  };
-}
-
-function isRuntimePolicyRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function trimmedPolicyString(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  void value;
+  void source;
+  return undefined;
 }

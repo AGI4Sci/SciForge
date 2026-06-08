@@ -18,6 +18,11 @@ const targetResults: Record<string, unknown>[] = [];
 const targetRuns: Record<string, unknown>[] = [];
 let agentServerRunCount = 0;
 
+const runtimeCodexReadyServiceEnv = {
+  SCIFORGE_RUNTIME_API_KEY: 'test-runtime-service-key',
+  SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
+} as NodeJS.ProcessEnv;
+
 class FakeRuntimeCodexAdapter implements AgentCliAdapter {
   readonly inputs: AgentCliStartTurnInput[] = [];
 
@@ -185,6 +190,7 @@ try {
     },
     expectedTests: ['test -f src/fixed.txt && grep -q repaired src/fixed.txt'],
     githubSyncRequired: false,
+    executorBackend: 'agent-server',
     agentServerBaseUrl: `http://127.0.0.1:${agentAddress.port}`,
     forbiddenWritePaths: ['.git', '.sciforge/repair-results', '.sciforge/repair-worktrees'],
     repairRunId: 'runner-focused',
@@ -193,6 +199,7 @@ try {
     executorStateDir,
     executorLogDir,
     executorConfigLocalPath,
+    runtimeCodexServiceEnv: runtimeCodexReadyServiceEnv,
   });
 
   assert.equal(result.verdict, 'fixed');
@@ -261,6 +268,7 @@ try {
     },
     expectedTests: ['test -f src/fixed.txt'],
     githubSyncRequired: false,
+    executorBackend: 'agent-server',
     agentServerBaseUrl: `http://127.0.0.1:${agentAddress.port}`,
     repairRunId: 'runner-target-record-fails',
   }, {
@@ -297,6 +305,7 @@ try {
     },
     expectedTests: ['test -f docs/user-notes.md'],
     githubSyncRequired: false,
+    executorBackend: 'agent-server',
     agentServerBaseUrl: `http://127.0.0.1:${agentAddress.port}`,
     repairRunId: 'runner-dirty-overlap',
   }, {
@@ -349,7 +358,7 @@ try {
     executorConfigLocalPath,
     runtimeCodexEnv: {
       SCIFORGE_RUNTIME_API_KEY: 'config-fallback-key-cannot-satisfy-service-env',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example.test/v1',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
     },
     runtimeCodexServiceEnv: {},
   });
@@ -359,9 +368,9 @@ try {
   assert.equal(runtimePreflightBlocked.refs.worktreePath, undefined);
   assert.equal(runtimePreflightBlocked.refs.branch, undefined);
   assert.equal((runtimePreflightBlocked.metadata.providerPreflight as Record<string, unknown>).status, 'blocked');
-  assert.deepEqual((runtimePreflightBlocked.metadata.providerPreflight as Record<string, unknown>).missingEnv, ['SCIFORGE_RUNTIME_API_KEY']);
+  assert.deepEqual((runtimePreflightBlocked.metadata.providerPreflight as Record<string, unknown>).missingEnv, ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_MODEL_ROUTER_BASE_URL']);
   assert.equal((runtimePreflightBlocked.metadata.providerPreflight as Record<string, unknown>).runtimeApiKeyPresentInAdapterEnv, true);
-  assert.equal((runtimePreflightBlocked.metadata.providerPreflight as Record<string, unknown>).upstreamBaseUrlSource, 'adapter-env-or-config');
+  assert.equal((runtimePreflightBlocked.metadata.providerPreflight as Record<string, unknown>).modelRouterEndpointSource, 'adapter-env-or-config');
   assert.equal(runtimePreflightBlocked.metadata.noExecutorDispatch, true);
   assert.equal(runtimePreflightBlocked.metadata.noIsolatedWorktreeCreated, true);
   assert.equal(runtimePreflightBlocked.metadata.noTargetRepairRunRegistered, true);
@@ -373,6 +382,7 @@ try {
   const runtimeBlockedTerminal = await fileText(String(runtimePreflightBlocked.metadata.terminalMirrorRef));
   assert.match(runtimeBlockedTerminal, /Runtime Codex provider preflight blocked before isolated worktree creation/);
   assert.match(runtimeBlockedTerminal, /SCIFORGE_RUNTIME_API_KEY/);
+  assert.match(runtimeBlockedTerminal, /SCIFORGE_MODEL_ROUTER_BASE_URL/);
   assert.match(runtimeBlockedTerminal, /adapter\/config fallback/);
   assert.doesNotMatch(runtimeBlockedTerminal, /Created isolated worktree/);
   assert.doesNotMatch(runtimeBlockedTerminal, /Starting Runtime Codex repair/);

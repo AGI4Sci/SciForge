@@ -1,0 +1,588 @@
+import type {
+  BrowserPrimitiveEnvelope,
+  BrowserResource,
+  BrowserResourceStatus,
+} from '../../../packages/actions/browser-runtime/index.js';
+
+export interface AgentHostBrowserEvidenceLedger {
+  schemaVersion: 'sciforge.agent-host.browser-evidence-ledger.v1';
+  resourcesByRef: Record<string, BrowserResource>;
+  resourceEvents: AgentHostBrowserResourceEvent[];
+  refs: string[];
+}
+
+export interface AgentHostBrowserResourceEvent {
+  ref: string;
+  kind: string;
+  status: BrowserResourceStatus;
+  originTool?: string;
+}
+
+export interface AgentHostBrowserEvidenceIssue {
+  code: string;
+  message: string;
+  evidenceRefs?: string[];
+}
+
+export interface AgentHostBrowserEvidenceRepairHint {
+  action: 'call-browser-read' | 'project-final-answer' | 'collect-browser-evidence';
+  reason: string;
+}
+
+export interface AgentHostBrowserAcceptanceSpec {
+  schemaVersion: 'sciforge.agent-host.browser-acceptance-spec.v1';
+  taskSummary?: string;
+  source: {
+    requireSourcePageRefs: true;
+    requirePageTextRefs: true;
+    minReadSources: number;
+    rejectLowInformationSources: true;
+  };
+  topicalTerms: string[];
+  temporal?: AgentHostBrowserTemporalConstraint;
+}
+
+export type AgentHostBrowserTemporalConstraint =
+  | {
+      kind: 'relative-window';
+      windowDays: number;
+      startDate: string;
+      endDate: string;
+      referenceDate: string;
+      source: 'prompt';
+    }
+  | {
+      kind: 'today';
+      startDate: string;
+      endDate: string;
+      referenceDate: string;
+      source: 'prompt';
+    }
+  | {
+      kind: 'latest';
+      maxAgeDays: number;
+      referenceDate: string;
+      source: 'prompt';
+    };
+
+export interface AgentHostBrowserEvidenceEvaluationOptions {
+  acceptanceSpec?: AgentHostBrowserAcceptanceSpec;
+}
+
+export interface AgentHostBrowserEvidenceEvaluation {
+  schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1';
+  status: 'satisfied' | 'repairable' | 'partial' | 'blocked';
+  issues: AgentHostBrowserEvidenceIssue[];
+  repairHints: AgentHostBrowserEvidenceRepairHint[];
+  satisfiedEvidenceRefs: string[];
+  acceptanceSpec?: AgentHostBrowserAcceptanceSpec;
+}
+
+export interface AgentHostBrowserCompletionTruth {
+  schemaVersion: 'sciforge.agent-host.completion-truth.v1';
+  scope: 'user-task';
+  status: 'satisfied' | 'partial' | 'blocked';
+  validator: 'agent-host-browser-acceptance';
+  evidenceRefs: string[];
+  reason?: string;
+}
+
+export function createAgentHostBrowserEvidenceLedger(): AgentHostBrowserEvidenceLedger {
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-evidence-ledger.v1',
+    resourcesByRef: {},
+    resourceEvents: [],
+    refs: [],
+  };
+}
+
+export function recordAgentHostBrowserToolResult(
+  ledger: AgentHostBrowserEvidenceLedger,
+  toolResult: unknown,
+): AgentHostBrowserEvidenceLedger {
+  const envelope = browserPrimitiveEnvelope(toolResult);
+  if (!envelope) return ledger;
+  const resourcesByRef = { ...ledger.resourcesByRef };
+  const resourceEvents = [...ledger.resourceEvents];
+  for (const resource of envelope.resources ?? []) {
+    if (!resource.ref?.trim()) continue;
+    resourcesByRef[resource.ref] = resource;
+    resourceEvents.push({
+      ref: resource.ref,
+      kind: resource.kind,
+      status: resource.status,
+      originTool: resource.originTool,
+    });
+  }
+  return {
+    ...ledger,
+    resourcesByRef,
+    resourceEvents,
+    refs: uniqueStrings([...ledger.refs, ...(envelope.refs ?? []), ...resourceRefs(envelope.resources)]),
+  };
+}
+
+export function recordAgentHostBrowserRefs(
+  ledger: AgentHostBrowserEvidenceLedger,
+  refs: readonly string[],
+): AgentHostBrowserEvidenceLedger {
+  return {
+    ...ledger,
+    refs: uniqueStrings([...ledger.refs, ...refs]),
+  };
+}
+
+export function agentHostBrowserAcceptanceSpecFromPrompt(
+  prompt: string | undefined,
+  options: { now?: Date } = {},
+): AgentHostBrowserAcceptanceSpec {
+  const now = options.now ?? new Date();
+  const referenceDate = isoDate(now);
+  const temporal = temporalConstraintFromPrompt(prompt, now, referenceDate);
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-acceptance-spec.v1',
+    taskSummary: prompt?.trim().slice(0, 500) || undefined,
+    source: {
+      requireSourcePageRefs: true,
+      requirePageTextRefs: true,
+      minReadSources: 1,
+      rejectLowInformationSources: true,
+    },
+    topicalTerms: topicalTermsFromPrompt(prompt),
+    ...(temporal ? { temporal } : {}),
+  };
+}
+
+export function evaluateAgentHostBrowserEvidence(
+  ledger: AgentHostBrowserEvidenceLedger,
+  options: AgentHostBrowserEvidenceEvaluationOptions = {},
+): AgentHostBrowserEvidenceEvaluation {
+  const resources = Object.values(ledger.resourcesByRef);
+  const sourcePageRefs = currentRunSourcePageRefs(resources, ledger.refs);
+  const pageTextRefs = currentRunPageTextRefs(resources, ledger.refs);
+  const finalAnswerRefs = currentRunFinalAnswerRefs(ledger.refs);
+  const acceptanceSpec = options.acceptanceSpec;
+  const hasSearchEvidence = resources.some((resource) => resource.originTool === 'browser.search')
+    || ledger.refs.some((ref) => /\bbrowser_search\b/i.test(ref));
+  const hasReadEvidence = resources.some((resource) => resource.originTool === 'browser.read')
+    || ledger.refs.some((ref) => /\bbrowser_read\b/i.test(ref));
+  const issues: AgentHostBrowserEvidenceIssue[] = [];
+  const repairHints: AgentHostBrowserEvidenceRepairHint[] = [];
+
+  if (!hasReadEvidence) {
+    issues.push({
+      code: 'browser-read-tool-missing',
+      message: 'No current-run browser_read evidence was recorded.',
+    });
+  }
+  if (sourcePageRefs.length === 0) {
+    issues.push({
+      code: 'browser-source-page-refs-missing',
+      message: 'Browser search candidates are not source evidence until browser_read materializes source-page refs.',
+    });
+  }
+  if (pageTextRefs.length === 0) {
+    issues.push({
+      code: 'browser-page-text-refs-missing',
+      message: 'Browser search candidates are not page text evidence until browser_read materializes page-text refs.',
+    });
+  }
+  if (sourcePageRefs.length === 0 || pageTextRefs.length === 0 || !hasReadEvidence) {
+    repairHints.push({
+      action: hasSearchEvidence ? 'call-browser-read' : 'collect-browser-evidence',
+      reason: hasSearchEvidence
+        ? 'Read one or more discovered web_page resources before claiming user-level Browser completion.'
+        : 'Collect Browser source/page-text evidence before claiming user-level Browser completion.',
+    });
+    return {
+      schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1',
+      status: hasSearchEvidence ? 'repairable' : 'blocked',
+      issues,
+      repairHints,
+      satisfiedEvidenceRefs: [],
+      ...(acceptanceSpec ? { acceptanceSpec } : {}),
+    };
+  }
+
+  const sourceEvidenceRefs = uniqueStrings([...sourcePageRefs, ...pageTextRefs]);
+  const acceptance = acceptanceEvaluationForReadSources(resources, ledger.refs, acceptanceSpec);
+  if (acceptance.issues.length > 0) {
+    return {
+      schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1',
+      status: acceptance.status,
+      issues: acceptance.issues,
+      repairHints: acceptance.repairHints,
+      satisfiedEvidenceRefs: sourceEvidenceRefs,
+      ...(acceptanceSpec ? { acceptanceSpec } : {}),
+    };
+  }
+
+  if (finalAnswerRefs.length === 0) {
+    issues.push({
+      code: 'browser-final-answer-ref-missing',
+      message: 'Browser source evidence exists, but no current-run Codex App Server final-answer ref was recorded.',
+      evidenceRefs: sourceEvidenceRefs,
+    });
+    repairHints.push({
+      action: 'project-final-answer',
+      reason: 'Agent Host should synthesize the final answer as a Codex App Server assistant final message after verifier acceptance.',
+    });
+    return {
+      schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1',
+      status: 'partial',
+      issues,
+      repairHints,
+      satisfiedEvidenceRefs: sourceEvidenceRefs,
+      ...(acceptanceSpec ? { acceptanceSpec } : {}),
+    };
+  }
+
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1',
+    status: 'satisfied',
+    issues: [],
+    repairHints: [],
+    satisfiedEvidenceRefs: uniqueStrings([...sourceEvidenceRefs, ...finalAnswerRefs]),
+    ...(acceptanceSpec ? { acceptanceSpec } : {}),
+  };
+}
+
+export function agentHostBrowserCompletionTruthFromEvaluation(
+  evaluation: AgentHostBrowserEvidenceEvaluation,
+): AgentHostBrowserCompletionTruth {
+  if (evaluation.status === 'satisfied') {
+    return {
+      schemaVersion: 'sciforge.agent-host.completion-truth.v1',
+      scope: 'user-task',
+      status: 'satisfied',
+      validator: 'agent-host-browser-acceptance',
+      evidenceRefs: evaluation.satisfiedEvidenceRefs,
+      reason: 'Browser source/page text refs and Codex App Server final-answer evidence are present in the current run.',
+    };
+  }
+  if (evaluation.status === 'partial') {
+    return {
+      schemaVersion: 'sciforge.agent-host.completion-truth.v1',
+      scope: 'user-task',
+      status: 'partial',
+      validator: 'agent-host-browser-acceptance',
+      evidenceRefs: evaluation.satisfiedEvidenceRefs,
+      reason: evaluation.issues.map((issue) => issue.message).join(' '),
+    };
+  }
+  return {
+    schemaVersion: 'sciforge.agent-host.completion-truth.v1',
+    scope: 'user-task',
+    status: 'blocked',
+    validator: 'agent-host-browser-acceptance',
+    evidenceRefs: evaluation.satisfiedEvidenceRefs,
+    reason: evaluation.issues.map((issue) => issue.message).join(' '),
+  };
+}
+
+function browserPrimitiveEnvelope(value: unknown): BrowserPrimitiveEnvelope | undefined {
+  const candidate = isRecord(value) && isRecord(value.value) ? value.value : value;
+  if (!isRecord(candidate)) return undefined;
+  if (candidate.schemaVersion !== 'sciforge.browser-runtime.primitive-result.v1') return undefined;
+  if (candidate.moduleId !== 'browser') return undefined;
+  if (!Array.isArray(candidate.resources)) return undefined;
+  return candidate as unknown as BrowserPrimitiveEnvelope;
+}
+
+function currentRunSourcePageRefs(resources: BrowserResource[], refs: string[]): string[] {
+  return uniqueStrings([
+    ...resources
+      .filter((resource) => resource.kind === 'source_page' && resource.status === 'read')
+      .map((resource) => resource.ref),
+    ...refs.filter((ref) => /source-pages\/.+\.source\.json$/i.test(ref)),
+  ]).filter(isCurrentRunBrowserEvidenceRef);
+}
+
+function currentRunPageTextRefs(resources: BrowserResource[], refs: string[]): string[] {
+  return uniqueStrings([
+    ...resources
+      .filter((resource) => resource.kind === 'page_text' && resource.status === 'read')
+      .map((resource) => resource.ref),
+    ...refs.filter((ref) => /source-pages\/.+\.txt$/i.test(ref)),
+  ]).filter(isCurrentRunBrowserEvidenceRef);
+}
+
+function currentRunFinalAnswerRefs(refs: string[]): string[] {
+  return refs.filter((ref) => /(?:^|[:/_-])codex\.app-server\.final-answer\b|final[-_/]?answer/i.test(ref));
+}
+
+function acceptanceEvaluationForReadSources(
+  resources: BrowserResource[],
+  refs: string[],
+  spec: AgentHostBrowserAcceptanceSpec | undefined,
+): Pick<AgentHostBrowserEvidenceEvaluation, 'status' | 'issues' | 'repairHints'> {
+  if (!spec) return { status: 'satisfied', issues: [], repairHints: [] };
+  const readResources = currentRunReadResources(resources, refs);
+  const lowInformationRefs = readResources.filter(browserResourceLooksLowInformation).map((resource) => resource.ref);
+  const completionEligibleSourceRefs = currentRunSourcePageRefs(
+    readResources.filter((resource) => resource.kind === 'source_page' && !lowInformationRefs.includes(resource.ref)),
+    refs,
+  );
+  const issues: AgentHostBrowserEvidenceIssue[] = [];
+  const repairHints: AgentHostBrowserEvidenceRepairHint[] = [];
+  if (lowInformationRefs.length > 0) {
+    issues.push({
+      code: 'browser-source-low-information',
+      message: 'Browser read refs only include low-information navigation, login, or discovery-only pages.',
+      evidenceRefs: lowInformationRefs,
+    });
+  }
+  if (completionEligibleSourceRefs.length < spec.source.minReadSources) {
+    issues.push({
+      code: 'browser-source-count-insufficient',
+      message: `Browser acceptance requires at least ${spec.source.minReadSources} current-run read source page ref(s).`,
+      evidenceRefs: completionEligibleSourceRefs,
+    });
+  }
+
+  const textualResources = readResources
+    .map((resource) => normalizeText(browserResourceSearchText(resource)))
+    .filter(Boolean);
+  if (spec.topicalTerms.length > 0 && textualResources.length === 0) {
+    issues.push({
+      code: 'browser-source-relevance-evidence-missing',
+      message: 'Browser read refs were materialized, but source metadata contains no searchable text for topic relevance verification.',
+      evidenceRefs: readResources.map((resource) => resource.ref),
+    });
+  } else if (spec.topicalTerms.length > 0) {
+    const matched = spec.topicalTerms.some((term) => {
+      const normalized = normalizeText(term);
+      return normalized && textualResources.some((text) => text.includes(normalized));
+    });
+    if (!matched) {
+      issues.push({
+        code: 'browser-source-relevance-gap',
+        message: 'Browser read refs were materialized, but available source metadata does not match the task topic.',
+        evidenceRefs: readResources.map((resource) => resource.ref),
+      });
+    }
+  }
+
+  const temporalIssue = temporalAcceptanceIssue(readResources, spec);
+  if (temporalIssue) issues.push(temporalIssue);
+
+  if (issues.length === 0) return { status: 'satisfied', issues: [], repairHints: [] };
+  repairHints.push({
+    action: 'call-browser-read',
+    reason: 'Read additional task-relevant source pages before claiming Browser user-level completion.',
+  });
+  return {
+    status: issues.some((issue) =>
+      issue.code === 'browser-source-low-information' || issue.code === 'browser-source-count-insufficient')
+      ? 'blocked'
+      : 'partial',
+    issues,
+    repairHints,
+  };
+}
+
+function currentRunReadResources(resources: BrowserResource[], refs: string[]): BrowserResource[] {
+  const currentRefs = new Set(uniqueStrings([
+    ...currentRunSourcePageRefs(resources, refs),
+    ...currentRunPageTextRefs(resources, refs),
+  ]));
+  return resources.filter((resource) =>
+    resource.status === 'read'
+    && (currentRefs.has(resource.ref) || resource.kind === 'web_page')
+    && !/(?:fixture|replay|history|seed|demo)/i.test(resource.ref));
+}
+
+function browserResourceLooksLowInformation(resource: BrowserResource): boolean {
+  if (resource.metadata?.discoveryOnly === true) return true;
+  const url = stringFromRecord(resource.locator, 'url') ?? stringFromRecord(resource.metadata, 'finalUrl');
+  if (url && browserUrlLooksLowInformation(url)) return true;
+  const text = normalizeText(browserResourceSearchText(resource));
+  if (!text) return false;
+  return /\b(?:login|sign in|sign-in|homepage|home page|privacy policy|terms of service|skip to main content)\b/i.test(text)
+    && text.length < 500;
+}
+
+function browserUrlLooksLowInformation(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/\/+$/g, '').toLowerCase();
+    return path === ''
+      || path === '/'
+      || /^\/(?:login|signin|sign-in|account|help|about|contact|privacy|terms)$/i.test(path);
+  } catch {
+    return false;
+  }
+}
+
+function browserResourceSearchText(resource: BrowserResource): string {
+  return [
+    resource.title,
+    resource.snippet,
+    stringFromRecord(resource.locator, 'url'),
+    stringFromRecord(resource.metadata, 'finalUrl'),
+    stringFromRecord(resource.metadata, 'textPreview'),
+    stringFromRecord(resource.metadata, 'textSummary'),
+    stringFromRecord(resource.metadata, 'publishedAt'),
+    stringFromRecord(resource.metadata, 'date'),
+  ].filter(Boolean).join(' ');
+}
+
+function temporalAcceptanceIssue(
+  resources: BrowserResource[],
+  spec: AgentHostBrowserAcceptanceSpec,
+): AgentHostBrowserEvidenceIssue | undefined {
+  if (!spec.temporal) return undefined;
+  const dates = uniqueStrings(resources.flatMap(browserResourceDates)).sort();
+  if (dates.length === 0) {
+    return {
+      code: 'browser-source-temporal-evidence-missing',
+      message: 'Browser acceptance requires current/recent source evidence, but source metadata contains no verifiable dates.',
+      evidenceRefs: resources.map((resource) => resource.ref),
+    };
+  }
+  const temporal = spec.temporal;
+  const startDate = temporal.kind === 'latest'
+    ? isoDateMinusDays(temporal.referenceDate, temporal.maxAgeDays)
+    : temporal.startDate;
+  const endDate = temporal.kind === 'latest' ? temporal.referenceDate : temporal.endDate;
+  const inWindow = dates.some((date) => date >= startDate && date <= endDate);
+  if (inWindow) return undefined;
+  return {
+    code: 'browser-source-temporal-gap',
+    message: `Browser source dates do not satisfy the requested ${temporal.kind} window ${startDate}..${endDate}.`,
+    evidenceRefs: resources.map((resource) => resource.ref),
+  };
+}
+
+function browserResourceDates(resource: BrowserResource): string[] {
+  const rawValues = [
+    stringFromRecord(resource.metadata, 'publishedAt'),
+    stringFromRecord(resource.metadata, 'date'),
+    stringFromRecord(resource.metadata, 'updatedAt'),
+    browserResourceSearchText(resource),
+  ];
+  return rawValues.flatMap((value) => value ? isoDatesInText(value) : []);
+}
+
+function temporalConstraintFromPrompt(
+  prompt: string | undefined,
+  now: Date,
+  referenceDate: string,
+): AgentHostBrowserTemporalConstraint | undefined {
+  const text = prompt ?? '';
+  if (/最近一周|近一周|过去一周|last\s+7\s+days|past\s+week|last\s+week|recent\s+week/i.test(text)) {
+    const start = new Date(now);
+    start.setUTCDate(start.getUTCDate() - 7);
+    return {
+      kind: 'relative-window',
+      windowDays: 7,
+      startDate: isoDate(start),
+      endDate: referenceDate,
+      referenceDate,
+      source: 'prompt',
+    };
+  }
+  if (/今天|今日|\btoday\b/i.test(text)) {
+    return {
+      kind: 'today',
+      startDate: referenceDate,
+      endDate: referenceDate,
+      referenceDate,
+      source: 'prompt',
+    };
+  }
+  if (/最新|最近|当前|current|latest|recent/i.test(text)) {
+    return {
+      kind: 'latest',
+      maxAgeDays: 14,
+      referenceDate,
+      source: 'prompt',
+    };
+  }
+  return undefined;
+}
+
+function topicalTermsFromPrompt(prompt: string | undefined): string[] {
+  if (!prompt?.trim()) return [];
+  const text = prompt
+    .replace(/不要只凭记忆回答|不要只给搜索结果|不要只给|凭记忆回答|引用编号|最近一周|近一周|过去一周|今天|今日|最新|最近|当前|来源链接|来源|链接|搜索|搜一下|查询|查一下|总结|回答|请你|请|帮我|帮忙|麻烦|一下|并列出|列出|必须先调用|调用|网页正文|实际读取|验收标记/gu, ' ')
+    .replace(/\b(?:sciforge|search|read|answer|summarize|summary|source|sources|refs?|latest|recent|current|today|week|links?|browser|evidence|and|from|with|for|the|this|that|user|task|cite|list|provide)\b/giu, ' ');
+  const cjkTerms = (text.match(/[\p{Script=Han}]{2,}/gu) ?? [])
+    .map((term) => term.replace(/^[或和与及]+/u, '').replace(/[的是了]+$/u, ''))
+    .filter((term) => !/使用|内置|读取|页面|主题|调用|正文|中文|简短|新闻|动态|网页|来源|结果|编号|记忆|回答/.test(term));
+  const latinTerms = (text.match(/[a-z0-9][a-z0-9-]{2,}/giu) ?? [])
+    .filter((term) => !/^(?:search|read|browser|source|refs?|sciforge)$/i.test(term));
+  return uniqueStrings([...latinTerms, ...cjkTerms]).slice(0, 12);
+}
+
+function isoDate(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function isoDateMinusDays(referenceDate: string, days: number): string {
+  const value = new Date(`${referenceDate}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() - days);
+  return isoDate(value);
+}
+
+function isoDatesInText(value: string): string[] {
+  const monthNumbers: Record<string, string> = {
+    jan: '01',
+    january: '01',
+    feb: '02',
+    february: '02',
+    mar: '03',
+    march: '03',
+    apr: '04',
+    april: '04',
+    may: '05',
+    jun: '06',
+    june: '06',
+    jul: '07',
+    july: '07',
+    aug: '08',
+    august: '08',
+    sep: '09',
+    september: '09',
+    oct: '10',
+    october: '10',
+    nov: '11',
+    november: '11',
+    dec: '12',
+    december: '12',
+  };
+  return uniqueStrings([
+    ...(value.match(/\b\d{4}-\d{2}-\d{2}\b/g) ?? []),
+    ...(value.match(/\b\d{4}\/\d{2}\/\d{2}\b/g) ?? []).map((date) => date.replace(/\//g, '-')),
+    ...Array.from(value.matchAll(/\b(20\d{2})年(\d{1,2})月(\d{1,2})日(?=$|[\s,.;:!?，。；：！？])/g))
+      .map((match) => `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`),
+    ...Array.from(value.matchAll(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),\s+(20\d{2})\b/gi))
+      .map((match) => `${match[3]}-${monthNumbers[String(match[1]).toLowerCase()] ?? '01'}-${String(match[2]).padStart(2, '0')}`),
+  ]);
+}
+
+function normalizeText(value: string | undefined): string {
+  return (value ?? '').toLowerCase().normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+function stringFromRecord(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function resourceRefs(resources: readonly BrowserResource[] | undefined): string[] {
+  if (!resources) return [];
+  return resources.flatMap((resource) => [resource.ref, ...(resource.refs ?? [])]);
+}
+
+function isCurrentRunBrowserEvidenceRef(ref: string): boolean {
+  return /^browser-host-session:/i.test(ref) && !/(?:fixture|replay|history|seed|demo)/i.test(ref);
+}
+
+function uniqueStrings(values: readonly (string | undefined)[]): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim()))];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}

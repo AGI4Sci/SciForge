@@ -11,7 +11,7 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
   attemptId: string;
 }): Promise<RuntimeCodexBrowserOrdinaryChatAcceptanceManifest> {
   if (!/https:\/\/developers\.openai\.com\/api\/docs\/changelog/.test(options.commandText)) {
-    throw new Error('producer writer fixture requires the official OpenAI changelog open_read prompt');
+    throw new Error('producer writer fixture requires the official OpenAI changelog Browser retrieval prompt');
   }
   await mkdir(options.outputDir, { recursive: true });
   await mkdir(join(options.workspacePath, '.sciforge', 'browser-host', 'sessions', 'ordinary-chat-producer', 'source-pages'), { recursive: true });
@@ -28,24 +28,27 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
     ),
     writeFile(
       join(options.workspacePath, '.sciforge', 'browser-host', 'sessions', 'ordinary-chat-producer', 'source-pages', 'producer.txt'),
-      'Source evidence text for Runtime Codex Browser bounded operation acceptance.\n',
+      'Source evidence text for Runtime Codex direct Browser primitive acceptance.\n',
       'utf8',
     ),
   ]);
 
   const evidenceRefs = [
-    `action-ledger:browser.executeBoundedOperation/${options.commandId}/module.invoke`,
-    `runtime-truth:module.invoke/browser.open_read/${options.commandId}`,
+    `action-ledger:browser_search/${options.commandId}`,
+    `action-ledger:browser_read/${options.commandId}/source-pages/producer.source.json`,
+    `runtime-truth:direct-browser-primitive/browser_search/${options.commandId}`,
+    `runtime-truth:direct-browser-primitive/browser_read/${options.commandId}`,
     'browser-host-session:ordinary-chat-producer',
     'browser-host-session:ordinary-chat-producer/source-pages/producer.source.json',
     'browser-host-session:ordinary-chat-producer/source-pages/producer.txt',
+    'gui.present:final-answer',
     'artifact:runtime-codex-browser-acceptance/final-answer.md',
   ];
-  const finalAnswer = 'Browser bounded operation source evidence produced a visible Runtime Codex answer.';
+  const finalAnswer = 'Runtime Codex presented a visible answer from direct Browser source evidence.';
   await writeFile(join(options.outputDir, 'final-answer.md'), finalAnswer, 'utf8');
   await writeFile(join(options.outputDir, 'runtime-audit.json'), JSON.stringify({
     schemaVersion: 'sciforge.runtime-codex.browser-ordinary-chat-audit.v1',
-    selectedRuntime: 'module.invoke',
+    selectedRuntime: 'direct-browser-primitives',
     commandId: options.commandId,
     evidenceRefs,
     outputDigest: boundedTextEvidence(finalAnswer),
@@ -73,7 +76,7 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
     releaseEligible: true,
     acceptanceRubric: {
       userIntent: 'use ordinary Runtime Codex chat to run SciForge Browser retrieval with source citations',
-      expectedObservableResult: 'module.invoke browser.search_read/open_read result with BrowserHostSession source-page and page-text refs plus a visible final answer',
+      expectedObservableResult: 'direct browser_search plus browser_read result with BrowserHostSession source-page and page-text refs plus gui.present final-answer evidence',
       actualResult: 'ordinary-chat Runtime Codex Browser retrieval completed with current source refs and a final-answer artifact',
       evidenceRefs,
       negativeChecks: ['local dogfood alone rejected', 'missing source-page refs rejected', 'missing page-text refs rejected', 'missing final-answer refs rejected'],
@@ -89,6 +92,7 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
     liveRuntimeCodexProof: {
       messageProvenance: 'live-runtime-codex',
       commandId: options.commandId,
+      guiPresentObserved: true,
       nativeDefaultChatAssistantAnswerRendered: true,
       runtimeOutputObserved: true,
       seedOrDemoExcluded: true,

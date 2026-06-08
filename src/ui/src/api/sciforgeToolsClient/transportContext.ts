@@ -691,21 +691,6 @@ function workspacePersistenceSummary(input: SendAgentMessageInput) {
   };
 }
 
-function buildToolLlmEndpoint(input: SendAgentMessageInput) {
-  const provider = input.config.modelProvider.trim();
-  const modelName = input.config.modelName.trim();
-  const baseUrl = input.config.modelBaseUrl.trim().replace(/\/+$/, '');
-  const apiKey = input.config.apiKey.trim();
-  const useNative = !provider || provider === 'native';
-  if (!baseUrl && !modelName && !apiKey) return undefined;
-  return {
-    provider: useNative ? 'native' : provider,
-    baseUrl: baseUrl || undefined,
-    apiKey: apiKey || undefined,
-    modelName: modelName || undefined,
-  };
-}
-
 function buildTransportAgentContext(
   input: SendAgentMessageInput,
   availableComponentIds: string[],

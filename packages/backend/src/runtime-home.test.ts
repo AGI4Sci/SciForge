@@ -19,6 +19,7 @@ import {
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
   runtimeProviderForEnv,
   runtimeConfigToml,
+  assertRuntimeModelRouterBaseUrl,
 } from './runtime-home';
 
 test('runtime config writes the selected router alias/profile to the local Model Router provider', () => {
@@ -117,7 +118,23 @@ test('ensureRuntimeHome rewrites managed config missing Runtime Codex plugin dis
 
 test('runtime provider env ignores legacy user-facing native provider id', () => {
   assert.equal(runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'native' }), RUNTIME_PROVIDER);
-  assert.equal(runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'sciforge-custom-runtime' }), 'sciforge-custom-runtime');
+  assert.throws(
+    () => runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'sciforge-custom-runtime' }),
+    /cannot override Runtime Codex provider/,
+  );
+});
+
+test('runtime Model Router base URL rejects remote raw provider endpoints', () => {
+  assert.equal(assertRuntimeModelRouterBaseUrl('http://127.0.0.1:5175/healthz'), 'http://127.0.0.1:5175/v1');
+  assert.equal(assertRuntimeModelRouterBaseUrl('http://localhost:5175/v1/responses'), 'http://localhost:5175/v1');
+  assert.throws(
+    () => assertRuntimeModelRouterBaseUrl('https://provider.example.test/v1'),
+    /local SciForge Model Router loopback/,
+  );
+  assert.throws(
+    () => assertRuntimeModelRouterBaseUrl('http://127.0.0.1:5175/chat/completions'),
+    /Model Router \/v1 endpoint/,
+  );
 });
 
 test('runtime CODEX_HOME and default workspace stay under packages/backend', () => {
@@ -168,7 +185,7 @@ test('path guard rejects sibling traversal', () => {
   assert.throws(() => assertPathInside(join(paths.runtimeRoot, '..', 'outside'), paths.runtimeRoot, 'test'), /must stay inside/);
 });
 
-test('runtime readiness rejects OpenAI-looking proxy without explicit opt-in', async () => {
+test('runtime readiness rejects non-router providers and remote raw endpoints', async () => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-ready-'));
   const codexHome = join(runtimeRoot, 'codex-home');
   const paths = {
@@ -193,14 +210,45 @@ test('runtime readiness rejects OpenAI-looking proxy without explicit opt-in', a
   }), 'utf8');
   const env = {
     SCIFORGE_CONFIG_PATH: configLocalPath,
+    [RUNTIME_KEY_ENV]: 'service-runtime-key',
   } as NodeJS.ProcessEnv;
 
-  await assert.rejects(() => assertRuntimeReady(paths, { env }), /OpenAI Runtime Codex provider\/model is disabled/);
+  await assert.rejects(() => assertRuntimeReady(paths, { env }), /must be sciforge-model-router|local SciForge Model Router/);
   env.SCIFORGE_ALLOW_OPENAI_RUNTIME = '1';
-  await assert.doesNotReject(() => assertRuntimeReady(paths, { env }));
+  await assert.rejects(() => assertRuntimeReady(paths, { env }), /must be sciforge-model-router|local SciForge Model Router/);
 });
 
-test('runtime readiness accepts config.local derived key without writing it to Codex config', async () => {
+test('runtime readiness rejects OpenAI-looking router aliases without an opt-in bypass', async () => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-openai-alias-'));
+  const codexHome = join(runtimeRoot, 'codex-home');
+  const paths = {
+    backendRoot: runtimeRoot,
+    runtimeRoot,
+    codexHome,
+    configPath: join(codexHome, 'config.toml'),
+    memoriesDir: join(codexHome, 'memories'),
+    sessionsDir: join(codexHome, 'sessions'),
+    logsDir: join(runtimeRoot, 'logs'),
+    defaultWorkspace: join(runtimeRoot, 'workspaces', 'default'),
+  };
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(paths.configPath, runtimeConfigToml({
+    proxyBaseUrl: DEFAULT_PROXY_BASE_URL,
+    provider: RUNTIME_PROVIDER,
+    model: 'openai-direct-model',
+  }), 'utf8');
+  const env = {
+    [RUNTIME_KEY_ENV]: 'service-runtime-key',
+    SCIFORGE_ALLOW_OPENAI_RUNTIME: '1',
+  } as NodeJS.ProcessEnv;
+
+  await assert.rejects(
+    () => assertRuntimeReady(paths, { env }),
+    /OpenAI-looking Runtime Codex provider\/model is disabled/,
+  );
+});
+
+test('runtime readiness requires service env Runtime API key and rejects config.local member-model secrets', async () => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-config-local-ready-'));
   const codexHome = join(runtimeRoot, 'codex-home');
   const configLocalPath = join(runtimeRoot, 'config.local.json');
@@ -228,15 +276,22 @@ test('runtime readiness accepts config.local derived key without writing it to C
     SCIFORGE_CONFIG_PATH: configLocalPath,
   } as NodeJS.ProcessEnv;
 
+  await assert.rejects(
+    () => assertRuntimeReady(paths, { env }),
+    /Missing SCIFORGE_RUNTIME_API_KEY/,
+  );
+  assert.equal(env[RUNTIME_KEY_ENV], undefined);
+
+  env[RUNTIME_KEY_ENV] = 'service-runtime-key';
   await assert.doesNotReject(() => assertRuntimeReady(paths, { env }));
-  assert.equal(env[RUNTIME_KEY_ENV], 'config-local-secret');
 
   const config = await readFile(paths.configPath, 'utf8');
   assert.doesNotMatch(config, /config-local-secret/);
+  assert.doesNotMatch(config, /service-runtime-key/);
   assert.match(config, new RegExp(`env_key = "${RUNTIME_KEY_ENV}"`));
 });
 
-test('runtime readiness fails closed when config.local is missing even with stale service env', async () => {
+test('runtime readiness does not require config.local when Runtime API key is in service env', async () => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-missing-config-local-'));
   const codexHome = join(runtimeRoot, 'codex-home');
   const paths = {
@@ -252,13 +307,10 @@ test('runtime readiness fails closed when config.local is missing even with stal
   await mkdir(codexHome, { recursive: true });
   await writeFile(paths.configPath, runtimeConfigToml({ proxyBaseUrl: DEFAULT_PROXY_BASE_URL }), 'utf8');
 
-  await assert.rejects(
-    () => assertRuntimeReady(paths, {
-      env: {
-        SCIFORGE_CONFIG_PATH: join(runtimeRoot, 'missing-config.local.json'),
-        [RUNTIME_KEY_ENV]: 'stale-service-secret',
-      } as NodeJS.ProcessEnv,
-    }),
-    /config\.local\.json/,
-  );
+  await assert.doesNotReject(() => assertRuntimeReady(paths, {
+    env: {
+      SCIFORGE_CONFIG_PATH: join(runtimeRoot, 'missing-config.local.json'),
+      [RUNTIME_KEY_ENV]: 'service-runtime-key',
+    } as NodeJS.ProcessEnv,
+  }));
 });

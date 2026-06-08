@@ -307,15 +307,12 @@ export async function sendSciForgeToolMessage(
       result = stream.result;
       error = stream.error;
     } else {
-      const requestBody = buildCodexRuntimeStreamRequest({
+      let requestBody = buildCodexRuntimeStreamRequest({
         input,
         commandId,
         referenceSummary,
         silentStreamRunId,
       });
-      requestBodyForFailure = requestBody;
-      assertCodexRuntimeStreamRequestBoundary(requestBody);
-      assertCodexRealtimeSessionRequestBoundary(requestBody);
       const providerPreflightBlock = await runtimeProviderPreflightBlock(input, activeRequestController?.signal ?? signal);
       if (providerPreflightBlock) {
         const detail = runtimeProviderPreflightPublicFailureReason(providerPreflightBlock);
@@ -330,53 +327,81 @@ export async function sendSciForgeToolMessage(
           manifest: providerPreflightBlock,
         });
       }
-      callbacks.onRuntimeRequest?.(requestBody);
-      const requestBodyText = JSON.stringify(requestBody);
-      callbacks.onEvent?.(contextWindowTelemetryEvent(
-        input,
-        requestBodyText,
-        'Codex Runtime command/projection preflight estimate',
-      ));
-      callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
-      const composerDeclaredIntentEvent = composerDeclaredIntentProjectionEvent(requestBody);
-      if (composerDeclaredIntentEvent) callbacks.onEvent?.(composerDeclaredIntentEvent);
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        activeRequestController = new AbortController();
-        retryForSilentFirstEvent = false;
-        sawBackendEvent = false;
-        lastRealEventAt = Date.now();
-        lastSilentNoticeAt = 0;
-        if (attempt > 1) {
-          callbacks.onEvent?.(toolEvent('backend-stream-retry-start', `正在重连 workspace stream（第 ${attempt}/2 次），复用同一个请求 payload。`));
-        }
-        try {
-          if (signal?.aborted) activeRequestController.abort();
-          const client = createCodexRealtimeSessionClient({
-            workspaceWriterBaseUrl: input.config.workspaceWriterBaseUrl,
-            onControlReady: callbacks.onRealtimeControlReady,
-          });
-          const stream = await client.stream(requestBodyText, handleRuntimeEvent, activeRequestController.signal);
-          response = stream.response;
-          result = stream.result;
-          error = stream.error;
-          break;
-        } catch (streamError) {
-          if (retryForSilentFirstEvent && attempt < 2) {
-            const retryDetail = '首个 stream 已中断；准备重新发送同一请求。';
-            const retryDecision = noteSilentDecision({
-              decision: 'retry',
-              detail: retryDetail,
-              elapsedMs: Date.now() - lastRealEventAt,
-              status: 'retrying-first-backend-event',
-            });
-            callbacks.onEvent?.(toolEvent('backend-stream-retry', retryDetail, {
-              silentStreamRunId,
-              silentStreamDecision: retryDecision,
-            }));
-            continue;
+      let staleResumeRetried = false;
+      for (;;) {
+        requestBodyForFailure = requestBody;
+        assertCodexRuntimeStreamRequestBoundary(requestBody);
+        assertCodexRealtimeSessionRequestBoundary(requestBody);
+        callbacks.onRuntimeRequest?.(requestBody);
+        const requestBodyText = JSON.stringify(requestBody);
+        callbacks.onEvent?.(contextWindowTelemetryEvent(
+          input,
+          requestBodyText,
+          'Codex Runtime command/projection preflight estimate',
+        ));
+        callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
+        const composerDeclaredIntentEvent = composerDeclaredIntentProjectionEvent(requestBody);
+        if (composerDeclaredIntentEvent) callbacks.onEvent?.(composerDeclaredIntentEvent);
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          activeRequestController = new AbortController();
+          retryForSilentFirstEvent = false;
+          sawBackendEvent = false;
+          lastRealEventAt = Date.now();
+          lastSilentNoticeAt = 0;
+          if (attempt > 1) {
+            callbacks.onEvent?.(toolEvent('backend-stream-retry-start', `正在重连 workspace stream（第 ${attempt}/2 次），复用同一个请求 payload。`));
           }
-          throw streamError;
+          try {
+            if (signal?.aborted) activeRequestController.abort();
+            const client = createCodexRealtimeSessionClient({
+              workspaceWriterBaseUrl: input.config.workspaceWriterBaseUrl,
+              onControlReady: callbacks.onRealtimeControlReady,
+            });
+            const stream = await client.stream(requestBodyText, handleRuntimeEvent, activeRequestController.signal);
+            response = stream.response;
+            result = stream.result;
+            error = stream.error;
+            break;
+          } catch (streamError) {
+            if (retryForSilentFirstEvent && attempt < 2) {
+              const retryDetail = '首个 stream 已中断；准备重新发送同一请求。';
+              const retryDecision = noteSilentDecision({
+                decision: 'retry',
+                detail: retryDetail,
+                elapsedMs: Date.now() - lastRealEventAt,
+                status: 'retrying-first-backend-event',
+              });
+              callbacks.onEvent?.(toolEvent('backend-stream-retry', retryDetail, {
+                silentStreamRunId,
+                silentStreamDecision: retryDecision,
+              }));
+              continue;
+            }
+            throw streamError;
+          }
         }
+        if (runtimeCodexErrorIsMissingNativeRollout(error) && requestBody.codexSessionId && !staleResumeRetried) {
+          staleResumeRetried = true;
+          callbacks.onEvent?.(toolEvent('runtime-resume-stale', 'Runtime Codex native session resume is stale; retrying once as a fresh session.', {
+            commandId,
+            staleCodexSessionId: requestBody.codexSessionId,
+            previousAttemptId: requestBody.attemptId,
+            retryAttemptId: `${commandId}-attempt-2`,
+          }));
+          requestBody = buildCodexRuntimeStreamRequest({
+            input,
+            commandId,
+            referenceSummary,
+            silentStreamRunId,
+            attemptNumber: 2,
+            forceFreshSession: true,
+          });
+          response = undefined;
+          result = undefined;
+          error = undefined;
+          continue;
+        }
+        break;
       }
     }
     if (!useComputerUseDiagnosticShim && requestBodyForFailure && error && runtimeEvents.some(isRuntimeCodexFailedEvent)) {
@@ -574,18 +599,21 @@ function buildCodexRuntimeStreamRequest(input: {
   commandId: string;
   referenceSummary: Array<Record<string, unknown>>;
   silentStreamRunId: string;
+  attemptNumber?: number;
+  forceFreshSession?: boolean;
 }) {
   const config = input.input.config;
   const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
   const provider = runtimeProviderForVisibleMetadata(config.modelProvider);
   const model = runtimeModelForVisibleMetadata(config.modelName);
-  const codexSessionId = codexSessionIdForRuntimeResume(input.input);
+  const codexSessionId = input.forceFreshSession ? undefined : codexSessionIdForRuntimeResume(input.input);
   const inputObjects = runtimeInputObjectsForRuntimeRequest(input.input, input.referenceSummary);
   const commandText = buildCodexRuntimeCommandText(input, {
     resumeRequested: Boolean(codexSessionId),
     inputObjects,
   });
-  const attemptId = `${input.commandId}-attempt-1`;
+  const attemptNumber = Math.max(1, Math.trunc(input.attemptNumber ?? 1));
+  const attemptId = `${input.commandId}-attempt-${attemptNumber}`;
   const computerUseApproval = computerUseApprovalRuntimeMetadata(input.input, commandText, input.referenceSummary);
   const runtimeIntent = computerUseRuntimeHostIntent(input.input, commandText);
   const agentHostInput = buildCodexAgentHostInput(input.input, input.referenceSummary);
@@ -602,11 +630,11 @@ function buildCodexRuntimeStreamRequest(input: {
     workspacePath: config.workspacePath,
     profile,
     codexSessionId,
-    allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+    allowOpenAiRuntime: false,
     ...(inputObjects.length ? { inputObjects } : {}),
     agentHostInput,
     guiExtension: {
-      enabled: true,
+      enabled: false,
     },
     ...(runtimeIntent ? { runtimeIntent } : {}),
     ...(computerUseApproval ? {
@@ -624,8 +652,8 @@ function buildCodexRuntimeStreamRequest(input: {
         provider,
         model,
         profile,
-        apiKeyConfigured: Boolean(config.apiKey.trim()),
-        allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+        apiKeyConfigured: false,
+        allowOpenAiRuntime: false,
       },
       guiLocalProjection: auditOnlyGuiProjectionRefs(input.input, input.referenceSummary),
       silentStreamRunId: input.silentStreamRunId,
@@ -1910,7 +1938,7 @@ function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStream
       commandId: request.commandId,
       attemptId: request.attemptId,
       codexSessionRestored: Boolean(request.codexSessionId),
-      allowOpenAiRuntime: request.allowOpenAiRuntime,
+      allowOpenAiRuntime: false,
       boundary: asString(auditMetadata.boundary),
     },
   };
@@ -2123,6 +2151,10 @@ function isRuntimeCodexFailedEvent(event: AgentStreamEvent) {
     || String(isRecord(event.raw) ? stringRecordField(event.raw, 'status') : '').toLowerCase() === 'failed';
 }
 
+function runtimeCodexErrorIsMissingNativeRollout(error: string | undefined) {
+  return typeof error === 'string' && /\bno rollout found for thread id\b/i.test(error);
+}
+
 function runtimeFailureMetadata(
   request: ReturnType<typeof buildCodexRuntimeStreamRequest>,
   failureEvent: AgentStreamEvent | undefined,
@@ -2151,8 +2183,8 @@ function runtimeFailureMetadata(
     workspace: rawWorkspace,
   });
   const boundary = asString(raw.boundary) ?? asString(rawNested.boundary);
-  const boundaryReason = boundary === 'gui-present-required'
-    ? 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.'
+  const boundaryReason = boundary === 'final-answer-required'
+    ? 'Runtime Codex completed without a safe final assistant answer; SciForge withheld raw runtime diagnostics from the primary result.'
     : undefined;
   const failureSignal = boundaryReason
     ?? actionableRuntimeStderrSummary([

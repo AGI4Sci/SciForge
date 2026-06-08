@@ -1,14 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-
-type LocalConfig = {
-  llm?: {
-    baseUrl?: string;
-    apiKey?: string;
-    model?: string;
-  };
-};
 
 type BenchmarkResult = {
   caseName: string;
@@ -70,13 +60,20 @@ const BENCHMARK_CASES = [
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const configPath = String(args.config || 'config.local.json');
-  const config = await readLocalConfig(configPath);
-  const baseUrlSource = sourceFor(args.baseUrl, config.llm?.baseUrl, process.env.LLM_BASE_URL);
-  const apiKeySource = sourceFor(args.apiKey, config.llm?.apiKey, process.env.LLM_API_KEY);
-  const baseUrl = cleanBaseUrl(String(args.baseUrl || config.llm?.baseUrl || process.env.LLM_BASE_URL || ''));
-  const apiKey = String(args.apiKey || config.llm?.apiKey || process.env.LLM_API_KEY || '');
-  const models = String(args.models || process.env.LLM_MODELS || DEFAULT_MODELS.join(','))
+  const baseUrlSource = routerBaseUrlSource(args, process.env);
+  const apiKeySource = routerApiKeySource(args, process.env);
+  const profileSource = routerProfileSource(args, process.env);
+  const baseUrl = cleanRouterBaseUrl(baseUrlSource.value);
+  const apiKey = apiKeySource.value;
+  const profile = profileSource.value || 'sciforge-runtime-default';
+  const models = String(
+    stringArg(args.models)
+      || stringArg(args.model)
+      || process.env.SCIFORGE_MODEL_ROUTER_MODELS
+      || process.env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+      || process.env.SCIFORGE_RUNTIME_MODEL
+      || DEFAULT_MODELS.join(','),
+  )
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
@@ -85,13 +82,18 @@ async function main() {
   const maxTokens = positiveInt(args.maxTokens, 256);
   const temperature = numberArg(args.temperature, 1);
 
-  if (!baseUrl) throw new Error('Missing LLM base URL. Set config.local.json llm.baseUrl or LLM_BASE_URL.');
-  if (!apiKey) throw new Error('Missing LLM API key. Set config.local.json llm.apiKey or LLM_API_KEY.');
-  if (!models.length) throw new Error('No models configured.');
+  if (!baseUrl) {
+    throw new Error('Missing Model Router base URL. Set SCIFORGE_MODEL_ROUTER_BASE_URL, SCIFORGE_MODEL_ROUTER_URL, SCIFORGE_MODEL_ROUTER_PORT, or --base-url.');
+  }
+  if (!apiKey) {
+    throw new Error('Missing Model Router API key. Set SCIFORGE_RUNTIME_API_KEY, SCIFORGE_MODEL_ROUTER_API_KEY, or --api-key.');
+  }
+  if (!models.length) throw new Error('No Model Router aliases configured.');
 
-  console.log(`Benchmark endpoint: ${baseUrl}`);
-  console.log(`Config sources: baseUrl=${baseUrlSource}, apiKey=${apiKeySource}`);
+  console.log(`Benchmark endpoint: ${responsesUrl(baseUrl)}`);
+  console.log(`Config sources: baseUrl=${baseUrlSource.source}, apiKey=${apiKeySource.source}, profile=${profileSource.source}`);
   console.log(`Models: ${models.join(', ')}`);
+  console.log(`Profile: ${profile}`);
   console.log(`Cases: ${cases.map((item) => item.name).join(', ')}`);
   console.log(`Rounds: ${rounds}, max_tokens: ${maxTokens}, temperature: ${temperature}`);
   console.log('');
@@ -108,6 +110,7 @@ async function main() {
           baseUrl,
           apiKey,
           model,
+          profile,
           prompt: benchCase.prompt,
           maxTokens,
           temperature,
@@ -135,6 +138,7 @@ async function benchmarkModel(input: {
   baseUrl: string;
   apiKey: string;
   model: string;
+  profile: string;
   prompt: string;
   maxTokens: number;
   temperature: number;
@@ -146,7 +150,7 @@ async function benchmarkModel(input: {
   let usageCompletionTokens: number | undefined;
 
   try {
-    const response = await fetch(`${input.baseUrl}/chat/completions`, {
+    const response = await fetch(responsesUrl(input.baseUrl), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -154,14 +158,12 @@ async function benchmarkModel(input: {
       },
       body: JSON.stringify({
         model: input.model,
-        messages: [
-          { role: 'system', content: 'You are a concise scientific assistant.' },
-          { role: 'user', content: input.prompt },
-        ],
+        instructions: 'You are a concise scientific assistant.',
+        input: input.prompt,
+        metadata: { profile: input.profile },
         temperature: input.temperature,
         max_tokens: input.maxTokens,
         stream: true,
-        stream_options: { include_usage: true },
       }),
     });
 
@@ -250,6 +252,7 @@ function parseSseLine(line: string): unknown | '[DONE]' | undefined {
 
 function extractDelta(value: unknown) {
   if (!isRecord(value)) return '';
+  if (value.type === 'response.output_text.delta') return stringValue(value.delta);
   const choices = Array.isArray(value.choices) ? value.choices : [];
   const first = choices[0];
   if (!isRecord(first)) return '';
@@ -265,18 +268,15 @@ function extractDelta(value: unknown) {
 }
 
 function extractUsage(value: unknown) {
-  if (!isRecord(value) || !isRecord(value.usage)) return undefined;
-  return typeof value.usage.completion_tokens === 'number' ? value.usage.completion_tokens : undefined;
-}
-
-async function readLocalConfig(path: string): Promise<LocalConfig> {
-  try {
-    const raw = await readFile(resolve(path), 'utf8');
-    const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? parsed as LocalConfig : {};
-  } catch {
-    return {};
-  }
+  if (!isRecord(value)) return undefined;
+  const usage = isRecord(value.usage)
+    ? value.usage
+    : isRecord(value.response) && isRecord(value.response.usage)
+      ? value.response.usage
+      : undefined;
+  if (!usage) return undefined;
+  if (typeof usage.output_tokens === 'number') return usage.output_tokens;
+  return typeof usage.completion_tokens === 'number' ? usage.completion_tokens : undefined;
 }
 
 function parseArgs(argv: string[]) {
@@ -297,16 +297,9 @@ function parseArgs(argv: string[]) {
   return args;
 }
 
-function sourceFor(cliValue: unknown, configValue: unknown, envValue: unknown) {
-  if (typeof cliValue === 'string' && cliValue.trim()) return 'cli';
-  if (typeof configValue === 'string' && configValue.trim()) return 'config.local.json';
-  if (typeof envValue === 'string' && envValue.trim()) return 'env';
-  return 'missing';
-}
-
 function buildCases(args: Record<string, string | boolean>) {
   if (args.suite === true || args.suite === 'sciforge') return BENCHMARK_CASES;
-  const prompt = String(args.prompt || process.env.LLM_BENCH_PROMPT || DEFAULT_PROMPT);
+  const prompt = String(args.prompt || process.env.SCIFORGE_MODEL_ROUTER_BENCH_PROMPT || DEFAULT_PROMPT);
   return [{ name: String(args.case || 'default'), prompt }];
 }
 
@@ -397,6 +390,67 @@ function cleanBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, '');
 }
 
+function cleanRouterBaseUrl(value: string) {
+  const cleaned = cleanBaseUrl(value);
+  if (!cleaned) return '';
+  if (/\/chat\/completions$/i.test(cleaned)) {
+    throw new Error('Model Router base URL must point to /v1 or /v1/responses, not a member-model /chat/completions endpoint.');
+  }
+  if (/\/v1\/responses$/i.test(cleaned)) return cleaned.replace(/\/responses$/i, '');
+  if (/\/v1$/i.test(cleaned)) return cleaned;
+  return `${cleaned}/v1`;
+}
+
+function responsesUrl(baseUrl: string) {
+  const cleaned = cleanBaseUrl(baseUrl);
+  return /\/responses$/i.test(cleaned) ? cleaned : `${cleaned}/responses`;
+}
+
+function routerBaseUrlSource(args: Record<string, string | boolean>, env: NodeJS.ProcessEnv) {
+  const cliValue = stringArg(args.baseUrl) || stringArg(args.routerUrl);
+  if (cliValue) return { value: cliValue, source: 'cli' };
+  if (env.SCIFORGE_MODEL_ROUTER_BASE_URL?.trim()) {
+    return { value: env.SCIFORGE_MODEL_ROUTER_BASE_URL.trim(), source: 'env:SCIFORGE_MODEL_ROUTER_BASE_URL' };
+  }
+  if (env.SCIFORGE_MODEL_ROUTER_URL?.trim()) {
+    return { value: env.SCIFORGE_MODEL_ROUTER_URL.trim(), source: 'env:SCIFORGE_MODEL_ROUTER_URL' };
+  }
+  const fromPort = loopbackRouterBaseUrl(env.SCIFORGE_MODEL_ROUTER_PORT, env.SCIFORGE_MODEL_ROUTER_HOST);
+  if (fromPort) return { value: fromPort, source: 'env:SCIFORGE_MODEL_ROUTER_PORT' };
+  return { value: '', source: 'missing' };
+}
+
+function routerApiKeySource(args: Record<string, string | boolean>, env: NodeJS.ProcessEnv) {
+  const cliValue = stringArg(args.apiKey);
+  if (cliValue) return { value: cliValue, source: 'cli' };
+  if (env.SCIFORGE_RUNTIME_API_KEY?.trim()) {
+    return { value: env.SCIFORGE_RUNTIME_API_KEY.trim(), source: 'env:SCIFORGE_RUNTIME_API_KEY' };
+  }
+  if (env.SCIFORGE_MODEL_ROUTER_API_KEY?.trim()) {
+    return { value: env.SCIFORGE_MODEL_ROUTER_API_KEY.trim(), source: 'env:SCIFORGE_MODEL_ROUTER_API_KEY' };
+  }
+  return { value: '', source: 'missing' };
+}
+
+function routerProfileSource(args: Record<string, string | boolean>, env: NodeJS.ProcessEnv) {
+  const cliValue = stringArg(args.profile);
+  if (cliValue) return { value: cliValue, source: 'cli' };
+  if (env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE?.trim()) {
+    return { value: env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE.trim(), source: 'env:SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE' };
+  }
+  if (env.SCIFORGE_MODEL_ROUTER_PROFILE?.trim()) {
+    return { value: env.SCIFORGE_MODEL_ROUTER_PROFILE.trim(), source: 'env:SCIFORGE_MODEL_ROUTER_PROFILE' };
+  }
+  return { value: 'sciforge-runtime-default', source: 'default' };
+}
+
+function loopbackRouterBaseUrl(portValue: string | undefined, hostValue: string | undefined) {
+  const port = Number(portValue);
+  if (!Number.isFinite(port) || port <= 0) return '';
+  const host = hostValue?.trim() || '127.0.0.1';
+  return `http://${host}:${Math.trunc(port)}/v1`;
+}
+
 function positiveInt(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
@@ -430,6 +484,10 @@ function truncate(value: string, maxLength: number) {
 
 function toCamelCase(value: string) {
   return value.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
+}
+
+function stringArg(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
 function isNumber(value: unknown): value is number {

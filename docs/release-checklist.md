@@ -5,3 +5,14 @@
 当前 P0 不是 release matrix，而是基本模块与用户级验收。发布前应先确认 [`../PROJECT.md`](../PROJECT.md) 中的用户级验收标准。
 
 旧 Computer Use complex matrix 只保留为 opt-in diagnostic / historical release material，不能替代普通聊天入口、Codex backend completion truth、Browser source refs、Computer Use action evidence 或 artifact validator refs。
+
+## Computer Use Complex Matrix Opt-In Report
+
+- This report is not part of default release gates.
+- To rebuild the local aggregate/report artifact, run:
+
+```bash
+npm run release:computer-use-chat-live-complex-matrix-report --silent
+```
+
+- Attach the generated `release-report` artifact only as opt-in diagnostic evidence; it cannot replace ordinary chat, Runtime Codex, Browser source refs, Computer Use action evidence, or artifact validator refs.

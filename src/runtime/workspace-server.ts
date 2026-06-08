@@ -126,7 +126,6 @@ import {
   RUNTIME_MODEL,
   RUNTIME_PROFILE,
 } from '../../packages/backend/src/runtime-home.js';
-import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
@@ -817,7 +816,7 @@ function normalizeRepairHandoffContract(body: Record<string, unknown>): RepairHa
     repairRunId: typeof contract.repairRunId === 'string' ? contract.repairRunId : undefined,
     executorBackend: contract.executorBackend === 'runtime-codex' ? 'runtime-codex' : contract.executorBackend === 'agent-server' ? 'agent-server' : undefined,
     runtimeProfile: typeof contract.runtimeProfile === 'string' ? contract.runtimeProfile : undefined,
-    allowOpenAiRuntime: contract.allowOpenAiRuntime === true,
+    allowOpenAiRuntime: false,
     allowExecutorRepoTarget: contract.allowExecutorRepoTarget === true,
     initialGuidance: typeof contract.initialGuidance === 'string' ? contract.initialGuidance : undefined,
     allowedWritePaths: stringArray(contract.allowedWritePaths),
@@ -936,7 +935,7 @@ async function stableVersionEnvironment(root: string) {
 async function readRuntimeProviderPreflightManifest() {
   const serviceEnv = process.env;
   const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-  const proxyOptions = resolveProxyCliOptions([], runtimeEnv);
+  const proxyOptions = { upstreamBaseUrl: `${runtimeProviderProxyBaseUrl(runtimeEnv)}/v1` };
   const runtimeApiKeyPresentInServiceEnv = Boolean(stringValue(serviceEnv.SCIFORGE_RUNTIME_API_KEY));
   const upstreamBaseUrlPresent = Boolean(proxyOptions.upstreamBaseUrl);
   const checkedHealthz = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
@@ -1749,7 +1748,7 @@ async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body
   const terminalMirrorRef = feedbackCodexTerminalMirrorRef(root, sessionId);
   const promptRef = feedbackCodexTerminalPromptRef(root, sessionId);
   const runtimeProfile = stringField(body.runtimeProfile) || RUNTIME_PROFILE;
-  const allowOpenAiRuntime = body.allowOpenAiRuntime === true;
+  const allowOpenAiRuntime = false;
   const launchSurface = stringField(body.launchSurface) === 'web-viewer' ? 'web-viewer' : 'system-terminal';
   const prompt = buildFeedbackCodexTerminalPrompt({
     root,
@@ -1818,7 +1817,7 @@ async function launchFeedbackCodexPtySession(
     const config = await assertCodexRuntimeConfig({
       workspacePath: session.workspacePath,
       profile: session.runtimeProfile || RUNTIME_PROFILE,
-      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       env: runtimeCodexEnv,
     });
     const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeCodexEnv);
@@ -1885,7 +1884,7 @@ async function launchFeedbackCodexSystemTerminalSession(
     const config = await assertCodexRuntimeConfig({
       workspacePath: session.workspacePath,
       profile: session.runtimeProfile || RUNTIME_PROFILE,
-      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       env: runtimeCodexEnv,
     });
     const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeCodexEnv);
@@ -2042,7 +2041,7 @@ async function readFeedbackCodexTerminalSession(root: string, sessionId: string)
     updatedAt: stringField(manifest.updatedAt) || new Date().toISOString(),
     message: stringField(manifest.message),
     runtimeProfile: stringField(manifest.runtimeProfile),
-    allowOpenAiRuntime: manifest.allowOpenAiRuntime === true,
+    allowOpenAiRuntime: false,
     transport: feedbackCodexTerminalTransport(manifest.transport),
     webSocketPath: stringField(manifest.webSocketPath),
     systemTerminalLaunchRef: stringField(manifest.systemTerminalLaunchRef),

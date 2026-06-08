@@ -21,7 +21,7 @@ export const DESKTOP_PASS_CLAIM_LIVE_EVIDENCE_REQUIREMENTS: readonly DesktopPass
 export const DESKTOP_PASS_CLAIM_BLOCK_REASON =
   'R-DESK/R-PKG pass claims require real Runtime Codex task, selected-artifact follow-up, sidecar lifecycle, and clean shutdown evidence.';
 
-export type DesktopSidecarRole = 'workspace-server' | 'provider-proxy' | 'runtime-codex';
+export type DesktopSidecarRole = 'workspace-server' | 'model-router' | 'runtime-codex';
 
 export type DesktopLifecycleOwner = 'electron-main-runtime-launcher';
 
@@ -510,7 +510,7 @@ export function createDesktopPackagingPreflightContract(
   const appDataPath = normalizeOptionalAbsolutePath('Electron userData path', options.resolvedAppDataPath);
   const logPath = normalizeOptionalAbsolutePath('desktop logs path', options.resolvedLogPath);
   const roles = plan.runtime.sidecars.map((sidecar) => sidecar.role);
-  const requiredRoles = ['workspace-server', 'provider-proxy', 'runtime-codex'] satisfies DesktopSidecarRole[];
+  const requiredRoles = ['workspace-server', 'model-router', 'runtime-codex'] satisfies DesktopSidecarRole[];
   const missingRoles = requiredRoles.filter((role) => !roles.includes(role));
   const viteUrlMatches = collectViteDevServerUrls(plan);
 
@@ -723,7 +723,7 @@ export function collectViteDevServerUrls(value: unknown, path = '$'): Array<{ pa
 }
 
 function defaultSidecars(): DesktopSidecarPlan[] {
-  return ['workspace-server', 'provider-proxy', 'runtime-codex'].map((role) => ({
+  return ['workspace-server', 'model-router', 'runtime-codex'].map((role) => ({
     role: role as DesktopSidecarRole,
     owner: 'electron-main-runtime-launcher',
     lifecycle: 'managed-by-launcher',
@@ -735,7 +735,7 @@ function defaultSidecars(): DesktopSidecarPlan[] {
 
 function assertRequiredSidecars(sidecars: DesktopSidecarPlan[]): void {
   const roles = new Set(sidecars.map((sidecar) => sidecar.role));
-  for (const role of ['workspace-server', 'provider-proxy', 'runtime-codex'] satisfies DesktopSidecarRole[]) {
+  for (const role of ['workspace-server', 'model-router', 'runtime-codex'] satisfies DesktopSidecarRole[]) {
     if (!roles.has(role)) throw new Error(`Desktop runtime sidecar is missing from the launcher contract: ${role}`);
   }
   for (const sidecar of sidecars) {

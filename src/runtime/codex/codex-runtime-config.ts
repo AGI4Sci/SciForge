@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import {
   ensureRuntimeHome,
   getRuntimeHomePaths,
+  assertRuntimeModelRouterBaseUrl,
   readRuntimeConfig,
   RUNTIME_KEY_ENV,
   RUNTIME_MODEL,
@@ -81,15 +82,19 @@ export async function assertCodexRuntimeConfig(options: RuntimeConfigGuardOption
   if (!proxyBaseUrl) {
     throw new Error(`Runtime Codex provider ${provider} is missing proxy base_url.`);
   }
+  if (provider !== RUNTIME_PROVIDER) {
+    throw new Error(`Runtime Codex provider must be ${RUNTIME_PROVIDER}; ${provider} would bypass Model Router.`);
+  }
+  assertRuntimeModelRouterBaseUrl(proxyBaseUrl);
   if (envKey !== RUNTIME_KEY_ENV) {
     throw new Error(`Runtime Codex provider ${provider} must use env_key ${RUNTIME_KEY_ENV}.`);
   }
   if (!env[RUNTIME_KEY_ENV]) {
     throw new Error(`Missing ${RUNTIME_KEY_ENV}; Runtime Codex fails closed without a configured provider key.`);
   }
-  const allowOpenAiRuntime = options.allowOpenAiRuntime === true;
+  const allowOpenAiRuntime = false;
   if (!allowOpenAiRuntime && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
-    throw new Error('OpenAI Runtime Codex provider/model is disabled unless allowOpenAiRuntime=true.');
+    throw new Error('OpenAI-looking Runtime Codex provider/model is disabled; Runtime Codex must use the SciForge Model Router profile.');
   }
 
   return {
@@ -116,6 +121,7 @@ export function codexRuntimeEnv(baseEnv: NodeJS.ProcessEnv, codexHome: string): 
   env.NO_PROXY = appendNoProxyLoopbacks(env.NO_PROXY);
   env.no_proxy = appendNoProxyLoopbacks(env.no_proxy);
   for (const key of Object.keys(env)) {
+    if (key === 'SCIFORGE_RUNTIME_BASE_URL' || key.startsWith('SCIFORGE_PROXY_')) delete env[key];
     if (key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_')) delete env[key];
   }
   return env;
@@ -136,8 +142,8 @@ function appendNoProxyLoopbacks(value: string | undefined): string {
 
 function runtimeProviderBaseUrlForEnv(env: NodeJS.ProcessEnv): string | undefined {
   const value = [
-    env.SCIFORGE_PROXY_BASE_URL,
-    env.SCIFORGE_PROXY_URL,
+    env.SCIFORGE_MODEL_ROUTER_BASE_URL,
+    env.SCIFORGE_MODEL_ROUTER_URL,
   ].find((candidate) => typeof candidate === 'string' && candidate.trim())?.trim()
     ?? runtimeProviderServiceUrlForPortEnv(env);
   if (!value) return undefined;
@@ -146,25 +152,22 @@ function runtimeProviderBaseUrlForEnv(env: NodeJS.ProcessEnv): string | undefine
     .replace(/\/(?:healthz|health)\/?$/i, '')
     .replace(/\/v1\/responses\/?$/i, '/v1')
     .replace(/\/+$/, '');
-  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+  return assertRuntimeModelRouterBaseUrl(trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`);
 }
 
 function runtimeProviderServiceUrlForPortEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const port = runtimeProxyPortForEnv(env);
+  const port = runtimeModelRouterPortForEnv(env);
   if (!port) return undefined;
-  const host = [
-    env.SCIFORGE_PROXY_HOST,
-    env.SCIFORGE_MODEL_ROUTER_HOST,
-  ].find((candidate) => typeof candidate === 'string' && candidate.trim())?.trim() || '127.0.0.1';
+  const configuredHost = typeof env.SCIFORGE_MODEL_ROUTER_HOST === 'string' && env.SCIFORGE_MODEL_ROUTER_HOST.trim()
+    ? env.SCIFORGE_MODEL_ROUTER_HOST.trim()
+    : '127.0.0.1';
+  const host = configuredHost === '0.0.0.0' || configuredHost === '::' ? '127.0.0.1' : configuredHost;
   return `http://${host}:${port}`;
 }
 
-function runtimeProxyPortForEnv(env: NodeJS.ProcessEnv): string | undefined {
-  for (const value of [env.SCIFORGE_PROXY_PORT, env.SCIFORGE_MODEL_ROUTER_PORT]) {
-    const port = Number(value);
-    if (Number.isInteger(port) && port > 0 && port <= 65535) return String(port);
-  }
-  return undefined;
+function runtimeModelRouterPortForEnv(env: NodeJS.ProcessEnv): string | undefined {
+  const port = Number(env.SCIFORGE_MODEL_ROUTER_PORT);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? String(port) : undefined;
 }
 
 function profileBlock(config: string, profile: string): string {

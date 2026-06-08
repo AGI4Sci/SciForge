@@ -28,21 +28,35 @@ def test_vlm_config_defaults_to_router_public_model():
     assert config.model == "sciforge-router"
 
 
-def test_vlm_client_uses_configured_chat_completions_endpoint_and_model():
+def test_vlm_config_reads_model_router_runtime_env(monkeypatch):
+    monkeypatch.setenv("SCIFORGE_MODEL_ROUTER_BASE_URL", "https://router.example.test/v1")
+    monkeypatch.setenv("SCIFORGE_RUNTIME_API_KEY", "runtime-secret")
+    monkeypatch.setenv("SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS", "router-alias")
+    monkeypatch.setenv("SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE", "router-profile")
+
+    config = VisionVlmConfig()
+
+    assert config.base_url == "https://router.example.test/v1"
+    assert config.api_key == "runtime-secret"
+    assert config.model == "router-alias"
+    assert config.profile == "router-profile"
+
+
+def test_vlm_client_uses_configured_responses_endpoint_and_model():
     client = VisionVlmClient(VisionVlmConfig(base_url="https://example.test/v1", api_key="secret", model="custom-model"))
 
     assert client.config.model == "custom-model"
-    assert client._chat_completions_url() == "https://example.test/v1/chat/completions"
+    assert client._responses_url() == "https://example.test/v1/responses"
 
 
-def test_image_message_uses_openai_compatible_base64_content_shape():
+def test_image_message_uses_responses_input_image_content_shape():
     message = build_user_message_with_image("look", image_base64="YWJj", mime_type="image/jpeg")
 
     assert message == {
         "role": "user",
         "content": [
-            {"type": "text", "text": "look"},
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,YWJj"}},
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": "data:image/jpeg;base64,YWJj", "mime_type": "image/jpeg"},
         ],
     }
 

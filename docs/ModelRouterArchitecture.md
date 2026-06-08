@@ -1,6 +1,6 @@
 # Model Router 设计
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 文档目的与约束
 
@@ -22,9 +22,9 @@ Model Router 只负责：
 
 - 按 workspace / profile / role 选择已注册模型。
 - 调用 text reasoner、vision translator 或其它受控 provider。
-- 接收统一 `input_object` 多模态输入，并在 Router 内部完成模态识别、读取、翻译和必要的局部补充。
+- 接收统一 `input_object` 多模态输入，并在 Router 内部完成模态识别、读取和 provider 协议翻译。
 - 把截图、crop、页面片段、文本上下文等输入转成 bounded model output。
-- 维护 Router 内部的多模态对象 descriptor 缓存，减少同一会话/同一对象的重复 translator 调用。
+- 维护短期模态翻译缓存，减少同一 profile / 同一内容 hash 的重复 translator 调用。
 - 写 refs-first trace 和 provider-safe diagnostics。
 - 阻止未注册 provider、未授权 profile 或不安全 payload。
 
@@ -38,10 +38,12 @@ Model Router 不负责：
 - completion truth。
 - final answer ownership。
 - GUI / Browser / Desktop 动作执行。
+- GUI presentation / App Server event projection。
+- 对象记忆、长期 descriptor ownership 或跨 turn workflow。
 
 ## 外部边界
 
-Model Router 不直接面向用户完整任务。调用方必须先给出明确 profile、role、输入 refs、预算和用途。
+Model Router 不直接面向用户完整任务。Agent Host 把它作为模型底座调用，并负责给出明确 profile、role、输入 refs、预算和用途。
 
 Model Router 返回 bounded model output、trace refs、diagnostics 和 blocked reason；调用方负责解释这些输出、选择下一步、验证和生成最终答复。
 
@@ -52,10 +54,10 @@ Model Router 输出只是候选信号，不是可执行动作、坐标、文件�
 | 能力 | 作用 | 边界 |
 | --- | --- | --- |
 | Profile routing | 根据 workspace / profile / role 选择已注册 provider。 | 不静默 fallback 到未注册模型或私有 provider。 |
-| Text reasoning | 生成局部文本推理、候选解释或摘要。 | 不拥有任务计划、最终答案或验收结论。 |
+| Text reasoning | 承载 Agent Host 的模型推理调用并生成 bounded model output。 | Router 不拥有任务计划、最终答案或验收结论。 |
 | Multimodal input_object | 外部只传对象 ref / mime / title 等结构化对象，Router 内部选择合适 translator。 | 外部调用方不能为视觉、音频、文档等模态另建旁路链路。 |
-| Region-grounded descriptor | 为视觉对象积累 `object + summary + regions + gaps`，其中 `regions.anchor` 使用归一化 bbox 表达空间位置。 | descriptor 是 Router 内部证据，不是公开 provider payload，不包含 base64。 |
-| Vision translation | 把截图、crop、页面片段转成区域锚定 descriptor 或 descriptor patch。 | 不输出最终执行坐标，不绕过目标绑定。 |
+| Vision translation | 把截图、crop、页面片段转成文本化视觉 observation。 | 不输出最终执行坐标，不绕过目标绑定；同一内容可命中短期 translation cache。 |
+| Tool protocol pass-through | 把请求中的 provider tools / tool_choice 翻译给上游，并把 function_call 翻译回 `/v1/responses`。 | Router 不决定是否调用 Browser、Computer Use 或其它工具，也不生成 UI projection。 |
 | Trace / diagnostics | 记录 refs-first trace、耗时、provider-safe error。 | 不记录 API key、raw provider payload、base64 或 secret。 |
 
 ## 路由原则
@@ -65,9 +67,11 @@ Model Router 输出只是候选信号，不是可执行动作、坐标、文件�
 - 未注册模型、未注册 provider、缺失凭据或超预算请求必须 fail closed。
 - 本地调试 fallback 不能冒充 release / product evidence。
 - provider diagnostics 只能暴露 method、path、elapsed、retry、error category 等安全信息。
-- 多模态对象必须按对象 id / ref / content hash 绑定，不能按附件顺序猜测用户目标。
-- 同一视觉对象优先复用 region-grounded descriptor；只有缺少所需事实、bbox 区域不确定或置信度不足时，Router 才能调用 translator 做 targeted refinement。
-- targeted refinement 必须绑定到具体 `modality_input` 和可选 bbox / region 线索，不能重新读取所有对象。
+- 多模态输入必须按 ref / content hash 识别，不能按附件顺序猜测用户目标。
+- 同一请求中，同一内容的 initial vision translation 最多一次。
+- 跨请求重复进入同一内容时，Router 可以把 cached observation 注入 text reasoner，而不是重新传 raw image 给 translator。
+- translation cache 只是性能优化，不是对象记忆；缓存是否足够、是否需要更细粒度问题或后续模型调用，由 Agent Host 判断。
+- Router 不表达 `need_more_visual_info`、repair loop、补看图轮次或跨工具下一步。
 
 ## 局部辅助原则
 
@@ -91,6 +95,7 @@ Model Router 不能：
 - 自动 repair。
 - 产出用户级 completion truth。
 - 生成用户可见 final answer。
+- 决定、要求或模拟 GUI presentation / App Server projection。
 - 静默 fallback 到未注册 provider / model / profile。
 - 让 Agent Host、UI、Browser、Computer Use 或其它外部模块直接调用视觉 translator 形成旁路。
 - 让外部 prompt 承担“如何读取图片/音频/文档”的模态翻译职责。
@@ -104,6 +109,7 @@ Model Router 不能：
 - 旧的硬编码 provider / model name 收敛到注册 profile / public alias。
 - text reasoner 和 vision translator 通过明确 role 区分。
 - 旧的视觉旁路、Agent Host 视觉专用链路和外部模态 prompt 收敛到统一 `input_object` -> Model Router。
+- Router 内部旧的对象 descriptor / targeted refinement / supplement loop 语义收敛为短期 translation cache；对象上下文和长程多模态节奏属于 Agent Host。
 - Browser、Computer Use、artifact verifier 等模块只能把 Model Router 当局部辅助，不能把模型输出当产品 truth。
 - release / product 验收必须使用 refs-first trace 和注册 provider metadata，不能依赖本地调试 fallback。
 

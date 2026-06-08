@@ -61,6 +61,46 @@ class BlockedDesktopBrowserNativeLiveSmoke extends Error {
   }
 }
 
+function routerOnlyDesktopBrowserNativeLiveEnv(
+  dummyMemberProviderUrl: string,
+  options: { appRoot: string; userDataDir: string; workspaceDir: string; configPath: string },
+): Record<string, string> {
+  const env = stringRecordEnv({
+    ...process.env,
+    SCIFORGE_DESKTOP_APP_ROOT: options.appRoot,
+    SCIFORGE_DESKTOP_USER_DATA_DIR: options.userDataDir,
+    SCIFORGE_DESKTOP_WORKSPACE_PATH: options.workspaceDir,
+    SCIFORGE_CONFIG_PATH: options.configPath,
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
+    SCIFORGE_MODEL_ROUTER_API_KEY: 'sciforge-desktop-browser-native-live-router-key',
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-desktop-browser-native-live-router-key',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_TEXT_PROVIDER: 'desktop-browser-native-live-dummy-member',
+    SCIFORGE_TEXT_BASE_URL: dummyMemberProviderUrl,
+    SCIFORGE_TEXT_API_KEY: 'sciforge-desktop-browser-native-live-dummy-key',
+    SCIFORGE_TEXT_MODEL: 'sciforge-desktop-browser-native-live-dummy-model',
+  });
+  deleteLegacyDirectProviderEnv(env);
+  return env;
+}
+
+function stringRecordEnv(input: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+function deleteLegacyDirectProviderEnv(env: Record<string, string>): void {
+  for (const key of [
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_PROXY_API_KEY_ENV',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_QUIET',
+    'SCIFORGE_RUNTIME_BASE_URL',
+  ]) {
+    delete env[key];
+  }
+}
+
 const buildBlocker = desktopBrowserNativeLiveBuildBlocker();
 if (buildBlocker) {
   await writeNonPassingEvidence('blocked', buildBlocker, [buildBlocker]);
@@ -86,18 +126,12 @@ try {
   let navigationHeartbeatAt = openStartedAt;
   electronApp = await electron.launch({
     args: [mainPath],
-    env: {
-      ...process.env,
-      SCIFORGE_DESKTOP_APP_ROOT: projectRoot,
-      SCIFORGE_DESKTOP_USER_DATA_DIR: join(scratchRoot, 'userData'),
-      SCIFORGE_DESKTOP_WORKSPACE_PATH: join(scratchRoot, 'workspace'),
-      SCIFORGE_CONFIG_PATH: join(scratchRoot, 'missing-config.local.json'),
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: dummyProvider.url,
-      SCIFORGE_PROXY_API_KEY_ENV: 'SCIFORGE_DESKTOP_BROWSER_NATIVE_LIVE_DUMMY_KEY',
-      SCIFORGE_DESKTOP_BROWSER_NATIVE_LIVE_DUMMY_KEY: 'sciforge-desktop-browser-native-live-dummy-key',
-      SCIFORGE_PROXY_DEFAULT_MODEL: 'sciforge-desktop-browser-native-live-dummy-model',
-      SCIFORGE_PROXY_QUIET: '1',
-    },
+    env: routerOnlyDesktopBrowserNativeLiveEnv(dummyProvider.url, {
+      appRoot: projectRoot,
+      userDataDir: join(scratchRoot, 'userData'),
+      workspaceDir: join(scratchRoot, 'workspace'),
+      configPath: join(scratchRoot, 'missing-config.local.json'),
+    }),
   });
   const electronPid = electronProcessId(electronApp);
   await recordProcessResourceSample(resourceSamples, electronPid);
@@ -115,6 +149,7 @@ try {
   observedRuntimeConfig = config;
   assert.equal(config.schemaVersion, 'sciforge.desktop.runtime-config.v1');
   await waitForWorkspaceWriter(config.workspaceWriterBaseUrl);
+  await waitForRendererDesktopRuntimeConfig(page, config.workspaceWriterBaseUrl);
 
   openStartedAt = Date.now();
   await openBrowserPaneAt(page, fixture.url);
@@ -448,10 +483,28 @@ function desktopBrowserNativeLiveBuildBlocker(): string | undefined {
 
 async function openBrowserPaneAt(page: Page, url: string): Promise<void> {
   await page.getByRole('tab', { name: /^(Browser|浏览器)$/ }).click({ timeout: 15_000 });
-  await page.getByTestId('right-pane-browser-tool').waitFor({ state: 'visible', timeout: 15_000 });
-  const address = page.getByLabel('Browser URL');
+  const browserTool = page.getByTestId('right-pane-browser-tool');
+  await browserTool.waitFor({ state: 'visible', timeout: 15_000 });
+  const address = browserTool.getByLabel('Browser URL');
   await address.fill(url);
-  await address.press('Enter');
+  await browserTool.locator('form.browser-workbench-viewer-address button[type="submit"]').click();
+}
+
+async function waitForRendererDesktopRuntimeConfig(page: Page, workspaceWriterBaseUrl: string): Promise<void> {
+  const expected = workspaceWriterBaseUrl.replace(/\/+$/, '');
+  await page.waitForFunction((writerUrl) => {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index) ?? '';
+      if (!key.startsWith('sciforge.config.v1')) continue;
+      try {
+        const value = JSON.parse(window.localStorage.getItem(key) ?? '{}') as { workspaceWriterBaseUrl?: unknown };
+        if (typeof value.workspaceWriterBaseUrl === 'string' && value.workspaceWriterBaseUrl.replace(/\/+$/, '') === writerUrl) return true;
+      } catch {
+        // Keep waiting for the app config hydration effect.
+      }
+    }
+    return false;
+  }, expected, { timeout: 15_000 });
 }
 
 async function waitForWorkspaceWriter(baseUrl: string): Promise<void> {
@@ -1707,8 +1760,62 @@ async function desktopNativeLiveDiagnostics(
         }
       : undefined,
     runtimeHealth,
+    browserPane: page ? await browserPaneDiagnostics(page) : undefined,
     launcherAuditTail: await launcherAuditTail(config),
   };
+}
+
+async function browserPaneDiagnostics(page: Page): Promise<unknown> {
+  try {
+    const tool = page.locator('[data-testid="right-pane-browser-tool"]').first();
+    const workbench = page.locator('[data-component-id="browser-workbench"]').first();
+    const preview = page.locator('.browser-workbench-viewer-preview').first();
+    const nativeSurface = page.locator('[data-browser-native-surface="true"]').first();
+    const address = page.locator('input[name="browser-url"]').first();
+    const toolPresent = await tool.count() > 0;
+    const workbenchPresent = await workbench.count() > 0;
+    const previewPresent = await preview.count() > 0;
+    const nativeSurfacePresent = await nativeSurface.count() > 0;
+    const addressValue = await locatorInputValue(address);
+    const toolText = toolPresent ? await tool.textContent({ timeout: 1000 }).catch(() => '') : '';
+    return {
+      toolPresent,
+      toolVisible: toolPresent ? await tool.isVisible().catch(() => false) : false,
+      addressValueLength: addressValue.length,
+      workbenchStatus: workbenchPresent ? await workbench.getAttribute('data-status').catch(() => undefined) : undefined,
+      workbenchState: workbenchPresent ? await workbench.getAttribute('data-browser-state').catch(() => undefined) : undefined,
+      loadingState: workbenchPresent ? await workbench.getAttribute('data-browser-loading-progress-state').catch(() => undefined) : undefined,
+      loadingReason: workbenchPresent ? await workbench.getAttribute('data-browser-loading-progress-reason').catch(() => undefined) : undefined,
+      loadingSource: workbenchPresent ? await workbench.getAttribute('data-browser-loading-progress-source').catch(() => undefined) : undefined,
+      previewObjectType: previewPresent ? await preview.getAttribute('data-browser-object-type').catch(() => undefined) : undefined,
+      previewState: previewPresent ? await preview.getAttribute('data-browser-state').catch(() => undefined) : undefined,
+      nativeSurfacePresent,
+      nativeSurfaceVisible: nativeSurfacePresent ? await nativeSurface.isVisible().catch(() => false) : false,
+      nativeSurfaceTransport: nativeSurfacePresent ? await nativeSurface.getAttribute('data-browser-live-surface-transport').catch(() => undefined) : undefined,
+      hostSurface: nativeSurfacePresent ? await nativeSurface.getAttribute('data-browser-host-surface').catch(() => undefined) : undefined,
+      textDigest: boundedDigest(toolText ?? ''),
+      visibleDiagnosticExcerpt: boundedVisibleDiagnosticText(toolText ?? ''),
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function locatorInputValue(locator: Locator): Promise<string> {
+  try {
+    return await locator.inputValue({ timeout: 1000 });
+  } catch {
+    return '';
+  }
+}
+
+function boundedVisibleDiagnosticText(value: string): string {
+  return value
+    .replace(/https?:\/\/\S+/g, '[url]')
+    .replace(/file:\/\/\S+|\/(?:Applications|Users|var|tmp)\/\S+/g, '[path]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 360);
 }
 
 async function launcherAuditTail(config: DesktopRuntimeConfig | undefined): Promise<string[] | undefined> {

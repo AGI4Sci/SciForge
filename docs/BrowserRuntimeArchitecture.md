@@ -1,6 +1,6 @@
 # Browser Runtime 设计
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 文档目的与约束
 
@@ -49,16 +49,16 @@ Browser pane 只能作为 BrowserHostSession 的展示和控制面板，不能�
 
 Browser 新 public surface 只暴露这些 primitive：
 
-| primitive | 作用 | 边界 |
-| --- | --- | --- |
-| `browser.search` | 用调用方给定 query 做候选发现，并为每个可用候选返回可直接传给 `browser.read` 的 `readInput`。 | 不读取结果页正文、不总结答案、不改写 query。 |
-| `browser.navigate` | 将调用方给定 URL 绑定到一个 BrowserHostSession，并执行一次导航。 | 不读取长正文、不判断来源是否满足任务、不代表用户级完成。 |
-| `browser.observe` | 观察现有 session 当前状态。 | 不导航、不读取长正文、不完成任务级判断。 |
-| `browser.read` | 读取当前页面或给定 URL 的网页内容并物化 refs。 | 不下载文件、不抽象成最终结论、不跨页面继续搜索。 |
-| `browser.extract` | 对已读 refs 做纯结构解析。 | 不访问网络、不决定下一步、不做任务级语义验收。 |
-| `browser.download` | 把调用方指定的远程资源下载为受控 artifact。 | 不保存到任意本地路径、不自动执行/打开文件、不总结文件内容。 |
+| primitive          | 作用                                                               | 边界                             |
+| ------------------ | ---------------------------------------------------------------- | ------------------------------ |
+| `browser.search`   | 用调用方给定 query 做候选发现，并产出 `search_result_set` / `web_page:discovered` resources。 | 不读取结果页正文、不总结答案、不改写 query、不产出读取完成证据。 |
+| `browser.navigate` | 将调用方给定 URL 绑定到一个 BrowserHostSession，并执行一次导航。                     | 不读取长正文、不判断来源是否满足任务、不代表用户级完成。   |
+| `browser.observe`  | 观察现有 session 当前状态。                                               | 不导航、不读取长正文、不完成任务级判断。           |
+| `browser.read`     | 读取当前页面或给定 URL 的网页内容并物化 refs。                                     | 不下载文件、不抽象成最终结论、不跨页面继续搜索。       |
+| `browser.extract`  | 对已读 refs 做纯结构解析。                                                 | 不访问网络、不决定下一步、不做任务级语义验收。        |
+| `browser.download` | 把调用方指定的远程资源下载为受控 artifact。                                       | 不保存到任意本地路径、不自动执行/打开文件、不总结文件内容。 |
 
-所有 primitive 都必须使用 refs-first envelope。未知字段默认拒绝或进入 diagnostics，不能静默改变语义。
+所有 primitive 都必须使用 refs-first envelope，并在 result envelope 中返回 `resources` 与 `evidenceState`。`resources` 描述本次 primitive 发现、观察、读取、解析或下载到的对象；`evidenceState` 描述已经完成什么、仍未知什么、以及证据边界。未知字段默认拒绝或进入 diagnostics，不能静默改变语义。
 
 面向模型或 MCP provider 的直接工具名使用安全 alias：`browser_search`、`browser_navigate`、`browser_observe`、`browser_read`、`browser_extract`、`browser_download`。这些 alias 只是调用入口名，内部必须注入对应 input schemaVersion，并路由回同一个 Browser module dispatcher intent（例如 `browser_search` -> `moduleId=browser, intent=browser.search`）。它们不能形成第二条搜索、读取或总结链路。
 
@@ -67,11 +67,11 @@ Browser 新 public surface 只暴露这些 primitive：
 ## Session 与 Artifact 原则
 
 - 每个 primitive 只绑定一个 BrowserHostSession / tab scope，除非输入明确要求新建 session。
-- `search` 只产出候选结果、search refs、`readInput` 和 repair hints；搜索结果页不是用户级完成证据。调用方要回答网页内容、新闻、论文、来源或引用问题时，必须继续调用 `read` 或说明候选不可用。
+- `search` 只产出候选结果、search refs、候选 `resources` 和候选态 `evidenceState`；搜索结果页不是用户级完成证据。调用方要回答网页内容、新闻、论文、来源或引用问题时，必须继续调用 `read` 或说明候选不可用。
 - `navigate` 只证明导航尝试和当前 session 状态。
 - `read` 只证明页面内容已被物化为 source page / page text refs。
 - `extract` 只解析已有 refs，不访问网络。
-- `download` 只能写入受控 session artifact scope，并返回 hash、大小、MIME 和 artifact refs。
+- `download` 只能写入受控 session artifact scope，并返回 hash、大小、MIME 和 artifact refs；调用方可声明显式 URL，或提供 `sessionId + linkSelector` 让 Host adapter 从当前 frame artifact 机械解析 `<a href>`；调用方可声明 maxBytes、timeout、allowed/blocked domain，未知 MIME 或可执行 / 安装型下载必须先返回 `needs-confirmation`。
 - 下载后的内容理解属于后续 reader / parser / verifier，不属于 Browser。
 
 ## 风险与确认
@@ -83,7 +83,8 @@ Browser 可以识别浏览器动作风险并返回 `needs-confirmation`，但不
 - 跨站点表单提交。
 - credential-like 输入。
 - 上传、删除、支付、账号或安全设置变更。
-- 下载超过调用方声明的预算或类型约束。
+- 下载超过调用方声明的预算、domain 约束或类型约束。
+- 下载 MIME 未知，或响应 / 文件名表现为可执行、安装包、脚本等高风险文件。
 - 调用方没有提供有效 approval ref。
 
 确认由调用方收集。Browser 只验证 approval ref 是否匹配当前 action risk envelope。
@@ -99,7 +100,7 @@ Browser evidence 必须 refs-first。可作为局部证据的对象包括：
 - download artifact refs。
 - console / network diagnostics refs。
 
-`search` 返回的 URL 只能作为候选和下一步输入，不能作为已读取来源。`search` 成功时应提供结构化 `repairHints[].machineReadable.candidateReadInputs`，让调用方不需要从说明文字中猜测如何进入 `read`。如果一个 Host turn 连续执行 search 而没有 read / navigate / extract 进展，Host adapter 可以触发通用预算保护并返回 `browser_search_only_budget_exhausted`，要求调用方读取已有候选或报告 blocker。
+`search` 返回的 URL 只能作为候选和下一步输入，不能作为已读取来源。`search` 成功时应通过 `resources` 标记 `search_result_set` 与 `web_page:discovered`，并通过 `evidenceState` 明确“候选已发现、页面正文仍未知、候选不是 source evidence”。调用方要继续读取候选时，应用 `browser.read` 的当前输入 schema 构造读取请求；Browser 不再维护搜索专用读取输入缓存或搜索专用预算 blocker。
 
 raw HTML 大 payload、cookies、credentials、downloaded bytes、raw screenshot、data URL、base64、API key 和 secret 不得进入 primitive body 或 public diagnostics。
 
@@ -119,7 +120,7 @@ Browser primitive 默认不做任务级语义判断。
 - 产出 completion truth。
 - 生成 final answer。
 
-调用方可以读取 Browser refs 后自行调用模型或 verifier；这不属于 Browser primitive 内部职责。
+调用方可以读取 Browser refs 后自行调用模型或 verifier；这不属于 Browser primitive 内部职责。Agent Host 可维护 current-run Evidence Ledger，把 Browser primitive 的 `resources` / `refs` 记录为状态推进，并在生成 Codex App Server assistant final message / `FinalAnswerEnvelope` 前检查 source page refs、page text refs、final-answer refs，以及由当前 turn 文本派生的 AcceptanceSpec gap（例如低信息页面、topic mismatch、recent-window temporal gap）。这些检查属于 Agent Host verifier / completion truth 边界，不进入 Browser core，也不替代更完整的多来源事实充分性 verifier。
 
 ## 迁移口径
 
@@ -171,5 +172,5 @@ Browser 只能提供网页局部证据，不能单独提供用户级验收。
 
 ## 相关文档
 
-- [`ComputerUseRuntimeArchitecture.md`](ComputerUseRuntimeArchitecture.md)：Computer Use primitive runtime 的同构设计。
-- [`Architecture.md`](Architecture.md)：总架构和 Browser 上下游边界。
+- [ComputerUseRuntimeArchitecture.md](ComputerUseRuntimeArchitecture.md)：Computer Use primitive runtime 的同构设计。
+- [Architecture.md](Architecture.md)：总架构和 Browser 上下游边界。

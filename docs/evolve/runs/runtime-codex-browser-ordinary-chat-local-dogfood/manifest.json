@@ -1,9 +1,9 @@
 {
   "schemaVersion": "sciforge.runtime-codex.browser-ordinary-chat-local-dogfood.v1",
-  "status": "passed",
+  "status": "failed",
   "source": "runtime-codex-ordinary-chat-local-dogfood",
-  "observedAt": "2026-06-07T00:33:55.176Z",
-  "commandId": "browser-ordinary-chat-local-1cb793f9af53",
+  "observedAt": "2026-06-08T06:39:07.386Z",
+  "commandId": "browser-ordinary-chat-local-1ba485158d20",
   "taskPromptDigest": {
     "length": 164,
     "sha1": "965b795a4a824f7ea7851d659294578e8c388875"
@@ -18,18 +18,12 @@
     "secretValuesRedacted": true
   },
   "ordinaryChatAcceptance": {
-    "status": "passed",
+    "status": "blocked",
     "manifestRef": "artifact:runtime-codex-browser-ordinary-chat-local-dogfood/ordinary-chat-acceptance/manifest.json",
     "startedFromDefaultChatEntry": true,
-    "submittedThroughRuntimeCodex": true,
-    "acceptanceConclusionFromRealBrowser": true,
-    "evidenceRefs": [
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
-      "artifact:runtime-codex-browser-acceptance/final-answer.md"
-    ]
+    "submittedThroughRuntimeCodex": false,
+    "acceptanceConclusionFromRealBrowser": false,
+    "evidenceRefs": []
   },
   "releaseEligible": false,
   "releaseBlocking": true,
@@ -37,5 +31,6 @@
     "status": "local-dogfood-only",
     "strictReleaseStillRequiresServiceEnv": true,
     "retestCommand": "npm run smoke:runtime-codex-browser-acceptance:strict"
-  }
+  },
+  "blockedReason": "Ordinary-chat acceptance did not pass: Runtime Codex app-server ordinary-chat Browser acceptance failed before usable Browser evidence: Missing SCIFORGE_RUNTIME_API_KEY; Runtime Codex fails closed without a configured provider key."
 }

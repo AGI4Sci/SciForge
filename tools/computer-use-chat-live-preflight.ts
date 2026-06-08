@@ -118,7 +118,7 @@ const expectedEvidenceRefs = [
 
 const requiredEnvGroups = [
   ['SCIFORGE_RUNTIME_API_KEY'],
-  ['SCIFORGE_PROXY_UPSTREAM_BASE_URL', 'SCIFORGE_RUNTIME_BASE_URL'],
+  ['SCIFORGE_MODEL_ROUTER_BASE_URL', 'SCIFORGE_MODEL_ROUTER_URL', 'SCIFORGE_MODEL_ROUTER_PORT'],
   ['SCIFORGE_VISION_DESKTOP_BRIDGE'],
   ['SCIFORGE_VISION_INPUT_ADAPTER'],
   ['SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER'],
@@ -219,10 +219,9 @@ export async function buildComputerUseChatLivePreflightManifest(
       timeoutMs,
     }),
     checkService({
-      id: 'provider-proxy',
-      label: 'Provider proxy',
-      url: providerProxyHealthUrl(effectiveEnv),
-      fallbackUrls: providerProxyFallbackHealthUrls(effectiveEnv),
+      id: 'model-router',
+      label: 'Model Router',
+      url: modelRouterHealthUrl(effectiveEnv),
       fetchImpl,
       timeoutMs,
     }),
@@ -232,7 +231,7 @@ export async function buildComputerUseChatLivePreflightManifest(
     fetchImpl,
     timeoutMs,
   });
-  const serviceChecks = reconcileProviderProxyServiceCheck(rawServiceChecks, runtimeProviderPreflight);
+  const serviceChecks = reconcileModelRouterServiceCheck(rawServiceChecks, runtimeProviderPreflight);
   const runtimeProviderReady = runtimeProviderPreflight
     ? runtimeProviderPreflight.status === 'ready'
     : serviceChecks.find((check) => check.id === 'workspace-writer')?.status !== 'pass';
@@ -297,14 +296,14 @@ export async function runComputerUseChatLivePreflightCli(argv = process.argv): P
   if (args.strict && manifest.status !== 'ready') process.exitCode = 1;
 }
 
-function reconcileProviderProxyServiceCheck(
+function reconcileModelRouterServiceCheck(
   serviceChecks: ComputerUseChatLivePreflightManifest['serviceChecks'],
   runtimeProviderPreflight: ComputerUseChatLivePreflightManifest['runtimeProviderPreflight'] | undefined,
 ): ComputerUseChatLivePreflightManifest['serviceChecks'] {
   if (runtimeProviderPreflight?.status !== 'ready') return serviceChecks;
   return serviceChecks.map((check) => {
-    if (check.id !== 'provider-proxy' || check.status !== 'fail') return check;
-    if (!providerProxyProbeFailureIsTransportOnly(check.error)) return check;
+    if (check.id !== 'model-router' || check.status !== 'fail') return check;
+    if (!modelRouterProbeFailureIsTransportOnly(check.error)) return check;
     return {
       id: check.id,
       label: check.label,
@@ -315,7 +314,7 @@ function reconcileProviderProxyServiceCheck(
   });
 }
 
-function providerProxyProbeFailureIsTransportOnly(error: string | undefined): boolean {
+function modelRouterProbeFailureIsTransportOnly(error: string | undefined): boolean {
   if (!error) return false;
   return /aborted|aborterror|timed out|timeout|failed to fetch|couldn'?t connect|connection refused|econnrefused|network/i.test(error)
     && !/not ready|upstream-outage|provider-auth|rate-limited|blocked|unauthorized|forbidden/i.test(error);
@@ -425,7 +424,7 @@ function nextActions(input: {
   if (failed.length > 0) {
     actions.push({
       label: `Start or repair local services: ${failed.map((check) => check.id).join(', ')}.`,
-      command: 'Start UI, workspace writer, Runtime Codex sidecar, and provider proxy; then rerun this preflight.',
+      command: 'Start UI, workspace writer, Runtime Codex sidecar, and Model Router; then rerun this preflight.',
       writesRepo: false,
     });
   }
@@ -437,7 +436,7 @@ function nextActions(input: {
         input.runtimeProviderPreflight.category,
         input.runtimeProviderPreflight.readIssue,
       ].filter(Boolean).join(', ')}.`,
-      command: 'Set Runtime Codex provider variables in the workspace writer service environment and rerun this preflight.',
+      command: 'Set Runtime Codex Model Router variables in the workspace writer service environment and rerun this preflight.',
       writesRepo: false,
     });
   }
@@ -609,8 +608,6 @@ function envWithLocalConfigDefaults(
 ): NodeJS.ProcessEnv {
   const effective: NodeJS.ProcessEnv = { ...env };
   for (const name of [
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
-    'SCIFORGE_RUNTIME_BASE_URL',
     'SCIFORGE_VISION_DESKTOP_BRIDGE',
     'SCIFORGE_VISION_INPUT_ADAPTER',
     'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
@@ -624,30 +621,14 @@ function envWithLocalConfigDefaults(
 
 function configPathsForEnv(name: string): string[][] {
   if (name === 'SCIFORGE_RUNTIME_API_KEY') {
-    return [
-      ['apiKey'],
-      ['llm', 'apiKey'],
-      ['llm', 'upstreamApiKey'],
-      ['textLLM', 'apiKey'],
-      ['textLLM', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
-      ['codexProxy', 'apiKey'],
-      ['runtimeCodexProxy', 'apiKey'],
-    ];
+    return [];
   }
-  if (name === 'SCIFORGE_PROXY_UPSTREAM_BASE_URL' || name === 'SCIFORGE_RUNTIME_BASE_URL') {
-    return [
-      ['modelBaseUrl'],
-      ['llm', 'baseUrl'],
-      ['llm', 'upstreamBaseUrl'],
-      ['textLLM', 'baseUrl'],
-      ['textLLM', 'upstreamBaseUrl'],
-      ['textLLM', 'env', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
-      ['textLLM', 'env', 'SCIFORGE_RUNTIME_BASE_URL'],
-      ['codexProxy', 'upstreamBaseUrl'],
-      ['codexProxy', 'baseUrl'],
-      ['runtimeCodexProxy', 'upstreamBaseUrl'],
-      ['runtimeCodexProxy', 'baseUrl'],
-    ];
+  if (
+    name === 'SCIFORGE_MODEL_ROUTER_BASE_URL'
+    || name === 'SCIFORGE_MODEL_ROUTER_URL'
+    || name === 'SCIFORGE_MODEL_ROUTER_PORT'
+  ) {
+    return [];
   }
   if (name === 'SCIFORGE_VISION_DESKTOP_BRIDGE') {
     return [
@@ -741,16 +722,10 @@ function loopbackUrl(portValue: string | undefined, defaultPort: number, path: s
   return `http://127.0.0.1:${safePort}${path}`;
 }
 
-function providerProxyHealthUrl(env: NodeJS.ProcessEnv): string {
-  return providerProxyUpstreamHealthUrl(
-    serviceHealthUrl(env.SCIFORGE_PROXY_URL, '/healthz')
-      || loopbackUrl(env.SCIFORGE_PROXY_PORT, 3891, '/healthz'),
-  );
-}
-
-function providerProxyFallbackHealthUrls(env: NodeJS.ProcessEnv): string[] {
-  if (env.SCIFORGE_PROXY_URL || env.SCIFORGE_PROXY_PORT) return [];
-  return [providerProxyUpstreamHealthUrl(loopbackUrl(env.SCIFORGE_MODEL_ROUTER_PORT, 3892, '/healthz'))];
+function modelRouterHealthUrl(env: NodeJS.ProcessEnv): string {
+  const explicit = env.SCIFORGE_MODEL_ROUTER_BASE_URL?.trim() || env.SCIFORGE_MODEL_ROUTER_URL?.trim();
+  if (explicit) return modelRouterHealthUrlFromBase(explicit);
+  return loopbackUrl(env.SCIFORGE_MODEL_ROUTER_PORT, 3892, '/healthz');
 }
 
 function serviceHealthUrl(base: string | undefined, path: string): string | undefined {
@@ -772,20 +747,41 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function providerProxyUpstreamHealthUrl(value: string): string {
-  return withQueryParam(value, 'check', 'upstream');
-}
-
-function withQueryParam(value: string, key: string, paramValue: string): string {
+function modelRouterHealthUrlFromBase(value: string): string {
+  const trimmed = value.trim();
   try {
-    const url = new URL(value);
-    url.searchParams.set(key, paramValue);
+    const url = new URL(trimmed);
+    url.pathname = modelRouterHealthPath(url.pathname);
+    url.search = '';
+    url.hash = '';
     return url.toString();
   } catch {
-    const [beforeHash, hash = ''] = value.split('#', 2);
-    const separator = beforeHash.includes('?') ? '&' : '?';
-    return `${beforeHash}${separator}${encodeURIComponent(key)}=${encodeURIComponent(paramValue)}${hash ? `#${hash}` : ''}`;
+    return modelRouterRawHealthUrl(trimmed);
   }
+}
+
+function modelRouterHealthPath(pathname: string): string {
+  const normalized = pathname.replace(/\/+$/u, '');
+  if (!normalized || normalized === '/') return '/healthz';
+  if (/\/healthz$/iu.test(normalized)) return normalized;
+  if (/\/health$/iu.test(normalized)) return normalized.replace(/\/health$/iu, '/healthz');
+  if (/\/v1(?:\/(?:responses|models))?$/iu.test(normalized)) {
+    const prefix = normalized.replace(/\/v1(?:\/(?:responses|models))?$/iu, '');
+    return `${prefix || ''}/healthz`;
+  }
+  return `${normalized}/healthz`;
+}
+
+function modelRouterRawHealthUrl(value: string): string {
+  const [withoutHash] = value.split('#', 1);
+  const [withoutQuery] = withoutHash.split('?', 1);
+  const normalized = withoutQuery.replace(/\/+$/u, '');
+  if (/\/healthz$/iu.test(normalized)) return normalized;
+  if (/\/health$/iu.test(normalized)) return normalized.replace(/\/health$/iu, '/healthz');
+  if (/\/v1(?:\/(?:responses|models))?$/iu.test(normalized)) {
+    return `${normalized.replace(/\/v1(?:\/(?:responses|models))?$/iu, '')}/healthz`;
+  }
+  return `${normalized}/healthz`;
 }
 
 function healthPayloadReportsNotReady(payload: Record<string, unknown>): boolean {

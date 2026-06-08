@@ -235,7 +235,7 @@ test('聊天流式请求连接到 Codex Runtime bridge，但 public run event �
   const runtime = auditMetadata.runtime as Record<string, unknown>;
   assert.equal(runtime.provider, 'sciforge-model-router');
   assert.equal(runtime.model, 'sciforge-router');
-  assert.equal(runtime.apiKeyConfigured, true);
+  assert.equal(runtime.apiKeyConfigured, false);
   assert.equal(runtime.allowOpenAiRuntime, false);
   assert.equal(body.commandText, 'Summarize current context');
   assert.equal(body.codexSessionId, undefined);

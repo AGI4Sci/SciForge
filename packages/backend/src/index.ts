@@ -9,11 +9,6 @@ export {
   chatCompletionToResponse,
   responsesToChatCompletions,
 } from './response-compat';
-export type { StartedCodexResponsesProxy } from './proxy';
-export {
-  createCodexResponsesProxyServer,
-  startCodexResponsesProxyServer,
-} from './proxy';
 export type {
   CodexForkGateInput,
   CodexForkGateResult,

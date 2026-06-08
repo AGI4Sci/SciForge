@@ -589,11 +589,11 @@ test('Runtime Codex foreground final message can use native assistant message pr
 
     assert.equal(response.message.content, 'VISIBLE_FOREGROUND_NATIVE_MESSAGE');
     assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
-    assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
+    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
     assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
     const raw = response.run.raw as Record<string, unknown>;
-    const nativeMessage = raw.nativeCodexMessage as Record<string, unknown>;
-    assert.equal(nativeMessage.liveAcceptanceEligible, true);
+    const finalAnswer = raw.finalAnswerEnvelope as Record<string, unknown>;
+    assert.equal(finalAnswer.liveAcceptanceEligible, true);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -627,7 +627,7 @@ test('Runtime Codex done-only final text can use native assistant message proven
     assert.equal(response.run.status, 'completed');
     assert.equal(response.message.content, 'VISIBLE_DONE_ONLY_NATIVE_MESSAGE');
     assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
-    assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
+    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -662,7 +662,7 @@ test('Runtime Codex text-only SSE message can use native assistant message prove
 
     assert.equal(response.run.status, 'completed');
     assert.equal(response.message.content, 'VISIBLE_TEXT_ONLY_NATIVE_MESSAGE');
-    assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
+    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -695,16 +695,16 @@ test('Runtime Codex generic done status without final text still fails closed', 
 
     assert.equal(response.message.status, 'failed');
     assert.equal(response.run.status, 'failed');
-    assert.match(response.message.content, /Runtime Codex completed without gui\.present/);
+    assert.match(response.message.content, /Runtime Codex completed without a safe final assistant answer/);
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
-    assert.equal(failure.failureKind, 'missing-gui-present');
+    assert.equal(failure.failureKind, 'missing-final-answer');
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('Runtime Codex BrowserHostSession Agent Host candidate result asks for source reading without gui.present', async () => {
+test('Runtime Codex BrowserHostSession Agent Host candidate result asks for source reading before final answer', async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async (_url, init) => {
@@ -805,7 +805,7 @@ test('Runtime Codex BrowserHostSession Agent Host candidate result asks for sour
   }
 });
 
-test('Runtime Codex BrowserHostSession repair-needed diagnostics stay visible without gui.present', async () => {
+test('Runtime Codex BrowserHostSession repair-needed diagnostics stay visible before final answer', async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async (_url, init) => {
@@ -1042,7 +1042,7 @@ test('Runtime Codex foreground tool-call protocol text fails closed instead of c
     assert.doesNotMatch(response.message.content, /DSML|tool_call|private-skill/);
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
-    assert.equal(failure.failureKind, 'missing-gui-present');
+    assert.equal(failure.failureKind, 'missing-final-answer');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1090,7 +1090,7 @@ test('Runtime Codex foreground plural tool_calls protocol text fails closed inst
     assert.doesNotMatch(response.message.content, /DSML|tool_calls|multi_agent|伊朗/);
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
-    assert.equal(failure.failureKind, 'missing-gui-present');
+    assert.equal(failure.failureKind, 'missing-final-answer');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1134,11 +1134,11 @@ test('Runtime Codex foreground module_invoke protocol text fails closed instead 
     const response = await sendSciForgeToolMessage(runtimeRequestInput());
     assert.equal(response.message.status, 'failed');
     assert.equal(response.run.status, 'failed');
-    assert.match(response.message.content, /Runtime Codex completed without gui\.present/);
+    assert.match(response.message.content, /Runtime Codex completed without a safe final assistant answer/);
     assert.doesNotMatch(response.message.content, /module_invoke|browser|executeBoundedOperation/);
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
-    assert.equal(failure.failureKind, 'missing-gui-present');
+    assert.equal(failure.failureKind, 'missing-final-answer');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1188,11 +1188,11 @@ test('Runtime Codex foreground malformed function_calls protocol text fails clos
     const response = await sendSciForgeToolMessage(runtimeRequestInput());
     assert.equal(response.message.status, 'failed');
     assert.equal(response.run.status, 'failed');
-    assert.match(response.message.content, /Runtime Codex completed without gui\.present/);
+    assert.match(response.message.content, /Runtime Codex completed without a safe final assistant answer/);
     assert.doesNotMatch(response.message.content, /module_invoke|function_calls|browser|executeBoundedOperation|agentic reinforcement/i);
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
-    assert.equal(failure.failureKind, 'missing-gui-present');
+    assert.equal(failure.failureKind, 'missing-final-answer');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1814,6 +1814,89 @@ test('Runtime Codex app-server threadId is fixed to the same chat lane on follow
   assert.equal(realtimeSession.threadRef, `codex-thread:${nativeThreadId}`);
   assert.equal(realtimeSession.resumeRequested, true);
   assert.match(String(secondBody.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+});
+
+test('Runtime Codex retries stale native resume once as a fresh thread when app-server rollout is missing', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const staleThreadId = '019e6480-0000-7000-9000-staleold';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      bodies.push(body);
+      const commandId = String(body.commandId);
+      const attemptId = String(body.attemptId);
+      if (bodies.length === 1) {
+        return new Response([
+          'event: error\n',
+          `data: ${JSON.stringify({
+            type: 'error',
+            ok: false,
+            error: `no rollout found for thread id ${staleThreadId}`,
+          })}\n\n`,
+        ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+      }
+      return new Response([
+        'event: message\n',
+        `data: ${JSON.stringify({
+          type: 'message',
+          text: 'Fresh Runtime Codex answer.',
+          threadId: 'thread-fresh-after-stale-resume',
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          commandId,
+          attemptId,
+          threadId: 'thread-fresh-after-stale-resume',
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '继续普通聊天',
+      conversationLaneId: 'workbench:literature-evidence-review:session-test',
+      runs: [{
+        id: 'codex-command-stale',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'previous prompt',
+        response: 'previous answer',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        completedAt: '2026-05-19T00:00:01.000Z',
+        raw: {
+          codexSessionId: staleThreadId,
+          conversationLaneId: 'workbench:literature-evidence-review:session-test',
+        },
+      }],
+    });
+
+    assert.equal(response.message.content, 'Fresh Runtime Codex answer.');
+    assert.equal((response.run.raw as Record<string, unknown>).codexSessionId, 'thread-fresh-after-stale-resume');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const firstBody = bodies[0]!;
+  const firstRealtimeSession = firstBody.realtimeSession as Record<string, unknown>;
+  assert.equal(firstBody.codexSessionId, staleThreadId);
+  assert.equal(firstRealtimeSession.codexSessionId, staleThreadId);
+  assert.equal(firstRealtimeSession.resumeRequested, true);
+  assert.match(String(firstBody.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+
+  const secondBody = bodies[1]!;
+  const secondRealtimeSession = secondBody.realtimeSession as Record<string, unknown>;
+  assert.equal(secondBody.commandId, firstBody.commandId);
+  assert.equal(secondBody.attemptId, `${String(firstBody.commandId)}-attempt-2`);
+  assert.equal(secondBody.codexSessionId, undefined);
+  assert.equal(secondRealtimeSession.codexSessionId, undefined);
+  assert.equal(secondRealtimeSession.resumeRequested, false);
+  assert.doesNotMatch(String(secondBody.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+  assert.match(String(secondBody.commandText ?? ''), /继续普通聊天/);
 });
 
 test('Runtime Codex annotation quick action starts a fresh native thread even with selected lineage', async () => {
@@ -2937,7 +3020,7 @@ test('Runtime Codex provider auth failures surface a sanitized recoverable reaso
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
     const recoverState = failure.recoverState as Record<string, unknown>;
-    const publicReason = 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.';
+    const publicReason = 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured Model Router member model credentials.';
 
     assert.equal(failure.publicFailureReason, publicReason);
     assert.equal(recoverState.publicFailureReason, publicReason);
@@ -2972,7 +3055,7 @@ test('Runtime Codex provider forbidden failures surface a sanitized account acce
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
     const recoverState = failure.recoverState as Record<string, unknown>;
-    const publicReason = 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.';
+    const publicReason = 'Runtime Codex provider or plugin access was forbidden (403). Check the configured Model Router member model credentials and account access.';
 
     assert.equal(failure.publicFailureReason, publicReason);
     assert.equal(recoverState.publicFailureReason, publicReason);
@@ -3073,7 +3156,7 @@ test('Runtime Codex DNS failures are classified as retryable external-network wi
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
     const recoverState = failure.recoverState as Record<string, unknown>;
-    const publicReason = 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.';
+    const publicReason = 'Runtime Codex provider network request failed. Check network access and the configured Model Router member model endpoint.';
 
     assert.equal(failure.failureKind, 'external-network');
     assert.equal(failure.ownerLayer, 'external-network');

@@ -56,7 +56,7 @@ function parseArgs(args: string[]) {
     const index = args.indexOf(name);
     return index >= 0 ? args[index + 1] : undefined;
   };
-  const prompt = get('--prompt') ?? positionalArgs(args, ['--workspace', '--proxy-base-url', '--sandbox', '--prompt'])[0];
+  const prompt = get('--prompt') ?? positionalArgs(args, ['--workspace', '--model-router-base-url', '--sandbox', '--prompt'])[0];
   if (!prompt) {
     console.error('Missing prompt. Pass --prompt "..." or a positional prompt.');
     process.exit(2);
@@ -64,7 +64,7 @@ function parseArgs(args: string[]) {
   return {
     prompt,
     workspace: get('--workspace'),
-    proxyBaseUrl: get('--proxy-base-url') ?? process.env.SCIFORGE_PROXY_BASE_URL,
+    proxyBaseUrl: get('--model-router-base-url') ?? process.env.SCIFORGE_MODEL_ROUTER_BASE_URL,
     allowWorkspaceOutsideRuntimeRoot: args.includes('--allow-workspace-outside-runtime-root'),
     sandbox: get('--sandbox'),
   };

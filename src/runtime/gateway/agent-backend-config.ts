@@ -1,4 +1,4 @@
-import type { AgentBackendAdapter, AgentBackendCapabilities, GatewayRequest, LlmEndpointConfig } from '../runtime-types.js';
+import type { AgentBackendAdapter, AgentBackendCapabilities, GatewayRequest } from '../runtime-types.js';
 import { DEFAULT_AGENT_SERVER_URL } from '@sciforge-ui/runtime-contract/handoff';
 import {
   runtimeAgentBackendCapabilities,
@@ -25,14 +25,12 @@ export const BACKEND_ALLOW_DEFAULT_LLM_ENV = 'SCIFORGE_ALLOW_AGENTSERVER_DEFAULT
 export type BackendSelectionSource =
   | 'request.agentBackend'
   | 'env.SCIFORGE_AGENTSERVER_BACKEND'
-  | 'llmEndpoint.baseUrl'
   | 'runtime.default';
 
 export type BackendGenerationDispatchOptInSource =
   | 'request.agentBackend'
   | 'request.forceAgentServerGeneration'
   | 'request.agentServerBaseUrl'
-  | 'request.llmEndpoint'
   | 'env.SCIFORGE_AGENTSERVER_BACKEND'
   | 'env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH';
 
@@ -95,8 +93,8 @@ export function providerForBackend(backend: string) {
   return runtimeAgentBackendProvider(backend);
 }
 
-export function selectedAgentBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
-  return backendSelectionDecisionForRequest(request, llmEndpoint).backend;
+export function selectedAgentBackend(request?: GatewayRequest) {
+  return backendSelectionDecisionForRequest(request).backend;
 }
 
 export function normalizeBackendBaseUrl(value: unknown) {
@@ -164,13 +162,12 @@ export function requiresUserLlmEndpointForBackendBaseUrl(
 
 export function backendSelectionDecisionForRequest(
   request?: GatewayRequest,
-  llmEndpoint?: LlmEndpointConfig,
 ): BackendSelectionDecision {
   const requestBackend = request?.agentBackend?.trim();
   const envBackend = process.env.SCIFORGE_AGENTSERVER_BACKEND?.trim();
-  const endpoint = llmEndpoint ?? request?.llmEndpoint;
-  const endpointConfigured = Boolean(endpoint?.baseUrl?.trim());
+  const endpointConfigured = false;
   const ignoredSources: BackendSelectionDecision['trace']['ignoredSources'] = [];
+  if (request?.llmEndpoint?.baseUrl?.trim()) ignoredSources.push('request.llmEndpoint.baseUrl:ignored-model-router-only');
   if (runtimeAgentBackendSupported(requestBackend)) {
     return backendSelectionDecision(requestBackend, 'request.agentBackend', 'request selected a supported agent backend', {
       requestBackend,
@@ -189,14 +186,6 @@ export function backendSelectionDecisionForRequest(
     });
   }
   ignoredSources.push(`env.SCIFORGE_AGENTSERVER_BACKEND:${envBackend ? 'unsupported' : 'missing'}`);
-  if (endpointConfigured) {
-    return backendSelectionDecision('openteam_agent', 'llmEndpoint.baseUrl', 'configured LLM endpoint routes through the OpenTeam agent backend', {
-      requestBackend,
-      envBackend,
-      endpointConfigured,
-      ignoredSources,
-    });
-  }
   return backendSelectionDecision('codex', 'runtime.default', 'no supported backend override or LLM endpoint was configured; using default backend', {
     requestBackend,
     envBackend,
@@ -207,8 +196,6 @@ export function backendSelectionDecisionForRequest(
 
 export function backendGenerationDispatchQuarantineDecision(
   request?: GatewayRequest,
-  llmEndpoint?: LlmEndpointConfig,
-  llmEndpointSource?: string,
 ): BackendGenerationDispatchQuarantineDecision {
   const uiState = isRecord(request?.uiState) ? request.uiState : {};
   const requestBackend = request?.agentBackend?.trim();
@@ -222,7 +209,7 @@ export function backendGenerationDispatchQuarantineDecision(
     legacyCompatEnv: process.env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH === '1',
   };
   const source = dispatchOptInSource(explicitSignals);
-  const backendSelectionDecision = backendSelectionDecisionForRequest(request, llmEndpoint);
+  const backendSelectionDecision = backendSelectionDecisionForRequest(request);
   if (source) {
     return {
       schemaVersion: 'sciforge.backend-generation-dispatch-quarantine.v1',
@@ -256,7 +243,6 @@ function dispatchOptInSource(signals: BackendGenerationDispatchQuarantineDecisio
   if (signals.requestBackendSupported) return 'request.agentBackend';
   if (signals.requestForceGeneration) return 'request.forceAgentServerGeneration';
   if (signals.requestAgentServerBaseUrl) return 'request.agentServerBaseUrl';
-  if (signals.requestLlmEndpoint) return 'request.llmEndpoint';
   if (signals.envBackendSupported) return 'env.SCIFORGE_AGENTSERVER_BACKEND';
   if (signals.legacyCompatEnv) return 'env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH';
   return undefined;
@@ -300,7 +286,7 @@ function backendSelectionDecision(
       fallbackBackend: 'codex',
     },
     trace: {
-      selectionOrder: ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'llmEndpoint.baseUrl', 'runtime.default'],
+      selectionOrder: ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'runtime.default'],
       ignoredSources: input.ignoredSources,
     },
   };

@@ -1,6 +1,6 @@
 # SciForge 使用与运维
 
-最后更新：2026-06-06
+最后更新：2026-06-08
 
 ## 边界
 
@@ -75,14 +75,17 @@ git diff --check
 ## 当前产品验收提醒
 
 - Web / Vite dev 只能证明 UI 或 diagnostic，不能证明 Desktop native Browser / Computer Use 产品 ready。
-- Browser 用户级验收需要普通聊天入口、Codex backend completion truth、source page refs / page text refs 和 final answer。
-- Computer Use 用户级验收需要普通聊天入口、Codex backend completion truth、before / after action evidence、executor event 和 final answer。
+- Agent Host 是唯一智能体；它的模型能力统一来自 Model Router `/v1/responses`。
+- Model Router 只是多模态 API 边界，不拥有 workflow、工具选择、completion truth 或 final answer。
+- SciForge UI 只消费 Codex App Server protocol events，并由 App Server assistant final message 生成 `FinalAnswerEnvelope`；GUI projection 不等于 turn completion。
+- Browser 用户级验收需要普通聊天入口、Agent Host completion truth、source page refs / page text refs 和 final answer。
+- Computer Use 用户级验收需要普通聊天入口、Agent Host completion truth、before / after action evidence、executor event 和 final answer。
 - Artifact / PPT 用户级验收需要 final artifact refs 和 validator refs。
 
 ## 配置提醒
 
 - 不要把 secret、provider raw URL、API key 或 raw model slug 写入文档、trace 或长期主上下文。
-- Runtime Codex / browser release acceptance 需要在 service 环境设置 `SCIFORGE_RUNTIME_API_KEY`；配置文件里的 apiKey 只能作为本地 provider proxy 调试 fallback，不能算作验收凭据。
-- Provider proxy 需要 OpenAI-compatible upstream base URL，例如 `SCIFORGE_PROXY_UPSTREAM_BASE_URL` 或非 secret 的本地 upstream 配置；缺 upstream 时必须 blocked / fail closed。
+- Runtime Codex / browser release acceptance 需要在 service 环境设置 `SCIFORGE_RUNTIME_API_KEY`，并把 Runtime / Browser API base 指向 Model Router，例如 `SCIFORGE_MODEL_ROUTER_BASE_URL=http://127.0.0.1:<router>/v1`；配置文件里的 apiKey 不能算作验收凭据。
+- `config.local.json` 只作为 Model Router 成员模型配置来源；成员模型 provider、base URL、model 和 key env 使用 `SCIFORGE_TEXT_*` / `SCIFORGE_VISION_*`，不能作为 Runtime Codex 直连 upstream。
 - 大对象必须 refs-first。
 - 运行期配置以实际代码和本地配置文件为准；本文不列完整配置矩阵。

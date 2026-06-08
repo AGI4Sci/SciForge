@@ -1266,7 +1266,7 @@ export async function startFeedbackCodexPtyTerminal(
       workspacePath: input.workspacePath || config.workspacePath,
       initialMessage: input.initialMessage,
       runtimeProfile: input.runtimeProfile || config.runtimeProfile,
-      allowOpenAiRuntime: input.allowOpenAiRuntime ?? config.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       gitMode: input.gitMode || 'manual',
       launchSurface: input.launchSurface || 'system-terminal',
       cols: input.cols,

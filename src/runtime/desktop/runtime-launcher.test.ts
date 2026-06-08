@@ -21,7 +21,7 @@ test('production launcher exposes ready and health over dynamic loopback control
     requestedControlPort: 0,
     requestedUiPort: 0,
     requestedWorkspacePort: 0,
-    requestedProviderProxyPort: 0,
+    requestedModelRouterPort: 0,
     requestedRuntimeCodexPort: 0,
   });
   const started = await launcher.start();
@@ -33,7 +33,7 @@ test('production launcher exposes ready and health over dynamic loopback control
     assert.equal(health.ok, true);
     assert.equal(health.ready, true);
     const ports = health.ports as Array<{ name: string; requested: number; actual: number; url: string; conflict: boolean }>;
-    assert.deepEqual(ports.map((port) => port.name), ['control', 'ui', 'workspace-writer', 'provider-proxy', 'runtime-codex']);
+    assert.deepEqual(ports.map((port) => port.name), ['control', 'ui', 'workspace-writer', 'model-router', 'runtime-codex']);
     for (const port of ports) {
       assert.ok(port.actual > 0, `${port.name} actual port should be assigned`);
       assert.equal(port.url, `http://127.0.0.1:${port.actual}`);
@@ -75,18 +75,18 @@ test('production launcher moves control API to the next free loopback port on co
 test('production launcher resolves sidecar port conflicts and injects actual ports into managed services', async () => {
   const root = await tempRoot();
   const occupiedWorkspace = createServer();
-  const occupiedProviderProxy = createServer();
+  const occupiedModelRouter = createServer();
   const occupiedRuntime = createServer();
   occupiedWorkspace.listen(0, '127.0.0.1');
-  occupiedProviderProxy.listen(0, '127.0.0.1');
+  occupiedModelRouter.listen(0, '127.0.0.1');
   occupiedRuntime.listen(0, '127.0.0.1');
   await Promise.all([
     new Promise<void>((resolve) => occupiedWorkspace.once('listening', resolve)),
-    new Promise<void>((resolve) => occupiedProviderProxy.once('listening', resolve)),
+    new Promise<void>((resolve) => occupiedModelRouter.once('listening', resolve)),
     new Promise<void>((resolve) => occupiedRuntime.once('listening', resolve)),
   ]);
   const workspacePort = portForServer(occupiedWorkspace);
-  const providerProxyPort = portForServer(occupiedProviderProxy);
+  const modelRouterPort = portForServer(occupiedModelRouter);
   const runtimeCodexPort = portForServer(occupiedRuntime);
   const child = new FakeChild(1203);
   const capturedEnv: NodeJS.ProcessEnv[] = [];
@@ -96,9 +96,9 @@ test('production launcher resolves sidecar port conflicts and injects actual por
     requestedControlPort: 0,
     requestedUiPort: 0,
     requestedWorkspacePort: workspacePort,
-    requestedProviderProxyPort: providerProxyPort,
+    requestedModelRouterPort: modelRouterPort,
     requestedRuntimeCodexPort: runtimeCodexPort,
-    services: [service('provider-proxy'), service('runtime-codex')],
+    services: [service('model-router'), service('runtime-codex')],
     spawnProcess: ((_command, _args, options) => {
       capturedEnv.push(options.env);
       return child;
@@ -108,16 +108,16 @@ test('production launcher resolves sidecar port conflicts and injects actual por
   try {
     const started = await launcher.start();
     const workspaceBinding = started.ports.find((port) => port.name === 'workspace-writer');
-    const providerBinding = started.ports.find((port) => port.name === 'provider-proxy');
+    const modelRouterBinding = started.ports.find((port) => port.name === 'model-router');
     const runtimeBinding = started.ports.find((port) => port.name === 'runtime-codex');
     const uiBinding = started.ports.find((port) => port.name === 'ui');
 
     assert.equal(workspaceBinding?.requested, workspacePort);
     assert.equal(workspaceBinding?.conflict, true);
     assert.notEqual(workspaceBinding?.actual, workspacePort);
-    assert.equal(providerBinding?.requested, providerProxyPort);
-    assert.equal(providerBinding?.conflict, true);
-    assert.notEqual(providerBinding?.actual, providerProxyPort);
+    assert.equal(modelRouterBinding?.requested, modelRouterPort);
+    assert.equal(modelRouterBinding?.conflict, true);
+    assert.notEqual(modelRouterBinding?.actual, modelRouterPort);
     assert.equal(runtimeBinding?.requested, runtimeCodexPort);
     assert.equal(runtimeBinding?.conflict, true);
     assert.notEqual(runtimeBinding?.actual, runtimeCodexPort);
@@ -126,8 +126,10 @@ test('production launcher resolves sidecar port conflicts and injects actual por
     assert.match(String(capturedEnv[0]?.SCIFORGE_UI_PORT), /^\d+$/);
     assert.equal(capturedEnv[0]?.SCIFORGE_WORKSPACE_PORT, String(workspaceBinding?.actual));
     assert.equal(capturedEnv[0]?.SCIFORGE_WORKSPACE_WRITER_URL, workspaceBinding?.url);
-    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_PORT, String(providerBinding?.actual));
-    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_BASE_URL, providerBinding?.url);
+    assert.equal(capturedEnv[0]?.SCIFORGE_MODEL_ROUTER_PORT, String(modelRouterBinding?.actual));
+    assert.equal(capturedEnv[0]?.SCIFORGE_MODEL_ROUTER_BASE_URL, `${modelRouterBinding?.url}/v1`);
+    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_PORT, undefined);
+    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_BASE_URL, undefined);
     assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_PORT, String(runtimeBinding?.actual));
     assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_URL, runtimeBinding?.url);
     assert.equal(capturedEnv[0]?.SCIFORGE_DESKTOP_SIDECAR, '1');
@@ -146,7 +148,7 @@ test('production launcher resolves sidecar port conflicts and injects actual por
     await launcher.shutdown();
     await Promise.all([
       new Promise<void>((resolve) => occupiedWorkspace.close(() => resolve())),
-      new Promise<void>((resolve) => occupiedProviderProxy.close(() => resolve())),
+      new Promise<void>((resolve) => occupiedModelRouter.close(() => resolve())),
       new Promise<void>((resolve) => occupiedRuntime.close(() => resolve())),
     ]);
   }
@@ -184,16 +186,13 @@ test('production launcher records child stderr to folded audit and reports faile
   }
 });
 
-test('production launcher projects only non-secret proxy config into app-data config for packaged sidecars', async () => {
+test('production launcher does not project member model config into app-data config for packaged sidecars', async () => {
   const root = await tempRoot();
   const sourceConfig = join(root, 'source-config.local.json');
   await writeFile(sourceConfig, JSON.stringify({
-    codexProxy: {
-      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
-      defaultModel: 'bailian/deepseek-v4-flash',
-      apiKey: 'sk-should-not-copy',
-    },
     llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
       apiKey: 'sk-llm-should-not-copy',
     },
   }), 'utf8');
@@ -209,9 +208,7 @@ test('production launcher projects only non-secret proxy config into app-data co
     await launcher.start();
     const desktopConfigPath = join(root, 'app-data', 'config', 'config.local.json');
     const desktopConfig = await readFile(desktopConfigPath, 'utf8');
-    assert.match(desktopConfig, /provider\.example\.test/);
-    assert.match(desktopConfig, /bailian\/deepseek-v4-flash/);
-    assert.doesNotMatch(desktopConfig, /apiKey|sk-should-not-copy|sk-llm-should-not-copy/);
+    assert.doesNotMatch(desktopConfig, /codexProxy|provider\.example\.test|bailian\/deepseek-v4-flash|apiKey|sk-llm-should-not-copy/);
   } finally {
     if (previousConfigPath === undefined) {
       delete process.env.SCIFORGE_CONFIG_PATH;
@@ -226,9 +223,9 @@ test('production launcher projects only non-secret Computer Use input adapter co
   const root = await tempRoot();
   const sourceConfig = join(root, 'source-config.local.json');
   await writeFile(sourceConfig, JSON.stringify({
-    codexProxy: {
-      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
-      defaultModel: 'bailian/deepseek-v4-flash',
+    llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
       apiKey: 'sk-should-not-copy',
     },
     visionSense: {
@@ -255,7 +252,7 @@ test('production launcher projects only non-secret Computer Use input adapter co
     workspacePath: join(root, 'workspace'),
     appDataRoot: join(root, 'app-data'),
     requestedControlPort: 0,
-    services: [service('runtime-codex')],
+    services: [service('model-router'), service('runtime-codex')],
     spawnProcess: ((_command, _args, options) => {
       capturedEnv.push(options.env);
       return child;
@@ -285,13 +282,13 @@ test('production launcher projects only non-secret Computer Use input adapter co
   }
 });
 
-test('production launcher maps local provider config into Model Router role env and public runtime alias', async () => {
+test('production launcher keeps member model config on Model Router env and only gives Runtime Codex the router alias', async () => {
   const root = await tempRoot();
   const sourceConfig = join(root, 'source-config.local.json');
   await writeFile(sourceConfig, JSON.stringify({
-    codexProxy: {
-      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
-      defaultModel: 'bailian/deepseek-v4-flash',
+    llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
       apiKey: 'sk-local-dev-secret',
     },
     visionSense: {
@@ -301,10 +298,13 @@ test('production launcher maps local provider config into Model Router role env 
   const envKeys = [
     'SCIFORGE_CONFIG_PATH',
     'SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE',
+    'SCIFORGE_MODEL_ROUTER_API_KEY',
+    'SCIFORGE_MODEL_ROUTER_BASE_URL',
     'SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS',
     'SCIFORGE_PROXY_DEFAULT_MODEL',
     'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
     'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_RUNTIME_BASE_URL',
     'SCIFORGE_RUNTIME_MODEL',
     'SCIFORGE_TEXT_API_KEY',
     'SCIFORGE_TEXT_BASE_URL',
@@ -323,8 +323,8 @@ test('production launcher maps local provider config into Model Router role env 
     workspacePath: join(root, 'workspace'),
     appDataRoot: join(root, 'app-data'),
     requestedControlPort: 0,
-    requestedProviderProxyPort: 0,
-    services: [service('provider-proxy')],
+    requestedModelRouterPort: 0,
+    services: [service('model-router'), service('runtime-codex')],
     spawnProcess: ((_command, _args, options) => {
       capturedEnv.push(options.env);
       return child;
@@ -333,16 +333,46 @@ test('production launcher maps local provider config into Model Router role env 
 
   try {
     const started = await launcher.start();
-    const providerBinding = started.ports.find((port) => port.name === 'provider-proxy');
-    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_MODEL, RUNTIME_MODEL);
-    assert.equal(capturedEnv[0]?.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, RUNTIME_MODEL);
-    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_BASE_URL, 'https://provider.example.test/openai-compatible');
-    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_BASE_URL, 'https://provider.example.test/openai-compatible');
-    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
-    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_MODEL, 'qwen3.7-plus');
-    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_API_KEY, 'sk-local-dev-secret');
-    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_API_KEY, 'sk-local-dev-secret');
-    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_BASE_URL, providerBinding?.url);
+    const modelRouterBinding = started.ports.find((port) => port.name === 'model-router');
+    assert.ok(modelRouterBinding);
+    const modelRouterEnv = capturedEnv[0];
+    const runtimeCodexEnv = capturedEnv[1];
+    assert.ok(modelRouterEnv);
+    assert.ok(runtimeCodexEnv);
+
+    assert.equal(modelRouterEnv.SCIFORGE_RUNTIME_MODEL, RUNTIME_MODEL);
+    assert.equal(modelRouterEnv.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, RUNTIME_MODEL);
+    assert.equal(modelRouterEnv.SCIFORGE_TEXT_BASE_URL, 'https://provider.example.test/openai-compatible');
+    assert.equal(modelRouterEnv.SCIFORGE_VISION_BASE_URL, 'https://provider.example.test/openai-compatible');
+    assert.equal(modelRouterEnv.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+    assert.equal(modelRouterEnv.SCIFORGE_VISION_MODEL, 'qwen3.7-plus');
+    assert.equal(modelRouterEnv.SCIFORGE_TEXT_API_KEY, 'sk-local-dev-secret');
+    assert.equal(modelRouterEnv.SCIFORGE_VISION_API_KEY, 'sk-local-dev-secret');
+    assert.equal(modelRouterEnv.SCIFORGE_PROXY_BASE_URL, undefined);
+    assert.equal(modelRouterEnv.SCIFORGE_MODEL_ROUTER_BASE_URL, `${modelRouterBinding.url}/v1`);
+    assert.equal(modelRouterEnv.SCIFORGE_MODEL_ROUTER_PORT, String(modelRouterBinding.actual));
+    assert.equal(modelRouterEnv.SCIFORGE_RUNTIME_API_KEY, 'sciforge-local-model-router');
+    assert.equal(modelRouterEnv.SCIFORGE_MODEL_ROUTER_API_KEY, 'sciforge-local-model-router');
+    assert.equal(modelRouterEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL, undefined);
+    assert.equal(modelRouterEnv.SCIFORGE_RUNTIME_BASE_URL, undefined);
+    assert.equal(modelRouterEnv.SCIFORGE_PROXY_DEFAULT_MODEL, undefined);
+
+    assert.equal(runtimeCodexEnv.SCIFORGE_RUNTIME_MODEL, RUNTIME_MODEL);
+    assert.equal(runtimeCodexEnv.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, RUNTIME_MODEL);
+    assert.equal(runtimeCodexEnv.SCIFORGE_PROXY_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_MODEL_ROUTER_BASE_URL, `${modelRouterBinding.url}/v1`);
+    assert.equal(runtimeCodexEnv.SCIFORGE_MODEL_ROUTER_PORT, String(modelRouterBinding.actual));
+    assert.equal(runtimeCodexEnv.SCIFORGE_RUNTIME_API_KEY, 'sciforge-local-model-router');
+    assert.equal(runtimeCodexEnv.SCIFORGE_MODEL_ROUTER_API_KEY, 'sciforge-local-model-router');
+    assert.equal(runtimeCodexEnv.SCIFORGE_TEXT_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_VISION_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_TEXT_MODEL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_VISION_MODEL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_TEXT_API_KEY, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_VISION_API_KEY, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_RUNTIME_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_PROXY_DEFAULT_MODEL, undefined);
 
     const runtimeConfig = await readFile(join(root, 'app-data', 'runtime-codex', 'codex-home', 'config.toml'), 'utf8');
     assert.match(runtimeConfig, /model = "sciforge-router"/);
@@ -357,13 +387,249 @@ test('production launcher maps local provider config into Model Router role env 
   }
 });
 
+test('production launcher reads textLLM env member config only for Model Router', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    llm: {
+      baseUrl: 'https://stale-llm.example.test/openai-compatible',
+      model: 'stale-llm-model',
+      apiKey: 'sk-stale-llm-secret',
+    },
+    textLLM: {
+      env: {
+        SCIFORGE_TEXT_PROVIDER: 'openai-compatible',
+        SCIFORGE_TEXT_BASE_URL: 'https://text-env.example.test/openai-compatible',
+        SCIFORGE_TEXT_MODEL: 'text-env-model',
+        SCIFORGE_TEXT_API_KEY: 'sk-text-env-secret',
+      },
+    },
+  }), 'utf8');
+  const envKeys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_TEXT_PROVIDER',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const child = new FakeChild(1208);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    requestedModelRouterPort: 0,
+    services: [service('model-router'), service('runtime-codex')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    await launcher.start();
+    const modelRouterEnv = capturedEnv[0];
+    const runtimeCodexEnv = capturedEnv[1];
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_PROVIDER, 'openai-compatible');
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_BASE_URL, 'https://text-env.example.test/openai-compatible');
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_MODEL, 'text-env-model');
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_API_KEY, 'sk-text-env-secret');
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_PROVIDER, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_MODEL, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_API_KEY, undefined);
+
+    const runtimeConfig = await readFile(join(root, 'app-data', 'runtime-codex', 'codex-home', 'config.toml'), 'utf8');
+    assert.doesNotMatch(runtimeConfig, /text-env-model|text-env\.example|sk-text-env-secret|stale-llm/);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await launcher.shutdown();
+  }
+});
+
+test('production launcher projects llm env and member API key env only to Model Router', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    llm: {
+      env: {
+        SCIFORGE_TEXT_PROVIDER: 'llm-env-provider',
+        SCIFORGE_TEXT_BASE_URL: 'https://llm-env.example.test/openai-compatible',
+        SCIFORGE_TEXT_MODEL: 'llm-env-text-model',
+        SCIFORGE_TEXT_API_KEY_ENV: 'SCIFORGE_TEST_TEXT_MEMBER_KEY',
+      },
+    },
+    visionLLM: {
+      env: {
+        SCIFORGE_VISION_PROVIDER: 'vision-env-provider',
+        SCIFORGE_VISION_BASE_URL: 'https://vision-env.example.test/openai-compatible',
+        SCIFORGE_VISION_MODEL: 'vision-env-model',
+        SCIFORGE_VISION_API_KEY_ENV: 'SCIFORGE_TEST_VISION_MEMBER_KEY',
+      },
+    },
+  }), 'utf8');
+  const envKeys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_TEXT_PROVIDER',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_TEXT_API_KEY_ENV',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_VISION_PROVIDER',
+    'SCIFORGE_VISION_API_KEY',
+    'SCIFORGE_VISION_API_KEY_ENV',
+    'SCIFORGE_VISION_BASE_URL',
+    'SCIFORGE_VISION_MODEL',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const child = new FakeChild(1209);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    requestedModelRouterPort: 0,
+    services: [service('model-router'), service('runtime-codex')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    await launcher.start();
+    const modelRouterEnv = capturedEnv[0];
+    const runtimeCodexEnv = capturedEnv[1];
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_PROVIDER, 'llm-env-provider');
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_BASE_URL, 'https://llm-env.example.test/openai-compatible');
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_MODEL, 'llm-env-text-model');
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_API_KEY, undefined);
+    assert.equal(modelRouterEnv?.SCIFORGE_TEXT_API_KEY_ENV, 'SCIFORGE_TEST_TEXT_MEMBER_KEY');
+    assert.equal(modelRouterEnv?.SCIFORGE_VISION_PROVIDER, 'vision-env-provider');
+    assert.equal(modelRouterEnv?.SCIFORGE_VISION_BASE_URL, 'https://vision-env.example.test/openai-compatible');
+    assert.equal(modelRouterEnv?.SCIFORGE_VISION_MODEL, 'vision-env-model');
+    assert.equal(modelRouterEnv?.SCIFORGE_VISION_API_KEY, undefined);
+    assert.equal(modelRouterEnv?.SCIFORGE_VISION_API_KEY_ENV, 'SCIFORGE_TEST_VISION_MEMBER_KEY');
+
+    assert.equal(runtimeCodexEnv?.SCIFORGE_MODEL_ROUTER_BASE_URL, modelRouterEnv?.SCIFORGE_MODEL_ROUTER_BASE_URL);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_RUNTIME_MODEL, RUNTIME_MODEL);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, RUNTIME_MODEL);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_PROVIDER, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_MODEL, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_API_KEY, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_TEXT_API_KEY_ENV, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_VISION_PROVIDER, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_VISION_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_VISION_MODEL, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_VISION_API_KEY, undefined);
+    assert.equal(runtimeCodexEnv?.SCIFORGE_VISION_API_KEY_ENV, undefined);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await launcher.shutdown();
+  }
+});
+
+test('production launcher strips ambient member-model direct env from Runtime Codex services', async () => {
+  const root = await tempRoot();
+  const envKeys = [
+    'SCIFORGE_PROXY_API_KEY_ENV',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_HOST',
+    'SCIFORGE_PROXY_QUIET',
+    'SCIFORGE_PROXY_URL',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_RUNTIME_BASE_URL',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_VISION_API_KEY',
+    'SCIFORGE_VISION_BASE_URL',
+    'SCIFORGE_VISION_MODEL',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  process.env.SCIFORGE_PROXY_API_KEY_ENV = 'SCIFORGE_STALE_PROXY_KEY';
+  process.env.SCIFORGE_PROXY_DEFAULT_MODEL = 'private-member-model';
+  process.env.SCIFORGE_PROXY_HOST = '0.0.0.0';
+  process.env.SCIFORGE_PROXY_QUIET = '1';
+  process.env.SCIFORGE_PROXY_URL = 'http://127.0.0.1:3891/healthz';
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'https://ambient-provider.example.test/openai-compatible';
+  process.env.SCIFORGE_RUNTIME_API_KEY = 'service-router-key';
+  process.env.SCIFORGE_RUNTIME_BASE_URL = 'https://ambient-runtime.example.test/v1';
+  process.env.SCIFORGE_TEXT_API_KEY = 'sk-ambient-text-secret';
+  process.env.SCIFORGE_TEXT_BASE_URL = 'https://ambient-text.example.test/openai-compatible';
+  process.env.SCIFORGE_TEXT_MODEL = 'ambient-text-model';
+  process.env.SCIFORGE_VISION_API_KEY = 'sk-ambient-vision-secret';
+  process.env.SCIFORGE_VISION_BASE_URL = 'https://ambient-vision.example.test/openai-compatible';
+  process.env.SCIFORGE_VISION_MODEL = 'ambient-vision-model';
+
+  const child = new FakeChild(1207);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    services: [service('model-router'), service('runtime-codex')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    await launcher.start();
+    const modelRouterEnv = capturedEnv[0];
+    const runtimeCodexEnv = capturedEnv[1];
+    assert.ok(modelRouterEnv);
+    assert.ok(runtimeCodexEnv);
+    for (const serviceEnv of [modelRouterEnv, runtimeCodexEnv]) {
+      assert.equal(serviceEnv.SCIFORGE_PROXY_API_KEY_ENV, undefined);
+      assert.equal(serviceEnv.SCIFORGE_PROXY_DEFAULT_MODEL, undefined);
+      assert.equal(serviceEnv.SCIFORGE_PROXY_HOST, undefined);
+      assert.equal(serviceEnv.SCIFORGE_PROXY_QUIET, undefined);
+      assert.equal(serviceEnv.SCIFORGE_PROXY_URL, undefined);
+      assert.equal(serviceEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL, undefined);
+      assert.equal(serviceEnv.SCIFORGE_RUNTIME_BASE_URL, undefined);
+    }
+    assert.equal(runtimeCodexEnv.SCIFORGE_RUNTIME_API_KEY, 'service-router-key');
+    assert.equal(runtimeCodexEnv.SCIFORGE_TEXT_API_KEY, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_TEXT_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_TEXT_MODEL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_VISION_API_KEY, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_VISION_BASE_URL, undefined);
+    assert.equal(runtimeCodexEnv.SCIFORGE_VISION_MODEL, undefined);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await launcher.shutdown();
+  }
+});
+
 test('production launcher does not configure Model Router vision role from text-only config', async () => {
   const root = await tempRoot();
   const sourceConfig = join(root, 'source-config.local.json');
   await writeFile(sourceConfig, JSON.stringify({
-    codexProxy: {
-      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
-      defaultModel: 'bailian/deepseek-v4-flash',
+    llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
       apiKey: 'sk-local-dev-secret',
     },
   }), 'utf8');
@@ -387,8 +653,8 @@ test('production launcher does not configure Model Router vision role from text-
     workspacePath: join(root, 'workspace'),
     appDataRoot: join(root, 'app-data'),
     requestedControlPort: 0,
-    requestedProviderProxyPort: 0,
-    services: [service('provider-proxy')],
+    requestedModelRouterPort: 0,
+    services: [service('model-router')],
     spawnProcess: ((_command, _args, options) => {
       capturedEnv.push(options.env);
       return child;
@@ -414,9 +680,9 @@ test('production launcher uses explicit visionLLM qwen3.7-plus for Model Router 
   const root = await tempRoot();
   const sourceConfig = join(root, 'source-config.local.json');
   await writeFile(sourceConfig, JSON.stringify({
-    codexProxy: {
-      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
-      defaultModel: 'bailian/deepseek-v4-flash',
+    llm: {
+      baseUrl: 'https://provider.example.test/openai-compatible',
+      model: 'bailian/deepseek-v4-flash',
       apiKey: 'sk-local-dev-secret',
     },
     visionLLM: {
@@ -445,8 +711,8 @@ test('production launcher uses explicit visionLLM qwen3.7-plus for Model Router 
     workspacePath: join(root, 'workspace'),
     appDataRoot: join(root, 'app-data'),
     requestedControlPort: 0,
-    requestedProviderProxyPort: 0,
-    services: [service('provider-proxy')],
+    requestedModelRouterPort: 0,
+    services: [service('model-router')],
     spawnProcess: ((_command, _args, options) => {
       capturedEnv.push(options.env);
       return child;
@@ -546,7 +812,7 @@ class AsyncExitFakeChild extends FakeChild {
 function service(id: string): ManagedRuntimeServiceSpec {
   return {
     id,
-    role: id === 'runtime-codex' ? 'runtime-codex' : id === 'provider-proxy' ? 'provider-proxy' : 'workspace-writer',
+    role: id === 'runtime-codex' ? 'runtime-codex' : id === 'model-router' ? 'model-router' : 'workspace-writer',
     command: 'node',
     args: ['service.js'],
   };

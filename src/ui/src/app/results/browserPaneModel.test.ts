@@ -148,17 +148,17 @@ test('browser pane model keeps legacy host-stream projection refs without reusin
       metadata: { finalUrl: 'https://example.org/search?q=host' },
       data: {
         hostSession: {
-          id: 'browser-host-search-1',
+          id: 'browser-host-discovery-1',
           status: 'ready',
           requestedUrl: 'https://example.org/search?q=host',
           url: 'https://example.org/search?q=host',
           title: 'Search results',
-          liveSurfaceRef: 'browser-host-session:browser-host-search-1/live',
+          liveSurfaceRef: 'browser-host-session:browser-host-discovery-1/live',
           liveSurfaceTransport: 'host-stream',
           singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:browser-host-search-1/frame-stream',
-          frameRef: 'browser-host-session:browser-host-search-1/frame.png',
-          searchResultRef: 'browser-host-session:browser-host-search-1/search-results.json',
+          frameStreamRef: 'browser-host-session:browser-host-discovery-1/frame-stream',
+          frameRef: 'browser-host-session:browser-host-discovery-1/frame.png',
+          searchResultRef: 'browser-host-session:browser-host-discovery-1/search-results.json',
           reason: 'search projection ready',
         },
       },
@@ -174,11 +174,11 @@ test('browser pane model keeps legacy host-stream projection refs without reusin
 
   assert.equal(browserAddressForFocusedObjectReference(reference, session), 'https://example.org/search?q=host');
   const hostSession = browserHostSessionForFocusedObjectReference(reference, session);
-  assert.equal(hostSession?.id, 'browser-host-search-1');
+  assert.equal(hostSession?.id, 'browser-host-discovery-1');
   assert.equal(hostSession?.liveSurfaceTransport, undefined);
   assert.equal(hostSession?.singleInteractiveTruth, true);
-  assert.equal(hostSession?.frameStreamRef, 'browser-host-session:browser-host-search-1/frame-stream');
-  assert.equal(hostSession?.searchResultRef, 'browser-host-session:browser-host-search-1/search-results.json');
+  assert.equal(hostSession?.frameStreamRef, 'browser-host-session:browser-host-discovery-1/frame-stream');
+  assert.equal(hostSession?.searchResultRef, 'browser-host-session:browser-host-discovery-1/search-results.json');
   assert.equal(hostSession?.reason, 'search projection ready');
   assert.equal(hostSession?.loadingProgress?.state, 'network-quiet');
   assert.equal(hostSession?.loadingProgress?.reason, 'host-ready');

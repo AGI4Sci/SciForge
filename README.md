@@ -55,7 +55,7 @@ SciForge 提供注册式科学 UI 组件和 interactive views，例如 evidence 
 
 ### 4. TUI CLI 优先：把成熟 Agent 接到同一个科研工作台
 
-SciForge 的目标不是维护自己的 AgentServer，而是直接连接 Codex app-server；`codex exec --json`/CLI bridge 只作为 legacy/test-only 兼容和历史证据，并可把 Claude Code stream-json 作为可选 backend。生产默认让 Codex 使用 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy；OpenAI provider 只能显式 opt in。GUI 把用户动作翻译成终端等价文本，写入 agent host；再消费 Codex app-server rich-client 事件或可选 backend 的结构化事件流来渲染过程。
+SciForge 的目标不是维护自己的 AgentServer，而是直接连接 Codex app-server；`codex exec --json`/CLI bridge 只作为 legacy/test-only 兼容和历史证据，并可把 Claude Code stream-json 作为可选 backend。生产 Runtime Codex 只指向 Model Router public alias `sciforge-router`；真实 provider、model、base URL 和 key 只存在于 Model Router member profile / `config.local.json` member-model 配置中。OpenAI、DeepSeek 或其它模型提供方都只能作为 Model Router 成员模型，不能作为 Runtime Codex 直连 opt-in 路径。GUI 把用户动作翻译成终端等价文本，写入 Agent Host；再消费 Codex app-server rich-client 事件或可选 backend 的结构化事件流来渲染过程。
 
 Codex backend 负责理解、规划、工具调用、文件操作、修复和插件生态；SciForge 负责 GUI 输入、GUI 状态资源、UI 渲染、确认、反馈交接和科研 artifact 呈现。这样可以复用 Codex 的成熟能力，同时避免 SciForge 变成第二个 agent runtime。
 
@@ -63,9 +63,9 @@ Codex backend 负责理解、规划、工具调用、文件操作、修复和插
 
 ### 5. GUI-as-extension：让成熟 TUI agent 拥有逻辑
 
-新的架构方向是让 SciForge GUI 成为 Codex backend 的 GUI extension。GUI 把用户操作翻译成终端等价文本；Codex 继续使用原生 plugin/skill/tool/MCP 和 custom model provider 机制承载 capability discovery、harness/policy、provider route、verifier 和 workspace 操作。
+新的架构方向是让 SciForge GUI 成为 Codex backend 的 GUI extension。GUI 把用户操作翻译成终端等价文本；Codex 继续使用原生 plugin/skill/tool/MCP 承载 capability discovery 和 workspace 操作，custom model provider 固定为 `sciforge-model-router` facade，由 Model Router registered profile 管理 provider routing。Harness / acceptance 只验证协议、证据和 negative guards，不做 planning、source selection、synthesis 或 completion truth。
 
-SciForge 的长期模块范式是 Agent Host Semantic Pipeline：所有模块统一暴露 `module.describe/query/read/invoke`，Agent Host 负责编排 semantic pipeline 和 trace，GUI、skills、memory、capability、verifier、browser/computer-use 都是模块。GUI 模块提供只读虚拟 GUI resource tree 和展示/确认 intent；迁移期 `gui.*` alias 只能由 adapter shim 暴露，例如 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 和 `gui.apply_batch`。
+SciForge 的长期模块范式是 Agent Host Semantic Pipeline：所有模块统一暴露 `module.describe/query/read/invoke`，Agent Host 负责编排 semantic pipeline 和 trace，GUI、skills、memory、capability、verifier、browser/computer-use 都是模块。GUI 模块提供只读虚拟 GUI resource tree 和展示/确认 intent；旧 `gui.*` dynamic tool shim 不再作为产品 surface，SciForge UI 只消费 Codex App Server events 和 assistant final-message projection。
 
 当前设计真相源见 [`docs/Architecture.md`](docs/Architecture.md) 和 [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)。
 
@@ -107,8 +107,9 @@ Computer Use 是可迁移的 GUI primitive runtime，不是独立 agent 或 work
 Scientific question / paper / dataset / UI feedback
   -> GUI translates input to terminal-equivalent text
   -> Codex app-server (required product runtime)
-  -> Codex custom model provider
-  -> DeepSeek deepseek-v4-flash / configured provider proxy by default
+  -> Codex model_provider=sciforge-model-router
+  -> Model Router public alias sciforge-router
+  -> registered member model profile
   -> native plugins / skills / tools / MCP
   -> workspace files / tool calls / computer use
   -> agent-native repair loop when needed
@@ -143,7 +144,7 @@ Present   interactive views：科学 artifact 的可读、可点选、可评论�
 - npm
 - 一个本地 workspace 目录
 - Codex app-server 用于 agent-backed task execution；CLI JSON bridge 仅保留为 legacy/test-only 兼容和历史证据
-- DeepSeek `deepseek-v4-flash` 或 provider proxy，用于默认低成本 model provider
+- 可用的 Model Router；Runtime Codex 配置为 `sciforge-router` public alias，真实成员模型 provider/model/key 在 Model Router profile 或 `config.local.json` 中配置
 
 安装并启动 Web 开发工作台：
 
@@ -181,14 +182,14 @@ npm run desktop:dev
 ```text
 Vite renderer:    http://127.0.0.1:5173
 Workspace writer: http://127.0.0.1:5174
-Provider proxy:   http://127.0.0.1:5175
+Model Router:     http://127.0.0.1:5175
 Runtime Codex:    http://127.0.0.1:5176
 Electron shell:   加载 Vite renderer，并注入 Desktop native host 能力
 ```
 
 开发内置浏览器、全局评论、窗口操作等 Desktop native 能力时，必须使用 `npm run desktop:dev` 打开的 Electron 窗口验证；`http://localhost:5173/` 只等价于调试 React renderer、状态和诊断，不等价于真实 Desktop app。
 
-`desktop:dev` 默认读取被 Git 忽略的 `config.local.json` 或进程环境变量来配置 provider/proxy/model。常用覆盖：
+`desktop:dev` 默认读取被 Git 忽略的 `config.local.json` 或进程环境变量来配置 Model Router member-model profile。`config.local.json` 中的 LLM API 只投影给 Model Router sidecar；desktop/runtime sidecar 不继承 `SCIFORGE_PROXY_*` 或 raw Runtime provider env。常用覆盖：
 
 ```bash
 SCIFORGE_CONFIG_PATH=/path/to/config.local.json npm run desktop:dev
@@ -205,8 +206,8 @@ npm run desktop:start:prod
 在 Settings 中配置：
 
 - `Workspace Path`：`.sciforge/` 状态、任务文件、日志、artifact 和 scenario packages 的存储目录。
-- 迁移期设置里可能仍有 `AgentServer Base URL` / `Agent Backend` 字段；目标架构下产品设置应收敛到 Codex app-server 连接、事件流、provider/model 和权限配置。CLI JSON 兼容只保留在 legacy/test-only adapter 与历史证据中，不作为用户可选 runtime path。默认 provider/model 应为 DeepSeek `deepseek-v4-flash` 或 provider proxy，不得静默 fallback 到 OpenAI。
-- provider、base URL、model、API key、timeout 和 context-window budget。
+- 迁移期设置里可能仍有 `AgentServer Base URL` / `Agent Backend` 字段；目标架构下产品设置应收敛到 Codex app-server 连接、事件流、Model Router readiness/profile、权限配置和 workspace。CLI JSON 兼容只保留在 legacy/test-only adapter 与历史证据中，不作为用户可选 runtime path。Runtime Codex 不得静默 fallback 到 OpenAI 或任何 raw provider。
+- Router alias/profile、timeout、context-window budget、workspace 和权限；不展示或接受 raw provider base URL、UI API key 或 raw upstream model slug。
 
 ## 使用说明
 

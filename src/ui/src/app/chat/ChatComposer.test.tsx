@@ -6,6 +6,53 @@ import { readFileSync } from 'node:fs';
 
 import { ChatComposer } from './ChatComposer';
 
+test('composer exposes stable ordinary chat selectors for desktop UI automation', () => {
+  const collapsedHtml = renderToStaticMarkup(React.createElement(ChatComposer, {
+    expanded: false,
+    input: '',
+    isSending: false,
+    composerHeight: 58,
+    referencePickMode: false,
+    pendingReferences: [],
+    contextMeter: null,
+    fileInputRef: React.createRef<HTMLInputElement>(),
+    referenceChips: null,
+    onExpand: () => undefined,
+    onCollapse: () => undefined,
+    onToggleReferencePickMode: () => undefined,
+    onFileUpload: () => undefined,
+    onInputChange: () => undefined,
+    onSend: () => undefined,
+    onAbort: () => undefined,
+    onBeginResize: () => undefined,
+  }));
+
+  assert.match(collapsedHtml, /data-testid="chat-composer-collapsed-button"/);
+
+  const expandedHtml = renderToStaticMarkup(React.createElement(ChatComposer, {
+    expanded: true,
+    input: 'Hello from Browser P7',
+    isSending: false,
+    composerHeight: 58,
+    referencePickMode: false,
+    pendingReferences: [],
+    contextMeter: null,
+    fileInputRef: React.createRef<HTMLInputElement>(),
+    referenceChips: null,
+    onExpand: () => undefined,
+    onCollapse: () => undefined,
+    onToggleReferencePickMode: () => undefined,
+    onFileUpload: () => undefined,
+    onInputChange: () => undefined,
+    onSend: () => undefined,
+    onAbort: () => undefined,
+    onBeginResize: () => undefined,
+  }));
+
+  assert.match(expandedHtml, /data-testid="chat-composer-textarea"/);
+  assert.match(expandedHtml, /data-testid="chat-composer-send-button"/);
+});
+
 test('composer shows Codex-style context hints without provider, model, profile, or raw paths', () => {
   const html = renderToStaticMarkup(React.createElement(ChatComposer, {
     expanded: true,

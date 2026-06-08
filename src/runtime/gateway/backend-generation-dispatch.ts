@@ -12,7 +12,7 @@ import { normalizeBackendWorkspaceEvent as normalizeBackendWorkspaceEventFromMod
 import { backendAgentId, backendContextPolicy, contextCompactionMetadata, contextWindowMetadata, estimateWorkspaceContextWindowState, fetchBackendContextSnapshot, currentTurnReferences, handoffBudgetDecisionRecords, handoffContextWindowState, preflightBackendContextWindow, requestNeedsBackendContinuity } from './backend-context-window.js';
 import { backendSelectionDecisionForRequest } from './agent-backend-config.js';
 import { classifyPlainAgentText, toolPayloadFromPlainAgentOutput } from './direct-answer-payload.js';
-import { backendLlmRuntime, AGENT_BACKEND_ANSWER_PRINCIPLE, buildBackendCompactContext, buildBackendGenerationPrompt, contextEnvelopeMode, missingUserLlmEndpointMessage, requiresUserLlmEndpoint, summarizeRuntimeCapabilitiesForBackend, summarizeToolsForBackend, writeBackendDebugArtifact } from './backend-prompt-policy.js';
+import { backendLlmRuntime, AGENT_BACKEND_ANSWER_PRINCIPLE, buildBackendCompactContext, buildBackendGenerationPrompt, contextEnvelopeMode, summarizeRuntimeCapabilitiesForBackend, summarizeToolsForBackend, writeBackendDebugArtifact } from './backend-prompt-policy.js';
 import { backendRequestFailureMessage, backendRunFailure, extractBackendOutputText, looksLikeTruncatedBackendResponseText, looksLikeUnparsedGenerationResponseText, parseGenerationResponse, parseToolPayloadResponse } from './backend-run-output.js';
 import { diagnosticForFailure, sanitizeBackendError } from './backend-failure-diagnostics.js';
 import { finalizeBackendGenerationSuccess, recoverOrReturnBackendGenerationFailure, type BackendGenerationFailureDiagnostics, type BackendGenerationResult } from './generated-task-recovery.js';
@@ -268,15 +268,12 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
   try {
     const request = params.request;
     const promptRequest = requestWithoutInlineAgentHarness(request);
-    const { llmEndpointSource, ...llmRuntime } = await backendLlmRuntime(request, params.workspace);
-    const backendSelectionDecision = backendSelectionDecisionForRequest(request, llmRuntime.llmEndpoint);
+    const llmRuntime = await backendLlmRuntime(request, params.workspace);
+    const backendSelectionDecision = backendSelectionDecisionForRequest(request);
     const backend = backendSelectionDecision.backend;
     const needsContinuity = requestNeedsBackendContinuity(promptRequest);
     const repairContinuation = requestUsesRepairContext(promptRequest);
     const generationPurpose = needsContinuity ? 'workspace-task-generation' : 'workspace-task-generation-inline';
-    if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
-      return { ok: false, error: missingUserLlmEndpointMessage() };
-    }
     const adapter = backendAdapterForGenerationAdapter(generationAdapter, backend);
     const agentId = backendAgentId(promptRequest, 'task-generation');
     for (let dispatchAttempt = 1; dispatchAttempt <= 2; dispatchAttempt += 1) {
@@ -360,7 +357,6 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
     const contextEnvelopeBytes = Buffer.byteLength(JSON.stringify(contextEnvelope), 'utf8');
     const harnessMetadata = agentHarnessMetadata(request, {
       backendSelectionDecision,
-      llmEndpoint: llmRuntime.llmEndpoint,
       startupContextEnvelope: contextEnvelope.startupContextEnvelope as Record<string, unknown> | undefined,
     });
     const harnessRefMetadata = agentHarnessRefMetadata(harnessMetadata);
@@ -370,7 +366,7 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
       message: 'Estimated context window before backend dispatch',
       contextWindowState: estimateWorkspaceContextWindowState({
         backend,
-        modelName: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        modelName: llmRuntime.modelName ?? request.modelName,
         maxContextWindowTokens: request.maxContextWindowTokens,
         usedTokens: Math.ceil((contextEnvelopeBytes + generationPrompt.length) / 4),
         source: 'estimate',
@@ -443,7 +439,6 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
           modelContextWindow: request.maxContextWindowTokens,
           requiresNativeWorkspaceCapabilities: needsContinuity,
           nativeToolFirst: needsContinuity,
-          llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           capabilityDiscoveryToolTransport: capabilityDiscoveryBackendToolTransportBrief(),
           capabilityDiscoveryToolResults: compactDiscoveryToolResults,
           retryAudit: contextRecovery?.retryAudit,
@@ -557,7 +552,7 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
       message: 'Estimated context window after handoff slimming',
       contextWindowState: handoffContextWindowState({
         backend,
-        modelName: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        modelName: llmRuntime.modelName ?? request.modelName,
         maxContextWindowTokens: request.maxContextWindowTokens,
         rawRef: normalizedHandoff.rawRef,
         rawSha1: normalizedHandoff.rawSha1,
@@ -664,8 +659,8 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
         baseUrl: params.baseUrl,
         workspace: params.workspace,
         agentId,
-        provider: llmRuntime.llmEndpoint?.provider,
-        model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        provider: llmRuntime.modelProvider ?? request.modelProvider,
+        model: llmRuntime.modelName ?? request.modelName,
         request,
         skill: params.skill,
         callbacks: params.callbacks,
@@ -690,8 +685,8 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
         baseUrl: params.baseUrl,
         workspace: params.workspace,
         agentId,
-        provider: llmRuntime.llmEndpoint?.provider,
-        model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        provider: llmRuntime.modelProvider ?? request.modelProvider,
+        model: llmRuntime.modelName ?? request.modelName,
         request,
         skill: params.skill,
         callbacks: params.callbacks,
@@ -715,8 +710,8 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
         baseUrl: params.baseUrl,
         workspace: params.workspace,
         agentId,
-        provider: llmRuntime.llmEndpoint?.provider,
-        model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        provider: llmRuntime.modelProvider ?? request.modelProvider,
+        model: llmRuntime.modelName ?? request.modelName,
         request,
         skill: params.skill,
         callbacks: params.callbacks,
@@ -944,8 +939,8 @@ function backendGenerationFailureWithWorkEvidence(
 ): BackendGenerationResult {
   const diagnostic = diagnosticForFailure(error, {
     backend: request.agentBackend,
-    provider: llmRuntime.llmEndpoint?.provider ?? request.modelProvider,
-    model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+    provider: llmRuntime.modelProvider ?? request.modelProvider,
+    model: llmRuntime.modelName ?? request.modelName,
   });
   return {
     ok: false,

@@ -1,6 +1,6 @@
 # SciForge Evolve Plan
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 先回答两个真实任务问题
 
@@ -19,22 +19,22 @@ SciForge 的下一阶段演进只围绕两个产品生死问题，但判断标�
 /Applications/workspace/ailab/research/app/SciForge/config.local.json
 ```
 
-该文件已经包含 `llm` 和 `codexProxy` 的 provider、base URL、API key、model / defaultModel 配置。运行真实任务时可以读取它作为 LLM API 配置来源；文档、trace、final answer 和长期 evidence 不得写出其中的 secret、raw key 或完整敏感 provider payload。
+该文件已经包含 `llm` / `textLLM` / `visionLLM` 的 provider、base URL、API key 和 model 配置。运行真实任务时只能读取它作为 Model Router 的成员模型配置来源；Runtime Codex 和所有 API 服务必须指向 Model Router 的 `/v1` public alias，不能把本地 LLM 配置当作直连 upstream。文档、trace、final answer 和长期 evidence 不得写出其中的 secret、raw key 或完整敏感 provider payload。
 
 如果某个 release smoke 要求 `SCIFORGE_RUNTIME_API_KEY` 只能来自 service environment，那是 release gate 的安全策略；它不能替代本地 dogfood 的真实任务验收，也不能成为“不尝试真实任务”的理由。本地演进以 `config.local.json` 驱动任务，release 前再把同一能力迁移到 service-env 合规配置。
 
 ## 当前事实快照
 
-我在 2026-06-07 跑了三条默认诊断命令，当前结论是：
+截至 2026-06-08，当前结论是：
 
 | 能力 | 命令 | 当前状态 | 结论 |
 | --- | --- | --- | --- |
 | Computer Use 操纵真实软件 | `npm run smoke:desktop-computer-use-hard-confirm-product:strict --silent` + `npm run smoke:computer-use-chat-live-e2e:product-strict --silent` | `product hard-confirm passed / preflight ready / real T1 failed` | Electron Desktop 产品 shell、native host、Runtime Codex SSE、host-owned Computer Use package bridge、guard / hard-confirm surface 已有产品证据；ordinary Desktop chat product-strict 已能提交当前运行，但仍缺 live acceptance bundle 和 scoped GUI 创建 / 保存 / 验证证据。本机 Appium Mac2 服务未运行，opt-in TextEdit WindowActionSession bridge 只能作为单测通过的实现切片，不能作为 release 证据。 |
-| Runtime Codex 内置浏览器检索 | `npm run smoke:runtime-codex-browser-local-dogfood --silent` + `npm run smoke:runtime-codex-browser-acceptance --silent` + `npm run smoke:runtime-codex-browser-acceptance:strict --silent` | `ordinary chat release passed` | Runtime Codex ordinary chat 已通过 `browser.open_read` 打开并读取 OpenAI 官方 API changelog，产出 BrowserHostSession source-page / page-text refs、`module.invoke` evidence 和 final-answer artifact；release/strict smoke 当前通过。 |
-| Desktop native Browser live | `npm run smoke:desktop-browser-native-live-acceptance --silent` | `passed` | Desktop native Browser live 已不再是 T2 的主要代码 blocker；下一步是 ordinary chat / Runtime Codex acceptance 在 service-env 策略下产生当前运行证据。 |
+| Runtime Codex / Model Router Browser 边界 | `npm run smoke:runtime-provider-preflight --silent` + `node --import tsx tests/smoke/smoke-model-router-no-active-legacy-proxy.ts` | `Router-only / legacy proxy blocked` | Runtime Codex 已指向 Model Router `/v1` public alias，`config.local.json` 只给 Router 成员模型供 env；active scripts 和 desktop sidecar bundle 不再启动 legacy proxy。local dogfood 仍只能作为 diagnostic，不能替代桌面 product proof。 |
+| Desktop native Browser live | 三类 desktop ordinary-chat UI run + `npm run smoke:browser-runtime-live-download-chain:opt-in --silent` | `P7 product proof passed / P3-P6 live diagnostic passed` | P7 已有三类普通聊天正向产品证据：普通网页、arXiv/论文、新闻/最新动态，均通过 Codex App Server assistant final message -> `FinalAnswerEnvelope` 投影，并带 current-run BrowserHostSession source/page-text refs。P3/P6 native live diagnostic 已通过 search/read/extract/download、CSV/PDF hash/size/MIME、PDF source-read blocked、HTTP 401 auth-wall surrogate、HTTP 403 forbidden surrogate、`.invalid` network source-read blocked、CSV overbudget/domain blocked；剩余缺口是 robots/login 语义 detector 以及这些 blocked/partial negative case 的最终 assistant-message 收束和 release/product 级门槛，不能把 CLI diagnostic 升级成 product proof。 |
 
-这意味着：**当前不能对用户宣称 T1 已完成真实桌面软件任务；T2 已有普通聊天 / Runtime Codex release 级当前运行证据。**  
-下一轮演进不是继续补边角功能，而是从真实任务出发，失败就只修阻塞真实任务的那个能力缺口。
+这意味着：**当前不能对用户宣称 T1 已完成真实桌面软件任务；T2 的正向桌面普通聊天搜索产品证据已成立，但 Browser download/blocked negative live 诊断和 release 门槛仍要继续补。**
+下一轮演进不是继续补边角功能，而是从真实任务出发，失败就只修阻塞真实任务的那个能力缺口，尤其是 live blocked/partial 收束、download policy negative cases 和 release/service-env 证据。
 
 ## 真实任务通过标准
 
@@ -116,7 +116,7 @@ Playwright 应该负责低层浏览器动作：打开搜索页、等待页面 re
 但 Playwright 必须挂在 SciForge 的 Browser 产品路径下：
 
 - BrowserHostSession / tab scope 仍是 session、surface、action 和 evidence owner。
-- Playwright 只能实现 `browser.search_read` / `browser.open_read` 的底层 adapter。
+- Playwright 只能实现当前 Browser primitive 的底层 adapter；历史 `browser.search_read` / `browser.open_read` 组合入口已 superseded，不能作为当前 product acceptance surface。
 - Browser pane / 内置浏览器必须能展示或引用同一个 session 的状态，不能变成用户看不见的外部自动化。
 - Playwright 产出 source page refs、page text refs、screenshot refs 和 adapter trace refs。
 - Codex backend 基于这些 refs 生成 completion truth 和 final answer。
@@ -137,7 +137,7 @@ Playwright 应该负责低层浏览器动作：打开搜索页、等待页面 re
 不能作为通过：
 
 - 只证明 browser pane 能打开。
-- 只证明 iframe / proxy render / screenshot replay。
+- 只证明 iframe render / screenshot replay。
 - 只用 Codex 自带联网能力绕过 SciForge Browser。
 - 直接用裸 Playwright / headless browser 完成检索，但没有 BrowserHostSession refs、内置浏览器 session 状态和 SciForge Browser evidence。
 - 只返回搜索结果页标题。
@@ -158,7 +158,7 @@ Playwright 应该负责低层浏览器动作：打开搜索页、等待页面 re
 - source page refs。
 - page text refs。
 - final answer with citations。
-- blocked reason，如果 runtime key、provider proxy、upstream、BrowserHostSession 或 source read 不可用。
+- blocked reason，如果 runtime key、Model Router upstream、BrowserHostSession 或 source read 不可用。
 
 ## 演进方式
 
@@ -184,7 +184,7 @@ npm run smoke:desktop-browser-native-live-acceptance --silent
 - release smoke 的 service-env 要求可以后置，但不能阻止本地任务尝试。
 - Playwright 是 T2 的首选执行 / 读取 adapter，用来快速打通导航、来源页读取、截图和 refs-first evidence。
 - BrowserHostSession native live acceptance 不能 failed。
-- 普通聊天必须能触发 `browser.search_read` / `browser.open_read`。
+- 普通聊天必须能触发当前 Browser primitive（`browser.search`、`browser.navigate`、`browser.observe`、`browser.read`、`browser.extract`、`browser.download`），并以 `resources` / `evidenceState` / refs-first evidence 证明实际读取来源页。
 
 本步只解决一个问题：
 
@@ -325,11 +325,11 @@ docs/evolve/runs/YYYY-MM-DD-t1-desktop-software-task.md
 
 原因：
 
-- T2 本地 BrowserHostSession 来源页读取已经通过，剩余缺口不是 BrowserHostSession source-page 代码，而是 ordinary chat / Runtime Codex release acceptance 在 service-env 策略下产生当前运行证据。
+- T2 桌面普通聊天 source/page-text 当前运行证据已经通过，P3/P6 native live download/source-read negative diagnostic 也已通过；剩余缺口不是 BrowserHostSession source-page 正向代码，而是 robots/login 语义 detector、blocked/partial negative final-message 收束，以及 Runtime Codex release acceptance 在 service-env 策略下的当前运行证据。
 - T1 的安全产品面和 acceptance gate 已经更清楚，剩余缺口是 scoped GUI executor：TextEdit / Finder 等真实软件必须通过 WindowActionSession target binding、before / after evidence、executor event、artifact validator 和 stale invalidation 证明。
 - Desktop launcher 现在可以把 ignored local config 中两个非敏感 input adapter 字段投射给 packaged sidecars；provider secret / service-env release 策略仍不能绕过。
 
 当前最小下一步：
 
 - T1: 将 Appium Mac2 作为 WindowActionSession 的 target-bound scoped executor 继续推进；没有 Mac2 server URL 或 executor 注册时必须 fail closed，不能回退成 shared system input 或 workspace file writer。
-- T2: 增加 ordinary chat / Runtime Codex acceptance writer，要求当前运行的 `module.invoke(browser.executeBoundedOperation)`、BrowserHostSession source-page refs、page-text refs 和用户级 final answer；strict release 如果仍被 service-env 策略阻断，记录为 release blocker。
+- T2: 继续补 Browser blocked/partial negative live diagnostics 和 Runtime Codex release acceptance；要求当前运行的 Browser primitive `module.invoke` evidence、BrowserHostSession source-page refs、page-text refs、download artifact refs/hash/MIME/size 和用户级 final answer。历史 `browser.executeBoundedOperation` 只能作为旧 trace 诊断线索，不能作为当前 product acceptance 条件。strict release 如果仍被 service-env 策略阻断，记录为 release blocker。

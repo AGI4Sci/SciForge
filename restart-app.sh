@@ -9,13 +9,16 @@ LOG_DIR="$ROOT_DIR/.sciforge/logs"
 LOG_FILE="$LOG_DIR/app-service.log"
 PID_FILE="$LOG_DIR/app-service.pid"
 STARTUP_TIMEOUT_SECONDS="${SCIFORGE_APP_STARTUP_TIMEOUT_SECONDS:-90}"
+SCIFORGE_CONFIG_PATH="${SCIFORGE_CONFIG_PATH:-$ROOT_DIR/config.local.json}"
+SCIFORGE_MODEL_ROUTER_PORT="${SCIFORGE_MODEL_ROUTER_PORT:-5175}"
 
 APP_PORTS=(
-  3891 # managed Codex Responses proxy from npm run dev
-  3892 # model-router / goose proxy residue used by chat runtime
+  3891 # retired legacy proxy residue cleanup only
+  3892 # Model Router used by Runtime Codex
+  "$SCIFORGE_MODEL_ROUTER_PORT" # active Model Router selected for this restart
   5173 # Vite renderer
   5174 # workspace writer
-  5175 # desktop provider proxy
+  5175 # desktop Model Router sidecar
   5176 # desktop Runtime Codex
   6173 # alternate workspace writer from tools/dev.ts
   18080 # legacy AgentServer / OpenTeam Studio
@@ -26,10 +29,8 @@ APP_PATTERNS=(
   "tools/desktop-dev-shell"
   "tools/desktop-dev-shell.ts"
   "server/index.ts"
-  "sciforge-goose-proxy.mjs"
   "dist-desktop/src/desktop/main.js"
   "dist-desktop/src/runtime/workspace-server.js"
-  "dist-desktop/packages/backend/src/cli.js"
   "dist-desktop/packages/workers/model-router/src/cli.js"
   "packages/workers/model-router/src/cli.ts"
   "dist-desktop/src/runtime/codex/codex-runtime-standalone-server.js"
@@ -38,8 +39,29 @@ APP_PATTERNS=(
 HEALTH_PORTS=(
   5173 # Vite renderer
   5174 # workspace writer
-  5175 # model-router / desktop provider proxy
+  "$SCIFORGE_MODEL_ROUTER_PORT" # desktop Model Router sidecar
 )
+
+normalize_openai_base_url() {
+  local value="${1%/}"
+  if [[ "$value" == */v1 ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s/v1\n' "$value"
+  fi
+}
+
+shell_quote() {
+  local value="$1"
+  printf "'"
+  printf '%s' "$value" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+SCIFORGE_MODEL_ROUTER_BASE_URL="$(normalize_openai_base_url "${SCIFORGE_MODEL_ROUTER_BASE_URL:-${SCIFORGE_MODEL_ROUTER_URL:-http://127.0.0.1:${SCIFORGE_MODEL_ROUTER_PORT}}}")"
+SCIFORGE_MODEL_ROUTER_API_KEY="${SCIFORGE_MODEL_ROUTER_API_KEY:-sciforge-local-model-router}"
+SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS="${SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS:-sciforge-router}"
+SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE="${SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE:-sciforge-runtime-default}"
 
 collect_app_pids() {
   local pids=()
@@ -140,8 +162,20 @@ start_app() {
   : > "$LOG_FILE"
 
   echo "[restart-app] rebuilding artifacts and starting desktop app in tmux session: $TMUX_SESSION"
+  echo "[restart-app] config: $SCIFORGE_CONFIG_PATH"
+  if [[ ! -f "$SCIFORGE_CONFIG_PATH" ]]; then
+    echo "[restart-app] warning: config.local.json not found at $SCIFORGE_CONFIG_PATH; Model Router member LLM env may be incomplete" >&2
+  fi
+  echo "[restart-app] model router: $SCIFORGE_MODEL_ROUTER_BASE_URL"
   tmux new-session -d -s "$TMUX_SESSION" \
-    "cd '$ROOT_DIR' && npm run desktop:dev 2>&1 | tee '$LOG_FILE'"
+    "cd $(shell_quote "$ROOT_DIR") && env \
+SCIFORGE_CONFIG_PATH=$(shell_quote "$SCIFORGE_CONFIG_PATH") \
+SCIFORGE_MODEL_ROUTER_API_KEY=$(shell_quote "$SCIFORGE_MODEL_ROUTER_API_KEY") \
+SCIFORGE_MODEL_ROUTER_BASE_URL=$(shell_quote "$SCIFORGE_MODEL_ROUTER_BASE_URL") \
+SCIFORGE_MODEL_ROUTER_PORT=$(shell_quote "$SCIFORGE_MODEL_ROUTER_PORT") \
+SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS=$(shell_quote "$SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS") \
+SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE=$(shell_quote "$SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE") \
+npm run desktop:dev 2>&1 | tee $(shell_quote "$LOG_FILE")"
   tmux display-message -p -t "$TMUX_SESSION" '#{pane_pid}' > "$PID_FILE"
 
   if wait_for_ports; then

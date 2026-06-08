@@ -301,7 +301,7 @@ export function writeDesktopLiveAcceptanceEvidence(
       model: 'bailian/deepseek-v4-flash',
       workspacePath: join(workspaceRoot, 'workspace'),
       commandId: runtimeCommandId,
-      providerProxyUsed: true,
+      modelRouterUsed: true,
       providerAuditVisible: true,
       answerVisibleInRenderer: true,
       rawPreflightOnly: false,
@@ -333,12 +333,12 @@ export function writeDesktopLiveAcceptanceEvidence(
         logPath: join(logsPath, 'sidecars', 'workspace-server.log'),
       },
       {
-        role: 'provider-proxy',
+        role: 'model-router',
         owner: 'electron-main',
         startedBy: 'electron-main-before-renderer-ready',
         stoppedBy: 'electron-main-shutdown',
         healthCheck: 'pass',
-        logPath: join(logsPath, 'sidecars', 'provider-proxy.log'),
+        logPath: join(logsPath, 'sidecars', 'model-router.log'),
       },
       {
         role: 'runtime-codex',
@@ -351,7 +351,7 @@ export function writeDesktopLiveAcceptanceEvidence(
     ],
     ports: [
       { name: 'workspace-server', host: '127.0.0.1', actualPort: 62010, allocation: 'dynamic' },
-      { name: 'provider-proxy', host: '127.0.0.1', actualPort: 62011, allocation: 'dynamic' },
+      { name: 'model-router', host: '127.0.0.1', actualPort: 62011, allocation: 'dynamic' },
       { name: 'runtime-codex', host: '127.0.0.1', actualPort: 62012, allocation: 'dynamic' },
     ],
     paths: {

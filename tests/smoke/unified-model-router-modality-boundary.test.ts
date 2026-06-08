@@ -42,9 +42,11 @@ test('Agent Host does not expose ordinary-chat Browser primitive bypasses', asyn
   }
 });
 
-test('Retired ordinary-chat Browser acceptance writer cannot call Agent Host Browser bypasses', async () => {
+test('Ordinary-chat Browser acceptance writer uses app-server path and no Agent Host Browser bypasses', async () => {
   const text = await source('src/runtime/runtime-codex-browser-ordinary-chat-acceptance-writer.ts');
-  assert.match(text, /Retired: ordinary-chat Browser acceptance must flow through the unified Runtime Codex app-server \/ Model Router tool protocol/);
+  assert.match(text, /\bcreateCodexAppServerClient\b/);
+  assert.doesNotMatch(text, /\bBrowserHostSessionManager\b/);
+  assert.doesNotMatch(text, /\bcreateRuntimeCodexBrowserOrdinaryChatBrowserHostSessionManager\b/);
   for (const pattern of [
     /\bevaluateCodexAgentHostTurnLoop\b/,
     /\bCodexAgentHostBrowserPrimitiveInvoker\b/,

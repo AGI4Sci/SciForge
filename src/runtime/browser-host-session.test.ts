@@ -9,22 +9,22 @@ import { WebSocket } from 'ws';
 
 import {
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
-  BROWSER_HOST_SEARCH_SCHEMA,
+  BROWSER_HOST_DISCOVERY_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
   BROWSER_HOST_SESSION_SCHEMA,
   BrowserHostSessionManager,
   browserHostNavigationCommittedAfterTimeout,
-  browserHostSearchSummary,
-  browserHostSearchUrl,
+  browserHostDiscoverySummary,
+  browserHostDiscoveryUrl,
   browserHostSessionDir,
   createNativeEmbeddedBrowserHostDriverFactory,
   normalizeBrowserHostUrl,
   type BrowserHostFrameCaptureResult,
   type BrowserHostMouseButton,
-  type BrowserHostOpenReadInput,
-  type BrowserHostOpenReadOutput,
-  type BrowserHostSearchInput,
-  type BrowserHostSearchOutput,
+  type BrowserHostPageReadInput,
+  type BrowserHostPageReadOutput,
+  type BrowserHostDiscoveryInput,
+  type BrowserHostDiscoveryOutput,
   type BrowserHostSessionDriver,
   type BrowserHostSessionDriverFactory,
   type BrowserHostSessionLoadingProgressReason,
@@ -1012,7 +1012,7 @@ test('BrowserHostSessionManager default product path blocks when native adapter 
 });
 
 test('BrowserHostSession search persists bounded search refs and excludes search-engine self links', async () => {
-  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-search-'));
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-discovery-'));
   const { factory, drivers } = fakeDriverFactory();
   try {
     const manager = new BrowserHostSessionManager({ driverFactory: factory });
@@ -1023,7 +1023,7 @@ test('BrowserHostSession search persists bounded search refs and excludes search
       limit: 3,
     });
 
-    assert.equal(output.schemaVersion, BROWSER_HOST_SEARCH_SCHEMA);
+    assert.equal(output.schemaVersion, BROWSER_HOST_DISCOVERY_SCHEMA);
     assert.equal(output.engine, 'duckduckgo');
     assert.match(output.searchUrl, /^https:\/\/duckduckgo\.com\/html\/\?/);
     assert.equal(output.results.length, 2);
@@ -1046,8 +1046,8 @@ test('BrowserHostSession search persists bounded search refs and excludes search
     const firstSourceMetadata = JSON.parse(await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(output.sourcePages?.[0]?.sourcePageRef ?? '')), 'utf8')) as { textRef?: string };
     assert.equal(firstSourceMetadata.textRef, output.sourcePages?.[0]?.textRef);
     assert.match(output.searchResultRef, /^browser-host-session:/);
-    assert.match(browserHostSearchSummary(output), /BrowserHostSession search: browser host session/);
-    assert.match(browserHostSearchSummary(output), /Opened source pages: 2/);
+    assert.match(browserHostDiscoverySummary(output), /BrowserHostSession search: browser host session/);
+    assert.match(browserHostDiscoverySummary(output), /Opened source pages: 2/);
     assert.equal(output.automationSummary?.schemaVersion, 'sciforge.browser-runtime.automation-summary.v1');
     assert.equal(output.automationSummary?.kind, 'scrape');
     assert.equal(output.automationSummary?.boundedRefsOnly, true);
@@ -1072,7 +1072,7 @@ test('BrowserHostSession search persists bounded search refs and excludes search
   }
 });
 
-test('BrowserHostSession openRead persists source page metadata and page text refs for a Host URL', async () => {
+test('BrowserHostSession pageRead persists source page metadata and page text refs for a Host URL', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-open-read-'));
   const { factory, drivers } = fakeDriverFactory({
     textByUrl: {
@@ -1081,7 +1081,7 @@ test('BrowserHostSession openRead persists source page metadata and page text re
   });
   try {
     const manager = new BrowserHostSessionManager({ driverFactory: factory });
-    const output = await manager.openRead(workspacePath, {
+    const output = await manager.readPage(workspacePath, {
       url: 'https://example.org/open-read',
       sessionId: 'open-read-session',
       title: 'Host provided source',
@@ -1105,7 +1105,7 @@ test('BrowserHostSession openRead persists source page metadata and page text re
   }
 });
 
-test('BrowserHostSession openRead falls back to public source text fetch when browser text extraction fails', async () => {
+test('BrowserHostSession pageRead falls back to public source text fetch when browser text extraction fails', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-open-read-fetch-fallback-'));
   const sourceUrl = 'https://platform.openai.com/docs/changelog';
   const { factory } = fakeDriverFactory({
@@ -1123,7 +1123,7 @@ test('BrowserHostSession openRead falls back to public source text fetch when br
         };
       },
     });
-    const output = await manager.openRead(workspacePath, {
+    const output = await manager.readPage(workspacePath, {
       url: sourceUrl,
       sessionId: 'open-read-fetch-fallback-session',
       title: 'OpenAI API changelog',
@@ -1142,7 +1142,7 @@ test('BrowserHostSession openRead falls back to public source text fetch when br
   }
 });
 
-test('BrowserHostSession openRead falls back to public source text fetch when browser driver is unavailable', async () => {
+test('BrowserHostSession pageRead falls back to public source text fetch when browser driver is unavailable', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-open-read-no-driver-fallback-'));
   const previousNativeAdapterUrl = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
   delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
@@ -1158,7 +1158,7 @@ test('BrowserHostSession openRead falls back to public source text fetch when br
         };
       },
     });
-    const output = await manager.openRead(workspacePath, {
+    const output = await manager.readPage(workspacePath, {
       url: sourceUrl,
       sessionId: 'open-read-no-driver-fallback-session',
       title: 'OpenAI API changelog',
@@ -1884,7 +1884,7 @@ test('BrowserHostSession HTTP routes expose session/action routes and reject leg
     const invalidOpenRead = await invalidOpenReadResponse.json() as { ok: boolean; error?: string };
     assert.equal(invalidOpenRead.ok, false);
     assert.match(invalidOpenRead.error ?? '', /not found/);
-    assert.equal(manager.openReadInputs.length, 0);
+    assert.equal(manager.pageReadInputs.length, 0);
 
     const missingFrame = await fetch(`${baseUrl}/api/sciforge/browser-host/sessions/route-session/frame?workspacePath=${encodeURIComponent(workspacePath)}`);
     assert.equal(missingFrame.status, 404);
@@ -2332,8 +2332,8 @@ test('BrowserHostSession URL and search helpers normalize user-facing targets', 
   assert.equal(normalizeBrowserHostUrl('example.org'), 'https://example.org');
   assert.equal(normalizeBrowserHostUrl('localhost:5173/app'), 'http://localhost:5173/app');
   assert.equal(normalizeBrowserHostUrl('about:blank'), 'about:blank');
-  assert.match(browserHostSearchUrl('bing', 'cell atlas', 'us-en'), /^https:\/\/www\.bing\.com\/search\?/);
-  assert.match(browserHostSearchUrl('duckduckgo', 'cell atlas', 'wt-wt'), /^https:\/\/duckduckgo\.com\/html\/\?/);
+  assert.match(browserHostDiscoveryUrl('bing', 'cell atlas', 'us-en'), /^https:\/\/www\.bing\.com\/search\?/);
+  assert.match(browserHostDiscoveryUrl('duckduckgo', 'cell atlas', 'wt-wt'), /^https:\/\/duckduckgo\.com\/html\/\?/);
 });
 
 test('BrowserHostSession navigation timeout can continue after a committed HTTP navigation', () => {
@@ -2879,7 +2879,7 @@ function createRouteManager(
   const sessions = new Map<string, BrowserHostSessionState>();
   const framePaths = new Map<string, string>();
   const actionInputs: Array<{ root: string; sessionId: string; input: Record<string, unknown> }> = [];
-  const openReadInputs: Array<{ root: string; input: BrowserHostOpenReadInput }> = [];
+  const pageReadInputs: Array<{ root: string; input: BrowserHostPageReadInput }> = [];
   let frameStreamSkipIndex = 0;
   const captureFrame = async (sessionId: string) => {
     const session = sessions.get(sessionId);
@@ -2897,7 +2897,7 @@ function createRouteManager(
   };
   return {
     actionInputs,
-    openReadInputs,
+    pageReadInputs,
     async openSession(root: string, input: { url: string; sessionId?: string }) {
       const id = input.sessionId || 'route-session';
       const session: BrowserHostSessionState = {
@@ -2965,12 +2965,12 @@ function createRouteManager(
       session.updatedAt = new Date().toISOString();
       return session;
     },
-    async search(_root: string, input: BrowserHostSearchInput) {
+    async search(_root: string, input: BrowserHostDiscoveryInput) {
       const session = input.sessionId && sessions.get(input.sessionId)
         ? await this.act(workspacePath, input.sessionId, { action: 'navigate', url: 'https://www.bing.com/search?q=query' })
         : await this.openSession(workspacePath, { url: 'https://www.bing.com/search?q=query', sessionId: 'search-route' });
-      const search: BrowserHostSearchOutput = {
-        schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
+      const search: BrowserHostDiscoveryOutput = {
+        schemaVersion: BROWSER_HOST_DISCOVERY_SCHEMA,
         query: 'query text',
         engine: 'bing',
         searchUrl: 'https://www.bing.com/search?q=query',
@@ -2982,8 +2982,8 @@ function createRouteManager(
       };
       return search;
     },
-    async openRead(root: string, input: BrowserHostOpenReadInput): Promise<BrowserHostOpenReadOutput> {
-      openReadInputs.push({ root, input: { ...input } });
+    async readPage(root: string, input: BrowserHostPageReadInput): Promise<BrowserHostPageReadOutput> {
+      pageReadInputs.push({ root, input: { ...input } });
       const session = input.sessionId && sessions.get(input.sessionId)
         ? await this.act(workspacePath, input.sessionId, { action: 'navigate', url: input.url })
         : await this.openSession(workspacePath, { url: input.url, sessionId: input.sessionId ?? 'open-read-route' });

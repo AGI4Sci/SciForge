@@ -1,6 +1,5 @@
 import { access } from 'node:fs/promises';
 import { isAbsolute, join, sep } from 'node:path';
-import { LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS } from '../../packages/backend/src/local-provider-config.js';
 import { RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS } from '../../packages/backend/src/runtime-home.js';
 import {
   compactString,
@@ -17,15 +16,19 @@ export const SYSTEM_TERMINAL_RUNTIME_ENV_KEYS = [
   'SCIFORGE_CONFIG_PATH',
   'SCIFORGE_RUNTIME_PROVIDER',
   'SCIFORGE_RUNTIME_MODEL',
-  'SCIFORGE_RUNTIME_BASE_URL',
-  'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
-  'SCIFORGE_PROXY_BASE_URL',
-  'SCIFORGE_PROXY_PORT',
-  'SCIFORGE_PROXY_DEFAULT_MODEL',
-  'SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM',
+  'SCIFORGE_MODEL_ROUTER_BASE_URL',
+  'SCIFORGE_MODEL_ROUTER_URL',
+  'SCIFORGE_MODEL_ROUTER_PORT',
+  'SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS',
+  'SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE',
+  'SCIFORGE_TEXT_PROVIDER',
+  'SCIFORGE_TEXT_BASE_URL',
+  'SCIFORGE_TEXT_MODEL',
+  'SCIFORGE_VISION_PROVIDER',
+  'SCIFORGE_VISION_BASE_URL',
+  'SCIFORGE_VISION_MODEL',
   'SCIFORGE_RUNTIME_CODEX_SANDBOX',
   'SCIFORGE_RUNTIME_CODEX_COMMAND',
-  'SCIFORGE_ALLOW_OPENAI_RUNTIME',
 ] as const;
 
 export type FeedbackCodexTerminalStatus = typeof FEEDBACK_CODEX_TERMINAL_STATUSES[number];
@@ -126,7 +129,7 @@ export function feedbackCodexTerminalPublicSession(session: FeedbackCodexTermina
     updatedAt: session.updatedAt,
     message: session.message,
     runtimeProfile: session.runtimeProfile,
-    allowOpenAiRuntime: session.allowOpenAiRuntime,
+    allowOpenAiRuntime: false,
     transport: session.transport,
     webSocketPath: session.webSocketPath,
     systemTerminalLaunchRef: session.systemTerminalLaunchRef,
@@ -313,7 +316,15 @@ export function systemTerminalRuntimeEnvExports(input: {
 }
 
 export function systemTerminalRuntimeKeyReaderScript() {
-  const keyPaths = JSON.stringify(LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS);
+  const keyPaths = JSON.stringify([
+    ['runtimeApiKey'],
+    ['runtimeCodex', 'apiKey'],
+    ['runtimeCodex', 'runtimeApiKey'],
+    ['runtimeCodex', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
+    ['modelRouter', 'apiKey'],
+    ['modelRouter', 'runtimeApiKey'],
+    ['modelRouter', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
+  ]);
   return [
     'const fs = require("fs");',
     'const path = process.argv[1];',
@@ -407,7 +418,7 @@ export function buildFeedbackCodexTerminalRepairRun(input: BuildFeedbackCodexTer
       directCodexTerminalSessionId: session.id,
       codexSessionId: session.codexSessionId,
       runtimeProfile: session.runtimeProfile,
-      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       targetWorkspacePath: session.workspacePath,
       promptRef: session.promptRef,
       webSocketPath: session.webSocketPath,

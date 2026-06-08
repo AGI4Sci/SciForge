@@ -63,16 +63,15 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.SCIFORGE_SUBAGENT_APPROVAL_POLICY="on-request"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentCommandId}="app-server-client-command"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentAttemptId}="attempt-1"`));
+  assert.doesNotMatch(argv.join('\n'), /sciforge_gui|gui-mcp-server|gui\.present|SCIFORGE_GUI_EXTENSION_STATE/);
   assert.equal(appServer.threadStartParams.approvalPolicy, 'on-request');
   assert.equal(appServer.threadStartParams.sandbox, 'read-only');
 
   const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'module' && tool.name === 'invoke'));
   assert.ok(dynamicTools.some((tool) => tool.name === 'module_invoke'), 'provider-safe module.invoke alias should be registered');
-  assert.ok(dynamicTools.some((tool) => tool.name === 'gui_present'), 'provider-safe gui.present alias should be registered');
-  assert.ok(dynamicTools.some((tool) => tool.name === 'gui_ask_user'), 'provider-safe gui.ask_user alias should be registered');
-  const guiPresentTool = dynamicTools.find((tool) => tool.name === 'gui_present');
-  assert.deepEqual((guiPresentTool?.inputSchema as { required?: string[] } | undefined)?.required, ['content']);
+  assert.equal(dynamicTools.some((tool) => tool.name === 'gui_present'), false, 'GUI presentation is not a product-path dynamic tool');
+  assert.equal(dynamicTools.some((tool) => tool.name === 'gui_ask_user'), false, 'GUI ask-user is not a product-path dynamic tool');
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
   const spawnTool = dynamicTools.find((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent');
   const spawnAliasTool = dynamicTools.find((tool) => tool.name === 'multi_agent_v1_spawn_agent');
@@ -229,16 +228,222 @@ test('Codex app-server client exposes browser primitives as direct dynamic tools
   assert.match(text, /"routed":true/);
 });
 
-test('Codex app-server client returns a browser.read repair hint for search-only loops', async () => {
+test('Codex app-server client does not create a search-only Browser bypass', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   const invoked: ModuleInvokeRequest[] = [];
+  const sourceRef = 'browser-host-session:auto/source-pages/source.source.json';
+  const textRef = 'browser-host-session:auto/source-pages/source.txt';
+  const browserNewsPreview = `${new Date().toISOString().slice(0, 10)} OpenAI ChatGPT Enterprise/EDU adds default plugin sharing in Codex for eligible workspaces, letting teammates install shared local plugins. Workspace admins can disable plugin sharing.`;
   const appServer = fakeAppServer({
     turnToolCalls: [
       { tool: 'browser_search', arguments: { query: '伊朗局势 最新', limit: 2 } },
       { tool: 'browser_search', arguments: { query: '伊朗局势 2026 最新', limit: 2 } },
       { tool: 'browser_search', arguments: { query: 'Iran situation latest', limit: 2 } },
       { tool: 'browser_search', arguments: { query: '伊朗局势 最新消息', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: '伊朗局势 来源 再查一次', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'Iran situation source again', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'Iran latest repeat search', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'Iran latest repeat search again', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'Iran latest repeated search final', limit: 2 } },
+    ],
+    suppressTerminalAfterToolCall: true,
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        if (request.intent === 'browser.read') {
+          return moduleResult({
+            moduleId: request.moduleId,
+            ok: true,
+            value: {
+              schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+              moduleId: 'browser',
+              primitive: 'read',
+              status: 'completed',
+              output: {
+                finalUrl: 'https://example.com/source',
+                title: 'Source',
+                sourcePageRef: sourceRef,
+                pageTextRef: textRef,
+                textPreview: browserNewsPreview,
+                textCharCount: 42,
+              },
+              resources: [{
+                ref: sourceRef,
+                kind: 'source_page',
+                status: 'read',
+                originTool: 'browser.read',
+                title: 'Source',
+                metadata: {
+                  textPreview: browserNewsPreview,
+                },
+                confidence: 'materialized',
+              }, {
+                ref: textRef,
+                kind: 'page_text',
+                status: 'read',
+                originTool: 'browser.read',
+                title: 'Source',
+                metadata: {
+                  textPreview: browserNewsPreview,
+                },
+                confidence: 'materialized',
+              }],
+              evidenceState: {
+                completed: ['Materialized page content as source/page text refs.'],
+                unknown: ['Task-level synthesis remains outside Browser Runtime.'],
+                boundary: 'Read refs are Browser evidence; Agent Host decides completion.',
+              },
+              refs: [sourceRef, textRef],
+              diagnostics: [],
+              budget: {},
+            },
+            refs: [sourceRef, textRef],
+          });
+        }
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+            moduleId: 'browser',
+            primitive: 'search',
+            status: 'completed',
+          output: {
+            query: (request.input as { query?: string }).query,
+            results: [{
+              rank: 1,
+              title: 'Source',
+              url: 'https://example.com/source',
+              snippet: 'Candidate source.',
+            }],
+            searchResultRef: 'browser-host-session:search/search-results.json',
+          },
+          resources: [{
+            ref: 'browser:resource:web_page:source',
+            kind: 'web_page',
+            status: 'discovered',
+            originTool: 'browser.search',
+            locator: { url: 'https://example.com/source' },
+            title: 'Source',
+            snippet: 'Candidate source.',
+            confidence: 'candidate',
+          }],
+          evidenceState: {
+            completed: ['Discovered 1 candidate web page resource(s).'],
+            unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+            boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+          },
+          refs: ['browser-host-session:search/search-results.json'],
+          diagnostics: [],
+          budget: {},
+        },
+          refs: ['browser-host-session:search/search-results.json'],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '请使用 SciForge 内置 Browser 搜索并读取一个最近的新闻来源页面，主题是 OpenAI 或人工智能的最新动态。必须先调用 browser_search，再调用 browser_read 读取网页正文/source refs，然后用中文简短总结这一条新闻，并列出实际读取来源链接。不要只凭记忆回答，不要只给搜索结果或引用编号。',
+    workspacePath: workspace,
+    commandId: 'browser-search-loop-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 5);
+  assert.equal(invoked.filter((request) => request.intent === 'browser.read').length, 1);
+  const readInvoke = invoked.find((request) => request.intent === 'browser.read');
+  assert.deepEqual(readInvoke?.input, {
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+    resourceRef: 'browser:resource:web_page:source',
+    includeText: true,
+  });
+  const autoReadText = (appServer.toolCallResponses[3]?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponses[3]?.success, true);
+  assert.match(autoReadText, /browser-auto-read-result/);
+  assert.match(autoReadText, /browser_read/);
+  assert.match(autoReadText, /browser:resource:web_page:source/);
+  assert.match(autoReadText, /sourcePageRef/);
+  assert.match(autoReadText, /pageTextRef/);
+  assert.doesNotMatch(autoReadText, legacyTokenRegex(['browser', 'search', 'only', 'budget', 'exhausted'], '_'));
+  assert.doesNotMatch(autoReadText, legacyTokenRegex(['candidate', 'Read', 'Inputs']));
+
+  assert.equal(appServer.toolCallResponses.at(-1)?.success, false);
+  const finalRequiredText = (appServer.toolCallResponses.at(-1)?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(finalRequiredText, /browser-final-required/);
+  assert.match(finalRequiredText, /browser_final_answer_required/);
+  assert.match(finalRequiredText, /assistant_final_answer/);
+  assert.match(finalRequiredText, /source\.source\.json/);
+  assert.match(finalRequiredText, /source\.txt/);
+  const hostFinalMessage = events.find((event): event is Record<string, unknown> =>
+    isRecord(event)
+    && event.schemaVersion === 'sciforge.codex.normalized-event.v1'
+    && event.type === 'message'
+    && /agent-host-browser-finalizer/.test(JSON.stringify(event.raw)));
+  assert.ok(hostFinalMessage);
+  const hostFinalText = String(hostFinalMessage.text ?? '');
+  assert.match(hostFinalText, /Source/);
+  assert.match(hostFinalText, /plugin sharing in Codex|共享本地插件|install shared local plugins/);
+  assert.match(hostFinalText, /source\.source\.json/);
+  assert.doesNotMatch(hostFinalText, /OpenAI API 文档首页/);
+  assert.ok(events.some((event) =>
+    isRecord(event)
+    && event.schemaVersion === 'sciforge.codex.normalized-event.v1'
+    && event.type === 'done'
+    && /agent-host-browser-finalizer/.test(JSON.stringify(event.raw))));
+});
+
+test('Codex app-server client requires browser_read after repeated Browser module.invoke discovery', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const sourceRef = 'browser-host-session:auto/source-pages/openai-docs.source.json';
+  const textRef = 'browser-host-session:auto/source-pages/openai-docs.txt';
+  const moduleSearchCall = (query: string) => ({
+    tool: 'module_invoke',
+    arguments: {
+      moduleId: 'browser',
+      intent: 'browser.search',
+      input: {
+        schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.search,
+        query,
+        limit: 2,
+      },
+    },
+  });
+  const appServer = fakeAppServer({
+    turnToolCalls: [
+      moduleSearchCall('OpenAI API docs'),
+      moduleSearchCall('OpenAI API documentation'),
+      moduleSearchCall('OpenAI platform docs'),
+      moduleSearchCall('OpenAI docs title'),
     ],
   });
   const client = createCodexAppServerClient({
@@ -262,6 +467,47 @@ test('Codex app-server client returns a browser.read repair hint for search-only
       read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
       invoke: async (request) => {
         invoked.push(request);
+        if (request.intent === 'browser.read') {
+          return moduleResult({
+            moduleId: request.moduleId,
+            ok: true,
+            value: {
+              schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+              moduleId: 'browser',
+              primitive: 'read',
+              status: 'completed',
+              output: {
+                finalUrl: 'https://platform.openai.com/docs',
+                title: 'OpenAI API docs',
+                sourcePageRef: sourceRef,
+                pageTextRef: textRef,
+                textCharCount: 84,
+              },
+              resources: [{
+                ref: sourceRef,
+                kind: 'source_page',
+                status: 'read',
+                originTool: 'browser.read',
+                confidence: 'materialized',
+              }, {
+                ref: textRef,
+                kind: 'page_text',
+                status: 'read',
+                originTool: 'browser.read',
+                confidence: 'materialized',
+              }],
+              evidenceState: {
+                completed: ['Materialized page content as source/page text refs.'],
+                unknown: ['Task-level synthesis remains outside Browser Runtime.'],
+                boundary: 'Read refs are Browser evidence; Agent Host decides completion.',
+              },
+              refs: [sourceRef, textRef],
+              diagnostics: [],
+              budget: {},
+            },
+            refs: [sourceRef, textRef],
+          });
+        }
         return moduleResult({
           moduleId: request.moduleId,
           ok: true,
@@ -274,17 +520,32 @@ test('Codex app-server client returns a browser.read repair hint for search-only
               query: (request.input as { query?: string }).query,
               results: [{
                 rank: 1,
-                title: 'Source',
-                url: 'https://example.com/source',
-                snippet: 'Candidate source.',
+                title: 'OpenAI API docs',
+                url: 'https://platform.openai.com/docs',
+                snippet: 'API documentation candidate.',
               }],
-              searchResultRef: 'browser-host-session:search/search-results.json',
+              searchResultRef: 'browser-host-session:search/openai-search-results.json',
             },
-            refs: ['browser-host-session:search/search-results.json'],
+            resources: [{
+              ref: 'browser:resource:web_page:openai-docs',
+              kind: 'web_page',
+              status: 'discovered',
+              originTool: 'browser.search',
+              locator: { url: 'https://platform.openai.com/docs' },
+              title: 'OpenAI API docs',
+              snippet: 'API documentation candidate.',
+              confidence: 'candidate',
+            }],
+            evidenceState: {
+              completed: ['Discovered 1 candidate web page resource(s).'],
+              unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+              boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+            },
+            refs: ['browser-host-session:search/openai-search-results.json'],
             diagnostics: [],
             budget: {},
           },
-          refs: ['browser-host-session:search/search-results.json'],
+          refs: ['browser-host-session:search/openai-search-results.json'],
         });
       },
       trace: () => [],
@@ -296,22 +557,662 @@ test('Codex app-server client returns a browser.read repair hint for search-only
   });
 
   const stream = await client.startTurn({
-    commandText: '搜索一下伊朗局势，用中文总结当前最新情况，并列出你实际读取过的来源链接',
+    commandText: 'Search the web and answer from actual Browser source refs.',
     workspacePath: workspace,
-    commandId: 'browser-search-loop-command',
+    commandId: 'browser-module-search-loop-command',
     attemptId: 'attempt-1',
     guiExtension: { enabled: false },
   });
   await collect(stream.events);
 
   assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 3);
+  assert.equal(invoked.at(-1)?.intent, 'browser.read');
+  assert.deepEqual(invoked.at(-1)?.input, {
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+    resourceRef: 'browser:resource:web_page:openai-docs',
+    includeText: true,
+  });
+  assert.equal(appServer.toolCallResponses.at(-1)?.success, true);
   const text = (appServer.toolCallResponses.at(-1)?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
-  assert.match(text, /browser_search_only_budget_exhausted/);
-  assert.match(text, /candidateReadInputs/);
-  assert.match(text, /browser\.read/);
+  assert.match(text, /browser-auto-read-result/);
+  assert.match(text, /browser_read/);
+  assert.match(text, /browser:resource:web_page:openai-docs/);
+  assert.match(text, /sourcePageRef/);
+  assert.match(text, /pageTextRef/);
+  assert.doesNotMatch(text, legacyTokenRegex(['candidate', 'Read', 'Inputs']));
 });
 
-test('Codex app-server client projects provider-safe GUI dynamic tool aliases as completion events', async () => {
+test('Codex app-server client routes direct browser_read resource refs through module dispatcher', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let invoked: ModuleInvokeRequest | undefined;
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'browser_read',
+      arguments: {
+        resourceRef: 'browser-host-session:search/result-1',
+        includeText: true,
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [{ name: 'browser.read', sideEffect: 'external' }],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked = request;
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            routed: true,
+            input: request.input,
+          },
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Read the Browser resource ref.',
+    workspacePath: workspace,
+    commandId: 'direct-browser-read-resource-ref-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.equal(invoked?.moduleId, 'browser');
+  assert.equal(invoked?.intent, 'browser.read');
+  assert.deepEqual(invoked?.input, {
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+    resourceRef: 'browser-host-session:search/result-1',
+    includeText: true,
+  });
+  assert.equal(appServer.toolCallResponse?.success, true);
+});
+
+test('Codex app-server client registers Browser direct tools with source-read follow-up guidance', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Inspect Browser direct tool metadata.',
+    workspacePath: workspace,
+    commandId: 'browser-direct-tool-metadata-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
+  const browserTools = dynamicTools.filter((tool) => typeof tool.name === 'string' && tool.name.startsWith('browser_'));
+  const browserToolText = JSON.stringify(browserTools);
+  const searchTool = browserTools.find((tool) => tool.name === 'browser_search');
+  const readTool = browserTools.find((tool) => tool.name === 'browser_read');
+  const readSchema = readTool?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+
+  assert.match(String(searchTool?.description ?? ''), /resources/);
+  assert.match(String(searchTool?.description ?? ''), /evidenceState/);
+  assert.match(String(searchTool?.description ?? ''), /browser_read/);
+  const navigateTool = browserTools.find((tool) => tool.name === 'browser_navigate');
+  assert.match(String(navigateTool?.description ?? ''), /browser_read/);
+  assert.match(String(navigateTool?.description ?? ''), /sessionId/);
+  assert.match(String(readTool?.description ?? ''), /resourceRef/);
+  assert.match(String(readTool?.description ?? ''), /sessionId/);
+  assert.match(String(readTool?.description ?? ''), /sourcePageRef|pageTextRef/);
+  assert.ok(readSchema?.properties?.resourceRef);
+  assert.doesNotMatch(browserToolText, legacyTokenRegex(['candidate', 'Read', 'Inputs']));
+  assert.doesNotMatch(browserToolText, legacyTokenRegex(['read', 'Input']));
+  assert.doesNotMatch(browserToolText, /search_read|open_read|executeBoundedOperation/);
+});
+
+test('Codex app-server client rejects legacy GUI completion after search-only Browser evidence', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'browser_search',
+      arguments: { query: 'latest browser evidence', limit: 1 },
+    }, {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'Search-only answer should not be accepted.' },
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [{ name: 'browser.search', sideEffect: 'external' }],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => moduleResult({
+        moduleId: request.moduleId,
+        ok: true,
+        value: {
+          schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+          moduleId: 'browser',
+          primitive: 'search',
+          status: 'completed',
+          output: {
+            query: 'latest browser evidence',
+            results: [{
+              title: 'Candidate',
+              url: 'https://example.com/candidate',
+              snippet: 'Candidate only.',
+            }],
+            searchResultRef: 'browser:search-result:turn-1',
+          },
+          resources: [{
+            ref: 'browser:resource:web_page:candidate',
+            kind: 'web_page',
+            status: 'discovered',
+            originTool: 'browser.search',
+            locator: { url: 'https://example.com/candidate' },
+            confidence: 'candidate',
+          }],
+          evidenceState: {
+            completed: ['Discovered 1 candidate web page resource(s).'],
+            unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+            boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+          },
+          refs: ['browser:search-result:turn-1'],
+          diagnostics: [],
+          budget: {},
+        },
+        refs: ['browser:search-result:turn-1'],
+      }),
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Search and answer from Browser evidence.',
+    workspacePath: workspace,
+    commandId: 'browser-search-only-final-answer-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  await collect(stream.events);
+
+  const searchResponse = appServer.toolCallResponses.at(0);
+  const guiResponse = appServer.toolCallResponses.at(-1);
+  const guiText = (guiResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(searchResponse?.success, true);
+  assert.equal(guiResponse?.success, false);
+  assert.match(guiText, /unsupported_dynamic_tool:gui_present/);
+  assert.doesNotMatch(guiText, /browser-source-page-refs-missing|completionTruth|"status":"satisfied"/);
+});
+
+test('Codex app-server client rejects legacy GUI completion after materialized Browser read evidence', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const sourceRef = 'browser-host-session:current/source-pages/source-1.source.json';
+  const textRef = 'browser-host-session:current/source-pages/source-1.txt';
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'browser_search',
+      arguments: { query: 'latest browser evidence', limit: 1 },
+    }, {
+      tool: 'browser_read',
+      arguments: { resourceRef: 'browser:resource:web_page:candidate', includeText: true },
+    }, {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'Answer from materialized Browser evidence.' },
+        displayedRefs: [sourceRef, textRef],
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => moduleResult({
+        moduleId: request.moduleId,
+        ok: true,
+        value: request.intent === 'browser.search'
+          ? {
+              schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+              moduleId: 'browser',
+              primitive: 'search',
+              status: 'completed',
+              output: {
+                query: 'latest browser evidence',
+                results: [{ title: 'Candidate', url: 'https://example.com/candidate' }],
+                searchResultRef: 'browser:search-result:turn-1',
+              },
+              resources: [{
+                ref: 'browser:resource:web_page:candidate',
+                kind: 'web_page',
+                status: 'discovered',
+                originTool: 'browser.search',
+                locator: { url: 'https://example.com/candidate' },
+                confidence: 'candidate',
+              }],
+              evidenceState: {
+                completed: ['Discovered 1 candidate web page resource(s).'],
+                unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+                boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+              },
+              refs: ['browser:search-result:turn-1'],
+              diagnostics: [],
+              budget: {},
+            }
+          : {
+              schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+              moduleId: 'browser',
+              primitive: 'read',
+              status: 'completed',
+              output: {
+                finalUrl: 'https://example.com/candidate',
+                title: 'Candidate',
+                sourcePageRef: sourceRef,
+                pageTextRef: textRef,
+                textCharCount: 42,
+              },
+              resources: [{
+                ref: sourceRef,
+                kind: 'source_page',
+                status: 'read',
+                originTool: 'browser.read',
+                confidence: 'materialized',
+              }, {
+                ref: textRef,
+                kind: 'page_text',
+                status: 'read',
+                originTool: 'browser.read',
+                confidence: 'materialized',
+              }],
+              evidenceState: {
+                completed: ['Materialized page content as source/page text refs.'],
+                unknown: ['Task-level synthesis and verifier acceptance remain outside Browser Runtime.'],
+                boundary: 'Read refs are Browser evidence; only Agent Host can decide how they support the user request.',
+              },
+              refs: [sourceRef, textRef],
+              diagnostics: [],
+              budget: {},
+            },
+        refs: request.intent === 'browser.read' ? [sourceRef, textRef] : ['browser:search-result:turn-1'],
+      }),
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Search, read, and answer from Browser evidence.',
+    workspacePath: workspace,
+    commandId: 'browser-read-final-answer-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  await collect(stream.events);
+
+  const guiResponse = appServer.toolCallResponses.at(-1);
+  const guiText = (guiResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponses.at(0)?.success, true);
+  assert.equal(appServer.toolCallResponses.at(1)?.success, true);
+  assert.equal(guiResponse?.success, false);
+  assert.match(guiText, /unsupported_dynamic_tool:gui_present/);
+  assert.doesNotMatch(guiText, /agent-host-browser-acceptance|completionTruth|"status":\s*"satisfied"/);
+});
+
+test('Codex app-server client keeps low-information Browser evidence out of legacy GUI completion', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const sourceRef = 'browser-host-session:current/source-pages/login.source.json';
+  const textRef = 'browser-host-session:current/source-pages/login.txt';
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'browser_search',
+      arguments: { query: '伊朗局势 最近一周', limit: 1 },
+    }, {
+      tool: 'browser_read',
+      arguments: { resourceRef: 'browser:resource:web_page:login', includeText: true },
+    }, {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'Low-information Browser read evidence must not complete the user task.' },
+        displayedRefs: [sourceRef, textRef],
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => moduleResult({
+        moduleId: request.moduleId,
+        ok: true,
+        value: request.intent === 'browser.search'
+          ? {
+              schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+              moduleId: 'browser',
+              primitive: 'search',
+              status: 'completed',
+              output: {
+                query: '伊朗局势 最近一周',
+                results: [{ title: 'Candidate', url: 'https://example.com/login' }],
+                searchResultRef: 'browser:search-result:turn-low-info',
+              },
+              resources: [{
+                ref: 'browser:resource:web_page:login',
+                kind: 'web_page',
+                status: 'discovered',
+                originTool: 'browser.search',
+                locator: { url: 'https://example.com/login' },
+                confidence: 'candidate',
+              }],
+              evidenceState: {
+                completed: ['Discovered 1 candidate web page resource(s).'],
+                unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+                boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+              },
+              refs: ['browser:search-result:turn-low-info'],
+              diagnostics: [],
+              budget: {},
+            }
+          : {
+              schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+              moduleId: 'browser',
+              primitive: 'read',
+              status: 'completed',
+              output: {
+                finalUrl: 'https://example.com/login',
+                title: 'Login',
+                sourcePageRef: sourceRef,
+                pageTextRef: textRef,
+                textCharCount: 47,
+              },
+              resources: [{
+                ref: sourceRef,
+                kind: 'source_page',
+                status: 'read',
+                originTool: 'browser.read',
+                confidence: 'materialized',
+                locator: { url: 'https://example.com/login' },
+                title: 'Login',
+                metadata: {
+                  discoveryOnly: true,
+                  finalUrl: 'https://example.com/login',
+                  textPreview: 'Skip to main content. Login. Sign in to continue.',
+                },
+              }, {
+                ref: textRef,
+                kind: 'page_text',
+                status: 'read',
+                originTool: 'browser.read',
+                confidence: 'materialized',
+                locator: { url: 'https://example.com/login' },
+                metadata: {
+                  discoveryOnly: true,
+                  finalUrl: 'https://example.com/login',
+                  textPreview: 'Skip to main content. Login. Sign in to continue.',
+                },
+              }],
+              evidenceState: {
+                completed: ['Materialized page content as source/page text refs.'],
+                unknown: ['Task-level synthesis and verifier acceptance remain outside Browser Runtime.'],
+                boundary: 'Read refs are Browser evidence; only Agent Host can decide how they support the user request.',
+              },
+              refs: [sourceRef, textRef],
+              diagnostics: [],
+              budget: {},
+            },
+        refs: request.intent === 'browser.read' ? [sourceRef, textRef] : ['browser:search-result:turn-low-info'],
+      }),
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '请搜索并总结最近一周伊朗局势，并列出你实际读取过的来源链接',
+    workspacePath: workspace,
+    commandId: 'browser-low-information-read-final-answer-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  await collect(stream.events);
+
+  const guiResponse = appServer.toolCallResponses.at(-1);
+  const guiText = (guiResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponses.at(0)?.success, true);
+  assert.equal(appServer.toolCallResponses.at(1)?.success, true);
+  assert.equal(guiResponse?.success, false);
+  assert.match(guiText, /unsupported_dynamic_tool:gui_present/);
+  assert.doesNotMatch(guiText, /browser-source-low-information|browser_evidence_incomplete|completionTruth|"status":"satisfied"/);
+});
+
+test('Codex app-server client blocks Browser direct tools for local-only user requests before dispatcher invoke', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let invokeCalled = false;
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'browser_search',
+      arguments: { query: '伊朗局势', limit: 1 },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [{ name: 'browser.search', sideEffect: 'external' }],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invokeCalled = true;
+        return moduleResult({ moduleId: request.moduleId, ok: true, value: { shouldNotRun: true } });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '只用本地上下文回答，不要联网或调用浏览器。',
+    workspacePath: workspace,
+    commandId: 'browser-local-only-policy-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.equal(invokeCalled, false);
+  assert.equal(appServer.toolCallResponse?.success, false);
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /agent_host_blocked:browser\.search/);
+  assert.match(text, /local-only|no-network/);
+  assert.doesNotMatch(text, /shouldNotRun/);
+});
+
+test('Codex app-server client routes Browser module.invoke calls while rejecting legacy GUI completion', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'module_invoke',
+      arguments: {
+        moduleId: 'browser',
+        intent: 'browser.search',
+        input: {
+          schemaVersion: 'sciforge.browser-runtime.search-input.v1',
+          query: 'module invoke browser search',
+        },
+      },
+    }, {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'Module-invoke search-only answer should not pass.' },
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [{ name: 'browser.search', sideEffect: 'external' }],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => moduleResult({
+        moduleId: request.moduleId,
+        ok: true,
+        value: {
+          schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+          moduleId: 'browser',
+          primitive: 'search',
+          status: 'completed',
+          output: {
+            query: 'module invoke browser search',
+            results: [{ title: 'Candidate', url: 'https://example.com/module-candidate' }],
+            searchResultRef: 'browser:search-result:module-turn',
+          },
+          resources: [{
+            ref: 'browser:resource:web_page:module-candidate',
+            kind: 'web_page',
+            status: 'discovered',
+            originTool: 'browser.search',
+            locator: { url: 'https://example.com/module-candidate' },
+          }],
+          evidenceState: {
+            completed: ['Discovered 1 candidate web page resource(s).'],
+            unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+            boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+          },
+          refs: ['browser:search-result:module-turn'],
+          diagnostics: [],
+          budget: {},
+        },
+        refs: ['browser:search-result:module-turn'],
+      }),
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Call Browser through module.invoke and then present.',
+    workspacePath: workspace,
+    commandId: 'module-invoke-browser-final-answer-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  await collect(stream.events);
+
+  const moduleResponse = appServer.toolCallResponses.at(0);
+  const guiResponse = appServer.toolCallResponses.at(-1);
+  const guiText = (guiResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(moduleResponse?.success, true);
+  assert.equal(guiResponse?.success, false);
+  assert.match(guiText, /unsupported_dynamic_tool:gui_present/);
+});
+
+test('Codex app-server client rejects provider-safe GUI dynamic tool aliases as legacy completion tools', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   const appServer = fakeAppServer({
@@ -341,13 +1242,13 @@ test('Codex app-server client projects provider-safe GUI dynamic tool aliases as
   const events = await collect(stream.events) as Array<Record<string, unknown>>;
 
   const syntheticGuiCompletion = events.find((event) => event.method === 'item/tool/completed') as Record<string, unknown> | undefined;
-  const completionParams = syntheticGuiCompletion?.params as Record<string, unknown> | undefined;
-  assert.equal(appServer.toolCallResponse?.success, true);
-  assert.equal(completionParams?.tool, 'gui_present');
-  assert.equal((completionParams?.arguments as Record<string, unknown> | undefined)?.content && ((completionParams.arguments as Record<string, unknown>).content as Record<string, unknown>).value, 'Visible answer from gui_present.');
+  const responseText = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponse?.success, false);
+  assert.equal(syntheticGuiCompletion, undefined);
+  assert.match(responseText, /unsupported_dynamic_tool:gui_present/);
 });
 
-test('Codex app-server client gives missing gui.present turns one bounded protocol repair attempt', async () => {
+test('Codex app-server client ends successful App Server turns without legacy GUI repair', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   const appServer = fakeAppServer({ autoToolCall: false });
@@ -359,22 +1260,21 @@ test('Codex app-server client gives missing gui.present turns one bounded protoc
   });
 
   const stream = await client.startTurn({
-    commandText: 'Answer through the unified GUI path.',
+    commandText: 'Answer through the Codex App Server final message path.',
     workspacePath: workspace,
-    commandId: 'missing-gui-protocol-repair-command',
+    commandId: 'app-server-final-message-no-gui-repair-command',
     attemptId: 'attempt-1',
     guiExtension: { enabled: true },
   });
   const events = await collect(stream.events) as Array<Record<string, unknown>>;
 
-  assert.equal(appServer.turnStartParamsHistory.length, 2);
-  assert.equal(((appServer.turnStartParamsHistory[0]?.input as Array<Record<string, unknown>>)[0]?.text), 'Answer through the unified GUI path.');
-  assert.match(String(((appServer.turnStartParamsHistory[1]?.input as Array<Record<string, unknown>>)[0]?.text) ?? ''), /runtime protocol repair/i);
-  assert.equal(events.filter((event) => event.method === 'sciforge/gui_protocol_repair').length, 1);
-  assert.equal(events.filter((event) => event.method === 'turn/completed').length, 2);
+  assert.equal(appServer.turnStartParamsHistory.length, 1);
+  assert.equal(((appServer.turnStartParamsHistory[0]?.input as Array<Record<string, unknown>>)[0]?.text), 'Answer through the Codex App Server final message path.');
+  assert.equal(events.filter((event) => event.method === 'sciforge/gui_protocol_repair').length, 0);
+  assert.equal(events.filter((event) => event.method === 'turn/completed').length, 1);
 });
 
-test('Codex app-server client repairs multimodal turns when gui.present is only a title', async () => {
+test('Codex app-server client does not synthesize GUI completion or repair turns for multimodal App Server turns', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   const appServer = fakeAppServer({
@@ -407,7 +1307,7 @@ test('Codex app-server client repairs multimodal turns when gui.present is only 
   const stream = await client.startTurn({
     commandText: '解释这张图',
     workspacePath: workspace,
-    commandId: 'title-only-multimodal-gui-repair-command',
+    commandId: 'multimodal-app-server-no-gui-repair-command',
     attemptId: 'attempt-1',
     guiExtension: { enabled: true },
     inputObjects: [{
@@ -420,10 +1320,12 @@ test('Codex app-server client repairs multimodal turns when gui.present is only 
   });
   const events = await collect(stream.events) as Array<Record<string, unknown>>;
 
-  assert.equal(appServer.turnStartParamsHistory.length, 2);
-  assert.match(String(((appServer.turnStartParamsHistory[1]?.input as Array<Record<string, unknown>>)[0]?.text) ?? ''), /gui\.present.*(?:title-only|too short)|(?:title-only|too short).*gui\.present/i);
-  assert.equal(events.filter((event) => event.method === 'sciforge/gui_protocol_repair').length, 1);
-  assert.equal(events.filter((event) => event.method === 'item/tool/completed').length, 2);
+  assert.equal(appServer.turnStartParamsHistory.length, 1);
+  assert.equal(events.filter((event) => event.method === 'sciforge/gui_protocol_repair').length, 0);
+  assert.equal(events.filter((event) => event.method === 'item/tool/completed').length, 0);
+  assert.equal(appServer.toolCallResponse?.success, false);
+  const responseText = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(responseText, /unsupported_dynamic_tool:gui_present/);
 });
 
 test('Codex app-server client binds default Browser module dispatcher to the turn workspace', async () => {
@@ -551,7 +1453,7 @@ test('Codex app-server client blocks generic actions.execute dynamic tool calls 
   await collect(stream.events);
 
   assert.equal(invokeCalled, false);
-  assert.equal(appServer.toolCallResponse?.success, true);
+  assert.equal(appServer.toolCallResponse?.success, false);
   const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
   assert.match(text, /agent_host_blocked:execute/);
   assert.match(text, /Computer Use Guard/);
@@ -586,7 +1488,7 @@ test('Codex app-server client treats GUI spawn_agent text as ordinary app-server
     text: 'Please call multi_agent_v1.spawn_agent exactly once to inspect PROJECT.md.',
     text_elements: [],
   }]);
-  assert.deepEqual(events.map((event) => event.method), ['turn/completed', 'sciforge/gui_protocol_repair', 'turn/completed']);
+  assert.deepEqual(events.map((event) => event.method), ['turn/completed']);
 });
 
 test('Codex app-server client keeps streaming after retryable provider error notifications', async () => {
@@ -865,6 +1767,8 @@ test('Codex app-server client instructs models to route current external evidenc
   assert.match(developerInstructions, /module\.invoke/);
   assert.match(developerInstructions, /module_describe/);
   assert.match(developerInstructions, /module_invoke/);
+  assert.match(developerInstructions, /Codex App Server assistant\/final message/);
+  assert.doesNotMatch(developerInstructions, /gui\.present|gui\.ask_user|gui_present|gui_ask_user|native assistant prose is progress only/i);
   assert.match(developerInstructions, /Browser primitive path/);
   assert.match(developerInstructions, /browser\.search/);
   assert.match(developerInstructions, /browser\.navigate/);
@@ -1028,20 +1932,26 @@ test('Codex app-server client uses ready vision descriptors instead of resending
   assert.match(String(input[1]?.text ?? ''), /高德地图酒店预订凭证/);
 });
 
-test('Codex app-server client caches sufficient gui.present content as a follow-up vision descriptor', async () => {
+test('Codex app-server client caches sufficient assistant final answer content as a follow-up vision descriptor', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   const firstServer = fakeAppServer({
-    toolCall: {
-      tool: 'gui_present',
-      arguments: {
-        intent: 'show-result',
-        content: {
-          kind: 'markdown',
-          value: '这是一张高德地图酒店预订凭证，包含丽柏酒店、入住人高张阳、入住/离店时间、金额 ¥421.15、订单号和服务商飞猪。',
+    autoToolCall: false,
+    turnEvents: [{
+      method: 'message',
+      params: {
+        text: '这是一张高德地图酒店预订凭证，包含丽柏酒店、入住人高张阳、入住/离店时间、金额 ¥421.15、订单号和服务商飞猪。',
+      },
+    }, {
+      method: 'turn/completed',
+      params: {
+        status: 'completed',
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
         },
       },
-    },
+    }],
   });
   const secondServer = fakeAppServer({ autoToolCall: false });
   const servers = [firstServer.process, secondServer.process];
@@ -1066,7 +1976,7 @@ test('Codex app-server client caches sufficient gui.present content as a follow-
     workspacePath: workspace,
     commandId: 'cache-descriptor-first-command',
     attemptId: 'attempt-1',
-    guiExtension: { enabled: true },
+    guiExtension: { enabled: false },
     inputObjects: [inputObject],
   });
   await collect(first.events);
@@ -1085,6 +1995,136 @@ test('Codex app-server client caches sufficient gui.present content as a follow-
   assert.equal(secondInput.some((item) => item.type === 'localImage'), false);
   assert.match(String(secondInput[1]?.text ?? ''), /visionDescriptor\.source=agent-host-cache/);
   assert.match(String(secondInput[1]?.text ?? ''), /丽柏酒店/);
+});
+
+test('Codex app-server client does not treat legacy GUI tool calls as terminal App Server turns', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    suppressTerminalAfterToolCall: true,
+    toolCall: {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: {
+          kind: 'markdown',
+          value: '这张截图展示了一个桌面浏览器窗口，包含菜单栏、网页内容和底部状态信息。',
+        },
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '介绍这张截图',
+    workspacePath: workspace,
+    commandId: 'legacy-gui-tool-nonterminal-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    inputObjects: [{
+      schemaVersion: 'sciforge.runtime.input-object.v1',
+      ref: '.sciforge/uploads/session-test/desktop.png',
+      source: 'recent-artifact',
+      mimeType: 'image/png',
+      title: 'desktop.png',
+    }],
+  });
+
+  const collectPromise = collect(stream.events);
+  const result = await Promise.race([
+    collectPromise.then((events) => ({ kind: 'events' as const, events })),
+    delay(150).then(() => ({ kind: 'timeout' as const })),
+  ]);
+  if (result.kind === 'timeout') {
+    appServer.process.kill();
+    await collectPromise.catch(() => undefined);
+  }
+
+  assert.equal(result.kind, 'timeout');
+  assert.equal(appServer.process.killed, true);
+  assert.equal(appServer.toolCallResponse?.success, false);
+  const responseText = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(responseText, /unsupported_dynamic_tool:gui_present/);
+});
+
+test('Codex app-server client preserves structured multimodal descriptors for follow-up turns', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const firstServer = fakeAppServer({
+    autoToolCall: false,
+    turnEvents: [{
+      method: 'message',
+      params: {
+        text: [
+          '这是一张桌面截图。',
+          '- 前景应用是浏览器。',
+          '- 页面中央显示地图和窗口控件。',
+          '- 底部有状态栏和若干图标。',
+        ].join('\n'),
+      },
+    }, {
+      method: 'turn/completed',
+      params: {
+        status: 'completed',
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+        },
+      },
+    }],
+  });
+  const secondServer = fakeAppServer({ autoToolCall: false });
+  const servers = [firstServer.process, secondServer.process];
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      const process = servers.shift();
+      if (!process) throw new Error('unexpected extra app-server process');
+      return process;
+    },
+  });
+  const inputObject = {
+    schemaVersion: 'sciforge.runtime.input-object.v1',
+    ref: '.sciforge/uploads/session-test/desktop.png',
+    source: 'recent-artifact',
+    mimeType: 'image/png',
+    title: 'desktop.png',
+  } as const;
+
+  const first = await client.startTurn({
+    commandText: '介绍这张截图',
+    workspacePath: workspace,
+    commandId: 'structured-descriptor-first-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+    inputObjects: [inputObject],
+  });
+  await collect(first.events);
+
+  const second = await client.startTurn({
+    commandText: '继续说明这张截图里有哪些界面元素',
+    workspacePath: workspace,
+    commandId: 'structured-descriptor-second-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+    inputObjects: [inputObject],
+  });
+  await collect(second.events);
+
+  const secondInput = secondServer.turnStartParams.input as Array<Record<string, unknown>>;
+  const metadata = String(secondInput[1]?.text ?? '');
+  assert.equal(secondInput.some((item) => item.type === 'localImage'), false);
+  assert.match(metadata, /visionDescriptor\.version=1/);
+  assert.match(metadata, /visionDescriptor\.updatedAt=/);
+  assert.match(metadata, /visionDescriptor\.coverage=/);
+  assert.match(metadata, /介绍这张截图/);
+  assert.match(metadata, /visionDescriptor\.details=/);
+  assert.match(metadata, /前景应用是浏览器/);
 });
 
 test('Codex app-server client treats GUI /computer-use text as ordinary app-server input', async () => {
@@ -1143,7 +2183,7 @@ test('Codex app-server client treats GUI /computer-use text as ordinary app-serv
   assert.equal(spawnCalled, true);
   assert.equal(stream.turnId, 'turn-1');
   assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{ type: 'text', text: commandText, text_elements: [] }]);
-  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed', 'sciforge/gui_protocol_repair', 'turn/completed']);
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed']);
 });
 
 test('Codex app-server client routes host-owned Computer Use runtime intents through native package bridge', async () => {
@@ -1343,17 +2383,17 @@ test('Codex app-server client passes current VSCode live diagnostic options into
           timestamp: new Date().toISOString(),
           commandId: input.request.commandId,
           attemptId: input.request.attemptId,
-          status: 'completed',
-          message: 'native route completed',
+          status: 'done',
         }]),
       };
     },
   });
+
   const commandText = '读取我当前打开的 VSCode 可见文本。';
   const stream = await client.startTurn({
     commandText,
     workspacePath: workspace,
-    commandId: 'app-server-client-vscode-live-options',
+    commandId: 'ordinary-vscode-cowork-live-options',
     attemptId: 'attempt-1',
     guiExtension: { enabled: true },
     agentHostInput: p9bVSCodeCoWorkAgentHostInput(commandText),
@@ -1583,6 +2623,44 @@ test('Codex app-server subprocess does not inherit VirtualAppScreen native drive
   assert.equal(spawnedEnv?.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON, undefined);
 });
 
+test('Codex app-server subprocess does not inherit legacy direct proxy env', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  env.SCIFORGE_RUNTIME_BASE_URL = 'https://legacy-runtime.example.test/v1';
+  env.SCIFORGE_PROXY_API_KEY_ENV = 'SCIFORGE_STALE_PROXY_KEY';
+  env.SCIFORGE_PROXY_BASE_URL = 'http://127.0.0.1:3891';
+  env.SCIFORGE_PROXY_HOST = '0.0.0.0';
+  env.SCIFORGE_PROXY_PORT = '3891';
+  env.SCIFORGE_PROXY_QUIET = '1';
+  env.SCIFORGE_PROXY_URL = 'http://127.0.0.1:3891/healthz';
+  env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'https://legacy-provider.example.test/v1';
+  env.SCIFORGE_PROXY_DEFAULT_MODEL = 'legacy-direct-model';
+  const appServer = fakeAppServer();
+  let spawnedEnv: NodeJS.ProcessEnv | undefined;
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess(_command, _args, options) {
+      spawnedEnv = options.env;
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Explain the workspace.',
+    workspacePath: workspace,
+    commandId: 'normal-app-server-legacy-env-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.ok(spawnedEnv);
+  for (const key of Object.keys(spawnedEnv)) {
+    assert.equal(key.startsWith('SCIFORGE_PROXY_'), false, `${key} should be stripped from Codex app-server env`);
+  }
+  assert.equal(spawnedEnv.SCIFORGE_RUNTIME_BASE_URL, undefined);
+});
+
 test('Computer Use native route only claims diagnostic slash commands', () => {
   assert.equal(isComputerUseNativeRouteCommand('  /computer-use click the guarded Submit button'), false);
   assert.equal(isComputerUseNativeRouteCommand('/computer-use approve --approval-ref approval:computer-use:test'), false);
@@ -1612,6 +2690,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const result: T[] = [];
   for await (const event of iterable) result.push(event);
   return result;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function* asyncGenerator(values: unknown[]) {
@@ -1700,6 +2782,7 @@ function fakeAppServer(options: {
   toolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
   turnToolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
   turnEvents?: Array<Record<string, unknown>>;
+  suppressTerminalAfterToolCall?: boolean;
 } = {}) {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
@@ -1840,6 +2923,7 @@ function fakeAppServer(options: {
         setTimeout(() => writeToolCall(options.turnToolCalls?.[turnToolCallIndex], String(state.threadResumeParams.threadId ?? 'thread-1'), turnToolCallIndex), 0);
         return;
       }
+      if (options.suppressTerminalAfterToolCall) return;
       write({
         method: options.terminalEvent ?? 'turn/completed',
         params: {
@@ -1917,4 +3001,12 @@ function turnEvent(event: Record<string, unknown>, threadId: string): Record<str
       turnId: params.turnId ?? 'turn-1',
     },
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function legacyTokenRegex(parts: string[], separator = ''): RegExp {
+  return new RegExp(parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(separator), 'i');
 }

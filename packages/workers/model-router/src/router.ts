@@ -90,6 +90,17 @@ type ProviderCallRecord = {
   errorSummary?: string;
 };
 
+type VisionTranslationCacheEntry = {
+  schemaVersion: 'sciforge.model-router.vision-translation-cache-entry.v1';
+  profileId: string;
+  modalityCacheKey: string;
+  observation: string;
+  status: 'ok';
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type RoutedResponse = {
   responseId: string;
   model: string;
@@ -98,9 +109,7 @@ type RoutedResponse = {
   traceRef: string;
 };
 
-type TextControl =
-  | { type: 'final_answer'; content: string }
-  | { type: 'need_more_visual_info'; target?: string; question: string; reason?: string };
+type TextControl = { type: 'final_answer'; content: string };
 
 const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024;
 
@@ -108,6 +117,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
   const fetchImpl = options.fetchImpl ?? fetch;
   const env = options.env ?? processEnvSnapshot();
   const workspaceRoot = options.workspaceRoot ?? process.cwd();
+  const visionTranslationCache = new Map<string, VisionTranslationCacheEntry>();
 
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
@@ -146,6 +156,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           fetchImpl,
           workspaceRoot,
           request,
+          visionTranslationCache,
         });
         if (isRecord(body) && body.stream === true) return sendResponseStream(response, result);
         return sendJson(response, 200, responseObject(result));
@@ -225,6 +236,7 @@ async function routeResponsesRequest(
     fetchImpl: typeof fetch;
     workspaceRoot: string;
     request: IncomingMessage;
+    visionTranslationCache: Map<string, VisionTranslationCacheEntry>;
   },
 ): Promise<RoutedResponse> {
   const request = isRecord(body) ? body : {};
@@ -279,6 +291,22 @@ async function routeResponsesRequest(
       throw routerError(400, 'missing_vision_translator', 'Active Model Router profile does not have a usable vision translator.');
     }
     for (const modality of visionModalities) {
+      const cacheKey = visionObservationCacheKey(profileId, modality);
+      const cached = context.visionTranslationCache.get(cacheKey);
+      if (cached) {
+        const cachedObservation = formatCachedVisionTranslationObservation(modality, cached);
+        observations.push(cachedObservation);
+        await writeTraceJson(trace, `vision-initial-${modality.id}.json`, {
+          schemaVersion: 'sciforge.model-router.vision-observation.v1',
+          phase: 'initial',
+          status: cached.status,
+          cacheStatus: 'hit',
+          cacheVersion: cached.version,
+          targetIds: [modality.id],
+          observationSummary: boundedTraceText(cachedObservation, profile, publicModelAlias, traceRedactionSecrets),
+        });
+        continue;
+      }
       let observationStatus: 'ok' | 'failed' = 'ok';
       let observation: string;
       try {
@@ -304,10 +332,14 @@ async function routeResponsesRequest(
         ].join('\n');
       }
       observations.push(formatVisionObservation(modality, observation, observationStatus));
+      if (observationStatus === 'ok') {
+        storeVisionTranslationCacheEntry(context.visionTranslationCache, profileId, modality, observation);
+      }
       await writeTraceJson(trace, `vision-initial-${modality.id}.json`, {
         schemaVersion: 'sciforge.model-router.vision-observation.v1',
         phase: 'initial',
         status: observationStatus,
+        cacheStatus: observationStatus === 'ok' ? 'stored' : 'miss',
         targetIds: [modality.id],
         observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
       });
@@ -316,80 +348,19 @@ async function routeResponsesRequest(
 
   let outputText = '';
   let outputItems: JsonObject[] = [];
-  let controlError: string | undefined;
   try {
-    let textResult = await callTextReasoner({
+    const textResult = await callTextReasoner({
       profile,
       secret: textSecret,
       fetchImpl: context.fetchImpl,
       userText: extracted.userText,
       observations,
-      controlError,
       visualFailure: degraded,
       calls,
       request,
       requestOptions: textReasonerRequestOptions,
       toolNameAliases,
     });
-    for (let round = 0; round < visionSupplementRoundLimit(profile.translators.vision); round += 1) {
-      if (textResult.outputItems.some((item) => item.type === 'function_call')) break;
-      const control = parseTextControl(textResult.outputText);
-      if (control?.type !== 'need_more_visual_info') break;
-      const modality = modalityForSupplementControl(control, visionModalities);
-      if (!modality) {
-        controlError = `Rejected visual supplement request: unknown target "${control.target ?? ''}".`;
-        break;
-      }
-      if (!visionSecret) {
-        controlError = 'Rejected visual supplement request: vision translator secret is unavailable.';
-        break;
-      }
-      let observationStatus: 'ok' | 'failed' = 'ok';
-      let observation: string;
-      try {
-        observation = await callVisionTranslator({
-          profile,
-          secret: visionSecret,
-          fetchImpl: context.fetchImpl,
-          instruction: visionSupplementInstruction(extracted.userText, control, modality),
-          modality,
-          phase: `vision-supplement-${round + 1}`,
-          calls,
-        });
-      } catch (error) {
-        degraded = true;
-        observationStatus = 'failed';
-        const summary = traceErrorSummary(error);
-        observation = [
-          `modality_input=${modality.id}`,
-          'kind=vision.image',
-          'status=unavailable',
-          `reason=${summary}`,
-          'instruction=Answer from available context and explicitly state that the requested visual supplement could not be inspected.',
-        ].join('\n');
-      }
-      observations.push(formatVisionObservation(modality, observation, observationStatus));
-      await writeTraceJson(trace, `vision-supplement-${round + 1}-${modality.id}.json`, {
-        schemaVersion: 'sciforge.model-router.vision-observation.v1',
-        phase: `supplement-${round + 1}`,
-        status: observationStatus,
-        targetIds: [modality.id],
-        observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
-      });
-      textResult = await callTextReasoner({
-        profile,
-        secret: textSecret,
-        fetchImpl: context.fetchImpl,
-        userText: extracted.userText,
-        observations,
-        controlError,
-        visualFailure: degraded,
-        calls,
-        request,
-        requestOptions: textReasonerRequestOptions,
-        toolNameAliases,
-      });
-    }
     const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
     if (hasToolCall) {
       outputText = textResult.outputText;
@@ -708,14 +679,6 @@ function visionTranslatorInstruction(userInstruction: string, modality: Modality
   ].filter(Boolean).join('\n');
 }
 
-function visionSupplementInstruction(userInstruction: string, control: Extract<TextControl, { type: 'need_more_visual_info' }>, modality: ModalityRef) {
-  return [
-    visionTranslatorInstruction(userInstruction || 'Inspect the provided visual input.', modality),
-    `Supplemental visual question: ${boundedText(control.question, 1_000)}`,
-    control.reason ? `Reason for supplement: ${boundedText(control.reason, 1_000)}` : '',
-  ].filter(Boolean).join('\n\n');
-}
-
 function formatVisionObservation(modality: ModalityRef, observation: string, status: 'ok' | 'failed') {
   return [
     `Target modality_input: ${modality.id}`,
@@ -727,20 +690,41 @@ function formatVisionObservation(modality: ModalityRef, observation: string, sta
   ].filter(Boolean).join('\n');
 }
 
-function visionSupplementRoundLimit(config: ModelRouterProviderConfig | undefined) {
-  const value = config?.maxSupplementRounds;
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(3, Math.floor(value)));
+function formatCachedVisionTranslationObservation(modality: ModalityRef, cached: VisionTranslationCacheEntry) {
+  return [
+    formatVisionObservation(modality, cached.observation, cached.status),
+    'cache_status=hit',
+    `translation_cache_version=${cached.version}`,
+    'instruction=Use this cached structured visual observation unless the current request requires a targeted refinement for missing details.',
+  ].join('\n');
 }
 
-function modalityForSupplementControl(
-  control: Extract<TextControl, { type: 'need_more_visual_info' }>,
-  modalities: ModalityRef[],
+function storeVisionTranslationCacheEntry(
+  cache: Map<string, VisionTranslationCacheEntry>,
+  profileId: string,
+  modality: ModalityRef,
+  observation: string,
 ) {
-  if (control.target) {
-    return modalities.find((modality) => modality.id === control.target);
-  }
-  return modalities.length === 1 ? modalities[0] : undefined;
+  const modalityCacheKey = visionObservationCacheKey(profileId, modality);
+  const existing = cache.get(modalityCacheKey);
+  const now = new Date().toISOString();
+  cache.set(modalityCacheKey, {
+    schemaVersion: 'sciforge.model-router.vision-translation-cache-entry.v1',
+    profileId,
+    modalityCacheKey,
+    observation,
+    status: 'ok',
+    version: (existing?.version ?? 0) + 1,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+}
+
+function visionObservationCacheKey(profileId: string, modality: ModalityRef) {
+  return [
+    profileId,
+    modality.contentSha256 ?? modality.sha256,
+  ].join(':');
 }
 
 function extractTextualModalityRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
@@ -906,7 +890,6 @@ async function callTextReasoner(options: {
   fetchImpl: typeof fetch;
   userText: string;
   observations: string[];
-  controlError?: string;
   visualFailure: boolean;
   calls: ProviderCallRecord[];
   request: Record<string, unknown>;
@@ -932,7 +915,6 @@ async function callTextReasoner(options: {
         options.userText ? `User request:\n${options.userText}` : 'User request is empty.',
         'Modality evidence:',
         ...options.observations.map((observation, index) => `Observation ${index + 1}:\n${observation}`),
-        options.controlError ? `Router control error:\n${options.controlError}` : '',
         options.visualFailure ? 'Router degradation: at least one referenced modality could not be inspected.' : '',
       ].filter(Boolean).join('\n\n'),
     }] : [{ role: 'user', content: options.userText }]),
@@ -1083,14 +1065,6 @@ function parseTextControl(content: string): TextControl | undefined {
     if (!isRecord(parsed)) return undefined;
     if (parsed.type === 'final_answer' && typeof parsed.content === 'string') {
       return { type: 'final_answer', content: parsed.content };
-    }
-    if (parsed.type === 'need_more_visual_info' && typeof parsed.question === 'string') {
-      return {
-        type: 'need_more_visual_info',
-        target: stringField(parsed.target),
-        question: boundedText(parsed.question, 1_000),
-        reason: stringField(parsed.reason),
-      };
     }
   } catch {
     return undefined;

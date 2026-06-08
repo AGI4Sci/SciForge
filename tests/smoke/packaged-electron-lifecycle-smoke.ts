@@ -18,7 +18,7 @@ type DesktopRuntimeConfig = {
   appRoot: string;
   sidecarCwd: string;
   ports: Array<{
-    name: 'control' | 'ui' | 'workspace-writer' | 'provider-proxy' | 'runtime-codex';
+    name: 'control' | 'ui' | 'workspace-writer' | 'model-router' | 'runtime-codex';
     requested?: number;
     actual: number;
     url: string;
@@ -45,7 +45,7 @@ const packagedLifecycleBoundary = {
   claimScope: 'packaged-electron-lifecycle-only',
   canClaimRDeskOrRPkgPass: false,
   liveAcceptanceEligible: false,
-  providerMode: 'dummy-provider-503',
+  providerMode: 'model-router-dummy-member-503',
   missingLiveEvidence: [
     'runtime-codex-real-task',
     'provider-profile-model-workspace-command-id-audit-refs',
@@ -77,24 +77,19 @@ const scratchRoot = await mkdtemp(join(tmpdir(), 'sciforge-packaged-electron-lif
 const userDataDir = join(scratchRoot, 'userData');
 const workspaceDir = join(scratchRoot, 'workspace');
 const configPath = join(scratchRoot, 'missing-config.local.json');
-const dummyProvider = await startDummyProvider();
+const dummyMemberProvider = await startDummyProvider();
+const lifecycleEnv = buildRouterOnlyLifecycleEnv(dummyMemberProvider.url, {
+  userDataDir,
+  workspaceDir,
+  configPath,
+});
 let electronApp: Awaited<ReturnType<typeof electron.launch>> | undefined;
 
 try {
   electronApp = await electron.launch({
     executablePath,
     cwd: projectRoot,
-    env: {
-      ...process.env,
-      SCIFORGE_DESKTOP_USER_DATA_DIR: userDataDir,
-      SCIFORGE_DESKTOP_WORKSPACE_PATH: workspaceDir,
-      SCIFORGE_CONFIG_PATH: configPath,
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: dummyProvider.url,
-      SCIFORGE_PROXY_API_KEY_ENV: 'SCIFORGE_PACKAGED_LIFECYCLE_DUMMY_KEY',
-      SCIFORGE_PACKAGED_LIFECYCLE_DUMMY_KEY: 'sciforge-packaged-lifecycle-dummy-key',
-      SCIFORGE_PROXY_DEFAULT_MODEL: 'sciforge-packaged-lifecycle-dummy-model',
-      SCIFORGE_PROXY_QUIET: '1',
-    },
+    env: lifecycleEnv,
     timeout: 45_000,
   });
 
@@ -144,7 +139,7 @@ try {
   assert.deepEqual(
     (health.services ?? []).map((service) => [service.id, service.role, service.state]).sort(),
     [
-      ['provider-proxy', 'provider-proxy', 'running'],
+      ['model-router', 'model-router', 'running'],
       ['runtime-codex', 'runtime-codex', 'running'],
       ['workspace-server', 'workspace-writer', 'running'],
     ],
@@ -165,14 +160,73 @@ try {
   throw new Error(`Packaged Electron lifecycle smoke failed while launching ${executablePath}: ${message}`);
 } finally {
   if (electronApp) await electronApp.close().catch(() => {});
-  await dummyProvider.close();
+  await dummyMemberProvider.close();
   await rm(scratchRoot, { recursive: true, force: true });
+}
+
+function buildRouterOnlyLifecycleEnv(
+  dummyMemberProviderUrl: string,
+  options: { userDataDir: string; workspaceDir: string; configPath: string },
+): Record<string, string> {
+  const env = stringRecordEnv({
+    ...process.env,
+    SCIFORGE_DESKTOP_USER_DATA_DIR: options.userDataDir,
+    SCIFORGE_DESKTOP_WORKSPACE_PATH: options.workspaceDir,
+    SCIFORGE_CONFIG_PATH: options.configPath,
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
+    SCIFORGE_MODEL_ROUTER_API_KEY: 'sciforge-packaged-lifecycle-router-key',
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-packaged-lifecycle-router-key',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_TEXT_PROVIDER: 'packaged-lifecycle-dummy-member',
+    SCIFORGE_TEXT_BASE_URL: dummyMemberProviderUrl,
+    SCIFORGE_TEXT_API_KEY: 'sciforge-packaged-lifecycle-dummy-member-key',
+    SCIFORGE_TEXT_MODEL: 'sciforge-packaged-lifecycle-dummy-member-model',
+  });
+  deleteLegacyDirectProviderEnv(env);
+  assertRouterOnlyLifecycleEnv(env, dummyMemberProviderUrl);
+  return env;
+}
+
+function stringRecordEnv(input: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+function deleteLegacyDirectProviderEnv(env: Record<string, string>): void {
+  for (const key of [
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_PROXY_API_KEY_ENV',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_QUIET',
+    'SCIFORGE_RUNTIME_BASE_URL',
+  ]) {
+    delete env[key];
+  }
+}
+
+function assertRouterOnlyLifecycleEnv(env: Record<string, string>, dummyMemberProviderUrl: string): void {
+  for (const key of [
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_PROXY_API_KEY_ENV',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_QUIET',
+    'SCIFORGE_RUNTIME_BASE_URL',
+  ]) {
+    assert.equal(env[key], undefined, `packaged lifecycle must not inject legacy direct provider env: ${key}`);
+  }
+  assert.equal(env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, 'sciforge-router');
+  assert.equal(env.SCIFORGE_RUNTIME_MODEL, env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS);
+  assert.equal(env.SCIFORGE_RUNTIME_API_KEY, env.SCIFORGE_MODEL_ROUTER_API_KEY);
+  assert.equal(env.SCIFORGE_TEXT_BASE_URL, dummyMemberProviderUrl);
+  assert.equal(env.SCIFORGE_TEXT_PROVIDER, 'packaged-lifecycle-dummy-member');
+  assert.equal(env.SCIFORGE_TEXT_MODEL, 'sciforge-packaged-lifecycle-dummy-member-model');
+  assert.ok(env.SCIFORGE_TEXT_API_KEY, 'packaged lifecycle dummy member model key must stay router-member scoped');
 }
 
 function assertDynamicLoopbackConfig(config: DesktopRuntimeConfig): void {
   assert.equal(config.ports.length, 5);
   const byName = new Map(config.ports.map((port) => [port.name, port]));
-  for (const name of ['control', 'ui', 'workspace-writer', 'provider-proxy', 'runtime-codex'] as const) {
+  for (const name of ['control', 'ui', 'workspace-writer', 'model-router', 'runtime-codex'] as const) {
     const binding = byName.get(name);
     assert.ok(binding, `missing dynamic port binding: ${name}`);
     assert.equal(binding.requested, 0, `${name} should request an ephemeral port`);
@@ -183,7 +237,7 @@ function assertDynamicLoopbackConfig(config: DesktopRuntimeConfig): void {
   }
   assert.equal(config.runtimeControlUrl, byName.get('control')?.url);
   assert.equal(config.workspaceWriterBaseUrl, byName.get('workspace-writer')?.url);
-  assert.equal(config.modelBaseUrl, `${byName.get('provider-proxy')?.url}/v1`);
+  assert.equal(config.modelBaseUrl, `${byName.get('model-router')?.url}/v1`);
   assert.equal(config.runtimeCodexBaseUrl, byName.get('runtime-codex')?.url);
 }
 
@@ -194,7 +248,7 @@ async function waitForPackagedSidecars(page: Awaited<ReturnType<Awaited<ReturnTy
       (window as unknown as { sciforgeDesktop: DesktopBridgeApi }).sciforgeDesktop.getRuntimeHealth(),
     ) as DesktopHealth;
     const services = lastHealth.services ?? [];
-    const expected = new Set(['provider-proxy', 'runtime-codex', 'workspace-server']);
+    const expected = new Set(['model-router', 'runtime-codex', 'workspace-server']);
     const allExpectedRunning = services.every((service) => service.state === 'running') &&
       services.length >= expected.size &&
       services.every((service) => expected.has(service.id));

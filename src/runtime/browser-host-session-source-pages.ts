@@ -2,9 +2,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type {
-  BrowserHostSearchInput,
-  BrowserHostSearchResult,
-  BrowserHostSearchSourcePage,
+  BrowserHostDiscoveryInput,
+  BrowserHostDiscoveryResult,
+  BrowserHostSourcePage,
 } from './browser-host-session-types.js';
 import { sha1 } from './workspace-task-runner.js';
 
@@ -16,22 +16,22 @@ const SEARCH_RESULT_ITEM_SUMMARY_MAX = 520;
 const HUGGING_FACE_DAILY_PAPER_SUMMARY_MAX = 900;
 const OPENAI_CHANGELOG_SUMMARY_MAX = 1_200;
 
-export function browserHostSearchSourcePageLimit(input: BrowserHostSearchInput, searchLimit: number): number {
+export function browserHostSourcePageLimit(input: BrowserHostDiscoveryInput, searchLimit: number): number {
   const requested = Number.isFinite(input.sourcePageLimit) ? Math.floor(Number(input.sourcePageLimit)) : Math.min(3, searchLimit);
   return Math.max(0, Math.min(5, requested));
 }
 
-export async function persistBrowserHostSearchSourcePage(input: {
+export async function persistBrowserHostSourcePage(input: {
   sessionId: string;
   sessionDir: string;
-  result: BrowserHostSearchResult;
+  result: BrowserHostDiscoveryResult;
   resultIndex: number;
   finalUrl: string;
   openedAt: string;
   text: string;
   discoveryOnly?: boolean;
   discoveredSourceUrls?: string[];
-}): Promise<BrowserHostSearchSourcePage> {
+}): Promise<BrowserHostSourcePage> {
   const sourceText = cleanSourcePageText(input.text);
   const textSummary = sourcePageTextSummary(input.result, sourceText);
   const artifact = sourcePageArtifactText(input.result, sourceText, textSummary);
@@ -75,9 +75,9 @@ export async function persistBrowserHostSearchSourcePage(input: {
   };
 }
 
-export function browserHostSearchSourcePageDerivedResults(
-  sourcePage: BrowserHostSearchSourcePage,
-): BrowserHostSearchResult[] {
+export function browserHostSourcePageDerivedResults(
+  sourcePage: BrowserHostSourcePage,
+): BrowserHostDiscoveryResult[] {
   return structuredSummarySourceItems(sourcePage.textSummary ?? sourcePage.textPreview ?? '')
     .map((item) => ({
       title: item.title || item.url,
@@ -86,12 +86,12 @@ export function browserHostSearchSourcePageDerivedResults(
     }));
 }
 
-export function failedBrowserHostSearchSourcePage(input: {
-  result: BrowserHostSearchResult;
+export function failedBrowserHostSourcePage(input: {
+  result: BrowserHostDiscoveryResult;
   resultIndex: number;
   openedAt: string;
   error: string;
-}): BrowserHostSearchSourcePage {
+}): BrowserHostSourcePage {
   return {
     resultIndex: input.resultIndex,
     title: cleanSourcePageText(input.result.title),
@@ -116,7 +116,7 @@ function cleanSourcePageText(value: string) {
 }
 
 function sourcePageArtifactText(
-  result: BrowserHostSearchResult,
+  result: BrowserHostDiscoveryResult,
   sourceText: string,
   textSummary: string | undefined,
 ): { kind: 'page-text' | 'structured-summary'; text: string } {
@@ -162,7 +162,7 @@ function sourcePageArtifactText(
   return { kind: 'page-text', text: normalizeSourcePageText(sourceText) };
 }
 
-function sourcePageTextSummary(result: BrowserHostSearchResult, text: string): string | undefined {
+function sourcePageTextSummary(result: BrowserHostDiscoveryResult, text: string): string | undefined {
   if (isOpenAiApiChangelog(result)) return openAiApiChangelogSummary(text);
   if (isArxivSearchResultPage(result)) return arxivSearchResultSummary(text);
   if (isArxivAbsPage(result)) return arxivAbsPageSummary(result, text);
@@ -180,21 +180,21 @@ function sourcePageTextSummary(result: BrowserHostSearchResult, text: string): s
     .filter(Boolean), SOURCE_PAGE_SUMMARY_MAX);
 }
 
-function isStructuredSearchResultList(result: BrowserHostSearchResult, textSummary: string | undefined): boolean {
+function isStructuredSearchResultList(result: BrowserHostDiscoveryResult, textSummary: string | undefined): boolean {
   return Boolean(textSummary) && isArxivSearchResultPage(result);
 }
 
-function structuredSearchResultListLabel(result: BrowserHostSearchResult): string {
+function structuredSearchResultListLabel(result: BrowserHostDiscoveryResult): string {
   if (isArxivSearchResultPage(result)) return 'arXiv search result';
   return 'Search result list';
 }
 
-function isArxivSearchResultPage(result: BrowserHostSearchResult): boolean {
+function isArxivSearchResultPage(result: BrowserHostDiscoveryResult): boolean {
   return /^https:\/\/arxiv\.org\/search\?/i.test(result.url.trim())
     || (/arxiv/i.test(result.title) && /search/i.test(result.title));
 }
 
-function isArxivAbsPage(result: BrowserHostSearchResult): boolean {
+function isArxivAbsPage(result: BrowserHostDiscoveryResult): boolean {
   return /^https:\/\/arxiv\.org\/abs\/\d{4}\.\d{4,5}/i.test(result.url.trim());
 }
 
@@ -325,7 +325,7 @@ function arxivSearchResultEmptySummary(text: string): string | undefined {
   return arxivSearchResultHeading(normalized);
 }
 
-function arxivAbsPageSummary(result: BrowserHostSearchResult, text: string): string | undefined {
+function arxivAbsPageSummary(result: BrowserHostDiscoveryResult, text: string): string | undefined {
   const normalized = cleanSourcePageText(text);
   const id = arxivIdFromUrl(result.url);
   const readableParts = arxivAbsReadablePageParts(normalized);
@@ -457,7 +457,7 @@ function fullMonthName(value: string | undefined): string | undefined {
   return months[month];
 }
 
-function isOpenAiApiChangelog(result: BrowserHostSearchResult): boolean {
+function isOpenAiApiChangelog(result: BrowserHostDiscoveryResult): boolean {
   const url = result.url.trim();
   const title = result.title.trim();
   return /(^https:\/\/(?:platform|developers)\.openai\.com\/(?:api\/)?docs\/changelog\b)/i.test(url)
@@ -479,7 +479,7 @@ function openAiApiChangelogSummary(text: string): string | undefined {
   return joinCompleteSummaries(entries, OPENAI_CHANGELOG_SUMMARY_MAX);
 }
 
-function isHuggingFaceDailyPapersApi(result: BrowserHostSearchResult): boolean {
+function isHuggingFaceDailyPapersApi(result: BrowserHostDiscoveryResult): boolean {
   return /^https:\/\/huggingface\.co\/api\/daily_papers\b/i.test(result.url.trim())
     || (/hugging\s*face/i.test(result.title) && /daily\s*papers/i.test(result.title) && /api/i.test(result.title));
 }

@@ -243,8 +243,10 @@ test('system terminal preview and script avoid embedding runtime API key values'
     env: {
       SCIFORGE_RUNTIME_API_KEY: 'SECRET_FROM_ENV',
       SCIFORGE_RUNTIME_MODEL: 'model-name',
-      SCIFORGE_RUNTIME_BASE_URL: 'https://provider.example/v1',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
+      SCIFORGE_TEXT_BASE_URL: 'https://provider.example/v1',
       SCIFORGE_RUNTIME_CODEX_COMMAND: 'codex',
+      SCIFORGE_ALLOW_OPENAI_RUNTIME: '1',
       PATH: '/custom/bin',
     },
     path: '/custom/bin:/usr/bin',
@@ -259,7 +261,10 @@ test('system terminal preview and script avoid embedding runtime API key values'
   const exports = systemTerminalRuntimeEnvExports(input);
   assert.ok(exports.includes("export SCIFORGE_CONFIG_PATH='/workspace/config.local.json'"));
   assert.ok(exports.includes("export SCIFORGE_RUNTIME_MODEL='model-name'"));
-  assert.ok(exports.includes("export SCIFORGE_RUNTIME_BASE_URL='https://provider.example/v1'"));
+  assert.ok(exports.includes("export SCIFORGE_MODEL_ROUTER_BASE_URL='http://127.0.0.1:3892/v1'"));
+  assert.ok(exports.includes("export SCIFORGE_TEXT_BASE_URL='https://provider.example/v1'"));
+  assert.equal(exports.some((line) => /SCIFORGE_RUNTIME_BASE_URL|SCIFORGE_PROXY_UPSTREAM_BASE_URL/.test(line)), false);
+  assert.equal(exports.some((line) => /SCIFORGE_ALLOW_OPENAI_RUNTIME/.test(line)), false);
   assert.equal(exports.some((line) => line.includes('SECRET_FROM_ENV')), false);
 
   const script = systemTerminalLaunchScript(input);
@@ -270,13 +275,15 @@ test('system terminal preview and script avoid embedding runtime API key values'
   assert.match(script, /read "\?Press Return to close this window\.\.\."/);
   assert.equal(script.includes('SECRET_FROM_ENV'), false);
   assert.equal(script.includes(prompt), false);
+  assert.equal(script.includes('SCIFORGE_ALLOW_OPENAI_RUNTIME'), false);
 });
 
 test('runtime key reader script is generated without reading local config during tests', () => {
   const script = systemTerminalRuntimeKeyReaderScript();
   assert.match(script, /const fs = require\("fs"\);/);
-  assert.match(script, /apiKey/);
-  assert.match(script, /runtimeCodexProxy/);
+  assert.match(script, /runtimeCodex/);
+  assert.match(script, /modelRouter/);
+  assert.doesNotMatch(script, /codexProxy|llm|textLLM/);
 });
 
 test('withCodexPtyPath preserves existing PATH entries and appends unique fallbacks', () => {

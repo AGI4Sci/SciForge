@@ -277,6 +277,7 @@ export type DesktopBrowserNativeLiveAcceptanceEvidence = {
       appDataRoot?: string;
     };
     runtimeHealth?: unknown;
+    browserPane?: unknown;
     launcherAuditTail?: string[];
   };
   rejectedDesktopLiveSubstitutes: {

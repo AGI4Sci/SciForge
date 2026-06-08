@@ -211,7 +211,7 @@ async function browserPrimitiveReadWithManager(
   const session = input.sessionId ? await manager.sessionState(ports.workspacePath, input.sessionId) : undefined;
   const url = input.url ?? session?.url;
   if (!url) return browserPrimitiveBlocked('read', 'missing_read_url');
-  const output = await manager.openRead(ports.workspacePath, {
+  const output = await manager.readPage(ports.workspacePath, {
     url,
     sessionId: input.sessionId,
     timeoutMs: input.timeoutMs,
@@ -277,8 +277,15 @@ async function browserPrimitiveDownloadWithWorkspace(
   input: BrowserDownloadInput,
 ): Promise<BrowserPrimitivePortResult<BrowserDownloadOutput>> {
   if (!ports.workspacePath) return browserPrimitiveBlocked('download', 'missing_workspace_path');
-  if (!input.url) return browserPrimitiveBlocked('download', 'download_selector_requires_host_browser_port');
-  const response = await fetch(input.url, { signal: AbortSignal.timeout(input.timeoutMs ?? 30_000) });
+  const downloadUrl = input.url ?? await browserDownloadUrlFromSessionLink(ports, input);
+  if (typeof downloadUrl !== 'string') return downloadUrl;
+  const resolvedInput = { ...input, url: downloadUrl };
+  const domainBlock = browserDownloadDomainBlock(resolvedInput);
+  if (domainBlock) return browserPrimitiveBlocked('download', domainBlock);
+  const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(input.timeoutMs ?? 30_000) });
+  const finalUrl = response.url || downloadUrl;
+  const finalDomainBlock = browserDownloadDomainBlock(resolvedInput, finalUrl);
+  if (finalDomainBlock) return browserPrimitiveBlocked('download', finalDomainBlock);
   if (!response.ok) {
     return {
       status: 'failed',
@@ -292,12 +299,32 @@ async function browserPrimitiveDownloadWithWorkspace(
       }],
     };
   }
+  const mimeType = response.headers.get('content-type') ?? undefined;
+  const risk = browserDownloadRisk(resolvedInput, mimeType);
+  if (risk) {
+    return {
+      status: 'needs-confirmation',
+      refs: [],
+      blockedReason: risk.blockedReason,
+      diagnostics: [{
+        code: risk.code,
+        message: risk.message,
+        severity: 'warning',
+        retryable: false,
+      }],
+      repairHints: [{
+        code: 'browser-download-confirmation-required',
+        message: 'Ask Agent Host for explicit user confirmation before downloading high-risk or unknown file types.',
+        suggestedPrimitive: 'download',
+      }],
+    };
+  }
   const contentLength = Number(response.headers.get('content-length') ?? 0);
   if (input.maxBytes && contentLength > input.maxBytes) return browserPrimitiveBlocked('download', 'download_content_length_exceeds_budget');
   const bytes = Buffer.from(await response.arrayBuffer());
   if (input.maxBytes && bytes.byteLength > input.maxBytes) return browserPrimitiveBlocked('download', 'download_bytes_exceed_budget');
   const sha256 = createHash('sha256').update(bytes).digest('hex');
-  const filename = safeBrowserArtifactFilename(input.filenameHint ?? (basename(new URL(input.url).pathname) || 'download.bin'));
+  const filename = safeBrowserArtifactFilename(input.filenameHint ?? (basename(new URL(finalUrl).pathname) || 'download.bin'));
   const sessionId = safeBrowserArtifactSegment(input.sessionId ?? 'downloads');
   const fileName = `${sha256.slice(0, 12)}-${filename}`;
   const dir = join(browserHostSessionDir(ports.workspacePath, sessionId), 'downloads');
@@ -310,13 +337,154 @@ async function browserPrimitiveDownloadWithWorkspace(
     output: {
       artifactRef,
       filename,
-      mimeType: response.headers.get('content-type') ?? undefined,
+      mimeType,
       byteLength: bytes.byteLength,
       sha256,
-      finalUrl: response.url || input.url,
+      finalUrl,
     },
     diagnostics: [],
   };
+}
+
+async function browserDownloadUrlFromSessionLink(
+  ports: BrowserRuntimeModulePorts,
+  input: BrowserDownloadInput,
+): Promise<string | BrowserPrimitivePortResult<BrowserDownloadOutput>> {
+  if (!input.sessionId || !input.linkSelector) return browserPrimitiveBlocked('download', 'missing_download_source:url_or_session_linkSelector');
+  const manager = ports.manager ?? defaultBrowserHostSessionManager();
+  const session = await manager.sessionState(ports.workspacePath ?? '', input.sessionId);
+  if (!session) return browserPrimitiveBlocked('download', 'browser_session_not_found');
+  if (!session.frameRef) return browserPrimitiveBlocked('download', 'download_selector_missing_frame_ref');
+  const framePath = browserHostFilePathForRef(ports.workspacePath ?? '', session.frameRef);
+  if (!framePath) return browserPrimitiveBlocked('download', 'download_selector_invalid_frame_ref');
+  let html: string;
+  try {
+    html = await readFile(framePath, 'utf8');
+  } catch {
+    return browserPrimitiveBlocked('download', 'download_selector_frame_ref_unreadable');
+  }
+  const href = hrefForLinkSelector(html, input.linkSelector);
+  if (!href) return browserPrimitiveBlocked('download', 'download_link_selector_not_found');
+  try {
+    const resolved = new URL(href, session.url);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+      return browserPrimitiveBlocked('download', 'download_link_selector_non_http_url');
+    }
+    return resolved.toString();
+  } catch {
+    return browserPrimitiveBlocked('download', 'download_link_selector_invalid_url');
+  }
+}
+
+function browserDownloadRisk(
+  input: BrowserDownloadInput,
+  mimeType: string | undefined,
+): { code: string; blockedReason: string; message: string } | undefined {
+  const normalizedMime = (mimeType ?? '').split(';', 1)[0]?.trim().toLowerCase();
+  const filename = `${input.filenameHint ?? ''} ${input.url ? basename(new URL(input.url).pathname) : ''}`.toLowerCase();
+  if (browserDownloadFilenameLooksExecutable(filename) || browserDownloadMimeLooksExecutable(normalizedMime)) {
+    return {
+      code: 'browser-download-high-risk-mime',
+      blockedReason: 'download_high_risk_mime_requires_confirmation',
+      message: 'Browser download is paused because the target appears to be executable or installable content.',
+    };
+  }
+  if (!normalizedMime || normalizedMime === 'application/octet-stream') {
+    return {
+      code: 'browser-download-unknown-mime',
+      blockedReason: 'download_unknown_mime_requires_confirmation',
+      message: 'Browser download is paused because the target MIME type is unknown or opaque.',
+    };
+  }
+  return undefined;
+}
+
+function hrefForLinkSelector(html: string, selector: string): string | undefined {
+  const trimmedSelector = selector.trim();
+  if (!trimmedSelector || /[\s>+~]/u.test(trimmedSelector)) return undefined;
+  for (const candidateSelector of trimmedSelector.split(',').map((value) => value.trim()).filter(Boolean)) {
+    for (const anchor of anchorLinksFromHtml(html)) {
+      if (anchorMatchesSelector(anchor.attrs, candidateSelector)) return anchor.href;
+    }
+  }
+  return undefined;
+}
+
+function anchorLinksFromHtml(html: string): Array<{ attrs: string; href: string }> {
+  const anchors: Array<{ attrs: string; href: string }> = [];
+  for (const match of html.matchAll(/<a\b([^>]*)>/giu)) {
+    const attrs = match[1] ?? '';
+    const href = attr(attrs, 'href')?.trim();
+    if (href) anchors.push({ attrs, href });
+  }
+  return anchors;
+}
+
+function anchorMatchesSelector(attrs: string, selector: string): boolean {
+  if (!selector) return false;
+  const tagMatch = /^[a-z][a-z0-9-]*/iu.exec(selector);
+  const tag = tagMatch?.[0]?.toLowerCase();
+  if (tag && tag !== 'a') return false;
+  const selectorWithoutTag = tag ? selector.slice(tag.length) : selector;
+  const idMatch = /#([a-zA-Z0-9_-]+)/u.exec(selectorWithoutTag);
+  if (idMatch && attr(attrs, 'id') !== idMatch[1]) return false;
+  const classNames = (attr(attrs, 'class') ?? '').split(/\s+/u).filter(Boolean);
+  for (const classMatch of selectorWithoutTag.matchAll(/\.([a-zA-Z0-9_-]+)/gu)) {
+    if (!classNames.includes(classMatch[1] ?? '')) return false;
+  }
+  for (const attrMatch of selectorWithoutTag.matchAll(/\[([a-zA-Z0-9_-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\]/gu)) {
+    const name = attrMatch[1] ?? '';
+    const expected = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4];
+    const actual = attr(attrs, name);
+    if (actual === undefined) return false;
+    if (expected !== undefined && actual !== expected.trim()) return false;
+  }
+  return selectorWithoutTag
+    .replace(/#[a-zA-Z0-9_-]+/gu, '')
+    .replace(/\.[a-zA-Z0-9_-]+/gu, '')
+    .replace(/\[[^\]]+\]/gu, '')
+    .trim() === '';
+}
+
+function browserDownloadDomainBlock(input: BrowserDownloadInput, candidateUrl = input.url): string | undefined {
+  if (!candidateUrl) return undefined;
+  const constraints = input.constraints;
+  if (!constraints) return undefined;
+  const host = new URL(candidateUrl).hostname.toLowerCase();
+  if ((constraints.blockedDomains ?? []).some((domain) => browserDomainMatches(host, domain))) {
+    return 'download_domain_blocked';
+  }
+  const allowedDomains = constraints.allowedDomains ?? [];
+  if (allowedDomains.length > 0 && !allowedDomains.some((domain) => browserDomainMatches(host, domain))) {
+    return 'download_domain_not_allowed';
+  }
+  return undefined;
+}
+
+function browserDomainMatches(host: string, domain: string): boolean {
+  const normalized = domain.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+  return Boolean(normalized) && (host === normalized || host.endsWith(`.${normalized}`));
+}
+
+function browserDownloadMimeLooksExecutable(mimeType: string | undefined): boolean {
+  if (!mimeType) return false;
+  return [
+    'application/java-archive',
+    'application/vnd.microsoft.portable-executable',
+    'application/x-apple-diskimage',
+    'application/x-debian-package',
+    'application/x-dosexec',
+    'application/x-executable',
+    'application/x-mach-binary',
+    'application/x-msdownload',
+    'application/x-msdos-program',
+    'application/x-rpm',
+    'application/x-sh',
+  ].includes(mimeType);
+}
+
+function browserDownloadFilenameLooksExecutable(filename: string): boolean {
+  return /\.(?:app|apk|bat|cmd|com|deb|dmg|exe|jar|msi|pkg|ps1|rpm|scr|sh)(?:\b|$)/i.test(filename);
 }
 
 function isBrowserPrimitiveIntent(intent: string): intent is BrowserPrimitiveIntent {

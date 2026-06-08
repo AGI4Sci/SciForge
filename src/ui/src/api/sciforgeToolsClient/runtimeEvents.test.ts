@@ -102,8 +102,8 @@ test('SSE reader pushes backend deltas, tool lifecycle, approval, and progress b
   assert.equal(seen.find((event) => event.type === 'process-progress')?.raw, seen[3]?.raw);
 });
 
-test('SSE reader still requires gui.present or a native assistant message for Runtime Codex completion', async () => {
-  const commandId = 'codex-command-gui-required';
+test('SSE reader requires a safe final assistant answer for Runtime Codex completion', async () => {
+  const commandId = 'codex-command-final-answer-required';
   const body = [
     'event: done',
     `data: ${JSON.stringify({
@@ -126,7 +126,7 @@ test('SSE reader still requires gui.present or a native assistant message for Ru
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
   assert.equal(stream.result, undefined);
-  assert.match(stream.error ?? '', /without gui\.present/);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/);
   assert.equal((seen.at(-1) as { type?: string }).type, 'failed');
 });
 
@@ -246,6 +246,7 @@ test('SSE reader promotes native Runtime Codex assistant messages when gui.prese
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
   const result = stream.result as {
     message?: string;
+    finalAnswerEnvelope?: { source?: string; kind?: string; liveAcceptanceEligible?: boolean };
     nativeCodexMessage?: { source?: string; liveAcceptanceEligible?: boolean };
     displayIntent?: {
       conversationProjection?: {
@@ -257,13 +258,151 @@ test('SSE reader promotes native Runtime Codex assistant messages when gui.prese
 
   assert.equal(stream.error, undefined);
   assert.equal(result.message, 'VISIBLE_FROM_CODEX_NATIVE_MESSAGE');
-  assert.equal(result.nativeCodexMessage?.source, `codex.native-message:${commandId}`);
+  assert.equal(result.finalAnswerEnvelope?.source, `codex.app-server.final-answer:${commandId}`);
+  assert.equal(result.finalAnswerEnvelope?.kind, 'assistant-message');
+  assert.equal(result.finalAnswerEnvelope?.liveAcceptanceEligible, true);
+  assert.equal(result.nativeCodexMessage?.source, `codex.app-server.final-answer:${commandId}`);
   assert.equal(result.nativeCodexMessage?.liveAcceptanceEligible, true);
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'visible-not-live-acceptance');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'completed');
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
-  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'native-message');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'final-answer');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.liveAcceptanceEligible, true);
+});
+
+test('SSE reader prefers Agent Host Browser finalizer text over structured done summaries', async () => {
+  const commandId = 'codex-command-browser-finalizer-visible';
+  const finalizerText = [
+    '根据已通过 Browser 读取的页面，OpenAI API 文档首页的标题或页面主题是“OpenAI API Platform Documentation”。',
+    '',
+    '来源：',
+    '- OpenAI API Platform Documentation — https://developers.openai.com/api/docs',
+    '证据 refs：',
+    '- `browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.source.json`',
+    '- `browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.txt`',
+  ].join('\n');
+  const sourceOnlySummary = [
+    'https://developers.openai.com/api/docs 证据 refs：',
+    '- browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.source.json',
+    '- browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.txt',
+  ].join('\n');
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: finalizerText,
+      message: finalizerText,
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [
+        'browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.source.json',
+        'browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.txt',
+      ],
+      raw: { boundary: 'agent-host-browser-finalizer' },
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: sourceOnlySummary,
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [
+        'browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.source.json',
+        'browser-host-session:browser-host-08543b2b2e7c/source-pages/source-1-459f78e7b1.txt',
+      ],
+      uiManifest: [{
+        componentId: 'image-evidence-viewer',
+        artifactRef: 'browser-proof-screen',
+      }],
+      artifacts: [{
+        id: 'browser-proof-screen',
+        type: 'image-evidence',
+        data: { screenRef: 'browser-host-session:browser-host-08543b2b2e7c/frame/current.png' },
+      }],
+      raw: { boundary: 'agent-host-browser-finalizer' },
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    finalAnswerEnvelope?: { text?: string; source?: string };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, finalizerText);
+  assert.equal(result.finalAnswerEnvelope?.text, finalizerText);
+  assert.equal(result.finalAnswerEnvelope?.source, `codex.app-server.final-answer:${commandId}`);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, finalizerText);
+  assert.match(result.message ?? '', /OpenAI API Platform Documentation/);
+  assert.notEqual(result.message, sourceOnlySummary);
+});
+
+test('SSE reader prefers Agent Host Browser finalizer text over legacy GUI projection text', async () => {
+  const commandId = 'codex-command-browser-finalizer-gui-priority';
+  const finalizerText = '最终可见答案：OpenAI API Platform Documentation。来源：https://developers.openai.com/api/docs';
+  const guiSummary = 'https://developers.openai.com/api/docs 证据 refs：browser-host-session:source.txt';
+  const body = [
+    'event: gui_present',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_present',
+      commandId,
+      displayIntent: {
+        source: `gui.present:${commandId}:legacy`,
+        conversationProjection: {
+          visibleAnswer: { text: guiSummary, status: 'completed' },
+        },
+      },
+    })}`,
+    '',
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: finalizerText,
+      commandId,
+      raw: { boundary: ' Agent-Host-Browser-Finalizer ' },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: guiSummary,
+      commandId,
+      evidenceRefs: ['browser-host-session:source.txt'],
+    })}`,
+    '',
+  ].join('\n');
+
+  const stream = await readWorkspaceToolStream(createSseResponse(body), () => undefined);
+  const result = stream.result as {
+    message?: string;
+    finalAnswerEnvelope?: { text?: string; kind?: string };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, finalizerText);
+  assert.equal(result.finalAnswerEnvelope?.kind, 'assistant-message');
+  assert.equal(result.finalAnswerEnvelope?.text, finalizerText);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, finalizerText);
+  assert.notEqual(result.message, guiSummary);
 });
 
 test('SSE reader fails closed when native Runtime Codex message is an internal tool-call protocol', async () => {
@@ -299,12 +438,12 @@ test('SSE reader fails closed when native Runtime Codex message is an internal t
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /DSML|private-skill|tool_call/);
 });
 
@@ -341,12 +480,12 @@ test('SSE reader fails closed when native Runtime Codex message uses plural DSML
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /DSML|multi_agent|tool_calls|伊朗/);
 });
 
@@ -383,12 +522,12 @@ test('SSE reader fails closed when native Runtime Codex message contains module 
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /module_invoke|browser|executeBoundedOperation/);
 });
 
@@ -431,12 +570,12 @@ test('SSE reader fails closed when native Runtime Codex message contains malform
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /module_invoke|function_calls|browser|executeBoundedOperation|agentic reinforcement/i);
 });
 
@@ -468,12 +607,12 @@ test('SSE reader fails closed when native Runtime Codex message is only a Browse
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /Browser|agentic RL|arxiv/i);
 });
 
@@ -499,12 +638,12 @@ test('SSE reader fails closed when text-only Runtime Codex message contains stdo
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /stdoutRef|raw provider output|provider-payload/);
 });
 
@@ -536,12 +675,12 @@ test('SSE reader fails closed when streamed native Runtime Codex message contain
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /stderrRef|raw provider payload|provider-payload/);
 });
 
@@ -564,12 +703,12 @@ test('SSE reader fails closed when done-only final text contains raw provider ou
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /raw provider output|provider-payload/);
 });
 
@@ -592,12 +731,12 @@ test('SSE reader fails closed when done-only final text is only a Browser tool i
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
 
-  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
   assert.equal(stream.result, undefined);
   const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
   assert.equal(failed.type, 'failed');
   assert.equal(failed.status, 'failed');
-  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.equal(failed.raw?.boundary, 'final-answer-required');
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /Browser|agentic RL|arXiv/i);
 });
 

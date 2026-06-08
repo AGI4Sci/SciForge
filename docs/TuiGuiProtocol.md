@@ -1,29 +1,31 @@
 # GUI Protocol 设计
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 文档目的与约束
 
-这份文档只记录 SciForge GUI protocol 本身的最新设计原则和沟通口径，目标是让人类和 agent 读完后能快速理解 GUI 是什么、能做什么、不能做什么。
+这份文档只记录 SciForge GUI surface 本身的最新设计原则和沟通口径，目标是让人类和 agent 读完后能快速理解 GUI 是什么、能做什么、不能做什么。
 
 原则约束：
 
 - 保持简洁，避免把文档写成完整 IPC schema、MCP tool schema 或 UI 测试用例。
 - 文档只描述 GUI 自身的稳定边界、输入/展示原则、确认原则和迁移原则。
 - 外部系统只在解释边界时短提，不展开外部编排、模型路由或模块内部设计。
-- 精确字段、GUI MCP tools、resource tree、runtime event normalizer 和测试真相源放在 `src/runtime/codex/gui-*`、`src/ui` 和对应 tests。
+- 精确字段、resource tree、runtime event normalizer 和测试真相源放在 `src/ui`、`src/runtime/codex` 和对应 tests。
 - 如果实现细节变复杂，优先更新 contract 和测试；本文件只补能帮助沟通和理解需求的原则。
 
 ## 定位
 
-SciForge GUI 是输入、展示、确认和状态感知 surface，不是任务编排器，不是 hidden task router，也不是业务动作执行器。
+SciForge GUI 是 Codex App Server client 的输入、展示、确认和状态感知 surface，不是任务编排器，不是 hidden task router，也不是业务动作执行器。
+
+唯一产品展示链路是 Codex App Server protocol events -> `FinalAnswerEnvelope` -> SciForge UI projection。GUI 不暴露模型可调用的 `gui.present` / `gui.ask_user` completion tool，也不把 presentation intent 作为 turn completion truth。Runtime Codex 主链路不注入 GUI MCP server、不写入 `gui.present` shim、不注册 `gui` module；旧 `gui_present` / `gui_ask_user` dynamic tool 请求必须 fail closed，而不是降级成展示或 completion。
 
 GUI 只负责：
 
 - 收集用户自然语言、选区、annotation、browser、window、artifact 等 refs。
 - 展示 final answer、evidence refs、artifact refs、approval request、status 和 blocked recovery。
 - 提供 hard-confirm、cancel、stop、takeover 等用户控制面。
-- 暴露 read-only GUI resource tree 和 presentation intent。
+- 暴露 read-only GUI resource tree。
 - 管理确定性的本地 presentation state。
 
 GUI 不负责：
@@ -35,7 +37,7 @@ GUI 不负责：
 - completion truth。
 - final answer。
 - 根据用户文本直接调用 Browser / Computer Use / connector / artifact 业务动作。
-- 从按钮文案、截图、历史 run 或 GUI projection 推断任务完成。
+- 从按钮文案、截图、历史 run、GUI projection 或 presentation ack 推断任务完成。
 
 ## 输入与展示边界
 
@@ -55,10 +57,11 @@ GUI 可接收并展示：
 - evidence / artifact refs。
 - approval request。
 - status / blocked recovery。
-- presentation intent。
 - runtime event projection。
 
-GUI 不能把 presentation intent 当成业务命令，也不能把本地 UI state 当成产品 truth。
+GUI 不能把本地 UI state 当成产品 truth。
+
+GUI 也不能把一次本地 projection 当成 turn completion。turn lifecycle、completion truth 和是否继续长程任务由 Codex / Agent Host 决定，并通过 Codex App Server events 进入 UI。
 
 ## Resource Tree 原则
 
@@ -70,7 +73,7 @@ GUI resource tree 是只读语义资源树，用来让调用方感知当前界�
 - hot region。
 - visible artifacts。
 - selected refs。
-- presentation capabilities。
+- render capabilities。
 - pending approval / blocked state。
 
 它不能暴露：
@@ -108,22 +111,22 @@ GUI 不能使用 LLM 猜测应该调用什么工具、点击什么控件或如�
 
 迁移目标：
 
-- GUI 侧不再定义新的任务编排协议。
-- GUI 业务动作入口收敛为用户文本、refs、confirmation result 和 presentation intent。
+- GUI 侧不再定义新的任务编排或 completion 协议。
+- GUI 业务动作入口收敛为用户文本、refs 和 confirmation result。
 - 旧 GUI debug 控件、projection、fixture、snapshot replay 只能作为诊断材料。
-- GUI MCP / resource tree 只暴露只读语义资源和受控 presentation intent。
+- GUI resource tree 只暴露只读语义资源。
 - workspace、browser、desktop、connector 或 artifact 副作用必须由调用方通过对应模块执行。
 
 ## 契约真相源
 
-长期 GUI protocol、MCP tools、resource tree、runtime event projection 和测试应放在：
+长期产品展示契约、resource tree、runtime event projection 和测试应放在：
 
-- `src/runtime/codex/gui-extension-manifest.ts`
-- `src/runtime/codex/gui-mcp-tools.ts`
-- `src/runtime/codex/gui-mcp-server.ts`
+- `src/runtime/codex/codex-app-server-client.ts`
+- `src/runtime/codex/codex-app-server-adapter.ts`
 - `src/ui/src`
 - `src/ui/src/**/*.test.ts`
-- `tests/smoke/*gui*`
+
+历史 GUI MCP / shim 文件只作为迁移期诊断实现参考，不能作为产品 completion 协议真相源。
 
 本文件只保留设计原则和迁移口径。
 

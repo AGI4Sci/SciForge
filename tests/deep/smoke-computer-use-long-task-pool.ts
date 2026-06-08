@@ -170,6 +170,9 @@ const previousConfigPath = process.env.SCIFORGE_CONFIG_PATH;
 const previousRuntimeApiKey = process.env.SCIFORGE_RUNTIME_API_KEY;
 const previousProxyUpstreamBaseUrl = process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
 const previousRuntimeBaseUrl = process.env.SCIFORGE_RUNTIME_BASE_URL;
+const previousModelRouterBaseUrl = process.env.SCIFORGE_MODEL_ROUTER_BASE_URL;
+const previousModelRouterUrl = process.env.SCIFORGE_MODEL_ROUTER_URL;
+const previousModelRouterPort = process.env.SCIFORGE_MODEL_ROUTER_PORT;
 const previousPlannerProfile = process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE;
 const previousHighRisk = process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
 const previousInputAdapter = process.env.SCIFORGE_VISION_INPUT_ADAPTER;
@@ -187,8 +190,11 @@ try {
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
   process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
-  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
+  process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1';
+  delete process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
   delete process.env.SCIFORGE_RUNTIME_BASE_URL;
+  delete process.env.SCIFORGE_MODEL_ROUTER_URL;
+  delete process.env.SCIFORGE_MODEL_ROUTER_PORT;
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
   delete process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
   delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
@@ -208,26 +214,36 @@ try {
   assert.equal((await stat(String(preflight.reportPath))).isFile(), true);
   assert.ok(preflight.checks.some((check) => check.id === 'runtime-codex-planner' && check.status === 'pass'));
   assert.ok(preflight.checks.some((check) => check.id === 'input-isolation' && check.status === 'pass'));
-  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = '';
-  delete process.env.SCIFORGE_RUNTIME_BASE_URL;
-  const missingUpstreamPreflight = await preflightComputerUseLong({
+  process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = '';
+  delete process.env.SCIFORGE_MODEL_ROUTER_URL;
+  delete process.env.SCIFORGE_MODEL_ROUTER_PORT;
+  const missingRouterPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
     workspacePath: '/tmp/sciforge-cu-workspace',
     dryRun: true,
   });
-  const missingUpstreamPlannerCheck = missingUpstreamPreflight.checks.find((check) => check.id === 'runtime-codex-planner');
-  assert.equal(missingUpstreamPreflight.ok, false);
-  assert.equal(missingUpstreamPlannerCheck?.status, 'fail');
-  assert.match(String(missingUpstreamPlannerCheck?.message), /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
+  const missingRouterPlannerCheck = missingRouterPreflight.checks.find((check) => check.id === 'runtime-codex-planner');
+  assert.equal(missingRouterPreflight.ok, false);
+  assert.equal(missingRouterPlannerCheck?.status, 'fail');
+  assert.match(String(missingRouterPlannerCheck?.message), /SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT/);
   delete process.env.SCIFORGE_RUNTIME_API_KEY;
   delete process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
   delete process.env.SCIFORGE_RUNTIME_BASE_URL;
+  delete process.env.SCIFORGE_MODEL_ROUTER_BASE_URL;
+  delete process.env.SCIFORGE_MODEL_ROUTER_URL;
+  delete process.env.SCIFORGE_MODEL_ROUTER_PORT;
   const configOnlyPath = join(preparedRoot, 'runtime-config-only.local.json');
   await writeFile(configOnlyPath, JSON.stringify({
     llm: {
       apiKey: 'config-only-secret',
       baseUrl: 'http://127.0.0.1:3888/v1',
       model: 'config-only-model',
+    },
+    runtimeCodex: {
+      apiKey: 'config-only-runtime-router-key',
+    },
+    modelRouter: {
+      baseUrl: 'http://127.0.0.1:3892/v1',
     },
     computerUse: {
       plannerProfile: 'config-only-profile',
@@ -245,7 +261,7 @@ try {
   assert.doesNotMatch(JSON.stringify(configOnlyPreflight), /config-only-secret/);
   process.env.SCIFORGE_CONFIG_PATH = join(preparedRoot, 'empty-config.local.json');
   process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
-  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
+  process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1';
   const realInputBlockedPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
     workspacePath: '/tmp/sciforge-cu-workspace',
@@ -540,7 +556,7 @@ try {
   assert.equal(implicitPassedRepairPlan.summaryPath, matrixRun.summaryPath);
 
   process.env.SCIFORGE_RUNTIME_API_KEY = 'runtime-codex-text-planner-key';
-  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
+  process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1';
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'runtime-codex-text-planner-profile';
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = smokeActionsJson;
@@ -577,7 +593,7 @@ try {
     assert.ok(steps.every((step) => step.kind !== 'planning'), `${result.scenarioId} does not make dynamic planner calls in fixture smoke`);
   }
   process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
-  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
+  process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1';
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
@@ -674,6 +690,9 @@ try {
   restoreEnv('SCIFORGE_RUNTIME_API_KEY', previousRuntimeApiKey);
   restoreEnv('SCIFORGE_PROXY_UPSTREAM_BASE_URL', previousProxyUpstreamBaseUrl);
   restoreEnv('SCIFORGE_RUNTIME_BASE_URL', previousRuntimeBaseUrl);
+  restoreEnv('SCIFORGE_MODEL_ROUTER_BASE_URL', previousModelRouterBaseUrl);
+  restoreEnv('SCIFORGE_MODEL_ROUTER_URL', previousModelRouterUrl);
+  restoreEnv('SCIFORGE_MODEL_ROUTER_PORT', previousModelRouterPort);
   restoreEnv('SCIFORGE_COMPUTER_USE_PLANNER_PROFILE', previousPlannerProfile);
   restoreEnv('SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS', previousHighRisk);
   restoreEnv('SCIFORGE_VISION_INPUT_ADAPTER', previousInputAdapter);

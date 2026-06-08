@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { access, mkdir, mkdtemp, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -14,11 +14,9 @@ import {
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
 } from '../../../packages/backend/src/runtime-home.js';
 import { CodexExecJsonAdapter, type SpawnCodexProcess } from './codex-exec-json-adapter.js';
-import { defaultGuiExtensionStatePath, GUI_EXTENSION_STATE_ENV, GUI_MCP_SERVER_NAME } from './gui-extension-manifest.js';
-import { saveGuiExtensionSnapshot } from './gui-extension-state.js';
 import { SUBAGENT_MCP_ENV, SUBAGENT_MCP_SERVER_NAME } from './subagent-extension-manifest.js';
 
-test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text command', async () => {
+test('adapter spawns codex exec --json with isolated CODEX_HOME and no legacy GUI MCP injection', async () => {
   const child = fakeChild();
   let spawnCall: Parameters<SpawnCodexProcess> | undefined;
   const workspace = await tempWorkspace();
@@ -56,9 +54,7 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.ok(argv.includes('--ask-for-approval'));
   assert.equal(argv[(argv.indexOf('--ask-for-approval') ?? -2) + 1], 'never');
   await assert.rejects(access(join(workspace, '.git')));
-  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
-  assertMcpEntrypointArg(argv, GUI_MCP_SERVER_NAME, 'gui-mcp-server');
-  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${guiStatePath}"`));
+  assert.doesNotMatch(argv.join('\n'), /sciforge_gui|gui-mcp-server|gui\.present|SCIFORGE_GUI_EXTENSION_STATE/);
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.command="node"`));
   assertMcpEntrypointArg(argv, SUBAGENT_MCP_SERVER_NAME, 'subagent-mcp-server');
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
@@ -70,10 +66,9 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.deepEqual(argv.slice(-5), ['exec', '--json', '--skip-git-repo-check', '--ignore-rules', 'Summarize the workspace']);
   assert.equal(argv.filter((arg) => arg === 'Summarize the workspace').length, 1);
   assert.match(spawnCall?.[2].env.CODEX_HOME ?? '', /packages\/backend\/\.codex-runtime\/codex-home$/);
-  assert.match(spawnCall?.[2].env.PATH ?? '', /packages\/backend\/\.codex-runtime\/gui-extension\/bin/);
-  assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, guiStatePath);
-  await access(join(spawnCall?.[2].env.PATH?.split(':')[0] ?? '', 'gui.present'));
-  await access(join(spawnCall?.[2].env.PATH?.split(':')[0] ?? '', 'gui'));
+  assert.doesNotMatch(spawnCall?.[2].env.PATH ?? '', /packages\/backend\/\.codex-runtime\/gui-extension\/bin/);
+  assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, undefined);
+  await assert.rejects(access(guiStatePath));
   assert.equal(events.find((event) => event.type === 'message')?.text, 'OK');
   assert.equal(events.at(-1)?.type, 'done');
 });
@@ -135,7 +130,7 @@ test('adapter injects local sub-agent MCP server by default when GUI extension i
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.codexHome}="${spawnCall?.[2].env.CODEX_HOME}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentCommandId}="${turn.turnId}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentAttemptId}="${turn.attemptId}"`));
-  assert.equal(argv.some((arg) => arg.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.`)), false);
+  assert.doesNotMatch(argv.join('\n'), /sciforge_gui|gui-mcp-server|gui\.present|SCIFORGE_GUI_EXTENSION_STATE/);
   assert.deepEqual(argv.slice(-5), ['exec', '--json', '--skip-git-repo-check', '--ignore-rules', 'Delegate safely']);
 });
 
@@ -372,7 +367,7 @@ test('adapter preserves actionable 502 gateway errors in stderr summaries', asyn
 });
 
 
-test('adapter emits gui_present from file-backed GUI intent state before done', async () => {
+test('adapter ignores file-backed GUI intent state and keeps final output in native events', async () => {
   const child = fakeChild();
   const workspace = await tempWorkspace();
   const guiStatePath = join(workspace, 'gui-state.json');
@@ -380,7 +375,7 @@ test('adapter emits gui_present from file-backed GUI intent state before done', 
     env: { [RUNTIME_KEY_ENV]: 'test-key' },
     spawnProcess() {
       setTimeout(() => {
-        void saveGuiExtensionSnapshot(guiStatePath, {
+        void writeLegacyGuiExtensionSnapshot(guiStatePath, {
           revision: 2,
           focusedPanel: 'chat',
           layoutMode: 'desktop',
@@ -427,13 +422,12 @@ test('adapter emits gui_present from file-backed GUI intent state before done', 
   const guiPresentIndex = events.findIndex((event) => event.type === 'gui_present');
   const doneIndex = events.findIndex((event) => event.type === 'done');
 
-  assert.ok(guiPresentIndex >= 0);
-  assert.ok(doneIndex > guiPresentIndex);
-  assert.equal(events[guiPresentIndex]?.text, 'VISIBLE_FROM_GUI_STATE');
-  assert.equal(((events[guiPresentIndex]?.raw as { presentation?: { source?: string } }).presentation)?.source, `gui.present:${turn.turnId}`);
+  assert.equal(guiPresentIndex, -1);
+  assert.ok(doneIndex >= 0);
+  assert.doesNotMatch(JSON.stringify(events), /VISIBLE_FROM_GUI_STATE|artifact:runtime-answer/);
 });
 
-test('adapter defaults GUI intent state outside the user workspace', async () => {
+test('adapter does not create or inject GUI intent state when guiExtension is requested', async () => {
   const child = fakeChild();
   let spawnCall: Parameters<SpawnCodexProcess> | undefined;
   const workspace = await tempWorkspace();
@@ -446,25 +440,24 @@ test('adapter defaults GUI intent state outside the user workspace', async () =>
     },
   });
 
+  const guiStatePath = join(workspace, 'requested-gui-state.json');
   const turn = await adapter.startTurn({
     commandText: 'use GUI state',
     workspacePath: workspace,
-    guiExtension: {},
+    guiExtension: { statePath: guiStatePath },
   });
   await collect(turn.events);
 
-  const expectedStatePath = defaultGuiExtensionStatePath({ commandId: turn.turnId, attemptId: turn.attemptId });
   const argv = spawnCall?.[1] ?? [];
-  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${expectedStatePath}"`));
-  assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, expectedStatePath);
-  assert.ok(relative(workspace, expectedStatePath).startsWith('..'));
-  await access(expectedStatePath);
+  assert.doesNotMatch(argv.join('\n'), /sciforge_gui|gui-mcp-server|gui\.present|SCIFORGE_GUI_EXTENSION_STATE/);
+  assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, undefined);
+  await assert.rejects(access(guiStatePath));
 });
 
 test('adapter isolates default GUI intent state per command attempt', async () => {
   const child = fakeChild();
   const workspace = await tempWorkspace();
-  await saveGuiExtensionSnapshot(join(workspace, '.sciforge', 'runtime-gui-extension-state.json'), {
+  await writeLegacyGuiExtensionSnapshot(join(workspace, '.sciforge', 'runtime-gui-extension-state.json'), {
     revision: 2,
     focusedPanel: 'chat',
     layoutMode: 'desktop',
@@ -511,12 +504,9 @@ test('adapter isolates default GUI intent state per command attempt', async () =
     guiExtension: {},
   });
   const events = await collect(turn.events);
-  const expectedStatePath = defaultGuiExtensionStatePath({ commandId: turn.turnId, attemptId: turn.attemptId });
 
   assert.equal(events.some((event) => event.type === 'gui_present'), false);
   assert.doesNotMatch(JSON.stringify(events), /STALE_GUI_PRESENT_SHOULD_NOT_LEAK|artifact:stale-report/);
-  assert.ok(relative(workspace, expectedStatePath).startsWith('..'));
-  await access(expectedStatePath);
 });
 
 test('adapter emits resume-failed audit before failed exit on native resume failure', async () => {
@@ -672,7 +662,7 @@ test('adapter resumes native Codex session when codexSessionId is provided', asy
   assert.equal(turn.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
   assert.equal(spawnCall?.[0], 'codex');
   const argv = spawnCall?.[1] ?? [];
-  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
+  assert.doesNotMatch(argv.join('\n'), /sciforge_gui|gui-mcp-server|gui\.present|SCIFORGE_GUI_EXTENSION_STATE/);
   assert.ok(argv.includes('--sandbox'));
   assert.equal(argv[(argv.indexOf('--sandbox') ?? -2) + 1], 'workspace-write');
   assertConfigPair(argv, RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS);
@@ -844,6 +834,14 @@ function booleanField(record: Record<string, unknown>, key: string): boolean {
   const value = record[key];
   assert.equal(typeof value, 'boolean');
   return value as boolean;
+}
+
+async function writeLegacyGuiExtensionSnapshot(path: string, snapshot: Record<string, unknown>): Promise<void> {
+  await mkdir(resolve(path, '..'), { recursive: true });
+  await writeFile(path, `${JSON.stringify({
+    schemaVersion: 'sciforge.gui-extension-state.v1',
+    snapshot,
+  }, null, 2)}\n`, 'utf8');
 }
 
 function assertConfigPair(argv: string[], pair: readonly [string, string]): void {

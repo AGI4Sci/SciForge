@@ -68,6 +68,10 @@
         "sessionId": {
           "type": "string"
         },
+        "resourceRef": {
+          "type": "string",
+          "description": "Candidate Browser resource ref, such as a discovered web_page resource returned by browser.search and materialized by browser.read."
+        },
         "ref": {
           "type": "string"
         },
@@ -76,6 +80,35 @@
         },
         "saveScope": {
           "const": "session-artifacts"
+        },
+        "constraints": {
+          "type": "object",
+          "description": "Primitive constraints such as allowedDomains and blockedDomains; download evaluates domain constraints before network fetch.",
+          "properties": {
+            "allowedDomains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blockedDomains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "safeSearch": {
+              "enum": [
+                "off",
+                "moderate",
+                "strict"
+              ]
+            },
+            "requireUserConfirmationForCrossOrigin": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": true
@@ -88,6 +121,8 @@
         "primitive",
         "status",
         "refs",
+        "resources",
+        "evidenceState",
         "diagnostics",
         "budget"
       ],
@@ -121,7 +156,97 @@
           "type": "array",
           "items": {
             "type": "string"
+          },
+          "description": "Materialized artifact refs such as source_page, page_text, screenshot, frame, or download refs."
+        },
+        "resources": {
+          "type": "array",
+          "description": "Resource ledger entries. Search returns candidate web_page resources; browser.read must materialize those candidates into source/page text refs before they are treated as evidence.",
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "kind",
+              "status",
+              "originTool"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "discovered",
+                  "accessed",
+                  "observed",
+                  "read",
+                  "extracted",
+                  "downloaded",
+                  "blocked",
+                  "failed"
+                ]
+              },
+              "originTool": {
+                "type": "string"
+              },
+              "locator": {
+                "type": "object"
+              },
+              "title": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "confidence": {
+                "enum": [
+                  "candidate",
+                  "observed",
+                  "materialized"
+                ]
+              },
+              "metadata": {
+                "type": "object"
+              }
+            },
+            "additionalProperties": true
           }
+        },
+        "evidenceState": {
+          "type": "object",
+          "description": "Evidence boundary summary. Search should mark candidate pages as not read; read reports what source/page text refs were materialized.",
+          "required": [
+            "completed",
+            "unknown",
+            "boundary"
+          ],
+          "properties": {
+            "completed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "unknown": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "boundary": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
         },
         "diagnostics": {
           "type": "array"

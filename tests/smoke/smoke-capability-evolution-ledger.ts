@@ -485,7 +485,7 @@ try {
     outputRel: '.sciforge/task-results/generated-literature-provider-unavailable.json',
     stdoutRel: '.sciforge/logs/generated-literature-provider-unavailable.stdout.log',
     stderrRel: '.sciforge/logs/generated-literature-provider-unavailable.stderr.log',
-    failureReason: 'AgentServer request failed at configured Model Base URL: ECONNREFUSED; provider later returned HTTP 429 rate limit.',
+    failureReason: 'AgentServer request failed through configured Model Router profile: ECONNREFUSED; provider later returned HTTP 429 rate limit.',
     now: () => new Date('2026-05-09T00:06:00.000Z'),
   });
   assert.equal(providerUnavailable.record.failureCode, 'provider-unavailable');

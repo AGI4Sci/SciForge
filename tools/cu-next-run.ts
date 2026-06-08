@@ -38,7 +38,7 @@ import {
 } from './cu-next-readiness-manifest.js';
 import { cuNextCompletionGradeEvidenceIssues } from './computer-use-next/completion-grade.js';
 import { runCuL3IndependentInputAcceptanceHarness } from './cu-l3-independent-input-acceptance-harness.js';
-import { RUNTIME_PROVIDER } from '../packages/backend/src/runtime-home.js';
+import { RUNTIME_MODEL, RUNTIME_PROVIDER } from '../packages/backend/src/runtime-home.js';
 
 type CuNextCommand =
   | 'list'
@@ -911,38 +911,70 @@ async function hydrateCuNextRuntimeEnvFromLocalConfig(workspacePath?: string): P
   ])).filter(isRecord);
   if (!configs.length) return;
 
-  const apiKey = firstConfigString(configs, [
+  const runtimeApiKey = firstConfigString(configs, [
+    ['runtimeApiKey'],
+    ['runtimeCodex', 'apiKey'],
+    ['runtimeCodex', 'runtimeApiKey'],
+    ['runtimeCodex', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
+    ['modelRouter', 'apiKey'],
+    ['modelRouter', 'runtimeApiKey'],
+    ['modelRouter', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
+  ]);
+  const modelRouterBaseUrl = stripTrailingSlash(firstConfigString(configs, [
+    ['modelRouter', 'baseUrl'],
+    ['modelRouter', 'url'],
+    ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_BASE_URL'],
+    ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_URL'],
+    ['runtimeCodex', 'modelRouterBaseUrl'],
+    ['runtimeCodex', 'modelRouterUrl'],
+    ['runtimeCodex', 'env', 'SCIFORGE_MODEL_ROUTER_BASE_URL'],
+    ['runtimeCodex', 'env', 'SCIFORGE_MODEL_ROUTER_URL'],
+  ]));
+  const modelRouterPort = firstConfigString(configs, [
+    ['modelRouter', 'port'],
+    ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_PORT'],
+    ['runtimeCodex', 'modelRouterPort'],
+    ['runtimeCodex', 'env', 'SCIFORGE_MODEL_ROUTER_PORT'],
+  ]);
+  const modelRouterPublicModelAlias = firstConfigString(configs, [
+    ['modelRouter', 'publicModelAlias'],
+    ['modelRouter', 'modelAlias'],
+    ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS'],
+  ]) ?? RUNTIME_MODEL;
+  const modelRouterDefaultProfile = firstConfigString(configs, [
+    ['modelRouter', 'defaultProfile'],
+    ['modelRouter', 'profile'],
+    ['modelRouter', 'env', 'SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE'],
+  ]);
+  const textApiKey = firstConfigString(configs, [
     ['apiKey'],
     ['llm', 'apiKey'],
     ['llm', 'upstreamApiKey'],
-    ['codexProxy', 'apiKey'],
-    ['runtimeCodexProxy', 'apiKey'],
+    ['textLLM', 'apiKey'],
+    ['textLLM', 'env', 'SCIFORGE_TEXT_API_KEY'],
   ]);
-  const upstreamBaseUrl = stripTrailingSlash(firstConfigString(configs, [
+  const textBaseUrl = stripTrailingSlash(firstConfigString(configs, [
     ['modelBaseUrl'],
     ['llm', 'baseUrl'],
     ['llm', 'upstreamBaseUrl'],
-    ['codexProxy', 'upstreamBaseUrl'],
-    ['codexProxy', 'baseUrl'],
-    ['runtimeCodexProxy', 'upstreamBaseUrl'],
-    ['runtimeCodexProxy', 'baseUrl'],
+    ['textLLM', 'baseUrl'],
+    ['textLLM', 'upstreamBaseUrl'],
+    ['textLLM', 'env', 'SCIFORGE_TEXT_BASE_URL'],
   ]));
-  const model = firstConfigString(configs, [
+  const textModel = firstConfigString(configs, [
     ['modelName'],
     ['llm', 'model'],
     ['llm', 'modelName'],
-    ['codexProxy', 'defaultModel'],
-    ['codexProxy', 'model'],
-    ['runtimeCodexProxy', 'defaultModel'],
-    ['runtimeCodexProxy', 'model'],
+    ['textLLM', 'model'],
+    ['textLLM', 'modelName'],
+    ['textLLM', 'env', 'SCIFORGE_TEXT_MODEL'],
   ]);
-  const provider = firstConfigString(configs, [
-    ['runtimeProvider'],
-    ['codexProxy', 'runtimeProvider'],
-    ['codexProxy', 'provider'],
-    ['runtimeCodexProxy', 'runtimeProvider'],
-    ['runtimeCodexProxy', 'provider'],
-  ]) ?? (upstreamBaseUrl ? RUNTIME_PROVIDER : undefined);
+  const textProvider = firstConfigString(configs, [
+    ['provider'],
+    ['llm', 'provider'],
+    ['textLLM', 'provider'],
+    ['textLLM', 'env', 'SCIFORGE_TEXT_PROVIDER'],
+  ]);
   const plannerProfile = firstConfigString(configs, [
     ['computerUse', 'plannerProfile'],
     ['visionSense', 'plannerProfile'],
@@ -966,11 +998,16 @@ async function hydrateCuNextRuntimeEnvFromLocalConfig(workspacePath?: string): P
     ['visionSense', 'visionModel'],
   ]);
 
-  setEnvIfMissing('SCIFORGE_RUNTIME_API_KEY', apiKey);
-  setEnvIfMissing('SCIFORGE_RUNTIME_PROVIDER', provider);
-  setRuntimeUpstreamBaseUrlEnvIfMissing(upstreamBaseUrl);
-  setEnvIfMissing('SCIFORGE_RUNTIME_MODEL', model);
-  setEnvIfMissing('SCIFORGE_PROXY_DEFAULT_MODEL', model);
+  setEnvIfMissing('SCIFORGE_RUNTIME_API_KEY', runtimeApiKey);
+  setModelRouterEndpointEnvIfMissing({ baseUrl: modelRouterBaseUrl, port: modelRouterPort });
+  setEnvIfMissing('SCIFORGE_RUNTIME_PROVIDER', RUNTIME_PROVIDER);
+  setEnvIfMissing('SCIFORGE_RUNTIME_MODEL', modelRouterPublicModelAlias);
+  setEnvIfMissing('SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS', modelRouterPublicModelAlias);
+  setEnvIfMissing('SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE', modelRouterDefaultProfile);
+  setEnvIfMissing('SCIFORGE_TEXT_PROVIDER', textProvider);
+  setEnvIfMissing('SCIFORGE_TEXT_BASE_URL', textBaseUrl);
+  setEnvIfMissing('SCIFORGE_TEXT_MODEL', textModel);
+  setEnvIfMissing('SCIFORGE_TEXT_API_KEY', textApiKey);
   setEnvIfMissing('SCIFORGE_COMPUTER_USE_PLANNER_PROFILE', plannerProfile);
   setEnvIfMissing('SCIFORGE_VISION_GROUNDING_TRANSLATOR_UPLOAD_STRATEGY', grounderUploadStrategy);
   setEnvIfMissing('SCIFORGE_VISION_INPUT_ADAPTER', inputAdapter);
@@ -1013,15 +1050,27 @@ function setEnvIfMissing(key: string, value: string | undefined): void {
   if (value) process.env[key] = value;
 }
 
-function setRuntimeUpstreamBaseUrlEnvIfMissing(value: string | undefined): void {
+function setModelRouterEndpointEnvIfMissing(input: {
+  baseUrl?: string;
+  url?: string;
+  port?: string;
+}): void {
   if (
-    process.env.SCIFORGE_RUNTIME_BASE_URL !== undefined
-    || process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL !== undefined
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL !== undefined
+    || process.env.SCIFORGE_MODEL_ROUTER_URL !== undefined
+    || process.env.SCIFORGE_MODEL_ROUTER_PORT !== undefined
   ) {
     return;
   }
-  setEnvIfMissing('SCIFORGE_RUNTIME_BASE_URL', value);
-  setEnvIfMissing('SCIFORGE_PROXY_UPSTREAM_BASE_URL', value);
+  if (input.baseUrl) {
+    setEnvIfMissing('SCIFORGE_MODEL_ROUTER_BASE_URL', input.baseUrl);
+    return;
+  }
+  if (input.url) {
+    setEnvIfMissing('SCIFORGE_MODEL_ROUTER_URL', input.url);
+    return;
+  }
+  setEnvIfMissing('SCIFORGE_MODEL_ROUTER_PORT', input.port);
 }
 
 function stripTrailingSlash(value: string | undefined): string | undefined {

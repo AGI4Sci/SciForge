@@ -9,23 +9,18 @@ import {
   selectedComponentIdsForRequest,
 } from './gateway-request';
 
-test('gateway request delegates LLM endpoint normalization to runtime contract policy', () => {
-  assert.deepEqual(normalizeLlmEndpoint({
+test('gateway request ignores legacy raw LLM endpoint payloads', () => {
+  assert.equal(normalizeLlmEndpoint({
     provider: '  openai-compatible  ',
     baseUrl: ' http://llm.example.test/v1/// ',
     apiKey: ' test-secret ',
     modelName: ' qwen-test ',
-  }), {
-    provider: 'openai-compatible',
-    baseUrl: 'http://llm.example.test/v1',
-    apiKey: 'test-secret',
-    modelName: 'qwen-test',
-  });
+  }), undefined);
 
   assert.equal(normalizeLlmEndpoint({ provider: ' native ' }), undefined);
 });
 
-test('gateway request carries normalized LLM endpoint on full requests', () => {
+test('gateway request drops legacy raw LLM endpoint fields on full requests', () => {
   const request = normalizeGatewayRequest({
     skillDomain: 'literature',
     prompt: 'Summarize this report.',
@@ -37,12 +32,7 @@ test('gateway request carries normalized LLM endpoint on full requests', () => {
     artifacts: [],
   });
 
-  assert.deepEqual(request.llmEndpoint, {
-    provider: 'native',
-    baseUrl: 'http://native.example.test/v1',
-    modelName: 'native-model',
-    apiKey: undefined,
-  });
+  assert.equal(request.llmEndpoint, undefined);
 });
 
 test('gateway request drops deprecated verificationPolicy request fields before runtime policy projection', () => {

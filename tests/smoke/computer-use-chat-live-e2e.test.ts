@@ -101,8 +101,8 @@ test('Computer Use chat live E2E fail-closes with product blockers when input is
   assert.ok(manifest.issues.includes('product-blocker:input-isolation:no-independent-input-adapter-provider'));
 });
 
-test('Computer Use chat live E2E retries transient preflight service aborts before submit', async () => {
-  let providerProxyHealthCalls = 0;
+test('Computer Use chat live E2E retries transient Model Router preflight service aborts before submit', async () => {
+  let modelRouterHealthCalls = 0;
   let runtimeProviderPreflightCalls = 0;
   let streamCalls = 0;
   const manifest = await runComputerUseChatLiveE2E({
@@ -122,9 +122,9 @@ test('Computer Use chat live E2E retries transient preflight service aborts befo
         }
         return readyServiceResponse(url);
       }
-      if (url.includes(':3891') && urlPathname(url).endsWith('/healthz')) {
-        providerProxyHealthCalls += 1;
-        if (providerProxyHealthCalls === 1) {
+      if (url.includes(':3892') && urlPathname(url).endsWith('/healthz')) {
+        modelRouterHealthCalls += 1;
+        if (modelRouterHealthCalls === 1) {
           throw new Error('This operation was aborted');
         }
         return readyServiceResponse(url);
@@ -146,13 +146,13 @@ test('Computer Use chat live E2E retries transient preflight service aborts befo
     },
   });
 
-  assert.equal(providerProxyHealthCalls, 2);
+  assert.equal(modelRouterHealthCalls, 2);
   assert.equal(runtimeProviderPreflightCalls, 2);
   assert.equal(streamCalls, 1);
   assert.equal(manifest.preflight.status, 'ready');
   assert.equal(manifest.requestSubmitted, true);
   assert.equal(manifest.issues.includes('live-preflight-not-ready'), false);
-  assert.equal(manifest.issues.includes('service:provider-proxy'), false);
+  assert.equal(manifest.issues.includes('service:model-router'), false);
   assert.equal(manifest.issues.some((issue) => issue.startsWith('runtime-provider:read-issue:')), false);
 });
 
@@ -3465,14 +3465,13 @@ function continuationWhitelistedSidecars(input: {
 function readyEnv(): NodeJS.ProcessEnv {
   return {
     SCIFORGE_RUNTIME_API_KEY: 'sk-live-secret',
-    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
     SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
     SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
     SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
     SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
     SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
     SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',
-    SCIFORGE_PROXY_URL: 'http://127.0.0.1:3891/healthz',
     SCIFORGE_WORKSPACE_PATH: '/tmp/current',
   };
 }

@@ -10,7 +10,6 @@ SciForge should keep using upstream Codex as an external runtime boundary, but t
 SciForge runtime bridge
 -> codex app-server --listen stdio://
 -> thread/start or thread/resume + turn/start
--> packages/backend local Responses proxy
 -> SciForge Model Router public alias/profile
 -> role-based textReasoner / translators.vision providers
 ```
@@ -19,8 +18,8 @@ SciForge runtime bridge
 
 ## Why Not Fork Now
 
-- The successful boundary is already small: Codex CLI speaks Responses API, while `packages/backend` adapts provider-specific Chat Completions behavior.
-- Provider quirks can be fixed and tested locally in the proxy without taking ownership of Codex CLI sandbox, approval, plugin, and event-stream internals.
+- The successful boundary is already small: Codex app-server speaks Responses API, while Model Router adapts provider-specific behavior behind SciForge's public alias/profile.
+- Provider quirks can be fixed and tested locally in the Model Router compatibility layer without taking ownership of Codex CLI sandbox, approval, plugin, and event-stream internals.
 - Forking Codex CLI would make upstream security fixes, model metadata updates, tool protocol changes, and plugin behavior harder to absorb.
 - SciForge needs a runtime compatibility layer it can audit and test quickly; a fork should be a last resort, not the default extension point.
 
@@ -28,7 +27,7 @@ SciForge runtime bridge
 
 Consider a Codex CLI fork only if all of these are true:
 
-- The blocker cannot be fixed through Codex config, runtime profile isolation, or the provider compatibility proxy.
+- The blocker cannot be fixed through Codex config, runtime profile isolation, or the Model Router compatibility layer.
 - The required change is inside Codex CLI itself, such as tool dispatch, sandbox behavior, approval handling, or event emission.
 - The patch can be kept small and documented with fixtures.
 - The fork can live outside the main backend package path, for example under `vendor/` or a separate worktree/submodule.
@@ -105,7 +104,7 @@ The model would repeatedly say it was going to use `exec_command`, but Codex wou
 Current fix location:
 
 ```text
-packages/backend/src/proxy.ts
+packages/backend/src/response-compat.ts
 ```
 
 Regression test:
@@ -117,7 +116,7 @@ packages/backend/src/response-compat.test.ts
 Test name:
 
 ```text
-preserves streaming tool call name across empty DeepSeek deltas
+keeps provider-unsafe dynamic tool aliases scrubbed in Responses function calls
 ```
 
 ## Event Stream Policy
@@ -155,11 +154,14 @@ Generate or refresh the isolated Runtime Codex home:
 npm run backend:codex-runtime:setup -- --overwrite
 ```
 
-Start the local Responses-compatible router/proxy with a service-managed upstream:
+Start the local Model Router with service-managed member-model configuration:
 
 ```bash
-SCIFORGE_RUNTIME_API_KEY="..." \
-npm run backend:codex-proxy
+SCIFORGE_RUNTIME_API_KEY="sciforge-local-model-router" \
+SCIFORGE_TEXT_BASE_URL="https://your-openai-compatible-endpoint.example/v1" \
+SCIFORGE_TEXT_MODEL="private-text-model" \
+SCIFORGE_TEXT_API_KEY="..." \
+npm run backend:model-router -- --host 127.0.0.1 --port 3892
 ```
 
 Smoke the legacy exec JSON path only when auditing historical provider compatibility fixtures:
@@ -193,11 +195,11 @@ When upgrading Codex CLI:
 1. Confirm `codex --version`.
 2. Capture one `/v1/responses` request body against a local fake provider and inspect `tools`, `tool_choice`, `parallel_tool_calls`, and streaming expectations.
 3. Run `npm --workspace @sciforge/backend test`.
-4. Run direct proxy tool-call shape smoke and confirm function call `name` and `call_id` are non-empty.
+4. Run Model Router compatibility tool-call shape smoke and confirm function call `name` and `call_id` are non-empty.
 5. Run Runtime Codex simple completion through isolated `CODEX_HOME`.
 6. Run Runtime Codex complex tool-use acceptance.
 7. Check stderr for new tool router errors, schema errors, or Responses event-shape warnings.
-8. Only consider Codex CLI source changes if the failure cannot be fixed in config or the proxy.
+8. Only consider Codex CLI source changes if the failure cannot be fixed in config or the Model Router compatibility layer.
 
 ## Source Change Log
 

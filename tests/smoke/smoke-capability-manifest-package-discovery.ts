@@ -99,7 +99,7 @@ const entry = audit.entries.find((item) => item.id === 'literature.metadata-enri
 assert.ok(entry, 'package-discovered manifest should be present in compact registry audit');
 assert.equal(audit.contract, 'sciforge.capability-manifest-registry-audit.v1');
 assert.equal(audit.sourceCounts.core, coreRegistry.compactAudit.sourceCounts.core);
-assert.equal(audit.sourceCounts.packageDiscovery, 8);
+assert.equal(audit.sourceCounts.packageDiscovery, coreRegistry.compactAudit.sourceCounts.packageDiscovery + 1);
 assert.equal(entry.source, 'package-discovery');
 assert.equal(entry.packageName, '@sciforge/pkg-literature-enrich');
 assert.equal(entry.packageRoot, 'packages/skills/literature-enrich');

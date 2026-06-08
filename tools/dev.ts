@@ -12,8 +12,8 @@ import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwner
 import { normalizeInstanceName, parallelProfile } from '../src/runtime/parallel-instance-profile.js';
 import {
   computerUseWorkspaceEnvFromLocalSettings,
+  providerEnvFromLocalSettings,
   readLocalProviderSettings,
-  runtimeCodexEnvFromLocalSettings,
 } from '../packages/backend/src/local-provider-config.js';
 
 applyInstanceDefaults();
@@ -21,17 +21,13 @@ applyInstanceDefaults();
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
-const MODEL_ROUTER_PORT = Number(process.env.SCIFORGE_MODEL_ROUTER_PORT || process.env.SCIFORGE_PROXY_PORT || 3892);
+const MODEL_ROUTER_PORT = Number(process.env.SCIFORGE_MODEL_ROUTER_PORT || 3892);
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
 const children: ChildProcess[] = [];
 let shuttingDown = false;
 
 function computerUseWorkspaceEnvFromLocalConfig() {
   return computerUseWorkspaceEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
-}
-
-function runtimeCodexEnvFromLocalConfig() {
-  return runtimeCodexEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
 }
 
 function modelRouterEnvFromLocalConfig() {
@@ -41,19 +37,9 @@ function modelRouterEnvFromLocalConfig() {
   const visionApiKey = visionModel ? settings.visionApiKey ?? settings.apiKey : undefined;
   const visionProvider = visionModel ? settings.visionProvider ?? settings.provider : undefined;
   return {
-    ...runtimeCodexEnvFromLocalSettings(settings),
-    ...(settings.provider ? {
-      SCIFORGE_TEXT_PROVIDER: settings.provider,
-    } : {}),
-    ...(settings.baseUrl ? {
-      SCIFORGE_TEXT_BASE_URL: settings.baseUrl,
-    } : {}),
-    ...(settings.model ? {
-      SCIFORGE_TEXT_MODEL: settings.model,
-    } : {}),
-    ...(settings.apiKey ? {
-      SCIFORGE_TEXT_API_KEY: settings.apiKey,
-    } : {}),
+    ...providerEnvFromLocalSettings(settings),
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: 'sciforge-router',
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: 'sciforge-runtime-default',
     ...(visionProvider ? { SCIFORGE_VISION_PROVIDER: visionProvider } : {}),
     ...(visionBaseUrl ? { SCIFORGE_VISION_BASE_URL: visionBaseUrl } : {}),
     ...(visionModel ? { SCIFORGE_VISION_MODEL: visionModel } : {}),

@@ -27,6 +27,10 @@ test('Computer Use chat live preflight reports ready without printing secret env
   assert.equal(text.includes('sk-live-secret'), false);
   assert.equal(text.includes('https://provider.example/v1'), false);
   assert.ok(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_RUNTIME_API_KEY' && entry.present && entry.valuePrinted === false));
+  assert.ok(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_MODEL_ROUTER_BASE_URL' && entry.present && entry.valuePrinted === false));
+  assert.equal(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'), false);
+  assert.equal(manifest.serviceChecks.some((check) => check.id === 'model-router' && check.label === 'Model Router'), true);
+  assert.equal(manifest.serviceChecks.some((check) => check.id === 'provider-proxy'), false);
   assert.equal(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_VISION_KV_GROUND_URL'), false);
   assert.deepEqual(manifest.runtimeProviderPreflight?.checkedInference, {
     category: 'ready',
@@ -61,7 +65,7 @@ test('Computer Use chat live preflight writes blocked diagnostics for missing en
   assert.equal(manifest.status, 'blocked');
   assert.deepEqual(manifest.missingEnv, [
     'SCIFORGE_RUNTIME_API_KEY',
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL',
+    'SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT',
     'SCIFORGE_VISION_INPUT_ADAPTER',
     'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
   ]);
@@ -87,17 +91,26 @@ test('Computer Use chat live preflight writes blocked diagnostics for missing en
 test('Computer Use chat live preflight accepts ignored local config presence without printing values', async () => {
   const manifest = await buildComputerUseChatLivePreflightManifest({
     env: {
+      SCIFORGE_RUNTIME_API_KEY: 'sk-runtime-env-secret',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
       SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
       SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
       SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',
-      SCIFORGE_PROXY_URL: 'http://127.0.0.1:3891/healthz',
     },
     localConfigs: [{
       path: 'config.local.json',
       config: {
-        llm: {
-          apiKey: 'sk-local-config-secret',
-          upstreamBaseUrl: 'https://user:pass@provider.example/v1?token=raw-token',
+        textLLM: {
+          env: {
+            SCIFORGE_TEXT_API_KEY: 'sk-local-text-secret',
+            SCIFORGE_TEXT_BASE_URL: 'https://user:pass@text-provider.example/v1?token=raw-token',
+          },
+        },
+        visionLLM: {
+          env: {
+            SCIFORGE_VISION_API_KEY: 'sk-local-vision-secret',
+            SCIFORGE_VISION_BASE_URL: 'https://vision-provider.example/v1',
+          },
         },
         visionSense: {
           desktopBridgeEnabled: true,
@@ -114,7 +127,7 @@ test('Computer Use chat live preflight accepts ignored local config presence wit
   assert.ok(manifest.requiredEnv.some((entry) => (
     entry.name === 'SCIFORGE_RUNTIME_API_KEY'
     && entry.present
-    && entry.source === 'local-config'
+    && entry.source === 'env'
     && entry.valuePrinted === false
   )));
   assert.deepEqual(manifest.localConfigSources, [{
@@ -123,25 +136,30 @@ test('Computer Use chat live preflight accepts ignored local config presence wit
     valuePrinted: false,
   }]);
   const text = JSON.stringify(manifest);
-  assert.equal(text.includes('sk-local-config-secret'), false);
-  assert.equal(text.includes('provider.example'), false);
+  assert.equal(text.includes('sk-runtime-env-secret'), false);
+  assert.equal(text.includes('sk-local-text-secret'), false);
+  assert.equal(text.includes('sk-local-vision-secret'), false);
+  assert.equal(text.includes('text-provider.example'), false);
+  assert.equal(text.includes('vision-provider.example'), false);
   assert.equal(text.includes('raw-token'), false);
 });
 
-test('Computer Use chat live preflight blocks when local config has key but workspace service env does not', async () => {
+test('Computer Use chat live preflight blocks when local member model config exists but Runtime service env does not', async () => {
   const manifest = await buildComputerUseChatLivePreflightManifest({
     env: {
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
       SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
       SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
       SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',
-      SCIFORGE_PROXY_URL: 'http://127.0.0.1:3891/healthz',
     },
     localConfigs: [{
       path: 'config.local.json',
       config: {
-        llm: {
-          apiKey: 'sk-local-config-secret',
-          upstreamBaseUrl: 'https://provider.example/v1',
+        textLLM: {
+          env: {
+            SCIFORGE_TEXT_API_KEY: 'sk-local-text-secret',
+            SCIFORGE_TEXT_BASE_URL: 'https://text-provider.example/v1',
+          },
         },
         visionSense: {
           desktopBridgeEnabled: true,
@@ -165,12 +183,13 @@ test('Computer Use chat live preflight blocks when local config has key but work
   });
 
   assert.equal(manifest.status, 'blocked');
+  assert.ok(manifest.missingEnv.includes('SCIFORGE_RUNTIME_API_KEY'));
   assert.equal(manifest.runtimeProviderPreflight?.runtimeApiKeyPresentInServiceEnv, false);
   assert.deepEqual(manifest.runtimeProviderPreflight?.missingEnv, ['SCIFORGE_RUNTIME_API_KEY']);
   assert.ok(manifest.nextActions.some((action) => action.label.includes('Repair Runtime Codex provider preflight')));
   const text = JSON.stringify(manifest);
-  assert.equal(text.includes('sk-local-config-secret'), false);
-  assert.equal(text.includes('provider.example'), false);
+  assert.equal(text.includes('sk-local-text-secret'), false);
+  assert.equal(text.includes('text-provider.example'), false);
 });
 
 test('Computer Use chat live preflight exposes non-secret runtime inference probe diagnostics', async () => {
@@ -242,7 +261,7 @@ test('Computer Use chat live preflight whitelists runtime provider diagnostic ca
   assert.equal(text.includes('provider.example/raw'), false);
 });
 
-test('Computer Use chat live preflight reads textLLM presence and local policy blockers', async () => {
+test('Computer Use chat live preflight does not treat member model local config as Runtime or Router env', async () => {
   const manifest = await buildComputerUseChatLivePreflightManifest({
     env: readyEnv({ withoutRuntimeProvider: true }),
     localConfigs: [{
@@ -250,8 +269,8 @@ test('Computer Use chat live preflight reads textLLM presence and local policy b
       config: {
         textLLM: {
           env: {
-            SCIFORGE_RUNTIME_API_KEY: 'sk-text-llm-secret',
-            SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://text-provider.example/v1',
+            SCIFORGE_TEXT_API_KEY: 'sk-text-llm-secret',
+            SCIFORGE_TEXT_BASE_URL: 'https://text-provider.example/v1',
           },
         },
         visionSense: {
@@ -265,8 +284,8 @@ test('Computer Use chat live preflight reads textLLM presence and local policy b
   });
 
   assert.equal(manifest.status, 'blocked');
-  assert.equal(manifest.missingEnv.includes('SCIFORGE_RUNTIME_API_KEY'), false);
-  assert.equal(manifest.missingEnv.includes('SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL'), false);
+  assert.equal(manifest.missingEnv.includes('SCIFORGE_RUNTIME_API_KEY'), true);
+  assert.equal(manifest.missingEnv.includes('SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT'), true);
   assert.deepEqual(manifest.policyViolations, [
     'shared-system-input-cannot-satisfy-chat-e2e-preflight',
     'test-action-fixtures-cannot-satisfy-real-chat-e2e',
@@ -305,18 +324,17 @@ test('Computer Use chat live preflight lets request-level shared input false ove
 function readyEnv(options: { withoutRuntimeProvider?: boolean; withoutDesktopBridge?: boolean } = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     SCIFORGE_RUNTIME_API_KEY: 'sk-live-secret',
-    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example/v1',
+    SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
     SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
     SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
     SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
     SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
     SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
     SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',
-    SCIFORGE_PROXY_URL: 'http://127.0.0.1:3891/healthz',
   };
   if (options.withoutRuntimeProvider) {
     delete env.SCIFORGE_RUNTIME_API_KEY;
-    delete env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
+    delete env.SCIFORGE_MODEL_ROUTER_BASE_URL;
   }
   if (options.withoutDesktopBridge) {
     delete env.SCIFORGE_VISION_DESKTOP_BRIDGE;

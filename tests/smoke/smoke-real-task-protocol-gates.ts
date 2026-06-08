@@ -160,7 +160,8 @@ assert.doesNotMatch(projectText, /^- \[[ xX]\]\s+R-[A-Z0-9-]+\b/m, 'PROJECT.md m
 assert.match(architecture, /TUI-owned extension|TUI Host/i, 'Architecture must keep Computer Use owned by the TUI Host');
 assert.match(architecture, /gui\.present|gui\.ask_user/, 'Architecture must document TUI-to-GUI presentation and confirmation intents');
 assert.match(usage, /SCIFORGE_RUNTIME_API_KEY/, 'Usage must document Runtime Codex API key preflight');
-assert.match(usage, /SCIFORGE_PROXY_UPSTREAM_BASE_URL|upstream base URL|upstreamBaseUrl/, 'Usage must document provider proxy upstream preflight');
+assert.match(usage, /SCIFORGE_MODEL_ROUTER_BASE_URL|SCIFORGE_MODEL_ROUTER_URL|SCIFORGE_MODEL_ROUTER_PORT|Model Router \/v1 base URL|Router URL|Router port/i, 'Usage must document Model Router base URL/URL/PORT preflight');
+assert.doesNotMatch(usage, /SCIFORGE_PROXY_UPSTREAM_BASE_URL|SCIFORGE_RUNTIME_BASE_URL/, 'Usage must not require legacy upstream env for Runtime/API services');
 
 assert.match(computerUseManifest, /runTask|hostPorts|approvalRequest/, 'Computer Use manifest must expose runTask, host ports, and approval requests');
 assert.match(computerUseManifest, /refs-first|trace/i, 'Computer Use manifest must keep refs-first trace semantics');

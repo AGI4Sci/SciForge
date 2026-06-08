@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -13,10 +14,13 @@ import {
   BROWSER_PRIMITIVE_INPUT_SCHEMAS,
   BROWSER_PRIMITIVE_INTENTS,
   BROWSER_PRIMITIVE_NAMES,
-  BROWSER_PRIMITIVE_RESULT_SCHEMA,
+  type BrowserResource,
   type BrowserPrimitiveName,
 } from '../../../packages/actions/browser-runtime/index.js';
-import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
+import {
+  assertCodexRuntimeConfig,
+  codexRuntimeEnv,
+} from './codex-runtime-config.js';
 import type {
   CodexAppServerClient,
   CodexAppServerStartTurnRequest,
@@ -28,13 +32,19 @@ import {
   evaluateAgentHostLocalToolAct,
   type AgentHostLocalToolActDecision,
 } from './agent-host-local-tool-act-orchestrator.js';
+import {
+  agentHostBrowserAcceptanceSpecFromPrompt,
+  createAgentHostBrowserEvidenceLedger,
+  evaluateAgentHostBrowserEvidence,
+  recordAgentHostBrowserRefs,
+  recordAgentHostBrowserToolResult,
+  type AgentHostBrowserCompletionTruth,
+  type AgentHostBrowserEvidenceEvaluation,
+  type AgentHostBrowserEvidenceLedger,
+} from './agent-host-browser-evidence.js';
 import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
 import { createBrowserRuntimeModuleHandler } from '../modules/bounded-operation-module-handlers.js';
-import { createGuiModuleDescription, createGuiModuleHandler } from '../modules/gui-module-handler.js';
 import { callSubagentMcpTool } from './subagent-mcp-tools.js';
-import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
-import { createFileBackedGuiProtocolController } from './gui-extension-state.js';
-import { callGuiMcpTool } from './gui-mcp-tools.js';
 import {
   createComputerUseNativeRouteStream,
   isComputerUseNativeRouteCommand,
@@ -87,7 +97,9 @@ export interface CodexAppServerJsonRpcClientOptions {
 
 type CodexAppServerApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 type RequestId = number | string;
-const BROWSER_SEARCH_ONLY_CALL_BUDGET = 3;
+const BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT = 3;
+const BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT = 2;
+const BROWSER_HOST_FINALIZE_AFTER_FINAL_REQUIRED_LIMIT = 3;
 
 interface JsonRpcRequest {
   id: RequestId;
@@ -104,20 +116,6 @@ interface JsonRpcResponse {
   id: RequestId;
   result?: unknown;
   error?: { message?: string; code?: number; data?: unknown };
-}
-
-interface BrowserToolProgress {
-  searchOnlyCalls: number;
-  candidateReadInputs: Array<Record<string, unknown>>;
-  refs: string[];
-}
-
-function freshBrowserToolProgress(): BrowserToolProgress {
-  return {
-    searchOnlyCalls: 0,
-    candidateReadInputs: [],
-    refs: [],
-  };
 }
 
 export function createCodexAppServerClient(options: CodexAppServerJsonRpcClientOptions = {}): CodexAppServerClient {
@@ -147,10 +145,6 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     const env = codexRuntimeEnv(baseEnv, config.codexHome);
     const sandbox = this.options.sandbox ?? resolveRuntimeCodexSandbox(baseEnv);
     const approvalPolicy = this.options.approvalPolicy ?? approvalPolicyFromEnv(baseEnv) ?? 'never';
-    const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(request.guiExtension, {
-      commandId,
-      attemptId,
-    }));
     const transcriptRoot = this.options.transcriptRoot ?? defaultSubagentTranscriptRoot();
     const subagentInjection = await prepareRuntimeSubagentInjection({
       workspace: config.workspace,
@@ -167,29 +161,23 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       'app-server',
       ...RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
       ...appServerConfigArgs([
-        ...(guiInjection?.configArgs ?? []),
         ...subagentInjection.configArgs,
       ]),
       '--listen',
       'stdio://',
     ];
-    if (guiInjection) {
-      env.PATH = [guiInjection.binDir, env.PATH].filter(Boolean).join(':');
-      env.SCIFORGE_GUI_EXTENSION_STATE = guiInjection.statePath;
-    }
     const session = new CodexAppServerJsonRpcSession({
       command: this.options.command ?? baseEnv.SCIFORGE_CODEX_APP_SERVER_COMMAND ?? 'codex',
       args,
       cwd: config.workspace,
       env,
       spawnProcess: this.options.spawnProcess ?? spawn,
-      dispatcher: this.options.dispatcher ?? createCodexAppServerRuntimeModuleDispatcher(config.workspace, guiInjection?.statePath),
+      dispatcher: this.options.dispatcher ?? createCodexAppServerRuntimeModuleDispatcher(config.workspace),
       agentHostRuntimeTruth: request.agentHostRuntimeTruth,
       transcriptRoot,
       clientInfo: this.options.clientInfo,
       parentCommandId: commandId,
       parentAttemptId: attemptId,
-      guiExtensionStatePath: guiInjection?.statePath,
       sandbox,
       approvalPolicy,
       profile: config.profile,
@@ -360,10 +348,16 @@ function codexAppServerVisionDescriptorMetadataLines(
   return [
     `   visionDescriptor.status=${descriptor.status}`,
     `   visionDescriptor.source=${descriptor.source}`,
+    descriptor.objectId ? `   visionDescriptor.objectId=${descriptor.objectId}` : undefined,
+    typeof descriptor.version === 'number' ? `   visionDescriptor.version=${descriptor.version}` : undefined,
     descriptor.descriptorRef ? `   visionDescriptor.descriptorRef=${descriptor.descriptorRef}` : undefined,
     descriptor.sha256 ? `   visionDescriptor.sha256=${descriptor.sha256}` : undefined,
     descriptor.traceRef ? `   visionDescriptor.traceRef=${descriptor.traceRef}` : undefined,
+    descriptor.updatedAt ? `   visionDescriptor.updatedAt=${descriptor.updatedAt}` : undefined,
     descriptor.summary ? `   visionDescriptor.summary=${boundedVisionDescriptorSummary(descriptor.summary)}` : undefined,
+    descriptor.details ? `   visionDescriptor.details=${boundedVisionDescriptorJson(descriptor.details)}` : undefined,
+    descriptor.coverage ? `   visionDescriptor.coverage=${boundedVisionDescriptorJson(descriptor.coverage)}` : undefined,
+    descriptor.observations?.length ? `   visionDescriptor.observations=${boundedVisionDescriptorJson({ observations: descriptor.observations.slice(-4) })}` : undefined,
   ].filter(Boolean);
 }
 
@@ -400,8 +394,11 @@ function inputObjectsWithCachedVisionDescriptors(
   visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>,
 ): RuntimeInputObject[] {
   return (inputObjects ?? []).map((object) => {
-    if (hasReadyVisionDescriptor(object)) return object;
-    const cached = visionDescriptorCache.get(visionDescriptorCacheKey(object));
+    if (hasReadyVisionDescriptor(object)) {
+      cacheVisionDescriptorForObject(object, object.visionDescriptor, visionDescriptorCache);
+      return object;
+    }
+    const cached = cachedVisionDescriptorForObject(object, visionDescriptorCache);
     return cached ? { ...object, visionDescriptor: cached } : object;
   });
 }
@@ -410,24 +407,235 @@ function visionDescriptorCacheKey(object: Pick<RuntimeInputObject, 'ref'>) {
   return object.ref;
 }
 
-function cacheVisionDescriptorFromGuiCompletion(
-  completion: GuiCompletionEventDetails,
+function visionDescriptorCacheKeys(object: Pick<RuntimeInputObject, 'ref' | 'title' | 'visionDescriptor'>): string[] {
+  return uniqueRuntimeStrings([
+    object.visionDescriptor?.sha256,
+    object.visionDescriptor?.objectId,
+    object.ref,
+    object.title ? `title:${normalizedVisionDescriptorToken(object.title)}` : undefined,
+    `basename:${normalizedVisionDescriptorToken(visionDescriptorRefBasename(object.ref))}`,
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function cachedVisionDescriptorForObject(
+  object: Pick<RuntimeInputObject, 'ref' | 'title' | 'visionDescriptor'>,
+  visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>,
+): RuntimeInputObjectVisionDescriptor | undefined {
+  for (const key of visionDescriptorCacheKeys(object)) {
+    const cached = visionDescriptorCache.get(key);
+    if (cached) return cached;
+  }
+  return undefined;
+}
+
+function cacheVisionDescriptorForObject(
+  object: Pick<RuntimeInputObject, 'ref' | 'title' | 'visionDescriptor'>,
+  descriptor: RuntimeInputObjectVisionDescriptor | undefined,
+  visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>,
+): void {
+  if (!descriptor) return;
+  for (const key of visionDescriptorCacheKeys({ ...object, visionDescriptor: descriptor })) {
+    visionDescriptorCache.set(key, descriptor);
+  }
+}
+
+function cacheVisionDescriptorFromFinalAnswer(
+  finalAnswerText: string,
   inputObjects: RuntimeInputObject[],
   visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>,
+  turnInput: Record<string, unknown>,
 ) {
-  if (completion.name !== 'gui.present') return;
-  const summary = boundedVisionDescriptorSummary(completion.contentText ?? '');
+  const summary = boundedVisionDescriptorSummary(finalAnswerText);
   if (visibleAnswerCharacterCount(summary) < 24) return;
-  for (const object of inputObjects) {
+  const targets = cacheableInputObjectsForFinalAnswer(inputObjects, turnInput, summary);
+  for (const object of targets) {
     if (!isImageInputObject(object)) continue;
-    visionDescriptorCache.set(visionDescriptorCacheKey(object), {
-      schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
-      status: 'ready',
-      source: 'agent-host-cache',
+    const existing = cachedVisionDescriptorForObject(object, visionDescriptorCache);
+    const descriptor = structuredVisionDescriptorFromFinalAnswer({
+      object,
+      existing,
+      turnInput,
       summary,
-      createdAt: new Date().toISOString(),
     });
+    cacheVisionDescriptorForObject(object, descriptor, visionDescriptorCache);
   }
+}
+
+function structuredVisionDescriptorFromFinalAnswer(input: {
+  object: RuntimeInputObject;
+  existing?: RuntimeInputObjectVisionDescriptor;
+  turnInput: Record<string, unknown>;
+  summary: string;
+}): RuntimeInputObjectVisionDescriptor {
+  const now = new Date().toISOString();
+  const previousVersion = input.existing?.version ?? 0;
+  const version = previousVersion + 1;
+  const observationId = `obs_${stableHex([
+    input.object.ref,
+    input.summary,
+    String(version),
+  ].join('\n')).slice(0, 12)}`;
+  const question = turnQuestionText(input.turnInput);
+  const intentKey = question ? visionDescriptorIntentKey(question) : undefined;
+  return {
+    schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+    status: 'ready',
+    source: 'agent-host-cache',
+    objectId: input.existing?.objectId ?? objectIdForInputObject(input.object),
+    version,
+    summary: input.summary,
+    ...(input.existing?.descriptorRef ? { descriptorRef: input.existing.descriptorRef } : {}),
+    ...(input.existing?.sha256 ? { sha256: input.existing.sha256 } : {}),
+    ...(input.existing?.traceRef ? { traceRef: input.existing.traceRef } : {}),
+    createdAt: input.existing?.createdAt ?? now,
+    updatedAt: now,
+    details: mergeVisionDescriptorDetails(input.existing?.details, input.summary, observationId),
+    coverage: mergeVisionDescriptorCoverage(input.existing?.coverage, intentKey && question
+      ? { intentKey, question, observationId }
+      : undefined),
+    observations: [
+      ...(input.existing?.observations ?? []).slice(-7),
+      {
+        observationId,
+        reason: 'agent-host-presentation',
+        createdAt: now,
+        descriptorVersionBefore: previousVersion,
+        descriptorVersionAfter: version,
+      },
+    ],
+  };
+}
+
+function cacheableInputObjectsForFinalAnswer(
+  inputObjects: RuntimeInputObject[],
+  turnInput: Record<string, unknown>,
+  finalAnswerText: string,
+): RuntimeInputObject[] {
+  const images = inputObjects.filter(isImageInputObject);
+  if (images.length <= 1) return images;
+  const bindingText = normalizedVisionDescriptorToken([
+    turnQuestionText(turnInput),
+    finalAnswerText,
+  ].filter(Boolean).join('\n'));
+  const mentioned = images.filter((object) => visionDescriptorObjectTokens(object)
+    .some((token) => token.length >= 3 && bindingText.includes(token)));
+  if (mentioned.length) return mentioned;
+  return images.slice(0, 1);
+}
+
+function mergeVisionDescriptorDetails(
+  existing: RuntimeInputObjectVisionDescriptor['details'] | undefined,
+  summary: string,
+  observationId: string,
+): RuntimeInputObjectVisionDescriptor['details'] {
+  const existingFacts = existing?.facts ?? [];
+  const nextFacts = extractVisionDescriptorFacts(summary, observationId);
+  return {
+    ...(existing?.kind ? { kind: existing.kind } : { kind: 'unknown' }),
+    facts: uniqueVisionDescriptorFacts([...existingFacts, ...nextFacts]).slice(-24),
+    ...(existing?.regions?.length ? { regions: existing.regions.slice(-24) } : {}),
+    ...(existing?.visibleText?.length ? { visibleText: existing.visibleText.slice(-24) } : {}),
+    ...(existing?.gaps?.length ? { gaps: existing.gaps.slice(-12) } : {}),
+  };
+}
+
+function mergeVisionDescriptorCoverage(
+  existing: RuntimeInputObjectVisionDescriptor['coverage'] | undefined,
+  next: NonNullable<NonNullable<RuntimeInputObjectVisionDescriptor['coverage']>['answeredIntents']>[number] | undefined,
+): RuntimeInputObjectVisionDescriptor['coverage'] {
+  const answeredIntents = [...(existing?.answeredIntents ?? [])];
+  if (next && !answeredIntents.some((item) => item.intentKey === next.intentKey)) answeredIntents.push(next);
+  return { answeredIntents: answeredIntents.slice(-16) };
+}
+
+function extractVisionDescriptorFacts(summary: string, observationId: string) {
+  const chunks = summary
+    .split(/\n+|[。；;]/u)
+    .map((line) => line.replace(/^\s*[-*•]\s*/u, '').trim())
+    .filter((line) => visibleAnswerCharacterCount(line) >= 4)
+    .slice(0, 16);
+  return chunks.map((value, index) => ({
+    key: `observation.${index + 1}`,
+    value: value.slice(0, 500),
+    confidence: 0.8,
+    sourceObservationId: observationId,
+  }));
+}
+
+function uniqueVisionDescriptorFacts(
+  facts: NonNullable<NonNullable<RuntimeInputObjectVisionDescriptor['details']>['facts']>,
+) {
+  const seen = new Set<string>();
+  const out: typeof facts = [];
+  for (const fact of facts) {
+    const key = `${fact.key}:${fact.value}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(fact);
+  }
+  return out;
+}
+
+function turnQuestionText(turnInput: Record<string, unknown>): string | undefined {
+  const input = Array.isArray(turnInput.input) ? turnInput.input : [];
+  const firstText = input
+    .map((item) => (isRecord(item) ? stringAt(item, 'text') : undefined))
+    .find((text) => text?.trim());
+  return firstText?.trim().slice(0, 1_000);
+}
+
+function objectIdForInputObject(object: Pick<RuntimeInputObject, 'ref' | 'title' | 'visionDescriptor'>) {
+  return `mmo_${stableHex([
+    object.visionDescriptor?.sha256,
+    object.ref,
+    object.title,
+  ].filter(Boolean).join('\n')).slice(0, 16)}`;
+}
+
+function visionDescriptorIntentKey(question: string) {
+  return `intent_${stableHex(normalizedVisionDescriptorToken(question)).slice(0, 16)}`;
+}
+
+function visionDescriptorObjectTokens(object: Pick<RuntimeInputObject, 'ref' | 'title'>): string[] {
+  return uniqueRuntimeStrings([
+    object.title,
+    visionDescriptorRefBasename(object.ref),
+    visionDescriptorNameStem(object.title),
+    visionDescriptorNameStem(visionDescriptorRefBasename(object.ref)),
+    object.ref,
+  ].map(normalizedVisionDescriptorToken).filter((value) => value.length > 0));
+}
+
+function visionDescriptorRefBasename(ref: string) {
+  const clean = ref.split(/[?#]/, 1)[0] ?? ref;
+  return clean.split('/').filter(Boolean).pop() ?? clean;
+}
+
+function visionDescriptorNameStem(value: string | undefined) {
+  if (!value) return undefined;
+  return value.replace(/\.[A-Za-z0-9]{1,10}$/u, '');
+}
+
+function normalizedVisionDescriptorToken(value: string | undefined) {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[\s"'“”‘’「」『』《》【】()[\]{}._@/-]+/g, '')
+    .trim();
+}
+
+function uniqueRuntimeStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function stableHex(value: string) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function boundedVisionDescriptorJson(value: unknown) {
+  return JSON.stringify(value)
+    .replace(/\bdata:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+/gi, '[redacted-image]')
+    .slice(0, 4_000);
 }
 
 function boundedVisionDescriptorSummary(value: string) {
@@ -453,7 +661,6 @@ interface CodexAppServerJsonRpcSessionOptions {
   dispatcher: RuntimeModuleDispatcher;
   agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;
   transcriptRoot: string;
-  guiExtensionStatePath?: string;
   clientInfo?: {
     name: string;
     title?: string | null;
@@ -480,7 +687,12 @@ class CodexAppServerJsonRpcSession {
   private stderrTail = '';
   private lastTurnStartInput: Record<string, unknown> = {};
   private lastInputObjects: RuntimeInputObject[] = [];
-  private browserToolProgress = freshBrowserToolProgress();
+  private browserEvidenceLedger: AgentHostBrowserEvidenceLedger = createAgentHostBrowserEvidenceLedger();
+  private browserDiscoveryAttemptsWithoutRead = 0;
+  private browserDiscoveryAttemptsAfterRead = 0;
+  private browserFinalRequiredResponses = 0;
+  private browserHostFinalized = false;
+  private browserLastReadResult: unknown;
 
   constructor(private readonly options: CodexAppServerJsonRpcSessionOptions) {
     this.process = options.spawnProcess(options.command, options.args, {
@@ -568,7 +780,12 @@ class CodexAppServerJsonRpcSession {
 
   async startTurn(input: Record<string, unknown>): Promise<string> {
     this.lastTurnStartInput = input;
-    this.browserToolProgress = freshBrowserToolProgress();
+    this.browserEvidenceLedger = createAgentHostBrowserEvidenceLedger();
+    this.browserDiscoveryAttemptsWithoutRead = 0;
+    this.browserDiscoveryAttemptsAfterRead = 0;
+    this.browserFinalRequiredResponses = 0;
+    this.browserHostFinalized = false;
+    this.browserLastReadResult = undefined;
     const result = await this.request('turn/start', input);
     const resultRecord = isRecord(result) ? result : undefined;
     const turnId = stringAt(recordAt(resultRecord, 'turn'), 'id');
@@ -611,37 +828,21 @@ class CodexAppServerJsonRpcSession {
 
   async *eventsUntilTurnComplete(threadId: string, turnId: string, cleanup: () => void): AsyncIterable<unknown> {
     let currentTurnId = turnId;
-    let sawGuiCompletion = false;
-    let sawSufficientGuiCompletion = false;
-    let insufficientGuiPresentationReason: string | undefined;
-    let repairAttempts = 0;
+    const assistantTextFragments: string[] = [];
     try {
       for await (const event of this.queue) {
-        const guiCompletion = guiCompletionEventDetails(event);
-        if (guiCompletion) {
-          sawGuiCompletion = true;
-          const reason = insufficientGuiCompletionReason(guiCompletion, this.lastTurnStartInput);
-          if (reason) insufficientGuiPresentationReason = reason;
-          else {
-            sawSufficientGuiCompletion = true;
-            cacheVisionDescriptorFromGuiCompletion(guiCompletion, this.lastInputObjects, this.options.visionDescriptorCache);
-          }
-        }
+        const assistantText = assistantTextFromAppServerEvent(event);
+        if (assistantText) assistantTextFragments.push(assistantText);
         yield event;
         if (!isTerminalTurnEvent(event, threadId, currentTurnId)) continue;
-        const repairReason = guiProtocolRepairReason({
-          sawGuiCompletion,
-          sawSufficientGuiCompletion,
-          insufficientGuiPresentationReason,
-        });
-        if (repairReason && this.options.guiExtensionStatePath && repairAttempts < 1 && isSuccessfulTerminalTurnEvent(event)) {
-          repairAttempts += 1;
-          yield codexAppServerGuiProtocolRepairEvent(threadId, currentTurnId, repairAttempts, repairReason);
-          currentTurnId = await this.startTurn(guiProtocolRepairTurnStartInput(threadId, this.lastTurnStartInput, repairReason));
-          sawGuiCompletion = false;
-          sawSufficientGuiCompletion = false;
-          insufficientGuiPresentationReason = undefined;
-          continue;
+        const finalAnswerText = joinAssistantFinalTextFragments(assistantTextFragments);
+        if (finalAnswerText) {
+          cacheVisionDescriptorFromFinalAnswer(
+            finalAnswerText,
+            this.lastInputObjects,
+            this.options.visionDescriptorCache,
+            this.lastTurnStartInput,
+          );
         }
         break;
       }
@@ -696,8 +897,6 @@ class CodexAppServerJsonRpcSession {
   private async respondToServerRequest(request: JsonRpcRequest) {
     try {
       const result = await this.handleServerRequest(request);
-      const syntheticEvent = syntheticGuiToolCompletionEvent(request, result);
-      if (syntheticEvent) this.queue.push(syntheticEvent);
       this.write({ id: request.id, result });
     } catch (error) {
       this.write({
@@ -745,14 +944,8 @@ class CodexAppServerJsonRpcSession {
           parentAttemptId: this.options.parentAttemptId,
         });
       } else if (isGuiDynamicToolName(toolName)) {
-        if (!this.options.guiExtensionStatePath) {
-          success = false;
-          result = { ok: false, error: `gui_extension_unavailable:${toolName}` };
-        } else {
-          const { controller, flush } = await createFileBackedGuiProtocolController(this.options.guiExtensionStatePath);
-          result = callGuiMcpTool(controller, canonicalGuiDynamicToolName(toolName), args);
-          await flush();
-        }
+        success = false;
+        result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
       } else if (isBrowserDynamicToolName(toolName)) {
         const moduleRequest = browserModuleInvokeRequestFromDirectTool(toolName, args);
         if (!moduleRequest) {
@@ -760,7 +953,7 @@ class CodexAppServerJsonRpcSession {
           result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
           return { contentItems: [{ type: 'inputText', text: JSON.stringify(result) }], success };
         }
-        result = await this.invokeModuleWithBrowserProgressGuard(moduleRequest);
+        result = await this.invokeModule(moduleRequest);
       } else if (isModuleToolName(toolName)) {
         const moduleToolName = canonicalModuleToolName(toolName);
         if (!moduleToolName) {
@@ -778,7 +971,8 @@ class CodexAppServerJsonRpcSession {
         } else if (moduleToolName === 'module.read') {
           result = await this.options.dispatcher.read(args as unknown as ModuleReadRequest);
         } else if (moduleToolName === 'module.invoke') {
-          result = await this.invokeModuleWithBrowserProgressGuard(args as unknown as ModuleInvokeRequest);
+          const moduleRequest = args as unknown as ModuleInvokeRequest;
+          result = await this.invokeModule(moduleRequest);
         } else {
           success = false;
           result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
@@ -791,6 +985,13 @@ class CodexAppServerJsonRpcSession {
       success = false;
       result = { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
+    if (isBrowserFinalRequiredResult(result)) {
+      this.browserFinalRequiredResponses += 1;
+      if (this.browserFinalRequiredResponses >= BROWSER_HOST_FINALIZE_AFTER_FINAL_REQUIRED_LIMIT) {
+        setTimeout(() => this.finalizeBrowserHostAnswer(result), 0);
+      }
+    }
+    if (isBrowserReadRequiredResult(result) || isFailedModuleLikeResult(result)) success = false;
 
     return {
       contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
@@ -798,66 +999,149 @@ class CodexAppServerJsonRpcSession {
     };
   }
 
-  private async invokeModuleWithBrowserProgressGuard(moduleRequest: ModuleInvokeRequest): Promise<unknown> {
-    const blocked = this.browserSearchOnlyBudgetResult(moduleRequest);
-    if (blocked) return blocked;
+  private async invokeModule(moduleRequest: ModuleInvokeRequest): Promise<unknown> {
     const localToolDecision = await this.evaluateLocalToolAct('module.invoke', moduleRequest as unknown as Record<string, unknown>);
-    let result: unknown;
     if (localToolDecision.status !== 'auto') {
-      result = localToolActPolicyResult(localToolDecision);
-    } else {
-      result = await this.options.dispatcher.invoke(moduleRequest);
+      return localToolActPolicyResult(localToolDecision);
     }
-    this.recordBrowserToolProgress(moduleRequest, result);
+    const browserPrimitive = browserPrimitiveNameFromModuleRequest(moduleRequest);
+    if (browserPrimitive) {
+      const finalRequired = this.browserFinalRequiredResultForDiscovery(browserPrimitive);
+      if (finalRequired) return finalRequired;
+      const autoRead = this.browserAutoReadRequestForDiscovery(browserPrimitive);
+      if (autoRead) {
+        const autoReadLocalToolDecision = await this.evaluateLocalToolAct(
+          'module.invoke',
+          autoRead.moduleRequest as unknown as Record<string, unknown>,
+        );
+        if (autoReadLocalToolDecision.status !== 'auto') {
+          return localToolActPolicyResult(autoReadLocalToolDecision);
+        }
+        try {
+          const readResult = await this.options.dispatcher.invoke(autoRead.moduleRequest);
+          this.recordBrowserModuleResult('read', readResult);
+          return browserAutoReadResult({
+            attemptedPrimitive: browserPrimitive,
+            candidate: autoRead.candidate,
+            moduleRequest: autoRead.moduleRequest,
+            readResult,
+          });
+        } catch (error) {
+          return {
+            ...browserReadRequiredResult({
+              attemptedPrimitive: browserPrimitive,
+              ledger: this.browserEvidenceLedger,
+              candidates: autoRead.candidates,
+            }),
+            autoReadError: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+    }
+    const result = await this.options.dispatcher.invoke(moduleRequest);
+    if (browserPrimitive) this.recordBrowserModuleResult(browserPrimitive, result);
     return result;
   }
 
-  private browserSearchOnlyBudgetResult(moduleRequest: ModuleInvokeRequest): Record<string, unknown> | undefined {
-    const primitive = browserPrimitiveFromModuleRequest(moduleRequest);
-    if (primitive !== 'search') return undefined;
-    if (this.browserToolProgress.searchOnlyCalls < BROWSER_SEARCH_ONLY_CALL_BUDGET) return undefined;
-    const candidateReadInputs = this.browserToolProgress.candidateReadInputs;
+  private recordBrowserModuleResult(primitive: BrowserPrimitiveName, result: unknown): void {
+    this.browserEvidenceLedger = recordAgentHostBrowserToolResult(this.browserEvidenceLedger, result);
+    this.browserEvidenceLedger = recordAgentHostBrowserRefs(this.browserEvidenceLedger, refsFromModuleResult(result));
+    if (primitive === 'read') {
+      this.browserDiscoveryAttemptsWithoutRead = 0;
+      this.browserDiscoveryAttemptsAfterRead = 0;
+      this.browserFinalRequiredResponses = 0;
+      this.browserLastReadResult = result;
+      return;
+    }
+    if (isBrowserDiscoveryPrimitive(primitive)) {
+      if (browserLedgerHasReadEvidence(this.browserEvidenceLedger)) {
+        this.browserDiscoveryAttemptsAfterRead += 1;
+      } else {
+        this.browserDiscoveryAttemptsWithoutRead += 1;
+      }
+    }
+  }
+
+  private browserFinalRequiredResultForDiscovery(primitive: BrowserPrimitiveName): unknown | undefined {
+    if (!isBrowserDiscoveryPrimitive(primitive)) return undefined;
+    if (!browserLedgerHasReadEvidence(this.browserEvidenceLedger)) return undefined;
+    if (this.browserDiscoveryAttemptsAfterRead < BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT) return undefined;
+    if (this.browserEvidenceEvaluationForFinalizer().status !== 'satisfied') return undefined;
+    return browserFinalRequiredResult(this.browserEvidenceLedger);
+  }
+
+  private finalizeBrowserHostAnswer(finalRequiredResult: unknown): void {
+    if (this.browserHostFinalized) return;
+    this.browserHostFinalized = true;
+    const answerText = browserHostFinalAnswerText({
+      prompt: turnQuestionText(this.lastTurnStartInput),
+      readResult: this.browserLastReadResult,
+      ledger: this.browserEvidenceLedger,
+    });
+    const refs = browserReadEvidenceRefs(this.browserEvidenceLedger);
+    const timestamp = new Date().toISOString();
+    const raw = {
+      boundary: 'agent-host-browser-finalizer',
+      reason: 'Runtime model continued Browser discovery after browser_read source evidence and repeated browser_final_answer_required gates.',
+      finalRequiredResult,
+      sourceEvidenceRefs: refs,
+    };
+    this.queue.push({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      commandId: this.options.parentCommandId,
+      attemptId: this.options.parentAttemptId,
+      timestamp,
+      status: 'completed',
+      message: answerText,
+      text: answerText,
+      evidenceRefs: refs,
+      workspace: this.options.cwd,
+      profile: this.options.profile,
+      raw,
+    });
+    this.queue.push({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      commandId: this.options.parentCommandId,
+      attemptId: this.options.parentAttemptId,
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      message: 'Agent Host completed the Browser answer after stopping repeated discovery.',
+      evidenceRefs: refs,
+      workspace: this.options.cwd,
+      profile: this.options.profile,
+      raw,
+    });
+    this.close();
+  }
+
+  private browserAutoReadRequestForDiscovery(primitive: BrowserPrimitiveName): {
+    candidate: BrowserReadRepairCandidate;
+    candidates: BrowserReadRepairCandidate[];
+    moduleRequest: ModuleInvokeRequest;
+  } | undefined {
+    if (!isBrowserDiscoveryPrimitive(primitive)) return undefined;
+    const hasReadEvidence = browserLedgerHasReadEvidence(this.browserEvidenceLedger);
+    if (hasReadEvidence && this.browserEvidenceEvaluationForFinalizer().status === 'satisfied') return undefined;
+    if (hasReadEvidence) {
+      if (this.browserDiscoveryAttemptsAfterRead < BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT) return undefined;
+    } else if (this.browserDiscoveryAttemptsWithoutRead < BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT) return undefined;
+    const candidates = browserReadRepairCandidates(this.browserEvidenceLedger);
+    if (candidates.length === 0) return undefined;
+    const candidate = candidates[0];
     return {
-      moduleId: 'browser',
-      ok: false,
-      error: 'browser_search_only_budget_exhausted',
-      refs: this.browserToolProgress.refs,
-      value: {
-        schemaVersion: BROWSER_PRIMITIVE_RESULT_SCHEMA,
-        moduleId: 'browser',
-        primitive: 'search',
-        status: 'blocked',
-        refs: this.browserToolProgress.refs,
-        diagnostics: [{
-          code: 'browser-search-only-budget-exhausted',
-          message: 'The Host has already discovered candidate search results in this turn. Read one or more candidates before searching again, or present a blocker if the candidates are unusable.',
-          severity: 'warning',
-          retryable: true,
-        }],
-        budget: {},
-        blockedReason: 'browser_search_only_budget_exhausted',
-        repairHints: [{
-          code: 'search-results-require-read',
-          message: 'Call browser.read with a candidateReadInputs entry before citing or summarizing page content.',
-          suggestedPrimitive: 'read',
-          machineReadable: { candidateReadInputs },
-        }],
-      },
+      candidate,
+      candidates,
+      moduleRequest: browserReadModuleRequestFromCandidate(candidate),
     };
   }
 
-  private recordBrowserToolProgress(moduleRequest: ModuleInvokeRequest, result: unknown): void {
-    const primitive = browserPrimitiveFromModuleRequest(moduleRequest);
-    if (!primitive) return;
-    if (primitive !== 'search') {
-      this.browserToolProgress = freshBrowserToolProgress();
-      return;
-    }
-    this.browserToolProgress.searchOnlyCalls += 1;
-    const candidateReadInputs = candidateReadInputsFromBrowserSearchResult(result);
-    if (candidateReadInputs.length) this.browserToolProgress.candidateReadInputs = candidateReadInputs;
-    const refs = refsFromBrowserToolResult(result);
-    if (refs.length) this.browserToolProgress.refs = refs;
+  private browserEvidenceEvaluationForFinalizer(): AgentHostBrowserEvidenceEvaluation {
+    return evaluateAgentHostBrowserEvidence(
+      recordAgentHostBrowserRefs(this.browserEvidenceLedger, [`codex.app-server.final-answer:${this.options.parentCommandId}`]),
+      { acceptanceSpec: agentHostBrowserAcceptanceSpecFromPrompt(turnQuestionText(this.lastTurnStartInput)) },
+    );
   }
 
   private async evaluateLocalToolAct(
@@ -873,6 +1157,7 @@ class CodexAppServerJsonRpcSession {
       args,
       moduleDescription,
       runtimeTruth: this.options.agentHostRuntimeTruth,
+      userInstruction: turnQuestionText(this.lastTurnStartInput),
       commandId: this.options.parentCommandId,
       attemptId: this.options.parentAttemptId,
     });
@@ -903,17 +1188,8 @@ const GUI_DYNAMIC_TOOL_NAMES = [
   'gui.ask_user',
 ] as const;
 
-type GuiDynamicToolName = typeof GUI_DYNAMIC_TOOL_NAMES[number];
-
 function isGuiDynamicToolName(value: string): boolean {
   return GUI_DYNAMIC_TOOL_NAMES.some((name) => name === value || providerSafeDynamicToolAlias(name) === value);
-}
-
-function canonicalGuiDynamicToolName(value: string): GuiDynamicToolName {
-  const name = GUI_DYNAMIC_TOOL_NAMES.find((candidate) =>
-    candidate === value || providerSafeDynamicToolAlias(candidate) === value);
-  if (!name) throw new Error(`unsupported_gui_dynamic_tool:${value}`);
-  return name;
 }
 
 const BROWSER_DIRECT_TOOL_NAMES = new Map<string, BrowserPrimitiveName>(
@@ -945,7 +1221,7 @@ function browserDirectToolInput(
     ...args,
     schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS[primitive],
   };
-  if (primitive === 'read' && typeof input.url === 'string' && input.url.trim() && !input.sessionId && !input.navigationMode) {
+  if (primitive === 'read' && typeof input.url === 'string' && input.url.trim() && !input.sessionId && !input.resourceRef && !input.navigationMode) {
     input.navigationMode = 'ephemeral';
   }
   if (primitive === 'download' && !input.saveScope) {
@@ -954,59 +1230,352 @@ function browserDirectToolInput(
   return input;
 }
 
-function browserPrimitiveFromModuleRequest(moduleRequest: ModuleInvokeRequest): BrowserPrimitiveName | undefined {
-  if (moduleRequest.moduleId !== 'browser') return undefined;
-  return BROWSER_PRIMITIVE_NAMES.find((primitive) => BROWSER_PRIMITIVE_INTENTS[primitive] === moduleRequest.intent);
+interface BrowserReadRepairCandidate {
+  ref: string;
+  kind: string;
+  status: string;
+  originTool?: string;
+  title?: string;
+  snippet?: string;
+  resourceRef?: string;
+  sessionId?: string;
+  url?: string;
+  readArguments: Record<string, unknown>;
 }
 
-function candidateReadInputsFromBrowserSearchResult(result: unknown): Array<Record<string, unknown>> {
-  const value = recordAt(isRecord(result) ? result : undefined, 'value');
-  const output = recordAt(value, 'output');
-  const hintInputs = toRecordList(value?.repairHints)
-    .flatMap((hint) => toRecordList(recordAt(hint, 'machineReadable')?.candidateReadInputs));
-  if (hintInputs.length) return hintInputs;
-  return toRecordList(output?.results)
-    .flatMap((item) => {
-      const existing = recordAt(item, 'readInput');
-      if (existing) return [existing];
-      const url = stringAt(item, 'url');
-      if (!url || !isHttpUrl(url)) return [];
-      return [{
-        schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
-        url,
-        navigationMode: 'ephemeral',
-        includeText: true,
-      }];
-    });
+function browserPrimitiveNameFromModuleRequest(moduleRequest: ModuleInvokeRequest): BrowserPrimitiveName | undefined {
+  const record = moduleRequest as unknown as Record<string, unknown>;
+  const moduleId = stringAt(record, 'moduleId') ?? stringAt(record, 'module_id');
+  if (moduleId !== 'browser') return undefined;
+  const intent = stringAt(record, 'intent');
+  return BROWSER_PRIMITIVE_NAMES.find((primitive) => BROWSER_PRIMITIVE_INTENTS[primitive] === intent);
 }
 
-function refsFromBrowserToolResult(result: unknown): string[] {
-  if (!isRecord(result)) return [];
-  return uniqueStrings([
-    ...toStringList(result.refs),
-    ...toStringList(recordAt(result, 'value')?.refs),
+function isBrowserDiscoveryPrimitive(primitive: BrowserPrimitiveName): boolean {
+  return primitive === 'search' || primitive === 'navigate';
+}
+
+function browserLedgerHasReadEvidence(ledger: AgentHostBrowserEvidenceLedger): boolean {
+  const resources = Object.values(ledger.resourcesByRef);
+  return resources.some((resource) =>
+    resource.status === 'read'
+    && (
+      (resource.originTool === 'browser.read' && resource.confidence === 'materialized')
+      || resource.kind === 'source_page'
+      || resource.kind === 'page_text'
+      || resource.refs?.some((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref))
+    ))
+    || ledger.refs.some((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref));
+}
+
+function browserReadRepairCandidates(ledger: AgentHostBrowserEvidenceLedger): BrowserReadRepairCandidate[] {
+  const candidates = Object.values(ledger.resourcesByRef)
+    .flatMap(browserReadRepairCandidatesForResource)
+    .filter((candidate) => Object.keys(candidate.readArguments).length > 1);
+  const seen = new Set<string>();
+  const unique: BrowserReadRepairCandidate[] = [];
+  for (const candidate of candidates) {
+    const key = JSON.stringify(candidate.readArguments);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+  }
+  return unique.slice(0, 5);
+}
+
+function browserReadRepairCandidatesForResource(resource: BrowserResource): BrowserReadRepairCandidate[] {
+  if (resource.status === 'read' || resource.status === 'blocked' || resource.status === 'failed') return [];
+  const url = stringAt(resource.locator, 'url');
+  const sessionId = stringAt(resource.locator, 'sessionId');
+  if (resource.kind === 'web_page' && resource.ref.trim()) {
+    return [browserReadRepairCandidate(resource, { resourceRef: resource.ref }, url, sessionId)];
+  }
+  if (resource.kind === 'browser_session' && sessionId) {
+    return [browserReadRepairCandidate(resource, { sessionId }, url, sessionId)];
+  }
+  if (url) return [browserReadRepairCandidate(resource, { url }, url, sessionId)];
+  return [];
+}
+
+function browserReadRepairCandidate(
+  resource: BrowserResource,
+  readSource: Record<string, unknown>,
+  url: string | undefined,
+  sessionId: string | undefined,
+): BrowserReadRepairCandidate {
+  const readArguments = {
+    ...readSource,
+    includeText: true,
+  };
+  return {
+    ref: resource.ref,
+    kind: resource.kind,
+    status: resource.status,
+    originTool: resource.originTool,
+    ...(resource.title ? { title: resource.title } : {}),
+    ...(resource.snippet ? { snippet: resource.snippet } : {}),
+    ...(typeof readSource.resourceRef === 'string' ? { resourceRef: readSource.resourceRef } : {}),
+    ...(typeof readSource.sessionId === 'string' ? { sessionId: readSource.sessionId } : {}),
+    ...(url ? { url } : {}),
+    ...(sessionId && typeof readSource.sessionId !== 'string' ? { sessionId } : {}),
+    readArguments,
+  };
+}
+
+function browserReadRequiredResult(input: {
+  attemptedPrimitive: BrowserPrimitiveName;
+  ledger: AgentHostBrowserEvidenceLedger;
+  candidates: BrowserReadRepairCandidate[];
+}): Record<string, unknown> {
+  const first = input.candidates[0];
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-read-required.v1',
+    ok: false,
+    status: 'repairable',
+    moduleId: 'browser',
+    attemptedIntent: BROWSER_PRIMITIVE_INTENTS[input.attemptedPrimitive],
+    requiredIntent: BROWSER_PRIMITIVE_INTENTS.read,
+    requiredTool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
+    error: 'browser_read_required',
+    reason: 'Browser search, snippets, opened pages, screenshots, DOM, and AX state are not source evidence until browser_read materializes sourcePageRef/pageTextRef.',
+    evidenceBoundary: 'Call browser_read on a discovered web_page resourceRef, active sessionId, or URL before more Browser discovery/opening or final synthesis.',
+    nextCall: first
+      ? {
+          tool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
+          arguments: first.readArguments,
+        }
+      : undefined,
+    candidateResources: input.candidates,
+    repairHints: [{
+      action: 'call-browser-read',
+      reason: 'Read one of the candidate resources to produce current-run sourcePageRef/pageTextRef evidence.',
+    }],
+    refs: uniqueRuntimeStrings([
+      ...input.ledger.refs,
+      ...input.candidates.map((candidate) => candidate.ref),
+    ]),
+  };
+}
+
+function browserFinalRequiredResult(ledger: AgentHostBrowserEvidenceLedger): Record<string, unknown> {
+  const refs = browserReadEvidenceRefs(ledger);
+  const readResources = Object.values(ledger.resourcesByRef)
+    .filter((resource) => resource.status === 'read')
+    .map((resource) => ({
+      ref: resource.ref,
+      kind: resource.kind,
+      status: resource.status,
+      originTool: resource.originTool,
+      ...(resource.title ? { title: resource.title } : {}),
+      ...(resource.refs?.length ? { refs: resource.refs } : {}),
+    }));
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-final-required.v1',
+    ok: false,
+    status: 'blocked',
+    moduleId: 'browser',
+    error: 'browser_final_answer_required',
+    reason: 'Current-run browser_read source evidence is already materialized; stop Browser discovery and answer the user using the listed source refs.',
+    requiredAction: 'assistant_final_answer',
+    evidenceBoundary: 'Search results and snippets are no longer needed. The final answer must cite only the browser_read source/page text refs below.',
+    sourceEvidenceRefs: refs,
+    readResources,
+    repairHints: [{
+      action: 'project-final-answer',
+      reason: 'Use the current browser_read sourcePageRef/pageTextRef evidence to answer now.',
+    }],
+    refs,
+  };
+}
+
+function browserReadModuleRequestFromCandidate(candidate: BrowserReadRepairCandidate): ModuleInvokeRequest {
+  return {
+    moduleId: 'browser',
+    intent: BROWSER_PRIMITIVE_INTENTS.read,
+    input: browserDirectToolInput('read', candidate.readArguments),
+  };
+}
+
+function browserAutoReadResult(input: {
+  attemptedPrimitive: BrowserPrimitiveName;
+  candidate: BrowserReadRepairCandidate;
+  moduleRequest: ModuleInvokeRequest;
+  readResult: unknown;
+}): Record<string, unknown> {
+  const ok = isRecord(input.readResult) ? input.readResult.ok !== false : true;
+  const refs = uniqueRuntimeStrings([
+    input.candidate.ref,
+    ...refsFromModuleResult(input.readResult),
+  ]);
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-auto-read-result.v1',
+    ok,
+    status: ok ? 'completed' : 'blocked',
+    moduleId: 'browser',
+    attemptedIntent: BROWSER_PRIMITIVE_INTENTS[input.attemptedPrimitive],
+    dispatchedIntent: BROWSER_PRIMITIVE_INTENTS.read,
+    dispatchedTool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
+    reason: 'Repeated Browser discovery without source evidence was repaired by Agent Host dispatching browser_read for a discovered candidate resource.',
+    readArguments: input.moduleRequest.input,
+    candidateResource: input.candidate,
+    result: input.readResult,
+    refs,
+  };
+}
+
+function isBrowserReadRequiredResult(result: unknown): boolean {
+  return isRecord(result)
+    && result.schemaVersion === 'sciforge.agent-host.browser-read-required.v1'
+    && result.error === 'browser_read_required';
+}
+
+function isFailedModuleLikeResult(result: unknown): boolean {
+  return isRecord(result) && result.ok === false;
+}
+
+function isBrowserFinalRequiredResult(result: unknown): boolean {
+  return isRecord(result)
+    && result.schemaVersion === 'sciforge.agent-host.browser-final-required.v1'
+    && result.error === 'browser_final_answer_required';
+}
+
+function browserReadEvidenceRefs(ledger: AgentHostBrowserEvidenceLedger): string[] {
+  return uniqueRuntimeStrings([
+    ...ledger.refs.filter((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref)),
+    ...Object.values(ledger.resourcesByRef).flatMap((resource) => {
+      if (resource.status !== 'read') return [];
+      return uniqueRuntimeStrings([
+        resource.ref,
+        ...(resource.refs ?? []),
+      ]).filter((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref)
+        || ((resource.kind === 'source_page' || resource.kind === 'page_text') && /^browser-host-session:/i.test(ref)));
+    }),
   ]);
 }
 
-function toRecordList(value: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
+function browserHostFinalAnswerText(input: {
+  prompt?: string;
+  readResult: unknown;
+  ledger: AgentHostBrowserEvidenceLedger;
+}): string {
+  const readOutput = recordAt(recordAt(isRecord(input.readResult) ? input.readResult : undefined, 'value'), 'output');
+  const title = stringAt(readOutput, 'title') ?? browserReadResourceTitle(input.ledger) ?? '已读取的网页';
+  const finalUrl = stringAt(readOutput, 'finalUrl') ?? stringAt(readOutput, 'url') ?? browserReadResourceUrl(input.ledger);
+  const sourcePageRef = stringAt(readOutput, 'sourcePageRef');
+  const pageTextRef = stringAt(readOutput, 'pageTextRef') ?? stringAt(readOutput, 'textRef');
+  const sourceEvidenceRefs = browserReadEvidenceRefs(input.ledger);
+  const lead = browserFinalLead({
+    prompt: input.prompt,
+    title,
+    evidenceText: browserFinalEvidenceText(readOutput),
+  });
+  const lines = [
+    lead,
+    '',
+    '来源：',
+    `- ${title}${finalUrl ? ` — ${finalUrl}` : ''}`,
+    sourcePageRef || pageTextRef || sourceEvidenceRefs.length ? [
+      '证据 refs：',
+      ...uniqueRuntimeStrings([
+        sourcePageRef,
+        pageTextRef,
+        ...sourceEvidenceRefs,
+      ].filter((ref): ref is string => Boolean(ref))).map((ref) => `- \`${ref}\``),
+    ].join('\n') : undefined,
+  ].filter((line): line is string => line !== undefined);
+  return lines.join('\n');
 }
 
-function toStringList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
-}
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
+function browserFinalLead(input: {
+  prompt?: string;
+  title: string;
+  evidenceText?: string;
+}): string {
+  const prompt = input.prompt ?? '';
+  const excerpt = browserFinalEvidenceExcerpt(input.evidenceText, input.title);
+  if (/新闻|最新动态|最新情况|release\s*notes?|news|changelog|updates?/i.test(prompt)) {
+    return excerpt
+      ? `根据已通过 Browser 读取的页面，简要总结：${excerpt}`
+      : `根据已通过 Browser 读取的页面，已读取来源是“${input.title}”。`;
   }
+  if (/论文|学术|paper|arxiv|abstract/i.test(prompt)) {
+    return excerpt
+      ? `根据已通过 Browser 读取的页面，这篇论文的主题可概括为：${excerpt}`
+      : `根据已通过 Browser 读取的页面，已读取论文来源是“${input.title}”。`;
+  }
+  const topic = browserFinalTopic(prompt);
+  return topic
+    ? `根据已通过 Browser 读取的页面，${topic}是“${input.title}”。`
+    : `根据已通过 Browser 读取的页面，结论来自“${input.title}”。`;
 }
 
-function uniqueStrings(values: string[]) {
-  return [...new Set(values.filter((value) => value.trim().length > 0))];
+function browserFinalEvidenceText(readOutput: Record<string, unknown> | undefined): string | undefined {
+  return stringAt(readOutput, 'textSummary') ?? stringAt(readOutput, 'textPreview');
+}
+
+function browserFinalEvidenceExcerpt(value: string | undefined, title: string): string | undefined {
+  const text = value?.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  const titleNormalized = title.toLowerCase();
+  const candidates = text
+    .split(/(?<=[。.!?])\s+|(?=\b(?:20\d{2}[-年/]\d{1,2}|Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b)/i)
+    .map((part) => part.replace(/\s+/g, ' ').trim())
+    .filter((part) => part.length >= 40)
+    .filter((part) => {
+      const normalized = part.toLowerCase();
+      if (normalized === titleNormalized) return false;
+      return !/^(?:primary navigation|docs latest|back to arxiv|license:|create account|releasebot \| all release notes|get this feed|rss email api)\b/i.test(part);
+    });
+  return compactOneLine(candidates[0] ?? text, 240);
+}
+
+function browserFinalTopic(prompt: string | undefined): string | undefined {
+  if (!prompt) return undefined;
+  if (/标题|页面主题|title/i.test(prompt)) return '已读取页面的标题或页面主题';
+  if (/主题|topic/i.test(prompt)) return '已读取来源的主题';
+  if (/新闻|论文|网页|页面|来源|news|article|paper|source|web\s*page/i.test(prompt)) return '已读取来源';
+  const question = prompt
+    .replace(/必须.*$/s, '')
+    .replace(/不要.*$/s, '')
+    .trim();
+  return question ? compactOneLine(question, 80) : undefined;
+}
+
+function browserReadResourceTitle(ledger: AgentHostBrowserEvidenceLedger): string | undefined {
+  return Object.values(ledger.resourcesByRef)
+    .find((resource) => resource.status === 'read' && resource.title?.trim())
+    ?.title?.trim();
+}
+
+function browserReadResourceUrl(ledger: AgentHostBrowserEvidenceLedger): string | undefined {
+  for (const resource of Object.values(ledger.resourcesByRef)) {
+    if (resource.status !== 'read') continue;
+    const url = stringAt(resource.locator, 'url');
+    if (url) return url;
+  }
+  return undefined;
+}
+
+function compactOneLine(value: string, maxChars: number): string {
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+}
+
+function refsFromModuleResult(result: unknown): string[] {
+  const refs: string[] = [];
+  collectRefsFromRecord(isRecord(result) ? result : undefined, refs);
+  if (isRecord(result)) collectRefsFromRecord(recordAt(result, 'value'), refs);
+  return uniqueRuntimeStrings(refs);
+}
+
+function collectRefsFromRecord(record: Record<string, unknown> | undefined, refs: string[]): void {
+  if (!record) return;
+  const value = record.refs;
+  if (!Array.isArray(value)) return;
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.trim()) refs.push(entry.trim());
+  }
 }
 
 class AsyncEventQueue<T> implements AsyncIterable<T> {
@@ -1037,17 +1606,6 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
       },
     };
   }
-}
-
-function guiExtensionOptions(
-  options: CodexAppServerStartTurnRequest['guiExtension'],
-  input: { commandId: string; attemptId: string },
-): CodexAppServerStartTurnRequest['guiExtension'] {
-  if (options?.enabled === false) return options;
-  return {
-    ...options,
-    statePath: options?.statePath ?? defaultGuiExtensionStatePath(input),
-  };
 }
 
 function appServerConfigArgs(args: string[]): string[] {
@@ -1152,31 +1710,10 @@ function stringField(value: unknown, key: string): string | undefined {
   return typeof item === 'string' && item.trim().length > 0 ? item.trim() : undefined;
 }
 
-function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string, guiExtensionStatePath?: string): RuntimeModuleDispatcher {
+function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string): RuntimeModuleDispatcher {
   return createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
     browser: createBrowserRuntimeModuleHandler({ workspacePath }),
-    ...(guiExtensionStatePath ? { gui: createFileBackedGuiModuleHandler(guiExtensionStatePath) } : {}),
   }));
-}
-
-function createFileBackedGuiModuleHandler(statePath: string) {
-  return {
-    describe: createGuiModuleDescription,
-    query: async (request: ModuleQueryRequest) => {
-      const { controller } = await createFileBackedGuiProtocolController(statePath);
-      return createGuiModuleHandler(controller).query(request);
-    },
-    read: async (request: ModuleReadRequest) => {
-      const { controller } = await createFileBackedGuiProtocolController(statePath);
-      return createGuiModuleHandler(controller).read(request);
-    },
-    invoke: async (request: ModuleInvokeRequest) => {
-      const { controller, flush } = await createFileBackedGuiProtocolController(statePath);
-      const result = createGuiModuleHandler(controller).invoke(request);
-      await flush();
-      return result;
-    },
-  };
 }
 
 function runtimeDeveloperInstructions(
@@ -1190,16 +1727,13 @@ function runtimeDeveloperInstructions(
   const subagentToolAlias = providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
   const moduleDescribeAlias = providerSafeDynamicToolAlias('module.describe');
   const moduleInvokeAlias = providerSafeDynamicToolAlias('module.invoke');
-  const guiPresentAlias = providerSafeDynamicToolAlias('gui.present');
-  const guiAskUserAlias = providerSafeDynamicToolAlias('gui.ask_user');
   const browserToolAliases = BROWSER_PRIMITIVE_NAMES
     .map((primitive) => providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]))
     .join(', ');
   const lines = [
     'SciForge Agent Host delegation protocol:',
-    '- User-visible completion protocol: every final answer, blocker, repair-needed summary, and needs-human transition must be emitted through gui.present or gui.ask_user. Native assistant prose is progress only and is not a valid final answer.',
-    `- Prefer GUI presentation through ${moduleInvokeAlias} with moduleId "gui" and intent "present"/"ask_user"; provider-safe direct aliases ${guiPresentAlias} and ${guiAskUserAlias} are equivalent when exposed. Do not finish the turn until the GUI tool call succeeds or reports a blocker.`,
-    '- For gui.present, include the complete user-facing answer in content.value as markdown, plus stable refs already returned by tools when available. The title field is optional display metadata and cannot substitute for the answer body. Do not ask the UI to synthesize or complete the answer.',
+    '- User-visible completion protocol: finish with the Codex App Server assistant/final message for final answers, blockers, repair-needed summaries, and needs-human transitions. Do not call GUI presentation tools; SciForge renders the App Server event stream deterministically.',
+    '- Include the complete user-facing answer as assistant markdown. When tools return source, artifact, approval, or evidence refs, cite or list those stable refs in the assistant final answer when they are relevant to the user request.',
     '- If an input_object includes visionDescriptor.status=ready, treat visionDescriptor.summary as the current visual observation for that object and do not re-inspect the same image unless the descriptor is insufficient for the user request.',
     '- Use SciForge module tools for Host-owned capabilities; do not replace Browser, Computer Use, files, artifacts, or verifier modules with model-memory guesses.',
     `- Dynamic module call names: prefer the provider-safe functions ${moduleDescribeAlias} and ${moduleInvokeAlias}. Canonical names module.describe and module.invoke are equivalent only when the runtime exposes namespaced dynamic tools.`,
@@ -1208,6 +1742,8 @@ function runtimeDeveloperInstructions(
     `- For current, latest, today, external-web, citation, source-verification, or time-sensitive facts, first use ${moduleDescribeAlias} for the relevant module when needed, then collect bounded evidence before synthesizing the answer.`,
     `- Browser primitive path: prefer the direct dynamic tools ${browserToolAliases}. They are provider-safe aliases for browser.search, browser.navigate, browser.observe, browser.read, browser.extract, and browser.download, and still route through the Host-owned Browser module dispatcher. Compose these primitives yourself: search discovers candidates only; navigate opens or reuses a session; observe returns session state; read materializes page text/source refs; extract parses refs; download writes session-scoped artifacts.`,
     '- Browser calls must use nonzero budgets when a budget field is present, low-risk actions only, and refs-first evidence; if the module returns blocked, partial, failed, or needs-confirmation, use the blocker/repair hint for the next Host decision instead of fabricating current facts.',
+    '- If a Browser tool result returns error=browser_read_required or schemaVersion=sciforge.agent-host.browser-read-required.v1, immediately call browser_read with the provided resourceRef, sessionId, or URL; do not search, navigate, or open more pages until sourcePageRef/pageTextRef evidence exists.',
+    '- If a Browser tool result returns error=browser_final_answer_required or schemaVersion=sciforge.agent-host.browser-final-required.v1, stop Browser calls and answer the user now using only the listed sourceEvidenceRefs/readResources.',
     `- Computer Use primitive path: call ${moduleInvokeAlias} with moduleId "computer_use" and primitive intents computer_use.bind, computer_use.observe, computer_use.act, computer_use.run_procedure, and computer_use.control. Host owns task understanding, target choice, semantic locate, approval, artifact validation, completion truth, and final answer; run_procedure only executes Host-specified local primitive steps and does not prove the user task is complete.`,
     '- After a module returns refs or source pages, answer from that evidence and cite stable refs or source URLs present in the returned payload; runtime audit streams, provider payloads, local paths, and credentials stay out of the user-visible answer.',
     '- Treat GUI composer choices as public declared intents only; keep the user turn input as the source of task content.',
@@ -1330,47 +1866,6 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
     }),
     ...browserDirectToolSpecs(),
     {
-      name: providerSafeDynamicToolAlias('gui.present'),
-      description: 'Provider-safe alias for gui.present; present the complete final user-facing answer or artifact intent in SciForge GUI. Final answers must put the full answer body in content.value; title is display metadata only.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          intent: { type: 'string' },
-          ref: { type: 'string' },
-          content: {
-            type: 'object',
-            properties: {
-              kind: { type: 'string' },
-              value: {},
-            },
-            required: ['kind', 'value'],
-            additionalProperties: true,
-          },
-          title: { type: 'string' },
-          hint: { type: 'string' },
-          displayedRefs: { type: 'array', items: { type: 'string' } },
-          target: { type: 'object', additionalProperties: true },
-        },
-        required: ['content'],
-        additionalProperties: true,
-      },
-    },
-    {
-      name: providerSafeDynamicToolAlias('gui.ask_user'),
-      description: 'Provider-safe alias for gui.ask_user; ask the user for confirmation, input, or a choice through SciForge GUI.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          kind: { type: 'string' },
-          title: { type: 'string' },
-          message: { type: 'string' },
-          choices: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          submitCommandTemplate: { type: 'string' },
-        },
-        additionalProperties: true,
-      },
-    },
-    {
       namespace: 'multi_agent_v1',
       name: 'spawn_agent',
       description: 'Spawn a local SciForge Runtime Codex delegated worker and return safe transcript/result refs.',
@@ -1394,10 +1889,10 @@ function browserDirectToolSpecs(): Array<Record<string, unknown>> {
 
 function browserDirectToolDescription(primitive: BrowserPrimitiveName): string {
   const intent = BROWSER_PRIMITIVE_INTENTS[primitive];
-  if (primitive === 'search') return `Direct Browser Runtime primitive for ${intent}; discover candidate URLs for a query without reading result pages. Search output items include readInput and repairHints.candidateReadInputs; call browser_read with those inputs before citing or summarizing page content.`;
-  if (primitive === 'navigate') return `Direct Browser Runtime primitive for ${intent}; open or reuse a browser session for a Host-selected URL.`;
+  if (primitive === 'search') return `Direct Browser Runtime primitive for ${intent}; discover candidate web_page resources for a query and return evidenceState for follow-up Browser primitives. Search snippets are not source evidence: call browser_read next with a returned resourceRef or URL to materialize sourcePageRef/pageTextRef before answering.`;
+  if (primitive === 'navigate') return `Direct Browser Runtime primitive for ${intent}; open or reuse a browser session for a Host-selected URL. Opening a page is not source evidence: call browser_read next with the returned sessionId or finalUrl to materialize sourcePageRef/pageTextRef before answering.`;
   if (primitive === 'observe') return `Direct Browser Runtime primitive for ${intent}; return state and visual/DOM refs for an existing browser session.`;
-  if (primitive === 'read') return `Direct Browser Runtime primitive for ${intent}; materialize URL or session page text/source refs.`;
+  if (primitive === 'read') return `Direct Browser Runtime primitive for ${intent}; materialize page text/source refs from resourceRef, sessionId, or URL. A successful read returns sourcePageRef/pageTextRef evidence for final assistant synthesis.`;
   if (primitive === 'extract') return `Direct Browser Runtime primitive for ${intent}; parse links, forms, dates, metadata, or result items from a Browser ref.`;
   return `Direct Browser Runtime primitive for ${intent}; download a Host-selected resource into session-scoped artifacts.`;
 }
@@ -1470,6 +1965,7 @@ function browserDirectToolInputSchema(primitive: BrowserPrimitiveName): Record<s
       type: 'object',
       properties: {
         sessionId: { type: 'string' },
+        resourceRef: { type: 'string' },
         url: { type: 'string' },
         navigationMode: { type: 'string', enum: ['none', 'ephemeral'] },
         includeText: { type: 'boolean' },
@@ -1506,6 +2002,7 @@ function browserDirectToolInputSchema(primitive: BrowserPrimitiveName): Record<s
       maxBytes: { type: 'number', exclusiveMinimum: 0 },
       timeoutMs: { type: 'number', exclusiveMinimum: 0 },
       filenameHint: { type: 'string' },
+      constraints: constraintsSchema,
     },
     additionalProperties: false,
   };
@@ -1580,123 +2077,83 @@ function isRetryableCodexAppServerTerminalEvent(
   return Boolean(message && isCodexSamplingRetryMessage(message));
 }
 
-function isSuccessfulTerminalTurnEvent(event: unknown): boolean {
-  if (!isRecord(event)) return false;
-  const method = (stringAt(event, 'method') ?? stringAt(event, 'type') ?? '').trim().toLowerCase().replace(/\./g, '/');
-  const params = recordAt(event, 'params') ?? event;
-  const turn = recordAt(params, 'turn');
-  const status = (stringAt(params, 'status') ?? stringAt(turn, 'status') ?? '').trim().toLowerCase();
-  if (/failed|failure|error|cancel/.test(method)) return false;
-  if (status === 'failed' || status === 'failure' || status === 'error' || status === 'cancelled' || status === 'canceled') return false;
-  return method === 'turn/completed'
-    || method === 'turn/done'
-    || method === 'turn/finished'
-    || status === 'completed'
-    || status === 'complete'
-    || status === 'done'
-    || status === 'finished';
-}
-
-interface GuiCompletionEventDetails {
-  name: 'gui.present' | 'gui.ask_user';
-  title?: string;
-  contentText?: string;
-  fallbackText?: string;
-  hasContent: boolean;
-}
-
-function guiCompletionEventDetails(event: unknown): GuiCompletionEventDetails | undefined {
+function assistantTextFromAppServerEvent(event: unknown): string | undefined {
   if (!isRecord(event)) return undefined;
-  const type = (stringAt(event, 'type') ?? stringAt(event, 'event') ?? stringAt(event, 'method') ?? '').trim();
+  const method = (stringAt(event, 'method') ?? stringAt(event, 'type') ?? stringAt(event, 'event') ?? '').trim();
+  const normalized = method.toLowerCase().replace(/\./g, '_').replace(/\//g, '_');
+  if (!/(?:^|_)message(?:_|$)|assistant|final|output_text_delta|text_delta/.test(normalized)) return undefined;
+  if (/tool|command|approval|permission|attestation|error|warning/.test(normalized)) return undefined;
   const params = recordAt(event, 'params') ?? event;
-  if (type === 'gui_present' || type === 'gui_ask_user') {
-    const name = type === 'gui_present' ? 'gui.present' : 'gui.ask_user';
-    return guiCompletionDetailsFromPayload(name, params);
-  }
-  if (!/completed|done/i.test(type)) return undefined;
-  const guiIntent = guiIntentFromToolCallParams(params);
-  if (!guiIntent) return undefined;
-  return guiCompletionDetailsFromPayload(guiIntent.name, guiIntent.rawArgs);
+  const text = firstAssistantTextCandidate([
+    params.text,
+    params.delta,
+    params.message,
+    params.content,
+    params.finalText,
+    params.final_text,
+    recordAt(params, 'message')?.content,
+    recordAt(params, 'message')?.text,
+    recordAt(params, 'message')?.markdown,
+    recordAt(params, 'output')?.text,
+    recordAt(params, 'output')?.message,
+    recordAt(params, 'output')?.content,
+    recordAt(params, 'output')?.finalText,
+    recordAt(params, 'output')?.final_text,
+  ]);
+  if (!text || !assistantTextSafeForFinalAnswerCache(text)) return undefined;
+  return text;
 }
 
-function guiCompletionDetailsFromPayload(
-  name: 'gui.present' | 'gui.ask_user',
-  rawPayload: Record<string, unknown>,
-): GuiCompletionEventDetails {
-  const payload = guiPresentationPayloadFromArgs(rawPayload);
-  const title = stringAt(payload, 'title');
-  const contentText = guiPresentationContentText(payload);
-  const fallbackText = firstNonEmptyString(
-    contentText,
-    stringAt(payload, 'message'),
-    stringAt(payload, 'text'),
-    title,
-  );
-  return {
-    name,
-    title,
-    contentText,
-    fallbackText,
-    hasContent: Boolean(contentText?.trim()),
-  };
-}
-
-function guiPresentationPayloadFromArgs(args: Record<string, unknown>): Record<string, unknown> {
-  return parseJsonRecord(args.input) ?? args;
-}
-
-function guiPresentationContentText(payload: Record<string, unknown>): string | undefined {
-  const content = recordAt(payload, 'content');
-  if (!content) return undefined;
-  const value = content.value;
-  if (typeof value === 'string') return value.trim() || undefined;
-  if (value === undefined || value === null) return undefined;
-  return JSON.stringify(value);
-}
-
-function firstNonEmptyString(...values: Array<string | undefined>): string | undefined {
+function firstAssistantTextCandidate(values: unknown[]): string | undefined {
   for (const value of values) {
-    const trimmed = value?.trim();
-    if (trimmed) return trimmed;
+    const text = assistantTextCandidate(value);
+    if (text) return text;
   }
   return undefined;
 }
 
-function insufficientGuiCompletionReason(
-  completion: GuiCompletionEventDetails,
-  previousInput: Record<string, unknown>,
-): string | undefined {
-  if (completion.name === 'gui.ask_user') return undefined;
-  if (!turnRequiresSubstantiveGuiPresentation(previousInput)) return undefined;
-  const contentText = completion.contentText?.trim() ?? '';
-  if (!contentText) return 'previous gui.present did not include answer content; title/ref-only presentation cannot answer the multimodal user request.';
-  if (isTitleOnlyGuiPresentation(contentText, completion.title)) {
-    return 'previous gui.present content was title-only and did not answer the multimodal user request.';
+function assistantTextCandidate(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined;
+  if (Array.isArray(value)) {
+    const joined = value.map(assistantTextCandidate).filter(Boolean).join('');
+    return joined.trim() || undefined;
   }
-  if (visibleAnswerCharacterCount(contentText) < 24) {
-    return 'previous gui.present content was too short to answer the multimodal user request.';
-  }
-  return undefined;
+  if (!isRecord(value)) return undefined;
+  return firstAssistantTextCandidate([
+    value.text,
+    value.content,
+    value.value,
+    value.markdown,
+  ]);
 }
 
-function turnRequiresSubstantiveGuiPresentation(previousInput: Record<string, unknown>): boolean {
-  const input = previousInput.input;
-  if (!Array.isArray(input)) return false;
-  return input.some((item) => {
-    if (!isRecord(item)) return false;
-    const type = stringAt(item, 'type');
-    if (type && type !== 'text') return true;
-    const text = stringAt(item, 'text') ?? '';
-    return /^SciForge input_object attachments:/m.test(text);
-  });
+function joinAssistantFinalTextFragments(fragments: string[]): string | undefined {
+  const text = fragments.join('').trim();
+  if (!text || !assistantTextSafeForFinalAnswerCache(text)) return undefined;
+  return text;
 }
 
-function isTitleOnlyGuiPresentation(contentText: string, title?: string): boolean {
-  const normalizedContent = normalizeVisibleAnswerText(contentText);
-  const normalizedTitle = normalizeVisibleAnswerText(title ?? '');
-  if (!normalizedContent) return true;
-  if (normalizedTitle && normalizedContent === normalizedTitle) return true;
-  return false;
+function assistantTextSafeForFinalAnswerCache(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('data:image')
+    || lower.includes('rawproviderpayload')
+    || lower.includes('provider payload')
+    || lower.includes('stdoutref')
+    || lower.includes('stderrref')
+    || lower.includes('stdout:')
+    || lower.includes('stderr:')
+    || lower.includes('authorization:')
+    || lower.includes('bearer ')
+    || lower.includes('api-key')
+    || lower.includes('apikey')
+    || lower.includes('password')
+    || lower.includes('secret')
+    || lower.includes('token')
+  ) return false;
+  if (/^\s*[{[]/.test(text) && /"?(?:function|tool|moduleId|intent|arguments|tool_calls)"?\s*:/.test(text)) return false;
+  if (/<\/?(?:tool_call|function_call|module_invoke|tool_calls)\b/i.test(text)) return false;
+  return true;
 }
 
 function visibleAnswerCharacterCount(value: string): number {
@@ -1707,117 +2164,6 @@ function normalizeVisibleAnswerText(value: string): string {
   return value
     .replace(/[`*_#>\-[\]().:：。，“”,、\s]/g, '')
     .trim();
-}
-
-function guiProtocolRepairReason(input: {
-  sawGuiCompletion: boolean;
-  sawSufficientGuiCompletion: boolean;
-  insufficientGuiPresentationReason?: string;
-}): string | undefined {
-  if (!input.sawGuiCompletion) return 'missing-gui-present';
-  if (!input.sawSufficientGuiCompletion && input.insufficientGuiPresentationReason) {
-    return input.insufficientGuiPresentationReason;
-  }
-  return undefined;
-}
-
-function syntheticGuiToolCompletionEvent(request: JsonRpcRequest, result: unknown): Record<string, unknown> | undefined {
-  if (request.method !== 'item/tool/call') return undefined;
-  const params = isRecord(request.params) ? request.params : {};
-  const resultRecord = isRecord(result) ? result : {};
-  if (resultRecord.success === false) return undefined;
-  const guiIntent = guiIntentFromToolCallParams(params);
-  if (!guiIntent) return undefined;
-  return {
-    method: 'item/tool/completed',
-    params: {
-      ...params,
-      ...(guiIntent.kind === 'direct'
-        ? { namespace: undefined, tool: providerSafeDynamicToolAlias(guiIntent.name) }
-        : { namespace: 'module', tool: 'invoke' }),
-      arguments: guiIntent.rawArgs,
-      result,
-      output: result,
-      status: 'completed',
-    },
-  };
-}
-
-function guiIntentFromToolCallParams(params: Record<string, unknown>): {
-  name: 'gui.present' | 'gui.ask_user';
-  rawArgs: Record<string, unknown>;
-  kind: 'direct' | 'module';
-} | undefined {
-  const namespace = stringAt(params, 'namespace');
-  const tool = stringAt(params, 'tool') ?? '';
-  const toolName = namespace ? `${namespace}.${tool}` : tool;
-  const args = parseJsonRecord(params.arguments) ?? {};
-  if (isGuiDynamicToolName(toolName)) {
-    return {
-      name: canonicalGuiDynamicToolName(toolName),
-      rawArgs: args,
-      kind: 'direct',
-    };
-  }
-  const moduleToolName = canonicalModuleToolName(toolName);
-  if (moduleToolName !== 'module.invoke') return undefined;
-  const moduleId = stringAt(args, 'moduleId') ?? stringAt(args, 'module_id');
-  if (moduleId !== 'gui') return undefined;
-  const intent = stringAt(args, 'intent');
-  const rawArgs = parseJsonRecord(args.input) ?? {};
-  if (intent === 'present') return { name: 'gui.present', rawArgs: args, kind: 'module' };
-  if (intent === 'ask_user') return { name: 'gui.ask_user', rawArgs: args, kind: 'module' };
-  return undefined;
-}
-
-function guiProtocolRepairTurnStartInput(
-  threadId: string,
-  previousInput: Record<string, unknown>,
-  reason: string,
-): Record<string, unknown> {
-  const missingGui = reason === 'missing-gui-present';
-  return {
-    ...previousInput,
-    threadId,
-    input: [{
-      type: 'text',
-      text: [
-        'SciForge runtime protocol repair:',
-        missingGui
-          ? 'Your previous turn ended without a successful gui.present or gui.ask_user tool call.'
-          : `Your previous gui.present was not accepted: ${reason}`,
-        'Continue the same user request in this same thread. This is not a new user task.',
-        'Do not finish with native assistant prose. Use the available module tools and MCP actions required by the user request.',
-        'If multimodal evidence or object descriptions are already present in this thread, synthesize from that existing context; do not re-inspect the same object unless the available evidence is insufficient.',
-        'For external, current, latest, browser, source, citation, or verification needs, gather bounded evidence through the browser primitives before synthesizing.',
-        'When ready, call gui.present with the complete markdown answer in content.value and stable refs. The title field is optional metadata and cannot substitute for the answer body.',
-        'If blocked or user input is required, call gui.ask_user or gui.present with a blocker summary.',
-      ].join('\n'),
-      text_elements: [],
-    }],
-  };
-}
-
-function codexAppServerGuiProtocolRepairEvent(
-  threadId: string,
-  turnId: string,
-  attempt: number,
-  reason: string,
-): Record<string, unknown> {
-  const message = reason === 'missing-gui-present'
-    ? 'Runtime Codex ended without gui.present/gui.ask_user; continuing the same Agent Host session with one protocol repair attempt.'
-    : 'Runtime Codex produced an insufficient gui.present answer; continuing the same Agent Host session with one protocol repair attempt.';
-  return {
-    method: 'sciforge/gui_protocol_repair',
-    params: {
-      threadId,
-      turnId,
-      status: 'repairing',
-      attempt,
-      reason,
-      message,
-    },
-  };
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1858,6 +2204,30 @@ function localToolActPolicyResult(decision: AgentHostLocalToolActDecision): Reco
     refs: decision.evidenceRefs,
     ...(decision.approvalRequest ? { approvalRequest: decision.approvalRequest } : {}),
     error,
+  };
+}
+
+function attachBrowserCompletionTruth(result: unknown, completionTruth: AgentHostBrowserCompletionTruth): unknown {
+  if (!isRecord(result)) return result;
+  const structuredContent = isRecord(result.structuredContent)
+    ? {
+        ...result.structuredContent,
+        completionTruth,
+      }
+    : { completionTruth };
+  return {
+    ...result,
+    completionTruth,
+    structuredContent,
+    content: Array.isArray(result.content)
+      ? result.content.map((item) => {
+          if (!isRecord(item) || item.type !== 'text') return item;
+          return {
+            ...item,
+            text: JSON.stringify(structuredContent, null, 2),
+          };
+        })
+      : result.content,
   };
 }
 

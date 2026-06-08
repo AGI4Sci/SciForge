@@ -460,7 +460,7 @@ function mainLooksProduction(value: string): boolean {
   return value.includes('BrowserWindow') &&
     value.includes('loadFile') &&
     value.includes('requestedControlPort: 0') &&
-    value.includes('requestedProviderProxyPort: 0') &&
+    value.includes('requestedModelRouterPort: 0') &&
     value.includes('requestedRuntimeCodexPort: 0') &&
     value.includes('runtime:config') &&
     value.includes('dist-desktop') &&

@@ -141,6 +141,75 @@ test('browser primitives complete a local search-to-download user acceptance flo
   }
 });
 
+test('browser primitives keep search snippets and over-budget downloads out of completion evidence when reads are blocked', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-runtime-ua-blocked-'));
+  const server = await startBrowserAcceptanceFixtureServer();
+  try {
+    const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
+      browser: createBrowserRuntimeModuleHandler({
+        workspacePath,
+        primitivePorts: createLocalPrimitivePorts({
+          baseUrl: server.baseUrl,
+          workspacePath,
+        }),
+      }),
+    }));
+
+    const search = await invokeBrowser<BrowserSearchOutput>(dispatcher, BROWSER_PRIMITIVE_INTENTS.search, {
+      schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.search,
+      query: 'Browser primitives blocked diagnostic paper',
+      engine: 'duckduckgo',
+      limit: 1,
+      budget: { maxTimeMs: 5000 },
+    });
+    assert.equal(search.status, 'completed');
+    assert.match(search.output?.results[0]?.snippet ?? '', /snippet-only finding/);
+    const candidate = search.resources.find((resource) => resource.kind === 'web_page');
+    assert.ok(candidate?.ref);
+    assert.equal(candidate.status, 'discovered');
+    assert.equal(candidate.confidence, 'candidate');
+    assert.match(search.evidenceState.boundary, /Search results and snippets are not source evidence/);
+
+    const read = await invokeBrowser<BrowserReadOutput>(dispatcher, BROWSER_PRIMITIVE_INTENTS.read, {
+      schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+      resourceRef: candidate.ref,
+      includeText: true,
+      maxTextChars: 20_000,
+    }, { expectOk: false });
+    assert.equal(read.status, 'blocked');
+    assert.equal(read.blockedReason, 'source_page_read_failed');
+    assert.equal(read.output, undefined);
+    assert.equal(read.resources.some((resource) => resource.kind === 'page_text' || resource.kind === 'source_page'), false);
+    assert.match(read.evidenceState.boundary, /not user-level completion evidence/);
+    assert.match(read.diagnostics.map((diagnostic) => diagnostic.message).join('\n'), /read blocked diagnostic page/);
+    assert.doesNotMatch(JSON.stringify(read), /snippet-only finding/);
+
+    const download = await invokeBrowser<BrowserDownloadOutput>(dispatcher, BROWSER_PRIMITIVE_INTENTS.download, {
+      schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.download,
+      url: `${server.baseUrl}/downloads/browser-primitives-large.csv`,
+      sessionId: 'blocked-download-session',
+      saveScope: 'session-artifacts',
+      maxBytes: 8,
+      filenameHint: 'browser-primitives-large.csv',
+    }, { expectOk: false });
+    assert.equal(download.status, 'blocked');
+    assert.equal(download.blockedReason, 'download_content_length_exceeds_budget');
+    assert.equal(download.output, undefined);
+    assert.equal(download.resources.some((resource) => resource.kind === 'download_artifact'), false);
+    assert.match(download.evidenceState.boundary, /not user-level completion evidence/);
+    assert.doesNotMatch(JSON.stringify(download), /artifactRef|browser-primitives-large\.csv/);
+
+    assert.deepEqual(dispatcher.trace().map((step) => step.intent), [
+      'browser.search',
+      'browser.read',
+      'browser.download',
+    ]);
+  } finally {
+    await closeServer(server.httpServer);
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 function createLocalPrimitivePorts(input: {
   baseUrl: string;
   workspacePath: string;
@@ -239,7 +308,32 @@ function createLocalPrimitivePorts(input: {
         };
       }
       const response = await fetch(url);
-      if (!response.ok) throw new Error(`read fixture failed: ${response.status}`);
+      if (!response.ok) {
+        const sessionId = request.sessionId ?? 'ua-browser-ephemeral-read';
+        const dir = join(browserHostSessionDir(input.workspacePath, sessionId), 'diagnostics');
+        const diagnosticRef = `browser-host-session:${sessionId}/diagnostics/read-blocked.json`;
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, 'read-blocked.json'), JSON.stringify({
+          schemaVersion: 'sciforge.browser-host-session.read-diagnostic.v1',
+          url,
+          finalUrl: response.url,
+          status: response.status,
+          message: await response.text(),
+          recordedAt: FIXTURE_TIME,
+        }, null, 2), 'utf8');
+        return {
+          status: 'blocked',
+          blockedReason: 'source_page_read_failed',
+          refs: [diagnosticRef],
+          diagnostics: [{
+            code: 'source-page-read-failed',
+            message: `read blocked diagnostic page: HTTP ${response.status}`,
+            severity: 'error',
+            refs: [diagnosticRef],
+            retryable: true,
+          }],
+        };
+      }
       const html = await response.text();
       const sessionId = request.sessionId ?? 'ua-browser-ephemeral-read';
       const title = titleFromHtml(html) ?? session?.title ?? 'Untitled';
@@ -311,13 +405,14 @@ async function invokeBrowser<T>(
   dispatcher: ReturnType<typeof createRuntimeModuleDispatcher>,
   intent: string,
   input: Record<string, unknown>,
+  options: { expectOk?: boolean } = {},
 ): Promise<BrowserPrimitiveEnvelope<T>> {
   const result = await dispatcher.invoke({
     moduleId: 'browser',
     intent,
     input,
   });
-  assert.equal(result.ok, true, result.error);
+  assert.equal(result.ok, options.expectOk ?? true, result.error);
   const value = result.value as BrowserPrimitiveEnvelope<T>;
   assert.equal(value.moduleId, 'browser');
   return value;
@@ -334,6 +429,17 @@ async function startBrowserAcceptanceFixtureServer(): Promise<{
     const url = new URL(request.url ?? '/', baseUrl || 'http://127.0.0.1');
     requests.push(url.pathname + url.search);
     if (url.pathname === '/search.json') {
+      if ((url.searchParams.get('q') ?? '').includes('blocked diagnostic')) {
+        writeJson(response, {
+          query: url.searchParams.get('q') ?? '',
+          results: [{
+            title: 'Browser Primitives Blocked Diagnostic',
+            url: `${baseUrl}/paper/browser-primitives-blocked`,
+            snippet: 'A snippet-only finding that must not become final completion.',
+          }],
+        });
+        return;
+      }
       writeJson(response, {
         query: url.searchParams.get('q') ?? '',
         results: [{
@@ -348,8 +454,17 @@ async function startBrowserAcceptanceFixtureServer(): Promise<{
       writeText(response, paperHtml(baseUrl), 'text/html');
       return;
     }
+    if (url.pathname === '/paper/browser-primitives-blocked') {
+      response.writeHead(403, { 'Content-Type': 'text/plain' });
+      response.end('read blocked diagnostic page');
+      return;
+    }
     if (url.pathname === '/downloads/browser-primitives-atlas.csv') {
       writeText(response, FIXTURE_CSV, 'text/csv');
+      return;
+    }
+    if (url.pathname === '/downloads/browser-primitives-large.csv') {
+      writeText(response, FIXTURE_LARGE_CSV, 'text/csv');
       return;
     }
     response.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -391,7 +506,10 @@ function writeJson(response: ServerResponse, value: unknown) {
 }
 
 function writeText(response: ServerResponse, text: string, contentType: string) {
-  response.writeHead(200, { 'Content-Type': contentType });
+  response.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': Buffer.byteLength(text),
+  });
   response.end(text);
 }
 
@@ -430,5 +548,12 @@ const FIXTURE_CSV = [
   'sample,normalized_observation_delta,cohort_size',
   'local-a,42,7',
   'local-b,42,7',
+  '',
+].join('\n');
+const FIXTURE_LARGE_CSV = [
+  'sample,normalized_observation_delta,cohort_size',
+  'large-a,42,7',
+  'large-b,42,7',
+  'large-c,42,7',
   '',
 ].join('\n');

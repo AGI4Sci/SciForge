@@ -189,7 +189,7 @@ function localConfigEvidence(settings: LocalProviderSettings): RuntimeCodexBrows
 function boundedRefs(values: string[]): string[] {
   return [...new Set(values.filter((value) => (
     value.length <= 260
-    && /^(browser-host-session:|runtime-truth:module\.invoke\/browser\.|action-ledger:browser\.executeBoundedOperation\/|artifact:runtime-codex-browser-acceptance\/)/.test(value)
+    && /^(browser-host-session:|runtime-truth:browser_(?:search|navigate|observe|read|extract|download)\/|artifact:runtime-codex-browser-acceptance\/)/.test(value)
     && !/https?:\/\/|file:\/\/|\/tmp|secret|token|password|api[-_]?key|bearer|base64|workspace-file-writer|shared-system-input/i.test(value)
   )))];
 }

@@ -505,7 +505,7 @@ function blockedProviderPreflight(): RuntimeProviderPreflightManifest {
     category: 'config-secret-source',
     owner: 'environment',
     policyViolations: ['config-file-secret-fallback-cannot-satisfy-browser-release-acceptance'],
-    missingEnv: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
+    missingEnv: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_MODEL_ROUTER_BASE_URL'],
     evidenceMode: 'current-env-diagnostic-only',
     nextActions: [],
   };

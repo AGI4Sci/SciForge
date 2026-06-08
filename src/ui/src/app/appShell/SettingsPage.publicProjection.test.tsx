@@ -71,7 +71,7 @@ test('settings page renders public config projection without URLs, secrets, mode
   }
 
   assert.match(html, /Workspace path: present \(masked\)|Workspace Path/);
-  assert.match(html, /API key: present \(masked\)/);
+  assert.match(html, /Model Router/);
   assert.match(html, /Runtime Profile|Runtime profile/);
 });
 

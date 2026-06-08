@@ -51,9 +51,6 @@ export function providerReadinessNoticeFromManifest(
 
 export function providerReadinessNoticeFromConfig(config: SciForgeConfig): ProviderReadinessNotice {
   const provider = publicProviderAlias(config.modelProvider.trim() || defaultSciForgeConfig.modelProvider);
-  const model = config.modelName.trim();
-  const baseUrl = config.modelBaseUrl.trim();
-  const apiKeyConfigured = Boolean(config.apiKey.trim());
   if (provider === 'managed-runtime') {
     return {
       ready: true,
@@ -63,50 +60,12 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
       source: 'settings',
     };
   }
-  if (provider === 'native') {
-    if (!model && !baseUrl && !apiKeyConfigured) {
-      return {
-        ready: false,
-        state: 'blocked',
-        value: 'native',
-        detail: 'Custom model is not configured',
-        recoverAction: 'Set Model, Base URL, or API Key. SciForge will not switch providers automatically.',
-        source: 'settings',
-      };
-    }
-    return {
-      ready: true,
-      state: 'ready',
-      value: 'native',
-      detail: 'Model provider configured (masked)',
-      source: 'settings',
-    };
-  }
-  if (!baseUrl) {
-    return {
-      ready: false,
-      state: 'blocked',
-      value: provider,
-      detail: provider,
-      recoverAction: 'Set the Base URL for your configured model endpoint.',
-      source: 'settings',
-    };
-  }
-  if (!apiKeyConfigured) {
-    return {
-      ready: false,
-      state: 'blocked',
-      value: provider,
-      detail: `${provider} provider requires an API key`,
-      recoverAction: 'Set an API Key. SciForge will not switch providers automatically.',
-      source: 'settings',
-    };
-  }
   return {
-    ready: true,
-    state: 'ready',
+    ready: false,
+    state: 'blocked',
     value: provider,
-    detail: 'Model provider configured (API key masked)',
+    detail: 'Only the managed Model Router provider is supported for runtime model calls.',
+    recoverAction: 'Use the Model Router profile; keep provider API keys in config.local.json as Router member-model configuration.',
     source: 'settings',
   };
 }

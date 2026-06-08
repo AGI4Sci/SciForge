@@ -13,8 +13,8 @@ export function resolveModelRouterCliOptions(
   const parsed = parseModelRouterCliArgs(args);
   return {
     ...parsed,
-    host: parsed.host ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_HOST') ?? stringEnv(env, 'SCIFORGE_PROXY_HOST'),
-    port: parsed.port ?? numberEnv(env, 'SCIFORGE_MODEL_ROUTER_PORT') ?? numberEnv(env, 'SCIFORGE_PROXY_PORT'),
+    host: parsed.host ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_HOST'),
+    port: parsed.port ?? numberEnv(env, 'SCIFORGE_MODEL_ROUTER_PORT'),
     configPath: parsed.configPath ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_CONFIG'),
     workspaceRoot: parsed.workspaceRoot ?? stringEnv(env, 'SCIFORGE_WORKSPACE_PATH'),
   };

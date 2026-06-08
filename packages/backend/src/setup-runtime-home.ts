@@ -14,7 +14,7 @@ function parseArgs(args: string[]) {
     return index >= 0 ? args[index + 1] : undefined;
   };
   return {
-    proxyBaseUrl: get('--proxy-base-url') ?? process.env.SCIFORGE_PROXY_BASE_URL,
+    proxyBaseUrl: get('--model-router-base-url') ?? process.env.SCIFORGE_MODEL_ROUTER_BASE_URL,
     overwrite: args.includes('--overwrite'),
   };
 }

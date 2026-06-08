@@ -85,7 +85,7 @@ test('Vite renderer URL or fixed dev port prevents R-PKG-01 production package p
     },
     ports: [
       { name: 'workspace-server', host: '127.0.0.1', actualPort: 5173, allocation: 'dynamic' },
-      { name: 'provider-proxy', host: '127.0.0.1', actualPort: 62011, allocation: 'dynamic' },
+      { name: 'model-router', host: '127.0.0.1', actualPort: 62011, allocation: 'dynamic' },
       { name: 'runtime-codex', host: '127.0.0.1', actualPort: 62012, allocation: 'dynamic' },
     ],
   }));
@@ -124,7 +124,7 @@ test('package artifact inspection alone cannot claim R-DESK/R-PKG live pass', ()
     runtimeTask: {
       runtime: 'Runtime Codex',
       taskKind: 'real-user-task',
-      providerProxyUsed: true,
+      modelRouterUsed: true,
       providerAuditVisible: false,
       answerVisibleInRenderer: false,
       rawPreflightOnly: true,
@@ -167,7 +167,7 @@ test('desktop live pass requires Runtime Codex provider metadata, command id, an
       model: 'sciforge-router',
       workspacePath: '/Users/test/Library/Application Support/SciForge/workspace',
       commandId: 'not-a-runtime-command-id',
-      providerProxyUsed: true,
+      modelRouterUsed: true,
       providerAuditVisible: true,
       answerVisibleInRenderer: true,
       rawPreflightOnly: false,
@@ -293,7 +293,7 @@ function validEvidence(
       model: 'sciforge-router',
       workspacePath,
       commandId: runtimeCommandId,
-      providerProxyUsed: true,
+      modelRouterUsed: true,
       providerAuditVisible: true,
       answerVisibleInRenderer: true,
       rawPreflightOnly: false,
@@ -323,12 +323,12 @@ function validEvidence(
         logPath: join(sidecarLogsPath, 'workspace-server.log'),
       },
       {
-        role: 'provider-proxy',
+        role: 'model-router',
         owner: 'electron-main',
         startedBy: 'electron-main-before-renderer-ready',
         stoppedBy: 'electron-main-shutdown',
         healthCheck: 'pass',
-        logPath: join(sidecarLogsPath, 'provider-proxy.log'),
+        logPath: join(sidecarLogsPath, 'model-router.log'),
       },
       {
         role: 'runtime-codex',
@@ -341,7 +341,7 @@ function validEvidence(
     ],
     ports: [
       { name: 'workspace-server', host: '127.0.0.1', actualPort: 62010, allocation: 'dynamic' },
-      { name: 'provider-proxy', host: '127.0.0.1', actualPort: 62011, allocation: 'dynamic' },
+      { name: 'model-router', host: '127.0.0.1', actualPort: 62011, allocation: 'dynamic' },
       { name: 'runtime-codex', host: '127.0.0.1', actualPort: 62012, allocation: 'dynamic' },
     ],
     paths: {

@@ -16,13 +16,13 @@ export function blockedOnForReason(reason: string): string[] {
   if (/API key|upstream base URL|environment/i.test(reason)) {
     return [
       'Runtime Codex environment configuration',
-      'Runtime Codex provider proxy upstream configuration',
+      'Runtime Codex Model Router member model configuration',
       'Codex in-app browser execution',
     ];
   }
   if (/502|Bad Gateway|429|timeout|DNS|provider|upstream|outage/i.test(reason)) {
     return [
-      'provider proxy upstream availability',
+      'Model Router member model availability',
       'visible Runtime Codex answer not produced',
       'selected artifact follow-up not reached',
     ];

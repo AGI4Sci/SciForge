@@ -113,7 +113,7 @@ export function createProviderSecurityBudgetAuditFixture(): ProviderSecurityBudg
       'event:sa-web-38-repair-needed',
       'provider-manifest:sciforge-runtime-deepseek',
     ],
-    visibleSummary: 'DeepSeek provider proxy returned 502; run is repair-needed with scrubbed audit refs.',
+    visibleSummary: 'Model Router member model returned 502; run is repair-needed with scrubbed audit refs.',
   };
 
   const recoveredRun: ProviderRunRecord = {

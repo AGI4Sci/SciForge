@@ -2,7 +2,7 @@ import type { BrowserRuntimeAutomationSummary } from '@sciforge-ui/runtime-contr
 
 export const BROWSER_HOST_SESSION_PROVIDER_ID = 'sciforge.browser-host-session' as const;
 export const BROWSER_HOST_SESSION_SCHEMA = 'sciforge.browser-host-session.state.v1' as const;
-export const BROWSER_HOST_SEARCH_SCHEMA = 'sciforge.browser-host-session.search-result.v1' as const;
+export const BROWSER_HOST_DISCOVERY_SCHEMA = 'sciforge.browser-host-session.search-result.v1' as const;
 export const BROWSER_HOST_LOADING_PROGRESS_SCHEMA = 'sciforge.browser-host-session.loading-progress.lifecycle.v1' as const;
 export const BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA = 'sciforge.browser-host-session.native-os-ui-proof.v1' as const;
 
@@ -90,7 +90,7 @@ export interface BrowserHostMousePoint {
   y: number;
 }
 
-export type BrowserHostSearchEngine = 'bing' | 'duckduckgo';
+export type BrowserHostDiscoveryEngine = 'bing' | 'duckduckgo';
 
 export interface BrowserHostSessionViewport {
   width: number;
@@ -309,31 +309,31 @@ export interface BrowserHostSessionActionInput {
   riskType?: BrowserHostSessionActionRiskType;
 }
 
-export interface BrowserHostSearchInput {
+export interface BrowserHostDiscoveryInput {
   query: string;
   sessionId?: string;
   limit?: number;
   sourcePageLimit?: number;
-  preferredResults?: BrowserHostSearchResult[];
+  preferredResults?: BrowserHostDiscoveryResult[];
   region?: string;
-  engine?: BrowserHostSearchEngine;
+  engine?: BrowserHostDiscoveryEngine;
   timeoutMs?: number;
 }
 
-export interface BrowserHostOpenReadInput {
+export interface BrowserHostPageReadInput {
   url: string;
   sessionId?: string;
   title?: string;
   timeoutMs?: number;
 }
 
-export interface BrowserHostSearchResult {
+export interface BrowserHostDiscoveryResult {
   title: string;
   url: string;
   snippet: string;
 }
 
-export interface BrowserHostSearchSourcePage {
+export interface BrowserHostSourcePage {
   resultIndex: number;
   title: string;
   url: string;
@@ -353,15 +353,15 @@ export interface BrowserHostSearchSourcePage {
   error?: string;
 }
 
-export interface BrowserHostSearchOutput {
-  schemaVersion: typeof BROWSER_HOST_SEARCH_SCHEMA;
+export interface BrowserHostDiscoveryOutput {
+  schemaVersion: typeof BROWSER_HOST_DISCOVERY_SCHEMA;
   query: string;
-  engine: BrowserHostSearchEngine;
+  engine: BrowserHostDiscoveryEngine;
   searchedAt: string;
   searchUrl: string;
   finalUrl: string;
-  results: BrowserHostSearchResult[];
-  sourcePages?: BrowserHostSearchSourcePage[];
+  results: BrowserHostDiscoveryResult[];
+  sourcePages?: BrowserHostSourcePage[];
   session: BrowserHostSessionState;
   searchResultRef: string;
   screenshotRef?: string;
@@ -372,8 +372,8 @@ export interface BrowserHostSearchOutput {
   automationSummary?: BrowserRuntimeAutomationSummary;
 }
 
-export interface BrowserHostOpenReadOutput {
-  sourcePage: BrowserHostSearchSourcePage;
+export interface BrowserHostPageReadOutput {
+  sourcePage: BrowserHostSourcePage;
   session: BrowserHostSessionState;
 }
 
@@ -387,7 +387,7 @@ export interface BrowserHostSessionDriver {
   text(): Promise<string>;
   screenshot(path: string): Promise<void>;
   axSnapshot?(): Promise<unknown>;
-  searchResults?(limit: number): Promise<BrowserHostSearchResult[]>;
+  searchResults?(limit: number): Promise<BrowserHostDiscoveryResult[]>;
   canGoBack(): Promise<boolean>;
   canGoForward(): Promise<boolean>;
   back(timeoutMs: number): Promise<void>;

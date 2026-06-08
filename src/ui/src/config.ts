@@ -238,7 +238,7 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     locale: normalizeLocale(raw.locale),
     agentBackend: normalizeAgentBackend(raw.agentBackend),
     runtimeProfile: normalizeRuntimeProfile(raw.runtimeProfile),
-    allowOpenAiRuntime: raw.allowOpenAiRuntime === true,
+    allowOpenAiRuntime: false,
     modelProvider: typeof raw.modelProvider === 'string' ? raw.modelProvider : defaultSciForgeConfig.modelProvider,
     modelBaseUrl: normalizeModelBaseUrl(raw.modelBaseUrl),
     modelName: typeof raw.modelName === 'string' ? raw.modelName : '',
@@ -401,7 +401,7 @@ function cleanUrl(value: unknown) {
 
 function normalizeAgentBackend(value: unknown) {
   const backend = typeof value === 'string' ? value.trim() : '';
-  return ['codex', 'openteam_agent', 'claude-code', 'hermes-agent', 'openclaw', 'gemini'].includes(backend)
+  return backend === 'codex'
     ? backend
     : defaultSciForgeConfig.agentBackend;
 }

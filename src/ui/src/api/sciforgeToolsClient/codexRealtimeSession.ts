@@ -21,6 +21,8 @@ export const CODEX_REALTIME_SESSION_TRANSPORT_STATUS = {
   blockers: [],
 } as const;
 
+const CODEX_REALTIME_CLIENT_ERROR_CLOSE_CODE = 4000;
+
 export interface CodexRealtimeSessionRequest {
   realtimeSession: CodexRealtimeSessionEnvelope;
   commandText: string;
@@ -155,7 +157,7 @@ async function streamCodexRealtimeWebSocket(input: {
       await writer.write(chunk);
     }).catch((error: unknown) => {
       responseError = responseError ?? (error instanceof Error ? error.message : String(error));
-      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close(1011, 'codex realtime stream write error');
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close(CODEX_REALTIME_CLIENT_ERROR_CLOSE_CODE, 'codex realtime stream write error');
     });
     return writeChain;
   };
@@ -186,11 +188,11 @@ async function streamCodexRealtimeWebSocket(input: {
         if (payload.type === 'error') {
           responseError = payload.error;
           writeSseBlock('error', { ok: false, error: payload.error });
-          closeSocketAfterTerminalEvent('runtime error event', 1011);
+          closeSocketAfterTerminalEvent('runtime error event', CODEX_REALTIME_CLIENT_ERROR_CLOSE_CODE);
         }
       })().catch((error: unknown) => {
         responseError = error instanceof Error ? error.message : String(error);
-        ws.close(1011, 'codex realtime client parse error');
+        ws.close(CODEX_REALTIME_CLIENT_ERROR_CLOSE_CODE, 'codex realtime client parse error');
       });
     });
     ws.addEventListener('error', () => {

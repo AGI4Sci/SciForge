@@ -38,6 +38,12 @@ describe('browser runtime MCP facade', () => {
             primitive: 'search',
             status: 'completed',
             output: { query: '伊朗局势', results: [] },
+            resources: [],
+            evidenceState: {
+              completed: [],
+              unknown: [],
+              boundary: 'test envelope',
+            },
             refs: [],
             diagnostics: [],
             budget: {},
@@ -80,6 +86,12 @@ describe('browser runtime MCP facade', () => {
             moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
             primitive: 'read',
             status: 'completed',
+            resources: [],
+            evidenceState: {
+              completed: [],
+              unknown: [],
+              boundary: 'test envelope',
+            },
             refs: [],
             diagnostics: [],
             budget: {},
@@ -94,6 +106,10 @@ describe('browser runtime MCP facade', () => {
       arguments: { url: 'https://example.com/article', includeText: true },
     });
     await adapter.callTool({
+      name: 'browser_read',
+      arguments: { resourceRef: 'browser:resource:web_page:1', includeText: true },
+    });
+    await adapter.callTool({
       name: 'browser_download',
       arguments: { url: 'https://example.com/file.csv' },
     });
@@ -104,9 +120,32 @@ describe('browser runtime MCP facade', () => {
       includeText: true,
       navigationMode: 'ephemeral',
     }, {
+      schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+      resourceRef: 'browser:resource:web_page:1',
+      includeText: true,
+    }, {
       schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.download,
       url: 'https://example.com/file.csv',
       saveScope: 'session-artifacts',
     }]);
+  });
+
+  it('documents resource refs without legacy read input wording', () => {
+    const tools = browserRuntimeMcpTools();
+    const readTool = tools.find((tool) => tool.name === 'browser_read');
+
+    assert.deepEqual(
+      (readTool?.inputSchema.properties as Record<string, unknown>).resourceRef,
+      { type: 'string', minLength: 1 },
+    );
+    const descriptions = tools.map((tool) => tool.description).join('\n');
+    const legacyReadInput = ['read', 'Input'].join('');
+    const legacyCandidateInputs = ['candidate', 'Read', 'Inputs'].join('');
+
+    assert.match(descriptions, /resources\/evidenceState/);
+    assert.match(descriptions, /candidate web_page resources/);
+    assert.match(descriptions, /browser_read/);
+    assert.equal(descriptions.includes(legacyReadInput), false);
+    assert.equal(descriptions.includes(legacyCandidateInputs), false);
   });
 });

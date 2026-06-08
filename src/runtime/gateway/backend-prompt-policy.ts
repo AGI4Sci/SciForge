@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
+import type { GatewayRequest, SciForgeSkillDomain, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
-import { extractBackendCurrentUserRequest, normalizeConfiguredBackendLlmEndpoint } from '@sciforge-ui/runtime-contract/backend-prompt-policy';
-import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
+import { extractBackendCurrentUserRequest } from '@sciforge-ui/runtime-contract/backend-prompt-policy';
+import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { buildCapabilityBrokerBriefForBackend, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForBackend, summarizeExecutionRefs, summarizeTaskAttemptsForBackend, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords, workspaceTreeSummary, type BackendContextMode } from './context-envelope.js';
 import { backendAgentId, backendContextPolicy, contextWindowMetadata, fetchBackendContextSnapshot } from './backend-context-window.js';
 import { cleanUrl, clipForBackendJson, clipForBackendPrompt, errorMessage, extractLikelyErrorLine, hashJson, isRecord, readTextIfExists, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
@@ -98,11 +98,8 @@ export async function requestBackendRepair(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let runPayload: unknown;
   try {
-    const { llmEndpointSource, ...llmRuntime } = await backendLlmRuntime(params.request, params.run.workspace);
-    const backend = selectedAgentBackend(params.request, llmRuntime.llmEndpoint);
-    if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl, params.request)) {
-      return { ok: false, error: missingUserLlmEndpointMessage() };
-    }
+    const llmRuntime = await backendLlmRuntime(params.request, params.run.workspace);
+    const backend = selectedAgentBackend(params.request);
     const priorAttempts = await readRecentTaskAttempts(params.run.workspace, params.request.skillDomain, 8, {
       scenarioPackageId: params.request.scenarioPackageRef?.id,
       skillPlanRef: params.request.skillPlanRef,
@@ -168,7 +165,6 @@ export async function requestBackendRepair(params: {
           sandbox: 'danger-full-access',
           ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
           source: 'sciforge-workspace-runtime-gateway',
-          llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
         },
       },
       metadata: {
@@ -301,36 +297,10 @@ export function redactSecrets(value: unknown): unknown {
 export async function backendLlmRuntime(request: GatewayRequest, workspace: string): Promise<{
   modelProvider?: string;
   modelName?: string;
-  llmEndpoint?: LlmEndpointConfig;
-  llmEndpointSource?: string;
 }> {
-  const fromRequest = normalizeLlmEndpoint(request.llmEndpoint);
-  if (fromRequest) {
-    return {
-      modelProvider: request.modelProvider?.trim() || fromRequest.provider,
-      modelName: request.modelName?.trim() || fromRequest.modelName,
-      llmEndpoint: fromRequest,
-      llmEndpointSource: 'request',
-    };
-  }
-  if (hasExplicitRequestLlmConfig(request)) {
-    return {
-      modelProvider: request.modelProvider?.trim(),
-      modelName: request.modelName?.trim(),
-      llmEndpointSource: 'request-empty',
-    };
-  }
-  const fromLocal = await readConfiguredLlmEndpoint(join(process.cwd(), 'config.local.json'), 'config.local.json');
-  if (fromLocal) return fromLocal;
-  const fromWorkspace = await readConfiguredLlmEndpoint(join(workspace, '.sciforge', 'config.json'), 'workspace-config');
-  if (fromWorkspace) return fromWorkspace;
+  void request;
+  void workspace;
   return {};
-}
-
-export function hasExplicitRequestLlmConfig(request: GatewayRequest) {
-  return typeof request.modelProvider === 'string'
-    || typeof request.modelName === 'string'
-    || request.llmEndpoint !== undefined;
 }
 
 export function requiresUserLlmEndpoint(agentServerBaseUrl: string, request?: GatewayRequest) {
@@ -339,24 +309,10 @@ export function requiresUserLlmEndpoint(agentServerBaseUrl: string, request?: Ga
 
 export function missingUserLlmEndpointMessage() {
   return [
-    'User-side model configuration is required before using the default local AgentServer.',
-    'Set Model Provider, Model Base URL, Model Name, and API Key in SciForge settings so the request-selected llmEndpoint is forwarded.',
-    'SciForge will not fall back to AgentServer openteam.json defaults for this path.',
+    'Local AgentServer raw LLM dispatch is disabled.',
+    'Use Runtime Codex with a Model Router profile; config.local.json API keys are Model Router member-model configuration only.',
+    'SciForge will not forward UI/request model endpoints or fall back to AgentServer provider defaults for this path.',
   ].join(' ');
-}
-
-export async function readConfiguredLlmEndpoint(path: string, source: string): Promise<{
-  modelProvider?: string;
-  modelName?: string;
-  llmEndpoint?: LlmEndpointConfig;
-  llmEndpointSource?: string;
-} | undefined> {
-  try {
-    const parsed = JSON.parse(await readFile(path, 'utf8'));
-    return normalizeConfiguredBackendLlmEndpoint(parsed, source);
-  } catch {
-    return undefined;
-  }
 }
 
 export { buildBackendGenerationPrompt } from './generated-task-prompt-policy.js';

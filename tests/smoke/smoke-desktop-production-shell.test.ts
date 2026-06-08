@@ -73,7 +73,7 @@ test('R-DESK sidecar lifecycle belongs to Electron main and the launcher', () =>
   assert.ok(plan.runtime.portPolicy.forbiddenFixedDevPorts.includes(5173));
 
   const roles = new Set(plan.runtime.sidecars.map((sidecar) => sidecar.role));
-  assert.deepEqual([...roles].sort(), ['provider-proxy', 'runtime-codex', 'workspace-server']);
+  assert.deepEqual([...roles].sort(), ['model-router', 'runtime-codex', 'workspace-server']);
   for (const sidecar of plan.runtime.sidecars) {
     assert.equal(sidecar.owner, 'electron-main-runtime-launcher');
     assert.equal(sidecar.lifecycle, 'managed-by-launcher');

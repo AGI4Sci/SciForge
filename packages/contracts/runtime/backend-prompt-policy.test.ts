@@ -14,35 +14,20 @@ test('extracts current user request from the final backend handoff marker', () =
   assert.equal(extractBackendCurrentUserRequest(' direct task '), 'direct task');
 });
 
-test('normalizes configured backend LLM endpoint from root or llm blocks', () => {
-  assert.deepEqual(normalizeConfiguredBackendLlmEndpoint({
+test('rejects configured backend LLM endpoints outside Model Router member-model config', () => {
+  assert.equal(normalizeConfiguredBackendLlmEndpoint({
     llm: {
       provider: ' openai-compatible ',
       baseUrl: ' http://127.0.0.1:4000/// ',
       apiKey: ' sk-test ',
       model: ' test-model ',
     },
-  }, 'workspace-config'), {
-    modelProvider: 'openai-compatible',
-    modelName: 'test-model',
-    llmEndpoint: {
-      provider: 'openai-compatible',
-      baseUrl: 'http://127.0.0.1:4000',
-      apiKey: 'sk-test',
-      modelName: 'test-model',
-    },
-    llmEndpointSource: 'workspace-config',
-  });
+  }, 'workspace-config'), undefined);
 
-  assert.deepEqual(normalizeConfiguredBackendLlmEndpoint({
+  assert.equal(normalizeConfiguredBackendLlmEndpoint({
     baseUrl: 'http://127.0.0.1:4000',
     modelName: 'configured-model',
-  }, 'config.local.json')?.llmEndpoint, {
-    provider: undefined,
-    baseUrl: 'http://127.0.0.1:4000',
-    apiKey: undefined,
-    modelName: 'configured-model',
-  });
+  }, 'config.local.json'), undefined);
 
   assert.equal(normalizeConfiguredBackendLlmEndpoint({ provider: ' openai ' }, 'empty'), undefined);
 });

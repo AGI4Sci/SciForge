@@ -242,6 +242,7 @@ async function readWorkspaceToolSse(
   let error: string | undefined;
   let guiPresent: Record<string, unknown> | undefined;
   let guiAskUser: Record<string, unknown> | undefined;
+  let agentHostBrowserFinalizerMessage: string | undefined;
   const genericMessages: AssistantStreamTextFragment[] = [];
   function consumeBlock(block: string) {
     const lines = block.split(/\r?\n/);
@@ -269,6 +270,8 @@ async function readWorkspaceToolSse(
     if (isRecord(data)) {
       const assistantText = assistantTextFromStreamEventRecord(eventName, data);
       if (assistantText) genericMessages.push(assistantText);
+      agentHostBrowserFinalizerMessage = agentHostBrowserFinalizerTextFromStreamEventRecord(eventName, data)
+        ?? agentHostBrowserFinalizerMessage;
       if (eventName === 'gui_present' || data.type === 'gui_present') {
         guiPresent = data;
       }
@@ -282,6 +285,14 @@ async function readWorkspaceToolSse(
       genericMessages.push({ text: String(data), exact: false });
     }
     if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
+      if (agentHostBrowserFinalizerMessage) {
+        result = withAssistantMessageRuntimeResult(data, agentHostBrowserFinalizerMessage);
+        if (isRecord(result) && result.type === 'failed') {
+          onEvent(result);
+          error = asString(result.message);
+        }
+        return;
+      }
       if (guiAskUser) {
         result = withGuiAskUserRuntimeResult(data, guiAskUser, guiPresent);
         return;
@@ -294,12 +305,6 @@ async function readWorkspaceToolSse(
         result = withStructuredRuntimeDoneProjection(data);
         return;
       }
-      if (isRecord(data) && isRuntimeCodexDoneEvent(data)) {
-        const failed = runtimeCodexMissingGuiPresentFailure(data);
-        onEvent(failed);
-        error = failed.message;
-        return;
-      }
       const agentHostMessage = isRecord(data) ? agentHostTurnLoopDoneMessage(data) : undefined;
       if (agentHostMessage) {
         result = withAssistantMessageRuntimeResult(data, agentHostMessage);
@@ -308,7 +313,7 @@ async function readWorkspaceToolSse(
       const nativeMessage = joinAssistantStreamText(genericMessages);
       if (nativeMessage) {
         if (!runtimeNativeMessageSafeForVisibleAnswer(nativeMessage)) {
-          const failed = runtimeCodexMissingGuiPresentFailure(data);
+          const failed = runtimeCodexMissingFinalAnswerFailure(data);
           onEvent(failed);
           error = failed.message;
           return;
@@ -321,7 +326,13 @@ async function readWorkspaceToolSse(
         result = withAssistantMessageRuntimeResult(data, doneMessage);
         return;
       }
-      const failed = runtimeCodexMissingGuiPresentFailure(data);
+      if (isRecord(data) && isRuntimeCodexDoneEvent(data)) {
+        const failed = runtimeCodexMissingFinalAnswerFailure(data);
+        onEvent(failed);
+        error = failed.message;
+        return;
+      }
+      const failed = runtimeCodexMissingFinalAnswerFailure(data);
       onEvent(failed);
       error = failed.message;
     }
@@ -390,6 +401,19 @@ function assistantTextFromStreamEventRecord(eventName: string, data: Record<stri
   };
 }
 
+function agentHostBrowserFinalizerTextFromStreamEventRecord(eventName: string, data: Record<string, unknown>): string | undefined {
+  const eventType = asString(data.type) ?? asString(data.kind) ?? eventName;
+  const lowerEventName = eventName.trim().toLowerCase();
+  const lowerEventType = eventType.trim().toLowerCase();
+  const raw = isRecord(data.raw) ? data.raw : {};
+  if (asString(raw.boundary)?.trim().toLowerCase() !== 'agent-host-browser-finalizer') return undefined;
+  if (lowerEventName !== 'message' && lowerEventType !== 'message') return undefined;
+  return asTextFragment(data.text)
+    ?? asTextFragment(data.message)
+    ?? asTextFragment(data.delta)
+    ?? asTextFragment(data.detail);
+}
+
 function runtimeSseTextEventIsAssistantMessage(eventName: string, data: unknown): data is string {
   if (typeof data !== 'string' || !data.trim()) return false;
   const normalized = eventName.trim().toLowerCase();
@@ -444,7 +468,7 @@ function joinAssistantStreamText(fragments: AssistantStreamTextFragment[]): stri
 function withAssistantMessageRuntimeResult(result: unknown, message: string): unknown {
   if (!message.trim() || !isRecord(result)) return result;
   if (isRuntimeCodexDoneEvent(result)) {
-    if (!runtimeNativeMessageSafeForVisibleAnswer(message)) return runtimeCodexMissingGuiPresentFailure(result);
+      if (!runtimeNativeMessageSafeForVisibleAnswer(message)) return runtimeCodexMissingFinalAnswerFailure(result);
     return withNativeCodexMessageRuntimeResult(result, message);
   }
   return withVisibleRuntimeMessage(result, message);
@@ -773,12 +797,28 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
   const auditRefs = asStringArray(result.evidenceRefs) ?? [];
   const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
   const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(message, result);
+  const source = commandId ? `codex.app-server.final-answer:${commandId}` : 'codex.app-server.final-answer';
+  const finalAnswerEnvelope = {
+    schemaVersion: 'sciforge.final-answer-envelope.v1',
+    source,
+    kind: 'assistant-message',
+    text: message,
+    commandId,
+    attemptId: asString(result.attemptId),
+    provider: publicRuntimeMetadataValue(result.provider, 'provider'),
+    model: publicRuntimeMetadataValue(result.model, 'model'),
+    profile: publicRuntimeMetadataValue(result.profile, 'profile'),
+    codexSessionId: asString(result.codexSessionId),
+    evidenceRefs: auditRefs,
+    liveAcceptanceEligible,
+  };
   return {
     ...result,
     message,
+    finalAnswerEnvelope,
     nativeCodexMessage: {
       schemaVersion: 'sciforge.runtime-codex-native-message.v1',
-      source: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+      source,
       text: message,
       commandId,
       attemptId: asString(result.attemptId),
@@ -790,30 +830,28 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
       liveAcceptanceEligible,
     },
     displayIntent: {
-      source: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+      source,
       conversationProjection: {
         schemaVersion: 'sciforge.conversation-projection.v1',
-        conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:native-message',
+        conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:final-answer',
         visibleAnswer: {
-          status: 'visible-not-live-acceptance',
+          status: 'completed',
           text: message,
           artifactRefs: [],
           liveAcceptanceEligible,
         },
         artifacts: [],
         executionProcess: [{
-          eventId: `${commandId ?? 'runtime-codex'}:native-message`,
-          type: 'NativeCodexMessage',
-          summary: 'Runtime Codex completed with a native assistant message; tool process and raw diagnostics stay in the folded run audit.',
+          eventId: `${commandId ?? 'runtime-codex'}:final-answer`,
+          type: 'FinalAnswerEnvelope',
+          summary: 'Runtime Codex completed with a Codex App Server assistant final answer; tool process and raw diagnostics stay in the folded run audit.',
           timestamp: asString(result.timestamp) ?? new Date().toISOString(),
         }],
-        recoverActions: [
-          'Use gui.present on rerun only when the task needs a structured artifact projection beyond the native Codex assistant answer.',
-        ],
+        recoverActions: [],
         verificationState: {
           status: 'unverified',
-          verdict: 'native-message',
-          verifierRef: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+          verdict: 'final-answer',
+          verifierRef: source,
           liveAcceptanceEligible,
         },
         runtimeMetadata,
@@ -824,6 +862,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
     output: {
       ...output,
       message,
+      finalAnswerEnvelope: true,
       nativeCodexMessage: true,
     },
   };
@@ -2391,14 +2430,14 @@ function isTerminalEquivalentCommandText(commandText: string) {
     && !/\b(?:deleteFile|triggerRecover|updateCapabilityPreference|UserActionApi|ProjectionApi)\b/.test(commandText);
 }
 
-function runtimeCodexMissingGuiPresentFailure(result: unknown): { type: 'failed'; status: 'failed'; message: string; raw: Record<string, unknown> } {
+function runtimeCodexMissingFinalAnswerFailure(result: unknown): { type: 'failed'; status: 'failed'; message: string; raw: Record<string, unknown> } {
   const record = isRecord(result) ? result : {};
   return {
     type: 'failed',
     status: 'failed',
-    message: 'Runtime Codex completed without gui.present; SciForge failed closed instead of rendering raw provider text.',
+    message: 'Runtime Codex completed without a safe final assistant answer; SciForge failed closed instead of rendering raw runtime diagnostics.',
     raw: {
-      boundary: 'gui-present-required',
+      boundary: 'final-answer-required',
       exitCode: asNumber(record.exitCode) ?? 0,
       provider: asString(record.provider),
       model: asString(record.model),

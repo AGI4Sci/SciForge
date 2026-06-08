@@ -122,7 +122,7 @@ test('running message folds dense inline local path drafts into concise status c
     '/Applications/workspace/ailab/research/app/SciForge/tools/check-runtime-codex-truth-source.ts',
     '/Applications/workspace/ailab/research/app/SciForge/tools/check-boundary-inventory.ts',
     '/Applications/workspace/ailab/research/app/SciForge/tests/smoke/smoke-runtime-codex-final-acceptance.ts',
-    '/Applications/workspace/ailab/research/app/SciForge/packages/backend/src/proxy.ts',
+    '/Applications/workspace/ailab/research/app/SciForge/packages/workers/model-router/src/router.ts',
     '/Applications/workspace/ailab/research/app/SciForge/packages/backend/src/response-compat.ts',
     '/Applications/workspace/ailab/research/app/SciForge/packages/scenarios/core/src/scenarioDemoData.test.ts',
     '/Applications/workspace/ailab/research/app/SciForge/src/ui/src/app/ChatPanel.tsx',

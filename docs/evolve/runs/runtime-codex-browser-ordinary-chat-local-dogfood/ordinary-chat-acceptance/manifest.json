@@ -1,71 +1,54 @@
 {
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
-  "status": "passed",
+  "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-06-07T00:33:55.178Z",
-  "commandId": "browser-ordinary-chat-local-1cb793f9af53",
+  "observedAt": "2026-06-08T06:39:07.388Z",
+  "commandId": "browser-ordinary-chat-local-1ba485158d20",
   "startedFromDefaultChatEntry": true,
-  "submittedThroughRuntimeCodex": true,
-  "providerModelProfileVisible": true,
-  "workspaceVisible": true,
-  "commandIdVisible": true,
-  "mainAnswerVisible": true,
+  "submittedThroughRuntimeCodex": false,
+  "providerModelProfileVisible": false,
+  "workspaceVisible": false,
+  "commandIdVisible": false,
+  "mainAnswerVisible": false,
   "rawAuditFoldedByDefault": true,
   "automationSubstituteUsed": false,
   "seedDemoFixtureEvidenceUsed": false,
-  "acceptanceConclusionFromRealBrowser": true,
+  "acceptanceConclusionFromRealBrowser": false,
   "seedOrDemoMessagesExcluded": true,
   "liveAcceptanceScope": "non-seed-runtime-codex-messages-only",
-  "releaseBlocking": false,
-  "releaseEligible": true,
+  "releaseBlocking": true,
+  "releaseEligible": false,
+  "reason": "Runtime Codex app-server ordinary-chat Browser acceptance failed before usable Browser evidence: Missing SCIFORGE_RUNTIME_API_KEY; Runtime Codex fails closed without a configured provider key.",
   "acceptanceRubric": {
-    "userIntent": "use ordinary Runtime Codex chat to run SciForge Browser retrieval with source citations",
-    "expectedObservableResult": "module.invoke browser.search_read/open_read result with BrowserHostSession source-page and page-text refs plus a visible final answer",
-    "actualResult": "ordinary-chat Runtime Codex Browser retrieval completed with current source refs and a final-answer artifact",
-    "evidenceRefs": [
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
-      "artifact:runtime-codex-browser-acceptance/final-answer.md"
-    ],
+    "userIntent": "请用 SciForge 内置浏览器打开并读取 https://platform.openai.com/docs/changelog ，用中文总结最近的 OpenAI 产品更新，并列出来源链接。",
+    "expectedObservableResult": "Runtime Codex app-server ordinary chat must call browser_search, browser_read, materialize source/page text refs, and project gui.present with satisfied completionTruth.",
+    "actualResult": "Runtime Codex app-server ordinary-chat Browser acceptance failed before usable Browser evidence: Missing SCIFORGE_RUNTIME_API_KEY; Runtime Codex fails closed without a configured provider key.",
+    "evidenceRefs": [],
     "negativeChecks": [
-      "local dogfood alone rejected",
-      "missing source-page refs rejected",
-      "missing page-text refs rejected",
-      "missing final-answer refs rejected"
+      "Blocked manifests cannot claim release eligibility.",
+      "Search-only evidence cannot satisfy ordinary-chat Browser acceptance.",
+      "Fixture, replay, and historical refs are excluded from success criteria."
     ],
-    "remainingRisks": "release smoke still requires service-env Runtime Codex provider auth before this manifest can be produced by the live product path"
+    "remainingRisks": "Rerun with service-env Runtime Codex provider readiness and inspect runtime-audit.json."
   },
   "actualTaskResult": {
-    "status": "passed",
-    "summary": "Runtime Codex ordinary chat produced a BrowserHostSession-backed retrieval answer.",
-    "userIntentSatisfied": true,
-    "outputVerified": true,
-    "evidenceRefs": [
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
-      "artifact:runtime-codex-browser-acceptance/final-answer.md"
-    ]
+    "status": "blocked",
+    "summary": "Runtime Codex app-server ordinary-chat Browser acceptance failed before usable Browser evidence: Missing SCIFORGE_RUNTIME_API_KEY; Runtime Codex fails closed without a configured provider key.",
+    "userIntentSatisfied": false,
+    "outputVerified": false,
+    "evidenceRefs": []
   },
   "liveRuntimeCodexProof": {
-    "messageProvenance": "live-runtime-codex",
-    "commandId": "browser-ordinary-chat-local-1cb793f9af53",
-    "nativeDefaultChatAssistantAnswerRendered": true,
-    "runtimeOutputObserved": true,
+    "messageProvenance": "unknown",
+    "commandId": "browser-ordinary-chat-local-1ba485158d20",
+    "guiPresentObserved": false,
+    "nativeDefaultChatAssistantAnswerRendered": false,
+    "runtimeOutputObserved": false,
     "seedOrDemoExcluded": true,
-    "eventEvidenceRefs": [
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.source.json",
-      "browser-host-session:browser-host-695af3591380/source-pages/source-1-9370c544ce.txt",
-      "action-ledger:browser.executeBoundedOperation/browser-ordinary-chat-local-1cb793f9af53/module.invoke",
-      "runtime-truth:module.invoke/browser.open_read/browser-ordinary-chat-local-1cb793f9af53",
-      "artifact:runtime-codex-browser-acceptance/final-answer.md"
-    ]
+    "eventEvidenceRefs": []
   },
   "evidence": {
-    "notesPath": "final-answer.md",
+    "notesPath": "blocked-runtime-codex-browser-ordinary-chat.md",
     "runtimeAuditPath": "runtime-audit.json"
   }
 }

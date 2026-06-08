@@ -120,14 +120,14 @@ test('text planner receives structured acceptance contract without private GUI s
   assert.doesNotMatch(adapter.commandTexts[0] ?? '', /DOM_SHOULD_NOT_LEAK|AX_SHOULD_NOT_LEAK|data:image/);
 });
 
-test('text planner receives the current runtime provider proxy env instead of falling back to defaults', async () => {
+test('text planner receives the current Model Router env instead of falling back to defaults', async () => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-planner-env-'));
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-planner-workspace-'));
   const config = baseConfig();
   config.planner.env = {
     SCIFORGE_RUNTIME_ROOT: runtimeRoot,
     SCIFORGE_RUNTIME_API_KEY: 'test-runtime-key',
-    SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:5175/v1',
+    SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:5175/v1',
     SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
     SCIFORGE_CODEX_APP_SERVER_COMMAND: '/bin/false',
   };

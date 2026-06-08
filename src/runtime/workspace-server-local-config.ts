@@ -7,7 +7,6 @@ import {
   RUNTIME_MODEL,
   RUNTIME_PROVIDER,
 } from '../../packages/backend/src/runtime-home.js';
-import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import {
   computerUseWorkspaceEnvFromLocalSettings,
   localProviderSettings,
@@ -15,8 +14,12 @@ import {
   readRequiredLocalProviderSettings,
   type LocalProviderSettings,
 } from '../../packages/backend/src/local-provider-config.js';
-import { startCodexResponsesProxyServer, type StartedCodexResponsesProxy } from '../../packages/backend/src/proxy.js';
-import { runtimeProviderProxyBaseUrl as normalizeRuntimeProviderProxyBaseUrl } from './workspace-server-runtime-provider-preflight.js';
+import {
+  startModelRouterServer,
+  type ModelRouterConfig,
+  type StartedModelRouterServer,
+} from '../../packages/workers/model-router/src/router.js';
+import { runtimeProviderProxyBaseUrl as normalizeModelRouterBaseUrl } from './workspace-server-runtime-provider-preflight.js';
 
 export type WorkspacePeerInstanceRole = 'main' | 'repair' | 'peer';
 export type WorkspacePeerInstanceTrustLevel = 'readonly' | 'repair' | 'sync';
@@ -160,10 +163,9 @@ export function cleanUrlString(value: unknown) {
   return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
 }
 
-export function isSciForgeRuntimeProviderProxyHealth(value: unknown) {
+export function isSciForgeModelRouterHealth(value: unknown) {
   if (!isRecord(value)) return false;
-  return value.service === 'sciforge.codex-responses-proxy'
-    || value.service === 'sciforge.model-router';
+  return value.service === 'sciforge.model-router';
 }
 
 export interface WorkspaceLocalConfigServiceOptions {
@@ -177,7 +179,7 @@ export interface WorkspaceLocalConfigServiceOptions {
 }
 
 export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigServiceOptions) {
-  let managedRuntimeProviderProxy: Promise<StartedCodexResponsesProxy | undefined> | undefined;
+  let managedModelRouter: Promise<StartedModelRouterServer | undefined> | undefined;
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const defaultProxyBaseUrl = options.defaultProxyBaseUrl ?? DEFAULT_PROXY_BASE_URL;
@@ -226,23 +228,19 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
     const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
     const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
-    const codexProxy = isRecord(parsed.codexProxy) ? parsed.codexProxy : {};
+    const { codexProxy: _discardCodexProxy, runtimeCodexProxy: _discardRuntimeCodexProxy, ...storedParsed } = parsed;
     const { runtimeCodexBaseUrl: _discardRuntimeCodexBaseUrl, ...storedSciforge } = sciforge;
+    void _discardCodexProxy;
+    void _discardRuntimeCodexProxy;
     void _discardRuntimeCodexBaseUrl;
     const next = {
-      ...parsed,
+      ...storedParsed,
       llm: {
         ...llm,
         provider: typeof config.modelProvider === 'string' ? config.modelProvider : llm.provider,
         baseUrl: configuredString(config.modelBaseUrl, llm.baseUrl).replace(/\/+$/, ''),
         apiKey: preserveConfiguredSecretString(config.apiKey, llm.apiKey),
         model: preserveConfiguredSecretString(config.modelName, llm.model),
-      },
-      codexProxy: {
-        ...codexProxy,
-        upstreamBaseUrl: configuredString(config.modelBaseUrl, codexProxy.upstreamBaseUrl ?? llm.baseUrl).replace(/\/+$/, ''),
-        apiKey: preserveConfiguredSecretString(config.apiKey, codexProxy.apiKey ?? llm.apiKey),
-        defaultModel: preserveConfiguredSecretString(config.modelName, codexProxy.defaultModel ?? llm.model),
       },
       sciforge: {
         ...storedSciforge,
@@ -278,12 +276,12 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
 
   async function prepareRuntimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
     const runtimeEnv = await runtimeCodexEnvFromLocalConfig(configuredLocalConfig);
-    const proxyBaseUrl = await ensureRuntimeProviderProxy(runtimeEnv);
-    await syncRuntimeCodexHomeFromLocalConfig(runtimeEnv, proxyBaseUrl);
+    const modelRouterOpenAiBaseUrl = await ensureRuntimeModelRouter(runtimeEnv);
+    await syncRuntimeCodexHomeFromLocalConfig(runtimeEnv, modelRouterOpenAiBaseUrl);
     return runtimeEnv;
   }
 
-  async function syncRuntimeCodexHomeFromLocalConfig(runtimeEnv: NodeJS.ProcessEnv = env, proxyBaseUrl = runtimeCodexProxyBaseUrl(runtimeEnv)) {
+  async function syncRuntimeCodexHomeFromLocalConfig(runtimeEnv: NodeJS.ProcessEnv = env, proxyBaseUrl = runtimeCodexModelRouterBaseUrl(runtimeEnv)) {
     await ensureRuntimeHome({
       proxyBaseUrl,
       provider: RUNTIME_PROVIDER,
@@ -300,6 +298,10 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
         ? readLocalProviderSettings(runtimeLlmConfigLocalPath())
       : readRequiredLocalProviderSettings(runtimeLlmConfigLocalPath());
     const settings = completeDesktopSidecarLocalProviderSettings(loadedSettings, env);
+    if (!isCompleteLocalProviderSettings(settings)) {
+      const routerOnlyEnv = desktopSidecarRouterOnlyRuntimeEnv(settings);
+      if (routerOnlyEnv) return routerOnlyEnv;
+    }
     assertCompleteLocalProviderSettings(settings, runtimeLlmConfigLocalPath());
     const localEnv = workspaceComputerUseEnv(settings, env);
     const upstreamBaseUrl = settings.baseUrl!;
@@ -309,7 +311,10 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     const visionBaseUrl = visionModel ? settings.visionBaseUrl ?? upstreamBaseUrl : undefined;
     const visionApiKey = visionModel ? settings.visionApiKey ?? upstreamApiKey : undefined;
     const visionProvider = visionModel ? settings.visionProvider ?? settings.provider : undefined;
-    return {
+    const modelRouterBaseUrl = modelRouterBaseUrlFromEnv(env);
+    const modelRouterOpenAiBaseUrl = `${modelRouterBaseUrl.replace(/\/+$/, '')}/v1`;
+    const runtimeApiKey = runtimeCodexRouterApiKey(env);
+    return stripLegacyRuntimeDirectEnv({
       ...env,
       SCIFORGE_CONFIG_PATH: runtimeLlmConfigLocalPath(),
       ...localEnv,
@@ -317,8 +322,14 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
         SCIFORGE_TEXT_PROVIDER: settings.provider,
       } : {}),
       ...(visionProvider ? { SCIFORGE_VISION_PROVIDER: visionProvider } : {}),
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: upstreamBaseUrl,
-      SCIFORGE_PROXY_DEFAULT_MODEL: upstreamModel,
+      SCIFORGE_RUNTIME_API_KEY: runtimeApiKey,
+      SCIFORGE_RUNTIME_BASE_URL: undefined,
+      SCIFORGE_PROXY_BASE_URL: undefined,
+      SCIFORGE_PROXY_PORT: undefined,
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: undefined,
+      SCIFORGE_PROXY_DEFAULT_MODEL: undefined,
+      SCIFORGE_MODEL_ROUTER_API_KEY: runtimeApiKey,
+      SCIFORGE_MODEL_ROUTER_BASE_URL: modelRouterOpenAiBaseUrl,
       SCIFORGE_TEXT_BASE_URL: upstreamBaseUrl,
       SCIFORGE_TEXT_MODEL: upstreamModel,
       SCIFORGE_TEXT_API_KEY: upstreamApiKey,
@@ -328,79 +339,126 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
       SCIFORGE_RUNTIME_PROVIDER: RUNTIME_PROVIDER,
       SCIFORGE_RUNTIME_MODEL: RUNTIME_MODEL,
       SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: RUNTIME_MODEL,
-    };
+    });
   }
 
-  async function ensureRuntimeProviderProxy(runtimeEnv: NodeJS.ProcessEnv): Promise<string> {
-    const configuredProxyBaseUrl = runtimeProviderProxyBaseUrl(runtimeEnv);
-    if (await runtimeProviderProxyLocalReady(configuredProxyBaseUrl)) return runtimeCodexProxyBaseUrl(runtimeEnv);
+  function desktopSidecarRouterOnlyRuntimeEnv(settings: LocalProviderSettings): NodeJS.ProcessEnv | undefined {
+    if (!isDesktopSidecarEnv(env)) return undefined;
+    if (!hasExplicitModelRouterEndpoint(env) || !hasExplicitModelRouterApiKey(env)) return undefined;
+    const localEnv = workspaceComputerUseEnv(settings, env);
+    const modelRouterBaseUrl = modelRouterBaseUrlFromEnv(env);
+    const modelRouterOpenAiBaseUrl = `${modelRouterBaseUrl.replace(/\/+$/, '')}/v1`;
+    const runtimeApiKey = runtimeCodexRouterApiKey(env);
+    return stripLegacyRuntimeDirectEnv({
+      ...env,
+      SCIFORGE_CONFIG_PATH: runtimeLlmConfigLocalPath(),
+      ...localEnv,
+      SCIFORGE_RUNTIME_API_KEY: runtimeApiKey,
+      SCIFORGE_RUNTIME_BASE_URL: undefined,
+      SCIFORGE_PROXY_BASE_URL: undefined,
+      SCIFORGE_PROXY_PORT: undefined,
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: undefined,
+      SCIFORGE_PROXY_DEFAULT_MODEL: undefined,
+      SCIFORGE_MODEL_ROUTER_API_KEY: runtimeApiKey,
+      SCIFORGE_MODEL_ROUTER_BASE_URL: modelRouterOpenAiBaseUrl,
+      SCIFORGE_TEXT_PROVIDER: undefined,
+      SCIFORGE_TEXT_BASE_URL: undefined,
+      SCIFORGE_TEXT_MODEL: undefined,
+      SCIFORGE_TEXT_API_KEY: undefined,
+      SCIFORGE_TEXT_API_KEY_ENV: undefined,
+      SCIFORGE_VISION_PROVIDER: undefined,
+      SCIFORGE_VISION_BASE_URL: undefined,
+      SCIFORGE_VISION_MODEL: undefined,
+      SCIFORGE_VISION_API_KEY: undefined,
+      SCIFORGE_VISION_API_KEY_ENV: undefined,
+      SCIFORGE_RUNTIME_PROVIDER: RUNTIME_PROVIDER,
+      SCIFORGE_RUNTIME_MODEL: RUNTIME_MODEL,
+      SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: RUNTIME_MODEL,
+    });
+  }
 
-    if (!managedRuntimeProviderProxy) {
-      managedRuntimeProviderProxy = startManagedRuntimeProviderProxy(runtimeEnv).catch((error) => {
-        managedRuntimeProviderProxy = undefined;
+  async function ensureRuntimeModelRouter(runtimeEnv: NodeJS.ProcessEnv): Promise<string> {
+    const configuredModelRouterBaseUrl = modelRouterBaseUrlFromEnv(runtimeEnv);
+    if (await modelRouterLocalReady(configuredModelRouterBaseUrl)) return runtimeCodexModelRouterBaseUrl(runtimeEnv);
+    if (isDesktopSidecarEnv(runtimeEnv) && hasExplicitModelRouterEndpoint(runtimeEnv)) {
+      return runtimeCodexModelRouterBaseUrl(runtimeEnv);
+    }
+
+    if (!managedModelRouter) {
+      managedModelRouter = startManagedModelRouter(runtimeEnv).catch((error) => {
+        managedModelRouter = undefined;
         throw error;
       });
     }
-    const proxy = await managedRuntimeProviderProxy;
-    if (!proxy) return runtimeCodexProxyBaseUrl(runtimeEnv);
-    runtimeEnv.SCIFORGE_PROXY_BASE_URL = proxy.url;
-    runtimeEnv.SCIFORGE_PROXY_PORT = String(proxy.port);
-    return `${proxy.url.replace(/\/+$/, '')}/v1`;
+    const proxy = await managedModelRouter;
+    if (!proxy) return runtimeCodexModelRouterBaseUrl(runtimeEnv);
+    const routerBaseUrl = publicModelRouterBaseUrl(proxy, runtimeEnv);
+    runtimeEnv.SCIFORGE_MODEL_ROUTER_BASE_URL = `${routerBaseUrl.replace(/\/+$/, '')}/v1`;
+    runtimeEnv.SCIFORGE_MODEL_ROUTER_PORT = String(proxy.port);
+    return runtimeEnv.SCIFORGE_MODEL_ROUTER_BASE_URL;
   }
 
-  async function startManagedRuntimeProviderProxy(runtimeEnv: NodeJS.ProcessEnv): Promise<StartedCodexResponsesProxy | undefined> {
-    const options = resolveProxyCliOptions([], runtimeEnv);
+  async function startManagedModelRouter(runtimeEnv: NodeJS.ProcessEnv): Promise<StartedModelRouterServer | undefined> {
+    const listen = modelRouterListenOptions(runtimeEnv, modelRouterBaseUrlFromEnv(runtimeEnv));
     try {
-      const proxy = await startCodexResponsesProxyServer({
-        host: options.host,
-        port: options.port,
-        upstreamBaseUrl: options.upstreamBaseUrl,
-        upstreamApiKey: options.upstreamApiKey,
-        defaultModel: options.defaultModel,
-        forceNonStreamingUpstream: options.forceNonStreamingUpstream,
-        resolveDynamicOptions: async () => {
-          const latest = resolveProxyCliOptions([], await runtimeCodexEnvFromLocalConfig());
-          return {
-            upstreamBaseUrl: latest.upstreamBaseUrl,
-            upstreamApiKey: latest.upstreamApiKey,
-            defaultModel: latest.defaultModel,
-            forceNonStreamingUpstream: latest.forceNonStreamingUpstream,
-          };
-        },
-        log: (message) => console.error(`[sciforge-managed-codex-proxy] ${message}`),
+      const proxy = await startModelRouterServer({
+        host: listen.host,
+        port: listen.port,
+        config: modelRouterConfigFromRuntimeEnv(runtimeEnv),
+        env: runtimeEnv,
+        workspaceRoot: normalizeWorkspaceRootPath(resolve(options.defaultWorkspacePath)),
+        log: (message) => console.error(`[sciforge-managed-model-router] ${message}`),
       });
-      console.log(`SciForge managed Codex Responses proxy: ${proxy.url}/v1`);
+      console.log(`SciForge managed Model Router: ${publicModelRouterBaseUrl(proxy, runtimeEnv)}/v1`);
       return proxy;
     } catch (error) {
-      if (isAddrInUse(error) && await runtimeProviderProxyLocalReady(runtimeProviderProxyBaseUrl(runtimeEnv))) return undefined;
+      if (isAddrInUse(error) && await modelRouterLocalReady(modelRouterBaseUrlFromEnv(runtimeEnv))) return undefined;
       throw error;
     }
   }
 
-  async function runtimeProviderProxyLocalReady(baseUrl: string): Promise<boolean> {
+  async function closeManagedModelRouter() {
+    const proxy = await managedModelRouter;
+    managedModelRouter = undefined;
+    await proxy?.close();
+  }
+
+  async function modelRouterLocalReady(baseUrl: string): Promise<boolean> {
     try {
       const legacy = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(900) });
       const parsed = await legacy.json().catch(() => ({}));
-      if (legacy.ok && isSciForgeRuntimeProviderProxyHealth(parsed)) return true;
+      if (legacy.ok && isSciForgeModelRouterHealth(parsed)) return true;
     } catch {
       // Try the Model Router health endpoint below.
     }
     try {
       const router = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(900) });
       const parsed = await router.json().catch(() => ({}));
-      return router.ok && isSciForgeRuntimeProviderProxyHealth(parsed);
+      return router.ok && isSciForgeModelRouterHealth(parsed);
     } catch {
       return false;
     }
   }
 
-  function runtimeCodexProxyBaseUrl(runtimeEnv: NodeJS.ProcessEnv): string {
-    const proxyBase = runtimeProviderProxyBaseUrl(runtimeEnv);
+  function runtimeCodexModelRouterBaseUrl(runtimeEnv: NodeJS.ProcessEnv): string {
+    const proxyBase = modelRouterBaseUrlFromEnv(runtimeEnv);
     return proxyBase.endsWith('/v1') ? proxyBase : `${proxyBase}/v1`;
   }
 
-  function runtimeProviderProxyBaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
-    return normalizeRuntimeProviderProxyBaseUrl(runtimeEnv, defaultProxyBaseUrl);
+  function modelRouterBaseUrlFromEnv(runtimeEnv: NodeJS.ProcessEnv) {
+    const modelRouterBaseUrl = stringValue(runtimeEnv.SCIFORGE_MODEL_ROUTER_BASE_URL)
+      || stringValue(runtimeEnv.SCIFORGE_MODEL_ROUTER_URL);
+    if (modelRouterBaseUrl) {
+      return normalizeModelRouterBaseUrl({ SCIFORGE_MODEL_ROUTER_BASE_URL: modelRouterBaseUrl }, defaultProxyBaseUrl);
+    }
+    const modelRouterPort = stringValue(runtimeEnv.SCIFORGE_MODEL_ROUTER_PORT);
+    if (modelRouterPort) {
+      return normalizeModelRouterBaseUrl({
+        SCIFORGE_MODEL_ROUTER_HOST: runtimeEnv.SCIFORGE_MODEL_ROUTER_HOST,
+        SCIFORGE_MODEL_ROUTER_PORT: modelRouterPort,
+      }, defaultProxyBaseUrl);
+    }
+    return normalizeModelRouterBaseUrl({}, defaultProxyBaseUrl);
   }
 
   async function readConfigLocalJson(): Promise<Record<string, unknown>> {
@@ -426,7 +484,8 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     prepareRuntimeCodexEnvFromLocalConfig,
     runtimeCodexEnvFromLocalConfig,
     syncRuntimeCodexHomeFromLocalConfig,
-    runtimeProviderProxyBaseUrl,
+    closeManagedModelRouter,
+    modelRouterBaseUrlFromEnv,
     configLocalPath,
   };
 }
@@ -435,15 +494,116 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+const LOCAL_MEMBER_MODEL_RUNTIME_ALIAS_ENV_KEYS = new Set([
+  'SCIFORGE_RUNTIME_API_KEY',
+  'SCIFORGE_RUNTIME_BASE_URL',
+  'SCIFORGE_RUNTIME_MODEL',
+  'SCIFORGE_RUNTIME_PROVIDER',
+]);
+
+function stripLegacyRuntimeDirectEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  for (const key of Object.keys(env)) {
+    if (key === 'SCIFORGE_RUNTIME_BASE_URL' || key.startsWith('SCIFORGE_PROXY_')) delete env[key];
+  }
+  return env;
+}
+
+function runtimeCodexRouterApiKey(env: NodeJS.ProcessEnv) {
+  return stringValue(env.SCIFORGE_MODEL_ROUTER_API_KEY)
+    || stringValue(env.SCIFORGE_RUNTIME_API_KEY)
+    || 'sciforge-local-model-router';
+}
+
+function modelRouterConfigFromRuntimeEnv(env: NodeJS.ProcessEnv): ModelRouterConfig {
+  const defaultProfile = stringValue(env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE) || 'sciforge-runtime-default';
+  const visionBaseUrl = stringValue(env.SCIFORGE_VISION_BASE_URL);
+  const visionModel = stringValue(env.SCIFORGE_VISION_MODEL);
+  return {
+    defaultProfile,
+    publicModelAlias: stringValue(env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS) || RUNTIME_MODEL,
+    profiles: {
+      [defaultProfile]: {
+        traceRoot: stringValue(env.SCIFORGE_MODEL_ROUTER_TRACE_ROOT) || '.sciforge/model-router-traces',
+        textReasoner: {
+          provider: stringValue(env.SCIFORGE_TEXT_PROVIDER) || 'text-reasoner',
+          baseUrl: requiredRuntimeEnvString(env, 'SCIFORGE_TEXT_BASE_URL'),
+          apiKeyEnv: stringValue(env.SCIFORGE_TEXT_API_KEY_ENV) || 'SCIFORGE_TEXT_API_KEY',
+          model: requiredRuntimeEnvString(env, 'SCIFORGE_TEXT_MODEL'),
+        },
+        translators: visionBaseUrl && visionModel
+          ? {
+              vision: {
+                provider: stringValue(env.SCIFORGE_VISION_PROVIDER) || 'vision-translator',
+                baseUrl: visionBaseUrl,
+                apiKeyEnv: stringValue(env.SCIFORGE_VISION_API_KEY_ENV) || 'SCIFORGE_VISION_API_KEY',
+                model: visionModel,
+                ...(numberStringValue(env.SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS) ? {
+                  maxSupplementRounds: numberStringValue(env.SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS),
+                } : {}),
+              },
+            }
+          : {},
+      },
+    },
+  };
+}
+
+function requiredRuntimeEnvString(env: NodeJS.ProcessEnv, key: string): string {
+  const value = stringValue(env[key]);
+  if (!value) throw new Error(`Missing required Model Router runtime env ${key}.`);
+  return value;
+}
+
+function modelRouterListenOptions(env: NodeJS.ProcessEnv, baseUrl = '') {
+  const parsed = parseUrl(baseUrl);
+  return {
+    host: modelRouterListenHostFromEnv(env),
+    port: numberStringValue(env.SCIFORGE_MODEL_ROUTER_PORT)
+      ?? numberStringValue(parsed?.port)
+      ?? 3892,
+  };
+}
+
+function modelRouterListenHostFromEnv(env: NodeJS.ProcessEnv): string {
+  const host = stringValue(env.SCIFORGE_MODEL_ROUTER_HOST);
+  if (!host || host === '0.0.0.0' || host === '::') return '127.0.0.1';
+  return host;
+}
+
+function publicModelRouterBaseUrl(proxy: StartedModelRouterServer, env: NodeJS.ProcessEnv) {
+  const listenHost = stringValue(env.SCIFORGE_MODEL_ROUTER_HOST)
+    || parseUrl(proxy.url)?.hostname;
+  const host = !listenHost || listenHost === '0.0.0.0' || listenHost === '::'
+    ? '127.0.0.1'
+    : listenHost;
+  const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `http://${urlHost}:${proxy.port}`;
+}
+
+function parseUrl(value: string) {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function numberStringValue(value: unknown): number | undefined {
+  const raw = typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  if (!raw || !/^\d+$/.test(raw)) return undefined;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 65_535 ? parsed : undefined;
+}
+
 function assertCompleteLocalProviderSettings(settings: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
 }, configPath: string): void {
   const missing: string[] = [];
-  if (!settings.apiKey) missing.push('apiKey/llm.apiKey/codexProxy.apiKey');
-  if (!settings.baseUrl) missing.push('baseUrl/llm.baseUrl/codexProxy.upstreamBaseUrl');
-  if (!settings.model) missing.push('model/llm.model/codexProxy.defaultModel');
+  if (!settings.apiKey) missing.push('apiKey/llm.apiKey/textLLM.apiKey');
+  if (!settings.baseUrl) missing.push('baseUrl/llm.baseUrl/textLLM.baseUrl');
+  if (!settings.model) missing.push('model/llm.model/textLLM.model');
   if (!missing.length) return;
   throw new Error(`Incomplete config.local.json at ${configPath}; missing ${missing.join(', ')}.`);
 }
@@ -473,7 +633,10 @@ function completeDesktopSidecarLocalProviderSettings(
 function workspaceComputerUseEnv(settings: LocalProviderSettings, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const localEnv = computerUseWorkspaceEnvFromLocalSettings(settings);
   return Object.fromEntries(
-    Object.entries(localEnv).filter(([key]) => !key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_')),
+    Object.entries(localEnv).filter(([key]) => {
+      if (key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_')) return false;
+      return !LOCAL_MEMBER_MODEL_RUNTIME_ALIAS_ENV_KEYS.has(key);
+    }),
   );
 }
 
@@ -494,24 +657,32 @@ function isDesktopSidecarEnv(env: NodeJS.ProcessEnv): boolean {
   );
 }
 
+function hasExplicitModelRouterEndpoint(env: NodeJS.ProcessEnv): boolean {
+  return !!(
+    stringValue(env.SCIFORGE_MODEL_ROUTER_BASE_URL)
+    || stringValue(env.SCIFORGE_MODEL_ROUTER_URL)
+    || stringValue(env.SCIFORGE_MODEL_ROUTER_PORT)
+  );
+}
+
+function hasExplicitModelRouterApiKey(env: NodeJS.ProcessEnv): boolean {
+  return !!(
+    stringValue(env.SCIFORGE_MODEL_ROUTER_API_KEY)
+    || stringValue(env.SCIFORGE_RUNTIME_API_KEY)
+  );
+}
+
 function localProviderSettingsFromDesktopSidecarEnv(env: NodeJS.ProcessEnv): LocalProviderSettings | undefined {
-  const apiKeyEnvName = stringValue(env.SCIFORGE_PROXY_API_KEY_ENV);
   const apiKey = firstEnvString(env, [
-    ...(apiKeyEnvName ? [apiKeyEnvName] : []),
-    'SCIFORGE_RUNTIME_API_KEY',
     'SCIFORGE_TEXT_API_KEY',
     'SCIFORGE_VISION_API_KEY',
   ]);
   const baseUrl = firstEnvString(env, [
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
     'SCIFORGE_TEXT_BASE_URL',
-    'SCIFORGE_RUNTIME_BASE_URL',
   ], (value) => value.replace(/\/+$/, ''));
   const model = firstEnvString(env, [
-    'SCIFORGE_PROXY_DEFAULT_MODEL',
     'SCIFORGE_TEXT_MODEL',
-    'SCIFORGE_RUNTIME_MODEL',
-  ], (value, key) => key === 'SCIFORGE_RUNTIME_MODEL' && value === RUNTIME_MODEL ? '' : value);
+  ]);
   const visionApiKey = firstEnvString(env, ['SCIFORGE_VISION_API_KEY']);
   const visionBaseUrl = firstEnvString(env, ['SCIFORGE_VISION_BASE_URL'], (value) => value.replace(/\/+$/, ''));
   const visionModel = firstEnvString(env, ['SCIFORGE_VISION_MODEL']);
@@ -520,9 +691,8 @@ function localProviderSettingsFromDesktopSidecarEnv(env: NodeJS.ProcessEnv): Loc
     'SCIFORGE_VISION_PROVIDER',
     'SCIFORGE_RUNTIME_PROVIDER',
   ], (value, key) => key === 'SCIFORGE_RUNTIME_PROVIDER' && value === RUNTIME_PROVIDER ? '' : value);
-  const forceNonStreamingUpstream = env.SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM === '1';
 
-  if (!apiKey && !baseUrl && !model && !provider && !forceNonStreamingUpstream) return undefined;
+  if (!apiKey && !baseUrl && !model && !provider) return undefined;
   return {
     ...(apiKey ? { apiKey: apiKey.value, apiKeySource: apiKey.source } : {}),
     ...(baseUrl ? { baseUrl: baseUrl.value, baseUrlSource: baseUrl.source } : {}),
@@ -531,10 +701,6 @@ function localProviderSettingsFromDesktopSidecarEnv(env: NodeJS.ProcessEnv): Loc
     ...(visionApiKey ? { visionApiKey: visionApiKey.value, visionApiKeySource: visionApiKey.source } : {}),
     ...(visionBaseUrl ? { visionBaseUrl: visionBaseUrl.value, visionBaseUrlSource: visionBaseUrl.source } : {}),
     ...(visionModel ? { visionModel: visionModel.value, visionModelSource: visionModel.source } : {}),
-    ...(forceNonStreamingUpstream ? {
-      forceNonStreamingUpstream: true,
-      forceNonStreamingUpstreamSource: 'env:SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM',
-    } : {}),
   };
 }
 

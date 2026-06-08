@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { RUNTIME_MODEL, RUNTIME_PROFILE, RUNTIME_PROVIDER } from './runtime-home';
 
 export type LocalProviderSettings = {
   apiKey?: string;
@@ -31,11 +32,9 @@ export const LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS = [
   ['apiKey'],
   ['llm', 'apiKey'],
   ['llm', 'upstreamApiKey'],
+  ['llm', 'env', 'SCIFORGE_TEXT_API_KEY'],
   ['textLLM', 'apiKey'],
-  ['textLLM', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
-  ['codexProxy', 'apiKey'],
-  ['runtimeCodexProxy', 'apiKey'],
-  ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
+  ['textLLM', 'env', 'SCIFORGE_TEXT_API_KEY'],
 ] as const;
 
 export function defaultLocalProviderConfigPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -72,19 +71,29 @@ export function readRequiredLocalProviderSettings(path = defaultLocalProviderCon
 
 export function providerEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
   return {
-    ...(settings.apiKey ? { SCIFORGE_RUNTIME_API_KEY: settings.apiKey } : {}),
-    ...(settings.provider ? { SCIFORGE_RUNTIME_PROVIDER: settings.provider } : {}),
-    ...(settings.baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: settings.baseUrl, SCIFORGE_PROXY_UPSTREAM_BASE_URL: settings.baseUrl } : {}),
-    ...(settings.model ? { SCIFORGE_RUNTIME_MODEL: settings.model, SCIFORGE_PROXY_DEFAULT_MODEL: settings.model } : {}),
+    ...(settings.apiKey ? { SCIFORGE_TEXT_API_KEY: settings.apiKey } : {}),
+    ...(settings.provider ? { SCIFORGE_TEXT_PROVIDER: settings.provider } : {}),
+    ...(settings.baseUrl ? { SCIFORGE_TEXT_BASE_URL: settings.baseUrl } : {}),
+    ...(settings.model ? { SCIFORGE_TEXT_MODEL: settings.model } : {}),
+    ...(settings.visionApiKey ? { SCIFORGE_VISION_API_KEY: settings.visionApiKey } : {}),
+    ...(settings.visionProvider ? { SCIFORGE_VISION_PROVIDER: settings.visionProvider } : {}),
+    ...(settings.visionBaseUrl ? { SCIFORGE_VISION_BASE_URL: settings.visionBaseUrl } : {}),
+    ...(settings.visionModel ? { SCIFORGE_VISION_MODEL: settings.visionModel } : {}),
   };
 }
 
 export function runtimeCodexEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
-  return providerEnvFromLocalSettings(settings);
+  return {
+    SCIFORGE_RUNTIME_API_KEY: 'sciforge-local-model-router',
+    SCIFORGE_RUNTIME_PROVIDER: RUNTIME_PROVIDER,
+    SCIFORGE_RUNTIME_MODEL: RUNTIME_MODEL,
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: RUNTIME_MODEL,
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: RUNTIME_PROFILE,
+  };
 }
 
 export function computerUseWorkspaceEnvFromLocalSettings(settings: LocalProviderSettings): Record<string, string> {
-  return providerEnvFromLocalSettings(settings);
+  return runtimeCodexEnvFromLocalSettings(settings);
 }
 
 export function localProviderSettings(
@@ -102,11 +111,9 @@ export function localProviderSettings(
     candidate(root, ['runtimeProvider'], prefix),
     candidate(root, ['provider'], prefix),
     candidate(root, ['llm', 'provider'], prefix),
+    candidate(root, ['llm', 'env', 'SCIFORGE_TEXT_PROVIDER'], prefix),
     candidate(root, ['textLLM', 'provider'], prefix),
-    candidate(root, ['codexProxy', 'runtimeProvider'], prefix),
-    candidate(root, ['codexProxy', 'provider'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'runtimeProvider'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'provider'], prefix),
+    candidate(root, ['textLLM', 'env', 'SCIFORGE_TEXT_PROVIDER'], prefix),
   ]);
   const baseUrl = firstString([
     candidate(root, ['modelBaseUrl'], prefix),
@@ -114,16 +121,10 @@ export function localProviderSettings(
     candidate(root, ['upstreamBaseUrl'], prefix),
     candidate(root, ['llm', 'baseUrl'], prefix),
     candidate(root, ['llm', 'upstreamBaseUrl'], prefix),
+    candidate(root, ['llm', 'env', 'SCIFORGE_TEXT_BASE_URL'], prefix),
     candidate(root, ['textLLM', 'baseUrl'], prefix),
     candidate(root, ['textLLM', 'upstreamBaseUrl'], prefix),
-    candidate(root, ['textLLM', 'env', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'], prefix),
-    candidate(root, ['textLLM', 'env', 'SCIFORGE_RUNTIME_BASE_URL'], prefix),
-    candidate(root, ['codexProxy', 'upstreamBaseUrl'], prefix),
-    candidate(root, ['codexProxy', 'baseUrl'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'upstreamBaseUrl'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'baseUrl'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_BASE_URL'], prefix),
+    candidate(root, ['textLLM', 'env', 'SCIFORGE_TEXT_BASE_URL'], prefix),
   ], normalizeOpenAiCompatibleBaseUrl);
   const model = firstString([
     candidate(root, ['modelName'], prefix),
@@ -132,21 +133,11 @@ export function localProviderSettings(
     candidate(root, ['llm', 'model'], prefix),
     candidate(root, ['llm', 'modelName'], prefix),
     candidate(root, ['llm', 'defaultModel'], prefix),
+    candidate(root, ['llm', 'env', 'SCIFORGE_TEXT_MODEL'], prefix),
     candidate(root, ['textLLM', 'model'], prefix),
     candidate(root, ['textLLM', 'modelName'], prefix),
-    candidate(root, ['textLLM', 'env', 'SCIFORGE_PROXY_DEFAULT_MODEL'], prefix),
-    candidate(root, ['textLLM', 'env', 'SCIFORGE_RUNTIME_MODEL'], prefix),
-    candidate(root, ['codexProxy', 'defaultModel'], prefix),
-    candidate(root, ['codexProxy', 'model'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'defaultModel'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'model'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_PROXY_DEFAULT_MODEL'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_MODEL'], prefix),
+    candidate(root, ['textLLM', 'env', 'SCIFORGE_TEXT_MODEL'], prefix),
   ]);
-  const forceNonStreamingUpstream = [
-    candidate(root, ['codexProxy', 'forceNonStreamingUpstream'], prefix),
-    candidate(root, ['runtimeCodexProxy', 'forceNonStreamingUpstream'], prefix),
-  ].find((item) => item.value === true);
   const visionProvider = firstString([
     candidate(root, ['visionLLM', 'provider'], prefix),
     candidate(root, ['visionLLM', 'runtimeProvider'], prefix),
@@ -194,10 +185,6 @@ export function localProviderSettings(
     ...(visionProvider ? { visionProvider: visionProvider.value, visionProviderSource: visionProvider.source } : {}),
     ...(visionBaseUrl ? { visionBaseUrl: visionBaseUrl.value, visionBaseUrlSource: visionBaseUrl.source } : {}),
     ...(visionModel ? { visionModel: visionModel.value, visionModelSource: visionModel.source } : {}),
-    ...(forceNonStreamingUpstream ? {
-      forceNonStreamingUpstream: true,
-      forceNonStreamingUpstreamSource: forceNonStreamingUpstream.source,
-    } : {}),
   };
 }
 

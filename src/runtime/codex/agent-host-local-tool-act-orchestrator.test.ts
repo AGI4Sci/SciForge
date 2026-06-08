@@ -109,6 +109,35 @@ test('Agent Host local tool Act policy auto-allows Browser primitive module inte
   assert.match(decision.reason, /Browser primitive/i);
 });
 
+test('Agent Host local tool Act policy blocks Browser primitives for local-only user requests', () => {
+  const decision = evaluateAgentHostLocalToolAct({
+    toolName: 'module.invoke',
+    args: {
+      moduleId: 'browser',
+      intent: 'browser.search',
+      input: { query: '伊朗局势' },
+    },
+    moduleDescription: createModuleDescription({
+      moduleId: 'browser',
+      title: 'Browser Runtime',
+      summary: 'Browser primitive module.',
+      intents: [
+        { name: 'browser.search', sideEffect: 'external' },
+        { name: 'browser.read', sideEffect: 'external' },
+      ],
+      facets: { refs: true },
+    }),
+    userInstruction: '只用本地上下文回答，不要联网或调用浏览器。',
+    commandId: 'codex-command-browser-local-only',
+    attemptId: 'attempt-1',
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.moduleId, 'browser');
+  assert.equal(decision.intent, 'browser.search');
+  assert.match(decision.reason, /local-only|no-network|Browser primitive/i);
+});
+
 test('Agent Host local tool Act policy allows approved workspace mutations only with runtime control path', () => {
   const decision = evaluateAgentHostLocalToolAct({
     toolName: 'module.invoke',

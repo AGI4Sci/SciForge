@@ -255,7 +255,7 @@ export function writeRuntimeCodexBrowserAcceptanceFixtures(
   writeJsonFixture(
     fixtureDir,
     nativeDefaultChatPositiveFixture,
-    passedFixtureManifest(context, nativeDefaultChatDom, notes, screenshot, 'native-default-chat', true),
+    passedFixtureManifest(context, nativeDefaultChatDom, notes, screenshot, 'native-default-chat', writeBrowserSourceEvidenceFixtures(context)),
   );
   writeJsonFixture(
     fixtureDir,
@@ -397,13 +397,36 @@ function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode 
 
 function browserSourceEvidenceRefs(): string[] {
   return [
-    'action-ledger:browser.executeBoundedOperation/codex-command-negative-001/module.invoke',
-    'runtime-truth:module.invoke/browser.search_read/codex-command-negative-001',
-    'browser-host-session:fixture-session',
-    'browser-host-session:fixture-session/source-pages/source-1-fixture.source.json',
-    'browser-host-session:fixture-session/source-pages/source-1-fixture.txt',
-    'artifact:runtime-codex-browser-acceptance/final-answer.md',
+    'runtime-tool:browser_search/codex-command-negative-001',
+    'runtime-tool:browser_read/codex-command-negative-001',
+    'browser-host-session:validator-current',
+    'browser-host-session:validator-current/source-pages/source-1-current.source.json',
+    'browser-host-session:validator-current/source-pages/source-1-current.txt',
+    'gui.present:final-answer/codex-command-negative-001',
   ];
+}
+
+function writeBrowserSourceEvidenceFixtures(context: RuntimeCodexBrowserAcceptanceFixtureContext): true {
+  const sourceDir = join(context.workspacePath, '.sciforge', 'browser-host', 'sessions', 'validator-current', 'source-pages');
+  const text = [
+    'Runtime Codex answer rendered in the default chat.',
+    'Direct Browser source evidence was captured through browser_search and browser_read.',
+    `Profile: ${context.runtimeCodexIdentity.profile ?? 'unknown'}`,
+    `Provider: ${context.runtimeCodexIdentity.provider ?? 'unknown'}`,
+    `Model: ${context.runtimeCodexIdentity.model ?? 'unknown'}`,
+    '',
+  ].join('\n');
+  mkdirSync(sourceDir, { recursive: true });
+  writeFileSync(join(sourceDir, 'source-1-current.txt'), text, 'utf8');
+  writeFileSync(join(sourceDir, 'source-1-current.source.json'), JSON.stringify({
+    schemaVersion: 'sciforge.browser-host-session.source-page.v1',
+    status: 'read',
+    openedAt: new Date().toISOString(),
+    finalUrl: 'https://example.invalid/runtime-codex-browser-source',
+    textRef: 'browser-host-session:validator-current/source-pages/source-1-current.txt',
+    textSha1: createHash('sha1').update(text).digest('hex'),
+  }, null, 2), 'utf8');
+  return true;
 }
 
 function writeFixture(fixtureDir: string, file: string, content: string): void {

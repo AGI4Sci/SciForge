@@ -502,6 +502,123 @@ test('input_object refs are detected and translated inside the Model Router', as
   }
 });
 
+test('input_object vision observations are cached across repeated Model Router requests for the same object', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-input-object-cache-'));
+  const imageBytes = Buffer.from('repeated-input-object-pixels');
+  await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-test'), { recursive: true });
+  await writeFile(join(workspaceRoot, '.sciforge', 'uploads', 'session-test', 'desktop.png'), imageBytes);
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the screenshot shows a browser window and map UI.'),
+      chatCompletion('text-final-first', JSON.stringify({ type: 'final_answer', content: 'It shows a browser window and map UI.' })),
+      chatCompletion('text-final-second', JSON.stringify({ type: 'final_answer', content: 'The cached observation says it shows a browser window and map UI.' })),
+    ]),
+  });
+
+  const requestBody = {
+    model: 'sciforge-router',
+    input: [{
+      role: 'user',
+      content: [
+        { type: 'input_text', text: '介绍这张截图' },
+        {
+          type: 'input_object',
+          ref: '.sciforge/uploads/session-test/desktop.png',
+          mimeType: 'image/png',
+          title: 'desktop.png',
+        },
+      ],
+    }],
+  };
+
+  try {
+    const first = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    const second = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/chat/completions').length, 1);
+    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/chat/completions').length, 2);
+    const secondTextReasonerBody = JSON.stringify(calls[2]?.body);
+    assert.match(secondTextReasonerBody, /cached/i);
+    assert.match(secondTextReasonerBody, /browser window and map UI/);
+
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"cacheStatus":\s*"hit"/);
+    assert.match(traceText, /"cacheStatus":\s*"stored"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('inline image vision observations are cached across repeated Model Router requests for the same image sha', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-inline-image-cache-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the hotel voucher total is 421.15 yuan.'),
+      chatCompletion('text-final-first', JSON.stringify({ type: 'final_answer', content: 'It is a hotel voucher.' })),
+      chatCompletion('text-final-second', JSON.stringify({ type: 'final_answer', content: 'The cached observation says the total is 421.15 yuan.' })),
+    ]),
+  });
+
+  const requestBody = {
+    model: 'sciforge-router',
+    input: [{
+      role: 'user',
+      content: [
+        { type: 'input_text', text: '介绍图中内容' },
+        { type: 'input_image', image_url: pngDataUrl, mime_type: 'image/png' },
+      ],
+    }],
+  };
+
+  try {
+    const first = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    const second = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/chat/completions').length, 1);
+    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/chat/completions').length, 2);
+    const secondTextReasonerBody = JSON.stringify(calls[2]?.body);
+    assert.match(secondTextReasonerBody, /cache_status=hit/);
+    assert.match(secondTextReasonerBody, /421\.15 yuan/);
+
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"cacheStatus":\s*"hit"/);
+    assert.match(traceText, /"cacheStatus":\s*"stored"/);
+    assert.doesNotMatch(traceText, /data:image|base64|tiny-png/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test('textual ask refs route through vision translator before text reasoner', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-textual-ref-'));
   const calls: CapturedFetch[] = [];

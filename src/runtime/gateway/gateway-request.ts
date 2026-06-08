@@ -1,7 +1,6 @@
-import type { SciForgeSkillDomain, GatewayRequest, LlmEndpointConfig, VerificationMode, VerificationRiskLevel } from '../runtime-types.js';
+import type { SciForgeSkillDomain, GatewayRequest, VerificationMode, VerificationRiskLevel } from '../runtime-types.js';
 import { cleanUrl, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '@sciforge-ui/runtime-contract/handoff';
-import { normalizeRuntimeLlmEndpoint } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
 import { freshCodeDebugExecutionPromptPolicy, generatedWorkSelectedComponentsAllowed } from '@sciforge-ui/runtime-contract/generated-work-policy';
 import { normalizeRuntimeScenarioPackageRef } from '@sciforge-ui/runtime-contract/scenario-package-ref';
@@ -117,8 +116,8 @@ export function normalizeScenarioPackageRef(value: unknown): GatewayRequest['sce
   return normalizeRuntimeScenarioPackageRef(value);
 }
 
-export function normalizeLlmEndpoint(value: unknown): LlmEndpointConfig | undefined {
-  return normalizeRuntimeLlmEndpoint(value) as LlmEndpointConfig | undefined;
+export function normalizeLlmEndpoint(_value: unknown): undefined {
+  return undefined;
 }
 
 export function expectedArtifactTypesForRequest(request: GatewayRequest) {

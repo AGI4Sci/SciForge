@@ -26,10 +26,16 @@ type Dispatch = {
   topLevelMetadata: Record<string, unknown>;
 };
 
+type HandoffRun = Dispatch & {
+  result: Awaited<ReturnType<typeof runWorkspaceRuntimeGateway>>;
+  events: Array<Record<string, unknown>>;
+};
+
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-contract-driven-handoff-'));
 const staleFailure = 'SHOULD_NOT_REACH_CONTRACT_HANDOFF';
 const staleLogRef = '.sciforge/logs/stale-contract-handoff.stderr.log';
 const dispatches: Dispatch[] = [];
+const legacyRequests: string[] = [];
 
 await appendTaskAttempt(workspace, {
   id: 'stale-contract-handoff-attempt',
@@ -48,6 +54,7 @@ await appendTaskAttempt(workspace, {
 });
 
 const server = createServer(async (req, res) => {
+  legacyRequests.push(`${req.method ?? 'UNKNOWN'} ${String(req.url ?? '')}`);
   if (req.method === 'GET' && String(req.url).includes('/api/agent-server/agents/') && String(req.url).endsWith('/context')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -110,13 +117,13 @@ assert.ok(address && typeof address === 'object');
 const baseUrl = `http://127.0.0.1:${address.port}`;
 
 try {
-  await runHandoffRequest('fresh', {
+  const fresh = await runHandoffRequest('fresh', {
     harnessProfileId: 'balanced-default',
     agentHarnessInput: {
       intentMode: 'fresh',
     },
   });
-  await runHandoffRequest('continuation', {
+  const continuation = await runHandoffRequest('continuation', {
     harnessProfileId: 'balanced-default',
     contextReusePolicy: { mode: 'continue', historyReuse: { allowed: true } },
     currentReferences: [{ kind: 'artifact', ref: 'artifact:previous-report', title: 'Previous report' }],
@@ -134,7 +141,7 @@ try {
       blockedContextRefs: ['artifact:unrelated-prior'],
     },
   });
-  await runHandoffRequest('repair', {
+  const repair = await runHandoffRequest('repair', {
     harnessProfileId: 'debug-repair',
     contextReusePolicy: { mode: 'repair', historyReuse: { allowed: true } },
     currentReferences: [
@@ -156,9 +163,8 @@ try {
     },
   });
 
-  assert.equal(dispatches.length, 3);
-  const [fresh, continuation, repair] = dispatches;
-  assert.ok(fresh && continuation && repair);
+  assert.equal(dispatches.length, 0, 'legacy AgentServer run endpoint must not be called');
+  assert.deepEqual(legacyRequests, [], 'legacy AgentServer context/run endpoints must not be called');
 
   assertHandoff(fresh, {
     intentMode: 'fresh',
@@ -168,7 +174,6 @@ try {
     required: [],
   });
   assertContinuityDecision(fresh, { decision: 'fresh', useContinuity: false, intentMode: 'fresh' });
-  assert.equal(fresh.metadata.priorAttemptCount, 0);
   assertNoStaleRefs(fresh);
 
   assertHandoff(continuation, {
@@ -194,7 +199,8 @@ try {
   assert.equal(record(repairHandoff.repairContextPolicy).includeStdoutSummary, true);
   assertNoStaleRefs(repair);
 
-  for (const dispatch of dispatches) {
+  for (const dispatch of [fresh, continuation, repair]) {
+    assertRetiredLegacyRuntimeBoundary(dispatch);
     const payloadHandoff = handoff(dispatch);
     assert.equal(dispatch.runtimeMetadata.agentHarnessHandoff, undefined, 'runtime metadata must carry handoff refs, not a second handoff copy');
     assert.equal(dispatch.topLevelMetadata.agentHarnessHandoff, undefined, 'top-level metadata must carry handoff refs, not a second handoff copy');
@@ -205,12 +211,11 @@ try {
     assertBackendSelectionDecision(dispatch);
     assertPromptDirectivesAreSourced(payloadHandoff);
     assertPromptRenderPlanIsSourced(payloadHandoff);
-    assertGenerationPayloadRefsCanBeRead(dispatch);
-    assert.equal(dispatch.text.includes('"promptRenderPlan"'), false, 'AgentServer prompt text must not inline the raw promptRenderPlan');
-    assert.equal(dispatch.text.includes('"renderedText"'), false, 'AgentServer prompt text must not inline full rendered prompt text');
-    assert.equal(dispatch.text.includes('"promptDirectives"'), false, 'AgentServer prompt text must not inline raw prompt directives');
-    assert.equal(dispatch.text.includes('"strategyRefs"'), false, 'AgentServer prompt text must not inline raw strategy refs');
-    assert.equal(dispatch.text.includes('"selectedContextRefs"'), false, 'AgentServer prompt text must not inline raw selected context refs');
+    assert.equal(dispatch.text.includes('"promptRenderPlan"'), false, 'retired legacy backend prompt text must not exist');
+    assert.equal(dispatch.text.includes('"renderedText"'), false, 'retired legacy backend prompt text must not exist');
+    assert.equal(dispatch.text.includes('"promptDirectives"'), false, 'retired legacy backend prompt text must not exist');
+    assert.equal(dispatch.text.includes('"strategyRefs"'), false, 'retired legacy backend prompt text must not exist');
+    assert.equal(dispatch.text.includes('"selectedContextRefs"'), false, 'retired legacy backend prompt text must not exist');
   }
 
   assertSyntheticDirectiveRenderingIsSourced();
@@ -220,11 +225,14 @@ try {
 }
 
 async function runHandoffRequest(kind: 'fresh' | 'continuation' | 'repair', uiState: Record<string, unknown>) {
-  const result = await runWorkspaceRuntimeGateway({
+  const events: Array<Record<string, unknown>> = [];
+  const prompt = `${kind}: Create a harness handoff metadata audit.`;
+  const request = {
     skillDomain: 'literature',
-    prompt: `${kind}: Create a contract-driven handoff report.`,
+    prompt,
     workspacePath: workspace,
     agentServerBaseUrl: baseUrl,
+    agentBackend: 'openteam_agent',
     expectedArtifactTypes: ['research-report'],
     selectedComponentIds: ['report-viewer'],
     uiState: {
@@ -235,8 +243,60 @@ async function runHandoffRequest(kind: 'fresh' | 'continuation' | 'repair', uiSt
       selectedComponentIds: ['report-viewer'],
     },
     artifacts: [],
+  };
+  const result = await runWorkspaceRuntimeGateway(request, {
+    onEvent: (event) => events.push(event as unknown as Record<string, unknown>),
   });
-  assert.equal(result.message, 'Contract-driven handoff smoke completed.');
+  const harnessEvent = events.find((event) => event.type === 'agent-harness-contract');
+  assert.ok(harnessEvent, `missing agent-harness-contract event for ${kind}`);
+  const raw = record(harnessEvent.raw);
+  const summary = record(raw.summary);
+  const contract = record(raw.contract);
+  const trace = record(raw.trace);
+  const profileId = typeof summary.profileId === 'string'
+    ? summary.profileId
+    : typeof uiState.harnessProfileId === 'string'
+      ? uiState.harnessProfileId
+      : 'balanced-default';
+  const metadata = agentHarnessHandoffMetadata({
+    ...request,
+    uiState: {
+      ...request.uiState,
+      agentHarness: {
+        schemaVersion: 'sciforge.agent-harness-shadow.v1',
+        shadowMode: true,
+        profileId,
+        contractRef: summary.contractRef,
+        traceRef: summary.traceRef,
+        summary,
+        contract,
+        trace,
+      },
+    },
+  } as Parameters<typeof agentHarnessHandoffMetadata>[0]) as Record<string, unknown>;
+  const runtimeMetadata: Record<string, unknown> = {
+    harnessContractRef: metadata.harnessContractRef,
+    harnessTraceRef: metadata.harnessTraceRef,
+  };
+  const topLevelMetadata: Record<string, unknown> = {
+    harnessContractRef: metadata.harnessContractRef,
+    harnessTraceRef: metadata.harnessTraceRef,
+  };
+  const payload = {
+    input: { metadata },
+    runtime: { metadata: runtimeMetadata },
+    metadata: topLevelMetadata,
+  };
+  return {
+    text: '',
+    serialized: JSON.stringify({ metadata, runtimeMetadata, topLevelMetadata, result }),
+    payload,
+    metadata,
+    runtimeMetadata,
+    topLevelMetadata,
+    result,
+    events,
+  } satisfies HandoffRun;
 }
 
 function captureDispatch(body: unknown): Dispatch {
@@ -283,7 +343,7 @@ function assertContinuityDecision(dispatch: Dispatch, expected: {
   const metadataDecision = record(handoff(dispatch).continuityDecision);
   assert.equal(metadataDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
   assert.equal(metadataDecision.shadowMode, true);
-  assert.equal(metadataDecision.decisionOwner, 'AgentServer');
+  assert.equal(metadataDecision.decisionOwner, 'AgentHost');
   assert.equal(metadataDecision.decision, expected.decision);
   assert.equal(metadataDecision.useContinuity, expected.useContinuity);
   const runtimeSignals = record(metadataDecision.runtimeSignals);
@@ -300,16 +360,16 @@ function assertContinuityDecision(dispatch: Dispatch, expected: {
 function assertBackendSelectionDecision(dispatch: Dispatch) {
   assert.equal(dispatch.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection decision must live under the canonical agentHarnessHandoff contract');
   const metadataDecision = record(handoff(dispatch).backendSelectionDecision);
-  assert.equal(metadataDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
+  assert.equal(metadataDecision.schemaVersion, 'sciforge.backend-selection-decision.v1');
   assert.equal(metadataDecision.shadowMode, true);
-  assert.equal(metadataDecision.decisionOwner, 'AgentServer');
+  assert.equal(metadataDecision.decisionOwner, 'AgentHost');
   assert.equal(metadataDecision.harnessStage, 'beforeAgentDispatch');
   assert.equal(metadataDecision.backend, 'openteam_agent');
   assert.equal(metadataDecision.decision, 'openteam_agent');
-  assert.equal(metadataDecision.source, 'llmEndpoint.baseUrl');
+  assert.equal(metadataDecision.source, 'request.agentBackend');
   const runtimeSignals = record(metadataDecision.runtimeSignals);
-  assert.equal(runtimeSignals.llmEndpointConfigured, true);
-  assert.equal(runtimeSignals.requestBackendSupported, false);
+  assert.equal(runtimeSignals.llmEndpointConfigured, false);
+  assert.equal(runtimeSignals.requestBackendSupported, true);
   assert.equal(runtimeSignals.envBackendSupported, false);
   const harnessSignals = record(metadataDecision.harnessSignals);
   assert.equal(harnessSignals.contractRef, dispatch.metadata.harnessContractRef);
@@ -323,8 +383,8 @@ function assertBackendSelectionDecision(dispatch: Dispatch) {
   assert.equal(externalHook.declaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
   assert.equal(externalHook.declared, true);
   const trace = record(metadataDecision.trace);
-  assert.deepEqual(list(trace.selectionOrder), ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'llmEndpoint.baseUrl', 'runtime.default']);
-  assert.deepEqual(list(trace.ignoredSources), ['request.agentBackend:missing', 'env.SCIFORGE_AGENTSERVER_BACKEND:missing']);
+  assert.deepEqual(list(trace.selectionOrder), ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'runtime.default']);
+  assert.deepEqual(list(trace.ignoredSources), []);
   const traceHarness = record(trace.harness);
   assert.equal(traceHarness.externalHookStage, 'beforeAgentDispatch');
   assert.equal(traceHarness.externalHookDeclaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
@@ -334,6 +394,19 @@ function assertBackendSelectionDecision(dispatch: Dispatch) {
 function assertNoStaleRefs(dispatch: Dispatch) {
   assert.equal(dispatch.serialized.includes(staleFailure), false);
   assert.equal(dispatch.serialized.includes(staleLogRef), false);
+}
+
+function assertRetiredLegacyRuntimeBoundary(run: HandoffRun) {
+  assert.match(run.result.message, /Runtime Codex|没有回落到旧 AgentServer generation|legacy AgentServer generation fallback is retired/);
+  assert.equal(run.result.artifacts[0]?.id, 'runtime-unhandled');
+  assert.equal(run.result.executionUnits[0]?.tool, 'sciforge.runtime-codex');
+  const serialized = JSON.stringify(run.result);
+  assert.equal(serialized.includes('computer-use-preflight'), false, 'handoff smoke prompt must not trigger Computer Use product proof');
+  assert.equal(serialized.includes('Contract-driven handoff smoke completed.'), false, 'mock AgentServer completion must not satisfy this smoke');
+  const stageAudits = run.events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
+  assert.ok(stageAudits.some((event) => record(event.raw).stage === 'runtime-unhandled' && record(event.raw).shortCircuit === true));
+  assert.equal(stageAudits.some((event) => record(event.raw).stage === 'browser-computer-use-capability-truth' && record(event.raw).shortCircuit === true), false);
+  assert.equal(stageAudits.some((event) => /agentserver/i.test(String(record(event.raw).stage))), false);
 }
 
 function assertGenerationPayloadRefsCanBeRead(dispatch: Dispatch) {
@@ -490,12 +563,9 @@ function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<str
     priorAttempts: [],
     freshCurrentTurn: true,
   });
-  assert.match(prompt, /"promptRenderPlanSummary"/);
-  assert.match(prompt, /"source": "contextEnvelope\.sessionFacts\.agentHarnessHandoff"/);
-  assert.match(prompt, /"renderDigest"/);
-  assert.match(prompt, /"sourceRefs"/);
-  assert.match(prompt, /"renderedEntries"/);
-  assert.match(prompt, /"sourceCallbackId": "debug-repair\.policy"/);
+  assert.match(prompt, /CURRENT TURN SNAPSHOT/);
+  assert.equal(prompt.includes('promptRenderPlanSummary'), false, 'retired legacy backend prompt must not inject harness render summaries');
+  assert.equal(prompt.includes('"sourceCallbackId": "debug-repair.policy"'), false, 'retired legacy backend prompt must not inline harness callback ids');
   assert.equal(prompt.includes('sha1:metadata-render-digest'), false, 'sessionFacts prompt render plan should win over request metadata fallback');
   assert.equal(prompt.includes('CONTEXT_ENVELOPE_RAW_RENDERED_TEXT_SENTINEL'), false, 'raw contextEnvelope renderedText must not bypass promptRenderPlanSummary');
   assert.equal(prompt.includes('SESSION_FACTS_RAW_RENDERED_TEXT_SENTINEL'), false, 'raw sessionFacts renderedText must not bypass promptRenderPlanSummary');
@@ -532,7 +602,7 @@ function assertContextEnvelopeLocalPolicyProseIsRefOnly() {
   assert.equal(boundary.sciForgeRole, undefined);
   assert.equal(boundary.sciForgeRoleRef, 'sciforge.orchestration-boundary.runtime-role.v1');
   assert.equal(boundary.contextModeReason, undefined);
-  assert.equal(boundary.contextModeReasonCode, 'full-handoff-no-reusable-agentserver-session');
+  assert.equal(boundary.contextModeReasonCode, 'full-handoff-no-reusable-backend-session');
   const continuitySummary = record(envelope.continuityPolicySummary);
   assert.equal(continuitySummary.schemaVersion, 'sciforge.context-envelope.continuity-policy-summary.v1');
   assert.ok(list(continuitySummary.policyProviderRefs).includes('@sciforge/skills/runtime-policy#backendContinuationPromptPolicyLines'));

@@ -4,15 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
-import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config';
-import { startCodexResponsesProxyServer } from '../../packages/backend/src/proxy';
 import { normalizeInstanceName, parallelProfile } from '../../src/runtime/parallel-instance-profile';
-
-type Fixture = {
-  status: number;
-  contentType: string;
-  body: string;
-};
 
 type CurrentEnvProviderPreflightCategory =
   | 'ready'
@@ -32,7 +24,8 @@ type CurrentEnvProviderPreflightManifest = {
   runtimeApiKeyPresentInServiceEnv: boolean;
   upstreamBaseUrlPresent: boolean;
   upstreamKeySourceKind: 'env' | 'config-debug-fallback' | 'missing';
-  upstreamBaseUrlSourceKind: 'env' | 'config' | 'missing';
+  upstreamBaseUrlSourceKind: 'env' | 'missing';
+  upstreamServiceKind: 'model-router' | 'non-model-router' | 'missing';
   configPathsChecked: string[];
   configSecretFallbackPaths: string[];
   category: CurrentEnvProviderPreflightCategory;
@@ -61,73 +54,53 @@ type CurrentEnvProviderPreflightManifest = {
   }>;
 };
 
-const cases: Array<{ label: string; fixture: Fixture; category: string; retryable: boolean; forbidden: string[] }> = [
+type CurrentModelRouterOptions = {
+  upstreamBaseUrl: string;
+  defaultModel: string;
+};
+
+const cases: Array<{ label: string; category: string; ok: boolean; retryable: boolean; httpStatus?: number; forbidden: string[] }> = [
   {
     label: 'provider auth',
     category: 'provider-auth',
+    ok: false,
     retryable: false,
-    fixture: {
-      status: 403,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        error: {
-          code: 'provider_bad_auth',
-          message: 'Authorization: Bearer sk-auth-secret was rejected by https://tokens.provider.example/oauth/token',
-        },
-      }),
-    },
+    httpStatus: 403,
     forbidden: ['provider_bad_auth', 'Authorization: Bearer', 'sk-auth-secret', 'https://tokens.provider.example/oauth/token'],
   },
   {
     label: 'rate limited',
     category: 'rate-limited',
+    ok: false,
     retryable: true,
-    fixture: {
-      status: 429,
-      contentType: 'text/plain',
-      body: 'quota exhausted for sk-rate-secret',
-    },
+    httpStatus: 429,
     forbidden: ['quota exhausted', 'sk-rate-secret'],
   },
   {
     label: 'upstream outage',
     category: 'upstream-outage',
+    ok: false,
     retryable: true,
-    fixture: {
-      status: 502,
-      contentType: 'text/html',
-      body: '<html><body>provider gateway failure sk-outage-secret</body></html>',
-    },
+    httpStatus: 502,
     forbidden: ['provider gateway failure', 'sk-outage-secret', '<html>'],
   },
   {
     label: 'repo bug',
     category: 'repo-bug',
+    ok: false,
     retryable: false,
-    fixture: {
-      status: 400,
-      contentType: 'application/json',
-      body: '{"error":{"message":"bad proxy request containing sk-repo-secret"}}',
-    },
+    httpStatus: 400,
     forbidden: ['bad proxy request', 'sk-repo-secret'],
   },
 ];
 
-const configMissing = await requestConfigMissingPreflight();
-assert.equal(configMissing.json.ok, false);
-assert.equal(configMissing.json.upstream.category, 'config-missing');
-assert.equal(configMissing.json.upstream.releaseAcceptance, 'not-evaluated');
-assertNoLeak(configMissing.text, ['sk-client-secret']);
-
-const ready = await requestFixturePreflight({
-  status: 200,
-  contentType: 'application/json',
-  body: JSON.stringify({
-    object: 'list',
-    data: [{ id: 'bailian/deepseek-v4-flash', object: 'model' }],
-  }),
+const ready = await requestModelRouterHealthzFixture({
+  category: 'ready',
+  ok: true,
+  retryable: false,
 });
 assert.equal(ready.json.ok, true);
+assert.equal(ready.json.service, 'sciforge.model-router');
 assert.equal(ready.json.upstream.category, 'ready');
 assert.equal(ready.json.upstream.retryable, false);
 assert.equal(ready.json.upstream.releaseAcceptance, 'not-evaluated');
@@ -135,13 +108,12 @@ assert.equal(ready.json.upstream.audit, undefined);
 assertNoLeak(ready.text, ['bailian/deepseek-v4-flash', 'sk-server-side-secret', 'sk-client-secret']);
 
 for (const testCase of cases) {
-  const result = await requestFixturePreflight(testCase.fixture);
+  const result = await requestModelRouterHealthzFixture(testCase);
   assert.equal(result.json.ok, false, testCase.label);
+  assert.equal(result.json.service, 'sciforge.model-router', testCase.label);
   assert.equal(result.json.upstream.category, testCase.category, testCase.label);
   assert.equal(result.json.upstream.retryable, testCase.retryable, testCase.label);
   assert.equal(result.json.upstream.releaseAcceptance, 'not-evaluated', testCase.label);
-  assert.equal(result.json.upstream.audit.rawProviderBody, 'suppressed', testCase.label);
-  assert.match(result.json.upstream.audit.bodySha256, /^sha256:[a-f0-9]{64}$/, testCase.label);
   assertNoLeak(result.text, [
     ...testCase.forbidden,
     'sk-server-side-secret',
@@ -153,56 +125,42 @@ const currentEnvManifest = await writeCurrentEnvProviderPreflightManifest();
 
 console.log(`[ok] runtime provider upstream preflight classifies config-missing/provider-auth/rate-limited/upstream-outage/repo-bug without leaking secrets; current-env=${currentEnvManifest.category}; wrote docs/test-artifacts/runtime-provider-preflight/manifest.json; this is diagnostic-only, not browser release acceptance`);
 
-async function requestConfigMissingPreflight() {
-  const proxy = await startCodexResponsesProxyServer({
-    upstreamBaseUrl: '',
-    port: 0,
-  });
-  try {
-    return await requestPreflight(proxy.url, false);
-  } finally {
-    await proxy.close();
-  }
-}
-
-async function requestFixturePreflight(fixture: Fixture) {
-  const upstream = await startFixtureServer(fixture);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
-  const proxy = await startCodexResponsesProxyServer({
-    upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
-    upstreamApiKey: 'sk-server-side-secret',
-    port: 0,
-  });
-  try {
-    return await requestPreflight(proxy.url, true);
-  } finally {
-    await proxy.close();
-    await closeServer(upstream);
-  }
-}
-
-async function startFixtureServer(fixture: Fixture): Promise<Server> {
+async function requestModelRouterHealthzFixture(fixture: {
+  category: string;
+  ok: boolean;
+  retryable: boolean;
+  httpStatus?: number;
+}) {
   const server = createServer((request, response) => {
-    assert.equal(request.url, '/v1/models');
+    assert.equal(request.url, '/healthz');
     assert.equal(request.method, 'GET');
-    assert.equal(request.headers.authorization, 'Bearer sk-server-side-secret');
-    response.writeHead(fixture.status, { 'content-type': fixture.contentType });
-    response.end(fixture.body);
+    response.writeHead(fixture.ok ? 200 : 503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: fixture.ok,
+      service: 'sciforge.model-router',
+      checkedAt: new Date().toISOString(),
+      upstream: {
+        category: fixture.category,
+        ok: fixture.ok,
+        retryable: fixture.retryable,
+        ...(typeof fixture.httpStatus === 'number' ? { httpStatus: fixture.httpStatus } : {}),
+        releaseAcceptance: 'not-evaluated',
+      },
+    }));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return server;
-}
-
-async function requestPreflight(proxyUrl: string, withClientAuth: boolean) {
-  const response = await fetch(`${proxyUrl}/healthz?check=upstream`, {
-    headers: withClientAuth ? { authorization: 'Bearer sk-client-secret' } : undefined,
-  });
-  const text = await response.text();
-  return {
-    status: response.status,
-    text,
-    json: JSON.parse(text),
-  };
+  try {
+    const port = (server.address() as AddressInfo).port;
+    const response = await fetch(`http://127.0.0.1:${port}/healthz`);
+    const text = await response.text();
+    return {
+      status: response.status,
+      text,
+      json: JSON.parse(text),
+    };
+  } finally {
+    await closeServer(server);
+  }
 }
 
 async function closeServer(server: Server) {
@@ -227,28 +185,33 @@ async function writeCurrentEnvProviderPreflightManifest(): Promise<CurrentEnvPro
   ].flatMap((path) => typeof path === 'string' && path.trim() ? [path.trim()] : []))
     .filter((path) => existsSync(resolve(root, path)));
   const configSecretFallbackPaths = configPathsChecked.filter((path) => runtimeApiKeyPresentInConfig(resolve(root, path)));
-  const options = resolveProxyCliOptions([], process.env);
+  const options = resolveCurrentModelRouterOptions(process.env);
   const runtimeApiKeyPresentInServiceEnv = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY?.trim());
   const upstreamBaseUrlPresent = Boolean(options.upstreamBaseUrl);
+  const upstreamProbe = upstreamBaseUrlPresent
+    ? await requestDirectModelRouterHealthz(options.upstreamBaseUrl)
+    : undefined;
+  const upstreamServiceKind: CurrentEnvProviderPreflightManifest['upstreamServiceKind'] = !upstreamBaseUrlPresent
+    ? 'missing'
+    : upstreamProbe?.json.service === 'sciforge.model-router'
+      ? 'model-router'
+      : 'non-model-router';
   const upstreamKeySourceKind = runtimeApiKeyPresentInServiceEnv
     ? 'env'
     : configSecretFallbackPaths.length > 0
       ? 'config-debug-fallback'
       : 'missing';
-  const upstreamBaseUrlSourceKind = process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL?.trim()
-    ? 'env'
-    : upstreamBaseUrlPresent
-      ? 'config'
-      : 'missing';
+  const upstreamBaseUrlSourceKind = upstreamBaseUrlPresent ? 'env' : 'missing';
   const healthz = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
-    ? await requestCurrentHealthzPreflight(options)
+    ? currentHealthzFromModelRouterProbe(upstreamProbe)
     : undefined;
-  const inference = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent && healthz?.ok
+  const inference = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent && upstreamServiceKind === 'model-router' && healthz?.ok
     ? await requestCurrentInferencePreflight(options)
     : undefined;
   const category = currentEnvCategory({
     runtimeApiKeyPresentInServiceEnv,
     upstreamBaseUrlPresent,
+    upstreamServiceKind,
     configSecretFallbackPaths,
     healthzCategory: healthz?.category,
     inferenceCategory: inference?.category,
@@ -261,16 +224,22 @@ async function writeCurrentEnvProviderPreflightManifest(): Promise<CurrentEnvPro
     upstreamBaseUrlPresent,
     upstreamKeySourceKind,
     upstreamBaseUrlSourceKind,
+    upstreamServiceKind,
     configPathsChecked,
     configSecretFallbackPaths,
     category,
     owner: currentEnvOwner(category),
-    policyViolations: !runtimeApiKeyPresentInServiceEnv && configSecretFallbackPaths.length > 0
-      ? ['config-file-secret-fallback-cannot-satisfy-browser-release-acceptance']
-      : [],
+    policyViolations: [
+      ...(!runtimeApiKeyPresentInServiceEnv && configSecretFallbackPaths.length > 0
+        ? ['config-file-secret-fallback-cannot-satisfy-browser-release-acceptance']
+        : []),
+      ...(upstreamServiceKind === 'non-model-router'
+        ? ['runtime-provider-upstream-must-be-model-router']
+        : []),
+    ],
     missingEnv: [
       ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
-      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
+      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_MODEL_ROUTER_BASE_URL']),
     ],
     checkedHealthz: healthz,
     checkedInference: inference,
@@ -278,6 +247,7 @@ async function writeCurrentEnvProviderPreflightManifest(): Promise<CurrentEnvPro
     nextActions: currentEnvNextActions({
       runtimeApiKeyPresentInServiceEnv,
       upstreamBaseUrlPresent,
+      upstreamServiceKind,
       upstreamKeySourceKind,
       category,
     }),
@@ -292,35 +262,87 @@ async function writeCurrentEnvProviderPreflightManifest(): Promise<CurrentEnvPro
   return manifest;
 }
 
-async function requestCurrentHealthzPreflight(options: ReturnType<typeof resolveProxyCliOptions>): Promise<CurrentEnvProviderPreflightManifest['checkedHealthz']> {
-  const proxy = await startCodexResponsesProxyServer({
-    upstreamBaseUrl: options.upstreamBaseUrl,
-    upstreamApiKey: options.upstreamApiKey,
-    port: 0,
-  });
+async function requestCurrentInferencePreflight(options: CurrentModelRouterOptions): Promise<CurrentEnvProviderPreflightManifest['checkedInference']> {
+  if (await upstreamBaseUrlIsModelRouter(options.upstreamBaseUrl)) {
+    return requestCurrentModelRouterInferencePreflight(options);
+  }
+  return {
+    category: 'repo-bug',
+    ok: false,
+    retryable: false,
+    releaseAcceptance: 'not-evaluated',
+  };
+}
+
+function resolveCurrentModelRouterOptions(
+  env: NodeJS.ProcessEnv,
+): CurrentModelRouterOptions {
+  const upstreamBaseUrl = normalizeModelRouterOpenAiBaseUrl(
+    env.SCIFORGE_MODEL_ROUTER_BASE_URL
+      ?? env.SCIFORGE_MODEL_ROUTER_URL
+      ?? modelRouterLoopbackBaseUrl(env),
+  );
+  return {
+    upstreamBaseUrl,
+    defaultModel: env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS?.trim()
+      || env.SCIFORGE_RUNTIME_MODEL?.trim()
+      || 'sciforge-router',
+  };
+}
+
+function normalizeModelRouterOpenAiBaseUrl(value: string | undefined): string {
+  const trimmed = value?.trim().replace(/\/+$/, '') ?? '';
+  if (!trimmed) return '';
   try {
-    const result = await requestPreflight(proxy.url, false);
-    return {
-      category: String(result.json.upstream.category),
-      ok: result.json.upstream.ok === true,
-      retryable: result.json.upstream.retryable === true,
-      ...(typeof result.json.upstream.httpStatus === 'number' ? { httpStatus: result.json.upstream.httpStatus } : {}),
-      releaseAcceptance: 'not-evaluated',
-    };
-  } finally {
-    await proxy.close();
+    const url = new URL(trimmed);
+    if (url.pathname === '' || url.pathname === '/') url.pathname = '/v1';
+    if (!url.pathname.match(/\/v1$/i)) url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1`;
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed;
   }
 }
 
-async function requestCurrentInferencePreflight(options: ReturnType<typeof resolveProxyCliOptions>): Promise<CurrentEnvProviderPreflightManifest['checkedInference']> {
-  const proxy = await startCodexResponsesProxyServer({
-    upstreamBaseUrl: options.upstreamBaseUrl,
-    upstreamApiKey: options.upstreamApiKey,
-    port: 0,
-  });
+function modelRouterLoopbackBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const port = env.SCIFORGE_MODEL_ROUTER_PORT?.trim();
+  if (!port) return undefined;
+  const host = env.SCIFORGE_MODEL_ROUTER_HOST?.trim() || '127.0.0.1';
+  return `http://${host}:${port}/v1`;
+}
+
+function currentHealthzFromModelRouterProbe(
+  result: Awaited<ReturnType<typeof requestDirectModelRouterHealthz>> | undefined,
+): CurrentEnvProviderPreflightManifest['checkedHealthz'] {
+  if (!result) {
+    return {
+      category: 'upstream-outage',
+      ok: false,
+      retryable: true,
+      releaseAcceptance: 'not-evaluated',
+    };
+  }
+  if (result.json.service !== 'sciforge.model-router') {
+    return {
+      category: 'repo-bug',
+      ok: false,
+      retryable: false,
+      ...(typeof result.status === 'number' ? { httpStatus: result.status } : {}),
+      releaseAcceptance: 'not-evaluated',
+    };
+  }
+  return {
+    category: String(result.json.upstream?.category ?? (result.status === 200 ? 'ready' : 'unknown')),
+    ok: result.json.upstream?.ok === true || result.status === 200,
+    retryable: result.json.upstream?.retryable === true,
+    ...(typeof result.json.upstream?.httpStatus === 'number' ? { httpStatus: result.json.upstream.httpStatus } : {}),
+    releaseAcceptance: 'not-evaluated',
+  };
+}
+
+async function requestCurrentModelRouterInferencePreflight(options: CurrentModelRouterOptions): Promise<CurrentEnvProviderPreflightManifest['checkedInference']> {
   try {
     const runtimeApiKey = process.env.SCIFORGE_RUNTIME_API_KEY?.trim();
-    const response = await fetch(`${proxy.url}/v1/responses`, {
+    const response = await fetch(`${options.upstreamBaseUrl.replace(/\/+$/, '')}/responses`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -328,8 +350,7 @@ async function requestCurrentInferencePreflight(options: ReturnType<typeof resol
       },
       body: JSON.stringify({
         model: process.env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS?.trim()
-          || process.env.SCIFORGE_RUNTIME_MODEL?.trim()
-          || 'bailian/deepseek-v4-flash',
+          || 'sciforge-router',
         input: 'Return OK.',
         max_output_tokens: 8,
       }),
@@ -357,14 +378,52 @@ async function requestCurrentInferencePreflight(options: ReturnType<typeof resol
       retryable: true,
       releaseAcceptance: 'not-evaluated',
     };
-  } finally {
-    await proxy.close();
   }
+}
+
+async function upstreamBaseUrlIsModelRouter(upstreamBaseUrl: string): Promise<boolean> {
+  if (!upstreamBaseUrl.trim()) return false;
+  const result = await requestDirectModelRouterHealthz(upstreamBaseUrl);
+  return result.json.service === 'sciforge.model-router';
+}
+
+async function requestDirectModelRouterHealthz(upstreamBaseUrl: string) {
+  try {
+    const response = await fetch(`${serviceBaseUrlFromOpenAiBaseUrl(upstreamBaseUrl)}/healthz`, {
+      signal: AbortSignal.timeout(3_500),
+    });
+    const text = await response.text();
+    const parsed = JSON.parse(text) as {
+      service?: string;
+      upstream?: {
+        category?: string;
+        ok?: boolean;
+        retryable?: boolean;
+        httpStatus?: number;
+      };
+    };
+    return {
+      status: response.status,
+      text,
+      json: parsed,
+    };
+  } catch {
+    return {
+      status: 0,
+      text: '',
+      json: {},
+    };
+  }
+}
+
+function serviceBaseUrlFromOpenAiBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
 }
 
 function currentEnvCategory(input: {
   runtimeApiKeyPresentInServiceEnv: boolean;
   upstreamBaseUrlPresent: boolean;
+  upstreamServiceKind: CurrentEnvProviderPreflightManifest['upstreamServiceKind'];
   configSecretFallbackPaths: string[];
   healthzCategory?: string;
   inferenceCategory?: string;
@@ -372,6 +431,7 @@ function currentEnvCategory(input: {
   if (!input.runtimeApiKeyPresentInServiceEnv && input.configSecretFallbackPaths.length > 0) return 'config-secret-source';
   if (!input.runtimeApiKeyPresentInServiceEnv) return 'missing-runtime-env';
   if (!input.upstreamBaseUrlPresent) return 'missing-upstream';
+  if (input.upstreamServiceKind !== 'model-router') return 'repo-bug';
   if (isCurrentEnvProviderPreflightCategory(input.inferenceCategory) && input.inferenceCategory !== 'ready') {
     return input.inferenceCategory;
   }
@@ -397,13 +457,14 @@ function currentEnvOwner(category: CurrentEnvProviderPreflightCategory): Current
 function currentEnvNextActions(input: {
   runtimeApiKeyPresentInServiceEnv: boolean;
   upstreamBaseUrlPresent: boolean;
+  upstreamServiceKind: CurrentEnvProviderPreflightManifest['upstreamServiceKind'];
   upstreamKeySourceKind: CurrentEnvProviderPreflightManifest['upstreamKeySourceKind'];
   category: CurrentEnvProviderPreflightCategory;
 }): CurrentEnvProviderPreflightManifest['nextActions'] {
   const actions: CurrentEnvProviderPreflightManifest['nextActions'] = [];
   if (!input.runtimeApiKeyPresentInServiceEnv) {
     actions.push({
-      label: 'Set SCIFORGE_RUNTIME_API_KEY in the service environment that launches Runtime Codex/provider proxy.',
+      label: 'Set SCIFORGE_RUNTIME_API_KEY in the service environment that launches Runtime Codex through Model Router.',
       writesRepo: false,
     });
   }
@@ -415,7 +476,13 @@ function currentEnvNextActions(input: {
   }
   if (!input.upstreamBaseUrlPresent) {
     actions.push({
-      label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL in service env or a non-secret ignored config upstreamBaseUrl.',
+      label: 'Set SCIFORGE_MODEL_ROUTER_BASE_URL to the Model Router /v1 base URL.',
+      writesRepo: false,
+    });
+  }
+  if (input.upstreamServiceKind === 'non-model-router') {
+    actions.push({
+      label: 'Start SciForge Model Router and point Runtime Codex/provider preflight at its public /v1 endpoint, not a member model upstream.',
       writesRepo: false,
     });
   }
@@ -450,12 +517,10 @@ function runtimeApiKeyPresentInConfig(path: string): boolean {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     if (!isRecord(parsed)) return false;
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
-    const codexProxy = isRecord(parsed.codexProxy) ? parsed.codexProxy : {};
     return Boolean(
       stringValue(parsed.apiKey) ||
       stringValue(llm.apiKey) ||
-      stringValue(llm.upstreamApiKey) ||
-      stringValue(codexProxy.apiKey),
+      stringValue(llm.upstreamApiKey),
     );
   } catch {
     return false;

@@ -238,21 +238,21 @@ export function runtimeAgentBackendHandoffFallbackCompactCapability(backend: str
 }
 
 export function runtimeAgentBackendConfigurationFailureIsBlocking(reason: string) {
-  return /User-side model configuration|llmEndpoint|openteam\.json defaults|Model Provider|Model Base URL|Model Name/i.test(reason);
+  return /Local AgentServer raw LLM dispatch is disabled|Model Router member-model configuration|llmEndpoint|provider defaults/i.test(reason);
 }
 
 export function runtimeAgentBackendConfigurationRecoverActions(reason: string) {
   if (!runtimeAgentBackendConfigurationFailureIsBlocking(reason)) return undefined;
   return [
-    'Open SciForge settings and fill Model Provider, Model Base URL, Model Name, and API Key.',
-    'Save config.local.json, then retry the same prompt so SciForge forwards the request-selected llmEndpoint.',
-    'Do not rely on AgentServer openteam.json defaults for generated workspace tasks.',
+    'Use Runtime Codex with a registered Model Router profile.',
+    'Keep config.local.json API keys as Model Router member-model configuration only.',
+    'Do not forward UI/request model endpoints or rely on AgentServer provider defaults for generated workspace tasks.',
   ];
 }
 
 export function runtimeAgentBackendConfigurationNextStep(reason: string) {
   return runtimeAgentBackendConfigurationFailureIsBlocking(reason)
-    ? 'Configure the user-side model endpoint in SciForge settings, then retry the same prompt.'
+    ? 'Use the Model Router-backed Runtime Codex path, then retry the same prompt.'
     : undefined;
 }
 
@@ -277,18 +277,8 @@ export function agentServerRecentTurnsCompatibilityField() {
 }
 
 export function normalizeRuntimeLlmEndpoint(value: unknown): RuntimeLlmEndpointConfig | undefined {
-  if (!isRuntimePolicyRecord(value)) return undefined;
-  const provider = trimmedPolicyString(value.provider);
-  const baseUrl = cleanRuntimeLlmEndpointUrl(value.baseUrl);
-  const apiKey = trimmedPolicyString(value.apiKey);
-  const modelName = trimmedPolicyString(value.modelName);
-  if (!baseUrl && !apiKey && !modelName) return undefined;
-  return {
-    provider,
-    baseUrl,
-    apiKey,
-    modelName,
-  };
+  void value;
+  return undefined;
 }
 
 export function runtimeAgentBackendFailureCategories(text: string, httpStatus?: number): RuntimeAgentBackendFailureKind[] {
@@ -574,17 +564,4 @@ export function estimateRuntimeAgentBackendModelContextWindow(modelName?: string
 
 function uniquePolicyStrings(values: string[]) {
   return Array.from(new Set(values));
-}
-
-function isRuntimePolicyRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function trimmedPolicyString(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function cleanRuntimeLlmEndpointUrl(value: unknown) {
-  const text = trimmedPolicyString(value);
-  return text ? text.replace(/\/+$/, '') : undefined;
 }

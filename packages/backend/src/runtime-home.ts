@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRequiredLocalProviderSettings } from './local-provider-config.js';
 
 export const RUNTIME_PROFILE = 'sciforge-runtime-default';
 export const RUNTIME_PROVIDER = 'sciforge-model-router';
@@ -10,6 +9,7 @@ export const RUNTIME_KEY_ENV = 'SCIFORGE_RUNTIME_API_KEY';
 export const RUNTIME_CODEX_SANDBOX_ENV = 'SCIFORGE_RUNTIME_CODEX_SANDBOX';
 export const DEFAULT_RUNTIME_CODEX_SANDBOX = 'workspace-write';
 export const DEFAULT_PROXY_BASE_URL = 'http://127.0.0.1:3892/v1';
+export const MODEL_ROUTER_BASE_URL_ENV = 'SCIFORGE_MODEL_ROUTER_BASE_URL';
 export type RuntimeCodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
 export const RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS = [
   '--config',
@@ -92,7 +92,7 @@ export async function ensureRuntimeHome(options: RuntimeHomeOptions = {}): Promi
   await mkdir(paths.defaultWorkspace, { recursive: true });
 
   const config = runtimeConfigToml({
-    proxyBaseUrl: options.proxyBaseUrl ?? DEFAULT_PROXY_BASE_URL,
+    proxyBaseUrl: assertRuntimeModelRouterBaseUrl(options.proxyBaseUrl ?? DEFAULT_PROXY_BASE_URL),
     provider: options.provider ?? runtimeProviderForEnv(options.paths?.env),
     providerName: options.providerName,
     model: options.model ?? runtimeModelForEnv(options.paths?.env),
@@ -167,7 +167,7 @@ export async function assertRuntimeReady(
       throw new Error(`Runtime Codex config is missing ${required}`);
     }
   }
-  applyRuntimeKeyFromLocalProviderConfig(env, options.configLocalPath);
+  assertRuntimeKeyInServiceEnv(env);
   const profileConfig = tableBlock(config, `profiles.${RUNTIME_PROFILE}`);
   const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(config, 'model_provider');
   const model = valueForKey(profileConfig, 'model') ?? valueForKey(config, 'model');
@@ -181,19 +181,76 @@ export async function assertRuntimeReady(
   if (!proxyBaseUrl) {
     throw new Error(`Runtime Codex provider ${provider} is missing proxy base_url.`);
   }
-  if (env.SCIFORGE_ALLOW_OPENAI_RUNTIME !== '1' && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
-    throw new Error('OpenAI Runtime Codex provider/model is disabled unless SCIFORGE_ALLOW_OPENAI_RUNTIME=1.');
+  if (provider !== RUNTIME_PROVIDER) {
+    throw new Error(`Runtime Codex provider must be ${RUNTIME_PROVIDER}; ${provider} would bypass Model Router.`);
+  }
+  assertRuntimeModelRouterBaseUrl(proxyBaseUrl);
+  if (/openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
+    throw new Error('OpenAI-looking Runtime Codex provider/model is disabled; Runtime/API calls must use the SciForge Model Router profile.');
   }
 }
 
 export function runtimeProviderForEnv(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.SCIFORGE_RUNTIME_PROVIDER?.trim();
-  if (!configured || configured === 'native') return RUNTIME_PROVIDER;
-  return configured;
+  if (!configured || configured === 'native' || configured === RUNTIME_PROVIDER) return RUNTIME_PROVIDER;
+  throw new Error(`${envKeyName('SCIFORGE_RUNTIME_PROVIDER')} cannot override Runtime Codex provider; all Runtime/API calls must use ${RUNTIME_PROVIDER}.`);
 }
 
 export function runtimeModelForEnv(env: NodeJS.ProcessEnv = process.env): string {
   return env.SCIFORGE_RUNTIME_MODEL?.trim() || RUNTIME_MODEL;
+}
+
+export function assertRuntimeModelRouterBaseUrl(baseUrl: string): string {
+  const normalized = normalizeRuntimeModelRouterBaseUrl(baseUrl);
+  const parsed = new URL(normalized);
+  if (!isLoopbackHost(parsed.hostname)) {
+    throw new Error(`${MODEL_ROUTER_BASE_URL_ENV} must point to the local SciForge Model Router loopback /v1 endpoint; ${redactUrlForError(normalized)} would allow Runtime Codex to bypass Model Router.`);
+  }
+  return normalized;
+}
+
+function normalizeRuntimeModelRouterBaseUrl(baseUrl: string): string {
+  const value = baseUrl.trim();
+  if (!value) throw new Error(`${MODEL_ROUTER_BASE_URL_ENV} is required for Runtime Codex.`);
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${MODEL_ROUTER_BASE_URL_ENV} must be an absolute local Model Router URL.`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${MODEL_ROUTER_BASE_URL_ENV} must use http(s).`);
+  }
+  parsed.hash = '';
+  parsed.search = '';
+  const pathname = parsed.pathname.replace(/\/+$/, '');
+  if (pathname === '') parsed.pathname = '/v1';
+  else if (pathname === '/health' || pathname === '/healthz' || pathname === '/manifest') parsed.pathname = '/v1';
+  else if (pathname === '/v1/responses') parsed.pathname = '/v1';
+  else if (pathname !== '/v1') {
+    throw new Error(`${MODEL_ROUTER_BASE_URL_ENV} must point to the Model Router /v1 endpoint.`);
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function redactUrlForError(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    return '<invalid-url>';
+  }
+}
+
+function envKeyName(value: string): string {
+  return value;
 }
 
 export function resolveRuntimeCodexSandbox(env: NodeJS.ProcessEnv = process.env): RuntimeCodexSandbox {
@@ -234,13 +291,9 @@ function managedRuntimeConfigMatches(currentConfig: string, desiredConfig: strin
     && current.remotePlugin === desired.remotePlugin;
 }
 
-function applyRuntimeKeyFromLocalProviderConfig(env: NodeJS.ProcessEnv, configLocalPath?: string): void {
-  const localConfigPath = resolve(configLocalPath ?? env.SCIFORGE_CONFIG_PATH?.trim() ?? 'config.local.json');
-  const settings = readRequiredLocalProviderSettings(localConfigPath);
-  if (!settings.apiKey) {
-    throw new Error(`Missing ${RUNTIME_KEY_ENV}; configure apiKey, llm.apiKey, or codexProxy.apiKey in ${localConfigPath}.`);
-  }
-  env[RUNTIME_KEY_ENV] = settings.apiKey;
+function assertRuntimeKeyInServiceEnv(env: NodeJS.ProcessEnv): void {
+  if (env[RUNTIME_KEY_ENV]?.trim()) return;
+  throw new Error(`Missing ${RUNTIME_KEY_ENV}; set it in the Runtime Codex service environment. config.local.json member-model secrets cannot satisfy Runtime Codex readiness.`);
 }
 
 function runtimeConfigSignature(config: string) {

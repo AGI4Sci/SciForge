@@ -34,51 +34,48 @@ test('runtime config guard accepts isolated Model Router profile without exposin
   assert.match(config.codexHome, /packages\/backend\/\.codex-runtime\/codex-home$/);
 });
 
-test('runtime config guard normalizes private raw provider and model slugs out of runtime metadata', async () => {
+test('runtime config guard rejects private raw provider overrides instead of normalizing them', async () => {
   const workspace = await tempWorkspace();
-  const config = await assertCodexRuntimeConfig({
-    workspacePath: workspace,
-    env: { [RUNTIME_KEY_ENV]: 'test-key' },
-    configText: runtimeConfig({
-      provider: 'sciforge-deepseek-proxy',
-      model: 'deepseek-chat',
+  await assert.rejects(
+    () => assertCodexRuntimeConfig({
+      workspacePath: workspace,
+      env: { [RUNTIME_KEY_ENV]: 'test-key' },
+      configText: runtimeConfig({
+        provider: 'sciforge-deepseek-proxy',
+        model: 'deepseek-chat',
+      }),
     }),
-  });
-
-  assert.equal(config.provider, RUNTIME_PROVIDER);
-  assert.equal(config.model, RUNTIME_MODEL);
-  assert.doesNotMatch(JSON.stringify(config), /sciforge-deepseek-proxy|deepseek-chat/);
+    /provider must be sciforge-model-router/,
+  );
 });
 
-test('runtime config guard normalizes private raw slugs hidden behind public router prefixes', async () => {
+test('runtime config guard rejects private raw slugs hidden behind provider aliases', async () => {
   const workspace = await tempWorkspace();
-  const config = await assertCodexRuntimeConfig({
-    workspacePath: workspace,
-    env: { [RUNTIME_KEY_ENV]: 'test-key' },
-    configText: runtimeConfig({
-      provider: 'sciforge-model-router-deepseek-proxy',
-      model: 'sciforge-router-deepseek-chat',
+  await assert.rejects(
+    () => assertCodexRuntimeConfig({
+      workspacePath: workspace,
+      env: { [RUNTIME_KEY_ENV]: 'test-key' },
+      configText: runtimeConfig({
+        provider: 'sciforge-model-router-deepseek-proxy',
+        model: 'sciforge-router-deepseek-chat',
+      }),
     }),
-  });
-
-  assert.equal(config.provider, RUNTIME_PROVIDER);
-  assert.equal(config.model, RUNTIME_MODEL);
-  assert.doesNotMatch(JSON.stringify(config), /deepseek|proxy|chat/);
+    /provider must be sciforge-model-router/,
+  );
 });
 
-test('runtime config guard accepts a public router alias override without returning raw provider settings', async () => {
+test('runtime config guard accepts a public router model alias override without returning raw provider settings', async () => {
   const workspace = await tempWorkspace();
   const config = await assertCodexRuntimeConfig({
     workspacePath: workspace,
     env: { [RUNTIME_KEY_ENV]: 'test-key' },
     configText: runtimeConfig({
-      provider: 'sciforge-model-router-preview',
       model: 'sciforge-router-preview',
       proxyBaseUrl: 'http://127.0.0.1:3891/v1',
     }),
   });
 
-  assert.equal(config.provider, 'sciforge-model-router-preview');
+  assert.equal(config.provider, RUNTIME_PROVIDER);
   assert.equal(config.model, 'sciforge-router-preview');
   assert.equal('proxyBaseUrl' in config, false);
 });
@@ -104,7 +101,7 @@ test('runtime config guard reads CODEX_HOME from the supplied runtime env', asyn
   assert.equal(config.model, RUNTIME_MODEL);
 });
 
-test('runtime config guard heals stale on-disk provider config before app-server launch', async () => {
+test('runtime config guard heals stale on-disk provider config from Model Router env before app-server launch', async () => {
   const workspace = await tempWorkspace();
   const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-heal-root-'));
   const codexHome = join(root, 'codex-home');
@@ -120,7 +117,7 @@ test('runtime config guard heals stale on-disk provider config before app-server
     env: {
       SCIFORGE_RUNTIME_ROOT: root,
       SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
-      SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:5175',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:5175/v1',
       [RUNTIME_KEY_ENV]: 'test-key',
     },
   });
@@ -135,9 +132,9 @@ test('runtime config guard heals stale on-disk provider config before app-server
   assert.doesNotMatch(healedConfig, /model_provider = "native"|bailian\/deepseek-v4-flash|127\.0\.0\.1:3891/);
 });
 
-test('runtime config guard derives provider base_url from live proxy service URL alias', async () => {
+test('runtime config guard derives provider base_url from live Model Router service URL', async () => {
   const workspace = await tempWorkspace();
-  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-proxy-url-root-'));
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-router-url-root-'));
   const codexHome = join(root, 'codex-home');
   await mkdir(codexHome, { recursive: true });
   await writeFile(join(codexHome, 'config.toml'), runtimeConfig(), 'utf8');
@@ -147,7 +144,7 @@ test('runtime config guard derives provider base_url from live proxy service URL
     env: {
       SCIFORGE_RUNTIME_ROOT: root,
       SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
-      SCIFORGE_PROXY_URL: 'http://127.0.0.1:5175/healthz',
+      SCIFORGE_MODEL_ROUTER_URL: 'http://127.0.0.1:5175/healthz',
       [RUNTIME_KEY_ENV]: 'test-key',
     },
   });
@@ -157,9 +154,9 @@ test('runtime config guard derives provider base_url from live proxy service URL
   assert.doesNotMatch(healedConfig, /127\.0\.0\.1:3892/);
 });
 
-test('runtime config guard derives provider base_url from live proxy port binding', async () => {
+test('runtime config guard derives provider base_url from live Model Router port binding', async () => {
   const workspace = await tempWorkspace();
-  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-proxy-port-root-'));
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-router-port-root-'));
   const codexHome = join(root, 'codex-home');
   await mkdir(codexHome, { recursive: true });
   await writeFile(join(codexHome, 'config.toml'), runtimeConfig(), 'utf8');
@@ -169,7 +166,8 @@ test('runtime config guard derives provider base_url from live proxy port bindin
     env: {
       SCIFORGE_RUNTIME_ROOT: root,
       SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
-      SCIFORGE_PROXY_PORT: '5175',
+      SCIFORGE_MODEL_ROUTER_HOST: '0.0.0.0',
+      SCIFORGE_MODEL_ROUTER_PORT: '5175',
       [RUNTIME_KEY_ENV]: 'test-key',
     },
   });
@@ -177,6 +175,31 @@ test('runtime config guard derives provider base_url from live proxy port bindin
   const healedConfig = await readFile(join(codexHome, 'config.toml'), 'utf8');
   assert.match(healedConfig, /base_url = "http:\/\/127\.0\.0\.1:5175\/v1"/);
   assert.doesNotMatch(healedConfig, /127\.0\.0\.1:3892/);
+});
+
+test('runtime config guard ignores legacy proxy service aliases when deriving provider base_url', async () => {
+  const workspace = await tempWorkspace();
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-ignore-proxy-root-'));
+  const codexHome = join(root, 'codex-home');
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'config.toml'), runtimeConfig({ proxyBaseUrl: 'http://127.0.0.1:3891/v1' }), 'utf8');
+
+  await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: {
+      SCIFORGE_RUNTIME_ROOT: root,
+      SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
+      SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:5175',
+      SCIFORGE_PROXY_URL: 'http://127.0.0.1:5176/healthz',
+      SCIFORGE_PROXY_HOST: '127.0.0.1',
+      SCIFORGE_PROXY_PORT: '5177',
+      [RUNTIME_KEY_ENV]: 'test-key',
+    },
+  });
+
+  const healedConfig = await readFile(join(codexHome, 'config.toml'), 'utf8');
+  assert.match(healedConfig, /base_url = "http:\/\/127\.0\.0\.1:3892\/v1"/);
+  assert.doesNotMatch(healedConfig, /127\.0\.0\.1:5175|127\.0\.0\.1:5176|127\.0\.0\.1:5177/);
 });
 
 test('runtime config guard fails closed when workspace is missing', async () => {
@@ -239,7 +262,7 @@ test('runtime config guard fails closed when proxy base_url is missing', async (
   );
 });
 
-test('OpenAI-looking runtime endpoint is blocked unless explicitly opted in', async () => {
+test('remote OpenAI-looking runtime endpoint is blocked even with opt-in', async () => {
   const workspace = await tempWorkspace();
   const configText = runtimeConfig({ proxyBaseUrl: 'https://api.openai.com/v1' });
   await assert.rejects(
@@ -248,17 +271,18 @@ test('OpenAI-looking runtime endpoint is blocked unless explicitly opted in', as
       env: { [RUNTIME_KEY_ENV]: 'test-key' },
       configText,
     }),
-    /allowOpenAiRuntime=true/,
+    /local SciForge Model Router loopback/,
   );
 
-  const config = await assertCodexRuntimeConfig({
-    workspacePath: workspace,
-    env: { [RUNTIME_KEY_ENV]: 'test-key' },
-    configText,
-    allowOpenAiRuntime: true,
-  });
-  assert.equal(config.provider, RUNTIME_PROVIDER);
-  assert.equal(config.model, RUNTIME_MODEL);
+  await assert.rejects(
+    () => assertCodexRuntimeConfig({
+      workspacePath: workspace,
+      env: { [RUNTIME_KEY_ENV]: 'test-key' },
+      configText,
+      allowOpenAiRuntime: true,
+    }),
+    /local SciForge Model Router loopback/,
+  );
 });
 
 test('runtime environment forces isolated CODEX_HOME over inherited values', () => {

@@ -9,11 +9,54 @@ export interface ObjectReferenceVisionDescriptor {
   schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1';
   status: 'pending' | 'ready' | 'failed';
   source: 'upload-preextract' | 'first-reference-preextract' | 'agent-host-cache' | 'model-router-trace' | 'manual';
+  objectId?: string;
+  version?: number;
   summary?: string;
   descriptorRef?: string;
   sha256?: string;
   traceRef?: string;
   createdAt?: string;
+  updatedAt?: string;
+  details?: {
+    kind?: string;
+    facts?: Array<{
+      key: string;
+      value: string;
+      confidence?: number;
+      sourceObservationId?: string;
+    }>;
+    regions?: Array<{
+      regionId: string;
+      label: string;
+      description: string;
+      confidence?: number;
+      anchor?: { x: number; y: number; width: number; height: number };
+    }>;
+    visibleText?: Array<{
+      text: string;
+      regionId?: string;
+      confidence?: number;
+    }>;
+    gaps?: Array<{
+      gapId: string;
+      description: string;
+    }>;
+  };
+  coverage?: {
+    answeredIntents?: Array<{
+      intentKey: string;
+      question: string;
+      observationId: string;
+    }>;
+  };
+  observations?: Array<{
+    observationId: string;
+    reason: 'initial-ingest' | 'targeted-refinement' | 'user-followup' | 'agent-host-presentation';
+    traceRef?: string;
+    createdAt: string;
+    descriptorVersionBefore: number;
+    descriptorVersionAfter: number;
+  }>;
 }
 
 export const objectReferenceKinds = [

@@ -48,6 +48,9 @@ const cuNextRuntimeEnvKeys = [
   'SCIFORGE_RUNTIME_PROVIDER',
   'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
   'SCIFORGE_PROXY_DEFAULT_MODEL',
+  'SCIFORGE_MODEL_ROUTER_BASE_URL',
+  'SCIFORGE_MODEL_ROUTER_URL',
+  'SCIFORGE_MODEL_ROUTER_PORT',
   'SCIFORGE_COMPUTER_USE_PLANNER_PROFILE',
   'SCIFORGE_VISION_INPUT_ADAPTER',
   'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
@@ -336,7 +339,7 @@ test('CU-NEXT CLI exposes readiness through the shared readiness manifest builde
   }
 });
 
-test('CU-NEXT preflight prints no-secret service-env repair actions for missing Runtime Codex planner config', async () => {
+test('CU-NEXT preflight prints no-secret service-env repair actions for missing Runtime Codex Model Router config', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-repair-'));
   try {
     const result = await execFileAsync(process.execPath, [
@@ -352,7 +355,9 @@ test('CU-NEXT preflight prints no-secret service-env repair actions for missing 
     ], {
       env: cuNextRuntimeEnv({
         SCIFORGE_RUNTIME_API_KEY: '',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: '',
         SCIFORGE_PROXY_UPSTREAM_BASE_URL: '',
+        SCIFORGE_RUNTIME_BASE_URL: 'http://127.0.0.1:3888/v1',
         SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
         SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
       }),
@@ -361,7 +366,43 @@ test('CU-NEXT preflight prints no-secret service-env repair actions for missing 
     assert.match(result.stdout, /\[repair-needed\] CU-NEXT-04 preflight -> CU-LONG-005/);
     assert.match(result.stdout, /runtime-codex-planner: Runtime Codex text planner config is incomplete/);
     assert.match(result.stdout, /repair: Set SCIFORGE_RUNTIME_API_KEY in the service environment/);
-    assert.match(result.stdout, /SCIFORGE_PROXY_UPSTREAM_BASE_URL/);
+    assert.match(result.stdout, /SCIFORGE_MODEL_ROUTER_BASE_URL/);
+    assert.doesNotMatch(result.stdout, /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-NEXT preflight ignores retired Runtime upstream env when Model Router URL is missing', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-retired-upstream-'));
+  try {
+    const result = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'preflight',
+      '--task',
+      'CU-NEXT-04',
+      '--workspace-path',
+      workspace,
+      '--real',
+    ], {
+      env: cuNextRuntimeEnv({
+        SCIFORGE_RUNTIME_API_KEY: 'runtime-router-test-key',
+        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
+        SCIFORGE_RUNTIME_BASE_URL: 'http://127.0.0.1:3888/v1',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: '',
+        SCIFORGE_MODEL_ROUTER_URL: '',
+        SCIFORGE_MODEL_ROUTER_PORT: '',
+        SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
+        SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
+      }),
+    });
+
+    assert.match(result.stdout, /\[repair-needed\] CU-NEXT-04 preflight -> CU-LONG-005/);
+    assert.match(result.stdout, /missing SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT/);
+    assert.doesNotMatch(result.stdout, /missing SCIFORGE_RUNTIME_API_KEY/);
+    assert.doesNotMatch(result.stdout, /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -376,6 +417,12 @@ test('CU-NEXT preflight hydrates runtime env from explicit local config without 
         apiKey: 'sk-test-cu-next-local-config-secret',
         baseUrl: 'http://127.0.0.1:3888/v1',
         model: 'bailian/deepseek-v4-flash',
+      },
+      modelRouter: {
+        baseUrl: 'http://127.0.0.1:3892/v1',
+      },
+      runtimeCodex: {
+        apiKey: 'sciforge-runtime-router-test-key',
       },
       computerUse: {
         plannerProfile: 'sciforge-runtime-deepseek',
@@ -422,8 +469,61 @@ test('CU-NEXT preflight hydrates runtime env from explicit local config without 
   }
 });
 
-test('CU-NEXT preflight keeps explicit empty upstream fail-closed even with local config', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-empty-upstream-'));
+test('CU-NEXT preflight treats llm/textLLM as Router member config and ignores legacy codexProxy', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-member-model-only-'));
+  try {
+    const configPath = join(workspace, 'config.local.json');
+    await writeFile(configPath, `${JSON.stringify({
+      llm: {
+        apiKey: 'sk-test-member-model-secret',
+        baseUrl: 'http://127.0.0.1:3888/v1',
+        model: 'bailian/deepseek-v4-flash',
+      },
+      textLLM: {
+        env: {
+          SCIFORGE_TEXT_API_KEY: 'sk-test-text-member-secret',
+          SCIFORGE_TEXT_BASE_URL: 'http://127.0.0.1:3890/v1',
+          SCIFORGE_TEXT_MODEL: 'text-member-model',
+        },
+      },
+      codexProxy: {
+        apiKey: 'sk-test-codex-proxy-member-secret',
+        upstreamBaseUrl: 'http://127.0.0.1:3889/v1',
+        defaultModel: 'member-model-alias',
+      },
+      visionSense: {
+        inputAdapter: 'remote-desktop',
+        independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
+      },
+    }, null, 2)}\n`);
+
+    const result = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'preflight',
+      '--task',
+      'CU-NEXT-04',
+      '--workspace-path',
+      workspace,
+      '--real',
+    ], {
+      env: cuNextRuntimeEnv({
+        SCIFORGE_CONFIG_PATH: configPath,
+      }),
+    });
+
+    assert.match(result.stdout, /\[repair-needed\] CU-NEXT-04 preflight -> CU-LONG-005/);
+    assert.match(result.stdout, /missing SCIFORGE_RUNTIME_API_KEY, SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT/);
+    assert.doesNotMatch(result.stdout, /sk-test-member-model-secret|sk-test-text-member-secret|sk-test-codex-proxy-member-secret/);
+    assert.doesNotMatch(result.stderr, /sk-test-member-model-secret|sk-test-text-member-secret|sk-test-codex-proxy-member-secret/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-NEXT preflight keeps explicit empty Model Router endpoint fail-closed even with local config', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-empty-router-'));
   try {
     const configPath = join(workspace, 'config.local.json');
     await writeFile(configPath, `${JSON.stringify({
@@ -432,6 +532,12 @@ test('CU-NEXT preflight keeps explicit empty upstream fail-closed even with loca
         baseUrl: 'http://127.0.0.1:3888/v1',
         model: 'bailian/deepseek-v4-flash',
       },
+      modelRouter: {
+        baseUrl: 'http://127.0.0.1:3892/v1',
+      },
+      runtimeCodex: {
+        apiKey: 'sciforge-runtime-router-test-key',
+      },
       visionSense: {
         inputAdapter: 'remote-desktop',
         independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
@@ -439,9 +545,10 @@ test('CU-NEXT preflight keeps explicit empty upstream fail-closed even with loca
     }, null, 2)}\n`);
 
     for (const envOverrides of [
-      { SCIFORGE_PROXY_UPSTREAM_BASE_URL: '', SCIFORGE_RUNTIME_BASE_URL: '' },
-      { SCIFORGE_PROXY_UPSTREAM_BASE_URL: '' },
-      { SCIFORGE_RUNTIME_BASE_URL: '' },
+      { SCIFORGE_MODEL_ROUTER_BASE_URL: '', SCIFORGE_MODEL_ROUTER_URL: '', SCIFORGE_MODEL_ROUTER_PORT: '' },
+      { SCIFORGE_MODEL_ROUTER_BASE_URL: '' },
+      { SCIFORGE_MODEL_ROUTER_URL: '' },
+      { SCIFORGE_MODEL_ROUTER_PORT: '' },
     ]) {
       const result = await execFileAsync(process.execPath, [
         '--import',
@@ -461,7 +568,7 @@ test('CU-NEXT preflight keeps explicit empty upstream fail-closed even with loca
       });
 
       assert.match(result.stdout, /\[repair-needed\] CU-NEXT-04 preflight -> CU-LONG-005/);
-      assert.match(result.stdout, /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
+      assert.match(result.stdout, /SCIFORGE_MODEL_ROUTER_BASE_URL or SCIFORGE_MODEL_ROUTER_URL or SCIFORGE_MODEL_ROUTER_PORT/);
       assert.doesNotMatch(result.stdout, /sk-test-cu-next-empty-upstream-secret/);
       assert.doesNotMatch(result.stderr, /sk-test-cu-next-empty-upstream-secret/);
     }

@@ -7,7 +7,7 @@ import {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   type BrowserHostSessionNativeOsUiProof,
 } from '../runtime/browser-host-session-types.js';
-import { browserHostSearchResultExtractionScript } from '../runtime/browser-host-session-search.js';
+import { browserHostDiscoveryResultExtractionScript } from '../runtime/browser-host-session-search.js';
 
 export type DesktopBrowserHostSurfaceBounds = {
   x: number;
@@ -520,7 +520,7 @@ export function createDesktopBrowserHostSurfaceController(
     const session = sessions.get(sessionId);
     if (!session) return { ok: false, results: [], reason: 'native-embedded-session-not-found' };
     const results = await executeJavaScript<Array<{ title: string; url: string; snippet: string }>>(session, `(() => {
-      return ${browserHostSearchResultExtractionScript(limit)};
+      return ${browserHostDiscoveryResultExtractionScript(limit)};
     })()`, []);
     return { ok: true, results };
   }

@@ -148,6 +148,13 @@ const hostOwnedComputerUseRuntimeIntent = {
   source: 'host-owned',
 } as const;
 
+const hardConfirmProductRouterProfile = 'sciforge-runtime-default';
+const hardConfirmProductRouterAlias = 'sciforge-router';
+const hardConfirmProductRouterApiKey = 'sciforge-desktop-cu-hard-confirm-model-router-key';
+const hardConfirmProductMemberApiKeyEnv = 'SCIFORGE_DESKTOP_CU_HARD_CONFIRM_MEMBER_KEY';
+const hardConfirmProductMemberApiKey = 'sciforge-desktop-cu-hard-confirm-member-key';
+const hardConfirmProductMemberModel = 'sciforge-desktop-cu-hard-confirm-dummy-member-model';
+
 export async function runDesktopComputerUseHardConfirmProductSmoke(
   input: RunDesktopComputerUseHardConfirmProductSmokeInput = {},
 ): Promise<DesktopComputerUseHardConfirmProductSmokeManifest> {
@@ -339,28 +346,24 @@ async function runElectronProductHardConfirmSurfaceProbe(): Promise<DesktopCompu
   }
 
   const scratchRoot = await mkdtemp(join(tmpdir(), 'sciforge-desktop-cu-hard-confirm-product-'));
-  const dummyProvider = await startDummyProvider();
+  const dummyMemberProvider = await startDummyMemberProvider();
   const fixture = await startHardConfirmFixture();
   let electronApp: Awaited<ReturnType<typeof electron.launch>> | undefined;
   try {
     electronApp = await electron.launch({
       args: [mainPath],
-      env: {
+      env: scrubbedModelRouterProductSmokeEnv({
         ...process.env,
+        ...modelRouterOnlyProductSmokeEnv(dummyMemberProvider.url),
         SCIFORGE_DESKTOP_APP_ROOT: projectRoot,
         SCIFORGE_DESKTOP_USER_DATA_DIR: join(scratchRoot, 'userData'),
         SCIFORGE_DESKTOP_WORKSPACE_PATH: join(scratchRoot, 'workspace'),
         SCIFORGE_CONFIG_PATH: join(scratchRoot, 'missing-config.local.json'),
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: dummyProvider.url,
-        SCIFORGE_PROXY_API_KEY_ENV: 'SCIFORGE_DESKTOP_CU_HARD_CONFIRM_DUMMY_KEY',
-        SCIFORGE_DESKTOP_CU_HARD_CONFIRM_DUMMY_KEY: 'sciforge-desktop-cu-hard-confirm-dummy-key',
-        SCIFORGE_PROXY_DEFAULT_MODEL: 'sciforge-desktop-cu-hard-confirm-dummy-model',
-        SCIFORGE_PROXY_QUIET: '1',
         SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
         SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN: '0',
         SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
         SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-      },
+      }),
       timeout: 45_000,
     });
     const page = await electronApp.firstWindow({ timeout: 45_000 });
@@ -416,10 +419,40 @@ async function runElectronProductHardConfirmSurfaceProbe(): Promise<DesktopCompu
     };
   } finally {
     if (electronApp) await electronApp.close().catch(() => undefined);
-    await dummyProvider.close();
+    await dummyMemberProvider.close();
     await fixture.close();
     await rm(scratchRoot, { recursive: true, force: true });
   }
+}
+
+function modelRouterOnlyProductSmokeEnv(dummyMemberProviderUrl: string): Record<string, string> {
+  return {
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: hardConfirmProductRouterProfile,
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: hardConfirmProductRouterAlias,
+    SCIFORGE_MODEL_ROUTER_API_KEY: hardConfirmProductRouterApiKey,
+    SCIFORGE_RUNTIME_API_KEY: hardConfirmProductRouterApiKey,
+    SCIFORGE_RUNTIME_PROVIDER: 'sciforge-model-router',
+    SCIFORGE_RUNTIME_MODEL: hardConfirmProductRouterAlias,
+    SCIFORGE_TEXT_PROVIDER: 'desktop-cu-hard-confirm-dummy-member',
+    SCIFORGE_TEXT_BASE_URL: dummyMemberProviderUrl,
+    SCIFORGE_TEXT_API_KEY_ENV: hardConfirmProductMemberApiKeyEnv,
+    [hardConfirmProductMemberApiKeyEnv]: hardConfirmProductMemberApiKey,
+    SCIFORGE_TEXT_MODEL: hardConfirmProductMemberModel,
+  };
+}
+
+function scrubbedModelRouterProductSmokeEnv(input: Record<string, string | undefined>): Record<string, string> {
+  const env = Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  for (const key of [
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_PROXY_API_KEY_ENV',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_QUIET',
+    'SCIFORGE_RUNTIME_BASE_URL',
+  ]) {
+    delete env[key];
+  }
+  return env;
 }
 
 function blockedExecutorEvidence(reason: string): undefined {
@@ -757,7 +790,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-async function startDummyProvider(): Promise<{ url: string; close(): Promise<void> }> {
+async function startDummyMemberProvider(): Promise<{ url: string; close(): Promise<void> }> {
   const server = createServer((req, res) => {
     res.writeHead(503, { 'content-type': 'application/json' });
     res.end(JSON.stringify({

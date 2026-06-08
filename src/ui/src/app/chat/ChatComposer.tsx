@@ -132,6 +132,7 @@ export function ChatComposer({
       <button
         type="button"
         className="composer-collapsed"
+        data-testid="chat-composer-collapsed-button"
         onClick={onExpand}
         aria-expanded={false}
         title={t({ 'zh-CN': '展开输入框', 'en-US': 'Expand composer' })}
@@ -305,6 +306,7 @@ export function ChatComposer({
       ) : null}
       <textarea
         ref={textareaRef}
+        data-testid="chat-composer-textarea"
         value={input}
         onChange={(event) => onInputChange(event.target.value)}
         onKeyDown={(event) => {
@@ -360,7 +362,12 @@ export function ChatComposer({
           {t({ 'zh-CN': '停止', 'en-US': 'Stop' })}
         </ActionButton>
       ) : null}
-      <ActionButton icon={isSending ? Sparkles : Send} onClick={onSend} disabled={disabled || (!input.trim() && !pendingReferences.length)}>
+      <ActionButton
+        icon={isSending ? Sparkles : Send}
+        data-testid="chat-composer-send-button"
+        onClick={onSend}
+        disabled={disabled || (!input.trim() && !pendingReferences.length)}
+      >
         {isSending ? sendingLabel : sendLabel}
       </ActionButton>
     </div>

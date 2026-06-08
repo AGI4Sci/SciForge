@@ -9,11 +9,11 @@ import {
   RUNTIME_CODEX_BROWSER_LOCAL_DOGFOOD_SCHEMA_VERSION,
 } from '../../src/runtime/runtime-codex-browser-local-dogfood.js';
 import {
-  BROWSER_HOST_SEARCH_SCHEMA,
+  BROWSER_HOST_DISCOVERY_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
   BROWSER_HOST_SESSION_SCHEMA,
-  type BrowserHostSearchInput,
-  type BrowserHostSearchOutput,
+  type BrowserHostDiscoveryInput,
+  type BrowserHostDiscoveryOutput,
   type BrowserHostSessionManager,
 } from '../../src/runtime/browser-host-session.js';
 
@@ -30,12 +30,12 @@ test('Runtime Codex browser local dogfood records source page refs without leaki
       model: 'local-model',
     },
   }), 'utf8');
-  const calls: BrowserHostSearchInput[] = [];
+  const calls: BrowserHostDiscoveryInput[] = [];
   const manager = {
-    async search(_workspacePath: string, input: BrowserHostSearchInput): Promise<BrowserHostSearchOutput> {
+    async search(_workspacePath: string, input: BrowserHostDiscoveryInput): Promise<BrowserHostDiscoveryOutput> {
       calls.push(input);
       return {
-        schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
+        schemaVersion: BROWSER_HOST_DISCOVERY_SCHEMA,
         query: input.query,
         engine: 'bing',
         searchedAt: '2026-06-07T00:00:00.000Z',
@@ -158,9 +158,9 @@ test('Runtime Codex browser local dogfood fails when official source text is emp
     },
   }), 'utf8');
   const manager = {
-    async search(_workspacePath: string, input: BrowserHostSearchInput): Promise<BrowserHostSearchOutput> {
+    async search(_workspacePath: string, input: BrowserHostDiscoveryInput): Promise<BrowserHostDiscoveryOutput> {
       return {
-        schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
+        schemaVersion: BROWSER_HOST_DISCOVERY_SCHEMA,
         query: input.query,
         engine: 'bing',
         searchedAt: '2026-06-07T00:00:00.000Z',
@@ -242,9 +242,9 @@ test('Runtime Codex browser local dogfood summarizes changelog text without navi
     },
   }), 'utf8');
   const manager = {
-    async search(_workspacePath: string, input: BrowserHostSearchInput): Promise<BrowserHostSearchOutput> {
+    async search(_workspacePath: string, input: BrowserHostDiscoveryInput): Promise<BrowserHostDiscoveryOutput> {
       return {
-        schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
+        schemaVersion: BROWSER_HOST_DISCOVERY_SCHEMA,
         query: input.query,
         engine: 'bing',
         searchedAt: '2026-06-07T00:00:00.000Z',

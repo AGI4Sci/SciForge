@@ -1,4 +1,4 @@
-import type { GatewayRequest, LlmEndpointConfig } from '../runtime-types.js';
+import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { HARNESS_EXTERNAL_HOOK_STAGES } from '../../../packages/agent-harness/src/runtime.js';
 import {
@@ -12,7 +12,6 @@ export function agentHarnessBackendSelectionDecision(
   request: GatewayRequest,
   input: {
     backendSelectionDecision?: BackendSelectionDecision;
-    llmEndpoint?: LlmEndpointConfig;
     agentHarness?: Record<string, unknown>;
     summary?: Record<string, unknown>;
     trace?: Record<string, unknown>;
@@ -22,7 +21,7 @@ export function agentHarnessBackendSelectionDecision(
   const agentHarness = input.agentHarness ?? (isRecord(uiState.agentHarness) ? uiState.agentHarness : {});
   const summary = input.summary ?? (isRecord(agentHarness.summary) ? agentHarness.summary : {});
   const trace = input.trace ?? (isRecord(agentHarness.trace) ? agentHarness.trace : undefined);
-  const decision = input.backendSelectionDecision ?? backendSelectionDecisionForRequest(request, input.llmEndpoint);
+  const decision = input.backendSelectionDecision ?? backendSelectionDecisionForRequest(request);
   const harnessSignals = agentHarnessStageHookTraceMetadata(request, decision.harnessStage, { agentHarness, summary, trace });
   return {
     ...decision,

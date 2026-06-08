@@ -11,26 +11,26 @@ export function publicRuntimeFailureReason(stderrSummary: string | undefined, ex
 
 export function classifyRuntimeFailure(stderrSummary: string | undefined, exitCode: number | undefined): RuntimeFailureClassification {
   const text = stderrSummary ?? '';
-  if (/completed without gui\.present|gui-present-required/i.test(text)) {
-    return runtimeFailureClassification('missing-gui-present', 'runtime-projection', true, 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.');
+  if (/without a safe final assistant answer|final-answer-required/i.test(text)) {
+    return runtimeFailureClassification('missing-final-answer', 'runtime-projection', true, 'Runtime Codex completed without a safe final assistant answer; SciForge withheld raw runtime diagnostics from the primary result.');
   }
   if (/401|unauthorized|invalid token/i.test(text)) {
-    return runtimeFailureClassification('provider-auth', 'provider-config', false, 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.');
+    return runtimeFailureClassification('provider-auth', 'provider-config', false, 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured Model Router member model credentials.');
   }
   if (/403|forbidden/i.test(text)) {
-    return runtimeFailureClassification('provider-forbidden', 'provider-access', false, 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.');
+    return runtimeFailureClassification('provider-forbidden', 'provider-access', false, 'Runtime Codex provider or plugin access was forbidden (403). Check the configured Model Router member model credentials and account access.');
   }
   if (/429|rate limit|quota|insufficient_quota/i.test(text)) {
-    return runtimeFailureClassification('provider-quota', 'provider-budget', false, 'Runtime Codex provider rate limit or quota blocked the run. Check the configured proxy upstream account limits.');
+    return runtimeFailureClassification('provider-quota', 'provider-budget', false, 'Runtime Codex provider rate limit or quota blocked the run. Check the configured Model Router member model account limits.');
   }
   if (/502|bad gateway/i.test(text)) {
     return runtimeFailureClassification('provider-gateway', 'provider-upstream', true, 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.');
   }
   if (/ECONNREFUSED|connection refused|failed to connect/i.test(text)) {
-    return runtimeFailureClassification('provider-proxy-unreachable', 'provider-proxy', true, 'Runtime Codex could not reach the configured provider proxy. Check that the proxy is running and the base URL is correct.');
+    return runtimeFailureClassification('model-router-unreachable', 'model-router', true, 'Runtime Codex could not reach the configured Model Router. Check that the Model Router is running and the base URL is correct.');
   }
   if (/ENOTFOUND|EAI_AGAIN|getaddrinfo|nodename nor servname|DNS|network|timeout|timed out/i.test(text)) {
-    return runtimeFailureClassification('external-network', 'external-network', true, 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.');
+    return runtimeFailureClassification('external-network', 'external-network', true, 'Runtime Codex provider network request failed. Check network access and the configured Model Router member model endpoint.');
   }
   if (/ENOENT|spawn .*ENOENT|command not found|executable not found|No such file or directory/i.test(text)) {
     return runtimeFailureClassification('runtime-tool-missing', 'local-runtime', false, 'Runtime Codex could not start a required local tool or executable. Check the Runtime Codex installation and PATH.');

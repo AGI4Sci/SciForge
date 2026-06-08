@@ -27,7 +27,7 @@ test('buildRuntimeProviderPreflightManifest reports missing runtime service env 
     category: 'missing-runtime-env',
     owner: 'environment',
     policyViolations: [],
-    missingEnv: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
+    missingEnv: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_MODEL_ROUTER_BASE_URL'],
     evidenceMode: 'current-env-diagnostic-only',
     checkedHealthz: undefined,
     nextActions: [
@@ -36,7 +36,7 @@ test('buildRuntimeProviderPreflightManifest reports missing runtime service env 
         writesRepo: false,
       },
       {
-        label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or ignored local provider base URL for the Runtime Codex proxy.',
+        label: 'Set SCIFORGE_MODEL_ROUTER_BASE_URL to the Model Router /v1 endpoint for Runtime Codex.',
         writesRepo: false,
       },
       {
@@ -52,13 +52,13 @@ test('buildRuntimeProviderPreflightManifest preserves provider healthz diagnosti
   const manifest = buildRuntimeProviderPreflightManifest({
     serviceEnv: {
       SCIFORGE_RUNTIME_API_KEY: 'sk-service',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.test/v1',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
     },
     runtimeEnv: {
       SCIFORGE_RUNTIME_API_KEY: 'sk-runtime',
     },
     proxyOptions: {
-      upstreamBaseUrl: 'https://provider.test/v1',
+      upstreamBaseUrl: 'http://127.0.0.1:3892/v1',
     },
     checkedHealthz: {
       category: 'provider-auth',
@@ -91,13 +91,13 @@ test('buildRuntimeProviderPreflightManifest treats inference failures as provide
   const manifest = buildRuntimeProviderPreflightManifest({
     serviceEnv: {
       SCIFORGE_RUNTIME_API_KEY: 'sk-service',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.test/v1',
+      SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
     },
     runtimeEnv: {
       SCIFORGE_RUNTIME_API_KEY: 'sk-runtime',
     },
     proxyOptions: {
-      upstreamBaseUrl: 'https://provider.test/v1',
+      upstreamBaseUrl: 'http://127.0.0.1:3892/v1',
     },
     checkedHealthz: {
       category: 'ready',
@@ -127,7 +127,7 @@ test('buildRuntimeProviderPreflightManifest treats inference failures as provide
   assert.equal(manifest.nextActions[0]?.label, 'Resolve provider-side provider-auth before live repair can pass.');
 });
 
-test('buildRuntimeProviderPreflightManifest reports config fallbacks without requiring service base URL', () => {
+test('buildRuntimeProviderPreflightManifest rejects config/member-model base URL fallbacks for Runtime Codex readiness', () => {
   const manifest = buildRuntimeProviderPreflightManifest({
     serviceEnv: {},
     runtimeEnv: {
@@ -140,9 +140,9 @@ test('buildRuntimeProviderPreflightManifest reports config fallbacks without req
   });
 
   assert.equal(manifest.upstreamKeySourceKind, 'config-debug-fallback');
-  assert.equal(manifest.upstreamBaseUrlSourceKind, 'config');
+  assert.equal(manifest.upstreamBaseUrlSourceKind, 'missing');
   assert.equal(manifest.category, 'missing-runtime-env');
-  assert.deepEqual(manifest.missingEnv, ['SCIFORGE_RUNTIME_API_KEY']);
+  assert.deepEqual(manifest.missingEnv, ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_MODEL_ROUTER_BASE_URL']);
 });
 
 test('normalizeRuntimeProviderProxyHealthzResponse reads upstream diagnostics and falls back to response status', () => {
@@ -202,9 +202,10 @@ test('normalizeRuntimeProviderProxyInferenceResponse classifies real inference f
   });
 });
 
-test('runtimeProviderProxyInferenceRequestCandidates probes Responses first and keeps chat fallback', () => {
+test('runtimeProviderProxyInferenceRequestCandidates probes only the Model Router Responses endpoint', () => {
   const candidates = runtimeProviderProxyInferenceRequestCandidates('sciforge-router');
 
+  assert.equal(candidates.length, 1);
   assert.equal(candidates[0]?.endpoint, '/v1/responses');
   assert.deepEqual(candidates[0]?.body, {
     model: 'sciforge-router',
@@ -212,27 +213,28 @@ test('runtimeProviderProxyInferenceRequestCandidates probes Responses first and 
     stream: false,
     max_output_tokens: 8,
   });
-  assert.equal(candidates[1]?.endpoint, '/v1/chat/completions');
-  assert.deepEqual(candidates[1]?.body, {
-    model: 'sciforge-router',
-    messages: [{ role: 'user', content: 'Reply with exactly OK.' }],
-    stream: false,
-    max_tokens: 8,
-  });
 });
 
-test('runtimeProviderProxyBaseUrl normalizes proxy base URL and strips OpenAI-compatible v1 suffix', () => {
+test('runtimeProviderProxyBaseUrl normalizes Model Router base URL and strips OpenAI-compatible v1 suffix', () => {
   assert.equal(
-    runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:8787/v1///' }, 'http://fallback/v1'),
+    runtimeProviderProxyBaseUrl({ SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:8787/v1///' }, 'http://fallback/v1'),
     'http://127.0.0.1:8787',
   );
   assert.equal(
-    runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_PORT: '3893' }, 'http://fallback/v1'),
+    runtimeProviderProxyBaseUrl({ SCIFORGE_MODEL_ROUTER_PORT: '3894' }, 'http://fallback/v1'),
+    'http://127.0.0.1:3894',
+  );
+  assert.equal(
+    runtimeProviderProxyBaseUrl({ SCIFORGE_MODEL_ROUTER_HOST: '0.0.0.0', SCIFORGE_MODEL_ROUTER_PORT: '3893' }, 'http://fallback/v1'),
     'http://127.0.0.1:3893',
   );
   assert.equal(
+    runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:8787/v1' }, 'http://fallback/v1'),
+    'http://fallback',
+  );
+  assert.equal(
     runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_HOST: '0.0.0.0', SCIFORGE_PROXY_PORT: '3893' }, 'http://fallback/v1'),
-    'http://127.0.0.1:3893',
+    'http://fallback',
   );
   assert.equal(runtimeProviderProxyBaseUrl({}, 'http://fallback/v1'), 'http://fallback');
 });

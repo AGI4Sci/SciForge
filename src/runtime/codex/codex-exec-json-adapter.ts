@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, guiAskUserEvent, guiPresentEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
+import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 import { type AgentCliAdapter, type AgentCliApprovalPolicy, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
 import { assertCodexNoForkGate } from '../../../packages/backend/src/codex-compatibility-gate.js';
 import {
@@ -16,8 +16,6 @@ import {
   scrubRuntimeCodexEventForAudit,
   type RuntimeCodexAuditBundle,
 } from './codex-runtime-audit-bundle.js';
-import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
-import { loadGuiExtensionSnapshot } from './gui-extension-state.js';
 import { prepareRuntimeSubagentInjection } from './subagent-extension-manifest.js';
 
 const RUNTIME_CODEX_EXEC_ISOLATION_ARGS = ['--skip-git-repo-check', '--ignore-rules'];
@@ -48,7 +46,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     const config = await assertCodexRuntimeConfig({
       workspacePath: input.workspacePath,
       profile: input.profile,
-      allowOpenAiRuntime: input.allowOpenAiRuntime,
+      allowOpenAiRuntime: false,
       env: this.options.env,
     });
     const commandText = input.commandText.trim();
@@ -61,11 +59,6 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     const runtimeSandbox = input.sandbox ?? resolveRuntimeCodexSandbox(runtimeEnv);
     const approvalPolicy = input.approvalPolicy ?? RUNTIME_CODEX_APPROVAL_POLICY;
     const codexGate = assertCodexNoForkGate({ codexCommand: runtimeEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
-    const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(input.guiExtension, {
-      workspace: config.workspace,
-      commandId,
-      attemptId,
-    }));
     const subagentInjection = await prepareRuntimeSubagentInjection({
       workspace: config.workspace,
       profile: config.profile,
@@ -99,15 +92,10 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       sandbox: runtimeSandbox,
       approvalPolicy,
       configArgs: [
-        ...(guiInjection?.configArgs ?? []),
         ...subagentInjection.configArgs,
       ],
     });
     const env = codexRuntimeEnv(runtimeEnv, config.codexHome);
-    if (guiInjection) {
-      env.PATH = [guiInjection.binDir, env.PATH].filter(Boolean).join(':');
-      env.SCIFORGE_GUI_EXTENSION_STATE = guiInjection.statePath;
-    }
     const child = (this.options.spawnProcess ?? spawn)(codexGate.codexCommand, args, {
       cwd: config.workspace,
       env,
@@ -122,7 +110,6 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
 
     const events = this.eventsForChild(child, metadata, {
       auditBundle,
-      guiExtensionStatePath: guiInjection?.statePath,
       cleanup: () => {
         input.abortSignal?.removeEventListener('abort', abort);
         this.activeTurns.delete(commandId);
@@ -143,7 +130,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
   private async *eventsForChild(
     child: CodexChildProcess,
     metadata: CodexRuntimeMetadata,
-    options: { auditBundle: RuntimeCodexAuditBundle; guiExtensionStatePath?: string; cleanup: () => void },
+    options: { auditBundle: RuntimeCodexAuditBundle; cleanup: () => void },
   ): AsyncIterable<NormalizedAgentEvent> {
     const started = runStartedEvent(metadata);
     options.auditBundle.appendNormalizedEvent(started);
@@ -154,13 +141,11 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | string | null = null;
     let spawnError: unknown;
-    let sawVisibleGuiIntent = false;
     const stderrChunks: string[] = [];
 
     const wake = () => waiters.splice(0).forEach((resolve) => resolve());
     const push = (event: NormalizedAgentEvent) => {
       const scrubbedEvent = scrubRuntimeCodexEventForAudit(event);
-      if (scrubbedEvent.type === 'gui_present' || scrubbedEvent.type === 'gui_ask_user') sawVisibleGuiIntent = true;
       options.auditBundle.appendNormalizedEvent(scrubbedEvent);
       queue.push(scrubbedEvent);
       wake();
@@ -213,11 +198,6 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
           });
           await options.auditBundle.finalize({ status: 'failed', exitCode: 1, signal: null });
         } else {
-          if (code === 0 && !sawVisibleGuiIntent && options.guiExtensionStatePath) {
-            const guiIntent = await latestVisibleGuiIntentFromState(options.guiExtensionStatePath).catch(() => undefined);
-            if (guiIntent?.kind === 'present') push(guiPresentEvent(metadata, guiIntent.presentation));
-            if (guiIntent?.kind === 'ask_user') push(guiAskUserEvent(metadata, guiIntent.askUser));
-          }
           if (metadata.resumeRequested && code !== 0) {
             push(resumeFailureAuditEvent(metadata, {
               exitCode: code,
@@ -254,113 +234,12 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
   }
 }
 
-async function latestVisibleGuiIntentFromState(statePath: string): Promise<
-  | { kind: 'present'; presentation: Parameters<typeof guiPresentEvent>[1] }
-  | { kind: 'ask_user'; askUser: Parameters<typeof guiAskUserEvent>[1] }
-  | undefined
-> {
-  const snapshot = await loadGuiExtensionSnapshot(statePath);
-  const latest = [...(snapshot.intentLog ?? [])]
-    .reverse()
-    .find((entry) => (entry.tool === 'gui.present' || entry.tool === 'gui.ask_user') && entry.applied === true);
-  if (!latest) return undefined;
-  if (latest.tool === 'gui.ask_user') return latestGuiAskUserFromState(snapshot, latest);
-  return latestGuiPresentFromState(snapshot, latest);
-}
-
-function latestGuiPresentFromState(
-  snapshot: Awaited<ReturnType<typeof loadGuiExtensionSnapshot>>,
-  present: NonNullable<Awaited<ReturnType<typeof loadGuiExtensionSnapshot>>['intentLog']>[number],
-): { kind: 'present'; presentation: Parameters<typeof guiPresentEvent>[1] } | undefined {
-  if (!present) return undefined;
-  const panel = present.placement?.panel ?? snapshot.hotRegion?.panel;
-  const viewId = present.placement?.viewId ?? snapshot.hotRegion?.viewId;
-  const region = (snapshot.regions ?? []).find((candidate) => {
-    if (viewId && candidate.viewId === viewId) return true;
-    return panel && candidate.regionId === panel;
-  }) ?? (snapshot.regions ?? []).find((candidate) => candidate.regionId !== 'chat') ?? (snapshot.regions ?? [])[0];
-  const text = stringField(region?.summary)
-    ?? stringField(region?.selectionSummary)
-    ?? stringField(region?.title)
-    ?? present.summary;
-  if (!text.trim()) return undefined;
-  return {
-    kind: 'present',
-    presentation: {
-      text,
-      source: undefined,
-      ref: stringField(snapshot.hotRegion?.primaryRef) ?? stringField(region?.visibleRefs?.[0]),
-      displayedRefs: stringListField(region?.visibleRefs) ?? stringListField(snapshot.hotRegion?.selectedRefs),
-      title: stringField(region?.title) ?? present.summary,
-      intentLogId: present.id,
-      placement: present.placement,
-    },
-  };
-}
-
-function latestGuiAskUserFromState(
-  snapshot: Awaited<ReturnType<typeof loadGuiExtensionSnapshot>>,
-  ask: NonNullable<Awaited<ReturnType<typeof loadGuiExtensionSnapshot>>['intentLog']>[number],
-): { kind: 'ask_user'; askUser: Parameters<typeof guiAskUserEvent>[1] } | undefined {
-  const panel = ask.placement?.panel ?? snapshot.hotRegion?.panel;
-  const viewId = ask.placement?.viewId ?? snapshot.hotRegion?.viewId;
-  const region = (snapshot.regions ?? []).find((candidate) => {
-    if (viewId && candidate.viewId === viewId) return true;
-    return panel && candidate.regionId === panel;
-  }) ?? (snapshot.regions ?? []).find((candidate) => candidate.regionId === 'modal');
-  const title = stringField(region?.title) ?? stringField(region?.selectionSummary) ?? ask.summary;
-  const message = stringField(region?.summary);
-  if (!title.trim()) return undefined;
-  const choices = (region?.affordances ?? []).flatMap((action) => {
-    const label = stringField(action.label);
-    const commandText = stringField(action.commandText);
-    if (!label || !commandText) return [];
-    return [{ label, commandText, style: action.style }];
-  });
-  const relatedRefs = stringListField(region?.visibleRefs) ?? stringListField(snapshot.hotRegion?.selectedRefs);
-  const text = [
-    `## ${title}`,
-    message && message !== title ? message : undefined,
-    relatedRefs?.length ? ['Evidence refs:', ...relatedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
-    choices.length ? ['Choices:', ...choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
-  ].filter(Boolean).join('\n\n');
-  return {
-    kind: 'ask_user',
-    askUser: {
-      kind: stringField((region?.rendererState as Record<string, unknown> | undefined)?.kind) ?? 'confirmation',
-      title,
-      message,
-      text,
-      submitCommandTemplate: stringField((region?.rendererState as Record<string, unknown> | undefined)?.submitCommandTemplate),
-      choices: choices.length ? choices : undefined,
-      relatedRefs,
-      displayedRefs: relatedRefs,
-      intentLogId: ask.id,
-      placement: ask.placement,
-    },
-  };
-}
-
 function evidenceRefsForTurn(commandId: string, attemptId: string): string[] {
   return [
     `audit:codex-runtime:${commandId}:${attemptId}:raw-jsonl`,
     `audit:codex-runtime:${commandId}:${attemptId}:stderr`,
     `audit:codex-runtime:${commandId}:${attemptId}:normalized-events`,
   ];
-}
-
-function guiExtensionOptions(
-  options: AgentCliStartTurnInput['guiExtension'],
-  input: { workspace: string; commandId: string; attemptId: string },
-): AgentCliStartTurnInput['guiExtension'] {
-  if (options?.enabled === false) return options;
-  return {
-    ...options,
-    statePath: options?.statePath ?? defaultGuiExtensionStatePath({
-      commandId: input.commandId,
-      attemptId: input.attemptId,
-    }),
-  };
 }
 
 function summarizeStderr(stderr: string): string | undefined {
@@ -434,14 +313,4 @@ function codexExecArgs(input: {
     ...RUNTIME_CODEX_EXEC_ISOLATION_ARGS,
     input.commandText,
   ];
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function stringListField(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const values = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
-  return values.length ? values : undefined;
 }

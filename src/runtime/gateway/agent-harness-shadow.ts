@@ -1,4 +1,4 @@
-import type { GatewayRequest, LlmEndpointConfig, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { clipForBackendJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
 import type { BackendSelectionDecision } from './agent-backend-config.js';
@@ -127,7 +127,6 @@ export async function requestWithAgentHarnessShadow(
 
 export function agentHarnessMetadata(request: GatewayRequest, runtime: {
   backendSelectionDecision?: BackendSelectionDecision;
-  llmEndpoint?: LlmEndpointConfig;
   startupContextEnvelope?: Record<string, unknown>;
 } = {}) {
   return agentHarnessHandoffMetadata(request, runtime);
@@ -135,7 +134,6 @@ export function agentHarnessMetadata(request: GatewayRequest, runtime: {
 
 export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
   backendSelectionDecision?: BackendSelectionDecision;
-  llmEndpoint?: LlmEndpointConfig;
   startupContextEnvelope?: Record<string, unknown>;
 } = {}) {
   const agentHarness = isRecord(request.uiState?.agentHarness) ? request.uiState.agentHarness : undefined;

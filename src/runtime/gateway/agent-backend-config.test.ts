@@ -7,6 +7,8 @@ import {
   BACKEND_BASE_URL_ENV_KEYS,
   DEFAULT_BACKEND_BASE_URL,
   selectedAgentBackend,
+  backendGenerationDispatchQuarantineDecision,
+  backendSelectionDecisionForRequest,
   backendBaseUrlSelectionDecision,
   configuredBackendBaseUrl,
   effectiveBackendBaseUrl,
@@ -19,10 +21,37 @@ test('AgentServer backend selection reuses the centralized runtime backend polic
     delete process.env.SCIFORGE_AGENTSERVER_BACKEND;
     assert.equal(selectedAgentBackend(gatewayRequest({ agentBackend: 'gemini' })), 'gemini');
     assert.equal(selectedAgentBackend(gatewayRequest({ agentBackend: 'not-supported' })), 'codex');
-    assert.equal(selectedAgentBackend(gatewayRequest(), { baseUrl: 'https://llm.example.test/v1' }), 'openteam_agent');
+    assert.equal(selectedAgentBackend(gatewayRequest({ llmEndpoint: { baseUrl: 'https://llm.example.test/v1' } })), 'codex');
 
     process.env.SCIFORGE_AGENTSERVER_BACKEND = 'openclaw';
     assert.equal(selectedAgentBackend(gatewayRequest()), 'openclaw');
+  } finally {
+    restoreEnv('SCIFORGE_AGENTSERVER_BACKEND', originalBackend);
+  }
+});
+
+test('raw llmEndpoint no longer opts into OpenTeam Agent or AgentServer dispatch', () => {
+  const originalBackend = process.env.SCIFORGE_AGENTSERVER_BACKEND;
+  try {
+    delete process.env.SCIFORGE_AGENTSERVER_BACKEND;
+
+    const request = gatewayRequest({
+      llmEndpoint: {
+        baseUrl: 'https://llm.example.test/v1',
+        apiKey: 'sk-secret',
+        modelName: 'legacy-model',
+      },
+    });
+    const decision = backendSelectionDecisionForRequest(request);
+    const quarantine = backendGenerationDispatchQuarantineDecision(request);
+
+    assert.equal(decision.backend, 'codex');
+    assert.equal(decision.source, 'runtime.default');
+    assert.equal(decision.runtimeSignals.llmEndpointConfigured, false);
+    assert.deepEqual(decision.trace.ignoredSources, ['request.llmEndpoint.baseUrl:ignored-model-router-only', 'request.agentBackend:missing', 'env.SCIFORGE_AGENTSERVER_BACKEND:missing']);
+    assert.deepEqual(decision.trace.selectionOrder, ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'runtime.default']);
+    assert.equal(quarantine.allowed, false);
+    assert.equal(quarantine.explicitSignals.requestLlmEndpoint, false);
   } finally {
     restoreEnv('SCIFORGE_AGENTSERVER_BACKEND', originalBackend);
   }

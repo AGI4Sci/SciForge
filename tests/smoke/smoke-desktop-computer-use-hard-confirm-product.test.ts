@@ -24,6 +24,18 @@ test('desktop Computer Use hard-confirm product smoke script is wired as diagnos
   assert.doesNotMatch(script ?? '', /SCIFORGE_DESKTOP_COMPUTER_USE_HARD_CONFIRM_PRODUCT_EXECUTE_REAL=1/);
 });
 
+test('desktop Computer Use hard-confirm product smoke routes dummy member provider only through Model Router env', () => {
+  const source = readFileSync(join(process.cwd(), 'tools', 'desktop-computer-use-hard-confirm-product-smoke-runner.ts'), 'utf8');
+
+  assert.doesNotMatch(source, /SCIFORGE_PROXY_(?:UPSTREAM_BASE_URL|API_KEY_ENV|DEFAULT_MODEL|QUIET)/);
+  assert.match(source, /SCIFORGE_TEXT_BASE_URL/);
+  assert.match(source, /SCIFORGE_TEXT_API_KEY_ENV/);
+  assert.match(source, /SCIFORGE_TEXT_MODEL/);
+  assert.match(source, /SCIFORGE_RUNTIME_API_KEY/);
+  assert.match(source, /SCIFORGE_RUNTIME_MODEL/);
+  assert.match(source, /SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS/);
+});
+
 test('desktop Computer Use hard-confirm product smoke writes blocked diagnostic evidence by default', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'sciforge-desktop-cu-hard-confirm-'));
   const outputPath = join(tmp, 'manifest.json');

@@ -36,7 +36,7 @@ packages/actions/
     action-provider.manifest.json
 ```
 
-Provider 实现可以是 TypeScript、MCP server 或外部 adapter。manifest 只描述稳定边界；运行时 broker 可以先读取 manifest 生成紧凑 capability brief，只有真正选中 provider 后再加载更详细的实现文档。Browser Runtime 当前提供 TypeScript contract service 和 MCP-compatible tool adapter；Computer Use 当前是 TS-only，产品验收走 Agent Host / WindowActionSession / current-run evidence。
+Provider 实现可以是 TypeScript、MCP server 或外部 adapter。manifest 只描述稳定边界；运行时 broker 可以先读取 manifest 生成紧凑 capability brief，只有真正选中 provider 后再加载更详细的实现文档。Browser Runtime 当前提供 TypeScript contract service 和 MCP-compatible tool adapter；其 public/product surface 只包含 `browser.search`、`browser.navigate`、`browser.observe`、`browser.read`、`browser.extract`、`browser.download` 六个 primitive，结果 envelope 以 `resources`、`evidenceState` 和 refs-first evidence 为准。Computer Use 当前是 TS-only，产品验收走 Agent Host / WindowActionSession / current-run evidence。
 
 ## 安全原则
 
@@ -44,4 +44,4 @@ Provider 实现可以是 TypeScript、MCP server 或外部 adapter。manifest �
 - action provider 自报成功不能替代 verifier；高风险或有外部副作用的结果必须进入 verification policy。
 - trace 不内联截图、base64、原始日志或大 payload；使用 artifact refs 和 compact summary。
 - provider 不得依赖 UI component 的内部 React 实现；如果需要操作 UI，只能通过目标环境 contract、可见 affordance、object refs、截图或 accessibility/DOM 等稳定观察输入。
-- 迁移旧 package 时是否保留兼容导出由该 provider 的架构文档决定；Browser Runtime 已明确不保留 `browser.search_read` / `browser.open_read` / `browser.open` 兼容入口。
+- 迁移旧 package 时是否保留兼容导出由该 provider 的架构文档决定；Browser Runtime 已明确不保留 `browser.search_read` / `browser.open_read` / `browser.open` / browser `executeBoundedOperation` 兼容入口，这些名称只可作为历史 trace / 诊断术语出现。

@@ -4,10 +4,38 @@ import { join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { buildDesktopNativeReadiness, type DesktopNativeReadiness } from '../src/desktop/native-readiness.js';
 
-export type DesktopDevShellProcessId = 'vite' | 'workspace-writer' | 'provider-proxy' | 'runtime-codex' | 'electron';
+export type DesktopDevShellProcessId = 'vite' | 'workspace-writer' | 'model-router' | 'runtime-codex' | 'electron';
 const MODEL_ROUTER_PUBLIC_MODEL_ALIAS = 'sciforge-router';
 const MODEL_ROUTER_DEFAULT_PROFILE = 'sciforge-runtime-default';
+const MODEL_ROUTER_LOCAL_RUNTIME_API_KEY = 'sciforge-local-model-router';
 export const DESKTOP_DEV_DEFAULT_BROWSER_HOST_NATIVE_ADAPTER_URL = 'http://127.0.0.1:5177';
+const LEGACY_RUNTIME_DIRECT_ENV_KEYS = [
+  'SCIFORGE_RUNTIME_BASE_URL',
+] as const;
+const ROUTER_MEMBER_ENV_KEYS = [
+  'SCIFORGE_TEXT_PROVIDER',
+  'SCIFORGE_TEXT_BASE_URL',
+  'SCIFORGE_TEXT_MODEL',
+  'SCIFORGE_TEXT_API_KEY',
+  'SCIFORGE_TEXT_API_KEY_ENV',
+  'SCIFORGE_VISION_PROVIDER',
+  'SCIFORGE_VISION_BASE_URL',
+  'SCIFORGE_VISION_MODEL',
+  'SCIFORGE_VISION_API_KEY',
+  'SCIFORGE_VISION_API_KEY_ENV',
+  'SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS',
+] as const;
+const RUNTIME_ROUTER_ENV_KEYS = [
+  'SCIFORGE_RUNTIME_API_KEY',
+  'SCIFORGE_MODEL_ROUTER_API_KEY',
+  'SCIFORGE_RUNTIME_MODEL',
+  'SCIFORGE_MODEL_ROUTER_BASE_URL',
+] as const;
+const FRONTEND_ENV_UNSET_KEYS = [
+  ...LEGACY_RUNTIME_DIRECT_ENV_KEYS,
+  ...ROUTER_MEMBER_ENV_KEYS,
+  ...RUNTIME_ROUTER_ENV_KEYS,
+] as const;
 
 export type DesktopDevShellProcessPlan = {
   id: DesktopDevShellProcessId;
@@ -35,9 +63,10 @@ export type DesktopDevShellPlan = {
     nativeReadiness: DesktopNativeReadiness;
     config: {
       source: string | null;
-      credentialSource: 'env' | 'config' | 'missing';
-      upstreamBaseUrlConfigured: boolean;
-      modelConfigured: boolean;
+      memberCredentialSource: 'env' | 'config' | 'missing';
+      textBaseUrlConfigured: boolean;
+      textModelConfigured: boolean;
+      visionModelConfigured: boolean;
     };
   };
 };
@@ -50,7 +79,7 @@ export type DesktopDevShellCreatePlanOptions = {
   nativeAdapterUrl?: string;
   rendererUrl?: string;
   workspaceWriterUrl?: string;
-  providerProxyUrl?: string;
+  modelRouterUrl?: string;
   runtimeCodexUrl?: string;
 };
 
@@ -85,7 +114,14 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
   const config = readDesktopDevShellConfig(configPath);
   const rendererUrl = sanitizeLoopbackHttpUrl(options.rendererUrl ?? 'http://127.0.0.1:5173') ?? 'http://127.0.0.1:5173';
   const workspaceWriterUrl = sanitizeLoopbackHttpUrl(options.workspaceWriterUrl ?? 'http://127.0.0.1:5174') ?? 'http://127.0.0.1:5174';
-  const providerProxyUrl = sanitizeLoopbackHttpUrl(options.providerProxyUrl ?? 'http://127.0.0.1:5175') ?? 'http://127.0.0.1:5175';
+  const modelRouterUrl = firstSanitizedLoopbackHttpUrl([
+    options.modelRouterUrl,
+    env.SCIFORGE_MODEL_ROUTER_BASE_URL,
+    env.SCIFORGE_MODEL_ROUTER_URL,
+    loopbackHttpUrlFromPort(env.SCIFORGE_MODEL_ROUTER_PORT),
+    'http://127.0.0.1:5175',
+  ]) ?? 'http://127.0.0.1:5175';
+  const modelRouterOpenAiBaseUrl = openAiBaseUrl(modelRouterUrl);
   const runtimeCodexUrl = sanitizeLoopbackHttpUrl(options.runtimeCodexUrl ?? 'http://127.0.0.1:5176') ?? 'http://127.0.0.1:5176';
   const nativeAdapterUrl = firstSanitizedLoopbackHttpUrl([
     options.nativeAdapterUrl,
@@ -93,82 +129,82 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
     config.browserHostNativeAdapterUrl,
     DESKTOP_DEV_DEFAULT_BROWSER_HOST_NATIVE_ADAPTER_URL,
   ]);
-  const apiKey = stringValue(env.SCIFORGE_RUNTIME_API_KEY)
-    ?? stringValue(env.SCIFORGE_TEXT_API_KEY)
-    ?? stringValue(env.SCIFORGE_VISION_API_KEY)
-    ?? config.apiKey;
-  const upstreamBaseUrl = stringValue(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
-    ?? stringValue(env.SCIFORGE_RUNTIME_BASE_URL)
-    ?? stringValue(env.SCIFORGE_TEXT_BASE_URL)
-    ?? config.upstreamBaseUrl;
-  const legacyRuntimeModel = stringValue(env.SCIFORGE_RUNTIME_MODEL);
-  const providerModel = stringValue(env.SCIFORGE_TEXT_MODEL)
-    ?? stringValue(env.SCIFORGE_PROXY_DEFAULT_MODEL)
-    ?? (legacyRuntimeModel && legacyRuntimeModel !== MODEL_ROUTER_PUBLIC_MODEL_ALIAS ? legacyRuntimeModel : undefined)
-    ?? config.model;
   const routerPublicModelAlias = stringValue(env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS)
     ?? MODEL_ROUTER_PUBLIC_MODEL_ALIAS;
   const routerProfile = stringValue(env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE)
     ?? MODEL_ROUTER_DEFAULT_PROFILE;
-  const textBaseUrl = stringValue(env.SCIFORGE_TEXT_BASE_URL) ?? upstreamBaseUrl;
-  const textModel = stringValue(env.SCIFORGE_TEXT_MODEL) ?? providerModel;
+  const runtimeApiKey = stringValue(env.SCIFORGE_MODEL_ROUTER_API_KEY)
+    ?? stringValue(env.SCIFORGE_RUNTIME_API_KEY)
+    ?? MODEL_ROUTER_LOCAL_RUNTIME_API_KEY;
+  const textProvider = stringValue(env.SCIFORGE_TEXT_PROVIDER) ?? config.textProvider;
+  const textBaseUrl = stringValue(env.SCIFORGE_TEXT_BASE_URL) ?? config.textBaseUrl;
+  const textModel = stringValue(env.SCIFORGE_TEXT_MODEL) ?? config.textModel;
+  const textApiKey = stringValue(env.SCIFORGE_TEXT_API_KEY) ?? config.textApiKey;
+  const textApiKeyEnv = stringValue(env.SCIFORGE_TEXT_API_KEY_ENV);
   const visionModel = stringValue(env.SCIFORGE_VISION_MODEL) ?? config.visionModel;
+  const visionProvider = visionModel
+    ? stringValue(env.SCIFORGE_VISION_PROVIDER) ?? config.visionProvider ?? textProvider
+    : undefined;
   const visionBaseUrl = visionModel
-    ? stringValue(env.SCIFORGE_VISION_BASE_URL) ?? config.visionBaseUrl ?? upstreamBaseUrl
+    ? stringValue(env.SCIFORGE_VISION_BASE_URL) ?? config.visionBaseUrl ?? textBaseUrl
     : undefined;
-  const textApiKey = stringValue(env.SCIFORGE_TEXT_API_KEY) ?? apiKey;
   const visionApiKey = visionModel
-    ? stringValue(env.SCIFORGE_VISION_API_KEY) ?? config.visionApiKey ?? apiKey
+    ? stringValue(env.SCIFORGE_VISION_API_KEY) ?? config.visionApiKey ?? textApiKey
     : undefined;
-  const credentialFromEnv = Boolean(
-    stringValue(env.SCIFORGE_RUNTIME_API_KEY)
-    || stringValue(env.SCIFORGE_TEXT_API_KEY)
+  const visionApiKeyEnv = visionModel ? stringValue(env.SCIFORGE_VISION_API_KEY_ENV) : undefined;
+  const visionMaxSupplementRounds = visionModel ? stringValue(env.SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS) : undefined;
+  const memberCredentialFromEnv = Boolean(
+    stringValue(env.SCIFORGE_TEXT_API_KEY)
     || stringValue(env.SCIFORGE_VISION_API_KEY),
   );
+  const memberCredentialFromConfig = Boolean(config.textApiKey || config.visionApiKey);
 
-  const sidecarEnv: NodeJS.ProcessEnv = compactEnv({
+  const sidecarEnv: NodeJS.ProcessEnv = withUnsetEnv(compactEnv({
     SCIFORGE_DESKTOP_DEV: '1',
     SCIFORGE_WORKSPACE_PATH: workspacePath,
     SCIFORGE_RUNTIME_DEFAULT_WORKSPACE: workspacePath,
     SCIFORGE_WORKSPACE_WRITER_URL: workspaceWriterUrl,
-    SCIFORGE_PROXY_BASE_URL: providerProxyUrl,
+    SCIFORGE_MODEL_ROUTER_BASE_URL: modelRouterOpenAiBaseUrl,
+    SCIFORGE_MODEL_ROUTER_HOST: '127.0.0.1',
+    SCIFORGE_MODEL_ROUTER_PORT: portFromUrl(modelRouterUrl),
     SCIFORGE_RUNTIME_CODEX_URL: runtimeCodexUrl,
     SCIFORGE_WORKSPACE_PORT: portFromUrl(workspaceWriterUrl),
     SCIFORGE_RUNTIME_CODEX_HOST: '127.0.0.1',
     SCIFORGE_RUNTIME_CODEX_PORT: portFromUrl(runtimeCodexUrl),
     ...(nativeAdapterUrl ? { SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: nativeAdapterUrl } : {}),
-    ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
-    ...(upstreamBaseUrl ? { SCIFORGE_PROXY_UPSTREAM_BASE_URL: upstreamBaseUrl } : {}),
+    SCIFORGE_RUNTIME_API_KEY: runtimeApiKey,
+    SCIFORGE_MODEL_ROUTER_API_KEY: runtimeApiKey,
     SCIFORGE_RUNTIME_MODEL: routerPublicModelAlias,
     SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: routerPublicModelAlias,
     SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: routerProfile,
+  }), LEGACY_RUNTIME_DIRECT_ENV_KEYS);
+  const routerMemberEnv: NodeJS.ProcessEnv = compactEnv({
+    ...(textProvider ? { SCIFORGE_TEXT_PROVIDER: textProvider } : {}),
     ...(textBaseUrl ? { SCIFORGE_TEXT_BASE_URL: textBaseUrl } : {}),
+    ...(textModel ? { SCIFORGE_TEXT_MODEL: textModel } : {}),
+    ...(textApiKey ? { SCIFORGE_TEXT_API_KEY: textApiKey } : {}),
+    ...(textApiKeyEnv ? { SCIFORGE_TEXT_API_KEY_ENV: textApiKeyEnv } : {}),
+    ...(visionProvider ? { SCIFORGE_VISION_PROVIDER: visionProvider } : {}),
     ...(visionBaseUrl ? { SCIFORGE_VISION_BASE_URL: visionBaseUrl } : {}),
-    ...(textModel ? {
-      SCIFORGE_TEXT_MODEL: textModel,
-    } : {}),
-    ...(visionModel ? {
-      SCIFORGE_VISION_MODEL: visionModel,
-    } : {}),
-    ...(textApiKey ? {
-      SCIFORGE_TEXT_API_KEY: textApiKey,
-    } : {}),
-    ...(visionApiKey ? {
-      SCIFORGE_VISION_API_KEY: visionApiKey,
-    } : {}),
+    ...(visionModel ? { SCIFORGE_VISION_MODEL: visionModel } : {}),
+    ...(visionApiKey ? { SCIFORGE_VISION_API_KEY: visionApiKey } : {}),
+    ...(visionApiKeyEnv ? { SCIFORGE_VISION_API_KEY_ENV: visionApiKeyEnv } : {}),
+    ...(visionMaxSupplementRounds ? { SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS: visionMaxSupplementRounds } : {}),
   });
-  const rendererEnv: NodeJS.ProcessEnv = compactEnv({
+  const nonRouterSidecarEnv = withUnsetEnv(sidecarEnv, ROUTER_MEMBER_ENV_KEYS);
+  const modelRouterEnv = { ...sidecarEnv, ...routerMemberEnv };
+  const rendererEnv: NodeJS.ProcessEnv = withUnsetEnv(compactEnv({
     SCIFORGE_DESKTOP_DEV: '1',
     VITE_SCIFORGE_DEFAULT_WORKSPACE_WRITER_URL: workspaceWriterUrl,
-  });
-  const electronEnv: NodeJS.ProcessEnv = compactEnv({
+  }), FRONTEND_ENV_UNSET_KEYS);
+  const electronEnv: NodeJS.ProcessEnv = withUnsetEnv(compactEnv({
     SCIFORGE_DESKTOP_DEV: '1',
     SCIFORGE_DESKTOP_APP_ROOT: projectRoot,
     SCIFORGE_DESKTOP_RENDERER_URL: rendererUrl,
     SCIFORGE_DESKTOP_WORKSPACE_PATH: workspacePath,
     SCIFORGE_WORKSPACE_PATH: workspacePath,
     ...(nativeAdapterUrl ? { SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: nativeAdapterUrl } : {}),
-  });
+  }), FRONTEND_ENV_UNSET_KEYS);
 
   const processes: DesktopDevShellProcessPlan[] = [
     {
@@ -183,10 +219,10 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
       command: 'npm',
       args: ['run', 'workspace:server', '--', '--host', '127.0.0.1', '--port', portFromUrl(workspaceWriterUrl)],
       cwd: projectRoot,
-      env: sidecarEnv,
+      env: nonRouterSidecarEnv,
     },
     {
-      id: 'provider-proxy',
+      id: 'model-router',
       command: 'npm',
       args: [
         'run',
@@ -196,19 +232,19 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
         '--host',
         '127.0.0.1',
         '--port',
-        portFromUrl(providerProxyUrl),
+        portFromUrl(modelRouterUrl),
         '--workspace-root',
         workspacePath,
       ],
       cwd: projectRoot,
-      env: sidecarEnv,
+      env: modelRouterEnv,
     },
     {
       id: 'runtime-codex',
       command: 'npm',
       args: ['run', 'backend:codex-runtime:server'],
       cwd: projectRoot,
-      env: sidecarEnv,
+      env: nonRouterSidecarEnv,
     },
     {
       id: 'electron',
@@ -251,9 +287,10 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
       }),
       config: {
         source: config.source,
-        credentialSource: credentialFromEnv ? 'env' : config.apiKey ? 'config' : 'missing',
-        upstreamBaseUrlConfigured: Boolean(upstreamBaseUrl),
-        modelConfigured: Boolean(providerModel),
+        memberCredentialSource: memberCredentialFromEnv ? 'env' : memberCredentialFromConfig ? 'config' : 'missing',
+        textBaseUrlConfigured: Boolean(textBaseUrl),
+        textModelConfigured: Boolean(textModel),
+        visionModelConfigured: Boolean(visionModel),
       },
     },
   };
@@ -272,7 +309,7 @@ export class DesktopDevShellController {
     for (const processPlan of plan.processes) {
       const child = spawnProcess(processPlan.command, processPlan.args, {
         cwd: processPlan.cwd,
-        env: { ...process.env, ...processPlan.env },
+        env: mergeDesktopDevShellEnv(process.env, processPlan.env),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       this.children.push(child);
@@ -300,10 +337,12 @@ function defaultDesktopDevShellSpawn(
 
 type DesktopDevShellConfig = {
   source: string | null;
-  apiKey?: string;
-  upstreamBaseUrl?: string;
-  model?: string;
+  textApiKey?: string;
+  textProvider?: string;
+  textBaseUrl?: string;
+  textModel?: string;
   visionApiKey?: string;
+  visionProvider?: string;
   visionBaseUrl?: string;
   visionModel?: string;
   browserHostNativeAdapterUrl?: string;
@@ -317,7 +356,6 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
     const llm = recordField(parsed, 'llm');
     const textLLM = recordField(parsed, 'textLLM');
     const textLLMEnv = recordField(textLLM, 'env');
-    const codexProxy = recordField(parsed, 'codexProxy');
     const visionLLM = recordField(parsed, 'visionLLM');
     const visionLLMEnv = recordField(visionLLM, 'env');
     const visionSense = recordField(parsed, 'visionSense');
@@ -327,27 +365,30 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
     const browserHost = recordField(parsed, 'browserHost');
     return {
       source: path,
-      apiKey: stringValue(textLLMEnv.SCIFORGE_RUNTIME_API_KEY)
+      textApiKey: stringValue(textLLMEnv.SCIFORGE_TEXT_API_KEY)
         ?? stringValue(textLLM.apiKey)
         ?? stringValue(llm.apiKey)
         ?? stringValue(parsed.apiKey),
-      upstreamBaseUrl: stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
+      textProvider: stringValue(textLLMEnv.SCIFORGE_TEXT_PROVIDER)
+        ?? stringValue(textLLM.provider)
+        ?? stringValue(llm.provider)
+        ?? stringValue(parsed.provider),
+      textBaseUrl: stringValue(textLLMEnv.SCIFORGE_TEXT_BASE_URL)
         ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
         ?? stringValue(textLLM.baseUrl)
+        ?? stringValue(textLLM.upstreamBaseUrl)
         ?? stringValue(textLLM.modelBaseUrl)
         ?? stringValue(llm.baseUrl)
+        ?? stringValue(llm.upstreamBaseUrl)
         ?? stringValue(llm.modelBaseUrl)
-        ?? stringValue(codexProxy.upstreamBaseUrl)
-        ?? stringValue(codexProxy.baseUrl)
         ?? stringValue(parsed.modelBaseUrl),
-      model: stringValue(textLLMEnv.SCIFORGE_RUNTIME_MODEL)
-        ?? stringValue(textLLMEnv.SCIFORGE_PROXY_DEFAULT_MODEL)
+      textModel: stringValue(textLLMEnv.SCIFORGE_TEXT_MODEL)
         ?? stringValue(textLLM.model)
         ?? stringValue(textLLM.modelName)
+        ?? stringValue(textLLM.defaultModel)
         ?? stringValue(llm.model)
         ?? stringValue(llm.modelName)
-        ?? stringValue(codexProxy.defaultModel)
-        ?? stringValue(codexProxy.model)
+        ?? stringValue(llm.defaultModel)
         ?? stringValue(parsed.modelName)
         ?? stringValue(parsed.model),
       visionApiKey: stringValue(visionLLM.apiKey)
@@ -356,6 +397,10 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
         ?? stringValue(visionSense.apiKey)
         ?? stringValue(visionSenseEnv.SCIFORGE_VISION_API_KEY)
         ?? stringValue(visionSenseEnv.SCIFORGE_VISION_VLM_API_KEY),
+      visionProvider: stringValue(visionLLMEnv.SCIFORGE_VISION_PROVIDER)
+        ?? stringValue(visionLLM.provider)
+        ?? stringValue(visionSenseEnv.SCIFORGE_VISION_PROVIDER)
+        ?? stringValue(visionSense.provider),
       visionBaseUrl: stringValue(visionLLMEnv.SCIFORGE_VISION_BASE_URL)
         ?? stringValue(visionLLMEnv.SCIFORGE_VISION_VLM_BASE_URL)
         ?? stringValue(visionLLM.baseUrl)
@@ -395,6 +440,14 @@ function firstSanitizedLoopbackHttpUrl(values: Array<string | undefined>): strin
   return undefined;
 }
 
+function loopbackHttpUrlFromPort(value: string | undefined): string | undefined {
+  const port = stringValue(value);
+  if (!port || !/^\d+$/.test(port)) return undefined;
+  const parsed = Number(port);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65_535) return undefined;
+  return `http://127.0.0.1:${parsed}`;
+}
+
 function sanitizeLoopbackHttpUrl(value: string | undefined): string | undefined {
   if (!value?.trim()) return undefined;
   try {
@@ -418,8 +471,34 @@ function portFromUrl(value: string): string {
   }
 }
 
+function openAiBaseUrl(value: string): string {
+  return `${value.replace(/\/+$/, '')}/v1`;
+}
+
 function compactEnv(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0));
+}
+
+function withUnsetEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...Object.fromEntries(keys.map((key) => [key, undefined])),
+  };
+}
+
+function mergeDesktopDevShellEnv(base: NodeJS.ProcessEnv, overlay: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...base, ...overlay };
+  for (const [key, value] of Object.entries(overlay)) {
+    if (value === undefined) delete merged[key];
+  }
+  stripLegacyRuntimeDirectEnv(merged);
+  return merged;
+}
+
+function stripLegacyRuntimeDirectEnv(env: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(env)) {
+    if (key === 'SCIFORGE_RUNTIME_BASE_URL' || key.startsWith('SCIFORGE_PROXY_')) delete env[key];
+  }
 }
 
 function recordField(value: Record<string, unknown>, key: string): Record<string, unknown> {

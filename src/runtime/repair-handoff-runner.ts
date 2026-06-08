@@ -148,6 +148,8 @@ interface RuntimeCodexPreDispatchBlock {
   runtimeApiKeyPresentInAdapterEnv: boolean;
   upstreamBaseUrlPresent: boolean;
   upstreamBaseUrlSource: 'service-env' | 'adapter-env-or-config' | 'missing';
+  modelRouterEndpointPresent: boolean;
+  modelRouterEndpointSource: 'service-env' | 'adapter-env-or-config' | 'missing';
 }
 
 export interface RepairHandoffStopResult {
@@ -538,28 +540,40 @@ function runtimeCodexPreDispatchBlocker(
   const adapterEnv = environment.runtimeCodexEnv ?? process.env;
   const runtimeApiKeyPresentInServiceEnv = envHasValue(serviceEnv, 'SCIFORGE_RUNTIME_API_KEY');
   const runtimeApiKeyPresentInAdapterEnv = envHasValue(adapterEnv, 'SCIFORGE_RUNTIME_API_KEY');
-  const upstreamBaseUrlPresentInServiceEnv = envHasValue(serviceEnv, 'SCIFORGE_PROXY_UPSTREAM_BASE_URL');
-  const upstreamBaseUrlPresentInAdapterEnv = envHasValue(adapterEnv, 'SCIFORGE_PROXY_UPSTREAM_BASE_URL')
-    || envHasValue(adapterEnv, 'SCIFORGE_RUNTIME_BASE_URL');
-  const upstreamBaseUrlPresent = upstreamBaseUrlPresentInServiceEnv || upstreamBaseUrlPresentInAdapterEnv;
+  const modelRouterEndpointPresentInServiceEnv = modelRouterEndpointPresent(serviceEnv);
+  const modelRouterEndpointPresentInAdapterEnv = modelRouterEndpointPresent(adapterEnv);
+  const modelRouterEndpointPresentInEnv = modelRouterEndpointPresentInServiceEnv || modelRouterEndpointPresentInAdapterEnv;
   const missingEnv = [
     ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
-    ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
+    ...(modelRouterEndpointPresentInServiceEnv ? [] : ['SCIFORGE_MODEL_ROUTER_BASE_URL']),
   ];
   if (missingEnv.length === 0) return undefined;
   const configFallbackNote = !runtimeApiKeyPresentInServiceEnv && runtimeApiKeyPresentInAdapterEnv
     ? ' A Runtime Codex key was present in adapter/config fallback, but repair execution requires SCIFORGE_RUNTIME_API_KEY in the service environment.'
     : '';
+  const routerFallbackNote = !modelRouterEndpointPresentInServiceEnv && modelRouterEndpointPresentInAdapterEnv
+    ? ' A Model Router endpoint was present in adapter/config fallback, but repair execution requires SCIFORGE_MODEL_ROUTER_BASE_URL, SCIFORGE_MODEL_ROUTER_URL, or SCIFORGE_MODEL_ROUTER_PORT in the service environment.'
+    : '';
   return {
     missingEnv,
     runtimeApiKeyPresentInServiceEnv,
     runtimeApiKeyPresentInAdapterEnv,
-    upstreamBaseUrlPresent,
-    upstreamBaseUrlSource: upstreamBaseUrlPresentInServiceEnv
+    upstreamBaseUrlPresent: modelRouterEndpointPresentInEnv,
+    upstreamBaseUrlSource: modelRouterEndpointPresentInServiceEnv
       ? 'service-env'
-      : upstreamBaseUrlPresentInAdapterEnv ? 'adapter-env-or-config' : 'missing',
-    message: `Runtime Codex provider preflight blocked before isolated worktree creation; missing ${missingEnv.join(', ')}.${configFallbackNote}`,
+      : modelRouterEndpointPresentInAdapterEnv ? 'adapter-env-or-config' : 'missing',
+    modelRouterEndpointPresent: modelRouterEndpointPresentInEnv,
+    modelRouterEndpointSource: modelRouterEndpointPresentInServiceEnv
+      ? 'service-env'
+      : modelRouterEndpointPresentInAdapterEnv ? 'adapter-env-or-config' : 'missing',
+    message: `Runtime Codex provider preflight blocked before isolated worktree creation; missing ${missingEnv.join(', ')}.${configFallbackNote}${routerFallbackNote}`,
   };
+}
+
+function modelRouterEndpointPresent(env: NodeJS.ProcessEnv): boolean {
+  return envHasValue(env, 'SCIFORGE_MODEL_ROUTER_BASE_URL')
+    || envHasValue(env, 'SCIFORGE_MODEL_ROUTER_URL')
+    || envHasValue(env, 'SCIFORGE_MODEL_ROUTER_PORT');
 }
 
 async function persistPreDispatchBlockedRepairResult(
@@ -590,6 +604,8 @@ async function persistPreDispatchBlockedRepairResult(
     runtimeApiKeyPresentInAdapterEnv: input.block.runtimeApiKeyPresentInAdapterEnv,
     upstreamBaseUrlPresent: input.block.upstreamBaseUrlPresent,
     upstreamBaseUrlSource: input.block.upstreamBaseUrlSource,
+    modelRouterEndpointPresent: input.block.modelRouterEndpointPresent,
+    modelRouterEndpointSource: input.block.modelRouterEndpointSource,
     executorMode: input.executorMode,
     noIsolatedWorktreeCreated: true,
     noTargetRepairRunRegistered: true,
@@ -639,6 +655,8 @@ async function persistPreDispatchBlockedRepairResult(
         runtimeApiKeyPresentInAdapterEnv: input.block.runtimeApiKeyPresentInAdapterEnv,
         upstreamBaseUrlPresent: input.block.upstreamBaseUrlPresent,
         upstreamBaseUrlSource: input.block.upstreamBaseUrlSource,
+        modelRouterEndpointPresent: input.block.modelRouterEndpointPresent,
+        modelRouterEndpointSource: input.block.modelRouterEndpointSource,
         evidenceRef: blockRef,
       },
       noExecutorDispatch: true,
@@ -744,7 +762,7 @@ async function dispatchRuntimeCodexRepair(
       attemptId: `repair-${options.repairRunId}-attempt`,
       profile: contract.runtimeProfile || RUNTIME_PROFILE,
       abortSignal: abortController.signal,
-      allowOpenAiRuntime: contract.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       guiExtension: { enabled: false },
     });
     options.activeRepairRun.turnId = turn.turnId || turnId;
@@ -1124,7 +1142,7 @@ async function recordTargetRepairRun(
         isolatedBranch: options.branch,
         isolatedWorktreePath: options.worktreePath,
         runtimeProfile: contract.runtimeProfile || RUNTIME_PROFILE,
-        allowOpenAiRuntime: contract.allowOpenAiRuntime === true,
+        allowOpenAiRuntime: false,
         requestMetadata: contract.requestMetadata,
         requestPlan: preflight.requestPlan,
         guardDigests: {

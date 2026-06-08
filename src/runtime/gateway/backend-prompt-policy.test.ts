@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildBackendGenerationPrompt, readConfiguredBackendBaseUrl } from './backend-prompt-policy.js';
+import { backendLlmRuntime, buildBackendGenerationPrompt, readConfiguredBackendBaseUrl } from './backend-prompt-policy.js';
 import { AGENTSERVER_BACKEND_HANDOFF_VERSION, type BackendHandoffPacket } from './backend-context-contract.js';
 import { BACKEND_BASE_URL_ENV_KEYS } from './agent-backend-config.js';
 import type { ProjectMemoryRef } from '../project-session-memory.js';
@@ -69,6 +69,55 @@ test('AgentServer prompt gateway config resolves AgentServer base URL through ce
     assert.equal(await readConfiguredBackendBaseUrl(workspace), 'http://env-agent.example.test');
   } finally {
     restoreEnvSnapshot(originals);
+  }
+});
+
+test('backend LLM runtime ignores request and local raw endpoints; Model Router owns member models', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-backend-llm-runtime-'));
+  const cwd = process.cwd();
+  await mkdir(join(workspace, '.sciforge'), { recursive: true });
+  await writeFile(join(workspace, 'config.local.json'), JSON.stringify({
+    llm: {
+      provider: 'openai-compatible',
+      baseUrl: 'https://member-model.example.test/v1',
+      apiKey: 'sk-member-secret',
+      model: 'member-model',
+    },
+  }), 'utf8');
+  await writeFile(join(workspace, '.sciforge', 'config.json'), JSON.stringify({
+    llm: {
+      provider: 'openai-compatible',
+      baseUrl: 'https://workspace-member.example.test/v1',
+      apiKey: 'sk-workspace-secret',
+      model: 'workspace-model',
+    },
+  }), 'utf8');
+
+  try {
+    const fromRequest = await backendLlmRuntime({
+      skillDomain: 'knowledge',
+      prompt: 'test',
+      artifacts: [],
+      modelProvider: 'openai-compatible',
+      modelName: 'request-model',
+      llmEndpoint: {
+        provider: 'openai-compatible',
+        baseUrl: 'https://request-member.example.test/v1',
+        apiKey: 'sk-request-secret',
+        modelName: 'request-model',
+      },
+    }, workspace);
+    process.chdir(workspace);
+    const fromLocal = await backendLlmRuntime({
+      skillDomain: 'knowledge',
+      prompt: 'test',
+      artifacts: [],
+    }, workspace);
+
+    assert.deepEqual(fromRequest, {});
+    assert.deepEqual(fromLocal, {});
+  } finally {
+    process.chdir(cwd);
   }
 });
 

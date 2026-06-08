@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import {
   boundedSearchResults,
-  browserHostSearchResultExtractionScript,
+  browserHostDiscoveryResultExtractionScript,
   decodeSearchRedirect,
 } from './browser-host-session-search.js';
 
@@ -38,7 +38,7 @@ test('browser host search extraction script prioritizes result containers over p
     },
   };
 
-  const rows = vm.runInNewContext(browserHostSearchResultExtractionScript(5), { document, URL }) as Array<{
+  const rows = vm.runInNewContext(browserHostDiscoveryResultExtractionScript(5), { document, URL }) as Array<{
     title: string;
     url: string;
     snippet: string;

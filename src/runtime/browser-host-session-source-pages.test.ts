@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { persistBrowserHostSearchSourcePage } from './browser-host-session-source-pages.js';
+import { persistBrowserHostSourcePage } from './browser-host-session-source-pages.js';
 
 test('OpenAI API changelog source pages store concise update summaries', async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), 'sciforge-browser-source-page-'));
   try {
-    const sourcePage = await persistBrowserHostSearchSourcePage({
+    const sourcePage = await persistBrowserHostSourcePage({
       sessionId: 'local',
       sessionDir,
       result: {
@@ -41,7 +41,7 @@ test('OpenAI API changelog source pages store concise update summaries', async (
 test('arXiv search source pages store structured paper result summaries', async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), 'sciforge-browser-source-page-arxiv-'));
   try {
-    const sourcePage = await persistBrowserHostSearchSourcePage({
+    const sourcePage = await persistBrowserHostSourcePage({
       sessionId: 'local',
       sessionDir,
       result: {
@@ -83,7 +83,7 @@ test('arXiv search source pages store structured paper result summaries', async 
 test('arXiv abstract source pages store structured single-paper summaries', async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), 'sciforge-browser-source-page-arxiv-abs-'));
   try {
-    const sourcePage = await persistBrowserHostSearchSourcePage({
+    const sourcePage = await persistBrowserHostSourcePage({
       sessionId: 'local',
       sessionDir,
       result: {
@@ -118,7 +118,7 @@ test('arXiv abstract source pages store structured single-paper summaries', asyn
 test('arXiv abstract source pages structure readable page text without explicit labels', async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), 'sciforge-browser-source-page-arxiv-readable-'));
   try {
-    const sourcePage = await persistBrowserHostSearchSourcePage({
+    const sourcePage = await persistBrowserHostSourcePage({
       sessionId: 'local',
       sessionDir,
       result: {

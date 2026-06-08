@@ -229,8 +229,43 @@ test('Codex realtime session client resolves terminal done events without waitin
   assert.equal(socket?.readyState, 3);
 });
 
+test('Codex realtime session client uses browser-legal private close code for terminal runtime errors', async () => {
+  let socket: MockSocket | undefined;
+  const client = createCodexRealtimeSessionClient({
+    workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+    webSocketFactory(url) {
+      socket = new MockSocket(url);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const request = {
+    realtimeSession: createCodexRealtimeSessionEnvelope({
+      commandId: 'codex-command-ws-error',
+      attemptId: 'codex-command-ws-error-attempt-1',
+    }),
+    commandText: 'resume stale thread',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-ws-error',
+    attemptId: 'codex-command-ws-error-attempt-1',
+  };
+  const events: unknown[] = [];
+  const pending = client.stream(JSON.stringify(request), (event) => events.push(event));
+
+  socket?.open();
+  socket?.message({ type: 'error', error: 'no rollout found for thread id stale-thread' });
+
+  const stream = await pending;
+
+  assert.match(stream.error ?? '', /no rollout found for thread id stale-thread/);
+  assert.deepEqual(events, [{ ok: false, error: 'no rollout found for thread id stale-thread' }]);
+  assert.equal(socket?.closeCodes[0], 4000);
+  assert.equal(socket?.closeReasons[0], 'runtime error event');
+});
+
 class MockSocket {
   readonly sent: string[] = [];
+  readonly closeCodes: Array<number | undefined> = [];
+  readonly closeReasons: Array<string | undefined> = [];
   readyState = 0;
   closeCount = 0;
   private readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
@@ -256,7 +291,12 @@ class MockSocket {
     this.emit('message', { data: JSON.stringify(data) });
   }
 
-  close(): void {
+  close(code?: number, reason?: string): void {
+    if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new DOMException(`Invalid close code ${code}`, 'InvalidAccessError');
+    }
+    this.closeCodes.push(code);
+    this.closeReasons.push(reason);
     this.closeCount += 1;
     this.readyState = 3;
     this.emit('close', {});

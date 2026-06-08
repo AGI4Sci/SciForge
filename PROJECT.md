@@ -1,166 +1,154 @@
-# SciForge 当前需求：模块化能力与用户级验收
+# SciForge 当前需求：Agent Host 唯一智能体与工具边界
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
-## 用户真正要什么
+## 核心判断
 
-用户在普通聊天里提出任务，例如：
+SciForge 的唯一智能体是 Codex / Agent Host。Agent Host 的模型能力统一来自 Model Router `/v1/responses`；凡是需要推理、规划、语言生成或多模态理解的 Host step，都通过 Model Router 获得模型能力。
 
-- “搜索并总结本周前沿 AI 大模型进展。”
-- “帮我在当前页面填写这些字段，但不要提交。”
-- “帮我做一页 PPT，并给我可验证文件。”
+Model Router 不是第二个 agent。它对外只是 OpenAI-compatible 的多模态模型 API 边界，负责 provider / protocol / modality translation，不拥有用户任务、对象记忆、workflow、completion truth 或 final answer。
 
-用户不是在请求一个 Browser agent 或 Computer Use agent。用户要的是一个可验收结果：有来源、有动作证据、有产物验证，或者明确说明为什么 blocked。
+`browser_search`、`browser_read`、Computer Use、artifact/verifier 等都是暴露给 Agent Host 的 tools / actions。工具不具备用户级智能；是否调用、何时调用、如何解释结果，都由 Agent Host 决定。`gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` / `moduleId=gui` completion surface 只属于 unsupported legacy / dynamic-tool shim，不是产品 final-answer 路径。
 
-## 总体决策
-
-SciForge 是 Codex backend 的 GUI / Browser / Desktop 能力面，不是第二个 Agent Host。
+## 主链路
 
 ```text
-用户普通聊天 turn
-  -> Codex backend Agent Host
-     -> 理解用户任务
-     -> 拆出局部目标、风险边界和证据要求
-     -> 调用 SciForge 模块 primitive
-     -> 基于 evidence 形成 completion truth
-     -> 生成用户可见 final answer
-  -> SciForge UI 展示回答、证据、产物、确认和 blocked recovery
+User / SciForge UI
+  -> CodexAppServerAdapter
+  -> Codex App Server protocol events
+  -> Codex / Agent Host
+      -> calls Model Router /v1/responses as model substrate
+      -> may call MCP tools/actions: browser_search / browser_read / computer_use / artifacts
+      -> owns workflow, evidence ledger, object context, repair, completion truth, turn lifecycle
+      -> emits assistant final message / tool / approval / done events
+  -> FinalAnswerEnvelope
+  -> SciForge UI projection
 ```
 
-Browser、Computer Use 和未来拓展模块只提供两类能力：
+SciForge UI 接收用户输入、附件对象和上下文，并把它们交给 Agent Host。UI 可以展示状态、证据、产物和恢复路径，但不生成答案，不判断任务完成，也不替 Agent Host 选择工具。
 
-- 信息输入：read / observe / search / capture / source evidence。
-- 局部操作执行：模块自有 primitive，以及不承载智能的局部组合 primitive。
+## Agent Host 拥有
 
-模块不得拥有用户级 task plan、repair、completion truth 或 final answer。
+Agent Host 负责：
 
-## 当前只做什么
+- 用户意图理解。
+- workflow / long-running task rhythm。
+- 结构化对象上下文和可复用 observation / descriptor。
+- Model Router 调用。
+- Browser / Computer Use / artifact / verifier 等 tools / actions 选择。
+- approval、risk policy、repair 和 blocker 判断。
+- completion truth 和用户级 final answer。
+- 是否继续工作、是否结束 turn。
 
-先把基本模块做扎实，不扩展复杂矩阵。
+## Model Router 边界
 
-P0 只包含：
+Model Router 负责：
 
-1. Browser source evidence：搜索、打开、读取来源，并返回 refs-first source/page evidence。
-2. Computer Use primitive：`computer_use.bind`、`computer_use.observe`、`computer_use.act`、`computer_use.run_procedure`、`computer_use.control`。
-3. Codex backend 将 source / action / artifact evidence 转成 completion truth 和 final answer。
+- 暴露 `/v1/responses` 兼容 API。
+- 选择注册 profile / role / provider。
+- 把 text、image、`input_object` 等输入翻译成上游 provider 协议。
+- 把 provider tool-call / text output 翻译回 `/v1/responses` 输出。
+- 写 refs-first trace、latency 和 provider-safe diagnostics。
+- 做短期模态翻译缓存，例如按 `profile + content hash` 复用同一图片的 vision observation，避免重复 vision translator 成本。
 
-P1 只包含：
+Model Router 不负责：
 
-1. 一页 PPT / artifact 用户级验收路径。
+- 用户任务规划。
+- 工具选择或跨工具 workflow。
+- final-answer / UI projection 决策。
+- Browser / Desktop / artifact 动作。
+- 对象记忆或长期 descriptor ownership。
+- repair、approval、risk policy。
+- completion truth 或用户级 final answer。
 
-## Primitive 契约
+短期模态翻译缓存只是性能优化，不是对象记忆。缓存命中只能把已有视觉 observation 提供给当前模型调用；是否足够、是否需要更细粒度追问、是否继续任务，仍由 Agent Host 决定。
 
-模块 primitive 是 Host 调用的 typed intent，不是新顶层 API，也不是工作流引擎。
+## GUI projection 与 legacy shim
 
-每次调用必须满足：
+唯一产品展示链路是 Codex App Server protocol events -> assistant final message -> `FinalAnswerEnvelope` -> SciForge UI projection。
 
-- 一个 owner module。
-- 一个 target scope。
-- 一个局部目标。
-- 有 `sessionRef`、`budget`、`riskPolicy`、`requiredEvidence` 和 `stopConditions`。
-- 不嵌套调用其它模块。
-- 配置不得表达跨模块 `if/else/loop` 工作流。
-- 模块只能返回 refs-first result、blocked reason 和 repair hint，不能自动 repair。
+SciForge UI 可以确定性展示 Codex App Server 事件中的用户可见状态，例如：
 
-统一返回状态：
+- `progress`：阶段进展。
+- `partial_result`：阶段性结果。
+- `final_answer`：Agent Host 认为当前用户请求已经完成。
+- `blocker`：无法继续，需要说明原因。
+- `needs_human`：需要用户输入或人工接管。
 
-```text
-completed
-partial
-blocked
-needs-confirmation
-failed
-```
+一次本地 presentation ack 不表示 turn 必须结束。长程任务中，UI 可以持续展示 progress / partial result / approval / blocked recovery；最终是否结束 turn 由 Codex App Server turn lifecycle 和 Agent Host completion truth 决定。
 
-Model Router 可以在 primitive 内部做局部辅助，但只能用于：
+最终用户可见答案来自 Codex App Server assistant final message，并由 SciForge 归一成 `FinalAnswerEnvelope`。`title` 或其它展示元数据不能替代正文。UI 不补写、不改写、不生成最终答案。
 
-- 截图 / crop / 页面片段描述。
-- 候选目标消歧。
-- 候选 next intent。
-- before / after 比较。
-- 不确定性解释。
+产品路径不得向 Codex app-server 注册或注入 `gui.present`、`gui.ask_user`、`gui_present`、`gui_ask_user` 或 `moduleId=gui` completion surface；旧动态工具请求必须作为 unsupported dynamic tool fail closed，不能降级成展示或 completion truth。
 
-Model Router 不得改变 risk policy，不得决定跨模块下一步，不得绕过确认，不得自动 repair，不得产出 completion truth 或 final answer。
+## 多模态对象策略
 
-## Browser 基本模块
+附件和引用对象必须以结构化 `input_object` / runtime input object 进入 Agent Host，不通过 prompt 拼接或附件顺序猜测。
 
-Browser 返回 source page refs 和 page text refs。Browser 不做：
+Agent Host 应维护同一 turn / thread 内的对象上下文：
 
-- 开放式探索。
-- 查询改写。
-- 来源取舍。
-- 最终总结。
-- 跨模块 repair。
+- 已有视觉 observation / descriptor 足够时，后续追问直接复用。
+- 不足时，Agent Host 再调用 Model Router，让 Router 做模态翻译。
+- 同一图片重复进入 Router 时，Router 可用短期 translation cache 避免重复 vision translator。
+- repair 或再次呈现不应默认重新看图，应优先复用已有 observation。
 
-Browser 用户级验收：
+upload 后异步 materializer 可以作为未来优化，但不是当前必需路径。
 
-- 普通聊天请求“搜索并总结本周前沿 AI 大模型进展”能由 Codex backend 调用 Browser source evidence 能力。
-- Browser 返回实际打开并读取过的 source page refs / page text refs。
-- 搜索结果页本身不能作为完成证据。
-- Codex backend 基于 source evidence 生成 final answer，并在回答中给出来源。
-- 来源不足、页面打不开、证据冲突或结果明显不相关时，final answer 必须是 partial / blocked，不能编造完成。
-- 用户禁止联网或要求只用本地上下文时，不调用 Browser，并说明依据。
+## 模块与工具边界
 
-## Computer Use 基本模块
+Browser、Computer Use、Desktop、artifact、verifier 等都只是 Host tools / actions 或能力模块。它们返回：
 
-Computer Use 当前只保留五个 primitive：
+- operation result。
+- refs-first evidence。
+- source / page text refs。
+- before / after action evidence。
+- artifact refs。
+- validator refs。
+- approval request。
+- blocked reason 和 repair hint。
 
-- `computer_use.bind`：绑定 Host 指定目标，建立 scoped session。
-- `computer_use.observe`：读取已绑定 target 的当前状态。
-- `computer_use.act`：在已绑定 target 上执行一个 Host 指定的原子动作。
-- `computer_use.run_procedure`：执行 Host 指定的无智能局部步骤序列，用来降低 Agent Host 往返成本。
-- `computer_use.control`：暂停、停止或释放 session。
+模块和工具不得返回用户级 final answer，也不得声明用户级 completion truth。
 
-Computer Use 不做：
+## 用户级验收
 
-- 用户任务理解。
-- PPT 内容设计。
-- 跨 app workflow planning。
-- 提交 / 发送 / 上传 / 删除 / 支付。
-- 用户级完成判断。
+用户级验收只能由 Agent Host 基于 current run evidence 产出，并通过 Codex App Server assistant final message / events 进入 `FinalAnswerEnvelope`。
 
-Computer Use 用户级验收：
+典型证据要求：
 
-- 普通聊天请求低风险 GUI 局部操作时，Codex backend 能调用 Computer Use primitive，不要求 `/computer-use`。
-- 每个改变界面的 action 都有 current target-bound before evidence、grounding refs、executor event、after evidence 和 stale invalidation。
-- 每个独立 Computer Use 会话有独立输入 adapter 和独立光标标志，不影响用户正常使用鼠标键盘。
-- final answer 由 Codex backend 基于 action evidence 生成，说明局部目标是否完成。
-- 高风险动作必须返回 `needs-confirmation`，由 GUI 收集确认；未确认不得执行。
-- 缺 native host、target binding、fresh evidence、permission refs、scoped executor 或 stop / cancel path 时，必须 blocked，并说明恢复路径。
+- Browser 任务：需要 source page refs / page text refs，搜索结果页本身不能作为完成证据。
+- GUI action：需要 before evidence / grounding refs / executor event / after evidence / stale invalidation。
+- Artifact 任务：需要 final artifact refs / validator refs。
+- 高风险动作：需要 approval refs。
+- 多模态任务：需要当前对象的 observation / descriptor，或明确说明无法检查。
 
-## Artifact / PPT 用户级验收
-
-PPT 场景用于证明“用户级完成”不能由 Computer Use 自己宣布。
-
-- 普通聊天请求“做一页 PPT”时，Codex backend 判断走 artifact generator 还是 Computer Use 局部动作。
-- 如果走 artifact path，completion truth 必须包含 final artifact refs 和 validator refs。
-- 如果走 Computer Use path，Computer Use 只提供局部 GUI action evidence；最终 PPT 完成仍必须由 artifact refs + validator refs 支撑。
-- final answer 必须给出可检查的 PPT artifact ref、验证结果和未完成事项。
+tool 文本、GUI 投影、旧截图、历史 run、fixture、package probe 或模型自信不能替代用户级完成。
 
 ## 打勾规则
 
 - `[x]` 只能表示普通聊天入口的当前产品链路已经达到用户级验收。
 - Contract test、module operation test、fixture、package probe、legacy diagnostic、GUI projection、手动脚本或局部 smoke 通过，不能单独打 `[x]`。
 - blocked 也可以通过用户级验收，但必须说明缺失条件、保留 evidence refs，并给出可恢复路径。
-- 如果 final answer 不能让用户确认任务结果，或者缺 source / action / artifact / validator refs，不得打 `[x]`。
+- 如果 final answer 不能让用户确认任务结果，或者缺 source / action / artifact / validator / observation refs，不得打 `[x]`。
 
-## Runtime Codex 配置边界
+## Runtime / Router 配置边界
 
-Runtime Codex / provider proxy 的 browser/release 验收必须从 service 环境读取 `SCIFORGE_RUNTIME_API_KEY`。本地 `config.toml`、`config.local.json` 或 `.sciforge/**/config.local.json` 里的 secret-like key 只能作为 provider proxy 调试 fallback，不能满足 Browser / release acceptance。
+Runtime Codex 必须使用 Model Router 作为模型入口。服务环境必须提供 `SCIFORGE_RUNTIME_API_KEY`，并通过 `SCIFORGE_MODEL_ROUTER_BASE_URL` / `SCIFORGE_MODEL_ROUTER_URL` / `SCIFORGE_MODEL_ROUTER_PORT` 指向 Router `/v1` endpoint；Runtime model 必须是 public alias，例如 `sciforge-router`。
 
-provider proxy 还必须能解析 OpenAI-compatible upstream base URL，例如通过 `SCIFORGE_PROXY_UPSTREAM_BASE_URL` 或非 secret 的本地 upstream 配置。缺 Runtime API key、upstream base URL、runtime profile、provider route 或 browser source/page evidence 时必须 fail closed / blocked，不能把旧 BrowserHostSearch、配置 fallback、历史 run 或诊断结果当作产品完成。
+`config.local.json` 只能作为 Model Router 成员模型配置来源，不能作为 Runtime Codex 直连 provider 配置。缺 Runtime API key、Model Router `/v1` base URL、runtime profile、router route 或必要 evidence 时必须 fail closed / blocked，不能把旧 fallback、历史 run 或诊断结果当作产品完成。
 
 ## 非目标
 
+- 不实现 SciForge 侧第二个 Agent Host。
 - 不实现 SciForge 侧 task router、planner、workflow engine 或 completion engine。
+- 不让 Model Router 拥有对象记忆、workflow、repair 或 final answer。
 - 不把 Browser Search、Computer Use、runtime gateway、slash command 或 GUI 控件做成产品任务入口。
-- 不设计完整多模块 workflow DSL。
-- 不扩展 release matrix。
+- 不让 GUI projection 隐式结束 turn。
 - 不用诊断路径替代普通聊天用户级验收。
 
 ## 文档地图
 
 - [`docs/Architecture.md`](docs/Architecture.md)：总架构边界。
-- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：Browser 模块边界。
-- [`docs/ComputerUseRuntimeArchitecture.md`](docs/ComputerUseRuntimeArchitecture.md)：Computer Use 模块边界。
-- [`PROJECT_CU.md`](PROJECT_CU.md)：Computer Use 分阶段任务清单。
+- [`docs/ModelRouterArchitecture.md`](docs/ModelRouterArchitecture.md)：Model Router 多模态 API 边界。
+- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：Browser 工具边界。
+- [`docs/ComputerUseRuntimeArchitecture.md`](docs/ComputerUseRuntimeArchitecture.md)：Computer Use 工具边界。
+- [`docs/runbooks/model-router-runtime-codex-runbook.md`](docs/runbooks/model-router-runtime-codex-runbook.md)：Runtime Codex 使用 Model Router 的运行手册。

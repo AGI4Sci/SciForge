@@ -6,7 +6,7 @@ import {
   BrowserHostSessionManager,
   createPlaywrightBrowserHostDriverFactory,
   defaultBrowserHostSessionManager,
-  type BrowserHostSearchOutput,
+  type BrowserHostDiscoveryOutput,
 } from './browser-host-session.js';
 import { sha1 } from './workspace-task-runner.js';
 
@@ -210,7 +210,7 @@ function failedManifest(input: {
   observedAt: string;
   prompt: string;
   settings: LocalProviderSettings;
-  output?: BrowserHostSearchOutput;
+  output?: BrowserHostDiscoveryOutput;
   blockedReason: string;
 }): RuntimeCodexBrowserLocalDogfoodManifest {
   const readPages = input.output ? officialOpenAiReadSourcePages(input.output) : [];
@@ -236,7 +236,7 @@ function failedManifest(input: {
   };
 }
 
-function readSourcePages(output: BrowserHostSearchOutput) {
+function readSourcePages(output: BrowserHostDiscoveryOutput) {
   return (output.sourcePages ?? []).filter((page) => (
     page.status === 'read'
     && Boolean(page.textRef)
@@ -245,13 +245,13 @@ function readSourcePages(output: BrowserHostSearchOutput) {
   ));
 }
 
-function officialOpenAiReadSourcePages(output: BrowserHostSearchOutput) {
+function officialOpenAiReadSourcePages(output: BrowserHostDiscoveryOutput) {
   return readSourcePages(output).filter((page) => isOfficialOpenAiUrl(page.finalUrl || page.url));
 }
 
 function localDogfoodFinalAnswer(input: {
   query: string;
-  readPages: NonNullable<BrowserHostSearchOutput['sourcePages']>;
+  readPages: NonNullable<BrowserHostDiscoveryOutput['sourcePages']>;
 }) {
   const summaryLines = conciseOpenAiSourceSummaries(input.readPages).slice(0, 5);
   const headline = `我已用 SciForge 内置浏览器搜索“${cleanText(input.query)}”，并打开、读取了 OpenAI 官方来源页面。`;
@@ -270,7 +270,7 @@ function localDogfoodFinalAnswer(input: {
   ].join('\n');
 }
 
-function conciseOpenAiSourceSummaries(pages: NonNullable<BrowserHostSearchOutput['sourcePages']>) {
+function conciseOpenAiSourceSummaries(pages: NonNullable<BrowserHostDiscoveryOutput['sourcePages']>) {
   const lines: string[] = [];
   for (const page of pages) {
     const text = cleanText(page.textSummary || page.textPreview || '');
@@ -287,7 +287,7 @@ function conciseOpenAiSourceSummaries(pages: NonNullable<BrowserHostSearchOutput
   return lines;
 }
 
-function isOpenAiDocsNavigationPage(page: NonNullable<BrowserHostSearchOutput['sourcePages']>[number], text: string) {
+function isOpenAiDocsNavigationPage(page: NonNullable<BrowserHostDiscoveryOutput['sourcePages']>[number], text: string) {
   const title = cleanText(page.title).toLowerCase();
   const url = (page.finalUrl || page.url || '').toLowerCase();
   const looksLikeDocsNav = /^Home API Codex ChatGPT Resources Start searching API Dashboard/i.test(text);

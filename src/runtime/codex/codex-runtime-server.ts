@@ -241,7 +241,7 @@ async function runCodexRuntimeTurn(
       attemptId,
       profile: stringField(body.profile),
       codexSessionId: realtimeSession.codexSessionId ?? stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
-      allowOpenAiRuntime: body.allowOpenAiRuntime === true,
+      allowOpenAiRuntime: false,
       inputObjects: inputObjects.length ? inputObjects : undefined,
       runtimeIntent,
       guiExtension: isRecord(body.guiExtension)
