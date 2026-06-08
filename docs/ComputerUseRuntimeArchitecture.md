@@ -181,7 +181,7 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 - blocked、partial 和 error path 也必须走同一 sanitizer，只能输出 safe summary、reason refs、evidence refs、artifact refs 或 compact observation refs。
 - sanitizer 只能作为 deterministic projection guard，不能生成 final answer，也不能判断 completion truth。
 
-第一批 product-facing 接入点是 `CodexAppServerAdapter` 的 host-owned public projection、`computer-use-native-route` 的 `workspaceRuntimeEvent` / `doneEvent` / `failedEvent`，以及 `codex-runtime-gateway` 的 public events 和 missing-final-answer payload。后续 P3 剩余工作应继续接入 app module readiness、Computer Use package result、UI runtime event persistence，而不是新增局部旁路 sanitizer。
+第一批 product-facing 接入点是 `CodexAppServerAdapter` 的 host-owned public projection、`computer-use-native-route` 的 `workspaceRuntimeEvent` / `doneEvent` / `failedEvent`，以及 `codex-runtime-gateway` 的 public events 和 missing-final-answer payload。后续 public projection 收口应继续覆盖 app module readiness、Computer Use package result、package bridge presentation 和 UI runtime event persistence，而不是新增局部旁路 sanitizer。
 
 ### App Module Contract 约束
 
@@ -197,17 +197,20 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 
 readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。key 检测必须覆盖 camelCase、snake_case 和 kebab-case alias；value 检测必须覆盖裸 base64、HTML/DOM、本地绝对路径等 raw payload。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
-阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。P0/P1/P2 的旧任务展开不再作为继续执行的 checklist 保留，只保留已验收基线；新的可执行路线从 P3 开始：
+阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。旧 P3-P9 的展开任务不再作为继续执行的 checklist 保留，只保留已验收基线；新的可执行路线以 `PROJECT_CU.md` 为准：
 
-- P3：接 ordinary chat Host-only bridge，要求裸自然语言只能进入 Agent Host，不能直接成为 app module operation。
-- P4：接 native route final-answer gate，要求只有 Host-owned final answer envelope 可以让 route `done`。
-- P5：统一 public event / readiness / runtime result sanitizer，确保大对象和 raw payload 只能以 refs 暴露。
-- P6：进入 VSCode read-only / focus / diagnostics live diagnostic 基线。
-- P7：进入 VSCode terminal 和 command palette 分步 live diagnostic，submit/select 必须和 observe 分离。
-- P8：进入 VSCode editor mutation diagnostic，先 unit，再 scratch / explicit live，不做论文级改写。
-- P9：进入 Host-owned preview 与 narrow apply，先 diff preview，不写文件，再由 Host 拆成 observe -> one primitive -> observe。
+- P0：路线图与架构收口，删除旧任务包袱。
+- P1：Public Projection 收口，覆盖 app module readiness、Computer Use result 和 package presentation。
+- P2：旧旁路删除与 fail-closed，删除或拒绝本地 final-answer、GUI completion、旧 Computer Use public surface。
+- P3：Computer Use lifecycle contract，固化 bind / observe / act / run_procedure / control release、refs 和 cleanup。
+- P4：VSCode target binding 与 ambiguity gate，只证明目标识别和不确定性。
+- P5：VSCode read-only / focus / diagnostics diagnostic，不做写入。
+- P6：VSCode terminal 原子能力，focus / send / observe / submit 分离。
+- P7：VSCode command palette 原子能力，open / query / observe / select 分离。
+- P8：VSCode editor mutation 原子能力，只做当前选区或明确范围的一步动作。
+- P9：Host-owned preview / narrow apply，先 diff preview，再由 Host 拆成 observe -> one primitive -> observe。
 
-P2 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 P3/P4/P5 必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
+入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
 ## VSCode App Module v1
 
@@ -365,7 +368,7 @@ Computer Use primitive 默认不调用模型。
 - Computer Use no-bypass static guard 是 `unit-proven`：它禁止 GUI completion surface、retired runtime `gui` module surface、legacy Computer Use public surface，以及 ordinary/native direct app module 或 act materializer imports。
 - Runtime `gui` module handler 已删除；默认 module registry 不列出 `gui`，外部注入 `gui` handler 也会 fail closed。
 - VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
-- 普通聊天 / native route 接线审计仍待完成，必须先于真实 VSCode live matrix。
+- 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
 - 论文 preview、narrow apply unit path 和 narrow apply diagnostic 仍待实现。
 
