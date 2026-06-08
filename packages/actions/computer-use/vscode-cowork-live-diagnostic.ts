@@ -237,6 +237,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
       };
     },
     observe: async (input: ComputerUseObserveInput) => {
+      const previousObservationRef = lastObservationRef;
       const observed = await readCurrentWindow();
       lastObservationRef = observed.observationRef;
       lastFocusedEditorRef = observed.focusedEditorRef;
@@ -249,12 +250,13 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           accessibilityRef: observed.accessibilityRef,
           elementRefs: [observed.editorElementRef],
           textRefs: uniqueRefs([observed.visibleTextRef, observed.visibleTextSha256Ref]),
-          staleInvalidationRefs: [],
+          staleInvalidationRefs: uniqueRefs([previousObservationRef]),
         },
         refs: uniqueRefs([
           computerUseSessionRef,
           windowActionSessionRef,
           ...observationRefs(observed),
+          previousObservationRef,
         ]),
       };
     },

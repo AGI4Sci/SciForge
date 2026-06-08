@@ -38,6 +38,21 @@ const publicProjectionActivation = /\b(?:emitWorkspaceRuntimeEvent|publicHostOwn
 const publicEventSanitizerImport = /@sciforge-ui\/runtime-contract\/public-event-sanitizer/;
 const alwaysUnsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawProviderPayload|rawVisibleText|rawSelectedText|rawCommand|rawPath)\b\s*:|data:image\/|;base64,)/i;
 const guardedUnsafePublicEventPayloadLiteral = /\b(?:commandText|terminalCommand|workspacePath|filePath|targetPath|stdout|stderr|requestBody|responseBody)\b\s*:/i;
+const allowedComputerUsePrimitiveNames = new Set(['bind', 'observe', 'act', 'run_procedure', 'control']);
+const forbiddenComputerUsePublicIntentNames = new Set([
+  'runTask',
+  'perform_local_action',
+  'fill_fields',
+  'executeBoundedOperation',
+  'complete',
+  'finalAnswer',
+  'plan',
+  'locate',
+  'verify',
+]);
+const computerUseIntentLiteral = /\bcomputer_use\.([A-Za-z0-9_-]+)\b/g;
+const computerUseInputSchemaLiteral = /\bsciforge\.computer-use\.([a-z0-9_-]+)-input\.v\d+\b/g;
+const forbiddenPublicIntentLiteral = /['"](?:runTask|perform_local_action|fill_fields|executeBoundedOperation|complete|finalAnswer|plan|locate|verify)['"]/g;
 
 async function main() {
   const files = [
@@ -157,6 +172,10 @@ async function main() {
 
 function fileLevelBypassFindings(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
+  findings.push(...computerUsePublicPrimitiveSurfaceFindings(file, text));
+  findings.push(...computerUseMcpAdapterFindings(file, text));
+  findings.push(...computerUsePrimitiveServiceGuardFindings(file, text));
+  findings.push(...sharedSystemInputSourceClaimFindings(file, text));
   if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts') {
     const structuredDone = sectionBetween(text, 'function withStructuredRuntimeDoneProjection', 'function withGuiAskUserRuntimeResult');
     if (structuredDone && (/\bvisibleAnswer\s*:\s*{[\s\S]*?\btext\s*:/.test(structuredDone) || unsafeMessageProjection(structuredDone))) {
@@ -206,6 +225,162 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
     });
   }
   return findings;
+}
+
+function computerUsePublicPrimitiveSurfaceFindings(file: string, text: string): Finding[] {
+  if (!isComputerUsePackagePublicSurface(file)) return [];
+  const findings: Finding[] = [];
+  scanComputerUsePrimitiveStrings(file, text, findings);
+  scanForbiddenPublicIntentNames(file, text, findings);
+  return findings;
+}
+
+function scanComputerUsePrimitiveStrings(file: string, text: string, findings: Finding[]): void {
+  for (const pattern of [computerUseIntentLiteral, computerUseInputSchemaLiteral]) {
+    pattern.lastIndex = 0;
+    for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+      const primitive = match[1];
+      if (isAllowedComputerUsePrimitiveName(primitive)) continue;
+      findings.push({
+        file,
+        line: lineNumberForIndex(text, match.index),
+        rule: 'forbidden-computer-use-public-primitive-surface',
+        message: 'Computer Use public primitive surface must only expose bind/observe/act/run_procedure/control.',
+        text: lineTextAtIndex(text, match.index),
+      });
+    }
+  }
+}
+
+function scanForbiddenPublicIntentNames(file: string, text: string, findings: Finding[]): void {
+  forbiddenPublicIntentLiteral.lastIndex = 0;
+  for (let match = forbiddenPublicIntentLiteral.exec(text); match; match = forbiddenPublicIntentLiteral.exec(text)) {
+    if (!isLikelyComputerUsePublicSurfaceContext(text, match.index)) continue;
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, match.index),
+      rule: 'forbidden-computer-use-public-primitive-surface',
+      message: 'Computer Use public primitive surface must not expose task, completion, planning, locating, or verification intents.',
+      text: lineTextAtIndex(text, match.index),
+    });
+  }
+}
+
+function computerUseMcpAdapterFindings(file: string, text: string): Finding[] {
+  if (!isComputerUseMcpAdapterFile(file) || !/\bcreateComputerUseMcpAdapter\b/.test(text)) return [];
+  const findings: Finding[] = [];
+  const adapterSection = sectionFrom(text, 'createComputerUseMcpAdapter');
+  if (!/\bservice\.invoke\s*\(/.test(adapterSection)) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, text.indexOf('createComputerUseMcpAdapter')),
+      rule: 'missing-computer-use-mcp-service-invoke',
+      message: 'Computer Use MCP adapter callTool must delegate primitive calls through service.invoke so shared primitive sanitization and raw detection run.',
+      text: 'createComputerUseMcpAdapter',
+    });
+  }
+  const callToolStart = adapterSection.search(/\bcallTool\b/);
+  const callToolSection = callToolStart >= 0 ? adapterSection.slice(callToolStart, callToolStart + 2500) : '';
+  if (/\bmoduleResult\s*\(/.test(callToolSection) && /\breturn\s+(?:moduleResult\s*\(|[A-Za-z_$][\w$]*moduleResult[A-Za-z_$\w$]*\b)/.test(callToolSection)) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, text.indexOf(callToolSection)),
+      rule: 'forbidden-computer-use-mcp-direct-module-result',
+      message: 'Computer Use MCP adapter callTool must not build or return primitive moduleResult directly; delegate through service.invoke.',
+      text: 'callTool moduleResult',
+    });
+  }
+  return findings;
+}
+
+function computerUsePrimitiveServiceGuardFindings(file: string, text: string): Finding[] {
+  if (!isComputerUseIndexFile(file)) return [];
+  if (!/\b(?:createComputerUsePrimitiveService|primitiveModuleResult)\b/.test(text)) return [];
+  if (/\bsanitizePublicEvent\b/.test(text) && /\b(?:publicEventHasForbiddenRaw|primitivePortResultHasForbiddenRaw)\b/.test(text)) return [];
+  return [{
+    file,
+    line: 1,
+    rule: 'missing-computer-use-primitive-sanitizer-path',
+    message: 'Computer Use primitive service must keep public outputs on the shared sanitizer and forbidden raw detector path.',
+    text: 'createComputerUsePrimitiveService/primitiveModuleResult',
+  }];
+}
+
+function sharedSystemInputSourceClaimFindings(file: string, text: string): Finding[] {
+  if (!isSharedSystemInputClaimSource(file, text)) return [];
+  const findings: Finding[] = [];
+  const pattern = /\b(?:sharedSystemInput|sharedSystemInputUsed)\s*:\s*true\b/g;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    const claim = objectLikeWindow(text, match.index);
+    if (sharedSystemInputClaimIsDiagnosticOnly(claim)) continue;
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, match.index),
+      rule: 'forbidden-shared-system-input-product-ready',
+      message: 'shared-system-input claims must be maturity=live-diagnostic and productReady=false.',
+      text: lineTextAtIndex(text, match.index),
+    });
+  }
+  return findings;
+}
+
+function isComputerUsePackagePublicSurface(file: string): boolean {
+  return /^packages\/actions\/computer-use\/(?:index|mcp)\.[cm]?[tj]s$/.test(file);
+}
+
+function isComputerUseMcpAdapterFile(file: string): boolean {
+  return /^packages\/actions\/computer-use\/mcp\.[cm]?[tj]s$/.test(file);
+}
+
+function isComputerUseIndexFile(file: string): boolean {
+  return /^packages\/actions\/computer-use\/index\.[cm]?[tj]s$/.test(file);
+}
+
+function isAllowedComputerUsePrimitiveName(value: string | undefined): boolean {
+  if (!value) return false;
+  return allowedComputerUsePrimitiveNames.has(normalizeComputerUsePrimitiveName(value));
+}
+
+function normalizeComputerUsePrimitiveName(value: string): string {
+  return value.replaceAll('-', '_');
+}
+
+function isLikelyComputerUsePublicSurfaceContext(text: string, index: number): boolean {
+  const line = lineTextAtIndex(text, index);
+  if (/\b(?:COMPUTER_USE_PRIMITIVE|computerUseMcpTools|name|toolName|intent|requiredPorts|forbiddenPorts|primitive|mcpTools)\b/.test(line)) return true;
+  const context = text.slice(Math.max(0, index - 500), Math.min(text.length, index + 500));
+  return /\b(?:COMPUTER_USE_PRIMITIVE|computerUseMcpTools|mcpTools|hostPortsContract|actionSchema|inputShape|requiredPorts|forbiddenPorts)\b/.test(context);
+}
+
+function isSharedSystemInputClaimSource(file: string, text: string): boolean {
+  if (!/\b(?:sharedSystemInput|sharedSystemInputUsed)\s*:\s*true\b/.test(text)) return false;
+  if (!/^packages\/actions\/computer-use\/.*\.[cm]?[tj]sx?$/.test(file)) {
+    return false;
+  }
+  return /\b(?:maturity|productReady)\s*:/.test(text) || /(?:manifest|capability|acceptance|diagnostic|readiness)/i.test(file);
+}
+
+function sharedSystemInputClaimIsDiagnosticOnly(text: string): boolean {
+  return /\bmaturity\s*:\s*['"]live-diagnostic['"]/.test(text)
+    && /\bproductReady\s*:\s*false\b/.test(text);
+}
+
+function sectionFrom(text: string, needle: string): string {
+  const start = text.indexOf(needle);
+  return start < 0 ? '' : text.slice(start);
+}
+
+function objectLikeWindow(text: string, index: number): string {
+  const start = text.lastIndexOf('{', index);
+  const end = text.indexOf('}', index);
+  if (start >= 0 && end >= 0 && end - start <= 2000) return text.slice(start, end + 1);
+  return text.slice(Math.max(0, index - 800), Math.min(text.length, index + 800));
+}
+
+function lineTextAtIndex(text: string, index: number): string {
+  const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
+  const lineEnd = text.indexOf('\n', index);
+  return text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd).trim();
 }
 
 function sectionBetween(text: string, startNeedle: string, endNeedle: string): string | undefined {
@@ -306,23 +481,139 @@ function isUnsafePublicEventPayloadLine(file: string, fileText: string, line: st
 }
 
 async function structuredManifestFindings(): Promise<Finding[]> {
-  const rel = 'packages/actions/computer-use/action-provider.manifest.json';
-  const text = await readTextIfExists(join(root, rel));
-  if (!text) return [];
   const findings: Finding[] = [];
-  const manifest = parseJsonRecord(text);
-  const actionSchemaText = JSON.stringify(recordAt(manifest, 'actionSchema') ?? {});
-  const hostPortsText = JSON.stringify(recordAt(manifest, 'hostPortsContract') ?? {});
-  if (legacyComputerUsePublicSurface.test(actionSchemaText) || legacyComputerUsePublicSurface.test(hostPortsText)) {
-    findings.push({
-      file: rel,
-      line: 1,
-      rule: 'forbidden-legacy-computer-use-public-surface',
-      message: 'Computer Use action schema and host ports contract must not expose legacy task-shaped public surface.',
-      text: 'actionSchema/hostPortsContract',
-    });
+  for (const rel of await collectComputerUseStructuredManifestFiles()) {
+    const text = await readTextIfExists(join(root, rel));
+    if (!text) continue;
+    const manifest = parseJsonRecord(text);
+    if (!manifest) continue;
+    const actionSchemaText = JSON.stringify(recordAt(manifest, 'actionSchema') ?? {});
+    const hostPortsText = JSON.stringify(recordAt(manifest, 'hostPortsContract') ?? {});
+    if (legacyComputerUsePublicSurface.test(actionSchemaText) || legacyComputerUsePublicSurface.test(hostPortsText)) {
+      findings.push({
+        file: rel,
+        line: 1,
+        rule: 'forbidden-legacy-computer-use-public-surface',
+        message: 'Computer Use action schema and host ports contract must not expose legacy task-shaped public surface.',
+        text: 'actionSchema/hostPortsContract',
+      });
+    }
+    findings.push(...structuredComputerUsePrimitiveSurfaceFindings(rel, manifest));
+    findings.push(...structuredSharedSystemInputFindings(rel, manifest));
   }
   return findings;
+}
+
+async function collectComputerUseStructuredManifestFiles(): Promise<string[]> {
+  const dir = join(root, 'packages', 'actions', 'computer-use');
+  const files = await collectFilesByExtensionIfExists(dir, '.json');
+  return files
+    .map((file) => relative(root, file).replaceAll('\\', '/'))
+    .filter((file) => /(?:manifest|capability).*\.json$/.test(file));
+}
+
+async function collectFilesByExtensionIfExists(dir: string, extension: string): Promise<string[]> {
+  try {
+    return await collectFilesByExtension(dir, extension);
+  } catch {
+    return [];
+  }
+}
+
+async function collectFilesByExtension(dir: string, extension: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (ignoredDirs.has(entry.name) || entry.name === 'fixtures') continue;
+      files.push(...await collectFilesByExtension(join(dir, entry.name), extension));
+      continue;
+    }
+    if (entry.isFile() && extname(entry.name) === extension) files.push(join(dir, entry.name));
+  }
+  return files;
+}
+
+function structuredComputerUsePrimitiveSurfaceFindings(file: string, manifest: Record<string, unknown>): Finding[] {
+  const findings: Finding[] = [];
+  walkStructuredValue(manifest, [], (value, path) => {
+    if (!isLikelyStructuredPublicSurfacePath(path)) return;
+    if (typeof value === 'string') {
+      const primitive = computerUsePrimitiveNameFromStructuredString(value, path);
+      if (primitive && !isAllowedComputerUsePrimitiveName(primitive)) {
+        findings.push({
+          file,
+          line: 1,
+          rule: 'forbidden-computer-use-public-primitive-surface',
+          message: 'Computer Use manifest/capability public primitive surface must only expose bind/observe/act/run_procedure/control.',
+          text: path.join('.'),
+        });
+      }
+      if (forbiddenComputerUsePublicIntentNames.has(value)) {
+        findings.push({
+          file,
+          line: 1,
+          rule: 'forbidden-computer-use-public-primitive-surface',
+          message: 'Computer Use manifest/capability public primitive surface must not expose task, completion, planning, locating, or verification intents.',
+          text: path.join('.'),
+        });
+      }
+    }
+    if (path.length && forbiddenComputerUsePublicIntentNames.has(path[path.length - 1] ?? '')) {
+      findings.push({
+        file,
+        line: 1,
+        rule: 'forbidden-computer-use-public-primitive-surface',
+        message: 'Computer Use manifest/capability public primitive surface must not expose task, completion, planning, locating, or verification intent keys.',
+        text: path.join('.'),
+      });
+    }
+  });
+  return findings;
+}
+
+function structuredSharedSystemInputFindings(file: string, manifest: Record<string, unknown>): Finding[] {
+  const findings: Finding[] = [];
+  walkStructuredValue(manifest, [], (value, path) => {
+    if (!isRecord(value)) return;
+    const usesSharedSystemInput = value.sharedSystemInput === true || value.sharedSystemInputUsed === true;
+    if (!usesSharedSystemInput) return;
+    if (value.maturity === 'live-diagnostic' && value.productReady === false) return;
+    findings.push({
+      file,
+      line: 1,
+      rule: 'forbidden-shared-system-input-product-ready',
+      message: 'shared-system-input manifest/capability claims must be maturity=live-diagnostic and productReady=false.',
+      text: path.join('.') || '(root)',
+    });
+  });
+  return findings;
+}
+
+function computerUsePrimitiveNameFromStructuredString(value: string, path: string[]): string | undefined {
+  const intent = value.match(/\bcomputer_use\.([A-Za-z0-9_-]+)\b/);
+  if (intent) return intent[1];
+  if (path.some((part) => part === 'schemaRef')) return undefined;
+  if (!path.some((part) => /^(?:schemaVersion|enum|const|\d+)$/.test(part))) return undefined;
+  const schema = value.match(/\bsciforge\.computer-use\.([a-z0-9_-]+)-input\.v\d+\b/);
+  return schema?.[1];
+}
+
+function isLikelyStructuredPublicSurfacePath(path: string[]): boolean {
+  const joined = path.join('.');
+  return /\b(?:actionSchema|hostPortsContract|mcpTools|tools|tool|inputShape|properties|schemaVersion|requiredPorts|forbiddenPorts|primitive|primitives|intent|intents|capability|capabilities|publicSurface)\b/i.test(joined);
+}
+
+function walkStructuredValue(value: unknown, path: string[], visit: (value: unknown, path: string[]) => void): void {
+  visit(value, path);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => walkStructuredValue(item, [...path, String(index)], visit));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    walkStructuredValue(child, [...path, key], visit);
+  }
 }
 
 async function collectSourceFilesIfExists(dir: string): Promise<string[]> {

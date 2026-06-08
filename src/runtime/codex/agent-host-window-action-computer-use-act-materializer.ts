@@ -297,6 +297,17 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
         sessionRef,
       ]);
     }
+    if (store.getActiveByRef(sessionRef)) {
+      return blockedResult(input, 'WindowActionSession Computer Use Act materializer blocked: computer_use.control(release) returned completed but active WindowActionSession control was not released.', [
+        'action-ledger:window-action-session/primitive-release-blocked',
+        'runtime-truth:window-action-session/release-not-confirmed',
+        ...observeBeforeMutateBlockedRefs(actRefs),
+        ...actRefs,
+        ...releaseRefs,
+        ...planRefs,
+        sessionRef,
+      ]);
+    }
     const releaseOutput = releaseEnvelope.output;
     if (!acted.ok || actEnvelope?.status !== 'completed' || !actEnvelope.output) {
       return blockedResult(input, primitiveBlockedMessage('act', acted), [

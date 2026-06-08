@@ -97,11 +97,17 @@ Computer Use MCP public surface 只暴露这些 primitive：
 
 所有 primitive 都必须使用 refs-first envelope。未知字段默认拒绝或进入 diagnostics，不能静默改变语义。
 
-`bind` 成功必须产出 session-scoped `inputAdapterRef`、`cursorRef` 和 `scopedInputLeaseRef`。这些 refs 在同一进程内必须唯一；`act` 和 `control` 只能在对应 session scope 内使用它们。
+`bind` 成功必须产出 session-scoped `inputAdapterRef`、`cursorRef`、`scopedInputLeaseRef`、`targetRef` 和初始 `observationRef`。这些 refs 在同一进程内必须唯一；输入中出现多个 concrete target selector 时必须视为目标不明确并 fail closed，不能猜测目标。Host canonical `targetRef` 可以和一个 app/window identity selector 并存，用来表达“Host 已选定目标 + 当前身份佐证”，不算多目标猜测。`act` 和 `control` 只能在对应 session scope 内使用它们。
+
+`observe` 成功必须只返回 current target 的 refs-first evidence：`observationRef`、`screenshotRef`、`accessibilityRef`、`elementRefs`、`textRefs`。当一次 observe 替换同一 session 的 current observation 时，必须通过 `staleInvalidationRefs` 标记被替换的 observation；缺失 stale invalidation refs 时不能把新 observation 当成有效 current state。
 
 `act` 的原子动作覆盖 click、double_click、type、key、scroll、wait、app_command 和 drag。这些动作只描述一次明确输入事件或应用命令，不承载智能。
 
 `run_procedure` 是性能和时延优化，不是旧 `runTask` 的改名。它只执行 Host 已经决定好的局部步骤序列。`run_procedure.status=completed` 只表示这段局部 procedure 执行完了，不能证明用户目标完成。
+
+`control(release|stop|cancel)` 成功必须释放 scoped input lease、input adapter 和 cursor，并返回 cleanup manifest。cleanup manifest 只记录 refs：`releasedRefs`、`cleanupRefs`、front app restoration ref、focus restoration ref 和 mouse position restoration ref。control port 缺少 `controlRef`、release output 或必要 cleanup refs 时必须 fail closed。
+
+Host / materializer 不能只相信 `computer_use.control(release).status=completed`。在把外层 run / materialized action 标记为 completed 之前，Host 必须确认对应 WindowActionSession 已不再 active；release 缺失、release blocked 或 release 声称 completed 但 session 仍 active 时，外层结果必须 blocked / runtime-diagnostic，并保留 release failure evidence refs。
 
 ## Host-side App Capability Modules
 
@@ -186,14 +192,14 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 当前 public projection 收口状态：
 
 - App module readiness validator 使用共享 forbidden raw detector，Agent Host readiness materializer 的 public result 使用共享 sanitizer。
-- Computer Use primitive `moduleResult` 使用共享 sanitizer 清洗 `output`、`diagnostics`、`repairHints` 和 refs。
+- Computer Use primitive port output 在进入 public `moduleResult` 前先走 forbidden raw detector 和 completion-truth detector；raw screenshot / AX / visible text / provider payload / raw command / raw path / URL / base64 / logs / secrets 或 `completionTruth` / `finalAnswer` / `done` 等用户任务完成真相字段都会 fail closed。随后 public `moduleResult` 仍使用共享 sanitizer 清洗 `output`、`diagnostics`、`repairHints` 和 refs。
 - Computer Use TUI host action projection 对 `approvalRequest` 使用白名单投影，对 summary `message`、window title、frame label、blocked reason 使用 safe summary 字符串。
 - Package bridge presentation 只调用 `computerUseResultToTuiHostActions`，同一份已收口 actions 再写入 objectReferences、logs 和 runtime event detail。
 - UI runtime event projection 已 fail closed 旧 GUI completion surface：`gui_present`、`gui_ask_user` 和 `computer-use.tui-host-actions` 只保留 `guiPresentation` / `guiAskUser`、artifact refs、confirmation refs、verification metadata 和 audit refs，不写 `message` 或 `visibleAnswer.text`。
 - Structured runtime `done` projection 只投影 artifact refs、uiManifest refs、audit refs 和 partial / blocked 状态；native `message`、runtime ack 和 fallback summary 不能进入用户可见 answer。
 - Response normalization 对 legacy `gui.present`、`gui.ask_user` 和 `computer-use.tui-host-actions` projection text fail closed；只有 trusted Host-owned `FinalAnswerEnvelope` 可以恢复为用户级 visible answer。
 - `attachRuntimeGuiPresentationToResponse` 只附加 GUI metadata、object refs 和 confirmation provenance；GUI source 不再标 `liveAcceptanceEligible=true`，也不把 GUI 文本写成前台 final answer。
-- `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation、primitive package result、GUI visible-answer guard、structured runtime local-message guard 和 response-normalization legacy projection guard；新增 public projection surface 必须接共享 sanitizer / detector 或明确白名单投影。
+- `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation、primitive package result、GUI visible-answer guard、structured runtime local-message guard、response-normalization legacy projection guard、Computer Use primitive public allowlist、MCP adapter `service.invoke` 路径和 shared-system-input maturity guard；新增 public projection surface 必须接共享 sanitizer / detector 或明确白名单投影。
 
 后续 UI runtime event persistence 仍属于 P2 旁路删除与 fail-closed 的重点，不能新增局部 sanitizer 或本地 final-answer 生成路径。
 

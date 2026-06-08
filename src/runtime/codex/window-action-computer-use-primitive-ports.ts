@@ -45,6 +45,7 @@ interface BoundWindowActionPrimitiveSession {
   cursorRef: string;
   scopedInputLeaseRef: string;
   adapter: WindowActionAdapter;
+  currentObservationRef?: string;
   latestObservation?: {
     observationRef: string;
     screenshotRef: string;
@@ -126,6 +127,7 @@ function bindWindowActionSession(
     cursorRef: `actor-cursor:computer-use/${safeRefPart(sessionId)}`,
     scopedInputLeaseRef: entry.session.inputLease.ref,
     adapter,
+    currentObservationRef: firstObservationRef(entry),
     latestWindowActionSession: entry.session,
   };
   context.sessions.set(sessionId, binding);
@@ -167,6 +169,7 @@ function observeWindowActionSession(
   const entry = context.store.getActiveByRef(binding.windowActionSessionRef);
   if (!entry) return blocked('window_action_session_unavailable', [binding.windowActionSessionRef]);
   const observedAt = context.now().toISOString();
+  const previousObservationRef = binding.currentObservationRef;
   const snapshot = observationSnapshot(entry, input, observedAt);
   if (!snapshot) {
     return blocked('window_action_observation_refs_missing', [
@@ -185,6 +188,7 @@ function observeWindowActionSession(
     observationRefs: snapshot.refs,
     timestamp: observedAt,
   });
+  binding.currentObservationRef = snapshot.observationRef;
   binding.latestObservation = snapshot;
   binding.latestWindowActionSession = observedSession;
   return {
@@ -196,9 +200,9 @@ function observeWindowActionSession(
       accessibilityRef: snapshot.accessibilityRef,
       elementRefs: snapshot.elementRefs,
       textRefs: snapshot.textRefs,
-      staleInvalidationRefs: [],
+      staleInvalidationRefs: uniqueStrings([previousObservationRef]),
     },
-    refs: uniqueStrings([snapshot.observationRef, ...snapshot.refs]),
+    refs: uniqueStrings([snapshot.observationRef, ...snapshot.refs, previousObservationRef]),
   };
 }
 

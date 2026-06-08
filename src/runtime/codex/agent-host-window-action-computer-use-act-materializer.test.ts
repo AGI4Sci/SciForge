@@ -18,6 +18,7 @@ import { createInMemoryWindowActionSessionStore } from '../window-action-session
 import {
   createDefaultWindowActionSessionComputerUseActMaterializer,
 } from './agent-host-window-action-computer-use-act-materializer.js';
+import type { WindowActionSessionStore } from '../window-action-session-store.js';
 import type { CodexAgentHostRuntimeTruth, NormalizedCodexAgentHostInput } from './agent-host-turn-loop.js';
 
 const now = '2026-06-03T00:00:00.000Z';
@@ -26,6 +27,7 @@ const beforeRef = 'window-action-session:vscode-main/evidence/before-frame';
 const beforeAccessibilityRef = 'accessibility-ui-automation:vscode-main/state-snapshot-before';
 const beforeTextRef = 'accessibility-ui-automation:vscode-main/text-before';
 const beforeElementRef = 'desktop-window:vscode-main';
+const currentObservationRef = 'observation:window-action-session/vscode-main/2026-06-03t00-00-00.000z';
 const permissionRef = 'permission:turn/codex-window-action/ordinary-navigation';
 const verificationRef = 'window-action-session:vscode-main/actions/codex-window-action-attempt-1/verification/verifier.json';
 const freshnessInvalidationRef = 'window-action-session:vscode-main/actions/codex-window-action-attempt-1/freshness-invalidation.json';
@@ -330,6 +332,42 @@ test('WindowActionSession Computer Use Act materializer releases post-dispatch s
   assert.ok(result?.evidenceRefs.includes(releaseLeaseRef));
   assert.ok(result?.evidenceRefs.includes(releasedInputAdapterRef));
   assert.ok(result?.evidenceRefs.includes(releasedCursorRef));
+});
+
+test('WindowActionSession Computer Use Act materializer blocks host completion when release does not actually clear control', async () => {
+  const store = releaseClaimsCompletedButStillActiveStore();
+  const materializer = createDefaultWindowActionSessionComputerUseActMaterializer({
+    windowActionSessionStore: store,
+    actionPlanner: async () => ({
+      status: 'planned',
+      message: 'Scroll with a locally completed procedure step.',
+      nextAction: { type: 'scroll', direction: 'down', amount: 240 },
+      evidenceRefs: ['action-ledger:planner/procedure-local-completed'],
+    }),
+    adapterHandlers: {
+      'app-native-command': async () => ({
+        status: 'completed',
+        evidenceRefs: [
+          { kind: 'executor-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/executor-event' },
+          { kind: 'verification', ref: verificationRef },
+          { kind: 'freshness-invalidation', ref: freshnessInvalidationRef },
+        ],
+        inputEventRefs: [{ kind: 'input-event', ref: 'app-native-command:vscode/actions/codex-window-action-attempt-1/scroll/input-event' }],
+        afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-procedure-local-completed' }],
+      }),
+    },
+    now: () => new Date(now),
+  });
+
+  const result = await materializer(readyMaterializerInput());
+
+  assert.equal(result?.status, 'blocked');
+  assert.equal(result?.claimType, 'runtime-diagnostic');
+  assert.match(result?.message ?? '', /release|control|active WindowActionSession/i);
+  assert.ok(result?.evidenceRefs.includes('runtime-truth:window-action-session/release-not-confirmed'));
+  assert.ok(result?.evidenceRefs.includes('action-ledger:window-action-session/release-claimed-but-active'));
+  assert.equal(result?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /status["']?:\s*["']completed|status["']?:\s*["']done|user task complete|workflow complete/i);
 });
 
 test('WindowActionSession Computer Use Act materializer releases session when primitive act is blocked', async () => {
@@ -795,6 +833,7 @@ test('WindowActionSession Computer Use Act materializer validates TextEdit save 
 
 function readyStore(options: {
   app?: Parameters<typeof createWindowActionSession>[0]['app'];
+  observationRefs?: string[];
 } = {}) {
   const store = createInMemoryWindowActionSessionStore({ now: () => new Date(now) });
   const session = enterWindowActionSession(createWindowActionSession({
@@ -814,10 +853,46 @@ function readyStore(options: {
   store.upsert(session, {
     refs: ['action-ledger:window-action-session/vscode-main/upsert'],
     targetRefs: [sessionRef],
-    observationRefs: beforeObservationRefs(),
+    observationRefs: options.observationRefs ?? beforeObservationRefs(),
     timestamp: now,
   });
   return store;
+}
+
+function releaseClaimsCompletedButStillActiveStore(): WindowActionSessionStore {
+  const store = readyStore({
+    observationRefs: [currentObservationRef, ...beforeObservationRefs()],
+  });
+  return {
+    upsert: (session, options = {}) => store.upsert(session, {
+      ...options,
+      observationRefs: [
+        currentObservationRef,
+        ...((options.observationRefs ?? []).filter((item): item is string => typeof item === 'string')),
+      ],
+    }),
+    getActiveByRef: (ref) => {
+      const entry = store.getActiveByRef(ref);
+      return entry
+        ? {
+            ...entry,
+            observationRefs: [currentObservationRef, ...entry.observationRefs],
+          }
+        : entry;
+    },
+    materializeForBrowserHostSession: (...args) => store.materializeForBrowserHostSession(...args),
+    materializeForAnnotationMetadata: (...args) => store.materializeForAnnotationMetadata(...args),
+    pause: (...args) => store.pause(...args),
+    stop: (...args) => store.stop(...args),
+    remove: (ref, options = {}) => ({
+      status: 'completed',
+      refs: [
+        'action-ledger:window-action-session/release-claimed-but-active',
+        ...((options.refs ?? []).filter((item): item is string => typeof item === 'string')),
+      ],
+      session: store.getActiveByRef(ref)?.session,
+    }),
+  };
 }
 
 function readyMaterializerInput(options: {

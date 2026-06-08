@@ -100,6 +100,114 @@ test('Computer Use no-bypass guard blocks legacy Computer Use public surface', (
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-legacy-computer-use-public-surface/);
 });
 
+test('Computer Use no-bypass guard blocks non-primitive public Computer Use intents', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'packages/actions/computer-use/mcp.ts', [
+    "export function computerUseMcpTools() {",
+    "  return [{ name: 'computer_use.bind' }, { name: 'computer_use.plan' }, { name: 'computer_use.finalAnswer' }];",
+    "}",
+  ].join('\n'));
+  writeFixtureFile(root, 'packages/actions/computer-use/index.ts', [
+    "export const COMPUTER_USE_PRIMITIVE_INTENTS = { bind: 'computer_use.bind', locate: 'computer_use.locate', verify: 'computer_use.verify' } as const;",
+    "export const COMPUTER_USE_PRIMITIVE_NAMES = ['bind', 'observe', 'act', 'run_procedure', 'control', 'complete'] as const;",
+  ].join('\n'));
+  writeFixtureFile(root, 'packages/actions/computer-use/action-provider.manifest.json', JSON.stringify({
+    actionSchema: {
+      inputShape: {
+        properties: {
+          schemaVersion: {
+            enum: [
+              'sciforge.computer-use.bind-input.v1',
+              'sciforge.computer-use.plan-input.v1',
+            ],
+          },
+          locate: {
+            type: 'object',
+          },
+        },
+      },
+    },
+    hostPortsContract: {
+      requiredPorts: ['bind', 'observe', 'act', 'control', 'verify'],
+    },
+    mcpTools: [
+      { name: 'computer_use.finalAnswer' },
+    ],
+  }));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-computer-use-public-primitive-surface/);
+});
+
+test('Computer Use no-bypass guard blocks MCP adapters returning primitive moduleResult directly', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'packages/actions/computer-use/mcp.ts', [
+    "import { moduleResult } from '@sciforge-ui/runtime-contract/modules';",
+    "export function createComputerUseMcpAdapter(service: { bind(input: unknown): Promise<unknown> }) {",
+    "  return {",
+    "    tools: () => [{ name: 'computer_use.bind' }],",
+    "    callTool: async (request: { arguments?: Record<string, unknown> }) => {",
+    "      const primitiveOutput = await service.bind(request.arguments ?? {});",
+    "      const moduleResultForPrimitive = moduleResult({ moduleId: 'computer_use', ok: true, value: primitiveOutput });",
+    "      return moduleResultForPrimitive;",
+    "    },",
+    "  };",
+    "}",
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-computer-use-mcp-direct-module-result|missing-computer-use-mcp-service-invoke/);
+});
+
+test('Computer Use no-bypass guard blocks product-ready shared-system-input claims', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'packages/actions/computer-use/shared-system-capability.ts', [
+    'export const SHARED_SYSTEM_INPUT_CAPABILITY = {',
+    "  sharedSystemInputUsed: true,",
+    "  maturity: 'product-ready',",
+    "  productReady: true,",
+    '};',
+  ].join('\n'));
+  writeFixtureFile(root, 'packages/actions/computer-use/shared-system-capability.manifest.json', JSON.stringify({
+    capability: {
+      sharedSystemInput: true,
+      maturity: 'product-ready',
+      productReady: true,
+    },
+  }));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-shared-system-input-product-ready/);
+});
+
+test('Computer Use no-bypass guard allows diagnostic-only shared-system-input claims', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'packages/actions/computer-use/shared-system-diagnostic.ts', [
+    'export const SHARED_SYSTEM_INPUT_DIAGNOSTIC = {',
+    "  sharedSystemInputUsed: true,",
+    "  maturity: 'live-diagnostic',",
+    "  productReady: false,",
+    '};',
+  ].join('\n'));
+  writeFixtureFile(root, 'packages/actions/computer-use/shared-system-diagnostic.manifest.json', JSON.stringify({
+    capability: {
+      sharedSystemInput: true,
+      maturity: 'live-diagnostic',
+      productReady: false,
+    },
+  }));
+
+  const result = runGuard(root);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test('Computer Use no-bypass guard blocks retired runtime gui module surfaces', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/modules/dispatcher.ts', [

@@ -5,10 +5,15 @@ import {
   type ModuleInvokeRequest,
   type ModuleInvokeResult,
 } from '@sciforge-ui/runtime-contract/modules';
-import { PUBLIC_EVENT_REDACTED, sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
+import {
+  PUBLIC_EVENT_REDACTED,
+  publicEventHasForbiddenRaw,
+  sanitizePublicEvent,
+} from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 
 export const COMPUTER_USE_PRIMITIVE_SERVICE_MODULE_ID = 'computer_use' as const;
 export const COMPUTER_USE_PRIMITIVE_RESULT_SCHEMA = 'sciforge.computer-use.primitive-result.v1' as const;
+export const COMPUTER_USE_CLEANUP_MANIFEST_SCHEMA = 'sciforge.computer-use.cleanup-manifest.v1' as const;
 
 export const COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS = {
   bind: 'sciforge.computer-use.bind-input.v1',
@@ -229,10 +234,21 @@ export interface ComputerUseControlInput {
   budget?: ComputerUsePrimitiveBudget;
 }
 
+export interface ComputerUseCleanupManifest {
+  schemaVersion: typeof COMPUTER_USE_CLEANUP_MANIFEST_SCHEMA;
+  status: ComputerUsePrimitiveStatus;
+  releasedRefs: string[];
+  cleanupRefs: string[];
+  frontAppRestoreRef?: string;
+  focusRestoreRef?: string;
+  mousePositionRestoreRef?: string;
+}
+
 export interface ComputerUseControlOutput {
   sessionId: string;
   controlRef: string;
   releasedRefs?: string[];
+  cleanupManifest?: ComputerUseCleanupManifest;
 }
 
 export interface ComputerUseProcedureStep {
@@ -308,6 +324,7 @@ export interface ComputerUsePrimitiveService {
 interface ComputerUseSessionState {
   sessionId: string;
   targetRef?: string;
+  currentObservationRef?: string;
   inputAdapterRef: string;
   cursorRef: string;
   scopedInputLeaseRef: string;
@@ -556,6 +573,25 @@ function finalizePrimitiveResult(
   startedAt: number,
   now: () => number,
 ): ComputerUsePrimitivePortResult {
+  const forbiddenTruth = firstForbiddenCompletionTruthKey(result.output);
+  if (forbiddenTruth) {
+    return invalidEvidenceResult(
+      'forbidden_computer_use_primitive_completion_truth',
+      `Computer Use primitive output cannot include user task completion truth field "${forbiddenTruth}".`,
+      input,
+      startedAt,
+      now,
+    );
+  }
+  if (primitivePortResultHasForbiddenRaw(result)) {
+    return invalidEvidenceResult(
+      'forbidden_computer_use_primitive_raw_output',
+      'Computer Use primitive output must be refs-first and cannot include raw screenshots, AX trees, visible text, provider payloads, raw commands, raw paths, URLs, base64, logs, or secrets.',
+      input,
+      startedAt,
+      now,
+    );
+  }
   if (primitive === 'bind') {
     return finalizeBindResult(input as ComputerUseBindInput, result as ComputerUsePrimitivePortResult<ComputerUseBindOutput>, runtime, startedAt, now);
   }
@@ -563,7 +599,7 @@ function finalizePrimitiveResult(
     return finalizeActResult(input as ComputerUseActInput, result as ComputerUsePrimitivePortResult<ComputerUseActOutput>, runtime, startedAt, now);
   }
   if (primitive === 'observe') {
-    return finalizeObserveResult(input as ComputerUseObserveInput, result as ComputerUsePrimitivePortResult<ComputerUseObserveOutput>, startedAt, now);
+    return finalizeObserveResult(input as ComputerUseObserveInput, result as ComputerUsePrimitivePortResult<ComputerUseObserveOutput>, runtime, startedAt, now);
   }
   if (primitive === 'control') {
     return finalizeControlResult(input as ComputerUseControlInput, result as ComputerUsePrimitivePortResult<ComputerUseControlOutput>, runtime, startedAt, now);
@@ -583,6 +619,9 @@ function finalizeBindResult(
   if (!output || !nonEmptyString(output.sessionId) || !nonEmptyString(output.inputAdapterRef) || !nonEmptyString(output.cursorRef) || !nonEmptyString(output.scopedInputLeaseRef)) {
     return invalidIsolationResult('invalid_bind_session_isolation_refs', 'A completed bind must return sessionId, inputAdapterRef, cursorRef, and scopedInputLeaseRef.', input, startedAt, now);
   }
+  if (!nonEmptyString(output.targetRef) || !nonEmptyString(output.observationRef)) {
+    return invalidEvidenceResult('invalid_bind_target_observation_refs', 'A completed bind must return targetRef and initial observationRef for the scoped session.', input, startedAt, now);
+  }
   const duplicate = [...runtime.sessions.values()].find((session) => isLiveSession(session)
     && (session.sessionId === output.sessionId
       || session.inputAdapterRef === output.inputAdapterRef
@@ -595,6 +634,7 @@ function finalizeBindResult(
   runtime.sessions.set(output.sessionId, {
     sessionId: output.sessionId,
     targetRef: output.targetRef,
+    currentObservationRef: output.observationRef,
     inputAdapterRef: output.inputAdapterRef,
     cursorRef: output.cursorRef,
     scopedInputLeaseRef: output.scopedInputLeaseRef,
@@ -605,6 +645,8 @@ function finalizeBindResult(
     ...result,
     refs: uniqueStrings([
       ...(result.refs ?? []),
+      output.targetRef,
+      output.observationRef,
       output.inputAdapterRef,
       output.cursorRef,
       output.scopedInputLeaseRef,
@@ -654,6 +696,7 @@ function finalizeActResult(
 function finalizeObserveResult(
   input: ComputerUseObserveInput,
   result: ComputerUsePrimitivePortResult<ComputerUseObserveOutput>,
+  runtime: ComputerUseSessionRuntime,
   startedAt: number,
   now: () => number,
 ): ComputerUsePrimitivePortResult<ComputerUseObserveOutput> {
@@ -661,6 +704,27 @@ function finalizeObserveResult(
   if (!hasRequiredObserveEvidence(result.output)) {
     return invalidEvidenceResult('invalid_observe_evidence_refs', 'A completed observe must return observationRef, screenshotRef, accessibilityRef, elementRefs, and textRefs.', input, startedAt, now);
   }
+  const output = result.output;
+  if (!output) {
+    return invalidEvidenceResult('invalid_observe_evidence_refs', 'A completed observe must return observationRef, screenshotRef, accessibilityRef, elementRefs, and textRefs.', input, startedAt, now);
+  }
+  const session = runtime.sessions.get(input.sessionId);
+  if (!session) return sessionBlockedResult('unknown_computer_use_session', 'observe', input, startedAt, now);
+  const previousObservationRef = session.currentObservationRef;
+  const nextObservationRef = output.observationRef;
+  if (previousObservationRef && previousObservationRef !== nextObservationRef) {
+    const staleInvalidationRefs = output.staleInvalidationRefs;
+    if (!validStringArray(staleInvalidationRefs) || !staleInvalidationRefs.includes(previousObservationRef)) {
+      return invalidEvidenceResult(
+        'invalid_observe_stale_invalidation_refs',
+        'A completed observe that replaces the current session observation must return staleInvalidationRefs including the previous observationRef.',
+        input,
+        startedAt,
+        now,
+      );
+    }
+  }
+  session.currentObservationRef = nextObservationRef;
   return result;
 }
 
@@ -674,6 +738,9 @@ function finalizeControlResult(
   if (!isSuccessfulStatus(result.status)) return result;
   const session = runtime.sessions.get(input.sessionId);
   if (!session) return sessionBlockedResult('unknown_computer_use_session', 'control', input, startedAt, now);
+  if (!result.output || !nonEmptyString(result.output.controlRef)) {
+    return invalidEvidenceResult('invalid_control_evidence_refs', 'A completed control must return a controlRef and structured output.', input, startedAt, now);
+  }
 
   if (input.command === 'pause') session.status = 'paused';
   if (input.command === 'resume') session.status = 'active';
@@ -684,15 +751,18 @@ function finalizeControlResult(
   const releasedRefs = input.command === 'release' || input.command === 'stop' || input.command === 'cancel'
     ? [session.scopedInputLeaseRef, session.inputAdapterRef, session.cursorRef]
     : [];
-  const output = result.output
-    ? {
-        ...result.output,
-        releasedRefs: uniqueStrings([
-          ...(result.output.releasedRefs ?? []),
-          ...releasedRefs,
-        ]),
-      }
-    : result.output;
+  const finalReleasedRefs = uniqueStrings([
+    ...(result.output.releasedRefs ?? []),
+    ...releasedRefs,
+  ]);
+  const cleanupManifest = releasedRefs.length > 0
+    ? buildCleanupManifest(result, finalReleasedRefs)
+    : result.output.cleanupManifest;
+  const output = {
+    ...result.output,
+    releasedRefs: finalReleasedRefs,
+    cleanupManifest,
+  };
   return {
     ...result,
     output,
@@ -752,15 +822,17 @@ function sessionBlockedResult<T>(
   startedAt: number,
   now: () => number,
 ): ComputerUsePrimitivePortResult<T> {
+  const reasonRef = blockedReasonRef(blockedReason, primitive);
   return {
     status: 'blocked',
     blockedReason,
-    refs: [],
+    refs: [reasonRef],
     diagnostics: [{
       code: blockedReason,
       message: `Computer Use ${primitive} cannot run because the session is not active for this input adapter scope.`,
       severity: 'error',
       retryable: false,
+      refs: [reasonRef],
     }],
     budget: elapsedBudget(input, startedAt, now()),
   };
@@ -811,9 +883,12 @@ function validateBindInput(input: Record<string, unknown>, errors: string[]) {
     for (const field of ['targetRef', 'windowRef', 'appRef', 'displayRef', 'regionRef', 'remoteSessionRef', 'windowId', 'appId', 'titleContains']) {
       validateOptionalString(target[field], `target.${field}`, errors);
     }
-    if (!hasAnyNonEmptyString(target, ['targetRef', 'windowRef', 'appRef', 'displayRef', 'regionRef', 'remoteSessionRef', 'windowId', 'appId', 'titleContains'])) {
+    const selectorFields = ['windowRef', 'appRef', 'displayRef', 'regionRef', 'remoteSessionRef', 'windowId', 'appId', 'titleContains'];
+    const selectorCount = selectorFields.filter((field) => nonEmptyString(target[field])).length;
+    if (selectorCount === 0 && !nonEmptyString(target.targetRef)) {
       errors.push('missing_target_ref');
     }
+    if (selectorCount > 1) errors.push('ambiguous_target_ref');
   }
   validateOptionalEnum(input.riskPolicy, ['fail-closed', 'allow-confirmed'], 'riskPolicy', errors);
   validateOptionalString(input.approvalRef, 'approvalRef', errors);
@@ -1026,7 +1101,7 @@ function firstProcedureConfirmationBlock(input: ComputerUseRunProcedureInput): C
           stepId: step.id,
           primitive: step.primitive,
           status: block.status,
-          refs: [],
+          refs: block.refs ?? [],
           blockedReason: block.blockedReason,
           diagnostics: block.diagnostics,
         }],
@@ -1049,9 +1124,10 @@ function actionConfirmationBlock(
   const blockedReason = nonEmptyString(approvalRef)
     ? 'computer_use_action_approval_ref_mismatch'
     : 'computer_use_action_needs_confirmation';
+  const reasonRef = blockedReasonRef(blockedReason, 'act');
   return {
     status: 'needs-confirmation',
-    refs: [],
+    refs: [reasonRef],
     blockedReason,
     diagnostics: [{
       code: blockedReason,
@@ -1060,6 +1136,7 @@ function actionConfirmationBlock(
         : 'High-risk Computer Use action requires a caller-supplied approvalRef before execution.',
       severity: 'error',
       retryable: true,
+      refs: [reasonRef],
     }],
     budget: elapsedBudget(input, startedAt, now()),
     repairHints: [{
@@ -1226,6 +1303,94 @@ function hasRequiredActEvidence(output: ComputerUseActOutput | undefined) {
     && nonEmptyString(output.beforeObservationRef)
     && nonEmptyString(output.afterObservationRef)
     && validStringArray(output.invalidatedRefs));
+}
+
+function primitivePortResultHasForbiddenRaw(result: ComputerUsePrimitivePortResult) {
+  return publicEventHasForbiddenRaw({
+    output: result.output,
+    diagnostics: result.diagnostics,
+    repairHints: result.repairHints,
+  });
+}
+
+function firstForbiddenCompletionTruthKey(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const child = firstForbiddenCompletionTruthKey(item);
+      if (child) return child;
+    }
+    return undefined;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (isForbiddenCompletionTruthKey(key)) return key;
+    const nested = firstForbiddenCompletionTruthKey(child);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function isForbiddenCompletionTruthKey(key: string) {
+  const normalized = key.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+  return normalized === 'completion-truth'
+    || normalized === 'completion'
+    || normalized === 'final-answer'
+    || normalized === 'final-text'
+    || normalized === 'visible-answer'
+    || normalized === 'user-visible-answer'
+    || normalized === 'done';
+}
+
+function buildCleanupManifest(
+  result: ComputerUsePrimitivePortResult<ComputerUseControlOutput>,
+  releasedRefs: string[],
+): ComputerUseCleanupManifest {
+  const existing = result.output?.cleanupManifest;
+  const restorationRefs = cleanupRestorationRefs(result, existing);
+  const frontAppRestoreRef = existing?.frontAppRestoreRef ?? restorationRefs.find((ref) => ref.startsWith('front-app-restore:'));
+  const focusRestoreRef = existing?.focusRestoreRef ?? restorationRefs.find((ref) => ref.startsWith('focus-restore:'));
+  const mousePositionRestoreRef = existing?.mousePositionRestoreRef ?? restorationRefs.find((ref) => ref.startsWith('mouse-position-restore:'));
+  const cleanupRefs = uniqueStrings([
+    ...(existing?.cleanupRefs ?? []),
+    ...releasedRefs,
+    ...restorationRefs,
+  ]);
+  return {
+    schemaVersion: COMPUTER_USE_CLEANUP_MANIFEST_SCHEMA,
+    status: result.status,
+    releasedRefs,
+    cleanupRefs,
+    ...(frontAppRestoreRef ? { frontAppRestoreRef } : {}),
+    ...(focusRestoreRef ? { focusRestoreRef } : {}),
+    ...(mousePositionRestoreRef ? { mousePositionRestoreRef } : {}),
+  };
+}
+
+function cleanupRestorationRefs(
+  result: ComputerUsePrimitivePortResult<ComputerUseControlOutput>,
+  existing: ComputerUseCleanupManifest | undefined,
+) {
+  return uniqueStrings([
+    ...(result.refs ?? []),
+    ...(existing?.cleanupRefs ?? []),
+    existing?.frontAppRestoreRef ?? '',
+    existing?.focusRestoreRef ?? '',
+    existing?.mousePositionRestoreRef ?? '',
+  ].filter(isCleanupRestorationRef));
+}
+
+function isCleanupRestorationRef(value: string) {
+  return value.startsWith('front-app-restore:')
+    || value.startsWith('focus-restore:')
+    || value.startsWith('mouse-position-restore:');
+}
+
+function blockedReasonRef(blockedReason: string, primitive: ComputerUsePrimitiveName | ComputerUseProcedureStepPrimitive) {
+  return `blocked-reason:${safeRefSegment(blockedReason)}:${safeRefSegment(primitive)}`;
+}
+
+function safeRefSegment(value: string) {
+  return value.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'unknown';
 }
 
 function isSuccessfulStatus(status: ComputerUsePrimitiveStatus) {

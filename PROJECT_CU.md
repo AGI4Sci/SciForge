@@ -93,25 +93,25 @@ SciForge UI
 
 Build Tasks：
 
-- [ ] [Unit] 写 `bind` 红测：成功时必须产生 session-scoped `inputAdapterRef`、`cursorRef`、`scopedInputLeaseRef`、`targetRef` 和初始 `observationRef`。
-- [ ] [Unit] 写 `bind` ambiguity 红测：多个 concrete target selector、未知 target resolver、证据冲突 target 都必须带 reason refs / evidence refs 返回 `blocked` / `needs-confirmation`。
-- [ ] [Code] 收口 `bind` result envelope；缺少 scoped refs、重复 active refs、未知 target 或多 target 必须 fail closed。
-- [ ] [Unit] 写 `observe` raw-payload 红测：port 即使返回 raw screenshot / AX tree / visible text / provider payload，public output 也必须拒绝或清洗到 refs-only。
-- [ ] [Unit] 写 `observe` freshness 红测：替换 previous current observation 时必须产生 stale invalidation refs。
-- [ ] [Code] 收口 `observe` refs-first output；输出 `observationRef`、`screenshotRef`、`accessibilityRef`、`elementRefs`、`textRefs` 和 stale invalidation refs。
-- [ ] [Unit] 写 `act` evidence 红测：completed action 必须产生 executor event refs、input event refs、before/after observation refs 和 invalidated refs。
-- [ ] [Unit] 写 `act` blocked 红测：blocked / needs-confirmation action 必须返回 reason refs / evidence refs，且不能调用 executor。
-- [ ] [Unit] 写 `act` truth 红测：completed action output 含 `completionTruth`、`finalAnswer`、`done` 或 equivalent user-task truth 时必须 fail closed。
-- [ ] [Code] 收口 `act` 单 primitive result；`completed` 只表示这个输入事件完成，不生成 task completion truth。
-- [ ] [Unit] 写 `run_procedure` 红测：每个 step 都保留 primitive refs、executor event refs、before/after refs 和 invalidation refs。
-- [ ] [Code] 收口 `run_procedure` 局部结构化执行；拒绝自然语言 task / goal / instruction。
-- [ ] [Unit] 写 Host/run-level release 红测：`act/run_procedure` 后如果 `control release` 缺失或失败，外层 run / materializer 不能标记完成；`run_procedure.completed` 只能保留为局部 procedure 状态。
-- [ ] [Unit] 写 `control release` 红测：release 必须释放 input lease / adapter / cursor；control port 缺少 `controlRef` 或 release output 时必须 fail closed。
-- [ ] [Code] 实现 cleanup manifest：记录 released refs、front app restoration refs、focus restoration refs、mouse position restoration refs。
-- [ ] [Static] primitive public surface 精确 allowlist：只允许 `bind`、`observe`、`act`、`run_procedure`、`control`；禁止 `runTask`、`complete`、`finalAnswer`、`plan`、`locate`、`verify` 等 public intent。
-- [ ] [Static] MCP adapter 必须经 `service.invoke` 和 shared sanitizer / forbidden raw detector；新增 lifecycle public output 未接入时 smoke fail。
-- [ ] [Static] shared-system-input manifest / capability 只允许 `maturity=live-diagnostic` 且 `productReady=false`。
-- [ ] [Acceptance] shared-system-input lifecycle 只能标 `live-diagnostic` / `productReady=false`，不能宣称 product-ready。
+- [x] [Unit] 写 `bind` 红测：成功时必须产生 session-scoped `inputAdapterRef`、`cursorRef`、`scopedInputLeaseRef`、`targetRef` 和初始 `observationRef`。
+- [x] [Unit] 写 `bind` ambiguity 红测：多个 concrete target selector、未知 target resolver、证据冲突 target 都必须带 reason refs / evidence refs 返回 `blocked` / `needs-confirmation`。
+- [x] [Code] 收口 `bind` result envelope；缺少 scoped refs、重复 active refs、未知 target 或多 target 必须 fail closed。
+- [x] [Unit] 写 `observe` raw-payload 红测：port 即使返回 raw screenshot / AX tree / visible text / provider payload，public output 也必须拒绝或清洗到 refs-only。
+- [x] [Unit] 写 `observe` freshness 红测：替换 previous current observation 时必须产生 stale invalidation refs。
+- [x] [Code] 收口 `observe` refs-first output；输出 `observationRef`、`screenshotRef`、`accessibilityRef`、`elementRefs`、`textRefs` 和 stale invalidation refs。
+- [x] [Unit] 写 `act` evidence 红测：completed action 必须产生 executor event refs、input event refs、before/after observation refs 和 invalidated refs。
+- [x] [Unit] 写 `act` blocked 红测：blocked / needs-confirmation action 必须返回 reason refs / evidence refs，且不能调用 executor。
+- [x] [Unit] 写 `act` truth 红测：completed action output 含 `completionTruth`、`finalAnswer`、`done` 或 equivalent user-task truth 时必须 fail closed。
+- [x] [Code] 收口 `act` 单 primitive result；`completed` 只表示这个输入事件完成，不生成 task completion truth。
+- [x] [Unit] 写 `run_procedure` 红测：每个 step 都保留 primitive refs、executor event refs、before/after refs 和 invalidation refs。
+- [x] [Code] 收口 `run_procedure` 局部结构化执行；拒绝自然语言 task / goal / instruction。
+- [x] [Unit] 写 Host/run-level release 红测：`act/run_procedure` 后如果 `control release` 缺失或失败，外层 run / materializer 不能标记完成；`run_procedure.completed` 只能保留为局部 procedure 状态。
+- [x] [Unit] 写 `control release` 红测：release 必须释放 input lease / adapter / cursor；control port 缺少 `controlRef` 或 release output 时必须 fail closed。
+- [x] [Code] 实现 cleanup manifest：记录 released refs、front app restoration refs、focus restoration refs、mouse position restoration refs。
+- [x] [Static] primitive public surface 精确 allowlist：只允许 `bind`、`observe`、`act`、`run_procedure`、`control`；禁止 `runTask`、`complete`、`finalAnswer`、`plan`、`locate`、`verify` 等 public intent。
+- [x] [Static] MCP adapter 必须经 `service.invoke` 和 shared sanitizer / forbidden raw detector；新增 lifecycle public output 未接入时 smoke fail。
+- [x] [Static] shared-system-input manifest / capability 只允许 `maturity=live-diagnostic` 且 `productReady=false`。
+- [x] [Acceptance] shared-system-input lifecycle 只能标 `live-diagnostic` / `productReady=false`，不能宣称 product-ready。
 
 ### P4：VSCode Target Binding 与 Module Skeleton
 

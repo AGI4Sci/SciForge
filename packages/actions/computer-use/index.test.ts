@@ -101,6 +101,33 @@ describe('computer use primitive contract', () => {
     assert.match(validation.errors.join('\n'), /missing_target_ref/);
   });
 
+  it('rejects bind inputs with multiple concrete target selectors as ambiguous', () => {
+    const validation = validateComputerUsePrimitiveInvokeRequest(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        windowRef: 'window:one',
+        appRef: 'app:vscode',
+      },
+    }));
+
+    assert.equal(validation.ok, false);
+    assert.match(validation.errors.join('\n'), /ambiguous_target_ref/);
+  });
+
+  it('accepts a Host canonical targetRef with one concrete target identity selector', () => {
+    const validation = validateComputerUsePrimitiveInvokeRequest(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        targetRef: 'current-vscode-cowork',
+        appId: 'com.microsoft.VSCode',
+      },
+    }));
+
+    assert.equal(validation.ok, true, validation.errors.join('\n'));
+  });
+
   it('covers the complete atomic GUI action surface including drag', () => {
     assert.deepEqual([...COMPUTER_USE_ACTION_TYPES], [
       'click',
@@ -345,6 +372,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-risk',
             sessionRef: 'computer-use:session:risk',
             targetRef: 'window:risk',
+            observationRef: 'observation:bind:risk',
             inputAdapterRef: 'input-adapter:risk',
             cursorRef: 'cursor:risk',
             scopedInputLeaseRef: 'scoped-input-lease:risk',
@@ -415,6 +443,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-procedure-risk',
             sessionRef: 'computer-use:session:procedure-risk',
             targetRef: 'window:procedure-risk',
+            observationRef: 'observation:bind:procedure-risk',
             inputAdapterRef: 'input-adapter:procedure-risk',
             cursorRef: 'cursor:procedure-risk',
             scopedInputLeaseRef: 'scoped-input-lease:procedure-risk',
@@ -487,13 +516,14 @@ describe('computer use primitive service', () => {
       stepId: 'delete',
       primitive: 'act',
       status: 'needs-confirmation',
-      refs: [],
+      refs: ['blocked-reason:computer_use_action_approval_ref_mismatch:act'],
       blockedReason: 'computer_use_action_approval_ref_mismatch',
       diagnostics: [{
         code: 'computer_use_action_approval_ref_mismatch',
         message: 'High-risk Computer Use action approvalRef is not bound to the current risk envelope.',
         severity: 'error',
         retryable: true,
+        refs: ['blocked-reason:computer_use_action_approval_ref_mismatch:act'],
       }],
     }]);
   });
@@ -507,6 +537,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-missing-isolation',
             sessionRef: 'computer-use:session:missing-isolation',
             targetRef: 'window:missing-isolation',
+            observationRef: 'observation:bind:missing-isolation',
             scopedInputLeaseRef: 'scoped-input-lease:missing-isolation',
           },
           refs: [
@@ -532,6 +563,41 @@ describe('computer use primitive service', () => {
     assert.match(result.value?.diagnostics[0]?.message ?? '', /inputAdapterRef.*cursorRef/);
   });
 
+  it('rejects successful bind outputs that omit target and initial observation refs', async () => {
+    const service = createComputerUsePrimitiveService({
+      ports: {
+        bind: async () => ({
+          status: 'completed',
+          output: {
+            sessionId: 'cu-session-missing-bind-evidence',
+            sessionRef: 'computer-use:session:missing-bind-evidence',
+            inputAdapterRef: 'input-adapter:missing-bind-evidence',
+            cursorRef: 'cursor:missing-bind-evidence',
+            scopedInputLeaseRef: 'scoped-input-lease:missing-bind-evidence',
+          },
+          refs: [
+            'computer-use:session:missing-bind-evidence',
+            'input-adapter:missing-bind-evidence',
+            'cursor:missing-bind-evidence',
+            'scoped-input-lease:missing-bind-evidence',
+          ],
+        }),
+      },
+    });
+
+    const result = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        windowRef: 'window:missing-bind-evidence',
+      },
+    }));
+
+    assert.equal(result.ok, false);
+    assert.equal(result.value?.status, 'failed');
+    assert.equal(result.value?.blockedReason, 'invalid_bind_target_observation_refs');
+  });
+
   it('requires each active session to own unique input adapter and cursor refs', async () => {
     let sequence = 0;
     const service = createComputerUsePrimitiveService({
@@ -544,6 +610,7 @@ describe('computer use primitive service', () => {
               sessionId: `cu-session-${sequence}`,
               sessionRef: `computer-use:session:${sequence}`,
               targetRef: `window:${sequence}`,
+              observationRef: `observation:bind:${sequence}`,
               inputAdapterRef: 'input-adapter:shared',
               cursorRef: 'cursor:shared',
               scopedInputLeaseRef: `scoped-input-lease:${sequence}`,
@@ -591,6 +658,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-isolated',
             sessionRef: 'computer-use:session:isolated',
             targetRef: 'window:isolated',
+            observationRef: 'observation:bind:isolated',
             inputAdapterRef: 'input-adapter:isolated',
             cursorRef: 'cursor:isolated',
             scopedInputLeaseRef: 'scoped-input-lease:isolated',
@@ -686,6 +754,37 @@ describe('computer use primitive service', () => {
       reasonRef: 'reason:done',
     }));
     assert.equal(release.ok, true);
+    const releaseOutput = release.value?.output as {
+      releasedRefs: string[];
+      cleanupManifest?: {
+        schemaVersion: string;
+        status: string;
+        releasedRefs: string[];
+        cleanupRefs: string[];
+        frontAppRestoreRef?: string;
+        focusRestoreRef?: string;
+        mousePositionRestoreRef?: string;
+      };
+    };
+    assert.deepEqual(releaseOutput.releasedRefs, [
+      'scoped-input-lease:isolated',
+      'input-adapter:isolated',
+      'cursor:isolated',
+    ]);
+    assert.deepEqual(releaseOutput.cleanupManifest, {
+      schemaVersion: 'sciforge.computer-use.cleanup-manifest.v1',
+      status: 'completed',
+      releasedRefs: [
+        'scoped-input-lease:isolated',
+        'input-adapter:isolated',
+        'cursor:isolated',
+      ],
+      cleanupRefs: [
+        'scoped-input-lease:isolated',
+        'input-adapter:isolated',
+        'cursor:isolated',
+      ],
+    });
 
     const blocked = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.act, {
       schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
@@ -737,10 +836,12 @@ describe('computer use primitive service', () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.value?.blockedReason, 'unknown_computer_use_session');
+    assert.deepEqual(result.refs, ['blocked-reason:unknown_computer_use_session:act']);
+    assert.deepEqual(result.value?.diagnostics[0]?.refs, ['blocked-reason:unknown_computer_use_session:act']);
     assert.deepEqual(calls, []);
   });
 
-  it('sanitizes primitive action result public projection before returning module output', async () => {
+  it('fails closed when primitive action output contains raw public payload fields', async () => {
     const service = createComputerUsePrimitiveService({
       ports: {
         bind: async () => ({
@@ -749,6 +850,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-public-projection',
             sessionRef: 'computer-use:session:public-projection',
             targetRef: 'window:public-projection',
+            observationRef: 'observation:bind:public-projection',
             inputAdapterRef: 'input-adapter:public-projection',
             cursorRef: 'cursor:public-projection',
             scopedInputLeaseRef: 'scoped-input-lease:public-projection',
@@ -819,13 +921,150 @@ describe('computer use primitive service', () => {
       },
     }));
 
-    assert.equal(act.ok, true);
-    assert.equal(act.value?.status, 'completed');
-    assert.ok(act.refs?.includes('window-action:public-projection'));
+    assert.equal(act.ok, false);
+    assert.equal(act.value?.status, 'failed');
+    assert.equal(act.value?.blockedReason, 'forbidden_computer_use_primitive_raw_output');
     assert.doesNotMatch(
       JSON.stringify(act),
       /SECRET_|rawPath|providerPayload|workspacePath|stdout|requestBody|rawCommand|\/Users\/alice|Bearer/i,
     );
+  });
+
+  it('fails closed when observe output contains raw screenshot accessibility or visible text payloads', async () => {
+    const service = createComputerUsePrimitiveService({
+      ports: {
+        bind: async () => ({
+          status: 'completed',
+          output: {
+            sessionId: 'cu-session-observe-raw',
+            sessionRef: 'computer-use:session:observe-raw',
+            targetRef: 'window:observe-raw',
+            observationRef: 'observation:bind:observe-raw',
+            inputAdapterRef: 'input-adapter:observe-raw',
+            cursorRef: 'cursor:observe-raw',
+            scopedInputLeaseRef: 'scoped-input-lease:observe-raw',
+          },
+          refs: [
+            'computer-use:session:observe-raw',
+            'window:observe-raw',
+            'input-adapter:observe-raw',
+            'cursor:observe-raw',
+            'scoped-input-lease:observe-raw',
+          ],
+        }),
+        observe: async (input) => ({
+          status: 'completed',
+          output: {
+            sessionId: input.sessionId,
+            observationRef: 'observation:observe-raw',
+            screenshotRef: 'image:observe-raw',
+            accessibilityRef: 'accessibility:observe-raw',
+            elementRefs: ['element:observe-raw'],
+            textRefs: ['text-ref:observe-raw'],
+            rawScreenshotBase64: 'data:image/png;base64,SECRET_IMAGE_PAYLOAD',
+            rawAccessibilityTree: '<AXTree><Secret /></AXTree>',
+            rawVisibleText: 'SECRET_VISIBLE_TEXT',
+            providerPayload: { responseBody: 'SECRET_PROVIDER_PAYLOAD' },
+          } as never,
+          refs: ['observation:observe-raw', 'image:observe-raw', 'accessibility:observe-raw'],
+        }),
+      },
+    });
+
+    const bind = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        windowRef: 'window:observe-raw',
+      },
+    }));
+    assert.equal(bind.ok, true);
+
+    const observe = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.observe, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId: 'cu-session-observe-raw',
+      capture: 'both',
+    }));
+
+    assert.equal(observe.ok, false);
+    assert.equal(observe.value?.status, 'failed');
+    assert.equal(observe.value?.blockedReason, 'forbidden_computer_use_primitive_raw_output');
+    assert.doesNotMatch(
+      JSON.stringify(observe),
+      /SECRET_|rawScreenshotBase64|rawAccessibilityTree|rawVisibleText|providerPayload|data:image/i,
+    );
+  });
+
+  it('requires stale invalidation refs when observe replaces the current session observation', async () => {
+    let observeCount = 0;
+    const service = createComputerUsePrimitiveService({
+      ports: {
+        bind: async () => ({
+          status: 'completed',
+          output: {
+            sessionId: 'cu-session-observe-freshness',
+            sessionRef: 'computer-use:session:observe-freshness',
+            targetRef: 'window:observe-freshness',
+            observationRef: 'observation:bind:observe-freshness',
+            inputAdapterRef: 'input-adapter:observe-freshness',
+            cursorRef: 'cursor:observe-freshness',
+            scopedInputLeaseRef: 'scoped-input-lease:observe-freshness',
+          },
+          refs: [
+            'computer-use:session:observe-freshness',
+            'window:observe-freshness',
+            'input-adapter:observe-freshness',
+            'cursor:observe-freshness',
+            'scoped-input-lease:observe-freshness',
+          ],
+        }),
+        observe: async (input) => {
+          observeCount += 1;
+          return {
+            status: 'completed',
+            output: {
+              sessionId: input.sessionId,
+              observationRef: `observation:observe-freshness:${observeCount}`,
+              screenshotRef: `image:observe-freshness:${observeCount}`,
+              accessibilityRef: `accessibility:observe-freshness:${observeCount}`,
+              elementRefs: [`element:observe-freshness:${observeCount}`],
+              textRefs: [`text-ref:observe-freshness:${observeCount}`],
+            },
+            refs: [
+              `observation:observe-freshness:${observeCount}`,
+              `image:observe-freshness:${observeCount}`,
+              `accessibility:observe-freshness:${observeCount}`,
+            ],
+          };
+        },
+      },
+    });
+
+    const bind = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        windowRef: 'window:observe-freshness',
+      },
+    }));
+    assert.equal(bind.ok, true);
+
+    const first = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.observe, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId: 'cu-session-observe-freshness',
+      capture: 'both',
+    }));
+    assert.equal(first.ok, false);
+    assert.equal(first.value?.blockedReason, 'invalid_observe_stale_invalidation_refs');
+
+    const second = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.observe, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId: 'cu-session-observe-freshness',
+      capture: 'both',
+    }));
+
+    assert.equal(second.ok, false);
+    assert.equal(second.value?.blockedReason, 'invalid_observe_stale_invalidation_refs');
   });
 
   it('fails closed when an act port reports adapter or cursor refs outside the bound session scope', async () => {
@@ -837,6 +1076,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-scope',
             sessionRef: 'computer-use:session:scope',
             targetRef: 'window:scope',
+            observationRef: 'observation:bind:scope',
             inputAdapterRef: 'input-adapter:scope',
             cursorRef: 'cursor:scope',
             scopedInputLeaseRef: 'scoped-input-lease:scope',
@@ -899,6 +1139,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-evidence',
             sessionRef: 'computer-use:session:evidence',
             targetRef: 'window:evidence',
+            observationRef: 'observation:bind:evidence',
             inputAdapterRef: 'input-adapter:evidence',
             cursorRef: 'cursor:evidence',
             scopedInputLeaseRef: 'scoped-input-lease:evidence',
@@ -963,6 +1204,71 @@ describe('computer use primitive service', () => {
     assert.equal(act.value?.blockedReason, 'invalid_act_evidence_refs');
   });
 
+  it('fails closed when completed act output includes user task completion truth', async () => {
+    const service = createComputerUsePrimitiveService({
+      ports: {
+        bind: async () => ({
+          status: 'completed',
+          output: {
+            sessionId: 'cu-session-truth',
+            sessionRef: 'computer-use:session:truth',
+            targetRef: 'window:truth',
+            observationRef: 'observation:bind:truth',
+            inputAdapterRef: 'input-adapter:truth',
+            cursorRef: 'cursor:truth',
+            scopedInputLeaseRef: 'scoped-input-lease:truth',
+          },
+          refs: [
+            'computer-use:session:truth',
+            'window:truth',
+            'input-adapter:truth',
+            'cursor:truth',
+            'scoped-input-lease:truth',
+          ],
+        }),
+        act: async (input) => ({
+          status: 'completed',
+          output: {
+            sessionId: input.sessionId,
+            actionRef: 'window-action:truth',
+            executorEventRef: 'executor-event:truth',
+            inputEventRef: 'input-event:truth',
+            beforeObservationRef: 'observation:before:truth',
+            afterObservationRef: 'observation:after:truth',
+            invalidatedRefs: ['observation:before:truth'],
+            completionTruth: true,
+            finalAnswer: 'The user task is done.',
+            done: true,
+          } as never,
+          refs: ['window-action:truth', 'executor-event:truth', 'input-event:truth'],
+        }),
+      },
+    });
+
+    const bind = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'window',
+        windowRef: 'window:truth',
+      },
+    }));
+    assert.equal(bind.ok, true);
+
+    const act = await service.invoke(request(COMPUTER_USE_PRIMITIVE_INTENTS.act, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId: 'cu-session-truth',
+      action: {
+        type: 'click',
+        elementRef: 'element:truth',
+      },
+    }));
+
+    assert.equal(act.ok, false);
+    assert.equal(act.value?.status, 'failed');
+    assert.equal(act.value?.blockedReason, 'forbidden_computer_use_primitive_completion_truth');
+    assert.doesNotMatch(JSON.stringify(act), /finalAnswer|The user task is done|"done":true/i);
+  });
+
   it('delegates bind, observe, act, and control through structured refs', async () => {
     const calls: string[] = [];
     const ports: ComputerUsePrimitivePorts = {
@@ -974,6 +1280,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-1',
             sessionRef: 'computer-use:session:1',
             targetRef: input.target.windowRef,
+            observationRef: 'observation:bind:1',
             inputAdapterRef: 'input-adapter:window:1',
             cursorRef: 'cursor:window:1',
             scopedInputLeaseRef: 'lease:window:1',
@@ -992,8 +1299,9 @@ describe('computer use primitive service', () => {
             accessibilityRef: 'accessibility:before:1',
             elementRefs: ['element:save-button'],
             textRefs: ['text:save-button-label'],
+            staleInvalidationRefs: ['observation:bind:1'],
           },
-          refs: ['observation:before:1', 'image:before:1', 'accessibility:before:1', 'element:save-button', 'text:save-button-label'],
+          refs: ['observation:before:1', 'image:before:1', 'accessibility:before:1', 'element:save-button', 'text:save-button-label', 'observation:bind:1'],
         };
       },
       act: async (input) => {
@@ -1085,6 +1393,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-actions',
             sessionRef: 'computer-use:session:actions',
             targetRef: 'window:actions',
+            observationRef: 'observation:bind:actions',
             inputAdapterRef: 'input-adapter:actions',
             cursorRef: 'cursor:actions',
             scopedInputLeaseRef: 'scoped-input-lease:actions',
@@ -1170,6 +1479,7 @@ describe('computer use primitive service', () => {
             sessionId: 'cu-session-1',
             sessionRef: 'computer-use:session:1',
             targetRef: 'window:procedure',
+            observationRef: 'observation:bind:procedure',
             inputAdapterRef: 'input-adapter:procedure:1',
             cursorRef: 'cursor:procedure:1',
             scopedInputLeaseRef: 'scoped-input-lease:procedure:1',
@@ -1189,12 +1499,22 @@ describe('computer use primitive service', () => {
             output: {
               sessionId: input.sessionId,
               observationRef: `observation:${calls.length}`,
-              screenshotRef: `image:${calls.length}`,
-              accessibilityRef: `accessibility:${calls.length}`,
-              elementRefs: ['element:search-box'],
-              textRefs: ['text:query:1'],
-            },
-            refs: [`observation:${calls.length}`, `image:${calls.length}`, `accessibility:${calls.length}`, 'element:search-box', 'text:query:1'],
+            screenshotRef: `image:${calls.length}`,
+            accessibilityRef: `accessibility:${calls.length}`,
+            elementRefs: ['element:search-box'],
+            textRefs: ['text:query:1'],
+            staleInvalidationRefs: calls.length === 1
+              ? ['observation:bind:procedure']
+              : [`observation:${calls.length - 1}`],
+          },
+            refs: [
+              `observation:${calls.length}`,
+              `image:${calls.length}`,
+              `accessibility:${calls.length}`,
+              'element:search-box',
+              'text:query:1',
+              calls.length === 1 ? 'observation:bind:procedure' : `observation:${calls.length - 1}`,
+            ],
           };
         },
         act: async (input) => {
@@ -1267,6 +1587,7 @@ describe('computer use primitive service', () => {
       'accessibility:1',
       'element:search-box',
       'text:query:1',
+      'observation:bind:procedure',
       'window-action:type:1',
       'executor-event:type:1',
       'input-event:type:1',
@@ -1286,7 +1607,7 @@ describe('computer use primitive service', () => {
     };
     assert.equal(output.procedureRef, 'procedure:fill-search-box');
     assert.deepEqual(output.stepResults.map((step) => [step.stepId, step.primitive, step.status, step.refs]), [
-      ['observe-before', 'observe', 'completed', ['observation:1', 'image:1', 'accessibility:1', 'element:search-box', 'text:query:1']],
+      ['observe-before', 'observe', 'completed', ['observation:1', 'image:1', 'accessibility:1', 'element:search-box', 'text:query:1', 'observation:bind:procedure']],
       ['type-query', 'act', 'completed', [
         'window-action:type:1',
         'executor-event:type:1',
