@@ -32,18 +32,28 @@ const VSCODE_CAPABILITIES = [
 interface VSCodeAppObservation {
   refs: string[];
   invalidRefs: string[];
+  identityRefs: string[];
   appRefs: string[];
   processRefs: string[];
   sessionRefs: string[];
   windowRefs: string[];
+  titleRefs: string[];
   frontmostRefs: string[];
   observationRefs: string[];
+  currentObservationRefs: string[];
+  staleObservationRefs: string[];
   fileRefs: string[];
+  selectedFileRefs: string[];
   editorRefs: string[];
+  activeEditorRefs: string[];
+  editorGroupRefs: string[];
+  cursorRefs: string[];
   terminalRefs: string[];
   commandPaletteRefs: string[];
   commandPaletteItemRefs: string[];
   diagnosticsRefs: string[];
+  problemsPanelRefs: string[];
+  workspaceRefs: string[];
   unknownWebviewRefs: string[];
   operationRefRefs: string[];
   freshnessRefs: string[];
@@ -51,6 +61,13 @@ interface VSCodeAppObservation {
   selectionRefs: string[];
   textRefRefs: string[];
   textRefs: string[];
+  reasonRefs: string[];
+  evidenceRefs: string[];
+  safeSummary: {
+    identity: string;
+    freshness: string;
+    concepts: string[];
+  };
 }
 
 export function createVSCodeAppModule(): ComputerUseAppModule {
@@ -64,30 +81,107 @@ export function createVSCodeAppModule(): ComputerUseAppModule {
 }
 
 function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & { hasVSCodeIdentity: boolean } {
-  const invalidRefs = refs.filter(isRawRef);
+  const invalidRefs = refs.some(isRawRef) ? ['blocked:vscode-app-module:raw-ref-not-allowed'] : [];
   const safeRefs = uniqueStrings(refs.filter((ref) => !isRawRef(ref) && isVSCodeObservationRef(ref)));
+  const appRefs = safeRefs.filter((ref) => ref === 'macos-app:vscode' || ref.startsWith('macos-app:vscode:'));
+  const processRefs = safeRefs.filter((ref) => ref.startsWith('process:vscode'));
+  const windowRefs = safeRefs.filter((ref) => ref.startsWith('window:vscode:'));
+  const titleRefs = safeRefs.filter((ref) => ref.startsWith('text:title:vscode:') || ref.startsWith('title:vscode:'));
+  const frontmostRefs = safeRefs.filter((ref) => ref.startsWith('frontmost:vscode:'));
+  const observationRefs = safeRefs.filter((ref) => ref.startsWith('observation:vscode:'));
+  const staleObservationRefs = safeRefs.filter((ref) => ref.startsWith('stale-invalidation:vscode:'));
+  const fileRefs = safeRefs.filter((ref) => ref.startsWith('file-ref:vscode:'));
+  const selectedFileRefs = safeRefs.filter((ref) => ref.startsWith('selected-file:vscode:') || ref.startsWith('file-ref:vscode:current'));
+  const editorRefs = safeRefs.filter(isEditorRef);
+  const activeEditorRefs = safeRefs.filter((ref) => ref.startsWith('active-editor:vscode:'));
+  const editorGroupRefs = safeRefs.filter((ref) => ref.startsWith('editor-group:vscode:'));
+  const cursorRefs = safeRefs.filter((ref) => ref.startsWith('cursor-ref:vscode:'));
+  const terminalRefs = safeRefs.filter(isTerminalRef);
+  const commandPaletteRefs = safeRefs.filter(isCommandPaletteRef);
+  const diagnosticsRefs = safeRefs.filter(isDiagnosticsRef);
+  const problemsPanelRefs = safeRefs.filter(isProblemsPanelRef);
+  const workspaceRefs = safeRefs.filter((ref) => ref.startsWith('workspace-ref:vscode:') || ref.startsWith('workspace:vscode:'));
+  const unknownWebviewRefs = safeRefs.filter(isUnknownWebviewRef);
+  const reasonRefs = uniqueStrings([
+    ...invalidRefs,
+    ...(staleObservationRefs.length > 0 ? ['blocked:vscode-app-module:stale-observation'] : []),
+  ]);
+  const evidenceRefs = conceptEvidenceRefs({
+    workspaceRefs,
+    fileRefs: selectedFileRefs.length ? selectedFileRefs : fileRefs,
+    editorRefs,
+    editorGroupRefs,
+    activeEditorRefs,
+    selectionRefs: safeRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')),
+    cursorRefs,
+    terminalRefs,
+    commandPaletteRefs,
+    problemsPanelRefs,
+    unknownWebviewRefs,
+  });
   const observation: VSCodeAppObservation & { hasVSCodeIdentity: boolean } = {
     refs: safeRefs,
     invalidRefs,
-    appRefs: safeRefs.filter((ref) => ref === 'macos-app:vscode' || ref.startsWith('macos-app:vscode:')),
-    processRefs: safeRefs.filter((ref) => ref.startsWith('process:vscode')),
+    identityRefs: uniqueStrings([
+      ...appRefs,
+      ...processRefs,
+      ...windowRefs,
+      ...titleRefs,
+      ...frontmostRefs,
+    ]),
+    appRefs,
+    processRefs,
     sessionRefs: safeRefs.filter((ref) => ref.startsWith('window-action-session:vscode:') || ref.startsWith('computer-use-session:vscode:')),
-    windowRefs: safeRefs.filter((ref) => ref.startsWith('window:vscode:')),
-    frontmostRefs: safeRefs.filter((ref) => ref.startsWith('frontmost:vscode:')),
-    observationRefs: safeRefs.filter((ref) => ref.startsWith('observation:vscode:')),
-    fileRefs: safeRefs.filter((ref) => ref.startsWith('file-ref:vscode:')),
-    editorRefs: safeRefs.filter(isEditorRef),
-    terminalRefs: safeRefs.filter(isTerminalRef),
-    commandPaletteRefs: safeRefs.filter(isCommandPaletteRef),
+    windowRefs,
+    titleRefs,
+    frontmostRefs,
+    observationRefs,
+    currentObservationRefs: observationRefs,
+    staleObservationRefs,
+    fileRefs,
+    selectedFileRefs,
+    editorRefs,
+    activeEditorRefs,
+    editorGroupRefs,
+    cursorRefs,
+    terminalRefs,
+    commandPaletteRefs,
     commandPaletteItemRefs: safeRefs.filter((ref) => ref.startsWith('command-palette-item:vscode:')),
-    diagnosticsRefs: safeRefs.filter(isDiagnosticsRef),
-    unknownWebviewRefs: safeRefs.filter(isUnknownWebviewRef),
+    diagnosticsRefs,
+    problemsPanelRefs,
+    workspaceRefs,
+    unknownWebviewRefs,
     operationRefRefs: safeRefs.filter((ref) => ref.startsWith('operation-ref:vscode:')),
     freshnessRefs: safeRefs.filter((ref) => ref.startsWith('freshness:vscode:')),
     focusedEditorRefs: safeRefs.filter((ref) => ref.startsWith('focused-editor:vscode:')),
     selectionRefs: safeRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')),
     textRefRefs: safeRefs.filter((ref) => ref.startsWith('text-ref:')),
     textRefs: safeRefs.filter((ref) => ref.startsWith('text:')),
+    reasonRefs,
+    evidenceRefs,
+    safeSummary: {
+      identity: appRefs.length > 0 && processRefs.length > 0 && windowRefs.length > 0 && titleRefs.length > 0 && frontmostRefs.length > 0
+        ? 'vscode-window-identity:ready'
+        : 'vscode-window-identity:incomplete',
+      freshness: staleObservationRefs.length > 0
+        ? 'vscode-observation:stale'
+        : observationRefs.length > 0 && safeRefs.some((ref) => ref.startsWith('freshness:vscode:'))
+          ? 'vscode-observation:fresh'
+          : 'vscode-observation:missing',
+      concepts: conceptSummary({
+        workspaceRefs,
+        fileRefs: selectedFileRefs.length ? selectedFileRefs : fileRefs,
+        editorRefs,
+        editorGroupRefs,
+        activeEditorRefs,
+        selectionRefs: safeRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')),
+        cursorRefs,
+        terminalRefs,
+        commandPaletteRefs,
+        problemsPanelRefs,
+        unknownWebviewRefs,
+      }),
+    },
     hasVSCodeIdentity: false,
   };
   observation.hasVSCodeIdentity = observation.appRefs.length > 0
@@ -110,9 +204,6 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
   }
   if (!normalizedOperationRef) {
     return blocked('blocked:vscode-app-module:operation-ref-required', observation.refs);
-  }
-  if (observation.windowRefs.length === 0) {
-    return blocked('blocked:vscode-app-module:window-ref-required', observation.refs);
   }
   if (observation.windowRefs.length > 1) {
     return needsConfirmation('needs-confirmation:vscode-app-module:target-window-ambiguous', observation.windowRefs);
@@ -484,6 +575,40 @@ function currentPaletteItemRef(itemRef: string, paletteRef: string): boolean {
   return Boolean(paletteToken) && itemRef.startsWith(`command-palette-item:vscode:${paletteToken}:`);
 }
 
+interface VSCodeConceptBuckets {
+  workspaceRefs: string[];
+  fileRefs: string[];
+  editorRefs: string[];
+  editorGroupRefs: string[];
+  activeEditorRefs: string[];
+  selectionRefs: string[];
+  cursorRefs: string[];
+  terminalRefs: string[];
+  commandPaletteRefs: string[];
+  problemsPanelRefs: string[];
+  unknownWebviewRefs: string[];
+}
+
+function conceptSummary(concepts: VSCodeConceptBuckets): string[] {
+  return [
+    concepts.workspaceRefs.length > 0 ? 'workspace' : undefined,
+    concepts.fileRefs.length > 0 ? 'file' : undefined,
+    concepts.editorRefs.length > 0 ? 'editor' : undefined,
+    concepts.editorGroupRefs.length > 0 ? 'editor-group' : undefined,
+    concepts.activeEditorRefs.length > 0 ? 'active-editor' : undefined,
+    concepts.selectionRefs.length > 0 ? 'selection' : undefined,
+    concepts.cursorRefs.length > 0 ? 'cursor' : undefined,
+    concepts.terminalRefs.length > 0 ? 'terminal' : undefined,
+    concepts.commandPaletteRefs.length > 0 ? 'command-palette' : undefined,
+    concepts.problemsPanelRefs.length > 0 ? 'problems-panel' : undefined,
+    concepts.unknownWebviewRefs.length > 0 ? 'unknown-webview' : undefined,
+  ].filter((concept): concept is string => typeof concept === 'string');
+}
+
+function conceptEvidenceRefs(concepts: VSCodeConceptBuckets): string[] {
+  return conceptSummary(concepts).map((concept) => `concept:vscode:${concept}`);
+}
+
 function isTerminalOperation(operation: string): boolean {
   return operation === 'focus-terminal'
     || operation === 'send-terminal-text'
@@ -506,8 +631,21 @@ function checkCommonObservationGate(observation: VSCodeAppObservation): Computer
   if (observation.sessionRefs.length === 0) {
     return blocked('blocked:vscode-app-module:active-session-ref-required', observation.refs);
   }
-  if (observation.appRefs.length === 0 || observation.processRefs.length === 0 || observation.frontmostRefs.length === 0) {
+  if (
+    observation.appRefs.length === 0
+    || observation.processRefs.length === 0
+    || observation.windowRefs.length === 0
+    || observation.titleRefs.length === 0
+    || observation.frontmostRefs.length === 0
+  ) {
     return blocked('blocked:vscode-app-module:window-identity-refs-required', observation.refs);
+  }
+  if (observation.staleObservationRefs.length > 0) {
+    return blocked('blocked:vscode-app-module:stale-observation', uniqueStrings([
+      ...observation.currentObservationRefs,
+      ...observation.staleObservationRefs,
+      ...observation.freshnessRefs,
+    ]));
   }
   if (observation.observationRefs.length === 0 || observation.freshnessRefs.length === 0) {
     return blocked('blocked:vscode-app-module:fresh-observation-required', observation.refs);
@@ -553,6 +691,12 @@ function isDiagnosticsRef(ref: string): boolean {
     || ref.startsWith('element:vscode:problems:');
 }
 
+function isProblemsPanelRef(ref: string): boolean {
+  return ref.startsWith('problems:vscode:')
+    || ref.startsWith('element:vscode:problems:')
+    || ref.startsWith('diagnostics:vscode:problems');
+}
+
 function isUnknownWebviewRef(ref: string): boolean {
   return ref.startsWith('element:vscode:webview:')
     && !isEditorRef(ref)
@@ -576,9 +720,16 @@ function isVSCodeObservationRef(ref: string): boolean {
     || ref.startsWith('macos-app:vscode:')
     || ref.startsWith('process:vscode')
     || ref.startsWith('window:vscode:')
+    || ref.startsWith('title:vscode:')
+    || ref.startsWith('text:title:vscode:')
     || ref.startsWith('frontmost:vscode:')
     || ref.startsWith('observation:vscode:')
     || ref.startsWith('file-ref:vscode:')
+    || ref.startsWith('selected-file:vscode:')
+    || ref.startsWith('workspace-ref:vscode:')
+    || ref.startsWith('workspace:vscode:')
+    || ref.startsWith('editor-group:vscode:')
+    || ref.startsWith('active-editor:vscode:')
     || ref.startsWith('element:vscode:')
     || ref.startsWith('terminal:vscode:')
     || ref.startsWith('command-palette:vscode:')
@@ -586,7 +737,9 @@ function isVSCodeObservationRef(ref: string): boolean {
     || ref.startsWith('diagnostics:vscode:')
     || ref.startsWith('problems:vscode:')
     || ref.startsWith('freshness:vscode:')
+    || ref.startsWith('stale-invalidation:vscode:')
     || ref.startsWith('focused-editor:vscode:')
+    || ref.startsWith('cursor-ref:vscode:')
     || ref.startsWith('selection-ref:vscode:')
     || ref.startsWith('text-ref:')
     || ref.startsWith('text:vscode:')
@@ -598,7 +751,7 @@ function isVSCodeObservationRef(ref: string): boolean {
 }
 
 function isRawRef(ref: string): boolean {
-  return /(^|:)raw[-:]|base64|data:image|providerPayload|provider-payload|screenshot-path|file:\/\/|https?:\/\//i.test(ref);
+  return /(^|:)raw[-:]|base64|data:image|providerPayload|provider-payload|screenshot-path|file:\/\/|https?:\/\/|(^|:)\/(?:Users|Applications|Volumes|private|tmp)\/|\\|<[^>]+>|secret|password|api[-_]?key|bearer|[A-Za-z0-9+/]{64,}={0,2}/i.test(ref);
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

@@ -242,7 +242,7 @@ function operationRefFromRefs(operation: string, refs: string[]): string | undef
 }
 
 function collectAppModuleRefs(input: CodexAgentHostComputerUseActMaterializerInput): string[] {
-  return uniqueStrings([
+  const refs = [
     ...stringList(input.agentHostInput.refs),
     ...stringList(input.agentHostInput.target.refs),
     ...stringList(input.agentHostInput.observation.refs),
@@ -255,7 +255,55 @@ function collectAppModuleRefs(input: CodexAgentHostComputerUseActMaterializerInp
     ...(input.runtimeTruth?.permissions?.permissionRefs ?? []),
     ...(input.runtimeTruth?.permissions?.scopedExecutorRefs ?? []),
     ...(input.runtimeTruth?.refs ?? []),
+  ];
+  return uniqueStrings([
+    ...refs,
+    ...appModuleObservationFreshnessRefs(input, refs),
   ]);
+}
+
+function appModuleObservationFreshnessRefs(
+  input: CodexAgentHostComputerUseActMaterializerInput,
+  refs: string[],
+): string[] {
+  if (!refs.some((ref) =>
+    ref === 'macos-app:vscode'
+    || ref.startsWith('process:vscode')
+    || ref.startsWith('window:vscode:')
+  )) {
+    return [];
+  }
+  const observations = [
+    input.agentHostInput.observation,
+    input.runtimeTruth?.observation,
+  ];
+  return observations.some(staleObservationMetadata)
+    ? ['stale-invalidation:vscode:host-observation-metadata']
+    : [];
+}
+
+function staleObservationMetadata(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const freshness = isRecord(value.freshnessCheck) ? value.freshnessCheck : undefined;
+  const status = stringField(freshness?.status)
+    ?? stringField(value.status)
+    ?? (value.fresh === false ? 'stale' : value.fresh === true ? 'current' : undefined);
+  const normalizedStatus = status?.toLowerCase();
+  if (normalizedStatus && normalizedStatus !== 'current' && normalizedStatus !== 'fresh') return true;
+  if (value.fresh === false) return true;
+
+  const observedAt = stringField(value.observedAt)
+    ?? stringField(value.capturedAt)
+    ?? stringField(freshness?.observedAt);
+  const checkedAt = stringField(value.freshnessCheckedAt)
+    ?? stringField(freshness?.checkedAt);
+  const maxAgeMs = numberField(freshness?.maxAgeMs);
+  if (!observedAt || !checkedAt || maxAgeMs === undefined) return false;
+  const observedMs = Date.parse(observedAt);
+  const checkedMs = Date.parse(checkedAt);
+  return Number.isFinite(observedMs)
+    && Number.isFinite(checkedMs)
+    && checkedMs - observedMs > maxAgeMs;
 }
 
 function appModuleEvidenceRefs(refs: Array<string | undefined>): string[] {
@@ -289,6 +337,10 @@ function stringList(value: unknown): string[] {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function uniqueStrings(values: string[]): string[] {

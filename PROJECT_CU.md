@@ -110,22 +110,22 @@ Build Tasks：
 
 Build Tasks：
 
-- [ ] [Unit] 写 identity 红测：app / process / window / title / frontmost refs 任一关键证据缺失时 readiness 不能 ready。
-- [ ] [Code] 实现 identity readiness：只返回 identity refs、safe summary、reason refs 和 evidence refs。
-- [ ] [Unit] 写 freshness 红测：缺失 current observation ref 或 observation stale 时必须 `blocked`。
-- [ ] [Code] 把 normalizeObservation 绑定 current observation / freshness refs。
-- [ ] [Unit] 写 editor concept 红测：active editor、editor group、selection / cursor、selected file 必须映射为 tokenized concept refs。
-- [ ] [Code] 实现 editor concept normalization；不依赖固定坐标、固定布局、固定插件或当前文件名。
-- [ ] [Unit] 写 workspace / panel concept 红测：workspace、problems panel、terminal、command palette、unknown webview 映射为稳定 concept refs 或 blocked reason refs。
-- [ ] [Code] 实现 workspace / panel concept normalization；未知 webview 默认 unknown，不猜测。
-- [ ] [Unit] 写 raw 泄漏红测：raw visible text、raw path、raw URL、provider payload、base64 不得出现在 normalize/readiness public result。
-- [ ] [Verify] 跑 VSCode module normalization tests、typecheck 和 no-bypass smoke。
+- [x] [Unit] 写 identity 红测：app / process / window / title / frontmost refs 任一关键证据缺失时 readiness 不能 ready。
+- [x] [Code] 实现 identity readiness：只返回 identity refs、safe summary、reason refs 和 evidence refs。
+- [x] [Unit] 写 freshness 红测：缺失 current observation ref 或 observation stale 时必须 `blocked`。
+- [x] [Code] 把 normalizeObservation 绑定 current observation / freshness refs。
+- [x] [Unit] 写 editor concept 红测：active editor、editor group、selection / cursor、selected file 必须映射为 tokenized concept refs。
+- [x] [Code] 实现 editor concept normalization；不依赖固定坐标、固定布局、固定插件或当前文件名。
+- [x] [Unit] 写 workspace / panel concept 红测：workspace、problems panel、terminal、command palette、unknown webview 映射为稳定 concept refs 或 blocked reason refs。
+- [x] [Code] 实现 workspace / panel concept normalization；未知 webview 默认 unknown，不猜测。
+- [x] [Unit] 写 raw 泄漏红测：raw visible text、raw path、raw URL、provider payload、base64 不得出现在 normalize/readiness public result。
+- [x] [Verify] 跑 VSCode module normalization tests、typecheck 和 no-bypass smoke。
 
 验收：
 
-- [ ] 不同 VSCode 布局 / 插件缺失不会触发坐标硬编码或文件名硬编码。
-- [ ] concept result 只包含 refs、safe summaries 和 reason/evidence refs。
-- [ ] stale observation 不能被当成 current state 使用。
+- [x] 不同 VSCode 布局 / 插件缺失不会触发坐标硬编码或文件名硬编码。
+- [x] concept result 只包含 refs、safe summaries 和 reason/evidence refs。
+- [x] stale observation 不能被当成 current state 使用。
 
 ### P6：VSCode Ambiguity 与 Read-only Diagnostic
 

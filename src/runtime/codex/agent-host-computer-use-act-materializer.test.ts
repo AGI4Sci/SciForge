@@ -366,6 +366,33 @@ test('default Computer Use Act materializer selects a VSCode app module primitiv
   assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner|taskOutcome":"satisfied/i);
 });
 
+test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
+  const runtimeTruth = vscodeAppModuleRuntimeTruth();
+  runtimeTruth.observation = {
+    ...runtimeTruth.observation,
+    fresh: false,
+    freshnessCheck: {
+      ...runtimeTruth.observation?.freshnessCheck,
+      status: 'stale',
+    },
+  };
+
+  const materializer = createDefaultComputerUseActMaterializer();
+  const result = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('read-visible-text'),
+    preflight: vscodeAppModulePreflight(),
+    commandText: 'This stale observation must not produce a primitive candidate.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-app-module-stale',
+    attemptId: 'codex-command-default-vscode-app-module-stale-attempt-1',
+    runtimeTruth,
+  });
+
+  assert.equal(result?.status, 'blocked', result?.message);
+  assert.match(JSON.stringify(result), /blocked:vscode-app-module:stale-observation/);
+  assert.doesNotMatch(JSON.stringify(result), /computer-use-app-module-primitive-candidate|taskOutcome":"satisfied/i);
+});
+
 test('default Computer Use Act materializer blocks app module readiness without structured Host operation', async () => {
   let windowActionPlannerCalls = 0;
   const materializer = createDefaultComputerUseActMaterializer({
@@ -1137,7 +1164,7 @@ function vscodeAppModuleTargetRefs(extraRefs: string[] = []): string[] {
     'macos-app:vscode',
     'process:vscode:paper',
     'window:vscode:paper',
-    'text:title:paper',
+    'text:title:vscode:paper',
     'frontmost:vscode:paper',
     'file-ref:vscode:paper',
     'window-action-session:vscode:1',
@@ -1152,6 +1179,7 @@ function vscodeAppModuleObservationRefs(extraRefs: string[] = []): string[] {
     'process:vscode:paper',
     'frontmost:vscode:paper',
     'window:vscode:paper',
+    'text:title:vscode:paper',
     'observation:vscode:current',
     'image:vscode:current',
     'accessibility:vscode:current',

@@ -12,11 +12,30 @@ import {
 interface VSCodeTestObservation {
   refs: string[];
   invalidRefs: string[];
+  identityRefs: string[];
+  titleRefs: string[];
   windowRefs: string[];
+  currentObservationRefs: string[];
+  staleObservationRefs: string[];
   fileRefs: string[];
+  selectedFileRefs: string[];
   editorRefs: string[];
+  activeEditorRefs: string[];
+  editorGroupRefs: string[];
+  cursorRefs: string[];
+  selectionRefs: string[];
+  workspaceRefs: string[];
+  problemsPanelRefs: string[];
   terminalRefs: string[];
+  commandPaletteRefs: string[];
   unknownWebviewRefs: string[];
+  reasonRefs: string[];
+  evidenceRefs: string[];
+  safeSummary: {
+    identity: string;
+    freshness: string;
+    concepts: string[];
+  };
 }
 
 function createHostStructuredVSCodeAppModule() {
@@ -26,6 +45,10 @@ function createHostStructuredVSCodeAppModule() {
     checkReadiness: (input: Parameters<typeof vscode.checkReadiness>[0]) => vscode.checkReadiness({
       operationRef: `operation-ref:vscode:${input.operation}:test`,
       ...input,
+      refs: [
+        'text:title:vscode:test',
+        ...input.refs,
+      ],
     }),
   };
 }
@@ -68,21 +91,45 @@ test('normalizes VSCode observation refs into stable concepts without raw payloa
   const observation = normalizeVSCodeTestObservation([
     'window:vscode:main',
     'macos-app:vscode',
+    'process:vscode:main',
+    'text:title:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
     'file-ref:vscode:current:paper',
     'element:vscode:editor:monaco:1',
     'element:vscode:terminal:1',
-    'element:vscode:webview:latex-workshop:1',
-    'freshness:vscode:main:1',
+    'element:vscode:webview:opaque-panel:1',
     'raw-path:/Users/example/paper.tex',
   ]);
 
+  assert.deepEqual(observation.identityRefs, [
+    'macos-app:vscode',
+    'process:vscode:main',
+    'window:vscode:main',
+    'text:title:vscode:main',
+    'frontmost:vscode:main',
+  ]);
   assert.deepEqual(observation.windowRefs, ['window:vscode:main']);
+  assert.deepEqual(observation.currentObservationRefs, ['observation:vscode:main:1']);
   assert.deepEqual(observation.fileRefs, ['file-ref:vscode:current:paper']);
+  assert.deepEqual(observation.selectedFileRefs, ['file-ref:vscode:current:paper']);
   assert.deepEqual(observation.editorRefs, ['element:vscode:editor:monaco:1']);
   assert.deepEqual(observation.terminalRefs, ['element:vscode:terminal:1']);
-  assert.deepEqual(observation.unknownWebviewRefs, ['element:vscode:webview:latex-workshop:1']);
-  assert.deepEqual(observation.invalidRefs, ['raw-path:/Users/example/paper.tex']);
-  assert.ok(!observation.refs.includes('raw-path:/Users/example/paper.tex'));
+  assert.deepEqual(observation.unknownWebviewRefs, ['element:vscode:webview:opaque-panel:1']);
+  assert.deepEqual(observation.invalidRefs, ['blocked:vscode-app-module:raw-ref-not-allowed']);
+  assert.ok(observation.reasonRefs.includes('blocked:vscode-app-module:raw-ref-not-allowed'));
+  assert.ok(!JSON.stringify(observation).includes('/Users/example/paper.tex'));
+  assert.deepEqual(observation.safeSummary, {
+    identity: 'vscode-window-identity:ready',
+    freshness: 'vscode-observation:fresh',
+    concepts: [
+      'file',
+      'editor',
+      'terminal',
+      'unknown-webview',
+    ],
+  });
 });
 
 test('VSCode readiness requires a Host structured operation ref instead of natural language task text', () => {
@@ -92,6 +139,7 @@ test('VSCode readiness requires a Host structured operation ref instead of natur
     'macos-app:vscode',
     'process:vscode:1',
     'window:vscode:main',
+    'text:title:vscode:main',
     'frontmost:vscode:main',
     'observation:vscode:main:1',
     'file-ref:vscode:current:paper',
@@ -118,6 +166,161 @@ test('VSCode readiness requires a Host structured operation ref instead of natur
   assert.equal(ready.status, 'ready');
   assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:read-visible-text:test'));
   assert.doesNotMatch(JSON.stringify(ready), /please read visible text|commandText|message:/i);
+});
+
+test('VSCode readiness requires complete app process window title and frontmost identity refs', () => {
+  const vscode = createVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'text:title:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'freshness:vscode:main:1',
+  ];
+
+  for (const missing of ['macos-app:', 'process:', 'window:', 'text:title:', 'frontmost:']) {
+    const readiness = vscode.checkReadiness({
+      operation: 'read-visible-text',
+      operationRef: 'operation-ref:vscode:read-visible-text:test',
+      refs: baseRefs.filter((ref) => !ref.startsWith(missing)),
+    });
+
+    assert.equal(readiness.status, 'blocked', missing);
+    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:window-identity-refs-required', missing);
+    assert.doesNotMatch(JSON.stringify(readiness), /paper\.tex|\/Users\/|https?:\/\//i);
+  }
+});
+
+test('VSCode normalization and readiness reject stale or missing current observations', () => {
+  const vscode = createVSCodeAppModule();
+  const staleRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'text:title:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'stale-invalidation:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'freshness:vscode:main:1',
+  ];
+  const observation = vscode.normalizeObservation({ refs: staleRefs }) as VSCodeTestObservation;
+
+  assert.deepEqual(observation.currentObservationRefs, ['observation:vscode:main:1']);
+  assert.deepEqual(observation.staleObservationRefs, ['stale-invalidation:vscode:main:1']);
+  assert.equal(observation.safeSummary.freshness, 'vscode-observation:stale');
+
+  const stale = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    operationRef: 'operation-ref:vscode:read-visible-text:test',
+    refs: staleRefs,
+  });
+  assert.equal(stale.status, 'blocked');
+  assert.equal(stale.reasonRef, 'blocked:vscode-app-module:stale-observation');
+
+  const missingCurrent = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    operationRef: 'operation-ref:vscode:read-visible-text:test',
+    refs: staleRefs.filter((ref) => !ref.startsWith('observation:vscode:') && !ref.startsWith('stale-invalidation:')),
+  });
+  assert.equal(missingCurrent.status, 'blocked');
+  assert.equal(missingCurrent.reasonRef, 'blocked:vscode-app-module:fresh-observation-required');
+});
+
+test('VSCode normalization maps editor workspace panel and selection concepts to stable refs', () => {
+  const observation = normalizeVSCodeTestObservation([
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:main',
+    'window:vscode:main',
+    'text:title:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'workspace-ref:vscode:primary',
+    'editor-group:vscode:main:1',
+    'active-editor:vscode:main:1',
+    'element:vscode:editor:monaco:1',
+    'cursor-ref:vscode:main:1',
+    'selection-ref:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:problems:panel',
+    'terminal:vscode:main',
+    'command-palette:vscode:main',
+    'element:vscode:webview:opaque-webview',
+  ]);
+
+  assert.deepEqual(observation.workspaceRefs, ['workspace-ref:vscode:primary']);
+  assert.deepEqual(observation.editorGroupRefs, ['editor-group:vscode:main:1']);
+  assert.deepEqual(observation.activeEditorRefs, ['active-editor:vscode:main:1']);
+  assert.deepEqual(observation.cursorRefs, ['cursor-ref:vscode:main:1']);
+  assert.deepEqual(observation.selectionRefs, ['selection-ref:vscode:main:1']);
+  assert.deepEqual(observation.selectedFileRefs, ['file-ref:vscode:current:paper']);
+  assert.deepEqual(observation.problemsPanelRefs, ['element:vscode:problems:panel']);
+  assert.deepEqual(observation.terminalRefs, ['terminal:vscode:main']);
+  assert.deepEqual(observation.commandPaletteRefs, ['command-palette:vscode:main']);
+  assert.deepEqual(observation.unknownWebviewRefs, ['element:vscode:webview:opaque-webview']);
+  assert.deepEqual(observation.reasonRefs, []);
+  assert.ok(observation.evidenceRefs.includes('concept:vscode:editor'));
+  assert.ok(observation.evidenceRefs.includes('concept:vscode:workspace'));
+  assert.ok(observation.evidenceRefs.includes('concept:vscode:unknown-webview'));
+  assert.deepEqual(observation.safeSummary.concepts, [
+    'workspace',
+    'file',
+    'editor',
+    'editor-group',
+    'active-editor',
+    'selection',
+    'cursor',
+    'terminal',
+    'command-palette',
+    'problems-panel',
+    'unknown-webview',
+  ]);
+});
+
+test('VSCode normalization and readiness never expose raw visible text path url provider payload or base64', () => {
+  const vscode = createVSCodeAppModule();
+  const rawRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:main',
+    'window:vscode:main',
+    'text:title:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'raw-visible-text:SECRET PAPER BODY',
+    'raw-path:/Users/example/private-paper.md',
+    '/Users/example/private-paper.md',
+    'https://example.invalid/private',
+    'providerPayload:SECRET_PROVIDER_PAYLOAD',
+    'text:vscode:visible:SECRET_EDITOR_TEXT',
+    'file-ref:vscode:current:/Users/example/private-paper.md',
+    `image:vscode:base64:${'A'.repeat(96)}`,
+    `image:vscode:${'A'.repeat(96)}`,
+  ];
+
+  const observation = vscode.normalizeObservation({ refs: rawRefs });
+  const readiness = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    operationRef: 'operation-ref:vscode:read-visible-text:test',
+    refs: rawRefs,
+  });
+  const serialized = JSON.stringify({ observation, readiness });
+
+  assert.equal(readiness.status, 'blocked');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:raw-ref-not-allowed');
+  assert.doesNotMatch(serialized, /SECRET|\/Users\/example|example\.invalid|providerPayload|base64|raw-visible-text|raw-path|A{64}/i);
 });
 
 test('readiness fails closed when VSCode refs mix tokenized refs with raw payloads', () => {
