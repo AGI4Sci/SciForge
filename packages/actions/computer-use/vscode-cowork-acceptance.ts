@@ -1185,6 +1185,7 @@ function refsForTargetAndObservation(
     titleRef(targetWindow.titleRef) ? targetWindow.titleRef : undefined,
     frontmostRef(targetWindow.frontmostRef) ? targetWindow.frontmostRef : undefined,
     fileRef(input.selectedFileRef) ? input.selectedFileRef : undefined,
+    draftTextRef(input.draftTextRef) ? input.draftTextRef : undefined,
     cursorMoveRef(input.cursorMoveRef) ? input.cursorMoveRef : undefined,
     selectionRef(input.selectionRef) ? input.selectionRef : undefined,
     replacementTextRef(input.replacementTextRef) ? input.replacementTextRef : undefined,

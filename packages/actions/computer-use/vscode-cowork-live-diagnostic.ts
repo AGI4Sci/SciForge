@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
+  ComputerUseActInput,
+  ComputerUseActOutput,
+  ComputerUseAtomicAction,
   ComputerUseDiagnostic,
   ComputerUseObserveInput,
   ComputerUsePrimitivePorts,
@@ -58,9 +61,21 @@ export interface CurrentVSCodeCoWorkRestorationRefs {
   mousePositionRestoreRef: string;
 }
 
+export interface CurrentVSCodeCoWorkLiveActionExecution {
+  action: ComputerUseAtomicAction;
+  actionRef: string;
+  executorEventRef: string;
+  inputEventRef: string;
+  inputAdapterRef?: string;
+  cursorRef?: string;
+  scopedInputLeaseRef?: string;
+  beforeObservationRef: string;
+}
+
 export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   runId?: string;
   readCurrentWindow?: () => Promise<CurrentVSCodeCoWorkWindowObservation>;
+  performAction?: (input: CurrentVSCodeCoWorkLiveActionExecution) => Promise<void> | void;
   captureRestorationState?: () => Promise<CurrentVSCodeCoWorkRestorationState>;
   restoreCapturedState?: (
     state: CurrentVSCodeCoWorkRestorationState,
@@ -133,6 +148,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
   const restoreCapturedState = options.restoreCapturedState
     ?? (shouldUseDesktopRestoration ? restoreCurrentRestorationState : undefined);
   let restorationState: CurrentVSCodeCoWorkRestorationState = {};
+  let lastObservationRef: string | undefined;
 
   return {
     bind: async () => {
@@ -160,6 +176,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           diagnostics,
         };
       }
+      lastObservationRef = observed.observationRef;
       return {
         status: 'completed',
         output: {
@@ -186,6 +203,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
     },
     observe: async (input: ComputerUseObserveInput) => {
       const observed = await readCurrentWindow();
+      lastObservationRef = observed.observationRef;
       return {
         status: 'completed',
         output: {
@@ -201,6 +219,102 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           computerUseSessionRef,
           windowActionSessionRef,
           ...observationRefs(observed),
+        ]),
+      };
+    },
+    act: async (input: ComputerUseActInput) => {
+      const actionId = safeRunId(input.actionId ?? input.action.type);
+      const actionRef = `action:current-vscode-cowork:${runId}:${actionId}`;
+      const executorEventRef = `executor-event:current-vscode-cowork:${runId}:${actionId}`;
+      const inputEventRef = `input-event:current-vscode-cowork:${runId}:${actionId}`;
+      const invalidatedRef = `stale-invalidation:current-vscode-cowork:${runId}:${actionId}`;
+      const beforeObservationRef = lastObservationRef;
+      if (!beforeObservationRef) {
+        return {
+          status: 'blocked',
+          blockedReason: 'current-vscode-act-before-observation-missing',
+          refs: [
+            actionRef,
+            executorEventRef,
+            inputEventRef,
+            scopedInputLeaseRef,
+            inputAdapterRef,
+            cursorRef,
+          ],
+        };
+      }
+      if (!options.performAction) {
+        return {
+          status: 'blocked',
+          blockedReason: 'current-vscode-act-executor-missing',
+          refs: [
+            actionRef,
+            executorEventRef,
+            inputEventRef,
+            beforeObservationRef,
+            scopedInputLeaseRef,
+            inputAdapterRef,
+            cursorRef,
+          ],
+        };
+      }
+      try {
+        await options.performAction({
+          action: input.action,
+          actionRef,
+          executorEventRef,
+          inputEventRef,
+          inputAdapterRef: input.inputAdapterRef,
+          cursorRef: input.cursorRef,
+          scopedInputLeaseRef: input.scopedInputLeaseRef,
+          beforeObservationRef,
+        });
+      } catch (error) {
+        return {
+          status: 'blocked',
+          blockedReason: safeBlockedReason(error),
+          refs: [
+            actionRef,
+            executorEventRef,
+            inputEventRef,
+            beforeObservationRef,
+            scopedInputLeaseRef,
+            inputAdapterRef,
+            cursorRef,
+          ],
+        };
+      }
+      const afterObserved = await readCurrentWindow();
+      lastObservationRef = afterObserved.observationRef;
+      return {
+        status: 'completed',
+        output: {
+          sessionId: input.sessionId,
+          actionRef,
+          executorEventRef,
+          inputAdapterRef: input.inputAdapterRef,
+          cursorRef: input.cursorRef,
+          scopedInputLeaseRef: input.scopedInputLeaseRef,
+          inputEventRef,
+          beforeObservationRef,
+          afterObservationRef: afterObserved.observationRef,
+          invalidatedRefs: [invalidatedRef],
+        } satisfies ComputerUseActOutput,
+        refs: uniqueRefs([
+          actionRef,
+          executorEventRef,
+          inputEventRef,
+          input.action.elementRef,
+          input.action.textRef,
+          input.action.key ? `key:current-vscode-cowork:${runId}:${safeRunId(input.action.key)}` : undefined,
+          input.action.command ? `app-command:current-vscode-cowork:${runId}:${safeRunId(input.action.command)}` : undefined,
+          beforeObservationRef,
+          afterObserved.observationRef,
+          invalidatedRef,
+          scopedInputLeaseRef,
+          inputAdapterRef,
+          cursorRef,
+          ...observationRefs(afterObserved),
         ]),
       };
     },

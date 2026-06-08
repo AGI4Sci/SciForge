@@ -99,11 +99,46 @@ export function createDefaultVSCodeCoWorkComputerUseActMaterializer(): CodexAgen
       };
     }
 
-    if (decision.status === 'ready') {
-      return blockedResult(input, 'VSCode co-work Host producer selected an act primitive, but the live primitive runner is not wired for this Agent Host path yet.', [
-        ...refs,
-        'runtime-truth:vscode-cowork/act-runner-missing',
-      ]);
+    if (decision.status === 'ready' && decision.primitive === 'act') {
+      return {
+        status: 'completed',
+        message: 'VSCode co-work Host producer selected one refs-first act primitive from current observe refs.',
+        confidence: 0.76,
+        claimType: 'computer-use-vscode-cowork-act-decision',
+        reasoningTrace: 'Agent Host consumed current VSCode observe refs and selected one refs-first atomic action; Computer Use core did not plan the task.',
+        evidenceRefs: refs,
+        executionUnits: [{
+          id: `EU-vscode-cowork-host-producer-${safeToken(input.attemptId) || 'attempt'}`,
+          tool: TOOL_ID,
+          status: 'done',
+          primitive: 'act',
+          targetWindowRef: decision.targetWindowRef,
+          action: decision.action,
+          outputRef: firstRefWithPrefix(refs, ['action:', 'text-ref:', 'observation:']) ?? refs[0],
+          hash: safeToken(input.attemptId) || 'vscode-cowork-host-producer',
+        }],
+        artifacts: [decisionArtifact(input, decision.status, refs, {
+          primitive: decision.primitive,
+          targetWindowRef: decision.targetWindowRef,
+          action: decision.action,
+        })],
+        claims: [{
+          id: `claim-vscode-cowork-host-producer-${safeToken(input.attemptId) || 'attempt'}`,
+          type: 'runtime-action',
+          text: 'Agent Host selected one current VSCode co-work act primitive from refs-first evidence.',
+          confidence: 0.76,
+          evidenceLevel: 'runtime',
+          supportingRefs: refs.slice(0, 12),
+          opposingRefs: [],
+        }],
+        completionTruth: {
+          schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+          scope: 'action',
+          status: 'satisfied',
+          validator: 'vscode-cowork-host-producer',
+          evidenceRefs: refs,
+        },
+      };
     }
 
     return blockedResult(input, decision.blockedReason ?? 'VSCode co-work Host producer blocked on refs-first target or observation evidence.', refs);
@@ -113,6 +148,7 @@ export function createDefaultVSCodeCoWorkComputerUseActMaterializer(): CodexAgen
 function vscodeCoWorkRuntimeIntentFromHostRefs(input: CodexAgentHostComputerUseActMaterializerInput): VSCodeCoWorkRuntimeIntent | undefined {
   const hostInput = input.agentHostInput;
   const target = isRecord(hostInput.target) ? hostInput.target : {};
+  const explicitVSCodeCoWork = isRecord(target.vscodeCoWork) ? target.vscodeCoWork : {};
   const currentVSCode = stringField(target.kind) === 'current-vscode-cowork'
     || hostInput.refs.includes('intent:current-vscode-cowork')
     || refsFrom(input).some((ref) => ref === 'intent:current-vscode-cowork');
@@ -141,6 +177,11 @@ function vscodeCoWorkRuntimeIntentFromHostRefs(input: CodexAgentHostComputerUseA
     ...stringList(hostInput.permissions.refs),
     ...(input.runtimeTruth?.permissions?.refs ?? []),
   ], ['permission:']);
+  const draftTextRef = firstRefWithPrefix([
+    ...stringList(explicitVSCodeCoWork.refs),
+    ...stringList(hostInput.refs),
+    ...(input.runtimeTruth?.refs ?? []),
+  ], ['text-ref:']);
 
   return {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
@@ -154,11 +195,13 @@ function vscodeCoWorkRuntimeIntentFromHostRefs(input: CodexAgentHostComputerUseA
     },
     vscodeCoWork: compactRecord({
       requestRef,
-      operation: vscodeCoWorkOperationFromText(hostInput.intentText ?? input.commandText),
+      operation: vscodeCoWorkOperationField(explicitVSCodeCoWork.operation)
+        ?? vscodeCoWorkOperationFromText(hostInput.intentText ?? input.commandText),
       selectedWindowRef,
       selectedFileRef: visibleFileRefs.length === 1 ? visibleFileRefs[0] : undefined,
       windowCandidates,
       latestObservation,
+      draftTextRef,
       permissionRef,
     }),
   };
@@ -277,7 +320,14 @@ function blockedResult(
   };
 }
 
-function vscodeCoWorkOperationFromText(value: string): 'read-visible-text' | 'focus-editor' | undefined {
+function vscodeCoWorkOperationField(value: unknown): 'read-visible-text' | 'focus-editor' | 'insert-draft' | undefined {
+  return value === 'read-visible-text' || value === 'focus-editor' || value === 'insert-draft'
+    ? value
+    : undefined;
+}
+
+function vscodeCoWorkOperationFromText(value: string): 'read-visible-text' | 'focus-editor' | 'insert-draft' | undefined {
+  if (/(?:插入|写入草稿|插入草稿|insert(?:\s+draft)?|draft)/i.test(value)) return 'insert-draft';
   if (/(?:读取|查看|看看|read|visible\s+text)/i.test(value)) return 'read-visible-text';
   if (/(?:聚焦|focus)/i.test(value)) return 'focus-editor';
   return undefined;
@@ -299,7 +349,7 @@ function safeVSCodeCoWorkRef(value: string): boolean {
   if (!text || text.length > 240) return false;
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(text)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(text)) return false;
-  return /^(?:runtime-truth:|intent:|chat-request:|macos-app:|process:|window:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|scoped-input-adapter:|focus-lease:|cancel:|stop:)/i.test(text);
+  return /^(?:runtime-truth:|intent:|chat-request:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|focus-lease:|stale-invalidation:|cancel:|stop:)/i.test(text);
 }
 
 function refsWithPrefix(refs: string[], prefixes: string[]): string[] {

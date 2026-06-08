@@ -129,6 +129,136 @@ test('current VSCode co-work primitive ports bind current window, observe refs, 
   assert.doesNotMatch(JSON.stringify({ bind, observe, control }), /raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work primitive ports execute refs-first type action and return action evidence refs', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:mutate',
+      windowRef: 'window:vscode:mutate',
+      titleRef: 'text:title:mutate',
+      frontmostRef: 'frontmost:vscode:mutate',
+      fileRefs: ['file-ref:vscode:mutate'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:visible-before',
+      visibleTextSha256Ref: 'text:vscode:visible-before-sha256',
+      screenshotRef: 'image:vscode:before',
+      accessibilityRef: 'accessibility:vscode:before',
+      freshnessRef: 'freshness:vscode:before',
+      observationRef: 'observation:vscode:before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:mutate',
+      windowRef: 'window:vscode:mutate',
+      titleRef: 'text:title:mutate',
+      frontmostRef: 'frontmost:vscode:mutate',
+      fileRefs: ['file-ref:vscode:mutate'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:visible-after',
+      visibleTextSha256Ref: 'text:vscode:visible-after-sha256',
+      screenshotRef: 'image:vscode:after',
+      accessibilityRef: 'accessibility:vscode:after',
+      freshnessRef: 'freshness:vscode:after',
+      observationRef: 'observation:vscode:after',
+    },
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-act',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      performAction: async (input) => {
+        calls.push([
+          'perform-action',
+          input.action.type,
+          input.action.textRef,
+          input.action.elementRef,
+          input.inputAdapterRef,
+          input.cursorRef,
+          input.scopedInputLeaseRef,
+          input.beforeObservationRef,
+        ].join(':'));
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+  assert.equal(sessionId, 'current-vscode-cowork:unit-current-vscode-act');
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'insert-draft',
+      action: {
+        type: 'type',
+        textRef: 'text-ref:current-vscode-cowork:draft',
+        elementRef: 'element:vscode:editor',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, true, act.error);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true);
+
+  const output = act.value?.output as Record<string, unknown> | undefined;
+  assert.equal(output?.actionRef, 'action:current-vscode-cowork:unit-current-vscode-act:insert-draft');
+  assert.equal(output?.executorEventRef, 'executor-event:current-vscode-cowork:unit-current-vscode-act:insert-draft');
+  assert.equal(output?.inputEventRef, 'input-event:current-vscode-cowork:unit-current-vscode-act:insert-draft');
+  assert.equal(output?.beforeObservationRef, 'observation:vscode:before');
+  assert.equal(output?.afterObservationRef, 'observation:vscode:after');
+  assert.deepEqual(output?.invalidatedRefs, ['stale-invalidation:current-vscode-cowork:unit-current-vscode-act:insert-draft']);
+  assert.equal(output?.inputAdapterRef, 'scoped-input-adapter:current-vscode-cowork:unit-current-vscode-act');
+  assert.equal(output?.cursorRef, 'cursor-marker:current-vscode-cowork:unit-current-vscode-act');
+  assert.equal(output?.scopedInputLeaseRef, 'scoped-input-lease:current-vscode-cowork:unit-current-vscode-act');
+  assert.ok((act.value?.refs ?? []).includes('text-ref:current-vscode-cowork:draft'));
+  assert.ok((act.value?.refs ?? []).includes('observation:vscode:after'));
+  assert.ok((control.value?.refs ?? []).includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-act'));
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'perform-action:type:text-ref:current-vscode-cowork:draft:element:vscode:editor:scoped-input-adapter:current-vscode-cowork:unit-current-vscode-act:cursor-marker:current-vscode-cowork:unit-current-vscode-act:scoped-input-lease:current-vscode-cowork:unit-current-vscode-act:observation:vscode:before',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-act',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-act',
+  ]);
+  assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work primitive ports capture and restore desktop state on release', async () => {
   const calls: string[] = [];
   const service = createComputerUsePrimitiveService({
