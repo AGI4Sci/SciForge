@@ -17,6 +17,7 @@ const guiCompletionToolName = /\b(?:gui\.present|gui\.ask_user|gui_present|gui_a
 const guiCompletionRegistration = /\b(?:register(?:Tool|Module)?|define(?:Tool|Module)?|add(?:Tool|Module)?|create(?:Tool|Module|Mcp|Server)?|callTool)\s*\(|\b(?:name|toolName|moduleId)\s*:/i;
 const retiredRuntimeGuiModuleSurface = /(?:^\s*['"]gui['"]\s*,|moduleId\s*===\s*['"]gui['"]|moduleId\s*:\s*['"]gui['"]|moduleId:\s*GUI_MODULE_ID|export\s+const\s+GUI_MODULE_ID\s*=\s*['"]gui['"])/;
 const directComputerUseBypassImport = /(?:from\s+['"].*\/(?:vscode-app-module|agent-host-computer-use-act-materializer)(?:\.js)?['"]|import\s*\(\s*['"].*\/(?:vscode-app-module|agent-host-computer-use-act-materializer)(?:\.js)?['"]\s*\)|\bcreateDefaultComputerUseActMaterializer\s*\()/;
+const bareOrdinaryVSCodeNativeShortcut = /\b(?:shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic|narrowCurrentVSCodeLiveDiagnostic|narrow\s+ordinary\s+(?:chat\s+)?(?:text|vscode|live))/i;
 
 async function main() {
   const files = [
@@ -68,6 +69,15 @@ async function main() {
           text: line.trim(),
         });
       }
+      if (isBareOrdinaryVSCodeNativeShortcut(rel, line)) {
+        findings.push({
+          file: rel,
+          line: index + 1,
+          rule: 'forbidden-bare-ordinary-vscode-native-shortcut',
+          message: 'Bare ordinary chat text must not directly start current VSCode native live diagnostics; require Host-owned intent or refs-first Agent Host input.',
+          text: line.trim(),
+        });
+      }
     });
   }
 
@@ -102,8 +112,13 @@ function isLegacyComputerUsePublicSurfaceLine(file: string, line: string): boole
 }
 
 function isOrdinaryRouteDirectComputerUseImport(file: string, line: string): boolean {
-  if (!/^src\/runtime\/codex\/(?:computer-use-native-route|codex-app-server-client|codex-runtime-server)\.ts$/.test(file)) return false;
+  if (!/^src\/runtime\/(?:(?:codex\/(?:computer-use-native-route|codex-app-server-client|codex-runtime-server|codex-runtime-gateway))|generation-gateway|workspace-runtime-gateway|workspace-server)\.ts$/.test(file)) return false;
   return directComputerUseBypassImport.test(line);
+}
+
+function isBareOrdinaryVSCodeNativeShortcut(file: string, line: string): boolean {
+  if (file !== 'src/runtime/codex/computer-use-native-route.ts') return false;
+  return bareOrdinaryVSCodeNativeShortcut.test(line);
 }
 
 async function structuredManifestFindings(): Promise<Finding[]> {

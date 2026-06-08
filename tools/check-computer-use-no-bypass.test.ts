@@ -129,3 +129,34 @@ test('Computer Use no-bypass guard blocks ordinary route direct app module or ma
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-ordinary-chat-direct-computer-use-import/);
 });
+
+test('Computer Use no-bypass guard blocks runtime gateway direct app module or materializer imports', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/codex-runtime-gateway.ts', [
+    "import { createVSCodeAppModule } from './vscode-app-module.js';",
+    'export const bypass = createVSCodeAppModule;',
+  ].join('\n'));
+  writeFixtureFile(root, 'src/runtime/generation-gateway.ts', [
+    "import { createDefaultComputerUseActMaterializer } from './codex/agent-host-computer-use-act-materializer.js';",
+    'export const materializer = createDefaultComputerUseActMaterializer;',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-ordinary-chat-direct-computer-use-import/);
+});
+
+test('Computer Use no-bypass guard blocks bare ordinary VSCode native-route shortcuts', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    'function shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(input: unknown) {',
+    '  return /vscode/i.test(String(input));',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-bare-ordinary-vscode-native-shortcut/);
+});

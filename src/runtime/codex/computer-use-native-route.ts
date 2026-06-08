@@ -57,8 +57,7 @@ export function computerUseNativeRouteCommandText(commandText: string): string |
 
 export function createComputerUseNativeRouteStream(input: ComputerUseNativeRouteInput): CodexAppServerTurnStream | undefined {
   const runtimeIntent = runtimeIntentForComputerUseNativeRoute(input.request);
-  const narrowCurrentVSCodeLiveDiagnostic = shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(input);
-  if (!isComputerUseNativeRouteCommand(input.request.commandText) && !runtimeIntent && !narrowCurrentVSCodeLiveDiagnostic) {
+  if (!isComputerUseNativeRouteCommand(input.request.commandText) && !runtimeIntent) {
     return undefined;
   }
   const routeInput = runtimeIntent && runtimeIntent !== input.request.runtimeIntent
@@ -287,7 +286,6 @@ async function runComputerUseNativeRoute(
   queue.abort = abort;
   try {
     queue.push(operationEvent(metadata, 'Runtime Codex selected the Computer Use native package bridge.', 'running'));
-    if (await tryRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(input, queue, metadata)) return;
     if (await tryRunVSCodeCoWorkChatBridge(input, queue, metadata)) return;
     if (await tryRunTextEditWindowActionBridge(input, queue, metadata)) return;
     const { tryRunVisionSenseRuntime } = await import('../vision-sense-runtime.js');
@@ -308,29 +306,6 @@ async function runComputerUseNativeRoute(
     input.abortSignal?.removeEventListener('abort', abort);
     queue.end();
   }
-}
-
-async function tryRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(
-  input: ComputerUseNativeRouteInput,
-  queue: AsyncEventQueue<Record<string, unknown>>,
-  metadata: RouteMetadata,
-): Promise<boolean> {
-  if (!shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(input)) return false;
-  const runner = currentVSCodeCoWorkLiveDiagnosticRunner(input);
-  if (!runner) return false;
-  queue.push(operationEvent(metadata, 'Runtime Codex selected the current VSCode co-work live diagnostic runner from narrow ordinary chat text.', 'running'));
-  const result = await runner({
-    commandText: input.request.commandText,
-    workspacePath: input.workspace,
-    commandId: input.request.commandId,
-    attemptId: input.request.attemptId,
-    authorizationProfileId: stringField(input.request.agentHostInput, 'authorizationProfileId'),
-    runtimeIntent: input.request.runtimeIntent,
-    agentHostInput: input.request.agentHostInput,
-    activateCurrentVSCodeIfNeeded: shouldActivateCurrentVSCodeForLiveDiagnostic(input),
-  });
-  queue.push(doneEvent(metadata, currentVSCodeCoWorkLiveDiagnosticPayload(result)));
-  return true;
 }
 
 async function tryRunVSCodeCoWorkChatBridge(
@@ -379,18 +354,6 @@ function shouldActivateCurrentVSCodeForLiveDiagnostic(input: ComputerUseNativeRo
   return input.currentVSCodeCoWorkLiveDiagnosticOptions?.activateCurrentVSCodeIfNeeded === true
     ? true
     : undefined;
-}
-
-function shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic(input: ComputerUseNativeRouteInput): boolean {
-  if (!currentVSCodeCoWorkLiveDiagnosticRunner(input)) return false;
-  if (input.request.runtimeIntent || input.request.agentHostInput) return false;
-  if (isComputerUseNativeRouteCommand(input.request.commandText)) return false;
-  const text = input.request.commandText.trim();
-  if (!/(?:\bvs\s*code\b|\bvscode\b|visual\s+studio\s+code)/i.test(text)) return false;
-  if (!/(?:当前|已(?:经)?打开|open(?:ed)?|current|front(?:most)?|active)/i.test(text)) return false;
-  if (!lowRiskVSCodeCoWorkOperationFromText(text)) return false;
-  if (/(?:保存|修改|替换|写入|插入|删除|批量|多文件|跨文件|save|modify|replace|write|insert|delete|submit|publish|upload|pay|authorize)/i.test(text)) return false;
-  return true;
 }
 
 function currentVSCodeCoWorkLiveDiagnosticRunner(input: ComputerUseNativeRouteInput): CurrentVSCodeCoWorkLiveDiagnosticRunner | undefined {

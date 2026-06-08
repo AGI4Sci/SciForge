@@ -184,6 +184,8 @@ readiness validator 必须拒绝 top-level 或 nested action payload 中的 fina
 - P8：做 Host-owned preview workflow，不写用户文件，不让 VSCode module 解析论文语义。
 - P9：做 narrow apply workflow，Host 拆成 observe -> one primitive -> observe，live diagnostic 后置。
 
+P2 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 P3/P4/P5 必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
+
 ## VSCode App Module v1
 
 VSCode 是第一个 app module 目标。v1 聚焦用户已打开 VSCode 的 co-work，不要求固定布局或固定插件集合。泛化策略是稳定概念、能力探测和多证据确认，而不是坐标脚本。
@@ -406,3 +408,4 @@ Host-side App Capability Module 的 contract / registry 落地后，应拥有独
 
 - [`Architecture.md`](Architecture.md)：总架构和 Computer Use 上下游边界。
 - [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md)：Browser primitive runtime 的同构设计。
+- [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)：ordinary chat、native route、slash command 和旧 hook 的入口清单。

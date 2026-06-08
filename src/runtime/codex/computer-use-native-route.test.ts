@@ -581,7 +581,7 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
   assert.doesNotMatch(JSON.stringify(events), /SECRET|example\.invalid|raw-live|raw-cleanup|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
-test('Computer Use native route can start current VSCode live diagnostic from narrow ordinary chat text', async () => {
+test('Computer Use native route does not start current VSCode live diagnostic from bare ordinary chat text', async () => {
   const runnerCalls: Array<Record<string, unknown>> = [];
   const stream = createComputerUseNativeRouteStream({
     request: {
@@ -621,26 +621,8 @@ test('Computer Use native route can start current VSCode live diagnostic from na
     },
   });
 
-  assert.notEqual(stream, undefined);
-  const events = await collectStreamEvents(stream!);
-  const selected = events.find((event) => String(event.message).includes('current VSCode co-work live diagnostic'));
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
-
-  assert.ok(selected);
-  assert.equal(runnerCalls.length, 1);
-  assert.equal(runnerCalls[0]?.commandText, '操作我已经打开的 VSCode，读取当前可见文本。');
-  assert.equal(runnerCalls[0]?.commandId, 'native-route-vscode-cowork-narrow-ordinary-live');
-  assert.equal(runnerCalls[0]?.attemptId, 'native-route-vscode-cowork-narrow-ordinary-live-attempt-1');
-  assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
-  assert.equal(runnerCalls[0]?.agentHostInput, undefined);
-  assert.equal(runnerCalls[0]?.runtimeIntent, undefined);
-  assert.equal(done?.status, 'completed');
-  assert.equal(done?.maturity, 'live-diagnostic');
-  assert.equal(done?.productReady, false);
-  assert.deepEqual(done?.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
-  assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:ordinary-live'));
-  assert.ok((done?.cleanupRefs as string[]).includes('scoped-input-lease:current-vscode-cowork:narrow-ordinary-live'));
-  assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+  assert.equal(stream, undefined);
+  assert.equal(runnerCalls.length, 0);
 });
 
 test('Computer Use native route derives P9b VSCode co-work intent from generic Host target and observation refs', async () => {

@@ -150,7 +150,8 @@ open-command-palette
 - read-only、focus、editor mutation、terminal、command palette readiness 已 unit-proven。
 - Agent Host dry-run materializer 已 unit-proven：它不会从裸 `commandText`、terminal output、palette item 或 act completed status 推断 operation / completion。
 - 无旁路静态护栏已 unit-proven：GUI completion surface、retired runtime `gui` module、legacy Computer Use public surface、ordinary/native direct import 和 readiness final-answer/raw payload 泄漏都会 fail closed。
-- 普通聊天 / native route 接线审计、public event sanitizer、VSCode live diagnostic、Host-owned preview / apply workflow 仍待实现。
+- 普通聊天 / native route P2 入口审计已完成；裸 ordinary VSCode 文本不能直接启动 native live diagnostic。
+- public event sanitizer、VSCode live diagnostic、Host-owned preview / apply workflow 仍待实现。
 
 ## 新任务路线
 
@@ -201,16 +202,16 @@ Acceptance Gates：
 
 Build Tasks：
 
-- [ ] 列出普通聊天到 Codex / Agent Host 的唯一入口和事件边界。
-- [ ] 列出仍可能直接触发 VSCode module、Computer Use act 或 local completion 的旧入口。
-- [ ] 为每个旧入口决定删除、fail closed 或迁入 Host-owned bridge。
-- [ ] 旧入口清单没有“稍后兼容”项；每项只有删除、fail closed 或 Host bridge。
+- [x] 列出普通聊天到 Codex / Agent Host 的唯一入口和事件边界。
+- [x] 列出仍可能直接触发 VSCode module、Computer Use act 或 local completion 的旧入口。
+- [x] 为每个旧入口决定删除、fail closed 或迁入 Host-owned bridge。
+- [x] 旧入口清单没有“稍后兼容”项；每项只有删除、fail closed 或 Host bridge。
 
 Acceptance Gates：
 
-- [ ] 文档和测试都能说明 ordinary chat 只能进入 Agent Host，不直接调用 VSCode module。
-- [ ] runtime gateway / slash command 没有本地 final answer 旁路。
-- [ ] native route 没有本地 completion ack 旁路。
+- [x] 文档和测试都能说明 ordinary chat 只能进入 Agent Host，不直接调用 VSCode module。
+- [x] runtime gateway / slash command 入口已登记；gateway fallback synthesis / local final-answer 风险明确归属 P4/P5。
+- [x] native route 本地 completion ack 风险已登记到入口清单，并明确归属 P4 final-answer gate；P2 不留下“稍后兼容”项。
 
 ### P3：Ordinary Chat Host-only 接线
 

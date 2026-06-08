@@ -2328,6 +2328,64 @@ test('Codex app-server client treats GUI /computer-use text as ordinary app-serv
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed']);
 });
 
+test('Codex app-server client treats bare VSCode ordinary chat as app-server input even when live runner exists', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let spawnCalled = false;
+  let nativeRunnerCalled = false;
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const commandText = '操作我已经打开的 VSCode，读取当前可见文本。';
+  const client = createCodexAppServerClient({
+    env,
+    currentVSCodeCoWorkLiveDiagnosticRunner: async () => ({
+      status: 'completed' as const,
+      message: 'bare ordinary text must not reach this runner',
+      maturity: 'live-diagnostic' as const,
+      productReady: false as const,
+      primitiveChainObserved: [],
+      evidenceRefs: [],
+      cleanupRefs: [],
+    }),
+    spawnProcess() {
+      spawnCalled = true;
+      return appServer.process;
+    },
+    computerUseNativeRouteRunner(input) {
+      nativeRunnerCalled = true;
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([{
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          timestamp: new Date().toISOString(),
+          commandId: input.request.commandId,
+          attemptId: input.request.attemptId,
+          status: 'completed',
+        }]),
+      };
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'bare-vscode-ordinary-chat',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(nativeRunnerCalled, false);
+  assert.equal(spawnCalled, true);
+  assert.equal(stream.turnId, 'turn-1');
+  assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{ type: 'text', text: commandText, text_elements: [] }]);
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed']);
+});
+
 test('Codex app-server client routes host-owned Computer Use runtime intents through native package bridge', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
