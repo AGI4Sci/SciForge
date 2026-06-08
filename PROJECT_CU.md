@@ -90,19 +90,19 @@ SciForge UI
 
 Build Tasks：
 
-- [ ] [Unit] 写 registry 红测：VSCode module 不能被裸 `message`、`commandText`、terminal output、palette label、历史 run 或 completed action 触发。
-- [ ] [Code] 收口 registry 选择条件：VSCode module 只能从 Host 提供的 app / process / window refs 候选中进入 `canHandle`。
-- [ ] [Unit] 写 module surface 红测：VSCode module 只允许暴露 `canHandle`、`normalizeObservation`、`getCapabilities`、`checkReadiness`。
-- [ ] [Code] 收口 VSCode module skeleton：删除或 fail closed 与新 surface 冲突的旧 helper / fallback entry。
-- [ ] [Unit] 写 operation 输入红测：`checkReadiness` 只接受 Host structured operation ref，不接受自然语言 task / goal / instruction。
-- [ ] [Static] VSCode module 不得 import Computer Use executor、desktop controller、MCP adapter 或直接操作桌面。
-- [ ] [Verify] 跑 registry / module surface / no-bypass 相关测试和 smoke。
+- [x] [Unit] 写 registry 红测：VSCode module 不能被裸 `message`、`commandText`、terminal output、palette label、历史 run 或 completed action 触发。
+- [x] [Code] 收口 registry 选择条件：VSCode module 只能从 Host 提供的 app / process / window refs 候选中进入 `canHandle`。
+- [x] [Unit] 写 module surface 红测：VSCode module 只允许暴露 `canHandle`、`normalizeObservation`、`getCapabilities`、`checkReadiness`。
+- [x] [Code] 收口 VSCode module skeleton：删除或 fail closed 与新 surface 冲突的旧 helper / fallback entry。
+- [x] [Unit] 写 operation 输入红测：`checkReadiness` 只接受 Host structured operation ref，不接受自然语言 task / goal / instruction。
+- [x] [Static] VSCode module 不得 import Computer Use executor、desktop controller、MCP adapter 或直接操作桌面。
+- [x] [Verify] 跑 registry / module surface / no-bypass 相关测试和 smoke。
 
 验收：
 
-- [ ] ordinary chat、terminal 文本、palette 文本不能把 VSCode module 当作隐式 agent 调起。
-- [ ] VSCode module public API 足够小，不能形成第二条执行入口。
-- [ ] readiness 输出仍走 refs-first sanitizer / forbidden raw detector。
+- [x] ordinary chat、terminal 文本、palette 文本不能把 VSCode module 当作隐式 agent 调起。
+- [x] VSCode module public API 足够小，不能形成第二条执行入口。
+- [x] readiness 输出仍走 refs-first sanitizer / forbidden raw detector。
 
 ### P5：VSCode Identity 与 Concept Normalization
 

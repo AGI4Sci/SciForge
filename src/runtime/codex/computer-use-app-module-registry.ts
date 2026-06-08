@@ -16,6 +16,7 @@ export interface ComputerUseAppModuleObservation {
 
 export interface ComputerUseAppModuleReadinessInput {
   operation: string;
+  operationRef?: string;
   refs: string[];
 }
 
@@ -70,7 +71,16 @@ export function createComputerUseAppModuleRegistry(
   const registeredModules = [...modules];
   return {
     resolve(input) {
-      const matches = registeredModules.filter((module) => safeCanHandle(module, input));
+      const identityRefs = appModuleIdentityRefs(input.refs);
+      if (identityRefs.length === 0) {
+        return {
+          status: 'blocked',
+          reasonRef: 'blocked:computer-use-app-module:unsupported-app',
+          candidateModuleIds: [],
+        };
+      }
+      const identityInput = { refs: identityRefs };
+      const matches = registeredModules.filter((module) => safeCanHandle(module, identityInput));
       if (matches.length === 1) {
         return {
           status: 'ready',
@@ -95,6 +105,19 @@ export function createComputerUseAppModuleRegistry(
       return registeredModules;
     },
   };
+}
+
+function appModuleIdentityRefs(refs: string[]): string[] {
+  return uniqueStrings(refs.filter((ref) =>
+    ref.startsWith('macos-app:')
+    || ref.startsWith('app:')
+    || ref.startsWith('process:')
+    || ref.startsWith('window:')
+  ));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 export function validateComputerUseAppModuleReadiness(

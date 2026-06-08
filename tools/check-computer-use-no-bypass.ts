@@ -17,6 +17,8 @@ const guiCompletionToolName = /\b(?:gui\.present|gui\.ask_user|gui_present|gui_a
 const guiCompletionRegistration = /\b(?:register(?:Tool|Module)?|define(?:Tool|Module)?|add(?:Tool|Module)?|create(?:Tool|Module|Mcp|Server)?|callTool)\s*\(|\b(?:name|toolName|moduleId)\s*:/i;
 const retiredRuntimeGuiModuleSurface = /(?:^\s*['"]gui['"]\s*,|moduleId\s*===\s*['"]gui['"]|moduleId\s*:\s*['"]gui['"]|moduleId:\s*GUI_MODULE_ID|export\s+const\s+GUI_MODULE_ID\s*=\s*['"]gui['"])/;
 const directComputerUseBypassImport = /(?:from\s+['"].*\/(?:vscode-app-module|agent-host-computer-use-act-materializer)(?:\.js)?['"]|import\s*\(\s*['"].*\/(?:vscode-app-module|agent-host-computer-use-act-materializer)(?:\.js)?['"]\s*\)|\bcreateDefaultComputerUseActMaterializer\s*\()/;
+const vscodeAppModuleForbiddenDesktopImport = /\bfrom\s+['"][^'"]*(?:packages\/actions\/computer-use\/(?:index|mcp)|src\/runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|src\/desktop\/|\/desktop\/|agent-host-[^'"]*computer-use[^'"]*materializer|window-action-computer-use-primitive-ports)[^'"]*['"]|import\s*\(\s*['"][^'"]*(?:packages\/actions\/computer-use\/(?:index|mcp)|src\/runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|src\/desktop\/|\/desktop\/|agent-host-[^'"]*computer-use[^'"]*materializer|window-action-computer-use-primitive-ports)[^'"]*['"]\s*\)/;
+const vscodeAppModuleForbiddenDesktopCall = /\b(?:service\.invoke|createComputerUsePrimitiveService|createComputerUseMcpAdapter|createDefaultComputerUseActMaterializer|executeGenericDesktopAction|executeIndependentInputAdapterAction|desktopController\.[A-Za-z_$][\w$]*|systemInput\.[A-Za-z_$][\w$]*|runCommand\s*\(\s*['"](?:osascript|open|screencapture)['"]|execFile\s*\(\s*['"](?:osascript|open|screencapture)['"]|spawn\s*\(\s*['"](?:osascript|open|screencapture)['"]|CGEvent|System Events)\b/;
 const bareOrdinaryVSCodeNativeShortcut = /\b(?:shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic|narrowCurrentVSCodeLiveDiagnostic|narrow\s+ordinary\s+(?:chat\s+)?(?:text|vscode|live))/i;
 const ordinaryTextField = /\b(?:message|commandText|intentText|prompt)\b/;
 const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|move-cursor|insert-draft|replace-selection|save-current-file|bulk-replace|cross-file-modify|undo-last-action|redo-last-action|show-problems|read-diagnostics|focus-terminal|send-terminal-text|observe-terminal|submit-terminal-command|interrupt-terminal-command|clear-terminal|focus-editor-from-terminal|open-command-palette|send-command-palette-query|observe-command-palette-items|select-command-palette-item|close-command-palette)['"]/;
@@ -176,6 +178,7 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
   findings.push(...computerUseMcpAdapterFindings(file, text));
   findings.push(...computerUsePrimitiveServiceGuardFindings(file, text));
   findings.push(...sharedSystemInputSourceClaimFindings(file, text));
+  findings.push(...vscodeAppModuleDirectDesktopFindings(file, text));
   if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts') {
     const structuredDone = sectionBetween(text, 'function withStructuredRuntimeDoneProjection', 'function withGuiAskUserRuntimeResult');
     if (structuredDone && (/\bvisibleAnswer\s*:\s*{[\s\S]*?\btext\s*:/.test(structuredDone) || unsafeMessageProjection(structuredDone))) {
@@ -223,6 +226,24 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
       message: 'Response normalization must fail closed for legacy GUI and Computer Use projection text unless it is backed by a trusted Host final-answer envelope.',
       text: 'projectionVisibleAnswer',
     });
+  }
+  return findings;
+}
+
+function vscodeAppModuleDirectDesktopFindings(file: string, text: string): Finding[] {
+  if (!isVSCodeAppModuleSource(file)) return [];
+  const findings: Finding[] = [];
+  for (const pattern of [vscodeAppModuleForbiddenDesktopImport, vscodeAppModuleForbiddenDesktopCall]) {
+    const match = pattern.exec(text);
+    if (match) {
+      findings.push({
+        file,
+        line: lineNumberForIndex(text, match.index),
+        rule: 'forbidden-vscode-app-module-direct-desktop-access',
+        message: 'VSCode app module must only return Host readiness/evidence refs and must not import or call Computer Use executors, MCP adapters, desktop controllers, or shared system input directly.',
+        text: lineTextAtIndex(text, match.index),
+      });
+    }
   }
   return findings;
 }
@@ -334,6 +355,10 @@ function isComputerUseMcpAdapterFile(file: string): boolean {
 
 function isComputerUseIndexFile(file: string): boolean {
   return /^packages\/actions\/computer-use\/index\.[cm]?[tj]s$/.test(file);
+}
+
+function isVSCodeAppModuleSource(file: string): boolean {
+  return /^src\/runtime\/codex\/vscode-app-module(?:-[^/]*)?\.[cm]?[tj]sx?$/.test(file);
 }
 
 function isAllowedComputerUsePrimitiveName(value: string | undefined): boolean {

@@ -29,7 +29,7 @@ const VSCODE_CAPABILITIES = [
   'close-command-palette',
 ] as const;
 
-export interface VSCodeAppObservation {
+interface VSCodeAppObservation {
   refs: string[];
   invalidRefs: string[];
   appRefs: string[];
@@ -45,6 +45,7 @@ export interface VSCodeAppObservation {
   commandPaletteItemRefs: string[];
   diagnosticsRefs: string[];
   unknownWebviewRefs: string[];
+  operationRefRefs: string[];
   freshnessRefs: string[];
   focusedEditorRefs: string[];
   selectionRefs: string[];
@@ -52,30 +53,19 @@ export interface VSCodeAppObservation {
   textRefs: string[];
 }
 
-export type VSCodeAppVerifierResult =
-  | {
-    status: 'ready';
-    evidenceRefs: string[];
-  }
-  | {
-    status: 'blocked';
-    reasonRef: string;
-    evidenceRefs: string[];
-  };
-
 export function createVSCodeAppModule(): ComputerUseAppModule {
   return {
     moduleId: 'vscode',
     canHandle: ({ refs }) => normalizeVSCodeObservationRefs(refs).hasVSCodeIdentity,
     normalizeObservation: ({ refs }) => normalizeVSCodeObservationRefs(refs),
     getCapabilities: () => [...VSCODE_CAPABILITIES],
-    checkReadiness: ({ operation, refs }) => checkVSCodeReadiness(operation, refs),
+    checkReadiness: ({ operation, refs, operationRef }) => checkVSCodeReadiness(operation, refs, operationRef),
   };
 }
 
-export function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & { hasVSCodeIdentity: boolean } {
+function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & { hasVSCodeIdentity: boolean } {
   const invalidRefs = refs.filter(isRawRef);
-  const safeRefs = uniqueStrings(refs.filter((ref) => !isRawRef(ref)));
+  const safeRefs = uniqueStrings(refs.filter((ref) => !isRawRef(ref) && isVSCodeObservationRef(ref)));
   const observation: VSCodeAppObservation & { hasVSCodeIdentity: boolean } = {
     refs: safeRefs,
     invalidRefs,
@@ -92,6 +82,7 @@ export function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObserva
     commandPaletteItemRefs: safeRefs.filter((ref) => ref.startsWith('command-palette-item:vscode:')),
     diagnosticsRefs: safeRefs.filter(isDiagnosticsRef),
     unknownWebviewRefs: safeRefs.filter(isUnknownWebviewRef),
+    operationRefRefs: safeRefs.filter((ref) => ref.startsWith('operation-ref:vscode:')),
     freshnessRefs: safeRefs.filter((ref) => ref.startsWith('freshness:vscode:')),
     focusedEditorRefs: safeRefs.filter((ref) => ref.startsWith('focused-editor:vscode:')),
     selectionRefs: safeRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')),
@@ -101,18 +92,24 @@ export function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObserva
   };
   observation.hasVSCodeIdentity = observation.appRefs.length > 0
     || observation.processRefs.length > 0
-    || observation.windowRefs.length > 0
-    || safeRefs.includes('intent:current-vscode-cowork');
+    || observation.windowRefs.length > 0;
   return observation;
 }
 
-function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseAppModuleReadiness {
-  const observation = normalizeVSCodeObservationRefs(refs);
+function checkVSCodeReadiness(operation: string, refs: string[], operationRef: string | undefined): ComputerUseAppModuleReadiness {
+  const normalizedOperationRef = hostStructuredOperationRef(operation, operationRef, refs);
+  const observation = normalizeVSCodeObservationRefs(uniqueStrings([
+    ...refs,
+    normalizedOperationRef,
+  ]));
   if (observation.invalidRefs.length > 0) {
     return blocked('blocked:vscode-app-module:raw-ref-not-allowed', observation.refs);
   }
   if (!VSCODE_CAPABILITIES.includes(operation as typeof VSCODE_CAPABILITIES[number])) {
     return blocked('blocked:vscode-app-module:operation-not-supported', observation.refs);
+  }
+  if (!normalizedOperationRef) {
+    return blocked('blocked:vscode-app-module:operation-ref-required', observation.refs);
   }
   if (observation.windowRefs.length === 0) {
     return blocked('blocked:vscode-app-module:window-ref-required', observation.refs);
@@ -143,11 +140,13 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
           observation.editorRefs[0],
           observation.fileRefs[0],
           observation.freshnessRefs[0],
+          normalizedOperationRef,
         ]),
       },
       evidenceRefs: uniqueStrings([
         'module:vscode-app',
         `capability:vscode:${operation}`,
+        normalizedOperationRef,
         observation.sessionRefs[0],
         observation.windowRefs[0],
         observation.observationRefs[0],
@@ -173,11 +172,13 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
           observation.observationRefs[0],
           observation.diagnosticsRefs[0],
           observation.freshnessRefs[0],
+          normalizedOperationRef,
         ]),
       },
       evidenceRefs: uniqueStrings([
         'module:vscode-app',
         `capability:vscode:${operation}`,
+        normalizedOperationRef,
         observation.sessionRefs[0],
         observation.windowRefs[0],
         observation.observationRefs[0],
@@ -202,6 +203,7 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
           observation.observationRefs[0],
           observation.editorRefs[0],
           observation.freshnessRefs[0],
+          normalizedOperationRef,
         ]),
         action: {
           kind: 'key',
@@ -211,6 +213,7 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
       evidenceRefs: uniqueStrings([
         'module:vscode-app',
         `capability:vscode:${operation}`,
+        normalizedOperationRef,
         observation.sessionRefs[0],
         observation.windowRefs[0],
         observation.observationRefs[0],
@@ -244,6 +247,7 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
           selectionRef,
           textRef,
           observation.freshnessRefs[0],
+          normalizedOperationRef,
         ]),
         action: {
           kind: 'type',
@@ -254,6 +258,7 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
       evidenceRefs: uniqueStrings([
         'module:vscode-app',
         `capability:vscode:${operation}`,
+        normalizedOperationRef,
         observation.sessionRefs[0],
         observation.windowRefs[0],
         observation.fileRefs[0],
@@ -286,6 +291,7 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
           observation.editorRefs[0],
           observation.fileRefs[0],
           observation.freshnessRefs[0],
+          normalizedOperationRef,
         ]),
         action: {
           kind: 'key',
@@ -295,6 +301,7 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
       evidenceRefs: uniqueStrings([
         'module:vscode-app',
         `capability:vscode:${operation}`,
+        normalizedOperationRef,
         observation.sessionRefs[0],
         observation.windowRefs[0],
         observation.fileRefs[0],
@@ -303,98 +310,12 @@ function checkVSCodeReadiness(operation: string, refs: string[]): ComputerUseApp
     });
   }
   if (isTerminalOperation(operation)) {
-    return checkTerminalReadiness(operation, observation);
+    return checkTerminalReadiness(operation, observation, normalizedOperationRef);
   }
   if (isCommandPaletteOperation(operation)) {
-    return checkCommandPaletteReadiness(operation, observation);
+    return checkCommandPaletteReadiness(operation, observation, normalizedOperationRef);
   }
   return blocked(`blocked:vscode-app-module:${safeToken(operation) || 'operation'}-readiness-not-implemented`, observation.refs);
-}
-
-export function verifyVSCodeFocusedEditorEvidence(input: { refs: string[] }): VSCodeAppVerifierResult {
-  const observation = normalizeVSCodeObservationRefs(input.refs);
-  if (observation.invalidRefs.length > 0) {
-    return verifierBlocked('blocked:vscode-app-module:raw-ref-not-allowed', observation.refs);
-  }
-  if (!input.refs.some((ref) => ref.startsWith('action:vscode:focus-editor') || ref.startsWith('executor-event:vscode:focus-editor') || ref.startsWith('input-event:vscode:focus-editor'))) {
-    return verifierBlocked('blocked:vscode-app-module:focus-action-ref-required', observation.refs);
-  }
-  if (observation.observationRefs.length === 0 || observation.freshnessRefs.length === 0) {
-    return verifierBlocked('blocked:vscode-app-module:after-observe-ref-required', observation.refs);
-  }
-  if (observation.editorRefs.length === 0) {
-    return verifierBlocked('blocked:vscode-app-module:editor-ref-required', observation.refs);
-  }
-  if (observation.terminalRefs.length > 0 && observation.editorRefs.length === 0) {
-    return verifierBlocked('blocked:vscode-app-module:terminal-is-not-editor', observation.refs);
-  }
-  const token = safeToken(uniqueStrings([
-    observation.windowRefs[0],
-    observation.observationRefs[0],
-    observation.editorRefs[0],
-    observation.freshnessRefs[0],
-  ]).join(':')) || 'current';
-  return {
-    status: 'ready',
-    evidenceRefs: uniqueStrings([
-      ...observation.refs,
-      `focused-editor:vscode:module:${token}`,
-      `verifier:vscode-app-module:focus-editor:${token}`,
-    ]),
-  };
-}
-
-export function verifyVSCodeSameFileEvidence(input: { beforeRefs: string[]; afterRefs: string[] }): VSCodeAppVerifierResult {
-  const beforeFiles = uniqueStrings(input.beforeRefs.filter((ref) => ref.startsWith('file-ref:vscode:')));
-  const afterFiles = uniqueStrings(input.afterRefs.filter((ref) => ref.startsWith('file-ref:vscode:')));
-  if (beforeFiles.length !== 1 || afterFiles.length !== 1) {
-    return verifierBlocked('blocked:vscode-app-module:single-file-ref-required', uniqueStrings([...beforeFiles, ...afterFiles]));
-  }
-  if (beforeFiles[0] !== afterFiles[0]) {
-    return verifierBlocked('blocked:vscode-app-module:file-ref-drift', uniqueStrings([...beforeFiles, ...afterFiles]));
-  }
-  return {
-    status: 'ready',
-    evidenceRefs: [
-      beforeFiles[0],
-      `verifier:vscode-app-module:same-file:${safeToken(beforeFiles[0]) || 'file'}`,
-    ],
-  };
-}
-
-export function verifyVSCodeMutationEvidence(input: {
-  beforeRefs: string[];
-  actionRefs: string[];
-  afterRefs: string[];
-}): VSCodeAppVerifierResult {
-  const sameFile = verifyVSCodeSameFileEvidence({
-    beforeRefs: input.beforeRefs,
-    afterRefs: input.afterRefs,
-  });
-  if (sameFile.status === 'blocked') return sameFile;
-  if (!input.actionRefs.some((ref) => ref.startsWith('action:') || ref.startsWith('window-action:'))) {
-    return verifierBlocked('blocked:vscode-app-module:mutation-action-ref-required', uniqueStrings([
-      ...input.beforeRefs,
-      ...input.afterRefs,
-    ]));
-  }
-  if (!input.afterRefs.some((ref) => ref.startsWith('text:') || ref.startsWith('verifier:'))) {
-    return verifierBlocked('blocked:vscode-app-module:mutation-after-text-ref-required', uniqueStrings([
-      ...input.beforeRefs,
-      ...input.actionRefs,
-      ...input.afterRefs,
-    ]));
-  }
-  const fileRef = sameFile.evidenceRefs[0];
-  return {
-    status: 'ready',
-    evidenceRefs: uniqueStrings([
-      fileRef,
-      ...input.actionRefs,
-      ...input.afterRefs.filter((ref) => ref.startsWith('text:')),
-      `verifier:vscode-app-module:mutation:${safeToken(fileRef) || 'file'}`,
-    ]),
-  };
 }
 
 function checkEditorMutationGate(observation: VSCodeAppObservation): ComputerUseAppModuleReadiness | undefined {
@@ -415,7 +336,7 @@ function checkEditorMutationGate(observation: VSCodeAppObservation): ComputerUse
   return undefined;
 }
 
-function checkTerminalReadiness(operation: string, observation: VSCodeAppObservation): ComputerUseAppModuleReadiness {
+function checkTerminalReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
   const commonGate = checkCommonObservationGate(observation);
   if (commonGate) return commonGate;
   if (observation.terminalRefs.length === 0) {
@@ -428,49 +349,49 @@ function checkTerminalReadiness(operation: string, observation: VSCodeAppObserva
   if (operation === 'send-terminal-text') {
     const textRef = observation.textRefRefs[0];
     if (!textRef) return blocked('blocked:vscode-app-module:text-ref-required', observation.refs);
-    return actReady(operation, observation, [terminalRef, textRef], {
+    return actReady(operation, operationRef, observation, [terminalRef, textRef], {
       kind: 'type',
       textRef,
     });
   }
   if (operation === 'observe-terminal') {
-    return observeReady(operation, observation, [terminalRef]);
+    return observeReady(operation, operationRef, observation, [terminalRef]);
   }
   if (operation === 'submit-terminal-command') {
-    return actReady(operation, observation, [terminalRef], {
+    return actReady(operation, operationRef, observation, [terminalRef], {
       kind: 'key',
       key: 'Enter',
     });
   }
   if (operation === 'interrupt-terminal-command') {
-    return actReady(operation, observation, [terminalRef], {
+    return actReady(operation, operationRef, observation, [terminalRef], {
       kind: 'key',
       key: 'Control+C',
     });
   }
   if (operation === 'clear-terminal') {
-    return actReady(operation, observation, [terminalRef], {
+    return actReady(operation, operationRef, observation, [terminalRef], {
       kind: 'key',
       key: 'Meta+K',
     });
   }
   if (operation === 'focus-terminal') {
-    return actReady(operation, observation, [terminalRef], {
+    return actReady(operation, operationRef, observation, [terminalRef], {
       kind: 'key',
       key: 'Control+Backquote',
     });
   }
-  return actReady(operation, observation, [terminalRef], {
+  return actReady(operation, operationRef, observation, [terminalRef], {
     kind: 'key',
     key: 'Meta+1',
   });
 }
 
-function checkCommandPaletteReadiness(operation: string, observation: VSCodeAppObservation): ComputerUseAppModuleReadiness {
+function checkCommandPaletteReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
   const commonGate = checkCommonObservationGate(observation);
   if (commonGate) return commonGate;
   if (operation === 'open-command-palette') {
-    return actReady(operation, observation, [], {
+    return actReady(operation, operationRef, observation, [], {
       kind: 'key',
       key: 'Meta+Shift+P',
     });
@@ -482,30 +403,30 @@ function checkCommandPaletteReadiness(operation: string, observation: VSCodeAppO
   if (operation === 'send-command-palette-query') {
     const textRef = observation.textRefRefs[0];
     if (!textRef) return blocked('blocked:vscode-app-module:text-ref-required', observation.refs);
-    return actReady(operation, observation, [paletteRef, textRef], {
+    return actReady(operation, operationRef, observation, [paletteRef, textRef], {
       kind: 'type',
       textRef,
     });
   }
   if (operation === 'observe-command-palette-items') {
-    return observeReady(operation, observation, [paletteRef]);
+    return observeReady(operation, operationRef, observation, [paletteRef]);
   }
   if (operation === 'select-command-palette-item') {
     const itemRef = observation.commandPaletteItemRefs.find((ref) => currentPaletteItemRef(ref, paletteRef));
     if (!itemRef) return blocked('blocked:vscode-app-module:current-palette-item-ref-required', observation.refs);
-    return actReady(operation, observation, [paletteRef, itemRef], {
+    return actReady(operation, operationRef, observation, [paletteRef, itemRef], {
       kind: 'key',
       key: 'Enter',
       itemRef,
     });
   }
-  return actReady(operation, observation, [paletteRef], {
+  return actReady(operation, operationRef, observation, [paletteRef], {
     kind: 'key',
     key: 'Escape',
   });
 }
 
-function observeReady(operation: string, observation: VSCodeAppObservation, targetRefs: string[]): ComputerUseAppModuleReadiness {
+function observeReady(operation: string, operationRef: string, observation: VSCodeAppObservation, targetRefs: string[]): ComputerUseAppModuleReadiness {
   return validateComputerUseAppModuleReadiness({
     status: 'ready',
     primitive: {
@@ -516,11 +437,13 @@ function observeReady(operation: string, observation: VSCodeAppObservation, targ
         observation.observationRefs[0],
         ...targetRefs,
         observation.freshnessRefs[0],
+        operationRef,
       ]),
     },
     evidenceRefs: uniqueStrings([
       'module:vscode-app',
       `capability:vscode:${operation}`,
+      operationRef,
       observation.sessionRefs[0],
       observation.windowRefs[0],
       ...targetRefs,
@@ -529,7 +452,7 @@ function observeReady(operation: string, observation: VSCodeAppObservation, targ
   });
 }
 
-function actReady(operation: string, observation: VSCodeAppObservation, targetRefs: string[], action: Record<string, unknown>): ComputerUseAppModuleReadiness {
+function actReady(operation: string, operationRef: string, observation: VSCodeAppObservation, targetRefs: string[], action: Record<string, unknown>): ComputerUseAppModuleReadiness {
   return validateComputerUseAppModuleReadiness({
     status: 'ready',
     primitive: {
@@ -540,12 +463,14 @@ function actReady(operation: string, observation: VSCodeAppObservation, targetRe
         observation.observationRefs[0],
         ...targetRefs,
         observation.freshnessRefs[0],
+        operationRef,
       ]),
       action,
     },
     evidenceRefs: uniqueStrings([
       'module:vscode-app',
       `capability:vscode:${operation}`,
+      operationRef,
       observation.sessionRefs[0],
       observation.windowRefs[0],
       ...targetRefs,
@@ -606,14 +531,6 @@ function needsConfirmation(reasonRef: string, evidenceRefs: string[] = []): Comp
   };
 }
 
-function verifierBlocked(reasonRef: string, evidenceRefs: string[] = []): VSCodeAppVerifierResult {
-  return {
-    status: 'blocked',
-    reasonRef,
-    evidenceRefs,
-  };
-}
-
 function isEditorRef(ref: string): boolean {
   return ref.startsWith('element:vscode:editor:')
     || ref.startsWith('element:vscode:monaco:')
@@ -642,6 +559,42 @@ function isUnknownWebviewRef(ref: string): boolean {
     && !isTerminalRef(ref)
     && !isCommandPaletteRef(ref)
     && !isDiagnosticsRef(ref);
+}
+
+function hostStructuredOperationRef(operation: string, operationRef: string | undefined, refs: string[]): string | undefined {
+  const candidates = uniqueStrings([
+    operationRef,
+    ...refs.filter((ref) => ref.startsWith('operation-ref:vscode:')),
+  ]);
+  const expectedPrefix = `operation-ref:vscode:${operation}:`;
+  const exact = candidates.filter((ref) => ref.startsWith(expectedPrefix));
+  return exact.length === 1 ? exact[0] : undefined;
+}
+
+function isVSCodeObservationRef(ref: string): boolean {
+  return ref === 'macos-app:vscode'
+    || ref.startsWith('macos-app:vscode:')
+    || ref.startsWith('process:vscode')
+    || ref.startsWith('window:vscode:')
+    || ref.startsWith('frontmost:vscode:')
+    || ref.startsWith('observation:vscode:')
+    || ref.startsWith('file-ref:vscode:')
+    || ref.startsWith('element:vscode:')
+    || ref.startsWith('terminal:vscode:')
+    || ref.startsWith('command-palette:vscode:')
+    || ref.startsWith('command-palette-item:vscode:')
+    || ref.startsWith('diagnostics:vscode:')
+    || ref.startsWith('problems:vscode:')
+    || ref.startsWith('freshness:vscode:')
+    || ref.startsWith('focused-editor:vscode:')
+    || ref.startsWith('selection-ref:vscode:')
+    || ref.startsWith('text-ref:')
+    || ref.startsWith('text:vscode:')
+    || ref.startsWith('image:vscode:')
+    || ref.startsWith('accessibility:vscode:')
+    || ref.startsWith('operation-ref:vscode:')
+    || ref.startsWith('window-action-session:vscode:')
+    || ref.startsWith('computer-use-session:vscode:');
 }
 
 function isRawRef(ref: string): boolean {

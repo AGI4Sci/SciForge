@@ -2,16 +2,58 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createComputerUseAppModuleRegistry } from './computer-use-app-module-registry.js';
+import { createVSCodeAppModule } from './vscode-app-module.js';
 import {
-  createVSCodeAppModule,
-  normalizeVSCodeObservationRefs,
   verifyVSCodeFocusedEditorEvidence,
   verifyVSCodeMutationEvidence,
   verifyVSCodeSameFileEvidence,
-} from './vscode-app-module.js';
+} from './vscode-app-verifiers.js';
+
+interface VSCodeTestObservation {
+  refs: string[];
+  invalidRefs: string[];
+  windowRefs: string[];
+  fileRefs: string[];
+  editorRefs: string[];
+  terminalRefs: string[];
+  unknownWebviewRefs: string[];
+}
+
+function createHostStructuredVSCodeAppModule() {
+  const vscode = createVSCodeAppModule();
+  return {
+    ...vscode,
+    checkReadiness: (input: Parameters<typeof vscode.checkReadiness>[0]) => vscode.checkReadiness({
+      operationRef: `operation-ref:vscode:${input.operation}:test`,
+      ...input,
+    }),
+  };
+}
+
+function normalizeVSCodeTestObservation(refs: string[]): VSCodeTestObservation {
+  return createHostStructuredVSCodeAppModule().normalizeObservation({ refs }) as VSCodeTestObservation;
+}
+
+test('VSCode app module runtime exports only the module factory', async () => {
+  const runtimeExports = await import('./vscode-app-module.js');
+
+  assert.deepEqual(Object.keys(runtimeExports).sort(), ['createVSCodeAppModule']);
+});
+
+test('VSCode module object exposes only the Host app module contract methods plus moduleId', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  assert.deepEqual(Object.keys(vscode).sort(), [
+    'canHandle',
+    'checkReadiness',
+    'getCapabilities',
+    'moduleId',
+    'normalizeObservation',
+  ]);
+});
 
 test('VSCode module registers through Host-side app module registry', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
   const registry = createComputerUseAppModuleRegistry([vscode]);
 
   const match = registry.resolve({
@@ -23,7 +65,7 @@ test('VSCode module registers through Host-side app module registry', () => {
 });
 
 test('normalizes VSCode observation refs into stable concepts without raw payloads', () => {
-  const observation = normalizeVSCodeObservationRefs([
+  const observation = normalizeVSCodeTestObservation([
     'window:vscode:main',
     'macos-app:vscode',
     'file-ref:vscode:current:paper',
@@ -43,8 +85,43 @@ test('normalizes VSCode observation refs into stable concepts without raw payloa
   assert.ok(!observation.refs.includes('raw-path:/Users/example/paper.tex'));
 });
 
-test('readiness fails closed when VSCode refs mix tokenized refs with raw payloads', () => {
+test('VSCode readiness requires a Host structured operation ref instead of natural language task text', () => {
   const vscode = createVSCodeAppModule();
+  const refs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'freshness:vscode:main:1',
+    'message:please read visible text',
+    'commandText:read visible text',
+  ];
+
+  const missingOperationRef = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    refs,
+  });
+
+  assert.equal(missingOperationRef.status, 'blocked');
+  assert.equal(missingOperationRef.reasonRef, 'blocked:vscode-app-module:operation-ref-required');
+
+  const ready = vscode.checkReadiness({
+    operation: 'read-visible-text',
+    operationRef: 'operation-ref:vscode:read-visible-text:test',
+    refs,
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:read-visible-text:test'));
+  assert.doesNotMatch(JSON.stringify(ready), /please read visible text|commandText|message:/i);
+});
+
+test('readiness fails closed when VSCode refs mix tokenized refs with raw payloads', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-visible-text',
@@ -63,7 +140,7 @@ test('readiness fails closed when VSCode refs mix tokenized refs with raw payloa
 });
 
 test('readiness asks for confirmation when multiple VSCode windows remain possible', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-visible-text',
@@ -82,7 +159,7 @@ test('readiness asks for confirmation when multiple VSCode windows remain possib
 });
 
 test('unknown VSCode webview does not satisfy editor or terminal readiness', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-visible-text',
@@ -100,7 +177,7 @@ test('unknown VSCode webview does not satisfy editor or terminal readiness', () 
 });
 
 test('read-visible-text readiness requires session, window identity, file, editor and freshness refs', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-visible-text',
@@ -124,7 +201,7 @@ test('read-visible-text readiness requires session, window identity, file, edito
 });
 
 test('read-visible-text readiness blocks stale or sessionless observations', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-visible-text',
@@ -145,7 +222,7 @@ test('read-visible-text readiness blocks stale or sessionless observations', () 
 });
 
 test('read-visible-text readiness asks for confirmation when visible file refs are not unique', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-visible-text',
@@ -168,7 +245,7 @@ test('read-visible-text readiness asks for confirmation when visible file refs a
 });
 
 test('read-diagnostics readiness is refs-only and does not require editor focus', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'read-diagnostics',
@@ -190,7 +267,7 @@ test('read-diagnostics readiness is refs-only and does not require editor focus'
 });
 
 test('focus-editor readiness returns one Host-selected act primitive without completion truth', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'focus-editor',
@@ -266,7 +343,7 @@ test('same-file verifier blocks when before and after file refs drift', () => {
 });
 
 test('insert-draft readiness requires focused-editor evidence and text-ref content', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const missingFocus = vscode.checkReadiness({
     operation: 'insert-draft',
@@ -313,7 +390,7 @@ test('insert-draft readiness requires focused-editor evidence and text-ref conte
 });
 
 test('replace-selection readiness requires selection-ref and replacement text-ref', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'replace-selection',
@@ -342,7 +419,7 @@ test('replace-selection readiness requires selection-ref and replacement text-re
 });
 
 test('save-current-file readiness does not require confirmation but binds current file evidence', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const readiness = vscode.checkReadiness({
     operation: 'save-current-file',
@@ -388,7 +465,7 @@ test('mutation verifier requires action evidence and same-file before/after refs
 });
 
 test('terminal readiness is refs-first and keeps send separate from submit', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const focus = vscode.checkReadiness({
     operation: 'focus-terminal',
@@ -473,7 +550,7 @@ test('terminal readiness is refs-first and keeps send separate from submit', () 
 });
 
 test('terminal readiness fails closed for multiple terminals or raw shell commands', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const multiple = vscode.checkReadiness({
     operation: 'send-terminal-text',
@@ -514,7 +591,7 @@ test('terminal readiness fails closed for multiple terminals or raw shell comman
 });
 
 test('command palette readiness is split into open query observe select close steps', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const open = vscode.checkReadiness({
     operation: 'open-command-palette',
@@ -580,7 +657,7 @@ test('command palette readiness is split into open query observe select close st
 });
 
 test('command palette readiness rejects raw command ids and stale item refs', () => {
-  const vscode = createVSCodeAppModule();
+  const vscode = createHostStructuredVSCodeAppModule();
 
   const raw = vscode.checkReadiness({
     operation: 'select-command-palette-item',

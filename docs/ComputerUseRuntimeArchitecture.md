@@ -382,10 +382,11 @@ Computer Use primitive 默认不调用模型。
 
 当前状态摘要：
 
-- App Module Registry contract 是 `unit-proven`。
-- VSCode App Module skeleton、read-only、focus、editor mutation、terminal 和 command palette readiness 是 `unit-proven`。
-- Agent Host app-module dry-run materializer 是 `unit-proven`：它能根据 current-run refs 选择 VSCode module 并返回 primitive candidate，也能对 unknown / ambiguous app fail closed。
-- Computer Use no-bypass static guard 是 `unit-proven`：它禁止 GUI completion surface、retired runtime `gui` module surface、legacy Computer Use public surface，以及 ordinary/native direct app module 或 act materializer imports。
+- P4 VSCode module entry gate 是 `unit-proven`：registry 只把 Host app / process / window identity refs 交给 `canHandle`，裸 `message`、`commandText`、terminal output、palette label、history 或 completed action 不能触发 VSCode module。
+- VSCode App Module skeleton 是 `unit-proven`：运行时入口只导出 module factory，module object 只暴露 `moduleId`、`canHandle`、`normalizeObservation`、`getCapabilities` 和 `checkReadiness`；Host-owned verifier 已从 module surface 分离。
+- VSCode readiness operation gate 是 `unit-proven`：`checkReadiness` 需要 Host structured `operationRef`，自然语言 task / goal / instruction 或裸文本 refs 不能替代 operation evidence。
+- Agent Host app-module dry-run materializer 是 `unit-proven`：它能根据 current-run identity refs 和 structured operation refs 选择 VSCode module 并返回 primitive candidate，也能对 unknown / ambiguous app fail closed。
+- Computer Use no-bypass static guard 是 `unit-proven`：它禁止 GUI completion surface、retired runtime `gui` module surface、legacy Computer Use public surface、ordinary/native direct app module 或 act materializer imports，以及 VSCode app module 直接 import / call Computer Use executor、MCP adapter、desktop controller 或 shared system input。
 - Runtime `gui` module handler 已删除；默认 module registry 不列出 `gui`，外部注入 `gui` handler 也会 fail closed。
 - VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
 - 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。

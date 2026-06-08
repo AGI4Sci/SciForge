@@ -327,6 +327,41 @@ test('Computer Use no-bypass guard allows structured Host VSCode operation refs'
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test('Computer Use no-bypass guard blocks VSCode app module direct desktop or executor access', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/vscode-app-module.ts', [
+    "import { createComputerUsePrimitiveService } from '../../packages/actions/computer-use/index.js';",
+    "import { createComputerUseMcpAdapter } from '../../packages/actions/computer-use/mcp.js';",
+    "import { createDefaultComputerUseActMaterializer } from './agent-host-computer-use-act-materializer.js';",
+    'export function createVSCodeAppModule() {',
+    '  return {',
+    "    moduleId: 'vscode',",
+    '    canHandle: () => true,',
+    '    normalizeObservation: ({ refs }: { refs: string[] }) => ({ refs }),',
+    '    getCapabilities: () => [],',
+    '    checkReadiness: () => {',
+    "      createComputerUsePrimitiveService({} as never);",
+    "      createComputerUseMcpAdapter({} as never);",
+    "      createDefaultComputerUseActMaterializer();",
+    "      return { status: 'blocked', reasonRef: 'blocked:vscode', evidenceRefs: [] };",
+    '    },',
+    '  };',
+    '}',
+  ].join('\n'));
+  writeFixtureFile(root, 'src/runtime/codex/vscode-app-module-direct-desktop.ts', [
+    'export async function directDesktop() {',
+    "  await service.invoke({ primitive: 'act' });",
+    "  await desktopController.click({ x: 10, y: 20 });",
+    "  await systemInput.typeText('hello');",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-app-module-direct-desktop-access/);
+});
+
 test('Computer Use no-bypass guard blocks UI native final-answer synthesis bypasses', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts', [

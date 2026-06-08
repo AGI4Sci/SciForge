@@ -56,6 +56,63 @@ test('registry blocks unknown app refs instead of falling back to natural langua
   assert.deepEqual(match.candidateModuleIds, []);
 });
 
+test('registry does not select VSCode module from naked text, terminal output, palette labels, history, or completed actions', () => {
+  const textTriggeredModule: ComputerUseAppModule = {
+    ...vscodeModule,
+    canHandle: ({ refs }) => refs.some((ref) =>
+      ref.startsWith('message:')
+      || ref.startsWith('commandText:')
+      || ref.startsWith('terminal-output:')
+      || ref.startsWith('command-palette-label:')
+      || ref.startsWith('history:')
+      || ref.startsWith('action-completed:')
+    ),
+  };
+  const registry = createComputerUseAppModuleRegistry([textTriggeredModule]);
+
+  for (const ref of [
+    'message:please-read-vscode',
+    'commandText:focus editor',
+    'terminal-output:done',
+    'command-palette-label:Developer Reload Window',
+    'history:previous-vscode-run',
+    'action-completed:vscode:focus-editor',
+  ]) {
+    const match = registry.resolve({ refs: [ref] });
+    assert.equal(match.status, 'blocked', ref);
+    assert.equal(match.reasonRef, 'blocked:computer-use-app-module:unsupported-app', ref);
+    assert.deepEqual(match.candidateModuleIds, [], ref);
+  }
+});
+
+test('registry passes only Host app, process, or window identity refs into app module canHandle', () => {
+  let refsSeenByModule: string[] = [];
+  const identityOnlyModule: ComputerUseAppModule = {
+    ...vscodeModule,
+    canHandle: ({ refs }) => {
+      refsSeenByModule = refs;
+      return refs.includes('window:vscode:main')
+        && !refs.some((ref) => /message:|commandText:|terminal-output:|command-palette-label:|history:|action-completed:/i.test(ref));
+    },
+  };
+  const registry = createComputerUseAppModuleRegistry([identityOnlyModule]);
+
+  const match = registry.resolve({
+    refs: [
+      'window:vscode:main',
+      'message:focus editor',
+      'commandText:read visible text',
+      'terminal-output:tests passed',
+      'command-palette-label:Save All',
+      'history:old-run',
+      'action-completed:vscode:previous',
+    ],
+  });
+
+  assert.equal(match.status, 'ready');
+  assert.deepEqual(refsSeenByModule, ['window:vscode:main']);
+});
+
 test('readiness rejects user-visible final answer fields from modules', () => {
   const unsafe = validateComputerUseAppModuleReadiness({
     status: 'ready',

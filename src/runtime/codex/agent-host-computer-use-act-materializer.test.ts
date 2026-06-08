@@ -1043,6 +1043,7 @@ function vscodeAppModuleAgentHostInput(
   operation: string | undefined,
   extraRefs: string[] = [],
 ): NormalizedCodexAgentHostInput {
+  const operationRef = operation ? `operation-ref:vscode:${operation}:test` : undefined;
   const targetRefs = vscodeAppModuleTargetRefs(extraRefs);
   const observationRefs = vscodeAppModuleObservationRefs(extraRefs);
   return {
@@ -1055,8 +1056,9 @@ function vscodeAppModuleAgentHostInput(
       'intent:computer-use-app-module-dry-run',
       ...targetRefs,
       ...observationRefs,
+      operationRef,
       ...extraRefs,
-    ],
+    ].filter((ref): ref is string => typeof ref === 'string'),
     readiness: {},
     target: {
       kind: 'computer-use-app-module',
@@ -1064,6 +1066,7 @@ function vscodeAppModuleAgentHostInput(
       ...(operation ? {
         computerUseAppModule: {
           operation,
+          operationRef,
         },
       } : {}),
     },
@@ -1161,19 +1164,21 @@ function vscodeAppModuleObservationRefs(extraRefs: string[] = []): string[] {
 }
 
 function appModuleAgentHostInput(operation: string, refs: string[]): NormalizedCodexAgentHostInput {
+  const operationRef = `operation-ref:app-module:${operation}:test`;
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
     source: 'test',
     intentText: 'Host already selected a Computer Use app module operation.',
     authorizationProfileId: 'high-autonomy',
     singleTurnOverride: false,
-    refs: ['intent:computer-use-app-module-dry-run', ...refs],
+    refs: ['intent:computer-use-app-module-dry-run', operationRef, ...refs],
     readiness: {},
     target: {
       kind: 'computer-use-app-module',
       refs,
       computerUseAppModule: {
         operation,
+        operationRef,
       },
     },
     observation: {

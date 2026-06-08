@@ -15,15 +15,20 @@ import type {
 
 const TOOL_ID = 'computer-use.app-module-registry';
 
+interface StructuredAppModuleOperation {
+  operation: string;
+  operationRef?: string;
+}
+
 export function createDefaultComputerUseAppModuleMaterializer(options: {
   modules?: readonly ComputerUseAppModule[];
 } = {}): CodexAgentHostComputerUseActMaterializer {
   const registry = createComputerUseAppModuleRegistry(options.modules ?? [createVSCodeAppModule()]);
 
   return (input) => {
-    const operation = structuredAppModuleOperation(input);
     const refs = collectAppModuleRefs(input);
-    if (!operation) {
+    const hostOperation = structuredAppModuleOperation(input, refs);
+    if (!hostOperation) {
       if (!hasComputerUseAppModuleMarker(input, refs)) return undefined;
       return readinessResult(input, {
         status: 'blocked',
@@ -38,6 +43,7 @@ export function createDefaultComputerUseAppModuleMaterializer(options: {
         candidateModuleIds: [],
       });
     }
+    const { operation, operationRef } = hostOperation;
     const moduleMatch = registry.resolve({ refs });
     if (moduleMatch.status === 'blocked') {
       return readinessResult(input, {
@@ -57,6 +63,7 @@ export function createDefaultComputerUseAppModuleMaterializer(options: {
 
     const readiness = validateComputerUseAppModuleReadiness(moduleMatch.module.checkReadiness({
       operation,
+      operationRef,
       refs,
     }));
     return readinessResult(input, readiness, {
@@ -68,7 +75,7 @@ export function createDefaultComputerUseAppModuleMaterializer(options: {
 }
 
 export function hasStructuredComputerUseAppModuleOperation(input: CodexAgentHostComputerUseActMaterializerInput): boolean {
-  return structuredAppModuleOperation(input) !== undefined;
+  return structuredAppModuleOperation(input, collectAppModuleRefs(input)) !== undefined;
 }
 
 function readinessResult(
@@ -183,12 +190,24 @@ function readinessArtifact(
   };
 }
 
-function structuredAppModuleOperation(input: CodexAgentHostComputerUseActMaterializerInput): string | undefined {
+function structuredAppModuleOperation(
+  input: CodexAgentHostComputerUseActMaterializerInput,
+  refs: string[],
+): StructuredAppModuleOperation | undefined {
   const target = isRecord(input.agentHostInput.target) ? input.agentHostInput.target : {};
-  const operation = operationFromRecord(target)
-    ?? operationFromRecord(isRecord(target.computerUseAppModule) ? target.computerUseAppModule : undefined)
-    ?? operationFromRecord(isRecord(target.appModule) ? target.appModule : undefined);
-  return operation ? safeOperation(operation) : undefined;
+  const records = [
+    target,
+    isRecord(target.computerUseAppModule) ? target.computerUseAppModule : undefined,
+    isRecord(target.appModule) ? target.appModule : undefined,
+  ];
+  const operation = records.map(operationFromRecord).find((value): value is string => typeof value === 'string');
+  const safe = operation ? safeOperation(operation) : undefined;
+  if (!safe) return undefined;
+  return {
+    operation: safe,
+    operationRef: records.map(operationRefFromRecord).find((value): value is string => typeof value === 'string')
+      ?? operationRefFromRefs(safe, refs),
+  };
 }
 
 function hasComputerUseAppModuleMarker(
@@ -207,6 +226,19 @@ function operationFromRecord(value: Record<string, unknown> | undefined): string
   return stringField(value.operation)
     ?? stringField(value.computerUseOperation)
     ?? stringField(value.primitiveOperation);
+}
+
+function operationRefFromRecord(value: Record<string, unknown> | undefined): string | undefined {
+  if (!value) return undefined;
+  return safeOperationRef(stringField(value.operationRef)
+    ?? stringField(value.computerUseOperationRef)
+    ?? stringField(value.primitiveOperationRef));
+}
+
+function operationRefFromRefs(operation: string, refs: string[]): string | undefined {
+  const prefix = `operation-ref:`;
+  const candidates = refs.filter((ref) => ref.startsWith(prefix) && ref.includes(`:${operation}:`));
+  return candidates.length === 1 ? safeOperationRef(candidates[0]) : undefined;
 }
 
 function collectAppModuleRefs(input: CodexAgentHostComputerUseActMaterializerInput): string[] {
@@ -236,12 +268,17 @@ function safeAppModuleRef(value: string): boolean {
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(ref)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
   if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
-  return /^(?:runtime-truth:|intent:|blocked:|needs-confirmation:|module:|capability:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|diagnostics:|problems:|terminal:|command-palette:|command-palette-item:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:|cancel:|stop:|app-native-command:)/i.test(ref);
+  return /^(?:runtime-truth:|intent:|blocked:|needs-confirmation:|module:|capability:|operation-ref:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|diagnostics:|problems:|terminal:|command-palette:|command-palette-item:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:|cancel:|stop:|app-native-command:)/i.test(ref);
 }
 
 function safeOperation(value: string): string | undefined {
   const operation = value.trim();
   return /^[a-z][a-z0-9-]{1,80}$/u.test(operation) ? operation : undefined;
+}
+
+function safeOperationRef(value: string | undefined): string | undefined {
+  const ref = value?.trim();
+  return ref && /^operation-ref:[a-z0-9._-]+:[a-z0-9._-]+:[A-Za-z0-9._:-]+$/u.test(ref) ? ref : undefined;
 }
 
 function stringList(value: unknown): string[] {
