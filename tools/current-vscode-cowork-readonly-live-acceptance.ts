@@ -38,6 +38,7 @@ export async function runCurrentVSCodeCoWorkReadonlyLiveAcceptanceCli(
     manifestPath,
     maturity: manifest.maturity,
     productReady: manifest.productReady,
+    ordinaryChatNativeRouteUsed: manifest.ordinaryChatNativeRouteUsed,
     operation: manifest.operation,
     blockedReasons: manifest.blockedReasons,
     nextActions: manifest.nextActions,

@@ -46,6 +46,7 @@ test('current VSCode co-work readonly live acceptance CLI writes blocked manifes
       manifestPath?: string;
       maturity?: string;
       productReady?: boolean;
+      ordinaryChatNativeRouteUsed?: boolean;
     };
     const manifestText = await readFile(join(outputDir, 'manifest.json'), 'utf8');
     const manifest = JSON.parse(manifestText) as {
@@ -61,6 +62,7 @@ test('current VSCode co-work readonly live acceptance CLI writes blocked manifes
     assert.equal(cliOutput.manifestPath, join(outputDir, 'manifest.json'));
     assert.equal(cliOutput.maturity, 'live-diagnostic');
     assert.equal(cliOutput.productReady, false);
+    assert.equal(cliOutput.ordinaryChatNativeRouteUsed, false);
     assert.equal(manifest.status, 'blocked');
     assert.equal(manifest.productReady, false);
     assert.equal(manifest.vscodeLaunched, false);

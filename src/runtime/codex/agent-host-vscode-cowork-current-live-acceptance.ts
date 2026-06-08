@@ -10,11 +10,24 @@ import {
 import type {
   VSCodeCoWorkLiveDiagnosticResult,
 } from './agent-host-vscode-cowork-live-diagnostic.js';
+import type {
+  CodexAppServerTurnStream,
+} from './codex-app-server-adapter.js';
+import {
+  createComputerUseNativeRouteStream,
+  type CurrentVSCodeCoWorkLiveDiagnosticRunner,
+} from './computer-use-native-route.js';
 
 export const CURRENT_VSCODE_COWORK_READONLY_LIVE_ACCEPTANCE_SCHEMA_VERSION =
   'sciforge.current-vscode-cowork-readonly-live-acceptance.v1' as const;
 
+const DEFAULT_ORDINARY_CHAT_READONLY_COMMAND_TEXT = '操作我已经打开的 VSCode，读取当前可见文本。';
+
 type ReadonlyLiveAcceptanceStatus = 'passed' | 'blocked' | 'needs-confirmation';
+
+type ReadonlyLiveAcceptanceDiagnosticResult = VSCodeCoWorkLiveDiagnosticResult & {
+  hostProducerEvidence?: Record<string, unknown>;
+};
 
 export interface CurrentVSCodeCoWorkReadonlyLiveAcceptanceManifest {
   schemaVersion: typeof CURRENT_VSCODE_COWORK_READONLY_LIVE_ACCEPTANCE_SCHEMA_VERSION;
@@ -27,6 +40,7 @@ export interface CurrentVSCodeCoWorkReadonlyLiveAcceptanceManifest {
   checkedAt: string;
   userProfileUsed: true;
   sharedSystemInputUsed: true;
+  ordinaryChatNativeRouteUsed: boolean;
   vscodeLaunched: false;
   userVSCodeKilled: false;
   userProfileCleared: false;
@@ -103,16 +117,15 @@ export async function runCurrentVSCodeCoWorkReadonlyLiveAcceptance(
     }));
   }
 
-  const commandText = options.commandText ?? 'read visible text from the current VSCode window';
-  const runner = options.runReadVisibleTextLiveDiagnostic ?? runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic;
-  const result = await runner({
+  const commandText = options.commandText ?? DEFAULT_ORDINARY_CHAT_READONLY_COMMAND_TEXT;
+  const routeRun = await runReadonlyLiveDiagnosticThroughOrdinaryChatNativeRoute({
     env,
     commandText,
     workspacePath,
-    commandId: 'current-vscode-cowork-readonly-live',
-    attemptId: 'current-vscode-cowork-readonly-live-attempt-1',
-    activateCurrentVSCodeIfNeeded: options.activateCurrentVSCodeIfNeeded === true,
+    activateCurrentVSCodeIfNeeded: options.activateCurrentVSCodeIfNeeded,
+    runReadVisibleTextLiveDiagnostic: options.runReadVisibleTextLiveDiagnostic,
   });
+  const result = routeRun.result;
 
   const evidenceRefs = safeRefs([
     ...(result.evidenceRefs ?? []),
@@ -140,6 +153,7 @@ export async function runCurrentVSCodeCoWorkReadonlyLiveAcceptance(
     ...baseManifest({ checkedAt, readiness, blockedReasons }),
     status,
     passClaim: status === 'passed',
+    ordinaryChatNativeRouteUsed: routeRun.ordinaryChatNativeRouteUsed,
     primitiveChainObserved,
     finalAnswer: {
       status: result.agentHostFinalAnswer?.status ?? result.status,
@@ -181,6 +195,7 @@ function baseManifest(input: {
     checkedAt: input.checkedAt,
     userProfileUsed: true,
     sharedSystemInputUsed: true,
+    ordinaryChatNativeRouteUsed: false,
     vscodeLaunched: false,
     userVSCodeKilled: false,
     userProfileCleared: false,
@@ -219,6 +234,109 @@ async function writeManifest(
   return manifest;
 }
 
+async function runReadonlyLiveDiagnosticThroughOrdinaryChatNativeRoute(input: {
+  env: Record<string, string | undefined>;
+  commandText: string;
+  workspacePath: string;
+  activateCurrentVSCodeIfNeeded?: boolean;
+  runReadVisibleTextLiveDiagnostic?: RunCurrentVSCodeCoWorkReadonlyLiveAcceptanceOptions['runReadVisibleTextLiveDiagnostic'];
+}): Promise<{
+  ordinaryChatNativeRouteUsed: boolean;
+  result: ReadonlyLiveAcceptanceDiagnosticResult;
+}> {
+  const runner = input.runReadVisibleTextLiveDiagnostic ?? runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic;
+  const liveRunner: CurrentVSCodeCoWorkLiveDiagnosticRunner = (runnerInput) => runner({
+    env: input.env,
+    commandText: runnerInput.commandText,
+    workspacePath: runnerInput.workspacePath,
+    commandId: runnerInput.commandId,
+    attemptId: runnerInput.attemptId,
+    authorizationProfileId: runnerInput.authorizationProfileId,
+    activateCurrentVSCodeIfNeeded: runnerInput.activateCurrentVSCodeIfNeeded === true,
+  });
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: input.commandText,
+      workspacePath: input.workspacePath,
+      commandId: 'current-vscode-cowork-readonly-live',
+      attemptId: 'current-vscode-cowork-readonly-live-attempt-1',
+    },
+    workspace: input.workspacePath,
+    provider: 'host-owned-runtime',
+    model: 'computer-use-native-route',
+    profile: 'ordinary-chat-current-vscode-cowork-readonly-live',
+    currentVSCodeCoWorkLiveDiagnosticRunner: liveRunner,
+    currentVSCodeCoWorkLiveDiagnosticOptions: {
+      activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded === true,
+    },
+  });
+  if (!stream) {
+    return {
+      ordinaryChatNativeRouteUsed: false,
+      result: blockedRouteResult('Current VSCode read-only live acceptance did not select the ordinary chat native route.'),
+    };
+  }
+
+  const events = await collectRouteEvents(stream);
+  const done = events.find((event) => event.type === 'done');
+  if (!done) {
+    const failed = events.find((event) => event.type === 'failed');
+    return {
+      ordinaryChatNativeRouteUsed: true,
+      result: blockedRouteResult(
+        safeReason(failed?.message)
+          ?? 'Current VSCode read-only live acceptance native route did not produce a done event.',
+      ),
+    };
+  }
+  return {
+    ordinaryChatNativeRouteUsed: true,
+    result: diagnosticResultFromRouteDone(done),
+  };
+}
+
+async function collectRouteEvents(stream: CodexAppServerTurnStream): Promise<Record<string, unknown>[]> {
+  const events: Record<string, unknown>[] = [];
+  for await (const event of stream.events) {
+    if (isRecord(event)) events.push(event);
+  }
+  return events;
+}
+
+function diagnosticResultFromRouteDone(done: Record<string, unknown>): ReadonlyLiveAcceptanceDiagnosticResult {
+  return {
+    status: liveDiagnosticStatus(done.status),
+    message: safeReason(done.message) ?? 'Current VSCode read-only live diagnostic route completed.',
+    maturity: 'live-diagnostic',
+    productReady: false,
+    primitiveChainObserved: safePrimitiveChain(done.primitiveChainObserved),
+    evidenceRefs: safeRefs(done.evidenceRefs),
+    cleanupRefs: safeRefs(done.cleanupRefs),
+    ...(isRecord(done.agentHostFinalAnswer)
+      ? { agentHostFinalAnswer: done.agentHostFinalAnswer as unknown as VSCodeCoWorkLiveDiagnosticResult['agentHostFinalAnswer'] }
+      : {}),
+    ...(isRecord(done.hostProducerEvidence) ? { hostProducerEvidence: done.hostProducerEvidence } : {}),
+  };
+}
+
+function blockedRouteResult(message: string): ReadonlyLiveAcceptanceDiagnosticResult {
+  return {
+    status: 'blocked',
+    message,
+    maturity: 'live-diagnostic',
+    productReady: false,
+    primitiveChainObserved: [],
+    evidenceRefs: [],
+    cleanupRefs: [],
+  };
+}
+
+function liveDiagnosticStatus(value: unknown): ReadonlyLiveAcceptanceDiagnosticResult['status'] {
+  return value === 'completed' || value === 'needs-confirmation' || value === 'blocked'
+    ? value
+    : 'blocked';
+}
+
 function readinessSummary(env: Record<string, string | undefined>): CurrentVSCodeCoWorkReadonlyLiveAcceptanceManifest['readiness'] {
   const requiredEnv = [{
     name: VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
@@ -232,7 +350,7 @@ function readinessSummary(env: Record<string, string | undefined>): CurrentVSCod
 }
 
 function liveAcceptanceBlockers(input: {
-  result: VSCodeCoWorkLiveDiagnosticResult;
+  result: ReadonlyLiveAcceptanceDiagnosticResult;
   primitiveChainObserved: string[];
   evidenceRefs: string[];
   releaseEvidenceRefs: string[];
@@ -262,8 +380,10 @@ function liveAcceptanceBlockers(input: {
 }
 
 function hostProducerEvidenceFromResult(
-  result: VSCodeCoWorkLiveDiagnosticResult,
+  result: ReadonlyLiveAcceptanceDiagnosticResult,
 ): CurrentVSCodeCoWorkReadonlyHostProducerEvidence | undefined {
+  const routeProducerEvidence = hostProducerEvidenceFromRoutePayload(result.hostProducerEvidence);
+  if (routeProducerEvidence) return routeProducerEvidence;
   const agentHostInput = isRecord(result.agentHostInput) ? result.agentHostInput : undefined;
   const runtimeTruth = isRecord(result.runtimeTruth) ? result.runtimeTruth : undefined;
   if (!agentHostInput && !runtimeTruth) return undefined;
@@ -314,6 +434,45 @@ function hostProducerEvidenceFromResult(
     schemaVersion: 'sciforge.current-vscode-cowork-readonly-host-producer-evidence.v1',
     ...(target?.kind === 'current-vscode-cowork' ? { targetKind: 'current-vscode-cowork' as const } : {}),
     ...(vscodeCoWork?.operation === 'read-visible-text' ? { operation: 'read-visible-text' as const } : {}),
+    agentHostInputRefs,
+    targetRefs,
+    observationRefs,
+    permissionRefs,
+    runtimeTruthRefs,
+    sessionReadyRefs,
+    inputLeaseRefs,
+    adapterRefs,
+    evidenceRefs,
+  };
+}
+
+function hostProducerEvidenceFromRoutePayload(value: unknown): CurrentVSCodeCoWorkReadonlyHostProducerEvidence | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.codex-agent-host.current-vscode-cowork-live-producer-evidence.v1') return undefined;
+  const agentHostInputRefs = safeRefs(value.agentHostInputRefs);
+  const targetRefs = safeRefs(value.targetRefs);
+  const observationRefs = safeRefs(value.observationRefs);
+  const permissionRefs = safeRefs(value.permissionRefs);
+  const runtimeTruthRefs = safeRefs(value.runtimeTruthRefs);
+  const sessionReadyRefs = safeRefs(value.sessionReadyRefs);
+  const inputLeaseRefs = safeRefs(value.inputLeaseRefs);
+  const adapterRefs = safeRefs(value.adapterRefs);
+  const evidenceRefs = uniqueStrings([
+    ...safeRefs(value.evidenceRefs),
+    ...agentHostInputRefs,
+    ...targetRefs,
+    ...observationRefs,
+    ...permissionRefs,
+    ...runtimeTruthRefs,
+    ...sessionReadyRefs,
+    ...inputLeaseRefs,
+    ...adapterRefs,
+  ]);
+  if (!evidenceRefs.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.current-vscode-cowork-readonly-host-producer-evidence.v1',
+    ...(value.targetKind === 'current-vscode-cowork' ? { targetKind: 'current-vscode-cowork' as const } : {}),
+    ...(value.operation === 'read-visible-text' ? { operation: 'read-visible-text' as const } : {}),
     agentHostInputRefs,
     targetRefs,
     observationRefs,

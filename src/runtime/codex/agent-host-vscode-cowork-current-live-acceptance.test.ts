@@ -28,6 +28,7 @@ test('current VSCode co-work readonly live acceptance writes blocked manifest wi
     assert.equal(manifest.maturity, 'live-diagnostic');
     assert.equal(manifest.userProfileUsed, true);
     assert.equal(manifest.sharedSystemInputUsed, true);
+    assert.equal(manifest.ordinaryChatNativeRouteUsed, false);
     assert.equal(manifest.vscodeLaunched, false);
     assert.equal(manifest.userVSCodeKilled, false);
     assert.equal(manifest.userProfileCleared, false);
@@ -188,10 +189,11 @@ test('current VSCode co-work readonly live acceptance persists refs-first Host e
     const persistedText = await readFile(join(workspace, 'out', 'manifest.json'), 'utf8');
 
     assert.equal(runnerCalls.length, 1);
-    assert.equal(runnerCalls[0]?.commandText, 'read visible text from the current VSCode window');
+    assert.equal(runnerCalls[0]?.commandText, '操作我已经打开的 VSCode，读取当前可见文本。');
     assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
     assert.equal(manifest.status, 'passed');
     assert.equal(manifest.passClaim, true);
+    assert.equal(manifest.ordinaryChatNativeRouteUsed, true);
     assert.equal(manifest.finalAnswer.hostOwnsFinalAnswer, true);
     assert.equal(manifest.finalAnswer.computerUseCorePlanning, false);
     assert.equal(manifest.finalAnswer.userTaskCompletionClaimed, false);
