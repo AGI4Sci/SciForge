@@ -7,6 +7,7 @@ import {
   createComputerUsePrimitiveService,
 } from './index.js';
 import {
+  currentVSCodeCoWorkWindowObservationFromSnapshot,
   createCurrentVSCodeCoWorkLivePrimitivePorts,
   runCurrentVSCodeCoWorkLiveDiagnosticPreflight,
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
@@ -33,6 +34,24 @@ test('current VSCode co-work live diagnostic is env-gated and never product-read
 
   assert.equal(VSCODE_COWORK_LIVE_DIAGNOSTIC_CAPABILITY.requiresExplicitEnv, `${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}=1`);
   assert.equal(VSCODE_COWORK_LIVE_DIAGNOSTIC_CAPABILITY.productReady, false);
+});
+
+test('current VSCode co-work window snapshot exposes opaque visible file refs without raw title leakage', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'PROJECT_CU.md - SciForge - Visual Studio Code',
+    collectedText: 'PROJECT_CU.md\n编辑器可见文本',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  assert.equal(observation.appRef, 'macos-app:com.microsoft.VSCode');
+  assert.equal(observation.processRef, 'process:vscode:9182');
+  assert.match(observation.windowRef, /^window:vscode:[a-f0-9]{16}$/);
+  assert.match(observation.titleRef, /^text:title:[a-f0-9]{16}$/);
+  assert.deepEqual(observation.fileRefs, [`file-ref:vscode:current:${observation.windowRef.split(':').at(-1)}`]);
+  assert.match(observation.visibleTextRef, /^text:vscode:visible:[a-f0-9]{16}$/);
+  assert.match(observation.observationRef, /^observation:vscode:current:[a-f0-9]{16}:1780905600000$/);
+  assert.doesNotMatch(JSON.stringify(observation), /PROJECT_CU|SciForge|编辑器可见文本|Visual Studio Code/);
 });
 
 test('current VSCode co-work primitive ports bind current window, observe refs, and release restoration refs', async () => {

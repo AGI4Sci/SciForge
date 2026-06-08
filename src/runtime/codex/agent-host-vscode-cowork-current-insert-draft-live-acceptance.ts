@@ -87,6 +87,7 @@ export interface RunCurrentVSCodeCoWorkInsertDraftLiveAcceptanceOptions {
   commandText?: string;
   activateCurrentVSCodeIfNeeded?: boolean;
   draftTextRef?: string;
+  resolveDraftTextRef?: (textRef: string) => Promise<string | undefined> | string | undefined;
   now?: () => Date;
   runInsertDraftLiveDiagnostic?: (
     input: Parameters<typeof runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic>[0],
@@ -105,6 +106,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveAcceptance(
   const preflightBlockedReasons = [
     ...readiness.missing,
     draftTextRef ? undefined : 'missing-draft-text-ref',
+    options.resolveDraftTextRef ? undefined : 'missing-private-draft-text-resolver',
   ].filter((item): item is string => Boolean(item));
   if (preflightBlockedReasons.length) {
     return writeManifest(outputDir, baseManifest({
@@ -133,6 +135,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveAcceptance(
     attemptId: 'current-vscode-cowork-insert-draft-live-attempt-1',
     activateCurrentVSCodeIfNeeded: options.activateCurrentVSCodeIfNeeded === true,
     draftTextRef: requiredDraftTextRef,
+    resolveTextRef: options.resolveDraftTextRef,
   });
 
   const evidenceRefs = safeRefs([

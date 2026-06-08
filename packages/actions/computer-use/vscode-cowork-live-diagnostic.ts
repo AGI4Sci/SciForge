@@ -48,6 +48,13 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   observationRef: string;
 }
 
+export interface CurrentVSCodeCoWorkWindowSnapshot {
+  pid: string;
+  windowTitle: string;
+  collectedText: string;
+  observedAtMs?: number;
+}
+
 export interface CurrentVSCodeCoWorkRestorationState {
   frontApplicationName?: string;
   mousePosition?: {
@@ -506,22 +513,33 @@ on run argv
 end run
 `, input.activateIfNotFrontmost ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
   const [pid = 'unknown', title = 'untitled', ...textParts] = stdout.trim().replace(/\r/g, '\n').split('\n');
-  const titleToken = tokenHash(title);
-  const textToken = tokenHash(textParts.join('\n'));
+  return currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid,
+    windowTitle: title,
+    collectedText: textParts.join('\n'),
+  });
+}
+
+export function currentVSCodeCoWorkWindowObservationFromSnapshot(
+  input: CurrentVSCodeCoWorkWindowSnapshot,
+): CurrentVSCodeCoWorkWindowObservation {
+  const observedAtMs = input.observedAtMs ?? Date.now();
+  const titleToken = tokenHash(input.windowTitle);
+  const textToken = tokenHash(input.collectedText);
   return {
     appRef: 'macos-app:com.microsoft.VSCode',
-    processRef: `process:vscode:${safeRunId(pid)}`,
+    processRef: `process:vscode:${safeRunId(input.pid)}`,
     windowRef: `window:vscode:${titleToken}`,
     titleRef: `text:title:${titleToken}`,
     frontmostRef: `frontmost:vscode:${titleToken}`,
-    fileRefs: [],
+    fileRefs: [`file-ref:vscode:current:${titleToken}`],
     editorElementRef: `element:vscode:editor:${titleToken}`,
     visibleTextRef: `text:vscode:visible:${textToken}`,
     visibleTextSha256Ref: `text:vscode:visible-sha256:${textToken}`,
     screenshotRef: `image:vscode:current:${titleToken}`,
     accessibilityRef: `accessibility:vscode:current:${titleToken}`,
-    freshnessRef: `freshness:vscode:current:${Date.now()}`,
-    observationRef: `observation:vscode:current:${titleToken}:${Date.now()}`,
+    freshnessRef: `freshness:vscode:current:${observedAtMs}`,
+    observationRef: `observation:vscode:current:${titleToken}:${observedAtMs}`,
   };
 }
 

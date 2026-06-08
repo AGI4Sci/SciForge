@@ -5,6 +5,8 @@ import {
   runCurrentVSCodeCoWorkInsertDraftLiveAcceptance,
 } from '../src/runtime/codex/agent-host-vscode-cowork-current-insert-draft-live-acceptance.js';
 
+export const CURRENT_VSCODE_COWORK_DRAFT_TEXT_ENV = 'SCIFORGE_CURRENT_VSCODE_COWORK_DRAFT_TEXT' as const;
+
 interface CliArgs {
   workspacePath?: string;
   outputDir?: string;
@@ -32,6 +34,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveAcceptanceCli(
     commandText: args.commandText,
     draftTextRef: args.draftTextRef,
     activateCurrentVSCodeIfNeeded: args.activateCurrentVSCodeIfNeeded,
+    resolveDraftTextRef: createDraftTextRefResolverFromEnv(process.env, args.draftTextRef),
     env: process.env,
   });
   const manifestPath = join(outputDir, 'manifest.json');
@@ -95,13 +98,23 @@ function requiredValue(argv: string[], index: number, arg: string): string {
   return value;
 }
 
+export function createDraftTextRefResolverFromEnv(
+  env: Record<string, string | undefined>,
+  draftTextRef: string | undefined,
+): ((textRef: string) => string | undefined) | undefined {
+  if (!draftTextRef?.startsWith('text-ref:')) return undefined;
+  const draftText = env[CURRENT_VSCODE_COWORK_DRAFT_TEXT_ENV];
+  if (typeof draftText !== 'string' || draftText.length === 0) return undefined;
+  return (textRef: string) => textRef === draftTextRef ? draftText : undefined;
+}
+
 function usage(): string {
   return [
     'Usage: tsx tools/current-vscode-cowork-insert-draft-live-acceptance.ts [--workspace PATH] [--out DIR] [--command-text TEXT] --draft-text-ref REF [--activate-vscode] [--json]',
     '',
     'Writes docs/test-artifacts/current-vscode-cowork-insert-draft-live/manifest.json by default.',
     'Without SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC=1 it writes a blocked manifest and does not touch the desktop.',
-    '--draft-text-ref must be a refs-first text-ref; raw draft text must stay behind a Host resolver and is never printed.',
+    `--draft-text-ref must be a refs-first text-ref; raw draft text must stay behind a Host resolver such as ${CURRENT_VSCODE_COWORK_DRAFT_TEXT_ENV} and is never printed.`,
     '--activate-vscode may only be used for live diagnostic runs; it mechanically activates a unique VSCode window and the runner restores focus/mouse on release.',
   ].join('\n');
 }

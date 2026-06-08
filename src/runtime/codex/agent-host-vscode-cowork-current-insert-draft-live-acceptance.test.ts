@@ -43,6 +43,75 @@ test('current VSCode co-work insert-draft live acceptance writes blocked manifes
   }
 });
 
+test('current VSCode co-work insert-draft live acceptance passes private draft resolver without leaking raw text', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-insert-draft-live-resolver-'));
+  try {
+    const privateDraft = 'private draft body that must stay out of public artifacts';
+    let resolvedDraft: string | undefined;
+    const manifest = await runCurrentVSCodeCoWorkInsertDraftLiveAcceptance({
+      workspacePath: workspace,
+      outputDir: join(workspace, 'out'),
+      env: {
+        [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+      },
+      draftTextRef: 'text-ref:current-vscode-cowork:draft:p9c',
+      now: () => new Date('2026-06-08T00:00:00.000Z'),
+      resolveDraftTextRef: (textRef) => textRef === 'text-ref:current-vscode-cowork:draft:p9c'
+        ? privateDraft
+        : undefined,
+      runInsertDraftLiveDiagnostic: async (input) => {
+        resolvedDraft = await input.resolveTextRef?.('text-ref:current-vscode-cowork:draft:p9c');
+        return {
+          status: 'blocked',
+          message: 'synthetic resolver assertion run',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          primitiveChainObserved: [],
+          evidenceRefs: ['text-ref:current-vscode-cowork:draft:p9c'],
+          cleanupRefs: [],
+        };
+      },
+    });
+    const persistedText = await readFile(join(workspace, 'out', 'manifest.json'), 'utf8');
+
+    assert.equal(resolvedDraft, privateDraft);
+    assert.equal(manifest.status, 'blocked');
+    assert.equal(manifest.draftTextRef, 'text-ref:current-vscode-cowork:draft:p9c');
+    assert.doesNotMatch(persistedText, /private draft body|raw-|providerPayload|base64|secret|token/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('current VSCode co-work insert-draft live acceptance blocks before desktop without private draft resolver', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-insert-draft-live-no-resolver-'));
+  try {
+    let runnerCalled = false;
+    const manifest = await runCurrentVSCodeCoWorkInsertDraftLiveAcceptance({
+      workspacePath: workspace,
+      outputDir: join(workspace, 'out'),
+      env: {
+        [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+      },
+      draftTextRef: 'text-ref:current-vscode-cowork:draft:p9c',
+      now: () => new Date('2026-06-08T00:00:00.000Z'),
+      runInsertDraftLiveDiagnostic: async () => {
+        runnerCalled = true;
+        throw new Error('runner should not touch desktop without private resolver');
+      },
+    });
+
+    assert.equal(runnerCalled, false);
+    assert.equal(manifest.status, 'blocked');
+    assert.ok(manifest.blockedReasons.includes('missing-private-draft-text-resolver'));
+    assert.equal(manifest.cleanup.inputLeaseReleased, false);
+    assert.equal(manifest.cleanup.adapterReleased, false);
+    assert.equal(manifest.cleanup.cursorReleased, false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('current VSCode co-work insert-draft live acceptance persists action and cleanup refs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-insert-draft-live-'));
   try {
@@ -54,6 +123,9 @@ test('current VSCode co-work insert-draft live acceptance persists action and cl
         [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
       },
       draftTextRef: 'text-ref:current-vscode-cowork:draft:p9c',
+      resolveDraftTextRef: (textRef) => textRef === 'text-ref:current-vscode-cowork:draft:p9c'
+        ? 'private draft body for injected runner'
+        : undefined,
       activateCurrentVSCodeIfNeeded: true,
       now: () => new Date('2026-06-08T00:00:00.000Z'),
       runInsertDraftLiveDiagnostic: async (input) => {

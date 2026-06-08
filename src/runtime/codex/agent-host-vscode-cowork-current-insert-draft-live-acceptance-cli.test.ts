@@ -10,6 +10,7 @@ import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
+  createDraftTextRefResolverFromEnv,
   parseArgs,
 } from '../../../tools/current-vscode-cowork-insert-draft-live-acceptance.js';
 
@@ -20,6 +21,15 @@ test('current VSCode co-work insert-draft live acceptance CLI keeps draft ref an
   assert.equal(parseArgs([]).activateCurrentVSCodeIfNeeded, false);
   assert.equal(parseArgs(['--draft-text-ref', 'text-ref:current-vscode-cowork:draft:p9c']).draftTextRef, 'text-ref:current-vscode-cowork:draft:p9c');
   assert.equal(parseArgs(['--activate-vscode']).activateCurrentVSCodeIfNeeded, true);
+});
+
+test('current VSCode co-work insert-draft live acceptance CLI resolves draft text privately from env', async () => {
+  const resolver = createDraftTextRefResolverFromEnv({
+    SCIFORGE_CURRENT_VSCODE_COWORK_DRAFT_TEXT: 'private draft body from env',
+  }, 'text-ref:current-vscode-cowork:draft:p9c');
+
+  assert.equal(await resolver?.('text-ref:current-vscode-cowork:draft:p9c'), 'private draft body from env');
+  assert.equal(await resolver?.('text-ref:current-vscode-cowork:draft:other'), undefined);
 });
 
 test('current VSCode co-work insert-draft live acceptance CLI writes blocked manifest by default', async () => {
