@@ -281,6 +281,7 @@ function liveAcceptanceBlockers(input: {
     input.evidenceRefs.some((ref) => ref.startsWith('image:')) ? undefined : 'missing-image-ref',
     input.evidenceRefs.some((ref) => ref.startsWith('accessibility:')) ? undefined : 'missing-accessibility-ref',
     input.evidenceRefs.some((ref) => ref.startsWith('element:')) ? undefined : 'missing-editor-element-ref',
+    input.evidenceRefs.some((ref) => ref.startsWith('focused-editor:')) ? undefined : 'missing-focused-editor-ref',
     input.evidenceRefs.some((ref) => ref.startsWith('freshness:')) ? undefined : 'missing-freshness-ref',
     input.actionEvidenceRefs.some((ref) => ref.startsWith('action:')) ? undefined : 'missing-action-ref',
     input.actionEvidenceRefs.some((ref) => ref.startsWith('executor-event:')) ? undefined : 'missing-executor-event-ref',
@@ -385,7 +386,7 @@ function safeRef(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 260) return false;
   if (/https?:\/\/|data:|base64|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)|raw-/i.test(text)) return false;
-  return /^(?:intent:|chat-request:|decision:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|actor-cursor:|cursor-marker:|scoped-input-adapter:|input-adapter:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:)[^\s/\\]*$/i.test(text);
+  return /^(?:intent:|chat-request:|decision:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|actor-cursor:|cursor-marker:|scoped-input-adapter:|input-adapter:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:)[^\s/\\]*$/i.test(text);
 }
 
 function safePrimitiveChain(value: unknown): string[] {

@@ -139,6 +139,7 @@ test('current VSCode co-work insert-draft diagnostic resolves textRef, types, ob
       frontmostRef: 'frontmost:vscode:insert-wrapper',
       fileRefs: ['file-ref:vscode:insert-wrapper'],
       editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:insert-wrapper',
       visibleTextRef: 'text:vscode:insert-wrapper-bind',
       visibleTextSha256Ref: 'text:vscode:insert-wrapper-bind-sha256',
       screenshotRef: 'image:vscode:insert-wrapper-bind',
@@ -154,6 +155,7 @@ test('current VSCode co-work insert-draft diagnostic resolves textRef, types, ob
       frontmostRef: 'frontmost:vscode:insert-wrapper',
       fileRefs: ['file-ref:vscode:insert-wrapper'],
       editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:insert-wrapper',
       visibleTextRef: 'text:vscode:insert-wrapper-before',
       visibleTextSha256Ref: 'text:vscode:insert-wrapper-before-sha256',
       screenshotRef: 'image:vscode:insert-wrapper-before',
@@ -169,6 +171,7 @@ test('current VSCode co-work insert-draft diagnostic resolves textRef, types, ob
       frontmostRef: 'frontmost:vscode:insert-wrapper',
       fileRefs: ['file-ref:vscode:insert-wrapper'],
       editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:insert-wrapper',
       visibleTextRef: 'text:vscode:insert-wrapper-act-after',
       visibleTextSha256Ref: 'text:vscode:insert-wrapper-act-after-sha256',
       screenshotRef: 'image:vscode:insert-wrapper-act-after',
@@ -184,6 +187,7 @@ test('current VSCode co-work insert-draft diagnostic resolves textRef, types, ob
       frontmostRef: 'frontmost:vscode:insert-wrapper',
       fileRefs: ['file-ref:vscode:insert-wrapper'],
       editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:insert-wrapper',
       visibleTextRef: 'text:vscode:insert-wrapper-after',
       visibleTextSha256Ref: 'text:vscode:insert-wrapper-after-sha256',
       screenshotRef: 'image:vscode:insert-wrapper-after',
@@ -247,6 +251,7 @@ test('current VSCode co-work insert-draft diagnostic resolves textRef, types, ob
   assert.ok(result.evidenceRefs.includes('executor-event:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
   assert.ok(result.evidenceRefs.includes('input-event:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
   assert.ok(result.evidenceRefs.includes('stale-invalidation:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:insert-wrapper'));
   assert.ok(result.evidenceRefs.includes('observation:vscode:insert-wrapper-after'));
   assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-insert-wrapper'));
   assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-insert-wrapper'));

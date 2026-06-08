@@ -41,6 +41,8 @@ test('current VSCode co-work window snapshot exposes opaque visible file refs wi
     pid: '9182',
     windowTitle: 'PROJECT_CU.md - SciForge - Visual Studio Code',
     collectedText: 'PROJECT_CU.md\n编辑器可见文本',
+    focusedRole: 'AXTextArea',
+    focusedName: 'PROJECT_CU.md',
     observedAtMs: 1_780_905_600_000,
   });
 
@@ -49,9 +51,25 @@ test('current VSCode co-work window snapshot exposes opaque visible file refs wi
   assert.match(observation.windowRef, /^window:vscode:[a-f0-9]{16}$/);
   assert.match(observation.titleRef, /^text:title:[a-f0-9]{16}$/);
   assert.deepEqual(observation.fileRefs, [`file-ref:vscode:current:${observation.windowRef.split(':').at(-1)}`]);
+  assert.equal(observation.focusedEditorRef, `focused-editor:vscode:current:${observation.windowRef.split(':').at(-1)}`);
   assert.match(observation.visibleTextRef, /^text:vscode:visible:[a-f0-9]{16}$/);
   assert.match(observation.observationRef, /^observation:vscode:current:[a-f0-9]{16}:1780905600000$/);
   assert.doesNotMatch(JSON.stringify(observation), /PROJECT_CU|SciForge|编辑器可见文本|Visual Studio Code/);
+});
+
+test('current VSCode co-work window snapshot omits focused editor refs for non-editor focus', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'Explorer\nmain.tex',
+    focusedRole: 'AXButton',
+    focusedName: 'Explorer',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  assert.equal(observation.focusedEditorRef, undefined);
+  assert.ok(observation.editorElementRef.startsWith('element:vscode:editor:'));
+  assert.doesNotMatch(JSON.stringify(observation), /main\.tex|Explorer|SCALE|Visual Studio Code/);
 });
 
 test('current VSCode co-work primitive ports bind current window, observe refs, and release restoration refs', async () => {
@@ -289,6 +307,7 @@ test('current VSCode co-work primitive ports resolve text refs for the default t
       frontmostRef: 'frontmost:vscode:default-type',
       fileRefs: ['file-ref:vscode:default-type'],
       editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:default-type',
       visibleTextRef: 'text:vscode:default-type-before',
       visibleTextSha256Ref: 'text:vscode:default-type-before-sha256',
       screenshotRef: 'image:vscode:default-type-before',
@@ -304,6 +323,7 @@ test('current VSCode co-work primitive ports resolve text refs for the default t
       frontmostRef: 'frontmost:vscode:default-type',
       fileRefs: ['file-ref:vscode:default-type'],
       editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:default-type',
       visibleTextRef: 'text:vscode:default-type-after',
       visibleTextSha256Ref: 'text:vscode:default-type-after-sha256',
       screenshotRef: 'image:vscode:default-type-after',
@@ -406,6 +426,7 @@ test('current VSCode co-work primitive ports block the default type executor whe
     frontmostRef: 'frontmost:vscode:unresolved-type',
     fileRefs: ['file-ref:vscode:unresolved-type'],
     editorElementRef: 'element:vscode:editor',
+    focusedEditorRef: 'focused-editor:vscode:unresolved-type',
     visibleTextRef: 'text:vscode:unresolved-type-before',
     visibleTextSha256Ref: 'text:vscode:unresolved-type-before-sha256',
     screenshotRef: 'image:vscode:unresolved-type-before',
@@ -478,6 +499,99 @@ test('current VSCode co-work primitive ports block the default type executor whe
     'read-current-window',
     'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-unresolved-type',
     'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-unresolved-type',
+  ]);
+  assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work primitive ports block default type before resolving text when editor focus is unproven', async () => {
+  const calls: string[] = [];
+  const observation = {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:unfocused-type',
+    windowRef: 'window:vscode:unfocused-type',
+    titleRef: 'text:title:unfocused-type',
+    frontmostRef: 'frontmost:vscode:unfocused-type',
+    fileRefs: ['file-ref:vscode:unfocused-type'],
+    editorElementRef: 'element:vscode:editor',
+    visibleTextRef: 'text:vscode:unfocused-type-before',
+    visibleTextSha256Ref: 'text:vscode:unfocused-type-before-sha256',
+    screenshotRef: 'image:vscode:unfocused-type-before',
+    accessibilityRef: 'accessibility:vscode:unfocused-type-before',
+    freshnessRef: 'freshness:vscode:unfocused-type-before',
+    observationRef: 'observation:vscode:unfocused-type-before',
+  };
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-unfocused-type',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observation;
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return 'draft body that should not be resolved';
+      },
+      typeResolvedText: async () => {
+        calls.push('type-resolved-text');
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'insert-draft',
+      action: {
+        type: 'type',
+        textRef: 'text-ref:current-vscode-cowork:draft',
+        elementRef: 'element:vscode:editor',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, false);
+  assert.equal(act.value?.blockedReason, 'current-vscode-act-focused-editor-ref-required');
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-unfocused-type',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-unfocused-type',
   ]);
   assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });

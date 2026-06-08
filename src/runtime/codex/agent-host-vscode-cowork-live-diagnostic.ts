@@ -594,7 +594,7 @@ function observationRefsFromLive(
     ...(observe.output?.textRefs ?? []),
     ...(observe.output?.elementRefs ?? []),
     ...(observe.refs ?? []).filter((ref) =>
-      /^(?:computer-use-session:|window-action-session:|window:|observation:|image:|accessibility:|text:|element:|freshness:|file-ref:)/i.test(ref)
+      /^(?:computer-use-session:|window-action-session:|window:|observation:|image:|accessibility:|text:|element:|focused-editor:|freshness:|file-ref:)/i.test(ref)
     ),
   ]);
 }
@@ -735,7 +735,7 @@ function safeLiveRef(value: string): boolean {
   if (!text || text.length > 260) return false;
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(text)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)|raw-/i.test(text)) return false;
-  return /^(?:runtime-truth:|intent:|chat-request:|decision:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-adapter:|focus-lease:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:|cancel:|stop:)/i.test(text);
+  return /^(?:runtime-truth:|intent:|chat-request:|decision:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-adapter:|focus-lease:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:|cancel:|stop:)/i.test(text);
 }
 
 function firstRefWithPrefix(refs: string[], prefixes: string[]): string | undefined {

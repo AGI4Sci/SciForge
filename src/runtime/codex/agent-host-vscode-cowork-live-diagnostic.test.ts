@@ -108,6 +108,7 @@ test('VSCode co-work Host live producer builds insert-draft Host input without l
   assert.equal(produced.status, 'ready', produced.blockedReason);
   assert.equal(produced.operation, 'insert-draft');
   assert.ok(produced.agentHostInput?.refs.includes('text-ref:current-vscode-cowork:draft'));
+  assert.ok(produced.agentHostInput?.refs.includes('focused-editor:vscode:paper'));
   assert.equal(
     (produced.agentHostInput?.target.vscodeCoWork as Record<string, unknown> | undefined)?.draftTextRef,
     'text-ref:current-vscode-cowork:draft',
@@ -127,6 +128,7 @@ test('VSCode co-work Host live producer builds insert-draft Host input without l
   assert.equal(materializerResult?.status, 'completed', materializerResult?.message);
   assert.equal(materializerResult?.claimType, 'computer-use-vscode-cowork-act-decision');
   assert.equal(materializerResult?.executionUnits?.[0]?.primitive, 'act');
+  assert.ok(materializerResult?.evidenceRefs.includes('focused-editor:vscode:paper'));
   assert.deepEqual(materializerResult?.executionUnits?.[0]?.action, {
     type: 'type',
     elementRef: 'element:vscode:editor',
@@ -279,6 +281,7 @@ test('VSCode co-work live diagnostic lets Host choose insert-draft act then obse
   assert.ok(result.evidenceRefs.includes('executor-event:vscode-cowork:insert-draft'));
   assert.ok(result.evidenceRefs.includes('input-event:vscode-cowork:insert-draft'));
   assert.ok(result.evidenceRefs.includes('stale-invalidation:vscode-cowork:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:paper'));
   assert.ok(result.evidenceRefs.includes('observation:vscode:current-2'));
   assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
   assert.ok(result.cleanupRefs.includes('scoped-input-adapter:vscode:live'));
@@ -465,6 +468,7 @@ function vscodeRefs(name: string, options: {
     'accessibility:vscode:current',
     'text:vscode:visible',
     'element:vscode:editor',
+    `focused-editor:vscode:${name}`,
     'freshness:vscode:current',
   ];
 }

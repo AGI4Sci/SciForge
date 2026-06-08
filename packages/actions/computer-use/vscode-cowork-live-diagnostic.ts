@@ -40,6 +40,7 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   frontmostRef: string;
   fileRefs: string[];
   editorElementRef: string;
+  focusedEditorRef?: string;
   visibleTextRef: string;
   visibleTextSha256Ref?: string;
   screenshotRef?: string;
@@ -52,6 +53,9 @@ export interface CurrentVSCodeCoWorkWindowSnapshot {
   pid: string;
   windowTitle: string;
   collectedText: string;
+  focusedRole?: string;
+  focusedName?: string;
+  focusedValue?: string;
   observedAtMs?: number;
 }
 
@@ -77,6 +81,7 @@ export interface CurrentVSCodeCoWorkLiveActionExecution {
   cursorRef?: string;
   scopedInputLeaseRef?: string;
   beforeObservationRef: string;
+  focusedEditorRef?: string;
 }
 
 export interface CurrentVSCodeCoWorkLiveResolvedTextExecution
@@ -168,6 +173,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
     ?? (shouldUseDesktopRestoration ? restoreCurrentRestorationState : undefined);
   let restorationState: CurrentVSCodeCoWorkRestorationState = {};
   let lastObservationRef: string | undefined;
+  let lastFocusedEditorRef: string | undefined;
 
   return {
     bind: async () => {
@@ -196,6 +202,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
         };
       }
       lastObservationRef = observed.observationRef;
+      lastFocusedEditorRef = observed.focusedEditorRef;
       return {
         status: 'completed',
         output: {
@@ -223,6 +230,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
     observe: async (input: ComputerUseObserveInput) => {
       const observed = await readCurrentWindow();
       lastObservationRef = observed.observationRef;
+      lastFocusedEditorRef = observed.focusedEditorRef;
       return {
         status: 'completed',
         output: {
@@ -252,14 +260,14 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
         return {
           status: 'blocked',
           blockedReason: 'current-vscode-act-before-observation-missing',
-          refs: [
+          refs: uniqueRefs([
             actionRef,
             executorEventRef,
             inputEventRef,
             scopedInputLeaseRef,
             inputAdapterRef,
             cursorRef,
-          ],
+          ]),
         };
       }
       const actionExecution = {
@@ -271,6 +279,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
         cursorRef: input.cursorRef,
         scopedInputLeaseRef: input.scopedInputLeaseRef,
         beforeObservationRef,
+        focusedEditorRef: lastFocusedEditorRef,
       };
       try {
         if (options.performAction) {
@@ -282,15 +291,16 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
         return {
           status: 'blocked',
           blockedReason: safeBlockedReason(error),
-          refs: [
+          refs: uniqueRefs([
             actionRef,
             executorEventRef,
             inputEventRef,
             beforeObservationRef,
+            lastFocusedEditorRef,
             scopedInputLeaseRef,
             inputAdapterRef,
             cursorRef,
-          ],
+          ]),
         };
       }
       const afterObserved = await readCurrentWindow();
@@ -318,6 +328,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           input.action.key ? `key:current-vscode-cowork:${runId}:${safeRunId(input.action.key)}` : undefined,
           input.action.command ? `app-command:current-vscode-cowork:${runId}:${safeRunId(input.action.command)}` : undefined,
           beforeObservationRef,
+          lastFocusedEditorRef,
           afterObserved.observationRef,
           invalidatedRef,
           scopedInputLeaseRef,
@@ -425,6 +436,7 @@ async function performDefaultCurrentVSCodeAction(
   options: Pick<CurrentVSCodeCoWorkLivePrimitivePortsOptions, 'resolveTextRef' | 'typeResolvedText'>,
 ): Promise<void> {
   if (input.action.type !== 'type') throw new Error('current-vscode-act-unsupported-action');
+  if (!input.focusedEditorRef?.startsWith('focused-editor:')) throw new Error('current-vscode-act-focused-editor-ref-required');
   const textRef = input.action.textRef;
   if (!textRef?.startsWith('text-ref:')) throw new Error('current-vscode-act-text-ref-required');
   const text = await options.resolveTextRef?.(textRef);
@@ -497,8 +509,14 @@ on run argv
     set targetWindow to front window of targetProcess
     set windowTitle to name of targetWindow as text
     set collectedText to windowTitle
+    set focusedRole to ""
+    set focusedName to ""
+    set focusedValue to ""
     try
       set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
+      try
+        set focusedRole to role of focusedElement as text
+      end try
       try
         set focusedName to name of focusedElement as text
         if focusedName is not "" then set collectedText to collectedText & linefeed & focusedName
@@ -508,14 +526,16 @@ on run argv
         if focusedValue is not "" then set collectedText to collectedText & linefeed & focusedValue
       end try
     end try
-    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & collectedText
+    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & focusedRole & linefeed & focusedName & linefeed & collectedText
   end tell
 end run
 `, input.activateIfNotFrontmost ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
-  const [pid = 'unknown', title = 'untitled', ...textParts] = stdout.trim().replace(/\r/g, '\n').split('\n');
+  const [pid = 'unknown', title = 'untitled', focusedRole = '', focusedName = '', ...textParts] = stdout.trim().replace(/\r/g, '\n').split('\n');
   return currentVSCodeCoWorkWindowObservationFromSnapshot({
     pid,
     windowTitle: title,
+    focusedRole,
+    focusedName,
     collectedText: textParts.join('\n'),
   });
 }
@@ -526,6 +546,7 @@ export function currentVSCodeCoWorkWindowObservationFromSnapshot(
   const observedAtMs = input.observedAtMs ?? Date.now();
   const titleToken = tokenHash(input.windowTitle);
   const textToken = tokenHash(input.collectedText);
+  const focusedEditorRef = focusedEditorRefFromSnapshot(input, titleToken);
   return {
     appRef: 'macos-app:com.microsoft.VSCode',
     processRef: `process:vscode:${safeRunId(input.pid)}`,
@@ -534,6 +555,7 @@ export function currentVSCodeCoWorkWindowObservationFromSnapshot(
     frontmostRef: `frontmost:vscode:${titleToken}`,
     fileRefs: [`file-ref:vscode:current:${titleToken}`],
     editorElementRef: `element:vscode:editor:${titleToken}`,
+    ...(focusedEditorRef ? { focusedEditorRef } : {}),
     visibleTextRef: `text:vscode:visible:${textToken}`,
     visibleTextSha256Ref: `text:vscode:visible-sha256:${textToken}`,
     screenshotRef: `image:vscode:current:${titleToken}`,
@@ -621,6 +643,7 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     observed.frontmostRef,
     ...observed.fileRefs,
     observed.editorElementRef,
+    observed.focusedEditorRef,
     observed.visibleTextRef,
     observed.visibleTextSha256Ref,
     observed.screenshotRef,
@@ -628,6 +651,14 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     observed.freshnessRef,
     observed.observationRef,
   ]);
+}
+
+function focusedEditorRefFromSnapshot(
+  input: CurrentVSCodeCoWorkWindowSnapshot,
+  titleToken: string,
+): string | undefined {
+  if (!/AXTextArea/i.test(input.focusedRole ?? '')) return undefined;
+  return `focused-editor:vscode:current:${titleToken}`;
 }
 
 function uniqueRefs(refs: Array<string | undefined>): string[] {

@@ -241,6 +241,7 @@ function latestObservationFromRefs(
     accessibilityRef: firstRefWithPrefix(refs, ['accessibility:']),
     textRefs: refsWithPrefix(refs, ['text:']),
     elementRefs,
+    focusedEditorRef: firstRefWithPrefix(refs, ['focused-editor:']),
     freshnessRef: firstRefWithPrefix(refs, ['freshness:']),
     stale: agentObservation.fresh === false || runtimeObservation?.fresh === false ? true : undefined,
     editorVisible: elementRefs.some((ref) => /editor/i.test(ref)) ? true : undefined,
@@ -349,7 +350,7 @@ function safeVSCodeCoWorkRef(value: string): boolean {
   if (!text || text.length > 240) return false;
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(text)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(text)) return false;
-  return /^(?:runtime-truth:|intent:|chat-request:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|focus-lease:|stale-invalidation:|cancel:|stop:)/i.test(text);
+  return /^(?:runtime-truth:|intent:|chat-request:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|focus-lease:|stale-invalidation:|cancel:|stop:)/i.test(text);
 }
 
 function refsWithPrefix(refs: string[], prefixes: string[]): string[] {

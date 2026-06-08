@@ -78,6 +78,7 @@ export interface VSCodeCoWorkObservationRefs {
   accessibilityRef: string;
   textRefs: string[];
   elementRefs: string[];
+  focusedEditorRef?: string;
   freshnessRef: string;
   stale?: boolean;
   editorVisible?: boolean;
@@ -904,6 +905,10 @@ function editorElementEvidenceRef(value: unknown): value is string {
   return elementRef(value) && /editor/i.test(value);
 }
 
+function focusedEditorRef(value: unknown): value is string {
+  return structuredRef(value, ['focused-editor:']);
+}
+
 function userRealFileChangeOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
@@ -1198,6 +1203,7 @@ function refsForTargetAndObservation(
     observationRef(observation.observationRef) ? observation.observationRef : undefined,
     imageRef(observation.screenshotRef) ? observation.screenshotRef : undefined,
     accessibilityRef(observation.accessibilityRef) ? observation.accessibilityRef : undefined,
+    focusedEditorRef(observation.focusedEditorRef) ? observation.focusedEditorRef : undefined,
     freshnessRef(observation.freshnessRef) ? observation.freshnessRef : undefined,
     ...(observation.textRefs ?? []).filter(textRef),
     ...(observation.elementRefs ?? []).filter(elementRef),

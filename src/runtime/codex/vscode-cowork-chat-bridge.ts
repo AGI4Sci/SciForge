@@ -196,6 +196,7 @@ function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | unde
     accessibilityRef: safeRuntimeRef(value.accessibilityRef, ['accessibility:']) ?? '',
     textRefs: textRefs.refs ?? [],
     elementRefs: elementRefs.refs ?? [],
+    focusedEditorRef: safeRuntimeRef(value.focusedEditorRef, ['focused-editor:']),
     freshnessRef: safeRuntimeRef(value.freshnessRef, ['freshness:']) ?? '',
     stale: booleanField(value.stale),
     editorVisible: booleanField(value.editorVisible),
