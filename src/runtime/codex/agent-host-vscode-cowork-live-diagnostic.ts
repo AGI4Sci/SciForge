@@ -26,7 +26,7 @@ import type {
 
 type VSCodeCoWorkLiveDiagnosticStatus = 'completed' | 'blocked' | 'needs-confirmation';
 type VSCodeCoWorkLiveProducerStatus = 'ready' | 'blocked';
-type VSCodeCoWorkLiveProducerOperation = 'read-visible-text' | 'insert-draft';
+type VSCodeCoWorkLiveProducerOperation = 'read-visible-text' | 'focus-editor' | 'insert-draft';
 type VSCodeCoWorkLiveDiagnosticContext = Omit<VSCodeCoWorkLiveDiagnosticInput, 'service'>;
 
 export interface VSCodeCoWorkLiveDiagnosticInput {
@@ -241,6 +241,157 @@ export async function runVSCodeCoWorkReadVisibleTextLiveDiagnostic(
   return finish('completed', 'VSCode co-work live diagnostic completed a refs-only read-visible-text primitive and released input resources.');
 }
 
+export async function runVSCodeCoWorkFocusEditorLiveDiagnostic(
+  input: VSCodeCoWorkLiveDiagnosticInput,
+): Promise<VSCodeCoWorkLiveDiagnosticResult> {
+  const aggregate = liveAggregate();
+  let sessionId: string | undefined;
+  let bindOutput: ComputerUseBindOutput | undefined;
+  let agentHostInput: NormalizedCodexAgentHostInput | undefined;
+  let runtimeTruth: CodexAgentHostRuntimeTruth | undefined;
+  let materializerResult: CodexAgentHostComputerUseActMaterializerResult | undefined;
+
+  const finish = async (
+    status: VSCodeCoWorkLiveDiagnosticStatus,
+    message: string,
+  ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
+    if (sessionId) await releaseSession(input.service, sessionId, aggregate);
+    const evidenceRefs = runtimeOwnedLiveRefs(aggregate.evidenceRefs);
+    const cleanupRefs = runtimeOwnedLiveRefs(aggregate.cleanupRefs);
+    const primitiveChainObserved = [...aggregate.primitiveChainObserved];
+    const agentHostFinalAnswer = buildAgentHostFinalAnswer({
+      status,
+      message,
+      primitiveChainObserved,
+      evidenceRefs,
+      cleanupRefs,
+      materializerResult,
+    });
+    return {
+      status,
+      message,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved,
+      evidenceRefs,
+      cleanupRefs,
+      ...(agentHostInput ? { agentHostInput } : {}),
+      ...(runtimeTruth ? { runtimeTruth } : {}),
+      ...(materializerResult ? { materializerResult } : {}),
+      agentHostFinalAnswer,
+    };
+  };
+
+  const bind = await invokePrimitive<ComputerUseBindOutput>(input.service, COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
+    schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+    target: input.target,
+  });
+  aggregate.primitiveChainObserved.push('bind');
+  mergeRefs(aggregate.evidenceRefs, bind.refs ?? []);
+  if (bind.status !== 'completed' || !bind.output?.sessionId) {
+    mergeRefs(aggregate.cleanupRefs, cleanupRefsFromPrimitive(bind.refs ?? []));
+    return finish('blocked', bind.blockedReason ?? 'VSCode co-work focus-editor live diagnostic blocked: bind did not produce a session.');
+  }
+  bindOutput = bind.output;
+  sessionId = bind.output.sessionId;
+
+  const beforeObserve = await observeSession(input.service, sessionId, aggregate);
+  if (beforeObserve.status !== 'completed' || !beforeObserve.output) {
+    return finish('blocked', beforeObserve.blockedReason ?? 'VSCode co-work focus-editor live diagnostic blocked: before observe failed.');
+  }
+
+  const produced = produceVSCodeCoWorkAgentHostLiveInput({
+    ...input,
+    bindOutput,
+    bindRefs: bind.refs ?? [],
+    observe: beforeObserve,
+    operation: 'focus-editor',
+  });
+  if (produced.status !== 'ready' || !produced.agentHostInput || !produced.runtimeTruth || !produced.preflight) {
+    mergeRefs(aggregate.evidenceRefs, produced.evidenceRefs);
+    return finish('blocked', produced.blockedReason ?? 'VSCode co-work focus-editor live diagnostic blocked: Host producer could not build refs-first input.');
+  }
+  agentHostInput = produced.agentHostInput;
+  runtimeTruth = produced.runtimeTruth;
+  const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
+  materializerResult = await materializer({
+    agentHostInput,
+    preflight: produced.preflight,
+    commandText: input.commandText,
+    workspacePath: input.workspacePath,
+    commandId: input.commandId,
+    attemptId: input.attemptId,
+    runtimeTruth,
+  });
+  aggregate.primitiveChainObserved.push('host-decision');
+  mergeRefs(aggregate.evidenceRefs, materializerResult?.evidenceRefs ?? []);
+  const decisionRef = `decision:vscode-cowork:${safeToken(input.attemptId) || 'attempt'}:focus-editor`;
+  aggregate.evidenceRefs.push(decisionRef);
+
+  if (!materializerResult) {
+    return finish('blocked', 'VSCode co-work focus-editor live diagnostic blocked: Host decision materializer returned no result.');
+  }
+  if (materializerResult.status !== 'completed') {
+    return finish(materializerResult.status, materializerResult.message);
+  }
+  const hostUnit = materializerResult.executionUnits?.find((unit) => unit.tool === 'vscode-cowork.agent-host-producer');
+  if (hostUnit?.primitive !== 'act') {
+    return finish('blocked', 'VSCode co-work focus-editor live diagnostic blocked: Host did not select a refs-first act primitive.');
+  }
+  const action = isComputerUseAtomicAction(hostUnit.action) ? hostUnit.action : undefined;
+  if (!action) {
+    return finish('blocked', 'VSCode co-work focus-editor live diagnostic blocked: Host act decision did not include a valid atomic action.');
+  }
+
+  const act = await actSession(input.service, sessionId, action, aggregate, 'focus-editor');
+  if (act.status !== 'completed' || !act.output) {
+    return finish('blocked', act.blockedReason ?? 'VSCode co-work focus-editor live diagnostic blocked: selected act primitive failed.');
+  }
+
+  const afterObserve = await observeSession(input.service, sessionId, aggregate);
+  if (afterObserve.status !== 'completed' || !afterObserve.output) {
+    return finish('blocked', afterObserve.blockedReason ?? 'VSCode co-work focus-editor live diagnostic blocked: after observe failed.');
+  }
+  const focusVerifierRef = focusEditorVerifierRef(input.attemptId, afterObserve);
+  if (!focusVerifierRef) {
+    materializerResult = {
+      ...materializerResult,
+      completionTruth: {
+        schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+        scope: 'action',
+        status: 'blocked',
+        validator: 'vscode-cowork-focus-editor-live-diagnostic',
+        evidenceRefs: runtimeOwnedLiveRefs([
+          ...(materializerResult.evidenceRefs ?? []),
+          ...(act.refs ?? []),
+          ...(afterObserve.refs ?? []),
+        ]),
+        reason: 'missing-focused-editor-ref',
+      },
+    };
+    return finish('blocked', 'VSCode co-work focus-editor live diagnostic blocked: after observe did not produce focused-editor evidence.');
+  }
+  mergeRefs(aggregate.evidenceRefs, [focusVerifierRef]);
+  runtimeTruth = buildRuntimeTruth(input, bindOutput, bind.refs ?? [], afterObserve, agentHostInput);
+  materializerResult = {
+    ...materializerResult,
+    completionTruth: {
+      schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+      scope: 'action',
+      status: 'satisfied',
+      validator: 'vscode-cowork-focus-editor-live-diagnostic',
+      evidenceRefs: runtimeOwnedLiveRefs([
+        ...(materializerResult.evidenceRefs ?? []),
+        ...(act.refs ?? []),
+        ...(afterObserve.refs ?? []),
+        focusVerifierRef,
+      ]),
+    },
+  };
+
+  return finish('completed', 'VSCode co-work live diagnostic completed one refs-first focus-editor act primitive, observed focused editor after state, and released input resources.');
+}
+
 export async function runVSCodeCoWorkInsertDraftLiveDiagnostic(
   input: VSCodeCoWorkInsertDraftLiveDiagnosticInput,
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
@@ -414,11 +565,12 @@ async function actSession(
   sessionId: string,
   action: ComputerUseAtomicAction,
   aggregate: LiveAggregate,
+  actionId = 'insert-draft',
 ): Promise<PrimitiveEnvelope<ComputerUseActOutput>> {
   const acted = await invokePrimitive<ComputerUseActOutput>(service, COMPUTER_USE_PRIMITIVE_INTENTS.act, {
     schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
     sessionId,
-    actionId: 'insert-draft',
+    actionId,
     action,
     captureAfter: true,
   });
@@ -675,6 +827,9 @@ function inferVSCodeCoWorkLiveOperation(
   if (draftTextRef?.startsWith('text-ref:') && /(?:插入|写入|草稿|insert|draft)/i.test(commandText)) {
     return 'insert-draft';
   }
+  if (/(?:聚焦|focus)/i.test(commandText)) {
+    return 'focus-editor';
+  }
   if (/(?:读取|查看|看看|可见文本|read|visible\s+text)/i.test(commandText)) {
     return 'read-visible-text';
   }
@@ -775,11 +930,24 @@ function insertDraftMutationVerifierRef(
     : undefined;
 }
 
+function focusEditorVerifierRef(
+  attemptId: string,
+  afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
+): string | undefined {
+  return observationFocusedEditorRefs(afterObserve).length > 0
+    ? `verifier:vscode-cowork:${safeToken(attemptId) || 'attempt'}:focus-editor`
+    : undefined;
+}
+
 function observationTextRefs(observe: PrimitiveEnvelope<ComputerUseObserveOutput>): string[] {
   return runtimeOwnedLiveRefs([
     ...(observe.output?.textRefs ?? []),
     ...(observe.refs ?? []).filter((ref) => /^text:/i.test(ref)),
   ]);
+}
+
+function observationFocusedEditorRefs(observe: PrimitiveEnvelope<ComputerUseObserveOutput>): string[] {
+  return runtimeOwnedLiveRefs((observe.refs ?? []).filter((ref) => /^focused-editor:/i.test(ref)));
 }
 
 function firstRefWithPrefix(refs: string[], prefixes: string[]): string | undefined {
@@ -816,6 +984,7 @@ function buildAgentHostFinalAnswer(input: {
     text: agentHostFinalAnswerText({
       ...input,
       materializerClaimType: input.materializerResult?.claimType,
+      materializerResult: input.materializerResult,
     }),
     maturity: 'live-diagnostic',
     productReady: false,
@@ -836,12 +1005,13 @@ function agentHostFinalAnswerText(input: {
   evidenceRefs: string[];
   cleanupRefs: string[];
   materializerClaimType?: string;
+  materializerResult?: CodexAgentHostComputerUseActMaterializerResult;
 }): string {
   const chain = input.primitiveChainObserved.join(' -> ') || 'none';
   const evidence = input.evidenceRefs.slice(0, 8).join(', ') || 'no-evidence-refs';
   const cleanup = input.cleanupRefs.slice(0, 6).join(', ') || 'no-cleanup-refs';
   const completedOperation = input.materializerClaimType === 'computer-use-vscode-cowork-act-decision'
-    ? 'insert-draft act'
+    ? vscodeActOperationName(input.materializerResult)
     : 'read-visible-text';
   if (input.status === 'completed') {
     return [
@@ -870,6 +1040,15 @@ function agentHostFinalAnswerText(input: {
     `Cleanup refs: ${cleanup}.`,
     'Computer Use core did not plan the task.',
   ].join(' ');
+}
+
+function vscodeActOperationName(
+  materializerResult: CodexAgentHostComputerUseActMaterializerResult | undefined,
+): string {
+  const action = materializerResult?.executionUnits?.find((unit) => unit.tool === 'vscode-cowork.agent-host-producer')?.action;
+  if (isComputerUseAtomicAction(action) && action.type === 'key' && action.key === 'Command+1') return 'focus-editor act';
+  if (isComputerUseAtomicAction(action) && action.type === 'type') return 'insert-draft act';
+  return 'act';
 }
 
 function isComputerUseAtomicAction(value: unknown): value is ComputerUseAtomicAction {

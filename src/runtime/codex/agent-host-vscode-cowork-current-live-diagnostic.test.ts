@@ -5,6 +5,7 @@ import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
+  runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
 } from './agent-host-vscode-cowork-current-live-diagnostic.js';
@@ -125,6 +126,128 @@ test('current VSCode co-work live diagnostic preserves restoration refs when bin
     'read-current-window',
     'restore-captured:Codex:10,20:front-app-restore:current-vscode-cowork:unit-current-vscode-bind-fail:mouse-position-restore:current-vscode-cowork:unit-current-vscode-bind-fail',
   ]);
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work focus-editor diagnostic runs one Host-selected focus act then releases', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-wrapper',
+      windowRef: 'window:vscode:focus-wrapper',
+      titleRef: 'text:title:focus-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-wrapper',
+      fileRefs: ['file-ref:vscode:focus-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-wrapper-bind',
+      visibleTextSha256Ref: 'text:vscode:focus-wrapper-bind-sha256',
+      screenshotRef: 'image:vscode:focus-wrapper-bind',
+      accessibilityRef: 'accessibility:vscode:focus-wrapper-bind',
+      freshnessRef: 'freshness:vscode:focus-wrapper-bind',
+      observationRef: 'observation:vscode:focus-wrapper-bind',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-wrapper',
+      windowRef: 'window:vscode:focus-wrapper',
+      titleRef: 'text:title:focus-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-wrapper',
+      fileRefs: ['file-ref:vscode:focus-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-wrapper-before',
+      visibleTextSha256Ref: 'text:vscode:focus-wrapper-before-sha256',
+      screenshotRef: 'image:vscode:focus-wrapper-before',
+      accessibilityRef: 'accessibility:vscode:focus-wrapper-before',
+      freshnessRef: 'freshness:vscode:focus-wrapper-before',
+      observationRef: 'observation:vscode:focus-wrapper-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-wrapper',
+      windowRef: 'window:vscode:focus-wrapper',
+      titleRef: 'text:title:focus-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-wrapper',
+      fileRefs: ['file-ref:vscode:focus-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:focus-wrapper',
+      visibleTextRef: 'text:vscode:focus-wrapper-act-after',
+      visibleTextSha256Ref: 'text:vscode:focus-wrapper-act-after-sha256',
+      screenshotRef: 'image:vscode:focus-wrapper-act-after',
+      accessibilityRef: 'accessibility:vscode:focus-wrapper-act-after',
+      freshnessRef: 'freshness:vscode:focus-wrapper-act-after',
+      observationRef: 'observation:vscode:focus-wrapper-act-after',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-wrapper',
+      windowRef: 'window:vscode:focus-wrapper',
+      titleRef: 'text:title:focus-wrapper',
+      frontmostRef: 'frontmost:vscode:focus-wrapper',
+      fileRefs: ['file-ref:vscode:focus-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:focus-wrapper',
+      visibleTextRef: 'text:vscode:focus-wrapper-after',
+      visibleTextSha256Ref: 'text:vscode:focus-wrapper-after-sha256',
+      screenshotRef: 'image:vscode:focus-wrapper-after',
+      accessibilityRef: 'accessibility:vscode:focus-wrapper-after',
+      freshnessRef: 'freshness:vscode:focus-wrapper-after',
+      observationRef: 'observation:vscode:focus-wrapper-after',
+    },
+  ];
+
+  const result = await runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-focus-wrapper',
+    commandText: '聚焦我当前打开的 VSCode 编辑器。',
+    commandId: 'current-vscode-host-focus',
+    attemptId: 'current-vscode-host-focus-attempt-1',
+    workspacePath: '/tmp/workspace',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)']);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Command+1:observation:vscode:focus-wrapper-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-focus-wrapper',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-focus-wrapper',
+  ]);
+  assert.equal(result.materializerResult?.claimType, 'computer-use-vscode-cowork-act-decision');
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.match(result.agentHostFinalAnswer?.text ?? '', /focus-editor/i);
+  assert.ok(result.evidenceRefs.includes('action:current-vscode-cowork:unit-current-vscode-focus-wrapper:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('executor-event:current-vscode-cowork:unit-current-vscode-focus-wrapper:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('input-event:current-vscode-cowork:unit-current-vscode-focus-wrapper:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:focus-wrapper'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:current-vscode-host-focus-attempt-1:focus-editor'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-focus-wrapper'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-focus-wrapper'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-focus-wrapper'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-focus-wrapper'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-focus-wrapper'));
   assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 

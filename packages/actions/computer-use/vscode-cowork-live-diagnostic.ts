@@ -90,6 +90,11 @@ export interface CurrentVSCodeCoWorkLiveResolvedTextExecution
   text: string;
 }
 
+export interface CurrentVSCodeCoWorkLiveKeyExecution
+  extends CurrentVSCodeCoWorkLiveActionExecution {
+  key: string;
+}
+
 export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   runId?: string;
   activateCurrentVSCodeIfNeeded?: boolean;
@@ -97,6 +102,7 @@ export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   performAction?: (input: CurrentVSCodeCoWorkLiveActionExecution) => Promise<void> | void;
   resolveTextRef?: (textRef: string) => Promise<string | undefined> | string | undefined;
   typeResolvedText?: (input: CurrentVSCodeCoWorkLiveResolvedTextExecution) => Promise<void> | void;
+  pressKeyInCurrentVSCode?: (input: CurrentVSCodeCoWorkLiveKeyExecution) => Promise<void> | void;
   captureRestorationState?: () => Promise<CurrentVSCodeCoWorkRestorationState>;
   restoreCapturedState?: (
     state: CurrentVSCodeCoWorkRestorationState,
@@ -433,8 +439,18 @@ async function restoreCurrentRestorationState(
 
 async function performDefaultCurrentVSCodeAction(
   input: CurrentVSCodeCoWorkLiveActionExecution,
-  options: Pick<CurrentVSCodeCoWorkLivePrimitivePortsOptions, 'resolveTextRef' | 'typeResolvedText'>,
+  options: Pick<CurrentVSCodeCoWorkLivePrimitivePortsOptions, 'resolveTextRef' | 'typeResolvedText' | 'pressKeyInCurrentVSCode'>,
 ): Promise<void> {
+  if (input.action.type === 'key') {
+    const key = input.action.key;
+    if (key !== 'Command+1') throw new Error('current-vscode-act-key-unsupported');
+    const pressKey = options.pressKeyInCurrentVSCode ?? pressKeyIntoCurrentVSCode;
+    await pressKey({
+      ...input,
+      key,
+    });
+    return;
+  }
   if (input.action.type !== 'type') throw new Error('current-vscode-act-unsupported-action');
   if (!input.focusedEditorRef?.startsWith('focused-editor:')) throw new Error('current-vscode-act-focused-editor-ref-required');
   const textRef = input.action.textRef;
@@ -449,6 +465,32 @@ async function performDefaultCurrentVSCodeAction(
     textRef,
     text,
   });
+}
+
+async function pressKeyIntoCurrentVSCode(input: CurrentVSCodeCoWorkLiveKeyExecution): Promise<void> {
+  try {
+    await execFileAsync('osascript', ['-e', `
+on run argv
+  set keyName to item 1 of argv
+  tell application "System Events"
+    set vscodeProcesses to application processes whose bundle identifier is "com.microsoft.VSCode"
+    if (count of vscodeProcesses) is 0 then error "current-vscode-process-missing"
+    repeat with vscodeProcess in vscodeProcesses
+      if frontmost of vscodeProcess is true then
+        if keyName is "Command+1" then
+          keystroke "1" using command down
+          return "pressed"
+        end if
+        error "current-vscode-key-unsupported"
+      end if
+    end repeat
+  end tell
+  error "current-vscode-not-frontmost"
+end run
+`, input.key], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+  } catch {
+    throw new Error('current-vscode-key-action-failed');
+  }
 }
 
 async function typeResolvedTextIntoCurrentVSCode(input: CurrentVSCodeCoWorkLiveResolvedTextExecution): Promise<void> {

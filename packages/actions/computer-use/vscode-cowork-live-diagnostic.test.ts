@@ -416,6 +416,121 @@ test('current VSCode co-work primitive ports resolve text refs for the default t
   assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|must stay private|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work primitive ports execute Host-selected focus key without resolving text', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-key',
+      windowRef: 'window:vscode:focus-key',
+      titleRef: 'text:title:focus-key',
+      frontmostRef: 'frontmost:vscode:focus-key',
+      fileRefs: ['file-ref:vscode:focus-key'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:focus-key-before',
+      visibleTextSha256Ref: 'text:vscode:focus-key-before-sha256',
+      screenshotRef: 'image:vscode:focus-key-before',
+      accessibilityRef: 'accessibility:vscode:focus-key-before',
+      freshnessRef: 'freshness:vscode:focus-key-before',
+      observationRef: 'observation:vscode:focus-key-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:focus-key',
+      windowRef: 'window:vscode:focus-key',
+      titleRef: 'text:title:focus-key',
+      frontmostRef: 'frontmost:vscode:focus-key',
+      fileRefs: ['file-ref:vscode:focus-key'],
+      editorElementRef: 'element:vscode:editor',
+      focusedEditorRef: 'focused-editor:vscode:focus-key',
+      visibleTextRef: 'text:vscode:focus-key-after',
+      visibleTextSha256Ref: 'text:vscode:focus-key-after-sha256',
+      screenshotRef: 'image:vscode:focus-key-after',
+      accessibilityRef: 'accessibility:vscode:focus-key-after',
+      freshnessRef: 'freshness:vscode:focus-key-after',
+      observationRef: 'observation:vscode:focus-key-after',
+    },
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-focus-key',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      pressKeyInCurrentVSCode: async (input) => {
+        calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return 'draft body that should not be resolved';
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'focus-editor',
+      action: {
+        type: 'key',
+        key: 'Command+1',
+        elementRef: 'element:vscode:editor',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, true, act.error);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'press-key:Command+1:observation:vscode:focus-key-before',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-focus-key',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-focus-key',
+  ]);
+  assert.ok((act.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-focus-key:focus-editor'));
+  assert.ok((act.value?.refs ?? []).includes('focused-editor:vscode:focus-key'));
+  assert.ok((act.value?.refs ?? []).includes('observation:vscode:focus-key-after'));
+  assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work primitive ports block the default type executor when text refs are unresolved', async () => {
   const calls: string[] = [];
   const observation = {
