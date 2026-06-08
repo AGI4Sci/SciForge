@@ -8,6 +8,8 @@ import {
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
 } from './agent-host-vscode-cowork-current-live-diagnostic.js';
 
+const currentVSCodeLiveEnabled = process.env[VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV] === '1';
+
 test('current VSCode co-work live diagnostic uses real primitive ports shape and Host refs-only decision', async () => {
   const calls: string[] = [];
   const result = await runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic({
@@ -80,4 +82,34 @@ test('current VSCode co-work live diagnostic stays blocked without explicit env'
   assert.deepEqual(result.primitiveChainObserved, []);
   assert.match(result.message, /missing-env/);
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work live diagnostic can observe the real current VSCode window', {
+  skip: currentVSCodeLiveEnabled
+    ? undefined
+    : `set ${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}=1 with VSCode frontmost to run the current VSCode live diagnostic`,
+  timeout: 60_000,
+}, async () => {
+  const result = await runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic({
+    runId: `live-current-vscode-${Date.now()}`,
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    commandId: 'current-vscode-live-read-visible-text',
+    attemptId: 'current-vscode-live-read-visible-text-attempt-1',
+    workspacePath: process.cwd(),
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('window:vscode:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('accessibility:vscode:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('text:vscode:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('element:vscode:editor:') || ref === 'element:vscode:editor'));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('scoped-input-lease:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('scoped-input-adapter:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('cursor-marker:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('front-app-restore:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('mouse-position-restore:current-vscode-cowork:')));
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });

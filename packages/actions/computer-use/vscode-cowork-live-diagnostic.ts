@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
@@ -41,9 +44,27 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   observationRef: string;
 }
 
+export interface CurrentVSCodeCoWorkRestorationState {
+  frontApplicationName?: string;
+  mousePosition?: {
+    x: number;
+    y: number;
+  };
+}
+
+export interface CurrentVSCodeCoWorkRestorationRefs {
+  frontAppRestoreRef: string;
+  mousePositionRestoreRef: string;
+}
+
 export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   runId?: string;
   readCurrentWindow?: () => Promise<CurrentVSCodeCoWorkWindowObservation>;
+  captureRestorationState?: () => Promise<CurrentVSCodeCoWorkRestorationState>;
+  restoreCapturedState?: (
+    state: CurrentVSCodeCoWorkRestorationState,
+    refs: CurrentVSCodeCoWorkRestorationRefs,
+  ) => Promise<void> | void;
   restoreFocus?: (frontAppRestoreRef: string) => Promise<void> | void;
   restoreMouse?: (mousePositionRestoreRef: string) => Promise<void> | void;
 }
@@ -105,9 +126,16 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
   const frontAppRestoreRef = `front-app-restore:current-vscode-cowork:${runId}`;
   const mousePositionRestoreRef = `mouse-position-restore:current-vscode-cowork:${runId}`;
   const readCurrentWindow = options.readCurrentWindow ?? readCurrentVSCodeWindowRefs;
+  const shouldUseDesktopRestoration = !options.readCurrentWindow;
+  const captureRestorationState = options.captureRestorationState
+    ?? (shouldUseDesktopRestoration ? captureCurrentRestorationState : undefined);
+  const restoreCapturedState = options.restoreCapturedState
+    ?? (shouldUseDesktopRestoration ? restoreCurrentRestorationState : undefined);
+  let restorationState: CurrentVSCodeCoWorkRestorationState = {};
 
   return {
     bind: async () => {
+      restorationState = await captureRestorationState?.().catch(() => ({})) ?? {};
       const observed = await readCurrentWindow();
       return {
         status: 'completed',
@@ -155,6 +183,10 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
     },
     control: async (input) => {
       if (input.command === 'release') {
+        await restoreCapturedState?.(restorationState, {
+          frontAppRestoreRef,
+          mousePositionRestoreRef,
+        });
         await options.restoreFocus?.(frontAppRestoreRef);
         await options.restoreMouse?.(mousePositionRestoreRef);
       }
@@ -180,6 +212,24 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
       };
     },
   };
+}
+
+async function captureCurrentRestorationState(): Promise<CurrentVSCodeCoWorkRestorationState> {
+  const [frontApplicationName, mousePosition] = await Promise.all([
+    readFrontApplicationName().catch(() => undefined),
+    readMousePointer().catch(() => undefined),
+  ]);
+  return {
+    frontApplicationName,
+    mousePosition,
+  };
+}
+
+async function restoreCurrentRestorationState(
+  state: CurrentVSCodeCoWorkRestorationState,
+): Promise<void> {
+  await restoreFrontApplication(state.frontApplicationName);
+  await restoreMousePointer(state.mousePosition);
 }
 
 async function readCurrentVSCodeWindowRefs(): Promise<CurrentVSCodeCoWorkWindowObservation> {
@@ -228,6 +278,75 @@ error "current-vscode-not-frontmost"
     freshnessRef: `freshness:vscode:current:${Date.now()}`,
     observationRef: `observation:vscode:current:${titleToken}:${Date.now()}`,
   };
+}
+
+async function readFrontApplicationName(): Promise<string> {
+  const { stdout } = await execFileAsync('osascript', [
+    '-e',
+    'tell application "System Events" to get name of first application process whose frontmost is true',
+  ], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+  return stdout.trim();
+}
+
+async function restoreFrontApplication(appName: string | undefined): Promise<void> {
+  if (!appName) return;
+  await execFileAsync('osascript', ['-e', `
+on run argv
+  set appName to item 1 of argv
+  tell application "System Events"
+    if exists process appName then set frontmost of process appName to true
+  end tell
+end run
+`, appName], { timeout: 10_000, maxBuffer: 1024 * 1024 }).catch(() => undefined);
+}
+
+async function readMousePointer(): Promise<{ x: number; y: number }> {
+  const stdout = await runTransientSwift('computer-use-current-vscode-pointer-read.swift', `
+import CoreGraphics
+
+guard let event = CGEvent(source: nil) else {
+  exit(2)
+}
+let point = event.location
+print("\\(point.x),\\(point.y)")
+`, []);
+  const [x, y] = stdout.trim().split(',').map(Number);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('mouse-pointer-unavailable');
+  return { x, y };
+}
+
+async function restoreMousePointer(point: { x: number; y: number } | undefined): Promise<void> {
+  if (!point) return;
+  await runTransientSwift('computer-use-current-vscode-pointer-restore.swift', `
+import CoreGraphics
+
+let args = CommandLine.arguments
+guard args.count == 3,
+      let x = Double(args[1]),
+      let y = Double(args[2]) else {
+  exit(2)
+}
+let point = CGPoint(x: x, y: y)
+guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+  exit(3)
+}
+event.post(tap: .cghidEventTap)
+`, [String(point.x), String(point.y)]).catch(() => undefined);
+}
+
+async function runTransientSwift(filename: string, source: string, args: string[]): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'sciforge-cu-current-vscode-swift-'));
+  const sourcePath = join(dir, filename);
+  await writeFile(sourcePath, source, 'utf8');
+  try {
+    const { stdout } = await execFileAsync('/usr/bin/swift', [sourcePath, ...args], {
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+    return stdout;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string[] {

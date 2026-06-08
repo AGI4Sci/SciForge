@@ -128,3 +128,73 @@ test('current VSCode co-work primitive ports bind current window, observe refs, 
   ]);
   assert.doesNotMatch(JSON.stringify({ bind, observe, control }), /raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
+
+test('current VSCode co-work primitive ports capture and restore desktop state on release', async () => {
+  const calls: string[] = [];
+  const service = createComputerUsePrimitiveService({
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-restore',
+      captureRestorationState: async () => {
+        calls.push('capture-restoration');
+        return {
+          frontApplicationName: 'Codex',
+          mousePosition: { x: 12, y: 34 },
+        };
+      },
+      restoreCapturedState: async (state, refs) => {
+        calls.push(`restore-captured:${state.frontApplicationName}:${state.mousePosition?.x},${state.mousePosition?.y}:${refs.frontAppRestoreRef}:${refs.mousePositionRestoreRef}`);
+      },
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return {
+          appRef: 'macos-app:com.microsoft.VSCode',
+          processRef: 'process:vscode:restore',
+          windowRef: 'window:vscode:restore',
+          titleRef: 'text:title:restore',
+          frontmostRef: 'frontmost:vscode:restore',
+          fileRefs: [],
+          editorElementRef: 'element:vscode:editor',
+          visibleTextRef: 'text:vscode:visible',
+          screenshotRef: 'image:vscode:current',
+          accessibilityRef: 'accessibility:vscode:current',
+          freshnessRef: 'freshness:vscode:current',
+          observationRef: 'observation:vscode:current',
+        };
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+  assert.equal(sessionId, 'current-vscode-cowork:unit-current-vscode-restore');
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+
+  assert.equal(control.ok, true);
+  assert.deepEqual(calls, [
+    'capture-restoration',
+    'read-current-window',
+    'restore-captured:Codex:12,34:front-app-restore:current-vscode-cowork:unit-current-vscode-restore:mouse-position-restore:current-vscode-cowork:unit-current-vscode-restore',
+  ]);
+  assert.ok((control.value?.refs ?? []).includes('front-app-restore:current-vscode-cowork:unit-current-vscode-restore'));
+  assert.ok((control.value?.refs ?? []).includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-restore'));
+});
