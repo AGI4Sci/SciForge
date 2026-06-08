@@ -1,4 +1,5 @@
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeEvent } from '../runtime-types.js';
+import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 import { COMPUTER_USE_ACTION_PROVIDER_ID } from '../computer-use/host-adapter.js';
 import { VISION_TOOL_ID } from '../vision-sense/trace-policy.js';
 import { evaluateCodexAgentHostTurnLoop } from './agent-host-turn-loop.js';
@@ -727,7 +728,7 @@ function nonEmptyRecord(value: Record<string, unknown>): Record<string, unknown>
 
 function workspaceRuntimeEvent(metadata: RouteMetadata, event: WorkspaceRuntimeEvent): Record<string, unknown> {
   if (event.type === 'computer-use.tui-host-actions') {
-    return compactRecord({
+    return sanitizePublicEvent(compactRecord({
       ...baseEvent(metadata, event.type),
       status: event.status,
       source: event.source,
@@ -736,13 +737,13 @@ function workspaceRuntimeEvent(metadata: RouteMetadata, event: WorkspaceRuntimeE
       text: event.text,
       detail: event.detail,
       output: event.output,
-    });
+    })) as Record<string, unknown>;
   }
-  return operationEvent(
+  return sanitizePublicEvent(operationEvent(
     metadata,
     event.message ?? event.text ?? event.detail ?? event.type,
     event.status ?? 'running',
-  );
+  )) as Record<string, unknown>;
 }
 
 function operationEvent(
@@ -770,7 +771,7 @@ function doneEvent(metadata: RouteMetadata, payload: ToolPayload): Record<string
   const message = hasHostFinalAnswer
     ? payload.message
     : localEvidenceMessage(status);
-  return compactRecord({
+  return sanitizePublicEvent(compactRecord({
     ...baseEvent(metadata, eventType),
     ...projectedPayload,
     status: hasHostFinalAnswer ? status : localEvidenceStatus(status),
@@ -779,7 +780,7 @@ function doneEvent(metadata: RouteMetadata, payload: ToolPayload): Record<string
     commandId: metadata.commandId,
     attemptId: metadata.attemptId,
     evidenceRefs: uniqueRouteStrings([...payloadRefs, ...metadata.evidenceRefs]),
-  });
+  })) as Record<string, unknown>;
 }
 
 function hasHostOwnedFinalAnswerPayload(payload: ToolPayload): boolean {
@@ -832,12 +833,12 @@ function localEvidenceExecutionUnit(value: unknown): unknown {
 }
 
 function failedEvent(metadata: RouteMetadata, message: string): Record<string, unknown> {
-  return compactRecord({
+  return sanitizePublicEvent(compactRecord({
     ...baseEvent(metadata, 'failed'),
     status: 'failed',
     message,
     text: message,
-  });
+  })) as Record<string, unknown>;
 }
 
 function statusFromPayload(payload: ToolPayload) {

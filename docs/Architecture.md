@@ -83,6 +83,8 @@ Browser、Computer Use、Desktop 和其它模块只能作为 Codex / Agent Host 
 
 模块不得返回用户级 final answer，也不得声明用户级 completion truth。
 
+所有模块、native route、runtime gateway 和 UI persistence 的 public projection 都必须走 refs-first sanitizer。共享 sanitizer 位于 `@sciforge-ui/runtime-contract/public-event-sanitizer`；它只做 deterministic raw-payload guard，不能成为新的 Agent Host、completion surface 或本地 final-answer 生成路径。raw screenshot、AX tree、visible text、provider payload、trace、日志、raw artifact body、URL、raw path、raw command、base64 和 secret 只能以 artifact refs / evidence refs / compact observation refs 暴露。
+
 ## 用户级验收
 
 用户级验收只能由 Codex / Agent Host 产出，并通过 Codex App Server protocol events 进入 SciForge。SciForge 把 App Server assistant final message、tool refs、approval 状态和 done/error 事件确定性归一成 `FinalAnswerEnvelope` / conversation projection；GUI 不作为模型可调用 completion tool。产品路径不得向 Codex app-server 注册或注入 `gui.present`、`gui.ask_user`、`gui_present`、`gui_ask_user` 或 `moduleId=gui` completion surface；如果旧请求进入运行时，必须作为 unsupported dynamic tool fail closed。

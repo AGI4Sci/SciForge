@@ -24,6 +24,14 @@ const vscodeOperationTextInferenceHelper = /\b(?:lowRisk[A-Za-z0-9_$]*OperationF
 const genericOperationTextInferenceHelper = /\b[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)\b/;
 const vscodeLiveDiagnosticTextInference = /\b(?:liveDiagnostic|live[-\s]?diagnostic|currentVSCodeCoWorkLiveDiagnosticRunner|tryRunCurrentVSCodeCoWorkLiveDiagnostic)\b/i;
 const uiNativeFinalAnswerBypass = /\b(?:nativeCodexMessage|runtimeDoneNativeMessage|withNativeCodexMessageRuntimeResult)\b|codex\.native-message/;
+const publicProjectionSurfaceFiles = new Set([
+  'src/runtime/codex/codex-app-server-adapter.ts',
+  'src/runtime/codex/computer-use-native-route.ts',
+  'src/runtime/codex/codex-runtime-gateway.ts',
+]);
+const publicProjectionActivation = /\b(?:emitWorkspaceRuntimeEvent|publicHostOwnedRuntimeEvent|workspaceRuntimeEvent|doneEvent|failedEvent|runtimeCodexMissingFinalAnswerPayload|publicRuntimeMode|sanitizePublicEvent)\b/;
+const publicEventSanitizerImport = /@sciforge-ui\/runtime-contract\/public-event-sanitizer/;
+const unsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawCommand|rawPath)\b\s*:|data:image\/|;base64,)/i;
 
 async function main() {
   const files = [
@@ -39,6 +47,15 @@ async function main() {
     if (isTestFile(rel)) continue;
     const text = await readFile(file, 'utf8');
     const lines = text.split(/\r?\n/);
+    if (isActivePublicProjectionSurface(rel, text) && !publicEventSanitizerImport.test(text)) {
+      findings.push({
+        file: rel,
+        line: 1,
+        rule: 'missing-public-event-sanitizer',
+        message: 'Computer Use public projection surfaces must route public events through the shared public-event sanitizer.',
+        text: 'missing @sciforge-ui/runtime-contract/public-event-sanitizer import',
+      });
+    }
     lines.forEach((line, index) => {
       if (isGuiCompletionSurfaceLine(line)) {
         findings.push({
@@ -100,6 +117,15 @@ async function main() {
           line: index + 1,
           rule: 'forbidden-ui-native-final-answer-bypass',
           message: 'UI/runtime projection must not synthesize final answers from native messages; require Host-owned FinalAnswerEnvelope evidence.',
+          text: line.trim(),
+        });
+      }
+      if (isUnsafePublicEventPayloadLine(rel, text, line)) {
+        findings.push({
+          file: rel,
+          line: index + 1,
+          rule: 'forbidden-public-event-raw-payload',
+          message: 'Computer Use public projection surfaces must not expose raw screenshot paths, data URLs, raw commands, raw paths, provider payloads, or base64 bodies.',
           text: line.trim(),
         });
       }
@@ -171,6 +197,17 @@ function isVSCodeCoWorkRouteSurface(file: string): boolean {
 function isUiNativeFinalAnswerBypassLine(file: string, line: string): boolean {
   if (!/^src\/ui\/src\/api\/sciforgeToolsClient\/.*\.ts$/.test(file)) return false;
   return uiNativeFinalAnswerBypass.test(line.replace(/\/\/.*$/, ''));
+}
+
+function isActivePublicProjectionSurface(file: string, text: string): boolean {
+  return publicProjectionSurfaceFiles.has(file) && publicProjectionActivation.test(text);
+}
+
+function isUnsafePublicEventPayloadLine(file: string, fileText: string, line: string): boolean {
+  if (!isActivePublicProjectionSurface(file, fileText)) return false;
+  const code = line.replace(/\/\/.*$/, '');
+  if (/UNSAFE_|FORBIDDEN_|REDACT|sanitize|Sanitizer/i.test(code)) return false;
+  return unsafePublicEventPayloadLiteral.test(code);
 }
 
 async function structuredManifestFindings(): Promise<Finding[]> {

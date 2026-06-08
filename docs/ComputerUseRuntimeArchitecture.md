@@ -170,6 +170,19 @@ Runtime `gui` module 已退役。`gui_present` / `gui_ask_user` 只能作为 Age
 - public events 只包含 tokenized refs、safe summaries 和 Host final answer envelope。
 - 任何 `gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` / `moduleId=gui` completion surface 都必须作为 unsupported dynamic tool fail closed。
 
+### Public Event Sanitizer
+
+共享 public event sanitizer 的稳定落点是 `@sciforge-ui/runtime-contract/public-event-sanitizer`。它是 browser-safe、无 runtime 私有依赖的纯 contract helper，供 runtime、UI 和 Computer Use action package 共同使用；不要在 `src/shared`、UI client 或某个 runtime adapter 内再生出第二套递归 public sanitizer。
+
+public sanitizer 的职责是递归处理 public projection object、array、metadata、diagnostic payload、error payload 和 action payload：
+
+- 保留 tokenized refs，例如 `artifact:`、`evidence:`、`observation:`、`window:`、`computer-use:`、`executor-event:`、`text-ref:`、`non-user-file-scope:` 等。
+- drop 或 redact raw screenshot / image / AX tree / visible text / provider payload / trace / logs / raw artifact body / URL / raw path / raw command / base64 / secret。
+- blocked、partial 和 error path 也必须走同一 sanitizer，只能输出 safe summary、reason refs、evidence refs、artifact refs 或 compact observation refs。
+- sanitizer 只能作为 deterministic projection guard，不能生成 final answer，也不能判断 completion truth。
+
+第一批 product-facing 接入点是 `CodexAppServerAdapter` 的 host-owned public projection、`computer-use-native-route` 的 `workspaceRuntimeEvent` / `doneEvent` / `failedEvent`，以及 `codex-runtime-gateway` 的 public events 和 missing-final-answer payload。后续 P3 剩余工作应继续接入 app module readiness、Computer Use package result、UI runtime event persistence，而不是新增局部旁路 sanitizer。
+
 ### App Module Contract 约束
 
 最小 contract 是 `moduleId`、`canHandle(refs)`、`normalizeObservation(refs)`、`getCapabilities()` 和 `checkReadiness(operation, refs)`。`checkReadiness` 的输入只能是 Agent Host 已决定的一个 operation 和 current-run refs；contract 不暴露自然语言 task 字段。

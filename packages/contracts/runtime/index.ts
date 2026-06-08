@@ -197,6 +197,11 @@ export type {
   RuntimeLlmEndpointConfig,
 } from './agent-backend-policy';
 export {
+  PUBLIC_EVENT_REDACTED,
+  publicEventHasForbiddenRaw,
+  sanitizePublicEvent,
+} from './public-event-sanitizer';
+export {
   DIRTY_WORKTREE_CHANGE_STATUSES,
   DIRTY_WORKTREE_COLLABORATION_CONTRACT_ID,
   DIRTY_WORKTREE_COLLABORATION_SCHEMA_VERSION,

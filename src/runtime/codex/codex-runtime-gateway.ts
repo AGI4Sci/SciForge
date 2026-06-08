@@ -1,6 +1,7 @@
+import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 import { createCodexAppServerRuntimeAdapter } from './codex-runtime-adapter.js';
 import { codexRuntimeBridgeRequested } from './codex-runtime-server.js';
-import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 
 export async function tryRunCodexRuntimeGateway(
@@ -18,16 +19,25 @@ export async function tryRunCodexRuntimeGateway(
   });
   const chunks: string[] = [];
   const logs: Array<Record<string, unknown>> = [];
+  const publicEvidenceRefs: string[] = [];
   for await (const event of turn.events) {
-    logs.push(event as unknown as Record<string, unknown>);
-    emitWorkspaceRuntimeEvent(callbacks, {
+    const eventRecord = event as unknown as Record<string, unknown>;
+    logs.push(eventRecord);
+    publicEvidenceRefs.push(...safePublicRefsFromValue(eventRecord));
+    const publicEvent = sanitizePublicEvent({
       type: `codex-runtime-${event.type}`,
       status: event.status ?? event.type,
       source: 'codex-app-server',
       message: event.message,
       text: event.text,
-      raw: event,
-    });
+      evidenceRefs: uniqueStrings([
+        ...stringList(event.evidenceRefs),
+        ...safePublicRefsFromValue(eventRecord),
+      ]),
+      output: eventRecord.output,
+      error: eventRecord.error,
+    }) as WorkspaceRuntimeEvent;
+    emitWorkspaceRuntimeEvent(callbacks, publicEvent);
     if (event.type === 'message' || event.type === 'message_delta') {
       if (event.text) chunks.push(event.text);
     }
@@ -37,9 +47,9 @@ export async function tryRunCodexRuntimeGateway(
   }
   const message = chunks.join('').trim();
   if (!message) {
-    return runtimeCodexMissingFinalAnswerPayload(turn.turnId, logs);
+    return runtimeCodexMissingFinalAnswerPayload(turn.turnId, logs, uniqueStrings(publicEvidenceRefs));
   }
-  return {
+  return sanitizePublicEvent({
     message,
     claimType: 'runtime-codex-result',
     evidenceLevel: 'runtime-normalized-events',
@@ -58,16 +68,21 @@ export async function tryRunCodexRuntimeGateway(
     }],
     artifacts: [],
     logs,
-  };
+  }) as ToolPayload;
 }
 
 function runtimeCodexMissingFinalAnswerPayload(
   turnId: string,
   logs: Array<Record<string, unknown>>,
+  publicEvidenceRefs: string[] = [],
 ): ToolPayload {
   const first = logs[0] ?? {};
   const last = logs[logs.length - 1] ?? first;
-  return {
+  const evidenceRefs = uniqueStrings([
+    ...stringList(last.evidenceRefs),
+    ...publicEvidenceRefs,
+  ]);
+  return sanitizePublicEvent({
     message: 'Runtime Codex completed without a safe final assistant answer; final-answer-required.',
     claimType: 'runtime-codex-blocked',
     evidenceLevel: 'runtime-normalized-events',
@@ -76,7 +91,7 @@ function runtimeCodexMissingFinalAnswerPayload(
       type: 'runtime-codex-final-answer-required',
       status: 'blocked',
       boundary: 'final-answer-required',
-      evidenceRefs: stringList(last.evidenceRefs),
+      evidenceRefs,
     }],
     uiManifest: [],
     executionUnits: [{
@@ -97,11 +112,37 @@ function runtimeCodexMissingFinalAnswerPayload(
       boundary: 'final-answer-required',
     },
     logs,
-  };
+  }) as ToolPayload;
 }
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
+}
+
+function safePublicRefsFromValue(value: unknown): string[] {
+  const refs: string[] = [];
+  collectRefsFromValue(value, undefined, refs);
+  const sanitized = sanitizePublicEvent({ evidenceRefs: refs }) as Record<string, unknown>;
+  return stringList(sanitized.evidenceRefs);
+}
+
+function collectRefsFromValue(value: unknown, key: string | undefined, refs: string[]) {
+  if (typeof value === 'string') {
+    if (key && /(?:^|[-_])refs?$/i.test(key.replace(/([a-z0-9])([A-Z])/g, '$1-$2'))) refs.push(value);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectRefsFromValue(item, key, refs);
+    return;
+  }
+  for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+    collectRefsFromValue(childValue, childKey, refs);
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
 function allowOpenAiRuntime(request: GatewayRequest): boolean {

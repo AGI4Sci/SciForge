@@ -269,6 +269,29 @@ test('CodexAppServerAdapter projects host-owned native-route events without prov
             commandId: input.commandId,
             attemptId: input.attemptId,
             text: 'Native route inspected provider https://private-provider.example/v1 with token=sk-private-secret-123456 and /Applications/private/sciforge-workspace raw stdout.',
+            output: {
+              evidenceRefs: [
+                'observation:vscode:current',
+                'data:image/png;base64,SECRET_IMAGE',
+                '/tmp/private/raw-screenshot.png',
+              ],
+              action: {
+                targetRef: 'element:vscode:editor',
+                rawCommand: 'rm -rf /tmp/private',
+                providerPayload: {
+                  requestBody: 'SECRET_PROVIDER_PAYLOAD',
+                },
+                nested: {
+                  afterRef: 'executor-event:vscode:after',
+                  accessibilityTree: { role: 'AXTextArea', value: 'RAW_AX_TREE' },
+                },
+              },
+              diagnostics: {
+                rawPath: '/Users/example/private.txt',
+                detail: 'open https://example.invalid/private for raw detail',
+              },
+              logs: [{ stdout: 'SECRET_STDOUT' }],
+            },
             raw: {
               provider: 'private-provider',
               model: 'private-model',
@@ -309,7 +332,9 @@ test('CodexAppServerAdapter projects host-owned native-route events without prov
   assert.ok(events.every((event) => event.model === 'computer-use-native-route'));
   assert.ok(events.every((event) => event.profile === 'host-owned'));
   assert.ok(events.every((event) => event.workspace === 'workspace:current'));
-  assert.doesNotMatch(serialized, /private-provider|private-model|private-profile|private-provider\.example|sk-private-secret|\/Applications\/private|"raw"|workspacePath|stdout/);
+  assert.doesNotMatch(serialized, /private-provider|private-model|private-profile|private-provider\.example|sk-private-secret|\/Applications\/private|"raw"|workspacePath|stdout|SECRET_|providerPayload|rawCommand|accessibilityTree|RAW_AX_TREE|data:image|base64|example\.invalid|\/tmp\/private|\/Users\/example/i);
+  assert.match(serialized, /observation:vscode:current/);
+  assert.match(serialized, /executor-event:vscode:after/);
   assert.match(serialized, /\[redacted-url\]|\[redacted-secret\]|\[redacted-path\]|runtime audit/);
 });
 

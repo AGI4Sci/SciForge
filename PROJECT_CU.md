@@ -177,50 +177,59 @@ open-command-palette
 
 目标：先找全 public projection 出口，避免 sanitizer 只接住一两个显眼路径。
 
-- [ ] 列出 ordinary chat events、native route events、runtime gateway events、app module readiness、Computer Use result 的 public projection 文件和函数。
-- [ ] 对每个 surface 标注允许输出：status、safe summary、reason refs、evidence refs、artifact refs、compact observation refs、Host final-answer envelope。
-- [ ] 对每个 surface 标注禁止输出：raw screenshot、image/base64、AX tree、visible text、provider payload、trace、日志、raw artifact body、URL、raw path、raw command、secret。
-- [ ] 写一个最小红测，证明当前至少一个 nested raw/base64/provider payload 会泄漏或未被统一处理。
-- [ ] 更新 `npm run smoke:computer-use-no-bypass` 的扫描范围草案，覆盖新增 public projection surface。
+- [x] 列出 ordinary chat events、native route events、runtime gateway events、app module readiness、Computer Use result 的 public projection 文件和函数。
+- [x] 对每个 surface 标注允许输出：status、safe summary、reason refs、evidence refs、artifact refs、compact observation refs、Host final-answer envelope。
+- [x] 对每个 surface 标注禁止输出：raw screenshot、image/base64、AX tree、visible text、provider payload、trace、日志、raw artifact body、URL、raw path、raw command、secret。
+- [x] 写一个最小红测，证明当前至少一个 nested raw/base64/provider payload 会泄漏或未被统一处理。
+- [x] 更新 `npm run smoke:computer-use-no-bypass` 的扫描范围草案，覆盖新增 public projection surface。
 
 验收：
 
-- [ ] Inventory 能对应到具体文件和函数，不只写概念。
-- [ ] 红测在实现 sanitizer 前失败，失败原因和 raw payload 泄漏相关。
-- [ ] 没有新增 final-answer、completion truth 或 native message 旁路。
+- [x] Inventory 能对应到具体文件和函数，不只写概念。
+- [x] 红测在实现 sanitizer 前失败，失败原因和 raw payload 泄漏相关。
+- [x] 没有新增 final-answer、completion truth 或 native message 旁路。
+
+Inventory 摘要：
+
+- Ordinary chat events：`src/runtime/codex/codex-app-server-adapter.ts`、`backend-agent-event-adapter.ts`、`codex-event-normalizer.ts`、UI `sciforgeToolsClient/runtimeEvents.ts` / `client.ts`。
+- Native route events：`src/runtime/codex/computer-use-native-route.ts` 的 `workspaceRuntimeEvent` / `doneEvent` / `failedEvent`，以及 `codex-app-server-client.ts` 的 `publicNativeRouteEvents`。
+- Runtime gateway events：`src/runtime/codex/codex-runtime-gateway.ts`、`codex-runtime-server.ts`、`workspace-runtime-events.ts`、`workspace-event-normalizer.ts`。
+- App module readiness：`computer-use-app-module-registry.ts`、`agent-host-computer-use-app-module-materializer.ts`、`vscode-app-module.ts`。
+- Computer Use result：`src/runtime/computer-use/package-bridge*.ts`、`package-bridge-presentation.ts`、`host-adapter.ts`、`vision-sense/computer-use-trace-output.ts`。
+- UI persistence / display：`runtimeEvents.ts`、`runtimeGuiPresentation.ts`、`responseNormalization.ts`、`conversation-projection-view-model.ts`。
 
 ### P2：Shared Public Event Sanitizer
 
 目标：实现一个共享、递归、refs-first 的 public sanitizer，再接入最小 surface。
 
-- [ ] 新增共享 sanitizer 模块，递归处理 object、array、metadata、diagnostic payload、error payload 和 action payload。
-- [ ] sanitizer 对 forbidden key 和 forbidden value 都 fail closed 或 redacted，覆盖 camelCase、snake_case、kebab-case alias。
-- [ ] sanitizer 保留 tokenized refs，丢弃或替换 unsafe raw 值，不把大对象压进聊天正文或主上下文。
-- [ ] Unit tests 覆盖 top-level raw、nested raw、base64/data URL、provider payload、logs、raw path、raw command、secret。
-- [ ] Unit tests 覆盖 blocked / partial / error path 也不会泄漏 raw evidence。
+- [x] 新增共享 sanitizer 模块，递归处理 object、array、metadata、diagnostic payload、error payload 和 action payload。
+- [x] sanitizer 对 forbidden key 和 forbidden value 都 fail closed 或 redacted，覆盖 camelCase、snake_case、kebab-case alias。
+- [x] sanitizer 保留 tokenized refs，丢弃或替换 unsafe raw 值，不把大对象压进聊天正文或主上下文。
+- [x] Unit tests 覆盖 top-level raw、nested raw、base64/data URL、provider payload、logs、raw path、raw command、secret。
+- [x] Unit tests 覆盖 blocked / partial / error path 也不会泄漏 raw evidence。
 
 验收：
 
-- [ ] shared sanitizer 单测通过。
-- [ ] `publicProjectionHasForbiddenRaw(sanitized)` 或等价断言证明 sanitized output 干净。
-- [ ] 测试证明 artifact refs / evidence refs / observation refs 被保留。
+- [x] shared sanitizer 单测通过。
+- [x] `publicEventHasForbiddenRaw(sanitized)` 或等价断言证明 sanitized output 干净。
+- [x] 测试证明 artifact refs / evidence refs / observation refs 被保留。
 
 ### P3：Public Projection Integration
 
 目标：把 P2 sanitizer 接到第一批真实 public surface，先覆盖结果投影，不碰真实桌面。
 
-- [ ] native route `workspaceRuntimeEvent` / `done` / `failed` 投影使用 shared sanitizer。
-- [ ] runtime gateway 的 blocked / partial / empty-response / error payload 使用 shared sanitizer。
+- [x] native route `workspaceRuntimeEvent` / `done` / `failed` 投影使用 shared sanitizer。
+- [x] runtime gateway 的 blocked / partial / empty-response / error payload 使用 shared sanitizer。
 - [ ] app module readiness 的 public result 使用 shared sanitizer 或共享 forbidden raw detector。
 - [ ] Computer Use action/procedure result 的 public projection 只保留 refs 和 safe summary。
-- [ ] static guard 禁止新增 public raw screenshot path、data URL、raw command、raw path、provider payload。
+- [x] static guard 禁止新增 public raw screenshot path、data URL、raw command、raw path、provider payload。
 
 验收：
 
-- [ ] Native route 单测证明无 Host final answer 时仍 `partial` / `blocked`，且 payload sanitized。
-- [ ] Runtime gateway 单测证明 missing-final-answer / error 不泄漏 raw logs 或 raw provider payload。
+- [x] Native route 单测证明无 Host final answer 时仍 `partial` / `blocked`，且 payload sanitized。
+- [x] Runtime gateway 单测证明 missing-final-answer / error 不泄漏 raw logs 或 raw provider payload。
 - [ ] App module readiness 单测证明 nested raw action payload 被拒绝或 sanitized。
-- [ ] `npm run smoke:computer-use-no-bypass` 覆盖 P3 新 surface。
+- [x] `npm run smoke:computer-use-no-bypass` 覆盖 P3 新 surface。
 
 ### P4：Legacy Bypass Deletion Pass
 

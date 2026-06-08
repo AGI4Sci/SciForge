@@ -235,3 +235,24 @@ test('Computer Use no-bypass guard blocks UI native final-answer synthesis bypas
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-ui-native-final-answer-bypass/);
 });
+
+test('Computer Use no-bypass guard blocks raw public event payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/codex-runtime-gateway.ts', [
+    'export function emitLeakyPublicEvent(callbacks: { onEvent?: (event: unknown) => void }) {',
+    '  emitWorkspaceRuntimeEvent(callbacks, {',
+    "    type: 'codex-runtime-progress',",
+    "    rawScreenshotPath: '/tmp/private/screenshot.png',",
+    "    screenshotBase64: 'data:image/png;base64,SECRET_IMAGE',",
+    "    providerPayload: { requestBody: 'SECRET_PROVIDER_PAYLOAD' },",
+    "    rawCommand: 'rm -rf /tmp/private',",
+    "    rawPath: '/Users/example/private.txt',",
+    '  });',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /missing-public-event-sanitizer|forbidden-public-event-raw-payload/);
+});

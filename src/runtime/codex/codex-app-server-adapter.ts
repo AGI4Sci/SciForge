@@ -2,6 +2,7 @@ import {
   normalizeBackendEvent,
   type BackendEventNormalizationOptions,
 } from './backend-event-normalization.js';
+import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 import { backendEventToNormalizedAgentEvent } from './backend-agent-event-adapter.js';
 import {
   attemptIdForCommand,
@@ -193,7 +194,7 @@ function isHostOwnedComputerUseRuntimeIntent(value: unknown): value is CodexRunt
 function publicHostOwnedRuntimeEvent(event: NormalizedAgentEvent, metadata: CodexRuntimeMetadata): NormalizedAgentEvent {
   const { raw: _raw, ...rest } = event;
   const projected = publicHostOwnedRuntimeValue(rest) as Record<string, unknown>;
-  return {
+  return sanitizePublicEvent({
     ...projected,
     provider: metadata.provider,
     model: metadata.model,
@@ -202,7 +203,7 @@ function publicHostOwnedRuntimeEvent(event: NormalizedAgentEvent, metadata: Code
     commandId: typeof event.commandId === 'string' ? event.commandId : metadata.commandId,
     attemptId: typeof event.attemptId === 'string' ? event.attemptId : metadata.attemptId,
     evidenceRefs: Array.isArray(event.evidenceRefs) ? event.evidenceRefs : metadata.evidenceRefs,
-  } as NormalizedAgentEvent;
+  }) as NormalizedAgentEvent;
 }
 
 function publicHostOwnedRuntimeValue(value: unknown): unknown {
