@@ -1046,3 +1046,167 @@ test('current VSCode co-work primitive ports keep restoration refs when restorat
   ]);
   assert.doesNotMatch(JSON.stringify(bind), /\/Users\/example|product-ready|kill-vscode|clear-profile|providerPayload|base64/i);
 });
+
+test('current VSCode co-work primitive ports expose terminal refs and execute terminal actions with Host context', async () => {
+  const calls: string[] = [];
+  const terminalRefs = [
+    'terminal:vscode:terminal-live:1',
+    'terminal-session:vscode:terminal-live:1:session-a',
+    'terminal-input:vscode:terminal-live:1:input-a',
+  ];
+  const observations = [
+    currentTerminalObservation('before', 'abc123'),
+    currentTerminalObservation('after', 'def456'),
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-terminal-live',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return textRef === 'text-ref:current-vscode-cowork:terminal-probe' ? 'private terminal probe' : undefined;
+      },
+      typeResolvedText: async (input) => {
+        calls.push(`type-terminal:${input.textRef}:${input.contextRefs?.join(',')}:${input.beforeObservationRef}`);
+      },
+      pressKeyInCurrentVSCode: async (input) => {
+        calls.push(`press-key:${input.key}:${input.contextRefs?.join(',')}:${input.beforeObservationRef}`);
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true, bind.error);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const observe = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId,
+      capture: 'both',
+      includeTree: true,
+    },
+  });
+  assert.equal(observe.ok, true, observe.error);
+  assert.ok((observe.value?.refs ?? []).includes('terminal:vscode:terminal-live:1'));
+  assert.ok((observe.value?.refs ?? []).includes('terminal-output:vscode:terminal-live:1:current'));
+  assert.ok((observe.value?.refs ?? []).includes('terminal-output-hash:vscode:terminal-live:1:sha256:def456'));
+
+  const focus = await terminalAct(service, sessionId, 'focus-terminal', {
+    type: 'key',
+    key: 'Control+Backquote',
+    elementRef: terminalRefs[0],
+  }, terminalRefs);
+  assert.equal(focus.ok, true, focus.error);
+
+  const send = await terminalAct(service, sessionId, 'send-terminal-text', {
+    type: 'type',
+    textRef: 'text-ref:current-vscode-cowork:terminal-probe',
+    elementRef: terminalRefs[0],
+  }, terminalRefs);
+  assert.equal(send.ok, true, send.error);
+
+  const submit = await terminalAct(service, sessionId, 'submit-terminal-command', {
+    type: 'key',
+    key: 'Enter',
+    elementRef: terminalRefs[0],
+  }, terminalRefs);
+  assert.equal(submit.ok, true, submit.error);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true, control.error);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Control+Backquote:terminal:vscode:terminal-live:1,terminal-session:vscode:terminal-live:1:session-a,terminal-input:vscode:terminal-live:1:input-a:observation:vscode:terminal-live-after',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:terminal-probe',
+    'type-terminal:text-ref:current-vscode-cowork:terminal-probe:terminal:vscode:terminal-live:1,terminal-session:vscode:terminal-live:1:session-a,terminal-input:vscode:terminal-live:1:input-a:observation:vscode:terminal-live-after',
+    'read-current-window',
+    'press-key:Enter:terminal:vscode:terminal-live:1,terminal-session:vscode:terminal-live:1:session-a,terminal-input:vscode:terminal-live:1:input-a:observation:vscode:terminal-live-after',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-terminal-live',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-terminal-live',
+  ]);
+  assert.ok((focus.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-terminal-live:focus-terminal'));
+  assert.ok((send.value?.refs ?? []).includes('text-ref:current-vscode-cowork:terminal-probe'));
+  assert.ok((submit.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-terminal-live:submit-terminal-command'));
+  assert.ok((control.value?.refs ?? []).includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-terminal-live'));
+  assert.doesNotMatch(JSON.stringify({ bind, observe, focus, send, submit, control }), /private terminal probe|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
+function currentTerminalObservation(stage: 'before' | 'after', hash: string) {
+  return {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:terminal-live',
+    windowRef: 'window:vscode:terminal-live',
+    titleRef: 'text:title:terminal-live',
+    frontmostRef: 'frontmost:vscode:terminal-live',
+    fileRefs: ['file-ref:vscode:terminal-live'],
+    editorElementRef: 'element:vscode:editor:terminal-live',
+    terminalElementRef: 'terminal:vscode:terminal-live:1',
+    terminalSessionRef: 'terminal-session:vscode:terminal-live:1:session-a',
+    terminalInputRef: 'terminal-input:vscode:terminal-live:1:input-a',
+    terminalOutputRef: 'terminal-output:vscode:terminal-live:1:current',
+    terminalOutputHashRef: `terminal-output-hash:vscode:terminal-live:1:sha256:${hash}`,
+    visibleTextRef: `text:vscode:terminal-live-${stage}`,
+    visibleTextSha256Ref: `text:vscode:terminal-live-${stage}-sha256`,
+    screenshotRef: `image:vscode:terminal-live-${stage}`,
+    accessibilityRef: `accessibility:vscode:terminal-live-${stage}`,
+    freshnessRef: `freshness:vscode:terminal-live-${stage}`,
+    observationRef: `observation:vscode:terminal-live-${stage}`,
+  };
+}
+
+function terminalAct(
+  service: ReturnType<typeof createComputerUsePrimitiveService>,
+  sessionId: string | undefined,
+  actionId: string,
+  action: Record<string, unknown>,
+  contextRefs: string[],
+) {
+  return service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId,
+      contextRefs,
+      action,
+      captureAfter: true,
+    },
+  });
+}

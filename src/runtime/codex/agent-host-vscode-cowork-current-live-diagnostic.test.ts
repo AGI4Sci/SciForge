@@ -3,11 +3,13 @@ import test from 'node:test';
 
 import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
   runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
+  runCurrentVSCodeCoWorkTerminalLiveDiagnostic,
 } from './agent-host-vscode-cowork-current-live-diagnostic.js';
 
 const currentVSCodeLiveEnabled = process.env[VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV] === '1';
@@ -141,8 +143,19 @@ test('current VSCode co-work wrappers do not touch live ports without explicit e
     restoreFocus,
     restoreMouse,
   });
+  const terminal = await runCurrentVSCodeCoWorkTerminalLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-terminal-default-off',
+    terminalTextRef: 'text-ref:current-vscode-cowork:terminal-default-off',
+    readCurrentWindow,
+    resolveTextRef,
+    typeResolvedText,
+    pressKeyInCurrentVSCode,
+    restoreFocus,
+    restoreMouse,
+  });
 
-  for (const result of [read, focus, insert]) {
+  for (const result of [read, focus, insert, terminal]) {
     assert.equal(result.status, 'blocked');
     assert.equal(result.maturity, 'live-diagnostic');
     assert.equal(result.productReady, false);
@@ -1055,6 +1068,164 @@ test('current VSCode co-work insert-draft diagnostic blocks unsafe SciForge focu
   assert.ok(!result.evidenceRefs.some((ref) => ref.startsWith('verifier:') && ref.includes('focus-editor')));
   assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw focused editor|example\.invalid|data:image|base64|raw-screenshot|providerPayload|product-ready|kill-vscode|clear-profile/i);
 });
+
+test('current VSCode co-work terminal diagnostic runs focus send observe without submit', async () => {
+  const calls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkTerminalLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-terminal-no-submit',
+    terminalTextRef: 'text-ref:current-vscode-cowork:terminal-probe',
+    submit: false,
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return currentTerminalWrapperObservation('no-submit');
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:terminal-probe'
+        ? 'private terminal probe'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-terminal:${input.textRef}:${input.contextRefs?.join(',')}:${input.beforeObservationRef}`);
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.contextRefs?.join(',')}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act(focus-terminal)',
+    'act(send-terminal-text)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.ok(result.evidenceRefs.includes('decision:vscode-cowork:unit-current-vscode-terminal-no-submit:terminal-no-submit'));
+  assert.ok(result.evidenceRefs.includes('terminal:vscode:terminal-wrapper:1'));
+  assert.ok(result.evidenceRefs.includes('terminal-output:vscode:terminal-wrapper:1:current'));
+  assert.ok(result.evidenceRefs.includes('terminal-output-hash:vscode:terminal-wrapper:1:sha256:abc123'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-terminal-no-submit'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-terminal-no-submit'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-terminal-no-submit'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-terminal-no-submit'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-terminal-no-submit'));
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Control+Backquote:terminal:vscode:terminal-wrapper:1,terminal-session:vscode:terminal-wrapper:1:session-a,terminal-input:vscode:terminal-wrapper:1:input-a:observation:vscode:terminal-wrapper:no-submit',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:terminal-probe',
+    'type-terminal:text-ref:current-vscode-cowork:terminal-probe:terminal:vscode:terminal-wrapper:1,terminal-session:vscode:terminal-wrapper:1:session-a,terminal-input:vscode:terminal-wrapper:1:input-a:observation:vscode:terminal-wrapper:no-submit',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-terminal-no-submit',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-terminal-no-submit',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /private terminal probe|stdout|stderr|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work terminal diagnostic can submit only after send and observe', async () => {
+  const calls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkTerminalLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-terminal-submit',
+    terminalTextRef: 'text-ref:current-vscode-cowork:terminal-probe',
+    submit: true,
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return currentTerminalWrapperObservation('submit');
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:terminal-probe'
+        ? 'private terminal probe'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-terminal:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act(focus-terminal)',
+    'act(send-terminal-text)',
+    'observe',
+    'act(submit-terminal-command)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.ok(result.evidenceRefs.includes('action:current-vscode-cowork:unit-current-vscode-terminal-submit:submit-terminal-command'));
+  assert.ok(result.evidenceRefs.includes('terminal-input:vscode:terminal-wrapper:1:input-a'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-terminal-submit'));
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Control+Backquote:observation:vscode:terminal-wrapper:submit',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:terminal-probe',
+    'type-terminal:text-ref:current-vscode-cowork:terminal-probe:observation:vscode:terminal-wrapper:submit',
+    'read-current-window',
+    'read-current-window',
+    'press-key:Enter:observation:vscode:terminal-wrapper:submit',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-terminal-submit',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-terminal-submit',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /private terminal probe|stdout|stderr|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+function currentTerminalWrapperObservation(stage: string) {
+  return {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:terminal-wrapper',
+    windowRef: 'window:vscode:terminal-wrapper',
+    titleRef: 'text:title:terminal-wrapper',
+    frontmostRef: 'frontmost:vscode:terminal-wrapper',
+    fileRefs: ['file-ref:vscode:terminal-wrapper'],
+    editorElementRef: 'element:vscode:editor:terminal-wrapper',
+    terminalElementRef: 'terminal:vscode:terminal-wrapper:1',
+    terminalSessionRef: 'terminal-session:vscode:terminal-wrapper:1:session-a',
+    terminalInputRef: 'terminal-input:vscode:terminal-wrapper:1:input-a',
+    terminalOutputRef: 'terminal-output:vscode:terminal-wrapper:1:current',
+    terminalOutputHashRef: 'terminal-output-hash:vscode:terminal-wrapper:1:sha256:abc123',
+    visibleTextRef: `text:vscode:terminal-wrapper:${stage}`,
+    visibleTextSha256Ref: `text:vscode:terminal-wrapper:${stage}:sha256`,
+    screenshotRef: `image:vscode:terminal-wrapper:${stage}`,
+    accessibilityRef: `accessibility:vscode:terminal-wrapper:${stage}`,
+    freshnessRef: `freshness:vscode:terminal-wrapper:${stage}`,
+    observationRef: `observation:vscode:terminal-wrapper:${stage}`,
+  };
+}
 
 test('current VSCode co-work live diagnostic can observe the real current VSCode window', {
   skip: currentVSCodeLiveEnabled

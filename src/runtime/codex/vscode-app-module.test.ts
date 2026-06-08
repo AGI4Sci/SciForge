@@ -485,8 +485,8 @@ test('region ambiguity blocks editor diagnostics and palette item targets instea
     ],
   });
 
-  assert.equal(paletteItem.status, 'needs-confirmation');
-  assert.equal(paletteItem.reasonRef, 'needs-confirmation:vscode-app-module:target-palette-item-ambiguous');
+  assert.equal(paletteItem.status, 'blocked');
+  assert.equal(paletteItem.reasonRef, 'blocked:vscode-app-module:operation-not-supported');
 });
 
 test('unknown VSCode webview beside a terminal blocks terminal target readiness instead of guessing', () => {
@@ -777,106 +777,36 @@ test('same-file verifier blocks when before and after file refs drift', () => {
   ]);
 });
 
-test('insert-draft readiness requires focused-editor evidence and text-ref content', () => {
+test('editor mutation operations fail closed until P9 scope and preview are implemented', () => {
   const vscode = createHostStructuredVSCodeAppModule();
+  const refs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'focused-editor:vscode:module:main',
+    'selection-ref:vscode:current:1',
+    'text-ref:vscode:replacement:1',
+    'freshness:vscode:main:1',
+  ];
 
-  const missingFocus = vscode.checkReadiness({
-    operation: 'insert-draft',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'file-ref:vscode:current:paper',
-      'element:vscode:editor:monaco:1',
-      'text-ref:vscode:draft:1',
-      'freshness:vscode:main:1',
-    ],
-  });
+  for (const operation of [
+    'move-cursor',
+    'insert-draft',
+    'replace-selection',
+    'save-current-file',
+    'undo-last-action',
+    'redo-last-action',
+  ]) {
+    const readiness = vscode.checkReadiness({ operation, refs });
 
-  assert.equal(missingFocus.status, 'blocked');
-  assert.equal(missingFocus.reasonRef, 'blocked:vscode-app-module:focused-editor-ref-required');
-
-  const ready = vscode.checkReadiness({
-    operation: 'insert-draft',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'file-ref:vscode:current:paper',
-      'element:vscode:editor:monaco:1',
-      'focused-editor:vscode:module:main',
-      'text-ref:vscode:draft:1',
-      'freshness:vscode:main:1',
-    ],
-  });
-
-  assert.equal(ready.status, 'ready');
-  assert.equal(ready.primitive.name, 'computer_use.act');
-  assert.deepEqual(ready.primitive.action, {
-    kind: 'type',
-    textRef: 'text-ref:vscode:draft:1',
-  });
-});
-
-test('replace-selection readiness requires selection-ref and replacement text-ref', () => {
-  const vscode = createHostStructuredVSCodeAppModule();
-
-  const readiness = vscode.checkReadiness({
-    operation: 'replace-selection',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'file-ref:vscode:current:paper',
-      'element:vscode:editor:monaco:1',
-      'focused-editor:vscode:module:main',
-      'selection-ref:vscode:current:1',
-      'text-ref:vscode:replacement:1',
-      'freshness:vscode:main:1',
-    ],
-  });
-
-  assert.equal(readiness.status, 'ready');
-  assert.deepEqual(readiness.primitive.action, {
-    kind: 'type',
-    textRef: 'text-ref:vscode:replacement:1',
-    replaceSelectionRef: 'selection-ref:vscode:current:1',
-  });
-});
-
-test('save-current-file readiness does not require confirmation but binds current file evidence', () => {
-  const vscode = createHostStructuredVSCodeAppModule();
-
-  const readiness = vscode.checkReadiness({
-    operation: 'save-current-file',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'file-ref:vscode:current:paper',
-      'element:vscode:editor:monaco:1',
-      'freshness:vscode:main:1',
-    ],
-  });
-
-  assert.equal(readiness.status, 'ready');
-  assert.equal(readiness.primitive.name, 'computer_use.act');
-  assert.deepEqual(readiness.primitive.action, {
-    kind: 'key',
-    key: 'Meta+S',
-  });
+    assert.equal(readiness.status, 'blocked');
+    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:operation-not-supported');
+  }
 });
 
 test('mutation verifier requires action evidence and same-file before/after refs', () => {
@@ -921,6 +851,8 @@ test('terminal readiness is refs-first and keeps send separate from submit', () 
     kind: 'key',
     key: 'Control+Backquote',
   });
+  assert.ok(focus.primitive.inputRefs.includes('element:vscode:terminal:1'));
+  assert.ok(!JSON.stringify(focus).includes('textRef'));
 
   const send = vscode.checkReadiness({
     operation: 'send-terminal-text',
@@ -942,6 +874,29 @@ test('terminal readiness is refs-first and keeps send separate from submit', () 
     kind: 'type',
     textRef: 'text-ref:vscode:terminal-input:1',
   });
+  assert.ok(!JSON.stringify(send.primitive.action).includes('Enter'));
+
+  const observe = vscode.checkReadiness({
+    operation: 'observe-terminal',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'element:vscode:terminal:1',
+      'terminal-output:vscode:1:current',
+      'terminal-output-hash:vscode:1:sha256:abc123',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(observe.status, 'ready');
+  assert.equal(observe.primitive.name, 'computer_use.observe');
+  assert.ok(observe.primitive.inputRefs.includes('terminal-output:vscode:1:current'));
+  assert.ok(observe.primitive.inputRefs.includes('terminal-output-hash:vscode:1:sha256:abc123'));
+  assert.doesNotMatch(JSON.stringify(observe), /stdout|stderr|raw[-:]?output|npm test/i);
 
   const submit = vscode.checkReadiness({
     operation: 'submit-terminal-command',
@@ -953,6 +908,8 @@ test('terminal readiness is refs-first and keeps send separate from submit', () 
       'frontmost:vscode:main',
       'observation:vscode:main:1',
       'element:vscode:terminal:1',
+      'terminal-session:vscode:1:session-a',
+      'terminal-input:vscode:1:input-a',
       'freshness:vscode:main:1',
     ],
   });
@@ -962,26 +919,8 @@ test('terminal readiness is refs-first and keeps send separate from submit', () 
     kind: 'key',
     key: 'Enter',
   });
-
-  const focusEditor = vscode.checkReadiness({
-    operation: 'focus-editor-from-terminal',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'element:vscode:terminal:1',
-      'freshness:vscode:main:1',
-    ],
-  });
-
-  assert.equal(focusEditor.status, 'ready');
-  assert.deepEqual(focusEditor.primitive.action, {
-    kind: 'key',
-    key: 'Meta+1',
-  });
+  assert.ok(submit.primitive.inputRefs.includes('terminal-session:vscode:1:session-a'));
+  assert.ok(submit.primitive.inputRefs.includes('terminal-input:vscode:1:input-a'));
 });
 
 test('terminal readiness fails closed for multiple terminals or raw shell commands', () => {
@@ -1025,11 +964,11 @@ test('terminal readiness fails closed for multiple terminals or raw shell comman
   assert.equal(raw.reasonRef, 'blocked:vscode-app-module:raw-ref-not-allowed');
 });
 
-test('command palette readiness is split into open query observe select close steps', () => {
+test('terminal readiness rejects payload-shaped terminal text and output refs without leaking payloads', () => {
   const vscode = createHostStructuredVSCodeAppModule();
 
-  const open = vscode.checkReadiness({
-    operation: 'open-command-palette',
+  const terminalTextPayload = vscode.checkReadiness({
+    operation: 'send-terminal-text',
     refs: [
       'window-action-session:vscode:1',
       'macos-app:vscode',
@@ -1037,18 +976,18 @@ test('command palette readiness is split into open query observe select close st
       'window:vscode:main',
       'frontmost:vscode:main',
       'observation:vscode:main:1',
+      'element:vscode:terminal:1',
+      'text:vscode:terminal-input:opaque-payload',
       'freshness:vscode:main:1',
     ],
   });
 
-  assert.equal(open.status, 'ready');
-  assert.deepEqual(open.primitive.action, {
-    kind: 'key',
-    key: 'Meta+Shift+P',
-  });
+  assert.equal(terminalTextPayload.status, 'blocked');
+  assert.equal(terminalTextPayload.reasonRef, 'blocked:vscode-app-module:unsafe-terminal-ref-not-allowed');
+  assert.doesNotMatch(JSON.stringify(terminalTextPayload), /opaque-payload/);
 
-  const query = vscode.checkReadiness({
-    operation: 'send-command-palette-query',
+  const terminalOutputPayload = vscode.checkReadiness({
+    operation: 'observe-terminal',
     refs: [
       'window-action-session:vscode:1',
       'macos-app:vscode',
@@ -1056,42 +995,192 @@ test('command palette readiness is split into open query observe select close st
       'window:vscode:main',
       'frontmost:vscode:main',
       'observation:vscode:main:1',
-      'command-palette:vscode:main',
-      'text-ref:vscode:palette-query:1',
+      'element:vscode:terminal:1',
+      'terminal-output:vscode:1:opaque-payload',
       'freshness:vscode:main:1',
     ],
   });
 
-  assert.equal(query.status, 'ready');
-  assert.deepEqual(query.primitive.action, {
-    kind: 'type',
-    textRef: 'text-ref:vscode:palette-query:1',
-  });
-
-  const select = vscode.checkReadiness({
-    operation: 'select-command-palette-item',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'command-palette:vscode:main',
-      'command-palette-item:vscode:main:workbench-action-files-save',
-      'freshness:vscode:main:1',
-    ],
-  });
-
-  assert.equal(select.status, 'ready');
-  assert.deepEqual(select.primitive.action, {
-    kind: 'key',
-    key: 'Enter',
-    itemRef: 'command-palette-item:vscode:main:workbench-action-files-save',
-  });
+  assert.equal(terminalOutputPayload.status, 'blocked');
+  assert.equal(terminalOutputPayload.reasonRef, 'blocked:vscode-app-module:unsafe-terminal-ref-not-allowed');
+  assert.doesNotMatch(JSON.stringify(terminalOutputPayload), /opaque-payload/);
 });
 
-test('command palette readiness rejects raw command ids and stale item refs', () => {
+test('terminal observe and submit require current refs before acting', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'element:vscode:terminal:1',
+    'freshness:vscode:main:1',
+  ];
+
+  const observeWithoutOutput = vscode.checkReadiness({
+    operation: 'observe-terminal',
+    refs: baseRefs,
+  });
+
+  assert.equal(observeWithoutOutput.status, 'blocked');
+  assert.equal(observeWithoutOutput.reasonRef, 'blocked:vscode-app-module:terminal-output-ref-required');
+
+  const submitWithoutInput = vscode.checkReadiness({
+    operation: 'submit-terminal-command',
+    refs: baseRefs,
+  });
+
+  assert.equal(submitWithoutInput.status, 'blocked');
+  assert.equal(submitWithoutInput.reasonRef, 'blocked:vscode-app-module:terminal-input-ref-required');
+
+  const submitWithoutSession = vscode.checkReadiness({
+    operation: 'submit-terminal-command',
+    refs: [
+      ...baseRefs,
+      'terminal-input:vscode:1:input-a',
+    ],
+  });
+
+  assert.equal(submitWithoutSession.status, 'blocked');
+  assert.equal(submitWithoutSession.reasonRef, 'blocked:vscode-app-module:terminal-session-ref-required');
+});
+
+test('terminal submit blocks when session or input refs drift from the selected terminal', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const readiness = vscode.checkReadiness({
+    operation: 'submit-terminal-command',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'element:vscode:terminal:1',
+      'terminal-session:vscode:2:session-a',
+      'terminal-input:vscode:1:input-a',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'blocked');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:terminal-session-drift');
+
+  const inputDrift = vscode.checkReadiness({
+    operation: 'submit-terminal-command',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'element:vscode:terminal:1',
+      'terminal-session:vscode:1:session-a',
+      'terminal-input:vscode:2:input-a',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(inputDrift.status, 'blocked');
+  assert.equal(inputDrift.reasonRef, 'blocked:vscode-app-module:terminal-input-drift');
+
+  const windowDrift = vscode.checkReadiness({
+    operation: 'submit-terminal-command',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'terminal:vscode:other:1',
+      'terminal-session:vscode:other:1:session-a',
+      'terminal-input:vscode:other:1:input-a',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(windowDrift.status, 'blocked');
+  assert.equal(windowDrift.reasonRef, 'blocked:vscode-app-module:terminal-window-drift');
+});
+
+test('terminal submit emits same-session and same-input verifier refs', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const readiness = vscode.checkReadiness({
+    operation: 'submit-terminal-command',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'terminal:vscode:main:1',
+      'terminal-session:vscode:main:1:session-a',
+      'terminal-input:vscode:main:1:input-a',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'ready');
+  assert.ok(readiness.evidenceRefs.includes('verifier:vscode-app-module:terminal-same-session:main-1'));
+  assert.ok(readiness.evidenceRefs.includes('verifier:vscode-app-module:terminal-same-input:main-1'));
+});
+
+test('terminal operations outside P7 fail closed until separately designed', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const refs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'element:vscode:terminal:1',
+    'freshness:vscode:main:1',
+  ];
+
+  for (const operation of ['interrupt-terminal-command', 'clear-terminal', 'focus-editor-from-terminal']) {
+    const readiness = vscode.checkReadiness({ operation, refs });
+
+    assert.equal(readiness.status, 'blocked');
+    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:operation-not-supported');
+  }
+});
+
+test('command palette operations fail closed until P8 current item refs are implemented', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const refs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'command-palette:vscode:main',
+    'text-ref:vscode:palette-query:1',
+    'command-palette-item:vscode:main:rank-1',
+    'freshness:vscode:main:1',
+  ];
+
+  for (const operation of [
+    'open-command-palette',
+    'send-command-palette-query',
+    'observe-command-palette-items',
+    'select-command-palette-item',
+    'close-command-palette',
+  ]) {
+    const readiness = vscode.checkReadiness({ operation, refs });
+
+    assert.equal(readiness.status, 'blocked');
+    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:operation-not-supported');
+  }
+});
+
+test('command palette readiness rejects raw command ids even while P8 is fail-closed', () => {
   const vscode = createHostStructuredVSCodeAppModule();
 
   const raw = vscode.checkReadiness({
@@ -1111,22 +1200,4 @@ test('command palette readiness rejects raw command ids and stale item refs', ()
 
   assert.equal(raw.status, 'blocked');
   assert.equal(raw.reasonRef, 'blocked:vscode-app-module:raw-ref-not-allowed');
-
-  const stale = vscode.checkReadiness({
-    operation: 'select-command-palette-item',
-    refs: [
-      'window-action-session:vscode:1',
-      'macos-app:vscode',
-      'process:vscode:1',
-      'window:vscode:main',
-      'frontmost:vscode:main',
-      'observation:vscode:main:1',
-      'command-palette:vscode:main',
-      'command-palette-item:vscode:stale:workbench-action-files-save',
-      'freshness:vscode:main:1',
-    ],
-  });
-
-  assert.equal(stale.status, 'blocked');
-  assert.equal(stale.reasonRef, 'blocked:vscode-app-module:current-palette-item-ref-required');
 });

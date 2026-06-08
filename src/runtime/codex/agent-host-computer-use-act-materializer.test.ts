@@ -597,13 +597,15 @@ test('default Computer Use Act materializer does not treat terminal, palette, or
   const result = await materializer({
     agentHostInput: vscodeAppModuleAgentHostInput('observe-terminal', [
       'element:vscode:terminal:main',
-      'text:vscode:terminal-output',
+      'terminal-output:vscode:main:current',
+      'terminal-output-hash:vscode:main:sha256:abc123',
       'command-palette-item:vscode:main:workbench-action-files-save',
       'action:vscode:previous:completed',
     ]),
     preflight: vscodeAppModulePreflight([
       'element:vscode:terminal:main',
-      'text:vscode:terminal-output',
+      'terminal-output:vscode:main:current',
+      'terminal-output-hash:vscode:main:sha256:abc123',
       'command-palette-item:vscode:main:workbench-action-files-save',
       'action:vscode:previous:completed',
     ]),
@@ -613,7 +615,8 @@ test('default Computer Use Act materializer does not treat terminal, palette, or
     attemptId: 'codex-command-default-vscode-terminal-candidate-attempt-1',
     runtimeTruth: vscodeAppModuleRuntimeTruth([
       'element:vscode:terminal:main',
-      'text:vscode:terminal-output',
+      'terminal-output:vscode:main:current',
+      'terminal-output-hash:vscode:main:sha256:abc123',
       'command-palette-item:vscode:main:workbench-action-files-save',
       'action:vscode:previous:completed',
     ]),

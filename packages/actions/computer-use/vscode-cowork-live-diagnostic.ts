@@ -17,6 +17,8 @@ import type {
 const execFileAsync = promisify(execFile);
 
 export const VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV = 'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC' as const;
+export const VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV =
+  'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC' as const;
 export const VSCODE_COWORK_LIVE_DIAGNOSTIC_SCHEMA_VERSION =
   'sciforge.computer-use.current-vscode-cowork-live-diagnostic.v1' as const;
 
@@ -41,6 +43,11 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   fileRefs: string[];
   editorElementRef: string;
   focusedEditorRef?: string;
+  terminalElementRef?: string;
+  terminalSessionRef?: string;
+  terminalInputRef?: string;
+  terminalOutputRef?: string;
+  terminalOutputHashRef?: string;
   visibleTextRef: string;
   visibleTextSha256Ref?: string;
   screenshotRef?: string;
@@ -248,8 +255,13 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           observationRef: observed.observationRef,
           screenshotRef: observed.screenshotRef,
           accessibilityRef: observed.accessibilityRef,
-          elementRefs: [observed.editorElementRef],
-          textRefs: uniqueRefs([observed.visibleTextRef, observed.visibleTextSha256Ref]),
+          elementRefs: uniqueRefs([observed.editorElementRef, observed.terminalElementRef]),
+          textRefs: uniqueRefs([
+            observed.visibleTextRef,
+            observed.visibleTextSha256Ref,
+            observed.terminalOutputRef,
+            observed.terminalOutputHashRef,
+          ]),
           staleInvalidationRefs: uniqueRefs([previousObservationRef]),
         },
         refs: uniqueRefs([
@@ -455,7 +467,15 @@ async function performDefaultCurrentVSCodeAction(
 ): Promise<void> {
   if (input.action.type === 'key') {
     const key = input.action.key;
-    if (key !== 'Command+1') throw new Error('current-vscode-act-key-unsupported');
+    if (key !== 'Command+1' && key !== 'Control+Backquote' && key !== 'Enter') {
+      throw new Error('current-vscode-act-key-unsupported');
+    }
+    if ((key === 'Control+Backquote' || key === 'Enter') && !hasTerminalContext(input.contextRefs)) {
+      throw new Error('current-vscode-act-terminal-ref-required');
+    }
+    if (key === 'Enter' && !hasTerminalInputContext(input.contextRefs)) {
+      throw new Error('current-vscode-act-terminal-input-ref-required');
+    }
     const pressKey = options.pressKeyInCurrentVSCode ?? pressKeyIntoCurrentVSCode;
     await pressKey({
       ...input,
@@ -464,7 +484,9 @@ async function performDefaultCurrentVSCodeAction(
     return;
   }
   if (input.action.type !== 'type') throw new Error('current-vscode-act-unsupported-action');
-  if (!input.focusedEditorRef?.startsWith('focused-editor:')) throw new Error('current-vscode-act-focused-editor-ref-required');
+  const hasEditorContext = input.focusedEditorRef?.startsWith('focused-editor:') === true;
+  const hasTerminalTargetContext = hasTerminalContext(input.contextRefs) && hasTerminalInputContext(input.contextRefs);
+  if (!hasEditorContext && !hasTerminalTargetContext) throw new Error('current-vscode-act-focused-editor-ref-required');
   const textRef = input.action.textRef;
   if (!textRef?.startsWith('text-ref:')) throw new Error('current-vscode-act-text-ref-required');
   const text = await options.resolveTextRef?.(textRef);
@@ -491,6 +513,14 @@ on run argv
       if frontmost of vscodeProcess is true then
         if keyName is "Command+1" then
           keystroke "1" using command down
+          return "pressed"
+        end if
+        if keyName is "Control+Backquote" then
+          keystroke "\`" using control down
+          return "pressed"
+        end if
+        if keyName is "Enter" then
+          key code 36
           return "pressed"
         end if
         error "current-vscode-key-unsupported"
@@ -654,6 +684,7 @@ export function currentVSCodeCoWorkWindowObservationFromSnapshot(
   const titleToken = tokenHash(input.windowTitle);
   const textToken = tokenHash(input.collectedText);
   const focusedEditorRef = focusedEditorRefFromSnapshot(input, titleToken);
+  const terminalRefs = terminalRefsFromSnapshot(input, titleToken, textToken);
   return {
     appRef: 'macos-app:com.microsoft.VSCode',
     processRef: `process:vscode:${safeRunId(input.pid)}`,
@@ -663,6 +694,7 @@ export function currentVSCodeCoWorkWindowObservationFromSnapshot(
     fileRefs: [`file-ref:vscode:current:${titleToken}`],
     editorElementRef: `element:vscode:editor:${titleToken}`,
     ...(focusedEditorRef ? { focusedEditorRef } : {}),
+    ...terminalRefs,
     visibleTextRef: `text:vscode:visible:${textToken}`,
     visibleTextSha256Ref: `text:vscode:visible-sha256:${textToken}`,
     screenshotRef: `image:vscode:current:${titleToken}`,
@@ -751,6 +783,11 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     ...observed.fileRefs,
     observed.editorElementRef,
     observed.focusedEditorRef,
+    observed.terminalElementRef,
+    observed.terminalSessionRef,
+    observed.terminalInputRef,
+    observed.terminalOutputRef,
+    observed.terminalOutputHashRef,
     observed.visibleTextRef,
     observed.visibleTextSha256Ref,
     observed.screenshotRef,
@@ -788,10 +825,25 @@ function isSafeCurrentVSCodeContextRef(ref: string): boolean {
     'scoped-input-lease:',
     'stale-invalidation:',
     'text:',
+    'terminal:',
+    'terminal-session:',
+    'terminal-input:',
+    'terminal-output:',
+    'terminal-output-hash:',
     'verifier:',
     'window:',
     'window-action-session:',
   ].some((prefix) => ref.startsWith(prefix));
+}
+
+function hasTerminalContext(refs: string[] | undefined): boolean {
+  return safeCurrentVSCodeContextRefs(refs).some((ref) =>
+    ref.startsWith('terminal:vscode:') || ref.startsWith('element:vscode:terminal:')
+  );
+}
+
+function hasTerminalInputContext(refs: string[] | undefined): boolean {
+  return safeCurrentVSCodeContextRefs(refs).some((ref) => ref.startsWith('terminal-input:vscode:'));
 }
 
 function focusedEditorRefFromSnapshot(
@@ -800,6 +852,38 @@ function focusedEditorRefFromSnapshot(
 ): string | undefined {
   if (!hasFocusedEditorEvidence(input)) return undefined;
   return `focused-editor:vscode:current:${titleToken}`;
+}
+
+function terminalRefsFromSnapshot(
+  input: CurrentVSCodeCoWorkWindowSnapshot,
+  titleToken: string,
+  textToken: string,
+): Pick<
+  CurrentVSCodeCoWorkWindowObservation,
+  'terminalElementRef' | 'terminalSessionRef' | 'terminalInputRef' | 'terminalOutputRef' | 'terminalOutputHashRef'
+> {
+  if (!hasTerminalEvidence(input)) return {};
+  const terminalToken = `${titleToken}:integrated-1`;
+  return {
+    terminalElementRef: `terminal:vscode:${terminalToken}`,
+    terminalSessionRef: `terminal-session:vscode:${terminalToken}:current`,
+    terminalInputRef: `terminal-input:vscode:${terminalToken}:current`,
+    terminalOutputRef: `terminal-output:vscode:${terminalToken}:current`,
+    terminalOutputHashRef: `terminal-output-hash:vscode:${terminalToken}:sha256:${textToken}`,
+  };
+}
+
+function hasTerminalEvidence(input: CurrentVSCodeCoWorkWindowSnapshot): boolean {
+  const focusFields = [
+    input.focusedRole,
+    input.focusedName,
+    input.focusedValue,
+    input.focusedDescription,
+    input.focusedContext,
+    input.collectedText,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (focusFields.length === 0) return false;
+  return /(?:^|\b)(?:terminal|integrated terminal|zsh|bash|fish|shell)(?:\b|$)/i.test(focusFields.join('\n'));
 }
 
 function hasFocusedEditorEvidence(input: CurrentVSCodeCoWorkWindowSnapshot): boolean {

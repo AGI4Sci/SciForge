@@ -217,7 +217,9 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 
 readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。key 检测必须覆盖 camelCase、snake_case 和 kebab-case alias；value 检测必须覆盖裸 base64、HTML/DOM、本地绝对路径等 raw payload。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
-阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。旧 P3-P9 的展开任务不再作为继续执行的 checklist 保留，只保留已验收基线；新的可执行路线和可打勾任务以 `PROJECT_CU.md` 为准。架构文档只保留阶段方向：
+阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。`PROJECT_CU.md` 是唯一继续路线图：已关闭阶段只保留短摘要，不再保留旧展开 checklist；旧逻辑、旧测试或旧文档和新方案冲突时直接删除、改写或 fail closed。新的可打勾任务必须能由一个红测、一个窄实现、一个 materializer / static guard、一个 env-gated skip path 或一个明确 diagnostic evidence 覆盖。
+
+架构文档只保留阶段方向：
 
 - P0：路线图与架构收口，删除旧任务包袱。
 - P1：Public Projection 收口，覆盖 app module readiness、Computer Use result 和 package presentation。
@@ -227,8 +229,8 @@ readiness validator 必须拒绝 top-level 或 nested action payload 中的 fina
 - P5：VSCode identity 与 concept normalization，只做稳定状态模型。
 - P6：VSCode ambiguity 与 read-only diagnostic，先证明不猜测和只读诊断。
 - P7：VSCode terminal 原子能力，focus / send / observe / submit 分离。
-- P8：VSCode command palette 原子能力，open / query / observe / select 分离。
-- P9：VSCode editor mutation 与 Host-owned narrow apply，先 preview，再由 Host 拆成 observe -> one primitive -> observe。
+- P8：VSCode command palette 原子能力，按 fail-closed -> concept refs -> open -> query -> observe -> mocked select -> verify 递进；真实桌面 live 先只做 open / query / observe / close。
+- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；先 preview，再由 Host 拆成 observe -> one primitive -> observe。
 
 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
@@ -395,6 +397,9 @@ Computer Use primitive 默认不调用模型。
 - Runtime `gui` module handler 已删除；默认 module registry 不列出 `gui`，外部注入 `gui` handler 也会 fail closed。
 - P6 current VSCode read / focus live harness 是 `live-diagnostic` 且默认关闭：缺少 env 时返回 blocked skip manifest，poison runner / adapter 不会被调用；mocked env-on path 会记录 before refs、after refs、action refs、release refs 和 cleanup refs，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
 - VSCode diagnostics 当前保持 app-module dry-run refs-only；没有新增共享系统输入 diagnostics 旁路，不能声明 `product-ready`。
+- P7 VSCode terminal readiness 是 `unit-proven`：`focus-terminal`、`send-terminal-text`、`observe-terminal`、`submit-terminal-command` 保持分步 primitive；send 只接受 Host `text-ref:` 且不按 Enter，observe 只输出 terminal output / hash refs，submit 需要 current terminal input / session refs、same-session / same-input verifier refs，terminal window / session / input 漂移时 blocked-safe。
+- P7 current VSCode terminal live harness 是 `live-diagnostic` 且默认关闭：使用独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC=1` gate；缺少 env 时不构造 runner / adapter，mocked env-on path 已覆盖 `focus -> send -> observe` 与 `focus -> send -> observe -> submit -> observe -> release`，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
+- P8.0 / P9.0 app-module readiness 当前刻意 fail-closed：command palette、editor mutation、save、undo / redo 等旧 ready 路径不保留；进入对应细分阶段前不能暴露 raw command id、raw label、raw selected text、raw diff、raw path 或直接写入 primitive。
 - 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
 - 论文 preview、narrow apply unit path 和 narrow apply diagnostic 仍待实现。
