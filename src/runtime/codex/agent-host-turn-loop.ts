@@ -1278,7 +1278,7 @@ function runtimeOwnedActEvidenceRef(ref: string): boolean {
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:)/i.test(trimmed)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(trimmed)) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|input-lease:|lease:|native-host:|action-ledger:|evidence:|workEvidence:|runtime-truth:|permission:|cancel:|adapter-registry:|desktop-native:|desktop-window:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|input-lease:|lease:|native-host:|action-ledger:|evidence:|workEvidence:|runtime-truth:|intent:|chat-request:|permission:|approval:|risk:|cancel:|adapter-registry:|desktop-native:|desktop-window:|window:|macos-app:|process:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|non-user-file-scope:|cursor-move:|selection-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function structuredResult(input: {
@@ -1617,7 +1617,7 @@ function runtimeOwnedRuntimeTruthRef(ref: string): boolean {
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(trimmed)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(trimmed)) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|native-adapter:|desktop-native:|desktop-window:|permission:|approval:|cancel:|stop:|lease:|input-lease:|adapter-registry:|window:|action-ledger:|evidence:|workEvidence:|native-host:|audit:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|intent:|chat-request:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|native-adapter:|desktop-native:|desktop-window:|permission:|approval:|risk:|cancel:|stop:|lease:|input-lease:|adapter-registry:|window:|macos-app:|process:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|non-user-file-scope:|cursor-move:|selection-ref:|action-ledger:|evidence:|workEvidence:|native-host:|audit:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -5,6 +5,9 @@ import {
   createDefaultWindowActionSessionComputerUseActMaterializer,
 } from './agent-host-window-action-computer-use-act-materializer.js';
 import {
+  createDefaultVSCodeCoWorkComputerUseActMaterializer,
+} from './agent-host-vscode-cowork-act-materializer.js';
+import {
   requiresComputerUseProductCompletionEvidence,
 } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
 import {
@@ -36,10 +39,13 @@ export function createDefaultComputerUseActMaterializer(options: {
     ...options.windowAction,
     env: options.windowAction?.env ?? options.env,
   });
+  const vscodeCoWork = createDefaultVSCodeCoWorkComputerUseActMaterializer();
 
   const hostPortContract = materializerHostPortContract(options.hostPortContract);
   const singleStep: CodexAgentHostComputerUseActMaterializer = async (input) => {
     const normalizedInput = normalizePlannerObjectiveInput(input);
+    const vscodeCoWorkResult = await vscodeCoWork(normalizedInput);
+    if (vscodeCoWorkResult) return vscodeCoWorkResult;
     if (hasBrowserHostSessionRef(normalizedInput)) return browser(normalizedInput);
     if (hasWindowActionSessionRef(normalizedInput)) return windowAction(normalizedInput);
     return blockedTsOnlyResult(normalizedInput, {
@@ -440,7 +446,7 @@ function runtimeOwnedRef(ref: string): boolean {
     || /provider[-_/]?(?:payload|input|request|response)/i.test(trimmed)
   ) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|intent:|chat-request:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|approval:|risk:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|non-user-file-scope:|cursor-move:|selection-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function safeContractText(value: unknown): string {

@@ -316,6 +316,49 @@ test('default Computer Use Act materializer routes WindowActionSession through t
   assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:/i);
 });
 
+test('default Computer Use Act materializer produces a current VSCode co-work observe decision from Host refs', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not handle current VSCode co-work decisions.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-cowork-fallback'],
+        };
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: vscodeCoWorkAgentHostInput(),
+    preflight: vscodeCoWorkPreflight(),
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-cowork',
+    attemptId: 'codex-command-default-vscode-cowork-attempt-1',
+    runtimeTruth: vscodeCoWorkRuntimeTruth(),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.equal(result?.claimType, 'computer-use-vscode-cowork-observe-decision');
+  assert.equal(result?.completionTruth?.scope, 'action');
+  assert.equal(result?.completionTruth?.status, 'satisfied');
+  assert.ok(result?.evidenceRefs.includes('chat-request:vscode-cowork:agent-host-producer'));
+  assert.ok(result?.evidenceRefs.includes('window:vscode:paper'));
+  assert.ok(result?.evidenceRefs.includes('observation:vscode:current'));
+  assert.ok(result?.evidenceRefs.includes('text:vscode:visible'));
+  assert.ok(result?.evidenceRefs.includes('element:vscode:editor'));
+  assert.ok(result?.executionUnits?.some((unit) =>
+    unit.tool === 'vscode-cowork.agent-host-producer' && unit.primitive === 'observe'
+  ));
+  assert.match(result?.reasoningTrace ?? '', /Host.*observe refs.*primitive/i);
+  assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner/i);
+});
+
 test('default Computer Use Act materializer preserves first-step WindowAction evidence when workflow loop needs runtime truth refresh', async () => {
   const materializer = createDefaultComputerUseActMaterializer({
     maxActLoopSteps: 2,
@@ -749,6 +792,115 @@ function windowActionObservationRefs(): string[] {
     'accessibility-ui-automation:vscode-main/state-snapshot-before',
     'accessibility-ui-automation:vscode-main/text-before',
     'desktop-window:vscode-main',
+  ];
+}
+
+function vscodeCoWorkAgentHostInput(): NormalizedCodexAgentHostInput {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'test',
+    intentText: '读取我当前打开的 VSCode 可见文本。',
+    authorizationProfileId: 'high-autonomy',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'chat-request:vscode-cowork:agent-host-producer',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork',
+      refs: vscodeCoWorkTargetRefs(),
+    },
+    observation: {
+      fresh: true,
+      refs: vscodeCoWorkObservationRefs(),
+    },
+    permissions: {
+      refs: [
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+      ],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+}
+
+function vscodeCoWorkPreflight(): ComputerUsePreflightResult {
+  return {
+    ...readyPreflight(),
+    target: {
+      summary: 'Current VSCode co-work window',
+      refs: vscodeCoWorkTargetRefs(),
+    },
+    evidenceRefs: [
+      ...vscodeCoWorkObservationRefs(),
+      'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+    ],
+  };
+}
+
+function vscodeCoWorkRuntimeTruth(): CodexAgentHostRuntimeTruth {
+  return {
+    ...runtimeTruth({
+      observationRefs: vscodeCoWorkObservationRefs(),
+      permissionRefs: [
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+      ],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+    }),
+    target: {
+      bound: true,
+      summary: 'Current VSCode co-work window',
+      refs: vscodeCoWorkTargetRefs(),
+    },
+    observation: {
+      fresh: true,
+      refs: vscodeCoWorkObservationRefs(),
+      observedAt: '2026-06-03T00:00:00.000Z',
+      capturedAt: '2026-06-03T00:00:00.000Z',
+      freshnessCheckedAt: '2026-06-03T00:00:00.000Z',
+      freshnessCheck: {
+        status: 'current',
+        observedAt: '2026-06-03T00:00:00.000Z',
+        checkedAt: '2026-06-03T00:00:00.000Z',
+        maxAgeMs: 30_000,
+      },
+    },
+    refs: [
+      'intent:current-vscode-cowork',
+      'chat-request:vscode-cowork:agent-host-producer',
+      ...vscodeCoWorkTargetRefs(),
+      ...vscodeCoWorkObservationRefs(),
+      'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+      'computer-use:executor-scope:current-vscode',
+      'cancel:runtime-turn/codex-command-default-vscode-cowork',
+    ],
+  };
+}
+
+function vscodeCoWorkTargetRefs(): string[] {
+  return [
+    'macos-app:com.microsoft.VSCode',
+    'process:vscode:paper',
+    'window:vscode:paper',
+    'text:title:paper',
+    'frontmost:vscode:paper',
+    'file-ref:vscode:paper',
+    'window-action-session:vscode-cowork:1',
+  ];
+}
+
+function vscodeCoWorkObservationRefs(): string[] {
+  return [
+    'window-action-session:vscode-cowork:1',
+    'window:vscode:paper',
+    'observation:vscode:current',
+    'image:vscode:current',
+    'accessibility:vscode:current',
+    'text:vscode:visible',
+    'element:vscode:editor',
+    'freshness:vscode:current',
+    'file-ref:vscode:paper',
   ];
 }
 
