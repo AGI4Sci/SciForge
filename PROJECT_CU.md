@@ -33,7 +33,20 @@ Computer Use core 只执行 Host 指定的 primitive。Agent Host 负责理解�
 - 不杀用户 VSCode，不清用户 VSCode profile。
 - 共享系统输入路径只能标 `live-diagnostic`，不能宣称 `product-ready`。
 
-## 新方案
+## 当前已验收基线
+
+本节只记录已经证明过的事实，不再展开成旧任务 checklist。后续如果发现基线和新方案冲突，直接删除或 fail closed 旧逻辑，不做兼容层。
+
+- Host-side App Capability Module contract / registry 已 unit-proven；Computer Use core 不 import VSCode module。
+- VSCode stable concept model、sanitizer、readiness gate 和 atomic capability catalog 已 unit-proven。
+- read-only、focus、editor mutation、terminal、command palette readiness 已 unit-proven。
+- Agent Host dry-run materializer 已 unit-proven：它不会从裸 `commandText`、terminal output、palette item 或 act completed status 推断 completion。
+- 无旁路静态护栏已 unit-proven：GUI completion surface、retired runtime `gui` module、legacy Computer Use public surface、ordinary/native direct import 和 readiness final-answer/raw payload 泄漏都会 fail closed。
+- 普通聊天 / native route P2 入口审计已完成；裸 ordinary VSCode 文本不能直接启动 native live diagnostic。
+- Native route final-answer gate 已 unit-proven：没有 Host-owned final-answer evidence 时只能 `partial` / `blocked`，不能 `done`。
+- public event sanitizer、真实 VSCode live diagnostic、Host-owned preview / narrow apply workflow 仍待实现。
+
+## 新方案边界
 
 采用 Host-side App Capability Module Registry。
 
@@ -140,18 +153,6 @@ open-command-palette
   -> observe
 ```
 
-## 已验收基线
-
-以下是当前代码和测试已经覆盖的事实摘要。旧任务展开不再保留为继续执行的 checklist。
-
-- Host-side App Capability Module contract / registry 已 unit-proven；Computer Use core 不 import VSCode module。
-- VSCode stable concept model、sanitizer、readiness gate 和 atomic capability catalog 已 unit-proven。
-- read-only、focus、editor mutation、terminal、command palette readiness 已 unit-proven。
-- Agent Host dry-run materializer 已 unit-proven：它不会从裸 `commandText`、terminal output、palette item 或 act completed status 推断 completion。
-- 无旁路静态护栏已 unit-proven：GUI completion surface、retired runtime `gui` module、legacy Computer Use public surface、ordinary/native direct import 和 readiness final-answer/raw payload 泄漏都会 fail closed。
-- 普通聊天 / native route P2 入口审计已完成；裸 ordinary VSCode 文本不能直接启动 native live diagnostic。
-- public event sanitizer、VSCode live diagnostic、Host-owned preview / apply workflow 仍待实现。
-
 ## 新任务路线
 
 路线原则：
@@ -162,76 +163,108 @@ open-command-palette
 - Unit path 先行，env-gated live diagnostic 后置；真实桌面路径只能标 `live-diagnostic`。
 - `blocked` / `needs-confirmation` 是有效验收结果，但必须保留 reason refs、evidence refs 和恢复路径。
 
-### P3：Ordinary Chat Host-only 接线
+### P0：任务路线重置
 
-目标：普通聊天只能进入 Agent Host。裸自然语言、terminal 输出、palette item 或 action completed status 不能在本地被推断成 VSCode operation 或多步 GUI workflow。
+目标：删掉旧展开任务，把继续推进的路线改成新方案的递进 checklist。
 
-Build Tasks：
+- [x] `PROJECT_CU.md` 不再保留旧 P3-P9 的展开执行项。
+- [x] 已完成工作只作为“当前已验收基线”记录，不作为继续执行任务。
+- [x] 新任务从小闭环开始：先 surface inventory，再 sanitizer，再 live diagnostic，再写入与 apply。
+- [x] 每个阶段都有可打勾的 Build / Acceptance 项，不设置一步到完整 co-work 的巨大任务。
+- [x] 文档明确旧逻辑和新方案冲突时删除旧逻辑，不做兼容。
 
-- [x] 普通聊天 hook 只构造 Codex / Agent Host input envelope，不直接调用 VSCode module、Computer Use act 或 native live runner。
-- [x] 删除或 fail closed 通过 `message` / `commandText` / prompt 文本推断 VSCode operation 的旧逻辑。
-- [x] 只有 Host structured operation ref 可以调用 AppModuleRegistry / VSCode module readiness。
-- [x] terminal output、command palette item、action completed status 只能作为 evidence refs，不触发下一步 operation。
-- [x] 更新 `docs/ComputerUseEntryRouteAudit.md`，把 P3 迁移和删除项标清。
+### P1：Public Projection Surface Inventory
 
-Acceptance Gates：
+目标：先找全 public projection 出口，避免 sanitizer 只接住一两个显眼路径。
 
-- [x] Unit tests 证明 ordinary chat 裸文本不能绕过 Host 进入 VSCode module。
-- [x] Unit tests 证明裸 `message` / `commandText` 不能推断 `read-visible-text`、`focus-editor` 或 live diagnostic。
-- [x] Unit tests 证明 terminal / palette / action refs 只能作为 evidence，不会变成下一步 operation。
-- [x] Unit tests 证明 structured Host operation ref 可以走 dry-run，并且只返回 primitive candidate / readiness refs。
+- [ ] 列出 ordinary chat events、native route events、runtime gateway events、app module readiness、Computer Use result 的 public projection 文件和函数。
+- [ ] 对每个 surface 标注允许输出：status、safe summary、reason refs、evidence refs、artifact refs、compact observation refs、Host final-answer envelope。
+- [ ] 对每个 surface 标注禁止输出：raw screenshot、image/base64、AX tree、visible text、provider payload、trace、日志、raw artifact body、URL、raw path、raw command、secret。
+- [ ] 写一个最小红测，证明当前至少一个 nested raw/base64/provider payload 会泄漏或未被统一处理。
+- [ ] 更新 `npm run smoke:computer-use-no-bypass` 的扫描范围草案，覆盖新增 public projection surface。
 
-### P4：Native Route Final-answer Gate
+验收：
 
-目标：native route 只能投影 Host events / `FinalAnswerEnvelope`。没有 same-run Host final-answer evidence 时，只能 `blocked` / `partial`，不能 `done`。
+- [ ] Inventory 能对应到具体文件和函数，不只写概念。
+- [ ] 红测在实现 sanitizer 前失败，失败原因和 raw payload 泄漏相关。
+- [ ] 没有新增 final-answer、completion truth 或 native message 旁路。
 
-Build Tasks：
+### P2：Shared Public Event Sanitizer
 
-- [x] 定义 native route 可接受的 Host-owned final-answer evidence marker：`agentHostFinalAnswer.schemaVersion/source/hostOwnsFinalAnswer/computerUseCorePlanning/evidenceRefs`。
-- [x] native route result 只接受 Codex / Agent Host 的 final answer envelope；无 Host marker 时不投影 `done`。
-- [x] Computer Use / app module / runtime local result 只能作为 refs-first evidence；readiness/action/procedure completion 会降级为 `partial` / `blocked`。
-- [x] 删除 runtime-local answer synthesis、completion ack 或 fallback answer；UI 不再从 native `message` / `message_delta` / `done.finalText` 生成 `FinalAnswerEnvelope`。
-- [x] runtime gateway / slash command 的本地 completion fallback 同步 fail closed 或迁入 Host-owned event projection。
+目标：实现一个共享、递归、refs-first 的 public sanitizer，再接入最小 surface。
 
-Acceptance Gates：
+- [ ] 新增共享 sanitizer 模块，递归处理 object、array、metadata、diagnostic payload、error payload 和 action payload。
+- [ ] sanitizer 对 forbidden key 和 forbidden value 都 fail closed 或 redacted，覆盖 camelCase、snake_case、kebab-case alias。
+- [ ] sanitizer 保留 tokenized refs，丢弃或替换 unsafe raw 值，不把大对象压进聊天正文或主上下文。
+- [ ] Unit tests 覆盖 top-level raw、nested raw、base64/data URL、provider payload、logs、raw path、raw command、secret。
+- [ ] Unit tests 覆盖 blocked / partial / error path 也不会泄漏 raw evidence。
 
-- [x] Unit tests 证明 live diagnostic runner 返回 `completed` 但没有 Host final-answer evidence 时，native route 不能 `done`。
-- [x] Unit tests 证明 app module readiness、single action completed、`run_procedure.status=completed` 都不能成为 final answer。
-- [x] Unit tests 证明 runtime gateway 空响应不会合成本地 fallback answer。
-- [x] Unit tests 证明 public events 只包含 tokenized refs、blocked / partial 状态和 Host-owned final answer envelope。
+验收：
 
-### P5：公共事件与大对象 Sanitizer
+- [ ] shared sanitizer 单测通过。
+- [ ] `publicProjectionHasForbiddenRaw(sanitized)` 或等价断言证明 sanitized output 干净。
+- [ ] 测试证明 artifact refs / evidence refs / observation refs 被保留。
 
-目标：把 ordinary chat、native route、Computer Use result 和 app module readiness 的 public projection 统一成 refs-first 输出。
+### P3：Public Projection Integration
 
-Build Tasks：
+目标：把 P2 sanitizer 接到第一批真实 public surface，先覆盖结果投影，不碰真实桌面。
 
-- [ ] 列出所有 public projection surface：ordinary chat events、native route events、runtime gateway events、app module readiness、Computer Use result。
-- [ ] 实现共享 public event sanitizer，递归覆盖 action payload、metadata、diagnostic payload 和 error payload。
-- [ ] sanitizer 拒绝 screenshot、image、AX tree、visible text、provider payload、trace、日志、artifact raw body、URL、raw path、raw command、base64、secret。
-- [ ] 大对象只保留 artifact refs / evidence refs / compact observation refs，不进入聊天正文或主上下文。
-- [ ] blocked / partial / error 路径也只输出 reason refs 和安全摘要。
+- [ ] native route `workspaceRuntimeEvent` / `done` / `failed` 投影使用 shared sanitizer。
+- [ ] runtime gateway 的 blocked / partial / empty-response / error payload 使用 shared sanitizer。
+- [ ] app module readiness 的 public result 使用 shared sanitizer 或共享 forbidden raw detector。
+- [ ] Computer Use action/procedure result 的 public projection 只保留 refs 和 safe summary。
+- [ ] static guard 禁止新增 public raw screenshot path、data URL、raw command、raw path、provider payload。
 
-Acceptance Gates：
+验收：
 
-- [ ] Unit tests 覆盖 top-level 和 nested raw/base64/provider payload 泄漏。
-- [ ] Unit tests 覆盖 blocked / partial / error 路径不泄漏 raw 证据。
-- [ ] Static tests 覆盖 public event 不能包含 raw screenshot path、data URL、raw command、raw path。
-- [ ] `npm run smoke:computer-use-no-bypass` 覆盖新增 public projection surface。
+- [ ] Native route 单测证明无 Host final answer 时仍 `partial` / `blocked`，且 payload sanitized。
+- [ ] Runtime gateway 单测证明 missing-final-answer / error 不泄漏 raw logs 或 raw provider payload。
+- [ ] App module readiness 单测证明 nested raw action payload 被拒绝或 sanitized。
+- [ ] `npm run smoke:computer-use-no-bypass` 覆盖 P3 新 surface。
 
-### P6：VSCode Read-only Live Diagnostic 基线
+### P4：Legacy Bypass Deletion Pass
 
-目标：先跑真实 VSCode 的无写入 live diagnostic，证明目标识别、观察、focus 和 cleanup 能在真实桌面上闭环。
+目标：在 sanitizer 接入后，集中删除或 fail closed 剩余历史旁路，不做 compatibility wrapper。
 
-Build Tasks：
+- [ ] 用静态扫描列出仍能从 native `message`、`message_delta`、`done.finalText`、runtime ack 或 tool local completion 生成用户可见回答的路径。
+- [ ] 删除或 fail closed 剩余 `gui.present` / `gui.ask_user` / runtime `gui` module completion surface。
+- [ ] 删除或 fail closed 从裸 `message` / `commandText` / terminal output / palette item 推断 VSCode operation 的残留路径。
+- [ ] 删除或 fail closed 历史 run、fixture、package probe、fallback text 参与 completion truth 的残留路径。
+- [ ] 更新 no-bypass smoke，确保新 surface 进入扫描。
 
-- [ ] unit dry-run 覆盖 `read-visible-text` current-window readiness。
-- [ ] unit dry-run 覆盖 `focus-editor` current-window readiness。
-- [ ] unit dry-run 覆盖 `show-problems` / `read-diagnostics` blocked-safe readiness。
-- [ ] env-gated live diagnostic harness 默认关闭，显式 env 才运行。
+验收：
+
+- [ ] 单测证明 unsupported legacy GUI completion request fail closed。
+- [ ] 单测证明 native text / runtime ack / tool completion 不能铸造 `FinalAnswerEnvelope`。
+- [ ] `npm run smoke:computer-use-no-bypass`、`npm run smoke:no-legacy-paths` 通过；若有既存 warning，必须记录为非本阶段引入。
+
+### P5：Lifecycle Cleanup Contract
+
+目标：先把 bind / observe / act / release 的生命周期证据固化，再进入真实 VSCode。
+
+- [ ] Unit tests 覆盖 `bind` 产生 session-scoped input lease / adapter / cursor refs。
+- [ ] Unit tests 覆盖 `act` 后产生 executor event refs、after observation refs 或 blocked reason refs。
+- [ ] Unit tests 覆盖 `control release` 释放 input lease / adapter / cursor。
+- [ ] Unit tests 覆盖 shared-system-input 路径只能 `live-diagnostic`，不能 `product-ready`。
+- [ ] Cleanup manifest 记录 front app、focus、mouse position restoration refs。
+
+验收：
+
+- [ ] 所有 lifecycle public output 经过 P2 sanitizer。
+- [ ] release 缺失时 run 不能被标记为完成。
+- [ ] 不杀 VSCode，不清 profile，不依赖用户固定布局。
+
+### P6：VSCode Read-only Diagnostic
+
+目标：只验证目标识别、观察、focus 和 diagnostics，不做写入。
+
+- [ ] dry-run 覆盖 `read-visible-text` readiness，只输出 visible-text refs，不输出 raw visible text。
+- [ ] dry-run 覆盖 `focus-editor` readiness，目标不唯一时 `needs-confirmation` / `blocked`。
+- [ ] dry-run 覆盖 `show-problems` / `read-diagnostics` readiness，问题面板不可识别时 blocked-safe。
+- [ ] env-gated live harness 默认关闭，显式 env 才运行。
 - [ ] live run 记录 before refs、after refs、action refs、release refs 和 cleanup refs。
 
-Acceptance Gates：
+验收：
 
 - [ ] 每个 manifest 都是 `live-diagnostic` / `productReady=false`。
 - [ ] read-only current-window live diagnostic 通过或 blocked-safe，并保留 reason refs。
@@ -239,75 +272,66 @@ Acceptance Gates：
 - [ ] 每个 run 都 release input lease / adapter / cursor，恢复前台 app 和鼠标位置。
 - [ ] stdout、manifest、public events 不泄漏 raw text、raw path、raw screenshot、provider payload、base64。
 
-### P7：VSCode Terminal / Command Palette 分步 Diagnostic
+### P7：VSCode Terminal 分步 Diagnostic
 
-目标：在 P6 通过后验证 terminal 和 command palette 的单步能力；submit/select 必须和 observe 分离，不做软件级任务。
+目标：验证 terminal 的单步能力，send 和 submit 必须分离。
 
-Build Tasks：
+- [ ] dry-run 覆盖 `focus-terminal` readiness。
+- [ ] dry-run 覆盖 `send-terminal-text`，只接受 Host 提供的 `text-ref:`，不提交。
+- [ ] dry-run 覆盖 `observe-terminal`，只输出 terminal evidence refs。
+- [ ] dry-run 覆盖 `submit-terminal-command`，只提交 current terminal input ref，不携带 raw command。
+- [ ] env-gated live 按 `focus -> send -> observe -> submit -> observe -> cleanup` 分步运行。
 
-- [ ] `focus-terminal` live diagnostic。
-- [ ] `send-terminal-text` live diagnostic，只发送 Host 提供的 text ref，不提交。
-- [ ] `observe-terminal` live diagnostic，输出 terminal evidence refs。
-- [ ] `submit-terminal-command` 单独 gate，只提交 current input ref，不携带 raw command。
-- [ ] `open-command-palette` / `send-command-palette-query` / `observe-command-palette-items` live diagnostic。
-- [ ] `select-command-palette-item` 只接受 current observe item ref，目标不唯一时 blocked / needs-confirmation。
-- [ ] `close-command-palette` cleanup diagnostic。
+验收：
 
-Acceptance Gates：
+- [ ] Unit tests 证明 raw command 被拒绝。
+- [ ] Live diagnostic 证明 terminal focus / send / observe / submit 分离，或 blocked-safe。
+- [ ] terminal 目标漂移或多 terminal 不唯一时 `needs-confirmation` / `blocked`。
+- [ ] cleanup refs 完整，不杀 VSCode，不清 profile。
 
-- [ ] Terminal live 证明 focus / send / observe / submit 分离。
-- [ ] Command palette live 证明 item ref 来自 current observe。
-- [ ] terminal / palette / focus 漂移时 blocked / needs-confirmation。
-- [ ] 所有 manifest 都是 `live-diagnostic` / `productReady=false`，且 cleanup refs 完整。
-- [ ] 不杀 VSCode，不清 profile，不保留未说明的临时窗口 / artifact。
+### P8：VSCode Command Palette 分步 Diagnostic
 
-### P8：VSCode Editor Mutation Diagnostic
+目标：验证 command palette 的单步能力，item 选择必须来自 current observe refs。
 
-目标：在 P6/P7 的目标识别和 cleanup 可靠后，再验证 editor 写入类单步 primitive。先 unit，再 scratch / explicit live，不做论文级改写。
+- [ ] dry-run 覆盖 `open-command-palette` readiness。
+- [ ] dry-run 覆盖 `send-command-palette-query`，只接受 `text-ref:`。
+- [ ] dry-run 覆盖 `observe-command-palette-items`，只输出 item refs。
+- [ ] dry-run 覆盖 `select-command-palette-item`，只接受 current observe item ref。
+- [ ] env-gated live 按 `open -> send query -> observe items -> select item -> observe -> close/cleanup` 分步运行。
 
-Build Tasks：
+验收：
 
-- [ ] unit dry-run 覆盖 `insert-draft` current-selection primitive candidate。
-- [ ] unit dry-run 覆盖 `replace-selection` current-selection primitive candidate。
-- [ ] unit dry-run 覆盖 `save-current-file` same-file / mutation readiness。
-- [ ] live diagnostic 优先使用 scratch 或用户显式选择的当前选区；文件、选区或目标漂移时 blocked / needs-confirmation。
-- [ ] `save-current-file` live diagnostic 单独 env gate，必须绑定 same-file、mutation 和 Host action refs。
-- [ ] 每次写入后执行 observe，记录 before/after/action/mutation/cleanup refs。
+- [ ] Unit tests 证明 raw command id / raw palette label 不能直接执行。
+- [ ] Live diagnostic 证明 item ref 来自 current observe，或 blocked-safe。
+- [ ] palette 目标漂移、item 不唯一或 observation stale 时 `needs-confirmation` / `blocked`。
+- [ ] cleanup refs 完整，不留下 palette 或焦点漂移。
 
-Acceptance Gates：
+### P9：Editor Mutation 与 Host-owned Preview / Narrow Apply
 
-- [ ] Unit tests 证明 insert / replace / save 都只生成一个 primitive candidate。
-- [ ] Unit tests 证明文件、选区或目标漂移时 blocked / needs-confirmation。
-- [ ] explicit live diagnostic 通过或 blocked-safe，并保留 before/after/action/mutation refs。
-- [ ] save live diagnostic 不默认运行；显式运行时保留 same-file 和 cleanup refs。
-- [ ] public events 不泄漏 raw selected text、raw path、raw command 或 provider payload。
+目标：最后才进入写入与文本协作。先 preview，不写文件；再 narrow apply，只应用当前选区或单个明确范围。
 
-### P9：Host-owned Preview 与 Narrow Apply
-
-目标：最后才进入论文/文本协作。先 preview，不写文件；再 narrow apply，只应用当前选区或单个明确范围。
-
-Build Tasks：
-
+- [ ] dry-run 覆盖 `insert-draft` current-selection primitive candidate。
+- [ ] dry-run 覆盖 `replace-selection` current-selection primitive candidate。
+- [ ] dry-run 覆盖 `save-current-file` same-file / mutation readiness。
 - [ ] preview v1 只支持当前选区或 Host 明确选择的单个范围；范围不明确时 `needs-confirmation`。
 - [ ] preview 输出 draft / diff artifact refs，不调用 VSCode 写入 primitive。
-- [ ] preview v1 先覆盖 plain text / Markdown；LaTeX 命令、引用、公式、代码块和表格默认保留或 blocked-safe。
-- [ ] 用户明确要求 apply 时，Host 把 patch 拆成 observe -> one primitive -> observe 的多次单步流程。
-- [ ] narrow apply v1 只应用当前选区或单个明确范围；多章节、全文、跨文件修改继续拆分，不交给 Computer Use core planning。
-- [ ] apply 后必须有 same-file、mutation、cleanup refs。
+- [ ] explicit live mutation 优先使用 scratch 或用户明确选择的当前选区；文件、选区或目标漂移时 blocked-safe。
+- [ ] 用户明确要求 apply 时，Host 拆成 observe -> one primitive -> observe；多章节、全文、跨文件修改继续拆分。
+- [ ] apply 后必须有 same-file、mutation、cleanup refs，final answer 只能来自 Agent Host。
 
-Acceptance Gates：
+验收：
 
 - [ ] “润色当前选区”先返回 diff preview，不写文件。
 - [ ] preview final answer 只能来自 Agent Host，并包含 artifact refs 和 evidence refs。
 - [ ] Unit tests 证明明确应用当前选区会生成 replace-selection primitive candidate。
 - [ ] Unit tests 证明多章节、全文、跨文件修改不会变成单个 Computer Use task。
-- [ ] explicit live diagnostic 证明 apply 当前选区后有 before/after/action/mutation/cleanup refs。
-- [ ] final answer 只能来自 Agent Host，并包含变更摘要和 evidence refs。
+- [ ] explicit live diagnostic 证明 apply 当前选区后有 before/after/action/mutation/cleanup refs，或 blocked-safe。
+- [ ] public events 不泄漏 raw selected text、raw path、raw command 或 provider payload。
 
 ## 验收规则
 
 - 单个 `[x]` 只表示该 checkbox 对应的 Build Task 或 Acceptance Gate 已被当前证据覆盖。
-- 一个阶段只有在该阶段 Build Tasks 和 Acceptance Gates 全部为 `[x]` 时才算完成。
+- 一个阶段只有在该阶段任务和验收项全部为 `[x]` 时才算完成。
 - 单元测试通过但没有 live acceptance，不能打真实桌面完成勾。
 - live acceptance 通过但留下窗口、进程、临时文件、artifacts、input lease、cursor 或 adapter，不能打勾。
 - 共享系统鼠标 / 键盘路径不能打 `product-ready`。
