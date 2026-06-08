@@ -5,6 +5,7 @@ import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
+  runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
 } from './agent-host-vscode-cowork-current-live-diagnostic.js';
 
@@ -125,6 +126,134 @@ test('current VSCode co-work live diagnostic preserves restoration refs when bin
     'restore-captured:Codex:10,20:front-app-restore:current-vscode-cowork:unit-current-vscode-bind-fail:mouse-position-restore:current-vscode-cowork:unit-current-vscode-bind-fail',
   ]);
   assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work insert-draft diagnostic resolves textRef, types, observes after state, and releases', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-wrapper',
+      windowRef: 'window:vscode:insert-wrapper',
+      titleRef: 'text:title:insert-wrapper',
+      frontmostRef: 'frontmost:vscode:insert-wrapper',
+      fileRefs: ['file-ref:vscode:insert-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-wrapper-bind',
+      visibleTextSha256Ref: 'text:vscode:insert-wrapper-bind-sha256',
+      screenshotRef: 'image:vscode:insert-wrapper-bind',
+      accessibilityRef: 'accessibility:vscode:insert-wrapper-bind',
+      freshnessRef: 'freshness:vscode:insert-wrapper-bind',
+      observationRef: 'observation:vscode:insert-wrapper-bind',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-wrapper',
+      windowRef: 'window:vscode:insert-wrapper',
+      titleRef: 'text:title:insert-wrapper',
+      frontmostRef: 'frontmost:vscode:insert-wrapper',
+      fileRefs: ['file-ref:vscode:insert-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-wrapper-before',
+      visibleTextSha256Ref: 'text:vscode:insert-wrapper-before-sha256',
+      screenshotRef: 'image:vscode:insert-wrapper-before',
+      accessibilityRef: 'accessibility:vscode:insert-wrapper-before',
+      freshnessRef: 'freshness:vscode:insert-wrapper-before',
+      observationRef: 'observation:vscode:insert-wrapper-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-wrapper',
+      windowRef: 'window:vscode:insert-wrapper',
+      titleRef: 'text:title:insert-wrapper',
+      frontmostRef: 'frontmost:vscode:insert-wrapper',
+      fileRefs: ['file-ref:vscode:insert-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-wrapper-act-after',
+      visibleTextSha256Ref: 'text:vscode:insert-wrapper-act-after-sha256',
+      screenshotRef: 'image:vscode:insert-wrapper-act-after',
+      accessibilityRef: 'accessibility:vscode:insert-wrapper-act-after',
+      freshnessRef: 'freshness:vscode:insert-wrapper-act-after',
+      observationRef: 'observation:vscode:insert-wrapper-act-after',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-wrapper',
+      windowRef: 'window:vscode:insert-wrapper',
+      titleRef: 'text:title:insert-wrapper',
+      frontmostRef: 'frontmost:vscode:insert-wrapper',
+      fileRefs: ['file-ref:vscode:insert-wrapper'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-wrapper-after',
+      visibleTextSha256Ref: 'text:vscode:insert-wrapper-after-sha256',
+      screenshotRef: 'image:vscode:insert-wrapper-after',
+      accessibilityRef: 'accessibility:vscode:insert-wrapper-after',
+      freshnessRef: 'freshness:vscode:insert-wrapper-after',
+      observationRef: 'observation:vscode:insert-wrapper-after',
+    },
+  ];
+
+  const result = await runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-insert-wrapper',
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'current-vscode-host-insert',
+    attemptId: 'current-vscode-host-insert-attempt-1',
+    workspacePath: '/tmp/workspace',
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:draft'
+        ? 'draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.text.length}:${input.beforeObservationRef}`);
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)']);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:draft:31:observation:vscode:insert-wrapper-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-insert-wrapper',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-insert-wrapper',
+  ]);
+  assert.equal(result.materializerResult?.claimType, 'computer-use-vscode-cowork-act-decision');
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.ok(result.agentHostInput?.refs.includes('text-ref:current-vscode-cowork:draft'));
+  assert.ok(result.evidenceRefs.includes('action:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('executor-event:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('input-event:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('stale-invalidation:current-vscode-cowork:unit-current-vscode-insert-wrapper:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('observation:vscode:insert-wrapper-after'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-insert-wrapper'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-insert-wrapper'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-insert-wrapper'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-insert-wrapper'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-insert-wrapper'));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
 test('current VSCode co-work live diagnostic can observe the real current VSCode window', {

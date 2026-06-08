@@ -259,6 +259,210 @@ test('current VSCode co-work primitive ports execute refs-first type action and 
   assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work primitive ports resolve text refs for the default type executor without leaking raw text', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:default-type',
+      windowRef: 'window:vscode:default-type',
+      titleRef: 'text:title:default-type',
+      frontmostRef: 'frontmost:vscode:default-type',
+      fileRefs: ['file-ref:vscode:default-type'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:default-type-before',
+      visibleTextSha256Ref: 'text:vscode:default-type-before-sha256',
+      screenshotRef: 'image:vscode:default-type-before',
+      accessibilityRef: 'accessibility:vscode:default-type-before',
+      freshnessRef: 'freshness:vscode:default-type-before',
+      observationRef: 'observation:vscode:default-type-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:default-type',
+      windowRef: 'window:vscode:default-type',
+      titleRef: 'text:title:default-type',
+      frontmostRef: 'frontmost:vscode:default-type',
+      fileRefs: ['file-ref:vscode:default-type'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:default-type-after',
+      visibleTextSha256Ref: 'text:vscode:default-type-after-sha256',
+      screenshotRef: 'image:vscode:default-type-after',
+      accessibilityRef: 'accessibility:vscode:default-type-after',
+      freshnessRef: 'freshness:vscode:default-type-after',
+      observationRef: 'observation:vscode:default-type-after',
+    },
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-default-type',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return textRef === 'text-ref:current-vscode-cowork:draft'
+          ? 'draft body that must stay private'
+          : undefined;
+      },
+      typeResolvedText: async (input) => {
+        calls.push(`type-resolved-text:${input.textRef}:${input.text.length}:${input.beforeObservationRef}`);
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+  assert.equal(sessionId, 'current-vscode-cowork:unit-current-vscode-default-type');
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'insert-draft',
+      action: {
+        type: 'type',
+        textRef: 'text-ref:current-vscode-cowork:draft',
+        elementRef: 'element:vscode:editor',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, true, act.error);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:draft:33:observation:vscode:default-type-before',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-default-type',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-default-type',
+  ]);
+  assert.ok((act.value?.refs ?? []).includes('text-ref:current-vscode-cowork:draft'));
+  assert.ok((act.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-default-type:insert-draft'));
+  assert.ok((act.value?.refs ?? []).includes('observation:vscode:default-type-after'));
+  assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|must stay private|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work primitive ports block the default type executor when text refs are unresolved', async () => {
+  const calls: string[] = [];
+  const observation = {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:unresolved-type',
+    windowRef: 'window:vscode:unresolved-type',
+    titleRef: 'text:title:unresolved-type',
+    frontmostRef: 'frontmost:vscode:unresolved-type',
+    fileRefs: ['file-ref:vscode:unresolved-type'],
+    editorElementRef: 'element:vscode:editor',
+    visibleTextRef: 'text:vscode:unresolved-type-before',
+    visibleTextSha256Ref: 'text:vscode:unresolved-type-before-sha256',
+    screenshotRef: 'image:vscode:unresolved-type-before',
+    accessibilityRef: 'accessibility:vscode:unresolved-type-before',
+    freshnessRef: 'freshness:vscode:unresolved-type-before',
+    observationRef: 'observation:vscode:unresolved-type-before',
+  };
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-unresolved-type',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observation;
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'insert-draft',
+      action: {
+        type: 'type',
+        textRef: 'text-ref:current-vscode-cowork:missing-draft',
+        elementRef: 'element:vscode:editor',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, false);
+  assert.equal(act.value?.blockedReason, 'current-vscode-act-text-ref-unresolved');
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-unresolved-type',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-unresolved-type',
+  ]);
+  assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work primitive ports capture and restore desktop state on release', async () => {
   const calls: string[] = [];
   const service = createComputerUsePrimitiveService({

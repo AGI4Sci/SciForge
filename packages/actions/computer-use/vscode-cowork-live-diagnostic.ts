@@ -72,10 +72,18 @@ export interface CurrentVSCodeCoWorkLiveActionExecution {
   beforeObservationRef: string;
 }
 
+export interface CurrentVSCodeCoWorkLiveResolvedTextExecution
+  extends CurrentVSCodeCoWorkLiveActionExecution {
+  textRef: string;
+  text: string;
+}
+
 export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   runId?: string;
   readCurrentWindow?: () => Promise<CurrentVSCodeCoWorkWindowObservation>;
   performAction?: (input: CurrentVSCodeCoWorkLiveActionExecution) => Promise<void> | void;
+  resolveTextRef?: (textRef: string) => Promise<string | undefined> | string | undefined;
+  typeResolvedText?: (input: CurrentVSCodeCoWorkLiveResolvedTextExecution) => Promise<void> | void;
   captureRestorationState?: () => Promise<CurrentVSCodeCoWorkRestorationState>;
   restoreCapturedState?: (
     state: CurrentVSCodeCoWorkRestorationState,
@@ -243,32 +251,22 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           ],
         };
       }
-      if (!options.performAction) {
-        return {
-          status: 'blocked',
-          blockedReason: 'current-vscode-act-executor-missing',
-          refs: [
-            actionRef,
-            executorEventRef,
-            inputEventRef,
-            beforeObservationRef,
-            scopedInputLeaseRef,
-            inputAdapterRef,
-            cursorRef,
-          ],
-        };
-      }
+      const actionExecution = {
+        action: input.action,
+        actionRef,
+        executorEventRef,
+        inputEventRef,
+        inputAdapterRef: input.inputAdapterRef,
+        cursorRef: input.cursorRef,
+        scopedInputLeaseRef: input.scopedInputLeaseRef,
+        beforeObservationRef,
+      };
       try {
-        await options.performAction({
-          action: input.action,
-          actionRef,
-          executorEventRef,
-          inputEventRef,
-          inputAdapterRef: input.inputAdapterRef,
-          cursorRef: input.cursorRef,
-          scopedInputLeaseRef: input.scopedInputLeaseRef,
-          beforeObservationRef,
-        });
+        if (options.performAction) {
+          await options.performAction(actionExecution);
+        } else {
+          await performDefaultCurrentVSCodeAction(actionExecution, options);
+        }
       } catch (error) {
         return {
           status: 'blocked',
@@ -409,6 +407,48 @@ async function restoreCurrentRestorationState(
 ): Promise<void> {
   await restoreFrontApplication(state.frontApplicationName);
   await restoreMousePointer(state.mousePosition);
+}
+
+async function performDefaultCurrentVSCodeAction(
+  input: CurrentVSCodeCoWorkLiveActionExecution,
+  options: Pick<CurrentVSCodeCoWorkLivePrimitivePortsOptions, 'resolveTextRef' | 'typeResolvedText'>,
+): Promise<void> {
+  if (input.action.type !== 'type') throw new Error('current-vscode-act-unsupported-action');
+  const textRef = input.action.textRef;
+  if (!textRef?.startsWith('text-ref:')) throw new Error('current-vscode-act-text-ref-required');
+  const text = await options.resolveTextRef?.(textRef);
+  if (typeof text !== 'string') throw new Error('current-vscode-act-text-ref-unresolved');
+  if (text.length === 0) throw new Error('current-vscode-act-text-ref-empty');
+  if (text.length > 8000) throw new Error('current-vscode-act-text-ref-too-large');
+  const typeResolvedText = options.typeResolvedText ?? typeResolvedTextIntoCurrentVSCode;
+  await typeResolvedText({
+    ...input,
+    textRef,
+    text,
+  });
+}
+
+async function typeResolvedTextIntoCurrentVSCode(input: CurrentVSCodeCoWorkLiveResolvedTextExecution): Promise<void> {
+  try {
+    await execFileAsync('osascript', ['-e', `
+on run argv
+  set textToType to item 1 of argv
+  tell application "System Events"
+    set vscodeProcesses to application processes whose bundle identifier is "com.microsoft.VSCode"
+    if (count of vscodeProcesses) is 0 then error "current-vscode-process-missing"
+    repeat with vscodeProcess in vscodeProcesses
+      if frontmost of vscodeProcess is true then
+        keystroke textToType
+        return "typed"
+      end if
+    end repeat
+  end tell
+  error "current-vscode-not-frontmost"
+end run
+`, input.text], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+  } catch {
+    throw new Error('current-vscode-type-action-failed');
+  }
 }
 
 async function readCurrentVSCodeWindowRefs(): Promise<CurrentVSCodeCoWorkWindowObservation> {
