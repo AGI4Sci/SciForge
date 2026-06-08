@@ -41,6 +41,7 @@ export interface CodexRuntimeHostIntent {
   source: 'host-owned';
   computerUseNext?: Record<string, unknown>;
   computerUseLong?: Record<string, unknown>;
+  vscodeCoWork?: Record<string, unknown>;
 }
 
 export interface CodexAppServerTurnStream {
@@ -94,6 +95,7 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       guiExtension: input.guiExtension,
       humanApproval: input.humanApproval,
       uiState: input.uiState,
+      agentHostInput: input.agentHostInput,
       declaredIntents: input.declaredIntents,
       agentHostGrounding: input.agentHostGrounding,
       agentHostRuntimeTruth: input.agentHostRuntimeTruth,

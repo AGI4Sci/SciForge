@@ -252,6 +252,7 @@ async function runCodexRuntimeTurn(
         : undefined,
       humanApproval: approvalMetadata.humanApproval,
       uiState: approvalMetadata.uiState,
+      agentHostInput,
       declaredIntents: declaredIntentsFromAuditMetadata(body.auditMetadata),
       agentHostGrounding,
       agentHostRuntimeTruth,

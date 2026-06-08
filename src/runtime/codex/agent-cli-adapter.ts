@@ -121,6 +121,7 @@ export interface AgentCliStartTurnInput {
   };
   humanApproval?: Record<string, unknown>;
   uiState?: Record<string, unknown>;
+  agentHostInput?: unknown;
   declaredIntents?: RuntimeDeclaredIntentSnapshot;
   agentHostGrounding?: AgentHostGroundingSnapshot;
   agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;

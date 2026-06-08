@@ -276,22 +276,38 @@ P8 当前口径已按用户 co-work 要求从“临时 user data dir 隔离验�
 
 目标：用户已经打开 VSCode 时，Codex 能绑定当前用户窗口并进行低风险局部协作，而不是另起一个假测试窗口或要求用户切到专门 profile。
 
+阶段拆分：
+
+- `P9a refs-first contract / unit-proven`：把已打开 VSCode co-work 的 Host decision、目标绑定、风险确认和 cleanup evidence 规则固化并测试。
+- `P9b ordinary-chat live-diagnostic`：从普通聊天入口绑定用户当前 VSCode，先完成无写入低风险动作，例如 `read-visible-text` 或 `focus-editor`，并完整 release / restore。
+- `P9c confirmed single-file mutation live-diagnostic`：在用户明确确认后，对当前单文件做一个小范围 GUI 修改 / 可选保存，并用 before/after refs 与补充 validator 证明。
+- `P9d product-ready adapter gap`：session-local / focus-free adapter 通过真实 co-work 验收前，不把 P9 宣称为 `product-ready`；这不是 P9 live-diagnostic 的阻塞条件。
+
+本轮决策：SciForge 应拥有完整访问权限；P9 不再把 macOS/TCC 权限、VSCode profile 权限或真实文件可访问性当作阶段阻塞。完整访问权限只解决“能否操作”，不自动跳过 action risk policy：保存、撤销、批量替换、跨文件修改、提交、发布、删除或不可逆动作仍需要 refs-first confirmation，并且批量 / 跨文件修改仍必须由 Host 拆成单步原子 primitive。
+
 Build Tasks：
 
-- [ ] 从普通聊天入口触发“操作我已经打开的 VSCode / IDE”这类请求，Agent Host 负责识别用户意图、风险边界和目标窗口候选。
-- [ ] 支持绑定用户当前前台 VSCode 窗口或用户明确选择的 VSCode 窗口；绑定证据必须包含 window/session refs、process/app refs、frontmost/focus refs 和可见文件/编辑区 refs。
-- [ ] Agent Host 可以根据最新 observe refs 决定下一步原子能力，例如聚焦编辑区、读取当前可见文本、移动光标、替换选区、插入草稿、保存或撤销；Computer Use core 仍只执行 primitive，不做 task planning。
-- [ ] 复用用户 VSCode profile、扩展、账号和当前权限来支持真实 co-work；manifest / evidence 必须显式标记 `userProfileUsed=true` 和共享系统输入影响，不能宣称 profile-isolated。
-- [ ] 对用户已有文件的修改默认只做草稿或 diff preview；保存、撤销、批量替换、跨文件修改、提交、发布、删除或不可逆动作必须 `needs-confirmation`。
-- [ ] 每个 GUI action 都必须有 current-run before/after screenshot refs、AX/text refs、action refs、input adapter / cursor / lease refs 和 stale invalidation refs；文件内容读取只能作为补充 validator。
-- [ ] 会话释放时必须释放 input lease / cursor / adapter、恢复焦点和鼠标位置；不得杀用户 VSCode 进程、关闭用户原有窗口、清理用户 profile 或擅自保存无关文件。
+- [x] P9a：新增 Host-side current VSCode co-work acceptance controller，覆盖 window/file target、operation allowlist、fresh observe refs、editor visibility、editor element、cursor move、selection replacement、draft text、real-file risk / approval 和 cleanup policy。
+- [x] P9a：新增 Runtime Codex native-route VSCode co-work bridge，只接受 Host-owned `CU-NEXT-09` + `current-vscode-cowork` + `refs-first` intent，并把 sanitized refs 交给 package-local controller；Computer Use core 不做 task planning。
+- [x] P9a：目标绑定 contract 要求 window/session refs、process/app refs、frontmost/focus refs、可见文件 refs 和 editor element refs；raw title、raw path、raw AX/text、截图路径、provider payload 或 raw/refs 混用必须 fail closed。
+- [x] P9a：Host 可以基于最新 observe refs 选择下一步原子能力：`focus-editor`、`read-visible-text`、`move-cursor`、`insert-draft`、`replace-selection`、`save-current-file` 或 `undo-last-action`；Computer Use core 仍只执行 Host 指定 primitive。
+- [x] P9a：真实文件修改确认链已 refs-first 化，`risk:` 必须绑定目标 `file-ref:`，`approval:` 必须绑定同一 risk、active session 和目标 `file-ref:`；未确认时 executor 不得执行保存、撤销、批量替换或跨文件修改。
+- [x] P9a：live manifest / cleanup validator 要求 current-run before/after screenshot refs、AX/text refs、Host decision/action/control refs、input adapter / cursor / lease refs、stale invalidation refs、release refs 和 front app / mouse restoration refs；禁止杀用户 VSCode 或清用户 profile。
+- [x] P9b：普通聊天 HTTP/SSE -> AgentCli -> CodexAppServerAdapter -> CodexAppServerClient -> native route 已能透传 refs-first current VSCode co-work Host input；无 explicit runtimeIntent 时也能由 Host input 包装成 `CU-NEXT-09` + `current-vscode-cowork` + `refs-first` intent，但不会从裸 commandText 直接派生权限。
+- [ ] P9b：Agent Host live producer 负责从真实当前 VSCode 观察中识别窄 co-work 意图、风险边界和目标窗口候选，并生成 refs-first Host input / runtime intent。
+- [ ] P9b：支持绑定用户当前前台 VSCode 窗口，或在多个 VSCode 窗口中先用视觉 / AX / text / window title / visible file / editor refs 自动确认唯一目标；无法唯一确认时再 `needs-confirmation`。
+- [ ] P9b：完成第一个无写入 live-diagnostic：`bind -> observe -> Host decision -> read-visible-text` 或 `focus-editor -> observe -> control(release)`，final answer 给出 refs-first evidence。
+- [ ] P9c：在用户明确确认后，对当前单文件执行一个小范围 GUI 修改 / 可选保存；批量、跨文件、提交、删除或发布仍不进入可执行 batch，必须拆成单步原子 primitive。
 
 Acceptance Gates：
 
-- [ ] 用户在普通聊天中说“操作我已经打开的 VSCode”时，Host 能通过 `bind -> observe -> act -> observe -> control(release)` 完成一个低风险局部动作，并在 final answer 中给出 refs-first 证据。
-- [ ] 如果当前有多个 VSCode 窗口、目标文件不明确、编辑区不可见或 observation refs 不新鲜，必须返回 `needs-confirmation` / `blocked`，不能猜窗口或猜文件。
-- [ ] 对用户真实文件的改动必须先给预览或确认；未确认时 executor 不得执行保存、撤销、批量替换或跨文件修改。
-- [ ] shared-system-input 路径只能标为 `live-diagnostic`；只有 session-local / focus-free adapter 通过真实 co-work 验收且无副作用时，才允许升级为 `product-ready`。
+- [x] P9a：package focused tests 证明 current VSCode co-work contract 和 native-route bridge 在目标不明确、observe refs 不新鲜、raw/refs 混用、editor 不可见、缺少 editor element、缺少 refs-first action input 或缺少 confirmation 时 fail closed。
+- [x] P9a：live manifest validator 证明 bind / before observe / Host decision / action / after observe / control evidence 必须绑定同一 session、target window、editor element、必要 file target、input resources、release refs 和 visual refs。
+- [x] P9a：shared-system-input / user-profile path 只能标为 `live-diagnostic`，manifest 必须显式 `userProfileUsed=true`、`sharedSystemInputUsed=true`、`productReady=false`，不能宣称 profile-isolated 或 product-ready。
+- [x] P9a：真实用户文件相关保存、撤销、替换选区、批量替换和跨文件修改必须先给预览或确认；未确认、risk 未绑定目标 file、approval 未绑定 active session / file 时 executor 不得执行。
+- [ ] P9b：用户在普通聊天中说“操作我已经打开的 VSCode”时，Host 能通过 `bind -> observe -> act/observe -> observe -> control(release)` 完成一个无写入低风险局部动作，并在 final answer 中给出 refs-first 证据。
+- [ ] P9b：如果存在多个 VSCode 窗口，Host 必须先利用 SciForge 视觉 / AX / text / title / visible file / editor refs 观察并尝试确认正确窗口；只有证据冲突、无法唯一确认、目标文件不明确、编辑区不可见或 observation refs 不新鲜时，才返回 `needs-confirmation` / `blocked`。
+- [ ] P9c：用户明确确认后，Host 能对当前单文件执行一个小范围 GUI 修改 / 可选保存，并通过 before/after refs、action refs、release refs 和补充 validator 证明；不得借此声明批量或跨文件 batch 能力。
 
 本轮推进：新增 `packages/actions/computer-use/vscode-cowork-acceptance.ts` 和 focused tests，登记 `CU-NEXT-09 current-vscode-cowork`。该 Host-side acceptance controller 只把 current VSCode co-work 的下一步选择规则固化为 refs-first 契约：多 VSCode 窗口或目标不明确返回 `needs-confirmation`，缺少 fresh observe refs / editor 不可见 / refs 陈旧返回 `blocked`，fresh observe refs 可产出一个低风险 `focus-editor` 原子 `act`，用户真实文件的保存、撤销、批量替换和跨文件修改在缺少 matching confirmationRef 时返回 `needs-confirmation` 且不返回可执行 action；确认后的真实文件保存/撤销会把 `risk:` 形态 `riskActionHash` 绑定到后续 `act` 的 risk envelope 和 `approval:` 形态 approvalRef。cleanup validator 要求 release input lease / cursor / adapter，并要求 front app / mouse position restoration refs，拒绝 release/restoration evidence 中的 raw payload、secret-like、URL 或本地路径形态，且禁止杀用户 VSCode 或清用户 profile。该契约为 `unit-proven`，仍不是真实桌面 co-work live 完成。
 
@@ -373,7 +389,9 @@ Acceptance Gates：
 
 本轮补充：P9 live manifest 的 action evidence 现在必须绑定同一个 selected `file-ref:`。文件目标操作不能只让 Host decision 绑定目标文件；actual act evidence 也必须直接包含同一个 selectedFileRef，否则 validator 返回 `missing-action-ref:target-file`，防止真实 act 证据与 Host 选择的文件目标断链。
 
-当前状态：P9 policy / acceptance-controller contract、native-route window ambiguity bridge、window bind identity refs gate、operation allowlist gate、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、observe active-session refs gate、editor visibility gate、editor element target refs gate、cursor movement refs gate、selection replacement refs / approval gate、real-file risk/approval refs gate、riskActionHash target-file binding gate、route approval target-file binding gate、approval active-session binding gate、non-user file scope target binding gate、live-manifest bind/target refs validator、live-manifest bind input-resource refs validator、live-manifest editor-element target refs validator、Host decision observe-context refs validator、Host decision active-session refs validator、Host decision action refs validator、approval risk target-file refs validator、approval active-session refs validator、approval target-file refs validator、before observe target-window refs validator、before observe target-file refs validator、before/after observe active-session refs validator、after observe target/freshness refs validator、after observe target-file refs validator、after observe editor-element refs validator、control release/restoration refs validator、control active-session refs validator、action session refs validator、action target-window refs validator、action target-file refs validator、action input/stale evidence validator、action release input-resource binding refs validator、before/after visual refs validator 和 before/after observe visual binding refs validator 已达到 `unit-proven`；用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口能绑定真实当前用户窗口，并通过 `bind -> observe -> act -> observe -> control(release)` 完成低风险局部动作、释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。
+本轮补充：P9b ordinary-chat Host input bridge 已达到 `unit-proven`。HTTP/SSE 入口现在会把 refs-first `agentHostInput` 透传给下游 adapter，CodexAppServerAdapter 会继续传给 client，CodexAppServerClient 在看到 Host 标记的 `current-vscode-cowork` refs 时走 native package bridge 而不是启动普通 app-server 子进程；native route 则把 Host input 中的 `target.vscodeCoWork` / `observation.vscodeCoWork` 包装为 `CU-NEXT-09` + `current-vscode-cowork` + `refs-first` intent，并复用现有 VSCode co-work controller。该桥只接受 Host input 中已有的 refs-first target / observation，不从裸 commandText 直接派生 runtime intent；无 Host refs 的普通文本仍走普通 Codex / Agent Host 路径。
+
+当前状态：P9a 已达到 `unit-proven`，P9b ordinary-chat Host input bridge 也达到 `unit-proven`；P9b / P9c 仍未达到真实 co-work `live-diagnostic`。已完成的 P9a 覆盖 policy / acceptance-controller contract、native-route bridge、window bind identity refs gate、operation allowlist gate、target-file ambiguity gate、mixed raw/refs-first observe evidence gate、observe active-session refs gate、editor visibility gate、editor element target refs gate、cursor movement refs gate、selection replacement refs / approval gate、real-file risk/approval refs gate、riskActionHash target-file binding gate、route approval target-file binding gate、approval active-session binding gate、non-user file scope target binding gate、live-manifest bind/target refs validator、live-manifest bind input-resource refs validator、live-manifest editor-element target refs validator、Host decision observe-context refs validator、Host decision active-session refs validator、Host decision action refs validator、approval risk target-file refs validator、approval active-session refs validator、approval target-file refs validator、before observe target-window refs validator、before observe target-file refs validator、before/after observe active-session refs validator、after observe target/freshness refs validator、after observe target-file refs validator、after observe editor-element refs validator、control release/restoration refs validator、control active-session refs validator、action session refs validator、action target-window refs validator、action target-file refs validator、action input/stale evidence validator、action release input-resource binding refs validator、before/after visual refs validator 和 before/after observe visual binding refs validator。下一步不继续扩 validator，优先做 P9b ordinary-chat live producer：从真实当前 VSCode 观察生成 Host input，绑定当前真实 VSCode，用视觉 / AX / text refs 确认窗口，先执行无写入低风险动作，释放 input lease / cursor / adapter、恢复焦点和鼠标位置，最后由 Agent Host 基于 refs-first 证据生成 final answer。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9b live producer 才证明用户已打开 VSCode 的普通聊天 co-work。
 
 ## P10：论文修改 / 润色 GUI 协作
 

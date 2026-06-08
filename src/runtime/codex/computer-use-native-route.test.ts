@@ -344,6 +344,48 @@ test('VSCode co-work bridge requires host-owned refs-first runtime intent marker
   assert.doesNotMatch(JSON.stringify(accepted), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route derives P9b VSCode co-work intent from refs-first ordinary chat Host input', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-ordinary-chat-host-input',
+      attemptId: 'native-route-vscode-cowork-ordinary-chat-host-input-attempt-1',
+      agentHostInput: vscodeCoWorkAgentHostInput({
+        operation: 'read-visible-text',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:notes', titleRef: 'text:title:notes' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+      }),
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const selected = events.find((event) => String(event.message).includes('VSCode co-work'));
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
+
+  assert.ok(selected);
+  assert.equal(done?.status, 'ready');
+  assert.equal(unit?.status, 'ready');
+  assert.equal(unit?.primitive, 'observe');
+  assert.equal(unit?.action, undefined);
+  assert.equal(unit?.targetWindowRef, 'window:vscode:paper');
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:ordinary-host-input'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
+  assert.ok((done?.evidenceRefs as string[]).includes('text:vscode:visible'));
+  assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('Computer Use native route drops raw VSCode window and observation refs before public events', async () => {
   const events = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -1867,6 +1909,47 @@ function vscodeCoWorkRouteRequest(input: {
         semanticMarkers: ['current-vscode-cowork', 'refs-first'],
       },
       vscodeCoWork: input.vscodeCoWork,
+    },
+  };
+}
+
+function vscodeCoWorkAgentHostInput(input: {
+  operation: string;
+  selectedWindowRef?: string;
+  selectedFileRef?: string;
+  windowCandidates: Array<Record<string, unknown>>;
+  latestObservation: Record<string, unknown>;
+}) {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'ordinary-chat',
+    intentText: '读取我当前打开的 VSCode 可见文本。',
+    singleTurnOverride: false,
+    refs: ['intent:current-vscode-cowork', 'chat-request:vscode-cowork:ordinary-host-input'],
+    readiness: {
+      nativeBridge: 'ready',
+      nativeSurface: 'ready',
+      windowActionSession: 'ready',
+      computerUseAdapter: 'ready',
+    },
+    target: {
+      kind: 'current-vscode-cowork',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:ordinary-host-input',
+        operation: input.operation,
+        selectedWindowRef: input.selectedWindowRef,
+        selectedFileRef: input.selectedFileRef,
+        windowCandidates: input.windowCandidates,
+      },
+    },
+    observation: {
+      fresh: true,
+      vscodeCoWork: input.latestObservation,
+    },
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
     },
   };
 }

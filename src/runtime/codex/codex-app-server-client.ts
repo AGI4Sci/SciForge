@@ -249,7 +249,10 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     baseEnv: NodeJS.ProcessEnv,
     commandId: string,
   ): Promise<CodexAppServerTurnStream | undefined> {
-    if (!isHostOwnedComputerUseRuntimeIntent(request.runtimeIntent)) return undefined;
+    if (
+      !isHostOwnedComputerUseRuntimeIntent(request.runtimeIntent)
+      && !isCurrentVSCodeCoWorkAgentHostInput(request.agentHostInput)
+    ) return undefined;
     const config = await assertCodexRuntimeConfig({
       workspacePath: request.workspacePath,
       allowOpenAiRuntime: request.allowOpenAiRuntime,
@@ -1127,6 +1130,22 @@ function isHostOwnedComputerUseRuntimeIntent(value: unknown): boolean {
   return value.schemaVersion === 'sciforge.runtime-codex.host-intent.v1'
     && value.kind === 'computer-use-native-route'
     && value.source === 'host-owned';
+}
+
+function isCurrentVSCodeCoWorkAgentHostInput(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return false;
+  const target = isRecord(value.target) ? value.target : undefined;
+  if (stringField(target, 'kind') === 'current-vscode-cowork') return true;
+  if (isRecord(target?.vscodeCoWork)) return true;
+  const refs = Array.isArray(value.refs) ? value.refs : [];
+  return refs.some((ref) => ref === 'intent:current-vscode-cowork');
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const item = value[key];
+  return typeof item === 'string' && item.trim().length > 0 ? item.trim() : undefined;
 }
 
 function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string, guiExtensionStatePath?: string): RuntimeModuleDispatcher {

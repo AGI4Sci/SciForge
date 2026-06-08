@@ -37,28 +37,38 @@ export function computerUseNativeRouteCommandText(commandText: string): string |
 }
 
 export function createComputerUseNativeRouteStream(input: ComputerUseNativeRouteInput): CodexAppServerTurnStream | undefined {
-  if (!isComputerUseNativeRouteCommand(input.request.commandText) && !hasExplicitHostOwnedComputerUseNativeRouteIntent(input.request.runtimeIntent)) {
+  const runtimeIntent = runtimeIntentForComputerUseNativeRoute(input.request);
+  if (!isComputerUseNativeRouteCommand(input.request.commandText) && !runtimeIntent) {
     return undefined;
   }
+  const routeInput = runtimeIntent && runtimeIntent !== input.request.runtimeIntent
+    ? {
+      ...input,
+      request: {
+        ...input.request,
+        runtimeIntent,
+      },
+    }
+    : input;
   const retiredVirtualAppScreenReason = retiredVirtualAppScreenNativeRouteReason(input.request.commandText);
   if (retiredVirtualAppScreenReason) {
-    const metadata = routeMetadata(input);
+    const metadata = routeMetadata(routeInput);
     return {
-      turnId: input.request.commandId,
-      provider: input.provider,
-      model: input.model,
-      profile: input.profile,
-      workspacePath: input.workspace,
+      turnId: routeInput.request.commandId,
+      provider: routeInput.provider,
+      model: routeInput.model,
+      profile: routeInput.profile,
+      workspacePath: routeInput.workspace,
       events: singleEventStream(failedEvent(metadata, retiredVirtualAppScreenReason)),
     };
   }
   return {
-    turnId: input.request.commandId,
-    provider: input.provider,
-    model: input.model,
-    profile: input.profile,
-    workspacePath: input.workspace,
-    events: computerUseNativeRouteEvents(input),
+    turnId: routeInput.request.commandId,
+    provider: routeInput.provider,
+    model: routeInput.model,
+    profile: routeInput.profile,
+    workspacePath: routeInput.workspace,
+    events: computerUseNativeRouteEvents(routeInput),
   };
 }
 
@@ -71,6 +81,58 @@ function hasExplicitHostOwnedComputerUseNativeRouteIntent(value: unknown): boole
   return value.schemaVersion === 'sciforge.runtime-codex.host-intent.v1'
     && value.kind === 'computer-use-native-route'
     && value.source === 'host-owned';
+}
+
+function runtimeIntentForComputerUseNativeRoute(request: CodexAppServerStartTurnRequest): CodexAppServerStartTurnRequest['runtimeIntent'] | undefined {
+  if (hasExplicitHostOwnedComputerUseNativeRouteIntent(request.runtimeIntent)) {
+    return request.runtimeIntent;
+  }
+  return vscodeCoWorkRuntimeIntentFromAgentHostInput(request);
+}
+
+function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStartTurnRequest): CodexAppServerStartTurnRequest['runtimeIntent'] | undefined {
+  const agentHostInput = isRecord(request.agentHostInput) ? request.agentHostInput : undefined;
+  if (agentHostInput?.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
+  const target = isRecord(agentHostInput.target) ? agentHostInput.target : undefined;
+  const observation = isRecord(agentHostInput.observation) ? agentHostInput.observation : undefined;
+  const hostBinding = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  const latestObservation = isRecord(observation?.vscodeCoWork) ? observation.vscodeCoWork : undefined;
+  if (!hostBinding && !latestObservation) return undefined;
+  if (!isCurrentVSCodeCoWorkHostInput(agentHostInput, target)) return undefined;
+  const intentText = stringField(agentHostInput, 'intentText') ?? request.commandText;
+  const operation = stringField(hostBinding, 'operation') ?? lowRiskVSCodeCoWorkOperationFromText(intentText);
+  return {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+    computerUseNext: {
+      taskId: 'CU-NEXT-09',
+      recommendedTargetMode: 'active-window',
+      recommendedTargetApp: 'Visual Studio Code',
+      semanticMarkers: ['current-vscode-cowork', 'refs-first'],
+    },
+    vscodeCoWork: compactRecord({
+      ...(hostBinding ?? {}),
+      operation,
+      latestObservation: latestObservation ?? (isRecord(hostBinding?.latestObservation) ? hostBinding.latestObservation : undefined),
+    }),
+  };
+}
+
+function isCurrentVSCodeCoWorkHostInput(
+  agentHostInput: Record<string, unknown>,
+  target: Record<string, unknown> | undefined,
+): boolean {
+  if (stringField(target, 'kind') === 'current-vscode-cowork') return true;
+  if (isRecord(target?.vscodeCoWork)) return true;
+  const refs = Array.isArray(agentHostInput.refs) ? agentHostInput.refs : [];
+  return refs.some((ref) => ref === 'intent:current-vscode-cowork');
+}
+
+function lowRiskVSCodeCoWorkOperationFromText(intentText: string): 'read-visible-text' | 'focus-editor' | undefined {
+  if (/(?:读取|查看|看看|read|visible\s+text)/i.test(intentText)) return 'read-visible-text';
+  if (/(?:聚焦|focus)/i.test(intentText)) return 'focus-editor';
+  return undefined;
 }
 
 function retiredVirtualAppScreenNativeRouteReason(commandText: string): string | undefined {

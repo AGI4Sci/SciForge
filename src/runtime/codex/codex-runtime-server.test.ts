@@ -414,6 +414,44 @@ test('HTTP/SSE endpoint does not derive host-owned Computer Use runtime intent f
   }
 });
 
+test('HTTP/SSE endpoint forwards refs-first ordinary VSCode co-work Host input without text-derived runtime intent', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+  const commandText = '读取我当前打开的 VSCode 可见文本。';
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText,
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-vscode-cowork-host-input',
+        attemptId: 'codex-command-vscode-cowork-host-input-attempt-1',
+        agentHostInput: p9bVSCodeCoWorkAgentHostInput(commandText),
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: done/);
+    assert.equal(adapter.lastInput?.runtimeIntent, undefined);
+    assert.equal((adapter.lastInput?.agentHostInput as Record<string, unknown> | undefined)?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+    assert.equal(((adapter.lastInput?.agentHostInput as Record<string, unknown>)?.target as Record<string, unknown> | undefined)?.kind, 'current-vscode-cowork');
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('HTTP/SSE endpoint lets explicit Computer Use native route intent bypass Agent Host turn loop', async () => {
   const adapter = new FakeAdapter();
   const server = createServer((req, res) => {
@@ -1620,6 +1658,59 @@ function readyAgentHostInput(intentText: string) {
     permissions: {
       refs: ['permission:turn/gui-action'],
       scopedExecutorRefs: ['computer-use:executor-scope:current-window'],
+      stopCancelPath: true,
+    },
+  };
+}
+
+function p9bVSCodeCoWorkAgentHostInput(intentText: string) {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'ui-normal-composer-transport',
+    intentText,
+    authorizationProfileId: 'high-autonomy',
+    policyOwner: 'codex-agent-host-runtime',
+    refs: ['intent:current-vscode-cowork', 'chat-request:vscode-cowork:ordinary-host-input'],
+    readiness: {
+      nativeBridge: 'ready',
+      nativeSurface: 'ready',
+      windowActionSession: 'ready',
+      computerUseAdapter: 'ready',
+    },
+    target: {
+      kind: 'current-vscode-cowork',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:ordinary-host-input',
+        operation: 'read-visible-text',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [{
+          appRef: 'macos-app:com.microsoft.VSCode',
+          processRef: 'process:vscode:paper',
+          windowRef: 'window:vscode:paper',
+          titleRef: 'text:title:paper',
+          frontmostRef: 'frontmost:vscode:paper',
+        }],
+      },
+    },
+    observation: {
+      fresh: true,
+      vscodeCoWork: {
+        windowRef: 'window:vscode:paper',
+        sessionRef: 'window-action-session:vscode-cowork:1',
+        observationRef: 'observation:vscode:current',
+        screenshotRef: 'image:vscode:current',
+        accessibilityRef: 'accessibility:vscode:current',
+        textRefs: ['text:vscode:visible'],
+        elementRefs: ['element:vscode:editor'],
+        freshnessRef: 'freshness:vscode:current',
+        editorVisible: true,
+        visibleFileRefs: ['file-ref:vscode:paper'],
+        userFile: true,
+      },
+    },
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
       stopCancelPath: true,
     },
   };
