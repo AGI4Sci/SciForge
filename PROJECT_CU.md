@@ -2,15 +2,15 @@
 
 最后更新：2026-06-09
 
-## 用户真正要什么
+## 当前目标
 
-用户希望 Codex 能在本地桌面 / GUI 上可靠完成低风险和开发协作类操作，并给出可验证的动作证据。
+把 Computer Use 收敛成一个通用 refs-first GUI primitive runtime，并在它之上实现可插拔的 Host-side App Capability Module。当前第一个专门模块是 VSCode；目标是让 Agent Host 能和用户已打开的 VSCode 协作，但不衍生第二个 agent、聊天旁路或历史兼容包袱。
 
-Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理的 GUI primitive runtime。Agent Host 负责理解用户任务、选择目标、决定下一步、调用模型、判断 completion truth 和生成 final answer。
+Computer Use core 只执行 Host 指定的 primitive。Agent Host 负责理解用户任务、选择目标、调用模型、选择 app module、决定下一步、判断 completion truth 和生成 final answer。
 
-当前重点是 P9 / P10：让 Codex 能和用户已经打开的 VSCode 协作，并在通用 Computer Use 能力之上沉淀可插拔的软件专门优化模块。
+## Invariant Audit
 
-## 不可变原则
+每次阶段打勾前都要重新确认这些原则。
 
 - [x] 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
 - [x] 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
@@ -19,10 +19,11 @@ Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理�
 - [x] 在能提高时间效率的前提下，尽可能使用 sub agent 并行推进；并行任务必须拆清边界，避免不同 worker 修改同一文件造成冲突。
 - [x] SciForge对话、工作链路需要统一，不要额外生出旁路。
 - [x] **符合docs/Architecture.md设计原则, 如果继续推进会导致混乱、衍生旁路、设计方案不合理、有相互冲突的点、有更简洁通用的实现方案，需要停下来和用户讨论，澄清需求。**
-- [x] SciForge 是 Codex / Agent Host 的 GUI / Browser / Desktop 能力面，不是第二条智能链路。
-- [x] Computer Use core 只保留 primitive：`bind`、`observe`、`act`、`run_procedure`、`control`。
+- [x] Computer Use core 只保留 `bind`、`observe`、`act`、`run_procedure`、`control`。
 - [x] `run_procedure` 只执行 Host 已明确给出的局部结构化步骤，不接受自然语言 task / goal / instruction。
 - [x] Host 根据 current-run observe refs 决定下一步单个 primitive；Computer Use core 不做 task planning、semantic locate、repair、verification 或 final answer。
+- [x] App module 不接受自然语言任务，不调用模型生成执行决策，不生成用户级 final answer。
+- [x] ordinary chat、native route、app module、terminal 和 command palette 不能直答；用户级 final answer 只能来自 Codex / Agent Host。
 - [x] raw screenshot、raw AX tree、raw visible text、raw command、raw path、provider payload、URL、base64、secret 不得进入 public result。
 - [x] 多窗口、目标不唯一、证据冲突或 observation stale 时必须 `needs-confirmation` / `blocked`。
 - [x] 不要求每一步都视觉验证；AX、text、title、image、file、editor、action、freshness 等证据足够即可。
@@ -31,40 +32,10 @@ Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理�
 - [x] 运行后必须 release input lease / adapter / cursor，并恢复前台焦点和鼠标位置。
 - [x] 不杀用户 VSCode，不清用户 VSCode profile。
 - [x] 共享系统输入路径只能标 `live-diagnostic`，不能宣称 `product-ready`。
-- [x] 如果设计继续推进会产生旁路、职责混乱或更复杂的 core，先停下来和用户讨论。
 
-## 聊天旁路防线
+## 新方案
 
-VSCode App Module、terminal 和 command palette 会服务普通聊天里的 co-work 任务，但不能衍生出新的聊天旁路。唯一用户级智能载体仍然是 Codex / Agent Host；唯一用户级回答仍然来自 Agent Host final answer，并通过 Codex App Server protocol 进入 SciForge。
-
-禁止链路：
-
-- [x] `SciForge UI -> VSCode module -> 用户可见 final answer`。
-- [x] `ordinary chat hook / native route -> VSCode module -> done payload 直答`。
-- [x] `VSCode module -> Model Router -> message/done 直答`。
-- [x] `terminal output / command palette result -> 自动总结成用户级 completion`。
-- [x] `Computer Use act.status=completed` 或 `run_procedure.status=completed` 直接升级成用户任务完成。
-- [x] `module fallback`、`runtime gateway`、`slash command` 或旧 diagnostic runner 绕过 Codex / Agent Host 完成任务。
-
-允许链路：
-
-- [x] 普通聊天进入 Codex / Agent Host。
-- [x] Agent Host 基于用户意图和 current-run refs 选择 app module。
-- [x] App module 只返回 `ready` / `blocked` / `needs-confirmation`、primitive candidate、evidence refs 和 reason refs。
-- [x] Computer Use core 只执行 Host 指定的一个 primitive，并返回 action / observe / cleanup refs。
-- [x] Agent Host 基于 current-run evidence 和 verifier 判断是否继续、阻塞或生成 final answer。
-
-旁路风险判断：
-
-- [x] 如果 VSCode module 开始接受自然语言任务，它正在变成第二个 agent。
-- [x] 如果 VSCode module 或 native route 能生成用户可见回答，它正在变成聊天旁路。
-- [x] 如果 terminal / command palette 的 output 被模块直接解释为 completion truth，它正在绕过 Host。
-- [x] 如果 ordinary chat hook 从裸 commandText 推断多步计划、权限或目标，它正在绕过 Host。
-- [x] 如果发现上述趋势，必须停下来和用户讨论，而不是继续叠兼容层。
-
-## 当前架构决策
-
-用户已选择方案 C：**Host-side App Capability Module Registry**。
+采用 Host-side App Capability Module Registry。
 
 ```text
 Agent Host
@@ -84,14 +55,13 @@ Agent Host
 - [x] App module 属于 Agent Host 能力层，不是 Computer Use core plugin。
 - [x] App module 是软件状态模型、能力目录和证据门，不是第二个 agent。
 - [x] 智能载体仍然是 Agent Host；需要模型能力时由 Host 调 Model Router 或 Host-owned verifier/provider。
-- [x] App module 不接受自然语言任务，不循环，不 retry，不 repair，不自己决定多步计划，不生成 final answer。
 - [x] App module 只回答 Host 已决定的一个 operation 在当前 refs 下是否 ready，或应 `blocked` / `needs-confirmation`。
 
-## VSCode App Module v1 设计
+## VSCode App Module v1
 
-VSCode 是第一个专门优化模块。v1 聚焦用户已打开 VSCode 的 co-work。
+VSCode v1 聚焦用户已打开 VSCode 的 co-work，不依赖固定坐标、固定布局或固定插件集合。
 
-### 模块职责
+模块职责：
 
 - [x] 注册 VSCode app / process / window / bundle identity refs。
 - [x] 把通用 observation refs 归一成 VSCode 稳定概念。
@@ -101,20 +71,7 @@ VSCode 是第一个专门优化模块。v1 聚焦用户已打开 VSCode 的 co-w
 - [x] 提供 Host-owned focused-editor、same-file、mutation、save、diagnostics、terminal、command palette evidence provider / verifier 的接入点。
 - [x] 只输出安全 tokenized refs，不输出 raw payload。
 
-### 模块非职责
-
-- [x] 不理解完整用户任务。
-- [x] 不从自然语言决定 operation。
-- [x] 不决定下一步多步计划。
-- [x] 不拥有 LLM。
-- [x] 不直接操作桌面绕过 primitive。
-- [x] 不判断用户级完成。
-- [x] 不生成用户可见 final answer。
-- [x] v1 不做 permission / confirmation gate；当前 co-work session 内按 Agent full-access 处理。
-
-### 稳定概念模型
-
-VSCode module 不依赖固定坐标、固定布局或固定插件集合。它只建模稳定概念：
+稳定概念：
 
 - VSCode window。
 - workspace / folder。
@@ -129,52 +86,41 @@ VSCode module 不依赖固定坐标、固定布局或固定插件集合。它只
 - unknown extension webview。
 - observation freshness。
 
-泛化策略：
+能力目录：
 
-- [x] 不假设 explorer、editor、terminal、problems panel 的固定位置。
-- [x] 组合 app/process/window/title/frontmost、AX、visible text、image、file、editor、terminal、palette item、action 和 freshness refs。
-- [x] 未知插件 webview 默认未知；只有 refs 足够时才能作为明确目标。
-- [x] 证据不足或冲突时 fail closed。
+```text
+Editor:
+  read-visible-text
+  focus-editor
+  move-cursor
+  insert-draft
+  replace-selection
+  save-current-file
+  undo-last-action
+  redo-last-action
 
-### v1 能力目录
+Diagnostics:
+  show-problems
+  read-diagnostics
 
-Editor：
+Terminal:
+  focus-terminal
+  send-terminal-text
+  observe-terminal
+  submit-terminal-command
+  interrupt-terminal-command
+  clear-terminal
+  focus-editor-from-terminal
 
-- `read-visible-text`
-- `focus-editor`
-- `move-cursor`
-- `insert-draft`
-- `replace-selection`
-- `save-current-file`
-- `undo-last-action`
-- `redo-last-action`
+Command Palette:
+  open-command-palette
+  send-command-palette-query
+  observe-command-palette-items
+  select-command-palette-item
+  close-command-palette
+```
 
-Diagnostics：
-
-- `show-problems`
-- `read-diagnostics`
-
-Terminal：
-
-- `focus-terminal`
-- `send-terminal-text`
-- `observe-terminal`
-- `submit-terminal-command`
-- `interrupt-terminal-command`
-- `clear-terminal`
-- `focus-editor-from-terminal`
-
-Command Palette：
-
-- `open-command-palette`
-- `send-command-palette-query`
-- `observe-command-palette-items`
-- `select-command-palette-item`
-- `close-command-palette`
-
-### Terminal 分步规则
-
-Terminal v1 采用分步优先：
+Terminal 分步：
 
 ```text
 focus-terminal
@@ -184,15 +130,7 @@ focus-terminal
   -> observe-terminal
 ```
 
-- `send-terminal-text` 只输入 `text-ref:`，不按 Enter。
-- `submit-terminal-command` 只提交当前 terminal 输入，不携带 raw command。
-- Host 可以在 submit 前根据 observe refs 确认文本进入了唯一 terminal。
-- VSCode module 不理解 shell 命令语义，不判断测试是否通过，不决定下一步修复。
-- 命令输出和后续修复由 Agent Host 根据 terminal output refs、file refs、test refs 判断。
-
-### Command Palette 分步规则
-
-Command Palette v1 也采用分步：
+Command Palette 分步：
 
 ```text
 open-command-palette
@@ -202,90 +140,221 @@ open-command-palette
   -> observe
 ```
 
-- VSCode module 不接受模型随意传入的 raw command id。
-- Command Catalog 是稳定性目录，不是权限系统。
-- Host 可以选择 allowlisted capability，或选择 current observe 返回的 command palette item ref。
-- VSCode module 只验证 item ref 来自 current observe，并把选择映射成一个原子 primitive。
+## 新任务路线
 
-## 成熟度地图
+### R0：文档和任务看板收敛
 
-| 阶段 | 当前状态 | 结论 |
-| --- | --- | --- |
-| P0 Session 输入隔离 | done / live-diagnostic | input lease、adapter、cursor、release、shared-system-input 串行化已验收。 |
-| P1 原子操作完备性 | done / live-diagnostic | 8 个 action type contract、MCP schema、service delegation 和 TextEdit live 子集已覆盖。 |
-| P2 Observation 与 Evidence | done | before/after observation、action refs、stale invalidation、refs-first evidence 已固化。 |
-| P3 真实桌面验收 | done / live-diagnostic | TextEdit live acceptance 通过；共享系统输入仍不能 product-ready。 |
-| P4 Host / MCP 集成 | done / unit-proven | Agent Host 可走 primitive chain，final answer 基于 evidence。 |
-| P5 安全与确认 | done / unit-proven | 高风险 confirmation policy 已在 core 层 fail closed；P9 full-access 不把真实文件修改本身当作 gate。 |
-| P6 迁移与清理 | done | 旧 `runTask` / `perform_local_action` / `fill_fields` 不回流为 public surface。 |
-| P7 用户级验收链路 | done / unit-proven | 普通聊天能触发低风险 GUI action，但 completion truth 仍归 Host。 |
-| P8 VSCode 临时 workspace 诊断 | done / live-diagnostic | 真实 VSCode 临时 workspace primitive chain 通过；复用用户 profile，不能 product-ready。 |
-| P9 当前 VSCode co-work | partial | P9a/P9b 与 focus-editor live-diagnostic 完成；P9c 写入 live-diagnostic 和 App Module 化未完成。 |
-| P10 论文修改 / 润色 GUI 协作 | not started | 依赖 P9 当前文件 / 选区 mutation 能力。 |
+目标：把 `PROJECT_CU.md` 变成新方案执行看板，只保留后续实现需要遵守和验收的内容。
 
-## P9 当前状态
+Build Tasks：
 
-已完成：
+- [x] 删除旧阶段流水账、历史兼容任务和历史补充堆叠。
+- [x] 保留不可变原则和唯一 Agent Host 链路。
+- [x] 写清 Host-side App Capability Module Registry。
+- [x] 写清 VSCode App Module v1 能力范围。
+- [x] 把后续任务改成可阶段性打勾的递进路线。
 
-- [x] P9a current VSCode co-work controller contract：window/file target、operation allowlist、fresh observe refs、editor visibility、editor element、real-file target/session/full-access evidence。
-- [x] Native route bridge 只接受 `CU-NEXT-09` + `current-vscode-cowork` + `refs-first` intent，不让 Computer Use core 做 task planning。
-- [x] raw/refs 混用、raw title、raw path、raw AX/text、raw screenshot path、provider payload 都 fail closed。
-- [x] Read-only ordinary/native route live-diagnostic 已通过当前 VSCode。
-- [x] Runtime Codex HTTP/SSE read-only live-diagnostic 已通过当前 VSCode。
-- [x] focused-editor Host verifier/provider adapter 已接入。
-- [x] 默认 focused-editor provider 已完成一次真实 current VSCode focus live-diagnostic。
-- [x] `act.contextRefs` 已能把 Host focused-editor evidence 带到下一步 primitive。
-- [x] `insert-draft` primitive/Host runner、private draft resolver、mutation verifier gate 和 live acceptance writer 已达到 `unit-proven`。
+Acceptance Gates：
 
-未完成：
+- [x] `PROJECT_CU.md` 不再保留旧路径兼容任务。
+- [x] `PROJECT_CU.md` 不再把旧验收流水账作为下一步任务。
+- [x] 任何新阶段都能独立验收，不需要一步跳到完整 VSCode / 论文协作。
 
-- [ ] 把现有 VSCode co-work logic 收束成 Host-side VSCode App Module skeleton。
-- [ ] 定义 App Capability Registry contract，供未来其它软件模块复用。
-- [ ] 把 focused-editor provider、current file verifier、mutation verifier、save verifier 归入 VSCode module 边界。
-- [ ] 完成 P9c 当前 VSCode 小范围写入 live-diagnostic：`focus-editor -> insert-draft/replace-selection -> observe -> optional save -> control(release)`。
-- [ ] 写入 live-diagnostic 必须保留 before/after refs、action refs、mutation verifier refs、same-file refs、cleanup refs，并且不泄漏 raw draft。
-- [ ] Terminal v1 分步能力进入 VSCode module：focus、send text、observe、submit、observe。
-- [ ] Command Palette v1 分步能力进入 VSCode module：open、send query、observe items、select item、observe。
-- [ ] 当前仍使用共享系统输入，P9 不能声明 `product-ready`。
+### R1：App Module Registry Contract
 
-## P10 当前状态
+目标：定义 Host-side app module 的最小 contract，让未来 VSCode、浏览器、文档编辑器等软件优化都能走同一种插件边界。
 
-目标：用户在 VSCode / IDE 中打开论文草稿时，Codex 能基于当前文件、当前选区或用户指定范围生成可审阅修改，并在 full-access co-work session 内通过 GUI primitive 落到编辑器。
+Build Tasks：
 
-未开始：
+- [ ] 定义 `ComputerUseAppModule` contract：`moduleId`、`canHandle`、`normalizeObservation`、`getCapabilities`、`checkReadiness`。
+- [ ] 定义 `AppModuleRegistry`：根据 app/window/observe refs 选择一个 module。
+- [ ] 定义 readiness result：`ready`、`blocked`、`needs-confirmation`。
+- [ ] readiness input 只接受 Host 已决定的 operation 和 current-run refs，不接受自然语言 task。
+- [ ] readiness output 只返回 primitive candidate、evidence refs、reason refs，不返回 final answer。
 
-- [ ] Host 识别论文编辑范围：当前选区、可见段落、用户指定章节或全文 artifact。
+Acceptance Gates：
+
+- [ ] Unit tests 证明 registry 能按 refs 选择 VSCode module。
+- [ ] Unit tests 证明 unknown app 返回 blocked / unsupported，不 fallback 到自然语言执行。
+- [ ] Unit tests 证明 module 不能返回用户可见 final answer。
+- [ ] Computer Use core 不 import VSCode module。
+
+### R2：VSCode Module Skeleton
+
+目标：建立 VSCode module 文件边界，先迁入最小可用的状态模型和 sanitizer，不扩大行为。
+
+Build Tasks：
+
+- [ ] 新建 VSCode App Module skeleton。
+- [ ] 注册 VSCode app/process/window/title/frontmost identity refs。
+- [ ] 定义 VSCode stable concept refs：window、editor、file、terminal、palette、diagnostics、unknown webview、freshness。
+- [ ] 迁入 refs sanitizer：拒绝 raw title、raw path、raw AX/text、raw screenshot path、provider payload、base64、URL。
+- [ ] 保留现有 current VSCode co-work runner 行为，不新增 terminal / command palette act。
+
+Acceptance Gates：
+
+- [ ] Unit tests 证明 raw/refs 混用 fail closed。
+- [ ] Unit tests 证明多窗口候选无法唯一确认时 `needs-confirmation`。
+- [ ] Unit tests 证明 unknown webview 不会被误判为 editor / terminal。
+- [ ] 现有 read-only / focus / insert-draft unit tests 仍通过。
+
+### R3：VSCode Read-only Observation
+
+目标：让 VSCode module 稳定提供只读观察能力，证明当前窗口、当前文件、编辑区和 freshness refs。
+
+Build Tasks：
+
+- [ ] `read-visible-text` readiness 进入 VSCode module。
+- [ ] `show-problems` / `read-diagnostics` 先做 refs-only readiness，不执行写入动作。
+- [ ] current observe 必须绑定 active session、window identity、editor element、file refs 和 freshness refs。
+- [ ] visible text 只以 `text:` / observation refs 暴露，不公开 raw visible text。
+
+Acceptance Gates：
+
+- [ ] Unit tests 覆盖 editor 可见、editor 不可见、文件不唯一、observation stale。
+- [ ] Env-gated read-only live diagnostic 仍通过。
+- [ ] Live manifest 保持 `live-diagnostic` / `productReady=false`。
+- [ ] cleanup refs 覆盖 input lease、adapter、cursor、front app、mouse position。
+
+### R4：VSCode Focus 与当前文件证据
+
+目标：把 focused-editor、same-file 和 current-file evidence 正式归入 VSCode module 边界。
+
+Build Tasks：
+
+- [ ] focused-editor provider 迁入 VSCode module。
+- [ ] same-file verifier 绑定 before / after observe 中同一个 `file-ref:`。
+- [ ] focus-editor readiness 只允许 Host 已决定的单步 operation。
+- [ ] focus 后 evidence 必须来自 action refs + after observe refs，不允许只靠 editorVisible。
+
+Acceptance Gates：
+
+- [ ] Unit tests 证明 terminal/search/explorer 不会生成 focused-editor ref。
+- [ ] Unit tests 证明 Monaco-like editor context 可生成 focused-editor ref。
+- [ ] Unit tests 证明 file ref 漂移会 blocked。
+- [ ] Env-gated focus live diagnostic 仍通过。
+
+### R5：Editor 小范围修改 Unit Path
+
+目标：先在单元层打通 editor 写入 readiness，不碰真实桌面写入。
+
+Build Tasks：
+
+- [ ] `insert-draft` readiness 迁入 VSCode module。
+- [ ] `replace-selection` readiness 迁入 VSCode module。
+- [ ] `save-current-file` readiness 迁入 VSCode module。
+- [ ] 写入内容只接受 `text-ref:`，不接受 raw draft / raw replacement。
+- [ ] 写入前必须有 focused-editor 或等价 verifier refs。
+- [ ] 写入后必须生成 mutation verifier refs，否则 Host completion truth blocked。
+
+Acceptance Gates：
+
+- [ ] Unit tests 证明缺 focused-editor ref 时不解析 text ref、不 typing。
+- [ ] Unit tests 证明 raw draft / raw replacement fail closed。
+- [ ] Unit tests 证明 mutation verifier 缺失时不能完成。
+- [ ] Unit tests 证明 save-current-file 不因真实文件本身要求 confirmation，但必须绑定 current session/window/file/action refs。
+
+### R6：当前 VSCode 单文件写入 Live Diagnostic
+
+目标：在用户当前 VSCode 上完成一个小范围单文件 GUI 写入诊断，仍只标 `live-diagnostic`。
+
+Build Tasks：
+
+- [ ] CLI 默认 blocked，不触发桌面。
+- [ ] 显式 env + 私有 draft resolver 才允许真实运行。
+- [ ] 链路固定为 `bind -> observe -> host-decision -> act -> observe -> optional save -> control(release)`。
+- [ ] `act` 必须绑定同一个 session、window、editor、file 和 focused-editor context refs。
+- [ ] after observe 必须绑定同一个 file-ref，并有 mutation verifier refs。
+
+Acceptance Gates：
+
+- [ ] 默认 CLI blocked manifest 通过 cleanup / readiness 验收。
+- [ ] 显式 live run 通过，并保留 before/after/action/mutation/same-file/cleanup refs。
+- [ ] stdout、manifest、public events 不泄漏 raw draft、raw path、raw screenshot、provider payload、base64。
+- [ ] 不杀 VSCode，不清 profile，release input lease / adapter / cursor，恢复前台 app 和鼠标位置。
+- [ ] manifest 固定 `live-diagnostic` / `productReady=false`。
+
+### R7：Terminal 分步能力
+
+目标：让 VSCode module 支持 terminal，但按分步 refs-first 方式推进，避免一上来直接执行复杂 shell workflow。
+
+Build Tasks：
+
+- [ ] `focus-terminal` readiness。
+- [ ] `send-terminal-text` readiness，只输入 `text-ref:`，不按 Enter。
+- [ ] `observe-terminal` readiness，只读 terminal output refs。
+- [ ] `submit-terminal-command` readiness，只提交当前 terminal 输入，不携带 raw command。
+- [ ] `interrupt-terminal-command` / `clear-terminal` readiness。
+
+Acceptance Gates：
+
+- [ ] Unit tests 证明多个 terminal 不唯一时 `needs-confirmation`。
+- [ ] Unit tests 证明 raw shell command fail closed。
+- [ ] Unit tests 证明 submit 不能和 raw command 合并成一个绕过步骤。
+- [ ] Unit tests 证明 terminal output 不会被 VSCode module 解释成 completion truth。
+- [ ] Terminal live diagnostic 先只覆盖 focus/send/observe；submit live 单独 gate。
+
+### R8：Command Palette 分步能力
+
+目标：让 VSCode module 支持 command palette，但只通过 allowlisted capability 或 current observe item refs 操作。
+
+Build Tasks：
+
+- [ ] `open-command-palette` readiness。
+- [ ] `send-command-palette-query` readiness，只接受 `text-ref:`。
+- [ ] `observe-command-palette-items` readiness，生成 item refs。
+- [ ] `select-command-palette-item` readiness，只接受 current observe item ref。
+- [ ] `close-command-palette` readiness。
+
+Acceptance Gates：
+
+- [ ] Unit tests 证明 raw command id fail closed。
+- [ ] Unit tests 证明 stale item ref fail closed。
+- [ ] Unit tests 证明 unknown command palette item 不会被自动解释成 task plan。
+- [ ] Command palette live diagnostic 先覆盖 open/query/observe/select harmless item/close。
+
+### R9：普通聊天集成且无旁路
+
+目标：把 app module 接入普通聊天，但所有用户级 completion 仍由 Agent Host 产生。
+
+Build Tasks：
+
+- [ ] Agent Host 根据 current-run refs 选择 VSCode module。
+- [ ] ordinary chat hook 只作为进入 Agent Host 的桥，不从裸 commandText 推断多步计划、权限或目标。
+- [ ] native route 只投影 sanitized refs 和 Host final answer，不直答。
+- [ ] terminal output、command palette item 和 act completed status 都不能直接成为 final answer。
+
+Acceptance Gates：
+
+- [ ] Unit tests 证明 VSCode module result 不含 final answer 字段。
+- [ ] Unit tests 证明 native route 没有 Host final-answer evidence 时必须 blocked / partial。
+- [ ] Unit tests 证明 ordinary chat 裸文本不能绕过 Host 进入 VSCode module 多步执行。
+- [ ] Public events 只包含 tokenized refs 和 Host-owned final answer envelope。
+
+### R10：论文编辑工作流
+
+目标：在 P9 写入能力稳定后，再进入论文修改 / 润色场景。
+
+Build Tasks：
+
+- [ ] Host 识别编辑范围：当前选区、可见段落、用户指定章节或全文 artifact。
 - [ ] 范围不明确时 `needs-confirmation`。
-- [ ] Host 生成 draft / diff artifact refs，Computer Use 每次只执行一个 primitive。
+- [ ] 先生成 draft / diff artifact refs，不默认应用到文件。
 - [ ] 支持 LaTeX、Markdown、纯文本论文草稿，保留引用、公式、代码块、表格和术语。
-- [ ] 对事实性改写、引用补全、实验结果解释、作者贡献等高影响内容必须降级为建议或需要明确用户意图。
-- [ ] 修改结果必须有 source refs、draft/diff refs、GUI before/after refs、action refs、可选 file validator refs 和 final answer 变更摘要。
+- [ ] 用户明确要求应用时，Host 把 patch 拆成多次 VSCode primitive。
+- [ ] 高影响事实性改写、引用补全、实验结果解释、作者贡献等必须降级为建议或需要明确用户意图。
 
-## 下一阶段建议
+Acceptance Gates：
 
-当前只做文档，不改代码。文档批准后，建议按这个顺序推进：
-
-1. [ ] 定义 Host-side `ComputerUseAppModule` / registry contract。
-2. [ ] 建立 VSCode App Module skeleton，只迁入现有 focused-editor / read-only / insert-draft readiness 边界，不扩大能力。
-3. [ ] 把 P9c 当前 VSCode 小范围写入 live-diagnostic 跑通。
-4. [ ] 把 terminal 分步能力加入 VSCode module v1。
-5. [ ] 把 command palette 分步能力加入 VSCode module v1。
-6. [ ] 再进入 P10 论文编辑场景。
-
-## 非目标
-
-- [ ] 不做 Computer Use agent。
-- [ ] 不做 VSCode agent。
-- [ ] 不做跨应用 workflow engine。
-- [ ] 不在 Computer Use core 内做 task planning、semantic locate、repair、verification 或 final answer。
-- [ ] 不让 VSCode module 接受自然语言任务。
-- [ ] 不让 VSCode module 拥有 LLM 或 completion truth。
-- [ ] 不用 GUI projection、screenshot replay、fixture、历史 run 或 package probe 替代真实验收。
-- [ ] 不把 shared-system-input 路径宣传成 product-ready。
+- [ ] “润色当前选区”先返回 diff preview，不写文件。
+- [ ] 明确应用后，通过 GUI primitive 替换当前选区，并有 before/after/action/mutation refs。
+- [ ] LaTeX 命令、引用、公式不可验证时必须保留原文或 blocked。
+- [ ] 多章节 / 全文修改必须拆成多次 observe -> Host decision -> one primitive。
+- [ ] final answer 只能来自 Agent Host，并包含变更摘要和 evidence refs。
 
 ## 打勾规则
 
-- [ ] `[x]` 只能表示该阶段的 Build Tasks、Acceptance Gates 和 Invariant Audit 都通过。
+- [ ] `[x]` 只能表示该阶段的 Build Tasks、Acceptance Gates 都通过。
 - [ ] 单元测试通过但没有 live acceptance，不能打真实桌面完成勾。
 - [ ] live acceptance 通过但留下窗口、进程、临时文件、artifacts、input lease、cursor 或 adapter，不能打勾。
 - [ ] 共享系统鼠标 / 键盘路径不能打 product-ready。
