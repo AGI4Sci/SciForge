@@ -324,18 +324,18 @@ Acceptance Gates：
 
 Build Tasks：
 
-- [ ] Agent Host 根据 current-run refs 调用 `AppModuleRegistry.resolve`。
-- [ ] Host 把自己已决定的单个 operation 交给 module `checkReadiness`。
-- [ ] module 只返回一个 primitive candidate 或 `blocked` / `needs-confirmation`。
-- [ ] materializer 不从裸 `commandText` 推断 operation、目标或多步计划。
-- [ ] Computer Use core 仍不 import Host-side app module。
+- [x] Agent Host 根据 current-run refs 调用 `AppModuleRegistry.resolve`。
+- [x] Host 把自己已决定的单个 operation 交给 module `checkReadiness`。
+- [x] module 只返回一个 primitive candidate 或 `blocked` / `needs-confirmation`。
+- [x] materializer 不从裸 `commandText` 推断 operation、目标或多步计划。
+- [x] Computer Use core 仍不 import Host-side app module。
 
 Acceptance Gates：
 
-- [ ] Unit tests 证明 VSCode refs 会选择 VSCode module 并返回一个 primitive candidate。
-- [ ] Unit tests 证明 unknown app / ambiguous app blocked。
-- [ ] Unit tests 证明 readiness result 不能直接成为 final answer。
-- [ ] Unit tests 证明 terminal output、palette item、act completed status 不会被升级成 completion truth。
+- [x] Unit tests 证明 VSCode refs 会选择 VSCode module 并返回一个 primitive candidate。
+- [x] Unit tests 证明 unknown app / ambiguous app blocked。
+- [x] Unit tests 证明 readiness result 不能直接成为 final answer。
+- [x] Unit tests 证明 terminal output、palette item、act completed status 不会被升级成 completion truth。
 
 ### R10：普通聊天接线且无旁路
 

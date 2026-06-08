@@ -13,6 +13,7 @@ import {
   computerUseModelRouterCapabilityIds,
 } from '../../../packages/actions/computer-use/provider-policy.js';
 import type { ComputerUsePreflightResult } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
+import type { ComputerUseAppModule } from './computer-use-app-module-registry.js';
 import type { CodexAgentHostRuntimeTruth, NormalizedCodexAgentHostInput } from './agent-host-turn-loop.js';
 
 test('default Computer Use Act materializer routes BrowserHostSession through the TS product path', async () => {
@@ -316,7 +317,7 @@ test('default Computer Use Act materializer routes WindowActionSession through t
   assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:/i);
 });
 
-test('default Computer Use Act materializer produces a current VSCode co-work observe decision from Host refs', async () => {
+test('default Computer Use Act materializer selects a VSCode app module primitive candidate from Host operation refs', async () => {
   let windowActionPlannerCalls = 0;
   const materializer = createDefaultComputerUseActMaterializer({
     windowAction: {
@@ -333,87 +334,193 @@ test('default Computer Use Act materializer produces a current VSCode co-work ob
   });
 
   const result = await materializer({
-    agentHostInput: vscodeCoWorkAgentHostInput(),
-    preflight: vscodeCoWorkPreflight(),
-    commandText: '读取我当前打开的 VSCode 可见文本。',
+    agentHostInput: vscodeAppModuleAgentHostInput('read-visible-text'),
+    preflight: vscodeAppModulePreflight(),
+    commandText: 'This text must not be parsed to decide the VSCode operation.',
     workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-default-vscode-cowork',
-    attemptId: 'codex-command-default-vscode-cowork-attempt-1',
-    runtimeTruth: vscodeCoWorkRuntimeTruth(),
+    commandId: 'codex-command-default-vscode-app-module',
+    attemptId: 'codex-command-default-vscode-app-module-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(),
   });
 
   assert.equal(windowActionPlannerCalls, 0);
   assert.equal(result?.status, 'completed', result?.message);
-  assert.equal(result?.claimType, 'computer-use-vscode-cowork-observe-decision');
-  assert.equal(result?.completionTruth?.scope, 'action');
-  assert.equal(result?.completionTruth?.status, 'satisfied');
-  assert.ok(result?.evidenceRefs.includes('chat-request:vscode-cowork:agent-host-producer'));
+  assert.equal(result?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.equal(result?.completionTruth, undefined);
+  assert.ok(result?.evidenceRefs.includes('runtime-truth:computer-use-app-module/vscode/read-visible-text'));
   assert.ok(result?.evidenceRefs.includes('window:vscode:paper'));
   assert.ok(result?.evidenceRefs.includes('observation:vscode:current'));
-  assert.ok(result?.evidenceRefs.includes('text:vscode:visible'));
-  assert.ok(result?.evidenceRefs.includes('element:vscode:editor'));
+  assert.ok(result?.evidenceRefs.includes('element:vscode:editor:monaco:1'));
   assert.ok(result?.executionUnits?.some((unit) =>
-    unit.tool === 'vscode-cowork.agent-host-producer' && unit.primitive === 'observe'
+    unit.tool === 'computer-use.app-module-registry'
+      && unit.moduleId === 'vscode'
+      && unit.operation === 'read-visible-text'
+      && unit.primitive === 'computer_use.observe'
+      && unit.status === 'candidate'
   ));
-  assert.match(result?.reasoningTrace ?? '', /Host.*observe refs.*primitive/i);
-  assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner/i);
+  assert.ok(result?.artifacts?.some((artifact) =>
+    artifact.type === 'computer-use-app-module-readiness'
+      && (artifact.data as Record<string, unknown> | undefined)?.moduleId === 'vscode'
+  ));
+  assert.match(result?.reasoningTrace ?? '', /Host.*operation.*refs.*primitive candidate/i);
+  assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner|taskOutcome":"satisfied/i);
 });
 
-test('default Computer Use Act materializer auto-selects the unique VSCode window proven by observe refs', async () => {
+test('default Computer Use Act materializer blocks app module readiness without structured Host operation', async () => {
+  let windowActionPlannerCalls = 0;
   const materializer = createDefaultComputerUseActMaterializer({
     windowAction: {
       windowActionSessionStore: readyWindowActionStore(),
       actionPlanner: async () => {
-        throw new Error('generic planner must not handle VSCode co-work');
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic planner must not infer a VSCode operation from command text.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-operation-inference'],
+        };
       },
     },
   });
-  const targetRefs = [
-    ...vscodeCoWorkTargetRefs(),
-    'process:vscode:notes',
-    'window:vscode:notes',
-    'text:title:notes',
-    'frontmost:vscode:notes',
-  ];
-  const agentHostInput = vscodeCoWorkAgentHostInput();
-  agentHostInput.target = {
-    kind: 'current-vscode-cowork',
-    refs: targetRefs,
-  };
-  agentHostInput.refs = [
-    ...agentHostInput.refs,
-    ...targetRefs,
-  ];
-  const runtimeTruth = vscodeCoWorkRuntimeTruth();
-  runtimeTruth.target = {
-    bound: true,
-    summary: 'Current VSCode co-work window candidates',
-    refs: targetRefs,
-  };
-  runtimeTruth.refs = [
-    ...(runtimeTruth.refs ?? []),
-    ...targetRefs,
-  ];
 
   const result = await materializer({
-    agentHostInput,
-    preflight: vscodeCoWorkPreflight(),
-    commandText: '读取我当前打开的 VSCode 可见文本。',
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined),
+    preflight: vscodeAppModulePreflight(),
+    commandText: 'read visible text from VSCode',
     workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-default-vscode-cowork-multi-window-observed',
-    attemptId: 'codex-command-default-vscode-cowork-multi-window-observed-attempt-1',
-    runtimeTruth,
+    commandId: 'codex-command-default-vscode-app-module-no-operation',
+    attemptId: 'codex-command-default-vscode-app-module-no-operation-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(),
   });
 
-  const unit = result?.executionUnits?.find((item) => item.tool === 'vscode-cowork.agent-host-producer');
+  assert.equal(result?.status, 'blocked');
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(result?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(result?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.equal(result?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /computer-use-app-module\/vscode\/read-visible-text|taskOutcome":"satisfied/i);
+});
+
+test('default Computer Use Act materializer blocks unknown and ambiguous app module targets', async () => {
+  const ambiguousA = testAppModule('ambiguous-a');
+  const ambiguousB = testAppModule('ambiguous-b');
+  const materializer = createDefaultComputerUseActMaterializer({
+    appModules: [ambiguousA, ambiguousB],
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        throw new Error('generic planner must not handle structured app module operations');
+      },
+    },
+  });
+
+  const unknown = await materializer({
+    agentHostInput: appModuleAgentHostInput('read-visible-text', ['macos-app:unknown', 'window:unknown:main']),
+    preflight: appModulePreflight(['macos-app:unknown', 'window:unknown:main']),
+    commandText: 'do not fallback',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-app-module-unknown',
+    attemptId: 'codex-command-default-app-module-unknown-attempt-1',
+    runtimeTruth: appModuleRuntimeTruth(['macos-app:unknown', 'window:unknown:main']),
+  });
+
+  assert.equal(unknown?.status, 'blocked');
+  assert.equal(unknown?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(unknown?.evidenceRefs.includes('blocked:computer-use-app-module:unsupported-app'));
+  assert.equal(unknown?.completionTruth, undefined);
+
+  const ambiguous = await materializer({
+    agentHostInput: appModuleAgentHostInput('read-visible-text', ['macos-app:ambiguous', 'window:ambiguous:main']),
+    preflight: appModulePreflight(['macos-app:ambiguous', 'window:ambiguous:main']),
+    commandText: 'do not fallback',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-app-module-ambiguous',
+    attemptId: 'codex-command-default-app-module-ambiguous-attempt-1',
+    runtimeTruth: appModuleRuntimeTruth(['macos-app:ambiguous', 'window:ambiguous:main']),
+  });
+
+  assert.equal(ambiguous?.status, 'blocked');
+  assert.equal(ambiguous?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(ambiguous?.evidenceRefs.includes('blocked:computer-use-app-module:ambiguous-app'));
+  assert.equal(ambiguous?.completionTruth, undefined);
+});
+
+test('default Computer Use Act materializer rejects app module readiness that carries final answer payloads', async () => {
+  const unsafeModule: ComputerUseAppModule = {
+    moduleId: 'unsafe',
+    canHandle: ({ refs }) => refs.includes('macos-app:unsafe'),
+    normalizeObservation: ({ refs }) => ({ refs }),
+    getCapabilities: () => ['read-visible-text'],
+    checkReadiness: () => ({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.act',
+        inputRefs: ['window:unsafe:main'],
+        action: {
+          kind: 'app_command',
+          message: 'I handled the task',
+        },
+      },
+      evidenceRefs: ['module:unsafe'],
+    }),
+  };
+  const materializer = createDefaultComputerUseActMaterializer({
+    appModules: [unsafeModule],
+  });
+
+  const result = await materializer({
+    agentHostInput: appModuleAgentHostInput('read-visible-text', ['macos-app:unsafe', 'window:unsafe:main']),
+    preflight: appModulePreflight(['macos-app:unsafe', 'window:unsafe:main']),
+    commandText: 'do not expose module final answer',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-app-module-unsafe',
+    attemptId: 'codex-command-default-app-module-unsafe-attempt-1',
+    runtimeTruth: appModuleRuntimeTruth(['macos-app:unsafe', 'window:unsafe:main']),
+  });
+
+  assert.equal(result?.status, 'blocked');
+  assert.equal(result?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(result?.evidenceRefs.includes('blocked:computer-use-app-module:final-answer-not-allowed'));
+  assert.equal(result?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /I handled the task|taskOutcome":"satisfied/i);
+});
+
+test('default Computer Use Act materializer does not treat terminal, palette, or action refs as completion truth', async () => {
+  const materializer = createDefaultComputerUseActMaterializer();
+
+  const result = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('observe-terminal', [
+      'element:vscode:terminal:main',
+      'text:vscode:terminal-output',
+      'command-palette-item:vscode:main:workbench-action-files-save',
+      'action:vscode:previous:completed',
+    ]),
+    preflight: vscodeAppModulePreflight([
+      'element:vscode:terminal:main',
+      'text:vscode:terminal-output',
+      'command-palette-item:vscode:main:workbench-action-files-save',
+      'action:vscode:previous:completed',
+    ]),
+    commandText: 'terminal output says done',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-terminal-candidate',
+    attemptId: 'codex-command-default-vscode-terminal-candidate-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth([
+      'element:vscode:terminal:main',
+      'text:vscode:terminal-output',
+      'command-palette-item:vscode:main:workbench-action-files-save',
+      'action:vscode:previous:completed',
+    ]),
+  });
 
   assert.equal(result?.status, 'completed', result?.message);
-  assert.equal(result?.claimType, 'computer-use-vscode-cowork-observe-decision');
-  assert.equal(unit?.primitive, 'observe');
-  assert.equal(unit?.targetWindowRef, 'window:vscode:paper');
-  assert.ok(result?.evidenceRefs.includes('window:vscode:paper'));
-  assert.ok(result?.evidenceRefs.includes('observation:vscode:current'));
-  assert.doesNotMatch(JSON.stringify(result), /needs-confirmation|generic planner|product-ready|providerPayload|base64/i);
+  assert.equal(result?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.equal(result?.completionTruth, undefined);
+  assert.ok(result?.executionUnits?.some((unit) =>
+    unit.tool === 'computer-use.app-module-registry'
+      && unit.operation === 'observe-terminal'
+      && unit.primitive === 'computer_use.observe'
+  ));
+  assert.doesNotMatch(JSON.stringify(result), /taskOutcome":"satisfied|completionTruth|user-task|workflow complete/i);
 });
 
 test('default Computer Use Act materializer preserves first-step WindowAction evidence when workflow loop needs runtime truth refresh', async () => {
@@ -852,29 +959,41 @@ function windowActionObservationRefs(): string[] {
   ];
 }
 
-function vscodeCoWorkAgentHostInput(): NormalizedCodexAgentHostInput {
+function vscodeAppModuleAgentHostInput(
+  operation: string | undefined,
+  extraRefs: string[] = [],
+): NormalizedCodexAgentHostInput {
+  const targetRefs = vscodeAppModuleTargetRefs(extraRefs);
+  const observationRefs = vscodeAppModuleObservationRefs(extraRefs);
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
     source: 'test',
-    intentText: '读取我当前打开的 VSCode 可见文本。',
+    intentText: 'Host already selected a Computer Use app module operation.',
     authorizationProfileId: 'high-autonomy',
     singleTurnOverride: false,
     refs: [
-      'intent:current-vscode-cowork',
-      'chat-request:vscode-cowork:agent-host-producer',
+      'intent:computer-use-app-module-dry-run',
+      ...targetRefs,
+      ...observationRefs,
+      ...extraRefs,
     ],
     readiness: {},
     target: {
-      kind: 'current-vscode-cowork',
-      refs: vscodeCoWorkTargetRefs(),
+      kind: 'computer-use-app-module',
+      refs: targetRefs,
+      ...(operation ? {
+        computerUseAppModule: {
+          operation,
+        },
+      } : {}),
     },
     observation: {
       fresh: true,
-      refs: vscodeCoWorkObservationRefs(),
+      refs: observationRefs,
     },
     permissions: {
       refs: [
-        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode:1:file-ref:vscode:paper',
       ],
       scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
       stopCancelPath: true,
@@ -882,37 +1001,32 @@ function vscodeCoWorkAgentHostInput(): NormalizedCodexAgentHostInput {
   };
 }
 
-function vscodeCoWorkPreflight(): ComputerUsePreflightResult {
-  return {
-    ...readyPreflight(),
-    target: {
-      summary: 'Current VSCode co-work window',
-      refs: vscodeCoWorkTargetRefs(),
-    },
-    evidenceRefs: [
-      ...vscodeCoWorkObservationRefs(),
-      'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
-    ],
-  };
+function vscodeAppModulePreflight(extraRefs: string[] = []): ComputerUsePreflightResult {
+  return appModulePreflight([
+    ...vscodeAppModuleTargetRefs(extraRefs),
+    ...vscodeAppModuleObservationRefs(extraRefs),
+    'permission:current-vscode-cowork:full-access:window-action-session:vscode:1:file-ref:vscode:paper',
+  ]);
 }
 
-function vscodeCoWorkRuntimeTruth(): CodexAgentHostRuntimeTruth {
+function vscodeAppModuleRuntimeTruth(extraRefs: string[] = []): CodexAgentHostRuntimeTruth {
+  const observationRefs = vscodeAppModuleObservationRefs(extraRefs);
   return {
     ...runtimeTruth({
-      observationRefs: vscodeCoWorkObservationRefs(),
+      observationRefs,
       permissionRefs: [
-        'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+        'permission:current-vscode-cowork:full-access:window-action-session:vscode:1:file-ref:vscode:paper',
       ],
       scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
     }),
     target: {
       bound: true,
-      summary: 'Current VSCode co-work window',
-      refs: vscodeCoWorkTargetRefs(),
+      summary: 'Current VSCode app module target',
+      refs: vscodeAppModuleTargetRefs(extraRefs),
     },
     observation: {
       fresh: true,
-      refs: vscodeCoWorkObservationRefs(),
+      refs: observationRefs,
       observedAt: '2026-06-03T00:00:00.000Z',
       capturedAt: '2026-06-03T00:00:00.000Z',
       freshnessCheckedAt: '2026-06-03T00:00:00.000Z',
@@ -924,41 +1038,121 @@ function vscodeCoWorkRuntimeTruth(): CodexAgentHostRuntimeTruth {
       },
     },
     refs: [
-      'intent:current-vscode-cowork',
-      'chat-request:vscode-cowork:agent-host-producer',
-      ...vscodeCoWorkTargetRefs(),
-      ...vscodeCoWorkObservationRefs(),
-      'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper',
+      'intent:computer-use-app-module-dry-run',
+      ...vscodeAppModuleTargetRefs(extraRefs),
+      ...observationRefs,
+      ...extraRefs,
+      'permission:current-vscode-cowork:full-access:window-action-session:vscode:1:file-ref:vscode:paper',
       'computer-use:executor-scope:current-vscode',
-      'cancel:runtime-turn/codex-command-default-vscode-cowork',
+      'cancel:runtime-turn/codex-command-default-vscode-app-module',
     ],
   };
 }
 
-function vscodeCoWorkTargetRefs(): string[] {
+function vscodeAppModuleTargetRefs(extraRefs: string[] = []): string[] {
   return [
-    'macos-app:com.microsoft.VSCode',
+    'macos-app:vscode',
     'process:vscode:paper',
     'window:vscode:paper',
     'text:title:paper',
     'frontmost:vscode:paper',
     'file-ref:vscode:paper',
-    'window-action-session:vscode-cowork:1',
+    'window-action-session:vscode:1',
+    ...extraRefs,
   ];
 }
 
-function vscodeCoWorkObservationRefs(): string[] {
+function vscodeAppModuleObservationRefs(extraRefs: string[] = []): string[] {
   return [
-    'window-action-session:vscode-cowork:1',
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:paper',
+    'frontmost:vscode:paper',
     'window:vscode:paper',
     'observation:vscode:current',
     'image:vscode:current',
     'accessibility:vscode:current',
     'text:vscode:visible',
-    'element:vscode:editor',
+    'element:vscode:editor:monaco:1',
     'freshness:vscode:current',
     'file-ref:vscode:paper',
+    ...extraRefs,
   ];
+}
+
+function appModuleAgentHostInput(operation: string, refs: string[]): NormalizedCodexAgentHostInput {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'test',
+    intentText: 'Host already selected a Computer Use app module operation.',
+    authorizationProfileId: 'high-autonomy',
+    singleTurnOverride: false,
+    refs: ['intent:computer-use-app-module-dry-run', ...refs],
+    readiness: {},
+    target: {
+      kind: 'computer-use-app-module',
+      refs,
+      computerUseAppModule: {
+        operation,
+      },
+    },
+    observation: {
+      fresh: true,
+      refs,
+    },
+    permissions: {},
+  };
+}
+
+function appModulePreflight(refs: string[]): ComputerUsePreflightResult {
+  return {
+    ...readyPreflight(),
+    target: {
+      summary: 'Computer Use app module target',
+      refs,
+    },
+    evidenceRefs: refs,
+  };
+}
+
+function appModuleRuntimeTruth(refs: string[]): CodexAgentHostRuntimeTruth {
+  return {
+    ...runtimeTruth({
+      observationRefs: refs,
+      permissionRefs: ['permission:turn/app-module/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:app-module'],
+    }),
+    target: {
+      bound: true,
+      summary: 'Computer Use app module target',
+      refs,
+    },
+    observation: {
+      fresh: true,
+      refs,
+      observedAt: '2026-06-03T00:00:00.000Z',
+      capturedAt: '2026-06-03T00:00:00.000Z',
+      freshnessCheckedAt: '2026-06-03T00:00:00.000Z',
+    },
+    refs: ['intent:computer-use-app-module-dry-run', ...refs],
+  };
+}
+
+function testAppModule(moduleId: string): ComputerUseAppModule {
+  return {
+    moduleId,
+    canHandle: ({ refs }) => refs.includes('macos-app:ambiguous'),
+    normalizeObservation: ({ refs }) => ({ refs }),
+    getCapabilities: () => ['read-visible-text'],
+    checkReadiness: () => ({
+      status: 'ready',
+      primitive: {
+        name: 'computer_use.observe',
+        inputRefs: ['window:ambiguous:main'],
+      },
+      evidenceRefs: [`module:${moduleId}`],
+    }),
+  };
 }
 
 function readyPreflight(): ComputerUsePreflightResult {

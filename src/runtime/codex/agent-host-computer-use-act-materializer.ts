@@ -5,8 +5,9 @@ import {
   createDefaultWindowActionSessionComputerUseActMaterializer,
 } from './agent-host-window-action-computer-use-act-materializer.js';
 import {
-  createDefaultVSCodeCoWorkComputerUseActMaterializer,
-} from './agent-host-vscode-cowork-act-materializer.js';
+  createDefaultComputerUseAppModuleMaterializer,
+  hasStructuredComputerUseAppModuleOperation,
+} from './agent-host-computer-use-app-module-materializer.js';
 import {
   requiresComputerUseProductCompletionEvidence,
 } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
@@ -21,6 +22,7 @@ import type {
   CodexAgentHostComputerUseActMaterializerInput,
   CodexAgentHostComputerUseActMaterializerResult,
 } from './agent-host-turn-loop.js';
+import type { ComputerUseAppModule } from './computer-use-app-module-registry.js';
 
 const MAX_RUNTIME_OWNED_EVIDENCE_REFS = 64;
 
@@ -30,7 +32,11 @@ export function createDefaultComputerUseActMaterializer(options: {
   env?: NodeJS.ProcessEnv;
   maxActLoopSteps?: number;
   hostPortContract?: Partial<Record<ComputerUseActMaterializerHostPortName, string>>;
+  appModules?: readonly ComputerUseAppModule[];
 } = {}): CodexAgentHostComputerUseActMaterializer {
+  const appModule = createDefaultComputerUseAppModuleMaterializer({
+    modules: options.appModules,
+  });
   const browser = createDefaultBrowserHostComputerUseActMaterializer({
     ...options.browser,
     env: options.browser?.env ?? options.env,
@@ -39,13 +45,12 @@ export function createDefaultComputerUseActMaterializer(options: {
     ...options.windowAction,
     env: options.windowAction?.env ?? options.env,
   });
-  const vscodeCoWork = createDefaultVSCodeCoWorkComputerUseActMaterializer();
 
   const hostPortContract = materializerHostPortContract(options.hostPortContract);
   const singleStep: CodexAgentHostComputerUseActMaterializer = async (input) => {
     const normalizedInput = normalizePlannerObjectiveInput(input);
-    const vscodeCoWorkResult = await vscodeCoWork(normalizedInput);
-    if (vscodeCoWorkResult) return vscodeCoWorkResult;
+    const appModuleResult = await appModule(normalizedInput);
+    if (appModuleResult) return appModuleResult;
     if (hasBrowserHostSessionRef(normalizedInput)) return browser(normalizedInput);
     if (hasWindowActionSessionRef(normalizedInput)) return windowAction(normalizedInput);
     return blockedTsOnlyResult(normalizedInput, {
@@ -91,6 +96,7 @@ function requiresDefaultActLoop(
   input: CodexAgentHostComputerUseActMaterializerInput,
   normalizedInput: CodexAgentHostComputerUseActMaterializerInput = input,
 ): boolean {
+  if (hasStructuredComputerUseAppModuleOperation(normalizedInput)) return false;
   return requiresComputerUseProductCompletionEvidence({ commandText: input.commandText })
     || requiresComputerUseProductCompletionEvidence({ commandText: normalizedInput.commandText });
 }
@@ -446,7 +452,7 @@ function runtimeOwnedRef(ref: string): boolean {
     || /provider[-_/]?(?:payload|input|request|response)/i.test(trimmed)
   ) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|intent:|chat-request:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|approval:|risk:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|non-user-file-scope:|cursor-move:|selection-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|intent:|chat-request:|blocked:|needs-confirmation:|module:|capability:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|approval:|risk:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|diagnostics:|problems:|terminal:|command-palette:|command-palette-item:|non-user-file-scope:|cursor-move:|selection-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:)/i.test(trimmed);
 }
 
 function safeContractText(value: unknown): string {

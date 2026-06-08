@@ -71,6 +71,24 @@ test('readiness rejects user-visible final answer fields from modules', () => {
   assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:final-answer-not-allowed');
 });
 
+test('readiness rejects completion truth fields from modules', () => {
+  const unsafe = validateComputerUseAppModuleReadiness({
+    status: 'ready',
+    primitive: {
+      name: 'computer_use.observe',
+      inputRefs: ['window:vscode:1'],
+    },
+    evidenceRefs: ['module:vscode'],
+    completionTruth: {
+      scope: 'workflow',
+      status: 'satisfied',
+    },
+  });
+
+  assert.equal(unsafe.status, 'blocked');
+  assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:final-answer-not-allowed');
+});
+
 test('readiness rejects user-visible final answer fields nested in primitive actions', () => {
   const unsafe = validateComputerUseAppModuleReadiness({
     status: 'ready',

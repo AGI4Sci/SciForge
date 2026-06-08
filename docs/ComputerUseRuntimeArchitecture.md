@@ -146,6 +146,8 @@ App module 是懂某个软件的“状态模型、能力目录和证据门”，
 
 最小 contract 是 `moduleId`、`canHandle(refs)`、`normalizeObservation(refs)`、`getCapabilities()` 和 `checkReadiness(operation, refs)`。`checkReadiness` 的输入只能是 Agent Host 已决定的一个 operation 和 current-run refs；contract 不暴露自然语言 task 字段。
 
+默认 Agent Host materializer 只在 structured Host target 里出现 app module operation 时调用 registry；裸 `commandText`、terminal output、command palette item 或 act completed status 都不能触发 app module operation 推断。
+
 `checkReadiness` 的输出只能是：
 
 - `ready` + 一个 Computer Use primitive candidate + evidence refs。
@@ -315,9 +317,10 @@ Computer Use primitive 默认不调用模型。
 
 - App Module Registry contract 是 `unit-proven`。
 - VSCode App Module skeleton、read-only、focus、editor mutation、terminal 和 command palette readiness 是 `unit-proven`。
+- Agent Host app-module dry-run materializer 是 `unit-proven`：它能根据 current-run refs 选择 VSCode module 并返回 primitive candidate，也能对 unknown / ambiguous app fail closed。
 - VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
-- 普通聊天接线、Host dry-run materializer、论文 preview 和论文 apply 仍待实现。
+- 普通聊天接线、论文 preview 和论文 apply 仍待实现。
 
 ## 旧路径清理口径
 
