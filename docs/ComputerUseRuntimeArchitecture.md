@@ -189,7 +189,11 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 - Computer Use primitive `moduleResult` 使用共享 sanitizer 清洗 `output`、`diagnostics`、`repairHints` 和 refs。
 - Computer Use TUI host action projection 对 `approvalRequest` 使用白名单投影，对 summary `message`、window title、frame label、blocked reason 使用 safe summary 字符串。
 - Package bridge presentation 只调用 `computerUseResultToTuiHostActions`，同一份已收口 actions 再写入 objectReferences、logs 和 runtime event detail。
-- `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation 和 primitive package result；新增 public projection surface 必须接共享 sanitizer / detector 或明确白名单投影。
+- UI runtime event projection 已 fail closed 旧 GUI completion surface：`gui_present`、`gui_ask_user` 和 `computer-use.tui-host-actions` 只保留 `guiPresentation` / `guiAskUser`、artifact refs、confirmation refs、verification metadata 和 audit refs，不写 `message` 或 `visibleAnswer.text`。
+- Structured runtime `done` projection 只投影 artifact refs、uiManifest refs、audit refs 和 partial / blocked 状态；native `message`、runtime ack 和 fallback summary 不能进入用户可见 answer。
+- Response normalization 对 legacy `gui.present`、`gui.ask_user` 和 `computer-use.tui-host-actions` projection text fail closed；只有 trusted Host-owned `FinalAnswerEnvelope` 可以恢复为用户级 visible answer。
+- `attachRuntimeGuiPresentationToResponse` 只附加 GUI metadata、object refs 和 confirmation provenance；GUI source 不再标 `liveAcceptanceEligible=true`，也不把 GUI 文本写成前台 final answer。
+- `npm run smoke:computer-use-no-bypass` 覆盖 app module readiness、Computer Use package result、package bridge presentation、primitive package result、GUI visible-answer guard、structured runtime local-message guard 和 response-normalization legacy projection guard；新增 public projection surface 必须接共享 sanitizer / detector 或明确白名单投影。
 
 后续 UI runtime event persistence 仍属于 P2 旁路删除与 fail-closed 的重点，不能新增局部 sanitizer 或本地 final-answer 生成路径。
 
@@ -400,6 +404,13 @@ Computer Use primitive 默认不调用模型。
 - 每个软件的专门优化迁移到 Host-side App Capability Module，不进入 Computer Use core。
 
 历史或诊断引用只能用于拒绝、迁移审计或 evidence invalidation，不能作为执行路径、自动转译路径或 completion truth。
+
+当前 P2 清理状态：
+
+- Runtime `gui` module / `module.invoke gui.*`、legacy Computer Use public surface、ordinary/native text-to-VSCode-operation inference 已由 no-bypass guard 持续禁止。
+- GUI / Computer Use projection text 已从 runtimeEvents、responseNormalization 和 foreground client presentation 的用户级答案路径移除。
+- Structured artifact projection 仍可让 UI 展示 evidence / artifact / control-plane refs，但不能借本地 `done.message` 声明 completion。
+- `npm run smoke:no-legacy-paths` 仍报告既存 T120/T122 provider/prompt policy warning；这些 warning 不来自 Computer Use P2 清理，本阶段没有新增 legacy path。
 
 ## 用户级验收
 

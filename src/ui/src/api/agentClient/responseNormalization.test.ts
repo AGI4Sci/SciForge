@@ -309,6 +309,43 @@ test('summarizes raw backend failure payloads without leaking response body or r
   assert.equal(response.run.response, response.message.content);
 });
 
+test('fails closed for legacy GUI and Computer Use projection text without Host final-answer envelope', () => {
+  for (const source of [
+    'gui.present:codex-command-legacy',
+    'gui.ask_user:codex-command-legacy',
+    'computer-use.tui-host-actions:codex-command-legacy',
+  ]) {
+    const response = normalizeAgentResponse('literature-evidence-review', '继续上一轮', {
+      ok: true,
+      displayIntent: {
+        source,
+        conversationProjection: {
+          visibleAnswer: {
+            status: 'completed',
+            text: 'LEGACY_GUI_COMPLETION_SHOULD_NOT_RENDER',
+            source,
+            provenance: { source },
+          },
+        },
+      },
+      data: {
+        run: {
+          id: `run-${source.replace(/[^a-z0-9]+/gi, '-')}`,
+          status: 'failed',
+          output: {
+            error: 'HTTP 500 backend failure from https://api.example.invalid/private stdoutRef=.sciforge/logs/stdout.log',
+          },
+        },
+      },
+    });
+
+    assert.notEqual(response.message.content, 'LEGACY_GUI_COMPLETION_SHOULD_NOT_RENDER');
+    assert.notEqual(response.run.response, 'LEGACY_GUI_COMPLETION_SHOULD_NOT_RENDER');
+    assert.match(response.message.content, /后端运行未完成|运行时后端运行失败|backend/i);
+    assert.doesNotMatch(response.message.content, /api\.example|stdoutRef|https?:\/\//);
+  }
+});
+
 test('prefers Projection visible answer over stale backend wrapper failure text', () => {
   const response = normalizeAgentResponse('literature-evidence-review', '继续上一轮', {
     ok: true,

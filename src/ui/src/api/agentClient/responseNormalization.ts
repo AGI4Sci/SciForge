@@ -62,6 +62,9 @@ function readableMessageFromStructured(structured: Record<string, unknown>, fall
   if (direct && !looksLikeRawJson(direct)) return stripVerificationFooter(direct);
   const failure = userVisibleFailureSummary(structured, fallback);
   if (failure) return failure;
+  if (!direct && looksLikeRawJson(fallback)) {
+    return '运行时已返回结构化结果，但没有可展示的 Host-owned final answer。详细证据已保留在运行审计和对象引用中。';
+  }
   return stripVerificationFooter(direct || fallback);
 }
 
@@ -362,8 +365,54 @@ function projectionVisibleAnswer(value: unknown): { status?: string; text: strin
   const visibleAnswer = isRecord(projection?.visibleAnswer) ? projection.visibleAnswer : undefined;
   const text = asString(visibleAnswer?.text) ?? asString(visibleAnswer?.diagnostic);
   if (!text || looksLikeRawJson(text)) return undefined;
+  if (legacyGuiOrComputerUseProjectionSource(record, displayIntent, projection, visibleAnswer)
+    && !trustedFinalAnswerEnvelopeMatches(record, text)) {
+    return undefined;
+  }
   const status = asString(visibleAnswer?.status);
   return { status, text: stripVerificationFooter(text) };
+}
+
+function legacyGuiOrComputerUseProjectionSource(...values: Array<Record<string, unknown> | undefined>): boolean {
+  return values.some((value) => projectionSourceStrings(value).some(isLegacyGuiOrComputerUseProjectionSource));
+}
+
+function projectionSourceStrings(value: Record<string, unknown> | undefined): string[] {
+  if (!value) return [];
+  const provenance = isRecord(value.provenance) ? value.provenance : undefined;
+  return [
+    asString(value.source),
+    asString(value.producer),
+    asString(value.boundary),
+    asString(provenance?.source),
+    asString(provenance?.producer),
+  ].filter((entry): entry is string => Boolean(entry));
+}
+
+function isLegacyGuiOrComputerUseProjectionSource(source: string): boolean {
+  return /^(?:gui\.present|gui\.ask_user)(?::|$)/.test(source)
+    || /^computer-use\.tui-host-actions(?::|$)/.test(source);
+}
+
+function trustedFinalAnswerEnvelopeMatches(record: Record<string, unknown>, text: string): boolean {
+  const envelope = firstRecord([
+    record.finalAnswerEnvelope,
+    isRecord(record.output) ? record.output.finalAnswerEnvelope : undefined,
+    isRecord(record.run) && isRecord(record.run.output) ? record.run.output.finalAnswerEnvelope : undefined,
+    isRecord(record.data) ? record.data.finalAnswerEnvelope : undefined,
+    isRecord(record.data) && isRecord(record.data.run) && isRecord(record.data.run.output) ? record.data.run.output.finalAnswerEnvelope : undefined,
+  ]);
+  if (!envelope) return false;
+  const envelopeText = asString(envelope.text);
+  const source = asString(envelope.source);
+  return envelope.schemaVersion === 'sciforge.final-answer-envelope.v1'
+    && Boolean(envelopeText)
+    && stripVerificationFooter(envelopeText ?? '') === stripVerificationFooter(text)
+    && Boolean(source && /^codex\.(?:app-server|agent-host)\.final-answer(?::|$)/.test(source));
+}
+
+function firstRecord(values: unknown[]): Record<string, unknown> | undefined {
+  return values.find(isRecord);
 }
 
 function payloadLikeRecord(value: Record<string, unknown>) {

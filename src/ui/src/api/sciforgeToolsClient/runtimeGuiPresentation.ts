@@ -48,12 +48,13 @@ export function attachRuntimeGuiPresentationToResponse(
       ...response,
       message: {
         ...response.message,
+        content: '运行需要用户确认；确认请求已作为 refs-first 元数据保留。',
         provenance: {
           ...(response.message.provenance ?? {}),
           kind: 'live-runtime-codex',
           source: askSource,
           runtimeRequestEligible: false,
-          liveAcceptanceEligible: true,
+          liveAcceptanceEligible: false,
           requiresUserConfirmation: true,
           commandId: asString(askUser?.commandId),
           attemptId: asString(askUser?.attemptId),
@@ -83,12 +84,13 @@ export function attachRuntimeGuiPresentationToResponse(
       ...response,
       message: {
         ...response.message,
+        content: '运行返回了 GUI 展示元数据；没有 Host-owned final answer 时不会生成用户级回答。',
         provenance: {
           ...(response.message.provenance ?? {}),
           kind: 'live-runtime-codex',
           source,
           runtimeRequestEligible: false,
-          liveAcceptanceEligible: true,
+          liveAcceptanceEligible: false,
           commandId: asString(presentation?.commandId),
           attemptId: asString(presentation?.attemptId),
           provider: asString(presentation?.provider),
@@ -164,7 +166,7 @@ function objectReferenceFromGuiPresentation(presentation: Record<string, unknown
     preferredView: preferredViewFromPresentationHint(hint, kind),
     presentationRole: 'primary-deliverable',
     status: 'available',
-    summary: asString(presentation?.text)?.slice(0, 360) ?? rawRef,
+    summary: rawRef,
     provenance: {
       dataRef: isArtifact || kind === 'url' ? target : undefined,
       path: kind === 'file' || kind === 'folder' ? target : undefined,

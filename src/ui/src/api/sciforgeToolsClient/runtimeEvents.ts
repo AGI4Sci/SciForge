@@ -643,7 +643,7 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
   }));
   return {
     ...result,
-    message: presentation.text,
+    message: undefined,
     guiPresentation: presentation,
     displayIntent: {
       source: presentation.source,
@@ -652,7 +652,6 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:gui-present',
         visibleAnswer: {
           status: visibleAnswerStatusForGuiPresent(presentation),
-          text: presentation.text,
           artifactRefs: projectedArtifactRefs,
         },
         artifacts: [
@@ -675,7 +674,7 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
     },
     output: {
       ...output,
-      message: presentation.text,
+      message: undefined,
       guiPresentation: presentation,
     },
     ...((controlPlane.artifact || virtualScreen.artifact) ? {
@@ -762,13 +761,9 @@ function withStructuredRuntimeDoneProjection(result: Record<string, unknown>): u
     ...artifactRefs,
   ]);
   const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
-  const message = safeSummaryText(result.message)
-    ?? (artifacts.some((artifact) => artifact.type === COMPUTER_USE_SCREEN_EVIDENCE_ARTIFACT_TYPE || artifact.type === COMPUTER_USE_LEGACY_VIRTUAL_SCREEN_ARTIFACT_TYPE)
-      ? 'Computer Use image evidence is available in the evidence pane.'
-      : 'Runtime Codex materialized structured artifacts.');
   return {
     ...result,
-    message,
+    message: undefined,
     artifacts,
     uiManifest,
     structuredRuntimeProjection: {
@@ -785,7 +780,6 @@ function withStructuredRuntimeDoneProjection(result: Record<string, unknown>): u
         conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:structured-done',
         visibleAnswer: {
           status: 'partial-ready',
-          text: message,
           artifactRefs,
         },
         artifacts: artifacts.map((artifact) => ({
@@ -808,7 +802,7 @@ function withStructuredRuntimeDoneProjection(result: Record<string, unknown>): u
     },
     output: {
       ...output,
-      message,
+      message: undefined,
       structuredRuntimeProjection: true,
     },
   };
@@ -867,7 +861,7 @@ function withGuiAskUserRuntimeResult(
   ].filter(Boolean);
   return {
     ...result,
-    message: askUser.text,
+    message: undefined,
     guiPresentation: presentation,
     guiAskUser: askUser,
     displayIntent: {
@@ -877,10 +871,8 @@ function withGuiAskUserRuntimeResult(
         conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:gui-ask-user',
         visibleAnswer: {
           status: 'needs-human',
-          text: askUser.text,
           artifactRefs: projectedArtifacts.map((artifact) => artifact.ref),
           confirmationStatus: 'needs-confirmation',
-          liveAcceptanceEligible: true,
         },
         artifacts: projectedArtifacts,
         executionProcess,
@@ -888,7 +880,6 @@ function withGuiAskUserRuntimeResult(
         verificationState: {
           status: 'needs-human',
           verifierRef: askUser.source,
-          liveAcceptanceEligible: true,
         },
         runtimeMetadata,
         auditRefs,
@@ -897,7 +888,7 @@ function withGuiAskUserRuntimeResult(
     },
     output: {
       ...output,
-      message: askUser.text,
+      message: undefined,
       guiPresentation: presentation,
       guiAskUser: askUser,
     },

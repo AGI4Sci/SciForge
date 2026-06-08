@@ -43,6 +43,7 @@ async function main() {
   const files = [
     ...await collectSourceFilesIfExists(join(root, 'src', 'runtime')),
     ...await collectSourceFilesIfExists(join(root, 'src', 'ui', 'src', 'api', 'sciforgeToolsClient')),
+    ...await collectSourceFilesIfExists(join(root, 'src', 'ui', 'src', 'api', 'agentClient')),
     ...await collectSourceFilesIfExists(join(root, 'packages', 'backend', 'src')),
     ...await collectSourceFilesIfExists(join(root, 'packages', 'actions', 'computer-use')),
   ];
@@ -53,6 +54,7 @@ async function main() {
     if (isTestFile(rel)) continue;
     const text = await readFile(file, 'utf8');
     const lines = text.split(/\r?\n/);
+    findings.push(...fileLevelBypassFindings(rel, text));
     if (isActivePublicProjectionSurface(rel, text) && !hasPublicProjectionGuard(rel, text)) {
       findings.push({
         file: rel,
@@ -151,6 +153,81 @@ async function main() {
   }
 
   console.log(`[ok] no Computer Use bypass surfaces found: ${files.length} source files scanned.`);
+}
+
+function fileLevelBypassFindings(file: string, text: string): Finding[] {
+  const findings: Finding[] = [];
+  if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts') {
+    const structuredDone = sectionBetween(text, 'function withStructuredRuntimeDoneProjection', 'function withGuiAskUserRuntimeResult');
+    if (structuredDone && (/\bvisibleAnswer\s*:\s*{[\s\S]*?\btext\s*:/.test(structuredDone) || unsafeMessageProjection(structuredDone))) {
+      findings.push({
+        file,
+        line: lineNumberForIndex(text, text.indexOf(structuredDone)),
+        rule: 'forbidden-structured-runtime-visible-answer-text',
+        message: 'Structured runtime done projection may expose artifact refs, uiManifest refs, and audit refs, but must not project local message text as a visible answer.',
+        text: 'withStructuredRuntimeDoneProjection',
+      });
+    }
+    for (const [start, end] of [
+      ['function withGuiPresentRuntimeResult', 'function guiPresentVerificationState'],
+      ['function withGuiAskUserRuntimeResult', 'function withHostFinalAnswerRuntimeResult'],
+    ] as const) {
+      const section = sectionBetween(text, start, end);
+      if (section && /\bvisibleAnswer\s*:\s*{[\s\S]*?\btext\s*:/.test(section)) {
+        findings.push({
+          file,
+          line: lineNumberForIndex(text, text.indexOf(section)),
+          rule: 'forbidden-gui-projection-visible-answer-text',
+          message: 'GUI projection may carry metadata, artifact refs, and confirmation refs, but must not project GUI text as a visible final answer.',
+          text: start,
+        });
+      }
+    }
+  }
+  if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeGuiPresentation.ts'
+    && /startsWith\(\s*['"]gui\.(?:present|ask_user):['"]\s*\)[\s\S]{0,1200}\bliveAcceptanceEligible\s*:\s*true\b/.test(text)) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, text.search(/startsWith\(\s*['"]gui\.(?:present|ask_user):['"]\s*\)/)),
+      rule: 'forbidden-gui-projection-live-acceptance',
+      message: 'GUI presentation and GUI confirmation metadata must not be marked live-acceptance eligible; only Host-owned final-answer envelopes may do that.',
+      text: 'gui.present/gui.ask_user liveAcceptanceEligible',
+    });
+  }
+  if (file === 'src/ui/src/api/agentClient/responseNormalization.ts'
+    && /\bfunction\s+projectionVisibleAnswer\b/.test(text)
+    && !/\blegacyGuiOrComputerUseProjectionSource\b/.test(text)) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, text.search(/\bfunction\s+projectionVisibleAnswer\b/)),
+      rule: 'missing-legacy-gui-projection-fail-closed',
+      message: 'Response normalization must fail closed for legacy GUI and Computer Use projection text unless it is backed by a trusted Host final-answer envelope.',
+      text: 'projectionVisibleAnswer',
+    });
+  }
+  return findings;
+}
+
+function sectionBetween(text: string, startNeedle: string, endNeedle: string): string | undefined {
+  const start = text.indexOf(startNeedle);
+  if (start < 0) return undefined;
+  const end = text.indexOf(endNeedle, start + startNeedle.length);
+  return text.slice(start, end < 0 ? undefined : end);
+}
+
+function lineNumberForIndex(text: string, index: number): number {
+  if (index < 0) return 1;
+  return text.slice(0, index).split(/\r?\n/).length;
+}
+
+function unsafeMessageProjection(section: string): boolean {
+  return section.split(/\r?\n/).some((line) => {
+    const code = line.replace(/\/\/.*$/, '').trim();
+    if (/\{\s*message\s*[,}]/.test(code) || /^message\s*,/.test(code)) return true;
+    const match = code.match(/\bmessage\s*:\s*([^,}]+)/);
+    if (!match) return false;
+    return !/^(?:undefined|null)\b/.test(match[1]?.trim() ?? '');
+  });
 }
 
 function isGuiCompletionSurfaceLine(line: string): boolean {

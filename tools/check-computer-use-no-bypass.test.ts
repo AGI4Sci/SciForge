@@ -306,3 +306,54 @@ test('Computer Use no-bypass guard blocks raw primitive package result payload l
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
 });
+
+test('Computer Use no-bypass guard blocks structured runtime done visible answer text', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts', [
+    'function withStructuredRuntimeDoneProjection(result: Record<string, unknown>) {',
+    "  const message = String(result.message ?? 'Runtime Codex materialized structured artifacts.');",
+    '  return {',
+    '    displayIntent: { conversationProjection: { visibleAnswer: { status: "partial-ready", text: message } } },',
+    '    output: { message },',
+    '  };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-structured-runtime-visible-answer-text/);
+});
+
+test('Computer Use no-bypass guard blocks GUI projection live acceptance eligibility', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/ui/src/api/sciforgeToolsClient/runtimeGuiPresentation.ts', [
+    'export function attachRuntimeGuiPresentationToResponse(response: unknown, result: { guiPresentation?: { source?: string } }) {',
+    '  const source = result.guiPresentation?.source;',
+    "  if (source?.startsWith('gui.present:')) {",
+    '    return { message: { provenance: { liveAcceptanceEligible: true } } };',
+    '  }',
+    '  return response;',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-gui-projection-live-acceptance/);
+});
+
+test('Computer Use no-bypass guard requires legacy GUI projection fail-closed in response normalization', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/ui/src/api/agentClient/responseNormalization.ts', [
+    'function projectionVisibleAnswer(value: { displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } } }) {',
+    '  const visibleAnswer = value.displayIntent?.conversationProjection?.visibleAnswer;',
+    '  return visibleAnswer?.text ? { text: visibleAnswer.text } : undefined;',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /missing-legacy-gui-projection-fail-closed/);
+});

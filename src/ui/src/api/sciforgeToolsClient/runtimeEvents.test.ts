@@ -190,13 +190,18 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
   const result = stream.result as {
+    message?: string;
+    output?: { message?: string };
     structuredRuntimeProjection?: { artifactRefs?: string[]; failClosedRawText?: boolean };
     artifacts?: Array<{ id?: string; type?: string; data?: Record<string, unknown> }>;
     uiManifest?: Array<{ componentId?: string; artifactRef?: string }>;
-    displayIntent?: { conversationProjection?: { visibleAnswer?: { artifactRefs?: string[] } } };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string; artifactRefs?: string[] } } };
   };
 
   assert.equal(stream.error, undefined);
+  assert.equal(result.message, undefined);
+  assert.equal(result.output?.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.structuredRuntimeProjection?.failClosedRawText, true);
   assert.deepEqual(result.structuredRuntimeProjection?.artifactRefs, [`artifact:${screenArtifactId}`]);
   assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.includes(`artifact:${screenArtifactId}`));
@@ -1079,7 +1084,7 @@ test('SSE reader fails closed on exact native assistant deltas without Host fina
   assert.doesNotMatch(result.message ?? '', /Markdown sample|function greet|```\s*typescript/);
 });
 
-test('SSE reader promotes gui.present into the visible Runtime Codex result', async () => {
+test('SSE reader keeps gui.present as metadata without visible Runtime Codex answer', async () => {
   const commandId = 'codex-command-gui-present';
   const body = [
     'event: message',
@@ -1134,6 +1139,7 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
     displayIntent?: {
       source?: string;
       conversationProjection?: {
+        visibleAnswer?: { text?: string };
         artifacts?: Array<{ mime?: string }>;
         verificationState?: { status?: string; verdict?: string };
       };
@@ -1142,7 +1148,8 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   };
 
   assert.equal(stream.error, undefined);
-  assert.equal(result.message, 'VISIBLE_FROM_GUI_PRESENT');
+  assert.notEqual(result.message, 'VISIBLE_FROM_GUI_PRESENT');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.guiPresentation?.source, `gui.present:${commandId}`);
   assert.equal(result.guiPresentation?.hint, 'markdown');
   assert.equal(result.displayIntent?.source, `gui.present:${commandId}`);
@@ -1211,6 +1218,7 @@ test('SSE reader does not mark Agent Host gui.present verified from taskOutcome 
     message?: string;
     displayIntent?: {
       conversationProjection?: {
+        visibleAnswer?: { text?: string };
         verificationState?: { status?: string; verdict?: string; verifierRef?: string };
         auditRefs?: string[];
       };
@@ -1218,7 +1226,8 @@ test('SSE reader does not mark Agent Host gui.present verified from taskOutcome 
   };
 
   assert.equal(stream.error, undefined);
-  assert.equal(result.message, 'VISIBLE_VERIFIED_BROWSER_ANSWER');
+  assert.equal(result.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, undefined);
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verifierRef, `gui.present:${commandId}:agent-host`);
@@ -1292,6 +1301,7 @@ test('SSE reader marks Agent Host gui.present verified from satisfied completion
     message?: string;
     displayIntent?: {
       conversationProjection?: {
+        visibleAnswer?: { text?: string };
         verificationState?: { status?: string; verdict?: string; verifierRef?: string };
         auditRefs?: string[];
       };
@@ -1299,7 +1309,8 @@ test('SSE reader marks Agent Host gui.present verified from satisfied completion
   };
 
   assert.equal(stream.error, undefined);
-  assert.equal(result.message, 'VISIBLE_VERIFIED_BROWSER_ANSWER');
+  assert.equal(result.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'verified');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'pass');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verifierRef, 'agent-host-browser-acceptance');
@@ -1368,7 +1379,7 @@ test('SSE reader promotes gui.ask_user into a visible confirmation result', asyn
     displayIntent?: {
       source?: string;
       conversationProjection?: {
-        visibleAnswer?: { status?: string; liveAcceptanceEligible?: boolean };
+        visibleAnswer?: { status?: string; text?: string; liveAcceptanceEligible?: boolean };
         artifacts?: Array<{ ref?: string }>;
         recoverActions?: string[];
       };
@@ -1376,14 +1387,14 @@ test('SSE reader promotes gui.ask_user into a visible confirmation result', asyn
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Confirmation required/);
-  assert.doesNotMatch(result.message ?? '', /vision-trace\.json|Approval ref|Action ref|Choices|\/computer-use approve/);
+  assert.equal(result.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.guiAskUser?.source, `gui.ask_user:${commandId}`);
   assert.deepEqual(result.guiAskUser?.relatedRefs, ['.sciforge/vision-runs/run-1/vision-trace.json']);
   assert.equal(result.guiAskUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref approval-1');
   assert.equal(result.displayIntent?.source, `gui.ask_user:${commandId}`);
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, undefined);
   assert.deepEqual(result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref), ['.sciforge/vision-runs/run-1/vision-trace.json']);
   assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, []);
 });
@@ -1445,6 +1456,7 @@ test('SSE reader exposes generic public hard-confirm fields without leaking comm
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
     guiAskUser?: {
       publicProjection?: {
         action?: string;
@@ -1469,10 +1481,8 @@ test('SSE reader exposes generic public hard-confirm fields without leaking comm
   assert.equal(result.guiAskUser?.choices?.[0]?.label, 'Confirm');
   assert.equal(result.guiAskUser?.choices?.[1]?.label, 'Cancel');
   assert.match(result.guiAskUser?.choices?.[0]?.commandText ?? '', /^\/computer-use approve --approval-ref /);
-  assert.match(result.message ?? '', /Action: submit application form/);
-  assert.match(result.message ?? '', /Target: Example Jobs application form/);
-  assert.match(result.message ?? '', /Impact: Submits the prepared application/);
-  assert.match(result.message ?? '', /Authorization profile: High Autonomy/);
+  assert.equal(result.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.doesNotMatch(JSON.stringify(result), /provider\.example|sk-secret|private\.example|private-trace|stdout\.log|rawPayload|commandText.*#submit/);
 });
 
@@ -1531,7 +1541,7 @@ test('SSE reader preserves approval refs containing risk-missing without treatin
   assert.doesNotMatch(JSON.stringify(result), /sk-real-secret-token/);
 });
 
-test('SSE reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {
+test('SSE reader keeps Computer Use TUI host action metadata out of visible result while preserving confirmation refs', async () => {
   const commandId = 'codex-command-computer-use-actions';
   const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
   const screenshotRef = '.sciforge/vision-runs/cu-risk/step-001-before.png';
@@ -1597,14 +1607,13 @@ test('SSE reader turns Computer Use TUI host action metadata into visible result
     message?: string;
     guiAskUser?: { approvalRequest?: { id?: string }; relatedRefs?: string[] };
     guiPresentation?: { displayedRefs?: string[] };
-    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string }; artifacts?: Array<{ ref?: string }> } };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string; text?: string }; artifacts?: Array<{ ref?: string }> } };
     artifacts?: Array<{ type?: string; data?: Record<string, unknown> }>;
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Confirmation required/);
-  assert.match(result.message ?? '', /Allow the operation to click/);
-  assert.doesNotMatch(result.message ?? '', /approval:computer-use:cu-risk|vision-trace|Approval ref|Evidence refs|Choices|\/computer-use/);
+  assert.equal(result.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.guiAskUser?.approvalRequest?.id, 'approval:computer-use:cu-risk');
   assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(traceRef));
@@ -1620,7 +1629,7 @@ test('SSE reader turns Computer Use TUI host action metadata into visible result
   assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
 });
 
-test('NDJSON reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {
+test('NDJSON reader keeps Computer Use TUI host action metadata out of visible result while preserving confirmation refs', async () => {
   const commandId = 'computer-use-command-ndjson';
   const traceRef = '.sciforge/vision-runs/cu-ndjson/vision-trace.json';
   const screenshotRef = '.sciforge/vision-runs/cu-ndjson/step-001-before.png';
@@ -1678,13 +1687,12 @@ test('NDJSON reader turns Computer Use TUI host action metadata into visible res
     message?: string;
     guiAskUser?: { source?: string; choices?: Array<{ commandText?: string }>; relatedRefs?: string[] };
     guiPresentation?: { source?: string; displayedRefs?: string[] };
-    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string }; recoverActions?: string[] } };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string; text?: string }; recoverActions?: string[] } };
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Confirmation required/);
-  assert.match(result.message ?? '', /Allow the operation to click the guarded Submit button/);
-  assert.doesNotMatch(result.message ?? '', /approval:computer-use:ndjson|\/computer-use approve|\/computer-use reject|Evidence refs|Choices/);
+  assert.equal(result.message, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
   assert.equal(result.guiAskUser?.source, `gui.ask_user:${commandId}:computer-use`);
   assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
   assert.equal(result.guiAskUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref "approval:computer-use:ndjson"');
@@ -1810,7 +1818,7 @@ test('NDJSON reader exposes Computer Use repair sidecars without GUI-derived con
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
-    guiPresentation?: { displayedRefs?: string[] };
+    guiPresentation?: { text?: string; displayedRefs?: string[] };
     displayIntent?: {
       conversationProjection?: {
         visibleAnswer?: { status?: string; artifactRefs?: string[] };
@@ -1823,9 +1831,10 @@ test('NDJSON reader exposes Computer Use repair sidecars without GUI-derived con
   const projection = result.displayIntent?.conversationProjection;
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Repair hint refs/);
-  assert.match(result.message ?? '', /Continuation request refs/);
-  assert.match(result.message ?? '', /Run task chain refs/);
+  assert.equal(result.message, undefined);
+  assert.match(result.guiPresentation?.text ?? '', /Repair hint refs/);
+  assert.match(result.guiPresentation?.text ?? '', /Continuation request refs/);
+  assert.match(result.guiPresentation?.text ?? '', /Run task chain refs/);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(continuationRequestRef));
   assert.equal(projection?.visibleAnswer?.status, 'repair-needed');
   assert.ok(projection?.visibleAnswer?.artifactRefs?.includes(blockedManifestRef));
@@ -1877,7 +1886,7 @@ test('NDJSON reader surfaces Computer Use completion-grade and producer diagnost
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
-    guiPresentation?: { ref?: string; displayedRefs?: string[] };
+    guiPresentation?: { ref?: string; text?: string; displayedRefs?: string[] };
     displayIntent?: {
       conversationProjection?: {
         visibleAnswer?: { status?: string; artifactRefs?: string[] };
@@ -1886,9 +1895,10 @@ test('NDJSON reader surfaces Computer Use completion-grade and producer diagnost
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Completion diagnostic: completed status did not include a visible final artifact ref/);
-  assert.match(result.message ?? '', /Completion-grade diagnostic refs/);
-  assert.match(result.message ?? '', /L3 producer diagnostic refs/);
+  assert.equal(result.message, undefined);
+  assert.match(result.guiPresentation?.text ?? '', /Completion diagnostic: completed status did not include a visible final artifact ref/);
+  assert.match(result.guiPresentation?.text ?? '', /Completion-grade diagnostic refs/);
+  assert.match(result.guiPresentation?.text ?? '', /L3 producer diagnostic refs/);
   assert.equal(result.guiPresentation?.ref, diagnosticRef);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(producerDiagnosticRef));
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'partial-ready');
@@ -1940,6 +1950,7 @@ test('NDJSON reader projects Computer Use blocked sidecars without GUI-derived c
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
+    guiPresentation?: { text?: string };
     displayIntent?: {
       conversationProjection?: {
         visibleAnswer?: { status?: string; artifactRefs?: string[] };
@@ -1951,9 +1962,10 @@ test('NDJSON reader projects Computer Use blocked sidecars without GUI-derived c
   const projection = result.displayIntent?.conversationProjection;
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Blocked manifest refs/);
-  assert.match(result.message ?? '', /Run task chain refs/);
-  assert.doesNotMatch(result.message ?? '', /Raw provider result/);
+  assert.equal(result.message, undefined);
+  assert.match(result.guiPresentation?.text ?? '', /Blocked manifest refs/);
+  assert.match(result.guiPresentation?.text ?? '', /Run task chain refs/);
+  assert.doesNotMatch(result.guiPresentation?.text ?? '', /Raw provider result/);
   assert.equal(projection?.visibleAnswer?.status, 'external-blocked');
   assert.ok(projection?.visibleAnswer?.artifactRefs?.includes(blockedManifestRef));
   assert.ok(projection?.auditRefs?.includes(runTaskChainRef));

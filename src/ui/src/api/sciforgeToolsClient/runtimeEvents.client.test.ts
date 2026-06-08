@@ -4,7 +4,7 @@ import type { SendAgentMessageInput } from '../../domain';
 import { CODEX_RUNTIME_STREAM_PATH, sendSciForgeToolMessage } from '../sciforgeToolsClient';
 import { recursiveForbiddenKeys, runtimeRequestInput } from './runtimeEvents.testHelpers';
 
-test('Runtime Codex foreground Computer Use host actions preserve gui.present and gui.ask_user for default chat', async () => {
+test('Runtime Codex foreground Computer Use host actions preserve gui.present and gui.ask_user as metadata for default chat', async () => {
   const originalFetch = globalThis.fetch;
   const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
   const screenshotRef = '.sciforge/vision-runs/cu-risk/step-001-before.png';
@@ -76,8 +76,9 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
 
     assert.equal(response.message.provenance?.requiresUserConfirmation, true);
     assert.match(String(response.message.provenance?.source), /^gui\.ask_user:codex-command-.*:computer-use$/);
-    assert.match(response.message.content, /click the visible Submit button/);
-    assert.match(response.message.content, /Risk: High/);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
+    assert.match(response.message.content, /运行需要用户确认/);
+    assert.doesNotMatch(response.message.content, /click the visible Submit button|Risk: High/);
     assert.equal(guiPresentation.source, `gui.present:${response.run.id}:computer-use`);
     assert.equal(guiPresentation.status, 'needs-confirmation');
     assert.deepEqual(guiPresentation.displayedRefs, [
@@ -1380,8 +1381,12 @@ test('Runtime Codex provider inference preflight does not block local Host Brows
     });
 
     assert.equal(response.message.status, 'completed');
-    assert.match(response.message.content, /Agentic Monte Carlo/);
-    assert.match(response.message.content, /arxiv\.org/);
+    assert.match(response.message.content, /GUI 展示元数据/);
+    assert.doesNotMatch(response.message.content, /Agentic Monte Carlo|arxiv\.org/);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
+    const raw = response.run.raw as Record<string, unknown>;
+    const guiPresentation = raw.guiPresentation as Record<string, unknown>;
+    assert.deepEqual(guiPresentation.displayedRefs, ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt']);
     assert.equal(fetchedUrls.some((entry) => entry.includes(CODEX_RUNTIME_STREAM_PATH)), true);
     assert.equal(fetchedUrls.some((entry) => entry.includes('/api/sciforge/runtime-provider-preflight/manifest')), false);
   } finally {
@@ -1548,7 +1553,7 @@ test('Runtime Codex request resolves relative image refs as structured input obj
   }]);
 });
 
-test('Runtime Codex foreground final message uses gui.present provenance', async () => {
+test('Runtime Codex foreground gui.present keeps metadata without producing a final message', async () => {
   const originalFetch = globalThis.fetch;
   const commandIdPattern = /^codex-command-/;
   try {
@@ -1599,10 +1604,11 @@ test('Runtime Codex foreground final message uses gui.present provenance', async
 
     const response = await sendSciForgeToolMessage(runtimeRequestInput());
 
-    assert.equal(response.message.content, 'VISIBLE_FOREGROUND_GUI_PRESENT');
+    assert.notEqual(response.message.content, 'VISIBLE_FOREGROUND_GUI_PRESENT');
+    assert.match(response.message.content, /GUI 展示元数据/);
     assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
     assert.match(String(response.message.provenance?.source), /^gui\.present:codex-command-/);
-    assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
     assert.deepEqual(response.message.objectReferences?.map((reference) => reference.ref), ['file:.sciforge/artifacts/live-selected-report.md']);
     assert.equal(response.message.objectReferences?.[0]?.provenance?.path, '.sciforge/artifacts/live-selected-report.md');
     assert.deepEqual(response.run.objectReferences?.map((reference) => reference.ref), ['file:.sciforge/artifacts/live-selected-report.md']);

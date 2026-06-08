@@ -160,9 +160,10 @@ open-command-palette
 - 从当前状态继续，不保留旧 P3-P9 的展开执行项。
 - 每个 checkbox 必须对应可证明的代码、测试、文档、静态扫描或 live diagnostic manifest。
 - 一个阶段不能以“完整 VSCode co-work”作为验收目标。
-- 旧路径只允许删除、fail closed 或迁入 Host-owned bridge；不做 compatibility wrapper。
+- 旧路径只允许删除或 fail closed；需要的能力直接按新 primitive / Host-owned bridge 实现，不做 compatibility wrapper、legacy alias 或历史 run 转译。
 - Unit path 先行，env-gated live diagnostic 后置。
 - `blocked` / `needs-confirmation` 是有效验收结果，但必须保留 reason refs、evidence refs 和恢复路径。
+- 新阶段按“红测 -> 最小实现 -> 静态护栏 -> 文档/验收”递进；不把一个阶段写成没有中间验收的完整产品目标。
 
 ### P0：路线图与架构收口
 
@@ -198,28 +199,46 @@ open-command-palette
 
 目标：删除会让 SciForge、native route、runtime gateway、GUI module 或 Computer Use 自行回答用户的历史路径。
 
-- [ ] 静态扫描列出仍能从 native `message`、`message_delta`、`done.finalText`、runtime ack、tool local completion 生成用户可见回答的路径。
-- [ ] 删除或 fail closed `gui.present` / `gui.ask_user` / runtime `gui` module completion surface。
-- [ ] 删除或 fail closed 从裸 `message` / `commandText` / terminal output / palette item 推断 VSCode operation 的路径。
-- [ ] 删除或 fail closed 历史 run、fixture、package probe、fallback text 参与 completion truth 的路径。
-- [ ] 删除或 fail closed `runTask` / `perform_local_action` / `fill_fields` 等旧 public surface；需要的局部组合只进入 `run_procedure`。
+Build Tasks：
+
+- [x] 写 GUI projection 红测：`gui.present` / `gui.ask_user` / `computer-use.tui-host-actions` 只能保留 metadata、artifact refs、confirmation refs，不能写 `message` 或 `visibleAnswer.text`。
+- [x] 实现 GUI projection metadata-only：保留 `guiPresentation` / `guiAskUser` / artifact refs / verification metadata，删除本地 completion text 与 `liveAcceptanceEligible`。
+- [x] 写 response normalization 红测：旧 GUI / Computer Use projection text 没有 Host-owned `FinalAnswerEnvelope` 时不能进入 `message.content` / `run.response`。
+- [x] 实现 response normalization fail-closed：只信任 Host final answer envelope；legacy GUI / Computer Use projection text 返回 backend failure / missing final-answer summary。
+- [x] 写 structured runtime `done` 红测：structured artifacts 可以投影，native `message`、runtime ack 和 fallback summary 不能进入 `visibleAnswer.text`。
+- [x] 实现 structured runtime `done` artifacts-only projection：只输出 artifact refs、uiManifest refs、audit refs 和 partial / blocked status。
+- [x] 写旧 VSCode operation 推断红测：裸 `message` / `commandText` / terminal output / palette label 不能触发 VSCode operation。
+- [x] 保持旧 VSCode operation 推断 fail-closed：只有 Host structured operation ref 能进入 app module readiness。
+- [x] 写旧 Computer Use public surface 红测：`runTask` / `perform_local_action` / `fill_fields` / `executeBoundedOperation` 不能重新暴露。
+- [x] 保持旧 Computer Use public surface 删除态；需要的局部组合只进入 `run_procedure`。
+- [x] 扩展 static guard：覆盖 GUI visible-answer、本地 runtime message completion、legacy public surface、ordinary/native operation text inference。
+- [x] 更新 `docs/ComputerUseRuntimeArchitecture.md` 的旧路径清理口径，确保没有兼容层叙述。
 
 验收：
 
-- [ ] 单测证明 unsupported legacy GUI completion request fail closed。
-- [ ] 单测证明 native text / runtime ack / tool completion 不能铸造 `FinalAnswerEnvelope`。
-- [ ] `npm run smoke:computer-use-no-bypass`、`npm run smoke:no-legacy-paths` 通过；若有既存 warning，记录为非本阶段引入。
+- [x] 单测证明 unsupported legacy GUI completion request fail closed。
+- [x] 单测证明 native text / runtime ack / tool local completion 不能铸造 `FinalAnswerEnvelope` 或 visible final answer。
+- [x] 单测证明旧 VSCode operation text inference 仍被拒绝。
+- [x] 单测证明旧 Computer Use public surface 仍被拒绝。
+- [x] `npm run smoke:computer-use-no-bypass` 通过。
+- [x] `npm run smoke:no-legacy-paths` 通过；当前仅有既存 T120/T122 warning，非本阶段引入。
 
 ### P3：Computer Use Lifecycle Contract
 
 目标：先固化 `bind -> observe -> act/run_procedure -> control release` 的证据和 cleanup 契约，再碰真实 VSCode。
 
-- [ ] Unit tests 覆盖 `bind` 产生 session-scoped `inputAdapterRef`、`cursorRef`、`scopedInputLeaseRef`。
-- [ ] Unit tests 覆盖 `observe` 只返回 current target observation refs，不返回 raw screenshot / AX / visible text。
-- [ ] Unit tests 覆盖 `act` 后产生 executor event refs、after observation refs 或 blocked reason refs。
-- [ ] Unit tests 覆盖 `run_procedure` 每个 step 都保留 primitive refs 和 executor event refs，不生成 task completion truth。
-- [ ] Unit tests 覆盖 `control release` 释放 input lease / adapter / cursor。
-- [ ] Cleanup manifest 记录 front app、focus、mouse position restoration refs。
+Build Tasks：
+
+- [ ] 写 `bind` 红测：成功时必须产生 session-scoped `inputAdapterRef`、`cursorRef`、`scopedInputLeaseRef`。
+- [ ] 实现 / 收口 `bind` refs envelope，未知 target 或多 target 返回 `blocked` / `needs-confirmation`。
+- [ ] 写 `observe` 红测：只返回 current target observation refs，不返回 raw screenshot / AX / visible text。
+- [ ] 实现 / 收口 `observe` refs-first output 和 stale invalidation。
+- [ ] 写 `act` 红测：每次 action 必须产生 executor event refs、after observation refs 或 blocked reason refs。
+- [ ] 实现 / 收口 `act` 单 primitive result，不生成 task completion truth。
+- [ ] 写 `run_procedure` 红测：每个 step 都保留 primitive refs、executor event refs 和 invalidation refs。
+- [ ] 实现 / 收口 `run_procedure` 局部结构化执行；`completed` 只代表 procedure 完成。
+- [ ] 写 `control release` 红测：release 必须释放 input lease / adapter / cursor。
+- [ ] 实现 cleanup manifest：记录 front app、focus、mouse position restoration refs。
 
 验收：
 
@@ -231,11 +250,14 @@ open-command-palette
 
 目标：先只证明能识别当前 VSCode 目标和不确定性，不做输入动作。
 
-- [ ] dry-run 覆盖 VSCode app / process / window / title / frontmost refs 识别。
-- [ ] dry-run 覆盖 active editor、workspace、selected file、terminal、palette 的 concept refs 归一化。
-- [ ] dry-run 覆盖多 VSCode 窗口、多 editor group、多 terminal、unknown webview、stale observation。
-- [ ] 目标唯一时返回 ready candidate 所需 refs；目标不唯一时返回 `needs-confirmation` / `blocked`。
-- [ ] 所有 readiness result 只输出 refs 和 safe summary。
+Build Tasks：
+
+- [ ] 写 VSCode identity 红测：app / process / window / title / frontmost refs 缺失时不能 ready。
+- [ ] 实现 VSCode identity readiness，只返回 refs 和 safe summary。
+- [ ] 写 concept normalization 红测：active editor、workspace、selected file、terminal、palette 映射为稳定 concept refs。
+- [ ] 实现 concept normalization，不依赖固定坐标、固定布局或固定插件。
+- [ ] 写 ambiguity 红测：多 VSCode 窗口、多 editor group、多 terminal、unknown webview、stale observation 必须 blocked / needs-confirmation。
+- [ ] 实现 ambiguity gate；唯一目标时只返回下一步 primitive candidate 所需 refs。
 
 验收：
 
@@ -247,10 +269,15 @@ open-command-palette
 
 目标：进入真实 VSCode 前台窗口的只读和 focus 诊断，不做写入。
 
-- [ ] dry-run 覆盖 `read-visible-text` readiness，只输出 visible-text refs，不输出 raw text。
-- [ ] dry-run 覆盖 `focus-editor` readiness，目标不唯一时 `needs-confirmation` / `blocked`。
-- [ ] dry-run 覆盖 `show-problems` / `read-diagnostics` readiness。
-- [ ] env-gated live harness 默认关闭，显式 env 才运行。
+Build Tasks：
+
+- [ ] 写 `read-visible-text` dry-run 红测：只输出 visible-text refs，不输出 raw text。
+- [ ] 实现 `read-visible-text` readiness。
+- [ ] 写 `focus-editor` dry-run 红测：目标唯一才 ready，目标不唯一 blocked / needs-confirmation。
+- [ ] 实现 `focus-editor` readiness。
+- [ ] 写 `show-problems` / `read-diagnostics` dry-run 红测。
+- [ ] 实现 diagnostics readiness，只输出 diagnostics refs。
+- [ ] 新增 env-gated live harness，默认关闭，显式 env 才运行。
 - [ ] live run 记录 before refs、after refs、action refs、release refs 和 cleanup refs。
 
 验收：
@@ -265,10 +292,16 @@ open-command-palette
 
 目标：Terminal 只做分步 primitive，send 和 submit 分离。
 
-- [ ] dry-run 覆盖 `focus-terminal` readiness。
-- [ ] dry-run 覆盖 `send-terminal-text`，只接受 Host 提供的 `text-ref:`，不按 Enter。
-- [ ] dry-run 覆盖 `observe-terminal`，只输出 terminal evidence refs。
-- [ ] dry-run 覆盖 `submit-terminal-command`，只提交 current terminal input ref，不携带 raw command。
+Build Tasks：
+
+- [ ] 写 `focus-terminal` dry-run 红测：多 terminal 或 terminal 未定位时 blocked / needs-confirmation。
+- [ ] 实现 `focus-terminal` readiness。
+- [ ] 写 `send-terminal-text` dry-run 红测：只接受 Host 提供的 `text-ref:`，不按 Enter。
+- [ ] 实现 `send-terminal-text` primitive candidate。
+- [ ] 写 `observe-terminal` dry-run 红测：只输出 terminal evidence refs，不输出 raw output。
+- [ ] 实现 `observe-terminal` refs-first projection。
+- [ ] 写 `submit-terminal-command` dry-run 红测：只提交 current terminal input ref，不携带 raw command。
+- [ ] 实现 `submit-terminal-command` primitive candidate。
 - [ ] env-gated live 按 `focus -> send -> observe -> submit -> observe -> cleanup` 分步运行。
 
 验收：
@@ -282,10 +315,16 @@ open-command-palette
 
 目标：Command Palette 只做 current observe item ref 的选择，不让 raw command id 变成执行旁路。
 
-- [ ] dry-run 覆盖 `open-command-palette` readiness。
-- [ ] dry-run 覆盖 `send-command-palette-query`，只接受 `text-ref:`。
-- [ ] dry-run 覆盖 `observe-command-palette-items`，只输出 item refs。
-- [ ] dry-run 覆盖 `select-command-palette-item`，只接受 current observe item ref。
+Build Tasks：
+
+- [ ] 写 `open-command-palette` dry-run 红测：唯一 VSCode window 才 ready。
+- [ ] 实现 `open-command-palette` readiness。
+- [ ] 写 `send-command-palette-query` dry-run 红测：只接受 `text-ref:`。
+- [ ] 实现 `send-command-palette-query` primitive candidate。
+- [ ] 写 `observe-command-palette-items` dry-run 红测：只输出 item refs，不输出 raw label / raw command id。
+- [ ] 实现 `observe-command-palette-items` refs-first projection。
+- [ ] 写 `select-command-palette-item` dry-run 红测：只接受 current observe item ref。
+- [ ] 实现 `select-command-palette-item` primitive candidate。
 - [ ] env-gated live 按 `open -> send query -> observe items -> select item -> observe -> close/cleanup` 分步运行。
 
 验收：
@@ -299,11 +338,16 @@ open-command-palette
 
 目标：最后才进入写入 primitive，但仍只做当前选区或 Host 明确范围的一步动作。
 
-- [ ] dry-run 覆盖 `insert-draft` current-selection primitive candidate。
-- [ ] dry-run 覆盖 `replace-selection` current-selection primitive candidate。
-- [ ] dry-run 覆盖 `save-current-file` same-file / mutation readiness。
-- [ ] explicit live mutation 优先使用 scratch 或用户明确选择的当前选区。
-- [ ] 文件、选区或目标漂移时 blocked-safe。
+Build Tasks：
+
+- [ ] 写 `insert-draft` dry-run 红测：只能基于 current selection / cursor refs 和 `text-ref:`。
+- [ ] 实现 `insert-draft` primitive candidate。
+- [ ] 写 `replace-selection` dry-run 红测：只能基于 current selection refs 和 `text-ref:`。
+- [ ] 实现 `replace-selection` primitive candidate。
+- [ ] 写 `save-current-file` dry-run 红测：需要 same-file、mutation 和 current editor refs。
+- [ ] 实现 `save-current-file` readiness。
+- [ ] 写 drift 红测：文件、选区、editor group 或目标窗口漂移时 blocked-safe。
+- [ ] env-gated live mutation 优先使用 scratch 或用户明确选择的当前选区。
 
 验收：
 
@@ -316,11 +360,14 @@ open-command-palette
 
 目标：把编辑协作变成 Host-owned preview 和窄范围 apply，而不是 Computer Use task planning。
 
-- [ ] preview v1 只支持当前选区或 Host 明确选择的单个范围；范围不明确时 `needs-confirmation`。
-- [ ] preview 输出 draft / diff artifact refs，不调用 VSCode 写入 primitive。
-- [ ] 用户明确要求 apply 时，Host 拆成 `observe -> one primitive -> observe`。
-- [ ] apply 后必须有 same-file、mutation、cleanup refs。
-- [ ] final answer 只能来自 Agent Host，并引用 artifact refs / evidence refs。
+Build Tasks：
+
+- [ ] 写 preview scope 红测：只支持当前选区或 Host 明确选择的单个范围；范围不明确时 `needs-confirmation`。
+- [ ] 实现 preview v1：输出 draft / diff artifact refs，不调用 VSCode 写入 primitive。
+- [ ] 写 narrow apply 红测：明确 apply 时只能生成一个 `replace-selection` 或 `insert-draft` primitive candidate。
+- [ ] 实现 narrow apply Host bridge：拆成 `observe -> one primitive -> observe`。
+- [ ] 写 apply verification 红测：apply 后必须有 same-file、mutation、cleanup refs。
+- [ ] 实现 final projection：final answer 只能来自 Agent Host，并引用 artifact refs / evidence refs。
 
 验收：
 
