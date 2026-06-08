@@ -171,18 +171,15 @@ Runtime `gui` module 已退役。`gui_present` / `gui_ask_user` 只能作为 Age
 
 readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。key 检测必须覆盖 camelCase、snake_case 和 kebab-case alias；value 检测必须覆盖裸 base64、HTML/DOM、本地绝对路径等 raw payload。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
-阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑：
+阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。P0/P1/P2 的旧任务展开不再作为继续执行的 checklist 保留，只保留已验收基线；新的可执行路线从 P3 开始：
 
-- P0：收敛 `PROJECT_CU.md`，删除旧任务展开，只保留当前状态和新路线。
-- P1：先做无旁路静态护栏，禁止 GUI completion surface、旧 Computer Use public surface 和 readiness final-answer 泄漏。
-- P2：审计 ordinary chat、native route、runtime gateway、slash command 和旧 VSCode co-work hook 的入口，决定删除、fail closed 或迁入 Host bridge。
 - P3：接 ordinary chat Host-only bridge，要求裸自然语言只能进入 Agent Host，不能直接成为 app module operation。
 - P4：接 native route final-answer gate，要求只有 Host-owned final answer envelope 可以让 route `done`。
 - P5：统一 public event / readiness / runtime result sanitizer，确保大对象和 raw payload 只能以 refs 暴露。
-- P6：进入 VSCode read-only / focus live diagnostic 基线。
-- P7：进入 VSCode editor、terminal、command palette 单步 live diagnostic。
-- P8：做 Host-owned preview workflow，不写用户文件，不让 VSCode module 解析论文语义。
-- P9：做 narrow apply workflow，Host 拆成 observe -> one primitive -> observe，live diagnostic 后置。
+- P6：进入 VSCode read-only / focus / diagnostics live diagnostic 基线。
+- P7：进入 VSCode terminal 和 command palette 分步 live diagnostic，submit/select 必须和 observe 分离。
+- P8：进入 VSCode editor mutation diagnostic，先 unit，再 scratch / explicit live，不做论文级改写。
+- P9：进入 Host-owned preview 与 narrow apply，先 diff preview，不写文件，再由 Host 拆成 observe -> one primitive -> observe。
 
 P2 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 P3/P4/P5 必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
