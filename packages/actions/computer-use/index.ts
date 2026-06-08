@@ -193,6 +193,7 @@ export interface ComputerUseActInput {
   schemaVersion: typeof COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act;
   sessionId: string;
   actionId?: string;
+  contextRefs?: string[];
   action: ComputerUseAtomicAction;
   inputAdapterRef?: string;
   cursorRef?: string;
@@ -823,9 +824,10 @@ function validateObserveInput(input: Record<string, unknown>, errors: string[]) 
 
 function validateActInput(input: Record<string, unknown>, errors: string[]) {
   validateSchema(input, COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act, errors);
-  rejectUnknownFields(input, ['schemaVersion', 'sessionId', 'actionId', 'action', 'captureAfter', 'risk', 'approvalRef', 'budget'], errors);
+  rejectUnknownFields(input, ['schemaVersion', 'sessionId', 'actionId', 'contextRefs', 'action', 'captureAfter', 'risk', 'approvalRef', 'budget'], errors);
   if (!nonEmptyString(input.sessionId)) errors.push('missing_string:sessionId');
   validateOptionalString(input.actionId, 'actionId', errors);
+  validateOptionalStringArray(input.contextRefs, 'contextRefs', errors);
   validateAction(input.action, errors);
   validateOptionalBoolean(input.captureAfter, 'captureAfter', errors);
   validateOptionalRisk(input.risk, errors);

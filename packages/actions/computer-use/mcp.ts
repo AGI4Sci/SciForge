@@ -129,6 +129,7 @@ function actInputSchema() {
     schemaVersion: { const: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act },
     sessionId: { type: 'string', minLength: 1 },
     actionId: { type: 'string', minLength: 1 },
+    contextRefs: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
     action: actionSchema(),
     captureAfter: { type: 'boolean' },
     risk: riskSchema(),

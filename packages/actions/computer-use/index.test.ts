@@ -71,6 +71,24 @@ describe('computer use primitive contract', () => {
     assert.ok(procedureValidation.errors.includes('invalid_enum:steps[0].primitive'));
   });
 
+  it('accepts refs-first act contextRefs without treating them as task planning', () => {
+    const validation = validateComputerUsePrimitiveInvokeRequest(request(COMPUTER_USE_PRIMITIVE_INTENTS.act, {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId: 'cu-session-1',
+      contextRefs: [
+        'focused-editor:vscode:host-evidence:paper',
+        'verifier:vscode-cowork:attempt-1:focus-editor',
+      ],
+      action: {
+        type: 'type',
+        elementRef: 'element:vscode:editor',
+        textRef: 'text-ref:current-vscode-cowork:draft',
+      },
+    }));
+
+    assert.equal(validation.ok, true, validation.errors.join('\n'));
+  });
+
   it('requires explicit target binding before a session can be created', () => {
     const validation = validateComputerUsePrimitiveInvokeRequest(request(COMPUTER_USE_PRIMITIVE_INTENTS.bind, {
       schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,

@@ -394,6 +394,45 @@ test('VSCode co-work live diagnostic lets Host choose insert-draft act then obse
   assert.doesNotMatch(JSON.stringify(result), /draft body|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('VSCode co-work insert-draft passes focused-editor evidence refs into the selected act primitive', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper');
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({
+      calls,
+      refs,
+      requiredActContextRef: 'focused-editor:vscode:paper',
+    }),
+    now: () => new Date(now).getTime(),
+  });
+
+  const result = await runVSCodeCoWorkInsertDraftLiveDiagnostic({
+    service,
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'codex-command-vscode-live-insert-draft-context',
+    attemptId: 'codex-command-vscode-live-insert-draft-context-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(calls[0], 'bind');
+  assert.equal(calls[1], 'observe:1');
+  assert.match(calls[2] ?? '', /^act:type:text-ref:current-vscode-cowork:draft:element:vscode:editor:context:/);
+  assert.match(calls[2] ?? '', /focused-editor:vscode:paper/);
+  assert.equal(calls[3], 'observe:2');
+  assert.equal(calls[4], 'control:release');
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:paper'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:codex-command-vscode-live-insert-draft-context-attempt-1:insert-draft'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('VSCode co-work live diagnostic blocks insert-draft when after observe has no mutation verifier', async () => {
   const calls: string[] = [];
   const refs = vscodeRefs('paper');
@@ -436,6 +475,7 @@ function vscodePrimitivePorts(input: {
   calls: string[];
   refs: string[];
   stableTextRefs?: boolean;
+  requiredActContextRef?: string;
 }): ComputerUsePrimitivePorts {
   let observeCount = 0;
   return {
@@ -531,7 +571,26 @@ function vscodePrimitivePorts(input: {
           ],
         };
       }
-      input.calls.push(`act:${actInput.action.type}:${actInput.action.textRef}:${actInput.action.elementRef}`);
+      const actContextRefs = actInput.contextRefs ?? [];
+      if (input.requiredActContextRef) {
+        input.calls.push(`act:${actInput.action.type}:${actInput.action.textRef}:${actInput.action.elementRef}:context:${actContextRefs.join('|') || 'none'}`);
+        if (!actContextRefs.includes(input.requiredActContextRef)) {
+          return {
+            status: 'blocked',
+            blockedReason: 'missing-required-act-context-ref',
+            refs: [
+              'computer-use-session:vscode:live',
+              'window-action-session:vscode-cowork:live',
+              'action:vscode-cowork:insert-draft',
+              'executor-event:vscode-cowork:insert-draft',
+              'input-event:vscode-cowork:insert-draft',
+              ...actContextRefs,
+            ],
+          };
+        }
+      } else {
+        input.calls.push(`act:${actInput.action.type}:${actInput.action.textRef}:${actInput.action.elementRef}`);
+      }
       return {
         status: 'completed',
         output: {

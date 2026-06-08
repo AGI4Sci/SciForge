@@ -100,7 +100,7 @@ approval / risk policy 由 Codex / Agent Host 拥有。SciForge、Browser、Comp
 
 在 Host 声明 full-access co-work permission envelope 的当前 session 内，本地文件系统、用户 VSCode profile 和用户已打开工作区属于 Agent/SciForge 的正常协作权限范围；保存用户真实文件、批量替换或跨文件修改不因“真实文件 / 保存 / 批量 / 跨文件”类别本身要求 confirmation。它们仍必须绑定 current-run session refs、target refs、Host decision/action evidence 和 permission refs；批量或跨文件修改必须由 Host 基于每次 observe refs 拆成多次单步 primitive，不能交给 Computer Use core 做 task planning。
 
-必须 hard-confirm 的边界是 submit / send / publish / upload / delete / pay / authorize、改变外部账号/安全/法律/财务状态、不可逆外部副作用，或超出当前 session scope 的跨 app / 跨窗口 / 跨账号副作用。窗口、文件或目标不明确时，Host 应先用可用视觉 / AX / text / title / visible file / editor refs 尝试确认唯一目标；证据不足或冲突时返回 `needs-confirmation` / `blocked`。
+必须 hard-confirm 的边界是 submit / send / publish / upload / delete / pay / authorize、改变外部账号/安全/法律/财务状态、不可逆外部副作用，或超出当前 session scope 的跨 app / 跨窗口 / 跨账号副作用。窗口、文件或目标不明确时，Host 应先用可用视觉 / AX / text / title / visible file / editor refs 尝试确认唯一目标；不要求每一步都视觉验证，只要证据足够且 refs-first。证据不足或冲突时返回 `needs-confirmation` / `blocked`。
 
 ## 相关文档
 

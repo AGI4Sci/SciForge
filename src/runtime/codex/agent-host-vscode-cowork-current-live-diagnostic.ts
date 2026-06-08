@@ -33,6 +33,7 @@ export interface RunCurrentVSCodeCoWorkInsertDraftLiveDiagnosticInput
   attemptId?: string;
   authorizationProfileId?: string;
   draftTextRef: string;
+  focusedEditorContextRefs?: string[];
 }
 
 export interface RunCurrentVSCodeCoWorkFocusEditorLiveDiagnosticInput
@@ -186,6 +187,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(
     attemptId: input.attemptId ?? `current-vscode-cowork-${Date.now()}`,
     authorizationProfileId: input.authorizationProfileId,
     draftTextRef: input.draftTextRef,
+    focusedEditorContextRefs: input.focusedEditorContextRefs,
     target: {
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',

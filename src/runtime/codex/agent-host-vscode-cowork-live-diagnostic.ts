@@ -42,6 +42,7 @@ export interface VSCodeCoWorkLiveDiagnosticInput {
 
 export interface VSCodeCoWorkInsertDraftLiveDiagnosticInput extends VSCodeCoWorkLiveDiagnosticInput {
   draftTextRef: string;
+  focusedEditorContextRefs?: string[];
 }
 
 export interface VSCodeCoWorkFocusedEditorEvidenceVerifierInput {
@@ -527,7 +528,14 @@ export async function runVSCodeCoWorkInsertDraftLiveDiagnostic(
     return finish('blocked', 'VSCode co-work insert-draft live diagnostic blocked: Host act decision did not include a valid atomic action.');
   }
 
-  const act = await actSession(input.service, sessionId, action, aggregate);
+  const act = await actSession(
+    input.service,
+    sessionId,
+    action,
+    aggregate,
+    'insert-draft',
+    insertDraftActContextRefs(input, beforeObserve, decisionRef),
+  );
   if (act.status !== 'completed' || !act.output) {
     return finish('blocked', act.blockedReason ?? 'VSCode co-work insert-draft live diagnostic blocked: selected act primitive failed.');
   }
@@ -598,11 +606,13 @@ async function actSession(
   action: ComputerUseAtomicAction,
   aggregate: LiveAggregate,
   actionId = 'insert-draft',
+  contextRefs: string[] = [],
 ): Promise<PrimitiveEnvelope<ComputerUseActOutput>> {
   const acted = await invokePrimitive<ComputerUseActOutput>(service, COMPUTER_USE_PRIMITIVE_INTENTS.act, {
     schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
     sessionId,
     actionId,
+    ...(contextRefs.length ? { contextRefs } : {}),
     action,
     captureAfter: true,
   });
@@ -617,6 +627,24 @@ async function actSession(
     ...(acted.output?.invalidatedRefs ?? []),
   ]);
   return acted;
+}
+
+function insertDraftActContextRefs(
+  input: VSCodeCoWorkInsertDraftLiveDiagnosticInput,
+  beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
+  decisionRef: string,
+): string[] {
+  return runtimeOwnedLiveRefs([
+    decisionRef,
+    ...(input.focusedEditorContextRefs ?? []),
+    ...(beforeObserve.refs ?? []).filter((ref) =>
+      /^(?:focused-editor:|verifier:.*:focus-editor$|observation:|element:|window:|file-ref:|accessibility:|image:|freshness:)/i.test(ref)
+    ),
+    beforeObserve.output?.observationRef,
+    beforeObserve.output?.screenshotRef,
+    beforeObserve.output?.accessibilityRef,
+    ...(beforeObserve.output?.elementRefs ?? []),
+  ]);
 }
 
 async function releaseSession(

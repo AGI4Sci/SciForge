@@ -508,6 +508,123 @@ test('current VSCode co-work insert-draft diagnostic resolves textRef, types, ob
   assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work insert-draft diagnostic accepts Host supplied focused-editor context refs', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-host-context',
+      windowRef: 'window:vscode:insert-host-context',
+      titleRef: 'text:title:insert-host-context',
+      frontmostRef: 'frontmost:vscode:insert-host-context',
+      fileRefs: ['file-ref:vscode:insert-host-context'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-host-context-bind',
+      visibleTextSha256Ref: 'text:vscode:insert-host-context-bind-sha256',
+      screenshotRef: 'image:vscode:insert-host-context-bind',
+      accessibilityRef: 'accessibility:vscode:insert-host-context-bind',
+      freshnessRef: 'freshness:vscode:insert-host-context-bind',
+      observationRef: 'observation:vscode:insert-host-context-bind',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-host-context',
+      windowRef: 'window:vscode:insert-host-context',
+      titleRef: 'text:title:insert-host-context',
+      frontmostRef: 'frontmost:vscode:insert-host-context',
+      fileRefs: ['file-ref:vscode:insert-host-context'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-host-context-before',
+      visibleTextSha256Ref: 'text:vscode:insert-host-context-before-sha256',
+      screenshotRef: 'image:vscode:insert-host-context-before',
+      accessibilityRef: 'accessibility:vscode:insert-host-context-before',
+      freshnessRef: 'freshness:vscode:insert-host-context-before',
+      observationRef: 'observation:vscode:insert-host-context-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-host-context',
+      windowRef: 'window:vscode:insert-host-context',
+      titleRef: 'text:title:insert-host-context',
+      frontmostRef: 'frontmost:vscode:insert-host-context',
+      fileRefs: ['file-ref:vscode:insert-host-context'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-host-context-act-after',
+      visibleTextSha256Ref: 'text:vscode:insert-host-context-act-after-sha256',
+      screenshotRef: 'image:vscode:insert-host-context-act-after',
+      accessibilityRef: 'accessibility:vscode:insert-host-context-act-after',
+      freshnessRef: 'freshness:vscode:insert-host-context-act-after',
+      observationRef: 'observation:vscode:insert-host-context-act-after',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:insert-host-context',
+      windowRef: 'window:vscode:insert-host-context',
+      titleRef: 'text:title:insert-host-context',
+      frontmostRef: 'frontmost:vscode:insert-host-context',
+      fileRefs: ['file-ref:vscode:insert-host-context'],
+      editorElementRef: 'element:vscode:editor',
+      visibleTextRef: 'text:vscode:insert-host-context-after',
+      visibleTextSha256Ref: 'text:vscode:insert-host-context-after-sha256',
+      screenshotRef: 'image:vscode:insert-host-context-after',
+      accessibilityRef: 'accessibility:vscode:insert-host-context-after',
+      freshnessRef: 'freshness:vscode:insert-host-context-after',
+      observationRef: 'observation:vscode:insert-host-context-after',
+    },
+  ];
+
+  const result = await runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-insert-host-context',
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'current-vscode-host-insert-context',
+    attemptId: 'current-vscode-host-insert-context-attempt-1',
+    workspacePath: '/tmp/workspace',
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+    focusedEditorContextRefs: [
+      'focused-editor:vscode:host-evidence:insert-host-context',
+      'verifier:vscode-cowork:current-vscode-host-insert-context-attempt-1:focus-editor',
+    ],
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:draft'
+        ? 'draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.focusedEditorRef}:${input.beforeObservationRef}`);
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:draft:focused-editor:vscode:host-evidence:insert-host-context:observation:vscode:insert-host-context-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-insert-host-context',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-insert-host-context',
+  ]);
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:host-evidence:insert-host-context'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:current-vscode-host-insert-context-attempt-1:focus-editor'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-insert-host-context'));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work live diagnostic can observe the real current VSCode window', {
   skip: currentVSCodeLiveEnabled
     ? undefined

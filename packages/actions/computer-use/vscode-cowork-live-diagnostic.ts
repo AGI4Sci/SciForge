@@ -79,6 +79,7 @@ export interface CurrentVSCodeCoWorkLiveActionExecution {
   actionRef: string;
   executorEventRef: string;
   inputEventRef: string;
+  contextRefs?: string[];
   inputAdapterRef?: string;
   cursorRef?: string;
   scopedInputLeaseRef?: string;
@@ -264,6 +265,9 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
       const inputEventRef = `input-event:current-vscode-cowork:${runId}:${actionId}`;
       const invalidatedRef = `stale-invalidation:current-vscode-cowork:${runId}:${actionId}`;
       const beforeObservationRef = lastObservationRef;
+      const contextRefs = safeCurrentVSCodeContextRefs(input.contextRefs);
+      const focusedEditorContextRef = contextRefs.find((ref) => ref.startsWith('focused-editor:'));
+      const focusedEditorRef = lastFocusedEditorRef ?? focusedEditorContextRef;
       if (!beforeObservationRef) {
         return {
           status: 'blocked',
@@ -275,6 +279,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
             scopedInputLeaseRef,
             inputAdapterRef,
             cursorRef,
+            ...contextRefs,
           ]),
         };
       }
@@ -283,11 +288,12 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
         actionRef,
         executorEventRef,
         inputEventRef,
+        contextRefs,
         inputAdapterRef: input.inputAdapterRef,
         cursorRef: input.cursorRef,
         scopedInputLeaseRef: input.scopedInputLeaseRef,
         beforeObservationRef,
-        focusedEditorRef: lastFocusedEditorRef,
+        focusedEditorRef,
       };
       try {
         if (options.performAction) {
@@ -304,10 +310,11 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
             executorEventRef,
             inputEventRef,
             beforeObservationRef,
-            lastFocusedEditorRef,
+            focusedEditorRef,
             scopedInputLeaseRef,
             inputAdapterRef,
             cursorRef,
+            ...contextRefs,
           ]),
         };
       }
@@ -336,12 +343,13 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           input.action.key ? `key:current-vscode-cowork:${runId}:${safeRunId(input.action.key)}` : undefined,
           input.action.command ? `app-command:current-vscode-cowork:${runId}:${safeRunId(input.action.command)}` : undefined,
           beforeObservationRef,
-          lastFocusedEditorRef,
+          focusedEditorRef,
           afterObserved.observationRef,
           invalidatedRef,
           scopedInputLeaseRef,
           inputAdapterRef,
           cursorRef,
+          ...contextRefs,
           ...observationRefs(afterObserved),
         ]),
       };
@@ -748,6 +756,40 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     observed.freshnessRef,
     observed.observationRef,
   ]);
+}
+
+function safeCurrentVSCodeContextRefs(refs: string[] | undefined): string[] {
+  return uniqueRefs((refs ?? []).filter(isSafeCurrentVSCodeContextRef));
+}
+
+function isSafeCurrentVSCodeContextRef(ref: string): boolean {
+  if (ref !== ref.trim() || ref.length > 512) return false;
+  if (!/^[A-Za-z][A-Za-z0-9._-]*:[^\s]+$/u.test(ref)) return false;
+  return [
+    'accessibility:',
+    'action:',
+    'computer-use-session:',
+    'cursor-marker:',
+    'decision:',
+    'element:',
+    'executor-event:',
+    'file-ref:',
+    'focused-editor:',
+    'freshness:',
+    'frontmost:',
+    'image:',
+    'input-event:',
+    'macos-app:',
+    'observation:',
+    'process:',
+    'scoped-input-adapter:',
+    'scoped-input-lease:',
+    'stale-invalidation:',
+    'text:',
+    'verifier:',
+    'window:',
+    'window-action-session:',
+  ].some((prefix) => ref.startsWith(prefix));
 }
 
 function focusedEditorRefFromSnapshot(
