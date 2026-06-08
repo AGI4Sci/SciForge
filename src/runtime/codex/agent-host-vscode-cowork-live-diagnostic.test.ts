@@ -1,0 +1,203 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  createComputerUsePrimitiveService,
+  type ComputerUseBindOutput,
+  type ComputerUseObserveOutput,
+  type ComputerUsePrimitivePorts,
+} from '../../../packages/actions/computer-use/index.js';
+import {
+  runVSCodeCoWorkReadVisibleTextLiveDiagnostic,
+} from './agent-host-vscode-cowork-live-diagnostic.js';
+
+const now = '2026-06-08T00:00:00.000Z';
+
+test('VSCode co-work live diagnostic lets Host choose refs-only observe then releases input resources', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper');
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+
+  const result = await runVSCodeCoWorkReadVisibleTextLiveDiagnostic({
+    service,
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    commandId: 'codex-command-vscode-live-read',
+    attemptId: 'codex-command-vscode-live-read-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(calls, ['bind', 'observe:1', 'observe:2', 'control:release']);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
+  assert.equal(result.materializerResult?.claimType, 'computer-use-vscode-cowork-observe-decision');
+  assert.equal(result.agentHostInput?.target.kind, 'current-vscode-cowork');
+  assert.ok(result.agentHostInput?.refs.includes('intent:current-vscode-cowork'));
+  assert.ok(result.runtimeTruth?.target?.refs?.includes('window:vscode:paper'));
+  assert.ok(result.runtimeTruth?.observation?.refs?.includes('observation:vscode:current-2'));
+  assert.ok(result.evidenceRefs.includes('decision:vscode-cowork:codex-command-vscode-live-read-attempt-1:read-visible-text'));
+  assert.ok(result.evidenceRefs.includes('control:vscode-cowork:release'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:vscode:live'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:vscode:live'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:vscode:previous'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:vscode:previous'));
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('VSCode co-work live diagnostic needs confirmation for ambiguous target windows and still releases', async () => {
+  const calls: string[] = [];
+  const refs = [
+    ...vscodeRefs('paper', { omitObservationWindow: true }),
+    ...vscodeRefs('notes', { omitObservationWindow: true }),
+  ];
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+
+  const result = await runVSCodeCoWorkReadVisibleTextLiveDiagnostic({
+    service,
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    commandId: 'codex-command-vscode-live-ambiguous',
+    attemptId: 'codex-command-vscode-live-ambiguous-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+  });
+
+  assert.equal(result.status, 'needs-confirmation', result.message);
+  assert.deepEqual(calls, ['bind', 'observe:1', 'control:release']);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'control(release)']);
+  assert.equal(result.materializerResult?.status, 'needs-confirmation');
+  assert.ok(result.evidenceRefs.includes('window:vscode:paper'));
+  assert.ok(result.evidenceRefs.includes('window:vscode:notes'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:vscode:previous'));
+  assert.doesNotMatch(JSON.stringify(result), /observe:2|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+function vscodePrimitivePorts(input: {
+  calls: string[];
+  refs: string[];
+}): ComputerUsePrimitivePorts {
+  let observeCount = 0;
+  return {
+    bind: () => {
+      input.calls.push('bind');
+      return {
+        status: 'completed',
+        output: {
+          sessionId: 'vscode-live',
+          sessionRef: 'computer-use-session:vscode:live',
+          targetRef: firstRef(input.refs, 'window:') ?? 'window:vscode:paper',
+          windowActionSessionRef: 'window-action-session:vscode-cowork:live',
+          inputAdapterRef: 'scoped-input-adapter:vscode:live',
+          cursorRef: 'cursor-marker:vscode:live',
+          scopedInputLeaseRef: 'scoped-input-lease:vscode:live',
+          observationRef: 'observation:vscode:bind',
+        } satisfies ComputerUseBindOutput,
+        refs: [
+          'computer-use-session:vscode:live',
+          'window-action-session:vscode-cowork:live',
+          'scoped-input-adapter:vscode:live',
+          'cursor-marker:vscode:live',
+          'scoped-input-lease:vscode:live',
+          ...input.refs.filter((ref) => !ref.startsWith('observation:current-')),
+        ],
+      };
+    },
+    observe: (observeInput) => {
+      observeCount += 1;
+      input.calls.push(`observe:${observeCount}`);
+      const observationRef = `observation:vscode:current-${observeCount}`;
+      return {
+        status: 'completed',
+        output: {
+          sessionId: observeInput.sessionId,
+          observationRef,
+          screenshotRef: `image:vscode:current-${observeCount}`,
+          accessibilityRef: `accessibility:vscode:current-${observeCount}`,
+          elementRefs: uniqueStrings(['element:vscode:editor', ...input.refs.filter((ref) => ref.startsWith('element:'))]),
+          textRefs: uniqueStrings(['text:vscode:visible', ...input.refs.filter((ref) => ref.startsWith('text:'))]),
+          staleInvalidationRefs: [],
+        } satisfies ComputerUseObserveOutput,
+        refs: uniqueStrings([
+          'computer-use-session:vscode:live',
+          'window-action-session:vscode-cowork:live',
+          observationRef,
+          `image:vscode:current-${observeCount}`,
+          `accessibility:vscode:current-${observeCount}`,
+          `freshness:vscode:current-${observeCount}`,
+          'element:vscode:editor',
+          'text:vscode:visible',
+          ...input.refs,
+        ]),
+      };
+    },
+    control: (controlInput) => {
+      input.calls.push(`control:${controlInput.command}`);
+      return {
+        status: 'completed',
+        output: {
+          sessionId: controlInput.sessionId,
+          controlRef: 'control:vscode-cowork:release',
+          releasedRefs: [
+            'scoped-input-lease:vscode:live',
+            'scoped-input-adapter:vscode:live',
+            'cursor-marker:vscode:live',
+          ],
+        },
+        refs: [
+          'control:vscode-cowork:release',
+          'scoped-input-lease:vscode:live',
+          'scoped-input-adapter:vscode:live',
+          'cursor-marker:vscode:live',
+          'front-app-restore:vscode:previous',
+          'mouse-position-restore:vscode:previous',
+        ],
+      };
+    },
+  };
+}
+
+function vscodeRefs(name: string, options: {
+  omitObservationWindow?: boolean;
+} = {}): string[] {
+  return [
+    'macos-app:com.microsoft.VSCode',
+    `process:vscode:${name}`,
+    `window:vscode:${name}`,
+    `text:title:${name}`,
+    `frontmost:vscode:${name}`,
+    `file-ref:vscode:${name}`,
+    'window-action-session:vscode-cowork:live',
+    ...(options.omitObservationWindow ? [] : [`window:vscode:${name}`]),
+    'observation:vscode:current',
+    'image:vscode:current',
+    'accessibility:vscode:current',
+    'text:vscode:visible',
+    'element:vscode:editor',
+    'freshness:vscode:current',
+  ];
+}
+
+function firstRef(refs: string[], prefix: string): string | undefined {
+  return refs.find((ref) => ref.startsWith(prefix));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}

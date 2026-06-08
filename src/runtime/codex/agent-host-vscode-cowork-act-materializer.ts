@@ -207,8 +207,9 @@ function latestObservationFromRefs(
 
 function selectedWindowRefFromTargetAndObservation(windowRefs: string[], observationRefs: string[]): string | undefined {
   if (windowRefs.length === 1) return windowRefs[0];
-  const observationWindowRef = firstRefWithPrefix(observationRefs, ['window:']);
-  if (observationWindowRef && windowRefs.includes(observationWindowRef)) return observationWindowRef;
+  const observationWindowRefs = refsWithPrefix(observationRefs, ['window:']).filter((ref) => windowRefs.includes(ref));
+  if (observationWindowRefs.length === 1) return observationWindowRefs[0];
+  if (observationWindowRefs.length > 1) return undefined;
   const frontmostRefs = refsWithPrefix(observationRefs, ['frontmost:']);
   if (frontmostRefs.length === 1) {
     const tail = refTail(frontmostRefs[0]);
