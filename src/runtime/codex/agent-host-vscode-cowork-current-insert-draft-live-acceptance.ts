@@ -48,6 +48,7 @@ export interface CurrentVSCodeCoWorkInsertDraftLiveAcceptanceManifest {
   };
   evidenceRefs: string[];
   actionEvidenceRefs: string[];
+  mutationVerifierRefs: string[];
   releaseEvidenceRefs: string[];
   restorationEvidenceRefs: string[];
   hostProducerEvidence?: CurrentVSCodeCoWorkInsertDraftHostProducerEvidence;
@@ -144,6 +145,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveAcceptance(
   ]);
   const cleanupRefs = safeRefs(result.cleanupRefs ?? []);
   const actionEvidenceRefs = evidenceRefs.filter(actionEvidenceRef);
+  const mutationVerifierRefs = evidenceRefs.filter(mutationVerifierRef);
   const releaseEvidenceRefs = cleanupRefs.filter(releaseEvidenceRef);
   const restorationEvidenceRefs = cleanupRefs.filter(restorationEvidenceRef);
   const primitiveChainObserved = safePrimitiveChain(result.primitiveChainObserved);
@@ -154,6 +156,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveAcceptance(
     primitiveChainObserved,
     evidenceRefs,
     actionEvidenceRefs,
+    mutationVerifierRefs,
     releaseEvidenceRefs,
     restorationEvidenceRefs,
     hostProducerEvidence,
@@ -176,6 +179,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveAcceptance(
     },
     evidenceRefs,
     actionEvidenceRefs,
+    mutationVerifierRefs,
     releaseEvidenceRefs,
     restorationEvidenceRefs,
     ...(hostProducerEvidence ? { hostProducerEvidence } : {}),
@@ -224,6 +228,7 @@ function baseManifest(input: {
     },
     evidenceRefs: [],
     actionEvidenceRefs: [],
+    mutationVerifierRefs: [],
     releaseEvidenceRefs: [],
     restorationEvidenceRefs: [],
     cleanup: {
@@ -267,6 +272,7 @@ function liveAcceptanceBlockers(input: {
   primitiveChainObserved: string[];
   evidenceRefs: string[];
   actionEvidenceRefs: string[];
+  mutationVerifierRefs: string[];
   releaseEvidenceRefs: string[];
   restorationEvidenceRefs: string[];
   hostProducerEvidence?: CurrentVSCodeCoWorkInsertDraftHostProducerEvidence;
@@ -287,6 +293,7 @@ function liveAcceptanceBlockers(input: {
     input.actionEvidenceRefs.some((ref) => ref.startsWith('executor-event:')) ? undefined : 'missing-executor-event-ref',
     input.actionEvidenceRefs.some((ref) => ref.startsWith('input-event:')) ? undefined : 'missing-input-event-ref',
     input.actionEvidenceRefs.some((ref) => ref.startsWith('stale-invalidation:')) ? undefined : 'missing-stale-invalidation-ref',
+    input.mutationVerifierRefs.length ? undefined : 'missing-mutation-verifier-ref',
     input.releaseEvidenceRefs.some((ref) => ref.startsWith('scoped-input-lease:') || ref.startsWith('input-lease:')) ? undefined : 'missing-input-lease-release-ref',
     input.releaseEvidenceRefs.some((ref) => ref.startsWith('scoped-input-adapter:') || ref.startsWith('input-adapter:')) ? undefined : 'missing-input-adapter-release-ref',
     input.releaseEvidenceRefs.some((ref) => ref.startsWith('cursor-marker:') || ref.startsWith('actor-cursor:')) ? undefined : 'missing-cursor-release-ref',
@@ -386,7 +393,7 @@ function safeRef(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 260) return false;
   if (/https?:\/\/|data:|base64|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)|raw-/i.test(text)) return false;
-  return /^(?:intent:|chat-request:|decision:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|actor-cursor:|cursor-marker:|scoped-input-adapter:|input-adapter:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:)[^\s/\\]*$/i.test(text);
+  return /^(?:intent:|chat-request:|decision:|verifier:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|actor-cursor:|cursor-marker:|scoped-input-adapter:|input-adapter:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:)[^\s/\\]*$/i.test(text);
 }
 
 function safePrimitiveChain(value: unknown): string[] {
@@ -403,6 +410,10 @@ function primitiveChainMatches(chain: string[]): boolean {
 
 function actionEvidenceRef(ref: string): boolean {
   return /^(?:action:|executor-event:|input-event:|stale-invalidation:)/i.test(ref);
+}
+
+function mutationVerifierRef(ref: string): boolean {
+  return /^verifier:.*:insert-draft$/i.test(ref);
 }
 
 function releaseEvidenceRef(ref: string): boolean {
@@ -430,6 +441,7 @@ function nextActions(): string[] {
   return [
     `Set ${VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV}=1 only when the user is ready to run the current VSCode insert-draft live diagnostic.`,
     'Provide only a refs-first text-ref draft. Raw draft text must stay in the Host resolver and must not be written into the manifest or public events.',
+    'Require a Host mutation verifier ref from before/after observe evidence before recording a passed insert-draft live diagnostic.',
     'If the current VSCode target, selected file, editor, or draft scope is ambiguous, return needs-confirmation or blocked before act.',
   ];
 }

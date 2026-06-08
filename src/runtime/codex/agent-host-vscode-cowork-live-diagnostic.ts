@@ -353,6 +353,26 @@ export async function runVSCodeCoWorkInsertDraftLiveDiagnostic(
   if (afterObserve.status !== 'completed' || !afterObserve.output) {
     return finish('blocked', afterObserve.blockedReason ?? 'VSCode co-work insert-draft live diagnostic blocked: after observe failed.');
   }
+  const mutationVerifierRef = insertDraftMutationVerifierRef(input.attemptId, beforeObserve, afterObserve);
+  if (!mutationVerifierRef) {
+    materializerResult = {
+      ...materializerResult,
+      completionTruth: {
+        schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+        scope: 'action',
+        status: 'blocked',
+        validator: 'vscode-cowork-insert-draft-live-diagnostic',
+        evidenceRefs: runtimeOwnedLiveRefs([
+          ...(materializerResult.evidenceRefs ?? []),
+          ...(act.refs ?? []),
+          ...(afterObserve.refs ?? []),
+        ]),
+        reason: 'missing-mutation-verifier-ref',
+      },
+    };
+    return finish('blocked', 'VSCode co-work insert-draft live diagnostic blocked: after observe did not produce mutation verifier evidence.');
+  }
+  if (mutationVerifierRef) mergeRefs(aggregate.evidenceRefs, [mutationVerifierRef]);
   runtimeTruth = buildRuntimeTruth(input, bindOutput, bind.refs ?? [], afterObserve, agentHostInput);
   materializerResult = {
     ...materializerResult,
@@ -365,6 +385,7 @@ export async function runVSCodeCoWorkInsertDraftLiveDiagnostic(
         ...(materializerResult.evidenceRefs ?? []),
         ...(act.refs ?? []),
         ...(afterObserve.refs ?? []),
+        mutationVerifierRef,
       ]),
     },
   };
@@ -735,7 +756,30 @@ function safeLiveRef(value: string): boolean {
   if (!text || text.length > 260) return false;
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(text)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)|raw-/i.test(text)) return false;
-  return /^(?:runtime-truth:|intent:|chat-request:|decision:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-adapter:|focus-lease:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:|cancel:|stop:)/i.test(text);
+  return /^(?:runtime-truth:|intent:|chat-request:|decision:|verifier:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|scoped-input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-adapter:|focus-lease:|stale-invalidation:|control:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:|cancel:|stop:)/i.test(text);
+}
+
+function insertDraftMutationVerifierRef(
+  attemptId: string,
+  beforeObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
+  afterObserve: PrimitiveEnvelope<ComputerUseObserveOutput>,
+): string | undefined {
+  const beforeTextRefs = observationTextRefs(beforeObserve);
+  const afterTextRefs = observationTextRefs(afterObserve);
+  if (beforeTextRefs.length === 0 || afterTextRefs.length === 0) return undefined;
+
+  const beforeTextRefSet = new Set(beforeTextRefs);
+  const hasNewAfterTextRef = afterTextRefs.some((ref) => !beforeTextRefSet.has(ref));
+  return hasNewAfterTextRef
+    ? `verifier:vscode-cowork:${safeToken(attemptId) || 'attempt'}:insert-draft`
+    : undefined;
+}
+
+function observationTextRefs(observe: PrimitiveEnvelope<ComputerUseObserveOutput>): string[] {
+  return runtimeOwnedLiveRefs([
+    ...(observe.output?.textRefs ?? []),
+    ...(observe.refs ?? []).filter((ref) => /^text:/i.test(ref)),
+  ]);
 }
 
 function firstRefWithPrefix(refs: string[], prefixes: string[]): string | undefined {

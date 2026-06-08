@@ -282,6 +282,7 @@ test('VSCode co-work live diagnostic lets Host choose insert-draft act then obse
   assert.ok(result.evidenceRefs.includes('input-event:vscode-cowork:insert-draft'));
   assert.ok(result.evidenceRefs.includes('stale-invalidation:vscode-cowork:insert-draft'));
   assert.ok(result.evidenceRefs.includes('focused-editor:vscode:paper'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:codex-command-vscode-live-insert-draft-attempt-1:insert-draft'));
   assert.ok(result.evidenceRefs.includes('observation:vscode:current-2'));
   assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
   assert.ok(result.cleanupRefs.includes('scoped-input-adapter:vscode:live'));
@@ -291,9 +292,48 @@ test('VSCode co-work live diagnostic lets Host choose insert-draft act then obse
   assert.doesNotMatch(JSON.stringify(result), /draft body|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('VSCode co-work live diagnostic blocks insert-draft when after observe has no mutation verifier', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper');
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs, stableTextRefs: true }),
+    now: () => new Date(now).getTime(),
+  });
+
+  const result = await runVSCodeCoWorkInsertDraftLiveDiagnostic({
+    service,
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'codex-command-vscode-live-insert-draft-no-mutation',
+    attemptId: 'codex-command-vscode-live-insert-draft-no-mutation-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /mutation verifier/i);
+  assert.deepEqual(calls, [
+    'bind',
+    'observe:1',
+    'act:type:text-ref:current-vscode-cowork:draft:element:vscode:editor',
+    'observe:2',
+    'control:release',
+  ]);
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)']);
+  assert.equal(result.agentHostFinalAnswer?.completionTruth?.status, 'blocked');
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:vscode:live'));
+  assert.ok(!result.evidenceRefs.includes('verifier:vscode-cowork:codex-command-vscode-live-insert-draft-no-mutation-attempt-1:insert-draft'));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 function vscodePrimitivePorts(input: {
   calls: string[];
   refs: string[];
+  stableTextRefs?: boolean;
 }): ComputerUsePrimitivePorts {
   let observeCount = 0;
   return {
@@ -333,7 +373,11 @@ function vscodePrimitivePorts(input: {
           screenshotRef: `image:vscode:current-${observeCount}`,
           accessibilityRef: `accessibility:vscode:current-${observeCount}`,
           elementRefs: uniqueStrings(['element:vscode:editor', ...input.refs.filter((ref) => ref.startsWith('element:'))]),
-          textRefs: uniqueStrings(['text:vscode:visible', ...input.refs.filter((ref) => ref.startsWith('text:'))]),
+          textRefs: uniqueStrings([
+            ...(input.stableTextRefs ? [] : [`text:vscode:visible-${observeCount}`]),
+            'text:vscode:visible',
+            ...input.refs.filter((ref) => ref.startsWith('text:')),
+          ]),
           staleInvalidationRefs: [],
         } satisfies ComputerUseObserveOutput,
         refs: uniqueStrings([
@@ -344,6 +388,7 @@ function vscodePrimitivePorts(input: {
           `accessibility:vscode:current-${observeCount}`,
           `freshness:vscode:current-${observeCount}`,
           'element:vscode:editor',
+          ...(input.stableTextRefs ? [] : [`text:vscode:visible-${observeCount}`]),
           'text:vscode:visible',
           ...input.refs,
         ]),

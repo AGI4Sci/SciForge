@@ -261,6 +261,158 @@ test('current VSCode co-work insert-draft live acceptance blocks completed runne
   }
 });
 
+test('current VSCode co-work insert-draft live acceptance blocks completed runner without mutation verifier evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-insert-draft-live-no-verifier-'));
+  try {
+    const manifest = await runCurrentVSCodeCoWorkInsertDraftLiveAcceptance({
+      workspacePath: workspace,
+      outputDir: join(workspace, 'out'),
+      env: {
+        [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+      },
+      draftTextRef: 'text-ref:current-vscode-cowork:draft:p9c',
+      resolveDraftTextRef: (textRef) => textRef === 'text-ref:current-vscode-cowork:draft:p9c'
+        ? 'private draft body for injected runner'
+        : undefined,
+      now: () => new Date('2026-06-08T00:00:00.000Z'),
+      runInsertDraftLiveDiagnostic: async () => ({
+        status: 'completed',
+        message: 'Current VSCode insert-draft live diagnostic completed one refs-first act.',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)'],
+        evidenceRefs: [
+          'computer-use-session:current-vscode-cowork:insert-acceptance',
+          'window-action-session:current-vscode-cowork:insert-acceptance',
+          'window:vscode:paper',
+          'file-ref:vscode:paper',
+          'observation:vscode:before-insert',
+          'observation:vscode:after-insert',
+          'image:vscode:before-insert',
+          'image:vscode:after-insert',
+          'accessibility:vscode:before-insert',
+          'accessibility:vscode:after-insert',
+          'text:vscode:visible-before-insert',
+          'text:vscode:visible-after-insert',
+          'element:vscode:editor',
+          'focused-editor:vscode:insert-acceptance',
+          'freshness:vscode:before-insert',
+          'freshness:vscode:after-insert',
+          'decision:vscode-cowork:insert-acceptance:insert-draft',
+          'text-ref:current-vscode-cowork:draft:p9c',
+          'action:current-vscode-cowork:insert-acceptance:insert-draft',
+          'executor-event:current-vscode-cowork:insert-acceptance:insert-draft',
+          'input-event:current-vscode-cowork:insert-acceptance:insert-draft',
+          'stale-invalidation:current-vscode-cowork:insert-acceptance:insert-draft',
+        ],
+        cleanupRefs: [
+          'scoped-input-lease:current-vscode-cowork:insert-acceptance',
+          'scoped-input-adapter:current-vscode-cowork:insert-acceptance',
+          'cursor-marker:current-vscode-cowork:insert-acceptance',
+          'front-app-restore:current-vscode-cowork:insert-acceptance',
+          'mouse-position-restore:current-vscode-cowork:insert-acceptance',
+        ],
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'vscode-cowork-live-diagnostic',
+          intentText: 'private intent omitted from manifest assertions',
+          singleTurnOverride: false,
+          refs: [
+            'intent:current-vscode-cowork',
+            'chat-request:vscode-cowork:insert-acceptance',
+            'window:vscode:paper',
+            'observation:vscode:before-insert',
+            'focused-editor:vscode:insert-acceptance',
+            'text-ref:current-vscode-cowork:draft:p9c',
+          ],
+          readiness: {},
+          target: {
+            kind: 'current-vscode-cowork',
+            refs: ['window:vscode:paper', 'file-ref:vscode:paper'],
+            vscodeCoWork: {
+              operation: 'insert-draft',
+              draftTextRef: 'text-ref:current-vscode-cowork:draft:p9c',
+            },
+          },
+          observation: {
+            fresh: true,
+            refs: ['observation:vscode:before-insert', 'text:vscode:visible-before-insert', 'focused-editor:vscode:insert-acceptance'],
+          },
+          permissions: {
+            refs: ['permission:current-vscode-cowork:full-access:window-action-session:current-vscode-cowork:insert-acceptance:file-ref:vscode:paper'],
+            scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+            stopCancelPath: true,
+          },
+        },
+        runtimeTruth: {
+          schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+          source: 'vscode-cowork-live-diagnostic',
+          target: {
+            bound: true,
+            refs: ['window:vscode:paper', 'file-ref:vscode:paper'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['observation:vscode:after-insert', 'text:vscode:visible-after-insert', 'focused-editor:vscode:insert-acceptance'],
+          },
+          permissions: {
+            refs: ['permission:current-vscode-cowork:full-access:window-action-session:current-vscode-cowork:insert-acceptance:file-ref:vscode:paper'],
+            permissionRefs: ['permission:current-vscode-cowork:full-access:window-action-session:current-vscode-cowork:insert-acceptance:file-ref:vscode:paper'],
+            scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+            stopCancelPath: true,
+          },
+          sessions: {
+            sessionReadyRefs: [
+              'computer-use-session:current-vscode-cowork:insert-acceptance',
+              'window-action-session:current-vscode-cowork:insert-acceptance',
+              'scoped-input-lease:current-vscode-cowork:insert-acceptance',
+            ],
+            targetRefs: ['window:vscode:paper'],
+            inputLeaseRefs: ['scoped-input-lease:current-vscode-cowork:insert-acceptance'],
+            observationRefs: ['observation:vscode:after-insert', 'focused-editor:vscode:insert-acceptance'],
+          },
+          adapter: {
+            refs: ['scoped-input-adapter:current-vscode-cowork:insert-acceptance'],
+            inputIsolation: {
+              refsOnly: true,
+              refs: [
+                'scoped-input-lease:current-vscode-cowork:insert-acceptance',
+                'cursor-marker:current-vscode-cowork:insert-acceptance',
+              ],
+            },
+          },
+          refs: [
+            'intent:current-vscode-cowork',
+            'window:vscode:paper',
+            'observation:vscode:after-insert',
+            'focused-editor:vscode:insert-acceptance',
+            'computer-use-session:current-vscode-cowork:insert-acceptance',
+          ],
+        },
+        agentHostFinalAnswer: {
+          schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+          source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+          status: 'completed',
+          text: 'Host completed one current VSCode insert-draft act from refs-first evidence.',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          hostOwnsFinalAnswer: true,
+          computerUseCorePlanning: false,
+          primitiveChainObserved: ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)'],
+          evidenceRefs: ['action:current-vscode-cowork:insert-acceptance:insert-draft', 'observation:vscode:after-insert', 'focused-editor:vscode:insert-acceptance'],
+          cleanupRefs: ['scoped-input-lease:current-vscode-cowork:insert-acceptance'],
+        },
+      }),
+    });
+
+    assert.equal(manifest.status, 'blocked');
+    assert.equal(manifest.passClaim, false);
+    assert.ok(manifest.blockedReasons.includes('missing-mutation-verifier-ref'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('current VSCode co-work insert-draft live acceptance persists action and cleanup refs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-current-vscode-insert-draft-live-'));
   try {
@@ -303,6 +455,7 @@ test('current VSCode co-work insert-draft live acceptance persists action and cl
             'text:vscode:visible-after-insert',
             'element:vscode:editor',
             'focused-editor:vscode:insert-acceptance',
+            'verifier:current-vscode-cowork:insert-acceptance:insert-draft',
             'freshness:vscode:before-insert',
             'freshness:vscode:after-insert',
             'decision:vscode-cowork:insert-acceptance:insert-draft',
@@ -408,14 +561,22 @@ test('current VSCode co-work insert-draft live acceptance persists action and cl
             hostOwnsFinalAnswer: true,
             computerUseCorePlanning: false,
             primitiveChainObserved: ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)'],
-            evidenceRefs: ['action:current-vscode-cowork:insert-acceptance:insert-draft', 'observation:vscode:after-insert', 'focused-editor:vscode:insert-acceptance'],
+            evidenceRefs: [
+              'action:current-vscode-cowork:insert-acceptance:insert-draft',
+              'observation:vscode:after-insert',
+              'focused-editor:vscode:insert-acceptance',
+              'verifier:current-vscode-cowork:insert-acceptance:insert-draft',
+            ],
             cleanupRefs: ['scoped-input-lease:current-vscode-cowork:insert-acceptance'],
             completionTruth: {
               schemaVersion: 'sciforge.computer-use.completion-truth.v1',
               scope: 'action',
               status: 'satisfied',
               validator: 'vscode-cowork-insert-draft-live-diagnostic',
-              evidenceRefs: ['action:current-vscode-cowork:insert-acceptance:insert-draft'],
+              evidenceRefs: [
+                'action:current-vscode-cowork:insert-acceptance:insert-draft',
+                'verifier:current-vscode-cowork:insert-acceptance:insert-draft',
+              ],
             },
           },
         };
@@ -441,6 +602,7 @@ test('current VSCode co-work insert-draft live acceptance persists action and cl
     assert.ok(manifest.actionEvidenceRefs.includes('stale-invalidation:current-vscode-cowork:insert-acceptance:insert-draft'));
     assert.ok(manifest.evidenceRefs.includes('text-ref:current-vscode-cowork:draft:p9c'));
     assert.ok(manifest.evidenceRefs.includes('focused-editor:vscode:insert-acceptance'));
+    assert.ok(manifest.mutationVerifierRefs.includes('verifier:current-vscode-cowork:insert-acceptance:insert-draft'));
     assert.ok(manifest.cleanup.inputLeaseReleased);
     assert.ok(manifest.cleanup.adapterReleased);
     assert.ok(manifest.cleanup.cursorReleased);
