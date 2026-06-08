@@ -9,6 +9,9 @@ import type {
 import type { AppiumMac2WindowActionClient } from './appium-mac2-window-action-adapter.js';
 import { createTextEditWindowActionChatBridge } from './textedit-window-action-chat-bridge.js';
 import { createVSCodeCoWorkChatBridge } from './vscode-cowork-chat-bridge.js';
+import type {
+  VSCodeCoWorkLiveDiagnosticResult,
+} from './agent-host-vscode-cowork-live-diagnostic.js';
 
 export interface ComputerUseNativeRouteInput {
   request: CodexAppServerStartTurnRequest;
@@ -18,11 +21,23 @@ export interface ComputerUseNativeRouteInput {
   profile: string;
   abortSignal?: AbortSignal;
   textEditAppiumMac2Client?: AppiumMac2WindowActionClient;
+  currentVSCodeCoWorkLiveDiagnosticRunner?: CurrentVSCodeCoWorkLiveDiagnosticRunner;
 }
 
 const NORMALIZED_SCHEMA_VERSION = 'sciforge.codex.normalized-event.v1' as const;
+const CURRENT_VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV = 'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC';
 const UNSAFE_APPROVAL_REF_STRING_PATTERN = /(?:\bBearer\s+|\b(?:sk|rk|pk|ghp|github_pat)[_-]|api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|authorization|credential|providerPayload|data:[^,\s]+;base64,|https?:\/\/)/i;
 const BASE64ISH_APPROVAL_REF_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
+
+export type CurrentVSCodeCoWorkLiveDiagnosticRunner = (input: {
+  commandText: string;
+  workspacePath: string;
+  commandId: string;
+  attemptId: string;
+  authorizationProfileId?: string;
+  runtimeIntent?: unknown;
+  agentHostInput?: unknown;
+}) => Promise<VSCodeCoWorkLiveDiagnosticResult> | VSCodeCoWorkLiveDiagnosticResult;
 
 export function isComputerUseNativeRouteCommand(commandText: string): boolean {
   const text = computerUseNativeRouteCommandText(commandText);
@@ -253,8 +268,100 @@ async function tryRunVSCodeCoWorkChatBridge(
   });
   if (!bridge) return false;
   queue.push(operationEvent(metadata, 'Runtime Codex selected the VSCode co-work Host bridge.', 'running'));
+  const liveDiagnostic = await tryRunCurrentVSCodeCoWorkLiveDiagnostic(input, bridge);
+  if (liveDiagnostic) {
+    queue.push(operationEvent(metadata, 'Runtime Codex selected the current VSCode co-work live diagnostic runner.', 'running'));
+    queue.push(doneEvent(metadata, liveDiagnostic));
+    return true;
+  }
   queue.push(doneEvent(metadata, bridge.payload));
   return true;
+}
+
+async function tryRunCurrentVSCodeCoWorkLiveDiagnostic(
+  input: ComputerUseNativeRouteInput,
+  bridge: ReturnType<typeof createVSCodeCoWorkChatBridge>,
+): Promise<ToolPayload | undefined> {
+  if (!bridge || bridge.decision.status !== 'ready' || bridge.decision.primitive !== 'observe') return undefined;
+  const runner = input.currentVSCodeCoWorkLiveDiagnosticRunner
+    ?? (process.env[CURRENT_VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV] === '1'
+      ? defaultCurrentVSCodeCoWorkLiveDiagnosticRunner
+      : undefined);
+  if (!runner) return undefined;
+  const result = await runner({
+    commandText: input.request.commandText,
+    workspacePath: input.workspace,
+    commandId: input.request.commandId,
+    attemptId: input.request.attemptId,
+    authorizationProfileId: stringField(input.request.agentHostInput, 'authorizationProfileId'),
+    runtimeIntent: input.request.runtimeIntent,
+    agentHostInput: input.request.agentHostInput,
+  });
+  return currentVSCodeCoWorkLiveDiagnosticPayload(result);
+}
+
+async function defaultCurrentVSCodeCoWorkLiveDiagnosticRunner(input: Parameters<CurrentVSCodeCoWorkLiveDiagnosticRunner>[0]) {
+  const { runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic } = await import('./agent-host-vscode-cowork-current-live-diagnostic.js');
+  return runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(input);
+}
+
+function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagnosticResult): ToolPayload {
+  const status = result.status;
+  const evidenceRefs = safeHostInputRefs(result.evidenceRefs);
+  const cleanupRefs = safeHostInputRefs(result.cleanupRefs);
+  const primitiveChainObserved = safePrimitiveChain(result.primitiveChainObserved);
+  const agentHostFinalAnswer = safeAgentHostFinalAnswer(result.agentHostFinalAnswer);
+  return compactRecord({
+    status,
+    message: result.message,
+    claimType: 'computer-use-vscode-cowork-live-diagnostic',
+    evidenceLevel: 'refs-first',
+    reasoningTrace: 'Agent Host ran the current VSCode co-work live diagnostic only after Host-selected refs-first observe decision; Computer Use core did not infer or plan the task.',
+    maturity: 'live-diagnostic',
+    productReady: false,
+    primitiveChainObserved,
+    evidenceRefs,
+    cleanupRefs,
+    agentHostFinalAnswer,
+    completionTruth: agentHostFinalAnswer?.completionTruth,
+    claims: [{
+      kind: 'computer-use-vscode-cowork-live-diagnostic',
+      status,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      hostOwnsFinalAnswer: true,
+      computerUseCorePlanning: false,
+      primitiveChainObserved,
+      supportingRefs: evidenceRefs.slice(0, 12),
+    }],
+    uiManifest: [{
+      kind: 'computer-use-vscode-cowork-live-diagnostic',
+      status,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      refsOnly: true,
+      cleanupRefs,
+    }],
+    executionUnits: [{
+      id: 'computer-use.current-vscode-cowork.live-diagnostic',
+      tool: 'current-vscode-cowork-live-diagnostic',
+      status: status === 'completed' ? 'done' : status,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved,
+      outputRef: evidenceRefs[0],
+      evidenceRefs,
+      cleanupRefs,
+    }],
+    artifacts: [],
+    logs: [{
+      level: 'info',
+      code: 'current-vscode-cowork-live-diagnostic',
+      status,
+      evidenceRefs,
+      cleanupRefs,
+    }],
+  });
 }
 
 async function tryRunTextEditWindowActionBridge(
@@ -562,6 +669,83 @@ function safeHostInputRef(value: unknown, prefixes?: string[]): string | undefin
   if (BASE64ISH_APPROVAL_REF_PATTERN.test(text)) return undefined;
   if (!/^[a-z][a-z0-9_-]*:[^\s/\\]+$/i.test(text)) return undefined;
   if (prefixes && !prefixes.some((prefix) => text.startsWith(prefix))) return undefined;
+  return text;
+}
+
+function safePrimitiveChain(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => /^(?:bind|observe|host-decision|act|control\(release\)|control|release)$/i.test(item));
+}
+
+function safeAgentHostFinalAnswer(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1') return undefined;
+  if (value.source !== 'codex-agent-host-vscode-cowork-live-diagnostic') return undefined;
+  const status = liveDiagnosticStatus(value.status);
+  if (!status) return undefined;
+  const primitiveChainObserved = safePrimitiveChain(value.primitiveChainObserved);
+  const evidenceRefs = safeHostInputRefs(value.evidenceRefs);
+  const cleanupRefs = safeHostInputRefs(value.cleanupRefs);
+  return compactRecord({
+    schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+    source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+    status,
+    text: safeDiagnosticText(value.text) ?? 'Host final answer text omitted because it was not refs-first safe.',
+    maturity: 'live-diagnostic',
+    productReady: false,
+    hostOwnsFinalAnswer: value.hostOwnsFinalAnswer === true,
+    computerUseCorePlanning: false,
+    primitiveChainObserved,
+    evidenceRefs,
+    cleanupRefs,
+    materializerClaimType: safeDiagnosticToken(value.materializerClaimType),
+    completionTruth: safeCompletionTruth(value.completionTruth),
+  });
+}
+
+function safeCompletionTruth(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.computer-use.completion-truth.v1') return undefined;
+  const scope = value.scope === 'action' || value.scope === 'user-task' || value.scope === 'workflow'
+    ? value.scope
+    : undefined;
+  const status = value.status === 'satisfied' || value.status === 'blocked' || value.status === 'needs-confirmation'
+    ? value.status
+    : undefined;
+  if (!scope || !status) return undefined;
+  return compactRecord({
+    schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+    scope,
+    status,
+    evidenceRefs: safeHostInputRefs(value.evidenceRefs),
+    validator: safeDiagnosticToken(value.validator),
+    reason: safeDiagnosticText(value.reason),
+  });
+}
+
+function liveDiagnosticStatus(value: unknown): 'completed' | 'blocked' | 'needs-confirmation' | undefined {
+  return value === 'completed' || value === 'blocked' || value === 'needs-confirmation'
+    ? value
+    : undefined;
+}
+
+function safeDiagnosticToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > 120) return undefined;
+  if (UNSAFE_APPROVAL_REF_STRING_PATTERN.test(text) || BASE64ISH_APPROVAL_REF_PATTERN.test(text)) return undefined;
+  return /^[a-z0-9][a-z0-9._/-]*$/i.test(text) ? text : undefined;
+}
+
+function safeDiagnosticText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > 600) return undefined;
+  if (UNSAFE_APPROVAL_REF_STRING_PATTERN.test(text) || BASE64ISH_APPROVAL_REF_PATTERN.test(text)) return undefined;
+  if (/raw-|product-ready|kill-vscode|clear-profile/i.test(text)) return undefined;
   return text;
 }
 

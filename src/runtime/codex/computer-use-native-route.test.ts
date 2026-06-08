@@ -389,6 +389,96 @@ test('Computer Use native route derives P9b VSCode co-work intent from refs-firs
   assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route can run current VSCode co-work live diagnostic from ordinary chat Host input', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-ordinary-live',
+      attemptId: 'native-route-vscode-cowork-ordinary-live-attempt-1',
+      agentHostInput: vscodeCoWorkAgentHostInput({
+        operation: 'read-visible-text',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+      }),
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'Current VSCode co-work live diagnostic completed from ordinary chat Host input.',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+        evidenceRefs: [
+          'chat-request:vscode-cowork:ordinary-host-input',
+          'window:vscode:paper',
+          'observation:vscode:current-live',
+          'text:vscode:visible-live',
+          'https://example.invalid/SECRET_LIVE_EVIDENCE',
+          'raw-live-providerPayload:SECRET_SHOULD_NOT_LEAK',
+        ],
+        cleanupRefs: [
+          'scoped-input-lease:current-vscode-cowork:ordinary-live',
+          'scoped-input-adapter:current-vscode-cowork:ordinary-live',
+          'cursor-marker:current-vscode-cowork:ordinary-live',
+          'front-app-restore:current-vscode-cowork:ordinary-live',
+          'mouse-position-restore:current-vscode-cowork:ordinary-live',
+          'raw-cleanup-ref:SECRET_SHOULD_NOT_LEAK',
+        ],
+        agentHostFinalAnswer: {
+          schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+          source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+          status: 'completed',
+          text: 'SECRET_PROVIDER_PAYLOAD raw-visible-text should not leave the live runner.',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          hostOwnsFinalAnswer: true,
+          computerUseCorePlanning: false,
+          primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+          evidenceRefs: ['window:vscode:paper', 'observation:vscode:current-live', 'data:image/png;base64,SECRET_IMAGE'],
+          cleanupRefs: ['scoped-input-lease:current-vscode-cowork:ordinary-live', 'raw-cleanup-ref:SECRET_SHOULD_NOT_LEAK'],
+        },
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const selected = events.find((event) => String(event.message).includes('VSCode co-work'));
+  const liveSelected = events.find((event) => String(event.message).includes('current VSCode co-work live diagnostic'));
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
+
+  assert.ok(selected);
+  assert.ok(liveSelected);
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(runnerCalls[0]?.commandText, '读取我当前打开的 VSCode 可见文本。');
+  assert.equal(runnerCalls[0]?.commandId, 'native-route-vscode-cowork-ordinary-live');
+  assert.equal(runnerCalls[0]?.attemptId, 'native-route-vscode-cowork-ordinary-live-attempt-1');
+  assert.equal(runnerCalls[0]?.workspacePath, '/tmp/workspace');
+  assert.equal(done?.status, 'completed');
+  assert.equal(done?.maturity, 'live-diagnostic');
+  assert.equal(done?.productReady, false);
+  assert.deepEqual(done?.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'observe', 'control(release)']);
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.hostOwnsFinalAnswer, true);
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.computerUseCorePlanning, false);
+  assert.match(String((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.text), /omitted because it was not refs-first safe/);
+  assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current-live'));
+  assert.ok((done?.cleanupRefs as string[]).includes('scoped-input-lease:current-vscode-cowork:ordinary-live'));
+  assert.equal(unit?.tool, 'current-vscode-cowork-live-diagnostic');
+  assert.equal(unit?.status, 'done');
+  assert.doesNotMatch(JSON.stringify(events), /SECRET|example\.invalid|raw-live|raw-cleanup|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('Computer Use native route derives P9b VSCode co-work intent from generic Host target and observation refs', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {
