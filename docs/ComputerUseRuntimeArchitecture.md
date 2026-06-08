@@ -2,18 +2,18 @@
 
 最后更新：2026-06-09
 
-## 文档目的与约束
+## 文档目的
 
-这份文档只记录 Computer Use 本身的最新设计原则和沟通口径，目标是让人类和 agent 读完后能快速理解 Computer Use 是什么、能做什么、不能做什么。
+这份文档记录 Computer Use 的稳定边界、primitive 设计、refs-first 证据原则，以及 Host-side App Capability Module 的最新决策。
 
-原则约束：
+目标是让人类和 agent 读完后能快速判断：
 
-- 保持简洁，避免把文档写成 TypeScript contract、JSON schema 或测试用例。
-- 文档只描述 Computer Use 自身的稳定边界、primitive、证据原则和迁移原则。
-- 外部系统只在解释边界时短提，不展开外部编排、界面呈现、模型路由或产品工作流设计。
-- 精确字段、schema、MCP tool definition、validator 和测试真相源放在 `packages/actions/computer-use`。
-- 历史路径只保留必要迁移口径，不作为新设计的主叙事。
-- 如果实现细节变复杂，优先更新 package contract 和测试；本文件只补能帮助沟通和理解需求的原则。
+- 什么属于 Computer Use core。
+- 什么属于 Agent Host。
+- 每个软件的专门优化应该放在哪里。
+- VSCode co-work v1 应该如何推进。
+
+字段、schema、MCP tool definition、validator 和测试真相源仍放在 `packages/actions/computer-use`。本文件只保留架构原则和沟通口径。
 
 ## 定位
 
@@ -37,9 +37,39 @@ Computer Use 不负责：
 - 自动 repair。
 - 判断用户级 completion truth。
 - 生成 final answer。
-- 保存、提交、发送、上传、删除、支付等高风险副作用的最终决策。
+- 保存、提交、发送、上传、删除、支付等副作用的最终决策。
 
-## 模块化结构
+## 职责边界
+
+```text
+Agent Host owns:
+  task understanding
+  target selection
+  next-action reasoning
+  model calls
+  app module selection
+  risk / confirmation policy
+  verifier selection
+  artifact validation request
+  completion truth
+  final answer
+
+Computer Use owns:
+  target-bound session refs
+  current observation refs
+  scoped executor event refs
+  local primitive execution refs
+  stale invalidation
+  fail-closed diagnostics
+  stop / cancel / release controls
+```
+
+判断原则：
+
+- 如果某段逻辑需要理解“用户到底想完成什么”，它不属于 Computer Use。
+- 如果某段逻辑只需要回答“这个 session 现在看到什么 / 这一个 Host 指定动作是否被安全执行并记录”，它属于 Computer Use。
+
+## Core 模块结构
 
 Computer Use 长期保持小内核和可替换 adapter：
 
@@ -53,39 +83,9 @@ Product path 优先走 focus-free 或 session-local input adapter。如果某平
 
 实现默认不启用共享系统输入。只有调用方显式选择 diagnostic 或 handoff 模式时，Computer Use primitive port 才能绑定 `system-input` adapter；此时同一进程内只能有一个 shared-system-input action 进入 executor，其它会话必须 blocked 或排队。
 
-## 长期维护原则
-
-Computer Use 的长期维护目标是能力完备但算法简单。优先把复杂度放进清晰边界，而不是在 core 里堆推理逻辑。
-
-- 只保留一个 primitive core 和一个 MCP public surface；Host、runtime route 和平台实现都围绕这个 core 做 adapter。
-- 新增能力走同一条路径：action table -> validator -> MCP schema -> service delegation -> evidence test -> live acceptance。
-- Platform Adapter 只负责平台绑定、观察和执行；不能把 task planning、semantic locate、repair 或 completion truth 放进 adapter。
-- Acceptance Harness 只证明能力成熟度和副作用清理；不能成为 product runtime，也不能把 diagnostic path 宣传为 product-ready。
-- 旧逻辑与目标设计冲突时直接删除或迁移出 Computer Use；不为 `runTask` / operationKind / 历史 product claim 继续加兼容层。
-
-## 能力成熟度
-
-Computer Use 的每项能力都要标清成熟度，避免把 contract、fixture 或 diagnostic path 误认为产品能力。
-
-- `contracted`：primitive schema、validator、result envelope 和风险边界已经定义。
-- `unit-proven`：contract test 证明 validator、状态机、风险门和 evidence refs 正常。
-- `live-diagnostic`：能在真实桌面上跑通，但仍可能依赖共享系统输入、测试专用窗口或诊断适配器。
-- `product-ready`：走 session-local input adapter，真实桌面验收通过，执行后无窗口、进程、临时文稿或 artifact 残留。
-- `blocked`：平台或 adapter 暂时不能满足隔离、证据或清理要求，必须说明缺口和恢复条件。
-
-只有 `product-ready` 能作为 Computer Use 产品路径能力对外声明。其它状态只能用于开发、调试或风险说明。
-
-## 外部边界
-
-Computer Use 不直接面向用户表达的完整任务。调用方必须先给出明确 target、risk policy、budget、已选择的 action target 或 procedure steps。
-
-Computer Use 返回 refs-first observation、action evidence、diagnostics、blocked reason 和 repair hints；调用方负责继续推理、修复、验证和生成最终答复。
-
-`/computer-use` 只能作为 debug / diagnostic 入口，不能成为 Computer Use 的产品语义入口。
-
 ## Primitive Surface
 
-Computer Use 新 MCP public surface 只暴露这些 primitive：
+Computer Use MCP public surface 只暴露这些 primitive：
 
 | primitive | 作用 | 边界 |
 | --- | --- | --- |
@@ -99,158 +99,150 @@ Computer Use 新 MCP public surface 只暴露这些 primitive：
 
 `bind` 成功必须产出 session-scoped `inputAdapterRef`、`cursorRef` 和 `scopedInputLeaseRef`。这些 refs 在同一进程内必须唯一；`act` 和 `control` 只能在对应 session scope 内使用它们。
 
-`act` 的原子动作覆盖 click、double_click、type、key、scroll、wait、app_command 和 drag；这些动作只描述一次明确输入事件或应用命令，不承载智能。
+`act` 的原子动作覆盖 click、double_click、type、key、scroll、wait、app_command 和 drag。这些动作只描述一次明确输入事件或应用命令，不承载智能。
 
 `run_procedure` 是性能和时延优化，不是旧 `runTask` 的改名。它只执行 Host 已经决定好的局部步骤序列。`run_procedure.status=completed` 只表示这段局部 procedure 执行完了，不能证明用户目标完成。
 
-## 算法简化原则
+## Host-side App Capability Modules
 
-Computer Use 尽量用 contract 和状态约束替代复杂算法：
-
-- 用 action table 声明每种 action 的 required fields、risk rule、handler name 和 evidence requirement。
-- 用有限状态机管理 session 生命周期，不做隐式 repair。
-- 用 discriminated union 表达 action，不接受自由 JSON。
-- 坐标只做 screen / window / element 之间的机械转换，不做语义 locate。
-- 共享系统输入不做并行隔离；只做全局 focus/input lease 串行化，并把接管、恢复和用户影响写入 evidence。
-- `run_procedure` 只是顺序执行 primitive；遇到 `blocked`、`needs-confirmation` 或 `failed` 立即停止。
-- 不在 Computer Use core 内实现 retry planner、目标搜索器、结果 verifier 或跨 app workflow；需要这些能力时交给调用方或独立模块。
-- 任何含糊输入默认 `blocked`，并返回可理解的 reason 和 repair hint，而不是猜测执行。
-
-## 最小执行管线
-
-所有 primitive 尽量复用同一条短管线，新增能力优先补 table、validator、adapter handler 和 evidence，而不是加分支算法。
-
-- `bind`：校验 target scope -> platform bind -> 分配 session / input adapter / cursor / lease refs -> 进入 active。
-- `observe`：校验 session active -> platform observe -> 物化 screenshot / AX / element / text refs -> 返回 current observation。
-- `act`：校验 action payload -> 校验 session / lease / risk / permission envelope / policy-required confirmation -> 读取 before observation -> 调 input adapter handler -> 记录 executor / input event -> 读取 after observation -> invalidated stale refs。
-- `run_procedure`：按顺序调用 primitive 管线；任何 step `blocked`、`needs-confirmation` 或 `failed` 就停止并保留已产生 refs。
-- `control`：校验 session -> 状态转移 -> release / stop / cancel 时释放 lease、adapter 和 cursor refs。
-
-如果某个功能不能放进这条管线，默认判断为 Host 编排、Platform Adapter 能力或 Acceptance Harness，而不是扩大 Computer Use core。
-
-## 当前推进顺序
-
-近期实现按 P3 / P4 / P6 收敛，并把 P8 / P9 作为复杂真实软件验收与 co-work 边界：
-
-- P3 先把真实桌面验收做扎实：live test 默认 skip，显式 env 才运行；运行前后清理测试窗口、文稿、进程和 artifacts；多 session 要证明 adapter / cursor 独立。
-- P4 再接 Host / MCP：MCP schema 必须与 TS validator 一致；Host port adapter 提供真实 `bind` / `observe` / `act` / `control`；Agent Host 继续拥有用户任务理解和 final answer。
-- P6 持续清理迁移路径：旧 `runTask`、`perform_local_action`、`fill_fields`、`executeBoundedOperation` 和 VirtualAppScreen / noVNC product claim 不能回流到新 public surface。
-- P8 用 VSCode / IDE 复杂桌面窗口补齐视觉验收：真实 `observe` 必须看到文件树、编辑区、窗口标题或等价 AX/text 证据；Host-side acceptance controller 可以基于 observation refs 选择下一步原子动作，但 Computer Use core 仍不做规划；真实 `act` 必须改变当前测试窗口；after observe 必须用视觉/AX/text refs 验证变化，文件内容只能作为补充 validator；验收后必须清理测试文件 tab、临时 workspace、input lease、cursor 和 artifacts。
-- P9 面向用户已打开的 VSCode / IDE co-work：Host 可以根据当前 run 的 observe refs、用户选择的 window refs 和权限 envelope 决定下一步原子 primitive；window candidate 必须带 app/process/window/title/frontmost refs，缺少绑定身份 refs 时必须 `blocked`；observe/text/element/visible file evidence 必须保持 refs-first，合法 refs 与 raw payload 混用时必须 `blocked`，不能 silent-drop raw 项后继续；多窗口时 Host 应先用视觉 / AX / text / title / visible file / editor refs 尝试确认唯一正确窗口，证据冲突或无法唯一确认时才 `needs-confirmation`；目标文件不明确、编辑区不可见、缺少结构化 editor element ref 或 observation stale 必须 `needs-confirmation` / `blocked`；focused-editor 证明由 Host-owned evidence verifier 负责，可以来自原生 `focused-editor:` ref、视觉、AX/text/image/editor/action refs 或其它 refs-first observation，不要求每一步都视觉验证，只要证据足够并归一成安全 verifier refs，Computer Use core 不拥有 verifier；在 full-access co-work profile 下，保存用户真实文件、撤销用户编辑、批量替换和跨文件修改不再因为真实文件 / 批量 / 跨文件本身要求 confirmation，但必须绑定当前 active session、target window、editor element、selected `file-ref:`、Host decision/action evidence 和 full-access permission refs；批量 / 跨文件不能作为 batch plan 进入 Computer Use core，必须由 Host 基于每次 observe refs 拆成多次单步 primitive。提交、发布、删除、支付、外部发送或其它不可逆外部副作用仍沿用 P5 hard-confirm policy。Computer Use core 仍只接受 Host 指定的 primitive，不接受 task plan。
-
-完成顺序以验收成熟度为准：`contracted` 和 `unit-proven` 只能说明 contract 正确；只有 session-local adapter 通过真实桌面验收且无副作用残留，才能升为 `product-ready`。
-
-当前 P3 状态是 `live-diagnostic`：TextEdit live acceptance 已在真实桌面跑通原子动作链、双 session adapter / cursor 隔离，以及 shared-system-input 并发冲突 blocked；并验证运行后没有测试窗口、进程、临时文稿或默认 artifact 残留。该路径仍使用 System Events / CGEvent 共享系统输入，所以不能声明 `product-ready`。
-
-当前 P4 状态是 `unit-proven`：Agent Host 默认 WindowAction materializer 已通过 `computer_use.bind -> computer_use.observe -> computer_use.act -> computer_use.control(release)` 执行单步低风险 GUI action，turn-loop 普通聊天路径基于 action evidence 生成答复，并把 action / artifact validator / release evidence 保留到 final result；workflow loop blocked 时也保留已完成原子步骤 refs。这个状态不等于完整用户 workflow 完成，也不等于真实桌面 `product-ready`。
-
-当前 P1 状态是 `live-diagnostic`：8 个 action type 的 validator、MCP schema、service delegation 和 evidence refs 已有 package test 覆盖，TextEdit live acceptance 覆盖低风险原子动作子集。该状态不代表每个 `app_command` 值、快捷键组合或平台 adapter 都已 product-ready。
-
-当前 P5 状态是 `unit-proven`：内置高风险 `app_command` 列表默认 needs-confirmation；Host 标记为超出当前 session scope 的 cross-app、cross-window、cross-account、irreversible risk categories 默认 needs-confirmation；approvalRef 必须绑定当前 risk envelope；单步 `act` 和 `run_procedure` blocked 时不会调用 executor。Computer Use core 只执行 risk envelope 规则，不做跨 app / 跨账号语义推断，也不把 P9 full-access 下的真实文件保存、批量或跨文件本身升级成 confirmation gate。
-
-当前 P7 状态是 `unit-proven`：普通聊天入口已能触发 Host 选择 target，并走 `bind -> observe -> act -> control(release)`；final answer 只基于 action evidence 和 release evidence 表达局部动作结果。TextEdit chat bridge 和 live acceptance runner 已证明 save 目标、artifact validator refs、release refs 和 product completion gate 能保留到 blocked answer；真实桌面 TextEdit primitive live 仍是 `live-diagnostic`，普通聊天到真实 TextEdit/Appium 的完整 live 验收还不能声明 `product-ready`。
-
-当前 P8 状态是 `live-diagnostic`：VSCode live acceptance runner 默认 skip，显式 `SCIFORGE_COMPUTER_USE_VSCODE_PRIMITIVE_ACCEPTANCE=1` 才运行；用户要求它复用用户 VSCode profile / 当前权限以贴近真实 co-work，所以 manifest 明确标记 `userProfileUsed=true`。该 runner 在临时 workspace / test file 上走 `bind -> observe -> act -> observe -> control(release)`，记录 screenshotRef、accessibilityRef、visible text refs、target window/session refs、input adapter / cursor / lease release refs，并用补充文件 validator 交叉确认保存结果。不带 keep-artifacts 运行后会删除临时 workspace 和 evidence artifacts，但不会杀用户 VSCode 进程，也不会清理用户 profile。该能力仍使用共享系统输入和用户 profile，因此不能声明 `product-ready` 或 profile-isolated cleanup。
-
-当前 P9 状态是 `unit-proven` + P9b read-only `live-diagnostic` + P9b/P9c focus-editor 默认 provider `live-diagnostic`：`packages/actions/computer-use/vscode-cowork-acceptance.ts` 记录了 Host-side current VSCode co-work 的 acceptance controller contract，并登记 `CU-NEXT-09 current-vscode-cowork`。该 contract 只根据 Host 提供的窗口候选、选定 windowRef、selectedFileRef、fresh observe refs、cursorMoveRef、selectionRef、replacementTextRef、draftTextRef、permission envelope 和 action evidence 返回一个下一步原子 primitive，或返回 `needs-confirmation` / `blocked`；operation 必须属于受支持的 co-work allowlist，未知 operation 或 task-shaped raw 字符串会在消费 observe refs 前返回固定 `blocked` / `vscode_cowork_operation_required`，只保留 request/window candidate refs，不回显 raw operation，也不把它当成 Computer Use task plan；window/app/process/title/frontmost refs 与 observation/session/image/AX/text/element/freshness refs 必须是 tokenized refs，且每个 window candidate 必须包含 app/process/window/title/frontmost 绑定身份 refs，缺少时返回 `blocked` / `vscode_cowork_window_candidate_identity_refs_required`，不消费 observe refs、不返回 primitive/action；latest observation 必须绑定 `window-action-session:` / `computer-use-session:` 形态 active session ref，缺少 sessionRef 时会返回 `blocked` / `vscode_cowork_observe_session_ref_required`，ready Host decision refs 和 native route evidenceRefs 必须保留该 session ref；raw VSCode title、raw AX/text、截图路径或自然语言 observation 不能作为 bind/observe evidence；如果 Host 输入同时包含合法 window refs 和 raw window 候选，controller / native bridge 会返回 `blocked` / `vscode_cowork_window_candidate_refs_invalid`，不能静默丢弃 raw 候选后把目标误收敛成单窗口 ready；如果 `textRefs` / `elementRefs` 同时包含合法 refs 与 raw visible text、raw AX/element label，或 visible file refs 同时包含 `file-ref:` 与 raw path / 裸文件名，controller / native bridge 会返回 `blocked` / `vscode_cowork_observe_refs_invalid` 或 `vscode_cowork_visible_file_refs_invalid`，且 public events 只保留 tokenized refs；selectedWindowRef / selectedFileRef 必须来自当前 window/observe refs，raw VSCode title、raw path 或裸文件名会返回 `vscode_cowork_selected_window_ref_invalid` / `vscode_cowork_selected_file_ref_invalid`，不能被 sanitizer 当作未选择后自动绑定唯一候选；selectedFileRef 必须来自当前 window/observe refs 中的 `file-ref:` 形态 visible file refs，不能复用 stale 或外部文件 ref，raw path / 裸文件名也不能作为目标文件 ref；latest observation 标记 `editorVisible=false` 时，所有 co-work operation 都会 `blocked` / `vscode_cowork_editor_not_visible`，包括 refs-only `read-visible-text`，不能在编辑区不可见时猜测目标；latest observation 若缺少结构化 editor element ref，也会返回 `blocked` / `vscode_cowork_editor_element_ref_required`，不能把 file tabs 或其它可见元素当成 editor action target；`move-cursor` 缺少 refs-first `cursor-move:` 形态 cursorMoveRef 时会 `blocked`，只允许 Host 基于 observe refs 选择一个明确 arrow-key movement，不能把 raw 自然语言方向或多步移动计划塞入 Computer Use decision；`replace-selection` 缺少 refs-first `selection-ref:` 或 `text-ref:` replacement refs 时会 `blocked`，不能把 raw 选区描述、raw replacement body 或修改计划塞入 Computer Use decision；`insert-draft` 缺少 refs-first `text-ref:` 形态 `draftTextRef` 时会 `blocked`，不能把 raw draft text、clipboard payload 或 provider payload 嵌入 Computer Use decision；`read-visible-text` 只在编辑区可见、带 editor element ref 且 observe refs 新鲜时返回 `primitive=observe` 和当前 observation/text/AX refs，不产生 `act` action 或 visible text 原文；保存、撤销、替换选区、批量替换或跨文件修改不再因为真实文件 / 批量 / 跨文件本身要求 confirmation，而必须绑定 selected `file-ref:`、active session、Host decision/action refs 和 full-access permission refs；`bulk-replace` / `cross-file-modify` 仍会 `blocked` / `vscode_cowork_non_atomic_operation_requires_host_decomposition` 或等价状态，要求 Host 基于当前 observe refs 拆成单步原子 editor primitive，不能把批量或跨文件修改计划交给 Computer Use core。它不新增 MCP public surface，不进入 Computer Use primitive core，也不产生用户级 completion truth。Runtime Codex native route 现在有一个 VSCode co-work Host bridge：只有 schema/kind/source 均为 Host-owned native route、taskId 为 `CU-NEXT-09` 且带 `current-vscode-cowork` + `refs-first` semantic markers 的 intent 会被路由到该 bridge；bridge 只消费 sanitized refs / operation / permission envelope，并在多窗口、目标文件不明确或目标不明确时返回 refs-first `needs-confirmation` / `blocked`，不回落到 broader runtime 猜测窗口。P9 cleanup / live manifest validator 要求 manifest 明确 `userProfileUsed=true` 和 `sharedSystemInputUsed=true`；standalone cleanup 和 live manifest 都要求 release input lease / cursor / adapter refs、front app 与 mouse position restoration refs，拒绝 raw payload、URL、token/password/secret-like 值和本地路径形态，并禁止杀用户 VSCode 或清理用户 profile；live manifest 还要求 `bind -> observe -> Host decision -> one primitive -> observe -> control(release)`、before/after observe refs、Host decision/action/control refs，bind evidence 必须带 session、target window、app、process、frontmost/focus、scoped input lease、input adapter 和 cursor marker refs，且 bind input refs 必须精确绑定本次 release evidence 中释放的同一组资源；target window 必须是 `window:` ref，Host decision evidence 必须绑定 requestRef、同一个 bind active session ref、target window、before observation ref、freshness ref 和同一个 editor element ref，文件目标操作还必须绑定 selected `file-ref:`，真实文件操作还必须绑定 full-access permission refs；before/after observe evidence 必须绑定同一个 bind active session ref，证明 observe refs 属于本次 VSCode co-work session；before observe evidence 还必须绑定同一个 target window ref 和 editor element ref，证明 Host 用来决策的 observe refs 来自当前用户 VSCode 窗口并有明确编辑器目标；after observe evidence 必须重新绑定同一个 target window ref、after freshness ref 和同一个 editor element ref，不能只给一个泛泛 `observation:` ref，也不能用同窗口的其它面板替代动作后的编辑器观察；control evidence 必须绑定同一个 bind active session ref，并精确包含本次 release/restoration evidence 中的 scoped input lease、input adapter、cursor marker、front-app restore 和 mouse-position restore refs，不能只给一个泛泛 `control:` ref 或另一条合法 session ref；act evidence 必须带 actionRef、同一个 bind session ref、同一个 editor element ref、executorEventRef、inputEventRef、input adapter ref、cursor marker ref、scoped input lease ref 和 stale invalidation ref，并且 action 使用的 input adapter / cursor / lease refs 必须精确绑定本次 release evidence 中释放的同一组资源；screenshot / AX / text evidence 必须是对应类别 refs 且各自包含 before/after current-run refs，before/after observe evidence group 还必须分别绑定对应 screenshot / AX / text refs。该 contract 仍不代表 P9c 写入或 product-ready；只有 read-only ordinary/native route 与 HTTP/SSE route 当前达到真实 `live-diagnostic`。
-
-补充：P9b ordinary-chat Host input bridge 已达到 read-only `live-diagnostic`。HTTP/SSE 入口会把 refs-first `agentHostInput` 透传给下游 adapter，CodexAppServerAdapter 继续传给 client；当 client 看到 Host 标记的 `current-vscode-cowork` refs 时，会走 native package bridge，而不是启动普通 app-server 子进程。client 也会把 `currentVSCodeCoWorkLiveDiagnosticRunner` 与 `currentVSCodeCoWorkLiveDiagnosticOptions.activateCurrentVSCodeIfNeeded` 原样透传给 native route。native route 可以把 Host input 中已有的 `target.vscodeCoWork` / `observation.vscodeCoWork` 包装成 `CU-NEXT-09` + `current-vscode-cowork` + `refs-first` intent，并复用当前 VSCode co-work controller。若 Host producer 只给通用 `target.refs`，native route 也能从 tokenized `macos-app:` / `process:` / `window:` / title `text:` / `frontmost:` / `file-ref:` refs 与 `observation.vscodeCoWork` 合成最小 co-work binding；raw path / raw title sidecar 会被丢弃且不会进入 public events。partial `target.vscodeCoWork` 可以只承载 Host 基于 observe refs 选出的 operation / action refs，并与 generic `target.refs` 合并成单步 co-work binding；显式 raw selected/window/file refs 仍会覆盖并 fail closed，不能被 generic refs 静默修复。native route 还会把通用 `observation.refs` 与 Host 顶层 session refs 结构化成 `latestObservation` 的 session / observation / image / accessibility / text / element / freshness refs；这是 Host-input refs normalization，不是 Computer Use core 的窗口选择或 task planning。该合成只在单一 `window:` ref 且与 latest observe window 一致时进入 ready；多个 generic window refs 或绑定身份不足时只保留 requestRef 并 fail closed。该桥不从裸 commandText 直接派生权限；没有 Host refs 的普通文本仍走 Codex / Agent Host 路径。最新补充：当 VSCode co-work Host bridge 基于 refs-first Host input 产出 ready + `primitive=observe` 时，native route 可以调用注入式或显式 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC=1` env-gated current VSCode live diagnostic runner，并把 runner result 投影为 sanitized done payload，保留 `bind -> observe -> host-decision -> observe -> control(release)`、cleanup refs、Host final-answer evidence envelope 和 `hostProducerEvidence`。`hostProducerEvidence` 只公开 Host producer 生成的 agentHostInput/runtimeTruth tokenized refs，例如 target window/file、observation/text、permission、session、input lease、cursor 和 adapter refs；route sanitizer 会丢弃 runner 输出中的 raw URL、provider payload、base64、secret-like、raw intent/summary/path 或 raw cleanup ref。另有窄普通文本 hook：只有文本明确指向当前 / 已打开 VSCode 且是读取可见文本或聚焦这类低风险动作、并且 runner 注入或显式 env gate 存在时，native route 才会从普通文本进入 current VSCode live diagnostic runner；写入、保存、替换、删除、批量、跨文件或外部不可逆动作不会走该窄入口。该 hook 不让 Computer Use core 做 task planning；真实 read-only ordinary/native route 和 Runtime Codex HTTP/SSE route 均由 acceptance manifest writer/CLI 证明为 `live-diagnostic`，product-ready 仍未完成。
-
-补充：ordinary/native route 现在支持显式 `currentVSCodeCoWorkLiveDiagnosticOptions.activateCurrentVSCodeIfNeeded`，并会把它原样透传给 current VSCode live diagnostic runner。该 opt-in 只属于 route / acceptance harness 的真实诊断辅助，语义等价于 CLI `--activate-vscode` 的非默认选择：它可以允许平台绑定层在唯一目标条件下机械激活当前 VSCode，但不能从裸 commandText 推断权限、不能选择窗口、不能让 Computer Use core 规划下一步，也不能把诊断结果升级为 product-ready。Host 仍必须先依据 refs-first observe / bridge evidence 选出一个 primitive，Computer Use primitive service 只返回 refs、diagnostics、blocked / needs-confirmation 状态和 cleanup / restoration evidence。
-
-补充：P9b/P9c 默认 Agent Host Computer Use Act materializer 现在有 current VSCode co-work Host producer 单元路径。该路径只在 Host input / runtimeTruth 已经带 `intent:current-vscode-cowork`、target refs、current observe refs、permission refs 和必要 action refs 时触发；它从 tokenized refs 组装 `CU-NEXT-09 current-vscode-cowork refs-first` runtime intent，并调用现有 co-work controller 产出 `read-visible-text` refs-only observe decision、`focus-editor` refs-first key act decision 或 `insert-draft` refs-first act decision。它不会调用通用 WindowAction planner，不从裸 commandText 猜目标，不保存文件；如果多个 window candidate 存在但当前 observe/window/frontmost refs 唯一绑定其中一个窗口，Host producer 会自动选定该 targetWindowRef，证据冲突或无法唯一收敛时仍返回 `needs-confirmation`。Agent Host sanitizer 允许 `macos-app:`、`process:`、`frontmost:`、`file-ref:`、`text:`、`text-ref:`、`action:`、`executor-event:`、`input-event:`、`stale-invalidation:`、`verifier:`、`image:`、`accessibility:`、`element:`、`focused-editor:`、`freshness:` 等 tokenized co-work refs 作为 evidence，同时继续拒绝 raw、URL、base64、secret-like 和 provider payload。该状态仍是 `unit-proven`，不是 P9b/P9c 真实桌面 `live-diagnostic`。
-
-补充：P9b Host-side `read-visible-text` live diagnostic runner 现在有 unit-proven 路径。runner 只编排 Computer Use primitive service：先 `bind` 当前 VSCode target，再 `observe`，把 primitive 返回的 target/session/screenshot/AX/text/element/freshness/file/input-resource refs 归一成 `current-vscode-cowork` Host input 与 runtimeTruth，然后交给现有 co-work materializer 做 Host decision。若 Host 基于 observe refs 选择 refs-only `observe` primitive，runner 再执行一次 `observe`，最后无论 completed / blocked / needs-confirmation 都调用 `control(release)`，保留 scoped input lease / adapter / cursor release refs 与 front-app / mouse-position restore refs。多个 VSCode window refs 不再由 materializer 取第一个自动收敛；证据无法唯一确认时 runner 返回 `needs-confirmation`，不执行第二次 observe。runner 结束后生成 Host-owned `agentHostFinalAnswer` evidence envelope：只包含 Host status、primitive chain、evidence refs、cleanup refs、action-scoped completionTruth 和 diagnostic text，不包含 raw visible text / provider payload，也不让 Computer Use core 宣称用户任务完成。该 runner 不进入 Computer Use core、不新增 task planning、不触达真实用户文件、不声明 `product-ready`，并且该状态仍不是 P9b 真实桌面 `live-diagnostic`。
-
-补充：P9b current VSCode observe-only primitive ports 与 Host wrapper 现在达到 `live-diagnostic`，并有默认 skip 的 env-gated live test 入口。`packages/actions/computer-use/vscode-cowork-live-diagnostic.ts` 默认显式 env gate，启用后只绑定用户当前 VSCode 窗口并产出 refs-first app/process/window/title/frontmost/AX/text/editor/freshness evidence；它不启动测试文件、不执行 act、不保存文件、不杀用户 VSCode、不清 profile，并在 bind/release 周期 capture/restore 前台 app 与鼠标位置。若 bind 已 capture 桌面状态但无法观察当前 VSCode，它会返回 refs-first blocked envelope 并执行 restore，Host wrapper 也会保留 restoration evidence / cleanup refs；restore hook 自身失败会降级成 warning diagnostics，不能遮蔽原始 blocked reason 或吞掉 front-app / mouse restoration refs。`src/runtime/codex/agent-host-vscode-cowork-current-live-diagnostic.ts` 把这些 primitive ports 接到现有 Host-side runner，证明 Host 可以基于 observe refs 选择 refs-only `read-visible-text` primitive，并最终 release scoped input lease / adapter / cursor 与 front app / mouse restoration refs。真实当前 VSCode read-only ordinary/native 和 HTTP/SSE live diagnostic 已通过显式 env 入口；该路径仍不能声明 `product-ready`。
-
-补充：P9b/P9c Host live producer 现在有可复用的 `unit-proven` 入口。`produceVSCodeCoWorkAgentHostLiveInput` 只消费当前 run 的 `bind` / `observe` primitive envelope、target refs 和可选 `text-ref:` draftTextRef，生成 Host input、runtimeTruth 和 ready preflight；producer 只识别窄 `read-visible-text` / `focus-editor` / `insert-draft` 意图，并把 operation 显式写进 Host target refs，后续仍由现有 VSCode co-work materializer/bridge 选择一个 refs-first primitive。该 producer 不读取 raw draft、不从 fallback commandText 规划任务、不进入 Computer Use core，也不表示真实当前 VSCode ordinary-chat live run 已完成。
-
-补充：ordinary/native route 的 live runner 投影现在保留 `hostProducerEvidence`，用于审计“Computer Use primitive 返回 refs，Host 再决定下一步 primitive”的工作链路。该投影不是新的 planner，也不是 Computer Use core completion truth；它只是把 Host producer 已生成的 refs-first agentHostInput/runtimeTruth 证据压缩成可公开字段，供 final answer / UI 继续引用 refs。
-
-补充：P9b read-only live acceptance manifest writer 现在达到 `unit-proven`，并走 ordinary/native route。`runCurrentVSCodeCoWorkReadonlyLiveAcceptance` 默认在缺少 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC=1` 时只写 blocked manifest，`ordinaryChatNativeRouteUsed=false`，不触发真实桌面；显式 env 或注入 runner 时先构造普通聊天 request，进入 `createComputerUseNativeRouteStream` 的窄 ordinary chat hook，再调用 `read-visible-text` live diagnostic runner，并把 route sanitized done payload 压成 refs-first manifest。该 manifest 要求 Host producer refs、decision / observation / text / image / AX / editor / freshness refs、release input lease / adapter / cursor refs、front-app / mouse-position restore refs，固定 `ordinaryChatNativeRouteUsed=true`、`live-diagnostic`、`productReady=false`、`userProfileUsed=true`、`sharedSystemInputUsed=true`、`userVSCodeKilled=false`、`userProfileCleared=false`，并过滤 raw path、URL、base64、secret-like 和 provider payload。它是 read-only P9b ordinary/native route live run 的验收承载，不给 Computer Use core 增加 planning 或 final-answer 权限。
-
-补充：P9b read-only live acceptance 现在有固定 CLI：`node --import tsx tools/current-vscode-cowork-readonly-live-acceptance.ts --json`。该入口只调用 manifest writer；默认缺少显式 env 时写 blocked manifest，方便 cleanup / readiness 验收，不打印 env value，也不启动 VSCode。真实当前 VSCode read-only run 必须显式设置 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC=1`；若当前前台不是 VSCode，验收入口还可以显式加 `--activate-vscode`，只在唯一 VSCode 窗口条件下机械激活目标，并由同一个 bind / control(release) 周期恢复前台 app 和鼠标位置。该 opt-in 属于 acceptance harness / platform bind 辅助，不给 Computer Use core 增加 task planning、窗口选择或 final-answer 权限。CLI JSON summary 会暴露 `ordinaryChatNativeRouteUsed`；输出仍只能作为 `live-diagnostic` artifact，不能作为 product-ready claim。
-
-补充：P9b read-only live acceptance 已在当前 Mac 上以显式 env + `--activate-vscode` 经 ordinary/native route 跑通真实当前 VSCode 诊断。manifest status 为 `passed`、`ordinaryChatNativeRouteUsed=true`，primitive chain 为 `bind -> observe -> host-decision -> observe -> control(release)`，Host final answer 标记 `computerUseCorePlanning=false` / `userTaskCompletionClaimed=false`，release evidence 覆盖 scoped input lease / adapter / cursor，restoration evidence 覆盖 front app / mouse position，且 manifest 没有 raw path、base64、secret-like、provider payload 或 product-ready claim。Runtime Codex HTTP/SSE read-only acceptance 也已在当前 Mac 上以显式 live env + `--activate-vscode` 跑通，manifest status=`passed`、`httpSseTransportUsed=true`、`adapterBoundaryUsed=true`。这些结论只提升 read-only co-work 到真实 `live-diagnostic`；P9c 写入诊断和 product-ready adapter gap 仍未完成。
-
-补充：P9b read-only HTTP/SSE acceptance writer / CLI 现在达到真实 `live-diagnostic`。`runCurrentVSCodeCoWorkReadonlyHttpSseAcceptance` 默认缺少显式 live env 时只写 blocked manifest，不触发真实桌面；显式 env 或注入 adapter 时启动本地 Runtime Codex HTTP/SSE endpoint，POST 普通聊天 request，并从 public SSE events 中验收 `realtime_session`、`turn`、`done`、Host producer refs、Host-owned final answer、decision / observation / text / image / AX / editor / freshness refs、input lease / adapter / cursor release refs 和 front-app / mouse-position restore refs。固定 CLI 为 `node --import tsx tools/current-vscode-cowork-readonly-http-sse-acceptance.ts --json`；默认 blocked cleanup / readiness 已可验收，显式 live env + `--activate-vscode` 已在当前 Mac 上通过 `status=passed`。该 harness 证明 Runtime Codex HTTP/SSE transport contract 与 public event sanitizer，不给 Computer Use core 增加 planning、窗口选择、文件选择或 final-answer 权限；仍不能声明 product-ready。
-
-补充：P9c `insert-draft` primitive/Host runner 已达到 `unit-proven`。current VSCode live primitive ports 现在实现 `act` port：只有 Host 已给出一个 atomic action 时才执行，完成后返回 actionRef、executorEventRef、inputEventRef、before/after observation refs、stale invalidation refs 和 scoped input lease / adapter / cursor refs；before observation 缺失、非 `type` action、缺少 `text-ref:`、文本 ref 解析失败、空文本或超限文本都会 fail closed。默认 `type` executor 不从 action payload 读取 raw draft，而是调用 Host 提供的 `resolveTextRef` 解析 `text-ref:`，再交给注入的 `typeResolvedText` 或默认 System Events typing executor；公开 result / final evidence 只传播 tokenized refs。最新补充：snapshot 只有在 AX focused role 证明焦点 / 插入点位于 editor text area 时才生成 `focused-editor:` ref；Host live producer / runtimeTruth / materializer decision evidence 会保留该 ref，默认 `type` executor 缺少它会先 blocked / `current-vscode-act-focused-editor-ref-required`，且不会调用 `resolveTextRef`。Host-side `runVSCodeCoWorkInsertDraftLiveDiagnostic` 和 current VSCode wrapper 只编排 `bind -> observe -> host-decision -> act -> observe -> control(release)`，把 `draftTextRef` 作为 refs-first 输入交给 materializer；当 before/after observe 的 `text:` refs 出现当前 run 新 after ref 时，Host runner 才生成 `verifier:...:insert-draft` mutation evidence 并放入 action-scoped completion truth evidence；没有该 evidence 时 runner 返回 blocked / blocked completionTruth，并仍释放 input lease / adapter / cursor。Computer Use core 不读取 raw draft、不规划修改范围、不判断用户任务完成，也不拥有 verifier port。current VSCode observe port 会从当前窗口 snapshot 生成 opaque `file-ref:vscode:current:*`，用于 Host 绑定当前单文件和 full-access permission envelope；该 ref 来自 title/text snapshot token，不公开 raw title、raw path 或 raw visible text。该路径目前是单元诊断，不是真实当前 VSCode 写入 live-diagnostic，也不是 product-ready。
-
-补充：P9c `act.contextRefs` 现在是 Host 把上一轮 refs-first 证据交给下一步原子 primitive 的窄通道。primitive contract / MCP schema 允许 `computer_use.act` 带 `contextRefs`，Computer Use core 只做形状校验，不解释 `focused-editor`、`verifier` 或 observation refs 的任务语义，也不据此规划下一步。current VSCode provider 会过滤并回显安全 tokenized context refs；默认 `type` executor 可以使用 Host 已验证的 `focused-editor:` context ref 作为焦点前置证据，但不会自己运行 verifier、不会根据 context 选择窗口或文件。Host runner 会从 before observe 和显式 `focusedEditorContextRefs` 组装 context refs 传入 `insert-draft` act，使链路保持“observe refs -> Host decision -> one primitive -> refs”。该能力只证明证据交接为 `unit-proven`，不代表真实写入 live-diagnostic 或 product-ready。
-
-补充：P9c `insert-draft` runner 现在可以在 act 前调用 Host-owned `focusedEditorEvidenceVerifier`。该 verifier 只接收 before observe 的 tokenized image / AX / editor / target refs 和 Host decision ref，成功时返回安全 `focused-editor:` 与 `verifier:...:focus-editor` refs，再由 Host runner 放进下一步 `act.contextRefs`；失败时 runner blocked，并通过 `control(release)` 清理，不解析私有 draft、不执行 typing。这个 hook 是 SciForge 视觉 / AX / text / image / editor/action 观察能力接入点，但 verifier/provider 仍属于 Host / acceptance 层；Computer Use core 不拥有 verifier，也不把 focus evidence 当作 task plan。
-
-补充：P9b/P9c current VSCode wrapper 现在接入 Host / SciForge `focusedEditorEvidenceProvider` adapter。provider input 有固定 schema，只包含 current run 的 decision ref、before/after observe refs、target refs、editor/action refs 和聚合 evidence refs；provider result 仍复用 Host verifier sanitizer，只有安全 `focused-editor:` 与 `verifier:...:focus-editor` refs 会进入 runner evidence 或下一步 `act.contextRefs`。unsafe/raw provider 输出会在解析私有 draft 或 typing 前 blocked，并仍走 `control(release)` 清理。这个 provider 只回答“现有 refs 是否足以证明可写编辑区焦点”，不选择窗口、不选择文件、不决定下一步 primitive、不拥有 completion truth；证据来源可以是视觉、AX、text、title、file/editor/action refs 或其它足够的 refs-first observation，不要求每一步都视觉验证。
-
-补充：P9b/P9c 默认 current VSCode Host focused-editor provider 现在有真实 `live-diagnostic` 通过证据。该默认 provider 不把 editor visible 当作焦点证明；它只在原生 `focused-editor:` 已存在，或 Host 已执行单个 `focus-editor` act 后，才要求 after observe 同时给出唯一 window、frontmost、file、editor element、freshness、observation 和 AX/text/image 等 perception refs，然后生成安全 `focused-editor:vscode:sciforge-provider:*` 与 `verifier:...:focus-editor` refs。缺少 focus action evidence、窗口不唯一、目标文件/editor/freshness 缺失或 observation evidence 不足都会 blocked。真实 current VSCode focus run 已完成 `bind -> observe -> host-decision -> act -> observe -> control(release)`，释放 scoped input lease / adapter / cursor 并恢复前台 app / 鼠标位置；没有打字、保存、杀 VSCode、清 profile 或泄漏 raw screenshot / provider payload / base64，也仍只能标 `live-diagnostic`。
-
-补充：P9b/P9c `focus-editor` primitive/Host runner 已达到 `live-diagnostic` 的焦点前置证据阶段。current VSCode primitive ports 现在支持 Host 选出的单个 `Command+1` key act；该 act 返回 action / executor / input / after observe refs，不解析 `text-ref:`、不触达私有 draft、不保存文件。Host-side `runVSCodeCoWorkFocusEditorLiveDiagnostic` 和 current VSCode wrapper 只编排 `bind -> observe -> host-decision -> act -> observe -> control(release)`；after observe 的局部 focus 证明由 Host-owned `focusedEditorEvidenceVerifier` / `focusedEditorEvidenceProvider` 完成，默认 verifier 仍只接受原生 `focused-editor:` ref，默认 provider 则要求 Host 已执行 focus act 且 after observe refs 足够一致。注入 verifier/provider 可以使用 SciForge 视觉能力、AX/text/image/editor/action refs 或其它 refs-first observation 生成安全 `focused-editor:` + `verifier:...:focus-editor` refs；unsafe/raw verifier/provider 输出必须 blocked，不能泄漏 raw screenshot path、data URL、provider payload 或 URL。focused-editor observe verifier 已从单一 `AXTextArea` role 扩展为保守复合 AX 证据：先拒绝 terminal/search/explorer/source-control 等非编辑目标，再接受 `AXTextArea` 或 Monaco/code-editor/editor-group context；unit tests 证明 Monaco-like `AXGroup` 可生成 focused-editor ref，而 integrated terminal 的 `AXTextArea` 不会被误认。真实 current VSCode focus 默认诊断此前因 AX focused evidence 不足而 blocked；默认 Host provider 接入后已完成一次真实 focus live diagnostic，但这只证明焦点前置链路，不代表 P9c 写入 live-diagnostic 或 product-ready。下一步卡点是把该 focused context 串到后续小范围写入 primitive，而不是把 Computer Use core 扩成 planner 或放宽 verifier gate。
-
-补充：P9c `insert-draft` live acceptance writer / CLI 现在达到 `unit-proven`。`runCurrentVSCodeCoWorkInsertDraftLiveAcceptance` 默认在缺少显式 live env、缺少安全 `text-ref:` draftTextRef 或缺少私有 draft resolver 时只写 blocked manifest，不触发真实桌面；显式 env 或注入 runner 时调用 current VSCode insert-draft diagnostic，并把结果压成 refs-first manifest，要求 `bind -> observe -> host-decision -> act -> observe -> control(release)`、Host producer refs、Host-owned final answer、action / executor / input / stale refs、mutation verifier refs、decision / observation / text / image / AX / editor / focused-editor / freshness refs、input lease / adapter / cursor release refs 和 front-app / mouse-position restore refs。completed runner 如果没有 `focused-editor:` evidence 或没有 `verifier:...:insert-draft` mutation evidence，会分别被 manifest 降级为 blocked / `missing-focused-editor-ref` 或 `missing-mutation-verifier-ref`，不能只靠 editor element ref 或 action refs 宣称可写入。固定 CLI 为 `node --import tsx tools/current-vscode-cowork-insert-draft-live-acceptance.ts --draft-text-ref text-ref:... --json`；它不接受 raw draft，真实诊断时草稿正文只能通过私有 resolver，例如 `SCIFORGE_CURRENT_VSCODE_COWORK_DRAFT_TEXT`，在 Host 私有侧解析，不进入 stdout、manifest 或 public events。该 acceptance harness 不给 Computer Use core 增加 planning、窗口选择、文件选择或 final-answer 权限；默认 blocked cleanup / readiness 已可验收，显式 live env 但缺私有 resolver 会在触桌面前 blocked。当前真实 read-only 观察能绑定当前 VSCode 窗口与 file refs，默认 Host focused-editor provider 也已证明 focus 前置链路；P9c 真实当前 VSCode 写入 live-diagnostic 仍未完成。
-
-补充：P9 live manifest 的 Host decision evidence 还必须绑定 action evidence 中的同一个 `action:` / `window-action:` ref；只有 `decision:` ref 或绑定到另一条合法 action ref 不足以证明实际执行的 act 就是 Host 基于 before observe refs 选择的下一步原子能力。该补充仍属于 acceptance harness / manifest validator，不进入 Computer Use primitive core，也不改变 P9 的 `unit-proven` / `live-diagnostic` 状态。
-
-补充：P9 live manifest 的 act evidence 还必须直接绑定同一个 target `window:` ref。active session 和 editor element ref 仍会保留，但 manifest 不能只靠间接关系证明实际 act 没有漂移到其它 VSCode 窗口；该检查继续属于 refs-first acceptance evidence，不给 Computer Use core 增加窗口选择或 task planning 权限。
-
-补充：P9 file-target live manifest 的 act evidence 还必须直接绑定同一个 selected `file-ref:`。Host decision 绑定文件目标仍然保留，但 actual act evidence 不能只靠 decision 间接证明目标文件；该检查属于 refs-first acceptance evidence，不让 Computer Use core 选择文件或做 task planning。
-
-补充：P9 file-target live manifest 的 before observe evidence 还必须直接绑定同一个 selected `file-ref:`。Host 仍负责从 observe refs 选择目标文件；manifest 只是要求本次 before observe evidence 能证明该 file ref 来自当前观察，而不是只靠 target 字段或 decision 字段声明。
-
-补充：P9 file-target live manifest 的 after observe evidence 还必须直接绑定同一个 selected `file-ref:`。该检查只证明动作后观察仍对应 Host 选择的文件目标，不把“文件修改完成”的语义判断交给 Computer Use core。
-
-补充：最新 P9 full-access 决策下，real-file live manifest 不再要求 approval evidence；manifest validator 已要求 full-access permission envelope、Host decision evidence 和 action evidence 直接绑定同一个 selected `file-ref:` 与 bind active session ref。旧 approval evidence 检查只作为 legacy 兼容输入存在，不再作为 P9 real-file gate。
-
-补充：最新 P9 full-access 决策下，Host-side controller / native route 的真实文件 `confirmationRef` gate 已替换为 full-access permission envelope gate。保存、撤销、替换选区、批量替换或跨文件修改不再因为缺少 approval token 而 `needs-confirmation`；它们必须绑定当前 observe session、当前 selected/唯一 visible `file-ref:`、Host decision/action evidence 和 `permission:current-vscode-cowork:full-access:...` refs。Computer Use core 仍不收集确认、不选择文件、不做 task planning。
-
-补充：最新 P9 full-access 决策下，`riskActionHash` 不再作为真实文件保存 / 批量 / 跨文件的 confirmation key。Host 仍可记录 tokenized `risk:` / scope refs 作为审计 evidence，但执行 gate 应以 selected `file-ref:`、active session、permission envelope、Host decision/action refs 为准；泛泛 risk 文本、raw path 或裸文件名仍不能进入 public events。
-
-补充：最新 P9 full-access 决策下，`non-user-file-scope:` 不再是绕过真实文件 confirmation 的必要豁免 evidence。Host 可以继续提供该 ref 说明目标是临时草稿或非用户文件，但它不能替代 selected `file-ref:`、active session、permission envelope 或 action evidence。
-
-## 职责边界
+每个软件的专门优化不进入 Computer Use core。长期采用 Host-side App Capability Module Registry：Agent Host 根据 app / window / observation refs 选择合适的 app module，再由该 module 把软件专门知识压成 refs-first 的状态模型、能力目录和单步 readiness 结果。
 
 ```text
-Caller owns:
-  task understanding
-  target selection
-  semantic locate
-  next-action reasoning
-  cross-module repair
-  approval decision
-  artifact validation request
-  completion truth
-  final answer
-
-Computer Use owns:
-  target-bound session refs
-  current observation refs
-  scoped executor event refs
-  host-specified local procedure execution refs
-  stale invalidation
-  fail-closed diagnostics
-  stop / cancel / release controls
+Agent Host
+  -> App Capability Registry
+      -> VSCode App Module
+          -> stable concept model
+          -> evidence providers / verifiers
+          -> atomic capability catalog
+          -> primitive readiness
+  -> Computer Use Core
+      -> bind / observe / act / run_procedure / control
 ```
 
-判断原则：
+App module 可以提供：
 
-- 如果某段逻辑需要理解“用户到底想完成什么”，它不属于 Computer Use。
-- 如果某段逻辑只需要回答“这个 session 现在看到什么 / 这一个动作或 Host 指定局部 procedure 是否被安全执行并记录”，它属于 Computer Use。
+- app / window / process / bundle identity refs 的识别规则。
+- 软件稳定概念模型，例如 window、editor、file、selection、terminal、panel、command palette、diagnostics。
+- observation refs 归一化，把通用 screenshot / AX / text / image / title refs 映射成 app-specific tokenized refs。
+- target uniqueness 和 ambiguity 检查，例如多窗口、多 editor group、多 terminal、未知 webview 或 stale observation。
+- atomic capability catalog，例如 `focus-editor`、`insert-draft`、`save-current-file`、`focus-terminal`、`open-command-palette`。
+- primitive readiness：只回答 Host 已决定的一个 operation 是否能在当前 refs 下转成一个 Computer Use primitive，或应 `blocked` / `needs-confirmation`。
+- Host-owned evidence provider / verifier，例如 focused-editor、same-file、mutation、save、diagnostics、terminal output 或 command palette item verifier。
+- public evidence sanitizer 规则，确保 raw screenshot、raw AX、raw visible text、raw command、raw path、provider payload、URL、base64 或 secret 不进入 public result。
+
+App module 不可以：
+
+- 接受自然语言 task / goal / instruction。
+- 自己选择多步计划、自动 repair、循环 retry 或跨模块下一步。
+- 直接调用模型并把模型输出作为执行决策。
+- 直接操作桌面绕过 `bind -> observe -> act -> control` primitive。
+- 改变 risk / confirmation policy。
+- 判断用户级 completion truth。
+- 生成 final answer。
+
+App module 是懂某个软件的“状态模型、能力目录和证据门”，不是第二个 agent。智能载体仍然是 Agent Host；需要模型能力时由 Host 调 Model Router 或 Host-owned verifier/provider，并把结果压成安全 refs 后再进入下一步。
+
+## VSCode App Module v1
+
+VSCode 是第一个 app module 目标。v1 聚焦用户已打开 VSCode 的 co-work，不要求固定布局或固定插件集合。泛化策略是稳定概念、能力探测和多证据确认，而不是坐标脚本。
+
+### 设计口径
+
+- 不假设 editor、terminal、explorer、problems panel 或插件 webview 的固定位置。
+- 用 app/process/window/title/frontmost refs、AX refs、visible text refs、image refs、file refs、editor/terminal/palette element refs、action refs 和 freshness refs 组合证明目标。
+- 只要证据足够即可；不要求每一步都视觉验证。
+- 证据冲突或不足时返回 `needs-confirmation` / `blocked`，不能猜测。
+- 未知插件 webview 默认是未知区域，除非 refs 足以证明它就是 Host 选择的目标。
+- 当前 co-work session 采用 Agent full-access 口径。
+- VSCode App Module v1 自身不做 permission / confirmation gate；它只做 refs-first、目标唯一性、原子性、evidence 和 cleanup gate。
+- 若未来存在全局 Host hard-confirm policy，它仍属于 Agent Host 风险层，不属于 VSCode module。
+
+### v1 能力目录
+
+```text
+Editor:
+  read-visible-text
+  focus-editor
+  move-cursor
+  insert-draft
+  replace-selection
+  save-current-file
+  undo-last-action
+  redo-last-action
+
+Diagnostics:
+  show-problems
+  read-diagnostics
+
+Terminal:
+  focus-terminal
+  send-terminal-text
+  observe-terminal
+  submit-terminal-command
+  interrupt-terminal-command
+  clear-terminal
+  focus-editor-from-terminal
+
+Command Palette:
+  open-command-palette
+  send-command-palette-query
+  observe-command-palette-items
+  select-command-palette-item
+  close-command-palette
+```
+
+Terminal 必须按 refs-first 分步优先：
+
+```text
+focus-terminal
+  -> send-terminal-text
+  -> observe-terminal
+  -> submit-terminal-command
+  -> observe-terminal
+```
+
+`send-terminal-text` 只把 `text-ref:` 输入到唯一 terminal，不按 Enter；`submit-terminal-command` 只提交当前 terminal 输入，不携带 raw command。命令语义、运行结果和下一步修复由 Agent Host 基于后续 observe refs 判断。
+
+Command Palette 也必须分步：
+
+```text
+open-command-palette
+  -> send-command-palette-query
+  -> observe-command-palette-items
+  -> select-command-palette-item
+  -> observe
+```
+
+Command Catalog 是稳定性目录，不是权限系统。VSCode module 不接受模型随意传入的 raw command id；Host 必须基于 allowlisted capability 或当前 observe 产生的 command palette item refs 选择下一步。VSCode module 只验证 item ref 来自 current observe，并把选择映射为一个原子 primitive。
+
+### v1 Readiness Gate
+
+每个 VSCode operation 至少要检查：
+
+- active session ref。
+- selected window ref。
+- app/process/window/title/frontmost identity refs。
+- current observe ref 与 freshness ref。
+- 目标区域 refs，例如 editor element、terminal element、command palette item。
+- 需要文件目标时，selected `file-ref:` 必须来自 current observe。
+- 需要输入内容时，只接受 `text-ref:`，不接受 raw text / raw command。
+- Host decision/action evidence 必须绑定同一个 session、window 和目标 refs。
+- before/after evidence 必须能证明动作没有漂移到其它窗口、文件、terminal 或 palette。
+- release evidence 必须包含 input lease、adapter、cursor、front app 和 mouse restoration refs。
+
+缺少关键 refs、refs 混用 raw payload、目标不唯一或 evidence 冲突时，返回 `blocked` / `needs-confirmation`，不能 silent-drop 后继续执行。
 
 ## 风险与确认
 
-Computer Use 可以识别动作风险并返回 `needs-confirmation`，但不能自己决定高风险动作是否应该执行。
+Computer Use 可以识别动作风险并返回 `needs-confirmation`，但不能自己决定高风险动作是否应该执行。确认由调用方收集；Computer Use 只在策略要求 confirmation 时验证 approval ref 是否匹配当前 action risk envelope。
 
-P9 full-access co-work profile 下，本地文件系统、用户 VSCode profile 和用户已打开工作区属于 Agent/SciForge 的正常协作权限范围。保存用户真实文件、撤销用户编辑、批量替换或跨文件修改不再因为真实文件 / 保存 / 批量 / 跨文件本身要求 confirmation；它们必须绑定当前 session、目标 refs、Host decision/action evidence 和 full-access permission envelope。批量 / 跨文件仍不能作为 Computer Use core batch plan 执行，必须由 Host 拆成多次单步 primitive。
+当前 VSCode co-work 采用 Agent full-access 口径：本地文件系统、用户 VSCode profile 和用户已打开工作区属于正常协作范围。保存用户真实文件、撤销用户编辑、批量替换或跨文件修改不再因为真实文件 / 保存 / 批量 / 跨文件本身要求 confirmation。
 
-必须返回 `needs-confirmation` 的典型情况：
+full-access 不改变 refs-first：
 
-- submit / send / publish / upload / delete / pay / authorize。
-- 改变外部账号、安全、法律、财务或不可逆状态。
-- 跨 app / 跨窗口副作用超出当前 session scope。
-- 策略要求 approval 时，Host 没有提供有效 approval ref。
-
-确认由调用方收集。Computer Use 只在策略要求 confirmation 时验证 approval ref 是否匹配当前 action risk envelope。
+- Host 仍必须绑定 current session、target window、editor / terminal / palette target、selected file 或 item refs、Host decision/action evidence。
+- 批量 / 跨文件不能作为 Computer Use core batch plan 执行，必须由 Host 基于每次 observe refs 拆成多次单步 primitive。
+- VSCode App Module v1 不做 permission / confirmation gate；若有全局 hard-confirm policy，仍由 Agent Host 风险层拥有。
 
 ## Evidence 原则
 
@@ -267,7 +259,7 @@ P9 full-access co-work profile 下，本地文件系统、用户 VSCode profile 
 
 保存、导出和用户级产物必须额外由 artifact refs / validator refs 支撑。Computer Use 不拥有这些 validator；它只能产出 GUI action evidence。
 
-raw screenshot、raw AX tree、raw provider payload、data URL、base64、API key 和 secret 不得进入 primitive body 或 public diagnostics。
+raw screenshot、raw AX tree、raw visible text、raw command、raw path、raw provider payload、data URL、base64、API key 和 secret 不得进入 primitive body 或 public diagnostics。
 
 ## 局部感知原则
 
@@ -284,11 +276,32 @@ Computer Use primitive 默认不调用模型。
 - 产出 completion truth。
 - 生成 final answer。
 
-调用方可以读取 Computer Use refs 后自行调用模型或 verifier；这不属于 Computer Use primitive 内部职责。P9 focused-editor 证明遵守同一原则：视觉、AX、文本、图像或其它观察能力都只能在 Host / verifier 边界消费 refs 并输出新的安全 evidence refs，不能让 Computer Use core 自己判断用户级完成。
+调用方可以读取 Computer Use refs 后自行调用模型或 verifier；这不属于 Computer Use primitive 内部职责。VSCode focused-editor、terminal、command palette 或 mutation 证明遵守同一原则：视觉、AX、文本、图像或其它观察能力都只能在 Host / verifier 边界消费 refs 并输出新的安全 evidence refs。
+
+## 能力成熟度
+
+每项能力都要标清成熟度，避免把 contract、fixture 或 diagnostic path 误认为产品能力。
+
+- `contracted`：primitive schema、validator、result envelope 和风险边界已经定义。
+- `unit-proven`：contract test 证明 validator、状态机、风险门和 evidence refs 正常。
+- `live-diagnostic`：能在真实桌面上跑通，但仍可能依赖共享系统输入、测试专用窗口或诊断适配器。
+- `product-ready`：走 session-local input adapter，真实桌面验收通过，执行后无窗口、进程、临时文稿或 artifact 残留。
+- `blocked`：平台或 adapter 暂时不能满足隔离、证据或清理要求，必须说明缺口和恢复条件。
+
+只有 `product-ready` 能作为 Computer Use 产品路径能力对外声明。其它状态只能用于开发、调试或风险说明。
+
+当前状态摘要：
+
+- P0/P1/P3/P8 真实桌面路径均仍是 `live-diagnostic`，因为依赖共享系统输入或用户 profile。
+- P4/P5/P7 主要是 `unit-proven`，证明 Host 能调用 primitive 并基于 evidence 生成答复。
+- P9 已完成 current VSCode read-only ordinary/native route、HTTP/SSE route 和 focus-editor 默认 provider 的真实 `live-diagnostic`。
+- P9c insert-draft、focused context handoff、private draft resolver 和 mutation verifier gate 仍是 `unit-proven`。
+- P9 不能声明 `product-ready`。
+- P10 论文修改 / 润色 GUI 协作尚未实现。
 
 ## 迁移口径
 
-当前旧路径包括 `executeBoundedOperation`、`computer_use.perform_local_action`、`computer_use.fill_fields`、`computer_use.runTask(request, hostPorts)`、`plan`、`locate`、`verify` 等。
+旧路径包括 `executeBoundedOperation`、`computer_use.perform_local_action`、`computer_use.fill_fields`、`computer_use.runTask(request, hostPorts)`、`plan`、`locate`、`verify` 等。
 
 迁移目标：
 
@@ -299,6 +312,7 @@ Computer Use primitive 默认不调用模型。
 - `plan` 移到调用方。
 - `locate` 变成调用方对 observation refs 的选择；Computer Use 只接受 element ref / point。
 - `verify` 移到调用方 / verifier / artifact validator。
+- 每个软件的专门优化迁移到 Host-side App Capability Module，不进入 Computer Use core。
 
 历史或诊断引用只能用于拒绝、迁移审计或 evidence invalidation，不能作为执行路径、自动转译路径或 completion truth。
 
@@ -339,7 +353,7 @@ Computer Use 只能提供局部执行证据，不能单独提供用户级验收�
 - `packages/actions/computer-use/action-provider.manifest.json`
 - `packages/actions/computer-use/*.test.ts`
 
-本文件只保留设计原则和迁移口径。
+Host-side App Capability Module 的 contract / registry 落地后，应拥有独立的 Host-side contract 和 tests；Computer Use core contract 不因 VSCode module 扩大。
 
 ## 相关文档
 
