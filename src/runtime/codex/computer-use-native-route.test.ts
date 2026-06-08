@@ -1038,7 +1038,7 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
         latestObservation: vscodeNativeRouteObservation(),
         selectionRef: 'currently highlighted paragraph',
         replacementTextRef: 'text-ref:vscode:replacement',
-        riskActionHash: 'risk:replace-selection:paper',
+        riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1071,7 +1071,7 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
         latestObservation: vscodeNativeRouteObservation(),
         selectionRef: 'selection-ref:vscode:current',
         replacementTextRef: 'text-ref:vscode:replacement',
-        riskActionHash: 'risk:replace-selection:paper',
+        riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1088,7 +1088,7 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
   assert.equal(unconfirmedUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('selection-ref:vscode:current'));
   assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('text-ref:vscode:replacement'));
-  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:replace-selection:paper'));
+  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:replace-selection:file-ref:vscode:paper'));
 
   const confirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -1106,8 +1106,8 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
         latestObservation: vscodeNativeRouteObservation(),
         selectionRef: 'selection-ref:vscode:current',
         replacementTextRef: 'text-ref:vscode:replacement',
-        riskActionHash: 'risk:replace-selection:paper',
-        confirmationRef: 'approval:risk:replace-selection:paper:file-ref:vscode:paper:confirmed',
+        riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
+        confirmationRef: 'approval:risk:replace-selection:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1127,7 +1127,7 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
   });
   assert.ok((confirmedDone?.evidenceRefs as string[]).includes('selection-ref:vscode:current'));
   assert.ok((confirmedDone?.evidenceRefs as string[]).includes('text-ref:vscode:replacement'));
-  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('approval:risk:replace-selection:paper:file-ref:vscode:paper:confirmed'));
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('approval:risk:replace-selection:file-ref:vscode:paper:file-ref:vscode:paper:confirmed'));
   assert.doesNotMatch(JSON.stringify(confirmedEvents), /currently highlighted paragraph|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
@@ -1146,7 +1146,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
         ],
         latestObservation: vscodeNativeRouteObservation(),
-        riskActionHash: 'risk:save-current-file:paper',
+        riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1161,7 +1161,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(unconfirmedUnit?.primitive, undefined);
   assert.equal(unconfirmedUnit?.action, undefined);
   assert.equal(unconfirmedUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:file-ref:vscode:paper'));
 
   const bareNonUserFileEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -1287,7 +1287,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
         ],
         latestObservation: vscodeNativeRouteObservation(),
-        riskActionHash: 'risk:undo-last-action:paper',
+        riskActionHash: 'risk:undo-last-action:file-ref:vscode:paper',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1302,7 +1302,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(unconfirmedUndoUnit?.primitive, undefined);
   assert.equal(unconfirmedUndoUnit?.action, undefined);
   assert.equal(unconfirmedUndoUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.ok((unconfirmedUndoDone?.evidenceRefs as string[]).includes('risk:undo-last-action:paper'));
+  assert.ok((unconfirmedUndoDone?.evidenceRefs as string[]).includes('risk:undo-last-action:file-ref:vscode:paper'));
 
   const approvalWithoutRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -1397,6 +1397,41 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(prefixedRawRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
   assert.doesNotMatch(JSON.stringify(prefixedRawRiskEvents), /\/Users\/example\/paper\.md|paper\.md|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 
+  const unboundTargetRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-unbound-target-risk',
+      attemptId: 'native-route-vscode-cowork-save-unbound-target-risk-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-unbound-target-risk',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:save-current-file:paper',
+        confirmationRef: 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const unboundTargetRiskDone = unboundTargetRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unboundTargetRiskUnit = (unboundTargetRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(unboundTargetRiskDone?.status, 'blocked');
+  assert.equal(unboundTargetRiskUnit?.primitive, undefined);
+  assert.equal(unboundTargetRiskUnit?.action, undefined);
+  assert.equal(unboundTargetRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_risk_hash_target_ref_required');
+  assert.ok((unboundTargetRiskDone?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.ok((unboundTargetRiskDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+  assert.ok((unboundTargetRiskDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed'));
+  assert.doesNotMatch(JSON.stringify(unboundTargetRiskEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
   const embeddedRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '保存我当前打开的 VSCode 文件。',
@@ -1411,8 +1446,8 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
         ],
         latestObservation: vscodeNativeRouteObservation(),
-        riskActionHash: 'risk:save-current-file:paper',
-        confirmationRef: 'approval:risk:save-current-file:paper-old:confirmed',
+        riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+        confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper-old:file-ref:vscode:paper:confirmed',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1427,8 +1462,8 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(embeddedRiskUnit?.primitive, undefined);
   assert.equal(embeddedRiskUnit?.action, undefined);
   assert.equal(embeddedRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.ok((embeddedRiskDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
-  assert.ok((embeddedRiskDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper-old:confirmed'));
+  assert.ok((embeddedRiskDone?.evidenceRefs as string[]).includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok((embeddedRiskDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:file-ref:vscode:paper-old:file-ref:vscode:paper:confirmed'));
 
   const unsuffixedApprovalEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -1444,8 +1479,8 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
         ],
         latestObservation: vscodeNativeRouteObservation(),
-        riskActionHash: 'risk:save-current-file:paper',
-        confirmationRef: 'approval:risk:save-current-file:paper',
+        riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+        confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1460,8 +1495,8 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(unsuffixedApprovalUnit?.primitive, undefined);
   assert.equal(unsuffixedApprovalUnit?.action, undefined);
   assert.equal(unsuffixedApprovalUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
-  assert.ok((unsuffixedApprovalDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
-  assert.ok((unsuffixedApprovalDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper'));
+  assert.ok((unsuffixedApprovalDone?.evidenceRefs as string[]).includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok((unsuffixedApprovalDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:file-ref:vscode:paper'));
 
   const riskOnlyApprovalEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
@@ -1477,8 +1512,8 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
         ],
         latestObservation: vscodeNativeRouteObservation(),
-        riskActionHash: 'risk:save-current-file:paper',
-        confirmationRef: 'approval:risk:save-current-file:paper:confirmed',
+        riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+        confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:confirmed',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1494,7 +1529,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(riskOnlyApprovalUnit?.action, undefined);
   assert.equal(riskOnlyApprovalUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.ok((riskOnlyApprovalDone?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
-  assert.ok((riskOnlyApprovalDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper:confirmed'));
+  assert.ok((riskOnlyApprovalDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:file-ref:vscode:paper:confirmed'));
   assert.doesNotMatch(JSON.stringify(riskOnlyApprovalEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 
   const confirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
@@ -1511,8 +1546,8 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
         ],
         latestObservation: vscodeNativeRouteObservation(),
-        riskActionHash: 'risk:save-current-file:paper',
-        confirmationRef: 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+        riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+        confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
       },
     }),
     workspace: '/tmp/workspace',
@@ -1533,11 +1568,11 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.deepEqual(confirmedUnit?.risk, {
     level: 'high',
     categories: ['user-real-file-change'],
-    actionHash: 'risk:save-current-file:paper',
+    actionHash: 'risk:save-current-file:file-ref:vscode:paper',
   });
-  assert.equal(confirmedUnit?.approvalRef, 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed');
-  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
-  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed'));
+  assert.equal(confirmedUnit?.approvalRef, 'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed');
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed'));
   assert.doesNotMatch(JSON.stringify(confirmedEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
@@ -1557,8 +1592,8 @@ test('Computer Use native route blocks confirmed VSCode bulk and cross-file requ
             vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
           ],
           latestObservation: vscodeNativeRouteObservation(),
-          riskActionHash: `risk:${operation}:paper`,
-          confirmationRef: `approval:risk:${operation}:paper:file-ref:vscode:paper:confirmed`,
+          riskActionHash: `risk:${operation}:file-ref:vscode:paper`,
+          confirmationRef: `approval:risk:${operation}:file-ref:vscode:paper:file-ref:vscode:paper:confirmed`,
         },
       }),
       workspace: '/tmp/workspace',
@@ -1574,8 +1609,8 @@ test('Computer Use native route blocks confirmed VSCode bulk and cross-file requ
     assert.equal(unit?.blockedReason, 'vscode_cowork_non_atomic_operation_requires_host_decomposition', operation);
     assert.equal(unit?.primitive, undefined, operation);
     assert.equal(unit?.action, undefined, operation);
-    assert.ok((done?.evidenceRefs as string[]).includes(`risk:${operation}:paper`), operation);
-    assert.ok((done?.evidenceRefs as string[]).includes(`approval:risk:${operation}:paper:file-ref:vscode:paper:confirmed`), operation);
+    assert.ok((done?.evidenceRefs as string[]).includes(`risk:${operation}:file-ref:vscode:paper`), operation);
+    assert.ok((done?.evidenceRefs as string[]).includes(`approval:risk:${operation}:file-ref:vscode:paper:file-ref:vscode:paper:confirmed`), operation);
     assert.doesNotMatch(JSON.stringify(events), /replacement plan|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
   }
 });

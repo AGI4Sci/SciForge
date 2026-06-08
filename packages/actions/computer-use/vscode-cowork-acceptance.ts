@@ -479,7 +479,15 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (fileTargetOperation(manifest.operation) && !hostDecisionRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
     issues.push('missing-host-decision-ref:target-file');
   }
-  if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(riskActionHashRef)) issues.push('missing-host-decision-ref:risk-action-hash');
+  const hostDecisionRiskRefs = hostDecisionRefs.filter(riskActionHashRef);
+  if (realFileChangeOperation(manifest.operation) && hostDecisionRiskRefs.length === 0) {
+    issues.push('missing-host-decision-ref:risk-action-hash');
+  } else if (
+    realFileChangeOperation(manifest.operation)
+    && !hostDecisionRiskRefs.some((ref) => riskActionHashRefMatchesTargetFile(ref, manifest.target.selectedFileRef))
+  ) {
+    issues.push('missing-host-decision-ref:risk-action-hash-target-file');
+  }
   if (realFileChangeOperation(manifest.operation) && !hostDecisionRefs.some(approvalRef)) issues.push('missing-host-decision-ref:approval');
   if (!manifest.evidence.actionRefs.some(actionRef)) issues.push('invalid-evidence-ref:act');
   if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(actionRefs, manifest.evidence.bindRefs, sessionRef)) {
@@ -558,7 +566,15 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.cleanup.mousePositionRestored) issues.push('cleanup-mouse-position-not-restored');
   if (manifest.cleanup.userVSCodeProcessKilled) issues.push('cleanup-must-not-kill-user-vscode');
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
-  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(riskActionHashRef)) issues.push('missing-approval-ref:risk-action-hash');
+  const approvalRiskRefs = manifest.evidence.approvalRefs.filter(riskActionHashRef);
+  if (realFileChangeOperation(manifest.operation) && approvalRiskRefs.length === 0) {
+    issues.push('missing-approval-ref:risk-action-hash');
+  } else if (
+    realFileChangeOperation(manifest.operation)
+    && !approvalRiskRefs.some((ref) => riskActionHashRefMatchesTargetFile(ref, manifest.target.selectedFileRef))
+  ) {
+    issues.push('missing-approval-ref:risk-action-hash-target-file');
+  }
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(approvalRef)) issues.push('missing-approval-ref:approval');
   if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => nonEmptyString(manifest.target.selectedFileRef) && sameRef(ref, manifest.target.selectedFileRef))) {
     issues.push('missing-approval-ref:target-file');
@@ -766,7 +782,24 @@ function realFileChangeRiskEnvelopeBlock(
 ): VSCodeCoWorkDecision | undefined {
   if (!realFileChangeOperation(input.operation)) return undefined;
   if (observation.userFile === false) return undefined;
-  if (riskActionHashRef(input.riskActionHash)) return undefined;
+  if (riskActionHashRef(input.riskActionHash)) {
+    const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
+    if (riskActionHashRefMatchesTargetFile(input.riskActionHash, targetFileRef)) return undefined;
+    return {
+      ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+      targetWindowRef: targetWindow.windowRef,
+      blockedReason: 'vscode_cowork_real_file_change_risk_hash_target_ref_required',
+      confirmation: {
+        reason: 'Replacing selected text, saving, undoing, bulk replacement, or cross-file modification against a user file requires a riskActionHash bound to the selected file ref before confirmation can authorize the action.',
+        approvalScope: input.operation,
+      },
+      repairHints: [{
+        code: 'bind-real-file-risk-action-hash-to-target-file',
+        message: 'Host must bind the riskActionHash to the same selected fileRef before collecting confirmation for the user-file mutation.',
+        suggestedPrimitive: 'act',
+      }],
+    };
+  }
   return {
     ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
     targetWindowRef: targetWindow.windowRef,
@@ -1100,6 +1133,13 @@ function resolvedTargetFileRef(
 function approvalRefMatchesRiskActionHashAndTargetFile(approvalRef: string, riskActionHash: string, targetFileRef: string | undefined): boolean {
   if (!fileRef(targetFileRef)) return false;
   return approvalRef.startsWith(`approval:${riskActionHash}:${targetFileRef}:`);
+}
+
+function riskActionHashRefMatchesTargetFile(riskActionHash: string, targetFileRef: string | undefined): boolean {
+  if (!fileRef(targetFileRef)) return false;
+  const text = riskActionHash.trim();
+  const targetToken = `:${targetFileRef}`;
+  return text.endsWith(targetToken) || text.includes(`${targetToken}:`);
 }
 
 function nonUserFileScopeRefMatchesTargetFile(scopeRef: string, targetFileRef: string | undefined): boolean {

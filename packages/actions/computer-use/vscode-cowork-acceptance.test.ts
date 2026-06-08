@@ -632,17 +632,17 @@ test('Host-side VSCode co-work requires confirmation before replacing selected u
     latestObservation: freshObservation(),
     selectionRef: 'selection-ref:vscode:current',
     replacementTextRef: 'text-ref:vscode:replacement',
-    riskActionHash: 'risk:replace-selection:paper',
+    riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
   });
 
   assert.equal(unconfirmed.status, 'needs-confirmation');
   assert.equal(unconfirmed.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.equal(unconfirmed.primitive, undefined);
   assert.equal(unconfirmed.action, undefined);
-  assert.equal(unconfirmed.confirmation?.riskActionHash, 'risk:replace-selection:paper');
+  assert.equal(unconfirmed.confirmation?.riskActionHash, 'risk:replace-selection:file-ref:vscode:paper');
   assert.ok(unconfirmed.refs.includes('selection-ref:vscode:current'));
   assert.ok(unconfirmed.refs.includes('text-ref:vscode:replacement'));
-  assert.ok(unconfirmed.refs.includes('risk:replace-selection:paper'));
+  assert.ok(unconfirmed.refs.includes('risk:replace-selection:file-ref:vscode:paper'));
 });
 
 test('Host-side VSCode co-work replaces selected user-file text only after matching confirmation', () => {
@@ -655,8 +655,8 @@ test('Host-side VSCode co-work replaces selected user-file text only after match
     latestObservation: freshObservation(),
     selectionRef: 'selection-ref:vscode:current',
     replacementTextRef: 'text-ref:vscode:replacement',
-    riskActionHash: 'risk:replace-selection:paper',
-    confirmationRef: 'approval:risk:replace-selection:paper:file-ref:vscode:paper:confirmed',
+    riskActionHash: 'risk:replace-selection:file-ref:vscode:paper',
+    confirmationRef: 'approval:risk:replace-selection:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
   });
 
   assert.equal(decision.status, 'ready');
@@ -666,8 +666,8 @@ test('Host-side VSCode co-work replaces selected user-file text only after match
     textRef: 'text-ref:vscode:replacement',
     elementRef: 'element:vscode:editor',
   });
-  assert.equal(decision.risk?.actionHash, 'risk:replace-selection:paper');
-  assert.equal(decision.approvalRef, 'approval:risk:replace-selection:paper:file-ref:vscode:paper:confirmed');
+  assert.equal(decision.risk?.actionHash, 'risk:replace-selection:file-ref:vscode:paper');
+  assert.equal(decision.approvalRef, 'approval:risk:replace-selection:file-ref:vscode:paper:file-ref:vscode:paper:confirmed');
   assert.ok(decision.refs.includes('selection-ref:vscode:current'));
   assert.ok(decision.refs.includes('text-ref:vscode:replacement'));
   assert.doesNotMatch(JSON.stringify(decision), /raw body|planner|task|goal/);
@@ -681,15 +681,15 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
       selectedWindowRef: 'window:vscode:paper',
       windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
       latestObservation: freshObservation(),
-      riskActionHash: `risk:${operation}:paper`,
+      riskActionHash: `risk:${operation}:file-ref:vscode:paper`,
     });
 
     assert.equal(decision.status, 'needs-confirmation', operation);
     assert.equal(decision.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation', operation);
     assert.equal(decision.primitive, undefined, operation);
     assert.equal(decision.action, undefined, operation);
-    assert.equal(decision.confirmation?.riskActionHash, `risk:${operation}:paper`, operation);
-    assert.ok(decision.refs.includes(`risk:${operation}:paper`), operation);
+    assert.equal(decision.confirmation?.riskActionHash, `risk:${operation}:file-ref:vscode:paper`, operation);
+    assert.ok(decision.refs.includes(`risk:${operation}:file-ref:vscode:paper`), operation);
   }
 
   const bareNonUserFileFlag = decideVSCodeCoWorkNextPrimitive({
@@ -812,22 +812,41 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.equal(prefixedRawPathRiskHash.action, undefined);
   assert.doesNotMatch(JSON.stringify(prefixedRawPathRiskHash), /\/Users\/example\/paper\.md|paper\.md/);
 
+  const unboundTargetRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-unbound-target-risk',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'risk:save-current-file:paper',
+    confirmationRef: 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+  });
+
+  assert.equal(unboundTargetRiskHash.status, 'blocked');
+  assert.equal(unboundTargetRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_target_ref_required');
+  assert.equal(unboundTargetRiskHash.primitive, undefined);
+  assert.equal(unboundTargetRiskHash.action, undefined);
+  assert.ok(unboundTargetRiskHash.refs.includes('file-ref:vscode:paper'));
+  assert.ok(unboundTargetRiskHash.refs.includes('risk:save-current-file:paper'));
+  assert.ok(unboundTargetRiskHash.refs.includes('approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed'));
+
   const approvalWithEmbeddedRiskHash = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-approval-embedded-risk',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:paper',
-    confirmationRef: 'approval:risk:save-current-file:paper-old:confirmed',
+    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper-old:file-ref:vscode:paper:confirmed',
   });
 
   assert.equal(approvalWithEmbeddedRiskHash.status, 'needs-confirmation');
   assert.equal(approvalWithEmbeddedRiskHash.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.equal(approvalWithEmbeddedRiskHash.primitive, undefined);
   assert.equal(approvalWithEmbeddedRiskHash.action, undefined);
-  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('risk:save-current-file:paper'));
-  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('approval:risk:save-current-file:paper-old:confirmed'));
+  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper-old:file-ref:vscode:paper:confirmed'));
 
   const approvalWithoutConfirmationSuffix = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-approval-without-confirmation-suffix',
@@ -835,16 +854,16 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
     selectedWindowRef: 'window:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:paper',
-    confirmationRef: 'approval:risk:save-current-file:paper',
+    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper',
   });
 
   assert.equal(approvalWithoutConfirmationSuffix.status, 'needs-confirmation');
   assert.equal(approvalWithoutConfirmationSuffix.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.equal(approvalWithoutConfirmationSuffix.primitive, undefined);
   assert.equal(approvalWithoutConfirmationSuffix.action, undefined);
-  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('risk:save-current-file:paper'));
-  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('approval:risk:save-current-file:paper'));
+  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper'));
 
   const approvalWithoutFileTarget = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-approval-without-file-target',
@@ -853,8 +872,8 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
     selectedFileRef: 'file-ref:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:paper',
-    confirmationRef: 'approval:risk:save-current-file:paper:confirmed',
+    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:confirmed',
   });
 
   assert.equal(approvalWithoutFileTarget.status, 'needs-confirmation');
@@ -862,7 +881,7 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.equal(approvalWithoutFileTarget.primitive, undefined);
   assert.equal(approvalWithoutFileTarget.action, undefined);
   assert.ok(approvalWithoutFileTarget.refs.includes('file-ref:vscode:paper'));
-  assert.ok(approvalWithoutFileTarget.refs.includes('approval:risk:save-current-file:paper:confirmed'));
+  assert.ok(approvalWithoutFileTarget.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper:confirmed'));
 
   const confirmedSave = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-confirmed',
@@ -870,8 +889,8 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
     selectedWindowRef: 'window:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
-    riskActionHash: 'risk:save-current-file:paper',
-    confirmationRef: 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+    riskActionHash: 'risk:save-current-file:file-ref:vscode:paper',
+    confirmationRef: 'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
   });
 
   assert.equal(confirmedSave.status, 'ready');
@@ -884,11 +903,11 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.deepEqual(confirmedSave.risk, {
     level: 'high',
     categories: ['user-real-file-change'],
-    actionHash: 'risk:save-current-file:paper',
+    actionHash: 'risk:save-current-file:file-ref:vscode:paper',
   });
-  assert.equal(confirmedSave.approvalRef, 'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed');
-  assert.ok(confirmedSave.refs.includes('risk:save-current-file:paper'));
-  assert.ok(confirmedSave.refs.includes('approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed'));
+  assert.equal(confirmedSave.approvalRef, 'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed');
+  assert.ok(confirmedSave.refs.includes('risk:save-current-file:file-ref:vscode:paper'));
+  assert.ok(confirmedSave.refs.includes('approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed'));
 
   const confirmedUndo = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:undo-confirmed',
@@ -896,8 +915,8 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
     selectedWindowRef: 'window:vscode:paper',
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: freshObservation(),
-    riskActionHash: 'risk:undo-last-action:paper',
-    confirmationRef: 'approval:risk:undo-last-action:paper:file-ref:vscode:paper:confirmed',
+    riskActionHash: 'risk:undo-last-action:file-ref:vscode:paper',
+    confirmationRef: 'approval:risk:undo-last-action:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
   });
 
   assert.equal(confirmedUndo.status, 'ready');
@@ -910,11 +929,11 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.deepEqual(confirmedUndo.risk, {
     level: 'high',
     categories: ['user-real-file-change'],
-    actionHash: 'risk:undo-last-action:paper',
+    actionHash: 'risk:undo-last-action:file-ref:vscode:paper',
   });
-  assert.equal(confirmedUndo.approvalRef, 'approval:risk:undo-last-action:paper:file-ref:vscode:paper:confirmed');
-  assert.ok(confirmedUndo.refs.includes('risk:undo-last-action:paper'));
-  assert.ok(confirmedUndo.refs.includes('approval:risk:undo-last-action:paper:file-ref:vscode:paper:confirmed'));
+  assert.equal(confirmedUndo.approvalRef, 'approval:risk:undo-last-action:file-ref:vscode:paper:file-ref:vscode:paper:confirmed');
+  assert.ok(confirmedUndo.refs.includes('risk:undo-last-action:file-ref:vscode:paper'));
+  assert.ok(confirmedUndo.refs.includes('approval:risk:undo-last-action:file-ref:vscode:paper:file-ref:vscode:paper:confirmed'));
 });
 
 test('Host-side VSCode co-work blocks confirmed bulk and cross-file requests until Host decomposes them', () => {
@@ -926,16 +945,16 @@ test('Host-side VSCode co-work blocks confirmed bulk and cross-file requests unt
       selectedFileRef: 'file-ref:vscode:paper',
       windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
       latestObservation: freshObservation(),
-      riskActionHash: `risk:${operation}:paper`,
-      confirmationRef: `approval:risk:${operation}:paper:file-ref:vscode:paper:confirmed`,
+      riskActionHash: `risk:${operation}:file-ref:vscode:paper`,
+      confirmationRef: `approval:risk:${operation}:file-ref:vscode:paper:file-ref:vscode:paper:confirmed`,
     });
 
     assert.equal(decision.status, 'blocked', operation);
     assert.equal(decision.blockedReason, 'vscode_cowork_non_atomic_operation_requires_host_decomposition', operation);
     assert.equal(decision.primitive, undefined, operation);
     assert.equal(decision.action, undefined, operation);
-    assert.ok(decision.refs.includes(`risk:${operation}:paper`), operation);
-    assert.ok(decision.refs.includes(`approval:risk:${operation}:paper:file-ref:vscode:paper:confirmed`), operation);
+    assert.ok(decision.refs.includes(`risk:${operation}:file-ref:vscode:paper`), operation);
+    assert.ok(decision.refs.includes(`approval:risk:${operation}:file-ref:vscode:paper:file-ref:vscode:paper:confirmed`), operation);
     assert.deepEqual(decision.repairHints, [{
       code: 'decompose-file-change-into-atomic-primitives',
       message: 'Host must decompose bulk replacement or cross-file modification into explicit refs-first atomic editor primitives; Computer Use core must not plan or execute a batch edit.',
@@ -1209,6 +1228,28 @@ test('VSCode co-work live manifest requires approval refs to bind the selected f
 
   assert.equal(failed.ok, false);
   assert.ok(failed.issues.includes('missing-approval-ref:target-file'));
+});
+
+test('VSCode co-work live manifest requires risk refs to bind the selected file target', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const boundRiskRef = 'risk:save-current-file:file-ref:vscode:paper';
+  const unboundRiskRef = 'risk:save-current-file:paper';
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      hostDecisionRefs: base.evidence.hostDecisionRefs.map((ref) =>
+        ref === boundRiskRef ? unboundRiskRef : ref,
+      ),
+      approvalRefs: base.evidence.approvalRefs.map((ref) =>
+        ref === boundRiskRef ? unboundRiskRef : ref,
+      ),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-host-decision-ref:risk-action-hash-target-file'));
+  assert.ok(failed.issues.includes('missing-approval-ref:risk-action-hash-target-file'));
 });
 
 test('VSCode co-work live manifest requires refs-first target window and file refs for user-file changes', () => {
@@ -1749,8 +1790,8 @@ function vscodeCoWorkLiveManifest() {
         'observation:vscode:before',
         'freshness:vscode:before',
         'element:vscode:editor',
-        'risk:save-current-file:paper',
-        'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+        'risk:save-current-file:file-ref:vscode:paper',
+        'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
       ],
       actionRefs: [
         'action:vscode-cowork:save',
@@ -1789,9 +1830,9 @@ function vscodeCoWorkLiveManifest() {
       accessibilityRefs: ['accessibility:vscode:before', 'accessibility:vscode:after'],
       textRefs: ['text:vscode:visible-before', 'text:vscode:visible-after'],
       approvalRefs: [
-        'risk:save-current-file:paper',
+        'risk:save-current-file:file-ref:vscode:paper',
         'file-ref:vscode:paper',
-        'approval:risk:save-current-file:paper:file-ref:vscode:paper:confirmed',
+        'approval:risk:save-current-file:file-ref:vscode:paper:file-ref:vscode:paper:confirmed',
       ],
       releaseRefs: [
         'scoped-input-lease:vscode-cowork:1',
