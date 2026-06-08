@@ -38,6 +38,7 @@ export interface VSCodeCoWorkLiveDiagnosticInput {
   target: ComputerUseTargetBinding;
   authorizationProfileId?: string;
   focusedEditorEvidenceVerifier?: VSCodeCoWorkFocusedEditorEvidenceVerifier;
+  focusedEditorEvidenceProvider?: VSCodeCoWorkFocusedEditorEvidenceProvider;
 }
 
 export interface VSCodeCoWorkInsertDraftLiveDiagnosticInput extends VSCodeCoWorkLiveDiagnosticInput {
@@ -69,6 +70,18 @@ export interface VSCodeCoWorkFocusedEditorEvidenceVerifierResult {
 export type VSCodeCoWorkFocusedEditorEvidenceVerifier = (
   input: VSCodeCoWorkFocusedEditorEvidenceVerifierInput,
 ) => Promise<VSCodeCoWorkFocusedEditorEvidenceVerifierResult> | VSCodeCoWorkFocusedEditorEvidenceVerifierResult;
+
+export interface VSCodeCoWorkFocusedEditorEvidenceProviderInput
+  extends VSCodeCoWorkFocusedEditorEvidenceVerifierInput {
+  schemaVersion: 'sciforge.vscode-cowork.focused-editor-evidence-provider-input.v1';
+  evidenceRefs: string[];
+}
+
+export type VSCodeCoWorkFocusedEditorEvidenceProviderResult = VSCodeCoWorkFocusedEditorEvidenceVerifierResult;
+
+export type VSCodeCoWorkFocusedEditorEvidenceProvider = (
+  input: VSCodeCoWorkFocusedEditorEvidenceProviderInput,
+) => Promise<VSCodeCoWorkFocusedEditorEvidenceProviderResult> | VSCodeCoWorkFocusedEditorEvidenceProviderResult;
 
 export interface VSCodeCoWorkAgentHostLiveProducerInput
   extends VSCodeCoWorkLiveDiagnosticContext {
@@ -679,7 +692,7 @@ async function insertDraftFocusedEditorContext(
   reason?: string;
 }> {
   const baseRefs = insertDraftActContextRefs(input, beforeObserve, decisionRef);
-  if (!input.focusedEditorEvidenceVerifier) {
+  if (!input.focusedEditorEvidenceVerifier && !input.focusedEditorEvidenceProvider) {
     return {
       status: 'satisfied',
       evidenceRefs: baseRefs,
@@ -1060,9 +1073,43 @@ async function verifyFocusedEditorEvidence(
   },
 ): Promise<VSCodeCoWorkFocusedEditorEvidenceVerifierResult & { evidenceRefs: string[] }> {
   const verifierInput = focusedEditorEvidenceVerifierInput(context, input);
-  const verifier = context.focusedEditorEvidenceVerifier ?? defaultFocusedEditorEvidenceVerifier;
+  const verifier = context.focusedEditorEvidenceVerifier
+    ?? (context.focusedEditorEvidenceProvider
+      ? createVSCodeCoWorkFocusedEditorEvidenceVerifierFromProvider(context.focusedEditorEvidenceProvider)
+      : defaultFocusedEditorEvidenceVerifier);
   const result = await verifier(verifierInput);
   return normalizeFocusedEditorEvidenceVerifierResult(result);
+}
+
+export function createVSCodeCoWorkFocusedEditorEvidenceVerifierFromProvider(
+  provider: VSCodeCoWorkFocusedEditorEvidenceProvider,
+): VSCodeCoWorkFocusedEditorEvidenceVerifier {
+  return async (input) => provider(focusedEditorEvidenceProviderInput(input));
+}
+
+function focusedEditorEvidenceProviderInput(
+  input: VSCodeCoWorkFocusedEditorEvidenceVerifierInput,
+): VSCodeCoWorkFocusedEditorEvidenceProviderInput {
+  return {
+    schemaVersion: 'sciforge.vscode-cowork.focused-editor-evidence-provider-input.v1',
+    ...input,
+    decisionRef: input.decisionRef,
+    beforeObserveRefs: runtimeOwnedLiveRefs(input.beforeObserveRefs),
+    afterObserveRefs: runtimeOwnedLiveRefs(input.afterObserveRefs),
+    actionRefs: runtimeOwnedLiveRefs(input.actionRefs),
+    targetRefs: runtimeOwnedLiveRefs(input.targetRefs),
+    editorElementRefs: runtimeOwnedLiveRefs(input.editorElementRefs),
+    evidenceRefs: runtimeOwnedLiveRefs([
+      input.decisionRef,
+      input.beforeObservationRef,
+      input.afterObservationRef,
+      ...input.beforeObserveRefs,
+      ...input.afterObserveRefs,
+      ...input.actionRefs,
+      ...input.targetRefs,
+      ...input.editorElementRefs,
+    ]),
+  };
 }
 
 function focusedEditorEvidenceVerifierInput(

@@ -10,6 +10,7 @@ import {
   runVSCodeCoWorkInsertDraftLiveDiagnostic,
   runVSCodeCoWorkFocusEditorLiveDiagnostic,
   runVSCodeCoWorkReadVisibleTextLiveDiagnostic,
+  type VSCodeCoWorkFocusedEditorEvidenceProvider,
   type VSCodeCoWorkFocusedEditorEvidenceVerifier,
   type VSCodeCoWorkLiveDiagnosticResult,
 } from './agent-host-vscode-cowork-live-diagnostic.js';
@@ -35,6 +36,7 @@ export interface RunCurrentVSCodeCoWorkInsertDraftLiveDiagnosticInput
   draftTextRef: string;
   focusedEditorContextRefs?: string[];
   focusedEditorEvidenceVerifier?: VSCodeCoWorkFocusedEditorEvidenceVerifier;
+  focusedEditorEvidenceProvider?: VSCodeCoWorkFocusedEditorEvidenceProvider;
 }
 
 export interface RunCurrentVSCodeCoWorkFocusEditorLiveDiagnosticInput
@@ -46,6 +48,7 @@ export interface RunCurrentVSCodeCoWorkFocusEditorLiveDiagnosticInput
   attemptId?: string;
   authorizationProfileId?: string;
   focusedEditorEvidenceVerifier?: VSCodeCoWorkFocusedEditorEvidenceVerifier;
+  focusedEditorEvidenceProvider?: VSCodeCoWorkFocusedEditorEvidenceProvider;
 }
 
 export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
@@ -138,6 +141,7 @@ export async function runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic(
     attemptId: input.attemptId ?? `current-vscode-cowork-${Date.now()}`,
     authorizationProfileId: input.authorizationProfileId,
     focusedEditorEvidenceVerifier: input.focusedEditorEvidenceVerifier,
+    focusedEditorEvidenceProvider: input.focusedEditorEvidenceProvider,
     target: {
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',
@@ -190,6 +194,7 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(
     draftTextRef: input.draftTextRef,
     focusedEditorContextRefs: input.focusedEditorContextRefs,
     focusedEditorEvidenceVerifier: input.focusedEditorEvidenceVerifier,
+    focusedEditorEvidenceProvider: input.focusedEditorEvidenceProvider,
     target: {
       kind: 'app',
       appRef: 'macos-app:com.microsoft.VSCode',

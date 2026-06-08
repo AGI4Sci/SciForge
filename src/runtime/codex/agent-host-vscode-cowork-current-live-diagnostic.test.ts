@@ -756,6 +756,176 @@ test('current VSCode co-work insert-draft diagnostic derives focus context from 
   assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work insert-draft diagnostic adapts SciForge focused-editor evidence provider refs', async () => {
+  const calls: string[] = [];
+  const observation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:insert-sciforge-provider',
+    windowRef: 'window:vscode:insert-sciforge-provider',
+    titleRef: 'text:title:insert-sciforge-provider',
+    frontmostRef: 'frontmost:vscode:insert-sciforge-provider',
+    fileRefs: ['file-ref:vscode:insert-sciforge-provider'],
+    editorElementRef: 'element:vscode:editor',
+    visibleTextRef: `text:vscode:insert-sciforge-provider-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:insert-sciforge-provider-${suffix}-sha256`,
+    screenshotRef: `image:vscode:insert-sciforge-provider-${suffix}`,
+    accessibilityRef: `accessibility:vscode:insert-sciforge-provider-${suffix}`,
+    freshnessRef: `freshness:vscode:insert-sciforge-provider-${suffix}`,
+    observationRef: `observation:vscode:insert-sciforge-provider-${suffix}`,
+  });
+  const observations = [
+    observation('bind'),
+    observation('before'),
+    observation('act-after'),
+    observation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-insert-sciforge-provider',
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'current-vscode-host-insert-sciforge-provider',
+    attemptId: 'current-vscode-host-insert-sciforge-provider-attempt-1',
+    workspacePath: '/tmp/workspace',
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+    focusedEditorEvidenceProvider: (input) => {
+      calls.push(`provider-focus:${input.afterObservationRef}`);
+      assert.equal(input.schemaVersion, 'sciforge.vscode-cowork.focused-editor-evidence-provider-input.v1');
+      assert.ok(input.evidenceRefs.length >= 10);
+      assert.ok(input.afterObserveRefs.includes('image:vscode:insert-sciforge-provider-before'));
+      assert.ok(input.afterObserveRefs.includes('accessibility:vscode:insert-sciforge-provider-before'));
+      assert.ok(input.afterObserveRefs.includes('text:vscode:insert-sciforge-provider-before'));
+      assert.ok(input.targetRefs.includes('window:vscode:insert-sciforge-provider'));
+      assert.ok(input.targetRefs.includes('file-ref:vscode:insert-sciforge-provider'));
+      assert.ok(input.editorElementRefs.includes('element:vscode:editor'));
+      assert.doesNotMatch(JSON.stringify(input), /raw-|providerPayload|data:image|base64|\/tmp\/workspace/i);
+      return {
+        status: 'satisfied',
+        focusedEditorRef: 'focused-editor:vscode:sciforge-provider:insert-draft',
+        verifierRef: 'verifier:vscode-cowork:current-vscode-host-insert-sciforge-provider-attempt-1:focus-editor',
+        evidenceRefs: [
+          input.decisionRef,
+          'image:vscode:insert-sciforge-provider-before',
+          'accessibility:vscode:insert-sciforge-provider-before',
+          'text:vscode:insert-sciforge-provider-before',
+          'element:vscode:editor',
+        ],
+      };
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:draft'
+        ? 'draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.focusedEditorRef}:${input.beforeObservationRef}`);
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'provider-focus:observation:vscode:insert-sciforge-provider-before',
+    'resolve-text:text-ref:current-vscode-cowork:draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:draft:focused-editor:vscode:sciforge-provider:insert-draft:observation:vscode:insert-sciforge-provider-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-insert-sciforge-provider',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-insert-sciforge-provider',
+  ]);
+  assert.ok(result.evidenceRefs.includes('focused-editor:vscode:sciforge-provider:insert-draft'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:current-vscode-host-insert-sciforge-provider-attempt-1:focus-editor'));
+  assert.ok(result.evidenceRefs.includes('image:vscode:insert-sciforge-provider-before'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-insert-sciforge-provider'));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work insert-draft diagnostic blocks unsafe SciForge focused-editor provider refs before typing', async () => {
+  const calls: string[] = [];
+  const observation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:insert-unsafe-provider',
+    windowRef: 'window:vscode:insert-unsafe-provider',
+    titleRef: 'text:title:insert-unsafe-provider',
+    frontmostRef: 'frontmost:vscode:insert-unsafe-provider',
+    fileRefs: ['file-ref:vscode:insert-unsafe-provider'],
+    editorElementRef: 'element:vscode:editor',
+    visibleTextRef: `text:vscode:insert-unsafe-provider-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:insert-unsafe-provider-${suffix}-sha256`,
+    screenshotRef: `image:vscode:insert-unsafe-provider-${suffix}`,
+    accessibilityRef: `accessibility:vscode:insert-unsafe-provider-${suffix}`,
+    freshnessRef: `freshness:vscode:insert-unsafe-provider-${suffix}`,
+    observationRef: `observation:vscode:insert-unsafe-provider-${suffix}`,
+  });
+  const observations = [observation('bind'), observation('before')];
+
+  const result = await runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-insert-unsafe-provider',
+    commandText: '在我当前打开的 VSCode 文件里插入这段草稿。',
+    commandId: 'current-vscode-host-insert-unsafe-provider',
+    attemptId: 'current-vscode-host-insert-unsafe-provider-attempt-1',
+    workspacePath: '/tmp/workspace',
+    draftTextRef: 'text-ref:current-vscode-cowork:draft',
+    focusedEditorEvidenceProvider: () => {
+      calls.push('provider-focus:unsafe-output');
+      return {
+        status: 'satisfied',
+        focusedEditorRef: 'raw focused editor',
+        verifierRef: 'https://example.invalid/focus-verifier',
+        evidenceRefs: ['data:image/png;base64,abc', '/tmp/raw-screenshot.png', 'providerPayload:raw'],
+      };
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return 'draft body hidden from evidence';
+    },
+    typeResolvedText: async () => {
+      calls.push('type-resolved-text');
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /focused-editor evidence verifier/i);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'provider-focus:unsafe-output',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-insert-unsafe-provider',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-insert-unsafe-provider',
+  ]);
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-insert-unsafe-provider'));
+  assert.ok(!result.evidenceRefs.some((ref) => ref.startsWith('focused-editor:')));
+  assert.ok(!result.evidenceRefs.some((ref) => ref.startsWith('verifier:') && ref.includes('focus-editor')));
+  assert.doesNotMatch(JSON.stringify(result), /draft body|hidden from evidence|raw focused editor|example\.invalid|data:image|base64|raw-screenshot|providerPayload|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work live diagnostic can observe the real current VSCode window', {
   skip: currentVSCodeLiveEnabled
     ? undefined
