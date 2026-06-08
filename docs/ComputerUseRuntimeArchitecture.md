@@ -142,6 +142,27 @@ App module 不可以：
 
 App module 是懂某个软件的“状态模型、能力目录和证据门”，不是第二个 agent。智能载体仍然是 Agent Host；需要模型能力时由 Host 调 Model Router 或 Host-owned verifier/provider，并把结果压成安全 refs 后再进入下一步。
 
+### App Module Contract 约束
+
+最小 contract 是 `moduleId`、`canHandle(refs)`、`normalizeObservation(refs)`、`getCapabilities()` 和 `checkReadiness(operation, refs)`。`checkReadiness` 的输入只能是 Agent Host 已决定的一个 operation 和 current-run refs；contract 不暴露自然语言 task 字段。
+
+`checkReadiness` 的输出只能是：
+
+- `ready` + 一个 Computer Use primitive candidate + evidence refs。
+- `blocked` + reason ref + evidence refs。
+- `needs-confirmation` + reason ref + evidence refs。
+
+readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
+
+阶段推进必须递进：
+
+- 先做 registry contract 和 app module skeleton。
+- 再做 read-only、focus、editor mutation 的 unit path。
+- 再做 terminal / command palette 的分步 unit path。
+- 再接 Host dry-run materializer。
+- 再接 ordinary chat 且验证无 final-answer 旁路。
+- 最后进入 env-gated live diagnostic matrix 和论文编辑 preview / apply。
+
 ## VSCode App Module v1
 
 VSCode 是第一个 app module 目标。v1 聚焦用户已打开 VSCode 的 co-work，不要求固定布局或固定插件集合。泛化策略是稳定概念、能力探测和多证据确认，而不是坐标脚本。
@@ -292,22 +313,23 @@ Computer Use primitive 默认不调用模型。
 
 当前状态摘要：
 
-- P0/P1/P3/P8 真实桌面路径均仍是 `live-diagnostic`，因为依赖共享系统输入或用户 profile。
-- P4/P5/P7 主要是 `unit-proven`，证明 Host 能调用 primitive 并基于 evidence 生成答复。
-- P9 已完成 current VSCode read-only ordinary/native route、HTTP/SSE route 和 focus-editor 默认 provider 的真实 `live-diagnostic`。
-- P9c insert-draft、focused context handoff、private draft resolver 和 mutation verifier gate 仍是 `unit-proven`。
-- P9 不能声明 `product-ready`。
-- P10 论文修改 / 润色 GUI 协作尚未实现。
+- App Module Registry contract 是 `unit-proven`。
+- VSCode App Module skeleton、read-only、focus、editor mutation、terminal 和 command palette readiness 是 `unit-proven`。
+- VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
+- 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
+- 普通聊天接线、Host dry-run materializer、论文 preview 和论文 apply 仍待实现。
 
-## 迁移口径
+## 旧路径清理口径
+
+旧逻辑和最终目标冲突时，删除旧逻辑，直接实现新版本；不新增 legacy alias、compatibility wrapper、fallback shortcut 或历史 run 转译路径。
 
 旧路径包括 `executeBoundedOperation`、`computer_use.perform_local_action`、`computer_use.fill_fields`、`computer_use.runTask(request, hostPorts)`、`plan`、`locate`、`verify` 等。
 
-迁移目标：
+清理目标：
 
 - `perform_local_action` 拆为 `bind` / `observe` / `act`。
 - `fill_fields` 由调用方多次调用 `act(type/key/click)` 表达，或在调用方已明确步骤后使用 `run_procedure` 降低往返。
-- `runTask` 不进入新 MCP public surface，也不新增内部 legacy alias 或 compatibility wrapper。
+- `runTask` 不进入新 MCP public surface，也不新增内部 legacy alias、compatibility wrapper 或自动转译。
 - 无智能局部组合能力进入 `run_procedure`；它只执行 Host 指定的结构化步骤序列。
 - `plan` 移到调用方。
 - `locate` 变成调用方对 observation refs 的选择；Computer Use 只接受 element ref / point。

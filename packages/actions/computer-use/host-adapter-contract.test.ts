@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -214,3 +214,33 @@ test('package host adapter contract does not import runtime or GUI implementatio
   assert.deepEqual(importTargets, ['./action-schema.js', './provider-policy.js']);
   assert.doesNotMatch(source, /from\s+['"][^'"]*(?:src\/ui|src\/runtime|gui-module|gui-mcp)[^'"]*['"]/);
 });
+
+test('computer-use package does not import Host-side app modules', async () => {
+  const sources = await readPackageSources(new URL('.', import.meta.url));
+
+  for (const [filePath, source] of sources) {
+    assert.doesNotMatch(
+      source,
+      /(?:src\/runtime\/codex|computer-use-app-module-registry|vscode-app-module)/,
+      `${filePath} must not import Host-side app module code`,
+    );
+  }
+});
+
+async function readPackageSources(directory: URL): Promise<Array<[string, string]>> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const sources: Array<[string, string]> = [];
+  for (const entry of entries) {
+    if (entry.name === 'node_modules' || entry.name === 'fixtures' || entry.name === 'skills') continue;
+    const entryUrl = new URL(entry.name, directory);
+    if (entry.isDirectory()) {
+      sources.push(...await readPackageSources(new URL(`${entry.name}/`, directory)));
+      continue;
+    }
+    if (entry.name.endsWith('.test.ts')) continue;
+    if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.json')) continue;
+    const source = await readFile(entryUrl, 'utf8');
+    sources.push([entryUrl.pathname, source]);
+  }
+  return sources;
+}
