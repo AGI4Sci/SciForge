@@ -84,6 +84,7 @@ export async function runVSCodeCoWorkReadVisibleTextLiveDiagnostic(
   aggregate.primitiveChainObserved.push('bind');
   mergeRefs(aggregate.evidenceRefs, bind.refs ?? []);
   if (bind.status !== 'completed' || !bind.output?.sessionId) {
+    mergeRefs(aggregate.cleanupRefs, cleanupRefsFromPrimitive(bind.refs ?? []));
     return finish('blocked', bind.blockedReason ?? 'VSCode co-work live diagnostic blocked: bind did not produce a session.');
   }
   bindOutput = bind.output;
@@ -380,6 +381,7 @@ async function invokePrimitive<T>(
     intent,
     input: primitiveInput,
   });
+  if (result.value) return result.value as PrimitiveEnvelope<T>;
   if (!result.ok || !result.value) {
     return {
       schemaVersion: 'sciforge.computer-use.primitive-result.v1',
@@ -438,6 +440,12 @@ function stringList(value: unknown): string[] {
 
 function mergeRefs(target: string[], refs: string[]): void {
   target.splice(0, target.length, ...uniqueStrings([...target, ...runtimeOwnedLiveRefs(refs)]));
+}
+
+function cleanupRefsFromPrimitive(refs: string[]): string[] {
+  return runtimeOwnedLiveRefs(refs.filter((ref) =>
+    /^(?:control:|scoped-input-lease:|input-adapter:|scoped-input-adapter:|cursor-marker:|front-app-restore:|focus-restore:|mouse-position-restore:|cursor-position-restore:)/i.test(ref)
+  ));
 }
 
 function uniqueStrings(values: string[]): string[] {

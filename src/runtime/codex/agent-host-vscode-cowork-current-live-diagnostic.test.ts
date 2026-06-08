@@ -84,6 +84,44 @@ test('current VSCode co-work live diagnostic stays blocked without explicit env'
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work live diagnostic preserves restoration refs when bind cannot observe VSCode', async () => {
+  const calls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-bind-fail',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      throw new Error('current-vscode-not-frontmost');
+    },
+    captureRestorationState: async () => {
+      calls.push('capture-restoration');
+      return {
+        frontApplicationName: 'Codex',
+        mousePosition: { x: 10, y: 20 },
+      };
+    },
+    restoreCapturedState: async (state, refs) => {
+      calls.push(`restore-captured:${state.frontApplicationName}:${state.mousePosition?.x},${state.mousePosition?.y}:${refs.frontAppRestoreRef}:${refs.mousePositionRestoreRef}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /current-vscode-not-frontmost/);
+  assert.deepEqual(result.primitiveChainObserved, ['bind']);
+  assert.ok(result.evidenceRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-bind-fail'));
+  assert.ok(result.evidenceRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-bind-fail'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-bind-fail'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-bind-fail'));
+  assert.deepEqual(calls, [
+    'capture-restoration',
+    'read-current-window',
+    'restore-captured:Codex:10,20:front-app-restore:current-vscode-cowork:unit-current-vscode-bind-fail:mouse-position-restore:current-vscode-cowork:unit-current-vscode-bind-fail',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('current VSCode co-work live diagnostic can observe the real current VSCode window', {
   skip: currentVSCodeLiveEnabled
     ? undefined

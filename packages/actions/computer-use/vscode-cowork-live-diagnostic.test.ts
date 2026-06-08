@@ -198,3 +198,113 @@ test('current VSCode co-work primitive ports capture and restore desktop state o
   assert.ok((control.value?.refs ?? []).includes('front-app-restore:current-vscode-cowork:unit-current-vscode-restore'));
   assert.ok((control.value?.refs ?? []).includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-restore'));
 });
+
+test('current VSCode co-work primitive ports restore desktop state when bind observation fails', async () => {
+  const calls: string[] = [];
+  const service = createComputerUsePrimitiveService({
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-bind-fail',
+      captureRestorationState: async () => {
+        calls.push('capture-restoration');
+        return {
+          frontApplicationName: 'Codex',
+          mousePosition: { x: 56, y: 78 },
+        };
+      },
+      restoreCapturedState: async (state, refs) => {
+        calls.push(`restore-captured:${state.frontApplicationName}:${state.mousePosition?.x},${state.mousePosition?.y}:${refs.frontAppRestoreRef}:${refs.mousePositionRestoreRef}`);
+      },
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        throw new Error('current-vscode-not-frontmost');
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+
+  assert.equal(bind.ok, false);
+  assert.equal(bind.value?.status, 'blocked');
+  assert.match(bind.value?.blockedReason ?? '', /current-vscode-not-frontmost/);
+  assert.deepEqual(calls, [
+    'capture-restoration',
+    'read-current-window',
+    'restore-captured:Codex:56,78:front-app-restore:current-vscode-cowork:unit-current-vscode-bind-fail:mouse-position-restore:current-vscode-cowork:unit-current-vscode-bind-fail',
+  ]);
+  assert.doesNotMatch(JSON.stringify(bind), /product-ready|kill-vscode|clear-profile|providerPayload|base64/i);
+});
+
+test('current VSCode co-work primitive ports keep restoration refs when restoration hooks fail', async () => {
+  const calls: string[] = [];
+  const service = createComputerUsePrimitiveService({
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-restore-hook-fail',
+      captureRestorationState: async () => {
+        calls.push('capture-restoration');
+        return {
+          frontApplicationName: 'Codex',
+          mousePosition: { x: 90, y: 12 },
+        };
+      },
+      restoreCapturedState: async () => {
+        calls.push('restore-captured');
+        throw new Error('/Users/example/Desktop/restore failed');
+      },
+      restoreFocus: async () => {
+        calls.push('restore-focus');
+        throw new Error('focus restore failed');
+      },
+      restoreMouse: async () => {
+        calls.push('restore-mouse');
+        throw new Error('mouse restore failed');
+      },
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        throw new Error('current-vscode-not-frontmost');
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+
+  assert.equal(bind.ok, false);
+  assert.equal(bind.value?.status, 'blocked');
+  assert.match(bind.value?.blockedReason ?? '', /current-vscode-not-frontmost/);
+  assert.ok((bind.value?.refs ?? []).includes('front-app-restore:current-vscode-cowork:unit-current-vscode-restore-hook-fail'));
+  assert.ok((bind.value?.refs ?? []).includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-restore-hook-fail'));
+  assert.deepEqual(calls, [
+    'capture-restoration',
+    'read-current-window',
+    'restore-captured',
+    'restore-focus',
+    'restore-mouse',
+  ]);
+  assert.deepEqual((bind.value?.diagnostics ?? []).map((diagnostic) => diagnostic.code), [
+    'current_vscode_restore_captured_failed',
+    'current_vscode_restore_focus_failed',
+    'current_vscode_restore_mouse_failed',
+  ]);
+  assert.doesNotMatch(JSON.stringify(bind), /\/Users\/example|product-ready|kill-vscode|clear-profile|providerPayload|base64/i);
+});

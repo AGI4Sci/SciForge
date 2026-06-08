@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
+  ComputerUseDiagnostic,
   ComputerUseObserveInput,
   ComputerUsePrimitivePorts,
 } from './index.js';
@@ -136,7 +137,29 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
   return {
     bind: async () => {
       restorationState = await captureRestorationState?.().catch(() => ({})) ?? {};
-      const observed = await readCurrentWindow();
+      let observed: CurrentVSCodeCoWorkWindowObservation;
+      try {
+        observed = await readCurrentWindow();
+      } catch (error) {
+        const restorationRefs = {
+          frontAppRestoreRef,
+          mousePositionRestoreRef,
+        };
+        const diagnostics = await attemptRestoration(restorationState, restorationRefs, {
+          restoreCapturedState,
+          restoreFocus: options.restoreFocus,
+          restoreMouse: options.restoreMouse,
+        });
+        return {
+          status: 'blocked',
+          blockedReason: safeBlockedReason(error),
+          refs: [
+            frontAppRestoreRef,
+            mousePositionRestoreRef,
+          ],
+          diagnostics,
+        };
+      }
       return {
         status: 'completed',
         output: {
@@ -182,13 +205,17 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
       };
     },
     control: async (input) => {
+      let diagnostics: ComputerUseDiagnostic[] = [];
       if (input.command === 'release') {
-        await restoreCapturedState?.(restorationState, {
+        const restorationRefs = {
           frontAppRestoreRef,
           mousePositionRestoreRef,
+        };
+        diagnostics = await attemptRestoration(restorationState, restorationRefs, {
+          restoreCapturedState,
+          restoreFocus: options.restoreFocus,
+          restoreMouse: options.restoreMouse,
         });
-        await options.restoreFocus?.(frontAppRestoreRef);
-        await options.restoreMouse?.(mousePositionRestoreRef);
       }
       return {
         status: 'completed',
@@ -201,6 +228,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
             cursorRef,
           ],
         },
+        diagnostics,
         refs: [
           `control:current-vscode-cowork:${runId}:release`,
           scopedInputLeaseRef,
@@ -212,6 +240,43 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
       };
     },
   };
+}
+
+async function attemptRestoration(
+  state: CurrentVSCodeCoWorkRestorationState,
+  refs: CurrentVSCodeCoWorkRestorationRefs,
+  hooks: Pick<CurrentVSCodeCoWorkLivePrimitivePortsOptions, 'restoreCapturedState' | 'restoreFocus' | 'restoreMouse'>,
+): Promise<ComputerUseDiagnostic[]> {
+  const diagnostics: ComputerUseDiagnostic[] = [];
+  await recordRestoreFailure(diagnostics, 'current_vscode_restore_captured_failed', refs, () =>
+    hooks.restoreCapturedState?.(state, refs)
+  );
+  await recordRestoreFailure(diagnostics, 'current_vscode_restore_focus_failed', refs, () =>
+    hooks.restoreFocus?.(refs.frontAppRestoreRef)
+  );
+  await recordRestoreFailure(diagnostics, 'current_vscode_restore_mouse_failed', refs, () =>
+    hooks.restoreMouse?.(refs.mousePositionRestoreRef)
+  );
+  return diagnostics;
+}
+
+async function recordRestoreFailure(
+  diagnostics: ComputerUseDiagnostic[],
+  code: string,
+  refs: CurrentVSCodeCoWorkRestorationRefs,
+  restore: () => Promise<void> | void | undefined,
+): Promise<void> {
+  try {
+    await restore();
+  } catch (error) {
+    diagnostics.push({
+      code,
+      message: safeBlockedReason(error),
+      severity: 'warning',
+      refs: [refs.frontAppRestoreRef, refs.mousePositionRestoreRef],
+      retryable: true,
+    });
+  }
 }
 
 async function captureCurrentRestorationState(): Promise<CurrentVSCodeCoWorkRestorationState> {
@@ -377,4 +442,13 @@ function safeRunId(value: string): string {
 
 function tokenHash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+function safeBlockedReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/https?:\/\/\S+/gu, '[url]')
+    .replace(/\/(?:Users|Applications|private|tmp|var)\/\S+/gu, '[path]')
+    .replace(/[^A-Za-z0-9:_ .-]+/gu, '-')
+    .slice(0, 180) || 'current-vscode-bind-blocked';
 }

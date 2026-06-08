@@ -42,6 +42,8 @@ export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
     ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
       runId: input.runId,
       readCurrentWindow: input.readCurrentWindow,
+      captureRestorationState: input.captureRestorationState,
+      restoreCapturedState: input.restoreCapturedState,
       restoreFocus: input.restoreFocus,
       restoreMouse: input.restoreMouse,
     }),
