@@ -87,6 +87,14 @@ Browser、Computer Use、Desktop 和其它模块只能作为 Codex / Agent Host 
 
 tool 文本、GUI projection、旧截图、历史 run、fixture、package probe 或模型自信不能替代用户级完成。
 
+## 风险授权
+
+approval / risk policy 由 Codex / Agent Host 拥有。SciForge、Browser、Computer Use 和 Desktop 只投影 Host 的权限状态、confirmation UI、blocked reason 和 evidence，不自行决定用户级风险是否可执行。
+
+在 Host 声明 full-access co-work permission envelope 的当前 session 内，保存用户真实文件、批量替换或跨文件修改不因“真实文件 / 保存 / 批量 / 跨文件”类别本身要求 confirmation。它们仍必须绑定 current-run session refs、target refs、Host decision/action evidence 和 permission refs；批量或跨文件修改必须由 Host 基于每次 observe refs 拆成多次单步 primitive，不能交给 Computer Use core 做 task planning。
+
+必须 hard-confirm 的边界是 submit / send / publish / upload / delete / pay / authorize、改变外部账号/安全/法律/财务状态、不可逆外部副作用，或超出当前 session scope 的跨 app / 跨窗口 / 跨账号副作用。窗口、文件或目标不明确时，Host 应先用可用视觉 / AX / text / title / visible file / editor refs 尝试确认唯一目标；证据不足或冲突时返回 `needs-confirmation` / `blocked`。
+
 ## 相关文档
 
 - [`ModelRouterArchitecture.md`](ModelRouterArchitecture.md)：Model Router 服务层边界。

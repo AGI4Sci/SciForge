@@ -186,7 +186,7 @@ Build Tasks：
 - [x] submit / send / publish / upload / delete / pay / authorize 必须 action-time confirmation。
 - [x] 未确认不得执行 port。
 - [x] approvalRef 必须绑定当前 action risk envelope。
-- [x] 跨 app、跨窗口、跨账号或不可逆副作用必须 blocked 或 needs-confirmation。
+- [x] 超出当前 session scope、触达外部账号/状态或不可逆的跨 app / 跨窗口 / 跨账号副作用必须 blocked 或 needs-confirmation；P9 full-access 下真实文件保存、批量或跨文件本身不作为确认条件。
 - [x] 删除、提交、支付等动作不能藏在 `run_procedure` 内绕过确认。
 
 Acceptance Gates：
@@ -194,7 +194,7 @@ Acceptance Gates：
 - [x] 单步 `act` 和 `run_procedure` 都能阻止未确认高风险动作。
 - [x] 测试证明 blocked 时 executor port 没有被调用。
 
-当前状态：P5 已达到 `unit-proven`。Package tests 证明内置高风险 `app_command` 列表默认 needs-confirmation、Host 标记的 cross-app / cross-window / cross-account / irreversible risk categories 默认 needs-confirmation、错误 approvalRef 不能绕过 risk envelope、单步 `act` 和 `run_procedure` blocked 时不会调用 executor。该状态依赖 Host 正确标注 risk categories；Computer Use core 不做跨 app / 跨账号语义推断，所以不能声明 product-ready。
+当前状态：P5 已达到 `unit-proven`。Package tests 证明内置高风险 `app_command` 列表默认 needs-confirmation、Host 标记为超出当前 session scope 的 cross-app / cross-window / cross-account / irreversible risk categories 默认 needs-confirmation、错误 approvalRef 不能绕过 risk envelope、单步 `act` 和 `run_procedure` blocked 时不会调用 executor。该状态依赖 Host 正确标注 risk categories；Computer Use core 不做跨 app / 跨账号语义推断，也不把 P9 full-access 下的真实文件保存、批量或跨文件本身升级成 confirmation gate，所以不能声明 product-ready。
 
 ## P6：迁移与清理
 

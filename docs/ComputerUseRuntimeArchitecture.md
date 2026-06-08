@@ -146,7 +146,7 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 当前 P1 状态是 `live-diagnostic`：8 个 action type 的 validator、MCP schema、service delegation 和 evidence refs 已有 package test 覆盖，TextEdit live acceptance 覆盖低风险原子动作子集。该状态不代表每个 `app_command` 值、快捷键组合或平台 adapter 都已 product-ready。
 
-当前 P5 状态是 `unit-proven`：内置高风险 `app_command` 列表默认 needs-confirmation；Host 标记的 cross-app、cross-window、cross-account、irreversible risk categories 默认 needs-confirmation；approvalRef 必须绑定当前 risk envelope；单步 `act` 和 `run_procedure` blocked 时不会调用 executor。Computer Use core 只执行 risk envelope 规则，不做跨 app / 跨账号语义推断。
+当前 P5 状态是 `unit-proven`：内置高风险 `app_command` 列表默认 needs-confirmation；Host 标记为超出当前 session scope 的 cross-app、cross-window、cross-account、irreversible risk categories 默认 needs-confirmation；approvalRef 必须绑定当前 risk envelope；单步 `act` 和 `run_procedure` blocked 时不会调用 executor。Computer Use core 只执行 risk envelope 规则，不做跨 app / 跨账号语义推断，也不把 P9 full-access 下的真实文件保存、批量或跨文件本身升级成 confirmation gate。
 
 当前 P7 状态是 `unit-proven`：普通聊天入口已能触发 Host 选择 target，并走 `bind -> observe -> act -> control(release)`；final answer 只基于 action evidence 和 release evidence 表达局部动作结果。TextEdit chat bridge 和 live acceptance runner 已证明 save 目标、artifact validator refs、release refs 和 product completion gate 能保留到 blocked answer；真实桌面 TextEdit primitive live 仍是 `live-diagnostic`，普通聊天到真实 TextEdit/Appium 的完整 live 验收还不能声明 `product-ready`。
 
