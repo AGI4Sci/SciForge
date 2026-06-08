@@ -217,18 +217,18 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 
 readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。key 检测必须覆盖 camelCase、snake_case 和 kebab-case alias；value 检测必须覆盖裸 base64、HTML/DOM、本地绝对路径等 raw payload。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
-阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。旧 P3-P9 的展开任务不再作为继续执行的 checklist 保留，只保留已验收基线；新的可执行路线以 `PROJECT_CU.md` 为准：
+阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。旧 P3-P9 的展开任务不再作为继续执行的 checklist 保留，只保留已验收基线；新的可执行路线和可打勾任务以 `PROJECT_CU.md` 为准。架构文档只保留阶段方向：
 
 - P0：路线图与架构收口，删除旧任务包袱。
 - P1：Public Projection 收口，覆盖 app module readiness、Computer Use result 和 package presentation。
 - P2：旧旁路删除与 fail-closed，删除或拒绝本地 final-answer、GUI completion、旧 Computer Use public surface。
 - P3：Computer Use lifecycle contract，固化 bind / observe / act / run_procedure / control release、refs 和 cleanup。
-- P4：VSCode target binding 与 ambiguity gate，只证明目标识别和不确定性。
-- P5：VSCode read-only / focus / diagnostics diagnostic，不做写入。
-- P6：VSCode terminal 原子能力，focus / send / observe / submit 分离。
-- P7：VSCode command palette 原子能力，open / query / observe / select 分离。
-- P8：VSCode editor mutation 原子能力，只做当前选区或明确范围的一步动作。
-- P9：Host-owned preview / narrow apply，先 diff preview，再由 Host 拆成 observe -> one primitive -> observe。
+- P4：VSCode module entry gate，只证明入口、选择条件和导出边界。
+- P5：VSCode identity 与 concept normalization，只做稳定状态模型。
+- P6：VSCode ambiguity 与 read-only diagnostic，先证明不猜测和只读诊断。
+- P7：VSCode terminal 原子能力，focus / send / observe / submit 分离。
+- P8：VSCode command palette 原子能力，open / query / observe / select 分离。
+- P9：VSCode editor mutation 与 Host-owned narrow apply，先 preview，再由 Host 拆成 observe -> one primitive -> observe。
 
 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
