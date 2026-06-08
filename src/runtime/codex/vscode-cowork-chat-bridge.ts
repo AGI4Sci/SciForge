@@ -72,7 +72,7 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
   };
   const decision = binding.operation
     ? decideVSCodeCoWorkNextPrimitive(decisionInput)
-    : missingOperationDecision(requestRef, binding.windowCandidates);
+    : missingOperationDecision(requestRef, binding.windowCandidates, binding.latestObservation);
 
   return {
     decision,
@@ -261,6 +261,7 @@ function booleanField(value: unknown): boolean | undefined {
 function missingOperationDecision(
   requestRef: string,
   windowCandidates: VSCodeCoWorkWindowCandidate[],
+  latestObservation: VSCodeCoWorkObservationRefs | undefined,
 ): VSCodeCoWorkDecision {
   return {
     schemaVersion: VSCODE_COWORK_ACCEPTANCE_SCHEMA_VERSION,
@@ -270,6 +271,7 @@ function missingOperationDecision(
     userProfileUsed: true,
     refs: uniqueStrings([
       requestRef,
+      ...observationEvidenceRefs(latestObservation),
       ...windowCandidates.flatMap((candidate) => [
         candidate.appRef,
         candidate.processRef,
@@ -286,6 +288,23 @@ function missingOperationDecision(
       suggestedPrimitive: 'observe',
     }],
   };
+}
+
+function observationEvidenceRefs(value: VSCodeCoWorkObservationRefs | undefined): string[] {
+  if (!value) return [];
+  return uniqueStrings([
+    value.windowRef,
+    value.sessionRef,
+    value.observationRef,
+    value.screenshotRef,
+    value.accessibilityRef,
+    value.focusedEditorRef,
+    value.freshnessRef,
+    value.nonUserFileScopeRef,
+    ...(value.textRefs ?? []),
+    ...(value.elementRefs ?? []),
+    ...(value.visibleFileRefs ?? []),
+  ]);
 }
 
 function payloadForDecision(decision: VSCodeCoWorkDecision): VSCodeCoWorkRoutePayload {

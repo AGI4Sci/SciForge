@@ -124,8 +124,7 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
     ? compactRecord({ ...genericHostBinding, ...explicitHostBinding })
     : explicitHostBinding ?? genericHostBinding;
   if (!hostBinding && !latestObservation) return undefined;
-  const intentText = stringField(agentHostInput, 'intentText') ?? request.commandText;
-  const operation = stringField(hostBinding, 'operation') ?? lowRiskVSCodeCoWorkOperationFromText(intentText);
+  const operation = stringField(hostBinding, 'operation');
   return {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
     kind: 'computer-use-native-route',
@@ -245,12 +244,6 @@ function isCurrentVSCodeCoWorkHostInput(
   if (isRecord(target?.vscodeCoWork)) return true;
   const refs = Array.isArray(agentHostInput.refs) ? agentHostInput.refs : [];
   return refs.some((ref) => ref === 'intent:current-vscode-cowork');
-}
-
-function lowRiskVSCodeCoWorkOperationFromText(intentText: string): 'read-visible-text' | 'focus-editor' | undefined {
-  if (/(?:读取|查看|看看|read|visible\s+text)/i.test(intentText)) return 'read-visible-text';
-  if (/(?:聚焦|focus)/i.test(intentText)) return 'focus-editor';
-  return undefined;
 }
 
 function retiredVirtualAppScreenNativeRouteReason(commandText: string): string | undefined {

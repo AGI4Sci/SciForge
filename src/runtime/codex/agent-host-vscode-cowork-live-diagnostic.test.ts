@@ -81,6 +81,62 @@ test('VSCode co-work Host live producer builds read-visible-text Host input from
   assert.doesNotMatch(JSON.stringify({ produced, materializerResult }), /raw-|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('VSCode co-work Host producer does not infer operation from command text', async () => {
+  const calls: string[] = [];
+  const refs = vscodeRefs('paper');
+  const service = createComputerUsePrimitiveService({
+    ports: vscodePrimitivePorts({ calls, refs }),
+    now: () => new Date(now).getTime(),
+  });
+  const captured = await bindAndObserve(service);
+
+  const produced = produceVSCodeCoWorkAgentHostLiveInput({
+    commandText: '读取我当前打开的 VSCode 可见文本。',
+    commandId: 'codex-command-vscode-producer-no-text-inference',
+    attemptId: 'codex-command-vscode-producer-no-text-inference-attempt-1',
+    workspacePath: '/tmp/workspace',
+    target: {
+      kind: 'window',
+      targetRef: 'window-action-session:vscode-cowork:live',
+      appRef: 'macos-app:com.microsoft.VSCode',
+    },
+    bindOutput: captured.bindOutput,
+    bindRefs: captured.bindRefs,
+    observe: captured.observe,
+  });
+
+  const vscodeCoWork = produced.agentHostInput!.target.vscodeCoWork as Record<string, unknown>;
+  const agentHostInput = {
+    ...produced.agentHostInput!,
+    target: {
+      ...produced.agentHostInput!.target,
+      vscodeCoWork: {
+        ...vscodeCoWork,
+        operation: undefined,
+      },
+    },
+  };
+
+  const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
+  const materializerResult = await materializer({
+    agentHostInput,
+    preflight: produced.preflight!,
+    commandText: 'read visible text from VSCode',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-vscode-producer-no-text-inference',
+    attemptId: 'codex-command-vscode-producer-no-text-inference-attempt-1',
+    runtimeTruth: produced.runtimeTruth,
+  });
+
+  assert.equal(materializerResult?.status, 'blocked');
+  assert.equal(materializerResult?.claimType, 'computer-use-vscode-cowork-diagnostic');
+  assert.equal(materializerResult?.completionTruth, undefined);
+  assert.equal(materializerResult?.executionUnits?.[0]?.primitive, undefined);
+  assert.match(materializerResult?.message ?? '', /vscode_cowork_operation_required/i);
+  assert.ok(materializerResult?.evidenceRefs.includes('observation:vscode:current-1'));
+  assert.doesNotMatch(JSON.stringify(materializerResult), /computer-use-vscode-cowork-observe-decision|taskOutcome":"satisfied|product-ready/i);
+});
+
 test('VSCode co-work Host live producer builds insert-draft Host input without leaking raw draft text', async () => {
   const calls: string[] = [];
   const refs = vscodeRefs('paper');

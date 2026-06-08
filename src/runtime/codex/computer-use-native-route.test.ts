@@ -625,7 +625,7 @@ test('Computer Use native route does not start current VSCode live diagnostic fr
   assert.equal(runnerCalls.length, 0);
 });
 
-test('Computer Use native route derives P9b VSCode co-work intent from generic Host target and observation refs', async () => {
+test('Computer Use native route does not infer VSCode co-work operation from generic Host text', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {
       commandText: '读取我当前打开的 VSCode 可见文本。',
@@ -679,10 +679,11 @@ test('Computer Use native route derives P9b VSCode co-work intent from generic H
   const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
 
-  assert.equal(done?.status, 'ready');
-  assert.equal(unit?.status, 'ready');
-  assert.equal(unit?.primitive, 'observe');
-  assert.equal(unit?.targetWindowRef, 'window:vscode:paper');
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_operation_required');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.targetWindowRef, undefined);
   assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:generic-host-refs'));
   assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
   assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
@@ -1146,7 +1147,7 @@ test('Computer Use native route blocks task-shaped VSCode operations before publ
   assert.equal(unit?.action, undefined);
   assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:unsupported-operation'));
   assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
-  assert.ok(!(done?.evidenceRefs as string[]).includes('observation:vscode:current'));
+  assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
   assert.doesNotMatch(JSON.stringify(events), /replace every TODO|across this repo|planner|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 

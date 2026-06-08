@@ -160,3 +160,61 @@ test('Computer Use no-bypass guard blocks bare ordinary VSCode native-route shor
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-bare-ordinary-vscode-native-shortcut/);
 });
+
+test('Computer Use no-bypass guard blocks VSCode operation inference from ordinary text fields', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    "type VSCodeOperation = 'read-visible-text' | 'focus-editor';",
+    'function lowRiskVSCodeCoWorkOperationFromText(text: string): VSCodeOperation | undefined {',
+    "  if (/read visible text/i.test(text)) return 'read-visible-text';",
+    "  if (/focus editor/i.test(text)) return 'focus-editor';",
+    '  return undefined;',
+    '}',
+    'export function route(input: { request: { commandText: string; prompt?: string; message?: string }; intentText?: string }) {',
+    "  const text = input.request.commandText || input.request.prompt || input.request.message || input.intentText || '';",
+    '  const operation = lowRiskVSCodeCoWorkOperationFromText(text);',
+    '  return { vscodeCoWork: { operation } };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
+test('Computer Use no-bypass guard blocks direct VSCode operation selection from commandText', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    "type VSCodeOperation = 'read-visible-text' | 'focus-editor';",
+    'export function route(input: { request: { commandText: string } }) {',
+    "  const operation: VSCodeOperation | undefined = input.request.commandText.includes('focus editor') ? 'focus-editor' : undefined;",
+    '  return { vscodeCoWork: { operation } };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
+test('Computer Use no-bypass guard allows structured Host VSCode operation refs', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    'function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {',
+    "  const item = value?.[key];",
+    "  return typeof item === 'string' ? item : undefined;",
+    '}',
+    'export function route(agentHostInput: { target?: { vscodeCoWork?: Record<string, unknown> } }) {',
+    '  const hostBinding = agentHostInput.target?.vscodeCoWork;',
+    "  const operation = stringField(hostBinding, 'operation');",
+    "  const operationRef = stringField(hostBinding, 'operationRef');",
+    '  return { vscodeCoWork: { operation, operationRef } };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});

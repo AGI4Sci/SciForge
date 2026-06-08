@@ -25,6 +25,7 @@
 | legacy GUI completion dynamic tools | `gui.present` / `gui.ask_user` / provider-safe aliases。 | Fail closed。只能作为 Host event projection 或 evidence metadata，不是模型可调用 completion tool。 | `codex-app-server-client.test.ts` 和 `tools/check-computer-use-no-bypass.test.ts` 覆盖 unsupported dynamic tool / static guard。 |
 | retired runtime `gui` module | `module.invoke { moduleId: "gui", intent: "present" }`。 | Deleted / fail closed。runtime registry 不注册 `gui`，外部注入也忽略。 | `src/runtime/modules/dispatcher.test.ts` 覆盖 `module_not_found:gui`。 |
 | legacy narrow ordinary VSCode text shortcut | 裸文本如“读取我当前打开的 VSCode 可见文本”曾可在 runner 存在时直接启动 live diagnostic。 | Deleted / fail closed。必须先成为 Host-owned intent 或 refs-first Agent Host input。 | `computer-use-native-route.test.ts` 覆盖 bare ordinary VSCode text 不启动 runner。 |
+| Host input text-derived VSCode operation | `intentText` / `commandText` / prompt 文本曾可被本地 helper 推断成 `read-visible-text` / `focus-editor` / `insert-draft`。 | Deleted / fail closed。只有 `target.vscodeCoWork.operation` 或等价 structured Host operation ref 可以选择 VSCode operation。 | `computer-use-native-route.test.ts` 和 `agent-host-vscode-cowork-live-diagnostic.test.ts` 覆盖 generic Host text 不推断 operation；targeted search 无 text-derived helper。 |
 | TextEdit WindowActionSession bridge | explicit Host-owned native route + opt-in TextEdit/Appium env 后可进入 Agent Host turn loop。 | Host bridge / diagnostic-only。保留为 env-gated diagnostic；没有 Host-owned route 不触发。 | `computer-use-native-route.test.ts` 覆盖 opt-in bridge，输出 sanitized refs。 |
 | runtime gateway / package bridge projection | native route fallback 可调用 `tryRunVisionSenseRuntime` 并投影 `WorkspaceRuntimeEvent` / ToolPayload。 | Host bridge now, final-answer gate pending。P4 必须把 `done` 收敛为 Host final-answer envelope 或 blocked / partial。 | P2 只固定入口清单；P4 继续补 final-answer gate。 |
 
@@ -47,6 +48,6 @@ SciForge 不能归一化为用户级完成的对象：
 
 ## P2 后续归属
 
-- P3：把 ordinary chat Host-only bridge 写成强 contract；裸 `commandText` / terminal / palette / action refs 只能作为 evidence，不能推断 operation。
+- P3：把 ordinary chat Host-only bridge 写成强 contract；裸 `commandText` / `intentText` / terminal / palette / action refs 只能作为 evidence，不能推断 operation。
 - P4：native route 只能接受 Host final-answer envelope；没有 same-run Host final-answer evidence 时必须 `blocked` / `partial`。
 - P5：统一 public event sanitizer，确保 native route / runtime gateway / app module readiness 不泄漏 raw payload。

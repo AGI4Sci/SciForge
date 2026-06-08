@@ -168,18 +168,18 @@ open-command-palette
 
 Build Tasks：
 
-- [ ] 普通聊天 hook 只构造 Codex / Agent Host input envelope，不直接调用 VSCode module、Computer Use act 或 native live runner。
-- [ ] 删除或 fail closed 通过 `message` / `commandText` / prompt 文本推断 VSCode operation 的旧逻辑。
-- [ ] 只有 Host structured operation ref 可以调用 AppModuleRegistry / VSCode module readiness。
-- [ ] terminal output、command palette item、action completed status 只能作为 evidence refs，不触发下一步 operation。
-- [ ] 更新 `docs/ComputerUseEntryRouteAudit.md`，把 P3 迁移和删除项标清。
+- [x] 普通聊天 hook 只构造 Codex / Agent Host input envelope，不直接调用 VSCode module、Computer Use act 或 native live runner。
+- [x] 删除或 fail closed 通过 `message` / `commandText` / prompt 文本推断 VSCode operation 的旧逻辑。
+- [x] 只有 Host structured operation ref 可以调用 AppModuleRegistry / VSCode module readiness。
+- [x] terminal output、command palette item、action completed status 只能作为 evidence refs，不触发下一步 operation。
+- [x] 更新 `docs/ComputerUseEntryRouteAudit.md`，把 P3 迁移和删除项标清。
 
 Acceptance Gates：
 
-- [ ] Unit tests 证明 ordinary chat 裸文本不能绕过 Host 进入 VSCode module。
-- [ ] Unit tests 证明裸 `message` / `commandText` 不能推断 `read-visible-text`、`focus-editor` 或 live diagnostic。
-- [ ] Unit tests 证明 terminal / palette / action refs 只能作为 evidence，不会变成下一步 operation。
-- [ ] Unit tests 证明 structured Host operation ref 可以走 dry-run，并且只返回 primitive candidate / readiness refs。
+- [x] Unit tests 证明 ordinary chat 裸文本不能绕过 Host 进入 VSCode module。
+- [x] Unit tests 证明裸 `message` / `commandText` 不能推断 `read-visible-text`、`focus-editor` 或 live diagnostic。
+- [x] Unit tests 证明 terminal / palette / action refs 只能作为 evidence，不会变成下一步 operation。
+- [x] Unit tests 证明 structured Host operation ref 可以走 dry-run，并且只返回 primitive candidate / readiness refs。
 
 ### P4：Native Route Final-answer Gate
 

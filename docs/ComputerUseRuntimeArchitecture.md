@@ -146,6 +146,8 @@ App module 是懂某个软件的“状态模型、能力目录和证据门”，
 
 ordinary chat 只是进入 Codex / Agent Host 的用户输入桥，不是 VSCode module、Computer Use runtime 或 native route 的直接调用入口。裸 `message`、`commandText`、terminal output、command palette item、completed action 或历史 run 记录只能作为 Host 可见 evidence refs，不能被本地 runtime 推断成 app module operation、多步 GUI workflow、completion truth 或 final answer。
 
+即使输入已经被包装成 `sciforge.codex-agent-host-input.v1`，`intentText` / `commandText` / prompt 文本仍不能作为 VSCode operation fallback。只有 Host 写入 structured target operation ref，例如 `target.vscodeCoWork.operation` 或等价 Host operation ref，才能触发 VSCode module readiness 或 live diagnostic Host producer。
+
 native route 只做确定性投影：它可以投影 sanitized refs、blocked / partial 状态和 Host-owned final answer envelope。没有 same-run Host final-answer evidence 时，native route 必须返回 `blocked` / `partial`，不能用 Computer Use action result、app module readiness、`run_procedure.status=completed`、runtime ack 或 fallback text 自行 `done`。
 
 Runtime `gui` module 已退役。`gui_present` / `gui_ask_user` 只能作为 Agent Host public event projection 或 refs-first evidence metadata 出现，不能作为 `module.invoke gui.present` / `module.invoke gui.ask_user` 的 runtime module surface、dynamic tool surface 或 completion surface。

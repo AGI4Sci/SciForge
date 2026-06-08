@@ -195,8 +195,7 @@ function vscodeCoWorkRuntimeIntentFromHostRefs(input: CodexAgentHostComputerUseA
     },
     vscodeCoWork: compactRecord({
       requestRef,
-      operation: vscodeCoWorkOperationField(explicitVSCodeCoWork.operation)
-        ?? vscodeCoWorkOperationFromText(hostInput.intentText ?? input.commandText),
+      operation: vscodeCoWorkOperationField(explicitVSCodeCoWork.operation),
       selectedWindowRef,
       selectedFileRef: visibleFileRefs.length === 1 ? visibleFileRefs[0] : undefined,
       windowCandidates,
@@ -325,13 +324,6 @@ function vscodeCoWorkOperationField(value: unknown): 'read-visible-text' | 'focu
   return value === 'read-visible-text' || value === 'focus-editor' || value === 'insert-draft'
     ? value
     : undefined;
-}
-
-function vscodeCoWorkOperationFromText(value: string): 'read-visible-text' | 'focus-editor' | 'insert-draft' | undefined {
-  if (/(?:插入|写入草稿|插入草稿|insert(?:\s+draft)?|draft)/i.test(value)) return 'insert-draft';
-  if (/(?:读取|查看|看看|read|visible\s+text)/i.test(value)) return 'read-visible-text';
-  if (/(?:聚焦|focus)/i.test(value)) return 'focus-editor';
-  return undefined;
 }
 
 function refsFrom(input: CodexAgentHostComputerUseActMaterializerInput): string[] {
