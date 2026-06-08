@@ -69,6 +69,15 @@ type AssistantStreamTextFragment = {
   text: string;
   exact: boolean;
 };
+type HostFinalAnswerTextSource = 'agent-host-browser-finalizer' | 'agent-host-turn-loop';
+type HostFinalAnswerProjection = {
+  envelope: Record<string, unknown>;
+  text: string;
+  source: string;
+  visibleStatus: string;
+  liveAcceptanceEligible: boolean;
+  auditRefs: string[];
+};
 interface RuntimeActionPublicProjection {
   action?: string;
   target?: string;
@@ -286,7 +295,7 @@ async function readWorkspaceToolSse(
     }
     if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
       if (agentHostBrowserFinalizerMessage) {
-        result = withAssistantMessageRuntimeResult(data, agentHostBrowserFinalizerMessage);
+        result = withAssistantMessageRuntimeResult(data, agentHostBrowserFinalizerMessage, 'agent-host-browser-finalizer');
         if (isRecord(result) && result.type === 'failed') {
           onEvent(result);
           error = asString(result.message);
@@ -305,9 +314,14 @@ async function readWorkspaceToolSse(
         result = withStructuredRuntimeDoneProjection(data);
         return;
       }
+      const hostFinalAnswer = isRecord(data) ? hostFinalAnswerProjectionFromRuntimeResult(data, '') : undefined;
+      if (hostFinalAnswer) {
+        result = withHostFinalAnswerRuntimeResult(data, hostFinalAnswer);
+        return;
+      }
       const agentHostMessage = isRecord(data) ? agentHostTurnLoopDoneMessage(data) : undefined;
       if (agentHostMessage) {
-        result = withAssistantMessageRuntimeResult(data, agentHostMessage);
+        result = withAssistantMessageRuntimeResult(data, agentHostMessage, 'agent-host-turn-loop');
         return;
       }
       const nativeMessage = joinAssistantStreamText(genericMessages);
@@ -319,11 +333,10 @@ async function readWorkspaceToolSse(
           return;
         }
         result = withAssistantMessageRuntimeResult(data, nativeMessage);
-        return;
-      }
-      const doneMessage = isRecord(data) ? runtimeDoneNativeMessage(data) : undefined;
-      if (doneMessage) {
-        result = withAssistantMessageRuntimeResult(data, doneMessage);
+        if (isRecord(result) && result.type === 'failed') {
+          onEvent(result);
+          error = asString(result.message);
+        }
         return;
       }
       if (isRecord(data) && isRuntimeCodexDoneEvent(data)) {
@@ -420,43 +433,6 @@ function runtimeSseTextEventIsAssistantMessage(eventName: string, data: unknown)
   return normalized === 'message' || normalized === 'message_delta' || normalized === 'text-delta' || normalized === 'text_delta';
 }
 
-function runtimeDoneNativeMessage(data: Record<string, unknown>): string | undefined {
-  if (!isRuntimeCodexDoneEvent(data)) return undefined;
-  const output = isRecord(data.output) ? data.output : {};
-  const candidates = [
-    data.finalText,
-    data.final_text,
-    data.answer,
-    data.text,
-    data.message,
-    output.finalText,
-    output.final_text,
-    output.answer,
-    output.message,
-    output.text,
-    output.output_text,
-  ];
-  for (const candidate of candidates) {
-    const text = asString(candidate);
-    if (!text) continue;
-    if (runtimeDoneMessageLooksTransportOnly(text)) continue;
-    if (!agentHostVisibleMessageSafeForProjection(text)) continue;
-    if (!runtimeNativeMessageSafeForVisibleAnswer(text)) continue;
-    return text;
-  }
-  return undefined;
-}
-
-function runtimeDoneMessageLooksTransportOnly(text: string): boolean {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  if (!compact) return true;
-  return /^(?:ok|done|completed|success|successful)$/i.test(compact)
-    || /^Runtime Codex completed successfully\.?$/i.test(compact)
-    || /^Runtime Codex completed without gui\.present\b/i.test(compact)
-    || /^Runtime Codex (?:started|exited|was cancelled|运行未完成)\b/i.test(compact)
-    || /^Codex app-server (?:stream|正在|started|completed|finished)\b/i.test(compact);
-}
-
 function joinAssistantStreamText(fragments: AssistantStreamTextFragment[]): string {
   if (!fragments.length) return '';
   if (fragments.some((fragment) => fragment.exact)) {
@@ -465,11 +441,16 @@ function joinAssistantStreamText(fragments: AssistantStreamTextFragment[]): stri
   return joinAssistantTextFragments(fragments.map((fragment) => fragment.text));
 }
 
-function withAssistantMessageRuntimeResult(result: unknown, message: string): unknown {
+function withAssistantMessageRuntimeResult(
+  result: unknown,
+  message: string,
+  hostTextSource?: HostFinalAnswerTextSource,
+): unknown {
   if (!message.trim() || !isRecord(result)) return result;
   if (isRuntimeCodexDoneEvent(result)) {
-      if (!runtimeNativeMessageSafeForVisibleAnswer(message)) return runtimeCodexMissingFinalAnswerFailure(result);
-    return withNativeCodexMessageRuntimeResult(result, message);
+    const hostFinalAnswer = hostFinalAnswerProjectionFromRuntimeResult(result, message, hostTextSource);
+    if (!hostFinalAnswer) return runtimeCodexMissingFinalAnswerFailure(result);
+    return withHostFinalAnswerRuntimeResult(result, hostFinalAnswer);
   }
   return withVisibleRuntimeMessage(result, message);
 }
@@ -485,6 +466,151 @@ function withVisibleRuntimeMessage(result: unknown, message: string): unknown {
       message,
     },
   };
+}
+
+function hostFinalAnswerProjectionFromRuntimeResult(
+  result: Record<string, unknown>,
+  message: string,
+  hostTextSource?: HostFinalAnswerTextSource,
+): HostFinalAnswerProjection | undefined {
+  return finalAnswerProjectionFromExistingEnvelope(result)
+    ?? finalAnswerProjectionFromAgentHostMarker(result)
+    ?? finalAnswerProjectionFromTrustedHostText(result, message, hostTextSource);
+}
+
+function finalAnswerProjectionFromExistingEnvelope(result: Record<string, unknown>): HostFinalAnswerProjection | undefined {
+  const envelope = isRecord(result.finalAnswerEnvelope) ? result.finalAnswerEnvelope : undefined;
+  if (!envelope || envelope.schemaVersion !== 'sciforge.final-answer-envelope.v1') return undefined;
+  const text = safeHostFinalAnswerText(envelope.text);
+  if (!text) return undefined;
+  const source = asString(envelope.source);
+  if (!source || !/^codex\.(?:app-server|agent-host)\.final-answer(?::|$)/.test(source)) return undefined;
+  const commandId = asString(result.commandId);
+  const envelopeCommandId = asString(envelope.commandId);
+  if (commandId && envelopeCommandId && commandId !== envelopeCommandId) return undefined;
+  if (commandId && source.includes(':') && !source.endsWith(`:${commandId}`)) return undefined;
+  if (!hasSharedEvidenceRef(result.evidenceRefs, envelope.evidenceRefs)) return undefined;
+  const auditRefs = hostFinalAnswerAuditRefs(result, envelope);
+  return {
+    envelope: compactRecord({
+      ...envelope,
+      source,
+      text,
+      evidenceRefs: auditRefs,
+      liveAcceptanceEligible: typeof envelope.liveAcceptanceEligible === 'boolean'
+        ? envelope.liveAcceptanceEligible
+        : runtimeNativeMessageLiveAcceptanceEligible(text, result),
+    }),
+    text,
+    source,
+    visibleStatus: hostFinalAnswerVisibleStatus(envelope.status),
+    liveAcceptanceEligible: typeof envelope.liveAcceptanceEligible === 'boolean'
+      ? envelope.liveAcceptanceEligible
+      : runtimeNativeMessageLiveAcceptanceEligible(text, result),
+    auditRefs,
+  };
+}
+
+function finalAnswerProjectionFromAgentHostMarker(result: Record<string, unknown>): HostFinalAnswerProjection | undefined {
+  const marker = isRecord(result.agentHostFinalAnswer) ? result.agentHostFinalAnswer : undefined;
+  if (!marker) return undefined;
+  if (marker.schemaVersion !== 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1') return undefined;
+  if (marker.hostOwnsFinalAnswer !== true || marker.computerUseCorePlanning !== false) return undefined;
+  const sourceMarker = asString(marker.source);
+  if (!sourceMarker || !/^codex-agent-host(?:-|$)/.test(sourceMarker)) return undefined;
+  const text = safeHostFinalAnswerText(marker.text);
+  if (!text) return undefined;
+  if (!hasSharedEvidenceRef(result.evidenceRefs, marker.evidenceRefs)) return undefined;
+  const commandId = asString(result.commandId);
+  const source = commandId ? `codex.app-server.final-answer:${commandId}` : 'codex.app-server.final-answer';
+  const auditRefs = hostFinalAnswerAuditRefs(result, marker);
+  const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(text, result);
+  return {
+    envelope: compactRecord({
+      schemaVersion: 'sciforge.final-answer-envelope.v1',
+      source,
+      kind: 'assistant-message',
+      text,
+      commandId,
+      attemptId: asString(result.attemptId),
+      provider: publicRuntimeMetadataValue(result.provider, 'provider'),
+      model: publicRuntimeMetadataValue(result.model, 'model'),
+      profile: publicRuntimeMetadataValue(result.profile, 'profile'),
+      codexSessionId: asString(result.codexSessionId),
+      evidenceRefs: auditRefs,
+      liveAcceptanceEligible,
+    }),
+    text,
+    source,
+    visibleStatus: hostFinalAnswerVisibleStatus(marker.status),
+    liveAcceptanceEligible,
+    auditRefs,
+  };
+}
+
+function finalAnswerProjectionFromTrustedHostText(
+  result: Record<string, unknown>,
+  message: string,
+  hostTextSource?: HostFinalAnswerTextSource,
+): HostFinalAnswerProjection | undefined {
+  if (!hostTextSource) return undefined;
+  const text = safeHostFinalAnswerText(message);
+  if (!text) return undefined;
+  const commandId = asString(result.commandId);
+  const source = commandId ? `codex.app-server.final-answer:${commandId}` : 'codex.app-server.final-answer';
+  const auditRefs = asStringArray(result.evidenceRefs) ?? [];
+  const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(text, result);
+  return {
+    envelope: compactRecord({
+      schemaVersion: 'sciforge.final-answer-envelope.v1',
+      source,
+      kind: 'assistant-message',
+      text,
+      commandId,
+      attemptId: asString(result.attemptId),
+      provider: publicRuntimeMetadataValue(result.provider, 'provider'),
+      model: publicRuntimeMetadataValue(result.model, 'model'),
+      profile: publicRuntimeMetadataValue(result.profile, 'profile'),
+      codexSessionId: asString(result.codexSessionId),
+      evidenceRefs: auditRefs,
+      hostTextSource,
+      liveAcceptanceEligible,
+    }),
+    text,
+    source,
+    visibleStatus: 'completed',
+    liveAcceptanceEligible,
+    auditRefs,
+  };
+}
+
+function hostFinalAnswerAuditRefs(result: Record<string, unknown>, answer: Record<string, unknown>): string[] {
+  return uniqueStrings([
+    ...(asStringArray(result.evidenceRefs) ?? []),
+    ...(asStringArray(answer.evidenceRefs) ?? []),
+    ...(asStringArray(answer.cleanupRefs) ?? []),
+  ]);
+}
+
+function hasSharedEvidenceRef(left: unknown, right: unknown): boolean {
+  const leftRefs = new Set(asStringArray(left) ?? []);
+  return (asStringArray(right) ?? []).some((ref) => leftRefs.has(ref));
+}
+
+function safeHostFinalAnswerText(value: unknown): string | undefined {
+  const text = safeSummaryText(value, 4000);
+  if (!text) return undefined;
+  if (!agentHostVisibleMessageSafeForProjection(text)) return undefined;
+  if (!runtimeNativeMessageSafeForVisibleAnswer(text)) return undefined;
+  return text;
+}
+
+function hostFinalAnswerVisibleStatus(status: unknown): string {
+  const normalized = asString(status)?.trim().toLowerCase();
+  if (normalized === 'blocked' || normalized === 'failed' || normalized === 'error') return 'blocked';
+  if (normalized === 'needs-confirmation' || normalized === 'needs_confirmation' || normalized === 'needs-human') return 'needs-confirmation';
+  if (normalized === 'partial' || normalized === 'ready' || normalized === 'partial-ready') return 'partial';
+  return 'completed';
 }
 
 function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string, unknown>): unknown {
@@ -790,80 +916,49 @@ function withGuiAskUserRuntimeResult(
   };
 }
 
-function withNativeCodexMessageRuntimeResult(result: unknown, message: string): unknown {
-  if (!message.trim() || !isRecord(result)) return result;
+function withHostFinalAnswerRuntimeResult(result: unknown, finalAnswer: HostFinalAnswerProjection): unknown {
+  if (!isRecord(result)) return result;
   const output = isRecord(result.output) ? result.output : {};
   const commandId = asString(result.commandId);
-  const auditRefs = asStringArray(result.evidenceRefs) ?? [];
-  const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
-  const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(message, result);
-  const source = commandId ? `codex.app-server.final-answer:${commandId}` : 'codex.app-server.final-answer';
-  const finalAnswerEnvelope = {
-    schemaVersion: 'sciforge.final-answer-envelope.v1',
-    source,
-    kind: 'assistant-message',
-    text: message,
-    commandId,
-    attemptId: asString(result.attemptId),
-    provider: publicRuntimeMetadataValue(result.provider, 'provider'),
-    model: publicRuntimeMetadataValue(result.model, 'model'),
-    profile: publicRuntimeMetadataValue(result.profile, 'profile'),
-    codexSessionId: asString(result.codexSessionId),
-    evidenceRefs: auditRefs,
-    liveAcceptanceEligible,
-  };
+  const runtimeMetadata = runtimeMetadataForProjection(result, finalAnswer.auditRefs);
   return {
     ...result,
-    message,
-    finalAnswerEnvelope,
-    nativeCodexMessage: {
-      schemaVersion: 'sciforge.runtime-codex-native-message.v1',
-      source,
-      text: message,
-      commandId,
-      attemptId: asString(result.attemptId),
-      provider: publicRuntimeMetadataValue(result.provider, 'provider'),
-      model: publicRuntimeMetadataValue(result.model, 'model'),
-      profile: publicRuntimeMetadataValue(result.profile, 'profile'),
-      workspace: publicRuntimeMetadataValue(result.workspace, 'workspace'),
-      codexSessionId: asString(result.codexSessionId),
-      liveAcceptanceEligible,
-    },
+    message: finalAnswer.text,
+    finalAnswerEnvelope: finalAnswer.envelope,
     displayIntent: {
-      source,
+      source: finalAnswer.source,
       conversationProjection: {
         schemaVersion: 'sciforge.conversation-projection.v1',
         conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:final-answer',
         visibleAnswer: {
-          status: 'completed',
-          text: message,
+          status: finalAnswer.visibleStatus,
+          text: finalAnswer.text,
           artifactRefs: [],
-          liveAcceptanceEligible,
+          liveAcceptanceEligible: finalAnswer.liveAcceptanceEligible,
         },
         artifacts: [],
         executionProcess: [{
           eventId: `${commandId ?? 'runtime-codex'}:final-answer`,
           type: 'FinalAnswerEnvelope',
-          summary: 'Runtime Codex completed with a Codex App Server assistant final answer; tool process and raw diagnostics stay in the folded run audit.',
+          summary: 'Runtime Codex completed with a Host-owned final answer envelope; tool process and raw diagnostics stay in the folded run audit.',
           timestamp: asString(result.timestamp) ?? new Date().toISOString(),
         }],
         recoverActions: [],
         verificationState: {
           status: 'unverified',
           verdict: 'final-answer',
-          verifierRef: source,
-          liveAcceptanceEligible,
+          verifierRef: finalAnswer.source,
+          liveAcceptanceEligible: finalAnswer.liveAcceptanceEligible,
         },
         runtimeMetadata,
-        auditRefs,
+        auditRefs: finalAnswer.auditRefs,
         diagnostics: [],
       },
     },
     output: {
       ...output,
-      message,
+      message: finalAnswer.text,
       finalAnswerEnvelope: true,
-      nativeCodexMessage: true,
     },
   };
 }

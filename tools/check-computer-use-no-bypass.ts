@@ -23,10 +23,12 @@ const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|move-curso
 const vscodeOperationTextInferenceHelper = /\b(?:lowRisk[A-Za-z0-9_$]*OperationFromText|[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)|[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)[A-Za-z0-9_$]*(?:To|As|Into)[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation))\b/;
 const genericOperationTextInferenceHelper = /\b[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)\b/;
 const vscodeLiveDiagnosticTextInference = /\b(?:liveDiagnostic|live[-\s]?diagnostic|currentVSCodeCoWorkLiveDiagnosticRunner|tryRunCurrentVSCodeCoWorkLiveDiagnostic)\b/i;
+const uiNativeFinalAnswerBypass = /\b(?:nativeCodexMessage|runtimeDoneNativeMessage|withNativeCodexMessageRuntimeResult)\b|codex\.native-message/;
 
 async function main() {
   const files = [
     ...await collectSourceFilesIfExists(join(root, 'src', 'runtime')),
+    ...await collectSourceFilesIfExists(join(root, 'src', 'ui', 'src', 'api', 'sciforgeToolsClient')),
     ...await collectSourceFilesIfExists(join(root, 'packages', 'backend', 'src')),
     ...await collectSourceFilesIfExists(join(root, 'packages', 'actions', 'computer-use')),
   ];
@@ -89,6 +91,15 @@ async function main() {
           line: index + 1,
           rule: 'forbidden-vscode-operation-text-inference',
           message: 'Ordinary chat/native route must not infer VSCode operations or live diagnostics from message/commandText/intentText/prompt text; require a structured Host operation ref.',
+          text: line.trim(),
+        });
+      }
+      if (isUiNativeFinalAnswerBypassLine(rel, line)) {
+        findings.push({
+          file: rel,
+          line: index + 1,
+          rule: 'forbidden-ui-native-final-answer-bypass',
+          message: 'UI/runtime projection must not synthesize final answers from native messages; require Host-owned FinalAnswerEnvelope evidence.',
           text: line.trim(),
         });
       }
@@ -155,6 +166,11 @@ function isOrdinaryChatOrNativeRouteSurface(file: string): boolean {
 function isVSCodeCoWorkRouteSurface(file: string): boolean {
   return file === 'src/runtime/codex/computer-use-native-route.ts'
     || /(?:^|\/)vscode-cowork-.*(?:route|chat|bridge).*\.ts$/.test(file);
+}
+
+function isUiNativeFinalAnswerBypassLine(file: string, line: string): boolean {
+  if (!/^src\/ui\/src\/api\/sciforgeToolsClient\/.*\.ts$/.test(file)) return false;
+  return uiNativeFinalAnswerBypass.test(line.replace(/\/\/.*$/, ''));
 }
 
 async function structuredManifestFindings(): Promise<Finding[]> {

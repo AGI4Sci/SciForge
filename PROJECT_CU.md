@@ -187,18 +187,18 @@ Acceptance Gates：
 
 Build Tasks：
 
-- [ ] 定义 native route 可接受的 Host-owned final-answer evidence marker。
-- [ ] native route result 只接受 Codex / Agent Host 的 final answer envelope。
-- [ ] Computer Use / app module / runtime local result 只能作为 refs-first evidence。
-- [ ] 删除 runtime-local answer synthesis、completion ack 或 fallback answer。
-- [ ] runtime gateway / slash command 的本地 completion fallback 同步 fail closed 或迁入 Host-owned event projection。
+- [x] 定义 native route 可接受的 Host-owned final-answer evidence marker：`agentHostFinalAnswer.schemaVersion/source/hostOwnsFinalAnswer/computerUseCorePlanning/evidenceRefs`。
+- [x] native route result 只接受 Codex / Agent Host 的 final answer envelope；无 Host marker 时不投影 `done`。
+- [x] Computer Use / app module / runtime local result 只能作为 refs-first evidence；readiness/action/procedure completion 会降级为 `partial` / `blocked`。
+- [x] 删除 runtime-local answer synthesis、completion ack 或 fallback answer；UI 不再从 native `message` / `message_delta` / `done.finalText` 生成 `FinalAnswerEnvelope`。
+- [x] runtime gateway / slash command 的本地 completion fallback 同步 fail closed 或迁入 Host-owned event projection。
 
 Acceptance Gates：
 
-- [ ] Unit tests 证明 live diagnostic runner 返回 `completed` 但没有 Host final-answer evidence 时，native route 不能 `done`。
-- [ ] Unit tests 证明 app module readiness、single action completed、`run_procedure.status=completed` 都不能成为 final answer。
-- [ ] Unit tests 证明 runtime gateway 空响应不会合成本地 fallback answer。
-- [ ] Unit tests 证明 public events 只包含 tokenized refs、blocked / partial 状态和 Host-owned final answer envelope。
+- [x] Unit tests 证明 live diagnostic runner 返回 `completed` 但没有 Host final-answer evidence 时，native route 不能 `done`。
+- [x] Unit tests 证明 app module readiness、single action completed、`run_procedure.status=completed` 都不能成为 final answer。
+- [x] Unit tests 证明 runtime gateway 空响应不会合成本地 fallback answer。
+- [x] Unit tests 证明 public events 只包含 tokenized refs、blocked / partial 状态和 Host-owned final answer envelope。
 
 ### P5：公共事件与大对象 Sanitizer
 

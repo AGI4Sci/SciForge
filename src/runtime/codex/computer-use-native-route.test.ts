@@ -224,11 +224,11 @@ test('Computer Use native route can select opt-in TextEdit WindowActionSession b
     });
     assert.notEqual(stream, undefined);
     const events = await collectStreamEvents(stream!);
-    const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+    const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
     assert.equal(appiumCalls.length, 1);
     assert.equal(appiumCalls[0]?.action, 'save');
     assert.equal(appiumCalls[0]?.targetArtifactPath, artifactPath);
-    assert.match(String(done?.message), /Computer Use Act materializer (?:is )?completed|product workflow completion is blocked/i);
+    assert.match(String(done?.message), /Agent Host final answer is required/i);
     assert.ok((done?.evidenceRefs as string[]).includes('window-action-session:textedit-local-save'));
     assert.ok((done?.evidenceRefs as string[]).includes('adapter-registry:window-action-session/appium-mac2/computer-use'));
     assert.doesNotMatch(JSON.stringify(events), /workspace-file-writer|shell-writer|shared-system-input|SECRET|token/i);
@@ -275,7 +275,7 @@ test('Computer Use native route selects VSCode co-work bridge and fails closed o
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
   const selected = events.find((event) => String(event.message).includes('VSCode co-work'));
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const executionUnits = done?.executionUnits as Record<string, unknown>[] | undefined;
   const unit = executionUnits?.[0];
 
@@ -373,11 +373,11 @@ test('Computer Use native route derives P9b VSCode co-work intent from refs-firs
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
   const selected = events.find((event) => String(event.message).includes('VSCode co-work'));
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
 
   assert.ok(selected);
-  assert.equal(done?.status, 'ready');
+  assert.equal(done?.status, 'partial');
   assert.equal(unit?.status, 'ready');
   assert.equal(unit?.primitive, 'observe');
   assert.equal(unit?.action, undefined);
@@ -543,7 +543,7 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
   const events = await collectStreamEvents(stream!);
   const selected = events.find((event) => String(event.message).includes('VSCode co-work'));
   const liveSelected = events.find((event) => String(event.message).includes('current VSCode co-work live diagnostic'));
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
   const hostProducerEvidence = done?.hostProducerEvidence as Record<string, unknown> | undefined;
 
@@ -579,6 +579,60 @@ test('Computer Use native route can run current VSCode co-work live diagnostic f
   assert.equal(unit?.tool, 'current-vscode-cowork-live-diagnostic');
   assert.equal(unit?.status, 'done');
   assert.doesNotMatch(JSON.stringify(events), /SECRET|example\.invalid|raw-live|raw-cleanup|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('Computer Use native route does not project local live diagnostic completion as final done', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '读取我当前打开的 VSCode 可见文本。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-local-completed-no-final',
+      attemptId: 'native-route-vscode-cowork-local-completed-no-final-attempt-1',
+      agentHostInput: vscodeCoWorkAgentHostInput({
+        operation: 'read-visible-text',
+        selectedWindowRef: 'window:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+      }),
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async () => ({
+      status: 'completed',
+      message: 'LOCAL COMPLETED ACK MUST NOT BECOME FINAL ANSWER',
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+      evidenceRefs: [
+        'chat-request:vscode-cowork:local-completed-no-final',
+        'window:vscode:paper',
+        'observation:vscode:current-live',
+      ],
+      cleanupRefs: [
+        'scoped-input-lease:current-vscode-cowork:local-completed-no-final',
+        'scoped-input-adapter:current-vscode-cowork:local-completed-no-final',
+        'cursor-marker:current-vscode-cowork:local-completed-no-final',
+        'front-app-restore:current-vscode-cowork:local-completed-no-final',
+        'mouse-position-restore:current-vscode-cowork:local-completed-no-final',
+      ],
+    }),
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const terminal = events.find((event) => event.type === 'partial' || event.type === 'blocked') as Record<string, unknown> | undefined;
+
+  assert.equal(events.some((event) => event.type === 'done'), false);
+  assert.ok(terminal);
+  assert.notEqual(terminal?.status, 'completed');
+  assert.equal(terminal?.agentHostFinalAnswer, undefined);
+  assert.equal(terminal?.completionTruth, undefined);
+  assert.ok((terminal?.evidenceRefs as string[]).includes('observation:vscode:current-live'));
+  assert.doesNotMatch(JSON.stringify(events), /LOCAL COMPLETED ACK MUST NOT BECOME FINAL ANSWER|taskOutcome":"satisfied/i);
 });
 
 test('Computer Use native route does not start current VSCode live diagnostic from bare ordinary chat text', async () => {
@@ -676,7 +730,7 @@ test('Computer Use native route does not infer VSCode co-work operation from gen
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
 
   assert.equal(done?.status, 'blocked');
@@ -790,13 +844,13 @@ test('Computer Use native route structures generic observation refs before curre
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const runtimeIntent = runnerCalls[0]?.runtimeIntent as Record<string, unknown> | undefined;
   const vscodeCoWork = runtimeIntent?.vscodeCoWork as Record<string, unknown> | undefined;
   const latestObservation = vscodeCoWork?.latestObservation as Record<string, unknown> | undefined;
 
   assert.equal(runnerCalls.length, 1);
-  assert.equal(done?.status, 'completed');
+  assert.equal(done?.status, 'partial');
   assert.equal(latestObservation?.windowRef, 'window:vscode:paper');
   assert.equal(latestObservation?.sessionRef, 'window-action-session:vscode-cowork:1');
   assert.equal(latestObservation?.observationRef, 'observation:vscode:current');
@@ -856,10 +910,10 @@ test('Computer Use native route merges Host-selected operation with generic VSCo
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
 
-  assert.equal(done?.status, 'ready');
+  assert.equal(done?.status, 'partial');
   assert.equal(unit?.primitive, 'act');
   assert.equal(unit?.targetWindowRef, 'window:vscode:paper');
   assert.deepEqual(unit?.action, {
@@ -917,7 +971,7 @@ test('Computer Use native route fails closed on ambiguous generic Host window re
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
 
   assert.equal(done?.status, 'blocked');
@@ -961,7 +1015,7 @@ test('Computer Use native route drops raw VSCode window and observation refs bef
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -999,7 +1053,7 @@ test('Computer Use native route blocks mixed raw and refs-first VSCode window ca
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1034,7 +1088,7 @@ test('Computer Use native route blocks VSCode window candidates without bind ide
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1069,7 +1123,7 @@ test('Computer Use native route blocks raw selected VSCode target refs instead o
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const rawSelectedWindowDone = rawSelectedWindowEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawSelectedWindowDone = routeOutcomeEvent(rawSelectedWindowEvents) as Record<string, unknown> | undefined;
   const rawSelectedWindowUnit = (rawSelectedWindowDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(rawSelectedWindowDone?.status, 'blocked');
@@ -1104,7 +1158,7 @@ test('Computer Use native route blocks raw selected VSCode target refs instead o
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const rawSelectedFileDone = rawSelectedFileEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawSelectedFileDone = routeOutcomeEvent(rawSelectedFileEvents) as Record<string, unknown> | undefined;
   const rawSelectedFileUnit = (rawSelectedFileDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(rawSelectedFileDone?.status, 'blocked');
@@ -1137,7 +1191,7 @@ test('Computer Use native route blocks task-shaped VSCode operations before publ
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1190,7 +1244,7 @@ test('Computer Use native route requires confirmation when VSCode target file is
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const executionUnits = done?.executionUnits as Record<string, unknown>[] | undefined;
   const unit = executionUnits?.[0];
 
@@ -1229,7 +1283,7 @@ test('Computer Use native route blocks mixed raw and refs-first VSCode observe r
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1270,7 +1324,7 @@ test('Computer Use native route blocks stale VSCode selected file refs', async (
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1309,7 +1363,7 @@ test('Computer Use native route blocks mixed raw and refs-first VSCode visible f
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1352,7 +1406,7 @@ test('Computer Use native route blocks VSCode file targets that are raw paths in
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1389,7 +1443,7 @@ test('Computer Use native route requires draft text refs for VSCode draft insert
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(done?.status, 'blocked');
@@ -1425,7 +1479,7 @@ test('Computer Use native route requires draft text refs for VSCode draft insert
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const rawDraftDone = rawDraftEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawDraftDone = routeOutcomeEvent(rawDraftEvents) as Record<string, unknown> | undefined;
   const rawDraftUnit = (rawDraftDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(rawDraftDone?.status, 'blocked');
@@ -1460,7 +1514,7 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const hiddenDone = hiddenEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const hiddenDone = routeOutcomeEvent(hiddenEvents) as Record<string, unknown> | undefined;
   const hiddenUnit = (hiddenDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(hiddenDone?.status, 'blocked');
@@ -1493,7 +1547,7 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const missingEditorElementDone = missingEditorElementEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const missingEditorElementDone = routeOutcomeEvent(missingEditorElementEvents) as Record<string, unknown> | undefined;
   const missingEditorElementUnit = (missingEditorElementDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(missingEditorElementDone?.status, 'blocked');
@@ -1526,10 +1580,10 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
 
   assert.notEqual(stream, undefined);
   const events = await collectStreamEvents(stream!);
-  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
   const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
-  assert.equal(done?.status, 'ready');
+  assert.equal(done?.status, 'partial');
   assert.equal(unit?.primitive, 'observe');
   assert.equal(unit?.action, undefined);
   assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
@@ -1560,7 +1614,7 @@ test('Computer Use native route requires refs-first VSCode cursor movement refs'
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const rawCursorMoveDone = rawCursorMoveEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawCursorMoveDone = routeOutcomeEvent(rawCursorMoveEvents) as Record<string, unknown> | undefined;
   const rawCursorMoveUnit = (rawCursorMoveDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(rawCursorMoveDone?.status, 'blocked');
@@ -1590,10 +1644,10 @@ test('Computer Use native route requires refs-first VSCode cursor movement refs'
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const readyDone = readyEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const readyDone = routeOutcomeEvent(readyEvents) as Record<string, unknown> | undefined;
   const readyUnit = (readyDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
-  assert.equal(readyDone?.status, 'ready');
+  assert.equal(readyDone?.status, 'partial');
   assert.equal(readyUnit?.primitive, 'act');
   assert.deepEqual(readyUnit?.action, {
     type: 'key',
@@ -1629,7 +1683,7 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const rawSelectionDone = rawSelectionEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawSelectionDone = routeOutcomeEvent(rawSelectionEvents) as Record<string, unknown> | undefined;
   const rawSelectionUnit = (rawSelectionDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(rawSelectionDone?.status, 'blocked');
@@ -1662,7 +1716,7 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const missingPermissionDone = missingPermissionEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const missingPermissionDone = routeOutcomeEvent(missingPermissionEvents) as Record<string, unknown> | undefined;
   const missingPermissionUnit = (missingPermissionDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(missingPermissionDone?.status, 'blocked');
@@ -1698,10 +1752,10 @@ test('Computer Use native route gates VSCode replace-selection on refs-first sel
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const fullAccessDone = fullAccessEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const fullAccessDone = routeOutcomeEvent(fullAccessEvents) as Record<string, unknown> | undefined;
   const fullAccessUnit = (fullAccessDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
-  assert.equal(fullAccessDone?.status, 'ready');
+  assert.equal(fullAccessDone?.status, 'partial');
   assert.equal(fullAccessUnit?.primitive, 'act');
   assert.deepEqual(fullAccessUnit?.action, {
     type: 'type',
@@ -1740,7 +1794,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const unconfirmedDone = unconfirmedEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unconfirmedDone = routeOutcomeEvent(unconfirmedEvents) as Record<string, unknown> | undefined;
   const unconfirmedUnit = (unconfirmedDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(unconfirmedDone?.status, 'blocked');
@@ -1771,7 +1825,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const unboundPermissionDone = unboundPermissionEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unboundPermissionDone = routeOutcomeEvent(unboundPermissionEvents) as Record<string, unknown> | undefined;
   const unboundPermissionUnit = (unboundPermissionDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(unboundPermissionDone?.status, 'blocked');
@@ -1804,7 +1858,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const bareNonUserFileDone = bareNonUserFileEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const bareNonUserFileDone = routeOutcomeEvent(bareNonUserFileEvents) as Record<string, unknown> | undefined;
   const bareNonUserFileUnit = (bareNonUserFileDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(bareNonUserFileDone?.status, 'blocked');
@@ -1839,7 +1893,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const unboundNonUserFileScopeDone = unboundNonUserFileScopeEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unboundNonUserFileScopeDone = routeOutcomeEvent(unboundNonUserFileScopeEvents) as Record<string, unknown> | undefined;
   const unboundNonUserFileScopeUnit = (unboundNonUserFileScopeDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(unboundNonUserFileScopeDone?.status, 'blocked');
@@ -1876,10 +1930,10 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const scopedNonUserFileDone = scopedNonUserFileEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const scopedNonUserFileDone = routeOutcomeEvent(scopedNonUserFileEvents) as Record<string, unknown> | undefined;
   const scopedNonUserFileUnit = (scopedNonUserFileDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
-  assert.equal(scopedNonUserFileDone?.status, 'ready');
+  assert.equal(scopedNonUserFileDone?.status, 'partial');
   assert.equal(scopedNonUserFileUnit?.primitive, 'act');
   assert.deepEqual(scopedNonUserFileUnit?.action, {
     type: 'app_command',
@@ -1915,7 +1969,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const unconfirmedUndoDone = unconfirmedUndoEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unconfirmedUndoDone = routeOutcomeEvent(unconfirmedUndoEvents) as Record<string, unknown> | undefined;
   const unconfirmedUndoUnit = (unconfirmedUndoDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(unconfirmedUndoDone?.status, 'blocked');
@@ -1946,7 +2000,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const approvalWithoutRiskDone = approvalWithoutRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const approvalWithoutRiskDone = routeOutcomeEvent(approvalWithoutRiskEvents) as Record<string, unknown> | undefined;
   const approvalWithoutRiskUnit = (approvalWithoutRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(approvalWithoutRiskDone?.status, 'blocked');
@@ -1977,7 +2031,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const rawRiskDone = rawRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawRiskDone = routeOutcomeEvent(rawRiskEvents) as Record<string, unknown> | undefined;
   const rawRiskUnit = (rawRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(rawRiskDone?.status, 'blocked');
@@ -2008,7 +2062,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const prefixedRawRiskDone = prefixedRawRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const prefixedRawRiskDone = routeOutcomeEvent(prefixedRawRiskEvents) as Record<string, unknown> | undefined;
   const prefixedRawRiskUnit = (prefixedRawRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(prefixedRawRiskDone?.status, 'blocked');
@@ -2040,7 +2094,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const unboundTargetRiskDone = unboundTargetRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unboundTargetRiskDone = routeOutcomeEvent(unboundTargetRiskEvents) as Record<string, unknown> | undefined;
   const unboundTargetRiskUnit = (unboundTargetRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(unboundTargetRiskDone?.status, 'blocked');
@@ -2075,7 +2129,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const embeddedRiskDone = embeddedRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const embeddedRiskDone = routeOutcomeEvent(embeddedRiskEvents) as Record<string, unknown> | undefined;
   const embeddedRiskUnit = (embeddedRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(embeddedRiskDone?.status, 'blocked');
@@ -2108,7 +2162,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const unsuffixedApprovalDone = unsuffixedApprovalEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unsuffixedApprovalDone = routeOutcomeEvent(unsuffixedApprovalEvents) as Record<string, unknown> | undefined;
   const unsuffixedApprovalUnit = (unsuffixedApprovalDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(unsuffixedApprovalDone?.status, 'blocked');
@@ -2141,7 +2195,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const riskOnlyApprovalDone = riskOnlyApprovalEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const riskOnlyApprovalDone = routeOutcomeEvent(riskOnlyApprovalEvents) as Record<string, unknown> | undefined;
   const riskOnlyApprovalUnit = (riskOnlyApprovalDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(riskOnlyApprovalDone?.status, 'blocked');
@@ -2175,7 +2229,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const approvalWithoutSessionDone = approvalWithoutSessionEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const approvalWithoutSessionDone = routeOutcomeEvent(approvalWithoutSessionEvents) as Record<string, unknown> | undefined;
   const approvalWithoutSessionUnit = (approvalWithoutSessionDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
   assert.equal(approvalWithoutSessionDone?.status, 'blocked');
@@ -2209,10 +2263,10 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const confirmedDone = confirmedEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const confirmedDone = routeOutcomeEvent(confirmedEvents) as Record<string, unknown> | undefined;
   const confirmedUnit = (confirmedDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
-  assert.equal(confirmedDone?.status, 'ready');
+  assert.equal(confirmedDone?.status, 'partial');
   assert.equal(confirmedUnit?.primitive, 'act');
   assert.deepEqual(confirmedUnit?.action, {
     type: 'app_command',
@@ -2253,10 +2307,10 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
     model: 'sciforge-model',
     profile: 'host-owned',
   })!);
-  const undoFullAccessDone = undoFullAccessEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const undoFullAccessDone = routeOutcomeEvent(undoFullAccessEvents) as Record<string, unknown> | undefined;
   const undoFullAccessUnit = (undoFullAccessDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
-  assert.equal(undoFullAccessDone?.status, 'ready');
+  assert.equal(undoFullAccessDone?.status, 'partial');
   assert.equal(undoFullAccessUnit?.primitive, 'act');
   assert.deepEqual(undoFullAccessUnit?.action, {
     type: 'key',
@@ -2296,7 +2350,7 @@ test('Computer Use native route blocks VSCode bulk and cross-file requests until
       model: 'sciforge-model',
       profile: 'host-owned',
     })!);
-    const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+    const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
     const unit = (done?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
 
     assert.equal(done?.status, 'blocked', operation);
@@ -2480,6 +2534,14 @@ async function collectStreamEvents(stream: NonNullable<ReturnType<typeof createC
   const events: Record<string, unknown>[] = [];
   for await (const event of stream.events) events.push(event as Record<string, unknown>);
   return events;
+}
+
+function routeOutcomeEvent(events: Record<string, unknown>[]): Record<string, unknown> | undefined {
+  return events.find((event) =>
+    event.type === 'done'
+    || event.type === 'partial'
+    || event.type === 'blocked'
+  );
 }
 
 function snapshotEnv(keys: string[]): Record<string, string | undefined> {

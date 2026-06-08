@@ -87,6 +87,8 @@ Browser、Computer Use、Desktop 和其它模块只能作为 Codex / Agent Host 
 
 用户级验收只能由 Codex / Agent Host 产出，并通过 Codex App Server protocol events 进入 SciForge。SciForge 把 App Server assistant final message、tool refs、approval 状态和 done/error 事件确定性归一成 `FinalAnswerEnvelope` / conversation projection；GUI 不作为模型可调用 completion tool。产品路径不得向 Codex app-server 注册或注入 `gui.present`、`gui.ask_user`、`gui_present`、`gui_ask_user` 或 `moduleId=gui` completion surface；如果旧请求进入运行时，必须作为 unsupported dynamic tool fail closed。
 
+SciForge UI / Runtime Codex projection 不得把 native `message`、`message_delta`、`done.finalText`、runtime ack、空响应 fallback 或工具局部 completion 本地铸造成用户级 `FinalAnswerEnvelope`。只有已验证的 Host-owned final-answer marker 或已有 `FinalAnswerEnvelope` 可以进入最终答案展示；其它 runtime 输出只能作为 refs-first evidence、blocked / partial 状态或 missing-final-answer failure。
+
 完成必须有同一 current run 的 evidence 支撑：
 
 - Browser 任务需要 source page refs / page text refs。

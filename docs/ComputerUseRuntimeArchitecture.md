@@ -150,6 +150,17 @@ ordinary chat 只是进入 Codex / Agent Host 的用户输入桥，不是 VSCode
 
 native route 只做确定性投影：它可以投影 sanitized refs、blocked / partial 状态和 Host-owned final answer envelope。没有 same-run Host final-answer evidence 时，native route 必须返回 `blocked` / `partial`，不能用 Computer Use action result、app module readiness、`run_procedure.status=completed`、runtime ack 或 fallback text 自行 `done`。
 
+P4 后 Host-owned final answer evidence 的最小 marker 是：
+
+- `agentHostFinalAnswer.schemaVersion = sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1`。
+- `agentHostFinalAnswer.source` 必须来自 `codex-agent-host-*` Host producer。
+- `agentHostFinalAnswer.hostOwnsFinalAnswer = true`。
+- `agentHostFinalAnswer.computerUseCorePlanning = false`。
+- `agentHostFinalAnswer.text` 必须通过 public projection 安全检查。
+- `agentHostFinalAnswer.evidenceRefs` 必须和 current-run native route / Runtime Codex done evidence 有交集。
+
+UI / runtime projection 不能从 native `message`、`message_delta`、`done.finalText`、`answer`、`text`、completion ack 或 runtime gateway 空响应本地铸造 `FinalAnswerEnvelope`。这些内容没有 Host marker 时只能进入 missing-final-answer / blocked / partial 路径；`nativeCodexMessage` 旧旁路不得在产品代码中恢复。已有 `FinalAnswerEnvelope` 或 Host-owned marker 可以被 UI 确定性投影为 conversation visible answer。
+
 Runtime `gui` module 已退役。`gui_present` / `gui_ask_user` 只能作为 Agent Host public event projection 或 refs-first evidence metadata 出现，不能作为 `module.invoke gui.present` / `module.invoke gui.ask_user` 的 runtime module surface、dynamic tool surface 或 completion surface。
 
 普通聊天接线必须满足：

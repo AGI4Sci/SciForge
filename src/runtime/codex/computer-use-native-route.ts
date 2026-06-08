@@ -763,16 +763,72 @@ function doneEvent(metadata: RouteMetadata, payload: ToolPayload): Record<string
   const payloadRefs = Array.isArray(payloadRecord.evidenceRefs)
     ? (payloadRecord.evidenceRefs as unknown[]).filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)
     : [];
+  const status = statusFromPayload(payload);
+  const hasHostFinalAnswer = hasHostOwnedFinalAnswerPayload(payload);
+  const eventType = hasHostFinalAnswer ? 'done' : localEvidenceEventType(status);
+  const projectedPayload = hasHostFinalAnswer ? payload : localEvidencePayload(payload);
+  const message = hasHostFinalAnswer
+    ? payload.message
+    : localEvidenceMessage(status);
   return compactRecord({
-    ...baseEvent(metadata, 'done'),
-    ...payload,
-    status: statusFromPayload(payload),
-    message: payload.message,
-    text: payload.message,
+    ...baseEvent(metadata, eventType),
+    ...projectedPayload,
+    status: hasHostFinalAnswer ? status : localEvidenceStatus(status),
+    message,
+    text: message,
     commandId: metadata.commandId,
     attemptId: metadata.attemptId,
     evidenceRefs: uniqueRouteStrings([...payloadRefs, ...metadata.evidenceRefs]),
   });
+}
+
+function hasHostOwnedFinalAnswerPayload(payload: ToolPayload): boolean {
+  const value = (payload as unknown as Record<string, unknown>).agentHostFinalAnswer;
+  return isRecord(value)
+    && value.schemaVersion === 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1'
+    && value.source === 'codex-agent-host-vscode-cowork-live-diagnostic'
+    && value.hostOwnsFinalAnswer === true
+    && value.computerUseCorePlanning === false;
+}
+
+function localEvidenceEventType(status: string | undefined): 'blocked' | 'partial' {
+  return status === 'blocked' || status === 'needs-confirmation' || status === 'failed'
+    ? 'blocked'
+    : 'partial';
+}
+
+function localEvidenceStatus(status: string | undefined): string {
+  if (status === 'blocked' || status === 'needs-confirmation' || status === 'failed') return status;
+  return 'partial';
+}
+
+function localEvidenceMessage(status: string | undefined): string {
+  if (status === 'blocked') return 'Computer Use native route returned refs-first blocked evidence; Agent Host final answer is required.';
+  if (status === 'needs-confirmation') return 'Computer Use native route needs confirmation from refs-first evidence; Agent Host final answer is required.';
+  return 'Computer Use native route returned refs-first partial evidence; Agent Host final answer is required.';
+}
+
+function localEvidencePayload(payload: ToolPayload): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload as unknown as Record<string, unknown>)) {
+    if (key === 'message' || key === 'text' || key === 'status' || key === 'agentHostFinalAnswer' || key === 'completionTruth' || key === 'taskOutcome') continue;
+    if (key === 'executionUnits' && Array.isArray(value)) {
+      output[key] = value.map(localEvidenceExecutionUnit);
+      continue;
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function localEvidenceExecutionUnit(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const status = stringField(value, 'status');
+  if (status !== 'done' && status !== 'completed') return value;
+  return {
+    ...value,
+    status: 'partial',
+  };
 }
 
 function failedEvent(metadata: RouteMetadata, message: string): Record<string, unknown> {
@@ -897,6 +953,8 @@ function safeAgentHostFinalAnswer(value: unknown): Record<string, unknown> | und
   if (!isRecord(value)) return undefined;
   if (value.schemaVersion !== 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1') return undefined;
   if (value.source !== 'codex-agent-host-vscode-cowork-live-diagnostic') return undefined;
+  if (value.hostOwnsFinalAnswer !== true) return undefined;
+  if (value.computerUseCorePlanning !== false) return undefined;
   const status = liveDiagnosticStatus(value.status);
   if (!status) return undefined;
   const primitiveChainObserved = safePrimitiveChain(value.primitiveChainObserved);

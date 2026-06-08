@@ -142,42 +142,7 @@ export function attachRuntimeGuiPresentationToResponse(
       },
     };
   }
-  const nativeMessage = isRecord(result) && isRecord(result.nativeCodexMessage)
-    ? result.nativeCodexMessage
-    : isRecord(result) && isRecord(result.output) && isRecord(result.output.nativeCodexMessage)
-      ? result.output.nativeCodexMessage
-      : undefined;
-  const nativeSource = asString(nativeMessage?.source);
-  if (!nativeMessage || (!nativeSource?.startsWith('codex.native-message:') && !nativeSource?.startsWith('codex.app-server.final-answer:'))) return response;
-  const nativeLiveAcceptanceEligible = typeof nativeMessage.liveAcceptanceEligible === 'boolean'
-    ? nativeMessage.liveAcceptanceEligible
-    : runtimeNativeMessageLiveAcceptanceEligible(asString(nativeMessage.text) ?? response.message.content, result);
-  return {
-    ...response,
-    message: {
-      ...response.message,
-        provenance: {
-          ...(response.message.provenance ?? {}),
-          kind: 'live-runtime-codex',
-          source: nativeSource,
-          runtimeRequestEligible: false,
-          liveAcceptanceEligible: nativeLiveAcceptanceEligible,
-        commandId: asString(nativeMessage?.commandId),
-        attemptId: asString(nativeMessage?.attemptId),
-        provider: asString(nativeMessage?.provider),
-        model: asString(nativeMessage?.model),
-        profile: asString(nativeMessage?.profile),
-        workspace: asString(nativeMessage?.workspace),
-      },
-    },
-    run: {
-      ...response.run,
-      raw: {
-        ...(isRecord(response.run.raw) ? response.run.raw : {}),
-        nativeCodexMessage: nativeMessage,
-      },
-    },
-  };
+  return response;
 }
 
 function objectReferenceFromGuiPresentation(presentation: Record<string, unknown> | undefined, runId: string): ObjectReference | undefined {

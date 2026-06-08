@@ -35,7 +35,10 @@ export async function tryRunCodexRuntimeGateway(
       throw new Error(event.message ?? 'Runtime Codex failed.');
     }
   }
-  const message = chunks.join('').trim() || 'Runtime Codex completed without a text response.';
+  const message = chunks.join('').trim();
+  if (!message) {
+    return runtimeCodexMissingFinalAnswerPayload(turn.turnId, logs);
+  }
   return {
     message,
     claimType: 'runtime-codex-result',
@@ -56,6 +59,49 @@ export async function tryRunCodexRuntimeGateway(
     artifacts: [],
     logs,
   };
+}
+
+function runtimeCodexMissingFinalAnswerPayload(
+  turnId: string,
+  logs: Array<Record<string, unknown>>,
+): ToolPayload {
+  const first = logs[0] ?? {};
+  const last = logs[logs.length - 1] ?? first;
+  return {
+    message: 'Runtime Codex completed without a safe final assistant answer; final-answer-required.',
+    claimType: 'runtime-codex-blocked',
+    evidenceLevel: 'runtime-normalized-events',
+    reasoningTrace: 'Runtime Codex emitted terminal/progress events without a Host final answer message; SciForge failed closed.',
+    claims: [{
+      type: 'runtime-codex-final-answer-required',
+      status: 'blocked',
+      boundary: 'final-answer-required',
+      evidenceRefs: stringList(last.evidenceRefs),
+    }],
+    uiManifest: [],
+    executionUnits: [{
+      id: `EU-${turnId}`,
+      status: 'blocked',
+      title: 'Runtime Codex turn',
+      provider: first.provider,
+      model: first.model,
+      profile: first.profile,
+      workspace: first.workspace,
+      commandId: turnId,
+      failureReason: 'final-answer-required',
+      boundary: 'final-answer-required',
+    }],
+    artifacts: [],
+    displayIntent: {
+      status: 'blocked',
+      boundary: 'final-answer-required',
+    },
+    logs,
+  };
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
 function allowOpenAiRuntime(request: GatewayRequest): boolean {

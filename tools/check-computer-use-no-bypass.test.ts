@@ -218,3 +218,20 @@ test('Computer Use no-bypass guard allows structured Host VSCode operation refs'
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
+
+test('Computer Use no-bypass guard blocks UI native final-answer synthesis bypasses', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts', [
+    'function runtimeDoneNativeMessage(done: Record<string, unknown>) {',
+    "  return String(done.finalText ?? done.message ?? '');",
+    '}',
+    'export function projectNative(done: Record<string, unknown>) {',
+    "  return { nativeCodexMessage: runtimeDoneNativeMessage(done), finalAnswerEnvelope: true };",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-ui-native-final-answer-bypass/);
+});

@@ -27,7 +27,7 @@ test('SSE reader preserves generic workspace message events without synthesizing
   assert.equal('displayIntent' in (stream.result as Record<string, unknown>), false);
 });
 
-test('SSE reader pushes backend deltas, tool lifecycle, approval, and progress before final result', async () => {
+test('SSE reader pushes backend deltas, tool lifecycle, approval, and progress before missing-final-answer failure', async () => {
   const commandId = 'codex-command-realtime-reducer';
   const body = [
     'event: message_delta',
@@ -89,14 +89,16 @@ test('SSE reader pushes backend deltas, tool lifecycle, approval, and progress b
 
   await readWorkspaceToolStream(response, (event) => seen.push(normalizeWorkspaceRuntimeEvent(event)));
 
-  assert.deepEqual(seen.slice(0, -1).map((event) => event.type), [
+  assert.deepEqual(seen.map((event) => event.type), [
     'text-delta',
     'tool-call',
     'tool-result',
     'process-progress',
     'human-approval-required',
+    'done',
+    'failed',
   ]);
-  assert.equal(seen.at(-1)?.type, 'done');
+  assert.equal(seen.at(-1)?.type, 'failed');
   assert.equal(seen[0]?.detail, 'Partial answer');
   assert.equal(assistantDraftFromStreamEvents(seen.slice(0, 1)), 'Partial answer');
   assert.equal(seen.find((event) => event.type === 'process-progress')?.raw, seen[3]?.raw);
@@ -212,7 +214,7 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
   assert.equal((seen.at(-1) as { type?: string }).type, 'done');
 });
 
-test('SSE reader promotes native Runtime Codex assistant messages when gui.present is absent', async () => {
+test('SSE reader fails closed on native Runtime Codex assistant messages without Host final-answer envelope', async () => {
   const commandId = 'codex-command-native-message';
   const body = [
     'event: message',
@@ -246,28 +248,152 @@ test('SSE reader promotes native Runtime Codex assistant messages when gui.prese
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
   const result = stream.result as {
     message?: string;
-    finalAnswerEnvelope?: { source?: string; kind?: string; liveAcceptanceEligible?: boolean };
-    nativeCodexMessage?: { source?: string; liveAcceptanceEligible?: boolean };
-    displayIntent?: {
-      conversationProjection?: {
-        visibleAnswer?: { status?: string; liveAcceptanceEligible?: boolean };
-        verificationState?: { status?: string; verdict?: string; liveAcceptanceEligible?: boolean };
-      };
-    };
+    finalAnswerEnvelope?: unknown;
+    nativeCodexMessage?: unknown;
+    output?: Record<string, unknown>;
+  };
+  const failed = seen.at(-1) as { type?: string; status?: string; raw?: Record<string, unknown> } | undefined;
+
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
+  assert.equal(result.finalAnswerEnvelope, undefined);
+  assert.equal(result.nativeCodexMessage, undefined);
+  assert.equal(result.output?.finalAnswerEnvelope, undefined);
+  assert.equal(failed?.type, 'failed');
+  assert.equal(failed?.status, 'failed');
+  assert.equal(failed?.raw?.boundary, 'final-answer-required');
+  assert.doesNotMatch(JSON.stringify(result), /VISIBLE_FROM_CODEX_NATIVE_MESSAGE|codex\.app-server\.final-answer/);
+});
+
+test('SSE reader does not synthesize FinalAnswerEnvelope from native done text without Host final-answer envelope', async () => {
+  const commandId = 'codex-command-native-done-no-host-final-envelope';
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      finalText: 'Computer Use live diagnostic completed.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [
+        `computer-use:vscode/${commandId}/action.completed`,
+        `computer-use:vscode/${commandId}/run-procedure.completed`,
+      ],
+    })}`,
+    '',
+  ].join('\n');
+
+  const stream = await readWorkspaceToolStream(createSseResponse(body), () => undefined);
+  const result = (stream.result ?? {}) as {
+    finalAnswerEnvelope?: unknown;
+    nativeCodexMessage?: unknown;
+    output?: Record<string, unknown>;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string; text?: string } } };
+  };
+  const visible = result.displayIntent?.conversationProjection?.visibleAnswer;
+
+  assert.equal(result.finalAnswerEnvelope, undefined);
+  assert.equal(result.nativeCodexMessage, undefined);
+  assert.equal(result.output?.finalAnswerEnvelope, undefined);
+  assert.notEqual(visible?.status, 'completed');
+  assert.ok(stream.error || visible?.status === 'blocked' || visible?.status === 'partial');
+});
+
+test('SSE reader projects Host-owned Agent Host final-answer envelope from native done evidence', async () => {
+  const commandId = 'codex-command-native-agent-host-final-answer';
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'LOCAL COMPLETION ACK SHOULD NOT BE FINAL',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [
+        `computer-use:vscode/${commandId}/observation.current`,
+        `computer-use:vscode/${commandId}/action.completed`,
+      ],
+      agentHostFinalAnswer: {
+        schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+        source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+        status: 'completed',
+        text: 'HOST OWNED FINAL ANSWER',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        hostOwnsFinalAnswer: true,
+        computerUseCorePlanning: false,
+        primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+        evidenceRefs: [`computer-use:vscode/${commandId}/observation.current`],
+        cleanupRefs: [`computer-use:vscode/${commandId}/control.release`],
+      },
+    })}`,
+    '',
+  ].join('\n');
+
+  const stream = await readWorkspaceToolStream(createSseResponse(body), () => undefined);
+  const result = stream.result as {
+    message?: string;
+    finalAnswerEnvelope?: { source?: string; text?: string; kind?: string; liveAcceptanceEligible?: boolean };
+    nativeCodexMessage?: unknown;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string; text?: string } } };
   };
 
   assert.equal(stream.error, undefined);
-  assert.equal(result.message, 'VISIBLE_FROM_CODEX_NATIVE_MESSAGE');
+  assert.equal(result.message, 'HOST OWNED FINAL ANSWER');
   assert.equal(result.finalAnswerEnvelope?.source, `codex.app-server.final-answer:${commandId}`);
   assert.equal(result.finalAnswerEnvelope?.kind, 'assistant-message');
-  assert.equal(result.finalAnswerEnvelope?.liveAcceptanceEligible, true);
-  assert.equal(result.nativeCodexMessage?.source, `codex.app-server.final-answer:${commandId}`);
-  assert.equal(result.nativeCodexMessage?.liveAcceptanceEligible, true);
+  assert.equal(result.finalAnswerEnvelope?.text, 'HOST OWNED FINAL ANSWER');
+  assert.equal(result.nativeCodexMessage, undefined);
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'completed');
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
-  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
-  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'final-answer');
-  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.liveAcceptanceEligible, true);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, 'HOST OWNED FINAL ANSWER');
+  assert.equal(result.finalAnswerEnvelope?.liveAcceptanceEligible, true);
+});
+
+test('SSE reader rejects unbound final-answer envelopes without same-run evidence', async () => {
+  const commandId = 'codex-command-native-unbound-final-envelope';
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`runtime-codex:${commandId}:done`],
+      finalAnswerEnvelope: {
+        schemaVersion: 'sciforge.final-answer-envelope.v1',
+        source: `codex.app-server.final-answer:${commandId}`,
+        kind: 'assistant-message',
+        text: 'UNBOUND ENVELOPE SHOULD NOT PROJECT',
+        commandId,
+        evidenceRefs: ['runtime-codex:other-run:done'],
+      },
+    })}`,
+    '',
+  ].join('\n');
+
+  const stream = await readWorkspaceToolStream(createSseResponse(body), () => undefined);
+  const result = (stream.result ?? {}) as {
+    message?: string;
+    finalAnswerEnvelope?: unknown;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
+  };
+
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
+  assert.equal(result.finalAnswerEnvelope, undefined);
+  assert.notEqual(result.message, 'UNBOUND ENVELOPE SHOULD NOT PROJECT');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
 });
 
 test('SSE reader prefers Agent Host Browser finalizer text over structured done summaries', async () => {
@@ -740,7 +866,7 @@ test('SSE reader fails closed when done-only final text is only a Browser tool i
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /Browser|agentic RL|arXiv/i);
 });
 
-test('SSE reader joins CJK native assistant deltas without inserting word spaces', async () => {
+test('SSE reader fails closed on CJK native assistant deltas without Host final-answer envelope', async () => {
   const commandId = 'codex-command-native-cjk-message';
   const body = [
     'event: message_delta',
@@ -783,15 +909,19 @@ test('SSE reader joins CJK native assistant deltas without inserting word spaces
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
+    finalAnswerEnvelope?: unknown;
+    nativeCodexMessage?: unknown;
     displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
   };
 
-  assert.equal(stream.error, undefined);
-  assert.equal(result.message, '简洁直给 / 少说废话');
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, '简洁直给 / 少说废话');
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
+  assert.notEqual(result.message, '简洁直给 / 少说废话');
+  assert.equal(result.finalAnswerEnvelope, undefined);
+  assert.equal(result.nativeCodexMessage, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
 });
 
-test('SSE reader preserves assistant markdown structure across text deltas', async () => {
+test('SSE reader fails closed on markdown native assistant deltas without Host final-answer envelope', async () => {
   const commandId = 'codex-command-native-markdown-message';
   const expected = [
     '## 多轮 Markdown 验收',
@@ -874,18 +1004,20 @@ test('SSE reader preserves assistant markdown structure across text deltas', asy
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
+    finalAnswerEnvelope?: unknown;
+    nativeCodexMessage?: unknown;
     displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
   };
 
-  assert.equal(stream.error, undefined);
-  assert.equal(result.message, expected);
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, expected);
-  assert.match(result.message ?? '', /\n\n\| 项目 \| 状态 \|/);
-  assert.match(result.message ?? '', /\n```ts\nconst ok = true;\n```$/);
-  assert.doesNotMatch(result.message ?? '', /验收这是一段/);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
+  assert.notEqual(result.message, expected);
+  assert.equal(result.finalAnswerEnvelope, undefined);
+  assert.equal(result.nativeCodexMessage, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
+  assert.doesNotMatch(result.message ?? '', /验收这是一段|\| 项目 \| 状态 \||const ok = true/);
 });
 
-test('SSE reader concatenates real assistant deltas exactly instead of repairing word boundaries', async () => {
+test('SSE reader fails closed on exact native assistant deltas without Host final-answer envelope', async () => {
   const commandId = 'codex-command-native-markdown-exact-delta';
   const expected = [
     '## Markdown sample',
@@ -934,13 +1066,17 @@ test('SSE reader concatenates real assistant deltas exactly instead of repairing
   const stream = await readWorkspaceToolStream(response, () => undefined);
   const result = stream.result as {
     message?: string;
+    finalAnswerEnvelope?: unknown;
+    nativeCodexMessage?: unknown;
     displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
   };
 
-  assert.equal(stream.error, undefined);
-  assert.equal(result.message, expected);
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, expected);
-  assert.doesNotMatch(result.message ?? '', /Mark down|```\s+typescript|greet \(/);
+  assert.match(stream.error ?? '', /without a safe final assistant answer/i);
+  assert.notEqual(result.message, expected);
+  assert.equal(result.finalAnswerEnvelope, undefined);
+  assert.equal(result.nativeCodexMessage, undefined);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, undefined);
+  assert.doesNotMatch(result.message ?? '', /Markdown sample|function greet|```\s*typescript/);
 });
 
 test('SSE reader promotes gui.present into the visible Runtime Codex result', async () => {

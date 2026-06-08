@@ -548,7 +548,7 @@ test('Computer Use approval retry does not serialize prior gui.ask_user provenan
   assert.doesNotMatch(JSON.stringify(body), /prior-gui-ask-user|riskActionHash|risk-audit|gui-ask-user/);
 });
 
-test('Runtime Codex foreground final message can use native assistant message provenance', async () => {
+test('Runtime Codex foreground final message uses Host-owned final-answer envelope provenance', async () => {
   const originalFetch = globalThis.fetch;
   const commandIdPattern = /^codex-command-/;
   try {
@@ -581,25 +581,41 @@ test('Runtime Codex foreground final message can use native assistant message pr
           workspace: '/tmp/current',
           commandId,
           attemptId: `${commandId}-attempt-1`,
+          evidenceRefs: [`computer-use:vscode/${commandId}/observation.current`],
+          agentHostFinalAnswer: {
+            schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+            source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+            status: 'completed',
+            text: 'HOST_FOREGROUND_FINAL_MESSAGE',
+            maturity: 'live-diagnostic',
+            productReady: false,
+            hostOwnsFinalAnswer: true,
+            computerUseCorePlanning: false,
+            primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+            evidenceRefs: [`computer-use:vscode/${commandId}/observation.current`],
+            cleanupRefs: [`computer-use:vscode/${commandId}/control.release`],
+          },
         })}\n\n`,
       ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
 
     const response = await sendSciForgeToolMessage(runtimeRequestInput());
 
-    assert.equal(response.message.content, 'VISIBLE_FOREGROUND_NATIVE_MESSAGE');
+    assert.equal(response.message.content, 'HOST_FOREGROUND_FINAL_MESSAGE');
     assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
     assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
     assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
     const raw = response.run.raw as Record<string, unknown>;
     const finalAnswer = raw.finalAnswerEnvelope as Record<string, unknown>;
+    assert.equal(finalAnswer.text, 'HOST_FOREGROUND_FINAL_MESSAGE');
     assert.equal(finalAnswer.liveAcceptanceEligible, true);
+    assert.equal(raw.nativeCodexMessage, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('Runtime Codex done-only final text can use native assistant message provenance', async () => {
+test('Runtime Codex done-only final text fails closed without Host final-answer envelope', async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async (_url, init) => {
@@ -624,16 +640,20 @@ test('Runtime Codex done-only final text can use native assistant message proven
 
     const response = await sendSciForgeToolMessage(runtimeRequestInput());
 
-    assert.equal(response.run.status, 'completed');
-    assert.equal(response.message.content, 'VISIBLE_DONE_ONLY_NATIVE_MESSAGE');
-    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
-    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
+    assert.equal(response.run.status, 'failed');
+    assert.equal(response.message.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex completed without a safe final assistant answer/);
+    assert.doesNotMatch(response.message.content, /VISIBLE_DONE_ONLY_NATIVE_MESSAGE/);
+    assert.notEqual(response.message.provenance?.source, 'codex.app-server.final-answer');
+    const raw = response.run.raw as Record<string, unknown>;
+    assert.equal(raw.finalAnswerEnvelope, undefined);
+    assert.equal(raw.nativeCodexMessage, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('Runtime Codex text-only SSE message can use native assistant message provenance', async () => {
+test('Runtime Codex text-only SSE message fails closed without Host final-answer envelope', async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async (_url, init) => {
@@ -660,9 +680,13 @@ test('Runtime Codex text-only SSE message can use native assistant message prove
 
     const response = await sendSciForgeToolMessage(runtimeRequestInput());
 
-    assert.equal(response.run.status, 'completed');
-    assert.equal(response.message.content, 'VISIBLE_TEXT_ONLY_NATIVE_MESSAGE');
-    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
+    assert.equal(response.run.status, 'failed');
+    assert.equal(response.message.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex completed without a safe final assistant answer/);
+    assert.doesNotMatch(response.message.content, /VISIBLE_TEXT_ONLY_NATIVE_MESSAGE/);
+    const raw = response.run.raw as Record<string, unknown>;
+    assert.equal(raw.finalAnswerEnvelope, undefined);
+    assert.equal(raw.nativeCodexMessage, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -987,6 +1011,20 @@ test('Runtime Codex SSE diagnostic error event does not override later successfu
           workspace: '/tmp/current',
           commandId,
           attemptId,
+          evidenceRefs: [`runtime-codex:${commandId}:recovered`],
+          agentHostFinalAnswer: {
+            schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+            source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+            status: 'completed',
+            text: 'RECOVERED_AFTER_DIAGNOSTIC_ERROR',
+            maturity: 'live-diagnostic',
+            productReady: false,
+            hostOwnsFinalAnswer: true,
+            computerUseCorePlanning: false,
+            primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+            evidenceRefs: [`runtime-codex:${commandId}:recovered`],
+            cleanupRefs: [`runtime-codex:${commandId}:release`],
+          },
         })}\n\n`,
       ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
@@ -1852,6 +1890,20 @@ test('Runtime Codex retries stale native resume once as a fresh thread when app-
           commandId,
           attemptId,
           threadId: 'thread-fresh-after-stale-resume',
+          evidenceRefs: [`runtime-codex:${commandId}:fresh-answer`],
+          agentHostFinalAnswer: {
+            schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+            source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+            status: 'completed',
+            text: 'Fresh Runtime Codex answer.',
+            maturity: 'live-diagnostic',
+            productReady: false,
+            hostOwnsFinalAnswer: true,
+            computerUseCorePlanning: false,
+            primitiveChainObserved: ['bind', 'observe', 'host-decision', 'observe', 'control(release)'],
+            evidenceRefs: [`runtime-codex:${commandId}:fresh-answer`],
+            cleanupRefs: [`runtime-codex:${commandId}:release`],
+          },
         })}\n\n`,
       ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
@@ -2860,7 +2912,7 @@ test('Runtime Codex stream request excludes selected seed and fixture refs from 
   assert.match(serialized, /artifact:report-1/);
 });
 
-test('Runtime Codex stream request keeps live native-session refs even when not live-acceptance eligible', async () => {
+test('Runtime Codex stream request keeps live final-answer refs even when not live-acceptance eligible', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
   try {
@@ -2888,7 +2940,7 @@ test('Runtime Codex stream request keeps live native-session refs even when not 
         status: 'completed',
         provenance: {
           kind: 'live-runtime-codex',
-          source: 'codex.native-message:codex-command-native',
+          source: 'codex.app-server.final-answer:codex-command-native',
           runtimeRequestEligible: false,
           liveAcceptanceEligible: false,
         },
