@@ -96,10 +96,11 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
   const target = isRecord(agentHostInput.target) ? agentHostInput.target : undefined;
   const observation = isRecord(agentHostInput.observation) ? agentHostInput.observation : undefined;
   const permissions = isRecord(agentHostInput.permissions) ? agentHostInput.permissions : undefined;
-  const hostBinding = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
   const latestObservation = isRecord(observation?.vscodeCoWork) ? observation.vscodeCoWork : undefined;
-  if (!hostBinding && !latestObservation) return undefined;
   if (!isCurrentVSCodeCoWorkHostInput(agentHostInput, target)) return undefined;
+  const explicitHostBinding = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  const hostBinding = explicitHostBinding ?? genericVSCodeCoWorkBindingFromHostInput(agentHostInput, target, latestObservation);
+  if (!hostBinding && !latestObservation) return undefined;
   const intentText = stringField(agentHostInput, 'intentText') ?? request.commandText;
   const operation = stringField(hostBinding, 'operation') ?? lowRiskVSCodeCoWorkOperationFromText(intentText);
   return {
@@ -119,6 +120,51 @@ function vscodeCoWorkRuntimeIntentFromAgentHostInput(request: CodexAppServerStar
       latestObservation: latestObservation ?? (isRecord(hostBinding?.latestObservation) ? hostBinding.latestObservation : undefined),
     }),
   };
+}
+
+function genericVSCodeCoWorkBindingFromHostInput(
+  agentHostInput: Record<string, unknown>,
+  target: Record<string, unknown> | undefined,
+  latestObservation: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!target || !latestObservation) return undefined;
+  const requestRef = firstRefWithPrefix(safeHostInputRefs(agentHostInput.refs), ['chat-request:']);
+  const targetRefs = safeHostInputRefs(target.refs);
+  const windowRefs = refsWithPrefix(targetRefs, ['window:']);
+  const selectedWindowRef = selectedGenericWindowRef(windowRefs, latestObservation);
+  if (!selectedWindowRef) return requestRef ? { requestRef } : undefined;
+  const appRef = firstRefWithPrefix(targetRefs, ['macos-app:']);
+  const processRef = firstRefWithPrefix(targetRefs, ['process:']);
+  const titleRef = firstRefWithPrefix(targetRefs, ['text:']);
+  const frontmostRef = firstRefWithPrefix(targetRefs, ['frontmost:']);
+  if (!appRef || !processRef || !titleRef || !frontmostRef) return requestRef ? { requestRef } : undefined;
+  const visibleFileRefs = refsWithPrefix(targetRefs, ['file-ref:']);
+  return compactRecord({
+    requestRef,
+    selectedWindowRef,
+    selectedFileRef: visibleFileRefs.length === 1 ? visibleFileRefs[0] : undefined,
+    windowCandidates: [
+      compactRecord({
+        appRef,
+        processRef,
+        windowRef: selectedWindowRef,
+        titleRef,
+        frontmostRef,
+        visibleFileRefs: visibleFileRefs.length ? visibleFileRefs : undefined,
+      }),
+    ],
+  });
+}
+
+function selectedGenericWindowRef(
+  windowRefs: string[],
+  latestObservation: Record<string, unknown>,
+): string | undefined {
+  if (windowRefs.length !== 1) return undefined;
+  const windowRef = windowRefs[0];
+  const observationWindowRef = safeHostInputRef(latestObservation.windowRef, ['window:']);
+  if (observationWindowRef && observationWindowRef !== windowRef) return undefined;
+  return windowRef;
 }
 
 function isCurrentVSCodeCoWorkHostInput(
@@ -486,6 +532,34 @@ function compactRecord<T extends Record<string, unknown>>(value: T): T {
 
 function uniqueRouteStrings(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function safeHostInputRefs(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqueRouteStrings(value.map((item) => safeHostInputRef(item)).filter(nonEmptyString));
+}
+
+function firstRefWithPrefix(refs: string[], prefixes: string[]): string | undefined {
+  return refs.find((ref) => prefixes.some((prefix) => ref.startsWith(prefix)));
+}
+
+function refsWithPrefix(refs: string[], prefixes: string[]): string[] {
+  return refs.filter((ref) => prefixes.some((prefix) => ref.startsWith(prefix)));
+}
+
+function nonEmptyString(value: string | undefined): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function safeHostInputRef(value: unknown, prefixes?: string[]): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > 500) return undefined;
+  if (UNSAFE_APPROVAL_REF_STRING_PATTERN.test(text)) return undefined;
+  if (BASE64ISH_APPROVAL_REF_PATTERN.test(text)) return undefined;
+  if (!/^[a-z][a-z0-9_-]*:[^\s/\\]+$/i.test(text)) return undefined;
+  if (prefixes && !prefixes.some((prefix) => text.startsWith(prefix))) return undefined;
+  return text;
 }
 
 function stringField(value: unknown, key: string) {
