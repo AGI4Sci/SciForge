@@ -1,6 +1,6 @@
 # SciForge 架构
 
-最后更新：2026-06-08
+最后更新：2026-06-09
 
 ## 唯一产品链路
 
@@ -64,6 +64,8 @@ Model Router 拥有：
 - `slash command / runtime gateway / module fallback -> 绕过 Codex / Agent Host 完成任务`。
 - `Codex / Agent Host -> gui.present / gui.ask_user -> 用户级 completion`。
 - `Codex app-server 启动注入 GUI MCP / gui.present shim / gui module -> 模型可调用 completion tool`。
+
+旧逻辑如果和唯一 Agent Host 链路冲突，必须删除或 fail closed，不能新增 legacy alias、compatibility wrapper、fallback shortcut 或历史 run 转译路径。旧请求进入运行时只能作为 unsupported / blocked evidence 处理，不能被本地 runtime、slash command、native route 或 module fallback 自动补全成用户可见回答。
 
 多模态对象必须作为结构化 `input_object` 进入 Codex turn。Codex / Agent Host 的模型能力统一来自 Model Router；Host 通过 Router 获得或补充模态证据，并由 Host 判断这些证据是否足够。外部层不得通过专门 prompt、专门视觉链路或附件顺序猜测来完成模态翻译。
 

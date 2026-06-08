@@ -142,6 +142,19 @@ App module 不可以：
 
 App module 是懂某个软件的“状态模型、能力目录和证据门”，不是第二个 agent。智能载体仍然是 Agent Host；需要模型能力时由 Host 调 Model Router 或 Host-owned verifier/provider，并把结果压成安全 refs 后再进入下一步。
 
+## Ordinary Chat 与 Native Route 边界
+
+ordinary chat 只是进入 Codex / Agent Host 的用户输入桥，不是 VSCode module、Computer Use runtime 或 native route 的直接调用入口。裸 `message`、`commandText`、terminal output、command palette item、completed action 或历史 run 记录只能作为 Host 可见 evidence refs，不能被本地 runtime 推断成 app module operation、多步 GUI workflow、completion truth 或 final answer。
+
+native route 只做确定性投影：它可以投影 sanitized refs、blocked / partial 状态和 Host-owned final answer envelope。没有 same-run Host final-answer evidence 时，native route 必须返回 `blocked` / `partial`，不能用 Computer Use action result、app module readiness、`run_procedure.status=completed`、runtime ack 或 fallback text 自行 `done`。
+
+普通聊天接线必须满足：
+
+- Host bridge 只构造 Agent Host input envelope。
+- 只有 Host 产出的 structured app module operation ref 可以调用 app module readiness。
+- public events 只包含 tokenized refs、safe summaries 和 Host final answer envelope。
+- 任何 `gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` / `moduleId=gui` completion surface 都必须作为 unsupported dynamic tool fail closed。
+
 ### App Module Contract 约束
 
 最小 contract 是 `moduleId`、`canHandle(refs)`、`normalizeObservation(refs)`、`getCapabilities()` 和 `checkReadiness(operation, refs)`。`checkReadiness` 的输入只能是 Agent Host 已决定的一个 operation 和 current-run refs；contract 不暴露自然语言 task 字段。
@@ -156,14 +169,18 @@ App module 是懂某个软件的“状态模型、能力目录和证据门”，
 
 readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
-阶段推进必须递进：
+阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑：
 
-- 先做 registry contract 和 app module skeleton。
-- 再做 read-only、focus、editor mutation 的 unit path。
-- 再做 terminal / command palette 的分步 unit path。
-- 再接 Host dry-run materializer。
-- 再接 ordinary chat 且验证无 final-answer 旁路。
-- 最后进入 env-gated live diagnostic matrix 和论文编辑 preview / apply。
+- P0：收敛 `PROJECT_CU.md`，删除旧任务展开，只保留当前状态和新路线。
+- P1：先做无旁路静态护栏，禁止 GUI completion surface、旧 Computer Use public surface 和 readiness final-answer 泄漏。
+- P2：审计 ordinary chat、native route、runtime gateway、slash command 和旧 VSCode co-work hook 的入口，决定删除、fail closed 或迁入 Host bridge。
+- P3：接 ordinary chat Host-only bridge，要求裸自然语言只能进入 Agent Host，不能直接成为 app module operation。
+- P4：接 native route final-answer gate，要求只有 Host-owned final answer envelope 可以让 route `done`。
+- P5：统一 public event / readiness / runtime result sanitizer，确保大对象和 raw payload 只能以 refs 暴露。
+- P6：进入 VSCode read-only / focus live diagnostic 基线。
+- P7：进入 VSCode editor、terminal、command palette 单步 live diagnostic。
+- P8：做 Host-owned preview workflow，不写用户文件，不让 VSCode module 解析论文语义。
+- P9：做 narrow apply workflow，Host 拆成 observe -> one primitive -> observe，live diagnostic 后置。
 
 ## VSCode App Module v1
 
@@ -319,8 +336,9 @@ Computer Use primitive 默认不调用模型。
 - VSCode App Module skeleton、read-only、focus、editor mutation、terminal 和 command palette readiness 是 `unit-proven`。
 - Agent Host app-module dry-run materializer 是 `unit-proven`：它能根据 current-run refs 选择 VSCode module 并返回 primitive candidate，也能对 unknown / ambiguous app fail closed。
 - VSCode default / env-gated diagnostics 只能标 `live-diagnostic`，不能声明 `product-ready`。
+- 普通聊天 / native route 无旁路接线仍待完成，必须先于真实 VSCode live matrix。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
-- 普通聊天接线、论文 preview 和论文 apply 仍待实现。
+- 论文 preview、narrow apply unit path 和 narrow apply diagnostic 仍待实现。
 
 ## 旧路径清理口径
 
