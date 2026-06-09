@@ -515,7 +515,6 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
     operation: 'send-command-palette-query',
     operationRef: `operation-ref:vscode:send-command-palette-query:${currentVSCodeEvidenceToken(runId)}`,
     refs: currentVSCodeAppModuleRefs([
-      ...bind.refs,
       ...afterOpenObserve.refs,
       input.paletteQueryTextRef,
     ], afterOpenObserve.output?.observationRef),
@@ -548,7 +547,6 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
     operation: finalOperation,
     operationRef: `operation-ref:vscode:${finalOperation}:${currentVSCodeEvidenceToken(runId)}`,
     refs: currentVSCodeAppModuleRefs([
-      ...bind.refs,
       ...itemsObserve.refs,
     ], itemsObserve.output?.observationRef),
   });

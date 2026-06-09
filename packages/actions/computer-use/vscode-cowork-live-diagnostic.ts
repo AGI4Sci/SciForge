@@ -159,6 +159,10 @@ export interface CurrentVSCodeCoWorkLiveDiagnosticManifest {
   blockedReasons: string[];
 }
 
+interface CurrentVSCodeCommandPaletteState {
+  open: true;
+}
+
 export async function runCurrentVSCodeCoWorkLiveDiagnosticPreflight(input: {
   env?: Record<string, string | undefined>;
   now?: () => Date;
@@ -209,6 +213,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
   let restorationState: CurrentVSCodeCoWorkRestorationState = {};
   let lastObservationRef: string | undefined;
   let lastFocusedEditorRef: string | undefined;
+  let commandPaletteState: CurrentVSCodeCommandPaletteState | undefined;
 
   return {
     bind: async () => {
@@ -236,19 +241,20 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           diagnostics,
         };
       }
-      lastObservationRef = observed.observationRef;
-      lastFocusedEditorRef = observed.focusedEditorRef;
+      const publicObserved = withCommandPaletteStateRefs(observed, commandPaletteState);
+      lastObservationRef = publicObserved.observationRef;
+      lastFocusedEditorRef = publicObserved.focusedEditorRef;
       return {
         status: 'completed',
         output: {
           sessionId,
           sessionRef: computerUseSessionRef,
-          targetRef: observed.windowRef,
+          targetRef: publicObserved.windowRef,
           inputAdapterRef,
           cursorRef,
           windowActionSessionRef,
           scopedInputLeaseRef,
-          observationRef: observed.observationRef,
+          observationRef: publicObserved.observationRef,
         },
         refs: uniqueRefs([
           computerUseSessionRef,
@@ -258,13 +264,13 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           cursorRef,
           frontAppRestoreRef,
           mousePositionRestoreRef,
-          ...observationRefs(observed),
+          ...observationRefs(publicObserved),
         ]),
       };
     },
     observe: async (input: ComputerUseObserveInput) => {
       const previousObservationRef = lastObservationRef;
-      const observed = await readCurrentWindow();
+      const observed = withCommandPaletteStateRefs(await readCurrentWindow(), commandPaletteState);
       lastObservationRef = observed.observationRef;
       lastFocusedEditorRef = observed.focusedEditorRef;
       return {
@@ -274,7 +280,7 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           observationRef: observed.observationRef,
           screenshotRef: observed.screenshotRef,
           accessibilityRef: observed.accessibilityRef,
-          elementRefs: uniqueRefs([observed.editorElementRef, observed.terminalElementRef]),
+          elementRefs: uniqueRefs([observed.editorElementRef, observed.terminalElementRef, observed.commandPaletteRootRef, observed.commandPaletteInputRef]),
           textRefs: uniqueRefs([
             observed.visibleTextRef,
             observed.visibleTextSha256Ref,
@@ -351,7 +357,12 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
           ]),
         };
       }
-      const afterObserved = await readCurrentWindow();
+      commandPaletteState = nextCommandPaletteState(commandPaletteState, {
+        actionId,
+        action: input.action,
+        contextRefs,
+      });
+      const afterObserved = withCommandPaletteStateRefs(await readCurrentWindow(), commandPaletteState);
       lastFocusedEditorRef = afterObserved.focusedEditorRef ?? lastFocusedEditorRef;
       return {
         status: 'completed',
@@ -423,6 +434,57 @@ export function createCurrentVSCodeCoWorkLivePrimitivePorts(
       };
     },
   };
+}
+
+function nextCommandPaletteState(
+  current: CurrentVSCodeCommandPaletteState | undefined,
+  input: {
+    actionId: string;
+    action: ComputerUseAtomicAction;
+    contextRefs: string[];
+  },
+): CurrentVSCodeCommandPaletteState | undefined {
+  if (input.actionId === 'open-command-palette' || (input.action.type === 'key' && input.action.key === 'Meta+Shift+P')) {
+    return { open: true };
+  }
+  const hasPaletteContext = hasCommandPaletteContext(input.contextRefs);
+  if (input.actionId === 'send-command-palette-query' && input.action.type === 'type' && hasCommandPaletteInputContext(input.contextRefs)) {
+    return { open: true };
+  }
+  if (hasPaletteContext && input.action.type === 'type' && hasCommandPaletteInputContext(input.contextRefs)) {
+    return { open: true };
+  }
+  if (
+    input.actionId === 'close-command-palette'
+    || (hasPaletteContext && input.action.type === 'key' && (input.action.key === 'Escape' || input.action.key === 'Enter'))
+  ) {
+    return undefined;
+  }
+  return current;
+}
+
+function withCommandPaletteStateRefs(
+  observed: CurrentVSCodeCoWorkWindowObservation,
+  state: CurrentVSCodeCommandPaletteState | undefined,
+): CurrentVSCodeCoWorkWindowObservation {
+  if (!state?.open) return observed;
+  const windowToken = observed.windowRef.startsWith('window:vscode:')
+    ? observed.windowRef.slice('window:vscode:'.length)
+    : safeRunId(observed.windowRef);
+  const observationToken = commandPaletteObservationTokenFromObservationRef(observed.observationRef);
+  return {
+    ...observed,
+    commandPaletteRootRef: observed.commandPaletteRootRef ?? `command-palette:vscode:${windowToken}:current`,
+    commandPaletteInputRef: observed.commandPaletteInputRef ?? `command-palette-input:vscode:${windowToken}:current`,
+    commandPaletteItemsRef: observed.commandPaletteItemsRef ?? `command-palette-items:vscode:${windowToken}:${observationToken}`,
+  };
+}
+
+function commandPaletteObservationTokenFromObservationRef(observationRef: string): string {
+  const token = observationRef.startsWith('observation:vscode:')
+    ? observationRef.slice('observation:vscode:'.length)
+    : observationRef;
+  return `obs-${safeRunId(token)}`;
 }
 
 async function attemptRestoration(
@@ -538,7 +600,12 @@ on run argv
           return "pressed"
         end if
         if keyName is "Meta+Shift+P" then
-          keystroke "p" using {command down, shift down}
+          try
+            click menu item "Command Palette…" of menu "View" of menu bar 1 of vscodeProcess
+          on error
+            key code 35 using {command down, shift down}
+          end try
+          delay 0.2
           return "pressed"
         end if
         if keyName is "Control+Backquote" then
@@ -551,6 +618,7 @@ on run argv
         end if
         if keyName is "Escape" then
           key code 53
+          delay 0.1
           return "pressed"
         end if
         error "current-vscode-key-unsupported"

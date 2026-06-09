@@ -1287,6 +1287,182 @@ test('current VSCode co-work primitive ports expose command palette refs and pre
   assert.doesNotMatch(JSON.stringify({ bind, observe, act, control }), /command-palette-label|command-id|Save File|workbench|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work primitive ports materialize action-backed command palette refs', async () => {
+  const calls: string[] = [];
+  const baseObservation = (stage: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:palette-action-backed',
+    windowRef: 'window:vscode:palette-action-backed',
+    titleRef: 'text:title:palette-action-backed',
+    frontmostRef: 'frontmost:vscode:palette-action-backed',
+    fileRefs: ['file-ref:vscode:palette-action-backed'],
+    editorElementRef: 'element:vscode:editor:palette-action-backed',
+    visibleTextRef: `text:vscode:palette-action-backed-${stage}`,
+    visibleTextSha256Ref: `text:vscode:palette-action-backed-${stage}-sha256`,
+    screenshotRef: `image:vscode:palette-action-backed-${stage}`,
+    accessibilityRef: `accessibility:vscode:palette-action-backed-${stage}`,
+    freshnessRef: `freshness:vscode:palette-action-backed-${stage}`,
+    observationRef: `observation:vscode:palette-action-backed-${stage}`,
+  });
+  const observations = [
+    baseObservation('bind'),
+    baseObservation('before-open'),
+    baseObservation('after-open-act'),
+    baseObservation('after-open-observe'),
+    baseObservation('after-send-act'),
+    baseObservation('after-send-observe'),
+    baseObservation('after-close-act'),
+    baseObservation('after-close-observe'),
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-palette-action-backed',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return textRef === 'text-ref:vscode:palette-action-backed-query' ? 'hidden query' : undefined;
+      },
+      performAction: async (input) => {
+        calls.push(`perform-action:${input.action.type}:${input.action.key ?? input.action.textRef}:${input.contextRefs?.join(',') ?? 'no-context'}:${input.beforeObservationRef}`);
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true, bind.error);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+  const before = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId,
+      capture: 'both',
+      includeTree: true,
+    },
+  });
+  assert.equal(before.ok, true, before.error);
+  assert.equal((before.value?.refs ?? []).some((ref) => ref.startsWith('command-palette:vscode:')), false);
+
+  const open = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'open-command-palette',
+      contextRefs: ['action:vscode-app-module:open-command-palette:meta-shift-p'],
+      action: {
+        type: 'key',
+        key: 'Meta+Shift+P',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(open.ok, true, open.error);
+  assert.ok((open.value?.refs ?? []).includes('command-palette:vscode:palette-action-backed:current'));
+  assert.ok((open.value?.refs ?? []).includes('command-palette-input:vscode:palette-action-backed:current'));
+
+  const afterOpen = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId,
+      capture: 'both',
+      includeTree: true,
+    },
+  });
+  assert.equal(afterOpen.ok, true, afterOpen.error);
+  const paletteRefs = (afterOpen.value?.refs ?? []).filter((ref) => ref.startsWith('command-palette'));
+  assert.ok(paletteRefs.includes('command-palette:vscode:palette-action-backed:current'));
+  assert.ok(paletteRefs.includes('command-palette-input:vscode:palette-action-backed:current'));
+  assert.ok(paletteRefs.includes('command-palette-items:vscode:palette-action-backed:obs-palette-action-backed-after-open-observe'));
+
+  const send = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'send-command-palette-query',
+      contextRefs: paletteRefs,
+      action: {
+        type: 'type',
+        textRef: 'text-ref:vscode:palette-action-backed-query',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(send.ok, true, send.error);
+  assert.ok((send.value?.refs ?? []).includes('text-ref:vscode:palette-action-backed-query'));
+  assert.ok((send.value?.refs ?? []).includes('command-palette-input:vscode:palette-action-backed:current'));
+
+  const close = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'close-command-palette',
+      contextRefs: paletteRefs,
+      action: {
+        type: 'key',
+        key: 'Escape',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(close.ok, true, close.error);
+  assert.ok((close.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-palette-action-backed:close-command-palette'));
+
+  const afterClose = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId,
+      capture: 'both',
+      includeTree: true,
+    },
+  });
+  assert.equal(afterClose.ok, true, afterClose.error);
+  assert.equal((afterClose.value?.refs ?? []).some((ref) => ref.startsWith('command-palette:vscode:')), false);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true, control.error);
+  assert.doesNotMatch(JSON.stringify({ bind, before, open, afterOpen, send, close, afterClose, control }), /hidden query|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
 function currentTerminalObservation(stage: 'before' | 'after', hash: string) {
   return {
     appRef: 'macos-app:com.microsoft.VSCode',

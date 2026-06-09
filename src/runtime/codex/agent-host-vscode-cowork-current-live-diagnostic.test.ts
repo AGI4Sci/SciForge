@@ -2186,3 +2186,49 @@ test('current VSCode co-work live diagnostic can observe the real current VSCode
   assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
   assert.doesNotMatch(JSON.stringify(result), /raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
+
+test('current VSCode co-work command palette live diagnostic can open query close and release real VSCode', {
+  skip: process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV] === '1'
+    ? undefined
+    : `set ${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}=1 with one VSCode window available to run the command palette live diagnostic`,
+  timeout: 60_000,
+}, async () => {
+  const result = await runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
+    runId: `live-current-vscode-palette-${Date.now()}`,
+    activateCurrentVSCodeIfNeeded: true,
+    paletteQueryTextRef: 'text-ref:vscode:command-palette-query:live',
+    selectCurrentItem: false,
+    resolveTextRef: (textRef) => textRef === 'text-ref:vscode:command-palette-query:live' ? 'Help: About' : undefined,
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision(open-command-palette)',
+    'act(open-command-palette)',
+    'observe',
+    'host-decision(send-command-palette-query)',
+    'act(send-command-palette-query)',
+    'observe',
+    'host-decision(close-command-palette)',
+    'act(close-command-palette)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('window:vscode:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('command-palette:vscode:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('command-palette-input:vscode:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('command-palette-items:vscode:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('scoped-input-lease:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('scoped-input-adapter:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('cursor-marker:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('front-app-restore:current-vscode-cowork:')));
+  assert.ok(result.cleanupRefs.some((ref) => ref.startsWith('mouse-position-restore:current-vscode-cowork:')));
+  assert.equal(result.agentHostFinalAnswer?.status, 'completed');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.doesNotMatch(JSON.stringify(result), /Help: About|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});

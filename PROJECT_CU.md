@@ -93,7 +93,7 @@ SciForge UI
 - [x] P9.16-P9.18：Scratch Mutation live skip / mocked diagnostic 已闭合；独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC=1` gate 默认 blocked，generic live env 不能解锁 scratch writer；env-on mock 只允许非用户 scratch buffer，跑 `bind -> observe -> host-decision -> act -> observe -> control(release)`，验证 mutation verifier 与 cleanup refs，不写用户文件、不宣称 `product-ready`。
 - [x] P9.19-P9.20：Narrow Apply unit path 已闭合；`apply-current-selection` 是 Host-owned bridge，不是 VSCode module capability，只能从 structured Host operation + current scope refs + Host `text-ref:` 映射为一个 `replace-selection` / `insert-draft` primitive candidate；apply verifier 要求 same-file、same-window、same-editor、same-selection、after-observe、release 与 cleanup refs，不能把 Computer Use `completed` 当作用户任务完成。
 - [x] P9.21-P9.22：Save / batch unit path 已闭合；`save-current-file` 只从 structured Host operation、current editor/file refs、same-file + mutation verifier 和 Host action evidence 生成一个 `Meta+S` `computer_use.act` candidate；`bulk-replace` / `cross-file-modify` 由 Host-owned decomposition guard blocked-safe，不会生成单个 Computer Use task、`act` 或 `run_procedure`。
-- [x] P10.0-P10.4：显式 VSCode + Computer Use ordinary chat 已进入 Host-owned P10 bridge；入口只生成 refs-first `sciforge.codex-agent-host-input.v1`，native route 可在无预绑定 window candidates 时启动 current VSCode command palette live diagnostic runner；默认 macOS adapter 支持 `Meta+Shift+P`、palette `text-ref:` 输入和 `Escape` 关闭。
+- [x] P10.0-P10.5：显式 VSCode + Computer Use ordinary chat 已进入 Host-owned P10 bridge；入口只生成 refs-first `sciforge.codex-agent-host-input.v1`，native route 可在无预绑定 window candidates 时启动 current VSCode command palette live diagnostic runner；默认 macOS adapter 支持菜单方式打开 command palette、action-backed palette refs、palette `text-ref:` 输入、`Escape` 关闭和 release cleanup。
 
 ## 当前执行路线
 
@@ -101,16 +101,16 @@ SciForge UI
 
 目标：最快打通用户已打开 VSCode 的真实 Computer Use 绑定/操纵闭环。P10 只做一个很窄的 live-diagnostic：显式用户请求使用 Computer Use 操纵当前 VSCode 时，由 Agent Host 包装成 structured Host input，然后跑 `bind -> observe -> host-decision(open-command-palette) -> act -> observe -> host-decision(send-command-palette-query) -> act -> observe -> host-decision(close-command-palette) -> act -> observe -> control(release)`。Computer Use core 不做 task planning；VSCode module 只提供 readiness / evidence gate；用户级 final answer 仍由 Agent Host envelope 产生。
 
-当前状态：P10 单元与 mocked/native route 闭环已闭合；真实桌面仍是 env-gated `live-diagnostic`，不能宣称 `product-ready`。
+当前状态：P10 单元、mocked/native route 闭环和真实 VSCode command palette live diagnostic 已闭合；真实桌面仍是 env-gated `live-diagnostic`，不能宣称 `product-ready`。
 
 - [x] [P10.0 Unit] 显式 VSCode + Computer Use ordinary chat 不 spawn 通用 app-server，而是生成 refs-first Host input。
 - [x] [P10.0 Code] `CodexAppServerClient` 只在文本同时明确指向 VSCode 与 Computer Use / 桌面操纵 / 命令面板时包装 Host input；普通 VSCode 问答不路由。
 - [x] [P10.1 Unit] P10 command palette Host input 即使没有预绑定 window candidates，也能进入 current VSCode live diagnostic runner。
 - [x] [P10.1 Code] `computer-use-native-route` 对 `open-command-palette` structured Host operation 直接启动 live diagnostic runner；没有 Host final-answer envelope 时仍 blocked / partial，不本地铸造最终回答。
 - [x] [P10.2 Code] 默认 current VSCode live runner 可选择 command palette diagnostic；query 只通过 `text-ref:` 解析，public result 不泄漏 raw command / raw label / provider payload。
-- [x] [P10.3 Code] 默认 macOS shared-system-input adapter 支持 command palette open / query / close：`Meta+Shift+P`、palette input `text-ref:`、`Escape`。
+- [x] [P10.3 Code] 默认 macOS shared-system-input adapter 支持 command palette open / query / close：菜单方式打开 command palette、action-backed palette refs、palette input `text-ref:`、`Escape`。
 - [x] [P10.4 Verify] focused tests 覆盖 ordinary chat bridge、P10 native route、command palette adapter context。
-- [ ] [P10.5 Live] 在本机显式开启 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC=1` 后，验证真实 VSCode `bind -> observe -> open -> observe -> query -> observe -> close -> observe -> release`，并确认 input lease / adapter / cursor / focus / mouse cleanup refs。
+- [x] [P10.5 Live] 在本机显式开启 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC=1` 后，验证真实 VSCode `bind -> observe -> open -> observe -> query -> observe -> close -> observe -> release`，并确认 input lease / adapter / cursor / focus / mouse cleanup refs。
 - [ ] [P10.6 UX] 如果 live bind 发现多个非 frontmost VSCode 窗口或 evidence 冲突，Host public answer 必须给出 `needs-confirmation` / `blocked`，不能猜窗口。
 
 验收：
