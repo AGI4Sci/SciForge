@@ -294,9 +294,9 @@ test('Computer Use no-bypass guard blocks VSCode operation inference from ordina
 test('Computer Use no-bypass guard blocks direct VSCode operation selection from commandText', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
-    "type VSCodeOperation = 'read-visible-text' | 'focus-editor';",
+    "type VSCodeOperation = 'editor-scope';",
     'export function route(input: { request: { commandText: string } }) {',
-    "  const operation: VSCodeOperation | undefined = input.request.commandText.includes('focus editor') ? 'focus-editor' : undefined;",
+    "  const operation: VSCodeOperation | undefined = input.request.commandText.includes('current selection') ? 'editor-scope' : undefined;",
     '  return { vscodeCoWork: { operation } };',
     '}',
   ].join('\n'));

@@ -435,6 +435,80 @@ test('default Computer Use Act materializer selects command palette primitives o
   assert.doesNotMatch(JSON.stringify(inferred), /select-command-palette-item.*candidate|taskOutcome":"satisfied|Generic WindowAction planner/i);
 });
 
+test('default Computer Use Act materializer selects editor scope only from structured Host operation refs', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer editor scope operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-editor-scope-fallback'],
+        };
+      },
+    },
+  });
+  const scopeRefs = [
+    'editor-group:vscode:paper:1',
+    'active-editor:vscode:paper:1',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'terminal-output:vscode:paper:current',
+    'action:vscode:previous:completed',
+    'history:vscode:previous-run',
+  ];
+
+  const structured = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('editor-scope', scopeRefs),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: 'Polish the current selected text in /Users/example/private-paper.md; this text must not decide scope.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-editor-scope-candidate',
+    attemptId: 'codex-command-default-vscode-editor-scope-candidate-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(structured?.status, 'completed', structured?.message);
+  assert.equal(structured?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.equal(structured?.completionTruth, undefined);
+  assert.ok(structured?.executionUnits?.some((unit) =>
+    unit.tool === 'computer-use.app-module-registry'
+      && unit.moduleId === 'vscode'
+      && unit.operation === 'editor-scope'
+      && unit.primitive === 'computer_use.observe'
+      && unit.status === 'candidate'
+  ));
+  const structuredSerialized = JSON.stringify(structured);
+  assert.match(structuredSerialized, /selection-ref:vscode:paper:1/);
+  assert.match(structuredSerialized, /cursor-ref:vscode:paper:1/);
+  assert.match(structuredSerialized, /range-ref:vscode:paper:1/);
+  assert.ok(structured?.evidenceRefs.includes('selection-ref:vscode:paper:1'));
+  assert.ok(structured?.evidenceRefs.includes('cursor-ref:vscode:paper:1'));
+  assert.ok(structured?.evidenceRefs.includes('range-ref:vscode:paper:1'));
+  assert.doesNotMatch(structuredSerialized, /Polish the current selected text|private-paper|\/Users\/|rawSelectedText|providerPayload|data:image|base64|completionTruth|taskOutcome":"satisfied|Generic WindowAction planner/i);
+
+  const inferred = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined, scopeRefs),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: 'Polish the current selection in VSCode.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-editor-scope-no-operation',
+    attemptId: 'codex-command-default-vscode-editor-scope-no-operation-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(inferred?.status, 'blocked');
+  assert.equal(inferred?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(inferred?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.equal(inferred?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(inferred), /computer-use-app-module-primitive-candidate|"operation":"editor-scope"|taskOutcome":"satisfied|Generic WindowAction planner/i);
+});
+
 test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
   const runtimeTruth = vscodeAppModuleRuntimeTruth();
   runtimeTruth.observation = {

@@ -152,7 +152,7 @@ App module 是懂某个软件的“状态模型、能力目录和证据门”，
 
 ordinary chat 只是进入 Codex / Agent Host 的用户输入桥，不是 VSCode module、Computer Use runtime 或 native route 的直接调用入口。裸 `message`、`commandText`、terminal output、command palette item、completed action 或历史 run 记录只能作为 Host 可见 evidence refs，不能被本地 runtime 推断成 app module operation、多步 GUI workflow、completion truth 或 final answer。
 
-即使输入已经被包装成 `sciforge.codex-agent-host-input.v1`，`intentText` / `commandText` / prompt 文本仍不能作为 VSCode operation fallback。只有 Host 写入 structured target operation ref，例如 `target.vscodeCoWork.operation` 或等价 Host operation ref，才能触发 VSCode module readiness 或 live diagnostic Host producer。
+即使输入已经被包装成 `sciforge.codex-agent-host-input.v1`，`intentText` / `commandText` / prompt 文本仍不能作为 VSCode operation fallback。只有 Host 写入 structured app-module target operation，例如 `target.computerUseAppModule.operation` / `target.appModule.operation` 加 operation ref，才能触发 VSCode module readiness 或 live diagnostic Host producer。旧 `target.vscodeCoWork.operation` 不作为兼容 alias 保留。
 
 native route 只做确定性投影：它可以投影 sanitized refs、blocked / partial 状态和 Host-owned final answer envelope。没有 same-run Host final-answer evidence 时，native route 必须返回 `blocked` / `partial`，不能用 Computer Use action result、app module readiness、`run_procedure.status=completed`、runtime ack 或 fallback text 自行 `done`。
 
@@ -182,8 +182,8 @@ Runtime `gui` module 已退役。`gui_present` / `gui_ask_user` 只能作为 Age
 
 public sanitizer 的职责是递归处理 public projection object、array、metadata、diagnostic payload、error payload 和 action payload：
 
-- 保留 tokenized refs，例如 `artifact:`、`evidence:`、`observation:`、`window:`、`computer-use:`、`executor-event:`、`text-ref:`、`non-user-file-scope:` 等。
-- drop 或 redact raw screenshot / image / AX tree / visible text / provider payload / trace / logs / raw artifact body / URL / raw path / raw command / base64 / secret。
+- 保留 tokenized refs，例如 `artifact:`、`evidence:`、`observation:`、`window:`、`computer-use:`、`executor-event:`、`text-ref:`、`selection-ref:`、`cursor-ref:`、`range-ref:`、`non-user-file-scope:` 等。
+- drop 或 redact raw screenshot / image / AX tree / visible text / raw selected text / raw diff / provider payload / trace / logs / raw artifact body / URL / raw path / raw command / base64 / secret。
 - blocked、partial 和 error path 也必须走同一 sanitizer，只能输出 safe summary、reason refs、evidence refs、artifact refs 或 compact observation refs。
 - sanitizer 只能作为 deterministic projection guard，不能生成 final answer，也不能判断 completion truth。
 
@@ -191,7 +191,7 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 
 当前 public projection 收口状态：
 
-- App module readiness validator 使用共享 forbidden raw detector，Agent Host readiness materializer 的 public result 使用共享 sanitizer。
+- App module readiness validator 使用共享 forbidden raw detector，Agent Host readiness materializer 的 public result 使用共享 sanitizer；VSCode editor scope 只允许 tokenized `selection-ref:` / `cursor-ref:` / `range-ref:` 通过 Host public ref allowlist，伪装成 scope ref 的 raw/path/diff/url/provider token 必须 fail closed。
 - Computer Use primitive port output 在进入 public `moduleResult` 前先走 forbidden raw detector 和 completion-truth detector；raw screenshot / AX / visible text / provider payload / raw command / raw path / URL / base64 / logs / secrets 或 `completionTruth` / `finalAnswer` / `done` 等用户任务完成真相字段都会 fail closed。随后 public `moduleResult` 仍使用共享 sanitizer 清洗 `output`、`diagnostics`、`repairHints` 和 refs。
 - Computer Use TUI host action projection 对 `approvalRequest` 使用白名单投影，对 summary `message`、window title、frame label、blocked reason 使用 safe summary 字符串。
 - Package bridge presentation 只调用 `computerUseResultToTuiHostActions`，同一份已收口 actions 再写入 objectReferences、logs 和 runtime event detail。
@@ -230,7 +230,7 @@ readiness validator 必须拒绝 top-level 或 nested action payload 中的 fina
 - P6：VSCode ambiguity 与 read-only diagnostic，先证明不猜测和只读诊断。
 - P7：VSCode terminal 原子能力，focus / send / observe / submit 分离。
 - P8：VSCode command palette 原子能力，按 fail-closed -> concept refs -> open -> query -> observe -> mocked select -> verify 递进；真实桌面 live 先只做 open / query / observe / close。
-- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；先 preview，再由 Host 拆成 observe -> one primitive -> observe。
+- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；P9.2 已证明 Host materializer 只从 structured `editor-scope` operation 进入 scope readiness，ordinary chat / commandText / terminal output / history / completed action 不触发；后续先补 scope projection / diagnostic，再进入 preview。
 
 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 

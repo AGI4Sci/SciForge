@@ -81,76 +81,40 @@ SciForge UI
 - [x] P0-P5：路线图、public projection、旧旁路删除、Computer Use lifecycle、VSCode entry gate、VSCode identity / concept normalization 已收口到 refs-first Host/App Module/Core 边界。
 - [x] P6：VSCode ambiguity 与 read-only diagnostic 已闭合；多窗口、多区域、unknown webview、stale observation 均 blocked-safe，只读 readiness 和 env-gated live diagnostic 保持 refs-only。
 - [x] P7：VSCode terminal 原子能力已闭合；`focus-terminal`、`send-terminal-text`、`observe-terminal`、`submit-terminal-command` 分离，raw command 被拒绝，terminal drift blocked-safe，live path 仅 `live-diagnostic`。
+- [x] P8：VSCode Command Palette 原子能力已闭合；palette 只从 structured Host operation 进入，只选择 current observe 产生的 item ref，raw command id / raw label / history / completed action 不能触发执行；mocked diagnostic 已覆盖 cleanup，live path 仍只允许 `live-diagnostic`。
+- [x] P9.0：旧 editor mutation / save readiness 已 fail closed；旧直接写入、undo / redo、save shortcut 不能作为新方案兼容路径保留。
+- [x] P9.1：`editor-scope` readiness 已实现；只输出 editor / file / selection / cursor / range refs，不写入。
+- [x] P9.2：Host materializer 只从 structured `editor-scope` operation 进入 scope readiness；ordinary chat、commandText、terminal output、history 和 completed action 不触发；selection / cursor / range refs 保持 tokenized public refs。
 
 ## 当前执行路线
 
-### P8：VSCode Command Palette Atomic Capabilities
-
-目标：Command Palette 只选择 current observe 产生的 item ref；raw command id / raw label 不能成为执行旁路。
-
-当前 P8 已推进到 app-module unit / materializer / static guard / env-gated mocked live diagnostic：`open-command-palette`、`send-command-palette-query`、`observe-command-palette-items`、`select-command-palette-item`、`close-command-palette` 已按 refs-first 单步 readiness 接入。P8 仍不能宣称 `product-ready`；真实桌面 live 只允许在 env gate 下做 diagnostic，并优先 open/query/observe/close 或 blocked-safe。
-
-Build Tasks：
-
-- [x] [P8.0 Unit] 旧 palette ready path 红测：raw command id / raw label / direct command operation 必须 blocked。
-- [x] [P8.0 Code] 删除旧 palette readiness；P8 未完成前 `open/send/observe/select/close-command-palette` fail closed。
-- [x] [P8.1 Unit] palette concept 红测：无 palette、多 palette、palette refs stale 时 blocked-safe。
-- [x] [P8.1 Code] 实现 palette root / query input / item list / freshness concept refs；不依赖固定坐标、固定插件或固定语言。
-- [x] [P8.2 Unit] `open-command-palette` 红测：唯一 VSCode window 才 ready，只输出 action / target refs。
-- [x] [P8.2 Code] 实现 `open-command-palette` primitive candidate；不选择命令。
-- [x] [P8.3 Unit] `send-command-palette-query` 红测：只接受 Host `text-ref:`，不暴露 raw query，不按 Enter。
-- [x] [P8.3 Code] 实现 `send-command-palette-query` primitive candidate。
-- [x] [P8.4 Unit] `observe-command-palette-items` 红测：只基于 current palette / input refs 发起 observe；后续 observation 只能投影 item refs、rank refs、hash refs，不输出 raw label 或 raw command id。
-- [x] [P8.4 Code] 实现 palette observe readiness 与 item refs-first projection。
-- [x] [P8.5 Unit] `select-command-palette-item` 红测：只接受 current observe item ref；raw label / raw id / stale item ref 都 blocked。
-- [x] [P8.5 Code] 实现 `select-command-palette-item` primitive candidate。
-- [x] [P8.6 Unit] palette ambiguity / drift 红测：item 不唯一、palette 未打开、window / palette / item observation 漂移时 blocked-safe。
-- [x] [P8.6 Code] 实现 palette current-observation / same-window / same-item verifier refs。
-- [x] [P8.7 Materializer] Host materializer 只从 structured operation ref 进入 palette readiness；ordinary chat、terminal output、history 和 completed action 不能触发。
-- [x] [P8.8 Static] 扩展 no-bypass guard：palette 不能新增 raw command id、raw label、runtime final-answer 或 direct desktop bypass。
-- [x] [P8.9 Live Skip] env-gated palette live 默认关闭；无 env 时返回 blocked skip manifest，且不构造 runner / adapter。
-- [x] [P8.10 Mocked Live] mock `open -> send query -> observe items -> close/release`；不选择命令，验证 cleanup refs。
-- [x] [P8.11 Mocked Select] mock `open -> send query -> observe items -> select item -> observe -> release`；只证明 current item ref 链路，不触碰真实 VSCode。
-- [x] [P8.12 Verify] 跑 palette unit tests、materializer tests、live skip path、typecheck、cleanup/no-bypass smoke。
-
-验收：
-
-- [x] Unit tests 证明 raw command id / raw palette label 不能直接执行。
-- [x] Mocked select 证明 item ref 来自 current observe；真实桌面 live 只做 open/query/observe/close 或 blocked-safe。
-- [x] palette 目标漂移、item 不唯一或 observation stale 时 `needs-confirmation` / `blocked`。
-- [x] cleanup refs 完整，不留下 palette 或焦点漂移。
-
 ### P9：VSCode Editor Mutation 与 Host-owned Narrow Apply
 
-目标：最后才进入写入 primitive；先 preview，再由 Host 明确拆成 `observe -> one primitive -> observe`，Computer Use core 仍不做 planning。
+目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前 P9 只有旧 mutation / save path fail-closed 基线完成；editor mutation / save readiness 在 scope、preview、scratch mutation、narrow apply verifier 完成前必须继续 fail-closed，不能复用旧直接写入路径。P9 拆成四个递进小阶段：scope-only、preview no-write、scratch mutation、narrow apply / save / batch decomposition。每个阶段先 unit，再 materializer/static guard，再 env-gated skip，再 mocked diagnostic，最后 verify。
+当前状态：P9 scope 的 module readiness 与 materializer gate 已闭合。下一步只补 scope projection / diagnostic，再进入 preview no-write；不要跳到真实用户文件写入。
 
-Build Tasks：
+#### P9-A：Scope Projection 与 Diagnostic
 
-Scope-only：
-
-- [x] [P9.0 Unit] 旧 mutation / save ready path 红测：旧 `insert-draft`、`replace-selection`、`save-current-file`、undo / redo readiness 必须 blocked。
-- [x] [P9.0 Code] 删除旧 app-module editor mutation readiness；P9 未完成前 app-module 写入 readiness fail closed。
-- [x] [P9.1 Unit] editor scope 红测：当前 selection / cursor / single range 缺失或不唯一时 `needs-confirmation`。
-- [x] [P9.1 Code] 实现 scope readiness；只输出 editor / file / selection / cursor / range refs，不写入。
-- [ ] [P9.2 Materializer] Host materializer 只从 structured `editor-scope` operation ref 进入 scope readiness。
-- [ ] [P9.3 Static] scope public projection 不能泄漏 raw selected text、raw path、URL 或 provider payload。
-- [ ] [P9.4 Live Skip] env-gated scope diagnostic 默认关闭；无 env 时不构造 runner / adapter。
+- [ ] [P9.3 Unit] scope public projection 红测：raw selected text、raw path、URL、provider payload、raw visible text 必须被拒绝或清洗。
+- [ ] [P9.3 Code] scope projection 只保留 editor / file / selection / cursor / range / freshness / reason refs。
+- [ ] [P9.4 Unit] env-gated scope diagnostic 默认关闭；无 env 时必须返回 blocked skip manifest。
+- [ ] [P9.4 Code] 无 env 时不构造 runner / adapter，不申请 input lease。
 - [ ] [P9.5 Mocked Scope] mock 当前 selection / cursor scope；只返回 scope refs、freshness refs、reason refs 和 cleanup refs。
 - [ ] [P9.6 Verify Scope] 跑 scope unit、materializer、live skip、no-bypass focused tests。
 
-Preview no-write：
+#### P9-B：Preview No-write
 
 - [ ] [P9.7 Unit] preview provider 红测：draft / diff 只能作为 artifact refs，不进入 Computer Use primitive。
 - [ ] [P9.7 Code] 实现 preview v1；由 Host-owned provider 生成 artifact refs，不调用 VSCode 写入 primitive。
-- [ ] [P9.8 Materializer] preview 只从 structured Host operation ref + current scope refs 进入，不从 ordinary chat / selected text 推断。
-- [ ] [P9.9 Static] preview public projection 不能泄漏 raw selected text、raw diff、raw path 或 provider payload。
+- [ ] [P9.8 Unit] preview materializer 红测：只从 structured Host operation ref + current scope refs 进入。
+- [ ] [P9.8 Code] preview 不从 ordinary chat、selected text、history、terminal output 或 completed action 推断。
+- [ ] [P9.9 Static] preview public projection 不能泄漏 raw selected text、raw diff、raw path、URL 或 provider payload。
 - [ ] [P9.10 Live Skip] env-gated preview diagnostic 默认关闭；无 env 时不构造 writer / adapter。
 - [ ] [P9.11 Mocked Preview] mock 当前选区 preview：只返回 scope refs、artifact refs、verifier refs 和 preview 状态，不写文件。
 - [ ] [P9.12 Verify Preview] 跑 preview provider、projection、live skip、cleanup/no-bypass focused tests。
 
-Scratch mutation：
+#### P9-C：Scratch Mutation
 
 - [ ] [P9.13 Unit] `insert-draft` 红测：只能基于 current cursor / selection refs 和 Host `text-ref:`。
 - [ ] [P9.13 Code] 实现 `insert-draft` primitive candidate；不从 raw selected text、raw path 或历史 run 推断目标。
@@ -162,7 +126,7 @@ Scratch mutation：
 - [ ] [P9.17 Mocked Scratch] mock 非用户 scratch buffer mutation；验证 after-observe、mutation verifier 和 cleanup，不影响用户文件。
 - [ ] [P9.18 Verify Scratch] 跑 mutation unit、drift、scratch live skip、cleanup/no-bypass focused tests。
 
-Narrow apply / save / batch：
+#### P9-D：Narrow Apply / Save / Batch
 
 - [ ] [P9.19 Unit] narrow apply 红测：明确 apply 时只能生成一个 `replace-selection` 或 `insert-draft` primitive candidate。
 - [ ] [P9.19 Code] 实现 narrow apply Host bridge：严格拆成 `observe -> one primitive -> observe`。

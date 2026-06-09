@@ -451,8 +451,19 @@ function runtimeOwnedRef(ref: string): boolean {
     || /(^|[:/._-])raw([:/._-]|$)/i.test(trimmed)
     || /provider[-_/]?(?:payload|input|request|response)/i.test(trimmed)
   ) return false;
+  if (isUnsafeScopeRef(trimmed)) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|intent:|chat-request:|blocked:|needs-confirmation:|module:|capability:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|verifier:(?:vscode-app-module|vscode-cowork|current-vscode-cowork):|permission:|approval:|risk:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|diagnostics:|problems:|terminal:|command-palette:|command-palette-input:|command-palette-items:|command-palette-item:|command-palette-item-rank:|command-palette-item-hash:|non-user-file-scope:|cursor-move:|selection-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:)/i.test(trimmed);
+  return /^(?:runtime-truth:|intent:|chat-request:|blocked:|needs-confirmation:|module:|capability:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|verifier:(?:vscode-app-module|vscode-cowork|current-vscode-cowork):|permission:|approval:|risk:|cancel:|stop:|lease:|input-lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|diagnostics:|problems:|terminal:|command-palette:|command-palette-input:|command-palette-items:|command-palette-item:|command-palette-item-rank:|command-palette-item-hash:|non-user-file-scope:|cursor-move:|selection-ref:|cursor-ref:|range-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:)/i.test(trimmed);
+}
+
+function isUnsafeScopeRef(ref: string): boolean {
+  const match = /^(?:selection-ref|cursor-ref|range-ref):(.+)$/i.exec(ref);
+  if (!match) return false;
+  const parts = match[1].split(':').filter(Boolean);
+  return parts.length === 0 || parts.some((part) =>
+    !/^[a-z0-9][a-z0-9-]{0,79}$/i.test(part)
+      || /raw|payload|selected|text|diff|path|file|url|http|secret|password|base64|provider|command/i.test(part),
+  );
 }
 
 function safeContractText(value: unknown): string {

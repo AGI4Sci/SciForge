@@ -316,7 +316,18 @@ function safeAppModuleRef(value: string): boolean {
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(ref)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
   if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
-  return /^(?:runtime-truth:|intent:|blocked:|needs-confirmation:|module:|capability:|operation-ref:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|diagnostics:|problems:|terminal:|command-palette:|command-palette-input:|command-palette-items:|command-palette-item:|command-palette-item-rank:|command-palette-item-hash:|verifier:(?:vscode-app-module|vscode-cowork|current-vscode-cowork):|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:|cancel:|stop:|app-native-command:)/i.test(ref);
+  if (isUnsafeScopeRef(ref)) return false;
+  return /^(?:runtime-truth:|intent:|blocked:|needs-confirmation:|module:|capability:|operation-ref:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|diagnostics:|problems:|terminal:|command-palette:|command-palette-input:|command-palette-items:|command-palette-item:|command-palette-item-rank:|command-palette-item-hash:|verifier:(?:vscode-app-module|vscode-cowork|current-vscode-cowork):|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|cursor-ref:|range-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:|cancel:|stop:|app-native-command:)/i.test(ref);
+}
+
+function isUnsafeScopeRef(ref: string): boolean {
+  const match = /^(?:selection-ref|cursor-ref|range-ref):(.+)$/i.exec(ref);
+  if (!match) return false;
+  const parts = match[1].split(':').filter(Boolean);
+  return parts.length === 0 || parts.some((part) =>
+    !/^[a-z0-9][a-z0-9-]{0,79}$/i.test(part)
+      || /raw|payload|selected|text|diff|path|file|url|http|secret|password|base64|provider|command/i.test(part),
+  );
 }
 
 function safeOperation(value: string): string | undefined {

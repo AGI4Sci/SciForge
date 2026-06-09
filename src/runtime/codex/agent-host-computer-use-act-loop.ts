@@ -440,8 +440,19 @@ function runtimeOwnedLoopEvidenceRef(ref: string): boolean {
   if (!trimmed || trimmed.length > 240) return false;
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:|history:)/i.test(trimmed)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(trimmed)) return false;
+  if (isUnsafeScopeRef(trimmed)) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:runtime-truth:|intent:|chat-request:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|input-lease:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|approval:|risk:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|non-user-file-scope:|cursor-move:|selection-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|intent:|chat-request:|browser-host-session:|window-action-session:|computer-use:|computer-use-session:|observation:|executor-event:|input-event:|input-lease:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|approval:|risk:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|macos-app:|process:|frontmost:|file-ref:|text:|image:|accessibility:|element:|freshness:|non-user-file-scope:|cursor-move:|selection-ref:|cursor-ref:|range-ref:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+}
+
+function isUnsafeScopeRef(ref: string): boolean {
+  const match = /^(?:selection-ref|cursor-ref|range-ref):(.+)$/i.exec(ref);
+  if (!match) return false;
+  const parts = match[1].split(':').filter(Boolean);
+  return parts.length === 0 || parts.some((part) =>
+    !/^[a-z0-9][a-z0-9-]{0,79}$/i.test(part)
+      || /raw|payload|selected|text|diff|path|file|url|http|secret|password|base64|provider|command/i.test(part),
+  );
 }
 
 function safeRefPart(value: unknown): string {
