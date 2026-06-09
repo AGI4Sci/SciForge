@@ -242,8 +242,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     baseEnv: NodeJS.ProcessEnv,
     commandId: string,
   ): Promise<CodexAppServerTurnStream | undefined> {
-    const bridgedAgentHostInput = request.agentHostInput
-      ?? p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(request.commandText, commandId, request.attemptId);
+    const bridgedAgentHostInput = computerUseNativeRouteAgentHostInput(request, commandId);
     if (
       !isHostOwnedComputerUseRuntimeIntent(request.runtimeIntent)
       && !isCurrentVSCodeCoWorkAgentHostInput(bridgedAgentHostInput)
@@ -314,6 +313,15 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     session.close();
     this.activeSessions.delete(request.turnId);
   }
+}
+
+function computerUseNativeRouteAgentHostInput(
+  request: CodexAppServerStartTurnRequest,
+  commandId: string,
+): unknown {
+  if (isCurrentVSCodeCoWorkAgentHostInput(request.agentHostInput)) return request.agentHostInput;
+  return p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(request.commandText, commandId, request.attemptId)
+    ?? request.agentHostInput;
 }
 
 function codexAppServerTurnInputItems(

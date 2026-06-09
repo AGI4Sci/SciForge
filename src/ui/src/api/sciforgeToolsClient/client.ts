@@ -489,6 +489,7 @@ async function runtimeProviderPreflightBlock(
 ): Promise<RuntimeProviderPreflightManifest | undefined> {
   if (!runtimeProviderPreflightGateEnabled(input)) return undefined;
   if (localHostBrowserEvidenceCanRunWithoutProvider(input)) return undefined;
+  if (currentVSCodeComputerUseNativeRouteCanRunWithoutProvider(input)) return undefined;
   const manifest = await loadRuntimeProviderPreflightManifestForGate(input, signal);
   if (!manifest || manifest.category === 'ready') return undefined;
   return manifest;
@@ -500,6 +501,16 @@ function localHostBrowserEvidenceCanRunWithoutProvider(input: SendAgentMessageIn
   const asksForLookup = /(?:搜索|查找|查询|查一下|检索|浏览|打开|阅读|获取|总结|search|look\s*up|find|browse|open|read|summari[sz]e)/iu.test(prompt);
   if (!asksForLookup) return false;
   return /(?:https?:\/\/|www\.|site:|\barxiv\b|\bhugging\s*face\b|\bhuggingface\b|网页|网站|来源|论文|文章|新闻|今天|今日|最新|近期|\bweb\b|\bsite\b|\bsource\b|\bsources\b|\bpaper\b|\bpapers\b|\barticle\b|\barticles\b|\bnews\b|\btoday\b|\blatest\b|\brecent\b|\bcurrent\b)/iu.test(prompt);
+}
+
+function currentVSCodeComputerUseNativeRouteCanRunWithoutProvider(input: SendAgentMessageInput): boolean {
+  const prompt = (input.prompt ?? '').replace(/\s+/g, ' ').trim();
+  if (!prompt) return false;
+  const mentionsVSCode = /(?:\bvs\s*code\b|\bvscode\b|visual\s+studio\s+code|当前\s*VSCode|当前\s*vs\s*code)/iu.test(prompt);
+  if (!mentionsVSCode) return false;
+  const mentionsLocalComputerUse = /(?:\bcomputer\s*use\b|桌面|GUI|窗口|鼠标|键盘|命令面板|command\s+palette)/iu.test(prompt);
+  if (!mentionsLocalComputerUse) return false;
+  return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|observe|bind|control|open|close|command\s+palette|命令面板)/iu.test(prompt);
 }
 
 function runtimeProviderPreflightGateEnabled(input: SendAgentMessageInput) {

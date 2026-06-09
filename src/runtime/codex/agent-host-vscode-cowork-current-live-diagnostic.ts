@@ -114,21 +114,50 @@ export interface RunCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnosticInput
   draftTextRef: string;
 }
 
+function currentVSCodeCoWorkHostFinalAnswerResult(input: {
+  status: VSCodeCoWorkLiveDiagnosticResult['status'];
+  message: string;
+  primitiveChainObserved?: string[];
+  evidenceRefs?: string[];
+  cleanupRefs?: string[];
+}): VSCodeCoWorkLiveDiagnosticResult {
+  const primitiveChainObserved = [...(input.primitiveChainObserved ?? [])];
+  const evidenceRefs = uniqueSafeRefs(input.evidenceRefs);
+  const cleanupRefs = currentVSCodeCoWorkCleanupRefs(input.cleanupRefs ?? []);
+  return {
+    status: input.status,
+    message: input.message,
+    maturity: 'live-diagnostic',
+    productReady: false,
+    primitiveChainObserved,
+    evidenceRefs,
+    cleanupRefs,
+    agentHostFinalAnswer: {
+      schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+      source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+      status: input.status,
+      text: input.message,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      hostOwnsFinalAnswer: true,
+      computerUseCorePlanning: false,
+      primitiveChainObserved,
+      evidenceRefs,
+      cleanupRefs,
+    },
+  };
+}
+
 export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
   input: RunCurrentVSCodeCoWorkReadVisibleTextLiveDiagnosticInput = {},
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const preflight = await runCurrentVSCodeCoWorkLiveDiagnosticPreflight({ env: input.env });
   if (preflight.status !== 'ready') {
     const message = preflight.skipReason ?? (preflight.blockedReasons.join('; ') || 'current VSCode co-work live diagnostic blocked');
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const service = createComputerUsePrimitiveService({
@@ -168,15 +197,10 @@ export async function runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic(
   const preflight = await runCurrentVSCodeCoWorkLiveDiagnosticPreflight({ env: input.env });
   if (preflight.status !== 'ready') {
     const message = preflight.skipReason ?? (preflight.blockedReasons.join('; ') || 'current VSCode co-work focus-editor live diagnostic blocked');
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const service = createComputerUsePrimitiveService({
@@ -218,26 +242,17 @@ export async function runCurrentVSCodeCoWorkTerminalLiveDiagnostic(
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const env = input.env ?? process.env;
   if (env[VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV] !== '1') {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: `missing-env:${VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV}`,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
   if (!input.terminalTextRef.startsWith('text-ref:')) {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode co-work terminal diagnostic blocked: terminal text ref required',
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
       evidenceRefs: ['blocked:vscode-cowork:terminal-text-ref-required'],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const runId = input.runId ?? `current-vscode-terminal-${Date.now()}`;
@@ -385,26 +400,17 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const env = input.env ?? process.env;
   if (env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV] !== '1') {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: `missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
   if (!input.paletteQueryTextRef.startsWith('text-ref:')) {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode co-work command palette diagnostic blocked: palette query text ref required',
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
       evidenceRefs: ['blocked:vscode-cowork:palette-query-text-ref-required'],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const runId = input.runId ?? `current-vscode-palette-${Date.now()}`;
@@ -582,15 +588,10 @@ export async function runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic(
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const env = input.env ?? process.env;
   if (env[VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV] !== '1') {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: `missing-env:${VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV}`,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const runId = input.runId ?? `current-vscode-scope-${Date.now()}`;
@@ -713,15 +714,10 @@ export async function runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic(
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const env = input.env ?? process.env;
   if (env[VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV] !== '1') {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: `missing-env:${VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV}`,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const runId = input.runId ?? `current-vscode-preview-${Date.now()}`;
@@ -855,26 +851,17 @@ export async function runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagn
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const env = input.env ?? process.env;
   if (env[VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV] !== '1') {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: `missing-env:${VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV}`,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
   if (!input.draftTextRef.startsWith('text-ref:')) {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode current selection apply diagnostic blocked: text ref required',
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
       evidenceRefs: ['blocked:vscode-cowork:current-selection-apply-text-ref-required'],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const runId = input.runId ?? `current-vscode-current-selection-apply-${Date.now()}`;
@@ -1040,26 +1027,17 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
 ): Promise<VSCodeCoWorkLiveDiagnosticResult> {
   const env = input.env ?? process.env;
   if (env[VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV] !== '1') {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: `missing-env:${VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV}`,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
   if (!input.draftTextRef.startsWith('text-ref:')) {
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode scratch mutation diagnostic blocked: text ref required',
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
       evidenceRefs: ['blocked:vscode-cowork:scratch-text-ref-required'],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const runId = input.runId ?? `current-vscode-scratch-mutation-${Date.now()}`;
@@ -1640,15 +1618,10 @@ export async function runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic(
   const preflight = await runCurrentVSCodeCoWorkLiveDiagnosticPreflight({ env: input.env });
   if (preflight.status !== 'ready') {
     const message = preflight.skipReason ?? (preflight.blockedReasons.join('; ') || 'current VSCode co-work insert-draft live diagnostic blocked');
-    return {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message,
-      maturity: 'live-diagnostic',
-      productReady: false,
-      primitiveChainObserved: [],
-      evidenceRefs: [],
-      cleanupRefs: [],
-    };
+    });
   }
 
   const service = createComputerUsePrimitiveService({

@@ -123,13 +123,13 @@ SciForge UI
 
 目标：把 P10 的真实 VSCode command palette live-diagnostic 从 native route 证据闭环推进到 SciForge 对话 UI 的可见闭环。P11 仍然不扩大 Computer Use core，不做 task planning；只验证用户在 SciForge UI 中提出明确 VSCode Computer Use 请求时，Host bridge、native route、live runner、public event、final answer 和 cleanup 能稳定串起来。
 
-当前状态：P11.0 已闭合；P10 已提供可复用的 direct live route、ambiguity blocker 和真实桌面验收测试，UI runtime event reader 现在能把 Host final answer 的 `completed` / `needs-confirmation` / `blocked` 三态稳定投影为用户可见结果并结束等待。
+当前状态：P11.0-P11.2 / P11.4 已闭合；P10 已提供可复用的 direct live route、ambiguity blocker 和真实桌面验收测试。UI runtime event reader 现在能把 Host final answer 的 `completed` / `needs-confirmation` / `blocked` 三态稳定投影为用户可见结果并结束等待；显式 VSCode + Computer Use ordinary chat 即使带有 UI generic Host input，也会在后端桥接成 current VSCode co-work Host input，不再落回 app-server discovery 或 provider preflight blocker。P11 剩余卡点是多 VSCode 窗口 / 证据冲突的 UI dogfood。
 
 - [x] [P11.0 Unit] SciForge UI / client runtime event 投影测试：P10 `completed`、`needs-confirmation`、`blocked` 三类 Host final answer 都能在对话中终止等待，不显示“长期 worked / 无回复”；`needs-confirmation` 会在 message provenance 标记 `requiresUserConfirmation`，`blocked` / `needs-confirmation` 不可被当作 live acceptance。
-- [ ] [P11.1 Code] 对 explicit VSCode Computer Use ordinary chat，前端只消费 unified native route public events；不新增 chat bypass、不把 runner result 当作独立旁路消息。
-- [ ] [P11.2 Dogfood] 在本机 `localhost:5173` 通过 SciForge UI 发起“用 Computer Use 操纵当前 VSCode，打开命令面板”，验证不再卡在 unavailable / app-server discovery，最终只显示 `live-diagnostic` safe answer。
+- [x] [P11.1 Code] 对 explicit VSCode Computer Use ordinary chat，前端只消费 unified native route public events；不新增 chat bypass、不把 runner result 当作独立旁路消息。
+- [x] [P11.2 Dogfood] 在本机 `localhost:5173` 通过 SciForge UI 发起“用 Computer Use 操纵当前 VSCode，打开命令面板”，验证不再卡在 unavailable / app-server discovery，最终只显示 `live-diagnostic` safe answer。
 - [ ] [P11.3 UX] 多 VSCode 窗口或证据冲突时，SciForge UI dogfood 显示 Host `needs-confirmation` / `blocked`，不自动选择窗口；用户确认后的下一步仍由 Host 重新发一个 primitive。
-- [ ] [P11.4 Verify] 跑 UI event tests、P10 native route tests、typecheck、Computer Use no-bypass / no-legacy smoke，并确认没有 raw screenshot/base64/provider payload 进入 chat context。
+- [x] [P11.4 Verify] 跑 UI event tests、P10 native route tests、typecheck、Computer Use no-bypass / no-legacy smoke，并确认没有 raw screenshot/base64/provider payload 进入 chat context。
 
 ### P9：VSCode Editor Mutation 与 Host-owned Narrow Apply
 

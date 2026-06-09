@@ -7,6 +7,7 @@ import {
   isComputerUseNativeRouteCommand,
 } from './computer-use-native-route.js';
 import { createVSCodeCoWorkChatBridge } from './vscode-cowork-chat-bridge.js';
+import { VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 
 const VSCODE_COWORK_FULL_ACCESS_PERMISSION_REF = 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:1:file-ref:vscode:paper';
 const VSCODE_COWORK_UNBOUND_PERMISSION_REF = 'permission:current-vscode-cowork:full-access:window-action-session:vscode-cowork:other:file-ref:vscode:paper';
@@ -718,6 +719,77 @@ test('Computer Use native route can run P10 current VSCode command palette live 
   assert.ok((done?.evidenceRefs as string[]).includes('command-palette:vscode:p10:current'));
   assert.ok((done?.cleanupRefs as string[]).includes('front-app-restore:current-vscode-cowork:p10-palette'));
   assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('Computer Use native route projects Host final answer when P10 command palette live diagnostic is env-blocked', async () => {
+  const previousPaletteEnv = process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
+  delete process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
+  try {
+    const agentHostInput = {
+      schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+      source: 'ordinary-chat-current-vscode-computer-use-bridge',
+      intentText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
+      singleTurnOverride: false,
+      refs: [
+        'intent:current-vscode-cowork',
+        'intent:current-vscode-cowork-live-diagnostic',
+        'chat-request:vscode-cowork:p10-command-palette-env-blocked:attempt-1',
+      ],
+      readiness: {},
+      target: {
+        kind: 'current-vscode-cowork' as const,
+        vscodeCoWork: {
+          requestRef: 'chat-request:vscode-cowork:p10-command-palette-env-blocked:attempt-1',
+          operation: 'open-command-palette' as const,
+          diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+          targetMode: 'smart-detect-current-vscode-window',
+        },
+      },
+      observation: {},
+      permissions: {
+        refs: ['permission:turn/current-vscode-cowork/full-access'],
+        scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+        stopCancelPath: true,
+      },
+    };
+    const stream = createComputerUseNativeRouteStream({
+      request: {
+        commandText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
+        workspacePath: '/tmp/workspace',
+        commandId: 'native-route-vscode-cowork-p10-palette-env-blocked',
+        attemptId: 'native-route-vscode-cowork-p10-palette-env-blocked-attempt-1',
+        agentHostInput,
+      },
+      workspace: '/tmp/workspace',
+      provider: 'sciforge-provider',
+      model: 'sciforge-model',
+      profile: 'host-owned',
+      currentVSCodeCoWorkLiveDiagnosticOptions: {
+        activateCurrentVSCodeIfNeeded: true,
+      },
+    });
+
+    assert.notEqual(stream, undefined);
+    const events = await collectStreamEvents(stream!);
+    const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+    const finalAnswer = done?.agentHostFinalAnswer as Record<string, unknown> | undefined;
+
+    assert.equal(done?.status, 'blocked');
+    assert.equal(done?.maturity, 'live-diagnostic');
+    assert.equal(done?.productReady, false);
+    assert.equal(finalAnswer?.status, 'blocked');
+    assert.equal(finalAnswer?.hostOwnsFinalAnswer, true);
+    assert.equal(finalAnswer?.computerUseCorePlanning, false);
+    assert.match(String(finalAnswer?.text), new RegExp(`missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`));
+    assert.deepEqual(finalAnswer?.primitiveChainObserved, []);
+    assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+  } finally {
+    if (previousPaletteEnv === undefined) {
+      delete process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
+    } else {
+      process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV] = previousPaletteEnv;
+    }
+  }
 });
 
 test('Computer Use native route blocks P10 direct live diagnostic when Host target has ambiguous VSCode windows', async () => {

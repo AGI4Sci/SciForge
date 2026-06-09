@@ -203,6 +203,13 @@ test('current VSCode co-work command palette diagnostic is independently env-gat
   assert.equal(result.productReady, false);
   assert.deepEqual(result.primitiveChainObserved, []);
   assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`));
+  assert.equal(result.agentHostFinalAnswer?.status, 'blocked');
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.match(result.agentHostFinalAnswer?.text ?? '', new RegExp(`missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`));
+  assert.deepEqual(result.agentHostFinalAnswer?.primitiveChainObserved, []);
+  assert.deepEqual(result.agentHostFinalAnswer?.evidenceRefs, []);
+  assert.deepEqual(result.agentHostFinalAnswer?.cleanupRefs, []);
   assert.deepEqual(liveCalls, []);
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload/i);
 });

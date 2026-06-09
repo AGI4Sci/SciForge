@@ -616,6 +616,93 @@ test('Runtime Codex foreground final message uses Host-owned final-answer envelo
   }
 });
 
+test('Runtime Codex explicit VSCode Computer Use chat consumes unified native route Host final answer only', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestPrompt = '用 Computer Use 操纵当前 VSCode，打开命令面板';
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (url, init) => {
+      assert.equal(String(url).endsWith(CODEX_RUNTIME_STREAM_PATH), true);
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      bodies.push(body);
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: operation_progress\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'operation_progress',
+          status: 'running',
+          message: 'Runtime Codex selected the current VSCode co-work live diagnostic runner.',
+          commandId,
+          attemptId,
+          evidenceRefs: [`computer-use:vscode/${commandId}/route.selected`],
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'LOCAL RUNNER ACK SHOULD NOT BE VISIBLE',
+          provider: 'host-owned-runtime',
+          model: 'computer-use-native-route',
+          profile: 'host-owned',
+          workspace: 'workspace:current',
+          commandId,
+          attemptId,
+          evidenceRefs: [
+            `computer-use:vscode/${commandId}/route.selected`,
+            `computer-use:vscode/${commandId}/observation.current`,
+          ],
+          agentHostFinalAnswer: {
+            schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+            source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+            status: 'completed',
+            text: '已用 live-diagnostic 路径验证当前 VSCode 命令面板可以打开并关闭。',
+            maturity: 'live-diagnostic',
+            productReady: false,
+            hostOwnsFinalAnswer: true,
+            computerUseCorePlanning: false,
+            primitiveChainObserved: ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)'],
+            evidenceRefs: [
+              `computer-use:vscode/${commandId}/route.selected`,
+              `computer-use:vscode/${commandId}/observation.current`,
+            ],
+            cleanupRefs: [`computer-use:vscode/${commandId}/control.release`],
+          },
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: requestPrompt,
+      references: [],
+      artifacts: [],
+      claims: [],
+      messages: [],
+      runs: [],
+    });
+    const raw = response.run.raw as Record<string, unknown>;
+    const finalAnswer = raw.finalAnswerEnvelope as Record<string, unknown>;
+
+    assert.equal(bodies[0]?.commandText, requestPrompt);
+    assert.equal(response.message.content, '已用 live-diagnostic 路径验证当前 VSCode 命令面板可以打开并关闭。');
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
+    assert.equal(finalAnswer.text, response.message.content);
+    assert.equal(finalAnswer.status, 'completed');
+    assert.equal(finalAnswer.liveAcceptanceEligible, true);
+    assert.equal(raw.nativeCodexMessage, undefined);
+    assert.equal(raw.guiPresentation, undefined);
+    assert.equal(raw.guiAskUser, undefined);
+    assert.doesNotMatch(JSON.stringify(raw), /LOCAL RUNNER ACK SHOULD NOT BE VISIBLE|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Runtime Codex foreground Host final answer with needs-confirmation marks message provenance for user confirmation', async () => {
   const originalFetch = globalThis.fetch;
   try {
@@ -1449,6 +1536,73 @@ test('Runtime Codex provider inference preflight does not block local Host Brows
     const raw = response.run.raw as Record<string, unknown>;
     const guiPresentation = raw.guiPresentation as Record<string, unknown>;
     assert.deepEqual(guiPresentation.displayedRefs, ['browser-host-session:arxiv-agentic-rl/source-pages/source-1.txt']);
+    assert.equal(fetchedUrls.some((entry) => entry.includes(CODEX_RUNTIME_STREAM_PATH)), true);
+    assert.equal(fetchedUrls.some((entry) => entry.includes('/api/sciforge/runtime-provider-preflight/manifest')), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider inference preflight does not block explicit VSCode Computer Use native route prompts', async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchedUrls: string[] = [];
+  try {
+    globalThis.fetch = (async (url, init) => {
+      const urlText = String(url);
+      fetchedUrls.push(urlText);
+      if (urlText.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        throw new Error('VSCode Computer Use native route prompts should bypass provider preflight.');
+      }
+      if (urlText.includes(CODEX_RUNTIME_STREAM_PATH)) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const commandId = String(body.commandId);
+        const attemptId = `${commandId}-attempt-1`;
+        return new Response([
+          'event: done\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            status: 'done',
+            message: 'Runtime Codex completed successfully.',
+            provider: 'host-owned-runtime',
+            model: 'computer-use-native-route',
+            profile: 'host-owned',
+            workspace: 'workspace:current',
+            commandId,
+            attemptId,
+            evidenceRefs: [`computer-use:vscode/${commandId}/observation.current`],
+            agentHostFinalAnswer: {
+              schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+              source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+              status: 'completed',
+              text: '已通过 Host-owned VSCode Computer Use native route 返回 live-diagnostic 结果。',
+              maturity: 'live-diagnostic',
+              productReady: false,
+              hostOwnsFinalAnswer: true,
+              computerUseCorePlanning: false,
+              primitiveChainObserved: ['bind', 'observe', 'host-decision', 'act', 'observe', 'control(release)'],
+              evidenceRefs: [`computer-use:vscode/${commandId}/observation.current`],
+              cleanupRefs: [`computer-use:vscode/${commandId}/control.release`],
+            },
+          })}\n\n`,
+        ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+      }
+      throw new Error(`Unexpected fetch ${urlText}`);
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '用 Computer Use 操纵当前 VSCode，打开命令面板',
+      runtimeHealth: [{
+        id: 'model',
+        status: 'not-configured',
+        source: 'runtime-provider-preflight',
+      }],
+    });
+
+    assert.equal(response.message.status, 'completed');
+    assert.equal(response.message.content, '已通过 Host-owned VSCode Computer Use native route 返回 live-diagnostic 结果。');
+    assert.match(String(response.message.provenance?.source), /^codex\.app-server\.final-answer:codex-command-/);
     assert.equal(fetchedUrls.some((entry) => entry.includes(CODEX_RUNTIME_STREAM_PATH)), true);
     assert.equal(fetchedUrls.some((entry) => entry.includes('/api/sciforge/runtime-provider-preflight/manifest')), false);
   } finally {
