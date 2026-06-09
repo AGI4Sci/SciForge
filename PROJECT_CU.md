@@ -92,6 +92,7 @@ SciForge UI
 - [x] P9.13-P9.15：Scratch Mutation unit path 已闭合；`insert-draft` / `replace-selection` 只从 structured Host operation refs、current scope refs 和 Host `text-ref:` 生成单个 `computer_use.act` primitive candidate；public projection 只保留 scope / text-ref / verifier refs；mutation verifier 要求 action evidence、same-file、same-window、same-editor、same-selection 和 after-observe refs，漂移 blocked-safe。
 - [x] P9.16-P9.18：Scratch Mutation live skip / mocked diagnostic 已闭合；独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC=1` gate 默认 blocked，generic live env 不能解锁 scratch writer；env-on mock 只允许非用户 scratch buffer，跑 `bind -> observe -> host-decision -> act -> observe -> control(release)`，验证 mutation verifier 与 cleanup refs，不写用户文件、不宣称 `product-ready`。
 - [x] P9.19-P9.20：Narrow Apply unit path 已闭合；`apply-current-selection` 是 Host-owned bridge，不是 VSCode module capability，只能从 structured Host operation + current scope refs + Host `text-ref:` 映射为一个 `replace-selection` / `insert-draft` primitive candidate；apply verifier 要求 same-file、same-window、same-editor、same-selection、after-observe、release 与 cleanup refs，不能把 Computer Use `completed` 当作用户任务完成。
+- [x] P9.21-P9.22：Save / batch unit path 已闭合；`save-current-file` 只从 structured Host operation、current editor/file refs、same-file + mutation verifier 和 Host action evidence 生成一个 `Meta+S` `computer_use.act` candidate；`bulk-replace` / `cross-file-modify` 由 Host-owned decomposition guard blocked-safe，不会生成单个 Computer Use task、`act` 或 `run_procedure`。
 
 ## 当前执行路线
 
@@ -99,7 +100,7 @@ SciForge UI
 
 目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation，以及 P9-D 的 Narrow Apply / Apply Verification unit bridge 已闭合。下一步进入 `save-current-file` 与 batch / cross-file decomposition unit path；不要跳到真实桌面用户文件 apply。
+当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation，以及 P9-D 的 Narrow Apply / Apply Verification / Save / Batch Decomposition unit bridge 已闭合。下一步进入 current selection live skip、mocked preview/apply diagnostic 与 focused verify；不要跳到真实桌面用户文件 apply。
 
 #### P9-A：Scope Projection 与 Diagnostic
 
@@ -139,10 +140,10 @@ SciForge UI
 - [x] [P9.19 Code] 实现 narrow apply Host bridge：严格拆成 `observe -> one primitive -> observe`。
 - [x] [P9.20 Unit] apply verification 红测：apply 后必须有 same-file、mutation、after-observe、release 和 cleanup refs。
 - [x] [P9.20 Code] 实现 apply verification projection；不从 Computer Use `completed` 推断用户任务完成。
-- [ ] [P9.21 Unit] `save-current-file` 红测：需要 same-file、mutation、current editor refs 和 Host decision/action evidence。
-- [ ] [P9.21 Code] 实现 `save-current-file` readiness；full-access 文件操作不走类别式 confirmation gate。
-- [ ] [P9.22 Unit] batch / cross-file 红测：批量或跨文件修改必须由 Host 分解为多次 single primitive，不生成单个 Computer Use task。
-- [ ] [P9.22 Code] 实现 batch / cross-file decomposition guard；只输出下一步 refs、partial evidence 或 blocked reason。
+- [x] [P9.21 Unit] `save-current-file` 红测：需要 same-file、mutation、current editor refs 和 Host decision/action evidence。
+- [x] [P9.21 Code] 实现 `save-current-file` readiness；full-access 文件操作不走类别式 confirmation gate。
+- [x] [P9.22 Unit] batch / cross-file 红测：批量或跨文件修改必须由 Host 分解为多次 single primitive，不生成单个 Computer Use task。
+- [x] [P9.22 Code] 实现 batch / cross-file decomposition guard；只输出下一步 refs、partial evidence 或 blocked reason。
 - [ ] [P9.23 Live Skip] env-gated current selection diagnostic 默认关闭；无 env 时不构造 writer / adapter。
 - [ ] [P9.24 Mocked Current Selection Preview] mock 用户当前选区 preview；不写文件，证据不足 blocked-safe。
 - [ ] [P9.25 Mocked Current Selection Apply] mock explicit apply：只执行一个 primitive，随后 observe / verify / release。

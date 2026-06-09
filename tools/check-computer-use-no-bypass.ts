@@ -21,6 +21,7 @@ const vscodeAppModuleForbiddenDesktopImport = /\bfrom\s+['"][^'"]*(?:packages\/a
 const vscodeAppModuleForbiddenDesktopCall = /\b(?:service\.invoke|createComputerUsePrimitiveService|createComputerUseMcpAdapter|createDefaultComputerUseActMaterializer|executeGenericDesktopAction|executeIndependentInputAdapterAction|desktopController\.[A-Za-z_$][\w$]*|systemInput\.[A-Za-z_$][\w$]*|runCommand\s*\(\s*['"](?:osascript|open|screencapture)['"]|execFile\s*\(\s*['"](?:osascript|open|screencapture)['"]|spawn\s*\(\s*['"](?:osascript|open|screencapture)['"]|CGEvent|System Events)\b/;
 const bareOrdinaryVSCodeNativeShortcut = /\b(?:shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic|narrowCurrentVSCodeLiveDiagnostic|narrow\s+ordinary\s+(?:chat\s+)?(?:text|vscode|live))/i;
 const ordinaryTextField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId|selectedText|rawSelectedText|rawSelection|rawPath|rawDiff|rawPayload|providerPayload|terminalOutput|stdout|stderr|history|actionResult|completedAction|completionTruth|taskOutcome)\b/;
+const rawOperationInferenceField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId|selectedText|rawSelectedText|rawSelection|rawPath|filePath|targetPath|workspacePath|rawDiff|diff|patch|rawPayload|providerPayload|rawProviderPayload|providerResponse|terminalOutput|terminalResult|stdout|stderr|stdoutText|stderrText|history|actionResult|completedAction|completionTruth|taskOutcome)\b/;
 const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|editor-scope|preview-current-selection|apply-current-selection|move-cursor|insert-draft|replace-selection|save-current-file|bulk-replace|cross-file-modify|undo-last-action|redo-last-action|show-problems|read-diagnostics|focus-terminal|send-terminal-text|observe-terminal|submit-terminal-command|interrupt-terminal-command|clear-terminal|focus-editor-from-terminal|open-command-palette|send-command-palette-query|observe-command-palette-items|select-command-palette-item|close-command-palette)['"]/;
 const vscodeOperationTextInferenceHelper = /\b(?:lowRisk[A-Za-z0-9_$]*OperationFromText|[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)|[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)[A-Za-z0-9_$]*(?:To|As|Into)[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation))\b/;
 const genericOperationTextInferenceHelper = /\b[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)\b/;
@@ -33,7 +34,9 @@ const publicProjectionSurfaceFiles = new Set([
   'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts',
   'src/runtime/codex/agent-host-vscode-editor-preview-materializer.ts',
   'src/runtime/codex/agent-host-vscode-editor-narrow-apply-materializer.ts',
+  'src/runtime/codex/agent-host-vscode-editor-decomposition-guard-materializer.ts',
   'src/runtime/codex/vscode-editor-narrow-apply-provider.ts',
+  'src/runtime/codex/vscode-editor-decomposition-guard-provider.ts',
   'src/runtime/codex/computer-use-app-module-registry.ts',
   'src/runtime/computer-use/host-adapter.ts',
   'src/runtime/computer-use/package-bridge-presentation.ts',
@@ -294,7 +297,7 @@ function vscodeOperationTextInferenceFileFindings(file: string, text: string): F
   const match = vscodeOperationLiteral.exec(text);
   if (!match) return [];
   const context = text.slice(Math.max(0, match.index - 900), Math.min(text.length, match.index + 900));
-  if (!ordinaryTextField.test(context)) return [];
+  if (!rawOperationInferenceField.test(context)) return [];
   if (!/\b(?:infer|derive|detect|guess|parse|select|shouldRun|run|includes|match|test|some|find|trim|String|toLowerCase|toUpperCase)\b/.test(context)) return [];
   return [{
     file,
@@ -513,17 +516,22 @@ function isBareOrdinaryVSCodeNativeShortcut(file: string, line: string): boolean
 }
 
 function isVSCodeOperationTextInferenceLine(file: string, line: string): boolean {
-  if (!isOrdinaryChatOrNativeRouteSurface(file)) return false;
+  if (!isVSCodeOperationInferenceSurface(file)) return false;
   const code = line.replace(/\/\/.*$/, '');
   if (vscodeOperationTextInferenceHelper.test(code)) return true;
   if (genericOperationTextInferenceHelper.test(code) && (isVSCodeCoWorkRouteSurface(file) || vscodeOperationLiteral.test(code))) return true;
-  if (!ordinaryTextField.test(code)) return false;
+  if (!rawOperationInferenceField.test(code)) return false;
   if (isVSCodeCoWorkLiveDiagnosticProducerSurface(file)
     && /\b(?:operation|vscodeCoWorkOperation)\s*[:=]/i.test(code)) return true;
   if (vscodeOperationLiteral.test(code) && /\b(?:operation|vscodeCoWork|VSCode|Vscode|vscode)\b/.test(code)) return true;
   if (vscodeLiveDiagnosticTextInference.test(code) && /\b(?:infer|derive|detect|guess|parse|select|shouldRun|run)\b/i.test(code)) return true;
   if (/\b(?:operation|vscodeCoWorkOperation)\s*[:=]/i.test(code) && /\b(?:String|trim|match|test|includes|toLowerCase|toUpperCase)\s*\(/.test(code)) return true;
   return false;
+}
+
+function isVSCodeOperationInferenceSurface(file: string): boolean {
+  return isOrdinaryChatOrNativeRouteSurface(file)
+    || /^src\/runtime\/codex\/.*(?:materializer|provider|bridge)\.[cm]?[tj]sx?$/.test(file);
 }
 
 function isOrdinaryChatOrNativeRouteSurface(file: string): boolean {

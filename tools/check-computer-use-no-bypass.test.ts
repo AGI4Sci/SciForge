@@ -359,6 +359,46 @@ test('Computer Use no-bypass guard blocks narrow apply save or batch inference f
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
 });
 
+test('Computer Use no-bypass guard blocks VSCode materializer/provider operation inference from raw fields', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-vscode-editor-decomposition-guard-materializer.ts', [
+    'export function inferBatchOperation(input: Record<string, unknown>) {',
+    '  const rawPath = String(input.rawPath ?? "");',
+    '  const filePath = String(input.filePath ?? "");',
+    '  const providerResponse = String(input.providerResponse ?? "");',
+    '  const stdoutText = String(input.stdoutText ?? "");',
+    '  const completedAction = String(input.completedAction ?? "");',
+    "  if ([rawPath, filePath, providerResponse, stdoutText, completedAction].some((value) => value.includes('save'))) return { operation: 'save-current-file' };",
+    "  if (providerResponse.includes('bulk')) return { operation: 'bulk-replace' };",
+    "  return { operation: 'cross-file-modify' };",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
+test('Computer Use no-bypass guard allows structured VSCode save and decomposition operation refs', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-vscode-editor-decomposition-guard-materializer.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    "type Operation = 'save-current-file' | 'bulk-replace' | 'cross-file-modify';",
+    'export function fromHostTarget(target: { operation: Operation; operationRef: string; refs: string[] }) {',
+    '  return sanitizePublicEvent({',
+    '    status: target.operation === "save-current-file" ? "completed" : "blocked",',
+    '    evidenceRefs: [target.operationRef, ...target.refs],',
+    '    executionUnits: [{ tool: "vscode-editor-decomposition-guard-provider", operation: target.operation, status: "blocked" }],',
+    '  });',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test('Computer Use no-bypass guard blocks command palette operation inference from labels or commandText', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [

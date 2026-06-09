@@ -23,6 +23,9 @@ import {
 import {
   createDefaultVSCodeEditorNarrowApplyMaterializer,
 } from './agent-host-vscode-editor-narrow-apply-materializer.js';
+import {
+  createDefaultVSCodeEditorDecompositionGuardMaterializer,
+} from './agent-host-vscode-editor-decomposition-guard-materializer.js';
 import type {
   CodexAgentHostComputerUseActMaterializer,
   CodexAgentHostComputerUseActMaterializerInput,
@@ -43,6 +46,7 @@ export function createDefaultComputerUseActMaterializer(options: {
   const appModule = createDefaultComputerUseAppModuleMaterializer({
     modules: options.appModules,
   });
+  const vscodeEditorDecompositionGuard = createDefaultVSCodeEditorDecompositionGuardMaterializer();
   const vscodeEditorNarrowApply = createDefaultVSCodeEditorNarrowApplyMaterializer();
   const vscodeEditorPreview = createDefaultVSCodeEditorPreviewMaterializer();
   const browser = createDefaultBrowserHostComputerUseActMaterializer({
@@ -61,6 +65,8 @@ export function createDefaultComputerUseActMaterializer(options: {
     if (applyResult) return applyResult;
     const previewResult = await vscodeEditorPreview(normalizedInput);
     if (previewResult) return previewResult;
+    const decompositionResult = await vscodeEditorDecompositionGuard(normalizedInput);
+    if (decompositionResult) return decompositionResult;
     const appModuleResult = await appModule(normalizedInput);
     if (appModuleResult) return appModuleResult;
     if (hasBrowserHostSessionRef(normalizedInput)) return browser(normalizedInput);
@@ -173,6 +179,7 @@ function attachDefaultBoundaryArtifacts(
     isVSCodeEditorAppModulePublicResult(result)
     || isVSCodeEditorPreviewResult(result)
     || isVSCodeEditorNarrowApplyResult(result)
+    || isVSCodeEditorDecompositionResult(result)
   ) return result;
   const boundaryRefs = runtimeOwnedRefs([
     `runtime-truth:computer-use-act-materializer/preflight/${safeToken(input.commandId) || 'command'}/${safeToken(input.attemptId) || 'attempt'}`,
@@ -210,6 +217,7 @@ function isVSCodeEditorAppModulePublicResult(result: CodexAgentHostComputerUseAc
             unit.operation === 'editor-scope'
             || unit.operation === 'insert-draft'
             || unit.operation === 'replace-selection'
+            || unit.operation === 'save-current-file'
           )
         )
         || (
@@ -242,6 +250,14 @@ function isVSCodeEditorNarrowApplyResult(result: CodexAgentHostComputerUseActMat
     isRecord(unit)
       && unit.tool === 'vscode-editor-narrow-apply-provider'
       && unit.operation === 'apply-current-selection'
+  );
+}
+
+function isVSCodeEditorDecompositionResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
+  return (result.executionUnits ?? []).some((unit) =>
+    isRecord(unit)
+      && unit.tool === 'vscode-editor-decomposition-guard-provider'
+      && (unit.operation === 'bulk-replace' || unit.operation === 'cross-file-modify')
   );
 }
 

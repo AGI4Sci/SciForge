@@ -804,6 +804,140 @@ test('default Computer Use Act materializer routes explicit VSCode narrow apply 
   assert.doesNotMatch(JSON.stringify(inferred), /vscode-editor-narrow-apply-provider|"operation":"apply-current-selection"|Generic WindowAction planner|private-selected-text|text:vscode:visible|\/Users\/|providerPayload|base64/i);
 });
 
+test('default Computer Use Act materializer routes explicit VSCode save to one refs-first primitive without approval detour', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer VSCode save operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-save-fallback'],
+        };
+      },
+    },
+  });
+  const saveRefs = [
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'action:vscode:replace-selection:unit-save',
+    'verifier:vscode-app-module:same-file:selected-file-vscode-paper',
+    'verifier:vscode-app-module:mutation:selected-file-vscode-paper',
+    'verifier:vscode-app-module:same-window:window-vscode-paper',
+    'verifier:vscode-app-module:same-editor:focused-editor-vscode-paper-1',
+    'verifier:vscode-editor-narrow-apply:unit-save:verified',
+    'text:vscode:visible:private-selected-text',
+    'terminal-output:vscode:paper:current',
+    'history:vscode:previous-run',
+    'action:vscode:previous:completed',
+  ];
+
+  const structured = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('save-current-file', saveRefs),
+    preflight: vscodeAppModulePreflight(saveRefs),
+    commandText: 'Save /Users/example/private-paper.md after applying the selected edit; this text must not decide save.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-save-current-file',
+    attemptId: 'unit-save-current-file',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(saveRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(structured?.status, 'completed', structured?.message);
+  assert.equal(structured?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.equal(structured?.completionTruth, undefined);
+  assert.ok(structured?.executionUnits?.some((unit) =>
+    unit.tool === 'computer-use.app-module-registry'
+      && unit.moduleId === 'vscode'
+      && unit.operation === 'save-current-file'
+      && unit.primitive === 'computer_use.act'
+      && unit.status === 'candidate'
+  ));
+  const serialized = JSON.stringify(structured);
+  assert.match(serialized, /selected-file:vscode:paper/);
+  assert.match(serialized, /(?:element:vscode:editor:monaco:1|focused-editor:vscode:paper:1)/);
+  assert.match(serialized, /verifier:vscode-app-module:mutation:selected-file-vscode-paper/);
+  assert.match(serialized, /action:vscode-app-module:save-current-file:meta-s/);
+  assert.doesNotMatch(serialized, /needs-confirmation|approval:|permission:|computer-use:executor-scope|operation-ref:|window-action-session:vscode|macos-app:vscode|process:vscode|window:vscode|frontmost:vscode|observation:vscode|module:vscode-app|capability:vscode|text:vscode:visible|terminal-output:vscode|history:vscode|previous:completed|Save \/Users|private-paper|\/Users\/|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|Generic WindowAction planner|completionTruth|taskOutcome":"satisfied/i);
+
+  const inferred = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined, saveRefs),
+    preflight: vscodeAppModulePreflight(saveRefs),
+    commandText: 'Save the current VSCode file.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-save-no-operation',
+    attemptId: 'unit-save-no-operation',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(saveRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(inferred?.status, 'blocked');
+  assert.equal(inferred?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(inferred?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.doesNotMatch(JSON.stringify(inferred), /"operation":"save-current-file"|Generic WindowAction planner|private-selected-text|text:vscode:visible|\/Users\/|providerPayload|base64/i);
+});
+
+test('default Computer Use Act materializer blocks VSCode bulk and cross-file operations for Host decomposition', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer VSCode batch operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-batch-fallback'],
+        };
+      },
+    },
+  });
+  const scopeRefs = [
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'text:vscode:visible:private-selected-text',
+    'terminal-output:vscode:paper:current',
+    'history:vscode:previous-run',
+    'action:vscode:previous:completed',
+  ];
+
+  for (const operation of ['bulk-replace', 'cross-file-modify'] as const) {
+    const structured = await materializer({
+      agentHostInput: vscodeAppModuleAgentHostInput(operation, scopeRefs, {
+        requestedPrimitiveCount: 3,
+        nextStepRefs: ['next-step:vscode-editor:observe-current-scope'],
+        partialEvidenceRefs: [`partial-evidence:vscode-editor:${operation}:request`],
+      }),
+      preflight: vscodeAppModulePreflight(scopeRefs),
+      commandText: `Apply ${operation} to /Users/example/private workspace; this text must not become a Computer Use task.`,
+      workspacePath: '/tmp/workspace',
+      commandId: `codex-command-default-vscode-${operation}`,
+      attemptId: `unit-${operation}`,
+      runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+    });
+
+    assert.equal(windowActionPlannerCalls, 0);
+    assert.equal(structured?.status, 'blocked');
+    assert.equal(structured?.claimType, 'vscode-editor-decomposition-blocked');
+    assert.equal(structured?.completionTruth, undefined);
+    assert.ok(structured?.evidenceRefs.includes('blocked:vscode-editor-decomposition:host-decomposition-required')
+      || structured?.evidenceRefs.includes('blocked:vscode-editor-decomposition:single-primitive-required'));
+    assert.ok(structured?.executionUnits?.some((unit) =>
+      unit.tool === 'vscode-editor-decomposition-guard-provider'
+        && unit.operation === operation
+        && unit.status === 'blocked'
+    ));
+    const serialized = JSON.stringify(structured);
+    assert.match(serialized, /decomposition:vscode-editor:single-primitive-only/);
+    assert.doesNotMatch(serialized, /computer_use\.act|computer_use\.run_procedure|primitive-candidate|Generic WindowAction planner|private-selected-text|text:vscode:visible|terminal-output:vscode|history:vscode|previous:completed|\/Users\/|rawDiff|providerPayload|data:image|base64|completionTruth|taskOutcome":"satisfied/i);
+  }
+});
+
 test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
   const runtimeTruth = vscodeAppModuleRuntimeTruth();
   runtimeTruth.observation = {

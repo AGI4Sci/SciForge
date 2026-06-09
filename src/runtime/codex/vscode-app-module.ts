@@ -10,6 +10,7 @@ const VSCODE_CAPABILITIES = [
   'focus-editor',
   'insert-draft',
   'replace-selection',
+  'save-current-file',
   'show-problems',
   'read-diagnostics',
   'focus-terminal',
@@ -24,6 +25,7 @@ const VSCODE_CAPABILITIES = [
 ] as const;
 
 const FOCUS_EDITOR_ACTION_REF = 'action:vscode-app-module:focus-editor:meta-1';
+const SAVE_CURRENT_FILE_ACTION_REF = 'action:vscode-app-module:save-current-file:meta-s';
 const OPEN_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:open-command-palette:meta-shift-p';
 const CLOSE_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:close-command-palette:escape';
 
@@ -70,6 +72,8 @@ interface VSCodeAppObservation {
   textRefRefs: string[];
   textRefs: string[];
   visibleTextRefs: string[];
+  actionRefs: string[];
+  verifierRefs: string[];
   reasonRefs: string[];
   evidenceRefs: string[];
   safeSummary: {
@@ -213,6 +217,8 @@ function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & 
     textRefRefs: safeRefs.filter((ref) => ref.startsWith('text-ref:')),
     textRefs: safeRefs.filter((ref) => ref.startsWith('text:')),
     visibleTextRefs: safeRefs.filter((ref) => ref.startsWith('text:vscode:visible:')),
+    actionRefs: safeRefs.filter(isVSCodeActionEvidenceRef),
+    verifierRefs: safeRefs.filter(isVSCodeVerifierRef),
     reasonRefs,
     evidenceRefs,
     safeSummary: {
@@ -408,6 +414,9 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
   if (isEditorMutationOperation(operation)) {
     return checkEditorMutationReadiness(operation, observation, normalizedOperationRef);
   }
+  if (operation === 'save-current-file') {
+    return checkSaveCurrentFileReadiness(operation, observation, normalizedOperationRef);
+  }
   if (isTerminalOperation(operation)) {
     return checkTerminalReadiness(operation, observation, normalizedOperationRef);
   }
@@ -437,6 +446,44 @@ function checkEditorMutationReadiness(operation: string, observation: VSCodeAppO
   ], {
     kind: 'type',
     textRef,
+  });
+}
+
+function checkSaveCurrentFileReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const targetRefs = editorFileTargetRefs(observation);
+  if (targetRefs.status !== 'ready') return targetRefs.readiness;
+  const fileToken = safeToken(targetRefs.fileRef);
+  const sameFileRef = `verifier:vscode-app-module:same-file:${fileToken || 'file'}`;
+  const mutationRef = `verifier:vscode-app-module:mutation:${fileToken || 'file'}`;
+  if (!observation.verifierRefs.includes(sameFileRef)) {
+    return blocked(
+      observation.verifierRefs.some((ref) => ref.startsWith('verifier:vscode-app-module:same-file:'))
+        ? 'blocked:vscode-app-module:same-file-verifier-file-drift'
+        : 'blocked:vscode-app-module:same-file-verifier-ref-required',
+      observation.refs,
+    );
+  }
+  if (!observation.verifierRefs.includes(mutationRef)) {
+    return blocked(
+      observation.verifierRefs.some((ref) => ref.startsWith('verifier:vscode-app-module:mutation:'))
+        ? 'blocked:vscode-app-module:mutation-verifier-file-drift'
+        : 'blocked:vscode-app-module:mutation-verifier-ref-required',
+      observation.refs,
+    );
+  }
+  const actionEvidenceRefs = observation.actionRefs.filter(isVSCodeEditorMutationActionEvidenceRef);
+  if (actionEvidenceRefs.length === 0) {
+    return blocked('blocked:vscode-app-module:host-action-evidence-ref-required', observation.refs);
+  }
+  return actReady(operation, operationRef, observation, [
+    ...targetRefs.refs,
+    sameFileRef,
+    mutationRef,
+    ...actionEvidenceRefs,
+    SAVE_CURRENT_FILE_ACTION_REF,
+  ], {
+    kind: 'key',
+    key: 'Meta+S',
   });
 }
 
@@ -490,6 +537,39 @@ function editorScopeTargetRefs(
       observation.cursorRefs[0],
       observation.rangeRefs[0],
     ],
+  };
+}
+
+function editorFileTargetRefs(
+  observation: VSCodeAppObservation,
+): { status: 'ready'; refs: string[]; fileRef: string } | { status: 'blocked'; readiness: ComputerUseAppModuleReadiness } {
+  const editorRefs = editorTargetRefs(observation);
+  if (editorRefs.length === 0) {
+    return { status: 'blocked', readiness: blocked('blocked:vscode-app-module:editor-ref-required', observation.refs) };
+  }
+  if (editorRefs.length > 1 || observation.editorGroupRefs.length > 1 || observation.activeEditorRefs.length > 1) {
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-editor-ambiguous', uniqueStrings([
+      ...editorRefs,
+      ...observation.editorGroupRefs,
+      ...observation.activeEditorRefs,
+    ])) };
+  }
+  const commonGate = checkCommonObservationGate(observation);
+  if (commonGate) return { status: 'blocked', readiness: commonGate };
+  const fileRefs = observation.selectedFileRefs.length > 0 ? observation.selectedFileRefs : observation.fileRefs;
+  if (fileRefs.length === 0) {
+    return { status: 'blocked', readiness: blocked('blocked:vscode-app-module:file-ref-required', observation.refs) };
+  }
+  if (fileRefs.length > 1) {
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-file-ambiguous', fileRefs) };
+  }
+  return {
+    status: 'ready',
+    refs: [
+      editorRefs[0],
+      fileRefs[0],
+    ],
+    fileRef: fileRefs[0],
   };
 }
 
@@ -791,6 +871,7 @@ function isEditorOrTerminalTargetOperation(operation: string): boolean {
   return operation === 'read-visible-text'
     || operation === 'editor-scope'
     || operation === 'focus-editor'
+    || operation === 'save-current-file'
     || isEditorMutationOperation(operation)
     || isTerminalOperation(operation);
 }
@@ -932,11 +1013,28 @@ function isVSCodeObservationRef(ref: string): boolean {
     || ref.startsWith('text:vscode:')
     || ref.startsWith('image:vscode:')
     || ref.startsWith('accessibility:vscode:')
+    || isVSCodeActionEvidenceRef(ref)
+    || isVSCodeVerifierRef(ref)
     || ref.startsWith('operation-ref:vscode:')
     || ref.startsWith('window-action-session:vscode:')
     || ref.startsWith('computer-use-session:vscode:')
     || ref.startsWith('window-action-session:current-vscode-cowork:')
     || ref.startsWith('computer-use-session:current-vscode-cowork:');
+}
+
+function isVSCodeActionEvidenceRef(ref: string): boolean {
+  return /^action:vscode:(?:insert-draft|replace-selection):[A-Za-z0-9._:-]+$/u.test(ref)
+    || /^executor-event:vscode:(?:insert-draft|replace-selection):[A-Za-z0-9._:-]+$/u.test(ref)
+    || /^input-event:vscode:(?:insert-draft|replace-selection):[A-Za-z0-9._:-]+$/u.test(ref);
+}
+
+function isVSCodeEditorMutationActionEvidenceRef(ref: string): boolean {
+  return isVSCodeActionEvidenceRef(ref);
+}
+
+function isVSCodeVerifierRef(ref: string): boolean {
+  return /^verifier:vscode-app-module:(?:same-file|mutation|same-window|same-editor|same-selection|after-observe):[A-Za-z0-9._:-]+$/u.test(ref)
+    || /^verifier:vscode-editor-narrow-apply:[A-Za-z0-9._:-]+:(?:verified|cleanup-release|one-primitive)$/u.test(ref);
 }
 
 function isRawRef(ref: string): boolean {

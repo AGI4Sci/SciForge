@@ -1071,7 +1071,86 @@ test('replace-selection readiness is refs-first and requires current selection p
   assert.equal(missingSelection.reasonRef, 'needs-confirmation:vscode-app-module:editor-scope-selection-required');
 });
 
-test('editor mutation operations outside P9-C fail closed until separately implemented', () => {
+test('save-current-file readiness requires current editor file and mutation evidence before Meta+S', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const saveRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:after',
+    'freshness:vscode:main:after',
+    'selected-file:vscode:current-paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:current:1',
+    'cursor-ref:vscode:current:1',
+    'range-ref:vscode:current:1',
+    'action:vscode:replace-selection:unit-1',
+    'verifier:vscode-app-module:same-file:selected-file-vscode-current-paper',
+    'verifier:vscode-app-module:mutation:selected-file-vscode-current-paper',
+    'verifier:vscode-app-module:same-window:window-vscode-main',
+    'verifier:vscode-app-module:same-editor:element-vscode-editor-monaco-1',
+    'verifier:vscode-app-module:same-selection:selection-ref-vscode-current-1',
+    'verifier:vscode-editor-narrow-apply:unit-1:verified',
+  ];
+
+  const ready = vscode.checkReadiness({
+    operation: 'save-current-file',
+    refs: saveRefs,
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.primitive.name, 'computer_use.act');
+  assert.deepEqual(ready.primitive.action, {
+    kind: 'key',
+    key: 'Meta+S',
+  });
+  assert.ok(ready.primitive.inputRefs.includes('selected-file:vscode:current-paper'));
+  assert.ok(ready.primitive.inputRefs.includes('element:vscode:editor:monaco:1'));
+  assert.ok(ready.primitive.inputRefs.includes('action:vscode:replace-selection:unit-1'));
+  assert.ok(ready.primitive.inputRefs.includes('action:vscode-app-module:save-current-file:meta-s'));
+  assert.ok(ready.evidenceRefs.includes('capability:vscode:save-current-file'));
+  assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:save-current-file:test'));
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:same-file:selected-file-vscode-current-paper'));
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:mutation:selected-file-vscode-current-paper'));
+  assert.equal(Object.hasOwn(ready, 'completionTruth'), false);
+  assert.doesNotMatch(JSON.stringify(ready), /rawSelectedText|selected text|rawDiff|@@|\/Users\/|https?:\/\/|providerPayload|base64|finalAnswer/i);
+
+  const missingMutation = vscode.checkReadiness({
+    operation: 'save-current-file',
+    refs: saveRefs.filter((ref) => !ref.startsWith('verifier:vscode-app-module:mutation:')),
+  });
+  assert.equal(missingMutation.status, 'blocked');
+  assert.equal(missingMutation.reasonRef, 'blocked:vscode-app-module:mutation-verifier-ref-required');
+
+  const missingSameFile = vscode.checkReadiness({
+    operation: 'save-current-file',
+    refs: saveRefs.filter((ref) => !ref.startsWith('verifier:vscode-app-module:same-file:')),
+  });
+  assert.equal(missingSameFile.status, 'blocked');
+  assert.equal(missingSameFile.reasonRef, 'blocked:vscode-app-module:same-file-verifier-ref-required');
+
+  const missingActionEvidence = vscode.checkReadiness({
+    operation: 'save-current-file',
+    refs: saveRefs.filter((ref) => !ref.startsWith('action:vscode:replace-selection:')),
+  });
+  assert.equal(missingActionEvidence.status, 'blocked');
+  assert.equal(missingActionEvidence.reasonRef, 'blocked:vscode-app-module:host-action-evidence-ref-required');
+
+  const noSelection = vscode.checkReadiness({
+    operation: 'save-current-file',
+    refs: saveRefs.filter((ref) =>
+      !ref.startsWith('selection-ref:vscode:')
+        && !ref.startsWith('cursor-ref:vscode:')
+        && !ref.startsWith('range-ref:vscode:')
+        && !ref.startsWith('verifier:vscode-app-module:same-selection:')
+    ),
+  });
+  assert.equal(noSelection.status, 'ready');
+});
+
+test('unsupported editor operations fail closed until separately implemented', () => {
   const vscode = createHostStructuredVSCodeAppModule();
   const refs = [
     'window-action-session:vscode:1',
@@ -1091,7 +1170,6 @@ test('editor mutation operations outside P9-C fail closed until separately imple
   for (const operation of [
     'apply-current-selection',
     'move-cursor',
-    'save-current-file',
     'undo-last-action',
     'redo-last-action',
   ]) {
