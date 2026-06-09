@@ -372,7 +372,8 @@ async function tryRunCurrentVSCodeCoWorkLiveDiagnostic(
 }
 
 function shouldActivateCurrentVSCodeForLiveDiagnostic(input: ComputerUseNativeRouteInput): boolean | undefined {
-  return input.currentVSCodeCoWorkLiveDiagnosticOptions?.activateCurrentVSCodeIfNeeded === true
+  if (input.currentVSCodeCoWorkLiveDiagnosticOptions?.activateCurrentVSCodeIfNeeded === true) return true;
+  return currentVSCodeCoWorkTargetMode(input.request.agentHostInput) === 'smart-detect-current-vscode-window'
     ? true
     : undefined;
 }
@@ -400,7 +401,7 @@ async function defaultCurrentVSCodeCoWorkLiveDiagnosticRunner(input: Parameters<
     return runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
       ...input,
       paletteQueryTextRef,
-      selectCurrentItem: false,
+      selectCurrentItem: currentVSCodeCoWorkPaletteSelectCurrentItem(input.agentHostInput),
       resolveTextRef: (textRef) => textRef === paletteQueryTextRef ? 'Help: About' : undefined,
     });
   }
@@ -520,11 +521,25 @@ function currentVSCodeCoWorkLiveOperation(value: unknown): CurrentVSCodeCoWorkLi
   return safeVSCodeCoWorkLiveOperation(vscodeCoWork?.operation);
 }
 
+function currentVSCodeCoWorkTargetMode(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  return stringField(vscodeCoWork, 'targetMode');
+}
+
 function currentVSCodeCoWorkPaletteQueryTextRef(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   const target = isRecord(value.target) ? value.target : undefined;
   const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
   return safeHostInputRef(vscodeCoWork?.paletteQueryTextRef, ['text-ref:']);
+}
+
+function currentVSCodeCoWorkPaletteSelectCurrentItem(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  return vscodeCoWork?.selectCurrentItem === true;
 }
 
 function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagnosticResult): ToolPayload {

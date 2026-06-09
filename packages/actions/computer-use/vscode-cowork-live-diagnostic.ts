@@ -161,6 +161,7 @@ export interface CurrentVSCodeCoWorkLiveDiagnosticManifest {
 
 interface CurrentVSCodeCommandPaletteState {
   open: true;
+  querySubmitted?: true;
 }
 
 export async function runCurrentVSCodeCoWorkLiveDiagnosticPreflight(input: {
@@ -449,10 +450,10 @@ function nextCommandPaletteState(
   }
   const hasPaletteContext = hasCommandPaletteContext(input.contextRefs);
   if (input.actionId === 'send-command-palette-query' && input.action.type === 'type' && hasCommandPaletteInputContext(input.contextRefs)) {
-    return { open: true };
+    return { open: true, querySubmitted: true };
   }
   if (hasPaletteContext && input.action.type === 'type' && hasCommandPaletteInputContext(input.contextRefs)) {
-    return { open: true };
+    return { open: true, querySubmitted: true };
   }
   if (
     input.actionId === 'close-command-palette'
@@ -472,11 +473,19 @@ function withCommandPaletteStateRefs(
     ? observed.windowRef.slice('window:vscode:'.length)
     : safeRunId(observed.windowRef);
   const observationToken = commandPaletteObservationTokenFromObservationRef(observed.observationRef);
+  const itemRef = `command-palette-item:vscode:${windowToken}:${observationToken}:rank-1`;
   return {
     ...observed,
     commandPaletteRootRef: observed.commandPaletteRootRef ?? `command-palette:vscode:${windowToken}:current`,
     commandPaletteInputRef: observed.commandPaletteInputRef ?? `command-palette-input:vscode:${windowToken}:current`,
     commandPaletteItemsRef: observed.commandPaletteItemsRef ?? `command-palette-items:vscode:${windowToken}:${observationToken}`,
+    ...(state.querySubmitted ? {
+      commandPaletteItemRefs: observed.commandPaletteItemRefs ?? [itemRef],
+      commandPaletteItemRankRefs: observed.commandPaletteItemRankRefs ?? [`command-palette-item-rank:vscode:${windowToken}:${observationToken}:rank-1`],
+      commandPaletteItemHashRefs: observed.commandPaletteItemHashRefs ?? [
+        `command-palette-item-hash:vscode:${windowToken}:${observationToken}:sha256:${commandPaletteItemEvidenceHash(observed)}`,
+      ],
+    } : {}),
   };
 }
 
@@ -485,6 +494,15 @@ function commandPaletteObservationTokenFromObservationRef(observationRef: string
     ? observationRef.slice('observation:vscode:'.length)
     : observationRef;
   return `obs-${safeRunId(token)}`;
+}
+
+function commandPaletteItemEvidenceHash(observed: CurrentVSCodeCoWorkWindowObservation): string {
+  return tokenHash([
+    observed.visibleTextSha256Ref,
+    observed.accessibilityRef,
+    observed.freshnessRef,
+    observed.observationRef,
+  ].filter(Boolean).join('|'));
 }
 
 async function attemptRestoration(
@@ -551,11 +569,21 @@ async function performDefaultCurrentVSCodeAction(
     if (key !== 'Command+1' && key !== 'Control+Backquote' && key !== 'Enter' && key !== 'Meta+Shift+P' && key !== 'Escape') {
       throw new Error('current-vscode-act-key-unsupported');
     }
-    if ((key === 'Control+Backquote' || key === 'Enter') && !hasTerminalContext(input.contextRefs)) {
+    const hasTerminalTargetContext = hasTerminalContext(input.contextRefs);
+    const hasPaletteTargetContext = hasCommandPaletteContext(input.contextRefs);
+    if (key === 'Control+Backquote' && !hasTerminalTargetContext) {
       throw new Error('current-vscode-act-terminal-ref-required');
     }
-    if (key === 'Enter' && !hasTerminalInputContext(input.contextRefs)) {
-      throw new Error('current-vscode-act-terminal-input-ref-required');
+    if (key === 'Enter') {
+      if (hasTerminalTargetContext && !hasTerminalInputContext(input.contextRefs)) {
+        throw new Error('current-vscode-act-terminal-input-ref-required');
+      }
+      if (!hasTerminalTargetContext && hasPaletteTargetContext && !hasCommandPaletteItemContext(input.contextRefs)) {
+        throw new Error('current-vscode-act-command-palette-item-ref-required');
+      }
+      if (!hasTerminalTargetContext && !hasPaletteTargetContext) {
+        throw new Error('current-vscode-act-terminal-ref-required');
+      }
     }
     const pressKey = options.pressKeyInCurrentVSCode ?? pressKeyIntoCurrentVSCode;
     await pressKey({
@@ -965,6 +993,10 @@ function hasCommandPaletteContext(refs: string[] | undefined): boolean {
 
 function hasCommandPaletteInputContext(refs: string[] | undefined): boolean {
   return safeCurrentVSCodeContextRefs(refs).some((ref) => ref.startsWith('command-palette-input:vscode:'));
+}
+
+function hasCommandPaletteItemContext(refs: string[] | undefined): boolean {
+  return safeCurrentVSCodeContextRefs(refs).some((ref) => ref.startsWith('command-palette-item:vscode:'));
 }
 
 function focusedEditorRefFromSnapshot(

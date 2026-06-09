@@ -491,10 +491,7 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
   const open = vscodeModule.checkReadiness({
     operation: 'open-command-palette',
     operationRef: `operation-ref:vscode:open-command-palette:${currentVSCodeEvidenceToken(runId)}`,
-    refs: currentVSCodeAppModuleRefs([
-      ...bind.refs,
-      ...beforeObserve.refs,
-    ], beforeObserve.output?.observationRef),
+    refs: currentVSCodeAppModuleRefs(beforeObserve.refs, beforeObserve.output?.observationRef),
   });
   primitiveChainObserved.push('host-decision(open-command-palette)');
   pushRefs(evidenceRefs, open.evidenceRefs);

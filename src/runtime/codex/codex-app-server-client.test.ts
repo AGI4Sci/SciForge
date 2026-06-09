@@ -2613,6 +2613,64 @@ test('Codex app-server client wraps explicit VSCode Computer Use chat into P10 p
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
 });
 
+test('Codex app-server client wraps explicit visible VSCode palette execution into select-current-item Host input', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let spawnCalled = false;
+  let runnerCalled = false;
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      spawnCalled = true;
+      throw new Error('app-server should not spawn for explicit VSCode Computer Use palette execution');
+    },
+    computerUseNativeRouteRunner(input) {
+      runnerCalled = true;
+      const agentHostInput = input.request.agentHostInput as Record<string, unknown> | undefined;
+      const target = agentHostInput?.target as Record<string, unknown> | undefined;
+      const vscodeCoWork = target?.vscodeCoWork as Record<string, unknown> | undefined;
+      assert.equal(agentHostInput?.source, 'ordinary-chat-current-vscode-computer-use-bridge');
+      assert.equal(target?.kind, 'current-vscode-cowork');
+      assert.equal(vscodeCoWork?.operation, 'open-command-palette');
+      assert.equal(vscodeCoWork?.paletteQueryTextRef, 'text-ref:vscode:command-palette-query:p10');
+      assert.equal(vscodeCoWork?.selectCurrentItem, true);
+      assert.ok((agentHostInput?.refs as string[]).includes('intent:current-vscode-cowork'));
+      assert.doesNotMatch(JSON.stringify(vscodeCoWork), /Help: About|rawScreenshot|providerPayload|data:image|base64|\/Users\/|https?:\/\//i);
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([{
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          timestamp: new Date().toISOString(),
+          commandId: input.request.commandId,
+          attemptId: input.request.attemptId,
+          status: 'done',
+        }]),
+      };
+    },
+  });
+
+  const commandText = '用 Computer Use 操纵当前 VSCode，打开命令面板并执行 Help: About。';
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'p11-visible-vscode-palette-about',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(spawnCalled, false);
+  assert.equal(runnerCalled, true);
+  assert.equal(stream.turnId, 'p11-visible-vscode-palette-about');
+  assert.equal(stream.provider, 'host-owned-runtime');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
+});
+
 test('Codex app-server client bridges explicit VSCode Computer Use chat even when UI sends generic Agent Host input', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();

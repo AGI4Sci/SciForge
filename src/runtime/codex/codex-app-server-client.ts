@@ -1738,6 +1738,7 @@ function p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(
 ): Record<string, unknown> | undefined {
   if (!shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText)) return undefined;
   const requestRef = `chat-request:vscode-cowork:${safeRefSegment(commandId)}:${safeRefSegment(attemptId)}`;
+  const selectCurrentItem = shouldSelectCurrentVSCodeCommandPaletteItem(commandText);
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
     source: 'ordinary-chat-current-vscode-computer-use-bridge',
@@ -1755,9 +1756,12 @@ function p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(
       vscodeCoWork: {
         requestRef,
         operation: P10_PALETTE_OPEN,
-        diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+        diagnostic: selectCurrentItem
+          ? 'p10-vscode-bind-observe-command-palette-select-current-item'
+          : 'p10-vscode-bind-observe-command-palette-open-close',
         targetMode: 'smart-detect-current-vscode-window',
         paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10',
+        ...(selectCurrentItem ? { selectCurrentItem: true } : {}),
       },
     },
     observation: {},
@@ -1777,6 +1781,14 @@ function shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText: string): 
   const mentionsComputerUse = /(?:\bcomputer\s*use\b|桌面|GUI|窗口|鼠标|键盘|命令面板|command\s+palette)/i.test(text);
   if (!mentionsComputerUse) return false;
   return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|observe|bind|control|open|close|command\s+palette|命令面板)/i.test(text);
+}
+
+function shouldSelectCurrentVSCodeCommandPaletteItem(commandText: string): boolean {
+  const text = commandText.trim();
+  if (!/(?:执行|选择|选中|运行|打开.*Help|Help\s*:\s*About|按\s*Enter|回车|select|execute|run|press\s+enter)/i.test(text)) {
+    return false;
+  }
+  return /(?:Help\s*:\s*About|关于|命令面板|command\s+palette)/i.test(text);
 }
 
 function safeRefSegment(value: string): string {

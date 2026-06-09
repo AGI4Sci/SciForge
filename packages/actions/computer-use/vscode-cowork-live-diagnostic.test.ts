@@ -1418,6 +1418,9 @@ test('current VSCode co-work primitive ports materialize action-backed command p
   assert.equal(send.ok, true, send.error);
   assert.ok((send.value?.refs ?? []).includes('text-ref:vscode:palette-action-backed-query'));
   assert.ok((send.value?.refs ?? []).includes('command-palette-input:vscode:palette-action-backed:current'));
+  assert.ok((send.value?.refs ?? []).includes('command-palette-item:vscode:palette-action-backed:obs-palette-action-backed-after-send-act:rank-1'));
+  assert.ok((send.value?.refs ?? []).includes('command-palette-item-rank:vscode:palette-action-backed:obs-palette-action-backed-after-send-act:rank-1'));
+  assert.ok((send.value?.refs ?? []).some((ref) => /^command-palette-item-hash:vscode:palette-action-backed:obs-palette-action-backed-after-send-act:sha256:[a-f0-9]{16}$/.test(ref)));
 
   const close = await service.invoke({
     moduleId: 'computer_use',
@@ -1461,6 +1464,125 @@ test('current VSCode co-work primitive ports materialize action-backed command p
   });
   assert.equal(control.ok, true, control.error);
   assert.doesNotMatch(JSON.stringify({ bind, before, open, afterOpen, send, close, afterClose, control }), /hidden query|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work primitive ports press Enter for command palette item without terminal refs', async () => {
+  const calls: string[] = [];
+  const baseObservation = (stage: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:palette-enter',
+    windowRef: 'window:vscode:palette-enter',
+    titleRef: 'text:title:palette-enter',
+    frontmostRef: 'frontmost:vscode:palette-enter',
+    fileRefs: ['file-ref:vscode:palette-enter'],
+    editorElementRef: 'element:vscode:editor:palette-enter',
+    visibleTextRef: `text:vscode:palette-enter-${stage}`,
+    visibleTextSha256Ref: `text:vscode:palette-enter-${stage}-sha256`,
+    screenshotRef: `image:vscode:palette-enter-${stage}`,
+    accessibilityRef: `accessibility:vscode:palette-enter-${stage}`,
+    freshnessRef: `freshness:vscode:palette-enter-${stage}`,
+    observationRef: `observation:vscode:palette-enter-${stage}`,
+  });
+  const observations = [
+    baseObservation('bind'),
+    baseObservation('after-open-act'),
+    baseObservation('after-send-act'),
+    baseObservation('after-select-act'),
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-palette-enter',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return textRef === 'text-ref:vscode:palette-enter-query' ? 'hidden query' : undefined;
+      },
+      typeResolvedText: async (input) => {
+        calls.push(`type-text:${input.textRef}:${input.contextRefs?.join(',') ?? 'no-context'}:${input.beforeObservationRef}`);
+      },
+      pressKeyInCurrentVSCode: async (input) => {
+        calls.push(`press-key:${input.key}:${input.contextRefs?.join(',') ?? 'no-context'}:${input.beforeObservationRef}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true, bind.error);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const open = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'open-command-palette',
+      contextRefs: ['action:vscode-app-module:open-command-palette:meta-shift-p'],
+      action: {
+        type: 'key',
+        key: 'Meta+Shift+P',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(open.ok, true, open.error);
+
+  const send = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'send-command-palette-query',
+      contextRefs: (open.value?.refs ?? []).filter((ref) => ref.startsWith('command-palette')),
+      action: {
+        type: 'type',
+        textRef: 'text-ref:vscode:palette-enter-query',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(send.ok, true, send.error);
+  const selectRefs = (send.value?.refs ?? []).filter((ref) => ref.startsWith('command-palette'));
+  assert.ok(selectRefs.some((ref) => ref.startsWith('command-palette-item:vscode:')));
+
+  const select = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'select-command-palette-item',
+      contextRefs: selectRefs,
+      action: {
+        type: 'key',
+        key: 'Enter',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(select.ok, true, select.error);
+  assert.equal(select.value?.status, 'completed');
+
+  assert.ok(calls.some((call) => call.startsWith('press-key:Meta+Shift+P:')));
+  assert.ok(calls.some((call) => call.startsWith('type-text:text-ref:vscode:palette-enter-query:')));
+  assert.ok(calls.some((call) => call.startsWith('press-key:Enter:command-palette:vscode:palette-enter:current,')));
+  assert.doesNotMatch(JSON.stringify({ bind, open, send, select }), /hidden query|terminal:vscode|terminal-input|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
 
 function currentTerminalObservation(stage: 'before' | 'after', hash: string) {

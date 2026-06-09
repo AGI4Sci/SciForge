@@ -946,7 +946,12 @@ test('current VSCode co-work command palette diagnostic mocks open query observe
     } : {}),
   });
   const observations = [
-    paletteObservation('bind', false),
+    {
+      ...paletteObservation('bind', false),
+      windowRef: 'window:vscode:palette-close-stale-bind',
+      titleRef: 'text:title:palette-close-stale-bind',
+      frontmostRef: 'frontmost:vscode:palette-close-stale-bind',
+    },
     paletteObservation('before', false),
     paletteObservation('open-act-after', true),
     paletteObservation('open', true),

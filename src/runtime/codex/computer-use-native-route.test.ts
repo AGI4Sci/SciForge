@@ -623,9 +623,6 @@ test('Computer Use native route can run P10 current VSCode command palette live 
     provider: 'sciforge-provider',
     model: 'sciforge-model',
     profile: 'host-owned',
-    currentVSCodeCoWorkLiveDiagnosticOptions: {
-      activateCurrentVSCodeIfNeeded: true,
-    },
     currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
       runnerCalls.push(input);
       return {
@@ -719,6 +716,150 @@ test('Computer Use native route can run P10 current VSCode command palette live 
   assert.ok((done?.evidenceRefs as string[]).includes('command-palette:vscode:p10:current'));
   assert.ok((done?.cleanupRefs as string[]).includes('front-app-restore:current-vscode-cowork:p10-palette'));
   assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('Computer Use native route P10 command palette Host input can request selecting the observed current item', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: '请用 Computer Use 操纵当前 VSCode，打开命令面板并执行 Help: About。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p10-command-palette-select:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p10-command-palette-select:attempt-1',
+        operation: 'open-command-palette' as const,
+        diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+        targetMode: 'smart-detect-current-vscode-window',
+        paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10',
+        selectCurrentItem: true,
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，打开命令面板并执行 Help: About。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p10-palette-select',
+      attemptId: 'native-route-vscode-cowork-p10-palette-select-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'current VSCode command palette live diagnostic completed open, query, observe, select current item, observe, and release',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: [
+          'bind',
+          'observe',
+          'host-decision(open-command-palette)',
+          'act(open-command-palette)',
+          'observe',
+          'host-decision(send-command-palette-query)',
+          'act(send-command-palette-query)',
+          'observe',
+          'host-decision(select-command-palette-item)',
+          'act(select-command-palette-item)',
+          'observe',
+          'control(release)',
+        ],
+        evidenceRefs: [
+          'chat-request:vscode-cowork:p10-command-palette-select:attempt-1',
+          'window:vscode:p10',
+          'command-palette:vscode:p10:current',
+          'command-palette-item:vscode:p10:items:rank-1',
+          'observation:vscode:p10-after-select',
+        ],
+        cleanupRefs: [
+          'scoped-input-lease:current-vscode-cowork:p10-palette-select',
+          'scoped-input-adapter:current-vscode-cowork:p10-palette-select',
+          'cursor-marker:current-vscode-cowork:p10-palette-select',
+          'front-app-restore:current-vscode-cowork:p10-palette-select',
+          'mouse-position-restore:current-vscode-cowork:p10-palette-select',
+        ],
+        agentHostInput,
+        agentHostFinalAnswer: {
+          schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+          source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+          status: 'completed',
+          text: 'current VSCode command palette live diagnostic completed open, query, observe, select current item, observe, and release',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          hostOwnsFinalAnswer: true,
+          computerUseCorePlanning: false,
+          primitiveChainObserved: [
+            'bind',
+            'observe',
+            'host-decision(open-command-palette)',
+            'act(open-command-palette)',
+            'observe',
+            'host-decision(send-command-palette-query)',
+            'act(send-command-palette-query)',
+            'observe',
+            'host-decision(select-command-palette-item)',
+            'act(select-command-palette-item)',
+            'observe',
+            'control(release)',
+          ],
+          evidenceRefs: [
+            'chat-request:vscode-cowork:p10-command-palette-select:attempt-1',
+            'command-palette-item:vscode:p10:items:rank-1',
+            'observation:vscode:p10-after-select',
+          ],
+          cleanupRefs: [
+            'scoped-input-lease:current-vscode-cowork:p10-palette-select',
+            'front-app-restore:current-vscode-cowork:p10-palette-select',
+            'mouse-position-restore:current-vscode-cowork:p10-palette-select',
+          ],
+        },
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
+  assert.equal((((runnerCalls[0]?.agentHostInput as Record<string, unknown>).target as Record<string, unknown>).vscodeCoWork as Record<string, unknown>)?.selectCurrentItem, true);
+  assert.equal(done?.status, 'completed');
+  assert.deepEqual(done?.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision(open-command-palette)',
+    'act(open-command-palette)',
+    'observe',
+    'host-decision(send-command-palette-query)',
+    'act(send-command-palette-query)',
+    'observe',
+    'host-decision(select-command-palette-item)',
+    'act(select-command-palette-item)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.hostOwnsFinalAnswer, true);
+  assert.ok((done?.evidenceRefs as string[]).includes('command-palette-item:vscode:p10:items:rank-1'));
+  assert.doesNotMatch(JSON.stringify(events), /Help: About|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
 test('Computer Use native route projects Host final answer when P10 command palette live diagnostic is env-blocked', async () => {
