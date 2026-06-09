@@ -548,6 +548,90 @@ test('default Computer Use Act materializer editor-scope public projection keeps
   assert.doesNotMatch(JSON.stringify(result), /rawSelectedText|selectedText|rawVisibleText|visibleText|providerPayload|data:image|base64|https?:\/\/|\/Users\//i);
 });
 
+test('default Computer Use Act materializer returns VSCode preview artifact refs only from structured Host operation refs', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer VSCode preview operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-preview-fallback'],
+        };
+      },
+    },
+  });
+  const scopeRefs = [
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'text:vscode:visible:private-selected-text',
+    'observation:vscode:paper:1',
+    'window:vscode:paper',
+    'terminal-output:vscode:paper:current',
+    'action:vscode:previous:completed',
+    'history:vscode:previous-run',
+  ];
+
+  const structured = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('preview-current-selection', scopeRefs, {
+      draftArtifactRef: 'artifact:vscode-editor-draft:unit-preview-current-selection',
+    }),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: 'Polish the current selected text and show a diff; this text must not decide preview.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-preview-current-selection',
+    attemptId: 'unit-preview-current-selection',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(structured?.status, 'completed', structured?.message);
+  assert.equal(structured?.claimType, 'vscode-editor-preview-artifact-refs');
+  assert.equal(structured?.completionTruth, undefined);
+  assert.ok(structured?.evidenceRefs.includes('artifact:vscode-editor-draft:unit-preview-current-selection'));
+  assert.ok(structured?.evidenceRefs.includes('artifact:vscode-editor-preview:unit-preview-current-selection'));
+  assert.ok(structured?.evidenceRefs.includes('artifact:vscode-editor-preview-diff:unit-preview-current-selection'));
+  assert.ok(structured?.executionUnits?.some((unit) =>
+    unit.tool === 'vscode-editor-preview-provider'
+      && unit.operation === 'preview-current-selection'
+      && unit.primitive === undefined
+      && unit.status === 'artifact-preview'
+  ));
+  assert.ok(structured?.artifacts?.some((artifact) =>
+    artifact.type === 'vscode-editor-preview'
+      && (artifact.data as Record<string, unknown> | undefined)?.writesUserFile === false
+      && (artifact.data as Record<string, unknown> | undefined)?.computerUsePrimitive === false
+  ));
+  const structuredSerialized = JSON.stringify(structured);
+  assert.match(structuredSerialized, /selection-ref:vscode:paper:1/);
+  assert.match(structuredSerialized, /artifact:vscode-editor-preview-diff:unit-preview-current-selection/);
+  assert.doesNotMatch(structuredSerialized, /private-selected-text|text:vscode:visible|operation-ref:|observation:vscode|window:vscode|terminal-output:vscode|history:vscode|action:vscode|Polish the current selected text|rawSelectedText|selectedText|rawDiff|@@|providerPayload|data:image|base64|https?:\/\/|\/Users\/|replace-selection|insert-draft|Generic WindowAction planner/i);
+
+  const inferred = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined, [
+      ...scopeRefs,
+      'artifact:vscode-editor-draft:unit-preview-current-selection',
+    ]),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: '润色当前选区并给我 diff preview',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-preview-no-operation',
+    attemptId: 'unit-preview-no-operation',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(inferred?.status, 'blocked');
+  assert.equal(inferred?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(inferred?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.doesNotMatch(JSON.stringify(inferred), /vscode-editor-preview-provider|artifact-preview|preview-current-selection.*completed|Generic WindowAction planner/i);
+});
+
 test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
   const runtimeTruth = vscodeAppModuleRuntimeTruth();
   runtimeTruth.observation = {
@@ -1306,6 +1390,7 @@ function windowActionObservationRefs(): string[] {
 function vscodeAppModuleAgentHostInput(
   operation: string | undefined,
   extraRefs: string[] = [],
+  appModulePayload: Record<string, unknown> = {},
 ): NormalizedCodexAgentHostInput {
   const operationRef = operation ? `operation-ref:vscode:${operation}:test` : undefined;
   const targetRefs = vscodeAppModuleTargetRefs(extraRefs);
@@ -1331,6 +1416,7 @@ function vscodeAppModuleAgentHostInput(
         computerUseAppModule: {
           operation,
           operationRef,
+          ...appModulePayload,
         },
       } : {}),
     },

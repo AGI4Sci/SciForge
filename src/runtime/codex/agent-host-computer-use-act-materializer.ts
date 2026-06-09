@@ -17,6 +17,9 @@ import {
 import {
   createComputerUseActLoopMaterializer,
 } from './agent-host-computer-use-act-loop.js';
+import {
+  createDefaultVSCodeEditorPreviewMaterializer,
+} from './agent-host-vscode-editor-preview-materializer.js';
 import type {
   CodexAgentHostComputerUseActMaterializer,
   CodexAgentHostComputerUseActMaterializerInput,
@@ -37,6 +40,7 @@ export function createDefaultComputerUseActMaterializer(options: {
   const appModule = createDefaultComputerUseAppModuleMaterializer({
     modules: options.appModules,
   });
+  const vscodeEditorPreview = createDefaultVSCodeEditorPreviewMaterializer();
   const browser = createDefaultBrowserHostComputerUseActMaterializer({
     ...options.browser,
     env: options.browser?.env ?? options.env,
@@ -49,6 +53,8 @@ export function createDefaultComputerUseActMaterializer(options: {
   const hostPortContract = materializerHostPortContract(options.hostPortContract);
   const singleStep: CodexAgentHostComputerUseActMaterializer = async (input) => {
     const normalizedInput = normalizePlannerObjectiveInput(input);
+    const previewResult = await vscodeEditorPreview(normalizedInput);
+    if (previewResult) return previewResult;
     const appModuleResult = await appModule(normalizedInput);
     if (appModuleResult) return appModuleResult;
     if (hasBrowserHostSessionRef(normalizedInput)) return browser(normalizedInput);
@@ -157,7 +163,7 @@ function attachDefaultBoundaryArtifacts(
   hostPortContract: ComputerUseActMaterializerHostPortContract,
 ): CodexAgentHostComputerUseActMaterializerResult | undefined {
   if (!result) return undefined;
-  if (isVSCodeEditorScopeAppModuleResult(result)) return result;
+  if (isVSCodeEditorScopeAppModuleResult(result) || isVSCodeEditorPreviewResult(result)) return result;
   const boundaryRefs = runtimeOwnedRefs([
     `runtime-truth:computer-use-act-materializer/preflight/${safeToken(input.commandId) || 'command'}/${safeToken(input.attemptId) || 'attempt'}`,
     'runtime-truth:computer-use-act-materializer/host-port-contract',
@@ -189,6 +195,14 @@ function isVSCodeEditorScopeAppModuleResult(result: CodexAgentHostComputerUseAct
       && unit.tool === 'computer-use.app-module-registry'
       && unit.moduleId === 'vscode'
       && unit.operation === 'editor-scope'
+  );
+}
+
+function isVSCodeEditorPreviewResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
+  return (result.executionUnits ?? []).some((unit) =>
+    isRecord(unit)
+      && unit.tool === 'vscode-editor-preview-provider'
+      && unit.operation === 'preview-current-selection'
   );
 }
 

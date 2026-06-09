@@ -88,6 +88,7 @@ SciForge UI
 - [x] P9.3：scope public projection 已补最终 Host/public 窄化；safe editor / file / selection / cursor / range / freshness / reason refs 保留，宽 window / observation / operation / module / terminal / history refs、payload-shaped scope refs、raw selected text、raw visible text、raw diff、raw path、URL alias 和 provider payload 被拒绝或清洗。
 - [x] P9.4：editor-scope live diagnostic 默认 env-gated blocked；无 env 时返回 skip/block manifest，不构造 runner / adapter，不申请 input lease / cursor。
 - [x] P9.5-P9.6：mocked editor-scope diagnostic 与 focused verify 已闭合；env-on mock 跑 `bind -> observe -> host-decision -> observe -> control(release)`，只投影 scope / freshness / reason / cleanup refs，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
+- [x] P9.7-P9.12：Preview No-write 已闭合；Host-owned preview provider 只生成 draft / preview / diff artifact refs 和 refs-only verifier ref，materializer 只从 structured `preview-current-selection` operation + current scope refs 进入，ordinary chat / selected text / terminal output / history / completed action 不触发；env-gated mocked diagnostic 跑 `bind -> observe -> host-decision -> control(release)`，不写 VSCode、不写用户文件、不宣称 `product-ready`。
 
 ## 当前执行路线
 
@@ -95,7 +96,7 @@ SciForge UI
 
 目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前状态：P9-A scope projection 与 diagnostic 已闭合。下一步进入 P9-B Preview No-write；不要跳到真实用户文件写入、scratch mutation 或 narrow apply。
+当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write 已闭合。下一步进入 P9-C Scratch Mutation；不要跳到真实用户文件写入、narrow apply、save 或 batch。
 
 #### P9-A：Scope Projection 与 Diagnostic
 
@@ -108,14 +109,14 @@ SciForge UI
 
 #### P9-B：Preview No-write
 
-- [ ] [P9.7 Unit] preview provider 红测：draft / diff 只能作为 artifact refs，不进入 Computer Use primitive。
-- [ ] [P9.7 Code] 实现 preview v1；由 Host-owned provider 生成 artifact refs，不调用 VSCode 写入 primitive。
-- [ ] [P9.8 Unit] preview materializer 红测：只从 structured Host operation ref + current scope refs 进入。
-- [ ] [P9.8 Code] preview 不从 ordinary chat、selected text、history、terminal output 或 completed action 推断。
-- [ ] [P9.9 Static] preview public projection 不能泄漏 raw selected text、raw diff、raw path、URL 或 provider payload。
-- [ ] [P9.10 Live Skip] env-gated preview diagnostic 默认关闭；无 env 时不构造 writer / adapter。
-- [ ] [P9.11 Mocked Preview] mock 当前选区 preview：只返回 scope refs、artifact refs、verifier refs 和 preview 状态，不写文件。
-- [ ] [P9.12 Verify Preview] 跑 preview provider、projection、live skip、cleanup/no-bypass focused tests。
+- [x] [P9.7 Unit] preview provider 红测：draft / diff 只能作为 artifact refs，不进入 Computer Use primitive。
+- [x] [P9.7 Code] 实现 preview v1；由 Host-owned provider 生成 artifact refs，不调用 VSCode 写入 primitive。
+- [x] [P9.8 Unit] preview materializer 红测：只从 structured Host operation ref + current scope refs 进入。
+- [x] [P9.8 Code] preview 不从 ordinary chat、selected text、history、terminal output 或 completed action 推断。
+- [x] [P9.9 Static] preview public projection 不能泄漏 raw selected text、raw diff、raw path、URL 或 provider payload。
+- [x] [P9.10 Live Skip] env-gated preview diagnostic 默认关闭；无 env 时不构造 writer / adapter。
+- [x] [P9.11 Mocked Preview] mock 当前选区 preview：只返回 scope refs、artifact refs、verifier refs 和 preview 状态，不写文件。
+- [x] [P9.12 Verify Preview] 跑 preview provider、projection、live skip、cleanup/no-bypass focused tests。
 
 #### P9-C：Scratch Mutation
 

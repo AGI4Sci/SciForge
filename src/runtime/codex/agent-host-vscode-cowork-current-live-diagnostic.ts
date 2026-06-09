@@ -15,6 +15,7 @@ import {
   createCurrentVSCodeCoWorkLivePrimitivePorts,
   runCurrentVSCodeCoWorkLiveDiagnosticPreflight,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV,
   type CurrentVSCodeCoWorkLivePrimitivePortsOptions,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
@@ -28,6 +29,7 @@ import {
   type VSCodeCoWorkLiveDiagnosticResult,
 } from './agent-host-vscode-cowork-live-diagnostic.js';
 import { createVSCodeAppModule } from './vscode-app-module.js';
+import { createVSCodeEditorPreview } from './vscode-editor-preview-provider.js';
 
 export interface RunCurrentVSCodeCoWorkReadVisibleTextLiveDiagnosticInput
   extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
@@ -82,6 +84,12 @@ export interface RunCurrentVSCodeCoWorkCommandPaletteLiveDiagnosticInput
 export interface RunCurrentVSCodeCoWorkEditorScopeLiveDiagnosticInput
   extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   env?: Record<string, string | undefined>;
+}
+
+export interface RunCurrentVSCodeCoWorkEditorPreviewLiveDiagnosticInput
+  extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
+  env?: Record<string, string | undefined>;
+  draftArtifactRef?: string;
 }
 
 export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
@@ -680,6 +688,148 @@ export async function runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic(
   return finish('completed', 'current VSCode editor scope live diagnostic completed observe scope and release');
 }
 
+export async function runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic(
+  input: RunCurrentVSCodeCoWorkEditorPreviewLiveDiagnosticInput = {},
+): Promise<VSCodeCoWorkLiveDiagnosticResult> {
+  const env = input.env ?? process.env;
+  if (env[VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV] !== '1') {
+    return {
+      status: 'blocked',
+      message: `missing-env:${VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV}`,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [],
+      evidenceRefs: [],
+      cleanupRefs: [],
+    };
+  }
+
+  const runId = input.runId ?? `current-vscode-preview-${Date.now()}`;
+  const runToken = currentVSCodeEvidenceToken(runId);
+  const service = createComputerUsePrimitiveService({
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId,
+      activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded,
+      readCurrentWindow: input.readCurrentWindow,
+      performAction: input.performAction,
+      resolveTextRef: input.resolveTextRef,
+      typeResolvedText: input.typeResolvedText,
+      pressKeyInCurrentVSCode: input.pressKeyInCurrentVSCode,
+      captureRestorationState: input.captureRestorationState,
+      restoreCapturedState: input.restoreCapturedState,
+      restoreFocus: input.restoreFocus,
+      restoreMouse: input.restoreMouse,
+    }),
+  });
+  const vscodeModule = createVSCodeAppModule();
+  const primitiveChainObserved: string[] = [];
+  const evidenceRefs: string[] = [];
+  const cleanupRefs: string[] = [];
+  let sessionId: string | undefined;
+
+  const finish = async (
+    status: VSCodeCoWorkLiveDiagnosticResult['status'],
+    message: string,
+    reasonRefs: string[] = [],
+  ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
+    if (sessionId) {
+      const release = await currentVSCodeControlRelease(service, sessionId);
+      primitiveChainObserved.push('control(release)');
+      pushRefs(cleanupRefs, release.refs);
+      sessionId = undefined;
+    }
+    const finalEvidenceRefs = currentVSCodeEditorPreviewPublicRefs([
+      ...evidenceRefs,
+      ...reasonRefs,
+    ]);
+    const finalCleanupRefs = currentVSCodeCoWorkCleanupRefs(cleanupRefs);
+    return {
+      status,
+      message,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [...primitiveChainObserved],
+      evidenceRefs: finalEvidenceRefs,
+      cleanupRefs: finalCleanupRefs,
+      agentHostFinalAnswer: {
+        schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+        source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+        status,
+        text: message,
+        maturity: 'live-diagnostic',
+        productReady: false,
+        hostOwnsFinalAnswer: true,
+        computerUseCorePlanning: false,
+        primitiveChainObserved: [...primitiveChainObserved],
+        evidenceRefs: finalEvidenceRefs,
+        cleanupRefs: finalCleanupRefs,
+      },
+    };
+  };
+
+  const bind = await currentVSCodeBind(service);
+  primitiveChainObserved.push('bind');
+  if (bind.status !== 'completed' || !bind.output?.sessionId) {
+    pushRefs(cleanupRefs, bind.refs);
+    return finish('blocked', bind.blockedReason ?? 'current VSCode editor preview diagnostic blocked: bind failed');
+  }
+  sessionId = bind.output.sessionId;
+
+  const beforeObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  if (beforeObserve.status !== 'completed') {
+    return finish('blocked', beforeObserve.blockedReason ?? 'current VSCode editor preview diagnostic blocked: observe failed');
+  }
+
+  const readiness = vscodeModule.checkReadiness({
+    operation: 'editor-scope',
+    operationRef: `operation-ref:vscode:editor-scope:${runToken}`,
+    refs: currentVSCodeAppModuleRefs(beforeObserve.refs, beforeObserve.output?.observationRef),
+  });
+  primitiveChainObserved.push('host-decision');
+  pushRefs(evidenceRefs, readiness.status === 'ready'
+    ? [
+      ...readiness.evidenceRefs,
+      ...readiness.primitive.inputRefs,
+    ]
+    : [
+      ...(readiness.reasonRef ? [readiness.reasonRef] : []),
+      ...readiness.evidenceRefs,
+    ]);
+  if (readiness.status !== 'ready' || readiness.primitive.name !== 'computer_use.observe') {
+    return finish(
+      readinessFailureDiagnosticStatus(readiness.status),
+      readiness.status === 'ready'
+        ? 'current VSCode editor preview diagnostic blocked: editor-scope primitive invalid'
+        : readiness.reasonRef ?? 'current VSCode editor preview diagnostic blocked: editor-scope readiness failed',
+    );
+  }
+
+  const scopeRefs = currentVSCodeEditorScopePublicRefs([
+    ...beforeObserve.refs,
+    ...readiness.evidenceRefs,
+    ...readiness.primitive.inputRefs,
+  ]);
+  const scopeBlockedReason = currentVSCodeEditorScopePublicRefsBlockedReason(scopeRefs);
+  if (scopeBlockedReason) {
+    return finish('blocked', `current VSCode editor preview diagnostic blocked: ${scopeBlockedReason}`, [`blocked:vscode-cowork:${scopeBlockedReason}`]);
+  }
+
+  const preview = createVSCodeEditorPreview({
+    attemptId: runId,
+    operationRef: `operation-ref:vscode:preview-current-selection:${runToken}`,
+    scopeRefs,
+    draftArtifactRef: input.draftArtifactRef ?? `artifact:vscode-editor-draft:${runToken}`,
+  });
+  pushRefs(evidenceRefs, preview.evidenceRefs);
+  pushRefs(evidenceRefs, preview.artifactRefs);
+  if (preview.status !== 'completed') {
+    return finish('blocked', preview.message, preview.evidenceRefs);
+  }
+
+  return finish('completed', 'current VSCode editor preview live diagnostic completed refs-only preview and release');
+}
+
 export function createCurrentVSCodeCoWorkFocusedEditorEvidenceProvider(): VSCodeCoWorkFocusedEditorEvidenceProvider {
   return (input) => {
     const afterObserveRefs = uniqueSafeRefs(input.afterObserveRefs);
@@ -938,6 +1088,10 @@ function currentVSCodeEditorScopePublicRefs(refs: string[]): string[] {
   return uniqueSafeRefs(refs).filter(isCurrentVSCodeEditorScopePublicRef);
 }
 
+function currentVSCodeEditorPreviewPublicRefs(refs: string[]): string[] {
+  return uniqueSafeRefs(refs).filter(isCurrentVSCodeEditorPreviewPublicRef);
+}
+
 function currentVSCodeCoWorkCleanupRefs(refs: string[]): string[] {
   return uniqueSafeRefs(refs).filter(isCurrentVSCodeCoWorkCleanupRef);
 }
@@ -973,6 +1127,19 @@ function isCurrentVSCodeEditorScopePublicRef(ref: string): boolean {
     || ref.startsWith('needs-confirmation:vscode-app-module:')
     || ref.startsWith('blocked:vscode-cowork:')
     || ref.startsWith('needs-confirmation:vscode-cowork:');
+}
+
+function isCurrentVSCodeEditorPreviewPublicRef(ref: string): boolean {
+  if (ref !== ref.trim() || ref.length > 240) return false;
+  if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
+  if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
+  return isCurrentVSCodeEditorScopePublicRef(ref)
+    || ref.startsWith('artifact:vscode-editor-draft:')
+    || ref.startsWith('artifact:vscode-editor-preview:')
+    || ref.startsWith('artifact:vscode-editor-preview-diff:')
+    || ref.startsWith('verifier:vscode-editor-preview:')
+    || ref.startsWith('blocked:vscode-editor-preview:')
+    || ref.startsWith('needs-confirmation:vscode-editor-preview:');
 }
 
 function currentVSCodeEditorScopePublicRefsBlockedReason(refs: string[]): string | undefined {

@@ -4,11 +4,13 @@ import test from 'node:test';
 import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
   runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
+  runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic,
   runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic,
   runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
@@ -233,6 +235,38 @@ test('current VSCode co-work editor scope diagnostic is independently env-gated 
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
 });
 
+test('current VSCode co-work editor preview diagnostic is independently env-gated and does not touch ports by default', async () => {
+  const liveCalls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-preview-default-off',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('preview live port should not run without env');
+    },
+    performAction: async () => {
+      liveCalls.push('perform-action');
+      throw new Error('preview action should not run without env');
+    },
+    restoreFocus: async () => {
+      liveCalls.push('restore-focus');
+    },
+    restoreMouse: async () => {
+      liveCalls.push('restore-mouse');
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, []);
+  assert.deepEqual(result.evidenceRefs, []);
+  assert.deepEqual(result.cleanupRefs, []);
+  assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV}`));
+  assert.deepEqual(liveCalls, []);
+  assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
+});
+
 test('current VSCode co-work editor scope diagnostic mocks observe scope and releases', async () => {
   const calls: string[] = [];
   const scopeObservation = (suffix: string) => ({
@@ -424,6 +458,85 @@ test('current VSCode co-work editor scope diagnostic filters unsafe scope refs b
   assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-scope-unsafe'));
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /selection-ref:vscode:raw-selected-text|rawSelectedText|selectedText|text:vscode:scope-unsafe|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work editor preview diagnostic mocks current selection preview and releases without writing', async () => {
+  const calls: string[] = [];
+  const previewObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:preview',
+    windowRef: 'window:vscode:preview',
+    titleRef: 'text:title:preview',
+    frontmostRef: 'frontmost:vscode:preview',
+    fileRefs: ['selected-file:vscode:preview-paper'],
+    editorElementRef: 'element:vscode:editor:preview',
+    focusedEditorRef: 'focused-editor:vscode:preview',
+    selectionRef: 'selection-ref:vscode:preview:current',
+    cursorRef: 'cursor-ref:vscode:preview:current',
+    rangeRef: 'range-ref:vscode:preview:current',
+    visibleTextRef: `text:vscode:preview-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:preview-${suffix}-sha256`,
+    screenshotRef: `image:vscode:preview-${suffix}`,
+    accessibilityRef: `accessibility:vscode:preview-${suffix}`,
+    freshnessRef: `freshness:vscode:preview-${suffix}`,
+    observationRef: `observation:vscode:preview-${suffix}`,
+  });
+  const observations = [
+    previewObservation('bind'),
+    previewObservation('before'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-preview-mock',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    performAction: async () => {
+      calls.push('perform-action');
+      throw new Error('preview diagnostic must not act or write');
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'control(release)',
+  ]);
+  assert.ok(result.evidenceRefs.includes('selected-file:vscode:preview-paper'));
+  assert.ok(result.evidenceRefs.includes('selection-ref:vscode:preview:current'));
+  assert.ok(result.evidenceRefs.includes('cursor-ref:vscode:preview:current'));
+  assert.ok(result.evidenceRefs.includes('range-ref:vscode:preview:current'));
+  assert.ok(result.evidenceRefs.includes('artifact:vscode-editor-draft:unit-current-vscode-preview-mock'));
+  assert.ok(result.evidenceRefs.includes('artifact:vscode-editor-preview:unit-current-vscode-preview-mock'));
+  assert.ok(result.evidenceRefs.includes('artifact:vscode-editor-preview-diff:unit-current-vscode-preview-mock'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-editor-preview:unit-current-vscode-preview-mock:refs-only'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-preview-mock'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-preview-mock'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-preview-mock'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-preview-mock'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-preview-mock'));
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-preview-mock',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-preview-mock',
+  ]);
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /perform-action|text:vscode:preview|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|@@|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|replace-selection|insert-draft/i);
 });
 
 test('current VSCode co-work command palette diagnostic mocks open query observe close and release without selecting', async () => {

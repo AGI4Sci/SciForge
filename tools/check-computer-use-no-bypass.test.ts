@@ -307,6 +307,28 @@ test('Computer Use no-bypass guard blocks direct VSCode operation selection from
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
 });
 
+test('Computer Use no-bypass guard blocks preview operation inference from selected text terminal history or completed actions', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    'export function inferPreviewOperation(input: Record<string, unknown>) {',
+    '  const commandText = String(input.commandText ?? "");',
+    '  const selectedText = String(input.selectedText ?? "");',
+    '  const terminalOutput = String(input.terminalOutput ?? "");',
+    '  const history = String(input.history ?? "");',
+    '  const completedAction = String(input.completedAction ?? "");',
+    '  if ([commandText, selectedText, terminalOutput, history, completedAction].some((value) => value.includes("preview"))) {',
+    "    return { operation: 'preview-current-selection' };",
+    '  }',
+    '  return undefined;',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
 test('Computer Use no-bypass guard blocks command palette operation inference from labels or commandText', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
@@ -494,6 +516,24 @@ test('Computer Use no-bypass guard blocks scope selected and visible text projec
     "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
     'export function readinessArtifact() {',
     "  return sanitizePublicEvent({ type: 'computer-use-app-module-readiness', data: { selectedText: 'SECRET_SELECTED', visibleText: 'SECRET_VISIBLE' } });",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard blocks raw preview draft diff patch and artifact payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-vscode-editor-preview-materializer.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    'export function previewArtifact() {',
+    '  return sanitizePublicEvent({',
+    "    type: 'vscode-editor-preview',",
+    "    data: { draftText: 'SECRET_DRAFT', rawDraftText: 'SECRET_RAW_DRAFT', draftBody: 'SECRET_DRAFT_BODY', diff: '@@ SECRET_DIFF', patch: '@@ SECRET_PATCH', previewBody: 'SECRET_PREVIEW', artifactData: 'SECRET_ARTIFACT_DATA' },",
+    '  });',
     '}',
   ].join('\n'));
 

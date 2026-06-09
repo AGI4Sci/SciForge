@@ -20,8 +20,8 @@ const directComputerUseBypassImport = /(?:from\s+['"].*\/(?:vscode-app-module|ag
 const vscodeAppModuleForbiddenDesktopImport = /\bfrom\s+['"][^'"]*(?:packages\/actions\/computer-use\/(?:index|mcp)|src\/runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|src\/desktop\/|\/desktop\/|agent-host-[^'"]*computer-use[^'"]*materializer|window-action-computer-use-primitive-ports)[^'"]*['"]|import\s*\(\s*['"][^'"]*(?:packages\/actions\/computer-use\/(?:index|mcp)|src\/runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|src\/desktop\/|\/desktop\/|agent-host-[^'"]*computer-use[^'"]*materializer|window-action-computer-use-primitive-ports)[^'"]*['"]\s*\)/;
 const vscodeAppModuleForbiddenDesktopCall = /\b(?:service\.invoke|createComputerUsePrimitiveService|createComputerUseMcpAdapter|createDefaultComputerUseActMaterializer|executeGenericDesktopAction|executeIndependentInputAdapterAction|desktopController\.[A-Za-z_$][\w$]*|systemInput\.[A-Za-z_$][\w$]*|runCommand\s*\(\s*['"](?:osascript|open|screencapture)['"]|execFile\s*\(\s*['"](?:osascript|open|screencapture)['"]|spawn\s*\(\s*['"](?:osascript|open|screencapture)['"]|CGEvent|System Events)\b/;
 const bareOrdinaryVSCodeNativeShortcut = /\b(?:shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic|narrowCurrentVSCodeLiveDiagnostic|narrow\s+ordinary\s+(?:chat\s+)?(?:text|vscode|live))/i;
-const ordinaryTextField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId)\b/;
-const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|editor-scope|move-cursor|insert-draft|replace-selection|save-current-file|bulk-replace|cross-file-modify|undo-last-action|redo-last-action|show-problems|read-diagnostics|focus-terminal|send-terminal-text|observe-terminal|submit-terminal-command|interrupt-terminal-command|clear-terminal|focus-editor-from-terminal|open-command-palette|send-command-palette-query|observe-command-palette-items|select-command-palette-item|close-command-palette)['"]/;
+const ordinaryTextField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId|selectedText|terminalOutput|history|completedAction)\b/;
+const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|editor-scope|preview-current-selection|move-cursor|insert-draft|replace-selection|save-current-file|bulk-replace|cross-file-modify|undo-last-action|redo-last-action|show-problems|read-diagnostics|focus-terminal|send-terminal-text|observe-terminal|submit-terminal-command|interrupt-terminal-command|clear-terminal|focus-editor-from-terminal|open-command-palette|send-command-palette-query|observe-command-palette-items|select-command-palette-item|close-command-palette)['"]/;
 const vscodeOperationTextInferenceHelper = /\b(?:lowRisk[A-Za-z0-9_$]*OperationFromText|[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)|[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)[A-Za-z0-9_$]*(?:To|As|Into)[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation))\b/;
 const genericOperationTextInferenceHelper = /\b[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)\b/;
 const vscodeLiveDiagnosticTextInference = /\b(?:liveDiagnostic|live[-\s]?diagnostic|currentVSCodeCoWorkLiveDiagnosticRunner|tryRunCurrentVSCodeCoWorkLiveDiagnostic)\b/i;
@@ -31,6 +31,7 @@ const publicProjectionSurfaceFiles = new Set([
   'src/runtime/codex/computer-use-native-route.ts',
   'src/runtime/codex/codex-runtime-gateway.ts',
   'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts',
+  'src/runtime/codex/agent-host-vscode-editor-preview-materializer.ts',
   'src/runtime/codex/computer-use-app-module-registry.ts',
   'src/runtime/computer-use/host-adapter.ts',
   'src/runtime/computer-use/package-bridge-presentation.ts',
@@ -38,7 +39,7 @@ const publicProjectionSurfaceFiles = new Set([
 ]);
 const publicProjectionActivation = /\b(?:emitWorkspaceRuntimeEvent|publicHostOwnedRuntimeEvent|workspaceRuntimeEvent|doneEvent|failedEvent|runtimeCodexMissingFinalAnswerPayload|publicRuntimeMode|sanitizePublicEvent|publicEventHasForbiddenRaw|validateComputerUseAppModuleReadiness|readinessArtifact|readinessResult|computerUseResultToTuiHostActions|computerUsePresentationSummary|approvalRequestFromResult|attachPackageResultHostActions|primitiveModuleResult|moduleResult|objectReferences|payload\.logs|computer-use\.tui-host-actions)\b/;
 const publicEventSanitizerImport = /@sciforge-ui\/runtime-contract\/public-event-sanitizer/;
-const alwaysUnsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawProviderPayload|rawVisibleText|visibleText|rawSelectedText|selectedText|rawDiff|rawCommand|rawPath|rawUrl|requestedUrl|currentUrl|finalUrl|url|href)\b\s*:|data:image\/|;base64,)/i;
+const alwaysUnsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawProviderPayload|rawVisibleText|visibleText|rawSelectedText|selectedText|rawDraftText|draftText|draftBody|rawDiff|diff|patch|previewBody|artifactData|rawCommand|rawPath|rawUrl|requestedUrl|currentUrl|finalUrl|url|href)\b\s*:|data:image\/|;base64,)/i;
 const guardedUnsafePublicEventPayloadLiteral = /\b(?:commandText|terminalCommand|workspacePath|filePath|targetPath|stdout|stderr|requestBody|responseBody)\b\s*:/i;
 const allowedComputerUsePrimitiveNames = new Set(['bind', 'observe', 'act', 'run_procedure', 'control']);
 const forbiddenComputerUsePublicIntentNames = new Set([
@@ -179,6 +180,7 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
   findings.push(...computerUsePrimitiveServiceGuardFindings(file, text));
   findings.push(...sharedSystemInputSourceClaimFindings(file, text));
   findings.push(...vscodeAppModuleDirectDesktopFindings(file, text));
+  findings.push(...vscodeOperationTextInferenceFileFindings(file, text));
   if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts') {
     const structuredDone = sectionBetween(text, 'function withStructuredRuntimeDoneProjection', 'function withGuiAskUserRuntimeResult');
     if (structuredDone && (/\bvisibleAnswer\s*:\s*{[\s\S]*?\btext\s*:/.test(structuredDone) || unsafeMessageProjection(structuredDone))) {
@@ -246,6 +248,22 @@ function vscodeAppModuleDirectDesktopFindings(file: string, text: string): Findi
     }
   }
   return findings;
+}
+
+function vscodeOperationTextInferenceFileFindings(file: string, text: string): Finding[] {
+  if (!isOrdinaryChatOrNativeRouteSurface(file)) return [];
+  const match = vscodeOperationLiteral.exec(text);
+  if (!match) return [];
+  const context = text.slice(Math.max(0, match.index - 900), Math.min(text.length, match.index + 900));
+  if (!ordinaryTextField.test(context)) return [];
+  if (!/\b(?:infer|derive|detect|guess|parse|select|shouldRun|run|includes|match|test|some|find|trim|String|toLowerCase|toUpperCase)\b/.test(context)) return [];
+  return [{
+    file,
+    line: lineNumberForIndex(text, match.index),
+    rule: 'forbidden-vscode-operation-text-inference',
+    message: 'Ordinary chat/native route must not infer VSCode operations from message/commandText/intentText/selectedText/terminalOutput/history/completedAction text; require a structured Host operation ref.',
+    text: lineTextAtIndex(text, match.index),
+  }];
 }
 
 function computerUsePublicPrimitiveSurfaceFindings(file: string, text: string): Finding[] {
