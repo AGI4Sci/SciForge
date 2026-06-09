@@ -616,6 +616,68 @@ test('Runtime Codex foreground final message uses Host-owned final-answer envelo
   }
 });
 
+test('Runtime Codex foreground Host final answer with needs-confirmation marks message provenance for user confirmation', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'needs-confirmation',
+          message: 'current VSCode command palette live diagnostic needs confirmation: ambiguous VSCode target window refs',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId,
+          evidenceRefs: [
+            `computer-use:vscode/${commandId}/observation.current`,
+            `computer-use:vscode/${commandId}/window.paper`,
+            `computer-use:vscode/${commandId}/window.notes`,
+          ],
+          agentHostFinalAnswer: {
+            schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+            source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+            status: 'needs-confirmation',
+            text: '需要确认要操作哪一个 VSCode 窗口。',
+            maturity: 'live-diagnostic',
+            productReady: false,
+            hostOwnsFinalAnswer: true,
+            computerUseCorePlanning: false,
+            primitiveChainObserved: [],
+            evidenceRefs: [
+              `computer-use:vscode/${commandId}/observation.current`,
+              `computer-use:vscode/${commandId}/window.paper`,
+              `computer-use:vscode/${commandId}/window.notes`,
+            ],
+            cleanupRefs: [],
+          },
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const finalAnswer = raw.finalAnswerEnvelope as Record<string, unknown>;
+
+    assert.equal(response.message.content, '需要确认要操作哪一个 VSCode 窗口。');
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+    assert.equal(response.message.provenance?.requiresUserConfirmation, true);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
+    assert.equal(finalAnswer.status, 'needs-confirmation');
+    assert.equal(finalAnswer.text, '需要确认要操作哪一个 VSCode 窗口。');
+    assert.doesNotMatch(JSON.stringify(raw), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Runtime Codex done-only final text fails closed without Host final-answer envelope', async () => {
   const originalFetch = globalThis.fetch;
   try {

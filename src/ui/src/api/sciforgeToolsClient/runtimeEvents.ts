@@ -491,22 +491,21 @@ function finalAnswerProjectionFromExistingEnvelope(result: Record<string, unknow
   if (commandId && source.includes(':') && !source.endsWith(`:${commandId}`)) return undefined;
   if (!hasSharedEvidenceRef(result.evidenceRefs, envelope.evidenceRefs)) return undefined;
   const auditRefs = hostFinalAnswerAuditRefs(result, envelope);
+  const visibleStatus = hostFinalAnswerVisibleStatus(envelope.status);
+  const liveAcceptanceEligible = hostFinalAnswerLiveAcceptanceEligible(text, result, visibleStatus, envelope.liveAcceptanceEligible);
   return {
     envelope: compactRecord({
       ...envelope,
       source,
       text,
+      status: visibleStatus,
       evidenceRefs: auditRefs,
-      liveAcceptanceEligible: typeof envelope.liveAcceptanceEligible === 'boolean'
-        ? envelope.liveAcceptanceEligible
-        : runtimeNativeMessageLiveAcceptanceEligible(text, result),
+      liveAcceptanceEligible,
     }),
     text,
     source,
-    visibleStatus: hostFinalAnswerVisibleStatus(envelope.status),
-    liveAcceptanceEligible: typeof envelope.liveAcceptanceEligible === 'boolean'
-      ? envelope.liveAcceptanceEligible
-      : runtimeNativeMessageLiveAcceptanceEligible(text, result),
+    visibleStatus,
+    liveAcceptanceEligible,
     auditRefs,
   };
 }
@@ -524,13 +523,15 @@ function finalAnswerProjectionFromAgentHostMarker(result: Record<string, unknown
   const commandId = asString(result.commandId);
   const source = commandId ? `codex.app-server.final-answer:${commandId}` : 'codex.app-server.final-answer';
   const auditRefs = hostFinalAnswerAuditRefs(result, marker);
-  const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(text, result);
+  const visibleStatus = hostFinalAnswerVisibleStatus(marker.status);
+  const liveAcceptanceEligible = hostFinalAnswerLiveAcceptanceEligible(text, result, visibleStatus);
   return {
     envelope: compactRecord({
       schemaVersion: 'sciforge.final-answer-envelope.v1',
       source,
       kind: 'assistant-message',
       text,
+      status: visibleStatus,
       commandId,
       attemptId: asString(result.attemptId),
       provider: publicRuntimeMetadataValue(result.provider, 'provider'),
@@ -542,7 +543,7 @@ function finalAnswerProjectionFromAgentHostMarker(result: Record<string, unknown
     }),
     text,
     source,
-    visibleStatus: hostFinalAnswerVisibleStatus(marker.status),
+    visibleStatus,
     liveAcceptanceEligible,
     auditRefs,
   };
@@ -559,13 +560,15 @@ function finalAnswerProjectionFromTrustedHostText(
   const commandId = asString(result.commandId);
   const source = commandId ? `codex.app-server.final-answer:${commandId}` : 'codex.app-server.final-answer';
   const auditRefs = asStringArray(result.evidenceRefs) ?? [];
-  const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(text, result);
+  const visibleStatus = hostFinalAnswerVisibleStatus(result.status);
+  const liveAcceptanceEligible = hostFinalAnswerLiveAcceptanceEligible(text, result, visibleStatus);
   return {
     envelope: compactRecord({
       schemaVersion: 'sciforge.final-answer-envelope.v1',
       source,
       kind: 'assistant-message',
       text,
+      status: visibleStatus,
       commandId,
       attemptId: asString(result.attemptId),
       provider: publicRuntimeMetadataValue(result.provider, 'provider'),
@@ -578,7 +581,7 @@ function finalAnswerProjectionFromTrustedHostText(
     }),
     text,
     source,
-    visibleStatus: 'completed',
+    visibleStatus,
     liveAcceptanceEligible,
     auditRefs,
   };
@@ -611,6 +614,18 @@ function hostFinalAnswerVisibleStatus(status: unknown): string {
   if (normalized === 'needs-confirmation' || normalized === 'needs_confirmation' || normalized === 'needs-human') return 'needs-confirmation';
   if (normalized === 'partial' || normalized === 'ready' || normalized === 'partial-ready') return 'partial';
   return 'completed';
+}
+
+function hostFinalAnswerLiveAcceptanceEligible(
+  text: string,
+  result: Record<string, unknown>,
+  visibleStatus: string,
+  explicit?: unknown,
+): boolean {
+  if (visibleStatus === 'needs-confirmation' || visibleStatus === 'blocked') return false;
+  return typeof explicit === 'boolean'
+    ? explicit
+    : runtimeNativeMessageLiveAcceptanceEligible(text, result);
 }
 
 function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string, unknown>): unknown {

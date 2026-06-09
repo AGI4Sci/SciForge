@@ -720,6 +720,172 @@ test('Computer Use native route can run P10 current VSCode command palette live 
   assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route blocks P10 direct live diagnostic when Host target has ambiguous VSCode windows', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p10-command-palette-ambiguous:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      refs: [
+        'macos-app:com.microsoft.VSCode',
+        'process:vscode:paper',
+        'window:vscode:paper',
+        'window:vscode:notes',
+        'text:title:paper',
+        'text:title:notes',
+        'frontmost:vscode:paper',
+        'frontmost:vscode:notes',
+      ],
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p10-command-palette-ambiguous:attempt-1',
+        operation: 'open-command-palette' as const,
+        diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+        targetMode: 'smart-detect-current-vscode-window',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:notes', titleRef: 'text:title:notes' }),
+        ],
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p10-palette-ambiguous',
+      attemptId: 'native-route-vscode-cowork-p10-palette-ambiguous-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticOptions: {
+      activateCurrentVSCodeIfNeeded: true,
+    },
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'ambiguous target must not reach live runner',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind'],
+        evidenceRefs: ['window:vscode:paper'],
+        cleanupRefs: [],
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
+
+  assert.equal(runnerCalls.length, 0);
+  assert.equal(done?.status, 'needs-confirmation');
+  assert.equal(unit?.status, 'needs-confirmation');
+  assert.equal(unit?.tool, 'current-vscode-cowork-live-diagnostic');
+  assert.deepEqual(unit?.primitiveChainObserved, []);
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:p10-command-palette-ambiguous:attempt-1'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:notes'));
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.status, 'needs-confirmation');
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.hostOwnsFinalAnswer, true);
+  assert.doesNotMatch(JSON.stringify(events), /ambiguous target must not reach live runner|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('Computer Use native route blocks P10 direct live diagnostic when selected VSCode window conflicts with latest observation', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p10-command-palette-conflict:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p10-command-palette-conflict:attempt-1',
+        operation: 'open-command-palette' as const,
+        diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+        targetMode: 'smart-detect-current-vscode-window',
+        selectedWindowRef: 'window:vscode:paper',
+        latestObservation: {
+          windowRef: 'window:vscode:notes',
+          observationRef: 'observation:vscode:notes',
+        },
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p10-palette-conflict',
+      attemptId: 'native-route-vscode-cowork-p10-palette-conflict-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'conflicting target must not reach live runner',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind'],
+        evidenceRefs: ['window:vscode:paper'],
+        cleanupRefs: [],
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const unit = ((done?.executionUnits as Record<string, unknown>[] | undefined) ?? [])[0];
+
+  assert.equal(runnerCalls.length, 0);
+  assert.equal(done?.status, 'blocked');
+  assert.equal(unit?.status, 'blocked');
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.status, 'blocked');
+  assert.ok((done?.evidenceRefs as string[]).includes('blocked:vscode-app-module:target-window-evidence-conflict'));
+  assert.ok((done?.evidenceRefs as string[]).includes('chat-request:vscode-cowork:p10-command-palette-conflict:attempt-1'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:notes'));
+  assert.doesNotMatch(JSON.stringify(events), /conflicting target must not reach live runner|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('Computer Use native route does not project local live diagnostic completion as final done', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {

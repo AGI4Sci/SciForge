@@ -93,7 +93,7 @@ SciForge UI
 - [x] P9.16-P9.18：Scratch Mutation live skip / mocked diagnostic 已闭合；独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC=1` gate 默认 blocked，generic live env 不能解锁 scratch writer；env-on mock 只允许非用户 scratch buffer，跑 `bind -> observe -> host-decision -> act -> observe -> control(release)`，验证 mutation verifier 与 cleanup refs，不写用户文件、不宣称 `product-ready`。
 - [x] P9.19-P9.20：Narrow Apply unit path 已闭合；`apply-current-selection` 是 Host-owned bridge，不是 VSCode module capability，只能从 structured Host operation + current scope refs + Host `text-ref:` 映射为一个 `replace-selection` / `insert-draft` primitive candidate；apply verifier 要求 same-file、same-window、same-editor、same-selection、after-observe、release 与 cleanup refs，不能把 Computer Use `completed` 当作用户任务完成。
 - [x] P9.21-P9.22：Save / batch unit path 已闭合；`save-current-file` 只从 structured Host operation、current editor/file refs、same-file + mutation verifier 和 Host action evidence 生成一个 `Meta+S` `computer_use.act` candidate；`bulk-replace` / `cross-file-modify` 由 Host-owned decomposition guard blocked-safe，不会生成单个 Computer Use task、`act` 或 `run_procedure`。
-- [x] P10.0-P10.5：显式 VSCode + Computer Use ordinary chat 已进入 Host-owned P10 bridge；入口只生成 refs-first `sciforge.codex-agent-host-input.v1`，native route 可在无预绑定 window candidates 时启动 current VSCode command palette live diagnostic runner；默认 macOS adapter 支持菜单方式打开 command palette、action-backed palette refs、palette `text-ref:` 输入、`Escape` 关闭和 release cleanup。
+- [x] P10.0-P10.6：显式 VSCode + Computer Use ordinary chat 已进入 Host-owned P10 bridge；入口只生成 refs-first `sciforge.codex-agent-host-input.v1`，native route 可在无预绑定 window candidates 时启动 current VSCode command palette live diagnostic runner；默认 macOS adapter 支持菜单方式打开 command palette、action-backed palette refs、palette `text-ref:` 输入、`Escape` 关闭和 release cleanup；Host 已有多窗口或 selected/observed 冲突证据时 direct live route 先返回 `needs-confirmation` / `blocked`，不会启动 live runner 猜窗口。
 
 ## 当前执行路线
 
@@ -101,7 +101,7 @@ SciForge UI
 
 目标：最快打通用户已打开 VSCode 的真实 Computer Use 绑定/操纵闭环。P10 只做一个很窄的 live-diagnostic：显式用户请求使用 Computer Use 操纵当前 VSCode 时，由 Agent Host 包装成 structured Host input，然后跑 `bind -> observe -> host-decision(open-command-palette) -> act -> observe -> host-decision(send-command-palette-query) -> act -> observe -> host-decision(close-command-palette) -> act -> observe -> control(release)`。Computer Use core 不做 task planning；VSCode module 只提供 readiness / evidence gate；用户级 final answer 仍由 Agent Host envelope 产生。
 
-当前状态：P10 单元、mocked/native route 闭环和真实 VSCode command palette live diagnostic 已闭合；真实桌面仍是 env-gated `live-diagnostic`，不能宣称 `product-ready`。
+当前状态：P10 单元、mocked/native route、真实 VSCode command palette live diagnostic 和 direct route 多窗口/冲突 UX gate 已闭合；真实桌面仍是 env-gated `live-diagnostic`，不能宣称 `product-ready`。
 
 - [x] [P10.0 Unit] 显式 VSCode + Computer Use ordinary chat 不 spawn 通用 app-server，而是生成 refs-first Host input。
 - [x] [P10.0 Code] `CodexAppServerClient` 只在文本同时明确指向 VSCode 与 Computer Use / 桌面操纵 / 命令面板时包装 Host input；普通 VSCode 问答不路由。
@@ -111,13 +111,25 @@ SciForge UI
 - [x] [P10.3 Code] 默认 macOS shared-system-input adapter 支持 command palette open / query / close：菜单方式打开 command palette、action-backed palette refs、palette input `text-ref:`、`Escape`。
 - [x] [P10.4 Verify] focused tests 覆盖 ordinary chat bridge、P10 native route、command palette adapter context。
 - [x] [P10.5 Live] 在本机显式开启 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC=1` 后，验证真实 VSCode `bind -> observe -> open -> observe -> query -> observe -> close -> observe -> release`，并确认 input lease / adapter / cursor / focus / mouse cleanup refs。
-- [ ] [P10.6 UX] 如果 live bind 发现多个非 frontmost VSCode 窗口或 evidence 冲突，Host public answer 必须给出 `needs-confirmation` / `blocked`，不能猜窗口。
+- [x] [P10.6 UX] 如果 Host 已有多个 VSCode window/frontmost candidates、live bind 发现多个非 frontmost VSCode 窗口，或 selected window 与 latest observation 冲突，Host public answer 必须给出 `needs-confirmation` / `blocked`，不能启动 direct live runner 猜窗口。
 
 验收：
 
 - [x] 普通用户在 SciForge 里明确说“用 Computer Use 操纵当前 VSCode / 打开命令面板”时，进入 Host-owned native route，而不是长时间卡在 app-server tool discovery。
 - [x] public events 只包含 refs、safe summary、Host final answer envelope；不出现 raw screenshot、raw AX、raw command、raw label、raw path、provider payload、URL、base64 或 secret。
 - [x] shared-system-input 路径只标 `live-diagnostic`，不杀 VSCode、不清 profile、不宣称 `product-ready`。
+
+### P11：SciForge UI Dogfood 与用户可见闭环
+
+目标：把 P10 的真实 VSCode command palette live-diagnostic 从 native route 证据闭环推进到 SciForge 对话 UI 的可见闭环。P11 仍然不扩大 Computer Use core，不做 task planning；只验证用户在 SciForge UI 中提出明确 VSCode Computer Use 请求时，Host bridge、native route、live runner、public event、final answer 和 cleanup 能稳定串起来。
+
+当前状态：P11.0 已闭合；P10 已提供可复用的 direct live route、ambiguity blocker 和真实桌面验收测试，UI runtime event reader 现在能把 Host final answer 的 `completed` / `needs-confirmation` / `blocked` 三态稳定投影为用户可见结果并结束等待。
+
+- [x] [P11.0 Unit] SciForge UI / client runtime event 投影测试：P10 `completed`、`needs-confirmation`、`blocked` 三类 Host final answer 都能在对话中终止等待，不显示“长期 worked / 无回复”；`needs-confirmation` 会在 message provenance 标记 `requiresUserConfirmation`，`blocked` / `needs-confirmation` 不可被当作 live acceptance。
+- [ ] [P11.1 Code] 对 explicit VSCode Computer Use ordinary chat，前端只消费 unified native route public events；不新增 chat bypass、不把 runner result 当作独立旁路消息。
+- [ ] [P11.2 Dogfood] 在本机 `localhost:5173` 通过 SciForge UI 发起“用 Computer Use 操纵当前 VSCode，打开命令面板”，验证不再卡在 unavailable / app-server discovery，最终只显示 `live-diagnostic` safe answer。
+- [ ] [P11.3 UX] 多 VSCode 窗口或证据冲突时，SciForge UI dogfood 显示 Host `needs-confirmation` / `blocked`，不自动选择窗口；用户确认后的下一步仍由 Host 重新发一个 primitive。
+- [ ] [P11.4 Verify] 跑 UI event tests、P10 native route tests、typecheck、Computer Use no-bypass / no-legacy smoke，并确认没有 raw screenshot/base64/provider payload 进入 chat context。
 
 ### P9：VSCode Editor Mutation 与 Host-owned Narrow Apply
 

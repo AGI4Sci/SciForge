@@ -313,6 +313,11 @@ async function tryRunVSCodeCoWorkChatBridge(
   const directLiveOperation = directCurrentVSCodeCoWorkLiveDiagnosticOperation(input.request.agentHostInput);
   if (directLiveOperation) {
     queue.push(operationEvent(metadata, 'Runtime Codex selected the VSCode co-work Host bridge.', 'running'));
+    const directLiveBlocker = directCurrentVSCodeCoWorkLiveDiagnosticSafetyResult(input.request.agentHostInput);
+    if (directLiveBlocker) {
+      queue.push(doneEvent(metadata, currentVSCodeCoWorkLiveDiagnosticPayload(directLiveBlocker)));
+      return true;
+    }
     const liveDiagnostic = await tryRunCurrentVSCodeCoWorkLiveDiagnostic(input, undefined, {
       allowDirectLiveDiagnostic: true,
     });
@@ -409,6 +414,103 @@ function directCurrentVSCodeCoWorkLiveDiagnosticOperation(value: unknown): typeo
   if (target?.kind !== 'current-vscode-cowork') return undefined;
   const operation = currentVSCodeCoWorkLiveOperation(value);
   return operation === P10_PALETTE_OPEN ? operation : undefined;
+}
+
+function directCurrentVSCodeCoWorkLiveDiagnosticSafetyResult(value: unknown): VSCodeCoWorkLiveDiagnosticResult | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  const observation = isRecord(value.observation) ? value.observation : undefined;
+  const latestObservation = isRecord(vscodeCoWork?.latestObservation)
+    ? vscodeCoWork.latestObservation
+    : isRecord(observation?.vscodeCoWork)
+      ? observation.vscodeCoWork
+      : undefined;
+  const requestRefs = refsWithPrefix(safeHostInputRefs(value.refs), ['chat-request:']);
+  const targetRefs = safeHostInputRefs(target?.refs);
+  const observationRefs = safeHostInputRefs(observation?.refs);
+  const candidateWindowRefs = safeWindowCandidateRefs(vscodeCoWork?.windowCandidates, 'windowRef', ['window:']);
+  const candidateFrontmostRefs = safeWindowCandidateRefs(vscodeCoWork?.windowCandidates, 'frontmostRef', ['frontmost:']);
+  const explicitWindowRefs = uniqueRouteStrings([
+    ...refsWithPrefix(targetRefs, ['window:vscode:']),
+    ...refsWithPrefix(observationRefs, ['window:vscode:']),
+    ...candidateWindowRefs,
+    ...refsWithPrefix(safeHostInputRefs(latestObservation?.refs), ['window:vscode:']),
+    safeHostInputRef(latestObservation?.windowRef, ['window:']),
+  ].filter(nonEmptyString));
+  const explicitFrontmostRefs = uniqueRouteStrings([
+    ...refsWithPrefix(targetRefs, ['frontmost:vscode:']),
+    ...refsWithPrefix(observationRefs, ['frontmost:vscode:']),
+    ...candidateFrontmostRefs,
+  ]);
+  const baseEvidenceRefs = uniqueRouteStrings([
+    ...requestRefs,
+    ...explicitWindowRefs,
+    ...explicitFrontmostRefs,
+  ]);
+  if (explicitWindowRefs.length > 1 || explicitFrontmostRefs.length > 1) {
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'needs-confirmation',
+      'current VSCode command palette live diagnostic needs confirmation: ambiguous VSCode target window refs',
+      [
+        'needs-confirmation:vscode-app-module:target-window-ambiguous',
+        ...baseEvidenceRefs,
+      ],
+    );
+  }
+  const selectedWindowRef = safeHostInputRef(vscodeCoWork?.selectedWindowRef, ['window:']);
+  const observationWindowRef = safeHostInputRef(latestObservation?.windowRef, ['window:']);
+  if (selectedWindowRef && observationWindowRef && selectedWindowRef !== observationWindowRef) {
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'blocked',
+      'current VSCode command palette live diagnostic blocked: selected VSCode target window conflicts with latest observation',
+      [
+        'blocked:vscode-app-module:target-window-evidence-conflict',
+        ...requestRefs,
+        selectedWindowRef,
+        observationWindowRef,
+      ],
+    );
+  }
+  return undefined;
+}
+
+function directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+  status: 'blocked' | 'needs-confirmation',
+  message: string,
+  evidenceRefs: string[],
+): VSCodeCoWorkLiveDiagnosticResult {
+  const safeEvidenceRefs = safeHostInputRefs(uniqueRouteStrings(evidenceRefs));
+  return {
+    status,
+    message,
+    maturity: 'live-diagnostic',
+    productReady: false,
+    primitiveChainObserved: [],
+    evidenceRefs: safeEvidenceRefs,
+    cleanupRefs: [],
+    agentHostFinalAnswer: {
+      schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+      source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+      status,
+      text: message,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      hostOwnsFinalAnswer: true,
+      computerUseCorePlanning: false,
+      primitiveChainObserved: [],
+      evidenceRefs: safeEvidenceRefs,
+      cleanupRefs: [],
+    },
+  };
+}
+
+function safeWindowCandidateRefs(value: unknown, key: string, prefixes: string[]): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqueRouteStrings(value
+    .map((candidate) => isRecord(candidate) ? safeHostInputRef(candidate[key], prefixes) : undefined)
+    .filter(nonEmptyString));
 }
 
 function currentVSCodeCoWorkLiveOperation(value: unknown): CurrentVSCodeCoWorkLiveOperation | undefined {

@@ -115,6 +115,8 @@ export function attachRuntimeGuiPresentationToResponse(
     : undefined;
   const finalAnswerSource = asString(finalAnswer?.source);
   if (finalAnswer && finalAnswerSource?.startsWith('codex.app-server.final-answer:')) {
+    const finalAnswerStatus = asString(finalAnswer.status)?.trim().toLowerCase();
+    const requiresUserConfirmation = finalAnswerStatus === 'needs-confirmation' || finalAnswerStatus === 'needs-human';
     const finalLiveAcceptanceEligible = typeof finalAnswer.liveAcceptanceEligible === 'boolean'
       ? finalAnswer.liveAcceptanceEligible
       : runtimeNativeMessageLiveAcceptanceEligible(asString(finalAnswer.text) ?? response.message.content, result);
@@ -127,7 +129,8 @@ export function attachRuntimeGuiPresentationToResponse(
           kind: 'live-runtime-codex',
           source: finalAnswerSource,
           runtimeRequestEligible: false,
-          liveAcceptanceEligible: finalLiveAcceptanceEligible,
+          liveAcceptanceEligible: requiresUserConfirmation ? false : finalLiveAcceptanceEligible,
+          requiresUserConfirmation: requiresUserConfirmation || undefined,
           commandId: asString(finalAnswer?.commandId),
           attemptId: asString(finalAnswer?.attemptId),
           provider: asString(finalAnswer?.provider),

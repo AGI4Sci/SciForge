@@ -361,6 +361,57 @@ test('SSE reader projects Host-owned Agent Host final-answer envelope from nativ
   assert.equal(result.finalAnswerEnvelope?.liveAcceptanceEligible, true);
 });
 
+test('SSE reader projects blocked Agent Host final-answer envelope without live acceptance', async () => {
+  const commandId = 'codex-command-native-blocked-final-envelope';
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'blocked',
+      message: 'Current VSCode command palette diagnostic blocked.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [
+        `computer-use:vscode/${commandId}/observation.current`,
+        `computer-use:vscode/${commandId}/target-window-conflict`,
+      ],
+      agentHostFinalAnswer: {
+        schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+        source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+        status: 'blocked',
+        text: '当前 VSCode 目标证据冲突，已停止操作。',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        hostOwnsFinalAnswer: true,
+        computerUseCorePlanning: false,
+        primitiveChainObserved: ['bind', 'observe', 'host-decision', 'control(release)'],
+        evidenceRefs: [`computer-use:vscode/${commandId}/target-window-conflict`],
+        cleanupRefs: [`computer-use:vscode/${commandId}/control.release`],
+      },
+    })}`,
+    '',
+  ].join('\n');
+
+  const stream = await readWorkspaceToolStream(createSseResponse(body), () => undefined);
+  const result = stream.result as {
+    message?: string;
+    finalAnswerEnvelope?: { status?: string; text?: string; liveAcceptanceEligible?: boolean };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string; text?: string; liveAcceptanceEligible?: boolean } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, '当前 VSCode 目标证据冲突，已停止操作。');
+  assert.equal(result.finalAnswerEnvelope?.status, 'blocked');
+  assert.equal(result.finalAnswerEnvelope?.text, '当前 VSCode 目标证据冲突，已停止操作。');
+  assert.equal(result.finalAnswerEnvelope?.liveAcceptanceEligible, false);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'blocked');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, false);
+});
+
 test('SSE reader rejects unbound final-answer envelopes without same-run evidence', async () => {
   const commandId = 'codex-command-native-unbound-final-envelope';
   const body = [
