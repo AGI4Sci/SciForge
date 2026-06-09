@@ -548,6 +548,92 @@ test('default Computer Use Act materializer editor-scope public projection keeps
   assert.doesNotMatch(JSON.stringify(result), /rawSelectedText|selectedText|rawVisibleText|visibleText|providerPayload|data:image|base64|https?:\/\/|\/Users\//i);
 });
 
+test('default Computer Use Act materializer selects editor mutation primitives only from structured Host operation refs', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer editor mutation operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-editor-mutation-fallback'],
+        };
+      },
+    },
+  });
+  const mutationRefs = [
+    'editor-group:vscode:paper:1',
+    'active-editor:vscode:paper:1',
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'text-ref:vscode-draft:unit-1',
+    'text:vscode:visible:paper',
+    'image:vscode:current',
+    'accessibility:vscode:current',
+    'terminal-output:vscode:paper:current',
+    'history:vscode:previous-run',
+    'action:vscode:previous:completed',
+  ];
+
+  for (const operation of ['insert-draft', 'replace-selection'] as const) {
+    const structured = await materializer({
+      agentHostInput: vscodeAppModuleAgentHostInput(operation, mutationRefs),
+      preflight: vscodeAppModulePreflight(mutationRefs),
+      commandText: 'Apply selected text changes from /Users/example/private-paper.md; this text must not decide mutation.',
+      workspacePath: '/tmp/workspace',
+      commandId: `codex-command-default-vscode-${operation}`,
+      attemptId: `codex-command-default-vscode-${operation}-attempt-1`,
+      runtimeTruth: vscodeAppModuleRuntimeTruth(mutationRefs),
+    });
+
+    assert.equal(windowActionPlannerCalls, 0);
+    assert.equal(structured?.status, 'completed', structured?.message);
+    assert.equal(structured?.claimType, 'computer-use-app-module-primitive-candidate');
+    assert.equal(structured?.completionTruth, undefined);
+    assert.ok(structured?.executionUnits?.some((unit) =>
+      unit.tool === 'computer-use.app-module-registry'
+        && unit.moduleId === 'vscode'
+        && unit.operation === operation
+        && unit.primitive === 'computer_use.act'
+        && unit.status === 'candidate'
+    ));
+    assert.ok(structured?.evidenceRefs.some((ref) =>
+      ref === 'file-ref:vscode:paper' || ref === 'selected-file:vscode:paper'
+    ));
+    assert.ok(structured?.evidenceRefs.includes('selection-ref:vscode:paper:1'));
+    assert.ok(structured?.evidenceRefs.includes('cursor-ref:vscode:paper:1'));
+    assert.ok(structured?.evidenceRefs.includes('range-ref:vscode:paper:1'));
+    assert.ok(structured?.evidenceRefs.includes('text-ref:vscode-draft:unit-1'));
+    const serialized = JSON.stringify(structured);
+    assert.match(serialized, /"primitive":"computer_use\.act"/);
+    assert.match(serialized, /text-ref:vscode-draft:unit-1/);
+    assert.doesNotMatch(serialized, /window-action-session:vscode|macos-app:vscode|process:vscode|window:vscode|frontmost:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|text:vscode:visible|image:vscode|accessibility:vscode|terminal-output:vscode|action:vscode|history:vscode|permission:|computer-use:executor-scope|runtime-truth:computer-use-act-materializer/i);
+    assert.doesNotMatch(serialized, /Apply selected text|private-paper|\/Users\/|rawSelectedText|selectedText|rawVisibleText|visibleText|insertText|replacementText|rawSelection|providerPayload|data:image|base64|completionTruth|taskOutcome":"satisfied|Generic WindowAction planner/i);
+  }
+
+  const inferred = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined, mutationRefs),
+    preflight: vscodeAppModulePreflight(mutationRefs),
+    commandText: 'Replace current selection in VSCode with this draft.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-mutation-no-operation',
+    attemptId: 'codex-command-default-vscode-mutation-no-operation-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(mutationRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(inferred?.status, 'blocked');
+  assert.equal(inferred?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(inferred?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.equal(inferred?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(inferred), /computer-use-app-module-primitive-candidate|"operation":"(?:insert-draft|replace-selection)"|taskOutcome":"satisfied|Generic WindowAction planner/i);
+});
+
 test('default Computer Use Act materializer returns VSCode preview artifact refs only from structured Host operation refs', async () => {
   let windowActionPlannerCalls = 0;
   const materializer = createDefaultComputerUseActMaterializer({

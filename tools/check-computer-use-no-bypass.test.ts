@@ -543,6 +543,24 @@ test('Computer Use no-bypass guard blocks raw preview draft diff patch and artif
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
 });
 
+test('Computer Use no-bypass guard blocks raw editor mutation text and selection payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    'export function mutationArtifact() {',
+    '  return sanitizePublicEvent({',
+    "    type: 'computer-use-app-module-readiness',",
+    "    data: { insertText: 'SECRET_INSERT', replacementText: 'SECRET_REPLACEMENT', rawSelection: 'SECRET_SELECTION', selectedRange: '1:5' },",
+    '  });',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
 test('Computer Use no-bypass guard allows unsafe pattern definitions while blocking raw payload emission', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [

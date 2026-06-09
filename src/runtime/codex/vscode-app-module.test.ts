@@ -938,7 +938,140 @@ test('editor scope readiness rejects payload-shaped selection cursor and range r
   }
 });
 
-test('editor mutation operations fail closed until P9 scope and preview are implemented', () => {
+test('insert-draft readiness is refs-first and requires current scope plus Host text ref', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const ready = vscode.checkReadiness({
+    operation: 'insert-draft',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'selected-file:vscode:current-paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:current:1',
+      'cursor-ref:vscode:current:1',
+      'range-ref:vscode:current:1',
+      'text-ref:vscode-draft:unit-1',
+    ],
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.primitive.name, 'computer_use.act');
+  assert.deepEqual(ready.primitive.action, {
+    kind: 'type',
+    textRef: 'text-ref:vscode-draft:unit-1',
+  });
+  assert.ok(ready.primitive.inputRefs.includes('selected-file:vscode:current-paper'));
+  assert.ok(ready.primitive.inputRefs.includes('selection-ref:vscode:current:1'));
+  assert.ok(ready.primitive.inputRefs.includes('cursor-ref:vscode:current:1'));
+  assert.ok(ready.primitive.inputRefs.includes('range-ref:vscode:current:1'));
+  assert.ok(ready.primitive.inputRefs.includes('text-ref:vscode-draft:unit-1'));
+  assert.ok(ready.evidenceRefs.includes('capability:vscode:insert-draft'));
+  assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:insert-draft:test'));
+  assert.doesNotMatch(JSON.stringify(ready), /rawSelectedText|selected text|\/Users\/|https?:\/\/|providerPayload|base64|completionTruth|finalAnswer/i);
+
+  const missingText = vscode.checkReadiness({
+    operation: 'insert-draft',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'selected-file:vscode:current-paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:current:1',
+      'cursor-ref:vscode:current:1',
+      'range-ref:vscode:current:1',
+    ],
+  });
+  assert.equal(missingText.status, 'blocked');
+  assert.equal(missingText.reasonRef, 'blocked:vscode-app-module:text-ref-required');
+
+  const rawScope = vscode.checkReadiness({
+    operation: 'insert-draft',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'selected-file:vscode:current-paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:raw-selected-text',
+      'cursor-ref:vscode:current:1',
+      'range-ref:vscode:current:1',
+      'text-ref:vscode-draft:unit-1',
+    ],
+  });
+  assert.equal(rawScope.status, 'blocked');
+  assert.doesNotMatch(JSON.stringify(rawScope), /rawSelectedText|selected text|providerPayload|base64|\/Users\//i);
+});
+
+test('replace-selection readiness is refs-first and requires current selection plus Host text ref', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const ready = vscode.checkReadiness({
+    operation: 'replace-selection',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'selected-file:vscode:current-paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:current:1',
+      'cursor-ref:vscode:current:1',
+      'range-ref:vscode:current:1',
+      'text-ref:vscode-replacement:unit-1',
+    ],
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.primitive.name, 'computer_use.act');
+  assert.deepEqual(ready.primitive.action, {
+    kind: 'type',
+    textRef: 'text-ref:vscode-replacement:unit-1',
+  });
+  assert.ok(ready.primitive.inputRefs.includes('selected-file:vscode:current-paper'));
+  assert.ok(ready.primitive.inputRefs.includes('selection-ref:vscode:current:1'));
+  assert.ok(ready.primitive.inputRefs.includes('text-ref:vscode-replacement:unit-1'));
+  assert.ok(ready.evidenceRefs.includes('capability:vscode:replace-selection'));
+  assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:replace-selection:test'));
+  assert.doesNotMatch(JSON.stringify(ready), /rawSelectedText|selected text|rawDiff|@@|\/Users\/|https?:\/\/|providerPayload|base64|completionTruth|finalAnswer/i);
+
+  const missingSelection = vscode.checkReadiness({
+    operation: 'replace-selection',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'selected-file:vscode:current-paper',
+      'element:vscode:editor:monaco:1',
+      'cursor-ref:vscode:current:1',
+      'range-ref:vscode:current:1',
+      'text-ref:vscode-replacement:unit-1',
+    ],
+  });
+  assert.equal(missingSelection.status, 'needs-confirmation');
+  assert.equal(missingSelection.reasonRef, 'needs-confirmation:vscode-app-module:editor-scope-selection-required');
+});
+
+test('editor mutation operations outside P9-C fail closed until separately implemented', () => {
   const vscode = createHostStructuredVSCodeAppModule();
   const refs = [
     'window-action-session:vscode:1',
@@ -957,8 +1090,6 @@ test('editor mutation operations fail closed until P9 scope and preview are impl
 
   for (const operation of [
     'move-cursor',
-    'insert-draft',
-    'replace-selection',
     'save-current-file',
     'undo-last-action',
     'redo-last-action',
@@ -981,13 +1112,94 @@ test('mutation verifier requires action evidence and same-file before/after refs
   assert.equal(blocked.reasonRef, 'blocked:vscode-app-module:mutation-action-ref-required');
 
   const verified = verifyVSCodeMutationEvidence({
-    beforeRefs: ['file-ref:vscode:current:paper'],
+    beforeRefs: [
+      'window:vscode:paper',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:paper:1',
+    ],
     actionRefs: ['action:vscode:insert-draft:1'],
-    afterRefs: ['file-ref:vscode:current:paper', 'text:vscode:after:1'],
+    afterRefs: [
+      'window:vscode:paper',
+      'observation:vscode:paper:after',
+      'freshness:vscode:paper:after',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:paper:1',
+      'text:vscode:after:1',
+    ],
   });
 
   assert.equal(verified.status, 'ready');
   assert.ok(verified.evidenceRefs.includes('verifier:vscode-app-module:mutation:file-ref-vscode-current-paper'));
+});
+
+test('mutation verifier blocks editor window selection and observation drift', () => {
+  const beforeRefs = [
+    'window:vscode:paper',
+    'observation:vscode:paper:before',
+    'freshness:vscode:paper:before',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+  ];
+  const afterRefs = [
+    'window:vscode:paper',
+    'observation:vscode:paper:after',
+    'freshness:vscode:paper:after',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'text:vscode:after:paper',
+  ];
+  const ready = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: ['action:vscode:replace-selection:1'],
+    afterRefs,
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:same-file:file-ref-vscode-current-paper'));
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:same-window:window-vscode-paper'));
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:same-editor:element-vscode-editor-monaco-1'));
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:same-selection:selection-ref-vscode-paper-1'));
+  assert.ok(ready.evidenceRefs.includes('verifier:vscode-app-module:after-observe:observation-vscode-paper-after'));
+
+  const windowDrift = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: ['action:vscode:replace-selection:1'],
+    afterRefs: afterRefs.map((ref) => ref === 'window:vscode:paper' ? 'window:vscode:other' : ref),
+  });
+  assert.equal(windowDrift.status, 'blocked');
+  assert.equal(windowDrift.reasonRef, 'blocked:vscode-app-module:window-ref-drift');
+
+  const editorDrift = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: ['action:vscode:replace-selection:1'],
+    afterRefs: afterRefs.map((ref) => ref === 'element:vscode:editor:monaco:1' ? 'element:vscode:editor:monaco:2' : ref),
+  });
+  assert.equal(editorDrift.status, 'blocked');
+  assert.equal(editorDrift.reasonRef, 'blocked:vscode-app-module:editor-ref-drift');
+
+  const selectionDrift = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: ['action:vscode:replace-selection:1'],
+    afterRefs: afterRefs.map((ref) => ref === 'selection-ref:vscode:paper:1' ? 'selection-ref:vscode:paper:2' : ref),
+  });
+  assert.equal(selectionDrift.status, 'blocked');
+  assert.equal(selectionDrift.reasonRef, 'blocked:vscode-app-module:selection-ref-drift');
+
+  const missingAfterObserve = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: ['action:vscode:replace-selection:1'],
+    afterRefs: afterRefs.filter((ref) => !ref.startsWith('observation:vscode:') && !ref.startsWith('freshness:vscode:')),
+  });
+  assert.equal(missingAfterObserve.status, 'blocked');
+  assert.equal(missingAfterObserve.reasonRef, 'blocked:vscode-app-module:after-observe-ref-required');
 });
 
 test('terminal readiness is refs-first and keeps send separate from submit', () => {

@@ -6,6 +6,7 @@ interface VSCodeVerifierObservation {
   windowRefs: string[];
   observationRefs: string[];
   editorRefs: string[];
+  selectionRefs: string[];
   terminalRefs: string[];
   freshnessRefs: string[];
 }
@@ -81,17 +82,51 @@ export function verifyVSCodeMutationEvidence(input: {
   actionRefs: string[];
   afterRefs: string[];
 }): VSCodeAppVerifierResult {
-  const sameFile = verifyVSCodeSameFileEvidence({
-    beforeRefs: input.beforeRefs,
-    afterRefs: input.afterRefs,
-  });
-  if (sameFile.status === 'blocked') return sameFile;
   if (!input.actionRefs.some((ref) => ref.startsWith('action:') || ref.startsWith('window-action:'))) {
     return verifierBlocked('blocked:vscode-app-module:mutation-action-ref-required', uniqueStrings([
       ...input.beforeRefs,
       ...input.afterRefs,
     ]));
   }
+  const sameFile = verifyVSCodeSameFileEvidence({
+    beforeRefs: input.beforeRefs,
+    afterRefs: input.afterRefs,
+  });
+  if (sameFile.status === 'blocked') return sameFile;
+
+  const sameWindow = verifySameMutationRef({
+    beforeRefs: input.beforeRefs,
+    afterRefs: input.afterRefs,
+    match: (ref) => ref.startsWith('window:vscode:'),
+    missingReasonRef: 'blocked:vscode-app-module:single-window-ref-required',
+    driftReasonRef: 'blocked:vscode-app-module:window-ref-drift',
+    verifierKind: 'same-window',
+  });
+  if (sameWindow.status === 'blocked') return sameWindow;
+
+  const sameEditor = verifySameMutationRef({
+    beforeRefs: input.beforeRefs,
+    afterRefs: input.afterRefs,
+    match: isVSCodeEditorVerifierRef,
+    missingReasonRef: 'blocked:vscode-app-module:single-editor-ref-required',
+    driftReasonRef: 'blocked:vscode-app-module:editor-ref-drift',
+    verifierKind: 'same-editor',
+  });
+  if (sameEditor.status === 'blocked') return sameEditor;
+
+  const sameSelection = verifySameMutationRef({
+    beforeRefs: input.beforeRefs,
+    afterRefs: input.afterRefs,
+    match: (ref) => ref.startsWith('selection-ref:vscode:'),
+    missingReasonRef: 'blocked:vscode-app-module:single-selection-ref-required',
+    driftReasonRef: 'blocked:vscode-app-module:selection-ref-drift',
+    verifierKind: 'same-selection',
+  });
+  if (sameSelection.status === 'blocked') return sameSelection;
+
+  const afterObserve = verifyMutationAfterObserve(input.afterRefs);
+  if (afterObserve.status === 'blocked') return afterObserve;
+
   if (!input.afterRefs.some((ref) => ref.startsWith('text:') || ref.startsWith('verifier:'))) {
     return verifierBlocked('blocked:vscode-app-module:mutation-after-text-ref-required', uniqueStrings([
       ...input.beforeRefs,
@@ -104,11 +139,67 @@ export function verifyVSCodeMutationEvidence(input: {
     status: 'ready',
     evidenceRefs: uniqueStrings([
       fileRef,
+      ...sameFile.evidenceRefs.slice(1),
+      ...sameWindow.evidenceRefs,
+      ...sameEditor.evidenceRefs,
+      ...sameSelection.evidenceRefs,
       ...input.actionRefs,
+      ...afterObserve.evidenceRefs,
       ...input.afterRefs.filter((ref) => ref.startsWith('text:')),
       `verifier:vscode-app-module:mutation:${safeToken(fileRef) || 'file'}`,
     ]),
   };
+}
+
+function verifySameMutationRef(input: {
+  beforeRefs: string[];
+  afterRefs: string[];
+  match: (ref: string) => boolean;
+  missingReasonRef: string;
+  driftReasonRef: string;
+  verifierKind: string;
+}): VSCodeAppVerifierResult {
+  const beforeRefs = uniqueStrings(input.beforeRefs.filter(input.match));
+  const afterRefs = uniqueStrings(input.afterRefs.filter(input.match));
+  if (beforeRefs.length !== 1 || afterRefs.length !== 1) {
+    return verifierBlocked(input.missingReasonRef, uniqueStrings([...beforeRefs, ...afterRefs]));
+  }
+  if (beforeRefs[0] !== afterRefs[0]) {
+    return verifierBlocked(input.driftReasonRef, uniqueStrings([...beforeRefs, ...afterRefs]));
+  }
+  return {
+    status: 'ready',
+    evidenceRefs: [
+      beforeRefs[0],
+      `verifier:vscode-app-module:${input.verifierKind}:${safeToken(beforeRefs[0]) || input.verifierKind}`,
+    ],
+  };
+}
+
+function verifyMutationAfterObserve(afterRefs: string[]): VSCodeAppVerifierResult {
+  const observationRefs = uniqueStrings(afterRefs.filter((ref) => ref.startsWith('observation:vscode:')));
+  const freshnessRefs = uniqueStrings(afterRefs.filter((ref) => ref.startsWith('freshness:vscode:')));
+  if (observationRefs.length !== 1 || freshnessRefs.length !== 1) {
+    return verifierBlocked('blocked:vscode-app-module:after-observe-ref-required', uniqueStrings([
+      ...observationRefs,
+      ...freshnessRefs,
+    ]));
+  }
+  return {
+    status: 'ready',
+    evidenceRefs: [
+      observationRefs[0],
+      freshnessRefs[0],
+      `verifier:vscode-app-module:after-observe:${safeToken(observationRefs[0]) || 'after-observe'}`,
+    ],
+  };
+}
+
+function isVSCodeEditorVerifierRef(ref: string): boolean {
+  return ref.startsWith('element:vscode:editor:')
+    || ref.startsWith('element:vscode:monaco:')
+    || ref.startsWith('focused-editor:vscode:')
+    || ref.startsWith('active-editor:vscode:');
 }
 
 function verifierBlocked(reasonRef: string, evidenceRefs: string[] = []): VSCodeAppVerifierResult {

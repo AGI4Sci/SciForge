@@ -198,10 +198,11 @@ function readinessPrimitiveForArtifact(
   },
   refs: string[],
 ): ComputerUseAppModulePrimitiveCandidate {
-  if (!isVSCodeEditorScopePublicProjection(context)) return primitive;
+  if (!isVSCodeEditorPublicProjection(context)) return primitive;
   return {
     name: primitive.name,
     inputRefs: refs,
+    ...(primitive.action ? { action: primitive.action } : {}),
   };
 }
 
@@ -333,14 +334,18 @@ function publicAppModuleEvidenceRefs(
   },
 ): string[] {
   const safeRefs = appModuleEvidenceRefs(refs);
-  return isVSCodeEditorScopePublicProjection(context) ? editorScopePublicEvidenceRefs(safeRefs) : safeRefs;
+  return isVSCodeEditorPublicProjection(context) ? editorScopePublicEvidenceRefs(safeRefs) : safeRefs;
 }
 
-function isVSCodeEditorScopePublicProjection(context: {
+function isVSCodeEditorPublicProjection(context: {
   operation: string;
   moduleId: string | undefined;
 }): boolean {
-  return context.moduleId === 'vscode' && context.operation === 'editor-scope';
+  return context.moduleId === 'vscode' && (
+    context.operation === 'editor-scope'
+      || context.operation === 'insert-draft'
+      || context.operation === 'replace-selection'
+  );
 }
 
 function editorScopePublicEvidenceRefs(refs: string[]): string[] {
@@ -358,6 +363,7 @@ function safeEditorScopePublicRef(value: string): boolean {
       || ref.startsWith('selection-ref:vscode:')
       || ref.startsWith('cursor-ref:vscode:')
       || ref.startsWith('range-ref:vscode:')
+      || ref.startsWith('text-ref:')
       || ref.startsWith('freshness:vscode:')
       || ref.startsWith('stale-invalidation:vscode:')
       || ref.startsWith('blocked:vscode-app-module:')

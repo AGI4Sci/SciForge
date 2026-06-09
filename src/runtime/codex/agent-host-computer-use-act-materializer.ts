@@ -163,7 +163,7 @@ function attachDefaultBoundaryArtifacts(
   hostPortContract: ComputerUseActMaterializerHostPortContract,
 ): CodexAgentHostComputerUseActMaterializerResult | undefined {
   if (!result) return undefined;
-  if (isVSCodeEditorScopeAppModuleResult(result) || isVSCodeEditorPreviewResult(result)) return result;
+  if (isVSCodeEditorAppModulePublicResult(result) || isVSCodeEditorPreviewResult(result)) return result;
   const boundaryRefs = runtimeOwnedRefs([
     `runtime-truth:computer-use-act-materializer/preflight/${safeToken(input.commandId) || 'command'}/${safeToken(input.attemptId) || 'attempt'}`,
     'runtime-truth:computer-use-act-materializer/host-port-contract',
@@ -189,12 +189,16 @@ function attachDefaultBoundaryArtifacts(
   };
 }
 
-function isVSCodeEditorScopeAppModuleResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
+function isVSCodeEditorAppModulePublicResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
   return (result.executionUnits ?? []).some((unit) =>
     isRecord(unit)
       && unit.tool === 'computer-use.app-module-registry'
       && unit.moduleId === 'vscode'
-      && unit.operation === 'editor-scope'
+      && (
+        unit.operation === 'editor-scope'
+        || unit.operation === 'insert-draft'
+        || unit.operation === 'replace-selection'
+      )
   );
 }
 

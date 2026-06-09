@@ -8,6 +8,8 @@ const VSCODE_CAPABILITIES = [
   'read-visible-text',
   'editor-scope',
   'focus-editor',
+  'insert-draft',
+  'replace-selection',
   'show-problems',
   'read-diagnostics',
   'focus-terminal',
@@ -403,6 +405,9 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
       ]),
     });
   }
+  if (isEditorMutationOperation(operation)) {
+    return checkEditorMutationReadiness(operation, observation, normalizedOperationRef);
+  }
   if (isTerminalOperation(operation)) {
     return checkTerminalReadiness(operation, observation, normalizedOperationRef);
   }
@@ -413,51 +418,79 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
 }
 
 function checkEditorScopeReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const targetRefs = editorScopeTargetRefs(observation);
+  if (targetRefs.status !== 'ready') return targetRefs.readiness;
+  return observeReady(operation, operationRef, observation, targetRefs.refs);
+}
+
+function checkEditorMutationReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const targetRefs = editorScopeTargetRefs(observation);
+  if (targetRefs.status !== 'ready') return targetRefs.readiness;
+  if (observation.textRefRefs.length > 1) {
+    return needsConfirmation('needs-confirmation:vscode-app-module:target-text-ref-ambiguous', observation.textRefRefs);
+  }
+  const textRef = observation.textRefRefs[0];
+  if (!textRef) return blocked('blocked:vscode-app-module:text-ref-required', observation.refs);
+  return actReady(operation, operationRef, observation, [
+    ...targetRefs.refs,
+    textRef,
+  ], {
+    kind: 'type',
+    textRef,
+  });
+}
+
+function editorScopeTargetRefs(
+  observation: VSCodeAppObservation,
+): { status: 'ready'; refs: string[] } | { status: 'blocked'; readiness: ComputerUseAppModuleReadiness } {
   const editorRefs = editorTargetRefs(observation);
   if (editorRefs.length === 0) {
-    return blocked('blocked:vscode-app-module:editor-ref-required', observation.refs);
+    return { status: 'blocked', readiness: blocked('blocked:vscode-app-module:editor-ref-required', observation.refs) };
   }
   if (editorRefs.length > 1 || observation.editorGroupRefs.length > 1 || observation.activeEditorRefs.length > 1) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:target-editor-ambiguous', uniqueStrings([
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-editor-ambiguous', uniqueStrings([
       ...editorRefs,
       ...observation.editorGroupRefs,
       ...observation.activeEditorRefs,
-    ]));
+    ])) };
   }
   const commonGate = checkCommonObservationGate(observation);
-  if (commonGate) return commonGate;
+  if (commonGate) return { status: 'blocked', readiness: commonGate };
   const fileRefs = observation.selectedFileRefs.length > 0 ? observation.selectedFileRefs : observation.fileRefs;
   if (fileRefs.length === 0) {
-    return blocked('blocked:vscode-app-module:file-ref-required', observation.refs);
+    return { status: 'blocked', readiness: blocked('blocked:vscode-app-module:file-ref-required', observation.refs) };
   }
   if (fileRefs.length > 1) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:target-file-ambiguous', fileRefs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-file-ambiguous', fileRefs) };
   }
   if (observation.selectionRefs.length === 0) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:editor-scope-selection-required', observation.refs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:editor-scope-selection-required', observation.refs) };
   }
   if (observation.cursorRefs.length === 0) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:editor-scope-cursor-required', observation.refs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:editor-scope-cursor-required', observation.refs) };
   }
   if (observation.rangeRefs.length === 0) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:editor-scope-range-required', observation.refs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:editor-scope-range-required', observation.refs) };
   }
   if (observation.selectionRefs.length > 1) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:target-selection-ambiguous', observation.selectionRefs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-selection-ambiguous', observation.selectionRefs) };
   }
   if (observation.cursorRefs.length > 1) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:target-cursor-ambiguous', observation.cursorRefs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-cursor-ambiguous', observation.cursorRefs) };
   }
   if (observation.rangeRefs.length > 1) {
-    return needsConfirmation('needs-confirmation:vscode-app-module:target-range-ambiguous', observation.rangeRefs);
+    return { status: 'blocked', readiness: needsConfirmation('needs-confirmation:vscode-app-module:target-range-ambiguous', observation.rangeRefs) };
   }
-  return observeReady(operation, operationRef, observation, [
-    editorRefs[0],
-    fileRefs[0],
-    observation.selectionRefs[0],
-    observation.cursorRefs[0],
-    observation.rangeRefs[0],
-  ]);
+  return {
+    status: 'ready',
+    refs: [
+      editorRefs[0],
+      fileRefs[0],
+      observation.selectionRefs[0],
+      observation.cursorRefs[0],
+      observation.rangeRefs[0],
+    ],
+  };
 }
 
 function checkCommandPaletteReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
@@ -749,10 +782,16 @@ function isCommandPaletteOperation(operation: string): boolean {
     || operation === 'close-command-palette';
 }
 
+function isEditorMutationOperation(operation: string): boolean {
+  return operation === 'insert-draft'
+    || operation === 'replace-selection';
+}
+
 function isEditorOrTerminalTargetOperation(operation: string): boolean {
   return operation === 'read-visible-text'
     || operation === 'editor-scope'
     || operation === 'focus-editor'
+    || isEditorMutationOperation(operation)
     || isTerminalOperation(operation);
 }
 
