@@ -132,8 +132,8 @@ Scope-only：
 
 - [x] [P9.0 Unit] 旧 mutation / save ready path 红测：旧 `insert-draft`、`replace-selection`、`save-current-file`、undo / redo readiness 必须 blocked。
 - [x] [P9.0 Code] 删除旧 app-module editor mutation readiness；P9 未完成前 app-module 写入 readiness fail closed。
-- [ ] [P9.1 Unit] editor scope 红测：当前 selection / cursor / single range 缺失或不唯一时 `needs-confirmation`。
-- [ ] [P9.1 Code] 实现 scope readiness；只输出 editor / file / selection / cursor / range refs，不写入。
+- [x] [P9.1 Unit] editor scope 红测：当前 selection / cursor / single range 缺失或不唯一时 `needs-confirmation`。
+- [x] [P9.1 Code] 实现 scope readiness；只输出 editor / file / selection / cursor / range refs，不写入。
 - [ ] [P9.2 Materializer] Host materializer 只从 structured `editor-scope` operation ref 进入 scope readiness。
 - [ ] [P9.3 Static] scope public projection 不能泄漏 raw selected text、raw path、URL 或 provider payload。
 - [ ] [P9.4 Live Skip] env-gated scope diagnostic 默认关闭；无 env 时不构造 runner / adapter。

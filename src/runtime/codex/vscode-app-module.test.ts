@@ -24,6 +24,7 @@ interface VSCodeTestObservation {
   editorGroupRefs: string[];
   cursorRefs: string[];
   selectionRefs: string[];
+  rangeRefs: string[];
   visibleTextRefs: string[];
   workspaceRefs: string[];
   problemsPanelRefs: string[];
@@ -253,6 +254,7 @@ test('VSCode normalization maps editor workspace panel and selection concepts to
     'element:vscode:editor:monaco:1',
     'cursor-ref:vscode:main:1',
     'selection-ref:vscode:main:1',
+    'range-ref:vscode:main:1',
     'file-ref:vscode:current:paper',
     'element:vscode:problems:panel',
     'terminal:vscode:main',
@@ -265,6 +267,7 @@ test('VSCode normalization maps editor workspace panel and selection concepts to
   assert.deepEqual(observation.activeEditorRefs, ['active-editor:vscode:main:1']);
   assert.deepEqual(observation.cursorRefs, ['cursor-ref:vscode:main:1']);
   assert.deepEqual(observation.selectionRefs, ['selection-ref:vscode:main:1']);
+  assert.deepEqual(observation.rangeRefs, ['range-ref:vscode:main:1']);
   assert.deepEqual(observation.selectedFileRefs, ['file-ref:vscode:current:paper']);
   assert.deepEqual(observation.problemsPanelRefs, ['element:vscode:problems:panel']);
   assert.deepEqual(observation.terminalRefs, ['terminal:vscode:main']);
@@ -282,6 +285,7 @@ test('VSCode normalization maps editor workspace panel and selection concepts to
     'active-editor',
     'selection',
     'cursor',
+    'range',
     'terminal',
     'command-palette',
     'problems-panel',
@@ -777,6 +781,152 @@ test('same-file verifier blocks when before and after file refs drift', () => {
     'file-ref:vscode:current:paper',
     'verifier:vscode-app-module:same-file:file-ref-vscode-current-paper',
   ]);
+});
+
+test('editor scope readiness returns refs-only observe primitive for unique current scope refs', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'editor-scope',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:main',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'file-ref:vscode:current:paper',
+      'editor-group:vscode:main:1',
+      'active-editor:vscode:main:1',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:main:1',
+      'cursor-ref:vscode:main:1',
+      'range-ref:vscode:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'ready');
+  assert.equal(readiness.primitive.name, 'computer_use.observe');
+  assert.equal(Object.hasOwn(readiness.primitive, 'action'), false);
+  assert.deepEqual(readiness.primitive.inputRefs, [
+    'window-action-session:vscode:1',
+    'window:vscode:main',
+    'observation:vscode:main:1',
+    'element:vscode:editor:monaco:1',
+    'file-ref:vscode:current:paper',
+    'selection-ref:vscode:main:1',
+    'cursor-ref:vscode:main:1',
+    'range-ref:vscode:main:1',
+    'freshness:vscode:main:1',
+    'operation-ref:vscode:editor-scope:test',
+  ]);
+  assert.ok(readiness.evidenceRefs.includes('capability:vscode:editor-scope'));
+  assert.ok(readiness.evidenceRefs.includes('selection-ref:vscode:main:1'));
+  assert.ok(readiness.evidenceRefs.includes('cursor-ref:vscode:main:1'));
+  assert.ok(readiness.evidenceRefs.includes('range-ref:vscode:main:1'));
+  assert.doesNotMatch(JSON.stringify(readiness), /selected text|rawSelectedText|raw-|providerPayload|data:image|base64|\/Users\/|paper\.tex/i);
+});
+
+test('editor scope readiness needs confirmation when selection cursor or range refs are missing', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:main',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:main:1',
+    'cursor-ref:vscode:main:1',
+    'range-ref:vscode:main:1',
+  ];
+
+  for (const [missingPrefix, reasonRef] of [
+    ['selection-ref:vscode:', 'needs-confirmation:vscode-app-module:editor-scope-selection-required'],
+    ['cursor-ref:vscode:', 'needs-confirmation:vscode-app-module:editor-scope-cursor-required'],
+    ['range-ref:vscode:', 'needs-confirmation:vscode-app-module:editor-scope-range-required'],
+  ] as const) {
+    const readiness = vscode.checkReadiness({
+      operation: 'editor-scope',
+      refs: baseRefs.filter((ref) => !ref.startsWith(missingPrefix)),
+    });
+
+    assert.equal(readiness.status, 'needs-confirmation', missingPrefix);
+    assert.equal(readiness.reasonRef, reasonRef, missingPrefix);
+    assert.doesNotMatch(JSON.stringify(readiness), /selected text|rawSelectedText|providerPayload|base64|\/Users\//i);
+  }
+});
+
+test('editor scope readiness needs confirmation when selection cursor or range refs are not unique', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:main',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:main:1',
+    'cursor-ref:vscode:main:1',
+    'range-ref:vscode:main:1',
+  ];
+
+  for (const [extraRef, reasonRef] of [
+    ['selection-ref:vscode:main:2', 'needs-confirmation:vscode-app-module:target-selection-ambiguous'],
+    ['cursor-ref:vscode:main:2', 'needs-confirmation:vscode-app-module:target-cursor-ambiguous'],
+    ['range-ref:vscode:main:2', 'needs-confirmation:vscode-app-module:target-range-ambiguous'],
+  ] as const) {
+    const readiness = vscode.checkReadiness({
+      operation: 'editor-scope',
+      refs: [...baseRefs, extraRef],
+    });
+
+    assert.equal(readiness.status, 'needs-confirmation', extraRef);
+    assert.equal(readiness.reasonRef, reasonRef, extraRef);
+    assert.ok(readiness.evidenceRefs.includes(extraRef));
+    assert.doesNotMatch(JSON.stringify(readiness), /selected text|rawSelectedText|providerPayload|base64|\/Users\//i);
+  }
+});
+
+test('editor scope readiness rejects payload-shaped selection cursor and range refs', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:main',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:main:1',
+    'cursor-ref:vscode:main:1',
+    'range-ref:vscode:main:1',
+  ];
+
+  for (const unsafeRef of [
+    'selection-ref:vscode:selected-token',
+    'cursor-ref:vscode:path-token',
+    'range-ref:vscode:provider-token',
+    'range-ref:vscode:diff-token',
+  ]) {
+    const readiness = vscode.checkReadiness({
+      operation: 'editor-scope',
+      refs: [...baseRefs, unsafeRef],
+    });
+
+    assert.equal(readiness.status, 'blocked', unsafeRef);
+    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:unsafe-editor-scope-ref-not-allowed', unsafeRef);
+    assert.doesNotMatch(JSON.stringify(readiness), /selected text|rawSelectedText|providerPayload|base64|\/Users\//i);
+  }
 });
 
 test('editor mutation operations fail closed until P9 scope and preview are implemented', () => {
