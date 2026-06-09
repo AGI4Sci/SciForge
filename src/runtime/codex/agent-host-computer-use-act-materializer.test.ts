@@ -718,6 +718,92 @@ test('default Computer Use Act materializer returns VSCode preview artifact refs
   assert.doesNotMatch(JSON.stringify(inferred), /vscode-editor-preview-provider|artifact-preview|preview-current-selection.*completed|Generic WindowAction planner/i);
 });
 
+test('default Computer Use Act materializer routes explicit VSCode narrow apply to one primitive candidate', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer VSCode narrow apply operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-apply-fallback'],
+        };
+      },
+    },
+  });
+  const scopeRefs = [
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'text:vscode:visible:private-selected-text',
+    'observation:vscode:paper:before',
+    'window:vscode:paper',
+    'terminal-output:vscode:paper:current',
+    'history:vscode:previous-run',
+    'action:vscode:previous:completed',
+  ];
+
+  const structured = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('apply-current-selection', scopeRefs, {
+      primitiveOperation: 'replace-selection',
+      draftTextRef: 'text-ref:vscode-draft:unit-apply-current-selection',
+    }),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: 'Apply the polished current selection from /Users/example/private-paper.md; this text must not decide apply.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-apply-current-selection',
+    attemptId: 'unit-apply-current-selection',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(structured?.status, 'completed', structured?.message);
+  assert.equal(structured?.claimType, 'vscode-editor-narrow-apply-primitive-candidate');
+  assert.equal(structured?.completionTruth, undefined);
+  assert.ok(structured?.evidenceRefs.includes('selection-ref:vscode:paper:1'));
+  assert.ok(structured?.evidenceRefs.includes('cursor-ref:vscode:paper:1'));
+  assert.ok(structured?.evidenceRefs.includes('range-ref:vscode:paper:1'));
+  assert.ok(structured?.evidenceRefs.includes('text-ref:vscode-draft:unit-apply-current-selection'));
+  assert.ok(structured?.executionUnits?.some((unit) =>
+    unit.tool === 'vscode-editor-narrow-apply-provider'
+      && unit.operation === 'apply-current-selection'
+      && unit.primitiveOperation === 'replace-selection'
+      && unit.primitive === 'computer_use.act'
+      && unit.status === 'candidate'
+  ));
+  assert.ok(structured?.artifacts?.some((artifact) =>
+    artifact.type === 'vscode-editor-narrow-apply'
+      && (artifact.data as Record<string, unknown> | undefined)?.primitiveCount === 1
+      && (artifact.data as Record<string, unknown> | undefined)?.computerUseCorePlanning === false
+  ));
+  const serialized = JSON.stringify(structured);
+  assert.match(serialized, /verifier:vscode-editor-narrow-apply:unit-apply-current-selection:one-primitive/);
+  assert.doesNotMatch(serialized, /private-selected-text|text:vscode:visible|operation-ref:|observation:vscode|window:vscode|terminal-output:vscode|history:vscode|previous:completed|Apply the polished|private-paper|\/Users\/|rawSelectedText|selectedText|rawDiff|@@|providerPayload|data:image|base64|https?:\/\/|Generic WindowAction planner|completionTruth|taskOutcome":"satisfied/i);
+
+  const inferred = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined, [
+      ...scopeRefs,
+      'text-ref:vscode-draft:unit-apply-current-selection',
+    ]),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: '应用当前选区的润色结果',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-apply-no-operation',
+    attemptId: 'unit-apply-no-operation',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(inferred?.status, 'blocked');
+  assert.equal(inferred?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(inferred?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.doesNotMatch(JSON.stringify(inferred), /vscode-editor-narrow-apply-provider|"operation":"apply-current-selection"|Generic WindowAction planner|private-selected-text|text:vscode:visible|\/Users\/|providerPayload|base64/i);
+});
+
 test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
   const runtimeTruth = vscodeAppModuleRuntimeTruth();
   runtimeTruth.observation = {

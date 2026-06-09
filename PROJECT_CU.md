@@ -91,6 +91,7 @@ SciForge UI
 - [x] P9.7-P9.12：Preview No-write 已闭合；Host-owned preview provider 只生成 draft / preview / diff artifact refs 和 refs-only verifier ref，materializer 只从 structured `preview-current-selection` operation + current scope refs 进入，ordinary chat / selected text / terminal output / history / completed action 不触发；env-gated mocked diagnostic 跑 `bind -> observe -> host-decision -> control(release)`，不写 VSCode、不写用户文件、不宣称 `product-ready`。
 - [x] P9.13-P9.15：Scratch Mutation unit path 已闭合；`insert-draft` / `replace-selection` 只从 structured Host operation refs、current scope refs 和 Host `text-ref:` 生成单个 `computer_use.act` primitive candidate；public projection 只保留 scope / text-ref / verifier refs；mutation verifier 要求 action evidence、same-file、same-window、same-editor、same-selection 和 after-observe refs，漂移 blocked-safe。
 - [x] P9.16-P9.18：Scratch Mutation live skip / mocked diagnostic 已闭合；独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC=1` gate 默认 blocked，generic live env 不能解锁 scratch writer；env-on mock 只允许非用户 scratch buffer，跑 `bind -> observe -> host-decision -> act -> observe -> control(release)`，验证 mutation verifier 与 cleanup refs，不写用户文件、不宣称 `product-ready`。
+- [x] P9.19-P9.20：Narrow Apply unit path 已闭合；`apply-current-selection` 是 Host-owned bridge，不是 VSCode module capability，只能从 structured Host operation + current scope refs + Host `text-ref:` 映射为一个 `replace-selection` / `insert-draft` primitive candidate；apply verifier 要求 same-file、same-window、same-editor、same-selection、after-observe、release 与 cleanup refs，不能把 Computer Use `completed` 当作用户任务完成。
 
 ## 当前执行路线
 
@@ -98,7 +99,7 @@ SciForge UI
 
 目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation 已闭合。下一步进入 P9-D Narrow Apply / Save / Batch 的 unit path；不要跳到真实桌面用户文件 apply。
+当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation，以及 P9-D 的 Narrow Apply / Apply Verification unit bridge 已闭合。下一步进入 `save-current-file` 与 batch / cross-file decomposition unit path；不要跳到真实桌面用户文件 apply。
 
 #### P9-A：Scope Projection 与 Diagnostic
 
@@ -134,10 +135,10 @@ SciForge UI
 
 #### P9-D：Narrow Apply / Save / Batch
 
-- [ ] [P9.19 Unit] narrow apply 红测：明确 apply 时只能生成一个 `replace-selection` 或 `insert-draft` primitive candidate。
-- [ ] [P9.19 Code] 实现 narrow apply Host bridge：严格拆成 `observe -> one primitive -> observe`。
-- [ ] [P9.20 Unit] apply verification 红测：apply 后必须有 same-file、mutation、after-observe、release 和 cleanup refs。
-- [ ] [P9.20 Code] 实现 apply verification projection；不从 Computer Use `completed` 推断用户任务完成。
+- [x] [P9.19 Unit] narrow apply 红测：明确 apply 时只能生成一个 `replace-selection` 或 `insert-draft` primitive candidate。
+- [x] [P9.19 Code] 实现 narrow apply Host bridge：严格拆成 `observe -> one primitive -> observe`。
+- [x] [P9.20 Unit] apply verification 红测：apply 后必须有 same-file、mutation、after-observe、release 和 cleanup refs。
+- [x] [P9.20 Code] 实现 apply verification projection；不从 Computer Use `completed` 推断用户任务完成。
 - [ ] [P9.21 Unit] `save-current-file` 红测：需要 same-file、mutation、current editor refs 和 Host decision/action evidence。
 - [ ] [P9.21 Code] 实现 `save-current-file` readiness；full-access 文件操作不走类别式 confirmation gate。
 - [ ] [P9.22 Unit] batch / cross-file 红测：批量或跨文件修改必须由 Host 分解为多次 single primitive，不生成单个 Computer Use task。
@@ -150,7 +151,7 @@ SciForge UI
 验收：
 
 - [ ] “润色当前选区”先返回 diff preview，不写文件。
-- [ ] 明确应用当前选区会生成一个 `replace-selection` primitive candidate。
+- [x] 明确应用当前选区会生成一个 `replace-selection` primitive candidate。
 - [ ] 保存、批量、跨文件修改不触发类别式 confirmation gate，但必须由 Host 基于 current refs 拆成多次单步 primitive。
 - [ ] 多章节、全文、跨文件修改不会变成单个 Computer Use task。
 - [ ] public events 不泄漏 raw selected text、raw path、raw command、raw diff 或 provider payload。

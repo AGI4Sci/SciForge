@@ -231,7 +231,7 @@ readiness validator 必须拒绝 top-level 或 nested action payload 中的 fina
 - P6：VSCode ambiguity 与 read-only diagnostic，先证明不猜测和只读诊断。
 - P7：VSCode terminal 原子能力，focus / send / observe / submit 分离。
 - P8：VSCode command palette 原子能力，按 fail-closed -> concept refs -> open -> query -> observe -> mocked select -> verify 递进；真实桌面 live 先只做 open / query / observe / close。
-- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；P9.2 已证明 Host materializer 只从 structured `editor-scope` operation 进入 scope readiness，ordinary chat / commandText / terminal output / history / completed action 不触发；P9.3-P9.6 已闭合 scope public projection、env-gated skip、mocked scope diagnostic 与 focused verify；P9.7-P9.12 已闭合 Preview No-write provider / materializer / public projection / env-gated mocked diagnostic；P9.13-P9.18 已闭合 Scratch Mutation unit/materializer/verifier、independent live skip、mocked scratch diagnostic 与 focused verify，后续进入 P9-D narrow apply unit path。
+- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；P9.2 已证明 Host materializer 只从 structured `editor-scope` operation 进入 scope readiness，ordinary chat / commandText / terminal output / history / completed action 不触发；P9.3-P9.6 已闭合 scope public projection、env-gated skip、mocked scope diagnostic 与 focused verify；P9.7-P9.12 已闭合 Preview No-write provider / materializer / public projection / env-gated mocked diagnostic；P9.13-P9.18 已闭合 Scratch Mutation unit/materializer/verifier、independent live skip、mocked scratch diagnostic 与 focused verify；P9.19-P9.20 已闭合 Host-owned Narrow Apply unit bridge 与 apply verifier projection，后续进入 save / batch decomposition unit path。
 
 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
@@ -334,6 +334,23 @@ editor-scope
 ```
 
 mutation verifier 至少要证明 action evidence、same-file、same-window、same-editor、same-selection 和 after-observe。窗口、文件、editor、selection 或 observation 漂移时必须 blocked-safe；证据足够即可，不要求每次都用视觉验证。
+
+Narrow Apply 是 Host-owned bridge，不是 VSCode module capability。Host 在 preview 之后明确发出 structured `apply-current-selection` operation，并指定一个已存在的原子写入 operation：`replace-selection` 或 `insert-draft`。bridge 只调用 VSCode module 的原子 readiness，最多返回一个 `computer_use.act` primitive candidate；它不读取 raw selected text、不解析 raw diff、不保存文件、不批量处理、不判断用户任务完成。
+
+Narrow Apply 必须分步：
+
+```text
+editor-scope
+  -> preview artifact refs
+  -> Host apply decision + text-ref
+  -> apply-current-selection bridge
+  -> exactly one replace-selection 或 insert-draft candidate
+  -> computer_use.act
+  -> observe
+  -> Host-owned apply verifier
+```
+
+apply verifier 必须要求 same-file、same-window、same-editor、same-selection、after-observe、release 和 cleanup refs。`computer_use.act.status=completed`、历史 action completed、terminal output、provider payload 或 `run_procedure.status=completed` 都不能替代这些 refs，也不能升级为用户级 final answer 或 workflow completion truth。
 
 ### v1 Readiness Gate
 
@@ -439,9 +456,10 @@ Computer Use primitive 默认不调用模型。
 - P9.10-P9.12 preview mocked diagnostic 是 env-gated `live-diagnostic`：使用独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC=1` gate；缺少 env 时 blocked，不构造 primitive service、runner、writer、adapter、input lease 或 cursor。env-on mock 跑 `bind -> observe -> host-decision -> control(release)`，Host 根据 current observe refs 调 `editor-scope` readiness 后生成 preview artifact refs；不执行 act、不写 VSCode、不写用户文件、不泄漏 raw selected text / raw diff / provider payload，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
 - P9.13-P9.15 scratch mutation unit path 是 `unit/materializer-proven`：`insert-draft` / `replace-selection` 只从 structured Host operation refs、current editor / selected file / selection / cursor / range refs 和 Host `text-ref:` 生成单个 `computer_use.act` primitive candidate；ordinary chat、`commandText`、selected text、terminal output、history、completed action、raw mutation text 或 raw selection payload 不能触发。Host public projection 只保留 scope / `text-ref:` / verifier / reason refs；mutation verifier 要求 action evidence、same-file、same-window、same-editor、same-selection 和 after-observe refs，漂移 blocked-safe。
 - P9.16-P9.18 scratch mutation diagnostic 是 env-gated `live-diagnostic`：使用独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC=1` gate；缺少该 env 时 blocked，即使 generic VSCode live env 已开启也不构造 primitive service、runner、writer、adapter、input lease 或 cursor。env-on mock 只接受 `non-user-file-scope:vscode:*` 与 scratch file refs，跑 `bind -> observe -> host-decision -> act -> observe -> control(release)`；Host 根据 current observe refs 调 `insert-draft` / `replace-selection` readiness，再用 Host-owned mutation verifier 证明 same-file、same-window、same-editor、same-selection 和 after-observe refs。public result 只保留 scratch scope、`text-ref:`、non-user-file-scope、verifier、reason 和 cleanup refs；raw draft、raw selection、visible text、image/accessibility refs、window/observation refs、action/executor/input-event refs、provider payload、base64 和 `product-ready` claim 均被 runtime allowlist 与 no-bypass guard 拒绝。
+- P9.19-P9.20 narrow apply unit path 是 `unit/materializer-proven`：默认 materializer 只从 structured `apply-current-selection` Host operation 进入 Host-owned narrow apply provider；`apply-current-selection` 不在 VSCode module capability catalog 中。provider 只把 Host 决策映射到一个 `replace-selection` / `insert-draft` primitive candidate，public result 只保留 scope refs、`text-ref:`、verifier 和 reason refs；operation-required blocked projection 也按 VSCode editor scope allowlist 收窄，默认 boundary artifact 不会重新引入 raw selected text、raw diff、raw path、provider payload、terminal output、history、completed action 或宽 preflight refs。apply verifier projection 要求 mutation verifier、after-observe、release 与 cleanup refs，不能从 Computer Use `completed` 推断用户任务完成。
 - 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
-- Narrow apply unit path、save / batch decomposition 和 narrow apply diagnostic 仍待实现。
+- Save / batch decomposition 和 narrow apply diagnostic 仍待实现。
 
 ## 旧路径清理口径
 

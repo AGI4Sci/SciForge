@@ -20,6 +20,9 @@ import {
 import {
   createDefaultVSCodeEditorPreviewMaterializer,
 } from './agent-host-vscode-editor-preview-materializer.js';
+import {
+  createDefaultVSCodeEditorNarrowApplyMaterializer,
+} from './agent-host-vscode-editor-narrow-apply-materializer.js';
 import type {
   CodexAgentHostComputerUseActMaterializer,
   CodexAgentHostComputerUseActMaterializerInput,
@@ -40,6 +43,7 @@ export function createDefaultComputerUseActMaterializer(options: {
   const appModule = createDefaultComputerUseAppModuleMaterializer({
     modules: options.appModules,
   });
+  const vscodeEditorNarrowApply = createDefaultVSCodeEditorNarrowApplyMaterializer();
   const vscodeEditorPreview = createDefaultVSCodeEditorPreviewMaterializer();
   const browser = createDefaultBrowserHostComputerUseActMaterializer({
     ...options.browser,
@@ -53,6 +57,8 @@ export function createDefaultComputerUseActMaterializer(options: {
   const hostPortContract = materializerHostPortContract(options.hostPortContract);
   const singleStep: CodexAgentHostComputerUseActMaterializer = async (input) => {
     const normalizedInput = normalizePlannerObjectiveInput(input);
+    const applyResult = await vscodeEditorNarrowApply(normalizedInput);
+    if (applyResult) return applyResult;
     const previewResult = await vscodeEditorPreview(normalizedInput);
     if (previewResult) return previewResult;
     const appModuleResult = await appModule(normalizedInput);
@@ -163,7 +169,11 @@ function attachDefaultBoundaryArtifacts(
   hostPortContract: ComputerUseActMaterializerHostPortContract,
 ): CodexAgentHostComputerUseActMaterializerResult | undefined {
   if (!result) return undefined;
-  if (isVSCodeEditorAppModulePublicResult(result) || isVSCodeEditorPreviewResult(result)) return result;
+  if (
+    isVSCodeEditorAppModulePublicResult(result)
+    || isVSCodeEditorPreviewResult(result)
+    || isVSCodeEditorNarrowApplyResult(result)
+  ) return result;
   const boundaryRefs = runtimeOwnedRefs([
     `runtime-truth:computer-use-act-materializer/preflight/${safeToken(input.commandId) || 'command'}/${safeToken(input.attemptId) || 'attempt'}`,
     'runtime-truth:computer-use-act-materializer/host-port-contract',
@@ -193,13 +203,30 @@ function isVSCodeEditorAppModulePublicResult(result: CodexAgentHostComputerUseAc
   return (result.executionUnits ?? []).some((unit) =>
     isRecord(unit)
       && unit.tool === 'computer-use.app-module-registry'
-      && unit.moduleId === 'vscode'
       && (
-        unit.operation === 'editor-scope'
-        || unit.operation === 'insert-draft'
-        || unit.operation === 'replace-selection'
+        (
+          unit.moduleId === 'vscode'
+          && (
+            unit.operation === 'editor-scope'
+            || unit.operation === 'insert-draft'
+            || unit.operation === 'replace-selection'
+          )
+        )
+        || (
+          unit.operation === 'operation-required'
+          && result.evidenceRefs.some(isVSCodeEditorPublicEvidenceRef)
+        )
       )
   );
+}
+
+function isVSCodeEditorPublicEvidenceRef(ref: string): boolean {
+  return ref.startsWith('element:vscode:editor:')
+    || ref.startsWith('element:vscode:monaco:')
+    || ref.startsWith('focused-editor:vscode:')
+    || ref.startsWith('selection-ref:vscode:')
+    || ref.startsWith('cursor-ref:vscode:')
+    || ref.startsWith('range-ref:vscode:');
 }
 
 function isVSCodeEditorPreviewResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
@@ -207,6 +234,14 @@ function isVSCodeEditorPreviewResult(result: CodexAgentHostComputerUseActMateria
     isRecord(unit)
       && unit.tool === 'vscode-editor-preview-provider'
       && unit.operation === 'preview-current-selection'
+  );
+}
+
+function isVSCodeEditorNarrowApplyResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
+  return (result.executionUnits ?? []).some((unit) =>
+    isRecord(unit)
+      && unit.tool === 'vscode-editor-narrow-apply-provider'
+      && unit.operation === 'apply-current-selection'
   );
 }
 

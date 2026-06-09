@@ -1089,6 +1089,7 @@ test('editor mutation operations outside P9-C fail closed until separately imple
   ];
 
   for (const operation of [
+    'apply-current-selection',
     'move-cursor',
     'save-current-file',
     'undo-last-action',

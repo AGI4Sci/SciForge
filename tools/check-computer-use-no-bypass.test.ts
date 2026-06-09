@@ -329,6 +329,36 @@ test('Computer Use no-bypass guard blocks preview operation inference from selec
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
 });
 
+test('Computer Use no-bypass guard blocks narrow apply save or batch inference from raw fields and completed actions', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    'export function inferApplyOperation(input: Record<string, unknown>) {',
+    '  const rawSelectedText = String(input.rawSelectedText ?? "");',
+    '  const rawSelection = String(input.rawSelection ?? "");',
+    '  const rawPath = String(input.rawPath ?? "");',
+    '  const rawDiff = String(input.rawDiff ?? "");',
+    '  const providerPayload = String(input.providerPayload ?? "");',
+    '  const stdout = String(input.stdout ?? "");',
+    '  const stderr = String(input.stderr ?? "");',
+    '  const actionResult = String(input.actionResult ?? "");',
+    '  const completedAction = String(input.completedAction ?? "");',
+    '  const completionTruth = String(input.completionTruth ?? "");',
+    '  const taskOutcome = String(input.taskOutcome ?? "");',
+    '  if ([rawSelectedText, rawSelection, rawPath, rawDiff, providerPayload, stdout, stderr, actionResult, completedAction, completionTruth, taskOutcome].some((value) => value.includes("apply"))) {',
+    "    return { operation: 'apply-current-selection', primitiveOperation: 'replace-selection' };",
+    '  }',
+    "  if (rawPath.includes('save')) return { operation: 'save-current-file' };",
+    "  if (rawDiff.includes('bulk')) return { operation: 'bulk-replace' };",
+    "  return { operation: 'cross-file-modify' };",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
 test('Computer Use no-bypass guard blocks command palette operation inference from labels or commandText', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
@@ -551,6 +581,24 @@ test('Computer Use no-bypass guard blocks raw editor mutation text and selection
     '  return sanitizePublicEvent({',
     "    type: 'computer-use-app-module-readiness',",
     "    data: { insertText: 'SECRET_INSERT', replacementText: 'SECRET_REPLACEMENT', rawSelection: 'SECRET_SELECTION', selectedRange: '1:5' },",
+    '  });',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard blocks raw narrow apply public payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-vscode-editor-narrow-apply-materializer.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    'export function applyArtifact() {',
+    '  return sanitizePublicEvent({',
+    "    type: 'vscode-editor-narrow-apply',",
+    "    data: { rawSelectedText: 'SECRET_SELECTED', rawPath: '/Users/example/private.md', rawDiff: '@@ SECRET_DIFF', providerPayload: { requestBody: 'SECRET_PROVIDER' }, stdout: 'SECRET_STDOUT', completedAction: 'typed secret' },",
     '  });',
     '}',
   ].join('\n'));

@@ -60,8 +60,8 @@ function normalizeVSCodeVerifierObservation(refs: string[]): VSCodeVerifierObser
 }
 
 export function verifyVSCodeSameFileEvidence(input: { beforeRefs: string[]; afterRefs: string[] }): VSCodeAppVerifierResult {
-  const beforeFiles = uniqueStrings(input.beforeRefs.filter((ref) => ref.startsWith('file-ref:vscode:')));
-  const afterFiles = uniqueStrings(input.afterRefs.filter((ref) => ref.startsWith('file-ref:vscode:')));
+  const beforeFiles = uniqueStrings(input.beforeRefs.filter(isVSCodeFileVerifierRef));
+  const afterFiles = uniqueStrings(input.afterRefs.filter(isVSCodeFileVerifierRef));
   if (beforeFiles.length !== 1 || afterFiles.length !== 1) {
     return verifierBlocked('blocked:vscode-app-module:single-file-ref-required', uniqueStrings([...beforeFiles, ...afterFiles]));
   }
@@ -200,6 +200,11 @@ function isVSCodeEditorVerifierRef(ref: string): boolean {
     || ref.startsWith('element:vscode:monaco:')
     || ref.startsWith('focused-editor:vscode:')
     || ref.startsWith('active-editor:vscode:');
+}
+
+function isVSCodeFileVerifierRef(ref: string): boolean {
+  return ref.startsWith('file-ref:vscode:')
+    || ref.startsWith('selected-file:vscode:');
 }
 
 function verifierBlocked(reasonRef: string, evidenceRefs: string[] = []): VSCodeAppVerifierResult {

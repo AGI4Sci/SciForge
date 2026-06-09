@@ -334,7 +334,9 @@ function publicAppModuleEvidenceRefs(
   },
 ): string[] {
   const safeRefs = appModuleEvidenceRefs(refs);
-  return isVSCodeEditorPublicProjection(context) ? editorScopePublicEvidenceRefs(safeRefs) : safeRefs;
+  return isVSCodeEditorPublicProjection(context) || isVSCodeEditorOperationRequiredProjection(context, safeRefs)
+    ? editorScopePublicEvidenceRefs(safeRefs)
+    : safeRefs;
 }
 
 function isVSCodeEditorPublicProjection(context: {
@@ -345,6 +347,28 @@ function isVSCodeEditorPublicProjection(context: {
     context.operation === 'editor-scope'
       || context.operation === 'insert-draft'
       || context.operation === 'replace-selection'
+  );
+}
+
+function isVSCodeEditorOperationRequiredProjection(
+  context: {
+    operation: string;
+    moduleId: string | undefined;
+  },
+  refs: string[],
+): boolean {
+  if (context.operation !== 'operation-required') return false;
+  return refs.some((ref) =>
+    ref === 'macos-app:vscode'
+      || ref.startsWith('process:vscode')
+      || ref.startsWith('window:vscode:')
+  ) && refs.some((ref) =>
+    ref.startsWith('element:vscode:editor:')
+      || ref.startsWith('element:vscode:monaco:')
+      || ref.startsWith('focused-editor:vscode:')
+      || ref.startsWith('selection-ref:vscode:')
+      || ref.startsWith('cursor-ref:vscode:')
+      || ref.startsWith('range-ref:vscode:')
   );
 }
 
@@ -366,6 +390,8 @@ function safeEditorScopePublicRef(value: string): boolean {
       || ref.startsWith('text-ref:')
       || ref.startsWith('freshness:vscode:')
       || ref.startsWith('stale-invalidation:vscode:')
+      || ref.startsWith('blocked:computer-use-app-module:')
+      || ref.startsWith('needs-confirmation:computer-use-app-module:')
       || ref.startsWith('blocked:vscode-app-module:')
       || ref.startsWith('needs-confirmation:vscode-app-module:')
   );
