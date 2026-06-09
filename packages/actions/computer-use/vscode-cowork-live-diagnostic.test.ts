@@ -119,6 +119,9 @@ test('current VSCode co-work primitive ports bind current window, observe refs, 
           frontmostRef: 'frontmost:vscode:paper',
           fileRefs: ['file-ref:vscode:paper'],
           editorElementRef: 'element:vscode:editor',
+          selectionRef: 'selection-ref:vscode:paper:current',
+          cursorRef: 'cursor-ref:vscode:paper:current',
+          rangeRef: 'range-ref:vscode:paper:current',
           visibleTextRef: 'text:vscode:visible',
           visibleTextSha256Ref: 'text:vscode:visible-sha256',
           screenshotRef: 'image:vscode:current',
@@ -183,6 +186,9 @@ test('current VSCode co-work primitive ports bind current window, observe refs, 
   assert.ok(refs.includes('window:vscode:paper'));
   assert.ok(refs.includes('file-ref:vscode:paper'));
   assert.ok(refs.includes('element:vscode:editor'));
+  assert.ok(refs.includes('selection-ref:vscode:paper:current'));
+  assert.ok(refs.includes('cursor-ref:vscode:paper:current'));
+  assert.ok(refs.includes('range-ref:vscode:paper:current'));
   assert.ok(refs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode'));
   assert.ok(refs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode'));
   assert.ok(refs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode'));
@@ -194,7 +200,7 @@ test('current VSCode co-work primitive ports bind current window, observe refs, 
     'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode',
     'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode',
   ]);
-  assert.doesNotMatch(JSON.stringify({ bind, observe, control }), /raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+  assert.doesNotMatch(JSON.stringify({ bind, observe, control }), /raw-|providerPayload|base64|kill-vscode|clear-profile|selected text|PROJECT_CU|Visual Studio Code/i);
 });
 
 test('current VSCode co-work primitive ports execute refs-first type action and return action evidence refs', async () => {

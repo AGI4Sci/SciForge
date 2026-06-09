@@ -47,6 +47,9 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   fileRefs: string[];
   editorElementRef: string;
   focusedEditorRef?: string;
+  selectionRef?: string;
+  cursorRef?: string;
+  rangeRef?: string;
   terminalElementRef?: string;
   terminalSessionRef?: string;
   terminalInputRef?: string;
@@ -793,6 +796,9 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     ...observed.fileRefs,
     observed.editorElementRef,
     observed.focusedEditorRef,
+    observed.selectionRef,
+    observed.cursorRef,
+    observed.rangeRef,
     observed.terminalElementRef,
     observed.terminalSessionRef,
     observed.terminalInputRef,
