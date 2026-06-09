@@ -561,6 +561,26 @@ test('Computer Use no-bypass guard blocks raw editor mutation text and selection
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
 });
 
+test('Computer Use no-bypass guard blocks raw scratch mutation live diagnostic payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-vscode-cowork-current-live-diagnostic.ts', [
+    'export function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic() {',
+    '  return {',
+    "    status: 'completed',",
+    "    maturity: 'live-diagnostic',",
+    '    productReady: false,',
+    "    evidenceRefs: ['file-ref:vscode:scratch:unit'],",
+    "    data: { draftText: 'SECRET_DRAFT', providerPayload: { rawSelection: 'SECRET_SELECTION' } },",
+    '  };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
 test('Computer Use no-bypass guard allows unsafe pattern definitions while blocking raw payload emission', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [

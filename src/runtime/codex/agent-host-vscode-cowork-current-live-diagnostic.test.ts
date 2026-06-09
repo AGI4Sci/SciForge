@@ -5,12 +5,14 @@ import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
   runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
   runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic,
+  runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic,
   runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic,
   runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
@@ -265,6 +267,59 @@ test('current VSCode co-work editor preview diagnostic is independently env-gate
   assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV}`));
   assert.deepEqual(liveCalls, []);
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic is independently env-gated and does not touch ports by default', async () => {
+  const liveCalls: string[] = [];
+  const input = {
+    runId: 'unit-current-vscode-scratch-default-off',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('scratch mutation live port should not run without env');
+    },
+    performAction: async () => {
+      liveCalls.push('perform-action');
+      throw new Error('scratch mutation action should not run without env');
+    },
+    resolveTextRef: async () => {
+      liveCalls.push('resolve-text');
+      throw new Error('scratch mutation text resolver should not run without env');
+    },
+    typeResolvedText: async () => {
+      liveCalls.push('type-text');
+      throw new Error('scratch mutation writer should not run without env');
+    },
+    restoreFocus: async () => {
+      liveCalls.push('restore-focus');
+    },
+    restoreMouse: async () => {
+      liveCalls.push('restore-mouse');
+    },
+  };
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    ...input,
+    env: {},
+  });
+  const genericOnly = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    ...input,
+    runId: 'unit-current-vscode-scratch-generic-only',
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+  });
+
+  for (const blocked of [result, genericOnly]) {
+    assert.equal(blocked.status, 'blocked');
+    assert.equal(blocked.maturity, 'live-diagnostic');
+    assert.equal(blocked.productReady, false);
+    assert.deepEqual(blocked.primitiveChainObserved, []);
+    assert.deepEqual(blocked.evidenceRefs, []);
+    assert.deepEqual(blocked.cleanupRefs, []);
+    assert.match(blocked.message, new RegExp(`missing-env:${VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV}`));
+  }
+  assert.deepEqual(liveCalls, []);
+  assert.doesNotMatch(JSON.stringify([result, genericOnly]), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
 });
 
 test('current VSCode co-work editor scope diagnostic mocks observe scope and releases', async () => {
@@ -537,6 +592,169 @@ test('current VSCode co-work editor preview diagnostic mocks current selection p
   ]);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /perform-action|text:vscode:preview|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|@@|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|replace-selection|insert-draft/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic mocks non-user scratch mutation verifies after observe and releases', async () => {
+  const calls: string[] = [];
+  const scratchObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:scratch',
+    windowRef: 'window:vscode:scratch',
+    titleRef: 'text:title:scratch',
+    frontmostRef: 'frontmost:vscode:scratch',
+    fileRefs: [
+      'file-ref:vscode:scratch:buffer',
+      'non-user-file-scope:vscode:scratch:buffer',
+    ],
+    editorElementRef: 'element:vscode:editor:scratch',
+    focusedEditorRef: 'focused-editor:vscode:scratch',
+    selectionRef: 'selection-ref:vscode:scratch:current',
+    cursorRef: 'cursor-ref:vscode:scratch:current',
+    rangeRef: 'range-ref:vscode:scratch:current',
+    visibleTextRef: `text:vscode:scratch-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:scratch-${suffix}-sha256`,
+    screenshotRef: `image:vscode:scratch-${suffix}`,
+    accessibilityRef: `accessibility:vscode:scratch-${suffix}`,
+    freshnessRef: `freshness:vscode:scratch-${suffix}`,
+    observationRef: `observation:vscode:scratch-${suffix}`,
+  });
+  const observations = [
+    scratchObservation('bind'),
+    scratchObservation('before'),
+    scratchObservation('act-after'),
+    scratchObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-scratch-mock',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:scratch-draft'
+        ? 'scratch draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'control(release)',
+  ]);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:scratch-draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:scratch-draft:observation:vscode:scratch-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-scratch-mock',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-scratch-mock',
+  ]);
+  assert.ok(result.evidenceRefs.includes('file-ref:vscode:scratch:buffer'));
+  assert.ok(result.evidenceRefs.includes('non-user-file-scope:vscode:scratch:buffer'));
+  assert.ok(result.evidenceRefs.includes('selection-ref:vscode:scratch:current'));
+  assert.ok(result.evidenceRefs.includes('cursor-ref:vscode:scratch:current'));
+  assert.ok(result.evidenceRefs.includes('range-ref:vscode:scratch:current'));
+  assert.ok(result.evidenceRefs.includes('text-ref:current-vscode-cowork:scratch-draft'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:mutation:file-ref-vscode-scratch-buffer'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-window:window-vscode-scratch'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-editor:element-vscode-editor-scratch'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-selection:selection-ref-vscode-scratch-current'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:after-observe:observation-vscode-scratch-after'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-scratch-mock'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-scratch-mock'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-scratch-mock'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-scratch-mock'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-scratch-mock'));
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /scratch draft body|hidden from evidence|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|text:vscode:scratch|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic blocks user-file targets before typing and still releases', async () => {
+  const calls: string[] = [];
+  const userFileObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:user-file',
+    windowRef: 'window:vscode:user-file',
+    titleRef: 'text:title:user-file',
+    frontmostRef: 'frontmost:vscode:user-file',
+    fileRefs: ['file-ref:vscode:current:user-file'],
+    editorElementRef: 'element:vscode:editor:user-file',
+    focusedEditorRef: 'focused-editor:vscode:user-file',
+    selectionRef: 'selection-ref:vscode:paper:current',
+    cursorRef: 'cursor-ref:vscode:paper:current',
+    rangeRef: 'range-ref:vscode:paper:current',
+    visibleTextRef: `text:vscode:user-file-${suffix}`,
+    screenshotRef: `image:vscode:user-file-${suffix}`,
+    accessibilityRef: `accessibility:vscode:user-file-${suffix}`,
+    freshnessRef: `freshness:vscode:user-file-${suffix}`,
+    observationRef: `observation:vscode:user-file-${suffix}`,
+  });
+  const observations = [
+    userFileObservation('bind'),
+    userFileObservation('before'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-scratch-user-file',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async () => {
+      calls.push('resolve-text');
+      return 'must not resolve user file scratch mutation';
+    },
+    typeResolvedText: async () => {
+      calls.push('type-resolved-text');
+      throw new Error('scratch mutation must not type into user file');
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(result.primitiveChainObserved, ['bind', 'observe', 'host-decision', 'control(release)']);
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-cowork:scratch-non-user-file-scope-required'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-scratch-user-file'));
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-scratch-user-file',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-scratch-user-file',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /must not resolve|type-resolved-text|text:vscode:user-file|image:vscode|accessibility:vscode|window:vscode|observation:vscode|raw-|providerPayload|base64|product-ready/i);
 });
 
 test('current VSCode co-work command palette diagnostic mocks open query observe close and release without selecting', async () => {

@@ -90,6 +90,7 @@ SciForge UI
 - [x] P9.5-P9.6：mocked editor-scope diagnostic 与 focused verify 已闭合；env-on mock 跑 `bind -> observe -> host-decision -> observe -> control(release)`，只投影 scope / freshness / reason / cleanup refs，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
 - [x] P9.7-P9.12：Preview No-write 已闭合；Host-owned preview provider 只生成 draft / preview / diff artifact refs 和 refs-only verifier ref，materializer 只从 structured `preview-current-selection` operation + current scope refs 进入，ordinary chat / selected text / terminal output / history / completed action 不触发；env-gated mocked diagnostic 跑 `bind -> observe -> host-decision -> control(release)`，不写 VSCode、不写用户文件、不宣称 `product-ready`。
 - [x] P9.13-P9.15：Scratch Mutation unit path 已闭合；`insert-draft` / `replace-selection` 只从 structured Host operation refs、current scope refs 和 Host `text-ref:` 生成单个 `computer_use.act` primitive candidate；public projection 只保留 scope / text-ref / verifier refs；mutation verifier 要求 action evidence、same-file、same-window、same-editor、same-selection 和 after-observe refs，漂移 blocked-safe。
+- [x] P9.16-P9.18：Scratch Mutation live skip / mocked diagnostic 已闭合；独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC=1` gate 默认 blocked，generic live env 不能解锁 scratch writer；env-on mock 只允许非用户 scratch buffer，跑 `bind -> observe -> host-decision -> act -> observe -> control(release)`，验证 mutation verifier 与 cleanup refs，不写用户文件、不宣称 `product-ready`。
 
 ## 当前执行路线
 
@@ -97,7 +98,7 @@ SciForge UI
 
 目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C unit/materializer/verifier 已闭合。下一步只推进 P9-C 的 live skip / mocked scratch diagnostic；不要跳到真实用户文件写入、narrow apply、save 或 batch。
+当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation 已闭合。下一步进入 P9-D Narrow Apply / Save / Batch 的 unit path；不要跳到真实桌面用户文件 apply。
 
 #### P9-A：Scope Projection 与 Diagnostic
 
@@ -127,9 +128,9 @@ SciForge UI
 - [x] [P9.14 Code] 实现 `replace-selection` primitive candidate。
 - [x] [P9.15 Unit] editor drift 红测：file / editor group / selection / target window / observation 漂移时 blocked-safe。
 - [x] [P9.15 Code] 实现 same-file / same-editor / same-selection / same-window verifier refs。
-- [ ] [P9.16 Live Skip] env-gated scratch / temporary buffer mutation diagnostic 默认关闭；无 env 时不构造 writer / adapter。
-- [ ] [P9.17 Mocked Scratch] mock 非用户 scratch buffer mutation；验证 after-observe、mutation verifier 和 cleanup，不影响用户文件。
-- [ ] [P9.18 Verify Scratch] 跑 mutation unit、drift、scratch live skip、cleanup/no-bypass focused tests。
+- [x] [P9.16 Live Skip] env-gated scratch / temporary buffer mutation diagnostic 默认关闭；无 env 时不构造 writer / adapter。
+- [x] [P9.17 Mocked Scratch] mock 非用户 scratch buffer mutation；验证 after-observe、mutation verifier 和 cleanup，不影响用户文件。
+- [x] [P9.18 Verify Scratch] 跑 mutation unit、drift、scratch live skip、cleanup/no-bypass focused tests。
 
 #### P9-D：Narrow Apply / Save / Batch
 

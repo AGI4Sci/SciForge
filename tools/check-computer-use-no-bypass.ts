@@ -181,6 +181,7 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
   findings.push(...sharedSystemInputSourceClaimFindings(file, text));
   findings.push(...vscodeAppModuleDirectDesktopFindings(file, text));
   findings.push(...vscodeOperationTextInferenceFileFindings(file, text));
+  findings.push(...vscodeScratchMutationLiveDiagnosticRawPayloadFindings(file, text));
   if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts') {
     const structuredDone = sectionBetween(text, 'function withStructuredRuntimeDoneProjection', 'function withGuiAskUserRuntimeResult');
     if (structuredDone && (/\bvisibleAnswer\s*:\s*{[\s\S]*?\btext\s*:/.test(structuredDone) || unsafeMessageProjection(structuredDone))) {
@@ -227,6 +228,42 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
       rule: 'missing-legacy-gui-projection-fail-closed',
       message: 'Response normalization must fail closed for legacy GUI and Computer Use projection text unless it is backed by a trusted Host final-answer envelope.',
       text: 'projectionVisibleAnswer',
+    });
+  }
+  return findings;
+}
+
+function vscodeScratchMutationLiveDiagnosticRawPayloadFindings(file: string, text: string): Finding[] {
+  if (!isVSCodeCoWorkLiveDiagnosticProducerSurface(file)) return [];
+  if (!/\brunCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic\b/.test(text)) return [];
+  const findings: Finding[] = [];
+  const section = sectionBetween(
+    text,
+    'runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic',
+    'export function createCurrentVSCodeCoWorkFocusedEditorEvidenceProvider',
+  ) ?? sectionFrom(text, 'runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic');
+  const sectionStartLine = lineNumberForIndex(text, text.indexOf(section));
+  const lines = section.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const code = line.replace(/\/\/.*$/, '');
+    if (isPublicProjectionSafetyRuleDefinitionLine(code)) return;
+    if (!alwaysUnsafePublicEventPayloadLiteral.test(code)) return;
+    findings.push({
+      file,
+      line: sectionStartLine + index,
+      rule: 'forbidden-public-event-raw-payload',
+      message: 'VSCode scratch mutation live diagnostic public results must only expose refs; raw draft, selection, diff, path, URL, provider payload, or base64 payload literals are forbidden.',
+      text: line.trim(),
+    });
+  });
+  if (/\bproductReady\s*:\s*true\b|product-ready/.test(section)) {
+    const productReadyIndex = text.indexOf(section) + section.search(/\bproductReady\s*:\s*true\b|product-ready/);
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, productReadyIndex),
+      rule: 'forbidden-shared-system-input-product-ready',
+      message: 'VSCode scratch mutation live diagnostic uses shared system input and must remain live-diagnostic, not product-ready.',
+      text: lineTextAtIndex(text, productReadyIndex),
     });
   }
   return findings;
