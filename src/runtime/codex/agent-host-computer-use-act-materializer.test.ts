@@ -509,6 +509,45 @@ test('default Computer Use Act materializer selects editor scope only from struc
   assert.doesNotMatch(JSON.stringify(inferred), /computer-use-app-module-primitive-candidate|"operation":"editor-scope"|taskOutcome":"satisfied|Generic WindowAction planner/i);
 });
 
+test('default Computer Use Act materializer editor-scope public projection keeps only scope refs', async () => {
+  const materializer = createDefaultComputerUseActMaterializer();
+  const scopeRefs = [
+    'editor-group:vscode:paper:1',
+    'active-editor:vscode:paper:1',
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+    'text:vscode:visible:paper',
+    'image:vscode:current',
+    'accessibility:vscode:current',
+    'terminal-output:vscode:paper:current',
+    'action:vscode:previous:completed',
+    'history:vscode:previous-run',
+  ];
+
+  const result = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('editor-scope', scopeRefs),
+    preflight: vscodeAppModulePreflight(scopeRefs),
+    commandText: 'Read current scope without publishing raw editor context.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-editor-scope-public-projection',
+    attemptId: 'codex-command-default-vscode-editor-scope-public-projection-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(scopeRefs),
+  });
+
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.equal(result?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.match(JSON.stringify(result), /selection-ref:vscode:paper:1/);
+  assert.match(JSON.stringify(result), /cursor-ref:vscode:paper:1/);
+  assert.match(JSON.stringify(result), /range-ref:vscode:paper:1/);
+  assert.match(JSON.stringify(result), /(?:element:vscode:editor:monaco:1|focused-editor:vscode:paper:1)/);
+  assert.match(JSON.stringify(result), /selected-file:vscode:paper/);
+  assert.doesNotMatch(JSON.stringify(result), /window-action-session:vscode|macos-app:vscode|process:vscode|window:vscode|frontmost:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|text:vscode:visible|image:vscode|accessibility:vscode|terminal-output:vscode|action:vscode|history:vscode|permission:|computer-use:executor-scope|runtime-truth:computer-use-act-materializer/i);
+  assert.doesNotMatch(JSON.stringify(result), /rawSelectedText|selectedText|rawVisibleText|visibleText|providerPayload|data:image|base64|https?:\/\/|\/Users\//i);
+});
+
 test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
   const runtimeTruth = vscodeAppModuleRuntimeTruth();
   runtimeTruth.observation = {

@@ -38,7 +38,7 @@ const publicProjectionSurfaceFiles = new Set([
 ]);
 const publicProjectionActivation = /\b(?:emitWorkspaceRuntimeEvent|publicHostOwnedRuntimeEvent|workspaceRuntimeEvent|doneEvent|failedEvent|runtimeCodexMissingFinalAnswerPayload|publicRuntimeMode|sanitizePublicEvent|publicEventHasForbiddenRaw|validateComputerUseAppModuleReadiness|readinessArtifact|readinessResult|computerUseResultToTuiHostActions|computerUsePresentationSummary|approvalRequestFromResult|attachPackageResultHostActions|primitiveModuleResult|moduleResult|objectReferences|payload\.logs|computer-use\.tui-host-actions)\b/;
 const publicEventSanitizerImport = /@sciforge-ui\/runtime-contract\/public-event-sanitizer/;
-const alwaysUnsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawProviderPayload|rawVisibleText|rawSelectedText|rawCommand|rawPath)\b\s*:|data:image\/|;base64,)/i;
+const alwaysUnsafePublicEventPayloadLiteral = /(?:\b(?:rawScreenshotPath|rawScreenshotBase64|screenshotBase64|providerPayload|rawProviderPayload|rawVisibleText|visibleText|rawSelectedText|selectedText|rawDiff|rawCommand|rawPath|rawUrl|requestedUrl|currentUrl|finalUrl|url|href)\b\s*:|data:image\/|;base64,)/i;
 const guardedUnsafePublicEventPayloadLiteral = /\b(?:commandText|terminalCommand|workspacePath|filePath|targetPath|stdout|stderr|requestBody|responseBody)\b\s*:/i;
 const allowedComputerUsePrimitiveNames = new Set(['bind', 'observe', 'act', 'run_procedure', 'control']);
 const forbiddenComputerUsePublicIntentNames = new Set([
@@ -502,14 +502,19 @@ function hasPublicProjectionGuard(file: string, text: string): boolean {
 function isUnsafePublicEventPayloadLine(file: string, fileText: string, line: string): boolean {
   if (!isActivePublicProjectionSurface(file, fileText)) return false;
   const code = line.replace(/\/\/.*$/, '');
-  if (/UNSAFE_|FORBIDDEN_|REDACT|sanitize|Sanitizer/i.test(code)) return false;
+  if (isPublicProjectionSafetyRuleDefinitionLine(code)) return false;
   if (alwaysUnsafePublicEventPayloadLiteral.test(code)) return true;
+  if (/UNSAFE_|FORBIDDEN_|REDACT/i.test(code)) return false;
   if (!guardedUnsafePublicEventPayloadLiteral.test(code)) return false;
   if (hasPublicProjectionGuard(file, fileText)) return false;
   if (/\b(?:commandText|terminalCommand|workspacePath|filePath|targetPath|stdout|stderr|requestBody|responseBody)\b\s*:\s*(?:string|number|boolean|unknown|Record\b|Array\b|readonly\b)/i.test(code)) {
     return false;
   }
   return true;
+}
+
+function isPublicProjectionSafetyRuleDefinitionLine(code: string): boolean {
+  return /^\s*(?:const|let|var)\s+(?:UNSAFE|FORBIDDEN|REDACT)[A-Za-z0-9_$]*\s*=\s*(?:\/|new\s+RegExp\b)/.test(code);
 }
 
 async function structuredManifestFindings(): Promise<Finding[]> {

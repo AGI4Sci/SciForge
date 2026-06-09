@@ -87,11 +87,11 @@ function readinessResult(
     candidateModuleIds: string[];
   },
 ): CodexAgentHostComputerUseActMaterializerResult {
-  const refs = appModuleEvidenceRefs([
+  const refs = publicAppModuleEvidenceRefs([
     `runtime-truth:computer-use-app-module/${safeToken(context.moduleId) || 'unresolved'}/${safeToken(context.operation) || 'operation'}`,
     ...readiness.evidenceRefs,
     readiness.status !== 'ready' ? readiness.reasonRef : undefined,
-  ]);
+  ], context);
   const outputRef = refs[0] ?? `runtime-truth:computer-use-app-module/${safeToken(context.operation) || 'operation'}`;
   if (readiness.status === 'ready') {
     return sanitizeReadinessResult({
@@ -184,9 +184,24 @@ function readinessArtifact(
       operation: context.operation,
       readinessStatus: readiness.status,
       reasonRef: readiness.status === 'ready' ? undefined : readiness.reasonRef,
-      primitive: readiness.status === 'ready' ? readiness.primitive : undefined,
+      primitive: readiness.status === 'ready' ? readinessPrimitiveForArtifact(readiness.primitive, context, refs) : undefined,
       evidenceRefs: refs.slice(0, 16),
     }),
+  };
+}
+
+function readinessPrimitiveForArtifact(
+  primitive: ComputerUseAppModulePrimitiveCandidate,
+  context: {
+    operation: string;
+    moduleId: string | undefined;
+  },
+  refs: string[],
+): ComputerUseAppModulePrimitiveCandidate {
+  if (!isVSCodeEditorScopePublicProjection(context)) return primitive;
+  return {
+    name: primitive.name,
+    inputRefs: refs,
   };
 }
 
@@ -310,6 +325,46 @@ function appModuleEvidenceRefs(refs: Array<string | undefined>): string[] {
   return uniqueStrings(refs.filter((ref): ref is string => typeof ref === 'string' && safeAppModuleRef(ref))).slice(0, 64);
 }
 
+function publicAppModuleEvidenceRefs(
+  refs: Array<string | undefined>,
+  context: {
+    operation: string;
+    moduleId: string | undefined;
+  },
+): string[] {
+  const safeRefs = appModuleEvidenceRefs(refs);
+  return isVSCodeEditorScopePublicProjection(context) ? editorScopePublicEvidenceRefs(safeRefs) : safeRefs;
+}
+
+function isVSCodeEditorScopePublicProjection(context: {
+  operation: string;
+  moduleId: string | undefined;
+}): boolean {
+  return context.moduleId === 'vscode' && context.operation === 'editor-scope';
+}
+
+function editorScopePublicEvidenceRefs(refs: string[]): string[] {
+  return uniqueStrings(refs.filter(safeEditorScopePublicRef)).slice(0, 64);
+}
+
+function safeEditorScopePublicRef(value: string): boolean {
+  const ref = value.trim();
+  return safeAppModuleRef(ref) && (
+    ref.startsWith('element:vscode:editor:')
+      || ref.startsWith('element:vscode:monaco:')
+      || ref.startsWith('focused-editor:vscode:')
+      || ref.startsWith('file-ref:vscode:')
+      || ref.startsWith('selected-file:vscode:')
+      || ref.startsWith('selection-ref:vscode:')
+      || ref.startsWith('cursor-ref:vscode:')
+      || ref.startsWith('range-ref:vscode:')
+      || ref.startsWith('freshness:vscode:')
+      || ref.startsWith('stale-invalidation:vscode:')
+      || ref.startsWith('blocked:vscode-app-module:')
+      || ref.startsWith('needs-confirmation:vscode-app-module:')
+  );
+}
+
 function safeAppModuleRef(value: string): boolean {
   const ref = value.trim();
   if (!ref || ref.length > 240) return false;
@@ -317,7 +372,7 @@ function safeAppModuleRef(value: string): boolean {
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
   if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
   if (isUnsafeScopeRef(ref)) return false;
-  return /^(?:runtime-truth:|intent:|blocked:|needs-confirmation:|module:|capability:|operation-ref:|macos-app:|process:|window:|frontmost:|file-ref:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|diagnostics:|problems:|terminal:|command-palette:|command-palette-input:|command-palette-items:|command-palette-item:|command-palette-item-rank:|command-palette-item-hash:|verifier:(?:vscode-app-module|vscode-cowork|current-vscode-cowork):|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|cursor-ref:|range-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:|cancel:|stop:|app-native-command:)/i.test(ref);
+  return /^(?:runtime-truth:|intent:|blocked:|needs-confirmation:|module:|capability:|operation-ref:|macos-app:|process:|window:|frontmost:|file-ref:|selected-file:|text:|text-ref:|image:|accessibility:|element:|focused-editor:|freshness:|observation:|diagnostics:|problems:|terminal:|command-palette:|command-palette-input:|command-palette-items:|command-palette-item:|command-palette-item-rank:|command-palette-item-hash:|verifier:(?:vscode-app-module|vscode-cowork|current-vscode-cowork):|window-action-session:|computer-use-session:|computer-use:|permission:|risk:|approval:|non-user-file-scope:|cursor-move:|selection-ref:|cursor-ref:|range-ref:|action:|executor-event:|input-event:|input-lease:|lease:|action-ledger:|adapter-registry:|actor-cursor:|cursor-marker:|scoped-input-lease:|scoped-input-adapter:|front-app-restore:|mouse-position-restore:|focus-lease:|stale-invalidation:|cancel:|stop:|app-native-command:)/i.test(ref);
 }
 
 function isUnsafeScopeRef(ref: string): boolean {

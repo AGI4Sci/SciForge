@@ -914,8 +914,14 @@ test('editor scope readiness rejects payload-shaped selection cursor and range r
 
   for (const unsafeRef of [
     'selection-ref:vscode:selected-token',
+    'selection-ref:vscode:raw-selected-text',
+    'selection-ref:vscode:https://example.invalid/private',
+    'selection-ref:vscode:/Users/example/private.md',
     'cursor-ref:vscode:path-token',
+    'cursor-ref:vscode:rawSelectedText',
+    'cursor-ref:vscode:url-token',
     'range-ref:vscode:provider-token',
+    'range-ref:vscode:provider-payload',
     'range-ref:vscode:diff-token',
   ]) {
     const readiness = vscode.checkReadiness({
@@ -924,7 +930,10 @@ test('editor scope readiness rejects payload-shaped selection cursor and range r
     });
 
     assert.equal(readiness.status, 'blocked', unsafeRef);
-    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:unsafe-editor-scope-ref-not-allowed', unsafeRef);
+    assert.ok([
+      'blocked:vscode-app-module:unsafe-editor-scope-ref-not-allowed',
+      'blocked:vscode-app-module:raw-ref-not-allowed',
+    ].includes(readiness.reasonRef), `${unsafeRef}: ${readiness.reasonRef}`);
     assert.doesNotMatch(JSON.stringify(readiness), /selected text|rawSelectedText|providerPayload|base64|\/Users\//i);
   }
 });

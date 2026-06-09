@@ -4,10 +4,12 @@ import test from 'node:test';
 import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
   runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
+  runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic,
   runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
@@ -197,6 +199,38 @@ test('current VSCode co-work command palette diagnostic is independently env-gat
   assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`));
   assert.deepEqual(liveCalls, []);
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload/i);
+});
+
+test('current VSCode co-work editor scope diagnostic is independently env-gated and does not touch ports by default', async () => {
+  const liveCalls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-scope-default-off',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('scope live port should not run without env');
+    },
+    performAction: async () => {
+      liveCalls.push('perform-action');
+      throw new Error('scope action should not run without env');
+    },
+    restoreFocus: async () => {
+      liveCalls.push('restore-focus');
+    },
+    restoreMouse: async () => {
+      liveCalls.push('restore-mouse');
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, []);
+  assert.deepEqual(result.evidenceRefs, []);
+  assert.deepEqual(result.cleanupRefs, []);
+  assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV}`));
+  assert.deepEqual(liveCalls, []);
+  assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
 });
 
 test('current VSCode co-work command palette diagnostic mocks open query observe close and release without selecting', async () => {

@@ -15,6 +15,7 @@ import {
   createCurrentVSCodeCoWorkLivePrimitivePorts,
   runCurrentVSCodeCoWorkLiveDiagnosticPreflight,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV,
   type CurrentVSCodeCoWorkLivePrimitivePortsOptions,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
@@ -76,6 +77,11 @@ export interface RunCurrentVSCodeCoWorkCommandPaletteLiveDiagnosticInput
   env?: Record<string, string | undefined>;
   paletteQueryTextRef: string;
   selectCurrentItem?: boolean;
+}
+
+export interface RunCurrentVSCodeCoWorkEditorScopeLiveDiagnosticInput
+  extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
+  env?: Record<string, string | undefined>;
 }
 
 export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
@@ -541,6 +547,32 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
     ? 'current VSCode command palette live diagnostic completed open, query, observe, select current item, observe, and release'
     : 'current VSCode command palette live diagnostic completed open, query, observe items, close, observe, and release'
   );
+}
+
+export async function runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic(
+  input: RunCurrentVSCodeCoWorkEditorScopeLiveDiagnosticInput = {},
+): Promise<VSCodeCoWorkLiveDiagnosticResult> {
+  const env = input.env ?? process.env;
+  if (env[VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV] !== '1') {
+    return {
+      status: 'blocked',
+      message: `missing-env:${VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV}`,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [],
+      evidenceRefs: [],
+      cleanupRefs: [],
+    };
+  }
+  return {
+    status: 'blocked',
+    message: 'current VSCode co-work editor scope diagnostic blocked: mocked scope diagnostic is not implemented yet',
+    maturity: 'live-diagnostic',
+    productReady: false,
+    primitiveChainObserved: [],
+    evidenceRefs: ['blocked:vscode-cowork:editor-scope-diagnostic-not-implemented'],
+    cleanupRefs: [],
+  };
 }
 
 export function createCurrentVSCodeCoWorkFocusedEditorEvidenceProvider(): VSCodeCoWorkFocusedEditorEvidenceProvider {

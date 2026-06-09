@@ -191,7 +191,7 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 
 当前 public projection 收口状态：
 
-- App module readiness validator 使用共享 forbidden raw detector，Agent Host readiness materializer 的 public result 使用共享 sanitizer；VSCode editor scope 只允许 tokenized `selection-ref:` / `cursor-ref:` / `range-ref:` 通过 Host public ref allowlist，伪装成 scope ref 的 raw/path/diff/url/provider token 必须 fail closed。
+- App module readiness validator 使用共享 forbidden raw detector，raw-blocked path 的 `evidenceRefs` 也必须重新走 public sanitizer；Agent Host readiness materializer 的 public result 使用共享 sanitizer。VSCode editor scope 额外做最终 Host public allowlist，只允许 editor / file / `selection-ref:` / `cursor-ref:` / `range-ref:` / freshness / reason refs 出现在 top-level evidence、claim supporting refs、readiness artifact evidence refs 和 artifact primitive input refs；宽 window / observation / operation / module / terminal / history refs、伪装成 scope ref 的 raw/path/diff/url/provider token 必须 fail closed 或被清洗。默认 boundary artifact 不能在 editor-scope public result 上重新引入 preflight / host-port 宽 refs。
 - Computer Use primitive port output 在进入 public `moduleResult` 前先走 forbidden raw detector 和 completion-truth detector；raw screenshot / AX / visible text / provider payload / raw command / raw path / URL / base64 / logs / secrets 或 `completionTruth` / `finalAnswer` / `done` 等用户任务完成真相字段都会 fail closed。随后 public `moduleResult` 仍使用共享 sanitizer 清洗 `output`、`diagnostics`、`repairHints` 和 refs。
 - Computer Use TUI host action projection 对 `approvalRequest` 使用白名单投影，对 summary `message`、window title、frame label、blocked reason 使用 safe summary 字符串。
 - Package bridge presentation 只调用 `computerUseResultToTuiHostActions`，同一份已收口 actions 再写入 objectReferences、logs 和 runtime event detail。
@@ -230,7 +230,7 @@ readiness validator 必须拒绝 top-level 或 nested action payload 中的 fina
 - P6：VSCode ambiguity 与 read-only diagnostic，先证明不猜测和只读诊断。
 - P7：VSCode terminal 原子能力，focus / send / observe / submit 分离。
 - P8：VSCode command palette 原子能力，按 fail-closed -> concept refs -> open -> query -> observe -> mocked select -> verify 递进；真实桌面 live 先只做 open / query / observe / close。
-- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；P9.2 已证明 Host materializer 只从 structured `editor-scope` operation 进入 scope readiness，ordinary chat / commandText / terminal output / history / completed action 不触发；后续先补 scope projection / diagnostic，再进入 preview。
+- P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；P9.2 已证明 Host materializer 只从 structured `editor-scope` operation 进入 scope readiness，ordinary chat / commandText / terminal output / history / completed action 不触发；P9.3/P9.4 已补最终 scope public projection guard 与 env-gated diagnostic skip path；后续先做 mocked scope，再进入 preview。
 
 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
@@ -404,6 +404,8 @@ Computer Use primitive 默认不调用模型。
 - P8 palette live harness 已有独立 env gate、palette observation refs、palette-safe act context、mocked `open -> query -> observe -> close/release` 与 `open -> query -> observe -> select current item -> observe -> release` 链路，并验证 cleanup manifest。真实桌面路径仍默认关闭，只能标 `live-diagnostic`，不能宣称 `product-ready`；默认 executor 仍不能把 raw command id / raw label / paletteLabel / commandText 变成执行旁路。
 - P9.0 app-module mutation/save readiness 当前刻意 fail-closed：editor mutation、save、undo / redo 等旧 ready 路径不保留；进入对应细分阶段前不能暴露 raw selected text、raw diff、raw path 或直接写入 primitive。
 - P9.1 editor scope readiness 是 `unit-proven`：`editor-scope` 只返回 refs-only `computer_use.observe` primitive candidate，要求唯一 editor / file / selection / cursor / range refs；selection、cursor 或 range 缺失或不唯一时 `needs-confirmation`，不会生成写入 action、preview、save 或用户级 completion。
+- P9.3 scope public projection 是 `unit/materializer-proven`：共享 public sanitizer 和 no-bypass guard 保留 tokenized scope refs，raw-blocked evidence refs 会被清洗；VSCode editor-scope 的最终 Host public result 只保留 editor / file / `selection-ref:` / `cursor-ref:` / `range-ref:` / freshness / reason refs，并把 readiness artifact primitive `inputRefs` 投影为同一组 scope refs。宽 window / observation / operation / module / terminal / history refs、payload-shaped scope refs、raw selected text、raw visible text、raw diff、raw path、URL alias 和 provider payload 均不得进入 public result。
+- P9.4 editor-scope diagnostic 是 env-gated `live-diagnostic` skip path：使用独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC=1` gate；缺少 env 时 blocked，不构造 primitive service、runner、adapter、input lease 或 cursor。mocked env-on scope diagnostic 仍属 P9.5。
 - 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
 - 论文 preview、narrow apply unit path 和 narrow apply diagnostic 仍待实现。

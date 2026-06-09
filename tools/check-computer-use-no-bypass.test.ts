@@ -455,6 +455,69 @@ test('Computer Use no-bypass guard blocks raw app module readiness public payloa
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
 });
 
+test('Computer Use no-bypass guard blocks raw diff and URL alias public payload literals', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    'export function readinessArtifact() {',
+    '  return sanitizePublicEvent({',
+    "    type: 'computer-use-app-module-readiness',",
+    "    data: { rawDiff: '@@ SECRET_DIFF', requestedUrl: 'https://example.invalid/private', href: 'https://example.invalid/link' },",
+    '  });',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard blocks raw diff and URL aliases on sanitizer lines', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/codex-runtime-gateway.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    'export function emitPreview(callbacks: { onEvent?: (event: unknown) => void }) {',
+    "  emitWorkspaceRuntimeEvent(callbacks, sanitizePublicEvent({ type: 'codex-runtime-progress', preview: { rawDiff: '@@ SECRET_DIFF', url: 'https://example.invalid/url', href: 'https://example.invalid/href', rawUrl: 'https://example.invalid/raw', requestedUrl: 'https://example.invalid/requested', currentUrl: 'https://example.invalid/current', finalUrl: 'https://example.invalid/final', providerPayload: { requestBody: 'SECRET_PROVIDER' } } }));",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard blocks scope selected and visible text projection aliases', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-computer-use-app-module-materializer.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    'export function readinessArtifact() {',
+    "  return sanitizePublicEvent({ type: 'computer-use-app-module-readiness', data: { selectedText: 'SECRET_SELECTED', visibleText: 'SECRET_VISIBLE' } });",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-public-event-raw-payload/);
+});
+
+test('Computer Use no-bypass guard allows unsafe pattern definitions while blocking raw payload emission', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    "import { sanitizePublicEvent } from '@sciforge-ui/runtime-contract/public-event-sanitizer';",
+    "const UNSAFE_APPROVAL_REF_STRING_PATTERN = /(?:providerPayload|data:[^,\\s]+;base64,|https?:\\/\\/)/i;",
+    'export function approvalRequestFromResult() {',
+    "  return sanitizePublicEvent({ type: 'computer-use.approval', refs: ['approval-ref:local:1'] });",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test('Computer Use no-bypass guard blocks raw package bridge presentation payload literals', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/computer-use/package-bridge-presentation.ts', [

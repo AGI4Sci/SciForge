@@ -1,4 +1,7 @@
-import { publicEventHasForbiddenRaw } from '@sciforge-ui/runtime-contract/public-event-sanitizer';
+import {
+  publicEventHasForbiddenRaw,
+  sanitizePublicEvent,
+} from '@sciforge-ui/runtime-contract/public-event-sanitizer';
 
 export type ComputerUseAppModuleReadinessStatus = 'ready' | 'blocked' | 'needs-confirmation';
 
@@ -130,7 +133,7 @@ export function validateComputerUseAppModuleReadiness(
     return blocked('blocked:computer-use-app-module:final-answer-not-allowed', safeStringList(readiness.evidenceRefs));
   }
   if (containsRawPayload(readiness) || publicEventHasForbiddenRaw(readiness)) {
-    return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', safeStringList(readiness.evidenceRefs));
+    return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', sanitizedEvidenceRefs(readiness.evidenceRefs));
   }
   if (readiness.status === 'ready') {
     const primitive = isRecord(readiness.primitive) ? readiness.primitive : undefined;
@@ -141,7 +144,7 @@ export function validateComputerUseAppModuleReadiness(
       return blocked('blocked:computer-use-app-module:primitive-invalid', evidenceRefs);
     }
     if (containsRawRef([...inputRefs, ...evidenceRefs])) {
-      return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', evidenceRefs);
+      return blocked('blocked:computer-use-app-module:raw-ref-not-allowed', sanitizedEvidenceRefs(evidenceRefs));
     }
     const action = Object.hasOwn(primitive, 'action') ? primitive.action : undefined;
     return {
@@ -182,6 +185,11 @@ function blocked(reasonRef: string, evidenceRefs: string[] = []): ComputerUseApp
     reasonRef,
     evidenceRefs,
   };
+}
+
+function sanitizedEvidenceRefs(value: unknown): string[] {
+  const sanitized = sanitizePublicEvent({ evidenceRefs: safeStringList(value) });
+  return isRecord(sanitized) ? safeStringList(sanitized.evidenceRefs) : [];
 }
 
 function hasForbiddenFinalAnswerField(value: Record<string, unknown>): boolean {

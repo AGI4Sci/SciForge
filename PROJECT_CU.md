@@ -85,6 +85,8 @@ SciForge UI
 - [x] P9.0：旧 editor mutation / save readiness 已 fail closed；旧直接写入、undo / redo、save shortcut 不能作为新方案兼容路径保留。
 - [x] P9.1：`editor-scope` readiness 已实现；只输出 editor / file / selection / cursor / range refs，不写入。
 - [x] P9.2：Host materializer 只从 structured `editor-scope` operation 进入 scope readiness；ordinary chat、commandText、terminal output、history 和 completed action 不触发；selection / cursor / range refs 保持 tokenized public refs。
+- [x] P9.3：scope public projection 已补最终 Host/public 窄化；safe editor / file / selection / cursor / range / freshness / reason refs 保留，宽 window / observation / operation / module / terminal / history refs、payload-shaped scope refs、raw selected text、raw visible text、raw diff、raw path、URL alias 和 provider payload 被拒绝或清洗。
+- [x] P9.4：editor-scope live diagnostic 默认 env-gated blocked；无 env 时返回 skip/block manifest，不构造 runner / adapter，不申请 input lease / cursor。
 
 ## 当前执行路线
 
@@ -92,14 +94,14 @@ SciForge UI
 
 目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前状态：P9 scope 的 module readiness 与 materializer gate 已闭合。下一步只补 scope projection / diagnostic，再进入 preview no-write；不要跳到真实用户文件写入。
+当前状态：P9 scope 的 module readiness、Host materializer gate、public scope projection 与 env-gated diagnostic skip path 已闭合。下一步先做 P9.5 mocked scope，再做 P9-A verify；不要跳到真实用户文件写入或 preview apply。
 
 #### P9-A：Scope Projection 与 Diagnostic
 
-- [ ] [P9.3 Unit] scope public projection 红测：raw selected text、raw path、URL、provider payload、raw visible text 必须被拒绝或清洗。
-- [ ] [P9.3 Code] scope projection 只保留 editor / file / selection / cursor / range / freshness / reason refs。
-- [ ] [P9.4 Unit] env-gated scope diagnostic 默认关闭；无 env 时必须返回 blocked skip manifest。
-- [ ] [P9.4 Code] 无 env 时不构造 runner / adapter，不申请 input lease。
+- [x] [P9.3 Unit] scope public projection 红测：raw selected text、raw path、URL、provider payload、raw visible text 必须被拒绝或清洗。
+- [x] [P9.3 Code] scope projection 只保留 editor / file / selection / cursor / range / freshness / reason refs。
+- [x] [P9.4 Unit] env-gated scope diagnostic 默认关闭；无 env 时必须返回 blocked skip manifest。
+- [x] [P9.4 Code] 无 env 时不构造 runner / adapter，不申请 input lease。
 - [ ] [P9.5 Mocked Scope] mock 当前 selection / cursor scope；只返回 scope refs、freshness refs、reason refs 和 cleanup refs。
 - [ ] [P9.6 Verify Scope] 跑 scope unit、materializer、live skip、no-bypass focused tests。
 

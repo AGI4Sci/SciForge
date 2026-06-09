@@ -46,6 +46,11 @@ const FORBIDDEN_KEY_COMPOUNDS = new Set([
   'command-text',
   'terminal-command',
   'raw-path',
+  'url',
+  'href',
+  'requested-url',
+  'current-url',
+  'final-url',
   'workspace-path',
   'file-path',
   'target-path',
@@ -122,5 +127,17 @@ function isSafePublicRef(value: string): boolean {
 function isUnsafePublicString(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return false;
-  return UNSAFE_VALUE_PATTERN.test(trimmed) || NAKED_BASE64_PATTERN.test(trimmed);
+  return UNSAFE_VALUE_PATTERN.test(trimmed)
+    || NAKED_BASE64_PATTERN.test(trimmed)
+    || isUnsafeScopeRef(trimmed);
+}
+
+function isUnsafeScopeRef(ref: string): boolean {
+  const match = /^(?:selection-ref|cursor-ref|range-ref):(.+)$/i.exec(ref);
+  if (!match) return false;
+  const parts = match[1].split(':').filter(Boolean);
+  return parts.length === 0 || parts.some((part) =>
+    !/^[a-z0-9][a-z0-9-]{0,79}$/i.test(part)
+      || /raw|payload|selected|text|diff|path|file|url|http|secret|password|base64|provider|command/i.test(part),
+  );
 }

@@ -157,6 +157,7 @@ function attachDefaultBoundaryArtifacts(
   hostPortContract: ComputerUseActMaterializerHostPortContract,
 ): CodexAgentHostComputerUseActMaterializerResult | undefined {
   if (!result) return undefined;
+  if (isVSCodeEditorScopeAppModuleResult(result)) return result;
   const boundaryRefs = runtimeOwnedRefs([
     `runtime-truth:computer-use-act-materializer/preflight/${safeToken(input.commandId) || 'command'}/${safeToken(input.attemptId) || 'attempt'}`,
     'runtime-truth:computer-use-act-materializer/host-port-contract',
@@ -180,6 +181,15 @@ function attachDefaultBoundaryArtifacts(
       ...recoveryClaims,
     ],
   };
+}
+
+function isVSCodeEditorScopeAppModuleResult(result: CodexAgentHostComputerUseActMaterializerResult): boolean {
+  return (result.executionUnits ?? []).some((unit) =>
+    isRecord(unit)
+      && unit.tool === 'computer-use.app-module-registry'
+      && unit.moduleId === 'vscode'
+      && unit.operation === 'editor-scope'
+  );
 }
 
 function readyPreflightContractArtifact(input: CodexAgentHostComputerUseActMaterializerInput): Record<string, unknown> {
@@ -476,4 +486,8 @@ function safeToken(value: unknown): string {
   return typeof value === 'string'
     ? value.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 80)
     : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

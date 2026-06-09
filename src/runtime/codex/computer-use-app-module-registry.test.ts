@@ -253,6 +253,37 @@ test('readiness rejects public-event raw log payloads through shared sanitizer r
   assert.doesNotMatch(JSON.stringify(unsafe), /SECRET_STDOUT|stdout|logs/i);
 });
 
+test('readiness rejects editor scope raw public projection payloads through shared sanitizer rules', () => {
+  const unsafe = validateComputerUseAppModuleReadiness({
+    status: 'ready',
+    primitive: {
+      name: 'computer_use.observe',
+      inputRefs: [
+        'selection-ref:vscode:paper:1',
+        'cursor-ref:vscode:raw-selected-text',
+        'range-ref:vscode:provider-payload',
+      ],
+      action: {
+        selectedText: 'SECRET_SELECTED_TEXT',
+        rawSelectedText: 'SECRET_SELECTED_TEXT',
+        visibleText: 'SECRET_VISIBLE_TEXT',
+        rawVisibleText: 'SECRET_VISIBLE_TEXT',
+        rawPath: '/Users/example/private.md',
+        requestedUrl: 'https://example.invalid/private',
+        href: 'https://example.invalid/link',
+        providerPayload: {
+          request: 'SECRET_PROVIDER_PAYLOAD',
+        },
+      },
+    },
+    evidenceRefs: ['module:vscode', 'selection-ref:vscode:https://example.invalid/private'],
+  });
+
+  assert.equal(unsafe.status, 'blocked');
+  assert.equal(unsafe.reasonRef, 'blocked:computer-use-app-module:raw-ref-not-allowed');
+  assert.doesNotMatch(JSON.stringify(unsafe), /SECRET_|selectedText|visibleText|providerPayload|https?:\/\/|\/Users\//i);
+});
+
 test('readiness rejects final-answer aliases with snake or kebab case', () => {
   for (const key of ['final_answer', 'final-answer', 'completion_truth', 'completion-truth']) {
     const unsafe = validateComputerUseAppModuleReadiness({
