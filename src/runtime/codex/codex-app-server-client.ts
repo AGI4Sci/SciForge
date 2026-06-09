@@ -102,6 +102,7 @@ type RequestId = number | string;
 const BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT = 3;
 const BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT = 0;
 const BROWSER_HOST_FINALIZE_AFTER_FINAL_REQUIRED_LIMIT = 3;
+const P10_PALETTE_OPEN = 'open-command-palette' as const;
 
 interface JsonRpcRequest {
   id: RequestId;
@@ -241,9 +242,11 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     baseEnv: NodeJS.ProcessEnv,
     commandId: string,
   ): Promise<CodexAppServerTurnStream | undefined> {
+    const bridgedAgentHostInput = request.agentHostInput
+      ?? p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(request.commandText, commandId, request.attemptId);
     if (
       !isHostOwnedComputerUseRuntimeIntent(request.runtimeIntent)
-      && !isCurrentVSCodeCoWorkAgentHostInput(request.agentHostInput)
+      && !isCurrentVSCodeCoWorkAgentHostInput(bridgedAgentHostInput)
     ) return undefined;
     const config = await assertCodexRuntimeConfig({
       workspacePath: request.workspacePath,
@@ -258,6 +261,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     const nativeRouteStream = await nativeRouteRunner({
       request: {
         ...request,
+        agentHostInput: bridgedAgentHostInput,
         abortSignal: nativeAbort.signal,
       },
       workspace: config.workspace,
@@ -1717,6 +1721,63 @@ function isCurrentVSCodeCoWorkAgentHostInput(value: unknown): boolean {
   if (isRecord(target?.vscodeCoWork)) return true;
   const refs = Array.isArray(value.refs) ? value.refs : [];
   return refs.some((ref) => ref === 'intent:current-vscode-cowork');
+}
+
+function p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(
+  commandText: string,
+  commandId: string,
+  attemptId: string,
+): Record<string, unknown> | undefined {
+  if (!shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText)) return undefined;
+  const requestRef = `chat-request:vscode-cowork:${safeRefSegment(commandId)}:${safeRefSegment(attemptId)}`;
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: commandText,
+    singleTurnOverride: false,
+    authorizationProfileId: 'high-autonomy',
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      requestRef,
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork',
+      vscodeCoWork: {
+        requestRef,
+        operation: P10_PALETTE_OPEN,
+        diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+        targetMode: 'smart-detect-current-vscode-window',
+        paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10',
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+}
+
+function shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText: string): boolean {
+  const text = commandText.trim();
+  if (!text) return false;
+  const mentionsVSCode = /(?:\bvs\s*code\b|\bvscode\b|visual\s+studio\s+code|当前\s*VSCode|当前\s*vs\s*code)/i.test(text);
+  if (!mentionsVSCode) return false;
+  const mentionsComputerUse = /(?:\bcomputer\s*use\b|桌面|GUI|窗口|鼠标|键盘|命令面板|command\s+palette)/i.test(text);
+  if (!mentionsComputerUse) return false;
+  return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|observe|bind|control|open|close|command\s+palette|命令面板)/i.test(text);
+}
+
+function safeRefSegment(value: string): string {
+  const segment = value
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return segment || 'turn';
 }
 
 function stringField(value: unknown, key: string): string | undefined {

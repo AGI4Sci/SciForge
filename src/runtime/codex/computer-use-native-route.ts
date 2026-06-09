@@ -30,6 +30,7 @@ export interface ComputerUseNativeRouteInput {
 
 const NORMALIZED_SCHEMA_VERSION = 'sciforge.codex.normalized-event.v1' as const;
 const CURRENT_VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV = 'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC';
+const P10_PALETTE_OPEN = 'open-command-palette' as const;
 const UNSAFE_APPROVAL_REF_STRING_PATTERN = /(?:\bBearer\s+|\b(?:sk|rk|pk|ghp|github_pat)[_-]|api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|authorization|credential|providerPayload|data:[^,\s]+;base64,|https?:\/\/)/i;
 const BASE64ISH_APPROVAL_REF_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
 
@@ -43,6 +44,8 @@ export type CurrentVSCodeCoWorkLiveDiagnosticRunner = (input: {
   agentHostInput?: unknown;
   activateCurrentVSCodeIfNeeded?: boolean;
 }) => Promise<VSCodeCoWorkLiveDiagnosticResult> | VSCodeCoWorkLiveDiagnosticResult;
+
+type CurrentVSCodeCoWorkLiveOperation = 'read-visible-text' | 'insert-draft' | typeof P10_PALETTE_OPEN;
 
 export function isComputerUseNativeRouteCommand(commandText: string): boolean {
   const text = computerUseNativeRouteCommandText(commandText);
@@ -307,6 +310,19 @@ async function tryRunVSCodeCoWorkChatBridge(
   queue: AsyncEventQueue<Record<string, unknown>>,
   metadata: RouteMetadata,
 ): Promise<boolean> {
+  const directLiveOperation = directCurrentVSCodeCoWorkLiveDiagnosticOperation(input.request.agentHostInput);
+  if (directLiveOperation) {
+    queue.push(operationEvent(metadata, 'Runtime Codex selected the VSCode co-work Host bridge.', 'running'));
+    const liveDiagnostic = await tryRunCurrentVSCodeCoWorkLiveDiagnostic(input, undefined, {
+      allowDirectLiveDiagnostic: true,
+    });
+    if (liveDiagnostic) {
+      queue.push(operationEvent(metadata, 'Runtime Codex selected the current VSCode co-work live diagnostic runner.', 'running'));
+      queue.push(doneEvent(metadata, liveDiagnostic));
+      return true;
+    }
+  }
+
   const bridge = createVSCodeCoWorkChatBridge({
     runtimeIntent: input.request.runtimeIntent,
     commandId: input.request.commandId,
@@ -326,10 +342,16 @@ async function tryRunVSCodeCoWorkChatBridge(
 
 async function tryRunCurrentVSCodeCoWorkLiveDiagnostic(
   input: ComputerUseNativeRouteInput,
-  bridge: ReturnType<typeof createVSCodeCoWorkChatBridge>,
+  bridge: ReturnType<typeof createVSCodeCoWorkChatBridge> | undefined,
+  options: {
+    allowDirectLiveDiagnostic?: boolean;
+  } = {},
 ): Promise<ToolPayload | undefined> {
-  if (!bridge || bridge.decision.status !== 'ready' || bridge.decision.primitive !== 'observe') return undefined;
-  const runner = currentVSCodeCoWorkLiveDiagnosticRunner(input);
+  const bridgeReadyForObserve = bridge?.decision.status === 'ready' && bridge.decision.primitive === 'observe';
+  if (!options.allowDirectLiveDiagnostic && !bridgeReadyForObserve) return undefined;
+  const runner = currentVSCodeCoWorkLiveDiagnosticRunner(input, {
+    allowDefaultRunner: options.allowDirectLiveDiagnostic === true,
+  });
   if (!runner) return undefined;
   const result = await runner({
     commandText: input.request.commandText,
@@ -350,16 +372,57 @@ function shouldActivateCurrentVSCodeForLiveDiagnostic(input: ComputerUseNativeRo
     : undefined;
 }
 
-function currentVSCodeCoWorkLiveDiagnosticRunner(input: ComputerUseNativeRouteInput): CurrentVSCodeCoWorkLiveDiagnosticRunner | undefined {
+function currentVSCodeCoWorkLiveDiagnosticRunner(
+  input: ComputerUseNativeRouteInput,
+  options: {
+    allowDefaultRunner?: boolean;
+  } = {},
+): CurrentVSCodeCoWorkLiveDiagnosticRunner | undefined {
   return input.currentVSCodeCoWorkLiveDiagnosticRunner
-    ?? (process.env[CURRENT_VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV] === '1'
+    ?? (options.allowDefaultRunner === true || process.env[CURRENT_VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV] === '1'
       ? defaultCurrentVSCodeCoWorkLiveDiagnosticRunner
       : undefined);
 }
 
 async function defaultCurrentVSCodeCoWorkLiveDiagnosticRunner(input: Parameters<CurrentVSCodeCoWorkLiveDiagnosticRunner>[0]) {
-  const { runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic } = await import('./agent-host-vscode-cowork-current-live-diagnostic.js');
+  const {
+    runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
+    runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
+  } = await import('./agent-host-vscode-cowork-current-live-diagnostic.js');
+  if (currentVSCodeCoWorkLiveOperation(input.agentHostInput) === P10_PALETTE_OPEN) {
+    const paletteQueryTextRef = currentVSCodeCoWorkPaletteQueryTextRef(input.agentHostInput)
+      ?? 'text-ref:vscode:command-palette-query:p10';
+    return runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
+      ...input,
+      paletteQueryTextRef,
+      selectCurrentItem: false,
+      resolveTextRef: (textRef) => textRef === paletteQueryTextRef ? 'Help: About' : undefined,
+    });
+  }
   return runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(input);
+}
+
+function directCurrentVSCodeCoWorkLiveDiagnosticOperation(value: unknown): typeof P10_PALETTE_OPEN | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  if (target?.kind !== 'current-vscode-cowork') return undefined;
+  const operation = currentVSCodeCoWorkLiveOperation(value);
+  return operation === P10_PALETTE_OPEN ? operation : undefined;
+}
+
+function currentVSCodeCoWorkLiveOperation(value: unknown): CurrentVSCodeCoWorkLiveOperation | undefined {
+  if (!isRecord(value)) return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  return safeVSCodeCoWorkLiveOperation(vscodeCoWork?.operation);
+}
+
+function currentVSCodeCoWorkPaletteQueryTextRef(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  return safeHostInputRef(vscodeCoWork?.paletteQueryTextRef, ['text-ref:']);
 }
 
 function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagnosticResult): ToolPayload {
@@ -564,8 +627,10 @@ function safeRuntimeTruthProducerEvidence(value: unknown): Record<string, unknow
   });
 }
 
-function safeVSCodeCoWorkLiveOperation(value: unknown): 'read-visible-text' | 'insert-draft' | undefined {
-  return value === 'read-visible-text' || value === 'insert-draft' ? value : undefined;
+function safeVSCodeCoWorkLiveOperation(value: unknown): CurrentVSCodeCoWorkLiveOperation | undefined {
+  return value === 'read-visible-text' || value === 'insert-draft' || value === P10_PALETTE_OPEN
+    ? value
+    : undefined;
 }
 
 function refsFromRecord(value: unknown, key: string): string[] {
@@ -947,7 +1012,7 @@ function safePrimitiveChain(value: unknown): string[] {
   return value
     .filter((item): item is string => typeof item === 'string')
     .map((item) => item.trim())
-    .filter((item) => /^(?:bind|observe|host-decision|act|control\(release\)|control|release)$/i.test(item));
+    .filter((item) => /^(?:bind|observe|host-decision(?:\([a-z0-9-]+\))?|act(?:\([a-z0-9-]+\))?|control\(release\)|control|release)$/i.test(item));
 }
 
 function safeAgentHostFinalAnswer(value: unknown): Record<string, unknown> | undefined {

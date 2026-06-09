@@ -486,7 +486,7 @@ async function performDefaultCurrentVSCodeAction(
 ): Promise<void> {
   if (input.action.type === 'key') {
     const key = input.action.key;
-    if (key !== 'Command+1' && key !== 'Control+Backquote' && key !== 'Enter') {
+    if (key !== 'Command+1' && key !== 'Control+Backquote' && key !== 'Enter' && key !== 'Meta+Shift+P' && key !== 'Escape') {
       throw new Error('current-vscode-act-key-unsupported');
     }
     if ((key === 'Control+Backquote' || key === 'Enter') && !hasTerminalContext(input.contextRefs)) {
@@ -505,7 +505,10 @@ async function performDefaultCurrentVSCodeAction(
   if (input.action.type !== 'type') throw new Error('current-vscode-act-unsupported-action');
   const hasEditorContext = input.focusedEditorRef?.startsWith('focused-editor:') === true;
   const hasTerminalTargetContext = hasTerminalContext(input.contextRefs) && hasTerminalInputContext(input.contextRefs);
-  if (!hasEditorContext && !hasTerminalTargetContext) throw new Error('current-vscode-act-focused-editor-ref-required');
+  const hasPaletteTargetContext = hasCommandPaletteContext(input.contextRefs) && hasCommandPaletteInputContext(input.contextRefs);
+  if (!hasEditorContext && !hasTerminalTargetContext && !hasPaletteTargetContext) {
+    throw new Error('current-vscode-act-focused-editor-ref-required');
+  }
   const textRef = input.action.textRef;
   if (!textRef?.startsWith('text-ref:')) throw new Error('current-vscode-act-text-ref-required');
   const text = await options.resolveTextRef?.(textRef);
@@ -534,12 +537,20 @@ on run argv
           keystroke "1" using command down
           return "pressed"
         end if
+        if keyName is "Meta+Shift+P" then
+          keystroke "p" using {command down, shift down}
+          return "pressed"
+        end if
         if keyName is "Control+Backquote" then
           keystroke "\`" using control down
           return "pressed"
         end if
         if keyName is "Enter" then
           key code 36
+          return "pressed"
+        end if
+        if keyName is "Escape" then
+          key code 53
           return "pressed"
         end if
         error "current-vscode-key-unsupported"
@@ -878,6 +889,14 @@ function hasTerminalContext(refs: string[] | undefined): boolean {
 
 function hasTerminalInputContext(refs: string[] | undefined): boolean {
   return safeCurrentVSCodeContextRefs(refs).some((ref) => ref.startsWith('terminal-input:vscode:'));
+}
+
+function hasCommandPaletteContext(refs: string[] | undefined): boolean {
+  return safeCurrentVSCodeContextRefs(refs).some((ref) => ref.startsWith('command-palette:vscode:'));
+}
+
+function hasCommandPaletteInputContext(refs: string[] | undefined): boolean {
+  return safeCurrentVSCodeContextRefs(refs).some((ref) => ref.startsWith('command-palette-input:vscode:'));
 }
 
 function focusedEditorRefFromSnapshot(

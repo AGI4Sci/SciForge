@@ -152,7 +152,9 @@ App module 是懂某个软件的“状态模型、能力目录和证据门”，
 
 ordinary chat 只是进入 Codex / Agent Host 的用户输入桥，不是 VSCode module、Computer Use runtime 或 native route 的直接调用入口。裸 `message`、`commandText`、terminal output、command palette item、completed action 或历史 run 记录只能作为 Host 可见 evidence refs，不能被本地 runtime 推断成 app module operation、多步 GUI workflow、completion truth 或 final answer。
 
-即使输入已经被包装成 `sciforge.codex-agent-host-input.v1`，`intentText` / `commandText` / prompt 文本仍不能作为 VSCode operation fallback。只有 Host 写入 structured app-module target operation，例如 `target.computerUseAppModule.operation` / `target.appModule.operation` 加 operation ref，才能触发 VSCode module readiness 或 live diagnostic Host producer。旧 `target.vscodeCoWork.operation` 不作为兼容 alias 保留。
+P10 起允许一个很窄的 Host-owned bridge：当 ordinary chat 同时明确指向 VSCode 和 Computer Use / 桌面操纵 / command palette 时，`CodexAppServerClient` 可以先构造 refs-first `sciforge.codex-agent-host-input.v1`，再进入 current VSCode live-diagnostic native route。这个 bridge 只能生成 structured Host input 和 operation refs，不能直接调用 VSCode module、不能执行 Computer Use primitive、不能生成 final answer，也不能把普通 VSCode 问答或模糊文本路由到桌面操纵。
+
+即使输入已经被包装成 `sciforge.codex-agent-host-input.v1`，`intentText` / `commandText` / prompt 文本仍不能作为 VSCode operation fallback。只有 Host 写入 structured target operation，例如 `target.computerUseAppModule.operation` / `target.appModule.operation` 加 operation ref，或 current-VSCode live producer 专用的 `target.vscodeCoWork.operation`，才能触发 VSCode module readiness 或 live diagnostic Host producer。`target.vscodeCoWork.operation` 不能作为普通 app-module alias、裸文本 fallback 或历史 run 兼容层使用。
 
 native route 只做确定性投影：它可以投影 sanitized refs、blocked / partial 状态和 Host-owned final answer envelope。没有 same-run Host final-answer evidence 时，native route 必须返回 `blocked` / `partial`，不能用 Computer Use action result、app module readiness、`run_procedure.status=completed`、runtime ack 或 fallback text 自行 `done`。
 
@@ -232,6 +234,7 @@ readiness validator 必须拒绝 top-level 或 nested action payload 中的 fina
 - P7：VSCode terminal 原子能力，focus / send / observe / submit 分离。
 - P8：VSCode command palette 原子能力，按 fail-closed -> concept refs -> open -> query -> observe -> mocked select -> verify 递进；真实桌面 live 先只做 open / query / observe / close。
 - P9：VSCode editor mutation 与 Host-owned narrow apply，按 fail-closed -> scope / preview no-write -> scratch mutation -> narrow apply -> save / batch decomposition -> verify 递进；P9.2 已证明 Host materializer 只从 structured `editor-scope` operation 进入 scope readiness，ordinary chat / commandText / terminal output / history / completed action 不触发；P9.3-P9.6 已闭合 scope public projection、env-gated skip、mocked scope diagnostic 与 focused verify；P9.7-P9.12 已闭合 Preview No-write provider / materializer / public projection / env-gated mocked diagnostic；P9.13-P9.18 已闭合 Scratch Mutation unit/materializer/verifier、independent live skip、mocked scratch diagnostic 与 focused verify；P9.19-P9.20 已闭合 Host-owned Narrow Apply unit bridge 与 apply verifier projection；P9.21-P9.22 已闭合 `save-current-file` readiness 与 batch / cross-file decomposition guard；P9.23-P9.25 已闭合 current selection apply 独立 env gate、mocked current selection preview 和 mocked explicit apply diagnostic，后续只剩 focused verify / cleanup smoke。
+- P10：VSCode real-bind command palette diagnostic，按 explicit ordinary chat Host bridge -> structured current VSCode operation -> native route direct live runner -> default macOS command palette adapter -> focused verify -> opt-in real desktop cleanup 验收递进；P10 不扩大 Computer Use core surface，不让 VSCode module 成为第二个 agent，也不宣称 `product-ready`。
 
 入口清单的当前真相源是 [`ComputerUseEntryRouteAudit.md`](ComputerUseEntryRouteAudit.md)。后续 public projection 和旧旁路删除必须在这份清单上迁移、删除或 fail close，不能新增未登记旁路。
 
@@ -303,7 +306,7 @@ Command Palette 也必须分步：
 open-command-palette
   -> send-command-palette-query
   -> observe-command-palette-items
-  -> select-command-palette-item
+  -> close-command-palette 或 select-command-palette-item
   -> observe
 ```
 
@@ -448,6 +451,7 @@ Computer Use primitive 默认不调用模型。
 - P7 current VSCode terminal live harness 是 `live-diagnostic` 且默认关闭：使用独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC=1` gate；缺少 env 时不构造 runner / adapter，mocked env-on path 已覆盖 `focus -> send -> observe` 与 `focus -> send -> observe -> submit -> observe -> release`，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
 - P8 command palette app-module readiness 是 `unit-proven` 到 env-gated mocked `live-diagnostic`：`open-command-palette`、`send-command-palette-query`、`observe-command-palette-items`、`select-command-palette-item`、`close-command-palette` 分步 primitive 已接入；query 只接受 Host `text-ref:`，observe 只基于 current palette / input refs 触发下一次观察，后续 observation 只能投影 current item / rank / hash refs，select 只接受 current observe item ref 并输出 palette current-observation / same-item verifier refs；raw command id / raw label / stale item / drift 均 blocked-safe，ordinary chat / terminal output / history 不能触发 palette readiness。
 - P8 palette live harness 已有独立 env gate、palette observation refs、palette-safe act context、mocked `open -> query -> observe -> close/release` 与 `open -> query -> observe -> select current item -> observe -> release` 链路，并验证 cleanup manifest。真实桌面路径仍默认关闭，只能标 `live-diagnostic`，不能宣称 `product-ready`；默认 executor 仍不能把 raw command id / raw label / paletteLabel / commandText 变成执行旁路。
+- P10 current VSCode command palette native route 是 `unit/native-route-proven` 到 env-gated `live-diagnostic`：显式 VSCode + Computer Use ordinary chat 会先被 Agent Host bridge 包装成 refs-first Host input，再由 native route 直接启动 `open-command-palette` live diagnostic runner；该路径不需要旧 bridge 预先提供 window candidates，因为 bind/observe 由 Computer Use primitive chain 产出 refs。默认 macOS shared-system-input adapter 已支持 `Meta+Shift+P`、palette input `text-ref:` 和 `Escape`；public projection 只保留 refs、safe summary 和 Host final-answer envelope。真实桌面验收仍要求独立开启 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC=1`，完成后必须 release input lease / adapter / cursor 并恢复前台焦点和鼠标位置；多窗口或证据冲突必须 `needs-confirmation` / `blocked`。
 - P9.0 app-module 未实现 editor operation 仍 fail-closed：undo / redo、move-cursor 等旧 ready 路径不保留；进入对应细分阶段前不能暴露 raw selected text、raw diff、raw path 或直接写入 primitive。
 - P9.1 editor scope readiness 是 `unit-proven`：`editor-scope` 只返回 refs-only `computer_use.observe` primitive candidate，要求唯一 editor / file / selection / cursor / range refs；selection、cursor 或 range 缺失或不唯一时 `needs-confirmation`，不会生成写入 action、preview、save 或用户级 completion。
 - P9.3 scope public projection 是 `unit/materializer-proven`：共享 public sanitizer 和 no-bypass guard 保留 tokenized scope refs，raw-blocked evidence refs 会被清洗；VSCode editor-scope 的最终 Host public result 只保留 editor / file / `selection-ref:` / `cursor-ref:` / `range-ref:` / freshness / reason refs，并把 readiness artifact primitive `inputRefs` 投影为同一组 scope refs。宽 window / observation / operation / module / terminal / history refs、payload-shaped scope refs、raw selected text、raw visible text、raw diff、raw path、URL alias 和 provider payload 均不得进入 public result。

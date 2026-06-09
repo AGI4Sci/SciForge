@@ -2548,6 +2548,71 @@ test('Codex app-server client routes refs-first ordinary VSCode co-work Host inp
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
 });
 
+test('Codex app-server client wraps explicit VSCode Computer Use chat into P10 palette native route input', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let spawnCalled = false;
+  let runnerCalled = false;
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      spawnCalled = true;
+      throw new Error('app-server should not spawn for explicit VSCode Computer Use chat');
+    },
+    computerUseNativeRouteRunner(input) {
+      runnerCalled = true;
+      assert.equal(input.request.runtimeIntent, undefined);
+      const agentHostInput = input.request.agentHostInput as Record<string, unknown> | undefined;
+      const target = agentHostInput?.target as Record<string, unknown> | undefined;
+      const vscodeCoWork = target?.vscodeCoWork as Record<string, unknown> | undefined;
+      const permissions = agentHostInput?.permissions as Record<string, unknown> | undefined;
+      assert.equal(agentHostInput?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+      assert.equal(agentHostInput?.source, 'ordinary-chat-current-vscode-computer-use-bridge');
+      assert.equal(target?.kind, 'current-vscode-cowork');
+      assert.equal(vscodeCoWork?.operation, 'open-command-palette');
+      assert.equal(vscodeCoWork?.diagnostic, 'p10-vscode-bind-observe-command-palette-open-close');
+      assert.deepEqual(agentHostInput?.refs, [
+        'intent:current-vscode-cowork',
+        'intent:current-vscode-cowork-live-diagnostic',
+        'chat-request:vscode-cowork:p10-vscode-palette-chat:attempt-1',
+      ]);
+      assert.ok((permissions?.refs as string[]).includes('permission:turn/current-vscode-cowork/full-access'));
+      assert.doesNotMatch(JSON.stringify(agentHostInput), /rawScreenshot|providerPayload|data:image|base64|\/Users\/|https?:\/\//i);
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([{
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          timestamp: new Date().toISOString(),
+          commandId: input.request.commandId,
+          attemptId: input.request.attemptId,
+          status: 'done',
+        }]),
+      };
+    },
+  });
+
+  const commandText = '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。';
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'p10-vscode-palette-chat',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(spawnCalled, false);
+  assert.equal(runnerCalled, true);
+  assert.equal(stream.turnId, 'p10-vscode-palette-chat');
+  assert.equal(stream.provider, 'host-owned-runtime');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
+});
+
 test('Codex app-server client passes current VSCode live diagnostic options into native package bridge', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
