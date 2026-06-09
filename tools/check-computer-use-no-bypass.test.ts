@@ -327,6 +327,24 @@ test('Computer Use no-bypass guard blocks command palette operation inference fr
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
 });
 
+test('Computer Use no-bypass guard blocks palette live diagnostic operation inference from text fields', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/agent-host-vscode-cowork-current-live-diagnostic.ts', [
+    "type VSCodeOperation = 'open-command-palette' | 'select-command-palette-item';",
+    'export function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(input: { commandText: string; paletteLabel: string }) {',
+    "  const operation: VSCodeOperation = /Save File/i.test(input.paletteLabel) || /save/i.test(input.commandText)",
+    "    ? 'select-command-palette-item'",
+    "    : 'open-command-palette';",
+    '  return { operation };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
 test('Computer Use no-bypass guard allows structured Host VSCode operation refs', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [

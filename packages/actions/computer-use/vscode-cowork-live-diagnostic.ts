@@ -19,6 +19,8 @@ const execFileAsync = promisify(execFile);
 export const VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV = 'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC' as const;
 export const VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV =
   'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC' as const;
+export const VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV =
+  'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC' as const;
 export const VSCODE_COWORK_LIVE_DIAGNOSTIC_SCHEMA_VERSION =
   'sciforge.computer-use.current-vscode-cowork-live-diagnostic.v1' as const;
 
@@ -48,6 +50,12 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   terminalInputRef?: string;
   terminalOutputRef?: string;
   terminalOutputHashRef?: string;
+  commandPaletteRootRef?: string;
+  commandPaletteInputRef?: string;
+  commandPaletteItemsRef?: string;
+  commandPaletteItemRefs?: string[];
+  commandPaletteItemRankRefs?: string[];
+  commandPaletteItemHashRefs?: string[];
   visibleTextRef: string;
   visibleTextSha256Ref?: string;
   screenshotRef?: string;
@@ -788,6 +796,12 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     observed.terminalInputRef,
     observed.terminalOutputRef,
     observed.terminalOutputHashRef,
+    observed.commandPaletteRootRef,
+    observed.commandPaletteInputRef,
+    observed.commandPaletteItemsRef,
+    ...(observed.commandPaletteItemRefs ?? []),
+    ...(observed.commandPaletteItemRankRefs ?? []),
+    ...(observed.commandPaletteItemHashRefs ?? []),
     observed.visibleTextRef,
     observed.visibleTextSha256Ref,
     observed.screenshotRef,
@@ -821,6 +835,12 @@ function isSafeCurrentVSCodeContextRef(ref: string): boolean {
     'macos-app:',
     'observation:',
     'process:',
+    'command-palette:',
+    'command-palette-input:',
+    'command-palette-items:',
+    'command-palette-item:',
+    'command-palette-item-rank:',
+    'command-palette-item-hash:',
     'scoped-input-adapter:',
     'scoped-input-lease:',
     'stale-invalidation:',

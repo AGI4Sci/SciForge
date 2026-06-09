@@ -3,9 +3,11 @@ import test from 'node:test';
 
 import {
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
+  VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
+  runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
   runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
@@ -164,6 +166,219 @@ test('current VSCode co-work wrappers do not touch live ports without explicit e
     assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload/i);
   }
   assert.deepEqual(liveCalls, []);
+});
+
+test('current VSCode co-work command palette diagnostic is independently env-gated and does not touch ports by default', async () => {
+  const liveCalls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-palette-default-off',
+    paletteQueryTextRef: 'text-ref:current-vscode-cowork:palette-query',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('palette live port should not run without env');
+    },
+    performAction: async () => {
+      liveCalls.push('perform-action');
+      throw new Error('palette action should not run without env');
+    },
+    restoreFocus: async () => {
+      liveCalls.push('restore-focus');
+    },
+    restoreMouse: async () => {
+      liveCalls.push('restore-mouse');
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, []);
+  assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`));
+  assert.deepEqual(liveCalls, []);
+  assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload/i);
+});
+
+test('current VSCode co-work command palette diagnostic mocks open query observe close and release without selecting', async () => {
+  const calls: string[] = [];
+  const paletteObservation = (suffix: string, paletteOpen: boolean, withItems = false) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:palette-close',
+    windowRef: 'window:vscode:palette-close',
+    titleRef: 'text:title:palette-close',
+    frontmostRef: 'frontmost:vscode:palette-close',
+    fileRefs: ['file-ref:vscode:palette-close'],
+    editorElementRef: 'element:vscode:editor:palette-close',
+    visibleTextRef: `text:vscode:palette-close-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:palette-close-${suffix}-sha256`,
+    screenshotRef: `image:vscode:palette-close-${suffix}`,
+    accessibilityRef: `accessibility:vscode:palette-close-${suffix}`,
+    freshnessRef: `freshness:vscode:palette-close-${suffix}`,
+    observationRef: `observation:vscode:palette-close-${suffix}`,
+    ...(paletteOpen ? {
+      commandPaletteRootRef: 'command-palette:vscode:palette-close:current',
+      commandPaletteInputRef: 'command-palette-input:vscode:palette-close:current',
+      commandPaletteItemsRef: `command-palette-items:vscode:palette-close:obs-palette-close-${suffix}`,
+    } : {}),
+    ...(withItems ? {
+      commandPaletteItemRefs: [`command-palette-item:vscode:palette-close:obs-palette-close-${suffix}:rank-1`],
+      commandPaletteItemRankRefs: [`command-palette-item-rank:vscode:palette-close:obs-palette-close-${suffix}:rank-1`],
+      commandPaletteItemHashRefs: ['command-palette-item-hash:vscode:palette-close:obs-palette-close-items:sha256:abc123'],
+    } : {}),
+  });
+  const observations = [
+    paletteObservation('bind', false),
+    paletteObservation('before', false),
+    paletteObservation('open-act-after', true),
+    paletteObservation('open', true),
+    paletteObservation('send-act-after', true),
+    paletteObservation('items', true, true),
+    paletteObservation('close-act-after', false),
+    paletteObservation('closed', false),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-palette-close',
+    paletteQueryTextRef: 'text-ref:current-vscode-cowork:palette-query',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:palette-query' ? 'hidden query' : undefined;
+    },
+    performAction: async (input) => {
+      calls.push(`perform-action:${input.action.type}:${input.action.key ?? input.action.textRef}:${input.beforeObservationRef}`);
+      assert.ok(input.contextRefs?.some((ref) => ref.startsWith('command-palette:')) || input.action.key === 'Meta+Shift+P');
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision(open-command-palette)',
+    'act(open-command-palette)',
+    'observe',
+    'host-decision(send-command-palette-query)',
+    'act(send-command-palette-query)',
+    'observe',
+    'host-decision(close-command-palette)',
+    'act(close-command-palette)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.ok(calls.includes('perform-action:key:Meta+Shift+P:observation:vscode:palette-close-before'));
+  assert.ok(calls.includes('perform-action:type:text-ref:current-vscode-cowork:palette-query:observation:vscode:palette-close-open'));
+  assert.ok(calls.includes('perform-action:key:Escape:observation:vscode:palette-close-items'));
+  assert.ok(!calls.some((call) => call.includes(':Enter:')));
+  assert.ok(result.evidenceRefs.includes('command-palette-item:vscode:palette-close:obs-palette-close-items:rank-1'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-palette-close'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-palette-close'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-palette-close'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-palette-close'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-palette-close'));
+  assert.doesNotMatch(JSON.stringify(result), /hidden query|Save File|workbench|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work command palette diagnostic selects only the current observed item ref', async () => {
+  const calls: string[] = [];
+  const paletteObservation = (suffix: string, withItems = false) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:palette-select',
+    windowRef: 'window:vscode:palette-select',
+    titleRef: 'text:title:palette-select',
+    frontmostRef: 'frontmost:vscode:palette-select',
+    fileRefs: ['file-ref:vscode:palette-select'],
+    editorElementRef: 'element:vscode:editor:palette-select',
+    visibleTextRef: `text:vscode:palette-select-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:palette-select-${suffix}-sha256`,
+    screenshotRef: `image:vscode:palette-select-${suffix}`,
+    accessibilityRef: `accessibility:vscode:palette-select-${suffix}`,
+    freshnessRef: `freshness:vscode:palette-select-${suffix}`,
+    observationRef: `observation:vscode:palette-select-${suffix}`,
+    commandPaletteRootRef: 'command-palette:vscode:palette-select:current',
+    commandPaletteInputRef: 'command-palette-input:vscode:palette-select:current',
+    commandPaletteItemsRef: `command-palette-items:vscode:palette-select:obs-palette-select-${suffix}`,
+    ...(withItems ? {
+      commandPaletteItemRefs: [`command-palette-item:vscode:palette-select:obs-palette-select-${suffix}:rank-1`],
+      commandPaletteItemRankRefs: [`command-palette-item-rank:vscode:palette-select:obs-palette-select-${suffix}:rank-1`],
+      commandPaletteItemHashRefs: [`command-palette-item-hash:vscode:palette-select:obs-palette-select-${suffix}:sha256:def456`],
+    } : {}),
+  });
+  const observations = [
+    { ...paletteObservation('bind'), commandPaletteRootRef: undefined, commandPaletteInputRef: undefined, commandPaletteItemsRef: undefined },
+    { ...paletteObservation('before'), commandPaletteRootRef: undefined, commandPaletteInputRef: undefined, commandPaletteItemsRef: undefined },
+    paletteObservation('open-act-after'),
+    paletteObservation('open'),
+    paletteObservation('send-act-after'),
+    paletteObservation('items', true),
+    paletteObservation('select-act-after', true),
+    paletteObservation('after-select', true),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-palette-select',
+    paletteQueryTextRef: 'text-ref:current-vscode-cowork:palette-query-select',
+    selectCurrentItem: true,
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:palette-query-select' ? 'hidden query' : undefined;
+    },
+    performAction: async (input) => {
+      calls.push(`perform-action:${input.action.type}:${input.action.key ?? input.action.textRef}:${input.beforeObservationRef}`);
+      if (input.action.key === 'Enter') {
+        assert.ok(input.contextRefs?.includes('command-palette-item:vscode:palette-select:obs-palette-select-items:rank-1'));
+        assert.ok(!input.contextRefs?.some((ref) => /workbench|label|Save File/i.test(ref)));
+      }
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision(open-command-palette)',
+    'act(open-command-palette)',
+    'observe',
+    'host-decision(send-command-palette-query)',
+    'act(send-command-palette-query)',
+    'observe',
+    'host-decision(select-command-palette-item)',
+    'act(select-command-palette-item)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.ok(calls.includes('perform-action:key:Enter:observation:vscode:palette-select-items'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:palette-current-observation:palette-select-obs-palette-select-items'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:palette-same-item:palette-select-obs-palette-select-items-rank-1'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-palette-select'));
+  assert.doesNotMatch(JSON.stringify(result), /hidden query|Save File|workbench|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
 test('current VSCode co-work live diagnostic preserves restoration refs when bind cannot observe VSCode', async () => {

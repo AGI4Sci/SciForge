@@ -17,10 +17,12 @@ const VSCODE_CAPABILITIES = [
   'send-command-palette-query',
   'observe-command-palette-items',
   'select-command-palette-item',
+  'close-command-palette',
 ] as const;
 
 const FOCUS_EDITOR_ACTION_REF = 'action:vscode-app-module:focus-editor:meta-1';
 const OPEN_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:open-command-palette:meta-shift-p';
+const CLOSE_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:close-command-palette:escape';
 
 interface VSCodeAppObservation {
   refs: string[];
@@ -95,10 +97,18 @@ function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & 
       && !isUnsafeCommandPaletteObservationRef(ref)
       && isVSCodeObservationRef(ref)
   ));
-  const appRefs = safeRefs.filter((ref) => ref === 'macos-app:vscode' || ref.startsWith('macos-app:vscode:'));
+  const appRefs = safeRefs.filter((ref) =>
+    ref === 'macos-app:vscode'
+      || ref.startsWith('macos-app:vscode:')
+      || ref === 'macos-app:com.microsoft.VSCode'
+  );
   const processRefs = safeRefs.filter((ref) => ref.startsWith('process:vscode'));
   const windowRefs = safeRefs.filter((ref) => ref.startsWith('window:vscode:'));
-  const titleRefs = safeRefs.filter((ref) => ref.startsWith('text:title:vscode:') || ref.startsWith('title:vscode:'));
+  const titleRefs = safeRefs.filter((ref) =>
+    ref.startsWith('text:title:vscode:')
+      || ref.startsWith('title:vscode:')
+      || ref.startsWith('text:title:')
+  );
   const frontmostRefs = safeRefs.filter((ref) => ref.startsWith('frontmost:vscode:'));
   const observationRefs = safeRefs.filter((ref) => ref.startsWith('observation:vscode:'));
   const staleObservationRefs = safeRefs.filter((ref) => ref.startsWith('stale-invalidation:vscode:'));
@@ -153,7 +163,12 @@ function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & 
     ]),
     appRefs,
     processRefs,
-    sessionRefs: safeRefs.filter((ref) => ref.startsWith('window-action-session:vscode:') || ref.startsWith('computer-use-session:vscode:')),
+    sessionRefs: safeRefs.filter((ref) =>
+      ref.startsWith('window-action-session:vscode:')
+        || ref.startsWith('computer-use-session:vscode:')
+        || ref.startsWith('window-action-session:current-vscode-cowork:')
+        || ref.startsWith('computer-use-session:current-vscode-cowork:')
+    ),
     windowRefs,
     titleRefs,
     frontmostRefs,
@@ -474,6 +489,12 @@ function checkCommandPaletteReadiness(operation: string, observation: VSCodeAppO
       `verifier:vscode-app-module:palette-same-item:${verifierToken.item}`,
     ]);
   }
+  if (operation === 'close-command-palette') {
+    return actReady(operation, operationRef, observation, [paletteRef, CLOSE_COMMAND_PALETTE_ACTION_REF], {
+      kind: 'key',
+      key: 'Escape',
+    });
+  }
   return blocked('blocked:vscode-app-module:operation-not-supported', observation.refs);
 }
 
@@ -663,7 +684,8 @@ function isCommandPaletteOperation(operation: string): boolean {
   return operation === 'open-command-palette'
     || operation === 'send-command-palette-query'
     || operation === 'observe-command-palette-items'
-    || operation === 'select-command-palette-item';
+    || operation === 'select-command-palette-item'
+    || operation === 'close-command-palette';
 }
 
 function isEditorOrTerminalTargetOperation(operation: string): boolean {
@@ -771,9 +793,11 @@ function hostStructuredOperationRef(operation: string, operationRef: string | un
 function isVSCodeObservationRef(ref: string): boolean {
   return ref === 'macos-app:vscode'
     || ref.startsWith('macos-app:vscode:')
+    || ref === 'macos-app:com.microsoft.VSCode'
     || ref.startsWith('process:vscode')
     || ref.startsWith('window:vscode:')
     || ref.startsWith('title:vscode:')
+    || ref.startsWith('text:title:')
     || ref.startsWith('text:title:vscode:')
     || ref.startsWith('frontmost:vscode:')
     || ref.startsWith('observation:vscode:')
@@ -808,7 +832,9 @@ function isVSCodeObservationRef(ref: string): boolean {
     || ref.startsWith('accessibility:vscode:')
     || ref.startsWith('operation-ref:vscode:')
     || ref.startsWith('window-action-session:vscode:')
-    || ref.startsWith('computer-use-session:vscode:');
+    || ref.startsWith('computer-use-session:vscode:')
+    || ref.startsWith('window-action-session:current-vscode-cowork:')
+    || ref.startsWith('computer-use-session:current-vscode-cowork:');
 }
 
 function isRawRef(ref: string): boolean {

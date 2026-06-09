@@ -20,7 +20,7 @@ const directComputerUseBypassImport = /(?:from\s+['"].*\/(?:vscode-app-module|ag
 const vscodeAppModuleForbiddenDesktopImport = /\bfrom\s+['"][^'"]*(?:packages\/actions\/computer-use\/(?:index|mcp)|src\/runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|src\/desktop\/|\/desktop\/|agent-host-[^'"]*computer-use[^'"]*materializer|window-action-computer-use-primitive-ports)[^'"]*['"]|import\s*\(\s*['"][^'"]*(?:packages\/actions\/computer-use\/(?:index|mcp)|src\/runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|runtime\/computer-use\/(?:executor|independent-input-adapter|package-bridge-execute-port)|src\/desktop\/|\/desktop\/|agent-host-[^'"]*computer-use[^'"]*materializer|window-action-computer-use-primitive-ports)[^'"]*['"]\s*\)/;
 const vscodeAppModuleForbiddenDesktopCall = /\b(?:service\.invoke|createComputerUsePrimitiveService|createComputerUseMcpAdapter|createDefaultComputerUseActMaterializer|executeGenericDesktopAction|executeIndependentInputAdapterAction|desktopController\.[A-Za-z_$][\w$]*|systemInput\.[A-Za-z_$][\w$]*|runCommand\s*\(\s*['"](?:osascript|open|screencapture)['"]|execFile\s*\(\s*['"](?:osascript|open|screencapture)['"]|spawn\s*\(\s*['"](?:osascript|open|screencapture)['"]|CGEvent|System Events)\b/;
 const bareOrdinaryVSCodeNativeShortcut = /\b(?:shouldRunNarrowCurrentVSCodeOrdinaryLiveDiagnostic|narrowCurrentVSCodeLiveDiagnostic|narrow\s+ordinary\s+(?:chat\s+)?(?:text|vscode|live))/i;
-const ordinaryTextField = /\b(?:message|commandText|intentText|prompt)\b/;
+const ordinaryTextField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId)\b/;
 const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|move-cursor|insert-draft|replace-selection|save-current-file|bulk-replace|cross-file-modify|undo-last-action|redo-last-action|show-problems|read-diagnostics|focus-terminal|send-terminal-text|observe-terminal|submit-terminal-command|interrupt-terminal-command|clear-terminal|focus-editor-from-terminal|open-command-palette|send-command-palette-query|observe-command-palette-items|select-command-palette-item|close-command-palette)['"]/;
 const vscodeOperationTextInferenceHelper = /\b(?:lowRisk[A-Za-z0-9_$]*OperationFromText|[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)|[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)[A-Za-z0-9_$]*(?:To|As|Into)[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation))\b/;
 const genericOperationTextInferenceHelper = /\b[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)\b/;
@@ -461,6 +461,8 @@ function isVSCodeOperationTextInferenceLine(file: string, line: string): boolean
   if (vscodeOperationTextInferenceHelper.test(code)) return true;
   if (genericOperationTextInferenceHelper.test(code) && (isVSCodeCoWorkRouteSurface(file) || vscodeOperationLiteral.test(code))) return true;
   if (!ordinaryTextField.test(code)) return false;
+  if (isVSCodeCoWorkLiveDiagnosticProducerSurface(file)
+    && /\b(?:operation|vscodeCoWorkOperation)\s*[:=]/i.test(code)) return true;
   if (vscodeOperationLiteral.test(code) && /\b(?:operation|vscodeCoWork|VSCode|Vscode|vscode)\b/.test(code)) return true;
   if (vscodeLiveDiagnosticTextInference.test(code) && /\b(?:infer|derive|detect|guess|parse|select|shouldRun|run)\b/i.test(code)) return true;
   if (/\b(?:operation|vscodeCoWorkOperation)\s*[:=]/i.test(code) && /\b(?:String|trim|match|test|includes|toLowerCase|toUpperCase)\s*\(/.test(code)) return true;
@@ -469,12 +471,17 @@ function isVSCodeOperationTextInferenceLine(file: string, line: string): boolean
 
 function isOrdinaryChatOrNativeRouteSurface(file: string): boolean {
   return /^src\/runtime\/codex\/.*(?:route|chat|gateway|server|bridge).*\.ts$/.test(file)
-    || /^src\/runtime\/(?:generation-gateway|workspace-runtime-gateway|workspace-server)\.ts$/.test(file);
+    || /^src\/runtime\/(?:generation-gateway|workspace-runtime-gateway|workspace-server)\.ts$/.test(file)
+    || isVSCodeCoWorkLiveDiagnosticProducerSurface(file);
 }
 
 function isVSCodeCoWorkRouteSurface(file: string): boolean {
   return file === 'src/runtime/codex/computer-use-native-route.ts'
     || /(?:^|\/)vscode-cowork-.*(?:route|chat|bridge).*\.ts$/.test(file);
+}
+
+function isVSCodeCoWorkLiveDiagnosticProducerSurface(file: string): boolean {
+  return /^src\/runtime\/codex\/agent-host-vscode-cowork-.*live-diagnostic\.[cm]?[tj]s$/.test(file);
 }
 
 function isUiNativeFinalAnswerBypassLine(file: string, line: string): boolean {

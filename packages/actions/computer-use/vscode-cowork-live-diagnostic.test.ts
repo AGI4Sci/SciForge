@@ -1167,6 +1167,120 @@ test('current VSCode co-work primitive ports expose terminal refs and execute te
   assert.doesNotMatch(JSON.stringify({ bind, observe, focus, send, submit, control }), /private terminal probe|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work primitive ports expose command palette refs and preserve palette action context', async () => {
+  const calls: string[] = [];
+  const paletteContextRefs = [
+    'command-palette:vscode:palette-live:current',
+    'command-palette-input:vscode:palette-live:current',
+    'command-palette-items:vscode:palette-live:obs-palette-live-after',
+    'command-palette-item:vscode:palette-live:obs-palette-live-after:rank-1',
+    'command-palette-item-rank:vscode:palette-live:obs-palette-live-after:rank-1',
+    'command-palette-item-hash:vscode:palette-live:obs-palette-live-after:sha256:abc123',
+    'command-palette-label:vscode:palette-live:Save File',
+    'command-id:vscode:workbench.action.files.save',
+  ];
+  const observations = [
+    currentPaletteObservation('before', false),
+    currentPaletteObservation('after', true),
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-palette-live',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      performAction: async (input) => {
+        calls.push(`perform-action:${input.action.type}:${input.action.key}:${input.contextRefs?.join(',')}:${input.beforeObservationRef}`);
+        assert.ok(input.contextRefs?.includes('command-palette:vscode:palette-live:current'));
+        assert.ok(input.contextRefs?.includes('command-palette-item:vscode:palette-live:obs-palette-live-after:rank-1'));
+        assert.ok(!input.contextRefs?.some((ref) => /command-palette-label|command-id|workbench|Save File/i.test(ref)));
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true, bind.error);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const observe = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.observe,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.observe,
+      sessionId,
+      capture: 'both',
+      includeTree: true,
+    },
+  });
+  assert.equal(observe.ok, true, observe.error);
+  assert.ok((observe.value?.refs ?? []).includes('command-palette:vscode:palette-live:current'));
+  assert.ok((observe.value?.refs ?? []).includes('command-palette-input:vscode:palette-live:current'));
+  assert.ok((observe.value?.refs ?? []).includes('command-palette-items:vscode:palette-live:obs-palette-live-after'));
+  assert.ok((observe.value?.refs ?? []).includes('command-palette-item:vscode:palette-live:obs-palette-live-after:rank-1'));
+  assert.ok((observe.value?.refs ?? []).includes('command-palette-item-rank:vscode:palette-live:obs-palette-live-after:rank-1'));
+  assert.ok((observe.value?.refs ?? []).includes('command-palette-item-hash:vscode:palette-live:obs-palette-live-after:sha256:abc123'));
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'select-command-palette-item',
+      contextRefs: paletteContextRefs,
+      action: {
+        type: 'key',
+        key: 'Enter',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, true, act.error);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true, control.error);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'perform-action:key:Enter:command-palette:vscode:palette-live:current,command-palette-input:vscode:palette-live:current,command-palette-items:vscode:palette-live:obs-palette-live-after,command-palette-item:vscode:palette-live:obs-palette-live-after:rank-1,command-palette-item-rank:vscode:palette-live:obs-palette-live-after:rank-1,command-palette-item-hash:vscode:palette-live:obs-palette-live-after:sha256:abc123:observation:vscode:palette-live-after',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-palette-live',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-palette-live',
+  ]);
+  assert.ok((act.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-palette-live:select-command-palette-item'));
+  assert.ok((act.value?.refs ?? []).includes('command-palette-item:vscode:palette-live:obs-palette-live-after:rank-1'));
+  assert.ok((control.value?.refs ?? []).includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-palette-live'));
+  assert.doesNotMatch(JSON.stringify({ bind, observe, act, control }), /command-palette-label|command-id|Save File|workbench|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
 function currentTerminalObservation(stage: 'before' | 'after', hash: string) {
   return {
     appRef: 'macos-app:com.microsoft.VSCode',
@@ -1187,6 +1301,32 @@ function currentTerminalObservation(stage: 'before' | 'after', hash: string) {
     accessibilityRef: `accessibility:vscode:terminal-live-${stage}`,
     freshnessRef: `freshness:vscode:terminal-live-${stage}`,
     observationRef: `observation:vscode:terminal-live-${stage}`,
+  };
+}
+
+function currentPaletteObservation(stage: 'before' | 'after', paletteOpen: boolean) {
+  return {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:palette-live',
+    windowRef: 'window:vscode:palette-live',
+    titleRef: 'text:title:palette-live',
+    frontmostRef: 'frontmost:vscode:palette-live',
+    fileRefs: ['file-ref:vscode:palette-live'],
+    editorElementRef: 'element:vscode:editor:palette-live',
+    ...(paletteOpen ? {
+      commandPaletteRootRef: 'command-palette:vscode:palette-live:current',
+      commandPaletteInputRef: 'command-palette-input:vscode:palette-live:current',
+      commandPaletteItemsRef: 'command-palette-items:vscode:palette-live:obs-palette-live-after',
+      commandPaletteItemRefs: ['command-palette-item:vscode:palette-live:obs-palette-live-after:rank-1'],
+      commandPaletteItemRankRefs: ['command-palette-item-rank:vscode:palette-live:obs-palette-live-after:rank-1'],
+      commandPaletteItemHashRefs: ['command-palette-item-hash:vscode:palette-live:obs-palette-live-after:sha256:abc123'],
+    } : {}),
+    visibleTextRef: `text:vscode:palette-live-${stage}`,
+    visibleTextSha256Ref: `text:vscode:palette-live-${stage}-sha256`,
+    screenshotRef: `image:vscode:palette-live-${stage}`,
+    accessibilityRef: `accessibility:vscode:palette-live-${stage}`,
+    freshnessRef: `freshness:vscode:palette-live-${stage}`,
+    observationRef: `observation:vscode:palette-live-${stage}`,
   };
 }
 

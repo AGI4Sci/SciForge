@@ -46,6 +46,7 @@ test('VSCode co-work Host live producer builds read-visible-text Host input from
     bindOutput: captured.bindOutput,
     bindRefs: captured.bindRefs,
     observe: captured.observe,
+    operation: 'read-visible-text',
   });
 
   assert.equal(produced.status, 'ready', produced.blockedReason);
@@ -105,36 +106,13 @@ test('VSCode co-work Host producer does not infer operation from command text', 
     observe: captured.observe,
   });
 
-  const vscodeCoWork = produced.agentHostInput!.target.vscodeCoWork as Record<string, unknown>;
-  const agentHostInput = {
-    ...produced.agentHostInput!,
-    target: {
-      ...produced.agentHostInput!.target,
-      vscodeCoWork: {
-        ...vscodeCoWork,
-        operation: undefined,
-      },
-    },
-  };
-
-  const materializer = createDefaultVSCodeCoWorkComputerUseActMaterializer();
-  const materializerResult = await materializer({
-    agentHostInput,
-    preflight: produced.preflight!,
-    commandText: 'read visible text from VSCode',
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-vscode-producer-no-text-inference',
-    attemptId: 'codex-command-vscode-producer-no-text-inference-attempt-1',
-    runtimeTruth: produced.runtimeTruth,
-  });
-
-  assert.equal(materializerResult?.status, 'blocked');
-  assert.equal(materializerResult?.claimType, 'computer-use-vscode-cowork-diagnostic');
-  assert.equal(materializerResult?.completionTruth, undefined);
-  assert.equal(materializerResult?.executionUnits?.[0]?.primitive, undefined);
-  assert.match(materializerResult?.message ?? '', /vscode_cowork_operation_required/i);
-  assert.ok(materializerResult?.evidenceRefs.includes('observation:vscode:current-1'));
-  assert.doesNotMatch(JSON.stringify(materializerResult), /computer-use-vscode-cowork-observe-decision|taskOutcome":"satisfied|product-ready/i);
+  assert.equal(produced.status, 'blocked');
+  assert.equal(produced.blockedReason, 'current-vscode-cowork-live-producer-operation-required');
+  assert.equal(produced.agentHostInput, undefined);
+  assert.equal(produced.runtimeTruth, undefined);
+  assert.equal(produced.preflight, undefined);
+  assert.ok(produced.evidenceRefs.includes('observation:vscode:current-1'));
+  assert.doesNotMatch(JSON.stringify(produced), /computer-use-vscode-cowork-observe-decision|taskOutcome":"satisfied|product-ready/i);
 });
 
 test('VSCode co-work Host live producer builds insert-draft Host input without leaking raw draft text', async () => {
@@ -160,6 +138,7 @@ test('VSCode co-work Host live producer builds insert-draft Host input without l
     bindRefs: captured.bindRefs,
     observe: captured.observe,
     draftTextRef: 'text-ref:current-vscode-cowork:draft',
+    operation: 'insert-draft',
   });
 
   assert.equal(produced.status, 'ready', produced.blockedReason);
@@ -534,6 +513,7 @@ function vscodePrimitivePorts(input: {
   requiredActContextRef?: string;
 }): ComputerUsePrimitivePorts {
   let observeCount = 0;
+  let currentObservationRef = 'observation:vscode:bind';
   return {
     bind: () => {
       input.calls.push('bind');
@@ -563,6 +543,8 @@ function vscodePrimitivePorts(input: {
       observeCount += 1;
       input.calls.push(`observe:${observeCount}`);
       const observationRef = `observation:vscode:current-${observeCount}`;
+      const staleInvalidationRefs = [currentObservationRef];
+      currentObservationRef = observationRef;
       return {
         status: 'completed',
         output: {
@@ -576,7 +558,7 @@ function vscodePrimitivePorts(input: {
             'text:vscode:visible',
             ...input.refs.filter((ref) => ref.startsWith('text:')),
           ]),
-          staleInvalidationRefs: [],
+          staleInvalidationRefs,
         } satisfies ComputerUseObserveOutput,
         refs: uniqueStrings([
           'computer-use-session:vscode:live',

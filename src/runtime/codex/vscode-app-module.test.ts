@@ -1242,6 +1242,30 @@ test('command palette readiness opens and queries without selecting commands', (
 
   assert.equal(multipleTextRefs.status, 'needs-confirmation');
   assert.equal(multipleTextRefs.reasonRef, 'needs-confirmation:vscode-app-module:target-text-ref-ambiguous');
+
+  const closeFromLiveRefs = vscode.checkReadiness({
+    operation: 'close-command-palette',
+    refs: [
+      'computer-use-session:current-vscode-cowork:unit-palette',
+      'window-action-session:current-vscode-cowork:unit-palette',
+      'macos-app:com.microsoft.VSCode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'text:title:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'command-palette:vscode:main:current',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(closeFromLiveRefs.status, 'ready');
+  assert.deepEqual(closeFromLiveRefs.primitive.action, {
+    kind: 'key',
+    key: 'Escape',
+  });
+  assert.ok(closeFromLiveRefs.primitive.inputRefs.includes('command-palette:vscode:main:current'));
+  assert.doesNotMatch(JSON.stringify(closeFromLiveRefs), /workbench|Save File|raw-label/i);
 });
 
 test('command palette readiness observes and selects only current item refs', () => {

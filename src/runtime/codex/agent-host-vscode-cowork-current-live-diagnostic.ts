@@ -14,6 +14,7 @@ import {
 import {
   createCurrentVSCodeCoWorkLivePrimitivePorts,
   runCurrentVSCodeCoWorkLiveDiagnosticPreflight,
+  VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
   type CurrentVSCodeCoWorkLivePrimitivePortsOptions,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
@@ -25,6 +26,7 @@ import {
   type VSCodeCoWorkFocusedEditorEvidenceVerifier,
   type VSCodeCoWorkLiveDiagnosticResult,
 } from './agent-host-vscode-cowork-live-diagnostic.js';
+import { createVSCodeAppModule } from './vscode-app-module.js';
 
 export interface RunCurrentVSCodeCoWorkReadVisibleTextLiveDiagnosticInput
   extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
@@ -67,6 +69,13 @@ export interface RunCurrentVSCodeCoWorkTerminalLiveDiagnosticInput
   env?: Record<string, string | undefined>;
   terminalTextRef: string;
   submit?: boolean;
+}
+
+export interface RunCurrentVSCodeCoWorkCommandPaletteLiveDiagnosticInput
+  extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
+  env?: Record<string, string | undefined>;
+  paletteQueryTextRef: string;
+  selectCurrentItem?: boolean;
 }
 
 export async function runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(
@@ -335,6 +344,205 @@ export async function runCurrentVSCodeCoWorkTerminalLiveDiagnostic(
   );
 }
 
+export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
+  input: RunCurrentVSCodeCoWorkCommandPaletteLiveDiagnosticInput,
+): Promise<VSCodeCoWorkLiveDiagnosticResult> {
+  const env = input.env ?? process.env;
+  if (env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV] !== '1') {
+    return {
+      status: 'blocked',
+      message: `missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [],
+      evidenceRefs: [],
+      cleanupRefs: [],
+    };
+  }
+  if (!input.paletteQueryTextRef.startsWith('text-ref:')) {
+    return {
+      status: 'blocked',
+      message: 'current VSCode co-work command palette diagnostic blocked: palette query text ref required',
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [],
+      evidenceRefs: ['blocked:vscode-cowork:palette-query-text-ref-required'],
+      cleanupRefs: [],
+    };
+  }
+
+  const runId = input.runId ?? `current-vscode-palette-${Date.now()}`;
+  const service = createComputerUsePrimitiveService({
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId,
+      activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded,
+      readCurrentWindow: input.readCurrentWindow,
+      performAction: input.performAction,
+      resolveTextRef: input.resolveTextRef,
+      typeResolvedText: input.typeResolvedText,
+      pressKeyInCurrentVSCode: input.pressKeyInCurrentVSCode,
+      captureRestorationState: input.captureRestorationState,
+      restoreCapturedState: input.restoreCapturedState,
+      restoreFocus: input.restoreFocus,
+      restoreMouse: input.restoreMouse,
+    }),
+  });
+  const vscodeModule = createVSCodeAppModule();
+  const primitiveChainObserved: string[] = [];
+  const evidenceRefs: string[] = [];
+  const cleanupRefs: string[] = [];
+  let sessionId: string | undefined;
+
+  const finish = async (
+    status: VSCodeCoWorkLiveDiagnosticResult['status'],
+    message: string,
+  ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
+    if (sessionId) {
+      const release = await currentVSCodeControlRelease(service, sessionId);
+      primitiveChainObserved.push('control(release)');
+      pushRefs(evidenceRefs, release.refs);
+      pushRefs(cleanupRefs, release.refs);
+      sessionId = undefined;
+    }
+    const finalEvidenceRefs = uniqueSafeRefs(evidenceRefs);
+    const finalCleanupRefs = uniqueSafeRefs(cleanupRefs);
+    return {
+      status,
+      message,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [...primitiveChainObserved],
+      evidenceRefs: finalEvidenceRefs,
+      cleanupRefs: finalCleanupRefs,
+      agentHostFinalAnswer: {
+        schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+        source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+        status,
+        text: message,
+        maturity: 'live-diagnostic',
+        productReady: false,
+        hostOwnsFinalAnswer: true,
+        computerUseCorePlanning: false,
+        primitiveChainObserved: [...primitiveChainObserved],
+        evidenceRefs: finalEvidenceRefs,
+        cleanupRefs: finalCleanupRefs,
+      },
+    };
+  };
+
+  const bind = await currentVSCodeBind(service);
+  primitiveChainObserved.push('bind');
+  pushRefs(evidenceRefs, bind.refs);
+  if (bind.status !== 'completed' || !bind.output?.sessionId) {
+    pushRefs(cleanupRefs, bind.refs);
+    return finish('blocked', bind.blockedReason ?? 'current VSCode command palette diagnostic blocked: bind failed');
+  }
+  sessionId = bind.output.sessionId;
+
+  const beforeObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  pushRefs(evidenceRefs, beforeObserve.refs);
+  if (beforeObserve.status !== 'completed') {
+    return finish('blocked', beforeObserve.blockedReason ?? 'current VSCode command palette diagnostic blocked: observe failed');
+  }
+
+  const open = vscodeModule.checkReadiness({
+    operation: 'open-command-palette',
+    operationRef: `operation-ref:vscode:open-command-palette:${currentVSCodeEvidenceToken(runId)}`,
+    refs: currentVSCodeAppModuleRefs([
+      ...bind.refs,
+      ...beforeObserve.refs,
+    ], beforeObserve.output?.observationRef),
+  });
+  primitiveChainObserved.push('host-decision(open-command-palette)');
+  pushRefs(evidenceRefs, open.evidenceRefs);
+  if (open.status !== 'ready' || open.primitive.name !== 'computer_use.act') {
+    return finish(readinessFailureDiagnosticStatus(open.status), open.reasonRef ?? 'current VSCode command palette diagnostic blocked: open readiness failed');
+  }
+  const openAction = appModuleActionToComputerUseAction(open.primitive.action);
+  if (!openAction) return finish('blocked', 'current VSCode command palette diagnostic blocked: open action invalid');
+  const openAct = await currentVSCodeAct(service, sessionId, 'open-command-palette', openAction, open.primitive.inputRefs);
+  primitiveChainObserved.push('act(open-command-palette)');
+  pushRefs(evidenceRefs, openAct.refs);
+  if (openAct.status !== 'completed') {
+    return finish('blocked', openAct.blockedReason ?? 'current VSCode command palette diagnostic blocked: open act failed');
+  }
+
+  const afterOpenObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  pushRefs(evidenceRefs, afterOpenObserve.refs);
+  if (afterOpenObserve.status !== 'completed') {
+    return finish('blocked', afterOpenObserve.blockedReason ?? 'current VSCode command palette diagnostic blocked: observe after open failed');
+  }
+
+  const send = vscodeModule.checkReadiness({
+    operation: 'send-command-palette-query',
+    operationRef: `operation-ref:vscode:send-command-palette-query:${currentVSCodeEvidenceToken(runId)}`,
+    refs: currentVSCodeAppModuleRefs([
+      ...bind.refs,
+      ...afterOpenObserve.refs,
+      input.paletteQueryTextRef,
+    ], afterOpenObserve.output?.observationRef),
+  });
+  primitiveChainObserved.push('host-decision(send-command-palette-query)');
+  pushRefs(evidenceRefs, send.evidenceRefs);
+  if (send.status !== 'ready' || send.primitive.name !== 'computer_use.act') {
+    return finish(readinessFailureDiagnosticStatus(send.status), send.reasonRef ?? 'current VSCode command palette diagnostic blocked: query readiness failed');
+  }
+  const sendAction = appModuleActionToComputerUseAction(send.primitive.action);
+  if (!sendAction) return finish('blocked', 'current VSCode command palette diagnostic blocked: query action invalid');
+  const sendAct = await currentVSCodeAct(service, sessionId, 'send-command-palette-query', sendAction, send.primitive.inputRefs);
+  primitiveChainObserved.push('act(send-command-palette-query)');
+  pushRefs(evidenceRefs, sendAct.refs);
+  if (sendAct.status !== 'completed') {
+    return finish('blocked', sendAct.blockedReason ?? 'current VSCode command palette diagnostic blocked: query act failed');
+  }
+
+  const itemsObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  pushRefs(evidenceRefs, itemsObserve.refs);
+  if (itemsObserve.status !== 'completed') {
+    return finish('blocked', itemsObserve.blockedReason ?? 'current VSCode command palette diagnostic blocked: observe items failed');
+  }
+
+  const finalOperation = input.selectCurrentItem === true
+    ? 'select-command-palette-item'
+    : 'close-command-palette';
+  const finalReadiness = vscodeModule.checkReadiness({
+    operation: finalOperation,
+    operationRef: `operation-ref:vscode:${finalOperation}:${currentVSCodeEvidenceToken(runId)}`,
+    refs: currentVSCodeAppModuleRefs([
+      ...bind.refs,
+      ...itemsObserve.refs,
+    ], itemsObserve.output?.observationRef),
+  });
+  primitiveChainObserved.push(`host-decision(${finalOperation})`);
+  pushRefs(evidenceRefs, finalReadiness.evidenceRefs);
+  if (finalReadiness.status !== 'ready' || finalReadiness.primitive.name !== 'computer_use.act') {
+    return finish(readinessFailureDiagnosticStatus(finalReadiness.status), finalReadiness.reasonRef ?? `current VSCode command palette diagnostic blocked: ${finalOperation} readiness failed`);
+  }
+  const finalAction = appModuleActionToComputerUseAction(finalReadiness.primitive.action);
+  if (!finalAction) return finish('blocked', `current VSCode command palette diagnostic blocked: ${finalOperation} action invalid`);
+  const finalAct = await currentVSCodeAct(service, sessionId, finalOperation, finalAction, finalReadiness.primitive.inputRefs);
+  primitiveChainObserved.push(`act(${finalOperation})`);
+  pushRefs(evidenceRefs, finalAct.refs);
+  if (finalAct.status !== 'completed') {
+    return finish('blocked', finalAct.blockedReason ?? `current VSCode command palette diagnostic blocked: ${finalOperation} act failed`);
+  }
+
+  const afterFinalObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  pushRefs(evidenceRefs, afterFinalObserve.refs);
+  if (afterFinalObserve.status !== 'completed') {
+    return finish('blocked', afterFinalObserve.blockedReason ?? `current VSCode command palette diagnostic blocked: observe after ${finalOperation} failed`);
+  }
+
+  return finish('completed', input.selectCurrentItem === true
+    ? 'current VSCode command palette live diagnostic completed open, query, observe, select current item, observe, and release'
+    : 'current VSCode command palette live diagnostic completed open, query, observe items, close, observe, and release'
+  );
+}
+
 export function createCurrentVSCodeCoWorkFocusedEditorEvidenceProvider(): VSCodeCoWorkFocusedEditorEvidenceProvider {
   return (input) => {
     const afterObserveRefs = uniqueSafeRefs(input.afterObserveRefs);
@@ -440,6 +648,67 @@ function uniqueSafeRefs(refs: string[] | undefined): string[] {
 
 function pushRefs(target: string[], refs: string[] | undefined): void {
   target.splice(0, target.length, ...uniqueSafeRefs([...target, ...(refs ?? [])]));
+}
+
+function currentVSCodeAppModuleRefs(refs: string[], currentObservationRef: string | undefined): string[] {
+  return uniqueSafeRefs(refs).filter((ref) =>
+    !ref.startsWith('observation:vscode:') || !currentObservationRef || ref === currentObservationRef
+  );
+}
+
+function readinessFailureDiagnosticStatus(status: 'ready' | 'blocked' | 'needs-confirmation'): VSCodeCoWorkLiveDiagnosticResult['status'] {
+  return status === 'needs-confirmation' ? 'needs-confirmation' : 'blocked';
+}
+
+function appModuleActionToComputerUseAction(action: unknown): ComputerUseAtomicAction | undefined {
+  if (!isRecord(action)) return undefined;
+  if (action.kind === 'key' && typeof action.key === 'string') {
+    return {
+      type: 'key',
+      key: action.key,
+    };
+  }
+  if (action.kind === 'type' && typeof action.textRef === 'string' && action.textRef.startsWith('text-ref:')) {
+    return {
+      type: 'type',
+      textRef: action.textRef,
+    };
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function currentVSCodeBind(
+  service: ReturnType<typeof createComputerUsePrimitiveService>,
+): Promise<ComputerUsePrimitiveEnvelope<ComputerUseBindOutput>> {
+  return currentTerminalBind(service);
+}
+
+async function currentVSCodeObserve(
+  service: ReturnType<typeof createComputerUsePrimitiveService>,
+  sessionId: string,
+): Promise<ComputerUsePrimitiveEnvelope<ComputerUseObserveOutput>> {
+  return currentTerminalObserve(service, sessionId);
+}
+
+async function currentVSCodeAct(
+  service: ReturnType<typeof createComputerUsePrimitiveService>,
+  sessionId: string,
+  actionId: string,
+  action: ComputerUseAtomicAction,
+  contextRefs: string[],
+): Promise<ComputerUsePrimitiveEnvelope<ComputerUseActOutput>> {
+  return currentTerminalAct(service, sessionId, actionId, action, contextRefs);
+}
+
+async function currentVSCodeControlRelease(
+  service: ReturnType<typeof createComputerUsePrimitiveService>,
+  sessionId: string,
+): Promise<ComputerUsePrimitiveEnvelope<ComputerUseControlOutput>> {
+  return currentTerminalControlRelease(service, sessionId);
 }
 
 async function currentTerminalBind(

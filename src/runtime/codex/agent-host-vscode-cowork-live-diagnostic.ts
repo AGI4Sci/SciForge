@@ -140,9 +140,9 @@ export function produceVSCodeCoWorkAgentHostLiveInput(
   if (input.observe.status !== 'completed' || !input.observe.output) {
     return blockedProducerResult('current-vscode-cowork-live-producer-observe-required', input);
   }
-  const operation = input.operation ?? inferVSCodeCoWorkLiveOperation(input.commandText, input.draftTextRef);
+  const operation = input.operation;
   if (!operation) {
-    return blockedProducerResult('current-vscode-cowork-live-producer-intent-unsupported', input);
+    return blockedProducerResult('current-vscode-cowork-live-producer-operation-required', input);
   }
   if (operation === 'insert-draft' && !input.draftTextRef?.startsWith('text-ref:')) {
     return blockedProducerResult('current-vscode-cowork-live-producer-draft-text-ref-required', input);
@@ -951,22 +951,6 @@ function readyPreflight(
     },
     blockers: [],
   };
-}
-
-function inferVSCodeCoWorkLiveOperation(
-  commandText: string,
-  draftTextRef: string | undefined,
-): VSCodeCoWorkLiveProducerOperation | undefined {
-  if (draftTextRef?.startsWith('text-ref:') && /(?:插入|写入|草稿|insert|draft)/i.test(commandText)) {
-    return 'insert-draft';
-  }
-  if (/(?:聚焦|focus)/i.test(commandText)) {
-    return 'focus-editor';
-  }
-  if (/(?:读取|查看|看看|可见文本|read|visible\s+text)/i.test(commandText)) {
-    return 'read-visible-text';
-  }
-  return undefined;
 }
 
 function blockedProducerResult(

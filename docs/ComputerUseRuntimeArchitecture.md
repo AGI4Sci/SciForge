@@ -217,7 +217,7 @@ public sanitizer 的职责是递归处理 public projection object、array、met
 
 readiness validator 必须拒绝 top-level 或 nested action payload 中的 final-answer 字段、completion truth 字段、raw/base64/provider payload、raw command、raw path、URL、raw screenshot path。key 检测必须覆盖 camelCase、snake_case 和 kebab-case alias；value 检测必须覆盖裸 base64、HTML/DOM、本地绝对路径等 raw payload。即使 action payload 不会直接展示给用户，也不能成为隐藏聊天旁路或大对象旁路。
 
-阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。`PROJECT_CU.md` 是唯一继续路线图：已关闭阶段只保留短摘要，不再保留旧展开 checklist；旧逻辑、旧测试或旧文档和新方案冲突时直接删除、改写或 fail closed。新的可打勾任务必须能由一个红测、一个窄实现、一个 materializer / static guard、一个 env-gated skip path 或一个明确 diagnostic evidence 覆盖。
+阶段推进必须递进，不能一步跳到完整 VSCode co-work 或论文编辑。`PROJECT_CU.md` 是唯一继续路线图：已关闭阶段只保留短摘要，不再保留旧展开 checklist；旧任务可以删除，旧逻辑、旧测试或旧文档和新方案冲突时直接删除、改写或 fail closed，不做兼容层、fallback shortcut、legacy alias 或历史 run 转译。新的可打勾任务必须能由一个红测、一个窄实现、一个 materializer / static guard、一个 env-gated skip path 或一个明确 diagnostic evidence 覆盖。
 
 架构文档只保留阶段方向：
 
@@ -399,8 +399,8 @@ Computer Use primitive 默认不调用模型。
 - VSCode diagnostics 当前保持 app-module dry-run refs-only；没有新增共享系统输入 diagnostics 旁路，不能声明 `product-ready`。
 - P7 VSCode terminal readiness 是 `unit-proven`：`focus-terminal`、`send-terminal-text`、`observe-terminal`、`submit-terminal-command` 保持分步 primitive；send 只接受 Host `text-ref:` 且不按 Enter，observe 只输出 terminal output / hash refs，submit 需要 current terminal input / session refs、same-session / same-input verifier refs，terminal window / session / input 漂移时 blocked-safe。
 - P7 current VSCode terminal live harness 是 `live-diagnostic` 且默认关闭：使用独立 `SCIFORGE_COMPUTER_USE_VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC=1` gate；缺少 env 时不构造 runner / adapter，mocked env-on path 已覆盖 `focus -> send -> observe` 与 `focus -> send -> observe -> submit -> observe -> release`，并释放 input lease / adapter / cursor、恢复焦点和鼠标位置。
-- P8 command palette app-module readiness 是 `unit-proven` 到 static guard：`open-command-palette`、`send-command-palette-query`、`observe-command-palette-items`、`select-command-palette-item` 分步 primitive 已接入；query 只接受 Host `text-ref:`，observe 只基于 current palette / input refs 触发下一次观察，后续 observation 只能投影 current item / rank / hash refs，select 只接受 current observe item ref 并输出 palette current-observation / same-item verifier refs；raw command id / raw label / stale item / drift 均 blocked-safe，ordinary chat / terminal output / history 不能触发 palette readiness。
-- P8 palette live harness 尚未实现：进入 P8.9-P8.11 前需要独立 palette env gate、live observation palette refs、palette-safe act context、mocked open/query/observe/select/close/release chain 和 cleanup manifest；不能把当前 unit-proven readiness 宣称为真实桌面完成。
+- P8 command palette app-module readiness 是 `unit-proven` 到 env-gated mocked `live-diagnostic`：`open-command-palette`、`send-command-palette-query`、`observe-command-palette-items`、`select-command-palette-item`、`close-command-palette` 分步 primitive 已接入；query 只接受 Host `text-ref:`，observe 只基于 current palette / input refs 触发下一次观察，后续 observation 只能投影 current item / rank / hash refs，select 只接受 current observe item ref 并输出 palette current-observation / same-item verifier refs；raw command id / raw label / stale item / drift 均 blocked-safe，ordinary chat / terminal output / history 不能触发 palette readiness。
+- P8 palette live harness 已有独立 env gate、palette observation refs、palette-safe act context、mocked `open -> query -> observe -> close/release` 与 `open -> query -> observe -> select current item -> observe -> release` 链路，并验证 cleanup manifest。真实桌面路径仍默认关闭，只能标 `live-diagnostic`，不能宣称 `product-ready`；默认 executor 仍不能把 raw command id / raw label / paletteLabel / commandText 变成执行旁路。
 - P9.0 app-module readiness 当前刻意 fail-closed：editor mutation、save、undo / redo 等旧 ready 路径不保留；进入对应细分阶段前不能暴露 raw selected text、raw diff、raw path 或直接写入 primitive。
 - 普通聊天 / native route 入口审计和 native route final-answer gate 已进入已验收基线；后续继续按 `PROJECT_CU.md` 收口 public projection 和旧旁路。
 - 真实当前 VSCode 前台窗口 live matrix 尚未全部跑完，未跑过的 env gate 不能打完成勾。
