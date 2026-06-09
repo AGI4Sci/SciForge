@@ -7,6 +7,8 @@ import {
   agentHostBrowserSearchPlanFromPrompt,
   agentHostBrowserUserPromptFromCommandText,
   createAgentHostBrowserEvidenceLedger,
+  evaluateAgentHostBrowserSearchDiscovery,
+  evaluateAgentHostBrowserSearchQuery,
   evaluateAgentHostBrowserEvidence,
   recordAgentHostBrowserRefs,
   recordAgentHostBrowserToolResult,
@@ -140,6 +142,28 @@ test('Agent Host Browser acceptance spec strips Runtime Codex continuation scaff
   assert.equal(agentHostBrowserUserPromptFromCommandText(prompt), '搜索一下伊朗局势');
   assert.deepEqual(spec.topicalTerms, ['伊朗局势']);
   assert.doesNotMatch(spec.taskSummary ?? '', /Continue the active Runtime Codex session|Interpret relative references/);
+});
+
+test('Agent Host Browser search guard rejects contaminated queries before Browser execution', () => {
+  const plan = agentHostBrowserSearchPlanFromPrompt('帮我搜索一下伊朗局势，至少搜索5条信息。');
+  const evaluation = evaluateAgentHostBrowserSearchQuery(
+    'Use the visible desktop from the ordinary SciForge Desktop chat to complete the Computer Use acceptance task. Start from the product chat surface, bind the curr',
+    plan,
+  );
+
+  assert.equal(evaluation.status, 'repairable');
+  assert.ok(evaluation.issues.some((issue) => issue.code === 'browser-search-query-contaminated'));
+  assert.ok(evaluation.repairHints.some((hint) => hint.action === 'collect-browser-evidence'));
+});
+
+test('Agent Host Browser search guard flags obviously unrelated discovery results before auto-read', () => {
+  const plan = agentHostBrowserSearchPlanFromPrompt('帮我搜索一下伊朗局势，至少搜索5条信息。');
+  const ledger = recordAgentHostBrowserToolResult(createAgentHostBrowserEvidenceLedger(), browserUnrelatedSearchEnvelope());
+  const evaluation = evaluateAgentHostBrowserSearchDiscovery(ledger, plan);
+
+  assert.equal(evaluation.status, 'repairable');
+  assert.ok(evaluation.issues.some((issue) => issue.code === 'browser-search-result-relevance-gap'));
+  assert.deepEqual(evaluation.satisfiedEvidenceRefs, []);
 });
 
 test('Agent Host Browser search plan extracts task query and source requirements without workflow scaffolding', () => {
@@ -360,6 +384,50 @@ function browserSearchEnvelope(): BrowserPrimitiveEnvelope {
       boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
     },
     refs: ['browser:search-result:turn-1'],
+    diagnostics: [],
+    budget: {},
+  };
+}
+
+function browserUnrelatedSearchEnvelope(): BrowserPrimitiveEnvelope {
+  return {
+    schemaVersion: BROWSER_PRIMITIVE_RESULT_SCHEMA,
+    moduleId: 'browser',
+    primitive: 'search',
+    status: 'completed',
+    output: {
+      query: 'Use the visible desktop from the ordinary SciForge Desktop chat to complete the Computer Use acceptance task',
+      results: [{
+        title: '内蒙古农业大学研究生院',
+        url: 'https://yjsy.imau.edu.cn/index.htm',
+        snippet: '内蒙古农业大学研究生院招生、培养和学位管理信息。',
+      }],
+      searchResultRef: 'browser:search-result:wrong-topic',
+    },
+    resources: [{
+      ref: 'browser:search-result:wrong-topic',
+      kind: 'search_result_set',
+      status: 'discovered',
+      originTool: 'browser.search',
+      confidence: 'candidate',
+      title: '内蒙古农业大学研究生院',
+      snippet: '内蒙古农业大学研究生院招生、培养和学位管理信息。',
+    }, {
+      ref: 'browser:resource:web_page:imau-yjs',
+      kind: 'web_page',
+      status: 'discovered',
+      originTool: 'browser.search',
+      locator: { url: 'https://yjsy.imau.edu.cn/index.htm' },
+      title: '内蒙古农业大学研究生院',
+      snippet: '内蒙古农业大学研究生院招生、培养和学位管理信息。',
+      confidence: 'candidate',
+    }],
+    evidenceState: {
+      completed: ['Discovered 1 candidate web page resource(s).'],
+      unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+      boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+    },
+    refs: ['browser:search-result:wrong-topic'],
     diagnostics: [],
     budget: {},
   };

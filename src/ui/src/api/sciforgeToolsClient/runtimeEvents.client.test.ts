@@ -2760,6 +2760,52 @@ test('Runtime Codex same workbench session resumes legacy runs without lane meta
   assert.match(String(body.commandText ?? ''), /^Continue the active Runtime Codex session\./);
 });
 
+test('Runtime Codex plain same-lane follow-up resumes thread without prepending resume context', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const previousThreadId = 'thread-plain-followup';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '搜索一下伊朗局势',
+      references: [],
+      artifacts: [],
+      claims: [],
+      conversationLaneId: 'workbench:literature-evidence-review:session-test',
+      runs: [{
+        id: 'codex-command-previous-plain',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'previous complete task',
+        response: 'previous answer',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        completedAt: '2026-05-19T00:00:01.000Z',
+        raw: {
+          codexSessionId: previousThreadId,
+          conversationLaneId: 'workbench:literature-evidence-review:session-test',
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const realtimeSession = body.realtimeSession as Record<string, unknown>;
+  assert.equal(body.codexSessionId, previousThreadId);
+  assert.equal(realtimeSession.codexSessionId, previousThreadId);
+  assert.equal(realtimeSession.resumeRequested, true);
+  assert.equal(body.commandText, '搜索一下伊朗局势');
+});
+
 test('Runtime Codex native resume keeps GUI follow-up as command text plus refs only', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];

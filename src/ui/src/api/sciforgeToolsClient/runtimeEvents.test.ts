@@ -132,6 +132,113 @@ test('SSE reader requires a safe final assistant answer for Runtime Codex comple
   assert.equal((seen.at(-1) as { type?: string }).type, 'failed');
 });
 
+test('SSE reader accepts structured Codex app-server agentMessage completion as final answer', async () => {
+  const commandId = 'codex-command-app-server-agent-message';
+  const attemptId = `${commandId}-attempt-1`;
+  const answer = '这是一张 macOS 桌面截图，主要展示科研项目、会议纪要和差旅文件。';
+  const body = [
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: answer,
+      message: answer,
+      commandId,
+      attemptId,
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      evidenceRefs: [`audit:codex-app-server:${commandId}:${attemptId}:normalized-events`],
+      raw: {
+        boundary: 'backend-neutral-normalized-event',
+        backend: 'codex-app-server',
+        event: {
+          schemaVersion: 'sciforge.backend-normalized-event.v1',
+          backend: 'codex-app-server',
+          type: 'message_delta',
+          text: answer,
+          raw: {
+            method: 'item/agentMessage/delta',
+            params: {
+              itemId: 'msg-1',
+              delta: answer,
+            },
+          },
+        },
+      },
+    })}`,
+    '',
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: answer,
+      message: answer,
+      commandId,
+      attemptId,
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      evidenceRefs: [`audit:codex-app-server:${commandId}:${attemptId}:normalized-events`],
+      raw: {
+        boundary: 'backend-neutral-normalized-event',
+        backend: 'codex-app-server',
+        event: {
+          schemaVersion: 'sciforge.backend-normalized-event.v1',
+          backend: 'codex-app-server',
+          type: 'message',
+          text: answer,
+          raw: {
+            method: 'item/completed',
+            params: {
+              item: {
+                type: 'agentMessage',
+                id: 'msg-1',
+                text: answer,
+              },
+            },
+          },
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId,
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      evidenceRefs: [`audit:codex-app-server:${commandId}:${attemptId}:normalized-events`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+  const result = stream.result as {
+    message?: string;
+    output?: { message?: string; finalAnswerEnvelope?: boolean };
+    finalAnswerEnvelope?: { hostTextSource?: string; text?: string };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, answer);
+  assert.equal(result.output?.message, answer);
+  assert.equal(result.output?.finalAnswerEnvelope, true);
+  assert.equal(result.finalAnswerEnvelope?.hostTextSource, 'codex-app-server-agent-message');
+  assert.equal(result.finalAnswerEnvelope?.text, answer);
+  assert.equal((seen.at(-1) as { type?: string }).type, 'done');
+});
+
 test('SSE reader materializes structured VirtualAppScreen artifacts from done payloads without raw text fallback', async () => {
   const commandId = 'codex-command-virtual-screen-done';
   const legacyScreenArtifactId = `computer-use-virtual-screen-${commandId}`;

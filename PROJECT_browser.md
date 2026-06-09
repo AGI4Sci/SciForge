@@ -1,325 +1,330 @@
-# SciForge Browser Search 当前任务
+# SciForge Web Search 当前任务
 
-最后更新：2026-06-08
+最后更新：2026-06-09
 
 ## 用户真正要什么
 
-用户希望 Codex 能在普通聊天中可靠完成联网搜索、网页读取、来源抽取、下载和中文/英文总结等任务，并给出可验证的当前 run 证据。
+搜索只是 SciForge 的基础能力，不是独立产品、不是第二个 agent，也不是浏览器自动化展示项目。
 
-Browser 不是独立 agent，也不是搜索总结器。它只提供可迁移、可验收、可清理的网页信息 primitive runtime；Agent Host 负责理解用户任务、选择搜索策略、决定读取哪些来源、运行 verifier、判断 completion truth 和生成 final answer。
+当前目标是把两个原子工具做扎实：
+
+- `web_search(query)`：稳定发现候选来源。
+- `web_read(url/ref)`：稳定读取单个来源正文。
+
+Agent Host 负责用户意图、query 是否合理、读哪些来源、证据是否足够、是否升级 fallback、最终回答和 completion truth。Web Search Runtime 只负责执行、返回结构化 evidence、timing、refs、failure reason 和可复核 artifact。
 
 ## 总体决策
 
-- [x] Public surface 只保留 primitive：`search`、`navigate`、`observe`、`read`、`extract`、`download`。
-- [x] 面向模型 / MCP provider 的直接工具名为 `browser_search`、`browser_navigate`、`browser_observe`、`browser_read`、`browser_extract`、`browser_download`。
-- [x] 直接工具只是 provider-safe alias，内部必须路由回同一个 Browser module dispatcher，不形成第二条搜索、读取、总结或 completion 链路。
-- [x] Browser 输出长期收敛为 `resources + evidenceState + refs-first envelope`；不继续扩展 `readInput`、`candidateReadInputs` 或搜索专用修复字段。
-- [x] `browser.read` 可以消费 `url`、`sessionId` 或 `resourceRef`；resource resolver 只做机械定位转换，不做来源选择、任务策略或语义判断。
-- [x] 旧 `browser.search_read`、`browser.open_read`、`browser.open`、`executeBoundedOperation` 浏览器组合入口不作为新 public surface 保留。
-- [x] Search-only loop、搜索结果总结、最终回答、verifier 选择和用户级完成判断只能由 Codex / Agent Host 管理，不能放在 Browser、UI、runtime fallback 或 Model Router 旁路里。
+- [ ] 第一版只暴露 `web_search` 和 `web_read` 两个普通业务工具。
+- [ ] `web_extract` 不进入第一版默认工具面；后续有批量结构化采集需求时再单独设计。
+- [ ] `web_batch_read` 不进入默认工具面；需要批量时由 Agent Host 或调用方并发调用 `web_read`。
+- [ ] `web_health` 作为 runtime resource / 管理端 endpoint，不作为普通 Agent tool。
+- [ ] `web_benchmark` 作为 CLI / 开发验收工具，不作为普通 Agent tool。
+- [ ] `web_search` 首选自建、开源可控的 JSON search provider，例如 SearXNG；OpenSERP 可作为备选 provider。
+- [ ] `web_read` 首选 static fetch + Markdown 抽取；trafilatura / Readability 作为静态正文抽取主路径。
+- [ ] Browser render 只作为 fallback：Crawl4AI / BrowserHostSession / Playwright path 可用于 JS-heavy、静态读取失败或正文缺失场景。
+- [ ] 复杂 browse fallback 需要智能时，由 Agent Host 显式启动 browse/search fallback sub agent 或 local harness；基础工具内部不能静默启动 autonomous agent。
 
-## Invariant Audit
+## 可复用开源工作与参考
 
-每次阶段打勾前都要重新确认这些不可变原则。
+实现前优先复用或适配已有开源组件；不要重新实现通用搜索引擎、网页正文抽取器、浏览器自动化框架或 MCP 基础协议。
+
+### Search Provider
+
+| 项目 | 用途 | 推荐状态 | 注意事项 |
+| --- | --- | --- | --- |
+| [SearXNG](https://github.com/searxng/searxng) | 自建 metasearch，提供 `/search?...&format=json` 候选发现。 | 第一版首选 search provider。 | AGPL；作为独立 sidecar / 外部服务接入，不 vendoring 到 SciForge core。JSON 输出需要实例配置开启。 |
+| [OpenSERP](https://github.com/karust/openserp) | API-first SERP 聚合，支持多引擎、JSON / OpenAPI / MCP。 | 第一版备选 provider，env-gated。 | 页面级 SERP 抽取仍可能遇到 captcha / 503；适合作 SearXNG 备援。 |
+| [4get](https://git.lolcat.ca/lolcat/4get) | 自托管 metasearch，覆盖较广，有 API。 | 实验 provider。 | AGPLv3-only；项目和安全边界需要先审计。 |
+| [YaCy](https://github.com/yacy/yacy_search_server) | 本地 / 垂直 corpus 搜索引擎和 P2P 索引。 | 后续 local_index provider。 | 不适合作通用 Web metasearch 主源；部署和索引成本较高。 |
+
+不推荐第一版主线：Whoogle、MetaGer、商业 SERP API。Whoogle 已不适合作稳定主源；商业 API 不符合“完全自建 / 开源可控”的第一版约束。
+
+### Read / Markdown Extraction
+
+| 项目 | 用途 | 推荐状态 | 注意事项 |
+| --- | --- | --- | --- |
+| [Crawl4AI](https://github.com/unclecode/crawl4ai) | URL -> LLM-friendly Markdown，支持 browser render、session、多 URL、cache。 | `web_read` browser render fallback 首选；也可作为 read 主后端实验。 | Apache-2.0；LLM extraction 不作为第一版默认能力。 |
+| [trafilatura](https://github.com/adbar/trafilatura) | 静态 HTML 正文 / metadata 抽取，支持 Markdown / JSON / XML 输出。 | `web_read` static extraction 首选。 | Apache-2.0；不执行 JS。 |
+| [Readability.js](https://github.com/mozilla/readability) | 已获取 HTML / DOM 后提取正文。 | `web_read` 静态 fallback 或 DOM 后处理。 | Apache-2.0；需要外层 fetch / render 和 Markdown 转换。 |
+| [newspaper4k](https://github.com/AndyTheFactory/newspaper4k) | 新闻文章专项抽取。 | 新闻专项可选 fallback。 | MIT；不作为通用默认。 |
+
+后续文档 / PDF 读取可接 [Apache Tika](https://github.com/apache/tika) 和 [GROBID](https://github.com/kermitt2/grobid)，但它们不进入第一版 `web_read` 普通网页 scope。
+
+### Browser Fallback / Harness
+
+| 项目 | 用途 | 推荐状态 | 注意事项 |
+| --- | --- | --- | --- |
+| [Playwright](https://github.com/microsoft/playwright) | 浏览器 render、DOM / network / screenshot / context / profile 管理。 | 基础 browser fallback 底座。 | Apache-2.0；浏览器二进制分发和 profile 隔离要单独处理。 |
+| [browser-use](https://github.com/browser-use/browser-use) | Browser agent / 操作容错 / real browser 连接经验。 | 参考或 Host-owned fallback harness 候选。 | 不作为基础工具内部静默 agent；只能在 Agent Host 显式升级时使用。 |
+| [Stagehand](https://github.com/browserbase/stagehand) | AI-friendly browser `act/extract/observe` 模式。 | 参考页面观察、抽取和动作容错设计。 | Browserbase 云能力不是第一版依赖。 |
+| [Crawlee](https://github.com/apify/crawlee) | request queue、session pool、proxy、Playwright / Puppeteer crawler 编排。 | 后续批量 / crawler / browser fallback 编排。 | Apache-2.0；第一版不做 `web_batch_read`。 |
+| [Browsertrix Crawler](https://github.com/webrecorder/browsertrix-crawler) | WARC / WACZ 归档和可复现网页抓取。 | 后续证据归档可选。 | AGPL；不是正文抽取主工具。 |
+
+不推荐默认采用：CloakBrowser、Browserless OSS / Enterprise stealth、undetected / stealth 插件。它们存在不可审计二进制、SSPL / 商业许可、长期稳定性或合规风险，不符合第一版“开源可控基础能力”的目标。
+
+### MCP / Tool Surface 参考
+
+| 项目 | 可借鉴点 | 注意事项 |
+| --- | --- | --- |
+| [mcp-server-fetch](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch) | `fetch(url, max_length, start_index, raw)` 的分块读取、robots/user-agent/proxy、安全边界。 | 只有 fetch/read，没有 search；需要补 SSRF guard。 |
+| [mcp-searxng](https://github.com/ihor-sokoliuk/mcp-searxng) | SearXNG MCP tool / HTTP health / Docker 接入形态。 | 可借鉴接口，不必 MCP 套 MCP；SciForge 内部优先 provider adapter。 |
+| [mcp-crawl4ai](https://pypi.org/project/mcp-crawl4ai/) | Crawl4AI 的 scrape / crawl / artifact tool 设计。 | 第一版只借鉴 read / artifact，不做 autonomous crawl。 |
+| [Firecrawl MCP](https://github.com/mcp/firecrawl/firecrawl-mcp-server) | scrape / search / map / crawl / extract 工具命名和任务拆分。 | Firecrawl 主仓库 AGPL；只借鉴接口，不作为默认依赖。 |
+
+## 不可变原则
+
+每次打勾前都要重新确认这些原则。
 
 - [x] 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
 - [x] 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
 - [x] 大对象必须 refs-first；截图、图片、provider payload、trace、日志和 artifact 不得作为 raw/base64 长期进入聊天正文或主上下文。
-- [x] 不使用 `git reset --hard` 或 `git checkout --` 擦除用户改动。
-- [x] 所有 Runtime Codex / API 服务调用先走 Model Router；`config.local.json` 只作为 Router 成员模型 env 配置来源，不作为 Runtime Codex 直连 provider 配置。
+- [x] LLM API 配置使用 `/Applications/workspace/ailab/research/app/SciForge/config.local.json`。
 - [x] 在能提高时间效率的前提下，尽可能使用 sub agent 并行推进；并行任务必须拆清边界，避免不同 worker 修改同一文件造成冲突。
-- [x] SciForge对话、工作链路需要统一，不要额外生出旁路
-- [x] **符合docs/Architecture.md设计原则, 如果你觉得继续推进会导致混乱、衍生旁路、设计方案不合理、有相互冲突的点、有更简洁通用的实现方案，需要停下来和用户讨论，澄清需求**
+- [x] SciForge 对话、工作链路需要统一，不要额外生出旁路。
+- [x] 符合 `docs/Architecture.md` 设计原则；如果继续推进会导致混乱、衍生旁路、设计方案不合理、有相互冲突的点，或有更简洁通用的实现方案，需要停下来和用户讨论。
+- [x] Agent Host owns intent, source policy, evidence sufficiency, repair, final answer and completion truth.
+- [x] Web Search Runtime owns execution only: provider call, browser render, extraction, refs, timing, diagnostics and blocked reason.
+- [x] `web_search` 结果只是候选，不能作为已读取来源 evidence。
+- [x] `web_read` 只读取一个 URL / ref，不能继续搜索、跨站 crawl、改写任务目标或生成最终回答。
+- [x] 工具结果必须 refs-first；raw HTML、长文本、截图、cookies、credentials、download bytes、base64、secret 不得进入主聊天正文。
+- [x] 所有 URL 访问必须 fail closed：只允许 HTTP(S)，默认拒绝 `localhost`、私网 IP、link-local、metadata endpoint、`file:` 和特殊协议。
+- [x] 登录态、验证码、付费墙、敏感域名和用户 profile 必须显式 policy / approval，不得自动绕过。
+- [x] 不能为当前截图、URL、query、thread、agent id 或历史 run 写硬编码补丁。
+- [x] 旧 `browser.search_read`、`browser.open_read`、`browser.open`、search-only summary path 不能作为新实现兼容层回流。
+- [x] 如果实现方案开始制造第二条 Agent Host、第二套 final answer 或第二套 verifier，必须停下来重新讨论。
 
-## 简化架构
+## 目标接口
 
-长期只保留五层，每层职责要窄。
+### `web_search(query)`
 
-- [x] Primitive Contract：schema、validator、result envelope、resource contract、evidenceState、refs-first 规则。
-- [x] Browser Host Runtime：BrowserHostSession / tab scope、导航、搜索页面、内容读取、下载 artifact 生命周期。
-- [x] Resource Resolver：把 `resourceRef` 机械解析成 primitive 可消费 locator，不做策略、不做语义判断。
-- [x] Host Adapter：把 provider-safe dynamic tools 路由到同一个 dispatcher，只做权限 / side-effect / schema 边界。
-- [x] Acceptance Harness：只验证协议形状、manifest schema、refs materialization、negative guards 和真实运行证据；不承担 query planning、source selection、synthesis、completion truth 或 final answer。
+作用：发现候选来源。
 
-## 算法简化原则
+输入：
 
-- [x] 用 primitive table 声明每个 primitive 的 required fields、side effect、consumes、produces 和 evidence requirement。
-- [x] 用 ResourceRef 表达搜索候选、浏览器 session、source page、page text、extracted link 和 downloaded artifact。
-- [x] 用 `evidenceState` 表达“已完成什么、还不知道什么、证据边界是什么”。
-- [x] Browser 不给任务级下一步建议；Agent Host 根据 Tool Schema、ResourceRef、Evidence Ledger 和 AcceptanceSpec 自主选择下一步。
-- [x] Resource resolver 只做机械转换，例如 `web_page:discovered -> browser.read({ resourceRef })` 解析到 URL。
-- [x] 连续调用无进展的判断属于 Agent Host / verifier / Evidence Ledger，不属于 Browser search 专用 guard。
-- [x] Product path 只能基于 current-run source page refs、page text refs、download artifact refs 和 verifier refs；搜索链接或 snippet 不能作为完成证据。
+- `query`：Agent Host 给定的搜索 query。
+- 可选：`limit`、`language`、`region`、`time_range`、`safe_search`、`provider`、`timeout_ms`、`constraints`。
 
-## 推荐推进策略
+输出：
 
-- [x] 每项能力按 `contracted -> unit-proven -> live-diagnostic -> product-ready` 推进，不能跳级宣传。
-- [x] 新增或修改 primitive 必须先补 validator、MCP schema、service delegation test、resource/evidenceState test 和 host adapter test。
-- [x] live test 只证明真实网页 / 真实浏览器行为；package probe、fixture、旧 run 和 UI screenshot 不能证明用户级完成。
-- [x] 复杂需求优先拆到 Agent Host、Verifier、Evidence Ledger 或 Acceptance Harness；Browser core 只保留 primitive 管线。
-- [x] 如果实现里出现搜索总结器、query planner、source ranker、search-only repair、final answer 或 verifier port，直接删除或迁移出 Browser。
-- [x] 每轮实现结束都更新本文件的成熟度和验收缺口，避免“单测通过”和“桌面 App 可完成用户搜索任务”混在一起。
+- normalized results：`rank`、`title`、`url`、`snippet`、`source`、`publishedAt?`、`provider`。
+- refs：search result set ref、per-result discovered page refs。
+- evidence boundary：候选已发现，页面正文未知。
+- timings：provider latency、parse latency、total latency。
+- diagnostics：provider degraded、timeout、rate limited、blocked、no results、fallback used。
 
-## 近期聚焦：P0 / P1 / P3 / P4 / P5 / P6 / P7
+边界：
 
-这几个阶段按顺序推进，避免一边改 Browser contract，一边继续保留旧 search-only 旁路。
+- 不读取正文。
+- 不总结。
+- 不改写 query。
+- 不决定候选是否足够回答用户。
 
-- [x] P0 先清理冲突路径：删除 `readInput`、`candidateReadInputs`、search-only guard 和旧组合入口兼容。
-- [x] P1 固化最终 Browser resource / evidenceState contract。
-- [x] P4 确保 Agent Host 看到的是直接 browser primitive tools，且全部走同一个 dispatcher。
-- [x] P7 用桌面 SciForge App 真实搜索任务验收：必须读取具体网页正文，由 Agent Host / App Server 生成 verified assistant final-message projection，SciForge UI 只消费该 projection；legacy `gui.present` dynamic tool 不能作为产品验收路径。
+### `web_read(url/ref)`
 
-## P0：唯一链路与旧旁路清理
+作用：读取一个来源正文。
 
-目标：Browser 只能作为 Agent Host 可调用的 primitive 工具存在，不能留下第二条搜索、读取、总结或 completion 链路。
+输入：
 
-Build Tasks：
+- `url` 或 `resourceRef`，二选一。
+- 可选：`format=markdown|text|html|metadata`、`render=auto|static|browser`、`max_chars`、`timeout_ms`、`cache_policy`、`constraints`。
 
-- [x] 删除 `readInput`、`candidateReadInputs` 和搜索专用 repair hint 逻辑。
-- [x] 删除 Host adapter 里的 `browser_search_only_budget_exhausted`、search-only progress guard 和 candidateReadInputs 缓存。
-- [x] 删除或显式拒绝 `browser.search_read`、`browser.open_read`、`browser.open`、`executeBoundedOperation` 浏览器组合入口。
-- [x] 删除旧 `browser_search` raw service / runtime fallback / slash command product path，保留时只能作为 fail-closed diagnostic。
-- [x] 确认 `SciForge UI -> Model Router -> 用户可见 final answer` 和 `Runtime Codex -> Model Router -> message/done 直答` 不存在于 Browser 搜索路径。
-- [x] 更新文档、README、manifest、tool descriptions 和 tests，不能再宣传旧路径。
+输出：
 
-Acceptance Gates：
+- source metadata：`requestedUrl`、`finalUrl`、`title`、`author?`、`publishedAt?`、`contentType`、`language?`。
+- content：Markdown / text preview 或 bounded content ref。
+- refs：source page ref、page text ref、HTML ref if allowed。
+- evidence boundary：页面正文已物化，是否低信息 / blocked / partial。
+- timings：fetch、render、extract、persist、total。
+- diagnostics：HTTP status、network error、blocked reason、needs browser、needs user browser、extract failed。
 
-- [x] 代码搜索找不到 `readInput`、`candidateReadInputs`、`browser_search_only_budget_exhausted` 作为产品逻辑。
-- [x] 旧组合 intent 调用必须 fail closed，不能静默转译为 primitive chain。
-- [x] Host adapter 对 browser direct tools 只做 schema 注入、权限边界和 dispatcher 路由，不做搜索策略或完成判断。
-- [x] Architecture 文档、Browser Runtime 文档和 package README 口径一致。
+边界：
 
-## P1：ResourceRef + EvidenceState Contract
+- 只读取一个来源。
+- 不继续搜索。
+- 不跨页面扩展。
+- 不做任务级事实综合。
 
-目标：所有 Browser primitive 都返回统一的资源状态和证据边界，让 Agent Host 基于 Evidence Ledger 自主规划。
+## P0：Contract 与 Tool Surface
 
-Build Tasks：
-
-- [x] 定义 `BrowserResource`：`ref`、`kind`、`status`、`originTool`、`locator`、`refs`、`confidence`、`metadata`。
-- [x] 定义 `BrowserEvidenceState`：`completed`、`unknown`、`boundary`。
-- [x] `browser.search` 产出 `search_result_set` 和 `web_page:discovered` resources。
-- [x] `browser.navigate` 产出 `browser_session:accessed/observed` 和当前 `web_page` resource。
-- [x] `browser.observe` 产出 session/state/visual/DOM refs，不伪装成页面正文读取。
-- [x] `browser.read` 产出 `web_page:read`、`source_page:read`、`page_text:read` resources。
-- [x] `browser.extract` 只解析已有 refs，并把链接产出为 `web_page:discovered` resources。
-- [x] `browser.download` 产出 `download_artifact:downloaded` resource。
-- [x] envelope 必须 refs-first，不能把 raw HTML、raw screenshot、download bytes、base64 或 secret 放入主输出。
-
-Acceptance Gates：
-
-- [x] Package tests 覆盖每个 primitive 的 resources 和 evidenceState。
-- [x] `browser.search` 的 successful result 不再包含 `readInput` 或 `candidateReadInputs`。
-- [x] 搜索链接和 snippet 的 evidenceState 明确标记为“候选，不是已读取来源”。
-- [x] `browser.read({ resourceRef })` 能从 `web_page:discovered` 机械解析到 URL 并读取正文。
-- [x] `browser.read({ resourceRef })` 对未知 ref、非 web_page ref 或无 URL locator 必须 fail closed。
-
-## P2：Primitive Schema 与 Validator 完备性
-
-目标：每个 Browser 原子操作都有清晰输入边界、输出边界和失败语义。
+目标：先把 `web_search` / `web_read` 的输入、输出、refs 和失败语义定死，避免实现过程中继续长出旧 Browser 旁路。
 
 Build Tasks：
 
-- [x] `search` validator 覆盖 query、engine、locale、region、limit、budget、constraints。
-- [x] `navigate` validator 只接受 HTTP(S) URL、sessionId、timeout、capture 和 constraints。
-- [x] `observe` validator 要求 sessionId，capture 只能是受控枚举。
-- [x] `read` validator 支持 `resourceRef | sessionId | url`，URL 直读必须显式 ephemeral，且三种 locator 必须三选一。
-- [x] `extract` validator 只接受已物化 ref 和明确 extract targets。
-- [x] `download` validator 只允许受控 URL 或 session/linkSelector，保存范围固定为 `session-artifacts`，且两种 locator 必须二选一。
-- [x] 未知字段必须拒绝或 diagnostics，不能静默改变语义。
+- [ ] 定义 `web_search` input / output schema。
+- [ ] 定义 `web_read` input / output schema。
+- [ ] 定义统一 result envelope：`ok`、`status`、`tool`、`provider`、`data`、`refs`、`timings`、`warnings`、`error`。
+- [ ] 定义 resource refs：`web-search:{id}`、`web-page:{id}`、`web-source:{id}`、`web-text:{id}`。
+- [ ] 定义稳定 error codes：`invalid_input`、`unsafe_url`、`provider_unavailable`、`timeout`、`rate_limited`、`no_results`、`read_failed`、`extract_failed`、`needs_browser`、`needs_user_browser`。
+- [ ] 明确 `web_health` resource / endpoint 和 `web_benchmark` CLI 不进入普通 Agent tool list。
+- [ ] 更新 Browser / Agent Host 文档和 tool descriptions，统一使用 `web_search` / `web_read` 口径。
 
 Acceptance Gates：
 
-- [x] 每个 primitive 都有 validator、MCP schema、service delegation 和 error path test。
-- [x] 缺字段、错 schemaVersion、非 HTTP URL、越界 limit/maxBytes、未知字段全部 fail closed。
-- [x] MCP facade 注入 schemaVersion 和默认机械字段时，不引入第二条逻辑链路。
+- [ ] Schema tests 覆盖必填、未知字段、越界 limit/max_chars/timeout、非 HTTP(S) URL、resourceRef 类型不匹配。
+- [ ] Direct tool specs 只出现 `web_search` / `web_read`，不出现 `web_extract` / `web_batch_read` 作为第一版工具。
+- [ ] `web_search` output 明确声明 search result 不是 source evidence。
+- [ ] `web_read` output 明确声明 source/page text refs 才是读取 evidence。
 
-## P3：BrowserHostSession Runtime
+## P1：`web_search` Provider Path
 
-目标：真实内置浏览器能稳定执行搜索、导航、观察、读取、抽取和下载，并把 evidence 落盘为 refs。
+目标：搜索候选发现不再默认依赖真实浏览器打开搜索页，优先走可控 JSON provider，降低慢和不稳定。
 
 Build Tasks：
 
-- [x] `browser.search` 使用 BrowserHostSessionManager 做候选发现，只打开搜索页或搜索服务，不自动读取结果页正文。
-- [x] `browser.navigate` 建立或复用 BrowserHostSession / tab scope，返回 session/navigation refs。
-- [x] `browser.observe` 能捕获当前 session 状态、screenshotRef、DOM/AX refs、console/network diagnostics refs。
-- [x] `browser.read` 能读取当前 session URL、ephemeral URL 或 `resourceRef` 对应网页正文。
-- [x] 网页正文必须落盘为 source page refs / page text refs，并记录 finalUrl、title、contentType、textSha。
-- [x] `browser.extract` 对已读 refs 做本地解析，不访问网络。
-- [x] `browser.download` 只能写入 session artifact scope，返回 hash、大小、MIME 和 artifact refs。
+- [ ] 新增 `SearchCandidateProvider` 抽象。
+- [ ] 实现 SearXNG JSON provider adapter。
+- [ ] 预留 OpenSERP provider adapter，但第一版可以 env-gated / disabled。
+- [ ] 实现 result normalization：title、URL、snippet、rank、provider、publishedAt?。
+- [ ] 实现 URL canonicalization、去重、搜索引擎自链接过滤和 unsafe URL 过滤。
+- [ ] 实现 provider timeout、rate limit / 429 分类、retry / fallback diagnostics。
+- [ ] 搜索结果落盘为 refs-first artifact，不能把大 payload 放入聊天正文。
+- [ ] Browser SERP adapter 只作为 fallback provider，不作为默认主路径。
 
 Acceptance Gates：
 
-- [x] 真实网页 smoke test 能 `search -> read(resourceRef/url) -> extract -> download`。（2026-06-08 `smoke:browser-runtime-live-download-chain:opt-in` 通过：native adapter `http://127.0.0.1:5177`、DuckDuckGo search、受控公共 HTML source page read、local extract、CSV/PDF download 均走 Browser primitive dispatcher；manifest 只作为 live-diagnostic，不是 release/product proof。）
-- [x] arXiv、新闻网页、普通 HTML 页面至少各有一个 live-diagnostic 验收样例。（2026-06-08 三类 clean desktop ordinary-chat product proof 均包含 current-run BrowserHostSession source/page-text refs。）
-- [x] 搜索结果不可用、登录墙 / forbidden HTTP 状态、网络失败、下载超预算时能返回 blocked/partial diagnostics 和 refs。（本轮补 local deterministic diagnostic：搜索候选存在但 read blocked、download content-length 超预算时返回 refs-first blocked diagnostics，且 search snippet / download artifact 不会成为 completion evidence；2026-06-08 P3/P6 opt-in live 已补 download 超预算、domain-not-allowed、公共 PDF source-read blocked、HTTP 401 auth-wall surrogate、HTTP 403 forbidden surrogate 和 `.invalid` network source-read blocked cases。当前 Browser Runtime 仍没有 robots/login 语义 detector，因此不把 robots/login semantic classification 冒充为已完成；robots/login 的用户级 final-message 收束仍列在未完成项。）
-- [x] BrowserHostSession artifacts 可审计，且没有 raw secret / cookie / base64 泄露到聊天正文。（Browser evidence tests、ordinary-chat writer validation 和 P3/P6 live manifest policyScan 均要求 refs-first source/page-text/download artifacts，不内联 bytes/base64/本地路径；P7 final-answer projection 只消费 assistant final message + evidence refs。）
+- [ ] Local fixture test 覆盖 SearXNG JSON 正常结果、空结果、429、5xx、malformed JSON、重复 URL、搜索引擎自链接。
+- [ ] Live diagnostic 在配置了本地 SearXNG 时，至少 5 个多语言 query 每个返回可解析候选和 timing。
+- [ ] `web_search` 不触发 `web_read`、不产出 page text refs、不把 snippet 标记为 source evidence。
+- [ ] Provider 不可用时返回 `provider_unavailable` / `timeout`，不能静默改走旧 search summary。
+- [ ] 浏览器 fallback 被调用时必须在 result 中标记 `fallbackUsed=true`、fallback provider、fallback reason 和 timing。
 
-## P4：Agent Host / MCP 集成
+## P2：`web_read` Static Read Path
 
-目标：Browser package 能被 Agent Host 和 MCP-style caller 稳定调用，同时保持唯一智能链路。
+目标：给定 URL / ref 后，能快速、稳定地读取公开网页正文并物化 refs。
 
 Build Tasks：
 
-- [x] `browser_search`、`browser_navigate`、`browser_observe`、`browser_read`、`browser_extract`、`browser_download` 作为 provider-safe dynamic tools 暴露。
-- [x] 直接工具内部路由回 `moduleId=browser, intent=browser.*`，使用同一个 dispatcher。
-- [x] `module.invoke(moduleId="browser")` 只作为通用模块调用入口，不是 Browser 主要认知入口，也不隐藏 primitive 能力。
-- [x] Agent Host developer instructions 明确：search 只发现候选，read 才产生 source/page text evidence；final answer / completion truth 属于 Agent Host / App Server，SciForge UI 只消费 assistant final-message / App Server event projection。
-- [x] Host adapter 不做 query rewrite、来源取舍、search-only loop repair、用户级 verifier 或 final answer。
+- [ ] 实现 `resourceRef -> URL` 机械解析，只解析 `web_search` 产出的 discovered web page refs。
+- [ ] 实现 static fetch，带 timeout、redirect policy、content-type、max bytes 和 unsafe URL guard。
+- [ ] 接入 trafilatura / Readability 静态正文抽取。
+- [ ] 输出 Markdown / text，并保留 bounded preview。
+- [ ] 物化 source page metadata ref 和 page text ref，记录 finalUrl、title、contentType、textSha1、openedAt。
+- [ ] 对低信息页面、403/401、网络失败、非 HTML、正文为空等返回 partial / blocked diagnostics。
+- [ ] 缓存策略显式化：cache hit / miss / revalidated 必须进入 timings 或 metadata。
 
 Acceptance Gates：
 
-- [x] Runtime dynamic tool specs 包含六个 direct Browser tools。
-- [x] Direct tool 和 `module.invoke` 调用同一个 dispatcher，trace / refs 一致。
-- [x] 重复 search 不被 Host adapter 特例拦截；是否 replan 由 Agent Host / verifier 基于 Evidence Ledger 决策。
-- [x] 普通聊天中模型能够直接调用 `browser_search` 和 `browser_read`，而不需要从自然语言描述猜 `module.invoke` 参数。
+- [ ] Local fixture test 覆盖普通 HTML、新闻页结构、文档页、重定向、乱码/编码、正文为空、403、401、404、网络失败。
+- [ ] `web_read({ resourceRef })` 能读取 `web_search` 发现的候选；未知 ref、非 web page ref、无 URL locator 必须 fail closed。
+- [ ] 读取成功必须产生 source page ref 和 page text ref，并能从磁盘重新打开验证 textSha1。
+- [ ] 读取失败不能产出伪 source evidence，final answer gate 不能 satisfied。
+- [ ] Markdown 不得包含明显 nav/script/style/cookie banner 主体噪声作为主要内容。
 
-## P5：Evidence Ledger 与 Verifier 对接
+## P3：Browser Render Fallback
 
-目标：Browser 产出的局部证据能被 Agent Host 的 Evidence Ledger 和 verifier 使用，但 Browser 不拥有 verifier。
+目标：静态读取失败或内容明显缺失时，能通过受控浏览器 render 补齐正文，但不把基础工具变成自主 agent。
 
 Build Tasks：
 
-- [x] 每个 Browser tool result 都能被 Evidence Ledger 记录为 resource 状态推进。（direct Browser tools 和 `module.invoke(moduleId="browser")` 都已覆盖。）
-- [x] Verifier 可检查当前 run 是否有 source page refs / page text refs，而不是只看搜索链接。（结构性 source/page-text/current-run gate 已覆盖，并接入 Agent Host AcceptanceSpec 的低信息、相关性和时间约束检查。）
-- [x] 对“今天 / 最新 / 最近一周 / 来源链接 / 系统报告”等需求，由 Agent Host 生成 AcceptanceSpec 和 verifier requirement。（当前实现为 prompt-derived source/page-text requirement、低信息拒绝、topic terms 和 temporal window；更完整的外部 verifier / ref 文件正文读取可继续扩展。）
-- [x] Browser 只暴露 resources/evidenceState，不基于关键词判断用户意图。（关键词/时间窗口只在 Agent Host evidence verifier 中使用，不进入 Browser primitive core。）
-- [x] 如果用户禁止联网或要求只用本地上下文，Agent Host 不调用 Browser，Browser 不承担该决策。（Agent Host local tool Act policy 会在 app-server direct Browser tool / `module.invoke` 前 blocked。）
+- [ ] 定义 fallback policy：何时允许 browser render，何时返回 `needs_browser` / `needs_user_browser`。
+- [ ] 接入 Crawl4AI / BrowserHostSession / Playwright browser render path。
+- [ ] 默认使用 workspace profile，不使用用户主 profile。
+- [ ] 记录 browser fallback trace：navigation URL、finalUrl、wait reason、extract method、timing、blocked reason。
+- [ ] 对 JS-heavy 页面、懒加载正文、cookie banner、搜索页阻断、验证码、登录态分别给出明确 status。
+- [ ] 多步交互、真实用户 profile、验证码/登录态必须升级为 Host-owned browse/search fallback sub agent；基础 `web_read` 只能返回 `needs_user_browser` 或 explicit escalation hint。
+- [ ] 参考 browser-use / Stagehand / Playwright MCP 的会话管理、页面观察和动作容错经验，但不能引入静默二级 Agent。
 
 Acceptance Gates：
 
-- [x] 搜索总结类任务没有 page text refs 时 verifier 必须失败或 uncertain。（Agent Host final answer / App Server projection 会被 Browser evidence gate 拦截为 blocked/repairable。）
-- [x] 有 search refs 但没有 read refs 时，final answer 不能宣称已读取来源。（direct tool 和 generic `module.invoke` search-only 都会 blocked。）
-- [x] 有 read refs 但来源不足、时间不满足或内容不相关时，verifier 能把 gap 返回给 Agent Host。（覆盖低信息/登录页、topic mismatch、recent-window temporal gap；动态多来源数量要求仍属于后续 verifier 增强。）
-- [x] verifier 结论能被 Agent Host 看到，并驱动继续调用工具、请求澄清或 blocked final projection。（当前已驱动 blocked completionTruth / final-message projection；更主动的 autonomous replan 由 Agent Host 模型策略继续承担。）
+- [ ] Local JS fixture：static read 内容缺失时 browser render fallback 成功，并记录 fallback trace。
+- [ ] CAPTCHA/login surrogate fixture：不能自动绕过，必须返回 `needs_user_browser` 或 blocked。
+- [ ] Browser fallback 成功时仍只返回 `web_read` source/page text refs，不生成 final answer。
+- [ ] Browser fallback 失败时必须有可读 failure reason，不能卡住直到全局超时。
+- [ ] 所有 fallback timing 必须能解释总耗时花在哪里。
 
-## P6：下载与文件型来源
+## P4：Agent Host 集成
 
-目标：下载能力覆盖 PDF、CSV、图片、压缩包等远程资源，但不把下载和语义理解混进 Browser。
+目标：Agent Host 可以像调用基础工具一样使用搜索能力，同时保留任务级智能和验收权。
 
 Build Tasks：
 
-- [x] `browser.download` 支持 Host 指定 URL 或 session/linkSelector。（URL 路径已实现；session/linkSelector 会从当前 BrowserHostSession frame artifact 机械解析匹配 `<a href>`，不做来源选择或语义判断。）
-- [x] 下载必须受 maxBytes、timeout、allowed/blocked domain 和 saveScope 约束。
-- [x] 下载结果返回 artifactRef、filename、mimeType、byteLength、sha256、finalUrl。
-- [x] 下载后的 PDF/CSV/图片/压缩包解析交给后续 reader / parser / verifier，不属于 Browser。
-- [x] 对可执行文件、超预算、未知 MIME 或高风险下载返回 `needs-confirmation` / `blocked`。（超预算 blocked、未知 MIME 和可执行/安装型 MIME/扩展名 `needs-confirmation` 已覆盖；live policy case 待 P7/P3 live 环境补。）
+- [ ] 在 Agent Host dynamic tools / MCP-style surface 暴露 `web_search` 和 `web_read`。
+- [ ] Agent Host prompt / tool descriptions 明确：search 只发现候选，read 才产生 source evidence。
+- [ ] Evidence Ledger 能记录 `web_search` discovered refs 和 `web_read` source/page text refs。
+- [ ] Final answer gate 必须要求 current-run `web_read` source/page text refs；search result / snippet 不能单独满足。
+- [ ] Query 污染、source relevance、source count、temporal gap 继续由 Agent Host verifier 负责。
+- [ ] 复杂场景升级 browse/search fallback sub agent 时，必须由 Agent Host 显式发起，并把 trace 纳入 evidence。
 
 Acceptance Gates：
 
-- [x] 下载普通 CSV/PDF 的 live-diagnostic 验收通过，artifact hash 和大小可复核。（2026-06-08 opt-in live manifest `docs/test-artifacts/browser-runtime-live-download-chain/manifest.json`：CSV `airtravel.csv` 321 bytes、sha256 `f6a5fc622a83ef040fe708b7305fb6f34b8725a62e19da03a9bc8ff8592d8054`、MIME `text/csv`；PDF `dummy.pdf` 13264 bytes、sha256 `3df79d34abbca99308e79cb94461c1893582604d68329a41fd4bec1885e6adb4`、MIME `application/pdf; qs=0.001`；manifest scan 无 inline bytes/base64/本地路径。）
-- [x] 超预算下载不会写入不完整 artifact 或会明确标记 partial/blocked。
-- [x] Browser final result 不内联 downloaded bytes、base64 或任意本地路径。
-- [x] 下载 artifact 不能被 Browser primitive status 直接当作用户任务完成。
+- [ ] Direct `web_search` / `web_read` tool call 和 module dispatcher path 结果一致。
+- [ ] 普通聊天搜索任务必须至少出现一次 `web_search` 和一次 `web_read`，最终回答来源必须来自实际读取 refs。
+- [ ] 模型重复 search 而不 read 时，Agent Host 必须 repair / auto-read / block，不能给 search snippet answer。
+- [ ] 模型读到低信息或不相关来源时，Agent Host 必须继续 repair 或 partial/block。
 
-## P7：用户级搜索验收链路
+## P5：Strict Acceptance Harness
 
-目标：证明 Browser 能服务普通聊天搜索请求，但不自己宣布用户任务完成。
-
-Build Tasks：
-
-- [x] 从普通聊天入口触发“搜索一下伊朗局势”这类开放网页搜索任务。（2026-06-08 已完成三类 clean desktop ordinary-chat product proof：普通网页 OpenAI docs、arXiv/论文、新闻/最新动态。）
-- [x] Agent Host 生成搜索 query，调用 `browser_search` 得到候选 resources。（direct tool contract、app-server writer unit proof、producer protocol-only diagnostic 和三类桌面 UI run 均覆盖。）
-- [x] Agent Host 基于候选 resources 调用 `browser_read` 读取具体网页正文。（三类桌面 UI run 均有 completed `browser_read`、current-run source/page-text refs、source JSON/page text artifacts、textSha1 和 `openedAt`。）
-- [x] Agent Host 基于 source page refs / page text refs 综合回答，并列出实际读取过的来源链接。（三类桌面 UI run 的 final answer 均含实际读取 source URL；refs 来自 BrowserHostSession source/page-text artifacts。）
-- [x] Agent Host 运行适当 verifier，确认有 current-run source evidence。（app-server finalizer 只有 `agent-host-browser-acceptance` satisfied 后才投影 final answer；单测覆盖 relevance/latest/temporal gap、blocked read 和低信息页面。）
-- [x] 最终回答必须来自 Agent Host / App Server 的 verified assistant final-message projection，并携带 satisfied completionTruth evidenceRefs；legacy `gui.present` dynamic tool 不能单独构成产品 final answer。（writer 要求 completed projection + satisfied `agent-host-browser-acceptance` completionTruth，desktop ordinary-chat 使用 assistant final-message projection。）
-
-Acceptance Gates：
-
-- [x] 桌面 SciForge App 能完成至少三类用户搜索任务：新闻最新情况、arXiv / 学术论文、普通网页资料检索。
-- [x] final answer 中的来源必须来自实际 `browser_read` 的 source/page text refs，不能来自 search snippet。
-- [x] 对“今天 / 最新 / 最近一周”这类时间约束，Agent Host 必须基于来源内容和 verifier 判断，不靠 Browser 关键词硬编码。（单测覆盖 relative-window/latest temporal gap 和中文日期识别；新闻 product proof 的 source text 包含 2026-06-04/2026-06-06 更新证据。）
-- [x] 如果搜索服务返回候选但无法读取正文，final answer 必须 partial / blocked，并说明未读到哪些来源。（Agent Host Browser evidence 单测覆盖 candidate read blocked 后不能 satisfied，local Browser runtime diagnostic 覆盖 read blocked refs-first envelope。）
-- [x] Harness / fixture contract 必须要求 `browser_search`、至少一个 `browser_read` 和一次 final-answer projection。（producer 已强制为 protocol-only blocked diagnostic；只证明协议形状、schema 和 negative guards，strict 不能当 release/live/product proof。）
-- [x] Ordinary-chat writer 只能从 app-server Browser evidence path 判定 pass，且必须验证 completed `browser_search` / `browser_read` / final-answer projection、结构化 Browser read refs、workspace 内真实 BrowserHostSession source/page-text artifacts、textSha1、current-run `openedAt` 和 completionTruth evidenceRefs。
-- [x] Strict validate-only smoke 必须重新打开 manifest 中的 BrowserHostSession source/page-text refs，验证 source JSON schema/status/openedAt/finalUrl/textRef/textSha1 和 text 文件实体；伪装成 historical negative fixture 的 passed manifest 也必须失败。
-- [x] 真实桌面 live run 记录中必须有 `browser_search`、至少一个 `browser_read` 和一次 verified final-answer projection。（2026-06-08 三类 clean ordinary-chat desktop run 均通过，baseline=0、`browserSearchMentions=1`、`browserReadMentions=1`、`sourceEvidenceOk=true`、`sourceLinkInFinal=true`。）
-
-## P8：迁移与清理
-
-目标：旧 Browser 路径不再污染新设计。
-
-Build Tasks：
-
-- [x] 清理 docs、README、manifest、tool description、tests 中旧 `readInput` / `candidateReadInputs` 口径。
-- [x] 清理 runtime gateway、slash command、module fallback、Browser pane dogfood 中能绕过 Agent Host 的产品路径。
-- [x] 清理旧 BrowserHostSearch / search_read / open_read / open 兼容 wrapper。（`search_read/open_read/open` task-facing wrappers 已 fail closed；host implementation 类型已改为 `BrowserHostDiscovery*` / `BrowserHostPageRead*`。）
-- [x] 清理把 Model Router 当作 Browser task upstream 或 final answer 生成器的路径。
-- [x] 防止 legacy path 回流到 package scripts、runtime registry、Agent Host 工具名或 product claim。
-
-Acceptance Gates：
-
-- [x] legacy path 检查通过。
-- [x] 新文档和 package README 不再把旧路径描述成目标能力。
-- [x] 没有 compatibility wrapper 被当成 completion truth。
-- [x] 没有 Browser/UI/Model Router 旁路能生成用户可见 final answer。
-
-## 非目标
-
-- 不做 Browser agent。
-- 不做搜索总结器。
-- 不做 query planner、source ranker、semantic verifier 或 final answer generator。
-- 不在 Browser 内做 task planning、repair、verification、AcceptanceSpec 或 completion truth。
-- 不用搜索链接、snippet、GUI projection、screenshot replay、fixture、历史 run 或 package probe 替代真实产品验收。
-- 不让 Browser pane 成为用户任务语义入口。
-
-## 打勾规则
-
-- `[x]` 只能表示该阶段的 Build Tasks、Acceptance Gates 和 Invariant Audit 都通过。
-- 单元测试通过但没有真实搜索 / 真实读取验收，不能打 live-diagnostic 完成勾。
-- live acceptance 通过但没有普通聊天 final-answer projection，不能打用户级搜索验收完成勾。
-- 如果 final answer 不能列出实际读取过的 source page/page text refs，不能打搜索总结任务完成勾。
-- 搜索结果页、搜索 snippet、旧 run、fixture 或 package probe 不能替代 source evidence。
-- blocked 也可以作为验收结果，但必须说明缺失条件、保留 refs，并给出恢复路径。
+目标：严格区分 unit、local diagnostic、live diagnostic 和 product proof；不能用 fixture 或旧 run 冒充产品完成。
 
 Proof 层级：
 
-- `unit proof`：函数 / 模块级测试或 appServerClient DI，只证明逻辑。
-- `protocol proof`：producer / fixture 合成 `browser_search -> browser_read -> final-answer projection` 形状，只证明协议字段、validator 和 negative guards。
-- `local diagnostic`：local HTTP fixture、local dogfood 或本地配置诊断；不能宣传为 live/product proof。
-- `live diagnostic`：service runtime ready、真实网页、真实 BrowserHostSession source/page text/download refs；证明能力，不等于普通聊天入口完成。
-- `product proof`：桌面 SciForge App 普通聊天入口，current-run Browser evidence，Agent Host / App Server verified final answer 可见，三类真实搜索任务完成。
+- `unit proof`：函数 / adapter / schema 级测试，只证明局部逻辑。
+- `local diagnostic`：本地 fixture HTTP server / fake provider / local browser fixture，只证明协议和 fallback 形状。
+- `live diagnostic`：真实 provider、真实网页、真实 BrowserHostSession / browser render refs，只证明能力可用。
+- `product proof`：桌面 SciForge App 普通聊天入口，current-run `web_search -> web_read -> verified final answer`，用户可见来源来自实际读取 refs。
 
-## 当前 Run 证据（2026-06-08）
+Build Tasks：
 
-- [x] `node --import tsx --test packages/actions/browser-runtime/index.test.ts packages/actions/browser-runtime/mcp.test.ts src/runtime/modules/bounded-operation-module-handlers.test.ts src/runtime/modules/browser-runtime-user-acceptance.test.ts`：29 tests passed，覆盖 primitive validator、resources/evidenceState、`resourceRef` resolver、MCP direct tools、download constraints/risk、local PDF refs-first artifact evidence、sessionId+linkSelector local frame artifact 解析、local search-to-download flow 和 blocked diagnostic flow。
-- [x] `node --import tsx --test src/runtime/modules/browser-runtime-user-acceptance.test.ts`：2 tests passed，覆盖 local search-to-download happy path，以及搜索候选存在但 `browser.read(resourceRef)` 无法读取正文、`browser.download` content-length 超预算时的 refs-first blocked diagnostics；断言 search snippet 不会进入 blocked read envelope，超预算 download 不产出 `download_artifact` resource / `artifactRef` completion evidence。
-- [x] `node --import tsx --test src/runtime/codex/agent-host-local-tool-act-orchestrator.test.ts src/runtime/codex/agent-host-browser-evidence.test.ts src/runtime/codex/codex-app-server-client.test.ts`：60 tests passed，覆盖 Browser evidence ledger、direct browser tools、`module.invoke(moduleId="browser")` evidence recording、`browser_read({ resourceRef })`、local-only/no-network Browser block、search-only / blocked-read / low-information final projection block、AcceptanceSpec relevance/latest/temporal gaps 和 completionTruth projection。
-- [x] `node --import tsx --test tests/smoke/runtime-codex-browser-ordinary-chat-acceptance-writer.test.ts tests/smoke/runtime-codex-browser-ordinary-chat-local-dogfood.test.ts tests/smoke/smoke-runtime-codex-browser-local-dogfood.test.ts`：14 tests passed，ordinary-chat writer 走 app-server client DI、要求 completed Browser search/read/final projection、结构化 Browser read refs、completionTruth evidenceRefs、真实 BrowserHostSession source JSON + page text 文件、textSha1 和 current-run openedAt；local dogfood 不注入 Browser manager 旁路。
-- [x] Model Router 链路收敛：Runtime Codex / API 服务只拿 `SCIFORGE_MODEL_ROUTER_BASE_URL` `/v1` 和 public alias `sciforge-router`；`config.local.json` 的 `llm/textLLM.env.SCIFORGE_TEXT_*` 只进入 Model Router 成员模型 env；`codexProxy` / `runtimeCodexProxy` 存储配置被丢弃，`backend:codex-proxy` / `packages/backend codex:proxy` 只剩 fail-closed alias，所有 `SCIFORGE_PROXY_*` / `SCIFORGE_RUNTIME_BASE_URL` 在桌面 launcher、dev shell、workspace local config 和 standalone Runtime Codex server 中被剥离；gateway request、runtime contract、Settings UI 和 backend prompt policy 均不再接受 / 转发 raw `llmEndpoint`、Provider Base URL 或 UI API Key。
-- [x] `node --import tsx --test packages/contracts/runtime/agent-backend-policy.test.ts packages/contracts/runtime/backend-prompt-policy.test.ts src/runtime/gateway/gateway-request.test.ts src/runtime/gateway/agent-backend-config.test.ts src/runtime/gateway/backend-prompt-policy.test.ts src/runtime/codex/agent-host-browser-evidence.test.ts`：43 tests passed，覆盖 raw LLM endpoint normalizer 变为 fail-closed、gateway request 丢弃 legacy `llmEndpoint`、backend policy 不再从 request/config.local/workspace raw endpoint 读取成员模型，以及 candidate read blocked 不允许 final answer satisfied。
-- [x] `node --import tsx --test tests/smoke/smoke-agent-harness-contract.ts tests/smoke/smoke-contract-driven-handoff.ts`：2 tests passed，legacy harness smoke 改为当前架构 tripwire：mock AgentServer context/run endpoints 调用次数必须为 0，harness metadata 可离线重建，backend selection owner 为 AgentHost，raw `llmEndpointConfigured=false`，Runtime Codex fail-closed 不会回落到旧 AgentServer generation。
-- [x] `node --import tsx tests/smoke/smoke-model-router-no-active-legacy-proxy.ts`：通过；active scripts 和 desktop sidecar bundle 不启动 legacy `sciforge-goose-proxy.mjs` / codex-responses-proxy。2026-06-08 额外清理用户目录残留 LaunchAgent：`/Users/zhangyanggao/Library/LaunchAgents/com.sciforge.gooseproxy.plist` 已 `bootout`/删除，`launchctl print gui/501/com.sciforge.gooseproxy` 已不可用。
-- [x] `node --import tsx --test src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts`：94 tests passed，覆盖 stale native resume 缺失 rollout 时自动重建 fresh Runtime Codex request（attempt-2、无 `codexSessionId`、无 resume prefix）和 Browser WebSocket 错误关闭使用浏览器合法 private close code `4000`。
-- [x] `node --import tsx --test src/runtime/desktop/runtime-launcher.test.ts src/runtime/workspace-server-local-config.test.ts tests/smoke/smoke-desktop-dev-shell.test.ts src/runtime/codex/codex-runtime-server.test.ts src/runtime/codex/codex-app-server-client.test.ts`：121 tests passed，覆盖 packaged launcher 只把 `textLLM.env.SCIFORGE_TEXT_*` 暴露给 Model Router、wildcard host 发布为 loopback URL、Runtime Codex service env 不继承 legacy proxy/direct-provider env、standalone server sanitize。
-- [x] `node --import tsx --test src/runtime/desktop/runtime-launcher.test.ts src/runtime/codex/codex-runtime-config.test.ts src/runtime/codex/codex-app-server-client.test.ts packages/backend/src/local-provider-config.test.ts tests/smoke/smoke-desktop-dev-shell.test.ts src/runtime/desktop/desktop-dev-shell-model-router.test.ts src/runtime/workspace-server-local-config.test.ts src/runtime/codex/codex-runtime-server.test.ts`：161 tests passed，覆盖 production launcher 读取 `llm/textLLM.env.SCIFORGE_TEXT_*` 作为 Model Router member-model env、成员模型 key/env 只进 Model Router、Runtime Codex / Codex app-server 子进程剥离 `SCIFORGE_RUNTIME_BASE_URL` 和所有 `SCIFORGE_PROXY_*`、standalone server sanitize、workspace local config 只暴露 member models 给 Router role env。
-- [x] `npm run desktop:build`：通过；生成新的 `dist-ui` 和 bundled desktop sidecars。Vite 仍提示既有 xterm default import/chunk size warning，不影响本轮 Browser/Router 验收。
-- [x] P7 真实桌面 SciForge ordinary-chat UI clean product proof（三类均 baseline=0、`status=passed`、`finalAnswerObserved=true`、`sourceEvidenceOk=true`、`sourceLinkInFinal=true`、`browserSearchMentions=1`、`browserReadMentions=1`）：普通网页 `docs/test-artifacts/desktop-browser-ordinary-chat-ui-live-openai-docs-clean-chat/manifest.json`，runId `desktop-browser-ui-live-openai-docs-clean-chat-2026-06-08T09-52-07-426Z`，source `https://developers.openai.com/api/docs`，textSha1 `459f78e7b14c01a30df895681dd46af4a5c7ebec`；arXiv/论文 `docs/test-artifacts/desktop-browser-ordinary-chat-ui-live-arxiv-summary-clean-chat/manifest.json`，runId `desktop-browser-ui-live-arxiv-summary-clean-chat-2026-06-08T10-01-30-033Z`，source `https://arxiv.org/html/2402.06196v3`，textSha1 `76a4d08061935c94e4c08f5663e7cfbd46fa7af8`；新闻/最新动态 `docs/test-artifacts/desktop-browser-ordinary-chat-ui-live-news-accepted-clean-chat/manifest.json`，runId `desktop-browser-ui-live-news-accepted-clean-chat-2026-06-08T10-17-06-870Z`，source `https://releasebot.io/updates/openai`，sourceRef `browser-host-session:browser-host-075e6bc1ddbe/source-pages/source-1-8af9285de5.source.json`，textRef `browser-host-session:browser-host-075e6bc1ddbe/source-pages/source-1-8af9285de5.txt`，openedAt `2026-06-08T10:19:16.376Z`，textSha1 `8af9285de50eef5d551fb29c6b373b493d20c278`，source text includes `Last updated: 2026年6月6日` 和 `2026年6月4日`。
-- [x] P7 真实桌面 negative diagnostic 已记录但不计入 product pass：`docs/test-artifacts/desktop-browser-ordinary-chat-ui-live-news-final-clean-chat/manifest.json`，runId `desktop-browser-ui-live-news-final-clean-chat-2026-06-08T10-52-31-573Z`，`status=failed`，runtime ready，WebSocket 652 frames；模型多次调用 `browser_search` / auto-read，读到当前 run `browser-host-session:browser-host-f5c20f91a5cf/source-pages/source-1-fa7aa5950b.source.json` / `.txt`，正文是 Zhihu 403 异常 JSON，12 分钟内未形成合格 assistant final-message projection。该样本证明 live blocked/partial 收束仍需产品化，不能作为 P7 正向 evidence。
-- [x] `node --import tsx --test src/runtime/browser-host-session.test.ts src/runtime/browser-host-session-source-pages.test.ts src/runtime/browser-host-session-search.test.ts src/runtime/modules/bounded-operation-module-handlers.test.ts src/ui/src/app/results/browserPaneModel.test.ts`：76 tests passed，覆盖 host-internal discovery/pageRead rename、OpenAI changelog / arXiv source-page local summaries、旧 host HTTP search/open-read route fail closed、download selector/redirect/domain constraints 和 Browser pane refs-first projection。
-- [x] `node --import tsx --test packages/contracts/runtime/modules.test.ts`：11 tests passed，generic bounded-operation 正向样例已改为 neutral `knowledge.*`，旧 `browser.search_read/open_read` 只保留在负向拒绝样例中。
-- [x] `node --import tsx --test tests/smoke/smoke-runtime-codex-browser-acceptance-producer.test.ts`：4 tests passed，producer protocol-only diagnostic 要求 `browser_search`、`browser_read`、source/page-text refs 和 final-answer projection，并拒绝旧 `search_read/open_read/executeBoundedOperation` product proof；strict smoke 会拒绝 fixture producer、缺失 materialized source artifacts 的 passed manifest，以及伪装 `codex-command-negative-* + artifact:negative-fixture` 的 passed manifest。该 producer 只在 test env 合成协议证据，不能替代 desktop SciForge App live ordinary-chat acceptance。
-- [x] `npm run smoke:capability-manifest-package-discovery --silent`：通过；package-discovery audit count 使用 core registry + discovered package 增量断言，不再依赖硬编码目录数量。
-- [x] `npm run smoke:no-legacy-paths --silent`：通过；仅保留既有 T120 tracked warnings，无 Browser legacy structural errors。2026-06-08 guard 已扩展到 ignored generated/runtime paths：`dist-desktop` 不得保留 retired GUI MCP/shim 或 codex-responses-proxy stale JS，`packages/backend/.codex-runtime/gui-extension` 必须保持删除；active source/package scripts 不得重新引入 `SCIFORGE_ALLOW_OPENAI_RUNTIME` / Computer Use planner OpenAI opt-in env。
-- [x] `npm run smoke:runtime-contracts --silent`：通过。
-- [x] `npm run smoke:package-runtime-boundary --silent`：通过。
-- [x] `node --import tsx --test tests/smoke/smoke-browser-runtime-live-download-chain.test.ts`：2 tests passed，覆盖 P3/P6 live diagnostic manifest 默认 opt-in blocked 状态，以及 passed manifest 必须包含 refs-first bounded search/source/page-text/download refs、CSV/PDF sha256/size/MIME、negative download blocked checks、primitive trace、无 inline payload / 本地路径。
-- [x] `npm run smoke:browser-runtime-live-download-chain:opt-in --silent`：通过；脚本默认使用 desktop dev shell loopback native adapter `http://127.0.0.1:5177`（也可由 `SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL` 覆盖），写入 `docs/test-artifacts/browser-runtime-live-download-chain/manifest.json`，status=`passed`，traceIntents 包含 search、navigate、read、extract、4 个 negative source-read 和 4 个 download；searchResultCount=8，source page/text refs 和 CSV/PDF download refs 均为 current-run `browser-host-session:` refs；negative read checks `pdf-source-read`、`auth-wall-http-status-source-read`、`forbidden-http-status-source-read`、`network-source-read` 均为 blocked / `source_page_read_failed` / `outputPresent=false` / diagnostic code `source-page-read-failed`，negative download checks `csv-overbudget` / `csv-domain-not-allowed` 均为 blocked，`refsCount=0`，`artifactRefPresent=false`。
-- [x] `npm run typecheck --silent`：通过。
-- [x] `npm run desktop:build`：通过 fresh build；`desktop:build` / `desktop:dev:prepare` 现在先执行 `desktop:clean` 清理 `dist-desktop`，避免删除源码后留下 stale JS；生成 `dist-ui` 和 bundled desktop sidecars，仍只有既有 xterm default import / chunk-size warnings。补充检查确认 retired generated GUI/proxy files、runtime shim dir、compiled GUI injection tokens 和 `SCIFORGE_ALLOW_OPENAI_RUNTIME` 均不存在。
-- [x] `node --import tsx --test src/runtime/codex/backend-event-normalization.test.ts src/runtime/codex/codex-event-normalizer.test.ts src/runtime/codex/backend-adapters.test.ts src/runtime/codex/codex-app-server-client.test.ts`：98 tests passed；Codex app-server / exec JSONL normalizers 不再把 legacy `gui.present` / `gui.ask_user` / `module.invoke(moduleId="gui")` tool completion 提升为 `gui_present` / `gui_ask_user` 用户级 completion，app-server client 仍对 GUI dynamic tool aliases 返回 `unsupported_dynamic_tool:*`。
-- [x] `git diff --check`：通过。
+- [ ] 建立 `web_search` / `web_read` local fixture suite。
+- [ ] 建立 live diagnostic script，要求本地 SearXNG 或明确 configured provider。
+- [ ] 建立 product acceptance writer，验证普通聊天入口的 current-run evidence。
+- [ ] 建立 negative fixture：search-only、read blocked、low-info page、topic mismatch、stale refs、historical manifest。
+- [ ] 建立 timing report：planning、search provider、parse、read fetch、render、extract、persist、final synthesis。
 
-当前未完成的 live/product 验收：
+Strict Gates：
 
-- [x] P3/P6 live diagnostics 已覆盖正向 opt-in live chain、CSV/PDF hash/size/MIME、download negative blocked cases，以及 PDF / HTTP 401 / HTTP 403 / `.invalid` source-read blocked cases；该结果仍只是 `diagnosticOnly=true`，不能升级为 release/product proof。
-- [ ] broader source-read blocked product 收束尚未完成：Browser Runtime 当前只统一返回 `source_page_read_failed`，还没有 robots/login semantic detector；仍需证明 app-server / desktop ordinary-chat 的最终 assistant final-message 能把这些 blocked/partial negative case 稳定收束为用户可理解的 partial/blocked，而不是把诊断或搜索 snippet 当完成。
-- [ ] `smoke:runtime-codex-browser-ordinary-chat-local-dogfood` 仍只能作为 local diagnostic；release/product claim 必须来自 app-server / desktop ordinary-chat path 的 current-run Browser evidence。
-- [x] Fixture / producer 的 manifest 必须保持 protocol-only blocked diagnostic，不能复制或解释为 release/live proof；真实验收必须来自 app-server / desktop ordinary-chat path 的 current-run Browser evidence。
+- [ ] `npm run typecheck` 通过。
+- [ ] `git diff --check` 通过。
+- [ ] Unit tests 覆盖 P0/P1/P2/P3 error paths。
+- [ ] Live diagnostic 至少覆盖：新闻网页、普通文档页、JS-heavy 页面、403/401 surrogate、network failure。
+- [ ] Product proof 至少覆盖三类普通聊天任务：新闻 / 最新情况、普通网页资料检索、学术或技术文档检索。
+- [ ] Product proof 必须验证 source page JSON、page text 文件、textSha1、openedAt、finalUrl、source link in final answer。
+- [ ] Search-only answer、snippet-only answer、历史 refs、fixture refs、GUI projection、screenshot replay 一律不能 pass。
+- [ ] 如果返回 blocked/partial，也必须有 current-run refs、failure reason 和用户可恢复路径。
+
+## P6：迁移与清理
+
+目标：新的 Web Search 基础能力落地后，旧 Browser 搜索路径只保留为内部 fallback 或 diagnostic，不再污染普通工具面。
+
+Build Tasks：
+
+- [ ] 清理旧 Browser search task 文档和旧验收证据，避免已完成历史误导当前任务。
+- [ ] 确认 `browser_search` / `browser_read` 与新 `web_search` / `web_read` 的关系：迁移、兼容 alias 或保留 Browser primitive internal path 必须有明确 owner。
+- [ ] 删除或 fail closed 旧 search summary、search_read、open_read、search-only product path。
+- [ ] 更新 docs、README、tool descriptions、runbooks 和 smoke naming。
+- [ ] 把 BrowserHostSession 作为 browser render fallback owner，而不是默认 search provider owner。
+
+Acceptance Gates：
+
+- [ ] 代码搜索确认旧组合入口没有作为 product path 回流。
+- [ ] 文档只宣传 `web_search` / `web_read` 第一版能力。
+- [ ] Browser Runtime Architecture、PROJECT.md、PROJECT_browser.md 口径一致。
+- [ ] 没有第二个 Agent Host、第二套 final-answer path 或 Browser-side verifier。
+
+## 非目标
+
+- 不把搜索做成独立产品。
+- 不做 browser-use 竞品。
+- 不做通用 crawler / deep research agent。
+- 不做默认 `web_extract`。
+- 不做默认 `web_batch_read`。
+- 不默认使用用户主浏览器 profile。
+- 不自动绕过 CAPTCHA、登录墙、付费墙或账号权限。
+- 不把搜索结果、snippet、screenshot、历史 run、fixture 或 package probe 当作用户级完成证据。
+
+## 打勾规则
+
+- `[x]` 只能在对应 Build Tasks、Acceptance Gates 和不可变原则都满足后打。
+- Unit proof 不能升级为 live diagnostic。
+- Live diagnostic 不能升级为 product proof。
+- Product proof 必须来自普通聊天入口 current-run evidence。
+- 任何 pass manifest 都必须能重新打开 refs 指向的 artifact 并复核 hash / finalUrl / openedAt。
+- 如果验收只证明协议形状，应标记 diagnostic-only，不能写成用户级完成。
 
 ## 文档地图
 
-- [`PROJECT.md`](PROJECT.md)：SciForge 总体用户级验收边界。
+- [`PROJECT.md`](PROJECT.md)：SciForge 总体 Agent Host 与工具边界。
 - [`docs/Architecture.md`](docs/Architecture.md)：唯一 Agent Host 产品链路。
-- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：Browser 最新设计原则。
-- [`packages/actions/browser-runtime`](packages/actions/browser-runtime)：Browser contract、MCP adapter、tests 和 package metadata。
+- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：Browser / search 工具边界。
+- [`packages/actions/browser-runtime`](packages/actions/browser-runtime)：当前 Browser primitive contract、MCP adapter 和测试。

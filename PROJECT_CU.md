@@ -1,10 +1,10 @@
 # SciForge Computer Use 当前任务
 
-最后更新：2026-06-09
+最后更新：2026-06-10
 
 ## 当前目标
 
-把 Computer Use 收敛成一个通用 refs-first GUI primitive runtime，并在它之上实现可插拔的 Host-side App Capability Module。第一个专门模块是 VSCode；目标是让 Agent Host 能和用户已打开的 VSCode 协作，但不衍生第二个 agent、聊天旁路、旧版本兼容层或历史包袱。
+把 Computer Use 收敛成一个通用 refs-first GUI primitive runtime，并在它之上实现可插拔的 Host-side App Capability Module。第一个专门模块是 VSCode；目标是让 Agent Host 能和用户已打开的 VSCode 协作，覆盖更多、更通用、更多样的真实 VSCode 使用场景，但不衍生第二个 agent、聊天旁路、旧版本兼容层或历史包袱。
 
 本文件是继续推进的唯一任务路线图，不是旧任务存档。旧任务可以删除；旧逻辑如果和新方案冲突，直接删除、收口或 fail closed，不做 legacy alias、compatibility wrapper、fallback shortcut、历史 run 转译或旁路保留。
 
@@ -94,6 +94,7 @@ SciForge UI
 - [x] P9.19-P9.20：Narrow Apply unit path 已闭合；`apply-current-selection` 是 Host-owned bridge，不是 VSCode module capability，只能从 structured Host operation + current scope refs + Host `text-ref:` 映射为一个 `replace-selection` / `insert-draft` primitive candidate；apply verifier 要求 same-file、same-window、same-editor、same-selection、after-observe、release 与 cleanup refs，不能把 Computer Use `completed` 当作用户任务完成。
 - [x] P9.21-P9.22：Save / batch unit path 已闭合；`save-current-file` 只从 structured Host operation、current editor/file refs、same-file + mutation verifier 和 Host action evidence 生成一个 `Meta+S` `computer_use.act` candidate；`bulk-replace` / `cross-file-modify` 由 Host-owned decomposition guard blocked-safe，不会生成单个 Computer Use task、`act` 或 `run_procedure`。
 - [x] P10.0-P10.8：显式 VSCode + Computer Use ordinary chat 已进入 Host-owned P10 bridge；入口只生成 refs-first `sciforge.codex-agent-host-input.v1`，native route 可在无预绑定 window candidates 时启动 current VSCode command palette live diagnostic runner；默认 macOS adapter 支持菜单方式打开 command palette、action-backed palette refs、palette `text-ref:` 输入、`Escape` 关闭、current observed item `Enter` 选择和 release cleanup；Host 已有多窗口或 selected/observed 冲突证据时 direct live route 先返回 `needs-confirmation` / `blocked`，不会启动 live runner 猜窗口。
+- [x] P11.0-P11.2 / P11.4-P11.5：SciForge UI dogfood 已证明 ordinary chat -> Host bridge -> native route -> current VSCode command palette live diagnostic -> Host final answer 的可见闭环；open/query/close 与 open/query/select-current-item 都能从 UI 跑通，仍只标 `live-diagnostic`。
 
 ## 当前执行路线
 
@@ -125,20 +126,83 @@ SciForge UI
 
 目标：把 P10 的真实 VSCode command palette live-diagnostic 从 native route 证据闭环推进到 SciForge 对话 UI 的可见闭环。P11 仍然不扩大 Computer Use core，不做 task planning；只验证用户在 SciForge UI 中提出明确 VSCode Computer Use 请求时，Host bridge、native route、live runner、public event、final answer 和 cleanup 能稳定串起来。
 
-当前状态：P11.0-P11.2 / P11.4-P11.5 已闭合；P10 已提供可复用的 direct live route、ambiguity blocker、smart-detect activation 和真实桌面验收测试。UI runtime event reader 现在能把 Host final answer 的 `completed` / `needs-confirmation` / `blocked` 三态稳定投影为用户可见结果并结束等待；显式 VSCode + Computer Use ordinary chat 即使带有 UI generic Host input，也会在后端桥接成 current VSCode co-work Host input，不再落回 app-server discovery 或 provider preflight blocker。P11 剩余卡点是多 VSCode 窗口 / 证据冲突的 UI dogfood。
+当前状态：P11.0-P11.2 / P11.4-P11.5 已闭合；P10 已提供可复用的 direct live route、ambiguity blocker、smart-detect activation 和真实桌面验收测试。UI runtime event reader 现在能把 Host final answer 的 `completed` / `needs-confirmation` / `blocked` 三态稳定投影为用户可见结果并结束等待；显式 VSCode + Computer Use ordinary chat 即使带有 UI generic Host input，也会在后端桥接成 current VSCode co-work Host input，不再落回 app-server discovery 或 provider preflight blocker。
 
 - [x] [P11.0 Unit] SciForge UI / client runtime event 投影测试：P10 `completed`、`needs-confirmation`、`blocked` 三类 Host final answer 都能在对话中终止等待，不显示“长期 worked / 无回复”；`needs-confirmation` 会在 message provenance 标记 `requiresUserConfirmation`，`blocked` / `needs-confirmation` 不可被当作 live acceptance。
 - [x] [P11.1 Code] 对 explicit VSCode Computer Use ordinary chat，前端只消费 unified native route public events；不新增 chat bypass、不把 runner result 当作独立旁路消息。
 - [x] [P11.2 Dogfood] 在本机 `localhost:5173` 通过 SciForge UI 发起“用 Computer Use 操纵当前 VSCode，打开命令面板”，验证不再卡在 unavailable / app-server discovery，最终只显示 `live-diagnostic` safe answer。
-- [ ] [P11.3 UX] 多 VSCode 窗口或证据冲突时，SciForge UI dogfood 显示 Host `needs-confirmation` / `blocked`，不自动选择窗口；用户确认后的下一步仍由 Host 重新发一个 primitive。
 - [x] [P11.4 Verify] 跑 UI event tests、P10 native route tests、typecheck、Computer Use no-bypass / no-legacy smoke，并确认没有 raw screenshot/base64/provider payload 进入 chat context。
 - [x] [P11.5 Dogfood] 在 `localhost:5173` 通过 SciForge UI 发起“用 Computer Use 操纵当前 VSCode，打开命令面板并执行 Help: About”，验证从 ordinary chat 进入 Host-owned native route，真实 VSCode 完成 `open -> query -> observe -> select current item -> observe -> release`，最终显示 `live-diagnostic` safe answer。
+
+暂缓项：
+
+- P11.3 多 VSCode 窗口或证据冲突的 UI confirmation dogfood 暂不作为当前卡点；相关底层原则不变：多窗口、目标不唯一、证据冲突或 stale observation 必须 `needs-confirmation` / `blocked`，不能猜窗口。后续需要做时再回到 UI confirmation 流。
+
+### P12：VSCode Diverse Usage 与通用能力扩面
+
+目标：在已经打通 current VSCode bind / observe / command palette select 的基础上，把 VSCode co-work 从单一 command palette dogfood 扩展成更通用、更 diverse 的真实使用能力。P12 仍然坚持 Host 决定下一步原子 primitive；Computer Use core 不做 task planning；VSCode module 只做状态模型、能力目录、readiness 和证据门。
+
+当前策略：先扩大“读、导航、诊断、终端、命令面板、编辑预览/应用”的能力面，再做更复杂的真实项目工作流。每个任务都必须能由 unit/mocked/live diagnostic 小步验收，不能直接设置“让 VSCode 完成任意任务”这种不可验收目标。
+
+#### P12-A：Capability Map 与入口泛化
+
+- [ ] [P12.0 Design] 将 VSCode diverse usage 分成稳定能力族：`read/navigation`、`command-palette`、`terminal`、`diagnostics/problems`、`editor-scope`、`preview/apply/save`；每族只列 Host-owned operation，不接受自然语言 task。
+- [ ] [P12.1 Unit] explicit VSCode Computer Use ordinary chat 只生成 structured Host input；新增多种 prompt 变体测试，覆盖读取、打开命令面板、终端、诊断、当前选区预览/应用，但不把裸文本当 operation fallback。
+- [ ] [P12.2 Code] P10 bridge 从单一 palette special-case 收敛为 current VSCode operation bridge factory：根据 Host-recognized intent 生成 `target.vscodeCoWork.operation` / `operationRef` / `text-ref:`，不泄漏 raw label、raw command、raw path。
+- [ ] [P12.3 Static] no-bypass guard 覆盖新增 VSCode diverse usage 入口：ordinary chat、native route、terminal output、history、completed action 都不能直接触发 app module operation 或 final answer。
+
+#### P12-B：Read / Navigation 多样化
+
+- [ ] [P12.4 Unit] `read-visible-text` ordinary chat bridge：显式“读取当前 VSCode 可见内容/当前文件概要”进入 current VSCode read live diagnostic，输出 visible text refs / safe summary，不泄漏 raw visible text。
+- [ ] [P12.5 Mocked] `focus-editor` / `editor-scope` live diagnostic 从 UI ordinary chat 可进入 Host bridge，跑 `bind -> observe -> host-decision -> act/observe -> control(release)`，只返回 editor/file/selection/cursor/range/freshness refs。
+- [ ] [P12.6 Unit] `quick-open-file` 或 `open-workspace-file` 只能由 Host 提供 `file-ref:` / workspace resource ref / `text-ref:` query 触发；raw path、URL、历史 filename 和当前截图文字不能直接成为 public target。
+- [ ] [P12.7 Live] 在单窗口 VSCode 上 dogfood 一个无写入导航场景：从 SciForge UI 触发 command palette / quick open / observe current editor，并确认 release cleanup。
+
+#### P12-C：Command Palette 通用化
+
+- [ ] [P12.8 Unit] command palette live diagnostic 不再内置 `Help: About`；由 Host input 提供 `paletteQueryTextRef` 和 final operation `close` / `select-current-item`，默认 runner 只解析 Host text ref。
+- [ ] [P12.9 Code] command palette adapter 支持多种 Host text-ref query 的同一套 open/query/observe/select/close 链路；public projection 仍只保留 palette/item/rank/hash refs，不暴露 raw label 或 raw command id。
+- [ ] [P12.10 Dogfood] 从 SciForge UI 至少跑通 3 个非硬编码 palette 场景：打开 Help/About、显示 Problems、聚焦 Terminal 或其它安全内置命令；每个场景都必须独立 release。
+
+#### P12-D：Terminal 通用化
+
+- [ ] [P12.11 Unit] terminal ordinary chat bridge 只生成 `focus-terminal` / `send-terminal-text` / `observe-terminal` / `submit-terminal-command` 的下一步 Host operation refs；raw command 不进入 public result。
+- [ ] [P12.12 Mocked] terminal multi-step diagnostic 支持从 UI 触发 `focus -> send text-ref -> observe -> submit -> observe -> release`，Host 基于 output/hash refs 决定是否完成或下一步。
+- [ ] [P12.13 Live] 单窗口 VSCode 上 dogfood 一个低风险 terminal 场景；命令内容只通过 Host `text-ref:` 进入，public answer 只展示 safe summary 和 terminal output/hash refs。
+
+#### P12-E：Diagnostics / Problems
+
+- [ ] [P12.14 Unit] `show-problems` / `read-diagnostics` ordinary chat bridge：只从 structured Host operation 进入 VSCode module readiness，diagnostics refs 缺失时 blocked-safe。
+- [ ] [P12.15 Mocked] Problems panel diagnostic 跑 `bind -> observe -> host-decision(show-problems) -> act -> observe(read-diagnostics) -> control(release)`；不把 raw problem text / file path 暴露到 public result。
+- [ ] [P12.16 Dogfood] 从 SciForge UI 触发一次“显示/读取 Problems”，验证 Host final answer 只使用 diagnostics refs / safe summary。
+
+#### P12-F：Editor Preview / Apply / Save 实用化
+
+- [ ] [P12.17 Unit] 当前选区 preview/apply ordinary chat bridge：preview 只产出 artifact refs；apply 只在 Host 明确确认 structured `apply-current-selection` 后生成一个 `insert-draft` / `replace-selection` primitive candidate。
+- [ ] [P12.18 Mocked] current selection apply live diagnostic 从 UI 入口跑完整 `bind -> observe -> host-decision -> act -> observe -> verify -> control(release)`，验证 same-file / same-window / same-editor / same-selection / after-observe / cleanup refs。
+- [ ] [P12.19 Live] 单窗口 VSCode 上只对非用户 scratch buffer 跑一次真实编辑 dogfood；不写用户真实文件，不宣称 `product-ready`。
+- [ ] [P12.20 Unit] `save-current-file` UI bridge 只在已有 same-file + mutation verifier + Host action evidence 时生成 `Meta+S` primitive；不能从“保存一下”裸文本、raw path、terminal output 或 history 直接触发。
+
+#### P12-G：Diverse Dogfood Matrix 与验收
+
+- [ ] [P12.21 Matrix] 建立 VSCode diverse usage dogfood matrix，至少覆盖：读当前文件、打开/执行 palette 命令、聚焦/使用 terminal、显示/读取 diagnostics、当前选区 preview、scratch apply。
+- [ ] [P12.22 UI Dogfood] 在 `localhost:5173` 从普通 SciForge 对话逐项跑 matrix；每项都必须显示 Host-owned final answer envelope，不能显示 raw payload 或长期 running。
+- [ ] [P12.23 Cleanup] 每个 live dogfood 后检查 release refs、input lease / adapter / cursor、前台焦点和鼠标恢复；不杀 VSCode、不清 profile。
+- [ ] [P12.24 Verify] 跑 VSCode bridge/native route/app module focused tests、UI event tests、typecheck、Computer Use no-bypass smoke。
+
+验收：
+
+- [ ] 至少 4 类不同 VSCode 使用能力可以从 SciForge UI 触发并完成 Host-owned final answer：读、palette、terminal、diagnostics、preview/apply 中任选 4 类。
+- [ ] 每一类都遵守 refs-first；raw screenshot、raw AX、raw visible text、raw command、raw path、raw label、provider payload、URL、base64、secret 不进入 public result。
+- [ ] 每一类都是 Host 决定下一步 primitive；Computer Use core 不做 task planning，不判断用户任务完成。
+- [ ] 每一次真实桌面 dogfood 都 release input lease / adapter / cursor，并恢复焦点和鼠标位置。
+- [ ] 所有 shared-system-input 路径仍只标 `live-diagnostic`，不宣称 `product-ready`。
 
 ### P9：VSCode Editor Mutation 与 Host-owned Narrow Apply
 
 目标：最后才进入写入 primitive；先 scope，再 preview，再 scratch mutation，最后由 Host 明确拆成 `observe -> one primitive -> observe`。Computer Use core 始终不做 planning、verification、repair 或 final answer。
 
-当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation，以及 P9-D 的 Narrow Apply / Apply Verification / Save / Batch Decomposition unit bridge 已闭合。当前推进重心已经转到 P10 VSCode 真实绑定与 command palette live-diagnostic。
+当前状态：P9-A scope projection 与 diagnostic、P9-B Preview No-write、P9-C Scratch Mutation，以及 P9-D 的 Narrow Apply / Apply Verification / Save / Batch Decomposition unit bridge 已闭合。当前推进重心已经转到 P12 VSCode diverse usage 扩面。
 
 #### P9-A：Scope Projection 与 Diagnostic
 

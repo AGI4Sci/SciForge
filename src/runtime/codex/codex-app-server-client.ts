@@ -36,12 +36,15 @@ import {
   agentHostBrowserSearchPlanFromPrompt,
   agentHostBrowserUserPromptFromCommandText,
   createAgentHostBrowserEvidenceLedger,
+  evaluateAgentHostBrowserSearchDiscovery,
+  evaluateAgentHostBrowserSearchQuery,
   evaluateAgentHostBrowserEvidence,
   recordAgentHostBrowserRefs,
   recordAgentHostBrowserToolResult,
   type AgentHostBrowserCompletionTruth,
   type AgentHostBrowserEvidenceEvaluation,
   type AgentHostBrowserEvidenceLedger,
+  type AgentHostBrowserSearchGuardEvaluation,
   type AgentHostBrowserSearchPlan,
 } from './agent-host-browser-evidence.js';
 import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
@@ -1022,6 +1025,8 @@ class CodexAppServerJsonRpcSession {
     if (browserPrimitive) {
       const finalRequired = this.browserFinalRequiredResultForDiscovery(browserPrimitive);
       if (finalRequired) return finalRequired;
+      const searchQueryRepair = this.browserSearchQueryRepairRequiredResult(browserPrimitive, moduleRequest);
+      if (searchQueryRepair) return searchQueryRepair;
       const autoRead = this.browserAutoReadRequestForDiscovery(browserPrimitive);
       if (autoRead) {
         const autoReadLocalToolDecision = await this.evaluateLocalToolAct(
@@ -1053,7 +1058,11 @@ class CodexAppServerJsonRpcSession {
       }
     }
     const result = await this.options.dispatcher.invoke(moduleRequest);
-    if (browserPrimitive) this.recordBrowserModuleResult(browserPrimitive, result);
+    if (browserPrimitive) {
+      this.recordBrowserModuleResult(browserPrimitive, result);
+      const searchDiscoveryRepair = this.browserSearchDiscoveryRepairRequiredResult(browserPrimitive);
+      if (searchDiscoveryRepair) return searchDiscoveryRepair;
+    }
     return result;
   }
 
@@ -1145,6 +1154,7 @@ class CodexAppServerJsonRpcSession {
       this.browserDiscoveryAttemptsWithoutRead
         < Math.max(1, searchPlan.search.maxDiscoveryAttemptsBeforeRead || BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT)
     ) return undefined;
+    if (evaluateAgentHostBrowserSearchDiscovery(this.browserEvidenceLedger, searchPlan).status === 'repairable') return undefined;
     const candidates = browserReadRepairCandidates(this.browserEvidenceLedger);
     if (candidates.length === 0) return undefined;
     const candidate = candidates[0];
@@ -1164,6 +1174,41 @@ class CodexAppServerJsonRpcSession {
 
   private browserSearchPlan(): AgentHostBrowserSearchPlan {
     return agentHostBrowserSearchPlanFromPrompt(turnQuestionText(this.lastTurnStartInput));
+  }
+
+  private browserSearchQueryRepairRequiredResult(
+    primitive: BrowserPrimitiveName,
+    moduleRequest: ModuleInvokeRequest,
+  ): unknown | undefined {
+    if (primitive !== 'search') return undefined;
+    const input = isRecord(moduleRequest.input) ? moduleRequest.input : {};
+    const query = stringAt(input, 'query');
+    const searchPlan = this.browserSearchPlan();
+    const evaluation = evaluateAgentHostBrowserSearchQuery(query, searchPlan);
+    if (evaluation.status !== 'repairable') return undefined;
+    return browserSearchRepairRequiredResult({
+      attemptedPrimitive: primitive,
+      query,
+      searchPlan,
+      evaluation,
+      refs: this.browserEvidenceLedger.refs,
+    });
+  }
+
+  private browserSearchDiscoveryRepairRequiredResult(primitive: BrowserPrimitiveName): unknown | undefined {
+    if (primitive !== 'search') return undefined;
+    const searchPlan = this.browserSearchPlan();
+    const evaluation = evaluateAgentHostBrowserSearchDiscovery(this.browserEvidenceLedger, searchPlan);
+    if (evaluation.status !== 'repairable') return undefined;
+    return browserSearchRepairRequiredResult({
+      attemptedPrimitive: primitive,
+      searchPlan,
+      evaluation,
+      refs: uniqueRuntimeStrings([
+        ...this.browserEvidenceLedger.refs,
+        ...evaluation.rejectedEvidenceRefs,
+      ]),
+    });
   }
 
   private async evaluateLocalToolAct(
@@ -1375,6 +1420,42 @@ function browserReadRequiredResult(input: {
     refs: uniqueRuntimeStrings([
       ...input.ledger.refs,
       ...input.candidates.map((candidate) => candidate.ref),
+    ]),
+  };
+}
+
+function browserSearchRepairRequiredResult(input: {
+  attemptedPrimitive: BrowserPrimitiveName;
+  query?: string;
+  searchPlan: AgentHostBrowserSearchPlan;
+  evaluation: AgentHostBrowserSearchGuardEvaluation;
+  refs: string[];
+}): Record<string, unknown> {
+  const firstIssue = input.evaluation.issues[0];
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-search-repair-required.v1',
+    ok: false,
+    status: 'repairable',
+    moduleId: 'browser',
+    attemptedIntent: BROWSER_PRIMITIVE_INTENTS[input.attemptedPrimitive],
+    requiredIntent: BROWSER_PRIMITIVE_INTENTS.search,
+    requiredTool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.search),
+    error: firstIssue?.code ?? 'browser-search-repair-required',
+    reason: firstIssue?.message ?? 'Agent Host requires a repaired Browser search before source reading or final synthesis.',
+    evidenceBoundary: 'Agent Host owns search intent, source relevance, repair, and completion truth. Browser/search modules only execute allowed primitives and return refs-first evidence.',
+    attemptedQuery: input.query,
+    currentIntent: {
+      taskSummary: input.searchPlan.taskSummary,
+      topicalTerms: input.searchPlan.acceptanceSpec.topicalTerms,
+      primaryQuery: input.searchPlan.search.primaryQuery,
+      queryCandidates: input.searchPlan.search.queryCandidates,
+    },
+    issues: input.evaluation.issues,
+    repairHints: input.evaluation.repairHints,
+    refs: uniqueRuntimeStrings([
+      ...input.refs,
+      ...input.evaluation.satisfiedEvidenceRefs,
+      ...input.evaluation.rejectedEvidenceRefs,
     ]),
   };
 }

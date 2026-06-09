@@ -242,15 +242,15 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
   const browserNewsPreview = `${new Date().toISOString().slice(0, 10)} OpenAI ChatGPT Enterprise/EDU adds default plugin sharing in Codex for eligible workspaces, letting teammates install shared local plugins. Workspace admins can disable plugin sharing.`;
   const appServer = fakeAppServer({
     turnToolCalls: [
-      { tool: 'browser_search', arguments: { query: '伊朗局势 最新', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: '伊朗局势 2026 最新', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: 'Iran situation latest', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: '伊朗局势 最新消息', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: '伊朗局势 来源 再查一次', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: 'Iran situation source again', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: 'Iran latest repeat search', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: 'Iran latest repeat search again', limit: 2 } },
-      { tool: 'browser_search', arguments: { query: 'Iran latest repeated search final', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI Codex plugin sharing latest', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI Codex shared local plugins', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI ChatGPT Enterprise EDU plugin sharing Codex', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI Codex plugin sharing source', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI Codex plugin sharing read source again', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI shared local plugins repeat search', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI Codex plugin sharing repeated search', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI plugin sharing repeated search again', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'OpenAI Codex plugin sharing repeated search final', limit: 2 } },
     ],
     suppressTerminalAfterToolCall: true,
   });
@@ -425,6 +425,165 @@ test('Codex app-server client does not create a search-only Browser bypass', asy
     && event.schemaVersion === 'sciforge.codex.normalized-event.v1'
     && event.type === 'done'
     && /agent-host-browser-finalizer/.test(JSON.stringify(event.raw))));
+});
+
+test('Codex app-server client blocks contaminated Browser search queries before dispatcher execution', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'browser_search',
+      arguments: {
+        query: 'Use the visible desktop from the ordinary SciForge Desktop chat to complete the Computer Use acceptance task. Start from the product chat surface, bind the curr',
+        limit: 5,
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        return moduleResult({ moduleId: request.moduleId, ok: true, value: {} });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '帮我搜索一下伊朗局势，至少搜索5条信息。',
+    workspacePath: workspace,
+    commandId: 'browser-contaminated-query-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(invoked, []);
+  assert.equal(appServer.toolCallResponse?.success, false);
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /sciforge\.agent-host\.browser-search-repair-required\.v1/);
+  assert.match(text, /browser-search-query-contaminated/);
+  assert.match(text, /伊朗局势/);
+});
+
+test('Codex app-server client does not auto-read Browser candidates that fail Agent Host topical relevance', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'browser_search',
+      arguments: { query: '伊朗局势 最新', limit: 5 },
+    }, {
+      tool: 'browser_search',
+      arguments: { query: '伊朗局势 最新消息', limit: 5 },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+            moduleId: 'browser',
+            primitive: 'search',
+            status: 'completed',
+            output: {
+              query: (request.input as { query?: string }).query,
+              results: [{
+                rank: 1,
+                title: '内蒙古农业大学研究生院',
+                url: 'https://yjsy.imau.edu.cn/index.htm',
+                snippet: '内蒙古农业大学研究生院招生、培养和学位管理信息。',
+              }],
+              searchResultRef: 'browser:search-result:wrong-topic',
+            },
+            resources: [{
+              ref: 'browser:resource:web_page:imau-yjs',
+              kind: 'web_page',
+              status: 'discovered',
+              originTool: 'browser.search',
+              locator: { url: 'https://yjsy.imau.edu.cn/index.htm' },
+              title: '内蒙古农业大学研究生院',
+              snippet: '内蒙古农业大学研究生院招生、培养和学位管理信息。',
+              confidence: 'candidate',
+            }],
+            evidenceState: {
+              completed: ['Discovered 1 candidate web page resource(s).'],
+              unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
+              boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+            },
+            refs: ['browser:search-result:wrong-topic'],
+            diagnostics: [],
+            budget: {},
+          },
+          refs: ['browser:search-result:wrong-topic'],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '帮我搜索一下伊朗局势，至少搜索5条信息。',
+    workspacePath: workspace,
+    commandId: 'browser-unrelated-results-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(invoked.map((request) => request.intent), ['browser.search', 'browser.search']);
+  assert.equal(appServer.toolCallResponses[0]?.success, false);
+  const firstText = (appServer.toolCallResponses[0]?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(firstText, /browser-search-result-relevance-gap/);
+  assert.doesNotMatch(JSON.stringify(appServer.toolCallResponses), /browser-auto-read-result|browser_read/);
 });
 
 test('Codex app-server client requires browser_read after repeated Browser module.invoke discovery', async () => {

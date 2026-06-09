@@ -1092,12 +1092,27 @@ function buildCodexRuntimeCommandText(
     ].filter(Boolean).join('\n\n');
   }
   if (!options.resumeRequested) return taskText;
+  const resumeContextNeeded =
+    refs.length > 0
+    || Boolean(selectedMessageContext)
+    || composerPromptMentionsRelativeObject(prompt)
+    || sameChatContinuityPrompt(prompt)
+    || codexRuntimePromptRequestsResumeContext(prompt);
+  if (!resumeContextNeeded) return taskText;
   const resumeContext = 'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.';
   return [
     resumeContext,
     selectedMessageContext,
+    'Current request:',
     taskText,
   ].filter(Boolean).join('\n\n');
+}
+
+function codexRuntimePromptRequestsResumeContext(prompt: string) {
+  return /\b(?:continue|resume|reuse|keep|stay in|use)\b.{0,40}\b(?:same|current|active|existing|previous|prior)\b.{0,20}\b(?:thread|chat|conversation|session)\b/i.test(prompt)
+    || /\b(?:do not|don't|dont|without|no)\b.{0,30}\b(?:new|fresh)\b.{0,20}\b(?:thread|chat|conversation|session)\b/i.test(prompt)
+    || /(?:继续|沿用|复用|保持|接着).{0,16}(?:同一|同一个|当前|这个|原来|已有|上个|上一).{0,16}(?:对话|会话|线程)/i.test(prompt)
+    || /(?:不要|别|无需).{0,8}(?:新开|新建|另开).{0,8}(?:对话|会话|线程)/i.test(prompt);
 }
 
 function runtimeInputObjectsForRuntimeRequest(

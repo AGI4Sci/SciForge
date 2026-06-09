@@ -35,6 +35,7 @@
 | [`SemanticModuleEngineering.md`](SemanticModuleEngineering.md) | 模块工程原则，当前以 Bounded Operation 为最小实现。 |
 | [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) | native / GUI / Agent Host 归属摘要。 |
 | [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | 反馈收件箱的未来产品原则。 |
+| [`ResearchAutomationRequirements.md`](ResearchAutomationRequirements.md) | 自动化科研需求记录，当前聚焦基础能力、AI 研究和 AI + 生物方向。 |
 | [`Usage.md`](Usage.md) | 当前启动和运维手册，描述现状，不定义产品职责。 |
 
 ## 历史与运行材料

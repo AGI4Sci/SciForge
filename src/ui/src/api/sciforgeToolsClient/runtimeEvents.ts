@@ -69,7 +69,7 @@ type AssistantStreamTextFragment = {
   text: string;
   exact: boolean;
 };
-type HostFinalAnswerTextSource = 'agent-host-browser-finalizer' | 'agent-host-turn-loop';
+type HostFinalAnswerTextSource = 'agent-host-browser-finalizer' | 'agent-host-turn-loop' | 'codex-app-server-agent-message';
 type HostFinalAnswerProjection = {
   envelope: Record<string, unknown>;
   text: string;
@@ -252,6 +252,7 @@ async function readWorkspaceToolSse(
   let guiPresent: Record<string, unknown> | undefined;
   let guiAskUser: Record<string, unknown> | undefined;
   let agentHostBrowserFinalizerMessage: string | undefined;
+  let codexAppServerAgentMessage: string | undefined;
   const genericMessages: AssistantStreamTextFragment[] = [];
   function consumeBlock(block: string) {
     const lines = block.split(/\r?\n/);
@@ -277,8 +278,13 @@ async function readWorkspaceToolSse(
     }
     onEvent(data);
     if (isRecord(data)) {
-      const assistantText = assistantTextFromStreamEventRecord(eventName, data);
-      if (assistantText) genericMessages.push(assistantText);
+      const completedAgentMessage = codexAppServerAgentMessageTextFromStreamEventRecord(eventName, data);
+      if (completedAgentMessage) {
+        codexAppServerAgentMessage = completedAgentMessage;
+      } else {
+        const assistantText = assistantTextFromStreamEventRecord(eventName, data);
+        if (assistantText) genericMessages.push(assistantText);
+      }
       agentHostBrowserFinalizerMessage = agentHostBrowserFinalizerTextFromStreamEventRecord(eventName, data)
         ?? agentHostBrowserFinalizerMessage;
       if (eventName === 'gui_present' || data.type === 'gui_present') {
@@ -296,6 +302,14 @@ async function readWorkspaceToolSse(
     if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
       if (agentHostBrowserFinalizerMessage) {
         result = withAssistantMessageRuntimeResult(data, agentHostBrowserFinalizerMessage, 'agent-host-browser-finalizer');
+        if (isRecord(result) && result.type === 'failed') {
+          onEvent(result);
+          error = asString(result.message);
+        }
+        return;
+      }
+      if (codexAppServerAgentMessage) {
+        result = withAssistantMessageRuntimeResult(data, codexAppServerAgentMessage, 'codex-app-server-agent-message');
         if (isRecord(result) && result.type === 'failed') {
           onEvent(result);
           error = asString(result.message);
@@ -425,6 +439,29 @@ function agentHostBrowserFinalizerTextFromStreamEventRecord(eventName: string, d
     ?? asTextFragment(data.message)
     ?? asTextFragment(data.delta)
     ?? asTextFragment(data.detail);
+}
+
+function codexAppServerAgentMessageTextFromStreamEventRecord(eventName: string, data: Record<string, unknown>): string | undefined {
+  const eventType = asString(data.type) ?? asString(data.kind) ?? eventName;
+  const lowerEventName = eventName.trim().toLowerCase();
+  const lowerEventType = eventType.trim().toLowerCase();
+  if (lowerEventName !== 'message' && lowerEventType !== 'message') return undefined;
+  if (data.schemaVersion !== 'sciforge.codex.normalized-event.v1') return undefined;
+  const raw = isRecord(data.raw) ? data.raw : {};
+  if (asString(raw.boundary) !== 'backend-neutral-normalized-event') return undefined;
+  if (asString(raw.backend) !== 'codex-app-server') return undefined;
+  const event = isRecord(raw.event) ? raw.event : {};
+  if (asString(event.type) !== 'message') return undefined;
+  if (asString(event.backend) !== 'codex-app-server') return undefined;
+  const backendRaw = isRecord(event.raw) ? event.raw : {};
+  if (asString(backendRaw.method) !== 'item/completed') return undefined;
+  const params = isRecord(backendRaw.params) ? backendRaw.params : {};
+  const item = isRecord(params.item) ? params.item : {};
+  if (asString(item.type) !== 'agentMessage') return undefined;
+  return asTextFragment(data.text)
+    ?? asTextFragment(data.message)
+    ?? asTextFragment(event.text)
+    ?? asTextFragment(item.text);
 }
 
 function runtimeSseTextEventIsAssistantMessage(eventName: string, data: unknown): data is string {

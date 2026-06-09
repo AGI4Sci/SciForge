@@ -1,6 +1,6 @@
 # Browser Runtime 设计
 
-最后更新：2026-06-08
+最后更新：2026-06-09
 
 ## 文档目的与约束
 
@@ -121,6 +121,64 @@ Browser primitive 默认不做任务级语义判断。
 - 生成 final answer。
 
 调用方可以读取 Browser refs 后自行调用模型或 verifier；这不属于 Browser primitive 内部职责。Agent Host 可维护 current-run Evidence Ledger，把 Browser primitive 的 `resources` / `refs` 记录为状态推进，并在生成 Codex App Server assistant final message / `FinalAnswerEnvelope` 前检查 source page refs、page text refs、final-answer refs，以及由当前 turn 文本派生的 AcceptanceSpec gap（例如低信息页面、topic mismatch、recent-window temporal gap）。这些检查属于 Agent Host verifier / completion truth 边界，不进入 Browser core，也不替代更完整的多来源事实充分性 verifier。
+
+## Agent Host 搜索与升级边界
+
+搜索的任务级智能载体是 Agent Host。Browser / search 基础工具默认保持原子工具属性，只执行已允许的 primitive，并返回 refs-first evidence、diagnostics、耗时和 blocked reason。
+
+如果搜索或读取遇到复杂浏览器场景，例如 JS-heavy 页面、弹窗、登录态、验证码、搜索页阻断、动态内容缺失或普通读取失败，Agent Host 可以显式升级到专用 browse/search fallback sub agent 或 local harness。这个升级必须是 Host-owned 调度，而不是基础工具内部静默启动第二个 agent。
+
+Agent Host owns:
+
+- 从当前用户请求抽取 intent、topic terms、时间窗口、来源数量和 source policy。
+- 为 `browser.search` 生成或验收 query，并拒绝明显被旧任务、workflow 文本或其它主题污染的 query。
+- 检查 search result metadata 是否和当前 topic 相关；明显不相关的候选不能触发 auto-read。
+- 决定是否从纯工具路径升级到 browse/search fallback sub agent，并传入明确 query / URL、预算、允许范围和停止条件。
+- 决定 repair：换 query、补充读取、停止错误来源、要求用户澄清或进入 final answer。
+- 在 final answer 前检查 source page refs、page text refs、当前轮 final-answer refs、topic relevance、source count 和 temporal gap。
+
+Browser / search does not own:
+
+- 任务意图抽取。
+- query 改写或 query 污染判断。
+- 来源相关性裁决。
+- 多来源充分性裁决。
+- 静默启动 autonomous browse agent。
+- repair 策略。
+- final answer permission。
+
+Browse/search fallback sub agent 或 local harness owns only execution recovery:
+
+- 在 Host 给定的 query、URL、domain policy、profile policy、time budget、step budget 内处理浏览器执行细节。
+- 可以使用真实浏览器、workspace profile、Playwright、browser-use-like 操作经验、局部页面感知或规则重试。
+- 必须返回结构化 search/read evidence、actions trace、timings、failure reason 和 refs。
+- 不能改写用户任务目标，不能决定最终来源充分性，不能直接生成 final answer。
+
+当前防错链路采用三道门：
+
+1. Query boundary gate：Agent Host 在执行 `browser.search` 前检查 planned query 是否属于当前 intent。若用户主题是“伊朗局势”，query 却是旧的 Computer Use 验收任务文本，Agent Host 返回 repairable guard result，不调用 Browser dispatcher。
+2. Search discovery relevance gate：Agent Host 记录 `browser.search` 的候选 refs 后，先检查候选标题、摘要和 URL 的 topic relevance。若候选明显不相关，例如全是“内蒙古农业大学研究生院”，不得 auto-read。
+3. Final evidence gate：Agent Host 只允许 current-run `browser.read` 物化出的 source page / page text refs 进入最终答复验收；search result、screenshot、DOM 和历史 refs 不能单独满足用户级完成。
+
+性能优化必须排在防错之后。允许的提速方向包括并发读取多个已通过 relevance gate 的候选、为单来源读取设置 timeout、缓存同 query 的候选 refs，以及把 Agent Host planning / search / parse / read / repair / final synthesis 的阶段耗时投影到 UI。任何提速都不能把 query/source/final decision 下放给 Browser / search 模块。
+
+## Web Search 基础能力建议
+
+SciForge 的搜索能力是基础集成能力，不作为独立产品卖点。第一版建议只暴露两个原子接口；`web_extract`、`web_batch_read`、复杂 crawler 和真实用户主 profile 都暂缓。
+
+| 接口 | 作用 | 第一版推荐实现 | 边界 |
+| --- | --- | --- | --- |
+| `web_search(query)` | 发现候选来源。返回 title、URL、snippet、rank、provider、search refs、timing 和错误原因。 | 首选自建 SearXNG / OpenSERP JSON provider；浏览器 SERP adapter 只作为 fallback 或验证路径。 | 不读取网页正文、不总结、不改写 query、不决定候选是否足够。 |
+| `web_read(url/ref)` | 读取一个来源。返回 finalUrl、title、metadata、Markdown / text、page refs、provider、timing 和错误原因。 | 静态 fetch + trafilatura / Readability 快路径；Crawl4AI / BrowserHostSession browser render 作为 fallback。 | 不继续搜索、不跨页面扩展、不做最终事实综合。 |
+
+`web_extract` 第一版不保留为默认工具。若未来出现批量结构化采集需求，可再增加 `web_extract(page_ref, schema)`，并限制为 selector、metadata、JSON-LD、表格或其它确定性抽取；LLM extraction 只能作为显式高级模式。
+
+推荐执行策略：
+
+1. `web_search` 默认走本地开源可控 search provider，减少直接打开搜索引擎页面造成的慢和不稳定。
+2. `web_read` 默认走静态读取和 Markdown 抽取，失败或内容明显缺失时再进入 browser render fallback。
+3. 浏览器 fallback 如果需要多步交互、用户 profile、登录态或复杂页面恢复，由 Agent Host 显式启动 browse/search fallback sub agent，并把 trace 回写为 evidence。
+4. `web_health` 作为 runtime resource 或管理端 endpoint；`web_benchmark` 作为 CLI / 开发工具，不作为 Agent Host 普通业务工具。
 
 ## 迁移口径
 

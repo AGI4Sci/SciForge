@@ -94,6 +94,15 @@ export interface AgentHostBrowserEvidenceEvaluation {
   acceptanceSpec?: AgentHostBrowserAcceptanceSpec;
 }
 
+export interface AgentHostBrowserSearchGuardEvaluation {
+  schemaVersion: 'sciforge.agent-host.browser-search-guard-evaluation.v1';
+  status: 'allowed' | 'repairable';
+  issues: AgentHostBrowserEvidenceIssue[];
+  repairHints: AgentHostBrowserEvidenceRepairHint[];
+  satisfiedEvidenceRefs: string[];
+  rejectedEvidenceRefs: string[];
+}
+
 export interface AgentHostBrowserCompletionTruth {
   schemaVersion: 'sciforge.agent-host.completion-truth.v1';
   scope: 'user-task';
@@ -220,6 +229,50 @@ export function agentHostBrowserUserPromptFromCommandText(prompt: string | undef
     .trim() || text;
 }
 
+export function evaluateAgentHostBrowserSearchQuery(
+  query: string | undefined,
+  plan: AgentHostBrowserSearchPlan,
+): AgentHostBrowserSearchGuardEvaluation {
+  const issues: AgentHostBrowserEvidenceIssue[] = [];
+  const text = query?.trim() ?? '';
+  const taskText = `${plan.taskSummary ?? ''} ${plan.acceptanceSpec.taskSummary ?? ''} ${plan.acceptanceSpec.topicalTerms.join(' ')}`;
+  const querySignals = browserSearchTopicSignals(text);
+  const planSignals = browserSearchTopicSignals(taskText);
+  if (browserSearchWorkflowContamination(text) && !browserSearchWorkflowContamination(taskText)) {
+    issues.push({
+      code: 'browser-search-query-contaminated',
+      message: 'Agent Host rejected the Browser search query because it contains workflow/task text that is not part of the current user intent.',
+    });
+  } else if (planSignals.length > 0 && querySignals.length > 0 && !signalsIntersect(planSignals, querySignals)) {
+    issues.push({
+      code: 'browser-search-query-topic-drift',
+      message: 'Agent Host rejected the Browser search query because its topic signals do not match the current user intent.',
+    });
+  }
+  return searchGuardEvaluation(issues, [], []);
+}
+
+export function evaluateAgentHostBrowserSearchDiscovery(
+  ledger: AgentHostBrowserEvidenceLedger,
+  plan: AgentHostBrowserSearchPlan,
+): AgentHostBrowserSearchGuardEvaluation {
+  const resources = Object.values(ledger.resourcesByRef).filter(browserSearchDiscoveryResource);
+  if (resources.length === 0 || plan.acceptanceSpec.topicalTerms.length === 0) return searchGuardEvaluation([], [], []);
+  const matchedRefs = resources
+    .filter((resource) => agentHostBrowserResourceMatchesSearchPlan(resource, plan))
+    .map((resource) => resource.ref);
+  if (matchedRefs.length > 0) return searchGuardEvaluation([], matchedRefs, []);
+  const rejectedRefs = resources
+    .filter((resource) => browserSearchResourceLooksSpecific(resource, plan))
+    .map((resource) => resource.ref);
+  if (rejectedRefs.length === 0) return searchGuardEvaluation([], [], []);
+  return searchGuardEvaluation([{
+    code: 'browser-search-result-relevance-gap',
+    message: 'Agent Host found Browser search candidates, but their visible result metadata does not match the current task topic.',
+    evidenceRefs: rejectedRefs,
+  }], [], rejectedRefs);
+}
+
 export function evaluateAgentHostBrowserEvidence(
   ledger: AgentHostBrowserEvidenceLedger,
   options: AgentHostBrowserEvidenceEvaluationOptions = {},
@@ -311,6 +364,26 @@ export function evaluateAgentHostBrowserEvidence(
     repairHints: [],
     satisfiedEvidenceRefs: uniqueStrings([...sourceEvidenceRefs, ...finalAnswerRefs]),
     ...(acceptanceSpec ? { acceptanceSpec } : {}),
+  };
+}
+
+function searchGuardEvaluation(
+  issues: AgentHostBrowserEvidenceIssue[],
+  satisfiedEvidenceRefs: string[],
+  rejectedEvidenceRefs: string[],
+): AgentHostBrowserSearchGuardEvaluation {
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-search-guard-evaluation.v1',
+    status: issues.length > 0 ? 'repairable' : 'allowed',
+    issues,
+    repairHints: issues.length > 0
+      ? [{
+          action: 'collect-browser-evidence',
+          reason: 'Agent Host should repair the Browser search plan/query before reading sources or synthesizing an answer.',
+        }]
+      : [],
+    satisfiedEvidenceRefs,
+    rejectedEvidenceRefs,
   };
 }
 
@@ -670,8 +743,76 @@ function topicalTermsFromPrompt(prompt: string | undefined): string[] {
     .map((term) => term.replace(/^[或和与及]+/u, '').replace(/[的是了]+$/u, ''))
     .filter((term) => !/使用|内置|读取|页面|主题|调用|正文|中文|简短|新闻|动态|网页|来源|结果|编号|记忆|回答/.test(term));
   const latinTerms = (text.match(/[a-z0-9][a-z0-9-]{2,}/giu) ?? [])
-    .filter((term) => !/^(?:search|read|browser|source|refs?|sciforge)$/i.test(term));
+    .filter((term) => !/^(?:search|read|browser|source|refs?|sciforge|actual|web)$/i.test(term));
   return uniqueStrings([...latinTerms, ...cjkTerms]).slice(0, 12);
+}
+
+function browserSearchDiscoveryResource(resource: BrowserResource): boolean {
+  return resource.originTool === 'browser.search'
+    && resource.status !== 'read'
+    && resource.status !== 'blocked'
+    && resource.status !== 'failed'
+    && (resource.kind === 'web_page' || resource.kind === 'search_result_set');
+}
+
+function agentHostBrowserResourceMatchesSearchPlan(
+  resource: BrowserResource,
+  plan: AgentHostBrowserSearchPlan,
+): boolean {
+  const text = browserResourceSearchText(resource);
+  if (!text.trim()) return false;
+  const taskText = `${plan.taskSummary ?? ''} ${plan.acceptanceSpec.topicalTerms.join(' ')}`;
+  const planSignals = browserSearchTopicSignals(taskText);
+  const resourceSignals = browserSearchTopicSignals(text);
+  if (planSignals.length > 0 && resourceSignals.length > 0 && signalsIntersect(planSignals, resourceSignals)) return true;
+  return plan.acceptanceSpec.topicalTerms.some((term) => browserSearchTermMatchesText(term, text));
+}
+
+function browserSearchResourceLooksSpecific(
+  resource: BrowserResource,
+  plan: AgentHostBrowserSearchPlan,
+): boolean {
+  const text = browserResourceSearchText(resource);
+  if (!text.trim()) return false;
+  const taskText = `${plan.taskSummary ?? ''} ${plan.acceptanceSpec.topicalTerms.join(' ')}`;
+  const planSignals = browserSearchTopicSignals(taskText);
+  const resourceSignals = browserSearchTopicSignals(text);
+  if (planSignals.length > 0 && resourceSignals.length > 0 && !signalsIntersect(planSignals, resourceSignals)) return true;
+  if (/[\p{Script=Han}]{4,}/u.test(text)) return true;
+  const specificLatinTokens = (text.match(/[a-z][a-z-]{4,}/giu) ?? [])
+    .map((token) => token.toLowerCase())
+    .filter((token) => !/^(?:https?|source|candidate|result|results|browser|search|latest|recent|current|example|login|signin|sign-in|page|pages|news|update|updates)$/i.test(token));
+  return specificLatinTokens.length >= 2;
+}
+
+function browserSearchTermMatchesText(term: string, text: string): boolean {
+  const normalizedText = normalizeText(text);
+  const normalizedTerm = normalizeText(term);
+  if (!normalizedTerm) return false;
+  if (normalizedText.includes(normalizedTerm)) return true;
+  if (/伊朗/u.test(term)) return /\biran(?:ian)?\b|伊朗/u.test(normalizedText);
+  if (/openai/i.test(term)) return /\bopenai\b/i.test(normalizedText);
+  if (/产品更新/u.test(term)) return /产品更新|product\s+updates?|release\s+notes?|changelog|updates?/iu.test(normalizedText);
+  if (/人工智能/u.test(term)) return /人工智能|\bai\b|artificial\s+intelligence/iu.test(normalizedText);
+  return false;
+}
+
+function browserSearchTopicSignals(text: string | undefined): string[] {
+  const value = text ?? '';
+  const signals: string[] = [];
+  if (/\bopenai\b/i.test(value)) signals.push('openai');
+  if (/\biran(?:ian)?\b|伊朗/u.test(value)) signals.push('iran');
+  if (browserSearchWorkflowContamination(value)) signals.push('computer-use-workflow');
+  return uniqueStrings(signals);
+}
+
+function browserSearchWorkflowContamination(text: string | undefined): boolean {
+  return /Computer Use acceptance task|visible desktop|ordinary SciForge Desktop chat|product chat surface|bind the curr|permission handoff|live acceptance/i.test(text ?? '');
+}
+
+function signalsIntersect(left: readonly string[], right: readonly string[]): boolean {
+  const rightSet = new Set(right);
+  return left.some((signal) => rightSet.has(signal));
 }
 
 function browserResourceDomain(resource: BrowserResource): string | undefined {
