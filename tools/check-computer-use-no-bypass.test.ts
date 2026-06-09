@@ -307,6 +307,26 @@ test('Computer Use no-bypass guard blocks direct VSCode operation selection from
   assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
 });
 
+test('Computer Use no-bypass guard blocks command palette operation inference from labels or commandText', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    "type VSCodeOperation = 'select-command-palette-item';",
+    'function paletteOperationFromCommandText(commandText: string, paletteLabel: string): VSCodeOperation | undefined {',
+    "  if (/Save File/i.test(paletteLabel) || /save/i.test(commandText)) return 'select-command-palette-item';",
+    '  return undefined;',
+    '}',
+    'export function route(input: { request: { commandText: string }; paletteLabel: string }) {',
+    '  const operation = paletteOperationFromCommandText(input.request.commandText, input.paletteLabel);',
+    '  return { vscodeCoWork: { operation } };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
 test('Computer Use no-bypass guard allows structured Host VSCode operation refs', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [

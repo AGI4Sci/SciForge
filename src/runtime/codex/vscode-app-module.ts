@@ -13,9 +13,14 @@ const VSCODE_CAPABILITIES = [
   'send-terminal-text',
   'observe-terminal',
   'submit-terminal-command',
+  'open-command-palette',
+  'send-command-palette-query',
+  'observe-command-palette-items',
+  'select-command-palette-item',
 ] as const;
 
 const FOCUS_EDITOR_ACTION_REF = 'action:vscode-app-module:focus-editor:meta-1';
+const OPEN_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:open-command-palette:meta-shift-p';
 
 interface VSCodeAppObservation {
   refs: string[];
@@ -41,8 +46,13 @@ interface VSCodeAppObservation {
   terminalInputRefs: string[];
   terminalOutputRefs: string[];
   terminalOutputHashRefs: string[];
+  commandPaletteRootRefs: string[];
+  commandPaletteInputRefs: string[];
+  commandPaletteItemsRefs: string[];
   commandPaletteRefs: string[];
   commandPaletteItemRefs: string[];
+  commandPaletteItemRankRefs: string[];
+  commandPaletteItemHashRefs: string[];
   diagnosticsRefs: string[];
   problemsPanelRefs: string[];
   workspaceRefs: string[];
@@ -77,9 +87,13 @@ function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & 
   const invalidRefs = uniqueStrings([
     ...(refs.some(isRawRef) ? ['blocked:vscode-app-module:raw-ref-not-allowed'] : []),
     ...(refs.some(isUnsafeTerminalObservationRef) ? ['blocked:vscode-app-module:unsafe-terminal-ref-not-allowed'] : []),
+    ...(refs.some(isUnsafeCommandPaletteObservationRef) ? ['blocked:vscode-app-module:unsafe-command-palette-ref-not-allowed'] : []),
   ]);
   const safeRefs = uniqueStrings(refs.filter((ref) =>
-    !isRawRef(ref) && !isUnsafeTerminalObservationRef(ref) && isVSCodeObservationRef(ref)
+    !isRawRef(ref)
+      && !isUnsafeTerminalObservationRef(ref)
+      && !isUnsafeCommandPaletteObservationRef(ref)
+      && isVSCodeObservationRef(ref)
   ));
   const appRefs = safeRefs.filter((ref) => ref === 'macos-app:vscode' || ref.startsWith('macos-app:vscode:'));
   const processRefs = safeRefs.filter((ref) => ref.startsWith('process:vscode'));
@@ -99,6 +113,12 @@ function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & 
   const terminalInputRefs = safeRefs.filter((ref) => ref.startsWith('terminal-input:vscode:'));
   const terminalOutputRefs = safeRefs.filter((ref) => ref.startsWith('terminal-output:vscode:'));
   const terminalOutputHashRefs = safeRefs.filter((ref) => ref.startsWith('terminal-output-hash:vscode:'));
+  const commandPaletteRootRefs = safeRefs.filter(isCommandPaletteRootRef);
+  const commandPaletteInputRefs = safeRefs.filter((ref) => ref.startsWith('command-palette-input:vscode:'));
+  const commandPaletteItemsRefs = safeRefs.filter((ref) => ref.startsWith('command-palette-items:vscode:'));
+  const commandPaletteItemRefs = safeRefs.filter((ref) => ref.startsWith('command-palette-item:vscode:'));
+  const commandPaletteItemRankRefs = safeRefs.filter((ref) => ref.startsWith('command-palette-item-rank:vscode:'));
+  const commandPaletteItemHashRefs = safeRefs.filter((ref) => ref.startsWith('command-palette-item-hash:vscode:'));
   const commandPaletteRefs = safeRefs.filter(isCommandPaletteRef);
   const diagnosticsRefs = safeRefs.filter(isDiagnosticsRef);
   const problemsPanelRefs = safeRefs.filter(isProblemsPanelRef);
@@ -151,8 +171,13 @@ function normalizeVSCodeObservationRefs(refs: string[]): VSCodeAppObservation & 
     terminalInputRefs,
     terminalOutputRefs,
     terminalOutputHashRefs,
+    commandPaletteRootRefs,
+    commandPaletteInputRefs,
+    commandPaletteItemsRefs,
     commandPaletteRefs,
-    commandPaletteItemRefs: safeRefs.filter((ref) => ref.startsWith('command-palette-item:vscode:')),
+    commandPaletteItemRefs,
+    commandPaletteItemRankRefs,
+    commandPaletteItemHashRefs,
     diagnosticsRefs,
     problemsPanelRefs,
     workspaceRefs,
@@ -355,7 +380,101 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
   if (isTerminalOperation(operation)) {
     return checkTerminalReadiness(operation, observation, normalizedOperationRef);
   }
+  if (isCommandPaletteOperation(operation)) {
+    return checkCommandPaletteReadiness(operation, observation, normalizedOperationRef);
+  }
   return blocked(`blocked:vscode-app-module:${safeToken(operation) || 'operation'}-readiness-not-implemented`, observation.refs);
+}
+
+function checkCommandPaletteReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const commonGate = checkCommonObservationGate(observation);
+  if (commonGate) return commonGate;
+  if (operation === 'open-command-palette') {
+    return actReady(operation, operationRef, observation, [OPEN_COMMAND_PALETTE_ACTION_REF], {
+      kind: 'key',
+      key: 'Meta+Shift+P',
+    });
+  }
+  if (observation.commandPaletteRootRefs.length === 0) {
+    return blocked('blocked:vscode-app-module:command-palette-ref-required', observation.refs);
+  }
+  if (observation.commandPaletteRootRefs.length > 1) {
+    return needsConfirmation('needs-confirmation:vscode-app-module:target-command-palette-ambiguous', observation.commandPaletteRootRefs);
+  }
+  const paletteRef = observation.commandPaletteRootRefs[0];
+  if (!commandPaletteRootIsCurrent(paletteRef)) {
+    return blocked('blocked:vscode-app-module:command-palette-current-ref-required', [paletteRef]);
+  }
+  if (commandPaletteWindowDrift(observation.windowRefs[0], paletteRef)) {
+    return blocked('blocked:vscode-app-module:command-palette-window-drift', [observation.windowRefs[0], paletteRef]);
+  }
+  if (operation === 'send-command-palette-query') {
+    if (observation.commandPaletteInputRefs.length === 0) {
+      return blocked('blocked:vscode-app-module:command-palette-input-ref-required', observation.refs);
+    }
+    if (observation.commandPaletteInputRefs.length > 1) {
+      return needsConfirmation('needs-confirmation:vscode-app-module:target-command-palette-input-ambiguous', observation.commandPaletteInputRefs);
+    }
+    const inputRef = observation.commandPaletteInputRefs[0];
+    if (!commandPaletteScopedRef(inputRef, paletteRef)) {
+      return blocked('blocked:vscode-app-module:command-palette-input-drift', [paletteRef, inputRef]);
+    }
+    if (observation.textRefRefs.length > 1) {
+      return needsConfirmation('needs-confirmation:vscode-app-module:target-text-ref-ambiguous', observation.textRefRefs);
+    }
+    const textRef = observation.textRefRefs[0];
+    if (!textRef) return blocked('blocked:vscode-app-module:text-ref-required', observation.refs);
+    return actReady(operation, operationRef, observation, [paletteRef, inputRef, textRef], {
+      kind: 'type',
+      textRef,
+    });
+  }
+  if (operation === 'observe-command-palette-items') {
+    if (observation.commandPaletteInputRefs.length > 1) {
+      return needsConfirmation('needs-confirmation:vscode-app-module:target-command-palette-input-ambiguous', observation.commandPaletteInputRefs);
+    }
+    const inputRefs = observation.commandPaletteInputRefs.filter((ref) => commandPaletteScopedRef(ref, paletteRef));
+    if (observation.commandPaletteInputRefs.length > 0 && inputRefs.length === 0) {
+      return blocked('blocked:vscode-app-module:command-palette-input-drift', [paletteRef, ...observation.commandPaletteInputRefs]);
+    }
+    const currentItemListRefs = currentCommandPaletteRefs(observation.commandPaletteItemsRefs, paletteRef, observation);
+    return observeReady(operation, operationRef, observation, [
+      paletteRef,
+      ...inputRefs,
+      ...currentItemListRefs,
+    ]);
+  }
+  if (operation === 'select-command-palette-item') {
+    if (observation.commandPaletteItemRefs.length === 0) {
+      return blocked('blocked:vscode-app-module:command-palette-item-ref-required', observation.refs);
+    }
+    const currentItems = currentCommandPaletteItemRefs(observation, paletteRef);
+    if (currentItems.length === 0) {
+      return blocked('blocked:vscode-app-module:command-palette-item-observation-drift', [observation.observationRefs[0], ...observation.commandPaletteItemRefs]);
+    }
+    if (currentItems.length > 1) {
+      return needsConfirmation('needs-confirmation:vscode-app-module:target-command-palette-item-ambiguous', currentItems);
+    }
+    if (currentItems.length !== observation.commandPaletteItemRefs.length) {
+      return blocked('blocked:vscode-app-module:command-palette-item-observation-drift', [observation.observationRefs[0], ...observation.commandPaletteItemRefs]);
+    }
+    const itemRef = currentItems[0];
+    if (!commandPaletteScopedRef(itemRef, paletteRef)) {
+      return blocked('blocked:vscode-app-module:command-palette-item-drift', [paletteRef, itemRef]);
+    }
+    if (!commandPaletteCurrentObservationRef(itemRef, observation)) {
+      return blocked('blocked:vscode-app-module:command-palette-item-observation-drift', [observation.observationRefs[0], itemRef]);
+    }
+    const verifierToken = commandPaletteVerifierToken(paletteRef, itemRef, observation);
+    return actReady(operation, operationRef, observation, [paletteRef, itemRef], {
+      kind: 'key',
+      key: 'Enter',
+    }, [
+      `verifier:vscode-app-module:palette-current-observation:${verifierToken.currentObservation}`,
+      `verifier:vscode-app-module:palette-same-item:${verifierToken.item}`,
+    ]);
+  }
+  return blocked('blocked:vscode-app-module:operation-not-supported', observation.refs);
 }
 
 function checkTerminalReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
@@ -540,6 +659,13 @@ function isTerminalOperation(operation: string): boolean {
     || operation === 'submit-terminal-command';
 }
 
+function isCommandPaletteOperation(operation: string): boolean {
+  return operation === 'open-command-palette'
+    || operation === 'send-command-palette-query'
+    || operation === 'observe-command-palette-items'
+    || operation === 'select-command-palette-item';
+}
+
 function isEditorOrTerminalTargetOperation(operation: string): boolean {
   return operation === 'read-visible-text'
     || operation === 'focus-editor'
@@ -599,9 +725,17 @@ function isTerminalRef(ref: string): boolean {
 }
 
 function isCommandPaletteRef(ref: string): boolean {
+  return isCommandPaletteRootRef(ref)
+    || ref.startsWith('command-palette-input:vscode:')
+    || ref.startsWith('command-palette-items:vscode:')
+    || ref.startsWith('command-palette-item:vscode:')
+    || ref.startsWith('command-palette-item-rank:vscode:')
+    || ref.startsWith('command-palette-item-hash:vscode:');
+}
+
+function isCommandPaletteRootRef(ref: string): boolean {
   return ref.startsWith('element:vscode:command-palette:')
-    || ref.startsWith('command-palette:vscode:')
-    || ref.startsWith('command-palette-item:vscode:');
+    || ref.startsWith('command-palette:vscode:');
 }
 
 function isDiagnosticsRef(ref: string): boolean {
@@ -656,7 +790,11 @@ function isVSCodeObservationRef(ref: string): boolean {
     || ref.startsWith('terminal-output:vscode:')
     || ref.startsWith('terminal-output-hash:vscode:')
     || ref.startsWith('command-palette:vscode:')
+    || ref.startsWith('command-palette-input:vscode:')
+    || ref.startsWith('command-palette-items:vscode:')
     || ref.startsWith('command-palette-item:vscode:')
+    || ref.startsWith('command-palette-item-rank:vscode:')
+    || ref.startsWith('command-palette-item-hash:vscode:')
     || ref.startsWith('diagnostics:vscode:')
     || ref.startsWith('problems:vscode:')
     || ref.startsWith('freshness:vscode:')
@@ -684,6 +822,17 @@ function isUnsafeTerminalObservationRef(ref: string): boolean {
   if (ref.startsWith('terminal-input:vscode:') || ref.startsWith('terminal-session:vscode:')) {
     return terminalRefParts(ref).some(unsafeTerminalToken);
   }
+  return false;
+}
+
+function isUnsafeCommandPaletteObservationRef(ref: string): boolean {
+  if (ref.startsWith('command-palette:vscode:')) return !safeCommandPaletteRootRef(ref);
+  if (ref.startsWith('element:vscode:command-palette:')) return !safeCommandPaletteToken(ref.slice('element:vscode:command-palette:'.length));
+  if (ref.startsWith('command-palette-input:vscode:')) return !safeCommandPaletteInputRef(ref);
+  if (ref.startsWith('command-palette-items:vscode:')) return !safeCommandPaletteItemsRef(ref);
+  if (ref.startsWith('command-palette-item:vscode:')) return !safeCommandPaletteItemRef(ref);
+  if (ref.startsWith('command-palette-item-rank:vscode:')) return !safeCommandPaletteItemRankRef(ref);
+  if (ref.startsWith('command-palette-item-hash:vscode:')) return !safeCommandPaletteItemHashRef(ref);
   return false;
 }
 
@@ -715,12 +864,135 @@ function unsafeTerminalToken(value: string | undefined): boolean {
   return typeof value === 'string' && /raw|payload|stdout|stderr|command|secret|password|base64|provider/i.test(value);
 }
 
+function safeCommandPaletteRootRef(ref: string): boolean {
+  const parts = commandPaletteRefParts(ref);
+  return parts.length === 1
+    ? safeCommandPaletteToken(parts[0])
+    : parts.length === 2 && safeCommandPaletteToken(parts[0]) && parts[1] === 'current';
+}
+
+function safeCommandPaletteInputRef(ref: string): boolean {
+  const parts = commandPaletteRefParts(ref);
+  return parts.length === 2 && safeCommandPaletteToken(parts[0]) && parts[1] === 'current';
+}
+
+function safeCommandPaletteItemsRef(ref: string): boolean {
+  const parts = commandPaletteRefParts(ref);
+  return parts.length === 2 && safeCommandPaletteToken(parts[0]) && safeCommandPaletteObservationToken(parts[1]);
+}
+
+function safeCommandPaletteItemRef(ref: string): boolean {
+  const parts = commandPaletteRefParts(ref);
+  return parts.length === 3
+    && safeCommandPaletteToken(parts[0])
+    && safeCommandPaletteObservationToken(parts[1])
+    && safeCommandPaletteRankToken(parts[2]);
+}
+
+function safeCommandPaletteItemRankRef(ref: string): boolean {
+  return safeCommandPaletteItemRef(ref.replace('command-palette-item-rank:vscode:', 'command-palette-item:vscode:'));
+}
+
+function safeCommandPaletteItemHashRef(ref: string): boolean {
+  const parts = commandPaletteRefParts(ref);
+  return parts.length === 4
+    && safeCommandPaletteToken(parts[0])
+    && safeCommandPaletteObservationToken(parts[1])
+    && parts[2] === 'sha256'
+    && /^[a-f0-9]{6,64}$/i.test(parts[3] ?? '');
+}
+
+function safeCommandPaletteToken(value: string | undefined): boolean {
+  return typeof value === 'string'
+    && /^[a-z0-9][a-z0-9-]{0,79}$/i.test(value)
+    && !unsafeCommandPaletteToken(value);
+}
+
+function safeCommandPaletteObservationToken(value: string | undefined): boolean {
+  return typeof value === 'string'
+    && /^obs-[a-z0-9][a-z0-9-]{0,95}$/i.test(value)
+    && !unsafeCommandPaletteToken(value);
+}
+
+function safeCommandPaletteRankToken(value: string | undefined): boolean {
+  return typeof value === 'string' && /^rank-[1-9][0-9]{0,3}$/.test(value);
+}
+
+function unsafeCommandPaletteToken(value: string | undefined): boolean {
+  return typeof value === 'string' && /raw|payload|command|workbench|action|label|save|secret|password|base64|provider|\s/i.test(value);
+}
+
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))];
 }
 
 function terminalScopedRefs(refs: string[], terminalRef: string): string[] {
   return refs.filter((ref) => terminalScopedRef(ref, terminalRef));
+}
+
+function currentCommandPaletteItemRefs(observation: VSCodeAppObservation, paletteRef: string): string[] {
+  return currentCommandPaletteRefs(observation.commandPaletteItemRefs, paletteRef, observation);
+}
+
+function currentCommandPaletteRefs(refs: string[], paletteRef: string, observation: VSCodeAppObservation): string[] {
+  return refs.filter((ref) =>
+    commandPaletteScopedRef(ref, paletteRef) && commandPaletteCurrentObservationRef(ref, observation)
+  );
+}
+
+function commandPaletteScopedRef(ref: string, paletteRef: string): boolean {
+  const token = commandPaletteIdentityToken(paletteRef);
+  return Boolean(token) && commandPaletteRefParts(ref)[0] === token;
+}
+
+function commandPaletteRootIsCurrent(ref: string): boolean {
+  if (ref.startsWith('command-palette:vscode:')) {
+    return commandPaletteRefParts(ref)[1] === 'current';
+  }
+  return ref.startsWith('element:vscode:command-palette:');
+}
+
+function commandPaletteCurrentObservationRef(ref: string, observation: VSCodeAppObservation): boolean {
+  const token = commandPaletteObservationToken(observation.observationRefs[0]);
+  return Boolean(token) && commandPaletteRefParts(ref)[1] === token;
+}
+
+function commandPaletteIdentityToken(ref: string): string {
+  if (ref.startsWith('command-palette:vscode:')) {
+    return commandPaletteRefParts(ref)[0] ?? '';
+  }
+  if (ref.startsWith('element:vscode:command-palette:')) {
+    return ref.slice('element:vscode:command-palette:'.length);
+  }
+  return '';
+}
+
+function commandPaletteObservationToken(observationRef: string | undefined): string {
+  if (!observationRef?.startsWith('observation:vscode:')) return '';
+  return `obs-${safeToken(observationRef.slice('observation:vscode:'.length))}`;
+}
+
+function commandPaletteRefParts(ref: string): string[] {
+  const [, rest = ''] = ref.split(':vscode:');
+  return rest.split(':').filter(Boolean);
+}
+
+function commandPaletteWindowDrift(windowRef: string | undefined, paletteRef: string): boolean {
+  const windowToken = windowRef?.startsWith('window:vscode:')
+    ? windowRef.slice('window:vscode:'.length)
+    : undefined;
+  const paletteToken = commandPaletteIdentityToken(paletteRef);
+  return Boolean(windowToken && paletteToken && windowToken !== paletteToken);
+}
+
+function commandPaletteVerifierToken(paletteRef: string, itemRef: string, observation: VSCodeAppObservation): { currentObservation: string; item: string } {
+  const paletteToken = safeToken(commandPaletteIdentityToken(paletteRef));
+  const observationToken = commandPaletteObservationToken(observation.observationRefs[0]);
+  const rankToken = commandPaletteRefParts(itemRef)[2] ?? '';
+  return {
+    currentObservation: safeToken(`${paletteToken}-${observationToken}`),
+    item: safeToken(`${paletteToken}-${observationToken}-${rankToken}`),
+  };
 }
 
 function terminalScopedRef(ref: string, terminalRef: string): boolean {

@@ -366,6 +366,75 @@ test('default Computer Use Act materializer selects a VSCode app module primitiv
   assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner|taskOutcome":"satisfied/i);
 });
 
+test('default Computer Use Act materializer selects command palette primitives only from structured Host operation refs', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer command palette operations.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-palette-fallback'],
+        };
+      },
+    },
+  });
+  const paletteRefs = [
+    'command-palette:vscode:paper:current',
+    'command-palette-items:vscode:paper:obs-current',
+    'command-palette-item:vscode:paper:obs-current:rank-1',
+    'command-palette-item-rank:vscode:paper:obs-current:rank-1',
+    'command-palette-item-hash:vscode:paper:obs-current:sha256:abc123',
+    'terminal-output:vscode:paper:current',
+    'action:vscode:previous:completed',
+  ];
+
+  const structured = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('select-command-palette-item', paletteRefs),
+    preflight: vscodeAppModulePreflight(paletteRefs),
+    commandText: 'Palette output says Save File is selected; this text must not decide the command.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-palette-candidate',
+    attemptId: 'codex-command-default-vscode-palette-candidate-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(paletteRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(structured?.status, 'completed', structured?.message);
+  assert.equal(structured?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.equal(structured?.completionTruth, undefined);
+  assert.ok(structured?.executionUnits?.some((unit) =>
+    unit.tool === 'computer-use.app-module-registry'
+      && unit.moduleId === 'vscode'
+      && unit.operation === 'select-command-palette-item'
+      && unit.primitive === 'computer_use.act'
+      && unit.status === 'candidate'
+  ));
+  const structuredSerialized = JSON.stringify(structured);
+  assert.match(structuredSerialized, /verifier:vscode-app-module:palette-current-observation:paper-obs-current/);
+  assert.match(structuredSerialized, /verifier:vscode-app-module:palette-same-item:paper-obs-current-rank-1/);
+  assert.doesNotMatch(structuredSerialized, /Save File|workbench|command-id|completionTruth|taskOutcome":"satisfied|Generic WindowAction planner/i);
+
+  const inferred = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput(undefined, paletteRefs),
+    preflight: vscodeAppModulePreflight(paletteRefs),
+    commandText: 'Use the command palette item to save the file.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-palette-no-operation',
+    attemptId: 'codex-command-default-vscode-palette-no-operation-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(paletteRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(inferred?.status, 'blocked');
+  assert.equal(inferred?.claimType, 'computer-use-app-module-blocked');
+  assert.ok(inferred?.evidenceRefs.includes('blocked:computer-use-app-module:operation-ref-required'));
+  assert.equal(inferred?.completionTruth, undefined);
+  assert.doesNotMatch(JSON.stringify(inferred), /select-command-palette-item.*candidate|taskOutcome":"satisfied|Generic WindowAction planner/i);
+});
+
 test('default Computer Use Act materializer blocks VSCode app module stale runtime observations', async () => {
   const runtimeTruth = vscodeAppModuleRuntimeTruth();
   runtimeTruth.observation = {
@@ -599,14 +668,18 @@ test('default Computer Use Act materializer does not treat terminal, palette, or
       'element:vscode:terminal:main',
       'terminal-output:vscode:main:current',
       'terminal-output-hash:vscode:main:sha256:abc123',
-      'command-palette-item:vscode:main:workbench-action-files-save',
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-1',
       'action:vscode:previous:completed',
     ]),
     preflight: vscodeAppModulePreflight([
       'element:vscode:terminal:main',
       'terminal-output:vscode:main:current',
       'terminal-output-hash:vscode:main:sha256:abc123',
-      'command-palette-item:vscode:main:workbench-action-files-save',
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-1',
       'action:vscode:previous:completed',
     ]),
     commandText: 'terminal output says done',
@@ -617,7 +690,9 @@ test('default Computer Use Act materializer does not treat terminal, palette, or
       'element:vscode:terminal:main',
       'terminal-output:vscode:main:current',
       'terminal-output-hash:vscode:main:sha256:abc123',
-      'command-palette-item:vscode:main:workbench-action-files-save',
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-1',
       'action:vscode:previous:completed',
     ]),
   });

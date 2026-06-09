@@ -29,6 +29,7 @@ interface VSCodeTestObservation {
   problemsPanelRefs: string[];
   terminalRefs: string[];
   commandPaletteRefs: string[];
+  commandPaletteItemRefs: string[];
   unknownWebviewRefs: string[];
   reasonRefs: string[];
   evidenceRefs: string[];
@@ -478,15 +479,16 @@ test('region ambiguity blocks editor diagnostics and palette item targets instea
       'window:vscode:main',
       'frontmost:vscode:main',
       'observation:vscode:main:1',
-      'command-palette:vscode:main',
-      'command-palette-item:vscode:main:item-a',
-      'command-palette-item:vscode:main:item-b',
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-2',
       'freshness:vscode:main:1',
     ],
   });
 
-  assert.equal(paletteItem.status, 'blocked');
-  assert.equal(paletteItem.reasonRef, 'blocked:vscode-app-module:operation-not-supported');
+  assert.equal(paletteItem.status, 'needs-confirmation');
+  assert.equal(paletteItem.reasonRef, 'needs-confirmation:vscode-app-module:target-command-palette-item-ambiguous');
 });
 
 test('unknown VSCode webview beside a terminal blocks terminal target readiness instead of guessing', () => {
@@ -1151,36 +1153,241 @@ test('terminal operations outside P7 fail closed until separately designed', () 
   }
 });
 
-test('command palette operations fail closed until P8 current item refs are implemented', () => {
-  const vscode = createHostStructuredVSCodeAppModule();
-  const refs = [
+test('command palette normalization keeps item refs current-observe-bound without raw labels', () => {
+  const observation = normalizeVSCodeTestObservation([
     'window-action-session:vscode:1',
     'macos-app:vscode',
     'process:vscode:1',
     'window:vscode:main',
     'frontmost:vscode:main',
     'observation:vscode:main:1',
-    'command-palette:vscode:main',
-    'text-ref:vscode:palette-query:1',
-    'command-palette-item:vscode:main:rank-1',
+    'command-palette:vscode:main:current',
+    'command-palette-input:vscode:main:current',
+    'command-palette-items:vscode:main:obs-main-1',
+    'command-palette-item:vscode:main:obs-main-1:rank-1',
+    'command-palette-item-rank:vscode:main:obs-main-1:rank-1',
+    'command-palette-item-hash:vscode:main:obs-main-1:sha256:abc123',
+    'command-palette-item:vscode:main:workbench-action-files-save',
+    'freshness:vscode:main:1',
+  ]);
+
+  assert.deepEqual(observation.commandPaletteRefs, [
+    'command-palette:vscode:main:current',
+    'command-palette-input:vscode:main:current',
+    'command-palette-items:vscode:main:obs-main-1',
+    'command-palette-item:vscode:main:obs-main-1:rank-1',
+    'command-palette-item-rank:vscode:main:obs-main-1:rank-1',
+    'command-palette-item-hash:vscode:main:obs-main-1:sha256:abc123',
+  ]);
+  assert.deepEqual(observation.commandPaletteItemRefs, [
+    'command-palette-item:vscode:main:obs-main-1:rank-1',
+  ]);
+  assert.ok(observation.invalidRefs.includes('blocked:vscode-app-module:unsafe-command-palette-ref-not-allowed'));
+  assert.ok(observation.safeSummary.concepts.includes('command-palette'));
+  assert.doesNotMatch(JSON.stringify(observation), /workbench|files-save|Save File/i);
+});
+
+test('command palette readiness opens and queries without selecting commands', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const windowRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
     'freshness:vscode:main:1',
   ];
 
-  for (const operation of [
-    'open-command-palette',
-    'send-command-palette-query',
-    'observe-command-palette-items',
-    'select-command-palette-item',
-    'close-command-palette',
-  ]) {
-    const readiness = vscode.checkReadiness({ operation, refs });
+  const open = vscode.checkReadiness({
+    operation: 'open-command-palette',
+    refs: windowRefs,
+  });
 
-    assert.equal(readiness.status, 'blocked');
-    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:operation-not-supported');
-  }
+  assert.equal(open.status, 'ready');
+  assert.equal(open.primitive.name, 'computer_use.act');
+  assert.deepEqual(open.primitive.action, {
+    kind: 'key',
+    key: 'Meta+Shift+P',
+  });
+  assert.ok(open.primitive.inputRefs.includes('action:vscode-app-module:open-command-palette:meta-shift-p'));
+
+  const query = vscode.checkReadiness({
+    operation: 'send-command-palette-query',
+    refs: [
+      ...windowRefs,
+      'command-palette:vscode:main:current',
+      'command-palette-input:vscode:main:current',
+      'text-ref:vscode:palette-query:1',
+    ],
+  });
+
+  assert.equal(query.status, 'ready');
+  assert.deepEqual(query.primitive.action, {
+    kind: 'type',
+    textRef: 'text-ref:vscode:palette-query:1',
+  });
+  assert.doesNotMatch(JSON.stringify(query), /Enter|workbench|Save File|raw-query/i);
+
+  const multipleTextRefs = vscode.checkReadiness({
+    operation: 'send-command-palette-query',
+    refs: [
+      ...windowRefs,
+      'command-palette:vscode:main:current',
+      'command-palette-input:vscode:main:current',
+      'text-ref:vscode:palette-query:1',
+      'text-ref:vscode:palette-query:2',
+    ],
+  });
+
+  assert.equal(multipleTextRefs.status, 'needs-confirmation');
+  assert.equal(multipleTextRefs.reasonRef, 'needs-confirmation:vscode-app-module:target-text-ref-ambiguous');
 });
 
-test('command palette readiness rejects raw command ids even while P8 is fail-closed', () => {
+test('command palette readiness observes and selects only current item refs', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const windowRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'command-palette:vscode:main:current',
+    'command-palette-input:vscode:main:current',
+    'freshness:vscode:main:1',
+  ];
+  const itemRefs = [
+    'command-palette-items:vscode:main:obs-main-1',
+    'command-palette-item:vscode:main:obs-main-1:rank-1',
+    'command-palette-item-rank:vscode:main:obs-main-1:rank-1',
+    'command-palette-item-hash:vscode:main:obs-main-1:sha256:abc123',
+  ];
+
+  const observe = vscode.checkReadiness({
+    operation: 'observe-command-palette-items',
+    refs: windowRefs,
+  });
+
+  assert.equal(observe.status, 'ready');
+  assert.equal(observe.primitive.name, 'computer_use.observe');
+  assert.ok(observe.primitive.inputRefs.includes('command-palette:vscode:main:current'));
+  assert.ok(observe.primitive.inputRefs.includes('command-palette-input:vscode:main:current'));
+  assert.ok(!observe.primitive.inputRefs.some((ref) => ref.startsWith('command-palette-item:vscode:')));
+
+  const select = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      ...windowRefs,
+      ...itemRefs,
+    ],
+  });
+
+  assert.equal(select.status, 'ready');
+  assert.equal(select.primitive.name, 'computer_use.act');
+  assert.deepEqual(select.primitive.action, {
+    kind: 'key',
+    key: 'Enter',
+  });
+  assert.ok(select.primitive.inputRefs.includes('command-palette-item:vscode:main:obs-main-1:rank-1'));
+  assert.ok(select.evidenceRefs.includes('verifier:vscode-app-module:palette-current-observation:main-obs-main-1'));
+  assert.ok(select.evidenceRefs.includes('verifier:vscode-app-module:palette-same-item:main-obs-main-1-rank-1'));
+  assert.doesNotMatch(JSON.stringify(select), /workbench|Save File|command-id|raw-label/i);
+});
+
+test('command palette readiness blocks ambiguity stale items and drift', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+  ];
+
+  const noPalette = vscode.checkReadiness({
+    operation: 'send-command-palette-query',
+    refs: [
+      ...baseRefs,
+      'text-ref:vscode:palette-query:1',
+    ],
+  });
+
+  assert.equal(noPalette.status, 'blocked');
+  assert.equal(noPalette.reasonRef, 'blocked:vscode-app-module:command-palette-ref-required');
+
+  const multiplePalettes = vscode.checkReadiness({
+    operation: 'send-command-palette-query',
+    refs: [
+      ...baseRefs,
+      'command-palette:vscode:main:current',
+      'command-palette:vscode:secondary:current',
+      'command-palette-input:vscode:main:current',
+      'text-ref:vscode:palette-query:1',
+    ],
+  });
+
+  assert.equal(multiplePalettes.status, 'needs-confirmation');
+  assert.equal(multiplePalettes.reasonRef, 'needs-confirmation:vscode-app-module:target-command-palette-ambiguous');
+
+  const staleItem = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      ...baseRefs,
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-2',
+      'command-palette-item:vscode:main:obs-main-2:rank-1',
+    ],
+  });
+
+  assert.equal(staleItem.status, 'blocked');
+  assert.equal(staleItem.reasonRef, 'blocked:vscode-app-module:command-palette-item-observation-drift');
+
+  const itemAmbiguity = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      ...baseRefs,
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-2',
+    ],
+  });
+
+  assert.equal(itemAmbiguity.status, 'needs-confirmation');
+  assert.equal(itemAmbiguity.reasonRef, 'needs-confirmation:vscode-app-module:target-command-palette-item-ambiguous');
+
+  const mixedCurrentAndStaleItems = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      ...baseRefs,
+      'command-palette:vscode:main:current',
+      'command-palette-items:vscode:main:obs-main-1',
+      'command-palette-item:vscode:main:obs-main-1:rank-1',
+      'command-palette-item:vscode:main:obs-main-2:rank-1',
+    ],
+  });
+
+  assert.equal(mixedCurrentAndStaleItems.status, 'blocked');
+  assert.equal(mixedCurrentAndStaleItems.reasonRef, 'blocked:vscode-app-module:command-palette-item-observation-drift');
+
+  const windowDrift = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      ...baseRefs,
+      'command-palette:vscode:other:current',
+      'command-palette-items:vscode:other:obs-main-1',
+      'command-palette-item:vscode:other:obs-main-1:rank-1',
+    ],
+  });
+
+  assert.equal(windowDrift.status, 'blocked');
+  assert.equal(windowDrift.reasonRef, 'blocked:vscode-app-module:command-palette-window-drift');
+});
+
+test('command palette readiness rejects raw command ids and labels', () => {
   const vscode = createHostStructuredVSCodeAppModule();
 
   const raw = vscode.checkReadiness({
@@ -1200,4 +1407,42 @@ test('command palette readiness rejects raw command ids even while P8 is fail-cl
 
   assert.equal(raw.status, 'blocked');
   assert.equal(raw.reasonRef, 'blocked:vscode-app-module:raw-ref-not-allowed');
+
+  const rawLabel = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'command-palette:vscode:main:current',
+      'command-palette-item:vscode:main:Save File',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(rawLabel.status, 'blocked');
+  assert.equal(rawLabel.reasonRef, 'blocked:vscode-app-module:unsafe-command-palette-ref-not-allowed');
+  assert.doesNotMatch(JSON.stringify(rawLabel), /Save File/);
+
+  const rawId = vscode.checkReadiness({
+    operation: 'select-command-palette-item',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'command-palette:vscode:main:current',
+      'command-palette-item:vscode:main:workbench-action-files-save',
+      'freshness:vscode:main:1',
+    ],
+  });
+
+  assert.equal(rawId.status, 'blocked');
+  assert.equal(rawId.reasonRef, 'blocked:vscode-app-module:unsafe-command-palette-ref-not-allowed');
+  assert.doesNotMatch(JSON.stringify(rawId), /workbench|files-save/i);
 });

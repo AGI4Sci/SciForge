@@ -88,26 +88,26 @@ SciForge UI
 
 目标：Command Palette 只选择 current observe 产生的 item ref；raw command id / raw label 不能成为执行旁路。
 
-当前 P8 未进入实现阶段；VSCode app-module command palette readiness 在 P8 完成前必须 fail-closed，不能复用旧 raw command id / raw label 路径。
+当前 P8 已推进到 app-module unit / materializer / static guard：`open-command-palette`、`send-command-palette-query`、`observe-command-palette-items`、`select-command-palette-item` 已按 refs-first 单步 readiness 接入。P8 尚未进入真实桌面 live diagnostic；P8.9-P8.12 必须先补 env-gated skip、mocked live、mocked select、cleanup 和验证链路，不能把当前 unit-proven 状态宣称为 live 完成。
 
 Build Tasks：
 
 - [x] [P8.0 Unit] 旧 palette ready path 红测：raw command id / raw label / direct command operation 必须 blocked。
 - [x] [P8.0 Code] 删除旧 palette readiness；P8 未完成前 `open/send/observe/select/close-command-palette` fail closed。
-- [ ] [P8.1 Unit] palette concept 红测：无 palette、多 palette、palette refs stale 时 blocked-safe。
-- [ ] [P8.1 Code] 实现 palette root / query input / item list / freshness concept refs；不依赖固定坐标、固定插件或固定语言。
-- [ ] [P8.2 Unit] `open-command-palette` 红测：唯一 VSCode window 才 ready，只输出 action / target refs。
-- [ ] [P8.2 Code] 实现 `open-command-palette` primitive candidate；不选择命令。
-- [ ] [P8.3 Unit] `send-command-palette-query` 红测：只接受 Host `text-ref:`，不暴露 raw query，不按 Enter。
-- [ ] [P8.3 Code] 实现 `send-command-palette-query` primitive candidate。
-- [ ] [P8.4 Unit] `observe-command-palette-items` 红测：只输出 item refs、rank refs、hash refs，不输出 raw label 或 raw command id。
-- [ ] [P8.4 Code] 实现 palette item refs-first projection。
-- [ ] [P8.5 Unit] `select-command-palette-item` 红测：只接受 current observe item ref；raw label / raw id / stale item ref 都 blocked。
-- [ ] [P8.5 Code] 实现 `select-command-palette-item` primitive candidate。
-- [ ] [P8.6 Unit] palette ambiguity / drift 红测：item 不唯一、palette 未打开、window / palette / item observation 漂移时 blocked-safe。
-- [ ] [P8.6 Code] 实现 palette current-observation / same-window / same-item verifier refs。
-- [ ] [P8.7 Materializer] Host materializer 只从 structured operation ref 进入 palette readiness；ordinary chat、terminal output、history 和 completed action 不能触发。
-- [ ] [P8.8 Static] 扩展 no-bypass guard：palette 不能新增 raw command id、raw label、runtime final-answer 或 direct desktop bypass。
+- [x] [P8.1 Unit] palette concept 红测：无 palette、多 palette、palette refs stale 时 blocked-safe。
+- [x] [P8.1 Code] 实现 palette root / query input / item list / freshness concept refs；不依赖固定坐标、固定插件或固定语言。
+- [x] [P8.2 Unit] `open-command-palette` 红测：唯一 VSCode window 才 ready，只输出 action / target refs。
+- [x] [P8.2 Code] 实现 `open-command-palette` primitive candidate；不选择命令。
+- [x] [P8.3 Unit] `send-command-palette-query` 红测：只接受 Host `text-ref:`，不暴露 raw query，不按 Enter。
+- [x] [P8.3 Code] 实现 `send-command-palette-query` primitive candidate。
+- [x] [P8.4 Unit] `observe-command-palette-items` 红测：只基于 current palette / input refs 发起 observe；后续 observation 只能投影 item refs、rank refs、hash refs，不输出 raw label 或 raw command id。
+- [x] [P8.4 Code] 实现 palette observe readiness 与 item refs-first projection。
+- [x] [P8.5 Unit] `select-command-palette-item` 红测：只接受 current observe item ref；raw label / raw id / stale item ref 都 blocked。
+- [x] [P8.5 Code] 实现 `select-command-palette-item` primitive candidate。
+- [x] [P8.6 Unit] palette ambiguity / drift 红测：item 不唯一、palette 未打开、window / palette / item observation 漂移时 blocked-safe。
+- [x] [P8.6 Code] 实现 palette current-observation / same-window / same-item verifier refs。
+- [x] [P8.7 Materializer] Host materializer 只从 structured operation ref 进入 palette readiness；ordinary chat、terminal output、history 和 completed action 不能触发。
+- [x] [P8.8 Static] 扩展 no-bypass guard：palette 不能新增 raw command id、raw label、runtime final-answer 或 direct desktop bypass。
 - [ ] [P8.9 Live Skip] env-gated palette live 默认关闭；无 env 时返回 blocked skip manifest，且不构造 runner / adapter。
 - [ ] [P8.10 Mocked Live] mock `open -> send query -> observe items -> close/release`；不选择命令，验证 cleanup refs。
 - [ ] [P8.11 Mocked Select] mock `open -> send query -> observe items -> select item -> observe -> release`；只证明 current item ref 链路，不触碰真实 VSCode。
@@ -115,16 +115,16 @@ Build Tasks：
 
 验收：
 
-- [ ] Unit tests 证明 raw command id / raw palette label 不能直接执行。
+- [x] Unit tests 证明 raw command id / raw palette label 不能直接执行。
 - [ ] Mocked select 证明 item ref 来自 current observe；真实桌面 live 只做 open/query/observe/close 或 blocked-safe。
-- [ ] palette 目标漂移、item 不唯一或 observation stale 时 `needs-confirmation` / `blocked`。
+- [x] palette 目标漂移、item 不唯一或 observation stale 时 `needs-confirmation` / `blocked`。
 - [ ] cleanup refs 完整，不留下 palette 或焦点漂移。
 
 ### P9：VSCode Editor Mutation 与 Host-owned Narrow Apply
 
 目标：最后才进入写入 primitive；先 preview，再由 Host 明确拆成 `observe -> one primitive -> observe`，Computer Use core 仍不做 planning。
 
-当前 P9 未进入实现阶段；VSCode app-module editor mutation / save readiness 在 P9 preview、scope 和 verifier 完成前必须 fail-closed，不能复用旧直接写入路径。P9 拆成 preview、scratch mutation、narrow apply、save / batch decomposition 四个小阶段，不能从 preview 直接跳到真实用户文件写入。
+当前 P9 只有旧 mutation / save path fail-closed 基线完成；editor mutation / save readiness 在 P9 scope、preview 和 verifier 完成前必须继续 fail-closed，不能复用旧直接写入路径。P9 拆成 scope、preview、scratch mutation、narrow apply、save / batch decomposition 五个小阶段，不能从 fail-closed 或 preview 直接跳到真实用户文件写入。
 
 Build Tasks：
 
