@@ -144,19 +144,19 @@ SciForge UI
 - [x] [P9.21 Code] 实现 `save-current-file` readiness；full-access 文件操作不走类别式 confirmation gate。
 - [x] [P9.22 Unit] batch / cross-file 红测：批量或跨文件修改必须由 Host 分解为多次 single primitive，不生成单个 Computer Use task。
 - [x] [P9.22 Code] 实现 batch / cross-file decomposition guard；只输出下一步 refs、partial evidence 或 blocked reason。
-- [ ] [P9.23 Live Skip] env-gated current selection diagnostic 默认关闭；无 env 时不构造 writer / adapter。
-- [ ] [P9.24 Mocked Current Selection Preview] mock 用户当前选区 preview；不写文件，证据不足 blocked-safe。
-- [ ] [P9.25 Mocked Current Selection Apply] mock explicit apply：只执行一个 primitive，随后 observe / verify / release。
-- [ ] [P9.26 Verify Apply] 跑 scope / preview / mutation / apply / save / batch tests、typecheck、cleanup/no-bypass smoke。
+- [x] [P9.23 Live Skip] env-gated current selection diagnostic 默认关闭；无 env 时不构造 writer / adapter。
+- [x] [P9.24 Mocked Current Selection Preview] mock 用户当前选区 preview；不写文件，证据不足 blocked-safe。
+- [x] [P9.25 Mocked Current Selection Apply] mock explicit apply：只执行一个 primitive，随后 observe / verify / release。
+- [x] [P9.26 Verify Apply] 跑 scope / preview / mutation / apply / save / batch tests、typecheck、cleanup/no-bypass smoke。
 
 验收：
 
-- [ ] “润色当前选区”先返回 diff preview，不写文件。
+- [x] “润色当前选区”先返回 diff preview，不写文件。
 - [x] 明确应用当前选区会生成一个 `replace-selection` primitive candidate。
-- [ ] 保存、批量、跨文件修改不触发类别式 confirmation gate，但必须由 Host 基于 current refs 拆成多次单步 primitive。
-- [ ] 多章节、全文、跨文件修改不会变成单个 Computer Use task。
-- [ ] public events 不泄漏 raw selected text、raw path、raw command、raw diff 或 provider payload。
-- [ ] 真实桌面路径只标 `live-diagnostic`，不能宣称 `product-ready`。
+- [x] 保存、批量、跨文件修改不触发类别式 confirmation gate，但必须由 Host 基于 current refs 拆成多次单步 primitive。
+- [x] 多章节、全文、跨文件修改不会变成单个 Computer Use task。
+- [x] public events 不泄漏 raw selected text、raw path、raw command、raw diff 或 provider payload。
+- [x] 真实桌面路径只标 `live-diagnostic`，不能宣称 `product-ready`。
 
 ## 文档地图
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PREVIEW_LIVE_DIAGNOSTIC_ENV,
@@ -11,6 +12,7 @@ import {
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
   runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
+  runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic,
   runCurrentVSCodeCoWorkEditorPreviewLiveDiagnostic,
   runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic,
   runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic,
@@ -317,6 +319,59 @@ test('current VSCode co-work scratch mutation diagnostic is independently env-ga
     assert.deepEqual(blocked.evidenceRefs, []);
     assert.deepEqual(blocked.cleanupRefs, []);
     assert.match(blocked.message, new RegExp(`missing-env:${VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV}`));
+  }
+  assert.deepEqual(liveCalls, []);
+  assert.doesNotMatch(JSON.stringify([result, genericOnly]), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic is independently env-gated and does not touch writer ports by default', async () => {
+  const liveCalls: string[] = [];
+  const input = {
+    runId: 'unit-current-vscode-apply-default-off',
+    draftTextRef: 'text-ref:current-vscode-cowork:apply-draft',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('current selection apply live port should not run without env');
+    },
+    performAction: async () => {
+      liveCalls.push('perform-action');
+      throw new Error('current selection apply action should not run without env');
+    },
+    resolveTextRef: async () => {
+      liveCalls.push('resolve-text');
+      throw new Error('current selection apply text resolver should not run without env');
+    },
+    typeResolvedText: async () => {
+      liveCalls.push('type-text');
+      throw new Error('current selection apply writer should not run without env');
+    },
+    restoreFocus: async () => {
+      liveCalls.push('restore-focus');
+    },
+    restoreMouse: async () => {
+      liveCalls.push('restore-mouse');
+    },
+  };
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    ...input,
+    env: {},
+  });
+  const genericOnly = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    ...input,
+    runId: 'unit-current-vscode-apply-generic-only',
+    env: {
+      [VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+  });
+
+  for (const blocked of [result, genericOnly]) {
+    assert.equal(blocked.status, 'blocked');
+    assert.equal(blocked.maturity, 'live-diagnostic');
+    assert.equal(blocked.productReady, false);
+    assert.deepEqual(blocked.primitiveChainObserved, []);
+    assert.deepEqual(blocked.evidenceRefs, []);
+    assert.deepEqual(blocked.cleanupRefs, []);
+    assert.match(blocked.message, new RegExp(`missing-env:${VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV}`));
   }
   assert.deepEqual(liveCalls, []);
   assert.doesNotMatch(JSON.stringify([result, genericOnly]), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
@@ -691,6 +746,105 @@ test('current VSCode co-work scratch mutation diagnostic mocks non-user scratch 
   assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-scratch-mock'));
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /scratch draft body|hidden from evidence|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|text:vscode:scratch|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic mocks one explicit primitive then observe verify and release', async () => {
+  const calls: string[] = [];
+  const applyObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:apply',
+    windowRef: 'window:vscode:apply',
+    titleRef: 'text:title:apply',
+    frontmostRef: 'frontmost:vscode:apply',
+    fileRefs: ['selected-file:vscode:apply-paper'],
+    editorElementRef: 'element:vscode:editor:apply',
+    focusedEditorRef: 'focused-editor:vscode:apply',
+    selectionRef: 'selection-ref:vscode:apply:current',
+    cursorRef: 'cursor-ref:vscode:apply:current',
+    rangeRef: 'range-ref:vscode:apply:current',
+    visibleTextRef: `text:vscode:apply-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:apply-${suffix}-sha256`,
+    screenshotRef: `image:vscode:apply-${suffix}`,
+    accessibilityRef: `accessibility:vscode:apply-${suffix}`,
+    freshnessRef: `freshness:vscode:apply-${suffix}`,
+    observationRef: `observation:vscode:apply-${suffix}`,
+  });
+  const observations = [
+    applyObservation('bind'),
+    applyObservation('before'),
+    applyObservation('act-after'),
+    applyObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-apply-mock',
+    draftTextRef: 'text-ref:current-vscode-cowork:apply-draft',
+    primitiveOperation: 'replace-selection',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:apply-draft'
+        ? 'apply draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'control(release)',
+  ]);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:apply-draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:apply-draft:observation:vscode:apply-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-apply-mock',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-apply-mock',
+  ]);
+  assert.ok(result.evidenceRefs.includes('selected-file:vscode:apply-paper'));
+  assert.ok(result.evidenceRefs.includes('selection-ref:vscode:apply:current'));
+  assert.ok(result.evidenceRefs.includes('cursor-ref:vscode:apply:current'));
+  assert.ok(result.evidenceRefs.includes('range-ref:vscode:apply:current'));
+  assert.ok(result.evidenceRefs.includes('text-ref:current-vscode-cowork:apply-draft'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-editor-narrow-apply:unit-current-vscode-apply-mock:one-primitive'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:mutation:selected-file-vscode-apply-paper'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-window:window-vscode-apply'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-editor:element-vscode-editor-apply'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-selection:selection-ref-vscode-apply-current'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:after-observe:observation-vscode-apply-after'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-editor-narrow-apply:unit-current-vscode-apply-mock:cleanup-release'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-editor-narrow-apply:unit-current-vscode-apply-mock:verified'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-apply-mock'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-apply-mock'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-apply-mock'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-apply-mock'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-apply-mock'));
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /apply draft body|hidden from evidence|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|text:vscode:apply|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
 test('current VSCode co-work scratch mutation diagnostic blocks user-file targets before typing and still releases', async () => {
