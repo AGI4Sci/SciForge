@@ -5,6 +5,8 @@ import {
 } from './computer-use-app-module-registry.js';
 
 const VSCODE_CAPABILITIES = [
+  'observe-current-vscode',
+  'read-editor-context',
   'read-visible-text',
   'editor-scope',
   'focus-editor',
@@ -22,12 +24,16 @@ const VSCODE_CAPABILITIES = [
   'observe-command-palette-items',
   'select-command-palette-item',
   'close-command-palette',
+  'quick-open',
+  'workspace-search',
 ] as const;
 
 const FOCUS_EDITOR_ACTION_REF = 'action:vscode-app-module:focus-editor:meta-1';
 const SAVE_CURRENT_FILE_ACTION_REF = 'action:vscode-app-module:save-current-file:meta-s';
 const OPEN_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:open-command-palette:meta-shift-p';
 const CLOSE_COMMAND_PALETTE_ACTION_REF = 'action:vscode-app-module:close-command-palette:escape';
+const QUICK_OPEN_ACTION_REF = 'action:vscode-app-module:quick-open:meta-p';
+const WORKSPACE_SEARCH_ACTION_REF = 'action:vscode-app-module:workspace-search:meta-shift-f';
 
 interface VSCodeAppObservation {
   refs: string[];
@@ -277,6 +283,12 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
   if (observation.unknownWebviewRefs.length > 0 && isEditorOrTerminalTargetOperation(operation)) {
     return blocked('blocked:vscode-app-module:unknown-webview-target-unresolved', observation.unknownWebviewRefs);
   }
+  if (operation === 'observe-current-vscode') {
+    return checkObserveCurrentVSCodeReadiness(operation, observation, normalizedOperationRef);
+  }
+  if (operation === 'read-editor-context') {
+    return checkReadEditorContextReadiness(operation, observation, normalizedOperationRef);
+  }
   if (operation === 'read-visible-text') {
     const editorRefs = editorTargetRefs(observation);
     if (editorRefs.length === 0) {
@@ -423,7 +435,28 @@ function checkVSCodeReadiness(operation: string, refs: string[], operationRef: s
   if (isCommandPaletteOperation(operation)) {
     return checkCommandPaletteReadiness(operation, observation, normalizedOperationRef);
   }
+  if (isNavigationSearchOperation(operation)) {
+    return checkNavigationSearchReadiness(operation, observation, normalizedOperationRef);
+  }
   return blocked(`blocked:vscode-app-module:${safeToken(operation) || 'operation'}-readiness-not-implemented`, observation.refs);
+}
+
+function checkObserveCurrentVSCodeReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const commonGate = checkCommonObservationGate(observation);
+  if (commonGate) return commonGate;
+  return observeReady(operation, operationRef, observation, []);
+}
+
+function checkReadEditorContextReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const targetRefs = editorScopeTargetRefs(observation);
+  if (targetRefs.status !== 'ready') return targetRefs.readiness;
+  if (observation.visibleTextRefs.length === 0) {
+    return blocked('blocked:vscode-app-module:visible-text-ref-required', observation.refs);
+  }
+  return observeReady(operation, operationRef, observation, [
+    ...targetRefs.refs,
+    ...observation.visibleTextRefs,
+  ]);
 }
 
 function checkEditorScopeReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
@@ -745,6 +778,47 @@ function checkTerminalReadiness(operation: string, observation: VSCodeAppObserva
   return blocked('blocked:vscode-app-module:operation-not-supported', observation.refs);
 }
 
+function checkNavigationSearchReadiness(operation: string, observation: VSCodeAppObservation, operationRef: string): ComputerUseAppModuleReadiness {
+  const commonGate = checkCommonObservationGate(observation);
+  if (commonGate) return commonGate;
+  if (observation.textRefRefs.length > 1) {
+    return needsConfirmation('needs-confirmation:vscode-app-module:target-text-ref-ambiguous', observation.textRefRefs);
+  }
+  const textRef = observation.textRefRefs[0];
+  if (!textRef) return blocked('blocked:vscode-app-module:text-ref-required', observation.refs);
+  const targetRefs = navigationSearchTargetRefs(observation);
+  if (targetRefs.length > 1) {
+    return needsConfirmation('needs-confirmation:vscode-app-module:target-navigation-resource-ambiguous', targetRefs);
+  }
+  if (operation === 'workspace-search') {
+    if (observation.workspaceRefs.length === 0) {
+      return blocked('blocked:vscode-app-module:workspace-ref-required', observation.refs);
+    }
+    if (observation.workspaceRefs.length > 1) {
+      return needsConfirmation('needs-confirmation:vscode-app-module:target-workspace-ambiguous', observation.workspaceRefs);
+    }
+    return actReady(operation, operationRef, observation, [
+      WORKSPACE_SEARCH_ACTION_REF,
+      observation.workspaceRefs[0],
+      textRef,
+    ], {
+      kind: 'key',
+      key: 'Meta+Shift+F',
+    });
+  }
+  if (operation === 'quick-open') {
+    return actReady(operation, operationRef, observation, [
+      QUICK_OPEN_ACTION_REF,
+      ...targetRefs,
+      textRef,
+    ], {
+      kind: 'key',
+      key: 'Meta+P',
+    });
+  }
+  return blocked('blocked:vscode-app-module:operation-not-supported', observation.refs);
+}
+
 function observeReady(operation: string, operationRef: string, observation: VSCodeAppObservation, targetRefs: string[]): ComputerUseAppModuleReadiness {
   return validateComputerUseAppModuleReadiness({
     status: 'ready',
@@ -799,6 +873,7 @@ function actReady(
       operationRef,
       observation.sessionRefs[0],
       observation.windowRefs[0],
+      observation.observationRefs[0],
       ...targetRefs,
       ...additionalEvidenceRefs,
       observation.freshnessRefs[0],
@@ -862,6 +937,11 @@ function isCommandPaletteOperation(operation: string): boolean {
     || operation === 'close-command-palette';
 }
 
+function isNavigationSearchOperation(operation: string): boolean {
+  return operation === 'quick-open'
+    || operation === 'workspace-search';
+}
+
 function isEditorMutationOperation(operation: string): boolean {
   return operation === 'insert-draft'
     || operation === 'replace-selection';
@@ -869,6 +949,7 @@ function isEditorMutationOperation(operation: string): boolean {
 
 function isEditorOrTerminalTargetOperation(operation: string): boolean {
   return operation === 'read-visible-text'
+    || operation === 'read-editor-context'
     || operation === 'editor-scope'
     || operation === 'focus-editor'
     || operation === 'save-current-file'
@@ -1038,7 +1119,7 @@ function isVSCodeVerifierRef(ref: string): boolean {
 }
 
 function isRawRef(ref: string): boolean {
-  return /(^|:)raw[-:]|base64|data:image|providerPayload|provider-payload|screenshot-path|file:\/\/|https?:\/\/|(^|:)\/(?:Users|Applications|Volumes|private|tmp)\/|\\|<[^>]+>|secret|password|api[-_]?key|bearer|[A-Za-z0-9+/]{64,}={0,2}/i.test(ref);
+  return /(^|:)raw(?:[-:]|\s)|base64|data:image|providerPayload|provider-payload|screenshot-path|file:\/\/|https?:\/\/|(^|:)\/(?:Users|Applications|Volumes|private|tmp)\/|\\|<[^>]+>|secret|password|api[-_]?key|bearer|[A-Za-z0-9+/]{64,}={0,2}/i.test(ref);
 }
 
 function isUnsafeTerminalObservationRef(ref: string): boolean {
@@ -1169,6 +1250,14 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 
 function terminalScopedRefs(refs: string[], terminalRef: string): string[] {
   return refs.filter((ref) => terminalScopedRef(ref, terminalRef));
+}
+
+function navigationSearchTargetRefs(observation: VSCodeAppObservation): string[] {
+  return uniqueStrings([
+    ...observation.workspaceRefs,
+    ...observation.selectedFileRefs,
+    ...observation.fileRefs,
+  ]);
 }
 
 function currentCommandPaletteItemRefs(observation: VSCodeAppObservation, paletteRef: string): string[] {

@@ -2348,6 +2348,62 @@ test('Runtime Codex stream request carries command text, Agent Host input, and a
   assert.doesNotMatch(JSON.stringify(body), /raw-terminal|raw-bytes/);
 });
 
+test('Runtime Codex stream request composes explicit current VSCode selection transform as Host-owned refs-first input', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '请用 Computer Use 操纵当前 VSCode，润色当前论文选区并保存。',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  const target = agentHostInput.target as Record<string, unknown>;
+  const vscodeCoWork = target.vscodeCoWork as Record<string, unknown>;
+  const refs = agentHostInput.refs as string[];
+  const serialized = JSON.stringify(body);
+
+  assert.match(String(body.commandId), /^codex-command-/);
+  assert.equal(agentHostInput.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+  assert.equal(agentHostInput.source, 'codex-agent-host-current-vscode-selection-transform');
+  assert.equal(agentHostInput.intentText, 'intent:current-vscode-selection-transform');
+  assert.equal(target.kind, 'current-vscode-cowork');
+  assert.equal(vscodeCoWork.operation, 'apply-current-selection');
+  assert.equal(vscodeCoWork.family, 'editor-edit');
+  assert.equal(vscodeCoWork.targetMode, 'smart-detect-current-vscode-window');
+  assert.equal(vscodeCoWork.primitiveOperation, 'replace-selection');
+  assert.equal(vscodeCoWork.requestedPrimitiveCount, 1);
+  assert.equal(vscodeCoWork.saveAfterApply, true);
+  assert.match(String(vscodeCoWork.operationRef), /^operation-ref:vscode:apply-current-selection:codex-command-/);
+  assert.match(String(vscodeCoWork.draftTextRef), /^text-ref:vscode:selection-transform-draft:codex-command-/);
+  assert.ok(refs.includes('intent:current-vscode-cowork'));
+  assert.ok(refs.includes('intent:current-vscode-selection-transform'));
+  assert.ok(refs.includes(String(vscodeCoWork.operationRef)));
+  assert.ok(refs.includes(String(vscodeCoWork.draftTextRef)));
+  assert.deepEqual(recursiveForbiddenKeys(agentHostInput, [
+    'selectedText',
+    'rawSelectedText',
+    'rawDraft',
+    'rawDiff',
+    'providerPayload',
+    'commandPaletteLabel',
+    'commandPaletteCommandId',
+  ]), []);
+  assert.doesNotMatch(serialized, /paper-polish|polish-paper|rawSelectedText|selectedText|rawDraft|rawDiff|providerPayload|@@|data:image|base64|Help: About|workbench\.action/i);
+});
+
 test('Runtime Codex stream request carries uploaded image refs as input objects without inline bytes', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];

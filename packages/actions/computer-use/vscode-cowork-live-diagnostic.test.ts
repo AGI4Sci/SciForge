@@ -72,6 +72,65 @@ test('current VSCode co-work window snapshot omits focused editor refs for non-e
   assert.doesNotMatch(JSON.stringify(observation), /main\.tex|Explorer|SCALE|Visual Studio Code/);
 });
 
+test('current VSCode co-work window snapshot derives current selection refs from editor menu selection evidence', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'selected paragraph must stay private',
+    editorMenuCopyEnabled: true,
+    editorMenuCutEnabled: true,
+    editorMenuToggleLineCommentEnabled: true,
+    editorMenuExpandSelectionEnabled: true,
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  const titleToken = observation.windowRef.split(':').at(-1);
+  assert.equal(observation.focusedEditorRef, `focused-editor:vscode:current:${titleToken}`);
+  assert.equal(observation.selectionRef, `selection-ref:vscode:current:${titleToken}:menu`);
+  assert.equal(observation.cursorRef, `cursor-ref:vscode:current:${titleToken}:menu`);
+  assert.equal(observation.rangeRef, `range-ref:vscode:current:${titleToken}:menu-menu`);
+  assert.doesNotMatch(JSON.stringify(observation), /selected paragraph|main\.tex|SCALE|Visual Studio Code|rawSelectedText|selectedText|providerPayload|base64/i);
+});
+
+test('current VSCode co-work window snapshot refuses menu selection evidence without editor-specific menu proof', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'selected command palette text must stay private',
+    editorMenuCopyEnabled: true,
+    editorMenuCutEnabled: true,
+    editorMenuToggleLineCommentEnabled: false,
+    editorMenuExpandSelectionEnabled: false,
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  assert.equal(observation.focusedEditorRef, undefined);
+  assert.equal(observation.selectionRef, undefined);
+  assert.equal(observation.cursorRef, undefined);
+  assert.equal(observation.rangeRef, undefined);
+  assert.doesNotMatch(JSON.stringify(observation), /selected command palette|main\.tex|SCALE|Visual Studio Code|rawSelectedText|selectedText|providerPayload|base64/i);
+});
+
+test('current VSCode co-work window snapshot refuses current file scope when window identity is empty', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: '',
+    collectedText: 'private editor body must stay private',
+    editorMenuCopyEnabled: true,
+    editorMenuCutEnabled: true,
+    editorMenuToggleLineCommentEnabled: true,
+    editorMenuExpandSelectionEnabled: true,
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  assert.deepEqual(observation.fileRefs, []);
+  assert.equal(observation.focusedEditorRef, undefined);
+  assert.equal(observation.selectionRef, undefined);
+  assert.equal(observation.cursorRef, undefined);
+  assert.equal(observation.rangeRef, undefined);
+  assert.doesNotMatch(JSON.stringify(observation), /private editor body|rawSelectedText|selectedText|providerPayload|base64/i);
+});
+
 test('current VSCode co-work window snapshot accepts Monaco editor focus context', () => {
   const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
     pid: '9182',
@@ -85,6 +144,157 @@ test('current VSCode co-work window snapshot accepts Monaco editor focus context
 
   assert.equal(observation.focusedEditorRef, `focused-editor:vscode:current:${observation.windowRef.split(':').at(-1)}`);
   assert.doesNotMatch(JSON.stringify(observation), /main\.tex|Monaco|Code editor|SCALE|Visual Studio Code/);
+});
+
+test('current VSCode co-work window snapshot derives opaque editor selection refs from focused range evidence', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'selected text must stay private',
+    focusedRole: 'AXTextArea',
+    focusedName: 'main.tex',
+    focusedDescription: 'Code editor',
+    focusedSelectedTextRange: '{12, 8}',
+    focusedInsertionPointLineNumber: '42',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  const titleToken = observation.windowRef.split(':').at(-1);
+  assert.equal(observation.focusedEditorRef, `focused-editor:vscode:current:${titleToken}`);
+  assert.equal(observation.selectionRef, `selection-ref:vscode:current:${titleToken}:r12-l8`);
+  assert.equal(observation.cursorRef, `cursor-ref:vscode:current:${titleToken}:line42`);
+  assert.equal(observation.rangeRef, `range-ref:vscode:current:${titleToken}:r12-l8-line42`);
+  assert.doesNotMatch(JSON.stringify(observation), /selected text|main\.tex|SCALE|Visual Studio Code|Code editor/);
+});
+
+test('current VSCode co-work window snapshot derives non-user scratch scope refs from untitled editor caret evidence', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Untitled-1 - SciForge - Visual Studio Code',
+    collectedText: 'scratch text must stay private',
+    focusedRole: 'AXTextArea',
+    focusedName: 'Untitled-1',
+    focusedDescription: 'Code editor',
+    focusedSelectedTextRange: '{0, 0}',
+    focusedInsertionPointLineNumber: '1',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  const titleToken = observation.windowRef.split(':').at(-1);
+  assert.deepEqual(observation.fileRefs, [`file-ref:vscode:scratch:${titleToken}`]);
+  assert.equal(observation.nonUserFileScopeRef, `non-user-file-scope:vscode:scratch:${titleToken}`);
+  assert.equal(observation.selectionRef, `selection-ref:vscode:scratch:${titleToken}:caret`);
+  assert.equal(observation.cursorRef, `cursor-ref:vscode:scratch:${titleToken}:line1`);
+  assert.equal(observation.rangeRef, `range-ref:vscode:scratch:${titleToken}:caret-line1`);
+  assert.doesNotMatch(JSON.stringify(observation), /scratch text|Untitled|SciForge|Visual Studio Code|Code editor/);
+});
+
+test('current VSCode co-work window snapshot derives opaque scratch caret refs from untitled title without focused AX fields', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Untitled-1 - SciForge - Visual Studio Code',
+    collectedText: 'scratch title only text must stay private',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  const titleToken = observation.windowRef.split(':').at(-1);
+  assert.deepEqual(observation.fileRefs, [`file-ref:vscode:scratch:${titleToken}`]);
+  assert.equal(observation.nonUserFileScopeRef, `non-user-file-scope:vscode:scratch:${titleToken}`);
+  assert.equal(observation.focusedEditorRef, `focused-editor:vscode:scratch:${titleToken}`);
+  assert.equal(observation.selectionRef, `selection-ref:vscode:scratch:${titleToken}:caret`);
+  assert.equal(observation.cursorRef, `cursor-ref:vscode:scratch:${titleToken}:caret`);
+  assert.equal(observation.rangeRef, `range-ref:vscode:scratch:${titleToken}:caret-caret`);
+  assert.doesNotMatch(JSON.stringify(observation), /scratch title only|Untitled|SciForge|Visual Studio Code|Code editor/);
+});
+
+test('current VSCode co-work window snapshot keeps edited untitled scratch refs stable after dirty title preview', () => {
+  const before = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Untitled-1 - SciForge - Visual Studio Code',
+    collectedText: 'scratch draft before typing stays private',
+    observedAtMs: 1_780_905_600_000,
+  });
+  const after = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Draft preview text • Untitled-1 — SciForge',
+    collectedText: 'scratch draft after typing stays private',
+    observedAtMs: 1_780_905_600_100,
+  });
+
+  const scratchToken = before.windowRef.split(':').at(-1);
+  assert.equal(after.windowRef, before.windowRef);
+  assert.deepEqual(after.fileRefs, [`file-ref:vscode:scratch:${scratchToken}`]);
+  assert.equal(after.nonUserFileScopeRef, `non-user-file-scope:vscode:scratch:${scratchToken}`);
+  assert.equal(after.focusedEditorRef, `focused-editor:vscode:scratch:${scratchToken}`);
+  assert.equal(after.selectionRef, `selection-ref:vscode:scratch:${scratchToken}:caret`);
+  assert.doesNotMatch(JSON.stringify({ before, after }), /Draft preview text|scratch draft|Untitled|SciForge|Visual Studio Code/);
+});
+
+test('current VSCode co-work window snapshot keeps saved untitled-like files in current file scope', () => {
+  const observation = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Untitled-1.md - SciForge - Visual Studio Code',
+    collectedText: 'saved untitled-like file body must stay private',
+    focusedRole: 'AXTextArea',
+    focusedName: 'Untitled-1.md',
+    focusedDescription: 'Code editor',
+    observedAtMs: 1_780_905_600_000,
+  });
+
+  const titleToken = observation.windowRef.split(':').at(-1);
+  assert.deepEqual(observation.fileRefs, [`file-ref:vscode:current:${titleToken}`]);
+  assert.equal(observation.nonUserFileScopeRef, undefined);
+  assert.equal(observation.focusedEditorRef, `focused-editor:vscode:current:${titleToken}`);
+  assert.equal(observation.selectionRef, undefined);
+  assert.doesNotMatch(JSON.stringify(observation), /Untitled-1\.md|saved untitled-like|SciForge|Visual Studio Code|Code editor/);
+});
+
+test('current VSCode co-work window snapshot keeps current file refs stable across dirty title markers', () => {
+  const clean = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'main.tex - SCALE - Visual Studio Code',
+    collectedText: 'clean current file body stays private',
+    focusedRole: 'AXTextArea',
+    focusedSelectedTextRange: '{12, 8}',
+    observedAtMs: 1_780_905_600_000,
+  });
+  const dirty = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Draft preview text • main.tex - SCALE - Visual Studio Code',
+    collectedText: 'dirty current file body stays private',
+    focusedRole: 'AXTextArea',
+    focusedSelectedTextRange: '{12, 0}',
+    observedAtMs: 1_780_905_600_100,
+  });
+
+  assert.equal(dirty.windowRef, clean.windowRef);
+  assert.deepEqual(dirty.fileRefs, clean.fileRefs);
+  assert.equal(dirty.editorElementRef, clean.editorElementRef);
+  assert.equal(dirty.focusedEditorRef, clean.focusedEditorRef);
+  assert.doesNotMatch(JSON.stringify({ clean, dirty }), /main\.tex|SCALE|Draft preview|clean current|dirty current|Visual Studio Code/i);
+});
+
+test('current VSCode co-work window snapshot uses delimiter-safe untitled scratch title parsing', () => {
+  const cleanWorkspaceWithDot = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Untitled-1 - my.project - Visual Studio Code',
+    collectedText: 'clean scratch title body stays private',
+    observedAtMs: 1_780_905_600_000,
+  });
+  const dirtySavedUntitledFile = currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Draft preview • Untitled-1.md — my.project',
+    collectedText: 'dirty saved untitled file body stays private',
+    observedAtMs: 1_780_905_600_100,
+  });
+
+  const scratchToken = cleanWorkspaceWithDot.windowRef.split(':').at(-1);
+  const currentToken = dirtySavedUntitledFile.windowRef.split(':').at(-1);
+  assert.deepEqual(cleanWorkspaceWithDot.fileRefs, [`file-ref:vscode:scratch:${scratchToken}`]);
+  assert.equal(cleanWorkspaceWithDot.nonUserFileScopeRef, `non-user-file-scope:vscode:scratch:${scratchToken}`);
+  assert.deepEqual(dirtySavedUntitledFile.fileRefs, [`file-ref:vscode:current:${currentToken}`]);
+  assert.equal(dirtySavedUntitledFile.nonUserFileScopeRef, undefined);
+  assert.doesNotMatch(JSON.stringify([cleanWorkspaceWithDot, dirtySavedUntitledFile]), /my\.project|Draft preview|Untitled|scratch title body|saved untitled file/i);
 });
 
 test('current VSCode co-work window snapshot refuses terminal text areas as editor focus evidence', () => {
@@ -294,6 +504,12 @@ test('current VSCode co-work primitive ports execute refs-first type action and 
         textRef: 'text-ref:current-vscode-cowork:draft',
         elementRef: 'element:vscode:editor',
       },
+      contextRefs: [
+        'file-ref:vscode:mutate',
+        'selection-ref:vscode:mutate:current',
+        'cursor-ref:vscode:mutate:current',
+        'range-ref:vscode:mutate:current',
+      ],
       captureAfter: true,
     },
   });
@@ -324,6 +540,9 @@ test('current VSCode co-work primitive ports execute refs-first type action and 
   assert.equal(output?.cursorRef, 'cursor-marker:current-vscode-cowork:unit-current-vscode-act');
   assert.equal(output?.scopedInputLeaseRef, 'scoped-input-lease:current-vscode-cowork:unit-current-vscode-act');
   assert.ok((act.value?.refs ?? []).includes('text-ref:current-vscode-cowork:draft'));
+  assert.ok((act.value?.refs ?? []).includes('selection-ref:vscode:mutate:current'));
+  assert.ok((act.value?.refs ?? []).includes('cursor-ref:vscode:mutate:current'));
+  assert.ok((act.value?.refs ?? []).includes('range-ref:vscode:mutate:current'));
   assert.ok((act.value?.refs ?? []).includes('observation:vscode:after'));
   assert.ok((control.value?.refs ?? []).includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-act'));
   assert.deepEqual(calls, [
@@ -691,6 +910,257 @@ test('current VSCode co-work primitive ports execute Host-selected focus key wit
   assert.ok((act.value?.refs ?? []).includes('focused-editor:vscode:focus-key'));
   assert.ok((act.value?.refs ?? []).includes('observation:vscode:focus-key-after'));
   assert.doesNotMatch(JSON.stringify({ act, control }), /draft body|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work primitive ports execute Host-selected save key without resolving text', async () => {
+  const calls: string[] = [];
+  const observations = [
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:save-key',
+      windowRef: 'window:vscode:save-key',
+      titleRef: 'text:title:save-key',
+      frontmostRef: 'frontmost:vscode:save-key',
+      fileRefs: ['selected-file:vscode:save-key'],
+      editorElementRef: 'element:vscode:editor:save-key',
+      focusedEditorRef: 'focused-editor:vscode:save-key',
+      selectionRef: 'selection-ref:vscode:save-key:current',
+      cursorRef: 'cursor-ref:vscode:save-key:current',
+      rangeRef: 'range-ref:vscode:save-key:current',
+      visibleTextRef: 'text:vscode:save-key-before',
+      visibleTextSha256Ref: 'text:vscode:save-key-before-sha256',
+      screenshotRef: 'image:vscode:save-key-before',
+      accessibilityRef: 'accessibility:vscode:save-key-before',
+      freshnessRef: 'freshness:vscode:save-key-before',
+      observationRef: 'observation:vscode:save-key-before',
+    },
+    {
+      appRef: 'macos-app:com.microsoft.VSCode',
+      processRef: 'process:vscode:save-key',
+      windowRef: 'window:vscode:save-key',
+      titleRef: 'text:title:save-key',
+      frontmostRef: 'frontmost:vscode:save-key',
+      fileRefs: ['selected-file:vscode:save-key'],
+      editorElementRef: 'element:vscode:editor:save-key',
+      focusedEditorRef: 'focused-editor:vscode:save-key',
+      selectionRef: 'selection-ref:vscode:save-key:current',
+      cursorRef: 'cursor-ref:vscode:save-key:current',
+      rangeRef: 'range-ref:vscode:save-key:current',
+      visibleTextRef: 'text:vscode:save-key-after',
+      visibleTextSha256Ref: 'text:vscode:save-key-after-sha256',
+      screenshotRef: 'image:vscode:save-key-after',
+      accessibilityRef: 'accessibility:vscode:save-key-after',
+      freshnessRef: 'freshness:vscode:save-key-after',
+      observationRef: 'observation:vscode:save-key-after',
+    },
+  ];
+  const service = createComputerUsePrimitiveService({
+    now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId: 'unit-current-vscode-save-key',
+      readCurrentWindow: async () => {
+        calls.push('read-current-window');
+        return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+      },
+      pressKeyInCurrentVSCode: async (input) => {
+        calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+      },
+      resolveTextRef: async (textRef) => {
+        calls.push(`resolve-text:${textRef}`);
+        return 'save action must not resolve text';
+      },
+      restoreFocus: async (ref) => {
+        calls.push(`restore-focus:${ref}`);
+      },
+      restoreMouse: async (ref) => {
+        calls.push(`restore-mouse:${ref}`);
+      },
+    }),
+  });
+
+  const bind = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+      target: {
+        kind: 'app',
+        appId: 'com.microsoft.VSCode',
+        targetRef: 'current-vscode-cowork',
+      },
+    },
+  });
+  assert.equal(bind.ok, true);
+  const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+  const act = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+      sessionId,
+      actionId: 'save-current-file',
+      contextRefs: [
+        'selected-file:vscode:save-key',
+        'element:vscode:editor:save-key',
+        'focused-editor:vscode:save-key',
+        'action:vscode-app-module:save-current-file:meta-s',
+      ],
+      action: {
+        type: 'key',
+        key: 'Meta+S',
+        elementRef: 'element:vscode:editor:save-key',
+      },
+      captureAfter: true,
+    },
+  });
+  assert.equal(act.ok, true, act.error);
+
+  const control = await service.invoke({
+    moduleId: 'computer_use',
+    intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+    input: {
+      schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+      sessionId,
+      command: 'release',
+    },
+  });
+  assert.equal(control.ok, true);
+
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'press-key:Meta+S:observation:vscode:save-key-before',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-save-key',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-save-key',
+  ]);
+  assert.ok((act.value?.refs ?? []).includes('action:current-vscode-cowork:unit-current-vscode-save-key:save-current-file'));
+  assert.ok((act.value?.refs ?? []).includes('action:vscode-app-module:save-current-file:meta-s'));
+  assert.ok((act.value?.refs ?? []).includes('focused-editor:vscode:save-key'));
+  assert.ok((act.value?.refs ?? []).includes('observation:vscode:save-key-after'));
+  assert.doesNotMatch(JSON.stringify({ act, control }), /save action must not resolve text|resolve-text|workbench|files-save|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work primitive ports execute Host-selected navigation keys without resolving text', async () => {
+  for (const [actionId, key] of [
+    ['quick-open', 'Meta+P'],
+    ['workspace-search', 'Meta+Shift+F'],
+  ] as const) {
+    const calls: string[] = [];
+    const observations = [
+      {
+        appRef: 'macos-app:com.microsoft.VSCode',
+        processRef: `process:vscode:${actionId}`,
+        windowRef: `window:vscode:${actionId}`,
+        titleRef: `text:title:${actionId}`,
+        frontmostRef: `frontmost:vscode:${actionId}`,
+        fileRefs: [`file-ref:vscode:${actionId}`],
+        editorElementRef: `element:vscode:editor:${actionId}`,
+        visibleTextRef: `text:vscode:${actionId}-before`,
+        visibleTextSha256Ref: `text:vscode:${actionId}-before-sha256`,
+        screenshotRef: `image:vscode:${actionId}-before`,
+        accessibilityRef: `accessibility:vscode:${actionId}-before`,
+        freshnessRef: `freshness:vscode:${actionId}-before`,
+        observationRef: `observation:vscode:${actionId}-before`,
+      },
+      {
+        appRef: 'macos-app:com.microsoft.VSCode',
+        processRef: `process:vscode:${actionId}`,
+        windowRef: `window:vscode:${actionId}`,
+        titleRef: `text:title:${actionId}`,
+        frontmostRef: `frontmost:vscode:${actionId}`,
+        fileRefs: [`file-ref:vscode:${actionId}`],
+        editorElementRef: `element:vscode:editor:${actionId}`,
+        visibleTextRef: `text:vscode:${actionId}-after`,
+        visibleTextSha256Ref: `text:vscode:${actionId}-after-sha256`,
+        screenshotRef: `image:vscode:${actionId}-after`,
+        accessibilityRef: `accessibility:vscode:${actionId}-after`,
+        freshnessRef: `freshness:vscode:${actionId}-after`,
+        observationRef: `observation:vscode:${actionId}-after`,
+      },
+    ];
+    const service = createComputerUsePrimitiveService({
+      now: () => new Date('2026-06-08T00:00:00.000Z').getTime(),
+      ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+        runId: `unit-current-vscode-${actionId}`,
+        readCurrentWindow: async () => {
+          calls.push('read-current-window');
+          return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+        },
+        pressKeyInCurrentVSCode: async (input) => {
+          calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+        },
+        resolveTextRef: async (textRef) => {
+          calls.push(`resolve-text:${textRef}`);
+          return 'navigation key must not resolve text';
+        },
+        restoreFocus: async (ref) => {
+          calls.push(`restore-focus:${ref}`);
+        },
+        restoreMouse: async (ref) => {
+          calls.push(`restore-mouse:${ref}`);
+        },
+      }),
+    });
+
+    const bind = await service.invoke({
+      moduleId: 'computer_use',
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.bind,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.bind,
+        target: {
+          kind: 'app',
+          appId: 'com.microsoft.VSCode',
+          targetRef: 'current-vscode-cowork',
+        },
+      },
+    });
+    assert.equal(bind.ok, true);
+    const sessionId = (bind.value?.output as { sessionId?: string } | undefined)?.sessionId;
+
+    const act = await service.invoke({
+      moduleId: 'computer_use',
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.act,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.act,
+        sessionId,
+        actionId,
+        contextRefs: [
+          `window:vscode:${actionId}`,
+          `file-ref:vscode:${actionId}`,
+          `text-ref:vscode:${actionId}:query`,
+        ],
+        action: {
+          type: 'key',
+          key,
+          elementRef: `element:vscode:editor:${actionId}`,
+        },
+        captureAfter: true,
+      },
+    });
+    assert.equal(act.ok, true, act.error);
+
+    const control = await service.invoke({
+      moduleId: 'computer_use',
+      intent: COMPUTER_USE_PRIMITIVE_INTENTS.control,
+      input: {
+        schemaVersion: COMPUTER_USE_PRIMITIVE_INPUT_SCHEMAS.control,
+        sessionId,
+        command: 'release',
+      },
+    });
+    assert.equal(control.ok, true);
+    assert.deepEqual(calls, [
+      'read-current-window',
+      `press-key:${key}:observation:vscode:${actionId}-before`,
+      'read-current-window',
+      `restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-${actionId}`,
+      `restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-${actionId}`,
+    ]);
+    assert.ok((act.value?.refs ?? []).includes(`action:current-vscode-cowork:unit-current-vscode-${actionId}:${actionId}`));
+    assert.ok((act.value?.refs ?? []).includes(`observation:vscode:${actionId}-after`));
+    assert.doesNotMatch(JSON.stringify({ act, control }), /navigation key must not resolve text|resolve-text|raw-|providerPayload|base64|kill-vscode|clear-profile/i);
+  }
 });
 
 test('current VSCode co-work primitive ports block the default type executor when text refs are unresolved', async () => {

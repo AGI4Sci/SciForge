@@ -410,7 +410,7 @@ function writeBrowserSourceEvidenceFixtures(context: RuntimeCodexBrowserAcceptan
   const sourceDir = join(context.workspacePath, '.sciforge', 'browser-host', 'sessions', 'validator-current', 'source-pages');
   const text = [
     'Runtime Codex answer rendered in the default chat.',
-    'Direct Browser source evidence was captured through browser_search and browser_read.',
+    'Diagnostic Browser primitive source evidence was captured through browser_search and browser_read.',
     `Profile: ${context.runtimeCodexIdentity.profile ?? 'unknown'}`,
     `Provider: ${context.runtimeCodexIdentity.provider ?? 'unknown'}`,
     `Model: ${context.runtimeCodexIdentity.model ?? 'unknown'}`,

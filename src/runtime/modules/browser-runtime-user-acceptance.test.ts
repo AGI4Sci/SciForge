@@ -168,7 +168,8 @@ test('browser primitives keep search snippets and over-budget downloads out of c
     assert.ok(candidate?.ref);
     assert.equal(candidate.status, 'discovered');
     assert.equal(candidate.confidence, 'candidate');
-    assert.match(search.evidenceState.boundary, /Search results and snippets are not source evidence/);
+    assert.match(search.evidenceState.boundary, /ordinary search answers with source links/i);
+    assert.match(search.evidenceState.boundary, /read-required escalation/i);
 
     const read = await invokeBrowser<BrowserReadOutput>(dispatcher, BROWSER_PRIMITIVE_INTENTS.read, {
       schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,

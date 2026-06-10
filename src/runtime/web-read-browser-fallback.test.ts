@@ -93,6 +93,39 @@ test('web_read browser fallback renders a JS-heavy page when static extraction h
   }
 });
 
+test('web_read browser fallback reports needs_browser when render is allowed but no adapter is available', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-web-read-needs-browser-'));
+  try {
+    const result = await runWebReadBrowserFallback({
+      workspacePath,
+      url: 'https://example.org/empty-static-page',
+      render: 'auto',
+      timeoutMs: 1_500,
+      staticRead: {
+        status: 'extract_failed',
+        reason: 'static_body_missing',
+        textCharCount: 0,
+        preview: '',
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'needs_browser');
+    assert.equal(result.error?.code, 'needs_browser');
+    assert.match(result.error?.message ?? '', /browser render adapter/i);
+    assert.equal(result.diagnostics.fallbackUsed, false);
+    assert.equal(result.diagnostics.needsBrowser, true);
+    assert.equal(result.diagnostics.needsUserBrowser, false);
+    assert.equal(result.fallbackTrace.reason, 'static_body_missing');
+    assert.equal(result.fallbackTrace.provider, 'none');
+    assert.equal(result.refs.sourcePageRef, undefined);
+    assert.equal(result.refs.pageTextRef, undefined);
+    assert.ok(result.timings.totalMs >= 0);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('web_read browser fallback returns needs_user_browser for CAPTCHA and login surrogates without autonomous bypass', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-web-read-user-browser-'));
   const adapterCalls: string[] = [];

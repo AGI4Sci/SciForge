@@ -80,7 +80,7 @@ async function browserPrimitiveSearchWithManager(
   const manager = ports.manager ?? defaultBrowserHostSessionManager();
   const output = await manager.search(ports.workspacePath, {
     query: input.query,
-    engine: input.engine,
+    engine: browserHostDiscoveryEngine(input.engine),
     region: input.region,
     limit: input.limit,
     sourcePageLimit: 0,
@@ -112,6 +112,11 @@ async function browserPrimitiveSearchWithManager(
     })),
     budget: input.budget,
   };
+}
+
+function browserHostDiscoveryEngine(engine: string | undefined) {
+  if (engine === 'bing' || engine === 'duckduckgo') return engine;
+  return undefined;
 }
 
 async function browserPrimitiveNavigateWithManager(

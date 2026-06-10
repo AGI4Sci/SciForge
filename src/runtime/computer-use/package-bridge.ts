@@ -337,6 +337,17 @@ async function locatePort(
   const observationRef = stringAt(observation, 'ref') ?? '';
   const beforeRefs = state.captureRefsByObservationRef.get(observationRef) ?? state.screenshotLedger.slice(-1);
   const action = packagePlanToGenericAction({ kind: state.activeAction?.type, target }, state.activeAction);
+  if (legacyDirectGrounderConfigured(config)) {
+    return {
+      ok: false,
+      reason: 'legacy direct grounding adapter is disabled on the Computer Use package bridge product path; use the Model Router grounding translator.',
+      metadata: {
+        status: 'failed',
+        provider: visionSenseModelRouterCapabilities.groundingTranslator,
+        reason: 'legacy direct grounding adapter is disabled',
+      },
+    };
+  }
   const grounded = await resolveActionGrounding(action, beforeRefs, config);
   if (!grounded.ok) {
     return {
@@ -443,6 +454,11 @@ function emitEventPort(
 
 function shouldRunFineGroundingPass(grounding: Record<string, unknown>) {
   return stringAt(grounding, 'provider') === visionSenseModelRouterCapabilities.groundingTranslator;
+}
+
+function legacyDirectGrounderConfigured(config: ComputerUseConfig): boolean {
+  const grounder = config.grounder as unknown as Record<string, unknown> | undefined;
+  return typeof grounder?.baseUrl === 'string' && grounder.baseUrl.trim().length > 0;
 }
 
 function recordArg(call: HostPortCall, index: number): Record<string, unknown> {

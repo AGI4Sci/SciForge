@@ -55,6 +55,7 @@ const rules: Rule[] = [
 ];
 
 assertRuleFixtures();
+await assertWebSearchStaticConfigAudit();
 
 const findings: Finding[] = [];
 
@@ -140,5 +141,109 @@ function assertRuleFixtures() {
     const rule = rules.find((item) => item.id === fixture.rule);
     assert.ok(rule, `missing smoke rule fixture target: ${fixture.rule}`);
     assert.match(fixture.text, rule.pattern, `fixture must be caught by ${fixture.rule}`);
+  }
+}
+
+async function assertWebSearchStaticConfigAudit() {
+  const webSearchAuditRoots = [
+    'src/runtime',
+    'packages/actions/browser-runtime',
+    'packages/workers/web-worker/src',
+  ];
+  const webSearchAuditFiles: string[] = [];
+  for (const scanRoot of webSearchAuditRoots) {
+    for (const file of await collectFiles(join(root, scanRoot))) {
+      const rel = relative(root, file).replaceAll('\\', '/');
+      if (!/(?:web[-_]?search|browser-host-session-search|browser-runtime|web-tools|runtime-module|workspace-server-modules|codex-app-server-client)/i.test(rel)) {
+        continue;
+      }
+      webSearchAuditFiles.push(file);
+    }
+  }
+
+  const auditRules: Rule[] = [
+    {
+      id: 'web-search-acceptance-query-or-prompt',
+      description: 'Web search strategy must not embed acceptance queries, ordinary-chat prompts, or news topics outside fixtures.',
+      pattern: /\b(?:Iran situation latest five sources|OpenAI API changelog latest|搜索一下伊朗局势|普通聊天入口|news-latest|ordinary-web-lookup|academic-technical-docs)\b/i,
+    },
+    {
+      id: 'web-search-provider-endpoint-literal',
+      description: 'Web search provider/browser endpoints must come from provider registry or config, not release-path literals.',
+      pattern: /https:\/\/(?:duckduckgo\.com\/html\/|www\.bing\.com\/search|export\.arxiv\.org\/api\/query|www\.ebi\.ac\.uk\/europepmc\/webservices\/rest\/search|api\.crossref\.org\/works)/i,
+    },
+    {
+      id: 'web-search-provider-id-literal',
+      description: 'Web search native/fallback provider ids must come from provider registry/config, not hardcoded routing literals.',
+      pattern: /['"`](?:codex-native-web-search|duckduckgo-html|duckduckgo-html-rendered|bing-rendered|arxiv-api|arxiv-browser|europepmc|crossref|playwright-chromium)['"`]/i,
+    },
+    {
+      id: 'web-search-acceptance-cli-or-event-field',
+      description: 'Web search product proof CLI flags and event-field names must stay in tools/tests/fixtures, not release strategy.',
+      pattern: /--(?:query|provider|preset|engines|categories|web-search|search-provider)\b|toolCompleted\(['"]web_(?:search|read)['"]\)|WebSocket current-run frames|web_search evidence plus final source links/i,
+    },
+    {
+      id: 'web-search-historical-run-literal',
+      description: 'Web search strategy must not rely on historical product-proof run ids or negative fixture ids.',
+      pattern: /\b(?:ordinary-chat-product-proof-current|web-search-p5-[a-z0-9-]+|read-required-search-only|snippet-only|stale-refs|fixture-product-proof|gui-projection|screenshot-replay|historical-manifest)\b/i,
+    },
+  ];
+
+  const auditFixtures = [
+    {
+      rule: 'web-search-acceptance-query-or-prompt',
+      text: "const query = 'Iran situation latest five sources';",
+    },
+    {
+      rule: 'web-search-provider-endpoint-literal',
+      text: "const url = new URL('https://duckduckgo.com/html/');",
+    },
+    {
+      rule: 'web-search-provider-id-literal',
+      text: "return { provider: 'codex-native-web-search' };",
+    },
+    {
+      rule: 'web-search-acceptance-cli-or-event-field',
+      text: "console.log('--search-provider searxng');",
+    },
+    {
+      rule: 'web-search-historical-run-literal',
+      text: "const runId = 'ordinary-chat-product-proof-current';",
+    },
+  ];
+  for (const fixture of auditFixtures) {
+    const rule = auditRules.find((item) => item.id === fixture.rule);
+    assert.ok(rule, `missing web_search static/config audit fixture target: ${fixture.rule}`);
+    assert.match(fixture.text, rule.pattern, `web_search static/config fixture must be caught by ${fixture.rule}`);
+  }
+
+  const webSearchFindings: Finding[] = [];
+  for (const file of webSearchAuditFiles) {
+    const rel = relative(root, file).replaceAll('\\', '/');
+    if (isAllowedPath(rel)) continue;
+    const text = await readFile(file, 'utf8');
+    const lines = text.split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (isCommentOnlyLine(line)) return;
+      for (const rule of auditRules) {
+        if (!rule.pattern.test(line)) continue;
+        webSearchFindings.push({
+          file: rel,
+          line: index + 1,
+          rule: rule.id,
+          text: line.trim(),
+        });
+      }
+    });
+  }
+
+  if (webSearchFindings.length) {
+    console.error('[no-hardcoded-success] forbidden web_search static/config literals found in release paths');
+    for (const finding of webSearchFindings) {
+      const rule = auditRules.find((item) => item.id === finding.rule);
+      console.error(`- ${finding.file}:${finding.line} [${finding.rule}] ${rule?.description ?? ''}`);
+      console.error(`  ${finding.text}`);
+    }
+    process.exitCode = 1;
   }
 }

@@ -11,6 +11,7 @@ import { createAutomationsModuleHandler } from './modules/automations-module-han
 import {
   createBrowserRuntimeModuleHandler,
 } from './modules/bounded-operation-module-handlers.js';
+import { createWebRuntimeModuleHandler } from './modules/web-runtime-module-handler.js';
 import { createComputerUsePrimitiveService } from '../../packages/actions/computer-use/index.js';
 
 export interface RuntimeModuleRouteOptions {
@@ -37,6 +38,7 @@ export async function handleWorkspaceModuleRoutes(
     const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
       files: createFilesModuleHandler({ workspacePath: root }),
       automations: createAutomationsModuleHandler({ workspacePath: root }),
+      web: createWebRuntimeModuleHandler({ workspacePath: root }),
       browser: createBrowserRuntimeModuleHandler({ workspacePath: root }),
       computer_use: createComputerUsePrimitiveService(),
     }));

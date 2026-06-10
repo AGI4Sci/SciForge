@@ -1,14 +1,168 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ModuleInvokeRequest } from '@sciforge-ui/runtime-contract/modules';
 import {
   BROWSER_PRIMITIVE_RESULT_SCHEMA,
   BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
   BROWSER_PRIMITIVE_INTENTS,
+  WEB_ERROR_CODES,
+  WEB_READ_TOOL_NAME,
+  WEB_RESOURCE_REF_PREFIXES,
+  WEB_SEARCH_TOOL_NAME,
+  WEB_TOOL_INPUT_SCHEMAS,
+  WEB_TOOL_NAMES,
+  WEB_TOOL_OUTPUT_SCHEMAS,
+  WEB_TOOL_RESULT_SCHEMA,
   createBrowserPrimitiveService,
   validateBrowserPrimitiveInvokeRequest,
+  validateWebToolInput,
   type BrowserPrimitivePorts,
 } from './index.js';
+
+describe('web search P0 contract', () => {
+  it('defines stable web_search/web_read schemas, result envelope, refs, and error codes', () => {
+    assert.equal(WEB_SEARCH_TOOL_NAME, 'web_search');
+    assert.equal(WEB_READ_TOOL_NAME, 'web_read');
+    assert.deepEqual(WEB_TOOL_NAMES, ['web_search', 'web_read']);
+    assert.equal(WEB_TOOL_RESULT_SCHEMA, 'sciforge.browser-runtime.web-tool-result.v1');
+    assert.deepEqual(WEB_RESOURCE_REF_PREFIXES, {
+      searchResultSet: 'web-search:',
+      discoveredPage: 'web-page:',
+      sourcePage: 'web-source:',
+      pageText: 'web-text:',
+    });
+    assert.deepEqual(WEB_ERROR_CODES, [
+      'invalid_input',
+      'unsafe_url',
+      'provider_unavailable',
+      'timeout',
+      'rate_limited',
+      'no_results',
+      'read_failed',
+      'extract_failed',
+      'needs_browser',
+      'needs_user_browser',
+    ]);
+
+    const searchSchema = WEB_TOOL_INPUT_SCHEMAS.web_search;
+    assert.equal(searchSchema.additionalProperties, false);
+    assert.deepEqual(searchSchema.required, ['query']);
+    assert.equal((searchSchema.properties.query as Record<string, unknown>).minLength, 1);
+    assert.equal((searchSchema.properties.limit as Record<string, unknown>).maximum, 20);
+    assert.equal((searchSchema.properties.timeout_ms as Record<string, unknown>).maximum, 60_000);
+
+    const readSchema = WEB_TOOL_INPUT_SCHEMAS.web_read;
+    assert.equal(readSchema.additionalProperties, false);
+    assert.deepEqual(readSchema.anyOf, [{ required: ['url'] }, { required: ['resourceRef'] }]);
+    assert.equal((readSchema.properties.max_chars as Record<string, unknown>).maximum, 1_000_000);
+    assert.equal((readSchema.properties.timeout_ms as Record<string, unknown>).maximum, 60_000);
+
+    const searchOutputSchemaText = JSON.stringify(WEB_TOOL_OUTPUT_SCHEMAS.web_search);
+    assert.match(searchOutputSchemaText, /ordinary search/i);
+    assert.match(searchOutputSchemaText, /source links/i);
+    assert.match(searchOutputSchemaText, /does not require web_read/i);
+    assert.doesNotMatch(searchOutputSchemaText, /Call web_read/i);
+    assert.doesNotMatch(searchOutputSchemaText, /source\/page text refs are evidence/i);
+
+    const readOutputSchemaText = JSON.stringify(WEB_TOOL_OUTPUT_SCHEMAS.web_read);
+    assert.match(readOutputSchemaText, /source\/page text refs are evidence/i);
+    assert.match(readOutputSchemaText, /web-source:\{id\}/);
+    assert.match(readOutputSchemaText, /web-text:\{id\}/);
+  });
+
+  it('keeps manifest wording aligned to ordinary web_search and internal advanced web_read', () => {
+    const manifestText = readFileSync(resolve(import.meta.dirname, 'action-provider.manifest.json'), 'utf8');
+    const manifest = JSON.parse(manifestText) as {
+      summary?: string;
+      ordinaryToolSurface?: unknown;
+      verifierContract?: {
+        notes?: string;
+      };
+    };
+
+    assert.match(manifest.summary ?? '', /Codex-compatible web_search/i);
+    assert.match(JSON.stringify(manifest.ordinaryToolSurface ?? {}), /web_search/);
+    assert.match(JSON.stringify(manifest.ordinaryToolSurface ?? {}), /web_read.*internal.*advanced/i);
+    assert.match(manifest.verifierContract?.notes ?? '', /current-run web_search/i);
+    assert.match(manifest.verifierContract?.notes ?? '', /source links/i);
+    assert.doesNotMatch(manifestText, /Final-answer evidence must come from current-run web_read/i);
+    assert.doesNotMatch(manifestText, /before citing or summarizing/i);
+  });
+
+  it('validates web_search input required fields, unknown fields, and bounds', () => {
+    assert.equal(validateWebToolInput('web_search', {
+      query: 'OpenAI latest news',
+      limit: 5,
+      language: 'en',
+      region: 'us',
+      time_range: 'week',
+      safe_search: 'moderate',
+      provider: 'searxng',
+      timeout_ms: 10_000,
+      constraints: { allowedDomains: ['openai.com'], blockedDomains: ['example.net'] },
+    }).ok, true);
+
+    const missing = validateWebToolInput('web_search', { limit: 3 });
+    assert.equal(missing.ok, false);
+    assert.deepEqual(missing.errors.map((error) => error.code), ['invalid_input']);
+    assert.match(missing.errors[0]?.message ?? '', /missing_string:query/);
+
+    const unknown = validateWebToolInput('web_search', {
+      query: 'OpenAI',
+      rewriteQuery: true,
+    });
+    assert.equal(unknown.ok, false);
+    assert.match(unknown.errors.map((error) => error.message).join('\n'), /unknown_input_field:rewriteQuery/);
+
+    const outOfBounds = validateWebToolInput('web_search', {
+      query: 'OpenAI',
+      limit: 0,
+      timeout_ms: 60_001,
+    });
+    assert.equal(outOfBounds.ok, false);
+    assert.match(outOfBounds.errors.map((error) => error.message).join('\n'), /invalid_integer:limit/);
+    assert.match(outOfBounds.errors.map((error) => error.message).join('\n'), /invalid_integer:timeout_ms/);
+  });
+
+  it('validates web_read URL/ref exclusivity, unsafe URLs, and web-page resourceRef type', () => {
+    assert.equal(validateWebToolInput('web_read', {
+      url: 'https://example.com/article',
+      format: 'markdown',
+      render: 'static',
+      max_chars: 12_000,
+      timeout_ms: 20_000,
+      cache_policy: 'default',
+    }).ok, true);
+    assert.equal(validateWebToolInput('web_read', {
+      resourceRef: 'web-page:abc123',
+      format: 'text',
+    }).ok, true);
+
+    const unsafeScheme = validateWebToolInput('web_read', { url: 'file:///tmp/page.html' });
+    assert.equal(unsafeScheme.ok, false);
+    assert.deepEqual(unsafeScheme.errors.map((error) => error.code), ['unsafe_url']);
+    assert.match(unsafeScheme.errors[0]?.message ?? '', /unsafe_url:url/);
+
+    const privateHost = validateWebToolInput('web_read', { url: 'http://127.0.0.1:8787/internal' });
+    assert.equal(privateHost.ok, false);
+    assert.deepEqual(privateHost.errors.map((error) => error.code), ['unsafe_url']);
+    assert.match(privateHost.errors[0]?.message ?? '', /unsafe_url:url/);
+
+    const wrongRef = validateWebToolInput('web_read', { resourceRef: 'web-search:abc123' });
+    assert.equal(wrongRef.ok, false);
+    assert.deepEqual(wrongRef.errors.map((error) => error.code), ['invalid_input']);
+    assert.match(wrongRef.errors[0]?.message ?? '', /resourceRef_type_mismatch:web-page/);
+
+    const ambiguous = validateWebToolInput('web_read', {
+      url: 'https://example.com/article',
+      resourceRef: 'web-page:abc123',
+    });
+    assert.equal(ambiguous.ok, false);
+    assert.match(ambiguous.errors.map((error) => error.message).join('\n'), /ambiguous_read_source:choose_url_or_resourceRef/);
+  });
+});
 
 describe('browser primitive contracts', () => {
   it('rejects legacy browser.open in favor of browser.navigate', () => {
@@ -245,7 +399,9 @@ describe('browser primitive service composition', () => {
     ));
     assert.ok(value.evidenceState?.completed?.some((entry) => /candidate/i.test(entry)));
     assert.ok(value.evidenceState?.unknown?.some((entry) => /not been read/i.test(entry)));
-    assert.match(value.evidenceState?.boundary ?? '', /not source evidence/i);
+    assert.match(value.evidenceState?.boundary ?? '', /ordinary search/i);
+    assert.match(value.evidenceState?.boundary ?? '', /read-required escalation/i);
+    assert.doesNotMatch(value.evidenceState?.boundary ?? '', /until browser\.read/i);
   });
 
   it('resolves a discovered web_page resourceRef when browser.read is invoked', async () => {
@@ -484,7 +640,8 @@ describe('browser primitive service composition', () => {
     const searchOutput = search.value?.output as { results: Array<{ url: string }> };
     assert.ok(search.value?.resources.some((resource) => resource.kind === 'search_result_set'));
     assert.ok(search.value?.resources.some((resource) => resource.kind === 'web_page' && resource.status === 'discovered'));
-    assert.match(search.value?.evidenceState.boundary ?? '', /not source evidence/i);
+    assert.match(search.value?.evidenceState.boundary ?? '', /ordinary search/i);
+    assert.match(search.value?.evidenceState.boundary ?? '', /read-required escalation/i);
 
     const navigate = await service.invoke(request(BROWSER_PRIMITIVE_INTENTS.navigate, {
       schemaVersion: 'sciforge.browser-runtime.navigate-input.v1',

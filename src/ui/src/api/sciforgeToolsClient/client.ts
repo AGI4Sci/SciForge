@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, NormalizedAgentResponse, ObjectAction, ObjectReference, RuntimeProviderPreflightManifest, SendAgentMessageInput } from '../../domain';
+import type { AgentHostWindowActionHandoff, AgentHostWindowActionHandoffRef, AgentStreamEvent, NormalizedAgentResponse, ObjectAction, ObjectReference, RuntimeProviderPreflightManifest, SendAgentMessageInput } from '../../domain';
 import type { ScenarioId } from '../../data';
 import { makeId, nowIso } from '../../domain';
 import { defaultSciForgeConfig } from '../../config';
@@ -85,6 +85,16 @@ interface RuntimeInputObjectVisionDescriptor {
   sha256?: string;
   traceRef?: string;
   createdAt?: string;
+}
+
+interface CodexAgentHostAuthorizationProjection {
+  profileId: string;
+  source: string;
+  scope: {
+    user: string;
+    workspace: string;
+  };
+  singleTurnOverride: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -510,7 +520,7 @@ function currentVSCodeComputerUseNativeRouteCanRunWithoutProvider(input: SendAge
   if (!mentionsVSCode) return false;
   const mentionsLocalComputerUse = /(?:\bcomputer\s*use\b|桌面|GUI|窗口|鼠标|键盘|命令面板|command\s+palette)/iu.test(prompt);
   if (!mentionsLocalComputerUse) return false;
-  return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|observe|bind|control|open|close|command\s+palette|命令面板)/iu.test(prompt);
+  return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|保存|润色|应用|替换|修改|编辑|优化|改写|observe|bind|control|open|close|save|polish|refine|improve|rewrite|apply|replace|edit|command\s+palette|命令面板)/iu.test(prompt);
 }
 
 function runtimeProviderPreflightGateEnabled(input: SendAgentMessageInput) {
@@ -627,7 +637,10 @@ function buildCodexRuntimeStreamRequest(input: {
   const attemptId = `${input.commandId}-attempt-${attemptNumber}`;
   const computerUseApproval = computerUseApprovalRuntimeMetadata(input.input, commandText, input.referenceSummary);
   const runtimeIntent = computerUseRuntimeHostIntent(input.input, commandText);
-  const agentHostInput = buildCodexAgentHostInput(input.input, input.referenceSummary);
+  const agentHostInput = buildCodexAgentHostInput(input.input, input.referenceSummary, {
+    commandId: input.commandId,
+    attemptId,
+  });
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
     realtimeSession: createCodexRealtimeSessionEnvelope({
@@ -696,10 +709,15 @@ function computerUseRuntimeHostIntent(input: SendAgentMessageInput, commandText:
 function buildCodexAgentHostInput(
   input: SendAgentMessageInput,
   referenceSummary: Array<Record<string, unknown>>,
+  runIdentity?: { commandId: string; attemptId: string },
 ) {
   const authorization = safeComposerDeclaredIntents(input.composerDeclaredIntents)?.authorization
     ?? defaultComposerDeclaredAuthorization();
   const readiness = buildCodexAgentHostRuntimeReadinessProjection(input.runtimeHealth);
+  const currentVSCodeSelectionTransform = runIdentity
+    ? buildCurrentVSCodeSelectionTransformAgentHostInput(input, authorization, readiness, runIdentity)
+    : undefined;
+  if (currentVSCodeSelectionTransform) return currentVSCodeSelectionTransform;
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
     source: 'ui-normal-composer-transport',
@@ -717,6 +735,87 @@ function buildCodexAgentHostInput(
     ])).slice(0, 24),
     ...(readiness ? { readiness } : {}),
   };
+}
+
+function buildCurrentVSCodeSelectionTransformAgentHostInput(
+  input: SendAgentMessageInput,
+  authorization: CodexAgentHostAuthorizationProjection,
+  readiness: ReturnType<typeof buildCodexAgentHostRuntimeReadinessProjection>,
+  runIdentity: { commandId: string; attemptId: string },
+) {
+  const prompt = (input.prompt ?? '').replace(/\s+/g, ' ').trim();
+  if (!isExplicitCurrentVSCodeSelectionTransformPrompt(prompt)) return undefined;
+  const commandToken = runtimeRefSegment(runIdentity.commandId);
+  const attemptToken = runtimeRefSegment(runIdentity.attemptId);
+  const requestRef = `chat-request:vscode-cowork:${commandToken}:${attemptToken}`;
+  const operationRef = `operation-ref:vscode:apply-current-selection:${commandToken}:${attemptToken}`;
+  const draftTextRef = `text-ref:vscode:selection-transform-draft:${commandToken}:${attemptToken}`;
+  const previewArtifactRef = `artifact:vscode:selection-transform-preview:${commandToken}:${attemptToken}`;
+  const refs = [
+    'intent:current-vscode-cowork',
+    'intent:current-vscode-cowork-live-diagnostic',
+    'intent:current-vscode-selection-transform',
+    requestRef,
+    operationRef,
+    draftTextRef,
+    previewArtifactRef,
+  ];
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'codex-agent-host-current-vscode-selection-transform',
+    intentText: 'intent:current-vscode-selection-transform',
+    authorizationProfileId: authorization.profileId,
+    authorizationProfileSource: authorization.source,
+    authorizationScope: authorization.scope,
+    singleTurnOverride: authorization.singleTurnOverride,
+    policyOwner: 'codex-agent-host-runtime',
+    refs,
+    ...(readiness ? { readiness } : {}),
+    target: {
+      kind: 'current-vscode-cowork',
+      refs,
+      vscodeCoWork: {
+        requestRef,
+        operation: 'apply-current-selection',
+        operationRef,
+        family: 'editor-edit',
+        targetMode: 'smart-detect-current-vscode-window',
+        draftTextRef,
+        previewArtifactRef,
+        primitiveOperation: 'replace-selection',
+        requestedPrimitiveCount: 1,
+        saveAfterApply: currentVSCodeSelectionTransformShouldSave(prompt),
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+}
+
+function isExplicitCurrentVSCodeSelectionTransformPrompt(prompt: string): boolean {
+  if (!prompt) return false;
+  const mentionsVSCode = /(?:\bvs\s*code\b|\bvscode\b|visual\s+studio\s+code|当前\s*VSCode|当前\s*vs\s*code)/iu.test(prompt);
+  const mentionsComputerUse = /(?:\bcomputer\s*use\b|桌面|GUI|窗口|鼠标|键盘|操纵|操作|控制)/iu.test(prompt);
+  const mentionsSelection = /(?:当前\s*)?(?:论文)?选区|\b(?:selection|current\s+selection)\b/iu.test(prompt);
+  const mentionsTransform = /(?:润色|polish|refine|improve|rewrite|改写|优化|修改|编辑)/iu.test(prompt);
+  return mentionsVSCode && mentionsComputerUse && mentionsSelection && mentionsTransform;
+}
+
+function currentVSCodeSelectionTransformShouldSave(prompt: string): boolean {
+  return /(?:保存|save).*(?:当前文件|文件|file)?|(?:当前文件|文件|file).*(?:保存|save)/iu.test(prompt);
+}
+
+function runtimeRefSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._:-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96) || 'ref';
 }
 
 function buildCodexAgentHostRuntimeReadinessProjection(value: SendAgentMessageInput['runtimeHealth']) {
@@ -827,11 +926,13 @@ function auditOnlyGuiProjectionRefs(
   const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
   const composerDeclaredIntents = safeComposerDeclaredIntents(input.composerDeclaredIntents)
     ?? defaultComposerAuthorizationDeclaredIntents();
+  const windowActionHandoff = safeAnnotationWindowActionHandoffProjection(input.windowActionHandoff);
   return {
     currentTurnId: input.currentTurnId,
     selectedRefCount: referenceSummary.length,
     refs: uniqueRuntimeStringList([...references, ...runRefs, ...artifactRefs, ...claimRefs, ...executionRefs]).slice(0, 48),
     ...(composerDeclaredIntents ? { composerDeclaredIntents } : {}),
+    ...(windowActionHandoff ? { windowActionHandoff } : {}),
     counts: {
       nonSeedMessages: nonSeedMessageCount,
       seedMessagesExcluded: (input.messages ?? []).length - nonSeedMessageCount,
@@ -841,6 +942,128 @@ function auditOnlyGuiProjectionRefs(
       executionUnitRefs: input.executionUnits?.length ?? 0,
     },
   };
+}
+
+function safeAnnotationWindowActionHandoffProjection(value: unknown): AgentHostWindowActionHandoff | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    value.schemaVersion !== 'sciforge.window-action-handoff.v1'
+    || value.source !== 'run-orchestrator'
+    || value.mode !== 'enter-or-reuse-window-action-session'
+    || value.intent !== 'annotation-quick-action'
+  ) return undefined;
+  const actionFlowRef = safeProjectionString(value.actionFlowRef, 240);
+  if (!actionFlowRef || !actionFlowRef.startsWith('window-action-flow:')) return undefined;
+  const highConfidenceThreshold = asFiniteNumber(value.highConfidenceThreshold) ?? 0.88;
+  const promotedRefs = Array.isArray(value.promotedRefs)
+    ? value.promotedRefs.flatMap(safeAnnotationWindowActionHandoffRef).slice(0, 8)
+    : [];
+  if (!promotedRefs.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.window-action-handoff.v1',
+    source: 'run-orchestrator',
+    mode: 'enter-or-reuse-window-action-session',
+    intent: 'annotation-quick-action',
+    actionFlowRef,
+    highConfidenceThreshold,
+    promotedRefs,
+  };
+}
+
+function safeAnnotationWindowActionHandoffRef(value: unknown): AgentHostWindowActionHandoffRef[] {
+  if (!isRecord(value)) return [];
+  const referenceId = safeProjectionString(value.referenceId, 96);
+  const ref = safeProjectionString(value.ref, 240);
+  const title = safeProjectionString(value.title, 120);
+  const windowBinding = safeAnnotationWindowBinding(value.windowBinding);
+  if (!referenceId || !ref || !title || !windowBinding) return [];
+  const annotationRef = safeProjectionString(value.annotationRef, 240);
+  const imageRef = safeProjectionString(value.imageRef, 240);
+  const screenshotRef = safeProjectionString(value.screenshotRef, 240);
+  const cropRef = safeProjectionString(value.cropRef, 240);
+  const targetRef = safeProjectionString(value.targetRef, 240);
+  const evidenceRefs = safeAnnotationWindowEvidenceRefs(value.evidenceRefs, {
+    annotationRef,
+    imageRef,
+    screenshotRef,
+    cropRef,
+    targetRef,
+  });
+  return [{
+    referenceId,
+    ref,
+    title,
+    ...(safeProjectionString(value.sourceKind, 64) ? { sourceKind: safeProjectionString(value.sourceKind, 64) } : {}),
+    ...(annotationRef ? { annotationRef } : {}),
+    ...(imageRef ? { imageRef } : {}),
+    ...(screenshotRef ? { screenshotRef } : {}),
+    ...(cropRef ? { cropRef } : {}),
+    ...(targetRef ? { targetRef } : {}),
+    evidenceRefs,
+    windowBinding,
+  }];
+}
+
+function safeAnnotationWindowEvidenceRefs(
+  value: unknown,
+  fallback: Record<string, string | undefined>,
+): Array<{ kind: string; ref: string }> {
+  const explicit = Array.isArray(value)
+    ? value.flatMap((item): Array<{ kind: string; ref: string }> => {
+      const record = isRecord(item) ? item : {};
+      const kind = safeProjectionString(record.kind, 64);
+      const ref = safeProjectionString(record.ref, 240);
+      return kind && ref ? [{ kind, ref }] : [];
+    })
+    : [];
+  const refs = explicit.length ? explicit : [
+    fallback.annotationRef ? { kind: 'annotation', ref: fallback.annotationRef } : undefined,
+    fallback.screenshotRef ? { kind: 'screenshot', ref: fallback.screenshotRef } : undefined,
+    fallback.cropRef ? { kind: 'crop', ref: fallback.cropRef } : undefined,
+    fallback.imageRef ? { kind: 'image', ref: fallback.imageRef } : undefined,
+    fallback.targetRef ? { kind: 'target', ref: fallback.targetRef } : undefined,
+  ].filter((item): item is { kind: string; ref: string } => Boolean(item));
+  return refs.slice(0, 16);
+}
+
+function safeAnnotationWindowBinding(value: unknown): AgentHostWindowActionHandoffRef['windowBinding'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = value.status === 'manual-bound' || value.status === 'auto-bound' ? value.status : undefined;
+  const windowRef = safeProjectionString(value.windowRef, 240);
+  if (!status || !windowRef) return undefined;
+  const confidence = asFiniteNumber(value.confidence);
+  const windowBounds = safeAnnotationWindowBounds(value.windowBounds);
+  const windowLocalBounds = safeAnnotationWindowBounds(value.windowLocalBounds);
+  return {
+    status,
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(safeProjectionString(value.reason, 240) ? { reason: safeProjectionString(value.reason, 240) } : {}),
+    windowRef,
+    ...(safeProjectionString(value.appName, 120) ? { appName: safeProjectionString(value.appName, 120) } : {}),
+    ...(safeProjectionString(value.bundleId, 160) ? { bundleId: safeProjectionString(value.bundleId, 160) } : {}),
+    ...(asFiniteNumber(value.pid) !== undefined ? { pid: asFiniteNumber(value.pid) } : {}),
+    ...(safeProjectionString(value.title, 160) ? { title: safeProjectionString(value.title, 160) } : {}),
+    ...(safeProjectionString(value.screenId, 120) ? { screenId: safeProjectionString(value.screenId, 120) } : {}),
+    ...(asFiniteNumber(value.scale) !== undefined ? { scale: asFiniteNumber(value.scale) } : {}),
+    ...(windowBounds ? { windowBounds } : {}),
+    ...(windowLocalBounds ? { windowLocalBounds } : {}),
+  };
+}
+
+function safeAnnotationWindowBounds(value: unknown): AgentHostWindowActionHandoffRef['windowBinding']['windowBounds'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const x = asFiniteNumber(value.x);
+  const y = asFiniteNumber(value.y);
+  const width = asFiniteNumber(value.width);
+  const height = asFiniteNumber(value.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return { x, y, width, height };
+}
+
+function safeProjectionString(value: unknown, maxLength: number): string | undefined {
+  const text = asString(value)?.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  return text.slice(0, maxLength);
 }
 
 function safeComposerDeclaredIntents(value: unknown) {

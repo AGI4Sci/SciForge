@@ -20,7 +20,7 @@ describe('runtime health model status', () => {
     assert.doesNotMatch(String(health.recoverAction), /Set the Base URL/i);
   });
 
-  it('marks empty native model configuration as setup instead of online', () => {
+  it('marks native runtime provider settings unsupported instead of switching away from Model Router', () => {
     const health = modelHealth(updateConfig(defaultSciForgeConfig, {
       modelProvider: 'native',
       modelBaseUrl: '',
@@ -29,12 +29,12 @@ describe('runtime health model status', () => {
     }));
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
-    assert.match(health.detail, /model.*not configured/i);
-    assert.match(String(health.recoverAction), /will not switch providers automatically/i);
+    assert.match(health.detail, /managed Model Router provider is supported/i);
+    assert.match(String(health.recoverAction), /Model Router profile/i);
     assert.doesNotMatch(String(health.recoverAction), /Runtime Codex|allowOpenAiRuntime/);
   });
 
-  it('treats native user model endpoints as an explicit online configuration', () => {
+  it('does not treat native user model endpoints as direct runtime model configuration', () => {
     const health = modelHealth(updateConfig(defaultSciForgeConfig, {
       modelProvider: 'native',
       modelBaseUrl: 'https://models.example.test/v1',
@@ -42,8 +42,8 @@ describe('runtime health model status', () => {
       apiKey: 'test-key',
     }));
 
-    assert.equal(health.status, RUNTIME_HEALTH_STATUS.ONLINE);
-    assert.match(health.detail, /Model provider configured|Assistant connection configured/i);
+    assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
+    assert.match(health.detail, /managed Model Router provider is supported/i);
     assert.doesNotMatch(health.detail, /sciforge-model|models\.example\.test|https?:\/\//);
   });
 
@@ -56,7 +56,7 @@ describe('runtime health model status', () => {
     }));
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
-    assert.match(String(health.recoverAction), /will not switch providers automatically/i);
+    assert.match(String(health.recoverAction), /Model Router profile/i);
     assert.doesNotMatch(String(health.recoverAction), /allowOpenAiRuntime/);
   });
 

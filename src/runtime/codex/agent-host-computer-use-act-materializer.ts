@@ -214,7 +214,8 @@ function isVSCodeEditorAppModulePublicResult(result: CodexAgentHostComputerUseAc
         (
           unit.moduleId === 'vscode'
           && (
-            unit.operation === 'editor-scope'
+            unit.operation === 'read-editor-context'
+            || unit.operation === 'editor-scope'
             || unit.operation === 'insert-draft'
             || unit.operation === 'replace-selection'
             || unit.operation === 'save-current-file'

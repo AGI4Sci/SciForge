@@ -682,6 +682,7 @@ function stripBrowserSearchRequestFraming(text: string): string {
     const next = query
       .replace(/^(?:please\s+)?(?:(?:use|using|with|through)\s+(?:the\s+)?(?:built[-\s]?in\s+|in[-\s]?app\s+)?(?:browser|web|internet)\s+)?(?:find\s+out|find|look\s+up|check|verify|confirm|search(?:\s+for)?|query|open|browse)\s+/i, '')
       .replace(/^(?:what|who|when|where)\s+(?:is|are|was|were)\s+/i, '')
+      .replace(/^(?:请|帮我|帮忙|给我|麻烦(?:你)?|你能不能|能否|可以)?\s*(?:搜索|检索|查询|查找|查看|看看|了解|确认|核实|查证)\s*并\s*(?:总结|概括|归纳|整理)\s*/i, '')
       .replace(/^(?:请|帮我|帮忙|给我|麻烦(?:你)?|你能不能|能否|可以)?\s*(?:通过|使用|用)?\s*(?:SciForge\s*)?(?:的)?\s*(?:内置)?\s*(?:浏览器|网页|网络|互联网)?\s*(?:上|里|中)?\s*(?:搜索|检索|查询|查找|查看|看看|了解|确认|核实|查证|查一下|查询一下|打开)\s*(?:一下)?\s*/i, '')
       .trim();
     if (next === query) break;

@@ -13,6 +13,8 @@ import {
 } from '../../../packages/actions/computer-use/index.js';
 import {
   createCurrentVSCodeCoWorkLivePrimitivePorts,
+  discardCurrentVSCodeDiagnosticScratchBuffer,
+  openCurrentVSCodeDiagnosticScratchBuffer,
   runCurrentVSCodeCoWorkLiveDiagnosticPreflight,
   VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
@@ -20,6 +22,7 @@ import {
   VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_SCOPE_LIVE_DIAGNOSTIC_ENV,
   type CurrentVSCodeCoWorkLivePrimitivePortsOptions,
+  type CurrentVSCodeCoWorkDiagnosticScratchBufferLifecycleInput,
   VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV,
 } from '../../../packages/actions/computer-use/vscode-cowork-live-diagnostic.js';
 import {
@@ -38,6 +41,11 @@ import {
   type VSCodeEditorNarrowApplyPrimitiveOperation,
 } from './vscode-editor-narrow-apply-provider.js';
 import { createVSCodeEditorPreview } from './vscode-editor-preview-provider.js';
+
+export const VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC_ENV =
+  'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC' as const;
+
+export type CurrentVSCodeCoWorkNavigationSearchOperation = 'quick-open' | 'workspace-search';
 
 export interface RunCurrentVSCodeCoWorkReadVisibleTextLiveDiagnosticInput
   extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
@@ -89,6 +97,14 @@ export interface RunCurrentVSCodeCoWorkCommandPaletteLiveDiagnosticInput
   selectCurrentItem?: boolean;
 }
 
+export interface RunCurrentVSCodeCoWorkNavigationSearchLiveDiagnosticInput
+  extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
+  env?: Record<string, string | undefined>;
+  operation: CurrentVSCodeCoWorkNavigationSearchOperation;
+  queryTextRef: string;
+  operationContextRefs?: string[];
+}
+
 export interface RunCurrentVSCodeCoWorkEditorScopeLiveDiagnosticInput
   extends CurrentVSCodeCoWorkLivePrimitivePortsOptions {
   env?: Record<string, string | undefined>;
@@ -105,6 +121,7 @@ export interface RunCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic
   env?: Record<string, string | undefined>;
   primitiveOperation?: VSCodeEditorNarrowApplyPrimitiveOperation;
   draftTextRef: string;
+  saveAfterApply?: boolean;
 }
 
 export interface RunCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnosticInput
@@ -112,6 +129,13 @@ export interface RunCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnosticInput
   env?: Record<string, string | undefined>;
   operation?: 'insert-draft' | 'replace-selection';
   draftTextRef: string;
+  useDiagnosticScratchBuffer?: boolean;
+  openDiagnosticScratchBuffer?: (
+    input: CurrentVSCodeCoWorkDiagnosticScratchBufferLifecycleInput,
+  ) => Promise<string[] | undefined> | string[] | undefined;
+  discardDiagnosticScratchBuffer?: (
+    input: CurrentVSCodeCoWorkDiagnosticScratchBufferLifecycleInput,
+  ) => Promise<string[] | undefined> | string[] | undefined;
 }
 
 function currentVSCodeCoWorkHostFinalAnswerResult(input: {
@@ -247,7 +271,7 @@ export async function runCurrentVSCodeCoWorkTerminalLiveDiagnostic(
       message: `missing-env:${VSCODE_COWORK_TERMINAL_LIVE_DIAGNOSTIC_ENV}`,
     });
   }
-  if (!input.terminalTextRef.startsWith('text-ref:')) {
+  if (!isCurrentVSCodeSafeTextRef(input.terminalTextRef)) {
     return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode co-work terminal diagnostic blocked: terminal text ref required',
@@ -405,7 +429,7 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
       message: `missing-env:${VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV}`,
     });
   }
-  if (!input.paletteQueryTextRef.startsWith('text-ref:')) {
+  if (!isCurrentVSCodeSafeTextRef(input.paletteQueryTextRef)) {
     return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode co-work command palette diagnostic blocked: palette query text ref required',
@@ -578,6 +602,156 @@ export async function runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic(
     ? 'current VSCode command palette live diagnostic completed open, query, observe, select current item, observe, and release'
     : 'current VSCode command palette live diagnostic completed open, query, observe items, close, observe, and release'
   );
+}
+
+export async function runCurrentVSCodeCoWorkNavigationSearchLiveDiagnostic(
+  input: RunCurrentVSCodeCoWorkNavigationSearchLiveDiagnosticInput,
+): Promise<VSCodeCoWorkLiveDiagnosticResult> {
+  const env = input.env ?? process.env;
+  if (env[VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC_ENV] !== '1') {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
+      status: 'blocked',
+      message: `missing-env:${VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC_ENV}`,
+    });
+  }
+  if (!isCurrentVSCodeNavigationSearchQueryTextRef(input.queryTextRef)) {
+    return currentVSCodeCoWorkHostFinalAnswerResult({
+      status: 'blocked',
+      message: 'current VSCode navigation/search diagnostic blocked: query text ref required',
+      evidenceRefs: ['blocked:vscode-cowork:navigation-search-query-text-ref-required'],
+    });
+  }
+
+  const runId = input.runId ?? `current-vscode-navigation-search-${Date.now()}`;
+  const service = createComputerUsePrimitiveService({
+    ports: createCurrentVSCodeCoWorkLivePrimitivePorts({
+      runId,
+      activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded,
+      readCurrentWindow: input.readCurrentWindow,
+      performAction: input.performAction,
+      resolveTextRef: input.resolveTextRef,
+      typeResolvedText: input.typeResolvedText,
+      pressKeyInCurrentVSCode: input.pressKeyInCurrentVSCode,
+      captureRestorationState: input.captureRestorationState,
+      restoreCapturedState: input.restoreCapturedState,
+      restoreFocus: input.restoreFocus,
+      restoreMouse: input.restoreMouse,
+    }),
+  });
+  const vscodeModule = createVSCodeAppModule();
+  const primitiveChainObserved: string[] = [];
+  const evidenceRefs: string[] = [];
+  const cleanupRefs: string[] = [];
+  let sessionId: string | undefined;
+
+  const finish = async (
+    status: VSCodeCoWorkLiveDiagnosticResult['status'],
+    message: string,
+    reasonRefs: string[] = [],
+  ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
+    if (sessionId) {
+      const release = await currentVSCodeControlRelease(service, sessionId);
+      primitiveChainObserved.push('control(release)');
+      pushRefs(evidenceRefs, release.refs);
+      pushRefs(cleanupRefs, release.refs);
+      sessionId = undefined;
+    }
+    const finalEvidenceRefs = currentVSCodeNavigationSearchPublicRefs([
+      ...evidenceRefs,
+      ...reasonRefs,
+      input.queryTextRef,
+    ]);
+    const finalCleanupRefs = currentVSCodeCoWorkCleanupRefs(cleanupRefs);
+    return {
+      status,
+      message,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      primitiveChainObserved: [...primitiveChainObserved],
+      evidenceRefs: finalEvidenceRefs,
+      cleanupRefs: finalCleanupRefs,
+      agentHostFinalAnswer: {
+        schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+        source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+        status,
+        text: message,
+        maturity: 'live-diagnostic',
+        productReady: false,
+        hostOwnsFinalAnswer: true,
+        computerUseCorePlanning: false,
+        primitiveChainObserved: [...primitiveChainObserved],
+        evidenceRefs: finalEvidenceRefs,
+        cleanupRefs: finalCleanupRefs,
+      },
+    };
+  };
+
+  const bind = await currentVSCodeBind(service);
+  primitiveChainObserved.push('bind');
+  if (bind.status !== 'completed' || !bind.output?.sessionId) {
+    pushRefs(cleanupRefs, bind.refs);
+    return finish('blocked', bind.blockedReason ?? 'current VSCode navigation/search diagnostic blocked: bind failed');
+  }
+  sessionId = bind.output.sessionId;
+
+  const beforeObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  if (beforeObserve.status !== 'completed') {
+    return finish('blocked', beforeObserve.blockedReason ?? 'current VSCode navigation/search diagnostic blocked: observe failed');
+  }
+
+  const readiness = vscodeModule.checkReadiness({
+    operation: input.operation,
+    operationRef: `operation-ref:vscode:${input.operation}:${currentVSCodeEvidenceToken(runId)}`,
+    refs: currentVSCodeNavigationSearchReadinessRefs({
+      refs: beforeObserve.refs,
+      currentObservationRef: beforeObserve.output?.observationRef,
+      operationContextRefs: input.operationContextRefs,
+      queryTextRef: input.queryTextRef,
+    }),
+  });
+  primitiveChainObserved.push(`host-decision(${input.operation})`);
+  pushRefs(evidenceRefs, readiness.status === 'ready'
+    ? [
+      ...readiness.evidenceRefs,
+      ...readiness.primitive.inputRefs,
+      input.queryTextRef,
+    ]
+    : [
+      ...(readiness.reasonRef ? [readiness.reasonRef] : []),
+      ...readiness.evidenceRefs,
+    ]);
+  if (readiness.status !== 'ready' || readiness.primitive.name !== 'computer_use.act') {
+    return finish(
+      readinessFailureDiagnosticStatus(readiness.status),
+      readiness.status === 'ready'
+        ? `current VSCode navigation/search diagnostic blocked: ${input.operation} primitive invalid`
+        : readiness.reasonRef ?? `current VSCode navigation/search diagnostic blocked: ${input.operation} readiness failed`,
+    );
+  }
+
+  const action = appModuleActionToComputerUseAction(readiness.primitive.action);
+  if (!action) {
+    return finish('blocked', `current VSCode navigation/search diagnostic blocked: ${input.operation} action invalid`, [
+      'blocked:vscode-cowork:navigation-search-action-invalid',
+    ]);
+  }
+
+  const act = await currentVSCodeAct(service, sessionId, input.operation, action, readiness.primitive.inputRefs);
+  primitiveChainObserved.push(`act(${input.operation})`);
+  pushRefs(evidenceRefs, act.refs);
+  if (act.status !== 'completed') {
+    return finish('blocked', act.blockedReason ?? `current VSCode navigation/search diagnostic blocked: ${input.operation} act failed`);
+  }
+
+  const afterObserve = await currentVSCodeObserve(service, sessionId);
+  primitiveChainObserved.push('observe');
+  pushRefs(evidenceRefs, afterObserve.refs);
+  if (afterObserve.status !== 'completed') {
+    return finish('blocked', afterObserve.blockedReason ?? `current VSCode navigation/search diagnostic blocked: observe after ${input.operation} failed`);
+  }
+
+  return finish('completed', `current VSCode navigation/search live diagnostic completed ${input.operation}, observe, and release`);
 }
 
 export async function runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic(
@@ -853,7 +1027,7 @@ export async function runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagn
       message: `missing-env:${VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV}`,
     });
   }
-  if (!input.draftTextRef.startsWith('text-ref:')) {
+  if (!isCurrentVSCodeSafeTextRef(input.draftTextRef)) {
     return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode current selection apply diagnostic blocked: text ref required',
@@ -889,33 +1063,42 @@ export async function runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagn
     message: string,
     reasonRefs: string[] = [],
   ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
+    let finalStatus = status;
+    let finalMessage = message;
+    const finalReasonRefs = [...reasonRefs];
     if (sessionId) {
       const release = await currentVSCodeControlRelease(service, sessionId);
       primitiveChainObserved.push('control(release)');
       pushRefs(cleanupRefs, release.refs);
+      const releaseBlockedReason = currentVSCodeReleaseCleanupBlockedReason(release);
+      if (releaseBlockedReason) {
+        finalStatus = 'blocked';
+        finalMessage = `${message}; ${releaseBlockedReason}`;
+        finalReasonRefs.push(`blocked:vscode-cowork:${releaseBlockedReason}`);
+      }
       sessionId = undefined;
     }
     const finalEvidenceRefs = currentVSCodeEditorCurrentSelectionApplyPublicRefs([
       ...evidenceRefs,
-      ...reasonRefs,
+      ...finalReasonRefs,
     ]);
     const finalCleanupRefs = currentVSCodeCoWorkCleanupRefs(cleanupRefs);
     return {
-      status,
-      message,
+      status: finalStatus,
+      message: finalMessage,
       maturity: 'live-diagnostic',
       productReady: false,
       primitiveChainObserved: [...primitiveChainObserved],
       evidenceRefs: finalEvidenceRefs,
       cleanupRefs: finalCleanupRefs,
       agentHostFinalAnswer: {
-        schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
-        source: 'codex-agent-host-vscode-cowork-live-diagnostic',
-        status,
-        text: message,
-        maturity: 'live-diagnostic',
-        productReady: false,
-        hostOwnsFinalAnswer: true,
+      schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+      source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+      status: finalStatus,
+      text: finalMessage,
+      maturity: 'live-diagnostic',
+      productReady: false,
+      hostOwnsFinalAnswer: true,
         computerUseCorePlanning: false,
         primitiveChainObserved: [...primitiveChainObserved],
         evidenceRefs: finalEvidenceRefs,
@@ -989,6 +1172,7 @@ export async function runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagn
   if (act.status !== 'completed') {
     return finish('blocked', act.blockedReason ?? 'current VSCode current selection apply diagnostic blocked: act failed');
   }
+  const actionBoundContextRefs = currentVSCodeMutationVerifierRefs(candidate.primitive.inputRefs);
 
   const afterObserve = await currentVSCodeObserve(service, sessionId);
   primitiveChainObserved.push('observe');
@@ -997,15 +1181,84 @@ export async function runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagn
   }
 
   const afterRefs = currentVSCodeAppModuleRefs(afterObserve.refs, afterObserve.output?.observationRef);
+  const mutationActionEvidenceRef = `action:vscode:${primitiveOperation}:${runToken}`;
+
+  if (input.saveAfterApply === true) {
+    const mutation = verifyVSCodeMutationEvidence({
+      beforeRefs: currentVSCodeMutationVerifierRefs(beforeRefs),
+      actionRefs: [
+        ...actionBoundContextRefs,
+        ...act.refs,
+        mutationActionEvidenceRef,
+      ],
+      afterRefs: currentVSCodeMutationVerifierRefs(afterRefs),
+    });
+    primitiveChainObserved.push('verify');
+    pushRefs(evidenceRefs, mutation.status === 'ready'
+      ? mutation.evidenceRefs
+      : [mutation.reasonRef, ...mutation.evidenceRefs]);
+    if (mutation.status !== 'ready') {
+      return finish('blocked', mutation.reasonRef, [mutation.reasonRef]);
+    }
+
+    const save = createVSCodeAppModule().checkReadiness({
+      operation: 'save-current-file',
+      operationRef: `operation-ref:vscode:save-current-file:${runToken}`,
+      refs: uniqueSafeRefs([
+        ...afterRefs,
+        ...mutation.evidenceRefs,
+        mutationActionEvidenceRef,
+      ]),
+    });
+    primitiveChainObserved.push('host-decision(save-current-file)');
+    pushRefs(evidenceRefs, save.status === 'ready'
+      ? [
+        ...save.evidenceRefs,
+        ...save.primitive.inputRefs,
+      ]
+      : [
+        ...(save.reasonRef ? [save.reasonRef] : []),
+        ...save.evidenceRefs,
+      ]);
+    if (save.status !== 'ready' || save.primitive.name !== 'computer_use.act') {
+      return finish(
+        readinessFailureDiagnosticStatus(save.status),
+        save.status === 'ready'
+          ? 'current VSCode current selection apply diagnostic blocked: save primitive invalid'
+          : save.reasonRef ?? 'current VSCode current selection apply diagnostic blocked: save readiness failed',
+      );
+    }
+    const saveAction = appModuleActionToComputerUseAction(save.primitive.action);
+    if (!saveAction) {
+      return finish('blocked', 'current VSCode current selection apply diagnostic blocked: save action invalid', [
+        'blocked:vscode-cowork:current-selection-apply-save-action-invalid',
+      ]);
+    }
+    const saveAct = await currentVSCodeAct(service, sessionId, 'save-current-file', saveAction, save.primitive.inputRefs);
+    primitiveChainObserved.push('act(save-current-file)');
+    pushRefs(evidenceRefs, [
+      'action:vscode-app-module:save-current-file:meta-s',
+      `verifier:vscode-cowork:save-current-file:${runToken}`,
+    ]);
+    if (saveAct.status !== 'completed') {
+      return finish('blocked', saveAct.blockedReason ?? 'current VSCode current selection apply diagnostic blocked: save act failed');
+    }
+  }
+
   const release = await currentVSCodeControlRelease(service, sessionId);
   primitiveChainObserved.push('control(release)');
   pushRefs(cleanupRefs, release.refs);
+  const releaseBlockedReason = currentVSCodeReleaseCleanupBlockedReason(release);
   sessionId = undefined;
 
   const verified = verifyVSCodeEditorNarrowApply({
     attemptId: runId,
     beforeRefs: currentVSCodeMutationVerifierRefs(beforeRefs),
-    actionRefs: act.refs,
+    actionRefs: [
+      ...actionBoundContextRefs,
+      ...act.refs,
+      mutationActionEvidenceRef,
+    ],
     afterRefs: currentVSCodeMutationVerifierRefs(afterRefs),
     cleanupRefs: currentVSCodeCoWorkCleanupRefs(cleanupRefs),
   });
@@ -1014,6 +1267,13 @@ export async function runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagn
     : [verified.reasonRef, ...verified.evidenceRefs]);
   if (verified.status !== 'ready') {
     return finish('blocked', verified.reasonRef, [verified.reasonRef]);
+  }
+  if (releaseBlockedReason) {
+    return finish(
+      'blocked',
+      `current VSCode current selection apply diagnostic blocked: ${releaseBlockedReason}`,
+      [`blocked:vscode-cowork:${releaseBlockedReason}`],
+    );
   }
 
   return finish('completed', 'current VSCode current selection apply live diagnostic completed one primitive, observe, verify, and release');
@@ -1029,7 +1289,7 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
       message: `missing-env:${VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV}`,
     });
   }
-  if (!input.draftTextRef.startsWith('text-ref:')) {
+  if (!isCurrentVSCodeSafeTextRef(input.draftTextRef)) {
     return currentVSCodeCoWorkHostFinalAnswerResult({
       status: 'blocked',
       message: 'current VSCode scratch mutation diagnostic blocked: text ref required',
@@ -1060,26 +1320,77 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
   const evidenceRefs: string[] = [];
   const cleanupRefs: string[] = [];
   let sessionId: string | undefined;
+  let diagnosticScratchBufferOpened = false;
+  let diagnosticScratchBufferDiscarded = false;
+  let diagnosticScratchBufferScopeProven = false;
+  let diagnosticScratchScopeRefs: string[] = [];
+  const scratchBufferLifecycleInput = {
+    runId,
+    activateCurrentVSCodeIfNeeded: input.activateCurrentVSCodeIfNeeded === true,
+  };
+  const openScratchBuffer = input.openDiagnosticScratchBuffer ?? openCurrentVSCodeDiagnosticScratchBuffer;
+  const discardScratchBuffer = input.discardDiagnosticScratchBuffer ?? discardCurrentVSCodeDiagnosticScratchBuffer;
+
+  const cleanupDiagnosticScratchBuffer = async (): Promise<string | undefined> => {
+    if (
+      !input.useDiagnosticScratchBuffer
+      || !diagnosticScratchBufferOpened
+      || diagnosticScratchBufferDiscarded
+      || !diagnosticScratchBufferScopeProven
+    ) {
+      return undefined;
+    }
+    try {
+      const refs = (await discardScratchBuffer({
+        ...scratchBufferLifecycleInput,
+        scratchScopeRefs: diagnosticScratchScopeRefs,
+      })) ?? [];
+      primitiveChainObserved.push('cleanup(scratch-buffer)');
+      pushRefs(cleanupRefs, refs);
+      if (refs.some((ref) => ref.endsWith(':discard-skipped'))) {
+        return 'scratch-buffer-cleanup-skipped';
+      }
+      diagnosticScratchBufferDiscarded = true;
+      return undefined;
+    } catch {
+      return 'scratch-buffer-cleanup-failed';
+    }
+  };
 
   const finish = async (
     status: VSCodeCoWorkLiveDiagnosticResult['status'],
     message: string,
     reasonRefs: string[] = [],
   ): Promise<VSCodeCoWorkLiveDiagnosticResult> => {
+    let finalStatus = status;
+    let finalMessage = message;
+    const finalReasonRefs = [...reasonRefs];
+    const cleanupBlockedReason = await cleanupDiagnosticScratchBuffer();
+    if (cleanupBlockedReason) {
+      finalStatus = 'blocked';
+      finalMessage = `${message}; ${cleanupBlockedReason}`;
+      finalReasonRefs.push(`blocked:vscode-cowork:${cleanupBlockedReason}`);
+    }
     if (sessionId) {
       const release = await currentVSCodeControlRelease(service, sessionId);
       primitiveChainObserved.push('control(release)');
       pushRefs(cleanupRefs, release.refs);
+      const releaseBlockedReason = currentVSCodeReleaseCleanupBlockedReason(release);
+      if (releaseBlockedReason) {
+        finalStatus = 'blocked';
+        finalMessage = `${finalMessage}; ${releaseBlockedReason}`;
+        finalReasonRefs.push(`blocked:vscode-cowork:${releaseBlockedReason}`);
+      }
       sessionId = undefined;
     }
     const finalEvidenceRefs = currentVSCodeEditorScratchMutationPublicRefs([
       ...evidenceRefs,
-      ...reasonRefs,
+      ...finalReasonRefs,
     ]);
     const finalCleanupRefs = currentVSCodeCoWorkCleanupRefs(cleanupRefs);
     return {
-      status,
-      message,
+      status: finalStatus,
+      message: finalMessage,
       maturity: 'live-diagnostic',
       productReady: false,
       primitiveChainObserved: [...primitiveChainObserved],
@@ -1088,8 +1399,8 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
       agentHostFinalAnswer: {
         schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
         source: 'codex-agent-host-vscode-cowork-live-diagnostic',
-        status,
-        text: message,
+        status: finalStatus,
+        text: finalMessage,
         maturity: 'live-diagnostic',
         productReady: false,
         hostOwnsFinalAnswer: true,
@@ -1100,6 +1411,18 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
       },
     };
   };
+
+  if (input.useDiagnosticScratchBuffer) {
+    try {
+      pushRefs(cleanupRefs, await openScratchBuffer(scratchBufferLifecycleInput));
+      diagnosticScratchBufferOpened = true;
+      primitiveChainObserved.push('prepare-scratch-buffer');
+    } catch {
+      return finish('blocked', 'current VSCode scratch mutation diagnostic blocked: scratch buffer open failed', [
+        'blocked:vscode-cowork:scratch-buffer-open-failed',
+      ]);
+    }
+  }
 
   const bind = await currentVSCodeBind(service);
   primitiveChainObserved.push('bind');
@@ -1116,6 +1439,12 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
   }
 
   const beforeRefs = currentVSCodeAppModuleRefs(beforeObserve.refs, beforeObserve.output?.observationRef);
+  diagnosticScratchBufferScopeProven = diagnosticScratchBufferScopeProven
+    || currentVSCodeHasNonUserScratchScope(beforeRefs);
+  diagnosticScratchScopeRefs = currentVSCodeScratchScopeRefs([
+    ...diagnosticScratchScopeRefs,
+    ...beforeRefs,
+  ]);
   const readiness = vscodeModule.checkReadiness({
     operation,
     operationRef: `operation-ref:vscode:${operation}:${runToken}`,
@@ -1171,6 +1500,12 @@ export async function runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic(
     return finish('blocked', afterObserve.blockedReason ?? 'current VSCode scratch mutation diagnostic blocked: observe after mutation failed');
   }
   const afterRefs = currentVSCodeAppModuleRefs(afterObserve.refs, afterObserve.output?.observationRef);
+  diagnosticScratchBufferScopeProven = diagnosticScratchBufferScopeProven
+    || currentVSCodeHasNonUserScratchScope(afterRefs);
+  diagnosticScratchScopeRefs = currentVSCodeScratchScopeRefs([
+    ...diagnosticScratchScopeRefs,
+    ...afterRefs,
+  ]);
   const mutation = verifyVSCodeMutationEvidence({
     beforeRefs: currentVSCodeMutationVerifierRefs(beforeRefs),
     actionRefs: act.refs,
@@ -1330,7 +1665,7 @@ function appModuleActionToComputerUseAction(action: unknown): ComputerUseAtomicA
       key: action.key,
     };
   }
-  if (action.kind === 'type' && typeof action.textRef === 'string' && action.textRef.startsWith('text-ref:')) {
+  if (action.kind === 'type' && typeof action.textRef === 'string' && isCurrentVSCodeSafeTextRef(action.textRef)) {
     return {
       type: 'type',
       textRef: action.textRef,
@@ -1475,8 +1810,23 @@ function currentVSCodeEditorScratchMutationPublicRefs(refs: string[]): string[] 
   return uniqueSafeRefs(refs).filter(isCurrentVSCodeEditorScratchMutationPublicRef);
 }
 
+function currentVSCodeNavigationSearchPublicRefs(refs: string[]): string[] {
+  return uniqueSafeRefs(refs).filter(isCurrentVSCodeNavigationSearchPublicRef);
+}
+
 function currentVSCodeCoWorkCleanupRefs(refs: string[]): string[] {
   return uniqueSafeRefs(refs).filter(isCurrentVSCodeCoWorkCleanupRef);
+}
+
+function currentVSCodeReleaseCleanupBlockedReason(
+  release: ComputerUsePrimitiveEnvelope<ComputerUseControlOutput>,
+): string | undefined {
+  if (release.status !== 'completed') return 'release-cleanup-failed';
+  return release.diagnostics.some((diagnostic) =>
+    diagnostic.severity === 'warning' || diagnostic.severity === 'error'
+  )
+    ? 'release-cleanup-failed'
+    : undefined;
 }
 
 function isCurrentVSCodeCoWorkCleanupRef(ref: string): boolean {
@@ -1484,6 +1834,7 @@ function isCurrentVSCodeCoWorkCleanupRef(ref: string): boolean {
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
   if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
   return (ref.startsWith('control:current-vscode-cowork:') && ref.endsWith(':release'))
+    || ref.startsWith('diagnostic-scratch-buffer:current-vscode-cowork:')
     || ref.startsWith('scoped-input-lease:current-vscode-cowork:')
     || ref.startsWith('scoped-input-adapter:current-vscode-cowork:')
     || ref.startsWith('cursor-marker:current-vscode-cowork:')
@@ -1530,10 +1881,11 @@ function isCurrentVSCodeEditorScratchMutationPublicRef(ref: string): boolean {
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
   if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
   return isCurrentVSCodeEditorScopePublicRef(ref)
-    || ref.startsWith('text-ref:')
+    || isCurrentVSCodeSafeTextRef(ref)
     || ref.startsWith('non-user-file-scope:vscode:')
     || ref.startsWith('verifier:vscode-app-module:')
     || ref.startsWith('blocked:vscode-cowork:scratch-')
+    || ref.startsWith('blocked:vscode-cowork:release-')
     || ref.startsWith('needs-confirmation:vscode-cowork:scratch-');
 }
 
@@ -1542,13 +1894,71 @@ function isCurrentVSCodeEditorCurrentSelectionApplyPublicRef(ref: string): boole
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
   if (/(^|[:/._-])raw([:/._-]|$)/i.test(ref)) return false;
   return isCurrentVSCodeEditorScopePublicRef(ref)
-    || ref.startsWith('text-ref:')
+    || /^action:vscode:(?:insert-draft|replace-selection):[A-Za-z0-9._:-]+$/u.test(ref)
+    || ref === 'action:vscode-app-module:save-current-file:meta-s'
+    || isCurrentVSCodeSafeTextRef(ref)
     || ref.startsWith('verifier:vscode-app-module:')
+    || ref.startsWith('verifier:vscode-cowork:save-current-file:')
     || ref.startsWith('verifier:vscode-editor-narrow-apply:')
     || ref.startsWith('blocked:vscode-editor-narrow-apply:')
     || ref.startsWith('needs-confirmation:vscode-editor-narrow-apply:')
+    || ref.startsWith('blocked:vscode-cowork:release-')
     || ref.startsWith('blocked:vscode-cowork:current-selection-apply-')
     || ref.startsWith('needs-confirmation:vscode-cowork:current-selection-apply-');
+}
+
+function isCurrentVSCodeNavigationSearchPublicRef(ref: string): boolean {
+  if (ref !== ref.trim() || ref.length > 240) return false;
+  if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)/i.test(ref)) return false;
+  if (/(^|[:/._-])raw([:/._-]|$)|(?:^|:)\/(?:Users|Applications|Volumes|private|tmp)\/|\\|\s/u.test(ref)) return false;
+  return isCurrentVSCodeNavigationSearchQueryTextRef(ref)
+    || ref.startsWith('workspace-ref:vscode:')
+    || ref.startsWith('workspace:vscode:')
+    || ref.startsWith('file-ref:vscode:')
+    || ref.startsWith('selected-file:vscode:')
+    || ref.startsWith('freshness:vscode:')
+    || ref === 'action:vscode-app-module:quick-open:meta-p'
+    || ref === 'action:vscode-app-module:workspace-search:meta-shift-f'
+    || ref.startsWith('blocked:vscode-app-module:')
+    || ref.startsWith('needs-confirmation:vscode-app-module:')
+    || ref.startsWith('blocked:vscode-cowork:navigation-search-')
+    || ref.startsWith('needs-confirmation:vscode-cowork:navigation-search-');
+}
+
+function isCurrentVSCodeNavigationSearchQueryTextRef(ref: string): boolean {
+  return isCurrentVSCodeSafeTextRef(ref);
+}
+
+function currentVSCodeNavigationSearchReadinessRefs(input: {
+  refs: string[];
+  currentObservationRef: string | undefined;
+  operationContextRefs: string[] | undefined;
+  queryTextRef: string;
+}): string[] {
+  return uniqueSafeRefs([
+    ...currentVSCodeAppModuleRefs(input.refs, input.currentObservationRef)
+      .filter(isCurrentVSCodeNavigationSearchBaseReadinessRef),
+    ...(input.operationContextRefs ?? []),
+    input.queryTextRef,
+  ]);
+}
+
+function isCurrentVSCodeNavigationSearchBaseReadinessRef(ref: string): boolean {
+  return ref === 'macos-app:vscode'
+    || ref === 'macos-app:com.microsoft.VSCode'
+    || ref.startsWith('macos-app:vscode:')
+    || ref.startsWith('process:vscode')
+    || ref.startsWith('window:vscode:')
+    || ref.startsWith('title:vscode:')
+    || ref.startsWith('text:title:')
+    || ref.startsWith('text:title:vscode:')
+    || ref.startsWith('frontmost:vscode:')
+    || ref.startsWith('observation:vscode:')
+    || ref.startsWith('freshness:vscode:')
+    || ref.startsWith('computer-use-session:current-vscode-cowork:')
+    || ref.startsWith('window-action-session:current-vscode-cowork:')
+    || ref.startsWith('computer-use-session:vscode:')
+    || ref.startsWith('window-action-session:vscode:');
 }
 
 function currentVSCodeEditorScopePublicRefsBlockedReason(refs: string[]): string | undefined {
@@ -1577,7 +1987,7 @@ function currentVSCodeScratchMutationScopeBlockedReason(refs: string[]): string 
   const publicRefs = currentVSCodeEditorScratchMutationPublicRefs(refs);
   const scopeReason = currentVSCodeEditorScopePublicRefsBlockedReason(publicRefs);
   if (scopeReason) return scopeReason;
-  if (!publicRefs.some((ref) => ref.startsWith('text-ref:'))) {
+  if (!publicRefs.some(isCurrentVSCodeSafeTextRef)) {
     return 'scratch-text-ref-required';
   }
   if (!publicRefs.some((ref) => ref.startsWith('non-user-file-scope:vscode:'))) {
@@ -1590,6 +2000,19 @@ function currentVSCodeScratchMutationScopeBlockedReason(refs: string[]): string 
   return undefined;
 }
 
+function currentVSCodeHasNonUserScratchScope(refs: string[]): boolean {
+  const publicRefs = currentVSCodeEditorScratchMutationPublicRefs(refs);
+  return publicRefs.some((ref) => ref.startsWith('non-user-file-scope:vscode:scratch:'))
+    && publicRefs.some((ref) => /^file-ref:vscode:scratch:|^selected-file:vscode:scratch:/i.test(ref));
+}
+
+function currentVSCodeScratchScopeRefs(refs: string[]): string[] {
+  return uniqueSafeRefs(currentVSCodeEditorScratchMutationPublicRefs(refs).filter((ref) =>
+    ref.startsWith('non-user-file-scope:vscode:scratch:')
+      || /^file-ref:vscode:scratch:|^selected-file:vscode:scratch:/i.test(ref)
+  ));
+}
+
 function isUnsafeEditorScopeRef(ref: string): boolean {
   const match = /^(?:selection-ref|cursor-ref|range-ref):(.+)$/i.exec(ref);
   if (!match) return false;
@@ -1598,6 +2021,14 @@ function isUnsafeEditorScopeRef(ref: string): boolean {
     !/^[a-z0-9][a-z0-9-]{0,79}$/i.test(part)
       || /raw|payload|selected|text|diff|path|file|url|http|secret|password|base64|provider|command/i.test(part),
   );
+}
+
+function isCurrentVSCodeSafeTextRef(ref: string): boolean {
+  return ref === ref.trim()
+    && ref.length <= 240
+    && /^[a-z][a-z0-9._-]*:[a-z0-9][a-z0-9._:-]*$/u.test(ref)
+    && ref.startsWith('text-ref:')
+    && !/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer|provider[-_/]?(?:payload|input|request|response)|(^|[:/._-])raw([:/._-]|$)|(?:^|:)\/(?:Users|Applications|Volumes|private|tmp)\/|\\|\s/iu.test(ref);
 }
 
 function currentVSCodeEvidenceToken(value: string): string {

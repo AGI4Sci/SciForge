@@ -457,6 +457,169 @@ test('Computer Use no-bypass guard allows structured Host VSCode operation refs'
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test('Computer Use no-bypass guard allows app-server bridge factory that only emits structured current-vscode Host input', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/codex-app-server-client.ts', [
+    'function currentVSCodeComputerUseAgentHostInputFromCommandText(commandText: string, commandId: string, attemptId: string) {',
+    '  const operationSpec = currentVSCodeOperationSpecFromCommandText(commandText, commandId, attemptId);',
+    '  if (!operationSpec) return undefined;',
+    '  const operationRef = `operation-ref:vscode:${operationSpec.operation}:${commandId}:${attemptId}`;',
+    "  const textRef = operationSpec.textRefKind ? `text-ref:vscode:${operationSpec.textRefKind}:${commandId}:${attemptId}` : undefined;",
+    '  return {',
+    "    schemaVersion: 'sciforge.codex-agent-host-input.v1',",
+    "    source: 'ordinary-chat-current-vscode-computer-use-bridge',",
+    "    intentText: 'intent:current-vscode-cowork',",
+    "    refs: ['intent:current-vscode-cowork', operationRef, textRef].filter(Boolean),",
+    '    target: {',
+    "      kind: 'current-vscode-cowork',",
+    '      vscodeCoWork: { operation: operationSpec.operation, operationRef, textRef },',
+    '    },',
+    '  };',
+    '}',
+    'function currentVSCodeOperationSpecFromCommandText(commandText: string, commandId: string, attemptId: string) {',
+    '  const text = commandText.trim();',
+    "  if (/diagnostic/i.test(text)) return { operation: 'read-diagnostics', family: 'read/context' };",
+    "  return { operation: 'open-command-palette', family: 'navigation/search', textRefKind: 'command-palette-query' };",
+    '}',
+    'function textRefFieldForOperation() {',
+    '  return {};',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test('Computer Use no-bypass guard blocks app-server bridge factory commandText-derived VSCode editor writes', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/codex-app-server-client.ts', [
+    'function currentVSCodeComputerUseAgentHostInputFromCommandText(commandText: string, commandId: string, attemptId: string) {',
+    '  const operationSpec = currentVSCodeOperationSpecFromCommandText(commandText, commandId, attemptId);',
+    '  if (!operationSpec) return undefined;',
+    '  const operationRef = `operation-ref:vscode:${operationSpec.operation}:${commandId}:${attemptId}`;',
+    '  return {',
+    "    schemaVersion: 'sciforge.codex-agent-host-input.v1',",
+    "    source: 'ordinary-chat-current-vscode-computer-use-bridge',",
+    "    intentText: 'intent:current-vscode-cowork',",
+    "    refs: ['intent:current-vscode-cowork', operationRef],",
+    "    target: { kind: 'current-vscode-cowork', vscodeCoWork: { operation: operationSpec.operation, operationRef } },",
+    '  };',
+    '}',
+    'function currentVSCodeOperationSpecFromCommandText(commandText: string) {',
+    '  const text = commandText.trim();',
+    "  if (/polish|润色/.test(text)) return { operation: 'apply-current-selection', family: 'editor-edit' };",
+    "  if (/save|保存/.test(text)) return { operation: 'save-current-file', family: 'editor-edit' };",
+    "  return { operation: 'open-command-palette', family: 'navigation/search' };",
+    '}',
+    'function textRefFieldForOperation() {',
+    '  return {};',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
+test('Computer Use no-bypass guard blocks current-vscode bridge direct final-answer projection', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/current-vscode-operation-bridge.ts', [
+    'export function projectBridgeTranscript(result: { transcriptText?: string; completedAction?: string }) {',
+    "  const message = result.transcriptText ?? result.completedAction ?? '';",
+    "  return { finalAnswer: message, visibleAnswer: { text: message } };",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-current-vscode-direct-final-answer/);
+});
+
+test('Computer Use no-bypass guard blocks current-vscode Help About palette shortcut resolvers', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/current-vscode-operation-bridge.ts', [
+    'export function resolvePaletteItem(items: Array<{ label: string; commandId?: string }>) {',
+    "  return items.find((item) => item.label === 'Help: About' || item.commandId === 'workbench.action.showAbout');",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-command-palette-shortcut/);
+});
+
+test('Computer Use no-bypass guard blocks current-vscode paper-polish operation and runner ids', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/current-vscode-operation-bridge.ts', [
+    'export const CURRENT_VSCODE_PAPER_POLISH_RUNNER_ID = "current-vscode.paper-polish";',
+    'export interface CurrentVSCodePaperPolishDogfoodTranscriptInput {}',
+    'export function createOperation() {',
+    "  return { operation: 'paper-polish', runnerId: CURRENT_VSCODE_PAPER_POLISH_RUNNER_ID };",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-current-vscode-paper-polish/);
+});
+
+test('Computer Use no-bypass guard blocks current-vscode polish-paper operation and runner ids', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/current-vscode-operation-bridge.ts', [
+    'export const CURRENT_VSCODE_POLISH_PAPER_RUNNER_ID = "current-vscode.polish-paper";',
+    'export interface CurrentVSCodePolishPaperDogfoodTranscriptInput {}',
+    'export function createOperation() {',
+    "  return { operation: 'polish-paper', runnerId: CURRENT_VSCODE_POLISH_PAPER_RUNNER_ID };",
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-current-vscode-paper-polish/);
+});
+
+test('Computer Use no-bypass guard blocks native route operation refs inferred from terminal history or completed action', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/computer-use-native-route.ts', [
+    'export function route(input: { terminalResult?: string; history?: string; completedAction?: string }) {',
+    "  const terminalResult = String(input.terminalResult ?? '');",
+    "  const history = String(input.history ?? '');",
+    "  const completedAction = String(input.completedAction ?? '');",
+    "  const operationRef = [terminalResult, history, completedAction].some((value) => value.includes('preview'))",
+    "    ? 'operation-ref:vscode:preview-current-selection'",
+    '    : undefined;',
+    '  return { target: { vscodeCoWork: { operationRef } } };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /forbidden-vscode-operation-text-inference/);
+});
+
+test('Computer Use no-bypass guard allows refs-first current-vscode structured operation strings', () => {
+  const root = minimalRepoFixture();
+  writeFixtureFile(root, 'src/runtime/codex/current-vscode-operation-bridge.ts', [
+    'export function bridge(target: { vscodeCoWork: { operation: string; operationRef: string } }) {',
+    '  return {',
+    '    target: { vscodeCoWork: { operation: target.vscodeCoWork.operation } },',
+    "    evidenceRefs: [target.vscodeCoWork.operationRef, 'operation-ref:vscode:read-visible-text'],",
+    '  };',
+    '}',
+  ].join('\n'));
+
+  const result = runGuard(root);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test('Computer Use no-bypass guard blocks VSCode app module direct desktop or executor access', () => {
   const root = minimalRepoFixture();
   writeFixtureFile(root, 'src/runtime/codex/vscode-app-module.ts', [

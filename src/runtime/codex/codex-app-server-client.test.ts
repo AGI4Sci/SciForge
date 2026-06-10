@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -17,6 +18,12 @@ import {
   type SpawnCodexAppServerProcess,
 } from './codex-app-server-client.js';
 import { BROWSER_PRIMITIVE_INPUT_SCHEMAS } from '../../../packages/actions/browser-runtime/index.js';
+import {
+  WEB_READ_INPUT_SCHEMA_VERSION,
+  WEB_SEARCH_INPUT_SCHEMA_VERSION,
+  WEB_SEARCH_INTENT,
+  WEB_READ_INTENT,
+} from '../modules/web-runtime-module-handler.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import { SUBAGENT_MCP_ENV, SUBAGENT_MCP_SERVER_NAME } from './subagent-extension-manifest.js';
 
@@ -88,6 +95,63 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   assert.match(text, /artifact:subagent-transcript-[a-f0-9]{12}/);
 });
 
+test('Codex app-server client prefers native web_search and suppresses SciForge fallback direct search tools', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  env.SCIFORGE_WEB_SEARCH_MODE = 'native';
+  const appServer = fakeAppServer({ autoToolCall: false });
+  let spawnCall: Parameters<SpawnCodexAppServerProcess> | undefined;
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess(command, args, options) {
+      spawnCall = [command, args, options];
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Search the web for current information.',
+    workspacePath: workspace,
+    commandId: 'native-web-search-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  const argv = spawnCall?.[1] ?? [];
+  assert.equal(argv[0], '--search');
+  assert.equal(argv[1], 'app-server');
+  const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
+  assert.equal(dynamicTools.some((tool) => tool.name === 'web_search'), false, 'native mode must not register SciForge fallback web_search');
+  assert.equal(dynamicTools.some((tool) => tool.name === 'web_read'), false, 'web_read is internal/advanced, not ordinary direct surface');
+  assert.match(String(appServer.threadStartParams.developerInstructions ?? ''), /Codex native web_search/);
+});
+
+test('Codex app-server client fails closed when native and fallback web_search are both requested', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  env.SCIFORGE_WEB_SEARCH_MODE = 'native';
+  env.SCIFORGE_WEB_SEARCH_REGISTER_FALLBACK = '1';
+  const appServer = fakeAppServer();
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  await assert.rejects(
+    () => client.startTurn({
+      commandText: '搜索一下伊朗局势。',
+      workspacePath: workspace,
+      commandId: 'web-search-conflict-command',
+      attemptId: 'attempt-1',
+      guiExtension: { enabled: false },
+    }),
+    /web_search capability conflict/i,
+  );
+});
+
 test('Codex app-server client serves provider-safe module dynamic tool aliases', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -148,7 +212,593 @@ test('Codex app-server client serves provider-safe module dynamic tool aliases',
   assert.match(text, /"routed":true/);
 });
 
-test('Codex app-server client exposes browser primitives as direct dynamic tools backed by module dispatcher', async () => {
+test('Codex app-server client exposes fallback web_search direct alias backed by the Web module dispatcher', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let invoked: ModuleInvokeRequest | undefined;
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'web_search',
+      arguments: {
+        query: 'OpenAI product updates',
+        limit: 2,
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'web',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'web',
+          title: 'Web Search',
+          summary: 'Web search/read module.',
+          intents: [
+            { name: WEB_SEARCH_INTENT, sideEffect: 'external' },
+            { name: WEB_READ_INTENT, sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked = request;
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            routed: true,
+            input: request.input,
+          },
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Use web_search once.',
+    workspacePath: workspace,
+    commandId: 'direct-web-search-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
+  const webSearchTool = dynamicTools.find((tool) => tool.name === 'web_search');
+  const webReadTool = dynamicTools.find((tool) => tool.name === 'web_read');
+  assert.ok(webSearchTool, 'fallback web_search should be registered');
+  assert.equal(webReadTool, undefined, 'web_read is internal/advanced, not an ordinary direct tool');
+  assert.equal(dynamicTools.some((tool) => tool.name === 'web_extract'), false);
+  assert.equal(dynamicTools.some((tool) => tool.name === 'web_batch_read'), false);
+  assert.match(String(webSearchTool?.description ?? ''), /fallback/i);
+  assert.match(String(webSearchTool?.description ?? ''), /ordinary search/i);
+  assert.doesNotMatch(String(webSearchTool?.description ?? ''), /Call web_read/i);
+
+  const responseText = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(appServer.toolCallResponse?.success, true, responseText);
+  assert.equal(invoked?.moduleId, 'web');
+  assert.equal(invoked?.intent, WEB_SEARCH_INTENT);
+  assert.deepEqual(invoked?.input, {
+    schemaVersion: WEB_SEARCH_INPUT_SCHEMA_VERSION,
+    query: 'OpenAI product updates',
+    limit: 2,
+  });
+});
+
+test('Codex app-server client fails closed after repeated web_search provider failures', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    turnToolCalls: Array.from({ length: 5 }, () => ({
+      tool: 'web_search',
+      arguments: {
+        query: 'OpenAI API models documentation',
+        limit: 5,
+      },
+    })),
+    suppressTerminalAfterToolCall: true,
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'web',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'web',
+          title: 'Web Search',
+          summary: 'Web search/read module.',
+          intents: [
+            { name: WEB_SEARCH_INTENT, sideEffect: 'external' },
+            { name: WEB_READ_INTENT, sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: false,
+          error: 'provider_unavailable',
+          value: {
+            schemaVersion: 'sciforge.web-runtime.result.v1',
+            ok: false,
+            status: 'failed',
+            tool: 'web_search',
+            data: {
+              evidenceState: 'none',
+              evidenceBoundary: 'No source evidence was materialized.',
+            },
+            refs: [],
+            timings: { totalMs: 0 },
+            warnings: [],
+            diagnostics: [],
+            error: {
+              code: 'provider_unavailable',
+              message: 'No web search provider is configured.',
+            },
+          },
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Search OpenAI API models documentation.',
+    workspacePath: workspace,
+    commandId: 'web-search-provider-failure-budget-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(invoked.length, 3, 'Agent Host should stop repeated provider failures before model loops indefinitely');
+  const lastEvent = events.at(-1);
+  const failed = isRecord(lastEvent) ? lastEvent : undefined;
+  assert.equal(failed?.type, 'failed');
+  assert.match(String(failed?.message ?? ''), /repeated web_search failures.*provider_unavailable/i);
+  assert.match(JSON.stringify(failed?.raw), /agent-host-web-search-provider-failure-budget/);
+});
+
+test('Codex app-server client allows terminal ordinary-chat answers backed by current-run web_search source links', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'web_search',
+      arguments: {
+        query: '伊朗局势',
+        limit: 5,
+      },
+    },
+    postToolEvents: [{
+      method: 'message',
+      params: {
+        text: [
+          '伊朗局势至少有 5 条信息：',
+          '1. 外交谈判仍在继续。https://example.com/iran-diplomacy',
+          '2. 能源市场关注供应风险。https://example.com/iran-energy',
+          '3. 地区安全讨论升温。https://example.com/iran-security',
+          '4. 制裁政策仍是焦点。https://example.com/iran-sanctions',
+          '5. 人道与民生问题受到关注。https://example.com/iran-humanitarian',
+        ].join('\n'),
+      },
+    }, {
+      method: 'turn/completed',
+      params: {
+        status: 'completed',
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'web',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'web',
+          title: 'Web Search',
+          summary: 'Web search/read module.',
+          intents: [
+            { name: WEB_SEARCH_INTENT, sideEffect: 'external' },
+            { name: WEB_READ_INTENT, sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        const results = [
+          ['iran-diplomacy', '伊朗局势：外交谈判继续', 'https://example.com/iran-diplomacy', '2026-06-08 伊朗外交谈判仍在继续。'],
+          ['iran-energy', '伊朗局势影响能源市场', 'https://example.com/iran-energy', '2026-06-08 能源市场关注伊朗供应风险。'],
+          ['iran-security', '伊朗局势与地区安全', 'https://example.com/iran-security', '2026-06-08 地区安全讨论升温。'],
+          ['iran-sanctions', '伊朗局势中的制裁政策', 'https://example.com/iran-sanctions', '2026-06-08 制裁政策仍是焦点。'],
+          ['iran-humanitarian', '伊朗局势下的人道民生', 'https://example.com/iran-humanitarian', '2026-06-08 人道与民生问题受到关注。'],
+        ];
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            schemaVersion: 'sciforge.web-runtime.result.v1',
+            ok: true,
+            status: 'completed',
+            tool: 'web_search',
+            provider: 'fixture',
+            data: {
+              query: '伊朗局势',
+              resultSetRef: 'web-search:terminal-search-only/results.json',
+              evidenceBoundary: 'web_search returned source links for ordinary search; Agent Host decides whether read escalation is required.',
+              results: results.map(([id, title, url, snippet], index) => ({
+                rank: index + 1,
+                title,
+                url,
+                snippet,
+                provider: 'fixture',
+                source: 'fixture',
+                publishedAt: '2026-06-08',
+                resourceRef: `web-page:terminal-search-only/${id}`,
+                evidenceState: 'search_result',
+              })),
+            },
+            refs: [
+              'web-search:terminal-search-only/results.json',
+              ...results.map(([id]) => `web-page:terminal-search-only/${id}`),
+            ],
+            timings: { totalMs: 1 },
+            warnings: [],
+            diagnostics: [],
+          },
+          refs: [
+            'web-search:terminal-search-only/results.json',
+            ...results.map(([id]) => `web-page:terminal-search-only/${id}`),
+          ],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '搜索一下伊朗局势，至少提供5条信息。',
+    workspacePath: workspace,
+    commandId: 'web-search-terminal-search-only-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(invoked.length, 1);
+  assert.equal(invoked[0]?.moduleId, 'web');
+  assert.equal(invoked[0]?.intent, WEB_SEARCH_INTENT);
+  const gateEvent = events.find((event): event is Record<string, unknown> =>
+    isRecord(event)
+    && event.schemaVersion === 'sciforge.codex.normalized-event.v1'
+    && event.type === 'message'
+    && /agent-host-browser-terminal-evidence-gate/.test(JSON.stringify(event.raw)));
+  assert.equal(gateEvent, undefined, JSON.stringify(events, null, 2));
+  assert.equal(events.some((event) => isRecord(event) && event.type === 'done' && event.status === 'blocked'), false);
+});
+
+test('Codex app-server client allows terminal ordinary-chat answers backed by current-run web_search and web_read refs', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'web_search',
+      arguments: {
+        query: 'OpenAI Codex plugin sharing latest',
+        limit: 2,
+      },
+    }, {
+      tool: 'web_read',
+      arguments: {
+        resourceRef: 'web-page:terminal-read/source',
+      },
+    }],
+    postToolEvents: [{
+      method: 'message',
+      params: {
+        text: 'OpenAI Codex plugin sharing changed recently. Source: https://example.com/openai-codex-plugin-sharing',
+      },
+    }, {
+      method: 'turn/completed',
+      params: {
+        status: 'completed',
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'web',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'web',
+          title: 'Web Search',
+          summary: 'Web search/read module.',
+          intents: [
+            { name: WEB_SEARCH_INTENT, sideEffect: 'external' },
+            { name: WEB_READ_INTENT, sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        if (request.intent === WEB_READ_INTENT) {
+          return moduleResult({
+            moduleId: request.moduleId,
+            ok: true,
+            value: {
+              schemaVersion: 'sciforge.web-runtime.result.v1',
+              ok: true,
+              status: 'completed',
+              tool: 'web_read',
+              provider: 'fixture',
+              data: {
+                source: {
+                  requestedUrl: 'https://example.com/openai-codex-plugin-sharing',
+                  finalUrl: 'https://example.com/openai-codex-plugin-sharing',
+                  title: 'OpenAI Codex plugin sharing',
+                  contentType: 'text/html',
+                  publishedAt: '2026-06-09',
+                  openedAt: '2026-06-10T08:00:00.000Z',
+                  textSha1: 'a'.repeat(40),
+                  sourceRef: 'web-source:terminal-read/source.source.json',
+                  pageTextRef: 'web-text:terminal-read/source.txt',
+                },
+                content: {
+                  format: 'markdown',
+                  preview: 'OpenAI Codex plugin sharing changed recently for eligible workspaces and requires source verification.',
+                  textRef: 'web-text:terminal-read/source.txt',
+                  textCharCount: 140,
+                },
+                evidenceBoundary: 'web_read materialized source/page text evidence.',
+              },
+              refs: [
+                'web-source:terminal-read/source.source.json',
+                'web-text:terminal-read/source.txt',
+              ],
+              timings: { totalMs: 2 },
+              warnings: [],
+              diagnostics: [],
+            },
+            refs: [
+              'web-source:terminal-read/source.source.json',
+              'web-text:terminal-read/source.txt',
+            ],
+          });
+        }
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            schemaVersion: 'sciforge.web-runtime.result.v1',
+            ok: true,
+            status: 'completed',
+            tool: 'web_search',
+            provider: 'fixture',
+            data: {
+              query: 'OpenAI Codex plugin sharing latest',
+              resultSetRef: 'web-search:terminal-read/results.json',
+              evidenceBoundary: 'Search results are candidates only.',
+              results: [{
+                rank: 1,
+                title: 'OpenAI Codex plugin sharing',
+                url: 'https://example.com/openai-codex-plugin-sharing',
+                snippet: 'Candidate snippet that must be read.',
+                provider: 'fixture',
+                resourceRef: 'web-page:terminal-read/source',
+                evidenceState: 'candidate_only',
+              }],
+            },
+            refs: [
+              'web-search:terminal-read/results.json',
+              'web-page:terminal-read/source',
+            ],
+            timings: { totalMs: 1 },
+            warnings: [],
+            diagnostics: [],
+          },
+          refs: [
+            'web-search:terminal-read/results.json',
+            'web-page:terminal-read/source',
+          ],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Search the web for OpenAI Codex plugin sharing latest, then answer with sources.',
+    workspacePath: workspace,
+    commandId: 'web-search-terminal-read-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events);
+
+  assert.deepEqual(invoked.map((request) => request.intent), [WEB_SEARCH_INTENT, WEB_READ_INTENT]);
+  const gateEvents = events.filter((event) =>
+    isRecord(event)
+    && event.schemaVersion === 'sciforge.codex.normalized-event.v1'
+    && /agent-host-browser-terminal-evidence-gate/.test(JSON.stringify(event.raw)));
+  assert.equal(gateEvents.length, 0, JSON.stringify(gateEvents, null, 2));
+  assert.ok(events.some((event) =>
+    isRecord(event)
+    && /OpenAI Codex plugin sharing changed recently/.test(JSON.stringify(event))));
+});
+
+test('Codex app-server client auto-reads repeated web_search candidates with valid web_read input', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    turnToolCalls: [{
+      tool: 'web_search',
+      arguments: { query: 'OpenAI latest news', limit: 3 },
+    }, {
+      tool: 'web_search',
+      arguments: { query: 'OpenAI latest news source', limit: 3 },
+    }],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'web',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: moduleId ?? 'web',
+          title: 'Web Runtime',
+          summary: 'Web search and read runtime.',
+          intents: [
+            { name: WEB_SEARCH_INTENT, sideEffect: 'external' },
+            { name: WEB_READ_INTENT, sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'web', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        if (request.intent === WEB_READ_INTENT) {
+          return moduleResult({
+            moduleId: 'web',
+            ok: true,
+            value: {
+              schemaVersion: 'sciforge.web-runtime.result.v1',
+              ok: true,
+              status: 'completed',
+              tool: 'web_read',
+              provider: 'fixture',
+              refs: ['web-source:openai-news', 'web-text:openai-news'],
+              data: {
+                source: {
+                  requestedUrl: 'https://openai.com/news/',
+                  finalUrl: 'https://openai.com/news/',
+                  title: 'OpenAI News',
+                  sourceRef: 'web-source:openai-news',
+                  pageTextRef: 'web-text:openai-news',
+                  openedAt: '2026-06-10T08:00:00.000Z',
+                  textSha1: 'fixture-sha1',
+                },
+                content: {
+                  preview: 'OpenAI news page text.',
+                  textRef: 'web-text:openai-news',
+                  textCharCount: 22,
+                },
+              },
+              timings: {},
+              warnings: [],
+              diagnostics: [],
+            },
+            refs: ['web-source:openai-news', 'web-text:openai-news'],
+          });
+        }
+        return moduleResult({
+          moduleId: 'web',
+          ok: true,
+          value: {
+            schemaVersion: 'sciforge.web-runtime.result.v1',
+            ok: true,
+            status: 'completed',
+            tool: 'web_search',
+            provider: 'fixture',
+            refs: ['web-search:openai-news', 'web-page:openai-news'],
+            data: {
+              query: 'OpenAI latest news',
+              resultSetRef: 'web-search:openai-news',
+              results: [{
+                rank: 1,
+                title: 'OpenAI News',
+                url: 'https://openai.com/news/',
+                source: 'fixture',
+                provider: 'fixture',
+                resourceRef: 'web-page:openai-news',
+                evidenceState: 'candidate_only',
+              }],
+            },
+            timings: {},
+            warnings: [],
+            diagnostics: [],
+          },
+          refs: ['web-search:openai-news', 'web-page:openai-news'],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '请搜索 OpenAI 最近动态并基于实际读取来源回答。',
+    workspacePath: workspace,
+    commandId: 'web-auto-read-after-repeated-search-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(invoked.map((request) => request.intent), [
+    WEB_SEARCH_INTENT,
+    WEB_READ_INTENT,
+  ]);
+  assert.deepEqual(invoked.at(-1)?.input, {
+    schemaVersion: WEB_READ_INPUT_SCHEMA_VERSION,
+    resourceRef: 'web-page:openai-news',
+  });
+  const autoReadResponse = appServer.toolCallResponses.find((response) =>
+    JSON.stringify(response.contentItems ?? []).includes('browser-auto-read-result'));
+  const autoReadText = (autoReadResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.equal(autoReadResponse?.success, true, autoReadText);
+  assert.match(autoReadText, /web_read/);
+  assert.doesNotMatch(autoReadText, /includeText|include_text/);
+  assert.doesNotMatch(autoReadText, /OpenAI latest news source/);
+});
+
+test('Codex app-server client keeps Browser search/read off the direct surface while retaining internal stale-call routing', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   let invoked: ModuleInvokeRequest | undefined;
@@ -213,9 +863,12 @@ test('Codex app-server client exposes browser primitives as direct dynamic tools
   await collect(stream.events);
 
   const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
-  for (const name of ['browser_search', 'browser_navigate', 'browser_observe', 'browser_read', 'browser_extract', 'browser_download']) {
+  assert.equal(dynamicTools.some((tool) => tool.name === 'browser_search'), false, 'legacy browser_search must not be registered in the ordinary-chat direct tool surface');
+  assert.equal(dynamicTools.some((tool) => tool.name === 'browser_read'), false, 'legacy browser_read must not be registered in the ordinary-chat direct tool surface');
+  for (const name of ['web_search', 'browser_navigate', 'browser_observe', 'browser_extract', 'browser_download']) {
     assert.ok(dynamicTools.some((tool) => tool.name === name), `${name} should be registered`);
   }
+  assert.equal(dynamicTools.some((tool) => tool.name === 'web_read'), false, 'web_read is internal/advanced, not an ordinary direct tool');
   assert.equal(invoked?.moduleId, 'browser');
   assert.equal(invoked?.intent, 'browser.search');
   assert.deepEqual(invoked?.input, {
@@ -815,7 +1468,7 @@ test('Codex app-server client routes direct browser_read resource refs through m
   assert.equal(appServer.toolCallResponse?.success, true);
 });
 
-test('Codex app-server client registers Browser direct tools with source-read follow-up guidance', async () => {
+test('Codex app-server client registers fallback web_search direct tool and keeps read/search legacy tools off the ordinary-chat surface', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   const appServer = fakeAppServer({ autoToolCall: false });
@@ -838,20 +1491,19 @@ test('Codex app-server client registers Browser direct tools with source-read fo
   const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
   const browserTools = dynamicTools.filter((tool) => typeof tool.name === 'string' && tool.name.startsWith('browser_'));
   const browserToolText = JSON.stringify(browserTools);
-  const searchTool = browserTools.find((tool) => tool.name === 'browser_search');
-  const readTool = browserTools.find((tool) => tool.name === 'browser_read');
-  const readSchema = readTool?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  const webSearchTool = dynamicTools.find((tool) => tool.name === 'web_search');
+  const webReadTool = dynamicTools.find((tool) => tool.name === 'web_read');
 
-  assert.match(String(searchTool?.description ?? ''), /resources/);
-  assert.match(String(searchTool?.description ?? ''), /evidenceState/);
-  assert.match(String(searchTool?.description ?? ''), /browser_read/);
+  assert.ok(webSearchTool, 'web_search should be registered');
+  assert.equal(webReadTool, undefined, 'web_read is internal/advanced, not an ordinary-chat direct tool');
+  assert.equal(browserTools.some((tool) => tool.name === 'browser_search'), false, 'browser_search is an internal fallback primitive, not an ordinary-chat direct tool');
+  assert.equal(browserTools.some((tool) => tool.name === 'browser_read'), false, 'browser_read is an internal fallback primitive, not an ordinary-chat direct tool');
+  assert.match(String(webSearchTool?.description ?? ''), /fallback.*web_search/i);
+  assert.match(String(webSearchTool?.description ?? ''), /source links/i);
+  assert.doesNotMatch(String(webSearchTool?.description ?? ''), /Call web_read/i);
   const navigateTool = browserTools.find((tool) => tool.name === 'browser_navigate');
-  assert.match(String(navigateTool?.description ?? ''), /browser_read/);
+  assert.match(String(navigateTool?.description ?? ''), /module\.invoke.*browser\.read/s);
   assert.match(String(navigateTool?.description ?? ''), /sessionId/);
-  assert.match(String(readTool?.description ?? ''), /resourceRef/);
-  assert.match(String(readTool?.description ?? ''), /sessionId/);
-  assert.match(String(readTool?.description ?? ''), /sourcePageRef|pageTextRef/);
-  assert.ok(readSchema?.properties?.resourceRef);
   assert.doesNotMatch(browserToolText, legacyTokenRegex(['candidate', 'Read', 'Inputs']));
   assert.doesNotMatch(browserToolText, legacyTokenRegex(['read', 'Input']));
   assert.doesNotMatch(browserToolText, /search_read|open_read|executeBoundedOperation/);
@@ -2070,7 +2722,8 @@ test('Codex app-server client instructs models to route current external evidenc
   assert.match(developerInstructions, /module_invoke/);
   assert.match(developerInstructions, /Codex App Server assistant\/final message/);
   assert.doesNotMatch(developerInstructions, /gui\.present|gui\.ask_user|gui_present|gui_ask_user|native assistant prose is progress only/i);
-  assert.match(developerInstructions, /Browser primitive path/);
+  assert.match(developerInstructions, /Browser fallback path/);
+  assert.match(developerInstructions, /Do not use legacy direct browser_search\/browser_read/);
   assert.match(developerInstructions, /browser\.search/);
   assert.match(developerInstructions, /browser\.navigate/);
   assert.match(developerInstructions, /browser\.observe/);
@@ -2092,6 +2745,11 @@ test('Codex app-server client instructs models to route current external evidenc
   assert.match(developerInstructions, /do not output the call payload as text/i);
   assert.doesNotMatch(developerInstructions, /<module_invoke>|<tool_call>|<\{"function"/i);
   assert.match(developerInstructions, /current|latest|today|external|citations/i);
+  assert.match(developerInstructions, /Web evidence path/);
+  assert.match(developerInstructions, /web_search/);
+  assert.match(developerInstructions, /ordinary search answers may be completed/i);
+  assert.match(developerInstructions, /Read-required escalation/);
+  assert.match(developerInstructions, /source links/);
   assert.match(developerInstructions, /nonzero budgets/);
   assert.doesNotMatch(developerInstructions, /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr|Applications\/workspace/i);
 });
@@ -2727,13 +3385,18 @@ test('Codex app-server client wraps explicit VSCode Computer Use chat into P10 p
       const permissions = agentHostInput?.permissions as Record<string, unknown> | undefined;
       assert.equal(agentHostInput?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
       assert.equal(agentHostInput?.source, 'ordinary-chat-current-vscode-computer-use-bridge');
+      assert.equal(agentHostInput?.intentText, 'intent:current-vscode-cowork');
       assert.equal(target?.kind, 'current-vscode-cowork');
       assert.equal(vscodeCoWork?.operation, 'open-command-palette');
-      assert.equal(vscodeCoWork?.diagnostic, 'p10-vscode-bind-observe-command-palette-open-close');
+      assert.equal(vscodeCoWork?.family, 'navigation/search');
+      assert.equal(vscodeCoWork?.operationRef, 'operation-ref:vscode:open-command-palette:p10-vscode-palette-chat:attempt-1');
+      assert.equal(vscodeCoWork?.paletteQueryTextRef, 'text-ref:vscode:command-palette-query:p10-vscode-palette-chat:attempt-1');
       assert.deepEqual(agentHostInput?.refs, [
         'intent:current-vscode-cowork',
         'intent:current-vscode-cowork-live-diagnostic',
         'chat-request:vscode-cowork:p10-vscode-palette-chat:attempt-1',
+        'operation-ref:vscode:open-command-palette:p10-vscode-palette-chat:attempt-1',
+        'text-ref:vscode:command-palette-query:p10-vscode-palette-chat:attempt-1',
       ]);
       assert.ok((permissions?.refs as string[]).includes('permission:turn/current-vscode-cowork/full-access'));
       assert.doesNotMatch(JSON.stringify(agentHostInput), /rawScreenshot|providerPayload|data:image|base64|\/Users\/|https?:\/\//i);
@@ -2772,6 +3435,164 @@ test('Codex app-server client wraps explicit VSCode Computer Use chat into P10 p
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['done']);
 });
 
+test('Codex app-server client wraps explicit VSCode Computer Use chat into generic operation inputs', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const seenOperations: Array<{
+    operation: unknown;
+    operationRef: unknown;
+    family: unknown;
+    textRefs: string[];
+    payload: Record<string, unknown> | undefined;
+  }> = [];
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      throw new Error('app-server should not spawn for explicit VSCode Computer Use generic operation chat');
+    },
+    computerUseNativeRouteRunner(input) {
+      const agentHostInput = input.request.agentHostInput as Record<string, unknown> | undefined;
+      const target = agentHostInput?.target as Record<string, unknown> | undefined;
+      const vscodeCoWork = target?.vscodeCoWork as Record<string, unknown> | undefined;
+      assert.equal(agentHostInput?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+      assert.equal(agentHostInput?.source, 'ordinary-chat-current-vscode-computer-use-bridge');
+      assert.equal(target?.kind, 'current-vscode-cowork');
+      assert.equal(typeof vscodeCoWork?.operationRef, 'string');
+      assert.match(String(vscodeCoWork?.operationRef), /^operation-ref:vscode:/);
+      assert.equal(vscodeCoWork?.targetMode, 'smart-detect-current-vscode-window');
+      assert.ok((agentHostInput?.refs as string[]).includes('intent:current-vscode-cowork'));
+      assert.ok((agentHostInput?.refs as string[]).includes(String(vscodeCoWork?.operationRef)));
+      assert.doesNotMatch(JSON.stringify(agentHostInput), /rawScreenshot|providerPayload|data:image|base64|\/Users\/|https?:\/\/|Help: About|private-paper/i);
+      seenOperations.push({
+        operation: vscodeCoWork?.operation,
+        operationRef: vscodeCoWork?.operationRef,
+        family: vscodeCoWork?.family,
+        textRefs: (agentHostInput?.refs as string[]).filter((ref) => ref.startsWith('text-ref:')),
+        payload: vscodeCoWork,
+      });
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([{
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          timestamp: new Date().toISOString(),
+          commandId: input.request.commandId,
+          attemptId: input.request.attemptId,
+          status: 'done',
+        }]),
+      };
+    },
+  });
+
+  const cases = [
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，观察当前 VSCode 窗口。',
+      commandId: 'p12-vscode-observe-current',
+      operation: 'observe-current-vscode',
+      family: 'target/session',
+    },
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，读取当前编辑器上下文。',
+      commandId: 'p12-vscode-read-context',
+      operation: 'read-editor-context',
+      family: 'read/context',
+    },
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，读取诊断问题面板。',
+      commandId: 'p12-vscode-read-diagnostics',
+      operation: 'read-diagnostics',
+      family: 'read/context',
+    },
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，用 quick open 打开目标文件引用。',
+      commandId: 'p12-vscode-quick-open',
+      operation: 'quick-open',
+      family: 'navigation/search',
+      textRef: 'text-ref:vscode:quick-open-query:p12-vscode-quick-open:attempt-1',
+    },
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，打开命令面板并执行当前观察到的结果。',
+      commandId: 'p12-vscode-palette-select',
+      operation: 'open-command-palette',
+      family: 'navigation/search',
+      textRef: 'text-ref:vscode:command-palette-query:p12-vscode-palette-select:attempt-1',
+      selectCurrentItem: true,
+    },
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，在终端发送 Host 提供的 text-ref 并提交。',
+      commandId: 'p12-vscode-terminal-submit',
+      operation: 'submit-terminal-command',
+      family: 'terminal',
+      textRef: 'text-ref:vscode:terminal-input:p12-vscode-terminal-submit:attempt-1',
+    },
+    {
+      commandText: '请用 Computer Use 操纵当前 VSCode，预览当前选区润色草稿。',
+      commandId: 'p12-vscode-preview-selection',
+      operation: 'preview-current-selection',
+      family: 'editor-edit',
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const stream = await client.startTurn({
+      commandText: item.commandText,
+      workspacePath: workspace,
+      commandId: item.commandId,
+      attemptId: 'attempt-1',
+      guiExtension: { enabled: true },
+    });
+    await collect(stream.events);
+  }
+
+  assert.deepEqual(seenOperations.map((item) => item.operation), cases.map((item) => item.operation));
+  assert.deepEqual(seenOperations.map((item) => item.family), cases.map((item) => item.family));
+  for (const [index, expected] of cases.entries()) {
+    const seen = seenOperations[index];
+    assert.match(String(seen.operationRef), new RegExp(`^operation-ref:vscode:${expected.operation}:`));
+    if ('textRef' in expected) assert.ok(seen.textRefs.includes(expected.textRef));
+    if ('selectCurrentItem' in expected) assert.equal(seen.payload?.selectCurrentItem, expected.selectCurrentItem);
+  }
+});
+
+test('Codex app-server client does not synthesize VSCode editor write operations from ordinary chat text', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  let spawnCalled = false;
+  let nativeRouteCalled = false;
+  const commandText = '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。';
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      spawnCalled = true;
+      return appServer.process;
+    },
+    computerUseNativeRouteRunner() {
+      nativeRouteCalled = true;
+      throw new Error('ordinary chat write intent must not reach native route without structured Host input');
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'p15-vscode-polish-selection-save',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(nativeRouteCalled, false);
+  assert.equal(spawnCalled, true);
+  assert.equal(stream.turnId, 'turn-1');
+  assert.deepEqual(appServer.turnStartParamsHistory[0]?.input, [{ type: 'text', text: commandText, text_elements: [] }]);
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed']);
+});
+
 test('Codex app-server client wraps explicit visible VSCode palette execution into select-current-item Host input', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -2791,7 +3612,9 @@ test('Codex app-server client wraps explicit visible VSCode palette execution in
       assert.equal(agentHostInput?.source, 'ordinary-chat-current-vscode-computer-use-bridge');
       assert.equal(target?.kind, 'current-vscode-cowork');
       assert.equal(vscodeCoWork?.operation, 'open-command-palette');
-      assert.equal(vscodeCoWork?.paletteQueryTextRef, 'text-ref:vscode:command-palette-query:p10');
+      assert.equal(vscodeCoWork?.family, 'navigation/search');
+      assert.equal(vscodeCoWork?.operationRef, 'operation-ref:vscode:open-command-palette:p11-visible-vscode-palette-about:attempt-1');
+      assert.equal(vscodeCoWork?.paletteQueryTextRef, 'text-ref:vscode:command-palette-query:p11-visible-vscode-palette-about:attempt-1');
       assert.equal(vscodeCoWork?.selectCurrentItem, true);
       assert.ok((agentHostInput?.refs as string[]).includes('intent:current-vscode-cowork'));
       assert.doesNotMatch(JSON.stringify(vscodeCoWork), /Help: About|rawScreenshot|providerPayload|data:image|base64|\/Users\/|https?:\/\//i);
@@ -3143,6 +3966,78 @@ test('Computer Use native route still requires Runtime Codex local configuration
   assert.equal(runnerCalled, false);
 });
 
+test('Codex app-server client prepares Runtime Codex through config.local Model Router env when runtime key is absent', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-app-server-client-config-local-'));
+  const workspace = join(root, 'workspace');
+  await mkdir(workspace, { recursive: true });
+  const configPath = join(root, 'config.local.json');
+  await writeFile(configPath, `${JSON.stringify({
+    llm: {
+      provider: 'native',
+      baseUrl: 'http://member-provider.example/v1',
+      apiKey: 'member-secret',
+      model: 'member-model',
+    },
+  })}\n`, 'utf8');
+
+  const router = createServer((req, res) => {
+    if (req.url === '/health' || req.url === '/healthz') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, service: 'sciforge.model-router' }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => router.listen(0, '127.0.0.1', resolve));
+  const address = router.address();
+  assert.equal(typeof address, 'object');
+  const routerUrl = `http://127.0.0.1:${address && typeof address === 'object' ? address.port : 0}`;
+  const runtimeRoot = join(root, 'runtime-codex');
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    SCIFORGE_RUNTIME_ROOT: runtimeRoot,
+    SCIFORGE_CONFIG_PATH: configPath,
+    SCIFORGE_MODEL_ROUTER_BASE_URL: `${routerUrl}/v1`,
+    SCIFORGE_WEB_SEARCH_MODE: 'fallback',
+  };
+  delete env[RUNTIME_KEY_ENV];
+  delete env.SCIFORGE_MODEL_ROUTER_API_KEY;
+  const appServer = fakeAppServer();
+  let spawnedEnv: NodeJS.ProcessEnv | undefined;
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess(_command, _args, options) {
+      spawnedEnv = options.env;
+      return appServer.process;
+    },
+  });
+
+  try {
+    const stream = await client.startTurn({
+      commandText: 'Explain the workspace.',
+      workspacePath: workspace,
+      commandId: 'config-local-model-router-command',
+      attemptId: 'attempt-1',
+      guiExtension: { enabled: false },
+    });
+    await collect(stream.events);
+
+    assert.equal(stream.provider, 'sciforge-model-router');
+    assert.equal(stream.model, 'sciforge-router');
+    assert.equal(spawnedEnv?.[RUNTIME_KEY_ENV], 'sciforge-local-model-router');
+    assert.equal(spawnedEnv?.SCIFORGE_MODEL_ROUTER_API_KEY, 'sciforge-local-model-router');
+    assert.equal(spawnedEnv?.SCIFORGE_MODEL_ROUTER_BASE_URL, `${routerUrl}/v1`);
+    assert.equal(spawnedEnv?.SCIFORGE_TEXT_BASE_URL, 'http://member-provider.example/v1');
+    assert.equal(spawnedEnv?.SCIFORGE_TEXT_MODEL, 'member-model');
+    assert.equal(spawnedEnv?.SCIFORGE_TEXT_API_KEY, 'member-secret');
+    assert.equal(appServer.threadStartParams.modelProvider, 'sciforge-model-router');
+    assert.equal(appServer.threadStartParams.model, 'sciforge-router');
+  } finally {
+    await new Promise<void>((resolve, reject) => router.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test('Codex app-server subprocess does not inherit VirtualAppScreen native driver env', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -3230,6 +4125,7 @@ async function tempRuntimeEnv(): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     SCIFORGE_RUNTIME_ROOT: runtimeRoot,
+    SCIFORGE_WEB_SEARCH_MODE: 'fallback',
     [RUNTIME_KEY_ENV]: 'test-key',
   };
   await ensureRuntimeHome({ paths: { env }, overwrite: true });
@@ -3332,6 +4228,7 @@ function fakeAppServer(options: {
   toolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
   turnToolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
   turnEvents?: Array<Record<string, unknown>>;
+  postToolEvents?: Array<Record<string, unknown>>;
   suppressTerminalAfterToolCall?: boolean;
 } = {}) {
   const emitter = new EventEmitter();
@@ -3474,6 +4371,12 @@ function fakeAppServer(options: {
         return;
       }
       if (options.suppressTerminalAfterToolCall) return;
+      if (options.postToolEvents) {
+        options.postToolEvents.forEach((event, index) => {
+          setTimeout(() => write(turnEvent(event, String(state.threadResumeParams.threadId ?? 'thread-1'))), index);
+        });
+        return;
+      }
       write({
         method: options.terminalEvent ?? 'turn/completed',
         params: {

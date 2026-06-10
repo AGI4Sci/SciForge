@@ -90,6 +90,17 @@ test('VSCode module registers through Host-side app module registry', () => {
   assert.equal(match.module.moduleId, 'vscode');
 });
 
+test('VSCode capability catalog exposes current-window read and navigation operations', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const capabilities = vscode.getCapabilities();
+
+  assert.ok(capabilities.includes('observe-current-vscode'));
+  assert.ok(capabilities.includes('read-editor-context'));
+  assert.ok(capabilities.includes('quick-open'));
+  assert.ok(capabilities.includes('workspace-search'));
+});
+
 test('normalizes VSCode observation refs into stable concepts without raw payloads', () => {
   const observation = normalizeVSCodeTestObservation([
     'window:vscode:main',
@@ -170,6 +181,102 @@ test('VSCode readiness requires a Host structured operation ref instead of natur
   assert.equal(ready.status, 'ready');
   assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:read-visible-text:test'));
   assert.doesNotMatch(JSON.stringify(ready), /please read visible text|commandText|message:/i);
+});
+
+test('observe-current-vscode readiness observes current VSCode window refs without editor payloads', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'observe-current-vscode',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'workspace-ref:vscode:primary',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'text:vscode:visible:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'ready');
+  assert.equal(readiness.primitive.name, 'computer_use.observe');
+  assert.deepEqual(readiness.primitive.inputRefs, [
+    'window-action-session:vscode:1',
+    'window:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'operation-ref:vscode:observe-current-vscode:test',
+  ]);
+  assert.ok(readiness.evidenceRefs.includes('capability:vscode:observe-current-vscode'));
+  assert.ok(readiness.evidenceRefs.includes('operation-ref:vscode:observe-current-vscode:test'));
+  assert.doesNotMatch(JSON.stringify(readiness), /paper\.tex|\/Users\/|https?:\/\/|raw|visible text|selected paragraph|providerPayload|base64/i);
+});
+
+test('read-editor-context readiness returns editor file selection cursor range and visible-text refs only', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'read-editor-context',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'workspace-ref:vscode:primary',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:main:selection',
+      'cursor-ref:vscode:main:cursor',
+      'range-ref:vscode:main:range',
+      'text:vscode:visible:main:1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'ready');
+  assert.equal(readiness.primitive.name, 'computer_use.observe');
+  assert.ok(readiness.primitive.inputRefs.includes('element:vscode:editor:monaco:1'));
+  assert.ok(readiness.primitive.inputRefs.includes('file-ref:vscode:current:paper'));
+  assert.ok(readiness.primitive.inputRefs.includes('selection-ref:vscode:main:selection'));
+  assert.ok(readiness.primitive.inputRefs.includes('cursor-ref:vscode:main:cursor'));
+  assert.ok(readiness.primitive.inputRefs.includes('range-ref:vscode:main:range'));
+  assert.ok(readiness.primitive.inputRefs.includes('text:vscode:visible:main:1'));
+  assert.ok(readiness.evidenceRefs.includes('capability:vscode:read-editor-context'));
+  assert.ok(readiness.evidenceRefs.includes('operation-ref:vscode:read-editor-context:test'));
+  assert.doesNotMatch(JSON.stringify(readiness), /private-paper|\/Users\/|https?:\/\/|raw|selected paragraph|providerPayload|base64/i);
+});
+
+test('read-editor-context readiness requires a visible text ref before reading context', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'read-editor-context',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'file-ref:vscode:current:paper',
+      'element:vscode:editor:monaco:1',
+      'selection-ref:vscode:main:selection',
+      'cursor-ref:vscode:main:cursor',
+      'range-ref:vscode:main:range',
+    ],
+  });
+
+  assert.equal(readiness.status, 'blocked');
+  assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:visible-text-ref-required');
+  assert.doesNotMatch(JSON.stringify(readiness), /selected paragraph|private-paper|\/Users\/|https?:\/\//i);
 });
 
 test('VSCode readiness requires complete app process window title and frontmost identity refs', () => {
@@ -1281,6 +1388,50 @@ test('mutation verifier blocks editor window selection and observation drift', (
   assert.equal(missingAfterObserve.reasonRef, 'blocked:vscode-app-module:after-observe-ref-required');
 });
 
+test('mutation verifier accepts collapsed post-replace selection when action refs bind the before selection', () => {
+  const beforeRefs = [
+    'window:vscode:paper',
+    'observation:vscode:paper:before',
+    'freshness:vscode:paper:before',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'selection-ref:vscode:paper:1',
+    'cursor-ref:vscode:paper:1',
+    'range-ref:vscode:paper:1',
+  ];
+  const afterRefs = [
+    'window:vscode:paper',
+    'observation:vscode:paper:after',
+    'freshness:vscode:paper:after',
+    'file-ref:vscode:current:paper',
+    'element:vscode:editor:monaco:1',
+    'text:vscode:after:paper',
+  ];
+
+  const verified = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: [
+      'action:vscode:replace-selection:1',
+      'selection-ref:vscode:paper:1',
+      'cursor-ref:vscode:paper:1',
+      'range-ref:vscode:paper:1',
+    ],
+    afterRefs,
+  });
+
+  assert.equal(verified.status, 'ready');
+  assert.ok(verified.evidenceRefs.includes('verifier:vscode-app-module:same-selection:selection-ref-vscode-paper-1'));
+  assert.doesNotMatch(JSON.stringify(verified), /rawSelectedText|selectedText|selected paragraph|providerPayload|base64|\/Users\//i);
+
+  const unbound = verifyVSCodeMutationEvidence({
+    beforeRefs,
+    actionRefs: ['action:vscode:replace-selection:1'],
+    afterRefs,
+  });
+  assert.equal(unbound.status, 'blocked');
+  assert.equal(unbound.reasonRef, 'blocked:vscode-app-module:single-selection-ref-required');
+});
+
 test('terminal readiness is refs-first and keeps send separate from submit', () => {
   const vscode = createHostStructuredVSCodeAppModule();
 
@@ -1716,6 +1867,129 @@ test('command palette readiness opens and queries without selecting commands', (
   });
   assert.ok(closeFromLiveRefs.primitive.inputRefs.includes('command-palette:vscode:main:current'));
   assert.doesNotMatch(JSON.stringify(closeFromLiveRefs), /workbench|Save File|raw-label/i);
+});
+
+test('quick-open navigation readiness opens VSCode quick open with refs-only query evidence', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+
+  const readiness = vscode.checkReadiness({
+    operation: 'quick-open',
+    refs: [
+      'window-action-session:vscode:1',
+      'macos-app:vscode',
+      'process:vscode:1',
+      'window:vscode:main',
+      'frontmost:vscode:main',
+      'observation:vscode:main:1',
+      'freshness:vscode:main:1',
+      'workspace-ref:vscode:primary',
+      'text-ref:vscode:quick-open-query:unit-1',
+    ],
+  });
+
+  assert.equal(readiness.status, 'ready');
+  assert.equal(readiness.primitive.name, 'computer_use.act');
+  assert.deepEqual(readiness.primitive.action, {
+    kind: 'key',
+    key: 'Meta+P',
+  });
+  assert.ok(readiness.primitive.inputRefs.includes('action:vscode-app-module:quick-open:meta-p'));
+  assert.ok(readiness.primitive.inputRefs.includes('workspace-ref:vscode:primary'));
+  assert.ok(readiness.primitive.inputRefs.includes('text-ref:vscode:quick-open-query:unit-1'));
+  assert.ok(readiness.evidenceRefs.includes('capability:vscode:quick-open'));
+  assert.ok(readiness.evidenceRefs.includes('operation-ref:vscode:quick-open:test'));
+  assert.doesNotMatch(JSON.stringify(readiness), /paper\.tex|\/Users\/|https?:\/\/|raw|visible text|screenshot|providerPayload|base64/i);
+});
+
+test('workspace-search navigation readiness requires workspace and text refs before acting', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+  ];
+
+  const missingWorkspace = vscode.checkReadiness({
+    operation: 'workspace-search',
+    refs: [
+      ...baseRefs,
+      'text-ref:vscode:workspace-search-query:unit-1',
+    ],
+  });
+
+  assert.equal(missingWorkspace.status, 'blocked');
+  assert.equal(missingWorkspace.reasonRef, 'blocked:vscode-app-module:workspace-ref-required');
+
+  const missingText = vscode.checkReadiness({
+    operation: 'workspace-search',
+    refs: [
+      ...baseRefs,
+      'workspace-ref:vscode:primary',
+    ],
+  });
+
+  assert.equal(missingText.status, 'blocked');
+  assert.equal(missingText.reasonRef, 'blocked:vscode-app-module:text-ref-required');
+
+  const ready = vscode.checkReadiness({
+    operation: 'workspace-search',
+    refs: [
+      ...baseRefs,
+      'workspace-ref:vscode:primary',
+      'text-ref:vscode:workspace-search-query:unit-1',
+    ],
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.primitive.name, 'computer_use.act');
+  assert.deepEqual(ready.primitive.action, {
+    kind: 'key',
+    key: 'Meta+Shift+F',
+  });
+  assert.ok(ready.primitive.inputRefs.includes('action:vscode-app-module:workspace-search:meta-shift-f'));
+  assert.ok(ready.primitive.inputRefs.includes('workspace-ref:vscode:primary'));
+  assert.ok(ready.primitive.inputRefs.includes('text-ref:vscode:workspace-search-query:unit-1'));
+  assert.ok(ready.evidenceRefs.includes('capability:vscode:workspace-search'));
+  assert.ok(ready.evidenceRefs.includes('operation-ref:vscode:workspace-search:test'));
+  assert.doesNotMatch(JSON.stringify(ready), /raw search|\/Users\/|https?:\/\/|providerPayload|base64|visible text|screenshot/i);
+});
+
+test('quick-open and workspace-search navigation reject raw path url screenshot and visible text targets', () => {
+  const vscode = createHostStructuredVSCodeAppModule();
+  const baseRefs = [
+    'window-action-session:vscode:1',
+    'macos-app:vscode',
+    'process:vscode:1',
+    'window:vscode:main',
+    'frontmost:vscode:main',
+    'observation:vscode:main:1',
+    'freshness:vscode:main:1',
+    'workspace-ref:vscode:primary',
+    'text-ref:vscode:navigation-query:unit-1',
+  ];
+
+  for (const [operation, unsafeRef] of [
+    ['quick-open', 'raw-path:/Users/example/private-paper.tex'],
+    ['quick-open', 'https://example.invalid/private-paper.tex'],
+    ['workspace-search', 'screenshot-path:/tmp/vscode-search.png'],
+    ['workspace-search', 'text:vscode:visible:raw visible search target'],
+  ] as const) {
+    const readiness = vscode.checkReadiness({
+      operation,
+      refs: [
+        ...baseRefs,
+        unsafeRef,
+      ],
+    });
+
+    assert.equal(readiness.status, 'blocked', operation);
+    assert.equal(readiness.reasonRef, 'blocked:vscode-app-module:raw-ref-not-allowed', operation);
+    assert.doesNotMatch(JSON.stringify(readiness), /private-paper|example\.invalid|vscode-search|raw visible search target|\/Users\/|\/tmp\/|https?:\/\//i);
+  }
 });
 
 test('command palette readiness observes and selects only current item refs', () => {

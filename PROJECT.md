@@ -1,6 +1,6 @@
 # SciForge 当前需求：Agent Host 唯一智能体与工具边界
 
-最后更新：2026-06-08
+最后更新：2026-06-10
 
 ## 核心判断
 
@@ -8,7 +8,11 @@ SciForge 的唯一智能体是 Codex / Agent Host。Agent Host 的模型能力�
 
 Model Router 不是第二个 agent。它对外只是 OpenAI-compatible 的多模态模型 API 边界，负责 provider / protocol / modality translation，不拥有用户任务、对象记忆、workflow、completion truth 或 final answer。
 
-`browser_search`、`browser_read`、Computer Use、artifact/verifier 等都是暴露给 Agent Host 的 tools / actions。工具不具备用户级智能；是否调用、何时调用、如何解释结果，都由 Agent Host 决定。`gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` / `moduleId=gui` completion surface 只属于 unsupported legacy / dynamic-tool shim，不是产品 final-answer 路径。
+`web_search`、Computer Use、artifact/verifier 等都是暴露给 Agent Host 的 tools / actions。工具不具备用户级智能；是否调用、何时调用、如何解释结果，都由 Agent Host 决定。普通网页检索入口收敛为 Codex-compatible `web_search`，不新增 `web_search_custom` 或第二个普通搜索入口：优先使用 Codex native search，native 不可用或不足时才注册 SciForge 同名 fallback。`web_read` 保留为 internal / advanced read strategy，用于 URL 读取、页面级核验和 search fallback，不再作为普通搜索任务默认第二个 model-visible 工具。Browser primitive 仍可作为底层浏览器能力、fallback 或诊断路径。`gui.present` / `gui.ask_user` / `gui_present` / `gui_ask_user` / `moduleId=gui` completion surface 只属于 unsupported legacy / dynamic-tool shim，不是产品 final-answer 路径。
+
+当前任务板：默认 Browser Search / Computer Use 都必须收敛在 Agent Host -> tool/action -> refs-first evidence -> final answer 的 GUI-host 边界内；默认 Browser search 或 Computer Use preflight 只提供 evidence / readiness / blocker，不拥有 final answer。详细勾选项分别维护在 [`PROJECT_browser.md`](PROJECT_browser.md) 和 [`PROJECT_CU.md`](PROJECT_CU.md)，设计基线见 [`docs/superpowers/specs/2026-06-05-default-browser-computer-use-design.md`](docs/superpowers/specs/2026-06-05-default-browser-computer-use-design.md)。
+
+Computer Use 默认档位是 `High Autonomy`；hard-confirm UI 必须展示 action、target、impact、evidence refs、authorization profile、Confirm / Cancel。GUI 只展示状态、收集授权，不生成任务答案或 completion truth。
 
 ## 主链路
 
@@ -18,7 +22,8 @@ User / SciForge UI
   -> Codex App Server protocol events
   -> Codex / Agent Host
       -> calls Model Router /v1/responses as model substrate
-      -> may call MCP tools/actions: browser_search / browser_read / computer_use / artifacts
+      -> may call MCP tools/actions: web_search / computer_use / artifacts
+      -> may use internal/advanced read strategy for URL/page-level verification
       -> owns workflow, evidence ledger, object context, repair, completion truth, turn lifecycle
       -> emits assistant final message / tool / approval / done events
   -> FinalAnswerEnvelope
@@ -115,7 +120,8 @@ Browser、Computer Use、Desktop、artifact、verifier 等都只是 Host tools /
 
 典型证据要求：
 
-- Browser 任务：需要 source page refs / page text refs，搜索结果页本身不能作为完成证据。
+- 普通搜索任务：可以由 current-run `web_search` results、source links、topic relevance 和 source count 满足。
+- URL / 页面级 Browser 任务：需要 current-run source page refs / page text refs；搜索结果页本身不能作为页面正文完成证据。
 - GUI action：需要 before evidence / grounding refs / executor event / after evidence / stale invalidation。
 - Artifact 任务：需要 final artifact refs / validator refs。
 - 高风险动作：需要 approval refs。
@@ -141,7 +147,7 @@ Runtime Codex 必须使用 Model Router 作为模型入口。服务环境必须�
 - 不实现 SciForge 侧第二个 Agent Host。
 - 不实现 SciForge 侧 task router、planner、workflow engine 或 completion engine。
 - 不让 Model Router 拥有对象记忆、workflow、repair 或 final answer。
-- 不把 Browser Search、Computer Use、runtime gateway、slash command 或 GUI 控件做成产品任务入口。
+- 不把 Browser primitive search、Browser pane、Computer Use、runtime gateway、slash command 或 GUI 控件做成产品任务入口。
 - 不让 GUI projection 隐式结束 turn。
 - 不用诊断路径替代普通聊天用户级验收。
 

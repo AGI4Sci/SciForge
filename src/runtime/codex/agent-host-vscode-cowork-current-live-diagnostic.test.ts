@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  currentVSCodeCoWorkWindowObservationFromSnapshot,
   VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV,
   VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV,
@@ -18,8 +19,10 @@ import {
   runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic,
   runCurrentVSCodeCoWorkFocusEditorLiveDiagnostic,
   runCurrentVSCodeCoWorkInsertDraftLiveDiagnostic,
+  runCurrentVSCodeCoWorkNavigationSearchLiveDiagnostic,
   runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
   runCurrentVSCodeCoWorkTerminalLiveDiagnostic,
+  VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC_ENV,
 } from './agent-host-vscode-cowork-current-live-diagnostic.js';
 
 const currentVSCodeLiveEnabled = process.env[VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV] === '1';
@@ -214,6 +217,45 @@ test('current VSCode co-work command palette diagnostic is independently env-gat
   assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload/i);
 });
 
+test('current VSCode co-work navigation/search diagnostic is independently env-gated and does not touch ports by default', async () => {
+  const liveCalls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkNavigationSearchLiveDiagnostic({
+    env: {},
+    runId: 'unit-current-vscode-navigation-default-off',
+    operation: 'quick-open',
+    queryTextRef: 'text-ref:vscode:quick-open-query:default-off',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('navigation/search live port should not run without env');
+    },
+    pressKeyInCurrentVSCode: async () => {
+      liveCalls.push('press-key');
+      throw new Error('navigation/search action should not run without env');
+    },
+    resolveTextRef: async () => {
+      liveCalls.push('resolve-text');
+      throw new Error('navigation/search query should never resolve raw text by default');
+    },
+    restoreFocus: async () => {
+      liveCalls.push('restore-focus');
+    },
+    restoreMouse: async () => {
+      liveCalls.push('restore-mouse');
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, []);
+  assert.match(result.message, new RegExp(`missing-env:${VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC_ENV}`));
+  assert.equal(result.agentHostFinalAnswer?.status, 'blocked');
+  assert.deepEqual(result.agentHostFinalAnswer?.evidenceRefs, []);
+  assert.deepEqual(result.agentHostFinalAnswer?.cleanupRefs, []);
+  assert.deepEqual(liveCalls, []);
+  assert.doesNotMatch(JSON.stringify(result), /product-ready|kill-vscode|clear-profile|base64|providerPayload|private-paper|\/Users\//i);
+});
+
 test('current VSCode co-work editor scope diagnostic is independently env-gated and does not touch ports by default', async () => {
   const liveCalls: string[] = [];
   const result = await runCurrentVSCodeCoWorkEditorScopeLiveDiagnostic({
@@ -382,6 +424,36 @@ test('current VSCode co-work current selection apply diagnostic is independently
   }
   assert.deepEqual(liveCalls, []);
   assert.doesNotMatch(JSON.stringify([result, genericOnly]), /product-ready|kill-vscode|clear-profile|base64|providerPayload|scoped-input-lease|scoped-input-adapter|cursor-marker/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic rejects unsafe draft text refs before touching live ports', async () => {
+  const liveCalls: string[] = [];
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-apply-unsafe-text-ref',
+    draftTextRef: 'text-ref: private draft sentence must not become public',
+    readCurrentWindow: async () => {
+      liveCalls.push('read-current-window');
+      throw new Error('read port should not run for unsafe text ref');
+    },
+    resolveTextRef: async () => {
+      liveCalls.push('resolve-text');
+      throw new Error('resolver should not run for unsafe text ref');
+    },
+    typeResolvedText: async () => {
+      liveCalls.push('type-text');
+      throw new Error('writer should not run for unsafe text ref');
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(result.primitiveChainObserved, []);
+  assert.deepEqual(result.cleanupRefs, []);
+  assert.deepEqual(liveCalls, []);
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-cowork:current-selection-apply-text-ref-required'));
+  assert.doesNotMatch(JSON.stringify(result), /private draft sentence|must not become public|base64|providerPayload|scoped-input-lease/i);
 });
 
 test('current VSCode co-work editor scope diagnostic mocks observe scope and releases', async () => {
@@ -755,6 +827,437 @@ test('current VSCode co-work scratch mutation diagnostic mocks non-user scratch 
   assert.doesNotMatch(serialized, /scratch draft body|hidden from evidence|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|text:vscode:scratch|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('current VSCode co-work scratch mutation diagnostic accepts real-like untitled scratch snapshot without pre-existing selection text', async () => {
+  const calls: string[] = [];
+  const scratchObservation = (suffix: string) => currentVSCodeCoWorkWindowObservationFromSnapshot({
+    pid: '9182',
+    windowTitle: 'Untitled-1 - SciForge - Visual Studio Code',
+    collectedText: `scratch body ${suffix} must stay private`,
+    focusedRole: 'AXTextArea',
+    focusedName: 'Untitled-1',
+    focusedDescription: 'Code editor',
+    focusedSelectedTextRange: '{0, 0}',
+    focusedInsertionPointLineNumber: '1',
+    observedAtMs: 1_780_905_600_000 + calls.length,
+  });
+  const observations = [
+    scratchObservation('bind'),
+    scratchObservation('before'),
+    scratchObservation('act-after'),
+    scratchObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-scratch-buffer-snapshot',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:scratch-draft'
+        ? 'private scratch draft'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('file-ref:vscode:scratch:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('non-user-file-scope:vscode:scratch:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('selection-ref:vscode:scratch:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('cursor-ref:vscode:scratch:')));
+  assert.ok(result.evidenceRefs.some((ref) => ref.startsWith('range-ref:vscode:scratch:')));
+  assert.ok(result.evidenceRefs.includes('text-ref:current-vscode-cowork:scratch-draft'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-scratch-buffer-snapshot'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-scratch-buffer-snapshot'));
+  assert.doesNotMatch(JSON.stringify(result), /private scratch|scratch body|Untitled|Visual Studio Code|Code editor|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic can own and discard a diagnostic scratch buffer', async () => {
+  const calls: string[] = [];
+  const scratchObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:scratch-owned',
+    windowRef: 'window:vscode:scratch-owned',
+    titleRef: 'text:title:scratch-owned',
+    frontmostRef: 'frontmost:vscode:scratch-owned',
+    fileRefs: ['file-ref:vscode:scratch:owned-buffer'],
+    nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch:owned-buffer',
+    editorElementRef: 'element:vscode:editor:scratch-owned',
+    focusedEditorRef: 'focused-editor:vscode:scratch-owned',
+    selectionRef: 'selection-ref:vscode:scratch:owned',
+    cursorRef: 'cursor-ref:vscode:scratch:owned',
+    rangeRef: 'range-ref:vscode:scratch:owned',
+    visibleTextRef: `text:vscode:scratch-owned-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:scratch-owned-${suffix}-sha256`,
+    screenshotRef: `image:vscode:scratch-owned-${suffix}`,
+    accessibilityRef: `accessibility:vscode:scratch-owned-${suffix}`,
+    freshnessRef: `freshness:vscode:scratch-owned-${suffix}`,
+    observationRef: `observation:vscode:scratch-owned-${suffix}`,
+  });
+  const observations = [
+    scratchObservation('bind'),
+    scratchObservation('before'),
+    scratchObservation('act-after'),
+    scratchObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-owned-scratch',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    useDiagnosticScratchBuffer: true,
+    openDiagnosticScratchBuffer: async ({ runId }) => {
+      calls.push(`open-scratch:${runId}`);
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runId}:open`];
+    },
+    discardDiagnosticScratchBuffer: async ({ runId, scratchScopeRefs }) => {
+      calls.push(`discard-scratch:${runId}:${scratchScopeRefs?.sort().join('|')}`);
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runId}:discard`];
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:scratch-draft'
+        ? 'owned scratch draft body'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'prepare-scratch-buffer',
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'cleanup(scratch-buffer)',
+    'control(release)',
+  ]);
+  assert.deepEqual(calls, [
+    'open-scratch:unit-current-vscode-owned-scratch',
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:scratch-draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:scratch-draft:observation:vscode:scratch-owned-before',
+    'read-current-window',
+    'read-current-window',
+    'discard-scratch:unit-current-vscode-owned-scratch:file-ref:vscode:scratch:owned-buffer|non-user-file-scope:vscode:scratch:owned-buffer',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-owned-scratch',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-owned-scratch',
+  ]);
+  assert.ok(result.cleanupRefs.includes('diagnostic-scratch-buffer:current-vscode-cowork:unit-current-vscode-owned-scratch:open'));
+  assert.ok(result.cleanupRefs.includes('diagnostic-scratch-buffer:current-vscode-cowork:unit-current-vscode-owned-scratch:discard'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-owned-scratch'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-owned-scratch'));
+  assert.doesNotMatch(JSON.stringify(result), /owned scratch draft|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic does not discard when owned scratch scope is unproven', async () => {
+  const calls: string[] = [];
+  const userFileObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:scratch-unproven',
+    windowRef: 'window:vscode:scratch-unproven',
+    titleRef: 'text:title:scratch-unproven',
+    frontmostRef: 'frontmost:vscode:scratch-unproven',
+    fileRefs: ['file-ref:vscode:current:user-file'],
+    editorElementRef: 'element:vscode:editor:scratch-unproven',
+    focusedEditorRef: 'focused-editor:vscode:scratch-unproven',
+    visibleTextRef: `text:vscode:scratch-unproven-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:scratch-unproven-${suffix}-sha256`,
+    screenshotRef: `image:vscode:scratch-unproven-${suffix}`,
+    accessibilityRef: `accessibility:vscode:scratch-unproven-${suffix}`,
+    freshnessRef: `freshness:vscode:scratch-unproven-${suffix}`,
+    observationRef: `observation:vscode:scratch-unproven-${suffix}`,
+  });
+  const observations = [
+    userFileObservation('bind'),
+    userFileObservation('before'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-owned-scratch-unproven',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    useDiagnosticScratchBuffer: true,
+    openDiagnosticScratchBuffer: async ({ runId }) => {
+      calls.push(`open-scratch:${runId}`);
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runId}:open`];
+    },
+    discardDiagnosticScratchBuffer: async ({ runId }) => {
+      calls.push(`discard-scratch:${runId}`);
+      throw new Error(`discard must not run for ${runId}`);
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return 'draft must not resolve without scratch scope';
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /editor-scope-selection-ref-required|scratch-/);
+  assert.deepEqual(calls, [
+    'open-scratch:unit-current-vscode-owned-scratch-unproven',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-owned-scratch-unproven',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-owned-scratch-unproven',
+  ]);
+  assert.ok(result.cleanupRefs.includes('diagnostic-scratch-buffer:current-vscode-cowork:unit-current-vscode-owned-scratch-unproven:open'));
+  assert.ok(!result.cleanupRefs.some((ref) => ref.endsWith(':discard')));
+  assert.ok(!result.evidenceRefs.includes('blocked:vscode-cowork:scratch-buffer-cleanup-failed'));
+  assert.doesNotMatch(JSON.stringify(result), /draft must not resolve|discard must not run|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic treats skipped owned scratch discard as blocked cleanup', async () => {
+  const calls: string[] = [];
+  const scratchObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:scratch-skip',
+    windowRef: 'window:vscode:scratch-skip',
+    titleRef: 'text:title:scratch-skip',
+    frontmostRef: 'frontmost:vscode:scratch-skip',
+    fileRefs: ['file-ref:vscode:scratch:skip-buffer'],
+    nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch:skip-buffer',
+    editorElementRef: 'element:vscode:editor:scratch-skip',
+    focusedEditorRef: 'focused-editor:vscode:scratch-skip',
+    selectionRef: 'selection-ref:vscode:scratch:skip',
+    cursorRef: 'cursor-ref:vscode:scratch:skip',
+    rangeRef: 'range-ref:vscode:scratch:skip',
+    visibleTextRef: `text:vscode:scratch-skip-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:scratch-skip-${suffix}-sha256`,
+    screenshotRef: `image:vscode:scratch-skip-${suffix}`,
+    accessibilityRef: `accessibility:vscode:scratch-skip-${suffix}`,
+    freshnessRef: `freshness:vscode:scratch-skip-${suffix}`,
+    observationRef: `observation:vscode:scratch-skip-${suffix}`,
+  });
+  const observations = [
+    scratchObservation('bind'),
+    scratchObservation('before'),
+    scratchObservation('act-after'),
+    scratchObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-owned-scratch-discard-skipped',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    useDiagnosticScratchBuffer: true,
+    openDiagnosticScratchBuffer: async ({ runId }) => {
+      calls.push(`open-scratch:${runId}`);
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runId}:open`];
+    },
+    discardDiagnosticScratchBuffer: async ({ runId, scratchScopeRefs }) => {
+      calls.push(`discard-scratch:${runId}:${scratchScopeRefs?.sort().join('|')}`);
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runId}:discard-skipped`];
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async () => 'private skip draft',
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /scratch-buffer-cleanup-skipped/);
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-cowork:scratch-buffer-cleanup-skipped'));
+  assert.ok(result.cleanupRefs.includes('diagnostic-scratch-buffer:current-vscode-cowork:unit-current-vscode-owned-scratch-discard-skipped:discard-skipped'));
+  assert.deepEqual(result.primitiveChainObserved, [
+    'prepare-scratch-buffer',
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'cleanup(scratch-buffer)',
+    'control(release)',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /private skip draft|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic treats failed owned scratch discard as blocked cleanup', async () => {
+  const calls: string[] = [];
+  const scratchObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:scratch-discard-fail',
+    windowRef: 'window:vscode:scratch-discard-fail',
+    titleRef: 'text:title:scratch-discard-fail',
+    frontmostRef: 'frontmost:vscode:scratch-discard-fail',
+    fileRefs: ['file-ref:vscode:scratch:discard-fail-buffer'],
+    nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch:discard-fail-buffer',
+    editorElementRef: 'element:vscode:editor:scratch-discard-fail',
+    focusedEditorRef: 'focused-editor:vscode:scratch-discard-fail',
+    selectionRef: 'selection-ref:vscode:scratch:discard-fail',
+    cursorRef: 'cursor-ref:vscode:scratch:discard-fail',
+    rangeRef: 'range-ref:vscode:scratch:discard-fail',
+    visibleTextRef: `text:vscode:scratch-discard-fail-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:scratch-discard-fail-${suffix}-sha256`,
+    screenshotRef: `image:vscode:scratch-discard-fail-${suffix}`,
+    accessibilityRef: `accessibility:vscode:scratch-discard-fail-${suffix}`,
+    freshnessRef: `freshness:vscode:scratch-discard-fail-${suffix}`,
+    observationRef: `observation:vscode:scratch-discard-fail-${suffix}`,
+  });
+  const observations = [
+    scratchObservation('bind'),
+    scratchObservation('before'),
+    scratchObservation('act-after'),
+    scratchObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-owned-scratch-discard-failed',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    useDiagnosticScratchBuffer: true,
+    openDiagnosticScratchBuffer: async ({ runId }) => {
+      calls.push(`open-scratch:${runId}`);
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runId}:open`];
+    },
+    discardDiagnosticScratchBuffer: async ({ runId, scratchScopeRefs }) => {
+      calls.push(`discard-scratch:${runId}:${scratchScopeRefs?.sort().join('|')}`);
+      throw new Error('discard sheet button missing');
+    },
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async () => 'private discard fail draft',
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /scratch-buffer-cleanup-failed/);
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-cowork:scratch-buffer-cleanup-failed'));
+  assert.ok(result.cleanupRefs.includes('diagnostic-scratch-buffer:current-vscode-cowork:unit-current-vscode-owned-scratch-discard-failed:open'));
+  assert.ok(!result.cleanupRefs.some((ref) => ref.endsWith(':discard')));
+  assert.doesNotMatch(JSON.stringify(result), /discard sheet button missing|private discard fail draft|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work scratch mutation diagnostic surfaces release restoration diagnostics as blocked cleanup', async () => {
+  const calls: string[] = [];
+  const scratchObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:scratch-release',
+    windowRef: 'window:vscode:scratch-release',
+    titleRef: 'text:title:scratch-release',
+    frontmostRef: 'frontmost:vscode:scratch-release',
+    fileRefs: ['file-ref:vscode:scratch:release-buffer'],
+    nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch:release-buffer',
+    editorElementRef: 'element:vscode:editor:scratch-release',
+    focusedEditorRef: 'focused-editor:vscode:scratch-release',
+    selectionRef: 'selection-ref:vscode:scratch:release',
+    cursorRef: 'cursor-ref:vscode:scratch:release',
+    rangeRef: 'range-ref:vscode:scratch:release',
+    visibleTextRef: `text:vscode:scratch-release-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:scratch-release-${suffix}-sha256`,
+    screenshotRef: `image:vscode:scratch-release-${suffix}`,
+    accessibilityRef: `accessibility:vscode:scratch-release-${suffix}`,
+    freshnessRef: `freshness:vscode:scratch-release-${suffix}`,
+    observationRef: `observation:vscode:scratch-release-${suffix}`,
+  });
+  const observations = [
+    scratchObservation('bind'),
+    scratchObservation('before'),
+    scratchObservation('act-after'),
+    scratchObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorScratchMutationLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_SCRATCH_MUTATION_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-scratch-release-diagnostic',
+    draftTextRef: 'text-ref:current-vscode-cowork:scratch-draft',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async () => 'private release draft',
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+      throw new Error('front app restore unavailable');
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /release-cleanup-failed/);
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-cowork:release-cleanup-failed'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-scratch-release-diagnostic'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-scratch-release-diagnostic'));
+  assert.doesNotMatch(JSON.stringify(result), /front app restore unavailable|private release draft|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
 test('current VSCode co-work current selection apply diagnostic mocks one explicit primitive then observe verify and release', async () => {
   const calls: string[] = [];
   const applyObservation = (suffix: string) => ({
@@ -852,6 +1355,316 @@ test('current VSCode co-work current selection apply diagnostic mocks one explic
   assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-apply-mock'));
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /apply draft body|hidden from evidence|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|text:vscode:apply|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic verifies collapsed post-replace selection through action-bound selection refs', async () => {
+  const calls: string[] = [];
+  const applyObservation = (suffix: string, withSelection: boolean) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:apply-collapse',
+    windowRef: 'window:vscode:apply-collapse',
+    titleRef: 'text:title:apply-collapse',
+    frontmostRef: 'frontmost:vscode:apply-collapse',
+    fileRefs: ['selected-file:vscode:apply-collapse-paper'],
+    editorElementRef: 'element:vscode:editor:apply-collapse',
+    focusedEditorRef: 'focused-editor:vscode:apply-collapse',
+    ...(withSelection ? {
+      selectionRef: 'selection-ref:vscode:apply-collapse:current',
+      cursorRef: 'cursor-ref:vscode:apply-collapse:current',
+      rangeRef: 'range-ref:vscode:apply-collapse:current',
+    } : {}),
+    visibleTextRef: `text:vscode:apply-collapse-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:apply-collapse-${suffix}-sha256`,
+    screenshotRef: `image:vscode:apply-collapse-${suffix}`,
+    accessibilityRef: `accessibility:vscode:apply-collapse-${suffix}`,
+    freshnessRef: `freshness:vscode:apply-collapse-${suffix}`,
+    observationRef: `observation:vscode:apply-collapse-${suffix}`,
+  });
+  const observations = [
+    applyObservation('bind', true),
+    applyObservation('before', true),
+    applyObservation('act-after', false),
+    applyObservation('after', false),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-apply-collapse',
+    draftTextRef: 'text-ref:current-vscode-cowork:apply-collapse-draft',
+    primitiveOperation: 'replace-selection',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:apply-collapse-draft'
+        ? 'collapsed apply draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.ok(result.evidenceRefs.includes('selection-ref:vscode:apply-collapse:current'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:same-selection:selection-ref-vscode-apply-collapse-current'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-editor-narrow-apply:unit-current-vscode-apply-collapse:verified'));
+  assert.doesNotMatch(JSON.stringify(result), /collapsed apply draft|hidden from evidence|rawSelectedText|selectedText|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic treats release restoration diagnostics as blocked cleanup', async () => {
+  const calls: string[] = [];
+  const applyObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:apply-release',
+    windowRef: 'window:vscode:apply-release',
+    titleRef: 'text:title:apply-release',
+    frontmostRef: 'frontmost:vscode:apply-release',
+    fileRefs: ['selected-file:vscode:apply-release-paper'],
+    editorElementRef: 'element:vscode:editor:apply-release',
+    focusedEditorRef: 'focused-editor:vscode:apply-release',
+    selectionRef: 'selection-ref:vscode:apply-release:current',
+    cursorRef: 'cursor-ref:vscode:apply-release:current',
+    rangeRef: 'range-ref:vscode:apply-release:current',
+    visibleTextRef: `text:vscode:apply-release-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:apply-release-${suffix}-sha256`,
+    screenshotRef: `image:vscode:apply-release-${suffix}`,
+    accessibilityRef: `accessibility:vscode:apply-release-${suffix}`,
+    freshnessRef: `freshness:vscode:apply-release-${suffix}`,
+    observationRef: `observation:vscode:apply-release-${suffix}`,
+  });
+  const observations = [
+    applyObservation('bind'),
+    applyObservation('before'),
+    applyObservation('act-after'),
+    applyObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-apply-release-diagnostic',
+    draftTextRef: 'text-ref:current-vscode-cowork:apply-release-draft',
+    primitiveOperation: 'replace-selection',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async () => 'private release draft',
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+      throw new Error('front app restore unavailable');
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.message, /release-cleanup-failed/);
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-cowork:release-cleanup-failed'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-apply-release-diagnostic'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-apply-release-diagnostic'));
+  assert.doesNotMatch(JSON.stringify(result), /front app restore unavailable|private release draft|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|rawSelectedText|selectedText|rawDiff|providerPayload|base64|product-ready/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic saves only after apply verifier passes', async () => {
+  const calls: string[] = [];
+  const applyObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:apply-save',
+    windowRef: 'window:vscode:apply-save',
+    titleRef: 'text:title:apply-save',
+    frontmostRef: 'frontmost:vscode:apply-save',
+    fileRefs: ['selected-file:vscode:apply-save-paper'],
+    editorElementRef: 'element:vscode:editor:apply-save',
+    focusedEditorRef: 'focused-editor:vscode:apply-save',
+    selectionRef: 'selection-ref:vscode:apply-save:current',
+    cursorRef: 'cursor-ref:vscode:apply-save:current',
+    rangeRef: 'range-ref:vscode:apply-save:current',
+    visibleTextRef: `text:vscode:apply-save-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:apply-save-${suffix}-sha256`,
+    screenshotRef: `image:vscode:apply-save-${suffix}`,
+    accessibilityRef: `accessibility:vscode:apply-save-${suffix}`,
+    freshnessRef: `freshness:vscode:apply-save-${suffix}`,
+    observationRef: `observation:vscode:apply-save-${suffix}`,
+  });
+  const observations = [
+    applyObservation('bind'),
+    applyObservation('before'),
+    applyObservation('act-after'),
+    applyObservation('after'),
+    applyObservation('save-after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-apply-save-mock',
+    draftTextRef: 'text-ref:current-vscode-cowork:apply-save-draft',
+    primitiveOperation: 'replace-selection',
+    saveAfterApply: true,
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return textRef === 'text-ref:current-vscode-cowork:apply-save-draft'
+        ? 'apply save draft body hidden from evidence'
+        : undefined;
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'verify',
+    'host-decision(save-current-file)',
+    'act(save-current-file)',
+    'control(release)',
+  ]);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:apply-save-draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:apply-save-draft:observation:vscode:apply-save-before',
+    'read-current-window',
+    'read-current-window',
+    'press-key:Meta+S:observation:vscode:apply-save-after',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-apply-save-mock',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-apply-save-mock',
+  ]);
+  assert.ok(result.evidenceRefs.includes('selected-file:vscode:apply-save-paper'));
+  assert.ok(result.evidenceRefs.includes('text-ref:current-vscode-cowork:apply-save-draft'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-editor-narrow-apply:unit-current-vscode-apply-save-mock:verified'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:mutation:selected-file-vscode-apply-save-paper'));
+  assert.ok(result.evidenceRefs.includes('action:vscode:replace-selection:unit-current-vscode-apply-save-mock'));
+  assert.ok(result.evidenceRefs.includes('action:vscode-app-module:save-current-file:meta-s'));
+  assert.ok(result.evidenceRefs.includes('verifier:vscode-cowork:save-current-file:unit-current-vscode-apply-save-mock'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-apply-save-mock'));
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /apply save draft body|hidden from evidence|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|text:vscode:apply-save|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|rawSelectedText|selectedText|rawDiff|providerPayload|workbench|files-save|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work current selection apply diagnostic does not save when apply verifier fails', async () => {
+  const calls: string[] = [];
+  const applyObservation = (suffix: string, fileRef = 'selected-file:vscode:apply-drift-paper') => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:apply-drift',
+    windowRef: 'window:vscode:apply-drift',
+    titleRef: 'text:title:apply-drift',
+    frontmostRef: 'frontmost:vscode:apply-drift',
+    fileRefs: [fileRef],
+    editorElementRef: 'element:vscode:editor:apply-drift',
+    focusedEditorRef: 'focused-editor:vscode:apply-drift',
+    selectionRef: 'selection-ref:vscode:apply-drift:current',
+    cursorRef: 'cursor-ref:vscode:apply-drift:current',
+    rangeRef: 'range-ref:vscode:apply-drift:current',
+    visibleTextRef: `text:vscode:apply-drift-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:apply-drift-${suffix}-sha256`,
+    screenshotRef: `image:vscode:apply-drift-${suffix}`,
+    accessibilityRef: `accessibility:vscode:apply-drift-${suffix}`,
+    freshnessRef: `freshness:vscode:apply-drift-${suffix}`,
+    observationRef: `observation:vscode:apply-drift-${suffix}`,
+  });
+  const observations = [
+    applyObservation('bind'),
+    applyObservation('before'),
+    applyObservation('act-after', 'selected-file:vscode:apply-drift-other'),
+    applyObservation('after', 'selected-file:vscode:apply-drift-other'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkEditorCurrentSelectionApplyLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_CURRENT_SELECTION_APPLY_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-apply-save-drift',
+    draftTextRef: 'text-ref:current-vscode-cowork:apply-save-drift-draft',
+    primitiveOperation: 'replace-selection',
+    saveAfterApply: true,
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async (textRef) => {
+      calls.push(`resolve-text:${textRef}`);
+      return 'drift draft body hidden from evidence';
+    },
+    typeResolvedText: async (input) => {
+      calls.push(`type-resolved-text:${input.textRef}:${input.beforeObservationRef}`);
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+      throw new Error('save must not run after verifier failure');
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.message, 'blocked:vscode-app-module:file-ref-drift');
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'verify',
+    'control(release)',
+  ]);
+  assert.ok(!result.primitiveChainObserved.includes('act(save-current-file)'));
+  assert.ok(result.evidenceRefs.includes('selected-file:vscode:apply-drift-paper'));
+  assert.ok(result.evidenceRefs.includes('selected-file:vscode:apply-drift-other'));
+  assert.ok(result.evidenceRefs.includes('blocked:vscode-app-module:file-ref-drift'));
+  assert.ok(!calls.some((call) => call.startsWith('press-key:Meta+S')));
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'resolve-text:text-ref:current-vscode-cowork:apply-save-drift-draft',
+    'type-resolved-text:text-ref:current-vscode-cowork:apply-save-drift-draft:observation:vscode:apply-drift-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-apply-save-drift',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-apply-save-drift',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /drift draft body|save must not run|action:current-vscode-cowork|executor-event:current-vscode-cowork|input-event:current-vscode-cowork|workbench|files-save|raw-|providerPayload|base64|product-ready/i);
 });
 
 test('current VSCode co-work scratch mutation diagnostic blocks user-file targets before typing and still releases', async () => {
@@ -1103,6 +1916,96 @@ test('current VSCode co-work command palette diagnostic selects only the current
   assert.ok(result.evidenceRefs.includes('verifier:vscode-app-module:palette-same-item:palette-select-obs-palette-select-items-rank-1'));
   assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-palette-select'));
   assert.doesNotMatch(JSON.stringify(result), /hidden query|Save File|workbench|raw-|providerPayload|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('current VSCode co-work navigation/search diagnostic quick-open uses Host refs-only readiness then observes and releases', async () => {
+  const calls: string[] = [];
+  const navigationObservation = (suffix: string) => ({
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: 'process:vscode:quick-open',
+    windowRef: 'window:vscode:quick-open',
+    titleRef: 'text:title:quick-open',
+    frontmostRef: 'frontmost:vscode:quick-open',
+    fileRefs: ['file-ref:vscode:quick-open-current'],
+    editorElementRef: 'element:vscode:editor:quick-open',
+    visibleTextRef: `text:vscode:quick-open-${suffix}`,
+    visibleTextSha256Ref: `text:vscode:quick-open-${suffix}-sha256`,
+    screenshotRef: `image:vscode:quick-open-${suffix}`,
+    accessibilityRef: `accessibility:vscode:quick-open-${suffix}`,
+    freshnessRef: `freshness:vscode:quick-open-${suffix}`,
+    observationRef: `observation:vscode:quick-open-${suffix}`,
+  });
+  const observations = [
+    navigationObservation('bind'),
+    navigationObservation('before'),
+    navigationObservation('act-after'),
+    navigationObservation('after'),
+  ];
+
+  const result = await runCurrentVSCodeCoWorkNavigationSearchLiveDiagnostic({
+    env: {
+      [VSCODE_COWORK_NAVIGATION_SEARCH_LIVE_DIAGNOSTIC_ENV]: '1',
+    },
+    runId: 'unit-current-vscode-quick-open-mock',
+    operation: 'quick-open',
+    queryTextRef: 'text-ref:vscode:quick-open-query:unit-current-vscode-quick-open-mock',
+    readCurrentWindow: async () => {
+      calls.push('read-current-window');
+      return observations[Math.min(calls.filter((call) => call === 'read-current-window').length - 1, observations.length - 1)]!;
+    },
+    resolveTextRef: async () => {
+      calls.push('resolve-text');
+      throw new Error('quick-open diagnostic must not resolve raw query text');
+    },
+    typeResolvedText: async () => {
+      calls.push('type-resolved-text');
+      throw new Error('quick-open diagnostic must not type raw query text');
+    },
+    pressKeyInCurrentVSCode: async (input) => {
+      calls.push(`press-key:${input.key}:${input.beforeObservationRef}`);
+      assert.ok(input.contextRefs?.includes('action:vscode-app-module:quick-open:meta-p'));
+      assert.ok(!input.contextRefs?.some((ref) => /private-paper|\/Users\/|raw-path|https?:\/\//i.test(ref)));
+    },
+    restoreFocus: async (ref) => {
+      calls.push(`restore-focus:${ref}`);
+    },
+    restoreMouse: async (ref) => {
+      calls.push(`restore-mouse:${ref}`);
+    },
+  });
+
+  assert.equal(result.status, 'completed', result.message);
+  assert.equal(result.maturity, 'live-diagnostic');
+  assert.equal(result.productReady, false);
+  assert.deepEqual(result.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision(quick-open)',
+    'act(quick-open)',
+    'observe',
+    'control(release)',
+  ]);
+  assert.deepEqual(calls, [
+    'read-current-window',
+    'read-current-window',
+    'press-key:Meta+P:observation:vscode:quick-open-before',
+    'read-current-window',
+    'read-current-window',
+    'restore-focus:front-app-restore:current-vscode-cowork:unit-current-vscode-quick-open-mock',
+    'restore-mouse:mouse-position-restore:current-vscode-cowork:unit-current-vscode-quick-open-mock',
+  ]);
+  assert.ok(result.evidenceRefs.includes('text-ref:vscode:quick-open-query:unit-current-vscode-quick-open-mock'));
+  assert.ok(result.evidenceRefs.includes('action:vscode-app-module:quick-open:meta-p'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-lease:current-vscode-cowork:unit-current-vscode-quick-open-mock'));
+  assert.ok(result.cleanupRefs.includes('scoped-input-adapter:current-vscode-cowork:unit-current-vscode-quick-open-mock'));
+  assert.ok(result.cleanupRefs.includes('cursor-marker:current-vscode-cowork:unit-current-vscode-quick-open-mock'));
+  assert.ok(result.cleanupRefs.includes('front-app-restore:current-vscode-cowork:unit-current-vscode-quick-open-mock'));
+  assert.ok(result.cleanupRefs.includes('mouse-position-restore:current-vscode-cowork:unit-current-vscode-quick-open-mock'));
+  assert.equal(result.agentHostFinalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(result.agentHostFinalAnswer?.computerUseCorePlanning, false);
+  assert.deepEqual(result.agentHostFinalAnswer?.primitiveChainObserved, result.primitiveChainObserved);
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /quick-open diagnostic must not|resolve-text|type-resolved-text|private-paper|\/Users\/|raw-path|hidden query|text:vscode:quick-open|image:vscode|accessibility:vscode|window:vscode|observation:vscode|operation-ref:|module:vscode-app|capability:vscode|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
 test('current VSCode co-work live diagnostic preserves restoration refs when bind cannot observe VSCode', async () => {

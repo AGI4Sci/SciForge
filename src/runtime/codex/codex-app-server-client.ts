@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { resolve, sep } from 'node:path';
+import { access } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import type { ModuleDescription, ModuleInvokeRequest, ModuleQueryRequest, ModuleReadRequest } from '@sciforge-ui/runtime-contract/modules';
@@ -10,6 +11,7 @@ import {
   resolveRuntimeCodexSandbox,
   type RuntimeCodexSandbox,
 } from '../../../packages/backend/src/runtime-home.js';
+import { createWorkspaceLocalConfigService } from '../workspace-server-local-config.js';
 import {
   BROWSER_PRIMITIVE_INPUT_SCHEMAS,
   BROWSER_PRIMITIVE_INTENTS,
@@ -39,6 +41,7 @@ import {
   evaluateAgentHostBrowserSearchDiscovery,
   evaluateAgentHostBrowserSearchQuery,
   evaluateAgentHostBrowserEvidence,
+  agentHostBrowserCompletionTruthFromEvaluation,
   recordAgentHostBrowserRefs,
   recordAgentHostBrowserToolResult,
   type AgentHostBrowserCompletionTruth,
@@ -49,6 +52,13 @@ import {
 } from './agent-host-browser-evidence.js';
 import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, type RuntimeModuleDispatcher } from '../modules/dispatcher.js';
 import { createBrowserRuntimeModuleHandler } from '../modules/bounded-operation-module-handlers.js';
+import {
+  WEB_READ_INPUT_SCHEMA_VERSION,
+  WEB_READ_INTENT,
+  WEB_SEARCH_INPUT_SCHEMA_VERSION,
+  WEB_SEARCH_INTENT,
+  createWebRuntimeModuleHandler,
+} from '../modules/web-runtime-module-handler.js';
 import { callSubagentMcpTool } from './subagent-mcp-tools.js';
 import {
   createComputerUseNativeRouteStream,
@@ -98,6 +108,7 @@ export interface CodexAppServerJsonRpcClientOptions {
     title?: string | null;
     version: string;
   };
+  webSearchCapability?: WebSearchCapability;
 }
 
 type CodexAppServerApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
@@ -105,7 +116,20 @@ type RequestId = number | string;
 const BROWSER_READ_REQUIRED_DISCOVERY_ATTEMPT_LIMIT = 3;
 const BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT = 0;
 const BROWSER_HOST_FINALIZE_AFTER_FINAL_REQUIRED_LIMIT = 3;
-const P10_PALETTE_OPEN = 'open-command-palette' as const;
+const WEB_SEARCH_REPEATED_PROVIDER_FAILURE_LIMIT = 3;
+const WEB_SEARCH_DIRECT_TOOL_NAME = 'web_search';
+const WEB_READ_DIRECT_TOOL_NAME = 'web_read';
+const VSCODE_OPERATION_OPEN_COMMAND_PALETTE = 'open-command-palette' as const;
+
+export interface WebSearchCapability {
+  schemaVersion: 'sciforge.web-search.capability.v1';
+  mode: 'native' | 'fallback';
+  native_available: boolean;
+  native_enabled: boolean;
+  fallback_registered: boolean;
+  conflict_detected: boolean;
+  reason: string;
+}
 
 interface JsonRpcRequest {
   id: RequestId;
@@ -132,11 +156,12 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
   private readonly activeSessions = new Map<string, CodexAppServerJsonRpcSession>();
   private readonly activeNativeTurns = new Map<string, AbortController>();
   private readonly visionDescriptorCache = new Map<string, RuntimeInputObjectVisionDescriptor>();
+  private readonly localConfigServices = new Map<string, ReturnType<typeof createWorkspaceLocalConfigService>>();
 
   constructor(private readonly options: CodexAppServerJsonRpcClientOptions = {}) {}
 
   async startTurn(request: CodexAppServerStartTurnRequest): Promise<CodexAppServerTurnStream> {
-    const baseEnv = this.options.env ?? process.env;
+    const baseEnv = await this.prepareRuntimeEnvForTurn(request, this.options.env ?? process.env);
     const commandId = request.commandId;
     const attemptId = request.attemptId;
     const nativeRouteStream = await this.startComputerUseNativeRoute(request, baseEnv, commandId);
@@ -152,6 +177,10 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     const sandbox = this.options.sandbox ?? resolveRuntimeCodexSandbox(baseEnv);
     const approvalPolicy = this.options.approvalPolicy ?? approvalPolicyFromEnv(baseEnv) ?? 'never';
     const transcriptRoot = this.options.transcriptRoot ?? defaultSubagentTranscriptRoot();
+    const webSearchCapability = this.options.webSearchCapability ?? resolveWebSearchCapability(baseEnv);
+    if (webSearchCapability.conflict_detected) {
+      throw new Error(`web_search capability conflict: ${webSearchCapability.reason}`);
+    }
     const subagentInjection = await prepareRuntimeSubagentInjection({
       workspace: config.workspace,
       profile: config.profile,
@@ -164,6 +193,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       transcriptRoot,
     });
     const args = this.options.args ?? [
+      ...(webSearchCapability.native_enabled ? ['--search'] : []),
       'app-server',
       ...RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
       ...appServerConfigArgs([
@@ -189,6 +219,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       profile: config.profile,
       codexHome: config.codexHome,
       visionDescriptorCache: this.visionDescriptorCache,
+      webSearchCapability,
     });
 
     await session.initialize(request.abortSignal);
@@ -209,7 +240,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
         sandbox,
         ephemeral: this.options.ephemeral ?? baseEnv.SCIFORGE_CODEX_APP_SERVER_EPHEMERAL === '1',
         serviceName: this.options.serviceName ?? 'SciForge',
-        developerInstructions: runtimeDeveloperInstructions(request.declaredIntents, request.agentHostGrounding),
+        developerInstructions: runtimeDeveloperInstructions(request.declaredIntents, request.agentHostGrounding, webSearchCapability),
       });
 
     const inputObjects = inputObjectsWithCachedVisionDescriptors(request.inputObjects, this.visionDescriptorCache);
@@ -234,10 +265,55 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       model: config.model,
       profile: config.profile,
       workspacePath: config.workspace,
-      events: session.eventsUntilTurnComplete(threadId, turnId, () => {
+      events: session.eventsUntilTurnComplete(threadId, turnId, async () => {
         this.activeSessions.delete(turnId);
+        if (this.activeSessions.size === 0) await this.closeRuntimeLocalConfigServices();
       }),
     };
+  }
+
+  private async prepareRuntimeEnvForTurn(
+    request: CodexAppServerStartTurnRequest,
+    baseEnv: NodeJS.ProcessEnv,
+  ): Promise<NodeJS.ProcessEnv> {
+    const configPath = await runtimeLocalConfigPathForTurn(request.workspacePath, baseEnv);
+    if (!configPath) return baseEnv;
+    const runtimeCodexPort = positiveIntegerEnv(baseEnv.SCIFORGE_RUNTIME_CODEX_PORT)
+      ?? positiveIntegerEnv(baseEnv.SCIFORGE_AGENT_SERVER_PORT)
+      ?? 18080;
+    const workspaceWriterPort = positiveIntegerEnv(baseEnv.SCIFORGE_WORKSPACE_PORT)
+      ?? 5174;
+    const serviceKey = [
+      configPath,
+      resolve(request.workspacePath || '.'),
+      runtimeCodexPort,
+      workspaceWriterPort,
+      baseEnv.SCIFORGE_MODEL_ROUTER_BASE_URL ?? '',
+      baseEnv.SCIFORGE_MODEL_ROUTER_URL ?? '',
+      baseEnv.SCIFORGE_MODEL_ROUTER_PORT ?? '',
+    ].join('\0');
+    let service = this.localConfigServices.get(serviceKey);
+    if (!service) {
+      service = createWorkspaceLocalConfigService({
+        configLocalPath: configPath,
+        runtimeCodexPort,
+        workspaceWriterPort,
+        defaultWorkspacePath: request.workspacePath,
+        cwd: request.workspacePath,
+        env: {
+          ...baseEnv,
+          SCIFORGE_CONFIG_PATH: configPath,
+        },
+      });
+      this.localConfigServices.set(serviceKey, service);
+    }
+    return service.prepareRuntimeCodexEnvFromLocalConfig();
+  }
+
+  private async closeRuntimeLocalConfigServices(): Promise<void> {
+    const services = Array.from(this.localConfigServices.values());
+    this.localConfigServices.clear();
+    await Promise.allSettled(services.map((service) => service.closeManagedModelRouter()));
   }
 
   private async startComputerUseNativeRoute(
@@ -323,7 +399,7 @@ function computerUseNativeRouteAgentHostInput(
   commandId: string,
 ): unknown {
   if (isCurrentVSCodeCoWorkAgentHostInput(request.agentHostInput)) return request.agentHostInput;
-  return p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(request.commandText, commandId, request.attemptId)
+  return currentVSCodeComputerUseAgentHostInputFromCommandText(request.commandText, commandId, request.attemptId)
     ?? request.agentHostInput;
 }
 
@@ -645,6 +721,14 @@ function uniqueRuntimeStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function firstNonEmptyRuntime(...values: Array<string | undefined>): string | undefined {
+  return values.map((value) => value?.trim()).find((value): value is string => Boolean(value));
+}
+
+function booleanEnv(value: string | undefined): boolean {
+  return /^(?:1|true|yes|on|enabled)$/i.test(value?.trim() ?? '');
+}
+
 function stableHex(value: string) {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -690,6 +774,7 @@ interface CodexAppServerJsonRpcSessionOptions {
   profile: string;
   codexHome: string;
   visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>;
+  webSearchCapability: WebSearchCapability;
 }
 
 class CodexAppServerJsonRpcSession {
@@ -710,6 +795,7 @@ class CodexAppServerJsonRpcSession {
   private browserFinalRequiredResponses = 0;
   private browserHostFinalized = false;
   private browserLastReadResult: unknown;
+  private webSearchProviderFailureCounts = new Map<string, number>();
 
   constructor(private readonly options: CodexAppServerJsonRpcSessionOptions) {
     this.process = options.spawnProcess(options.command, options.args, {
@@ -764,7 +850,7 @@ class CodexAppServerJsonRpcSession {
       serviceName: input.serviceName,
       ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
       threadSource: 'user',
-      dynamicTools: runtimeDynamicToolSpecs(),
+      dynamicTools: runtimeDynamicToolSpecs(this.options.webSearchCapability),
       experimentalRawEvents: false,
       persistExtendedHistory: false,
     });
@@ -789,7 +875,7 @@ class CodexAppServerJsonRpcSession {
       modelProvider: input.modelProvider,
       approvalPolicy: input.approvalPolicy,
       sandbox: input.sandbox,
-      dynamicTools: runtimeDynamicToolSpecs(),
+      dynamicTools: runtimeDynamicToolSpecs(this.options.webSearchCapability),
     });
     const resultRecord = isRecord(result) ? result : undefined;
     return stringAt(recordAt(resultRecord, 'thread'), 'id') ?? input.threadId;
@@ -803,6 +889,7 @@ class CodexAppServerJsonRpcSession {
     this.browserFinalRequiredResponses = 0;
     this.browserHostFinalized = false;
     this.browserLastReadResult = undefined;
+    this.webSearchProviderFailureCounts = new Map();
     const result = await this.request('turn/start', input);
     const resultRecord = isRecord(result) ? result : undefined;
     const turnId = stringAt(recordAt(resultRecord, 'turn'), 'id');
@@ -843,7 +930,7 @@ class CodexAppServerJsonRpcSession {
     if (!this.process.killed) this.process.kill('SIGTERM');
   }
 
-  async *eventsUntilTurnComplete(threadId: string, turnId: string, cleanup: () => void): AsyncIterable<unknown> {
+  async *eventsUntilTurnComplete(threadId: string, turnId: string, cleanup: () => void | Promise<void>): AsyncIterable<unknown> {
     let currentTurnId = turnId;
     const assistantTextFragments: string[] = [];
     try {
@@ -853,6 +940,11 @@ class CodexAppServerJsonRpcSession {
         yield event;
         if (!isTerminalTurnEvent(event, threadId, currentTurnId)) continue;
         const finalAnswerText = joinAssistantFinalTextFragments(assistantTextFragments);
+        const terminalEvidenceGate = this.browserTerminalEvidenceGateEvents(finalAnswerText);
+        if (terminalEvidenceGate) {
+          for (const gateEvent of terminalEvidenceGate) yield gateEvent;
+          break;
+        }
         if (finalAnswerText) {
           cacheVisionDescriptorFromFinalAnswer(
             finalAnswerText,
@@ -864,9 +956,62 @@ class CodexAppServerJsonRpcSession {
         break;
       }
     } finally {
-      cleanup();
+      await cleanup();
       this.close();
     }
+  }
+
+  private browserTerminalEvidenceGateEvents(finalAnswerText: string | undefined): Record<string, unknown>[] | undefined {
+    if (!browserLedgerHasEvidenceBoundary(this.browserEvidenceLedger)) return undefined;
+    const finalAnswerRef = finalAnswerText ? `codex.app-server.final-answer:${this.options.parentCommandId}` : undefined;
+    const evaluation = evaluateAgentHostBrowserEvidence(
+      finalAnswerRef
+        ? recordAgentHostBrowserRefs(this.browserEvidenceLedger, [finalAnswerRef])
+        : this.browserEvidenceLedger,
+      { acceptanceSpec: this.browserSearchPlan().acceptanceSpec, finalAnswerText },
+    );
+    if (evaluation.status === 'satisfied') return undefined;
+    const completionTruth = agentHostBrowserCompletionTruthFromEvaluation(evaluation);
+    const refs = uniqueRuntimeStrings([
+      ...this.browserEvidenceLedger.refs,
+      ...evaluation.satisfiedEvidenceRefs,
+    ]).slice(0, 32);
+    const timestamp = new Date().toISOString();
+    const text = browserTerminalEvidenceGateText(evaluation);
+    const raw = {
+      boundary: 'agent-host-browser-terminal-evidence-gate',
+      reason: 'Agent Host blocked terminal ordinary-chat completion because Web/Browser evidence was not sufficient for a user-level final answer.',
+      completionTruth,
+      evaluation,
+      finalAnswerPreview: finalAnswerText ? compactOneLine(finalAnswerText, 500) : undefined,
+      refs,
+    };
+    return [{
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      commandId: this.options.parentCommandId,
+      attemptId: this.options.parentAttemptId,
+      timestamp,
+      status: 'blocked',
+      message: text,
+      text,
+      evidenceRefs: refs,
+      workspace: this.options.cwd,
+      profile: this.options.profile,
+      raw,
+    }, {
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      commandId: this.options.parentCommandId,
+      attemptId: this.options.parentAttemptId,
+      timestamp: new Date().toISOString(),
+      status: 'blocked',
+      message: 'Agent Host blocked terminal Web/Browser completion until web_read source evidence and final-answer refs are sufficient.',
+      evidenceRefs: refs,
+      workspace: this.options.cwd,
+      profile: this.options.profile,
+      raw,
+    }];
   }
 
   private notify(method: string, params?: unknown) {
@@ -963,6 +1108,14 @@ class CodexAppServerJsonRpcSession {
       } else if (isGuiDynamicToolName(toolName)) {
         success = false;
         result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
+      } else if (isWebDynamicToolName(toolName)) {
+        const moduleRequest = webModuleInvokeRequestFromDirectTool(toolName, args);
+        if (!moduleRequest) {
+          success = false;
+          result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
+          return { contentItems: [{ type: 'inputText', text: JSON.stringify(result) }], success };
+        }
+        result = await this.invokeModule(moduleRequest);
       } else if (isBrowserDynamicToolName(toolName)) {
         const moduleRequest = browserModuleInvokeRequestFromDirectTool(toolName, args);
         if (!moduleRequest) {
@@ -1009,6 +1162,10 @@ class CodexAppServerJsonRpcSession {
       }
     }
     if (isBrowserReadRequiredResult(result) || isFailedModuleLikeResult(result)) success = false;
+    const webSearchFailureBudget = this.recordWebSearchProviderFailure(toolName, result);
+    if (webSearchFailureBudget) {
+      setTimeout(() => this.finalizeRepeatedWebSearchProviderFailure(webSearchFailureBudget), 0);
+    }
 
     return {
       contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
@@ -1019,7 +1176,10 @@ class CodexAppServerJsonRpcSession {
   private async invokeModule(moduleRequest: ModuleInvokeRequest): Promise<unknown> {
     const localToolDecision = await this.evaluateLocalToolAct('module.invoke', moduleRequest as unknown as Record<string, unknown>);
     if (localToolDecision.status !== 'auto') {
-      return localToolActPolicyResult(localToolDecision);
+      const webPrimitive = webPrimitiveNameFromModuleRequest(moduleRequest);
+      if (!webPrimitive) return localToolActPolicyResult(localToolDecision);
+      const webPolicyDecision = this.webPrimitiveLocalToolActDecision(moduleRequest, localToolDecision);
+      if (webPolicyDecision.status !== 'auto') return localToolActPolicyResult(webPolicyDecision);
     }
     const browserPrimitive = browserPrimitiveNameFromModuleRequest(moduleRequest);
     if (browserPrimitive) {
@@ -1085,12 +1245,70 @@ class CodexAppServerJsonRpcSession {
     }
   }
 
+  private recordWebSearchProviderFailure(
+    toolName: string,
+    result: unknown,
+  ): { code: string; count: number; result: unknown } | undefined {
+    if (toolName !== WEB_SEARCH_DIRECT_TOOL_NAME) return undefined;
+    const code = webRuntimeFailureCode(result);
+    if (!code || !webSearchProviderFailureCodeIsTerminal(code)) {
+      this.webSearchProviderFailureCounts.clear();
+      return undefined;
+    }
+    const count = (this.webSearchProviderFailureCounts.get(code) ?? 0) + 1;
+    this.webSearchProviderFailureCounts.set(code, count);
+    if (count < WEB_SEARCH_REPEATED_PROVIDER_FAILURE_LIMIT) return undefined;
+    return { code, count, result };
+  }
+
   private browserFinalRequiredResultForDiscovery(primitive: BrowserPrimitiveName): unknown | undefined {
     if (!isBrowserDiscoveryPrimitive(primitive)) return undefined;
     if (!browserLedgerHasReadEvidence(this.browserEvidenceLedger)) return undefined;
     if (this.browserDiscoveryAttemptsAfterRead < BROWSER_FINAL_REQUIRED_DISCOVERY_AFTER_READ_LIMIT) return undefined;
     if (this.browserEvidenceEvaluationForFinalizer().status !== 'satisfied') return undefined;
     return browserFinalRequiredResult(this.browserEvidenceLedger);
+  }
+
+  private finalizeRepeatedWebSearchProviderFailure(input: { code: string; count: number; result: unknown }): void {
+    if (this.closed) return;
+    const timestamp = new Date().toISOString();
+    const message = `Agent Host stopped repeated ${WEB_SEARCH_DIRECT_TOOL_NAME} failures after ${input.count} attempt(s): ${input.code}. Configure a live web_search provider or recover before retrying.`;
+    const raw = {
+      boundary: 'agent-host-web-search-provider-failure-budget',
+      reason: 'Agent Host owns retry budget and fail-closed behavior for repeated Web provider failures.',
+      toolName: WEB_SEARCH_DIRECT_TOOL_NAME,
+      failureCode: input.code,
+      failureCount: input.count,
+      lastResult: boundedJsonForAudit(input.result),
+    };
+    this.queue.push({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      commandId: this.options.parentCommandId,
+      attemptId: this.options.parentAttemptId,
+      timestamp,
+      status: 'blocked',
+      message,
+      text: message,
+      evidenceRefs: [],
+      workspace: this.options.cwd,
+      profile: this.options.profile,
+      raw,
+    });
+    this.queue.push({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'failed',
+      commandId: this.options.parentCommandId,
+      attemptId: this.options.parentAttemptId,
+      timestamp: new Date().toISOString(),
+      status: 'blocked',
+      message,
+      evidenceRefs: [],
+      workspace: this.options.cwd,
+      profile: this.options.profile,
+      raw,
+    });
+    this.close();
   }
 
   private finalizeBrowserHostAnswer(finalRequiredResult: unknown): void {
@@ -1230,6 +1448,36 @@ class CodexAppServerJsonRpcSession {
     });
   }
 
+  private webPrimitiveLocalToolActDecision(
+    moduleRequest: ModuleInvokeRequest,
+    fallback: AgentHostLocalToolActDecision,
+  ): AgentHostLocalToolActDecision {
+    const primitive = webPrimitiveNameFromModuleRequest(moduleRequest);
+    const intent = webIntentFromPrimitive(primitive);
+    if (!primitive || !intent) return fallback;
+    if (webLocalOnlyOrNoNetworkInstruction(turnQuestionText(this.lastTurnStartInput))) {
+      return {
+        ...fallback,
+        status: 'blocked',
+        reason: 'Web primitive is blocked by Agent Host local-only/no-network user instruction.',
+        moduleId: 'web',
+        functionName: 'invoke',
+        intent,
+        sideEffect: 'external',
+      };
+    }
+    return {
+      status: 'auto',
+      reason: `module.invoke ${intent} is a Web evidence primitive; the Web Runtime owns bounded execution, blockers, refs, and confirmation.`,
+      toolName: 'module.invoke',
+      moduleId: 'web',
+      functionName: 'invoke',
+      intent,
+      sideEffect: 'external',
+      evidenceRefs: fallback.evidenceRefs,
+    };
+  }
+
   private async describeModuleForLocalToolAct(moduleId: string): Promise<ModuleDescription | undefined> {
     const result = await this.options.dispatcher.describe({ moduleId });
     if (!isRecord(result) || result.ok !== true || !isRecord(result.value)) return undefined;
@@ -1267,17 +1515,65 @@ function isBrowserDynamicToolName(value: string): boolean {
   return BROWSER_DIRECT_TOOL_NAMES.has(value);
 }
 
+function isWebDynamicToolName(value: string): boolean {
+  return value === WEB_SEARCH_DIRECT_TOOL_NAME || value === WEB_READ_DIRECT_TOOL_NAME;
+}
+
+function webModuleInvokeRequestFromDirectTool(
+  toolName: string,
+  args: Record<string, unknown>,
+): ModuleInvokeRequest | undefined {
+  if (toolName === WEB_SEARCH_DIRECT_TOOL_NAME) {
+    return {
+      moduleId: 'web',
+      intent: WEB_SEARCH_INTENT,
+      input: webSearchDirectToolInput(args),
+    };
+  }
+  if (toolName === WEB_READ_DIRECT_TOOL_NAME) {
+    return {
+      moduleId: 'web',
+      intent: WEB_READ_INTENT,
+      input: webReadDirectToolInput(args),
+    };
+  }
+  return undefined;
+}
+
 function browserModuleInvokeRequestFromDirectTool(
   toolName: string,
   args: Record<string, unknown>,
 ): ModuleInvokeRequest | undefined {
-  const primitive = BROWSER_DIRECT_TOOL_NAMES.get(toolName);
+  const primitive = browserDirectToolPrimitive(toolName);
   if (!primitive) return undefined;
   return {
     moduleId: 'browser',
     intent: BROWSER_PRIMITIVE_INTENTS[primitive],
     input: browserDirectToolInput(primitive, args),
   };
+}
+
+function browserDirectToolPrimitive(toolName: string): BrowserPrimitiveName | undefined {
+  return BROWSER_DIRECT_TOOL_NAMES.get(toolName);
+}
+
+function webSearchDirectToolInput(args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...args,
+    schemaVersion: WEB_SEARCH_INPUT_SCHEMA_VERSION,
+  };
+}
+
+function webReadDirectToolInput(args: Record<string, unknown>): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    ...args,
+    schemaVersion: WEB_READ_INPUT_SCHEMA_VERSION,
+  };
+  if (typeof input.ref === 'string' && input.ref.trim() && !input.resourceRef) {
+    input.resourceRef = input.ref;
+    delete input.ref;
+  }
+  return input;
 }
 
 function browserDirectToolInput(
@@ -1288,6 +1584,10 @@ function browserDirectToolInput(
     ...args,
     schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS[primitive],
   };
+  if (primitive === 'read' && typeof input.ref === 'string' && input.ref.trim() && !input.resourceRef) {
+    input.resourceRef = input.ref;
+    delete input.ref;
+  }
   if (primitive === 'read' && typeof input.url === 'string' && input.url.trim() && !input.sessionId && !input.resourceRef && !input.navigationMode) {
     input.navigationMode = 'ephemeral';
   }
@@ -1311,11 +1611,39 @@ interface BrowserReadRepairCandidate {
 }
 
 function browserPrimitiveNameFromModuleRequest(moduleRequest: ModuleInvokeRequest): BrowserPrimitiveName | undefined {
+  const webPrimitive = webPrimitiveNameFromModuleRequest(moduleRequest);
+  if (webPrimitive) return webPrimitive;
   const record = moduleRequest as unknown as Record<string, unknown>;
   const moduleId = stringAt(record, 'moduleId') ?? stringAt(record, 'module_id');
   if (moduleId !== 'browser') return undefined;
   const intent = stringAt(record, 'intent');
   return BROWSER_PRIMITIVE_NAMES.find((primitive) => BROWSER_PRIMITIVE_INTENTS[primitive] === intent);
+}
+
+function webPrimitiveNameFromModuleRequest(moduleRequest: ModuleInvokeRequest): BrowserPrimitiveName | undefined {
+  const record = moduleRequest as unknown as Record<string, unknown>;
+  const moduleId = stringAt(record, 'moduleId') ?? stringAt(record, 'module_id');
+  if (moduleId !== 'web') return undefined;
+  const intent = stringAt(record, 'intent');
+  if (intent === WEB_SEARCH_INTENT) return 'search';
+  if (intent === WEB_READ_INTENT) return 'read';
+  return undefined;
+}
+
+function webIntentFromPrimitive(primitive: BrowserPrimitiveName | undefined): string | undefined {
+  if (primitive === 'search') return WEB_SEARCH_INTENT;
+  if (primitive === 'read') return WEB_READ_INTENT;
+  return undefined;
+}
+
+function webLocalOnlyOrNoNetworkInstruction(value: string | undefined): boolean {
+  if (!value?.trim()) return false;
+  const text = value.toLowerCase().normalize('NFKC');
+  return /(?:只用|仅用|只使用|仅使用).{0,12}(?:本地|当前|已有|现有|项目|上下文|文件|资料)/u.test(text)
+    || /(?:不要|禁止|不许|无需|别).{0,12}(?:联网|上网|浏览器|browser|\bweb\b|internet|external)/iu.test(text)
+    || /(?:不联网|离线|本地上下文)/u.test(text)
+    || /\b(?:no|without|do not|don't|dont|never)\s+(?:web|internet|browser|browsing|external)\b/i.test(text)
+    || /\b(?:local context only|offline only|use only local context|use local context only)\b/i.test(text);
 }
 
 function isBrowserDiscoveryPrimitive(primitive: BrowserPrimitiveName): boolean {
@@ -1327,18 +1655,64 @@ function browserLedgerHasReadEvidence(ledger: AgentHostBrowserEvidenceLedger): b
   return resources.some((resource) =>
     resource.status === 'read'
     && (
-      (resource.originTool === 'browser.read' && resource.confidence === 'materialized')
+      ((resource.originTool === 'browser.read' || String(resource.originTool) === 'web.read') && resource.confidence === 'materialized')
       || resource.kind === 'source_page'
       || resource.kind === 'page_text'
       || resource.refs?.some((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref))
     ))
-    || ledger.refs.some((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref));
+    || ledger.refs.some((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref) || /^web-(?:source|text):/i.test(ref));
+}
+
+function browserLedgerHasEvidenceBoundary(ledger: AgentHostBrowserEvidenceLedger): boolean {
+  if (ledger.refs.some((ref) =>
+    /^web-(?:search|page|source|text):/i.test(ref)
+    || /^browser-host-session:/i.test(ref)
+    || /^browser:resource:/i.test(ref)
+    || /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref))) return true;
+  return Object.values(ledger.resourcesByRef).some((resource) =>
+    resource.originTool === 'browser.search'
+    || resource.originTool === 'browser.read'
+    || String(resource.originTool) === 'web.search'
+    || String(resource.originTool) === 'web.read'
+    || resource.kind === 'search_result_set'
+    || resource.kind === 'web_page'
+    || resource.kind === 'source_page'
+    || resource.kind === 'page_text');
+}
+
+function browserTerminalEvidenceGateText(evaluation: AgentHostBrowserEvidenceEvaluation): string {
+  const issueSummary = evaluation.issues
+    .map((issue) => issue.code)
+    .slice(0, 4)
+    .join(', ') || 'browser-evidence-incomplete';
+  if (evaluation.issues.some((issue) =>
+    issue.code === 'browser-read-tool-missing'
+    || issue.code === 'browser-source-page-refs-missing'
+    || issue.code === 'browser-page-text-refs-missing')) {
+    return [
+      'Agent Host 已拦截这次 search-only Web 答复：web_search 只能发现候选，不能作为来源证据。',
+      '请先调用 web_read 读取候选 URL/resourceRef，并取得 sourcePageRef/pageTextRef 后再生成最终回答。',
+      `当前缺口：${issueSummary}`,
+    ].join('\n');
+  }
+  if (evaluation.issues.some((issue) => issue.code === 'browser-final-answer-ref-missing')) {
+    return [
+      'Agent Host 已读取到 Web source/page text evidence，但最终回答还没有绑定 current-run final-answer ref。',
+      '请基于已读取的 sourcePageRef/pageTextRef 直接回答用户，并引用实际读取来源。',
+      `当前缺口：${issueSummary}`,
+    ].join('\n');
+  }
+  return [
+    'Agent Host 已拦截这次 Web/Browser 终态答复，因为 current-run evidence 尚未满足验收。',
+    '请修复来源读取、相关性、数量或时间窗口缺口后再回答。',
+    `当前缺口：${issueSummary}`,
+  ].join('\n');
 }
 
 function browserReadRepairCandidates(ledger: AgentHostBrowserEvidenceLedger): BrowserReadRepairCandidate[] {
   const candidates = Object.values(ledger.resourcesByRef)
     .flatMap(browserReadRepairCandidatesForResource)
-    .filter((candidate) => Object.keys(candidate.readArguments).length > 1);
+    .filter(browserReadRepairCandidateHasTarget);
   const seen = new Set<string>();
   const unique: BrowserReadRepairCandidate[] = [];
   for (const candidate of candidates) {
@@ -1348,6 +1722,12 @@ function browserReadRepairCandidates(ledger: AgentHostBrowserEvidenceLedger): Br
     unique.push(candidate);
   }
   return unique.slice(0, 5);
+}
+
+function browserReadRepairCandidateHasTarget(candidate: BrowserReadRepairCandidate): boolean {
+  return typeof candidate.readArguments.resourceRef === 'string'
+    || typeof candidate.readArguments.sessionId === 'string'
+    || typeof candidate.readArguments.url === 'string';
 }
 
 function browserReadRepairCandidatesForResource(resource: BrowserResource): BrowserReadRepairCandidate[] {
@@ -1372,7 +1752,7 @@ function browserReadRepairCandidate(
 ): BrowserReadRepairCandidate {
   const readArguments = {
     ...readSource,
-    includeText: true,
+    ...(String(resource.originTool) === 'web.search' || resource.ref.startsWith('web-page:') ? {} : { includeText: true }),
   };
   return {
     ref: resource.ref,
@@ -1402,13 +1782,14 @@ function browserReadRequiredResult(input: {
     moduleId: 'browser',
     attemptedIntent: BROWSER_PRIMITIVE_INTENTS[input.attemptedPrimitive],
     requiredIntent: BROWSER_PRIMITIVE_INTENTS.read,
-    requiredTool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
+    requiredTool: WEB_READ_DIRECT_TOOL_NAME,
+    moduleIntentToolAlias: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
     error: 'browser_read_required',
-    reason: 'Browser search, snippets, opened pages, screenshots, DOM, and AX state are not source evidence until browser_read materializes sourcePageRef/pageTextRef.',
-    evidenceBoundary: 'Call browser_read on a discovered web_page resourceRef, active sessionId, or URL before more Browser discovery/opening or final synthesis.',
+    reason: 'Web search results, snippets, opened pages, screenshots, DOM, and AX state are not source evidence until web_read materializes sourcePageRef/pageTextRef.',
+    evidenceBoundary: 'Call web_read on a discovered web_page resourceRef, active sessionId, or URL before more Browser discovery/opening or final synthesis.',
     nextCall: first
       ? {
-          tool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
+          tool: WEB_READ_DIRECT_TOOL_NAME,
           arguments: first.readArguments,
         }
       : undefined,
@@ -1439,10 +1820,11 @@ function browserSearchRepairRequiredResult(input: {
     moduleId: 'browser',
     attemptedIntent: BROWSER_PRIMITIVE_INTENTS[input.attemptedPrimitive],
     requiredIntent: BROWSER_PRIMITIVE_INTENTS.search,
-    requiredTool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.search),
+    requiredTool: WEB_SEARCH_DIRECT_TOOL_NAME,
+    moduleIntentToolAlias: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.search),
     error: firstIssue?.code ?? 'browser-search-repair-required',
-    reason: firstIssue?.message ?? 'Agent Host requires a repaired Browser search before source reading or final synthesis.',
-    evidenceBoundary: 'Agent Host owns search intent, source relevance, repair, and completion truth. Browser/search modules only execute allowed primitives and return refs-first evidence.',
+    reason: firstIssue?.message ?? 'Agent Host requires a repaired web_search before source reading or final synthesis.',
+    evidenceBoundary: 'Agent Host owns search intent, source relevance, repair, and completion truth. web_search only discovers refs; web_read materializes source/page text refs.',
     attemptedQuery: input.query,
     currentIntent: {
       taskSummary: input.searchPlan.taskSummary,
@@ -1478,9 +1860,9 @@ function browserFinalRequiredResult(ledger: AgentHostBrowserEvidenceLedger): Rec
     status: 'blocked',
     moduleId: 'browser',
     error: 'browser_final_answer_required',
-    reason: 'Current-run browser_read source evidence is already materialized; stop Browser discovery and answer the user using the listed source refs.',
+    reason: 'Current-run web_read source evidence is already materialized; stop Web discovery and answer the user using the listed source refs.',
     requiredAction: 'assistant_final_answer',
-    evidenceBoundary: 'Search results and snippets are no longer needed. The final answer must cite only the browser_read source/page text refs below.',
+    evidenceBoundary: 'Search results and snippets are no longer needed. The final answer must cite only the web_read source/page text refs below.',
     sourceEvidenceRefs: refs,
     readResources,
     repairHints: [{
@@ -1492,11 +1874,27 @@ function browserFinalRequiredResult(ledger: AgentHostBrowserEvidenceLedger): Rec
 }
 
 function browserReadModuleRequestFromCandidate(candidate: BrowserReadRepairCandidate): ModuleInvokeRequest {
+  if (
+    candidate.resourceRef?.startsWith('web-page:')
+    || candidate.ref.startsWith('web-page:')
+    || candidate.originTool === 'web.search'
+  ) {
+    return {
+      moduleId: 'web',
+      intent: WEB_READ_INTENT,
+      input: webReadDirectToolInput(webReadRepairArguments(candidate.readArguments)),
+    };
+  }
   return {
     moduleId: 'browser',
     intent: BROWSER_PRIMITIVE_INTENTS.read,
     input: browserDirectToolInput('read', candidate.readArguments),
   };
+}
+
+function webReadRepairArguments(args: Record<string, unknown>): Record<string, unknown> {
+  const { includeText: _includeText, include_text: _includeTextSnake, ...rest } = args;
+  return rest;
 }
 
 function browserAutoReadResult(input: {
@@ -1517,8 +1915,9 @@ function browserAutoReadResult(input: {
     moduleId: 'browser',
     attemptedIntent: BROWSER_PRIMITIVE_INTENTS[input.attemptedPrimitive],
     dispatchedIntent: BROWSER_PRIMITIVE_INTENTS.read,
-    dispatchedTool: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
-    reason: 'Repeated Browser discovery without source evidence was repaired by Agent Host dispatching browser_read for a discovered candidate resource.',
+    dispatchedTool: WEB_READ_DIRECT_TOOL_NAME,
+    moduleIntentToolAlias: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS.read),
+    reason: 'Repeated Web discovery without source evidence was repaired by Agent Host dispatching web_read for a discovered candidate resource.',
     readArguments: input.moduleRequest.input,
     candidateResource: input.candidate,
     result: input.readResult,
@@ -1536,6 +1935,30 @@ function isFailedModuleLikeResult(result: unknown): boolean {
   return isRecord(result) && result.ok === false;
 }
 
+function webRuntimeFailureCode(result: unknown): string | undefined {
+  const record = isRecord(result) ? result : undefined;
+  const value = recordAt(record, 'value');
+  const valueError = recordAt(value, 'error');
+  return stringAt(valueError, 'code')
+    ?? stringAt(value, 'error')
+    ?? stringAt(record, 'error');
+}
+
+function webSearchProviderFailureCodeIsTerminal(code: string): boolean {
+  return /^(?:provider_unavailable|rate_limited|timeout)$/i.test(code);
+}
+
+function boundedJsonForAudit(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+      .replace(/"((?:authorization|api[-_]?key|token|secret|password))"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+      .replace(/\b(authorization|api[-_]?key|token|secret|password)\b\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,)}\]]+)/gi, '$1=[redacted]')
+      .slice(0, 4_000);
+  } catch {
+    return String(value).slice(0, 4_000);
+  }
+}
+
 function isBrowserFinalRequiredResult(result: unknown): boolean {
   return isRecord(result)
     && result.schemaVersion === 'sciforge.agent-host.browser-final-required.v1'
@@ -1544,13 +1967,14 @@ function isBrowserFinalRequiredResult(result: unknown): boolean {
 
 function browserReadEvidenceRefs(ledger: AgentHostBrowserEvidenceLedger): string[] {
   return uniqueRuntimeStrings([
-    ...ledger.refs.filter((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref)),
+    ...ledger.refs.filter((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref) || /^web-(?:source|text):/i.test(ref)),
     ...Object.values(ledger.resourcesByRef).flatMap((resource) => {
       if (resource.status !== 'read') return [];
       return uniqueRuntimeStrings([
         resource.ref,
         ...(resource.refs ?? []),
       ]).filter((ref) => /source-pages\/.+\.(?:source\.json|txt)$/i.test(ref)
+        || /^web-(?:source|text):/i.test(ref)
         || ((resource.kind === 'source_page' || resource.kind === 'page_text') && /^browser-host-session:/i.test(ref)));
     }),
   ]);
@@ -1720,6 +2144,24 @@ function appServerConfigArgs(args: string[]): string[] {
   return args.flatMap((arg) => (arg === '--config' ? ['-c'] : [arg]));
 }
 
+async function runtimeLocalConfigPathForTurn(workspacePath: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const explicit = env.SCIFORGE_CONFIG_PATH?.trim();
+  const candidates = [
+    ...(explicit ? [resolve(explicit)] : []),
+    ...(workspacePath ? [resolve(workspacePath, 'config.local.json')] : []),
+  ];
+  for (const candidate of candidates) {
+    if (await access(candidate).then(() => true).catch(() => false)) return candidate;
+  }
+  return undefined;
+}
+
+function positiveIntegerEnv(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 async function* cleanupAsyncIterable<T>(iterable: AsyncIterable<T>, cleanup: () => void): AsyncIterable<T> {
   try {
     for await (const value of iterable) yield value;
@@ -1812,38 +2254,62 @@ function isCurrentVSCodeCoWorkAgentHostInput(value: unknown): boolean {
   return refs.some((ref) => ref === 'intent:current-vscode-cowork');
 }
 
-function p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(
+type CurrentVSCodeBridgeFamily =
+  | 'target/session'
+  | 'read/context'
+  | 'navigation/search'
+  | 'terminal'
+  | 'editor-edit'
+  | 'verifier/cleanup';
+
+interface CurrentVSCodeBridgeOperationSpec {
+  operation: string;
+  family: CurrentVSCodeBridgeFamily;
+  textRefKind?: 'command-palette-query' | 'quick-open-query' | 'workspace-search-query' | 'terminal-input' | 'draft';
+  extra?: Record<string, unknown>;
+}
+
+function currentVSCodeComputerUseAgentHostInputFromCommandText(
   commandText: string,
   commandId: string,
   attemptId: string,
 ): Record<string, unknown> | undefined {
   if (!shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText)) return undefined;
+  const operationSpec = currentVSCodeOperationSpecFromCommandText(commandText, commandId, attemptId);
+  if (!operationSpec) return undefined;
   const requestRef = `chat-request:vscode-cowork:${safeRefSegment(commandId)}:${safeRefSegment(attemptId)}`;
-  const selectCurrentItem = shouldSelectCurrentVSCodeCommandPaletteItem(commandText);
+  const operationRef = `operation-ref:vscode:${operationSpec.operation}:${safeRefSegment(commandId)}:${safeRefSegment(attemptId)}`;
+  const textRef = operationSpec.textRefKind
+    ? `text-ref:vscode:${operationSpec.textRefKind}:${safeRefSegment(commandId)}:${safeRefSegment(attemptId)}`
+    : undefined;
+  const operationRefs = [
+    'intent:current-vscode-cowork',
+    'intent:current-vscode-cowork-live-diagnostic',
+    requestRef,
+    operationRef,
+    textRef,
+  ].filter((ref): ref is string => typeof ref === 'string');
+  const vscodeCoWork = compactRecord({
+    requestRef,
+    operation: operationSpec.operation,
+    operationRef,
+    family: operationSpec.family,
+    targetMode: 'smart-detect-current-vscode-window',
+    ...(textRefFieldForOperation(operationSpec, textRef)),
+    ...operationSpec.extra,
+  });
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
     source: 'ordinary-chat-current-vscode-computer-use-bridge',
-    intentText: commandText,
+    intentText: 'intent:current-vscode-cowork',
     singleTurnOverride: false,
     authorizationProfileId: 'high-autonomy',
-    refs: [
-      'intent:current-vscode-cowork',
-      'intent:current-vscode-cowork-live-diagnostic',
-      requestRef,
-    ],
+    refs: operationRefs,
     readiness: {},
     target: {
       kind: 'current-vscode-cowork',
-      vscodeCoWork: {
-        requestRef,
-        operation: P10_PALETTE_OPEN,
-        diagnostic: selectCurrentItem
-          ? 'p10-vscode-bind-observe-command-palette-select-current-item'
-          : 'p10-vscode-bind-observe-command-palette-open-close',
-        targetMode: 'smart-detect-current-vscode-window',
-        paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10',
-        ...(selectCurrentItem ? { selectCurrentItem: true } : {}),
-      },
+      refs: operationRefs,
+      vscodeCoWork,
     },
     observation: {},
     permissions: {
@@ -1854,6 +2320,125 @@ function p10CurrentVSCodeComputerUseAgentHostInputFromCommandText(
   };
 }
 
+function currentVSCodeOperationSpecFromCommandText(
+  commandText: string,
+  commandId: string,
+  attemptId: string,
+): CurrentVSCodeBridgeOperationSpec | undefined {
+  const text = commandText.trim();
+  if (!text) return undefined;
+  const wantsPalette = /(?:命令面板|command\s+palette)/i.test(text);
+  if (wantsPalette) {
+    return {
+      operation: VSCODE_OPERATION_OPEN_COMMAND_PALETTE,
+      family: 'navigation/search',
+      textRefKind: 'command-palette-query',
+      extra: compactRecord({
+        selectCurrentItem: shouldSelectCurrentVSCodeCommandPaletteItem(commandText) ? true : undefined,
+      }),
+    };
+  }
+  if (/(?:quick\s*open|快速打开|快速\s*open)/i.test(text)) {
+    return {
+      operation: 'quick-open',
+      family: 'navigation/search',
+      textRefKind: 'quick-open-query',
+    };
+  }
+  if (/(?:workspace\s*search|全局搜索|工作区搜索|搜索工作区)/i.test(text)) {
+    return {
+      operation: 'workspace-search',
+      family: 'navigation/search',
+      textRefKind: 'workspace-search-query',
+    };
+  }
+  if (/(?:观察|observe|inspect).*(?:当前\s*VSCode|VSCode\s*窗口|current\s+vs\s*code|vs\s*code\s+window|窗口)/i.test(text)) {
+    return {
+      operation: 'observe-current-vscode',
+      family: 'target/session',
+    };
+  }
+  if (/(?:终端|terminal)/i.test(text)) {
+    if (/(?:提交|submit|enter|回车|运行|execute|发送.*(?:提交|回车|enter))/i.test(text)) {
+      return {
+        operation: 'submit-terminal-command',
+        family: 'terminal',
+        textRefKind: 'terminal-input',
+      };
+    }
+    if (/(?:发送|输入|type|send)/i.test(text)) {
+      return {
+        operation: 'send-terminal-text',
+        family: 'terminal',
+        textRefKind: 'terminal-input',
+      };
+    }
+    return {
+      operation: 'observe-terminal',
+      family: 'terminal',
+    };
+  }
+  if (/(?:诊断|diagnostic|problems?|问题面板)/i.test(text)) {
+    return {
+      operation: 'read-diagnostics',
+      family: 'read/context',
+    };
+  }
+  if (/(?:预览|preview).*(?:选区|selection|草稿|draft)|(?:选区|selection).*(?:预览|preview)/i.test(text)) {
+    const token = `${safeRefSegment(commandId)}:${safeRefSegment(attemptId)}`;
+    return {
+      operation: 'preview-current-selection',
+      family: 'editor-edit',
+      extra: {
+        draftArtifactRef: `artifact:vscode-editor-draft:${token}`,
+        diffArtifactRef: `artifact:vscode-editor-diff:${token}`,
+      },
+    };
+  }
+  if (
+    /(?:润色|polish|refine|improve|rewrite|改写|优化|修改|编辑).*(?:当前\s*)?(?:选区|selection)|(?:当前\s*)?(?:选区|selection).*(?:润色|polish|refine|improve|rewrite|改写|优化|修改|编辑)/i.test(text)
+  ) {
+    return undefined;
+  }
+  if (/(?:应用|apply|替换|replace).*(?:草稿|draft|选区|selection)|(?:草稿|draft).*(?:应用|apply)/i.test(text)) {
+    return undefined;
+  }
+  if (/(?:保存|save).*(?:当前文件|file)|(?:当前文件|file).*(?:保存|save)/i.test(text)) {
+    return undefined;
+  }
+  if (/(?:编辑器上下文|editor\s+context|当前上下文|context)/i.test(text)) {
+    return {
+      operation: 'read-editor-context',
+      family: 'read/context',
+    };
+  }
+  if (/(?:读取|阅读|观察|observe|read).*(?:可见文本|visible\s+text|当前编辑器|editor|选区|selection)/i.test(text)) {
+    return {
+      operation: 'read-visible-text',
+      family: 'read/context',
+    };
+  }
+  if (/(?:聚焦|focus).*(?:编辑器|editor)/i.test(text)) {
+    return {
+      operation: 'focus-editor',
+      family: 'target/session',
+    };
+  }
+  return undefined;
+}
+
+function textRefFieldForOperation(
+  operationSpec: CurrentVSCodeBridgeOperationSpec,
+  textRef: string | undefined,
+): Record<string, string> {
+  if (!textRef) return {};
+  if (operationSpec.textRefKind === 'command-palette-query') return { paletteQueryTextRef: textRef };
+  if (operationSpec.textRefKind === 'quick-open-query') return { quickOpenQueryTextRef: textRef };
+  if (operationSpec.textRefKind === 'workspace-search-query') return { workspaceSearchQueryTextRef: textRef };
+  if (operationSpec.textRefKind === 'terminal-input') return { terminalInputTextRef: textRef };
+  return { draftTextRef: textRef };
+}
+
 function shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText: string): boolean {
   const text = commandText.trim();
   if (!text) return false;
@@ -1861,7 +2446,7 @@ function shouldBridgeExplicitCurrentVSCodeComputerUseChat(commandText: string): 
   if (!mentionsVSCode) return false;
   const mentionsComputerUse = /(?:\bcomputer\s*use\b|桌面|GUI|窗口|鼠标|键盘|命令面板|command\s+palette)/i.test(text);
   if (!mentionsComputerUse) return false;
-  return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|observe|bind|control|open|close|command\s+palette|命令面板)/i.test(text);
+  return /(?:操纵|操作|控制|绑定|打开|关闭|点击|输入|读取|观察|保存|润色|应用|替换|修改|编辑|优化|改写|use|observe|bind|control|open|close|save|polish|refine|improve|rewrite|apply|replace|edit|command\s+palette|命令面板)/i.test(text);
 }
 
 function shouldSelectCurrentVSCodeCommandPaletteItem(commandText: string): boolean {
@@ -1881,6 +2466,10 @@ function safeRefSegment(value: string): string {
   return segment || 'turn';
 }
 
+function compactRecord<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
+}
+
 function stringField(value: unknown, key: string): string | undefined {
   if (!isRecord(value)) return undefined;
   const item = value[key];
@@ -1889,13 +2478,51 @@ function stringField(value: unknown, key: string): string | undefined {
 
 function createCodexAppServerRuntimeModuleDispatcher(workspacePath: string): RuntimeModuleDispatcher {
   return createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
+    web: createWebRuntimeModuleHandler({ workspacePath }),
     browser: createBrowserRuntimeModuleHandler({ workspacePath }),
   }));
+}
+
+export function resolveWebSearchCapability(env: NodeJS.ProcessEnv = process.env): WebSearchCapability {
+  const mode = webSearchModeFromEnv(env);
+  const forceFallback = booleanEnv(env.SCIFORGE_WEB_SEARCH_FORCE_FALLBACK_DIRECT_TOOL)
+    || booleanEnv(env.SCIFORGE_WEB_SEARCH_REGISTER_FALLBACK);
+  const nativeEnabled = mode === 'native';
+  const fallbackRegistered = mode === 'fallback' || forceFallback;
+  const conflictDetected = nativeEnabled && fallbackRegistered;
+  const reason = conflictDetected
+    ? 'Codex native web_search and SciForge fallback web_search were both requested for the ordinary direct tool surface.'
+    : nativeEnabled
+      ? 'Codex native web_search is enabled; SciForge fallback direct tool registration is suppressed.'
+      : 'SciForge fallback web_search is registered because native web_search is disabled by configuration.';
+  return {
+    schemaVersion: 'sciforge.web-search.capability.v1',
+    mode,
+    native_available: nativeEnabled,
+    native_enabled: nativeEnabled,
+    fallback_registered: fallbackRegistered && !conflictDetected,
+    conflict_detected: conflictDetected,
+    reason,
+  };
+}
+
+function webSearchModeFromEnv(env: NodeJS.ProcessEnv): WebSearchCapability['mode'] {
+  const raw = firstNonEmptyRuntime(
+    env.SCIFORGE_WEB_SEARCH_MODE,
+    env.SCIFORGE_CODEX_WEB_SEARCH_MODE,
+    env.SCIFORGE_CODEX_NATIVE_WEB_SEARCH,
+    env.SCIFORGE_WEB_SEARCH_NATIVE,
+  )?.toLowerCase();
+  if (raw === 'fallback' || raw === 'self' || raw === 'sciforge' || raw === 'off' || raw === '0' || raw === 'false' || raw === 'disabled') {
+    return 'fallback';
+  }
+  return 'native';
 }
 
 function runtimeDeveloperInstructions(
   declaredIntents?: CodexAppServerStartTurnRequest['declaredIntents'],
   agentHostGrounding?: CodexAppServerStartTurnRequest['agentHostGrounding'],
+  webSearchCapability: WebSearchCapability = resolveWebSearchCapability(process.env),
 ): string {
   const mode = declaredIntents?.mode;
   const authorization = declaredIntents?.authorization;
@@ -1904,9 +2531,6 @@ function runtimeDeveloperInstructions(
   const subagentToolAlias = providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
   const moduleDescribeAlias = providerSafeDynamicToolAlias('module.describe');
   const moduleInvokeAlias = providerSafeDynamicToolAlias('module.invoke');
-  const browserToolAliases = BROWSER_PRIMITIVE_NAMES
-    .map((primitive) => providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]))
-    .join(', ');
   const lines = [
     'SciForge Agent Host delegation protocol:',
     '- User-visible completion protocol: finish with the Codex App Server assistant/final message for final answers, blockers, repair-needed summaries, and needs-human transitions. Do not call GUI presentation tools; SciForge renders the App Server event stream deterministically.',
@@ -1917,9 +2541,13 @@ function runtimeDeveloperInstructions(
     '- Never print or simulate tool-call protocol as prose or markup: no XML/HTML tags, DSML snippets, fenced pseudo-calls, or JSON objects whose function/moduleId/intent fields describe a tool call.',
     '- If a module is needed, make an actual dynamic tool/function call and wait for the tool result. If no dynamic call is possible, say the module call is unavailable; do not output the call payload as text.',
     `- For current, latest, today, external-web, citation, source-verification, or time-sensitive facts, first use ${moduleDescribeAlias} for the relevant module when needed, then collect bounded evidence before synthesizing the answer.`,
-    `- Browser primitive path: prefer the direct dynamic tools ${browserToolAliases}. They are provider-safe aliases for browser.search, browser.navigate, browser.observe, browser.read, browser.extract, and browser.download, and still route through the Host-owned Browser module dispatcher. Compose these primitives yourself: search discovers candidates only; navigate opens or reuses a session; observe returns session state; read materializes page text/source refs; extract parses refs; download writes session-scoped artifacts.`,
+    webSearchCapability.native_enabled
+      ? `- Web evidence path: use Codex native ${WEB_SEARCH_DIRECT_TOOL_NAME} for ordinary external web research. Ordinary search answers may be completed from current-run search results and source links when the Agent Host evidence gate says the request is not read-required.`
+      : `- Web evidence path: use the SciForge fallback ${WEB_SEARCH_DIRECT_TOOL_NAME} direct dynamic tool for ordinary external web research. It returns refs-first search results, source links, timings, and diagnostics in a Codex-compatible shape; ordinary search answers may be completed from current-run search evidence when the request is not read-required.`,
+    '- Read-required escalation: for user-provided URLs, page-level summaries, direct quotes, source conflicts, high-precision verification, low-information search results, or JS-heavy/login/CAPTCHA recovery, use Host-owned internal read/browser fallback paths through module.invoke rather than treating search snippets as page text.',
+    '- Browser fallback path: lower-level Browser primitives are internal fallback/harness operations. Use module.invoke with moduleId "browser" and canonical intents browser.search, browser.navigate, browser.observe, browser.read, browser.extract, or browser.download only when the Host explicitly escalates after Web Runtime blockers such as needs_browser/needs_user_browser. Do not use legacy direct browser_search/browser_read as an ordinary-chat product path.',
     '- Browser calls must use nonzero budgets when a budget field is present, low-risk actions only, and refs-first evidence; if the module returns blocked, partial, failed, or needs-confirmation, use the blocker/repair hint for the next Host decision instead of fabricating current facts.',
-    '- If a Browser tool result returns error=browser_read_required or schemaVersion=sciforge.agent-host.browser-read-required.v1, immediately call browser_read with the provided resourceRef, sessionId, or URL; do not search, navigate, or open more pages until sourcePageRef/pageTextRef evidence exists.',
+    `- If a Browser/Web tool result returns error=browser_read_required or schemaVersion=sciforge.agent-host.browser-read-required.v1, escalate through module.invoke with the provided resourceRef, sessionId, or URL to materialize sourcePageRef/pageTextRef evidence; do not search, navigate, or open more pages until that evidence exists.`,
     '- If a Browser tool result returns error=browser_final_answer_required or schemaVersion=sciforge.agent-host.browser-final-required.v1, stop Browser calls and answer the user now using only the listed sourceEvidenceRefs/readResources.',
     `- Computer Use primitive path: call ${moduleInvokeAlias} with moduleId "computer_use" and primitive intents computer_use.bind, computer_use.observe, computer_use.act, computer_use.run_procedure, and computer_use.control. Host owns task understanding, target choice, semantic locate, approval, artifact validation, completion truth, and final answer; run_procedure only executes Host-specified local primitive steps and does not prove the user task is complete.`,
     '- After a module returns refs or source pages, answer from that evidence and cite stable refs or source URLs present in the returned payload; runtime audit streams, provider payloads, local paths, and credentials stay out of the user-visible answer.',
@@ -1960,7 +2588,9 @@ const MODULE_DYNAMIC_TOOL_NAMES = [
 
 type ModuleDynamicToolName = typeof MODULE_DYNAMIC_TOOL_NAMES[number];
 
-function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
+function runtimeDynamicToolSpecs(
+  webSearchCapability: WebSearchCapability = resolveWebSearchCapability(process.env),
+): Array<Record<string, unknown>> {
   const anyObjectSchema = {
     type: 'object',
     additionalProperties: true,
@@ -2041,7 +2671,7 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
         inputSchema: tool.inputSchema,
       };
     }),
-    ...browserDirectToolSpecs(),
+    ...browserDirectToolSpecs(webSearchCapability),
     {
       namespace: 'multi_agent_v1',
       name: 'spawn_agent',
@@ -2056,20 +2686,32 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
   ];
 }
 
-function browserDirectToolSpecs(): Array<Record<string, unknown>> {
-  return BROWSER_PRIMITIVE_NAMES.map((primitive) => ({
-    name: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]),
-    description: browserDirectToolDescription(primitive),
-    inputSchema: browserDirectToolInputSchema(primitive),
-  }));
+function browserDirectToolSpecs(webSearchCapability: WebSearchCapability): Array<Record<string, unknown>> {
+  return [
+    ...webDirectToolSpecs(webSearchCapability),
+    ...BROWSER_PRIMITIVE_NAMES.filter((primitive) => primitive !== 'search' && primitive !== 'read').map((primitive) => ({
+      name: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]),
+      description: browserDirectToolDescription(primitive),
+      inputSchema: browserDirectToolInputSchema(primitive),
+    })),
+  ];
+}
+
+function webDirectToolSpecs(webSearchCapability: WebSearchCapability): Array<Record<string, unknown>> {
+  if (!webSearchCapability.fallback_registered) return [];
+  return [{
+    name: WEB_SEARCH_DIRECT_TOOL_NAME,
+    description: 'SciForge fallback for Codex-compatible web_search. Use it only when Codex native web_search is unavailable; it returns refs-first search results, source links, timings, diagnostics, and repair hints for ordinary search answers.',
+    inputSchema: webSearchDirectToolInputSchema(),
+  }];
 }
 
 function browserDirectToolDescription(primitive: BrowserPrimitiveName): string {
   const intent = BROWSER_PRIMITIVE_INTENTS[primitive];
-  if (primitive === 'search') return `Direct Browser Runtime primitive for ${intent}; discover candidate web_page resources for a query and return evidenceState for follow-up Browser primitives. Search snippets are not source evidence: call browser_read next with a returned resourceRef or URL to materialize sourcePageRef/pageTextRef before answering.`;
-  if (primitive === 'navigate') return `Direct Browser Runtime primitive for ${intent}; open or reuse a browser session for a Host-selected URL. Opening a page is not source evidence: call browser_read next with the returned sessionId or finalUrl to materialize sourcePageRef/pageTextRef before answering.`;
+  if (primitive === 'search') return `Internal Browser Runtime primitive for ${intent}; ordinary external research must use Codex-compatible web_search first.`;
+  if (primitive === 'navigate') return `Direct Browser Runtime primitive for ${intent}; open or reuse a browser session for a Host-selected URL. Opening a page is not page-level read evidence: use module.invoke with browser.read when a sessionId must be read.`;
   if (primitive === 'observe') return `Direct Browser Runtime primitive for ${intent}; return state and visual/DOM refs for an existing browser session.`;
-  if (primitive === 'read') return `Direct Browser Runtime primitive for ${intent}; materialize page text/source refs from resourceRef, sessionId, or URL. A successful read returns sourcePageRef/pageTextRef evidence for final assistant synthesis.`;
+  if (primitive === 'read') return `Internal Browser Runtime primitive for ${intent}; Browser session reads are available only through module.invoke when Host-owned fallback has an explicit sessionId.`;
   if (primitive === 'extract') return `Direct Browser Runtime primitive for ${intent}; parse links, forms, dates, metadata, or result items from a Browser ref.`;
   return `Direct Browser Runtime primitive for ${intent}; download a Host-selected resource into session-scoped artifacts.`;
 }
@@ -2180,6 +2822,50 @@ function browserDirectToolInputSchema(primitive: BrowserPrimitiveName): Record<s
       timeoutMs: { type: 'number', exclusiveMinimum: 0 },
       filenameHint: { type: 'string' },
       constraints: constraintsSchema,
+    },
+    additionalProperties: false,
+  };
+}
+
+function webSearchDirectToolInputSchema(): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 20 },
+      language: { type: 'string' },
+      region: { type: 'string' },
+      timeRange: { type: 'string' },
+      time_range: { type: 'string' },
+      safeSearch: { type: 'string' },
+      safe_search: { type: 'string' },
+      provider: { type: 'string' },
+      timeoutMs: { type: 'integer', minimum: 1, maximum: 120_000 },
+      timeout_ms: { type: 'integer', minimum: 1, maximum: 120_000 },
+      constraints: { type: 'object', additionalProperties: true },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  };
+}
+
+function webReadDirectToolInputSchema(): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      url: { type: 'string' },
+      resourceRef: { type: 'string' },
+      resource_ref: { type: 'string' },
+      ref: { type: 'string' },
+      format: { type: 'string', enum: ['markdown', 'text', 'html', 'metadata'] },
+      render: { type: 'string', enum: ['auto', 'static', 'browser'] },
+      maxChars: { type: 'integer', minimum: 1, maximum: 200_000 },
+      max_chars: { type: 'integer', minimum: 1, maximum: 200_000 },
+      timeoutMs: { type: 'integer', minimum: 1, maximum: 120_000 },
+      timeout_ms: { type: 'integer', minimum: 1, maximum: 120_000 },
+      cachePolicy: { type: 'string' },
+      cache_policy: { type: 'string' },
+      constraints: { type: 'object', additionalProperties: true },
     },
     additionalProperties: false,
   };

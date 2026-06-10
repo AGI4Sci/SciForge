@@ -1,6 +1,6 @@
 # SciForge 架构
 
-最后更新：2026-06-09
+最后更新：2026-06-10
 
 ## 唯一产品链路
 
@@ -93,7 +93,8 @@ SciForge UI / Runtime Codex projection 不得把 native `message`、`message_del
 
 完成必须有同一 current run 的 evidence 支撑：
 
-- Browser 任务需要 source page refs / page text refs。
+- 普通搜索任务可以由 current-run `web_search` results、source links、topic relevance 和 source count 支撑。
+- URL / 页面级 Browser 任务需要 source page refs / page text refs。
 - GUI action 需要 before evidence / grounding refs / executor event / after evidence / stale invalidation。
 - Artifact 任务需要 final artifact refs / validator refs。
 - 高风险动作需要 approval refs。

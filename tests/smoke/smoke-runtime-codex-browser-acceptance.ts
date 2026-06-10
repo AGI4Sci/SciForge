@@ -443,7 +443,7 @@ function testProducerWriterEnabled(): boolean {
 async function writeProducerProtocolOnlyBlockedAcceptanceManifest(
   ordinary: BrowserAcceptanceManifest,
 ): Promise<BrowserAcceptanceManifest> {
-  const reason = 'Producer fixture protocol-only diagnostic is blocked from release/live acceptance; rerun the real app-server or desktop ordinary-chat writer for product proof.';
+  const reason = 'Producer fixture protocol-only diagnostic is blocked from release/live acceptance; rerun the current web_search/web_read product acceptance path for product proof.';
   const manifest = await writeBlockedAcceptanceManifest(reason);
   const evidenceRefs = uniqueStrings([
     ...(ordinary.acceptanceRubric?.evidenceRefs ?? []),
@@ -484,7 +484,7 @@ async function writeOrdinaryChatReleaseNotes(manifest: BrowserAcceptanceManifest
     '',
     'Acceptance rubric:',
     '- User intent: ordinary Runtime Codex chat must run SciForge Browser retrieval and answer from current source pages.',
-    '- Expected observable result: direct browser_search plus browser_read with BrowserHostSession source-page and page-text refs plus gui.present final-answer evidence.',
+    '- Expected observable result: current web_search plus web_read product proof; legacy direct browser_search/browser_read refs may appear only as BrowserHostSession fallback or diagnostic evidence.',
     `- Actual result: ${manifest.actualTaskResult?.summary ?? 'ordinary-chat Browser acceptance passed'}`,
     `- Evidence refs: ${refs.slice(0, 12).join(', ')}`,
     '- Negative checks: fake pass, missing source refs, missing final answer, seed/demo evidence, and native answer outside default chat remain rejected.',
@@ -944,7 +944,7 @@ function assertOrdinaryChatPassedManifest(manifest: BrowserAcceptanceManifest): 
   assertEvidenceExists(manifest.evidence, 'manifest evidence');
   assertRuntimeCodexBrowserSourceEvidence(manifest, 'manifest browser source evidence');
   const evidenceText = readEvidenceText(manifest.evidence, { includeNotes: true });
-  assert.match(evidenceText, /direct Browser|来源页|source/i, 'ordinary-chat evidence must include the visible Browser answer or audit');
+  assert.match(evidenceText, /diagnostic Browser|BrowserHostSession|来源页|source/i, 'ordinary-chat evidence must include visible source evidence or a diagnostic Browser audit');
   assertDoesNotUseSeedDemoOrRawEvidence(evidenceText, 'manifest evidence');
 }
 
@@ -1146,11 +1146,11 @@ function assertRuntimeCodexBrowserSourceEvidence(manifest: BrowserAcceptanceMani
   );
   assert.ok(
     refs.some((ref) => /\bbrowser_search\b/i.test(ref)),
-    `${label} must prove direct browser_search was requested`,
+    `${label} may retain direct browser_search only as Browser primitive diagnostic/fallback evidence`,
   );
   assert.ok(
     refs.some((ref) => /\bbrowser_read\b/i.test(ref)),
-    `${label} must prove direct browser_read was requested`,
+    `${label} may retain direct browser_read only as Browser primitive diagnostic/fallback evidence`,
   );
   assert.ok(
     refs.some((ref) => /^browser-host-session:/i.test(ref)),

@@ -840,8 +840,8 @@ test('/computer-use 默认聊天请求只生成 terminal-equivalent text 给 Cod
   assert.doesNotMatch(JSON.stringify(body), /desktopBridgeEnabled|allowSharedSystemInput|action\.sciforge\.computer-use|local\.vision-sense/);
   assert.equal(response.message.provenance?.requiresUserConfirmation, true);
   assert.match(String(response.message.provenance?.source), /^gui\.ask_user:codex-command-.*:computer-use$/);
-  assert.match(response.message.content, /Confirmation required/);
-  assert.match(response.message.content, /Allow the operation to click the visible Submit button/);
+  assert.match(response.message.content, /运行需要用户确认/);
+  assert.match(response.message.content, /refs-first 元数据/);
   assert.doesNotMatch(response.message.content, /approval:computer-use:default-chat/);
   assert.doesNotMatch(response.message.content, /Raw action-provider result/);
   const guiAskUser = (response.run.raw as Record<string, unknown>).guiAskUser as Record<string, unknown>;
@@ -1005,8 +1005,7 @@ test('聊天流式请求用上一轮 native Codex session id 恢复多轮上下�
     }],
   }));
 
-  assert.match(String(bodies[0]?.commandText), /^Continue the active Runtime Codex session\./);
-  assert.match(String(bodies[0]?.commandText), /\n\nSummarize current context$/);
+  assert.equal(bodies[0]?.commandText, 'Summarize current context');
   assert.equal(bodies[0]?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
 });
 

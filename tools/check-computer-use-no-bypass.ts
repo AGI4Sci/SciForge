@@ -23,10 +23,14 @@ const bareOrdinaryVSCodeNativeShortcut = /\b(?:shouldRunNarrowCurrentVSCodeOrdin
 const ordinaryTextField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId|selectedText|rawSelectedText|rawSelection|rawPath|rawDiff|rawPayload|providerPayload|terminalOutput|stdout|stderr|history|actionResult|completedAction|completionTruth|taskOutcome)\b/;
 const rawOperationInferenceField = /\b(?:message|commandText|intentText|prompt|paletteLabel|commandId|selectedText|rawSelectedText|rawSelection|rawPath|filePath|targetPath|workspacePath|rawDiff|diff|patch|rawPayload|providerPayload|rawProviderPayload|providerResponse|terminalOutput|terminalResult|stdout|stderr|stdoutText|stderrText|history|actionResult|completedAction|completionTruth|taskOutcome)\b/;
 const vscodeOperationLiteral = /['"](?:focus-editor|read-visible-text|editor-scope|preview-current-selection|apply-current-selection|move-cursor|insert-draft|replace-selection|save-current-file|bulk-replace|cross-file-modify|undo-last-action|redo-last-action|show-problems|read-diagnostics|focus-terminal|send-terminal-text|observe-terminal|submit-terminal-command|interrupt-terminal-command|clear-terminal|focus-editor-from-terminal|open-command-palette|send-command-palette-query|observe-command-palette-items|select-command-palette-item|close-command-palette)['"]/;
+const vscodeOperationRefLiteral = /['"]operation-ref:vscode:[^'"]+['"]/;
 const vscodeOperationTextInferenceHelper = /\b(?:lowRisk[A-Za-z0-9_$]*OperationFromText|[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)|[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)[A-Za-z0-9_$]*(?:To|As|Into)[A-Za-z0-9_$]*(?:VSCode|Vscode|vscode|CoWork|Cowork)[A-Za-z0-9_$]*(?:Operation|operation))\b/;
 const genericOperationTextInferenceHelper = /\b[A-Za-z0-9_$]*(?:Operation|operation)[A-Za-z0-9_$]*(?:From|For|By)[A-Za-z0-9_$]*(?:Text|Prompt|Message|CommandText|IntentText)\b/;
 const vscodeLiveDiagnosticTextInference = /\b(?:liveDiagnostic|live[-\s]?diagnostic|currentVSCodeCoWorkLiveDiagnosticRunner|tryRunCurrentVSCodeCoWorkLiveDiagnostic)\b/i;
 const uiNativeFinalAnswerBypass = /\b(?:nativeCodexMessage|runtimeDoneNativeMessage|withNativeCodexMessageRuntimeResult)\b|codex\.native-message/;
+const currentVSCodeDirectFinalAnswerProjection = /\b(?:finalAnswer|visibleAnswer)\b[\s\S]{0,200}\b(?:message|transcriptText|completedAction|terminalResult|history)\b|\b(?:message|transcriptText|completedAction|terminalResult|history)\b[\s\S]{0,200}\b(?:finalAnswer|visibleAnswer)\b/;
+const vscodeCommandPaletteShortcut = /\b(?:Help:\s*About|workbench\.action\.showAbout)\b/;
+const currentVSCodePaperPolishId = /\b(?:paper[-_.\s]?polish|polish[-_.\s]?paper)\b|paperPolish|PaperPolish|polishPaper|PolishPaper/i;
 const publicProjectionSurfaceFiles = new Set([
   'src/runtime/codex/codex-app-server-adapter.ts',
   'src/runtime/codex/computer-use-native-route.ts',
@@ -133,7 +137,7 @@ async function main() {
           text: line.trim(),
         });
       }
-      if (isVSCodeOperationTextInferenceLine(rel, line)) {
+      if (isVSCodeOperationTextInferenceLine(rel, text, line, index + 1)) {
         findings.push({
           file: rel,
           line: index + 1,
@@ -186,6 +190,7 @@ function fileLevelBypassFindings(file: string, text: string): Finding[] {
   findings.push(...sharedSystemInputSourceClaimFindings(file, text));
   findings.push(...vscodeAppModuleDirectDesktopFindings(file, text));
   findings.push(...vscodeOperationTextInferenceFileFindings(file, text));
+  findings.push(...currentVSCodeBypassFindings(file, text));
   findings.push(...vscodeScratchMutationLiveDiagnosticRawPayloadFindings(file, text));
   if (file === 'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts') {
     const structuredDone = sectionBetween(text, 'function withStructuredRuntimeDoneProjection', 'function withGuiAskUserRuntimeResult');
@@ -294,8 +299,9 @@ function vscodeAppModuleDirectDesktopFindings(file: string, text: string): Findi
 
 function vscodeOperationTextInferenceFileFindings(file: string, text: string): Finding[] {
   if (!isOrdinaryChatOrNativeRouteSurface(file)) return [];
-  const match = vscodeOperationLiteral.exec(text);
+  const match = vscodeOperationLiteral.exec(text) ?? vscodeOperationRefLiteral.exec(text);
   if (!match) return [];
+  if (isAllowedCurrentVSCodeStructuredBridgeFactorySection(file, text, match.index)) return [];
   const context = text.slice(Math.max(0, match.index - 900), Math.min(text.length, match.index + 900));
   if (!rawOperationInferenceField.test(context)) return [];
   if (!/\b(?:infer|derive|detect|guess|parse|select|shouldRun|run|includes|match|test|some|find|trim|String|toLowerCase|toUpperCase)\b/.test(context)) return [];
@@ -306,6 +312,71 @@ function vscodeOperationTextInferenceFileFindings(file: string, text: string): F
     message: 'Ordinary chat/native route must not infer VSCode operations from message/commandText/intentText/selectedText/terminalOutput/history/completedAction text; require a structured Host operation ref.',
     text: lineTextAtIndex(text, match.index),
   }];
+}
+
+function isAllowedCurrentVSCodeStructuredBridgeFactorySection(file: string, text: string, index: number): boolean {
+  const range = allowedCurrentVSCodeStructuredBridgeFactoryRange(file, text);
+  return Boolean(range && index >= range.startIndex && index < range.endIndex);
+}
+
+function allowedCurrentVSCodeStructuredBridgeFactoryRange(
+  file: string,
+  text: string,
+): { startIndex: number; endIndex: number; startLine: number; endLine: number } | undefined {
+  if (file !== 'src/runtime/codex/codex-app-server-client.ts') return undefined;
+  const start = text.indexOf('function currentVSCodeComputerUseAgentHostInputFromCommandText(');
+  const end = text.indexOf('function textRefFieldForOperation(', start);
+  if (start < 0 || end < 0) return undefined;
+  const section = text.slice(start, end);
+  const allowed = /schemaVersion\s*:\s*['"]sciforge\.codex-agent-host-input\.v1['"]/.test(section)
+    && /source\s*:\s*['"]ordinary-chat-current-vscode-computer-use-bridge['"]/.test(section)
+    && /\boperationRef\b/.test(section)
+    && /\btextRef\b/.test(section)
+    && /\btarget\s*:\s*{[\s\S]*?\bkind\s*:\s*['"]current-vscode-cowork['"]/.test(section)
+    && !/\b(?:finalAnswer|visibleAnswer|computerUseNativeRouteRunner|currentVSCodeCoWorkLiveDiagnosticRunner)\b/.test(section);
+  if (!allowed) return undefined;
+  return {
+    startIndex: start,
+    endIndex: end,
+    startLine: lineNumberForIndex(text, start),
+    endLine: lineNumberForIndex(text, end),
+  };
+}
+
+function currentVSCodeBypassFindings(file: string, text: string): Finding[] {
+  if (!isCurrentVSCodeOperationSurface(file)) return [];
+  const findings: Finding[] = [];
+  const directFinalAnswer = currentVSCodeDirectFinalAnswerProjection.exec(text);
+  if (directFinalAnswer) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, directFinalAnswer.index),
+      rule: 'forbidden-current-vscode-direct-final-answer',
+      message: 'current-vscode bridge/transcript code must not project final answers directly from transcript, terminal, history, or completed action text.',
+      text: lineTextAtIndex(text, directFinalAnswer.index),
+    });
+  }
+  const paletteShortcut = vscodeCommandPaletteShortcut.exec(text);
+  if (paletteShortcut) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, paletteShortcut.index),
+      rule: 'forbidden-vscode-command-palette-shortcut',
+      message: 'current-vscode bridge/transcript code must not hard-code raw command palette labels or command ids such as Help: About; require refs-first structured operations.',
+      text: lineTextAtIndex(text, paletteShortcut.index),
+    });
+  }
+  const paperPolish = currentVSCodePaperPolishId.exec(text);
+  if (paperPolish) {
+    findings.push({
+      file,
+      line: lineNumberForIndex(text, paperPolish.index),
+      rule: 'forbidden-current-vscode-paper-polish',
+      message: 'current-vscode bridge/transcript code must not introduce paper-polish operation or runner ids.',
+      text: lineTextAtIndex(text, paperPolish.index),
+    });
+  }
+  return findings;
 }
 
 function computerUsePublicPrimitiveSurfaceFindings(file: string, text: string): Finding[] {
@@ -421,6 +492,10 @@ function isVSCodeAppModuleSource(file: string): boolean {
   return /^src\/runtime\/codex\/vscode-app-module(?:-[^/]*)?\.[cm]?[tj]sx?$/.test(file);
 }
 
+function isCurrentVSCodeOperationSurface(file: string): boolean {
+  return /^src\/runtime\/codex\/.*current-vscode.*\.[cm]?[tj]sx?$/.test(file);
+}
+
 function isAllowedComputerUsePrimitiveName(value: string | undefined): boolean {
   if (!value) return false;
   return allowedComputerUsePrimitiveNames.has(normalizeComputerUsePrimitiveName(value));
@@ -515,8 +590,9 @@ function isBareOrdinaryVSCodeNativeShortcut(file: string, line: string): boolean
   return bareOrdinaryVSCodeNativeShortcut.test(line);
 }
 
-function isVSCodeOperationTextInferenceLine(file: string, line: string): boolean {
+function isVSCodeOperationTextInferenceLine(file: string, text: string, line: string, lineNumber: number): boolean {
   if (!isVSCodeOperationInferenceSurface(file)) return false;
+  if (isAllowedCurrentVSCodeStructuredBridgeFactoryLine(file, text, lineNumber)) return false;
   const code = line.replace(/\/\/.*$/, '');
   if (vscodeOperationTextInferenceHelper.test(code)) return true;
   if (genericOperationTextInferenceHelper.test(code) && (isVSCodeCoWorkRouteSurface(file) || vscodeOperationLiteral.test(code))) return true;
@@ -527,6 +603,11 @@ function isVSCodeOperationTextInferenceLine(file: string, line: string): boolean
   if (vscodeLiveDiagnosticTextInference.test(code) && /\b(?:infer|derive|detect|guess|parse|select|shouldRun|run)\b/i.test(code)) return true;
   if (/\b(?:operation|vscodeCoWorkOperation)\s*[:=]/i.test(code) && /\b(?:String|trim|match|test|includes|toLowerCase|toUpperCase)\s*\(/.test(code)) return true;
   return false;
+}
+
+function isAllowedCurrentVSCodeStructuredBridgeFactoryLine(file: string, text: string, lineNumber: number): boolean {
+  const range = allowedCurrentVSCodeStructuredBridgeFactoryRange(file, text);
+  return Boolean(range && lineNumber >= range.startLine && lineNumber <= range.endLine);
 }
 
 function isVSCodeOperationInferenceSurface(file: string): boolean {

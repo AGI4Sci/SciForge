@@ -28,7 +28,7 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
     ),
     writeFile(
       join(options.workspacePath, '.sciforge', 'browser-host', 'sessions', 'ordinary-chat-producer', 'source-pages', 'producer.txt'),
-      'Source evidence text for Runtime Codex direct Browser primitive acceptance.\n',
+      'Source evidence text for a Runtime Codex diagnostic Browser primitive fixture.\n',
       'utf8',
     ),
   ]);
@@ -44,7 +44,7 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
     'gui.present:final-answer',
     'artifact:runtime-codex-browser-acceptance/final-answer.md',
   ];
-  const finalAnswer = 'Runtime Codex presented a visible answer from direct Browser source evidence.';
+  const finalAnswer = 'Runtime Codex presented a visible answer from diagnostic Browser source evidence.';
   await writeFile(join(options.outputDir, 'final-answer.md'), finalAnswer, 'utf8');
   await writeFile(join(options.outputDir, 'runtime-audit.json'), JSON.stringify({
     schemaVersion: 'sciforge.runtime-codex.browser-ordinary-chat-audit.v1',
@@ -75,16 +75,16 @@ export async function writeRuntimeCodexBrowserOrdinaryChatAcceptance(options: {
     releaseBlocking: false,
     releaseEligible: true,
     acceptanceRubric: {
-      userIntent: 'use ordinary Runtime Codex chat to run SciForge Browser retrieval with source citations',
-      expectedObservableResult: 'direct browser_search plus browser_read result with BrowserHostSession source-page and page-text refs plus gui.present final-answer evidence',
-      actualResult: 'ordinary-chat Runtime Codex Browser retrieval completed with current source refs and a final-answer artifact',
+      userIntent: 'record a diagnostic Runtime Codex Browser primitive fixture with source citations',
+      expectedObservableResult: 'diagnostic browser_search plus browser_read result with BrowserHostSession source-page and page-text refs plus gui.present final-answer evidence',
+      actualResult: 'diagnostic Runtime Codex Browser primitive fixture completed with current source refs and a final-answer artifact',
       evidenceRefs,
       negativeChecks: ['local dogfood alone rejected', 'missing source-page refs rejected', 'missing page-text refs rejected', 'missing final-answer refs rejected'],
-      remainingRisks: 'release smoke still requires service-env Runtime Codex provider auth before this manifest can be produced by the live product path',
+      remainingRisks: 'this fixture is historical/diagnostic only; release proof must come from the current web_search/web_read product path with service-env Runtime Codex provider auth',
     },
     actualTaskResult: {
       status: 'passed',
-      summary: 'Runtime Codex ordinary chat produced a BrowserHostSession-backed retrieval answer.',
+      summary: 'Runtime Codex diagnostic fixture produced BrowserHostSession-backed source evidence.',
       userIntentSatisfied: true,
       outputVerified: true,
       evidenceRefs,

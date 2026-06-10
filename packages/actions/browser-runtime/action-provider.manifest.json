@@ -3,26 +3,23 @@
   "id": "sciforge.browser-runtime",
   "version": "0.1.0",
   "kind": "action",
-  "displayName": "SciForge Browser Runtime",
-  "summary": "Refs-first browser primitive action provider for search, navigation, observation, reading, extraction, and controlled downloads.",
+  "displayName": "SciForge Web Search Runtime",
+  "summary": "Codex-compatible web_search ordinary surface with internal or advanced web_read for read-required escalation.",
   "domains": [
     "browser",
-    "web",
-    "automation"
+    "web"
   ],
   "triggers": [
     "web search",
-    "open URL",
     "read web page",
-    "extract links",
-    "download remote resource",
-    "browser session"
+    "source evidence"
   ],
   "antiTriggers": [
     "final answer synthesis",
     "task completion judgement",
     "domain-specific research strategy",
-    "UI rendering"
+    "batch crawling",
+    "autonomous browsing"
   ],
   "integrationLevel": "schema-adapter",
   "entrypoint": {
@@ -31,117 +28,203 @@
     "module": "packages/actions/browser-runtime/index.ts",
     "symbol": "createBrowserPrimitiveService",
     "path": "packages/actions/browser-runtime",
-    "notes": "Host supplies browser ports; the package owns primitive contracts and MCP-compatible dispatch only."
+    "notes": "Direct MCP aliases route through the Browser module dispatcher. web_search is the ordinary Codex-compatible search surface; web_read is internal or advanced, not a required second step for ordinary search."
   },
   "mcpTools": [
-    "browser_search",
-    "browser_navigate",
-    "browser_observe",
-    "browser_read",
-    "browser_extract",
-    "browser_download"
+    "web_search",
+    "web_read"
+  ],
+  "ordinaryToolSurface": {
+    "defaultTool": "web_search",
+    "description": "Codex-compatible ordinary search surface. Ordinary search may be satisfied by current-run web_search results plus final-answer source links.",
+    "webReadRole": "web_read is internal or advanced for URL summaries, direct quotes, page-level verification, diagnostics, fallback adapters, low-information results, or conflicting sources."
+  },
+  "excludedAgentTools": [
+    {
+      "name": "web_extract",
+      "reason": "Not part of the P0 default tool surface."
+    },
+    {
+      "name": "web_batch_read",
+      "reason": "Batching is owned by Agent Host or callers through parallel web_read calls."
+    },
+    {
+      "name": "web_health",
+      "reason": "Runtime resource or management endpoint, not a normal Agent tool."
+    },
+    {
+      "name": "web_benchmark",
+      "reason": "CLI/development acceptance utility, not a normal Agent tool."
+    }
   ],
   "actionSchema": {
-    "schemaRef": "sciforge.browser-runtime.primitive-result.v1",
+    "schemaRef": "sciforge.browser-runtime.web-tool-result.v1",
     "inputShape": {
-      "type": "object",
-      "required": [
-        "schemaVersion"
-      ],
-      "properties": {
-        "schemaVersion": {
-          "enum": [
-            "sciforge.browser-runtime.search-input.v1",
-            "sciforge.browser-runtime.navigate-input.v1",
-            "sciforge.browser-runtime.observe-input.v1",
-            "sciforge.browser-runtime.read-input.v1",
-            "sciforge.browser-runtime.extract-input.v1",
-            "sciforge.browser-runtime.download-input.v1"
-          ]
-        },
-        "query": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "sessionId": {
-          "type": "string"
-        },
-        "resourceRef": {
-          "type": "string",
-          "description": "Candidate Browser resource ref, such as a discovered web_page resource returned by browser.search and materialized by browser.read."
-        },
-        "ref": {
-          "type": "string"
-        },
-        "extract": {
-          "type": "array"
-        },
-        "saveScope": {
-          "const": "session-artifacts"
-        },
-        "constraints": {
+      "oneOf": [
+        {
+          "title": "web_search",
           "type": "object",
-          "description": "Primitive constraints such as allowedDomains and blockedDomains; download evaluates domain constraints before network fetch.",
+          "additionalProperties": false,
+          "required": [
+            "query"
+          ],
           "properties": {
-            "allowedDomains": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+            "query": {
+              "type": "string",
+              "minLength": 1
             },
-            "blockedDomains": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
             },
-            "safeSearch": {
+            "language": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "time_range": {
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "year"
+              ]
+            },
+            "safe_search": {
               "enum": [
                 "off",
                 "moderate",
                 "strict"
               ]
             },
-            "requireUserConfirmationForCrossOrigin": {
-              "type": "boolean"
+            "provider": {
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            },
+            "constraints": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "allowedDomains": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "blockedDomains": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
             }
-          },
-          "additionalProperties": false
+          }
+        },
+        {
+          "title": "web_read",
+          "type": "object",
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "required": [
+                "resourceRef"
+              ]
+            }
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "HTTP(S) URL only; localhost, private IPs, file:, and special protocols fail closed."
+            },
+            "resourceRef": {
+              "type": "string",
+              "description": "Discovered candidate page ref from web_search, formatted as web-page:{id}."
+            },
+            "format": {
+              "enum": [
+                "markdown",
+                "text",
+                "html",
+                "metadata"
+              ]
+            },
+            "render": {
+              "enum": [
+                "auto",
+                "static",
+                "browser"
+              ]
+            },
+            "max_chars": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            },
+            "cache_policy": {
+              "enum": [
+                "default",
+                "bypass",
+                "refresh"
+              ]
+            },
+            "constraints": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "allowedDomains": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "blockedDomains": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         }
-      },
-      "additionalProperties": true
+      ]
     },
     "outputShape": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "schemaVersion",
-        "moduleId",
-        "primitive",
+        "ok",
         "status",
+        "tool",
         "refs",
-        "resources",
-        "evidenceState",
-        "diagnostics",
-        "budget"
+        "timings",
+        "warnings"
       ],
       "properties": {
         "schemaVersion": {
-          "const": "sciforge.browser-runtime.primitive-result.v1"
+          "const": "sciforge.browser-runtime.web-tool-result.v1"
         },
-        "moduleId": {
-          "const": "browser"
-        },
-        "primitive": {
-          "enum": [
-            "search",
-            "navigate",
-            "observe",
-            "read",
-            "extract",
-            "download"
-          ]
+        "ok": {
+          "type": "boolean"
         },
         "status": {
           "enum": [
@@ -152,45 +235,49 @@
             "failed"
           ]
         },
+        "tool": {
+          "enum": [
+            "web_search",
+            "web_read"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "description": "web_search data contains ordinary search results, snippets, candidate refs, and source links; web_read data contains single-page source metadata and bounded content preview/ref metadata for internal or advanced read-required paths."
+        },
         "refs": {
           "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Materialized artifact refs such as source_page, page_text, screenshot, frame, or download refs."
-        },
-        "resources": {
-          "type": "array",
-          "description": "Resource ledger entries. Search returns candidate web_page resources; browser.read must materialize those candidates into source/page text refs before they are treated as evidence.",
+          "description": "Refs-first ledger. web-search:{id} and web-page:{id} identify result sets and source links for ordinary search; web-source:{id} and web-text:{id} are source evidence refs produced by internal or advanced web_read.",
           "items": {
             "type": "object",
             "required": [
               "ref",
               "kind",
-              "status",
-              "originTool"
+              "evidence"
             ],
             "properties": {
               "ref": {
                 "type": "string"
               },
               "kind": {
-                "type": "string"
-              },
-              "status": {
                 "enum": [
-                  "discovered",
-                  "accessed",
-                  "observed",
-                  "read",
-                  "extracted",
-                  "downloaded",
-                  "blocked",
-                  "failed"
+                  "search_result_set",
+                  "discovered_page",
+                  "source_page",
+                  "page_text",
+                  "html",
+                  "diagnostic"
                 ]
               },
-              "originTool": {
-                "type": "string"
+              "evidence": {
+                "enum": [
+                  "candidate",
+                  "source",
+                  "diagnostic"
+                ]
               },
               "locator": {
                 "type": "object"
@@ -198,201 +285,104 @@
               "title": {
                 "type": "string"
               },
-              "snippet": {
-                "type": "string"
-              },
-              "refs": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "confidence": {
-                "enum": [
-                  "candidate",
-                  "observed",
-                  "materialized"
-                ]
-              },
               "metadata": {
                 "type": "object"
               }
             },
-            "additionalProperties": true
+            "additionalProperties": false
           }
         },
-        "evidenceState": {
+        "timings": {
+          "type": "object"
+        },
+        "warnings": {
+          "type": "array"
+        },
+        "error": {
           "type": "object",
-          "description": "Evidence boundary summary. Search should mark candidate pages as not read; read reports what source/page text refs were materialized.",
-          "required": [
-            "completed",
-            "unknown",
-            "boundary"
-          ],
           "properties": {
-            "completed": {
+            "code": {
+              "enum": [
+                "invalid_input",
+                "unsafe_url",
+                "provider_unavailable",
+                "timeout",
+                "rate_limited",
+                "no_results",
+                "read_failed",
+                "extract_failed",
+                "needs_browser",
+                "needs_user_browser"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "refs": {
               "type": "array",
               "items": {
                 "type": "string"
               }
             },
-            "unknown": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "boundary": {
+            "provider": {
               "type": "string"
             }
           },
           "additionalProperties": false
-        },
-        "diagnostics": {
-          "type": "array"
-        },
-        "budget": {
-          "type": "object"
         }
       }
-    },
-    "examples": [
-      {
-        "intent": "browser.navigate",
-        "input": {
-          "schemaVersion": "sciforge.browser-runtime.navigate-input.v1",
-          "url": "https://example.com"
-        }
-      }
-    ]
+    }
   },
   "environmentTargets": [
     {
-      "type": "browser",
+      "type": "network",
       "coordinatePolicy": "provider-defined",
       "sideEffects": [
-        "network-navigation",
-        "session-state",
-        "session-artifact"
+        "search-provider-request",
+        "single-url-fetch-or-render"
       ],
-      "isolation": "host-provided browser session and session-scoped artifact storage"
-    },
-    {
-      "type": "filesystem",
-      "coordinatePolicy": "workspace-bound",
-      "sideEffects": [
-        "session-artifact-write"
-      ],
-      "isolation": "download artifacts must stay under session-artifacts refs"
+      "isolation": "Host-provided Browser Runtime ports and refs-first artifact storage"
     }
   ],
   "safetyGates": {
     "riskClass": "medium",
-    "defaultPolicy": "allow",
+    "defaultPolicy": "fail-closed-on-unsafe-url",
     "highRiskPolicy": "fail-closed",
     "supportsDryRun": false,
     "blockedActions": [
-      "arbitrary-local-file-write",
+      "localhost-or-private-network-url",
+      "file-url-or-special-protocol",
       "credential-entry",
-      "payment",
-      "destructive-browser-action",
-      "execute-downloaded-file"
+      "captcha-or-login-bypass",
+      "autonomous-cross-site-crawling"
     ],
     "requiresExplicitTarget": true,
-    "notes": "Agent Host chooses goals and verifier policy. Browser Runtime only executes declared primitives and returns refs-first evidence."
-  },
-  "confirmationRules": {
-    "requiredWhen": [
-      "cross-origin form submission",
-      "credential-like input",
-      "download exceeding Host-declared byte budget"
-    ],
-    "approvalEvidence": [
-      "host-approval-ref"
-    ],
-    "timeoutPolicy": "fail"
+    "notes": "Agent Host owns intent, source policy, evidence sufficiency, repair, final answer, and completion truth."
   },
   "traceContract": {
-    "schemaRef": "sciforge.browser-runtime.primitive-result.v1",
+    "schemaRef": "sciforge.browser-runtime.web-tool-result.v1",
     "storagePolicy": "ref-only",
     "eventTypes": [
-      "browser.search",
-      "browser.navigate",
-      "browser.observe",
-      "browser.read",
-      "browser.extract",
-      "browser.download"
+      "web_search",
+      "web_read"
     ],
     "redaction": [
       "raw-html-large-payload",
       "cookies",
       "credentials",
-      "downloaded-file-bytes"
+      "downloaded-file-bytes",
+      "base64"
     ],
     "retention": "session-scoped artifacts with refs-first summaries"
   },
   "verifierContract": {
     "required": false,
     "defaultVerifierTypes": [
-      "agent",
       "schema-test"
     ],
-    "requiredWhen": [
-      "Host acceptance spec requires external evidence",
-      "answer cites web sources",
-      "downloaded artifact must be inspected"
-    ],
-    "requestShape": {
-      "type": "object",
-      "properties": {
-        "acceptanceSpecRef": {
-          "type": "string"
-        },
-        "primitiveResultRefs": {
-          "type": "array"
-        }
-      }
-    },
-    "resultShape": {
-      "type": "object",
-      "properties": {
-        "status": {
-          "enum": [
-            "satisfied",
-            "unsatisfied",
-            "inconclusive"
-          ]
-        },
-        "repairHints": {
-          "type": "array"
-        }
-      }
-    }
-  },
-  "failureModes": [
-    {
-      "code": "invalid-contract-input",
-      "stage": "planning",
-      "recoverable": true,
-      "description": "The Host invoked a primitive with unsupported intent, schema version, field, URL, or budget."
-    },
-    {
-      "code": "navigation-blocked",
-      "stage": "execution",
-      "recoverable": true,
-      "description": "The browser could not reach or load the requested URL within declared policy."
-    },
-    {
-      "code": "missing-evidence-ref",
-      "stage": "execution",
-      "recoverable": true,
-      "description": "The primitive completed without the evidence refs required by its contract."
-    },
-    {
-      "code": "download-policy-blocked",
-      "stage": "execution",
-      "recoverable": true,
-      "description": "The requested download did not fit session artifact scope, budget, or safety policy."
-    }
-  ]
+    "notes": "Ordinary search verification may use current-run web_search results and final-answer source links. URL summaries, direct quotes, page-level verification, low-information results, or conflicting sources require read-required escalation through internal or advanced web_read."
+  }
 }

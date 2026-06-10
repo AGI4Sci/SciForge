@@ -314,15 +314,59 @@ export function SettingsPage({
                   <option value="sciforge-model-router">sciforge-model-router</option>
                 </select>
               </label>
+              <div className="wide settings-peer-section" aria-label="Router member model settings">
+                <div className="settings-peer-section-head">
+                  <span>Router Member Model</span>
+                  <code>config.local.json llm</code>
+                </div>
+                <p className="settings-peer-empty">
+                  {t({
+                    'zh-CN': '这些字段会写入本地 config.local.json 的 llm 配置，供 Model Router 调用成员模型；Runtime Codex 仍只请求公开 Router profile。',
+                    'en-US': 'These fields are written to the local config.local.json llm config for Model Router member-model calls; Runtime Codex still requests only the public Router profile.',
+                  })}
+                </p>
+              </div>
               <label>
-                <span>Model Alias</span>
+                <span>Member Provider</span>
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ modelProvider: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.modelProvider, 'openai-compatible')}
+                  aria-describedby="settings-member-provider-status"
+                />
+                <small id="settings-member-provider-status">{publicConfigPresenceLabel(config.modelProvider, 'Member provider')}</small>
+              </label>
+              <label>
+                <span>Member Base URL</span>
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ modelBaseUrl: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.modelBaseUrl, 'https://provider.example/v1')}
+                  aria-describedby="settings-member-base-url-status"
+                />
+                <small id="settings-member-base-url-status">{publicConfigPresenceLabel(config.modelBaseUrl, 'Member base URL')}</small>
+              </label>
+              <label>
+                <span>Member Model</span>
                 <input
                   defaultValue=""
                   onChange={(event) => onChange({ modelName: event.target.value })}
-                  placeholder={publicConfigInputPlaceholder(config.modelName, 'Enter model alias')}
+                  placeholder={publicConfigInputPlaceholder(config.modelName, 'provider/model-name')}
                   aria-describedby="settings-model-status"
                 />
-                <small id="settings-model-status">{publicConfigPresenceLabel(config.modelName, 'Model')}</small>
+                <small id="settings-model-status">{publicConfigPresenceLabel(config.modelName, 'Member model')}</small>
+              </label>
+              <label>
+                <span>Member API Key</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value=""
+                  onChange={(event) => onChange({ apiKey: event.target.value })}
+                  placeholder={secretInputPlaceholder(config.apiKey, 'sk-...', locale)}
+                  aria-describedby="settings-member-api-key-status"
+                />
+                <small id="settings-member-api-key-status">{secretPresenceLabel(config.apiKey, 'Member API key', locale)}</small>
               </label>
             </div>
           ) : null}

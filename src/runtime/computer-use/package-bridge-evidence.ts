@@ -17,15 +17,15 @@ import {
   CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
 } from '../../../packages/actions/computer-use/evidence-classification.js';
 import {
-  cuNextCompletionGradeEvidenceIssues,
   cuNextCompletedL3CompletionEvidenceIssues,
 } from '../../../packages/actions/computer-use/completion-grade.js';
 import { projectCuNextTaskAcceptanceMarkers } from '../../../packages/actions/computer-use/acceptance-projection.js';
-import type { CuNextTaskId, CuNextTaskMapping } from '../../../packages/actions/computer-use/task-map.js';
+import type { CuNextTaskId } from '../../../packages/actions/computer-use/task-map.js';
 import {
   buildCuUserAcceptanceManifest,
   type CuEvidenceClaim,
   type CuUserAcceptanceInput,
+  type CuUserAcceptanceManifest,
 } from '../../../packages/actions/computer-use/user-acceptance-manifest.js';
 
 const TUI_HOST_RUN_TASK_CHAIN_SCHEMA = 'sciforge.computer-use.tui-host-run-task-chain.v1';
@@ -197,15 +197,7 @@ export async function materializePackageBridgeCompletionGradeEvidence(params: {
     workspace: params.workspace,
   });
   const acceptanceManifest = buildCuUserAcceptanceManifest(acceptanceInput);
-  const bindingIssues = cuNextCompletionGradeEvidenceIssues(
-    acceptanceManifest,
-    packageBridgeCompletionGradeMapping(acceptanceInput),
-    completionEvidence,
-    {
-      refScopeDescription: 'the current package bridge run bundle',
-      refExists: (candidateRef) => bundleLocalRegularRefExists(params.state.runDir, candidateRef),
-    },
-  );
+  const bindingIssues = packageBridgeCompletionGradeBindingIssues(acceptanceManifest, completionEvidence);
   if (bindingIssues.length > 0) {
     const reason = `completed Computer Use package bridge run is fail-closed because ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} is not bound to the current package bridge final artifact and gui.present evidence.`;
     await writeCompletionGradeDiagnostic(join(params.state.runDir, 'completion-grade-diagnostics.json'), {
@@ -1292,6 +1284,8 @@ function buildPackageBridgeAcceptanceInput(params: {
     runId: params.state.runId,
     screenshotRefs,
   });
+  const primitiveSessionRef = independentInputSessionRefs[0] ?? ref('host-ports.json');
+  const primitiveTraceRef = ref('host-ports.json');
   const evidenceClaims: CuEvidenceClaim[] = [
     {
       id: 'package-bridge-vision-trace',
@@ -1306,6 +1300,15 @@ function buildPackageBridgeAcceptanceInput(params: {
       ref: ref('computer-use-request.json'),
       refs: [ref('computer-use-request.json'), ref('host-ports.json'), ref('tui-host-run-task-chain.json')],
       note: 'Computer Use package bridge was invoked through TUI Host runTask evidence.',
+    },
+    {
+      id: 'computer-use-primitive-session',
+      kind: 'computer-use-primitive-session',
+      status: 'present',
+      ref: primitiveTraceRef,
+      refs: [primitiveTraceRef],
+      sessionRefs: [primitiveSessionRef],
+      note: 'Package bridge diagnostic projection binds the host-port primitive session to current-run evidence.',
     },
     {
       id: 'independent-input-adapter',
@@ -1375,6 +1378,13 @@ function buildPackageBridgeAcceptanceInput(params: {
         status: 'present',
         requestRef: ref('computer-use-request.json'),
         hostPortsRef: ref('host-ports.json'),
+      },
+      {
+        id: 'computer-use-primitive-session',
+        kind: 'computer-use-primitive-session',
+        status: 'present',
+        sessionRef: primitiveSessionRef,
+        primitiveTraceRef,
       },
       {
         id: 'computer-use-action-provider',
@@ -1651,18 +1661,42 @@ function buildPackageBridgeDiagnosticCurrentRunProjection(params: {
   };
 }
 
-function packageBridgeCompletionGradeMapping(input: CuUserAcceptanceInput): CuNextTaskMapping {
-  return {
-    taskId: input.taskId ?? 'CU-NEXT-PACKAGE-BRIDGE',
-    title: 'Computer Use package bridge completion-grade evidence',
-    slug: 'package-bridge-completion-grade',
-    priority: 1,
-    primaryScenarioId: input.scenarioId ?? 'CU-LONG-PACKAGE-BRIDGE',
-    longScenarioIds: [input.scenarioId ?? 'CU-LONG-PACKAGE-BRIDGE'],
-    requirements: ['l3-workflow-refs', 'no-dom-playwright-accessibility'],
-    recommendedTargetMode: 'active-window',
-    recommendedMaxSteps: 1,
-  };
+function packageBridgeCompletionGradeBindingIssues(
+  acceptance: CuUserAcceptanceManifest,
+  completionEvidence: Record<string, unknown>,
+): string[] {
+  const issues: string[] = [];
+  const finalArtifactRef = stringAt(acceptance, 'finalArtifactRef');
+  if (!finalArtifactRef) return ['acceptance finalArtifactRef is required for package bridge completion-grade evidence.'];
+  const taskArtifactBinding = recordAt(completionEvidence, 'taskArtifactBinding');
+  const artifactCausality = recordAt(completionEvidence, 'artifactCausality');
+  const presentationEvidence = recordAt(completionEvidence, 'presentationEvidence');
+  const completionArtifactRefs = uniqueStrings([
+    stringAt(completionEvidence, 'finalArtifactRef'),
+    stringAt(taskArtifactBinding, 'finalArtifactRef'),
+    ...stringArrayAt(taskArtifactBinding, 'finalArtifactRefs'),
+    ...stringArrayAt(completionEvidence, 'taskFinalArtifactRefs'),
+    stringAt(artifactCausality, 'finalArtifactRef'),
+    ...stringArrayAt(presentationEvidence, 'artifactRefs'),
+  ].filter((ref): ref is string => Boolean(ref)));
+  if (!completionArtifactRefs.includes(finalArtifactRef)) {
+    issues.push('completionEvidenceRef evidence must bind to acceptance finalArtifactRef through finalArtifactRef, artifactCausality, presentationEvidence.artifactRefs, or taskArtifactBinding.');
+  }
+  const guiPresent = recordAt(acceptance, 'guiPresent');
+  const guiPresentDisplayedRefs = stringArrayAt(guiPresent, 'displayedRefs');
+  if (!guiPresentDisplayedRefs.includes(finalArtifactRef)) {
+    issues.push('acceptance gui.present evidence must display the same finalArtifactRef bound by completionEvidenceRef.');
+  }
+  const guiPresentArtifactRefs = uniqueStrings([
+    ...stringArrayAt(guiPresent, 'artifactRefs'),
+    ...recordArrayAt(acceptance, 'evidenceClaims')
+      .filter((claim) => stringAt(claim, 'kind') === 'gui-present-record')
+      .flatMap((claim) => stringArrayAt(claim, 'artifactRefs')),
+  ]);
+  if (!guiPresentArtifactRefs.includes(finalArtifactRef)) {
+    issues.push('acceptance gui-present-record evidence claim must include artifactRefs containing the same finalArtifactRef bound by completionEvidenceRef.');
+  }
+  return issues;
 }
 
 function chatOriginFromActionProviderRequest(request: Record<string, unknown>) {

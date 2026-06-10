@@ -25,7 +25,7 @@ export interface AgentHostBrowserEvidenceIssue {
 }
 
 export interface AgentHostBrowserEvidenceRepairHint {
-  action: 'call-browser-read' | 'project-final-answer' | 'collect-browser-evidence';
+  action: 'call-browser-read' | 'project-final-answer' | 'collect-browser-evidence' | 'collect-web-search-evidence';
   reason: string;
 }
 
@@ -46,9 +46,11 @@ export interface AgentHostBrowserAcceptanceSpec {
   schemaVersion: 'sciforge.agent-host.browser-acceptance-spec.v1';
   taskSummary?: string;
   source: {
-    requireSourcePageRefs: true;
-    requirePageTextRefs: true;
+    readRequired: boolean;
+    requireSourcePageRefs: boolean;
+    requirePageTextRefs: boolean;
     minReadSources: number;
+    minSearchSources: number;
     rejectLowInformationSources: true;
     requireIndependentSources: boolean;
     preferredDomains: string[];
@@ -83,6 +85,31 @@ export type AgentHostBrowserTemporalConstraint =
 
 export interface AgentHostBrowserEvidenceEvaluationOptions {
   acceptanceSpec?: AgentHostBrowserAcceptanceSpec;
+  finalAnswerText?: string;
+}
+
+export type AgentHostWebSearchEvidenceRoute = 'native' | 'fallback' | 'unknown';
+
+export interface AgentHostWebSearchEvidenceSourceLink {
+  ref: string;
+  url: string;
+  title?: string;
+  snippet?: string;
+  source?: string;
+  provider?: string;
+  publishedAt?: string;
+}
+
+export interface AgentHostWebSearchEvidence {
+  schemaVersion: 'sciforge.agent-host.web-search-evidence.v1';
+  route: AgentHostWebSearchEvidenceRoute;
+  query?: string;
+  provider?: string;
+  resultSetRefs: string[];
+  sourceLinks: AgentHostWebSearchEvidenceSourceLink[];
+  refs: string[];
+  timings: Record<string, unknown>;
+  diagnostics: unknown[];
 }
 
 export interface AgentHostBrowserEvidenceEvaluation {
@@ -126,10 +153,13 @@ export function recordAgentHostBrowserToolResult(
   toolResult: unknown,
 ): AgentHostBrowserEvidenceLedger {
   const envelope = browserPrimitiveEnvelope(toolResult);
-  if (!envelope) return ledger;
+  const webEnvelope = webRuntimeToolResultEnvelope(toolResult);
+  if (!envelope && !webEnvelope) return ledger;
+  const resources = envelope?.resources ?? webRuntimeResources(webEnvelope);
+  const refs = envelope?.refs ?? webRuntimeRefs(webEnvelope);
   const resourcesByRef = { ...ledger.resourcesByRef };
   const resourceEvents = [...ledger.resourceEvents];
-  for (const resource of envelope.resources ?? []) {
+  for (const resource of resources) {
     if (!resource.ref?.trim()) continue;
     resourcesByRef[resource.ref] = resource;
     resourceEvents.push({
@@ -143,7 +173,7 @@ export function recordAgentHostBrowserToolResult(
     ...ledger,
     resourcesByRef,
     resourceEvents,
-    refs: uniqueStrings([...ledger.refs, ...(envelope.refs ?? []), ...resourceRefs(envelope.resources)]),
+    refs: uniqueStrings([...ledger.refs, ...refs, ...resourceRefs(resources)]),
   };
 }
 
@@ -155,6 +185,35 @@ export function recordAgentHostBrowserRefs(
     ...ledger,
     refs: uniqueStrings([...ledger.refs, ...refs]),
   };
+}
+
+export function agentHostWebSearchEvidenceFromLedger(
+  ledger: AgentHostBrowserEvidenceLedger,
+  options: { route?: AgentHostWebSearchEvidenceRoute } = {},
+): AgentHostWebSearchEvidence {
+  return agentHostWebSearchEvidenceFromResources(Object.values(ledger.resourcesByRef), ledger.refs, {
+    route: options.route ?? 'unknown',
+  });
+}
+
+export function agentHostWebSearchEvidenceFromToolResult(
+  toolResult: unknown,
+  options: { route?: AgentHostWebSearchEvidenceRoute } = {},
+): AgentHostWebSearchEvidence {
+  const envelope = webRuntimeToolResultEnvelope(toolResult);
+  if (envelope && stringFromRecord(envelope, 'tool') === 'web_search') {
+    return agentHostWebSearchEvidenceFromResources(webSearchRuntimeResources(envelope), webRuntimeRefs(envelope), {
+      route: options.route ?? 'fallback',
+      provider: stringFromRecord(envelope, 'provider'),
+      query: stringFromRecord(recordFromRecord(envelope, 'data'), 'query'),
+      timings: recordFromRecord(envelope, 'timings') ?? {},
+      diagnostics: arrayFromRecord(envelope, 'diagnostics'),
+    });
+  }
+  const candidate = isRecord(toolResult) && isRecord(toolResult.value) ? toolResult.value : toolResult;
+  return agentHostNativeWebSearchEvidenceFromRecord(isRecord(candidate) ? candidate : {}, {
+    route: options.route ?? 'native',
+  });
 }
 
 export function agentHostBrowserAcceptanceSpecFromPrompt(
@@ -178,17 +237,21 @@ export function agentHostBrowserSearchPlanFromPrompt(
   const primaryQuery = queryTerms.join(' ') || compactPlanQuery(userPrompt) || topicalTerms.join(' ');
   const preferredDomains = preferredDomainsFromPrompt(userPrompt, queryTerms);
   const avoidedDomains = avoidedDomainsFromPrompt(userPrompt);
-  const minReadSources = minReadSourcesFromPrompt(userPrompt);
+  const readRequired = readRequiredFromPrompt(userPrompt);
+  const minSearchSources = minSearchSourcesFromPrompt(userPrompt);
+  const minReadSources = readRequired ? minReadSourcesFromPrompt(userPrompt) : 0;
   const queryCandidates = searchQueryCandidates(primaryQuery, preferredDomains);
   const acceptanceSpec: AgentHostBrowserAcceptanceSpec = {
     schemaVersion: 'sciforge.agent-host.browser-acceptance-spec.v1',
     taskSummary: userPrompt?.trim().slice(0, 500) || undefined,
     source: {
-      requireSourcePageRefs: true,
-      requirePageTextRefs: true,
+      readRequired,
+      requireSourcePageRefs: readRequired,
+      requirePageTextRefs: readRequired,
       minReadSources,
+      minSearchSources,
       rejectLowInformationSources: true,
-      requireIndependentSources: minReadSources > 1,
+      requireIndependentSources: Math.max(minReadSources, minSearchSources) > 1,
       preferredDomains,
       avoidedDomains,
     },
@@ -281,13 +344,24 @@ export function evaluateAgentHostBrowserEvidence(
   const sourcePageRefs = currentRunSourcePageRefs(resources, ledger.refs);
   const pageTextRefs = currentRunPageTextRefs(resources, ledger.refs);
   const finalAnswerRefs = currentRunFinalAnswerRefs(ledger.refs);
+  const finalAnswerSourceLinks = finalAnswerSourceLinksFromText(options.finalAnswerText);
   const acceptanceSpec = options.acceptanceSpec;
-  const hasSearchEvidence = resources.some((resource) => resource.originTool === 'browser.search')
-    || ledger.refs.some((ref) => /\bbrowser_search\b/i.test(ref));
-  const hasReadEvidence = resources.some((resource) => resource.originTool === 'browser.read')
-    || ledger.refs.some((ref) => /\bbrowser_read\b/i.test(ref));
+  const hasSearchEvidence = resources.some((resource) => isWebSearchOriginTool(resource.originTool))
+    || ledger.refs.some(isWebSearchToolRef);
+  const hasReadEvidence = resources.some((resource) => isWebReadOriginTool(resource.originTool))
+    || ledger.refs.some(isWebReadToolRef);
   const issues: AgentHostBrowserEvidenceIssue[] = [];
   const repairHints: AgentHostBrowserEvidenceRepairHint[] = [];
+
+  if (acceptanceSpec && !acceptanceSpec.source.readRequired && sourcePageRefs.length === 0 && pageTextRefs.length === 0) {
+    return evaluateAgentHostOrdinarySearchEvidence({
+      resources,
+      refs: ledger.refs,
+      finalAnswerRefs,
+      finalAnswerSourceLinks,
+      acceptanceSpec,
+    });
+  }
 
   if (!hasReadEvidence) {
     issues.push({
@@ -387,17 +461,120 @@ function searchGuardEvaluation(
   };
 }
 
+function evaluateAgentHostOrdinarySearchEvidence(input: {
+  resources: BrowserResource[];
+  refs: string[];
+  finalAnswerRefs: string[];
+  finalAnswerSourceLinks: string[];
+  acceptanceSpec: AgentHostBrowserAcceptanceSpec;
+}): AgentHostBrowserEvidenceEvaluation {
+  const searchResources = currentRunSearchResources(input.resources, input.refs);
+  const sourceResources = searchResources.filter((resource) => resource.kind === 'web_page' && browserResourceUrl(resource));
+  const searchRefs = uniqueStrings([
+    ...searchResources.map((resource) => resource.ref),
+    ...input.refs.filter(isWebSearchToolRef),
+  ]);
+  const issues: AgentHostBrowserEvidenceIssue[] = [];
+  const repairHints: AgentHostBrowserEvidenceRepairHint[] = [];
+
+  if (sourceResources.length < input.acceptanceSpec.source.minSearchSources) {
+    issues.push({
+      code: 'web-search-source-count-insufficient',
+      message: `Ordinary search acceptance requires at least ${input.acceptanceSpec.source.minSearchSources} current-run search source link(s).`,
+      evidenceRefs: searchRefs,
+    });
+  }
+
+  if (input.acceptanceSpec.source.requireIndependentSources) {
+    const independentDomains = uniqueStrings(sourceResources
+      .map((resource) => browserResourceDomain(resource))
+      .filter(Boolean));
+    if (independentDomains.length < input.acceptanceSpec.source.minSearchSources) {
+      issues.push({
+        code: 'web-search-source-independent-count-insufficient',
+        message: `Ordinary search acceptance requires at least ${input.acceptanceSpec.source.minSearchSources} independent search source domain(s).`,
+        evidenceRefs: sourceResources.map((resource) => resource.ref),
+      });
+    }
+  }
+
+  if (input.acceptanceSpec.topicalTerms.length > 0 && sourceResources.length > 0) {
+    const matched = sourceResources.some((resource) =>
+      input.acceptanceSpec.topicalTerms.some((term) =>
+        browserSearchTermMatchesText(term, browserResourceSearchText(resource))));
+    if (!matched) {
+      issues.push({
+        code: 'web-search-source-relevance-gap',
+        message: 'Search result metadata does not match the task topic closely enough for ordinary search completion.',
+        evidenceRefs: sourceResources.map((resource) => resource.ref),
+      });
+    }
+  }
+
+  const temporalIssue = temporalSearchAcceptanceIssue(sourceResources, input.acceptanceSpec);
+  if (temporalIssue) issues.push(temporalIssue);
+
+  if (input.finalAnswerRefs.length === 0) {
+    issues.push({
+      code: 'browser-final-answer-ref-missing',
+      message: 'Search evidence exists, but no current-run Codex App Server final-answer ref was recorded.',
+      evidenceRefs: searchRefs,
+    });
+    repairHints.push({
+      action: 'project-final-answer',
+      reason: 'Agent Host should synthesize the final answer as a Codex App Server assistant final message after search evidence is accepted.',
+    });
+  }
+
+  if (input.finalAnswerRefs.length > 0 && input.finalAnswerSourceLinks.length === 0) {
+    issues.push({
+      code: 'web-search-final-answer-source-links-missing',
+      message: 'Ordinary search completion requires source links in the final answer.',
+      evidenceRefs: searchRefs,
+    });
+  }
+
+  if (issues.length > 0) {
+    if (sourceResources.length === 0 || issues.some((issue) => issue.code === 'web-search-source-count-insufficient')) {
+      repairHints.push({
+        action: 'collect-web-search-evidence',
+        reason: 'Collect enough current-run web_search source links before answering the ordinary search task.',
+      });
+    }
+    return {
+      schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1',
+      status: input.finalAnswerRefs.length > 0 && sourceResources.length > 0 ? 'partial' : 'repairable',
+      issues,
+      repairHints,
+      satisfiedEvidenceRefs: sourceResources.length > 0 ? searchRefs : [],
+      acceptanceSpec: input.acceptanceSpec,
+    };
+  }
+
+  return {
+    schemaVersion: 'sciforge.agent-host.browser-evidence-evaluation.v1',
+    status: 'satisfied',
+    issues: [],
+    repairHints: [],
+    satisfiedEvidenceRefs: uniqueStrings([...searchRefs, ...input.finalAnswerRefs]),
+    acceptanceSpec: input.acceptanceSpec,
+  };
+}
+
 export function agentHostBrowserCompletionTruthFromEvaluation(
   evaluation: AgentHostBrowserEvidenceEvaluation,
 ): AgentHostBrowserCompletionTruth {
   if (evaluation.status === 'satisfied') {
+    const hasReadEvidence = evaluation.satisfiedEvidenceRefs.some((ref) => isSourcePageEvidenceRef(ref) || isPageTextEvidenceRef(ref));
     return {
       schemaVersion: 'sciforge.agent-host.completion-truth.v1',
       scope: 'user-task',
       status: 'satisfied',
       validator: 'agent-host-browser-acceptance',
       evidenceRefs: evaluation.satisfiedEvidenceRefs,
-      reason: 'Browser source/page text refs and Codex App Server final-answer evidence are present in the current run.',
+      reason: hasReadEvidence
+        ? 'Browser source/page text refs and Codex App Server final-answer evidence are present in the current run.'
+        : 'Current-run web_search results, source links, and Codex App Server final-answer evidence satisfy the ordinary search task.',
     };
   }
   if (evaluation.status === 'partial') {
@@ -429,12 +606,241 @@ function browserPrimitiveEnvelope(value: unknown): BrowserPrimitiveEnvelope | un
   return candidate as unknown as BrowserPrimitiveEnvelope;
 }
 
+function webRuntimeToolResultEnvelope(value: unknown): Record<string, unknown> | undefined {
+  const candidate = isRecord(value) && isRecord(value.value) ? value.value : value;
+  if (!isRecord(candidate)) return undefined;
+  if (candidate.schemaVersion !== 'sciforge.web-runtime.result.v1') return undefined;
+  if (candidate.tool !== 'web_search' && candidate.tool !== 'web_read') return undefined;
+  if (!Array.isArray(candidate.refs)) return undefined;
+  return candidate;
+}
+
+function webRuntimeRefs(envelope: Record<string, unknown> | undefined): string[] {
+  if (!envelope) return [];
+  return Array.isArray(envelope.refs)
+    ? envelope.refs.filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)
+    : [];
+}
+
+function webRuntimeResources(envelope: Record<string, unknown> | undefined): BrowserResource[] {
+  if (!envelope) return [];
+  const tool = stringFromRecord(envelope, 'tool');
+  if (tool === 'web_search') return webSearchRuntimeResources(envelope);
+  if (tool === 'web_read') return webReadRuntimeResources(envelope);
+  return [];
+}
+
+function webSearchRuntimeResources(envelope: Record<string, unknown>): BrowserResource[] {
+  const refs = webRuntimeRefs(envelope);
+  const data = recordFromRecord(envelope, 'data');
+  const provider = stringFromRecord(envelope, 'provider');
+  const searchRef = stringFromRecord(data, 'resultSetRef') ?? refs.find((ref) => /^web-search:/i.test(ref));
+  const resources: BrowserResource[] = [];
+  if (searchRef) {
+    resources.push({
+      ref: searchRef,
+      kind: 'search_result_set',
+      status: 'discovered',
+      originTool: 'web.search' as never,
+      title: stringFromRecord(data, 'query'),
+      confidence: 'candidate',
+      metadata: {
+        ...(provider ? { provider } : {}),
+        evidenceBoundary: stringFromRecord(data, 'evidenceBoundary'),
+      },
+    });
+  }
+  const results = Array.isArray(data?.results) ? data.results : [];
+  for (const item of results) {
+    if (!isRecord(item)) continue;
+    const ref = stringFromRecord(item, 'resourceRef');
+    const url = stringFromRecord(item, 'url');
+    if (!ref) continue;
+    resources.push({
+      ref,
+      kind: 'web_page',
+      status: 'discovered',
+      originTool: 'web.search' as never,
+      ...(url ? { locator: { url } } : {}),
+      title: stringFromRecord(item, 'title'),
+      snippet: stringFromRecord(item, 'snippet'),
+      confidence: 'candidate',
+      metadata: {
+        ...(provider ? { provider } : {}),
+        source: stringFromRecord(item, 'source'),
+        publishedAt: stringFromRecord(item, 'publishedAt'),
+        searchRef,
+      },
+    });
+  }
+  return resources;
+}
+
+function webReadRuntimeResources(envelope: Record<string, unknown>): BrowserResource[] {
+  const refs = webRuntimeRefs(envelope);
+  const data = recordFromRecord(envelope, 'data');
+  const source = recordFromRecord(data, 'source');
+  const content = recordFromRecord(data, 'content');
+  const provider = stringFromRecord(envelope, 'provider');
+  const sourceRef = stringFromRecord(source, 'sourceRef') ?? refs.find((ref) => /^web-source:/i.test(ref));
+  const pageTextRef = stringFromRecord(source, 'pageTextRef')
+    ?? stringFromRecord(content, 'textRef')
+    ?? refs.find((ref) => /^web-text:/i.test(ref));
+  const finalUrl = stringFromRecord(source, 'finalUrl') ?? stringFromRecord(source, 'requestedUrl');
+  const locator = finalUrl ? { url: finalUrl } : undefined;
+  const metadata = {
+    ...(provider ? { provider } : {}),
+    requestedUrl: stringFromRecord(source, 'requestedUrl'),
+    finalUrl,
+    publishedAt: stringFromRecord(source, 'publishedAt'),
+    openedAt: stringFromRecord(source, 'openedAt'),
+    textSha1: stringFromRecord(source, 'textSha1'),
+    textPreview: stringFromRecord(content, 'preview'),
+  };
+  const resources: BrowserResource[] = [];
+  if (sourceRef) {
+    resources.push({
+      ref: sourceRef,
+      kind: 'source_page',
+      status: 'read',
+      originTool: 'web.read' as never,
+      ...(locator ? { locator } : {}),
+      title: stringFromRecord(source, 'title'),
+      metadata,
+      confidence: 'materialized',
+    });
+  }
+  if (pageTextRef) {
+    resources.push({
+      ref: pageTextRef,
+      kind: 'page_text',
+      status: 'read',
+      originTool: 'web.read' as never,
+      ...(locator ? { locator } : {}),
+      title: stringFromRecord(source, 'title'),
+      metadata,
+      confidence: 'materialized',
+    });
+  }
+  return resources;
+}
+
+function agentHostWebSearchEvidenceFromResources(
+  resources: BrowserResource[],
+  refs: string[],
+  options: {
+    route: AgentHostWebSearchEvidenceRoute;
+    provider?: string;
+    query?: string;
+    timings?: Record<string, unknown>;
+    diagnostics?: unknown[];
+  },
+): AgentHostWebSearchEvidence {
+  const searchResources = currentRunSearchResources(resources, refs);
+  const resultSetRefs = uniqueStrings(searchResources
+    .filter((resource) => resource.kind === 'search_result_set')
+    .map((resource) => resource.ref));
+  const sourceLinks = searchResources
+    .filter((resource) => resource.kind === 'web_page')
+    .map((resource) => {
+      const url = browserResourceUrl(resource);
+      if (!url) return undefined;
+      return {
+        ref: resource.ref,
+        url,
+        ...(resource.title ? { title: resource.title } : {}),
+        ...(resource.snippet ? { snippet: resource.snippet } : {}),
+        ...(stringFromRecord(resource.metadata, 'source') ? { source: stringFromRecord(resource.metadata, 'source') } : {}),
+        ...(stringFromRecord(resource.metadata, 'provider') ? { provider: stringFromRecord(resource.metadata, 'provider') } : {}),
+        ...(stringFromRecord(resource.metadata, 'publishedAt') ? { publishedAt: stringFromRecord(resource.metadata, 'publishedAt') } : {}),
+      } satisfies AgentHostWebSearchEvidenceSourceLink;
+    })
+    .filter((source): source is AgentHostWebSearchEvidenceSourceLink => Boolean(source));
+  const refsFromResources = uniqueStrings([
+    ...resultSetRefs,
+    ...sourceLinks.map((source) => source.ref),
+    ...refs.filter(isCurrentRunSearchEvidenceRef),
+  ]);
+  return {
+    schemaVersion: 'sciforge.agent-host.web-search-evidence.v1',
+    route: options.route,
+    ...(options.query ? { query: options.query } : {}),
+    ...(options.provider ? { provider: options.provider } : {}),
+    resultSetRefs,
+    sourceLinks,
+    refs: refsFromResources,
+    timings: options.timings ?? {},
+    diagnostics: options.diagnostics ?? [],
+  };
+}
+
+function agentHostNativeWebSearchEvidenceFromRecord(
+  record: Record<string, unknown>,
+  options: { route: AgentHostWebSearchEvidenceRoute },
+): AgentHostWebSearchEvidence {
+  const data = recordFromRecord(record, 'data') ?? record;
+  const provider = stringFromRecord(record, 'provider') ?? stringFromRecord(data, 'provider');
+  const query = stringFromRecord(record, 'query') ?? stringFromRecord(data, 'query');
+  const rawRefs = stringArrayFromRecord(record, 'refs');
+  const resultSetRef = stringFromRecord(record, 'resultSetRef')
+    ?? stringFromRecord(data, 'resultSetRef')
+    ?? rawRefs.find((ref) => /^web-search:/i.test(ref));
+  const resultRecords = recordArrayFromRecord(data, 'results').length > 0
+    ? recordArrayFromRecord(data, 'results')
+    : recordArrayFromRecord(data, 'sourceLinks');
+  const sourceLinks = resultRecords
+    .map((item) => nativeSearchSourceLinkFromRecord(item, provider))
+    .filter((source): source is AgentHostWebSearchEvidenceSourceLink => Boolean(source));
+  const resultSetRefs = uniqueStrings([resultSetRef]);
+  return {
+    schemaVersion: 'sciforge.agent-host.web-search-evidence.v1',
+    route: options.route,
+    ...(query ? { query } : {}),
+    ...(provider ? { provider } : {}),
+    resultSetRefs,
+    sourceLinks,
+    refs: uniqueStrings([
+      ...resultSetRefs,
+      ...sourceLinks.map((source) => source.ref),
+      ...rawRefs.filter(isCurrentRunSearchEvidenceRef),
+    ]),
+    timings: recordFromRecord(record, 'timings') ?? recordFromRecord(data, 'timings') ?? {},
+    diagnostics: arrayFromRecord(record, 'diagnostics').length > 0
+      ? arrayFromRecord(record, 'diagnostics')
+      : arrayFromRecord(data, 'diagnostics'),
+  };
+}
+
+function nativeSearchSourceLinkFromRecord(
+  item: Record<string, unknown>,
+  fallbackProvider: string | undefined,
+): AgentHostWebSearchEvidenceSourceLink | undefined {
+  const url = stringFromRecord(item, 'url')
+    ?? stringFromRecord(item, 'link')
+    ?? stringFromRecord(item, 'sourceUrl');
+  if (!url) return undefined;
+  const ref = stringFromRecord(item, 'resourceRef')
+    ?? stringFromRecord(item, 'ref')
+    ?? stringFromRecord(item, 'sourceRef');
+  if (!ref || !isCurrentRunSearchEvidenceRef(ref)) return undefined;
+  const provider = stringFromRecord(item, 'provider') ?? fallbackProvider;
+  return {
+    ref,
+    url,
+    ...(stringFromRecord(item, 'title') ? { title: stringFromRecord(item, 'title') } : {}),
+    ...(stringFromRecord(item, 'snippet') ? { snippet: stringFromRecord(item, 'snippet') } : {}),
+    ...(stringFromRecord(item, 'source') ? { source: stringFromRecord(item, 'source') } : {}),
+    ...(provider ? { provider } : {}),
+    ...(stringFromRecord(item, 'publishedAt') ? { publishedAt: stringFromRecord(item, 'publishedAt') } : {}),
+  };
+}
+
 function currentRunSourcePageRefs(resources: BrowserResource[], refs: string[]): string[] {
   return uniqueStrings([
     ...resources
       .filter((resource) => resource.kind === 'source_page' && resource.status === 'read')
       .map((resource) => resource.ref),
-    ...refs.filter((ref) => /source-pages\/.+\.source\.json$/i.test(ref)),
+    ...refs.filter(isSourcePageEvidenceRef),
   ]).filter(isCurrentRunBrowserEvidenceRef);
 }
 
@@ -443,7 +849,7 @@ function currentRunPageTextRefs(resources: BrowserResource[], refs: string[]): s
     ...resources
       .filter((resource) => resource.kind === 'page_text' && resource.status === 'read')
       .map((resource) => resource.ref),
-    ...refs.filter((ref) => /source-pages\/.+\.txt$/i.test(ref)),
+    ...refs.filter(isPageTextEvidenceRef),
   ]).filter(isCurrentRunBrowserEvidenceRef);
 }
 
@@ -557,6 +963,38 @@ function currentRunReadResources(resources: BrowserResource[], refs: string[]): 
     && !/(?:fixture|replay|history|seed|demo)/i.test(resource.ref));
 }
 
+function currentRunSearchResources(resources: BrowserResource[], refs: string[]): BrowserResource[] {
+  const currentRefs = new Set(uniqueStrings([
+    ...resources
+      .filter((resource) => isWebSearchOriginTool(resource.originTool))
+      .map((resource) => resource.ref),
+    ...refs.filter(isCurrentRunSearchEvidenceRef),
+  ]));
+  return resources.filter((resource) =>
+    currentRefs.has(resource.ref)
+    && isWebSearchOriginTool(resource.originTool)
+    && resource.status !== 'blocked'
+    && resource.status !== 'failed'
+    && !/(?:fixture|replay|history|seed|demo|previous-run)/i.test(resource.ref));
+}
+
+function isCurrentRunSearchEvidenceRef(ref: string): boolean {
+  return /^web-(?:search|page):/i.test(ref)
+    && !/(?:fixture|replay|history|seed|demo|previous-run)/i.test(ref);
+}
+
+function browserResourceUrl(resource: BrowserResource): string | undefined {
+  return stringFromRecord(resource.locator, 'url')
+    ?? stringFromRecord(resource.metadata, 'finalUrl')
+    ?? stringFromRecord(resource.metadata, 'url');
+}
+
+function finalAnswerSourceLinksFromText(text: string | undefined): string[] {
+  if (!text) return [];
+  return uniqueStrings(Array.from(text.matchAll(/\bhttps?:\/\/[^\s<>)\]}，。；、'"]+/giu))
+    .map((match) => match[0].replace(/[.,;:!?]+$/u, '')));
+}
+
 function browserResourceLooksLowInformation(resource: BrowserResource): boolean {
   if (resource.metadata?.discoveryOnly === true) return true;
   const url = stringFromRecord(resource.locator, 'url') ?? stringFromRecord(resource.metadata, 'finalUrl');
@@ -619,6 +1057,33 @@ function temporalAcceptanceIssue(
   };
 }
 
+function temporalSearchAcceptanceIssue(
+  resources: BrowserResource[],
+  spec: AgentHostBrowserAcceptanceSpec,
+): AgentHostBrowserEvidenceIssue | undefined {
+  if (!spec.temporal || resources.length === 0) return undefined;
+  const dates = uniqueStrings(resources.flatMap(browserResourceDates)).sort();
+  if (dates.length === 0) {
+    return {
+      code: 'web-search-temporal-evidence-missing',
+      message: 'Ordinary search acceptance requires current/recent source evidence, but search result metadata contains no verifiable dates.',
+      evidenceRefs: resources.map((resource) => resource.ref),
+    };
+  }
+  const temporal = spec.temporal;
+  const startDate = temporal.kind === 'latest'
+    ? isoDateMinusDays(temporal.referenceDate, temporal.maxAgeDays)
+    : temporal.startDate;
+  const endDate = temporal.kind === 'latest' ? temporal.referenceDate : temporal.endDate;
+  const inWindow = dates.some((date) => date >= startDate && date <= endDate);
+  if (inWindow) return undefined;
+  return {
+    code: 'web-search-temporal-gap',
+    message: `Search result dates do not satisfy the requested ${temporal.kind} window ${startDate}..${endDate}.`,
+    evidenceRefs: resources.map((resource) => resource.ref),
+  };
+}
+
 function browserResourceDates(resource: BrowserResource): string[] {
   const rawValues = [
     stringFromRecord(resource.metadata, 'publishedAt'),
@@ -673,6 +1138,43 @@ function minReadSourcesFromPrompt(prompt: string | undefined): number {
     return 2;
   }
   return 1;
+}
+
+function minSearchSourcesFromPrompt(prompt: string | undefined): number {
+  const text = prompt ?? '';
+  const digitMatch = /(?:至少|最少|不少于|provide\s+at\s+least|at\s+least)\s*(\d{1,2})\s*(?:条|个|则|篇|sources?|items?|links?|信息|消息)?/iu.exec(text);
+  if (digitMatch) return boundedSourceCount(Number(digitMatch[1]));
+  const cjkNumberMatch = /(?:至少|最少|不少于)\s*(一|二|两|三|四|五|六|七|八|九|十)\s*(?:条|个|则|篇|来源|信息|消息)?/u.exec(text);
+  if (cjkNumberMatch) return boundedSourceCount(cjkNumberValue(cjkNumberMatch[1]));
+  if (/对比|比较|交叉验证|核验|多方|多个来源|两家|多家|compare|cross[-\s]?check|verify|multiple\s+sources/i.test(text)) {
+    return 2;
+  }
+  return 1;
+}
+
+function boundedSourceCount(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(10, Math.floor(value)));
+}
+
+function cjkNumberValue(value: string | undefined): number {
+  if (value === '一') return 1;
+  if (value === '二' || value === '两') return 2;
+  if (value === '三') return 3;
+  if (value === '四') return 4;
+  if (value === '五') return 5;
+  if (value === '六') return 6;
+  if (value === '七') return 7;
+  if (value === '八') return 8;
+  if (value === '九') return 9;
+  if (value === '十') return 10;
+  return 1;
+}
+
+function readRequiredFromPrompt(prompt: string | undefined): boolean {
+  const text = prompt ?? '';
+  if (/\bhttps?:\/\/\S+/i.test(text)) return true;
+  return /网页正文|页面正文|实际读取|打开(?:这个|该|网页|链接|url)?|读取(?:这个|该|网页|链接|url)?|逐字|原文|直接引用|quote|quotations?|verbatim|summari[sz]e\s+(?:this|the)\s+(?:url|page|article)|总结(?:这个|该|这篇|网页|链接|url|文章|论文)/iu.test(text);
 }
 
 function searchQueryTermsFromPrompt(prompt: string | undefined, topicalTerms: string[]): string[] {
@@ -748,7 +1250,7 @@ function topicalTermsFromPrompt(prompt: string | undefined): string[] {
 }
 
 function browserSearchDiscoveryResource(resource: BrowserResource): boolean {
-  return resource.originTool === 'browser.search'
+  return isWebSearchOriginTool(resource.originTool)
     && resource.status !== 'read'
     && resource.status !== 'blocked'
     && resource.status !== 'failed'
@@ -785,16 +1287,26 @@ function browserSearchResourceLooksSpecific(
   return specificLatinTokens.length >= 2;
 }
 
+export function agentHostBrowserTopicTermMatchesText(term: string, text: string): boolean {
+  return browserSearchTermMatchesText(term, text);
+}
+
 function browserSearchTermMatchesText(term: string, text: string): boolean {
   const normalizedText = normalizeText(text);
   const normalizedTerm = normalizeText(term);
   if (!normalizedTerm) return false;
-  if (normalizedText.includes(normalizedTerm)) return true;
   if (/伊朗/u.test(term)) return /\biran(?:ian)?\b|伊朗/u.test(normalizedText);
   if (/openai/i.test(term)) return /\bopenai\b/i.test(normalizedText);
   if (/产品更新/u.test(term)) return /产品更新|product\s+updates?|release\s+notes?|changelog|updates?/iu.test(normalizedText);
   if (/人工智能/u.test(term)) return /人工智能|\bai\b|artificial\s+intelligence/iu.test(normalizedText);
-  return false;
+  if (/[\p{Script=Han}]/u.test(normalizedTerm)) return normalizedText.includes(normalizedTerm);
+  const termTokens = normalizedTerm.match(/[a-z0-9]+/giu)?.map((token) => token.toLowerCase()) ?? [];
+  if (termTokens.length === 0) return false;
+  const textTokenList = normalizedText.match(/[a-z0-9]+/giu)?.map((token) => token.toLowerCase()) ?? [];
+  const textTokens = new Set(textTokenList);
+  if (termTokens.length === 1) return textTokens.has(termTokens[0]);
+  return textTokenList.some((_, index) =>
+    termTokens.every((termToken, offset) => textTokenList[index + offset] === termToken));
 }
 
 function browserSearchTopicSignals(text: string | undefined): string[] {
@@ -888,13 +1400,56 @@ function stringFromRecord(record: Record<string, unknown> | undefined, key: stri
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function recordFromRecord(record: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const value = record?.[key];
+  return isRecord(value) ? value : undefined;
+}
+
+function arrayFromRecord(record: Record<string, unknown> | undefined, key: string): unknown[] {
+  const value = record?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function recordArrayFromRecord(record: Record<string, unknown> | undefined, key: string): Record<string, unknown>[] {
+  return arrayFromRecord(record, key).filter(isRecord);
+}
+
+function stringArrayFromRecord(record: Record<string, unknown> | undefined, key: string): string[] {
+  return arrayFromRecord(record, key).filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
 function resourceRefs(resources: readonly BrowserResource[] | undefined): string[] {
   if (!resources) return [];
   return resources.flatMap((resource) => [resource.ref, ...(resource.refs ?? [])]);
 }
 
 function isCurrentRunBrowserEvidenceRef(ref: string): boolean {
-  return /^browser-host-session:/i.test(ref) && !/(?:fixture|replay|history|seed|demo)/i.test(ref);
+  return (/^browser-host-session:/i.test(ref) || /^web-(?:source|text):/i.test(ref))
+    && !/(?:fixture|replay|history|seed|demo)/i.test(ref);
+}
+
+function isSourcePageEvidenceRef(ref: string): boolean {
+  return /source-pages\/.+\.source\.json$/i.test(ref) || /^web-source:/i.test(ref);
+}
+
+function isPageTextEvidenceRef(ref: string): boolean {
+  return /source-pages\/.+\.txt$/i.test(ref) || /^web-text:/i.test(ref);
+}
+
+function isWebSearchOriginTool(value: string | undefined): boolean {
+  return value === 'browser.search' || value === 'web.search' || value === 'web_search';
+}
+
+function isWebReadOriginTool(value: string | undefined): boolean {
+  return value === 'browser.read' || value === 'web.read' || value === 'web_read';
+}
+
+function isWebSearchToolRef(ref: string): boolean {
+  return /\b(?:browser_search|web_search)\b/i.test(ref) || /^web-search:/i.test(ref);
+}
+
+function isWebReadToolRef(ref: string): boolean {
+  return /\b(?:browser_read|web_read)\b/i.test(ref);
 }
 
 function uniqueStrings(values: readonly (string | undefined)[]): string[] {

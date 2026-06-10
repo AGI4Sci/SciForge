@@ -201,7 +201,7 @@ test('files pane module port defaults to Agent Host files module dispatcher endp
       '/api/sciforge/modules/read',
       '/api/sciforge/modules/invoke',
     ]);
-    assert.deepEqual([...new Set(requests.map((request) => request.origin))], ['http://127.0.0.1:5174']);
+    assert.deepEqual([...new Set(requests.map((request) => request.origin))], ['http://127.0.0.1:5175']);
     assert.equal(requests.some((request) => request.path.startsWith('/api/sciforge/workspace/')), false);
     assert.equal(requests[0]?.body.moduleId, 'files');
     assert.deepEqual(requests[0]?.body.filters, { path: '/tmp/sciforge/src' });

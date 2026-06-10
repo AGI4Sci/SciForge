@@ -353,13 +353,13 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
   assert.match(githubFeedbackSource, /export function markFeedbackGithubIssueClosed/);
 });
 
-test('PROJECT.md records the current Browser and Computer Use task board with GUI-host boundaries', () => {
-  assert.match(projectSource, /当前任务板：默认 Browser Search \/ Computer Use/);
-  assert.match(projectSource, /docs\/superpowers\/specs\/2026-06-05-default-browser-computer-use-design\.md/);
-  assert.match(projectSource, /默认 Browser search 或 Computer Use preflight/);
-  assert.match(projectSource, /默认档位是 `High Autonomy`/);
-  assert.match(projectSource, /hard-confirm UI 必须展示 action、target、impact、evidence refs、authorization profile、Confirm \/ Cancel/);
-  assert.match(projectSource, /GUI 只展示状态、收集授权/);
+test('PROJECT.md records the current Agent Host and GUI projection boundaries', () => {
+  assert.match(projectSource, /SciForge 的唯一智能体是 Codex \/ Agent Host/);
+  assert.match(projectSource, /Model Router 不是第二个 agent/);
+  assert.match(projectSource, /Browser、Computer Use、Desktop、artifact、verifier 等都只是 Host tools \/ actions 或能力模块/);
+  assert.match(projectSource, /UI 可以展示状态、证据、产物和恢复路径，但不生成答案/);
+  assert.match(projectSource, /最终用户可见答案来自 Codex App Server assistant final message/);
+  assert.match(projectSource, /缺 Runtime API key、Model Router `\/v1` base URL、runtime profile、router route 或必要 evidence 时必须 fail closed \/ blocked/);
   assert.doesNotMatch(projectSource, /当前任务板：Model Router MVP/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
   assert.match(sciForgeAppSource, /runAnnotationQuickAction/);

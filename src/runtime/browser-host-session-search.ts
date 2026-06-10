@@ -6,15 +6,16 @@ import type {
   BrowserHostDiscoveryResult,
   BrowserHostSessionDriver,
 } from './browser-host-session-types.js';
+import { BROWSER_HOST_DISCOVERY_PROVIDER_ENDPOINTS } from './browser-host-provider-registry.js';
 
 export function browserHostDiscoveryUrl(engine: BrowserHostDiscoveryEngine, query: string, region = 'us-en'): string {
   if (engine === 'duckduckgo') {
-    const url = new URL('https://duckduckgo.com/html/');
+    const url = new URL(BROWSER_HOST_DISCOVERY_PROVIDER_ENDPOINTS.duckduckgo);
     url.searchParams.set('q', query);
     if (region.trim()) url.searchParams.set('kl', region.trim());
     return url.toString();
   }
-  const url = new URL('https://www.bing.com/search');
+  const url = new URL(BROWSER_HOST_DISCOVERY_PROVIDER_ENDPOINTS.bing);
   url.searchParams.set('q', query);
   if (region.toLowerCase().startsWith('us')) {
     url.searchParams.set('cc', 'US');

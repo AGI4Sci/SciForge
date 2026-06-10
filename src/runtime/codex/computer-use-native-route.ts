@@ -31,6 +31,9 @@ export interface ComputerUseNativeRouteInput {
 const NORMALIZED_SCHEMA_VERSION = 'sciforge.codex.normalized-event.v1' as const;
 const CURRENT_VSCODE_COWORK_LIVE_DIAGNOSTIC_ENV = 'SCIFORGE_COMPUTER_USE_VSCODE_COWORK_LIVE_DIAGNOSTIC';
 const P10_PALETTE_OPEN = 'open-command-palette' as const;
+const VSCODE_QUICK_OPEN = 'quick-open' as const;
+const VSCODE_WORKSPACE_SEARCH = 'workspace-search' as const;
+const VSCODE_APPLY_CURRENT_SELECTION = 'apply-current-selection' as const;
 const UNSAFE_APPROVAL_REF_STRING_PATTERN = /(?:\bBearer\s+|\b(?:sk|rk|pk|ghp|github_pat)[_-]|api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|authorization|credential|providerPayload|data:[^,\s]+;base64,|https?:\/\/)/i;
 const BASE64ISH_APPROVAL_REF_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
 
@@ -45,7 +48,19 @@ export type CurrentVSCodeCoWorkLiveDiagnosticRunner = (input: {
   activateCurrentVSCodeIfNeeded?: boolean;
 }) => Promise<VSCodeCoWorkLiveDiagnosticResult> | VSCodeCoWorkLiveDiagnosticResult;
 
-type CurrentVSCodeCoWorkLiveOperation = 'read-visible-text' | 'insert-draft' | typeof P10_PALETTE_OPEN;
+type CurrentVSCodeCoWorkLiveOperation =
+  | 'read-visible-text'
+  | 'insert-draft'
+  | typeof VSCODE_APPLY_CURRENT_SELECTION
+  | typeof P10_PALETTE_OPEN
+  | typeof VSCODE_QUICK_OPEN
+  | typeof VSCODE_WORKSPACE_SEARCH;
+
+type CurrentVSCodeCoWorkDirectLiveOperation =
+  | typeof P10_PALETTE_OPEN
+  | typeof VSCODE_APPLY_CURRENT_SELECTION
+  | typeof VSCODE_QUICK_OPEN
+  | typeof VSCODE_WORKSPACE_SEARCH;
 
 export function isComputerUseNativeRouteCommand(commandText: string): boolean {
   const text = computerUseNativeRouteCommandText(commandText);
@@ -393,28 +408,77 @@ function currentVSCodeCoWorkLiveDiagnosticRunner(
 async function defaultCurrentVSCodeCoWorkLiveDiagnosticRunner(input: Parameters<CurrentVSCodeCoWorkLiveDiagnosticRunner>[0]) {
   const {
     runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic,
+    runCurrentVSCodeCoWorkNavigationSearchLiveDiagnostic,
     runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic,
   } = await import('./agent-host-vscode-cowork-current-live-diagnostic.js');
-  if (currentVSCodeCoWorkLiveOperation(input.agentHostInput) === P10_PALETTE_OPEN) {
-    const paletteQueryTextRef = currentVSCodeCoWorkPaletteQueryTextRef(input.agentHostInput)
-      ?? 'text-ref:vscode:command-palette-query:p10';
+  const operation = currentVSCodeCoWorkLiveOperation(input.agentHostInput);
+  if (operation === P10_PALETTE_OPEN) {
+    const paletteQueryTextRef = currentVSCodeCoWorkPaletteQueryTextRef(input.agentHostInput);
+    if (!paletteQueryTextRef) {
+      return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+        'blocked',
+        'current VSCode command palette live diagnostic blocked: palette query text ref required',
+        [
+          'blocked:vscode-cowork:palette-query-text-ref-required',
+          ...safeHostInputRefs(isRecord(input.agentHostInput) ? input.agentHostInput.refs : undefined),
+        ],
+      );
+    }
     return runCurrentVSCodeCoWorkCommandPaletteLiveDiagnostic({
       ...input,
       paletteQueryTextRef,
       selectCurrentItem: currentVSCodeCoWorkPaletteSelectCurrentItem(input.agentHostInput),
-      resolveTextRef: (textRef) => textRef === paletteQueryTextRef ? 'Help: About' : undefined,
     });
+  }
+  if (operation === VSCODE_QUICK_OPEN || operation === VSCODE_WORKSPACE_SEARCH) {
+    const queryTextRef = currentVSCodeCoWorkNavigationSearchQueryTextRef(input.agentHostInput, operation);
+    if (!queryTextRef) {
+      return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+        'blocked',
+        'current VSCode navigation/search live diagnostic blocked: query text ref required',
+        [
+          'blocked:vscode-cowork:navigation-search-query-text-ref-required',
+          ...safeHostInputRefs(isRecord(input.agentHostInput) ? input.agentHostInput.refs : undefined),
+        ],
+      );
+    }
+    return runCurrentVSCodeCoWorkNavigationSearchLiveDiagnostic({
+      ...input,
+      operation,
+      queryTextRef,
+    });
+  }
+  if (operation === VSCODE_APPLY_CURRENT_SELECTION) {
+    const draftTextRef = currentVSCodeCoWorkDraftTextRef(input.agentHostInput);
+    if (!draftTextRef) {
+      return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+        'blocked',
+        'current VSCode apply-current-selection live diagnostic blocked: draft text ref required',
+        [
+          'blocked:vscode-cowork:apply-current-selection-draft-text-ref-required',
+          ...safeHostInputRefs(isRecord(input.agentHostInput) ? input.agentHostInput.refs : undefined),
+        ],
+      );
+    }
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'blocked',
+      'current VSCode apply-current-selection live diagnostic blocked: draft resolver required',
+      [
+        'blocked:vscode-cowork:apply-current-selection-draft-resolver-required',
+        ...safeHostInputRefs(isRecord(input.agentHostInput) ? input.agentHostInput.refs : undefined),
+      ],
+    );
   }
   return runCurrentVSCodeCoWorkReadVisibleTextLiveDiagnostic(input);
 }
 
-function directCurrentVSCodeCoWorkLiveDiagnosticOperation(value: unknown): typeof P10_PALETTE_OPEN | undefined {
+function directCurrentVSCodeCoWorkLiveDiagnosticOperation(value: unknown): CurrentVSCodeCoWorkDirectLiveOperation | undefined {
   if (!isRecord(value)) return undefined;
   if (value.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
   const target = isRecord(value.target) ? value.target : undefined;
   if (target?.kind !== 'current-vscode-cowork') return undefined;
   const operation = currentVSCodeCoWorkLiveOperation(value);
-  return operation === P10_PALETTE_OPEN ? operation : undefined;
+  return isCurrentVSCodeCoWorkDirectLiveOperation(operation) ? operation : undefined;
 }
 
 function directCurrentVSCodeCoWorkLiveDiagnosticSafetyResult(value: unknown): VSCodeCoWorkLiveDiagnosticResult | undefined {
@@ -422,6 +486,7 @@ function directCurrentVSCodeCoWorkLiveDiagnosticSafetyResult(value: unknown): VS
   if (value.schemaVersion !== 'sciforge.codex-agent-host-input.v1') return undefined;
   const target = isRecord(value.target) ? value.target : undefined;
   const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  const operation = currentVSCodeCoWorkLiveOperation(value);
   const observation = isRecord(value.observation) ? value.observation : undefined;
   const latestObservation = isRecord(vscodeCoWork?.latestObservation)
     ? vscodeCoWork.latestObservation
@@ -450,6 +515,16 @@ function directCurrentVSCodeCoWorkLiveDiagnosticSafetyResult(value: unknown): VS
     ...explicitWindowRefs,
     ...explicitFrontmostRefs,
   ]);
+  if (isCurrentVSCodeCoWorkMutatingDirectOperation(operation) && value.source === 'ordinary-chat-current-vscode-computer-use-bridge') {
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'blocked',
+      'current VSCode editor write live diagnostic blocked: structured Host operation required',
+      [
+        'blocked:vscode-cowork:structured-host-operation-required',
+        ...requestRefs,
+      ],
+    );
+  }
   if (explicitWindowRefs.length > 1 || explicitFrontmostRefs.length > 1) {
     return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
       'needs-confirmation',
@@ -457,6 +532,39 @@ function directCurrentVSCodeCoWorkLiveDiagnosticSafetyResult(value: unknown): VS
       [
         'needs-confirmation:vscode-app-module:target-window-ambiguous',
         ...baseEvidenceRefs,
+      ],
+    );
+  }
+  if (operation === P10_PALETTE_OPEN && !currentVSCodeCoWorkPaletteQueryTextRef(value)) {
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'blocked',
+      'current VSCode command palette live diagnostic blocked: palette query text ref required',
+      [
+        'blocked:vscode-cowork:palette-query-text-ref-required',
+        ...requestRefs,
+      ],
+    );
+  }
+  if (
+    isCurrentVSCodeCoWorkNavigationSearchOperation(operation)
+    && !currentVSCodeCoWorkNavigationSearchQueryTextRef(value, operation)
+  ) {
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'blocked',
+      'current VSCode navigation/search live diagnostic blocked: query text ref required',
+      [
+        'blocked:vscode-cowork:navigation-search-query-text-ref-required',
+        ...requestRefs,
+      ],
+    );
+  }
+  if (operation === VSCODE_APPLY_CURRENT_SELECTION && !currentVSCodeCoWorkDraftTextRef(value)) {
+    return directCurrentVSCodeCoWorkLiveDiagnosticStoppedResult(
+      'blocked',
+      'current VSCode apply-current-selection live diagnostic blocked: draft text ref required',
+      [
+        'blocked:vscode-cowork:apply-current-selection-draft-text-ref-required',
+        ...requestRefs,
       ],
     );
   }
@@ -540,6 +648,48 @@ function currentVSCodeCoWorkPaletteSelectCurrentItem(value: unknown): boolean {
   const target = isRecord(value.target) ? value.target : undefined;
   const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
   return vscodeCoWork?.selectCurrentItem === true;
+}
+
+function isCurrentVSCodeCoWorkDirectLiveOperation(
+  operation: CurrentVSCodeCoWorkLiveOperation | undefined,
+): operation is CurrentVSCodeCoWorkDirectLiveOperation {
+  return operation === P10_PALETTE_OPEN
+    || operation === VSCODE_APPLY_CURRENT_SELECTION
+    || isCurrentVSCodeCoWorkNavigationSearchOperation(operation);
+}
+
+function isCurrentVSCodeCoWorkMutatingDirectOperation(
+  operation: CurrentVSCodeCoWorkLiveOperation | undefined,
+): boolean {
+  return operation === VSCODE_APPLY_CURRENT_SELECTION;
+}
+
+function isCurrentVSCodeCoWorkNavigationSearchOperation(
+  operation: CurrentVSCodeCoWorkLiveOperation | undefined,
+): operation is typeof VSCODE_QUICK_OPEN | typeof VSCODE_WORKSPACE_SEARCH {
+  return operation === VSCODE_QUICK_OPEN || operation === VSCODE_WORKSPACE_SEARCH;
+}
+
+function currentVSCodeCoWorkNavigationSearchQueryTextRef(
+  value: unknown,
+  operation: typeof VSCODE_QUICK_OPEN | typeof VSCODE_WORKSPACE_SEARCH,
+): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  return safeHostInputRef(
+    operation === VSCODE_QUICK_OPEN
+      ? vscodeCoWork?.quickOpenQueryTextRef
+      : vscodeCoWork?.workspaceSearchQueryTextRef,
+    ['text-ref:'],
+  );
+}
+
+function currentVSCodeCoWorkDraftTextRef(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const target = isRecord(value.target) ? value.target : undefined;
+  const vscodeCoWork = isRecord(target?.vscodeCoWork) ? target.vscodeCoWork : undefined;
+  return safeHostInputRef(vscodeCoWork?.draftTextRef, ['text-ref:']);
 }
 
 function currentVSCodeCoWorkLiveDiagnosticPayload(result: VSCodeCoWorkLiveDiagnosticResult): ToolPayload {
@@ -745,7 +895,12 @@ function safeRuntimeTruthProducerEvidence(value: unknown): Record<string, unknow
 }
 
 function safeVSCodeCoWorkLiveOperation(value: unknown): CurrentVSCodeCoWorkLiveOperation | undefined {
-  return value === 'read-visible-text' || value === 'insert-draft' || value === P10_PALETTE_OPEN
+  return value === 'read-visible-text'
+    || value === 'insert-draft'
+    || value === VSCODE_APPLY_CURRENT_SELECTION
+    || value === P10_PALETTE_OPEN
+    || value === VSCODE_QUICK_OPEN
+    || value === VSCODE_WORKSPACE_SEARCH
     ? value
     : undefined;
 }
@@ -1129,7 +1284,7 @@ function safePrimitiveChain(value: unknown): string[] {
   return value
     .filter((item): item is string => typeof item === 'string')
     .map((item) => item.trim())
-    .filter((item) => /^(?:bind|observe|host-decision(?:\([a-z0-9-]+\))?|act(?:\([a-z0-9-]+\))?|control\(release\)|control|release)$/i.test(item));
+    .filter((item) => /^(?:bind|observe|host-decision(?:\([a-z0-9-]+\))?|act(?:\([a-z0-9-]+\))?|verify|control\(release\)|control|release)$/i.test(item));
 }
 
 function safeAgentHostFinalAnswer(value: unknown): Record<string, unknown> | undefined {

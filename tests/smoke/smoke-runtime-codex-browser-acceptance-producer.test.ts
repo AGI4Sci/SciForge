@@ -49,6 +49,7 @@ test('ready preflight producer branch records protocol proof without release eli
           NODE_ENV: 'test',
           SCIFORGE_WORKSPACE_PATH: workspacePath,
           SCIFORGE_RUNTIME_API_KEY: serviceKey,
+          SCIFORGE_MODEL_ROUTER_BASE_URL: upstreamBaseUrl,
           SCIFORGE_PROXY_UPSTREAM_BASE_URL: upstreamBaseUrl,
           SCIFORGE_BROWSER_ACCEPTANCE_VALIDATE_ONLY: '',
           SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE: '',
@@ -58,7 +59,7 @@ test('ready preflight producer branch records protocol proof without release eli
     );
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /\[blocked\] Runtime Codex in-app browser acceptance is not passed/);
+    assert.match(result.stdout, /\[blocked\] Runtime Codex (?:browser E2E is blocked|in-app browser acceptance is not passed)/);
 
     const manifestText = await readFile(resolve(evidenceDir, 'manifest.json'), 'utf8');
     const manifest = JSON.parse(manifestText) as {
@@ -124,14 +125,20 @@ test('ready preflight producer branch records protocol proof without release eli
       ? manifest.diagnosticProtocolProof.evidenceRefs.map((ref) => String(ref))
       : [];
     const eventEvidenceText = eventEvidenceRefs.join('\n');
-    assert.ok(eventEvidenceRefs.some((ref) => /\bbrowser_search\b/i.test(ref)), 'producer branch must preserve direct browser_search refs');
-    assert.ok(eventEvidenceRefs.some((ref) => /\bbrowser_read\b/i.test(ref)), 'producer branch must preserve direct browser_read refs');
+    assert.ok(eventEvidenceRefs.some((ref) => /\bbrowser_search\b/i.test(ref)), 'producer branch may preserve browser_search refs as diagnostic Browser primitive evidence');
+    assert.ok(eventEvidenceRefs.some((ref) => /\bbrowser_read\b/i.test(ref)), 'producer branch may preserve browser_read refs as diagnostic Browser primitive evidence');
     assert.ok(eventEvidenceRefs.some((ref) => /source-pages\/.+\.source\.json$/i.test(ref)), 'producer branch must preserve current-run source-page refs');
     assert.ok(eventEvidenceRefs.some((ref) => /source-pages\/.+\.txt$/i.test(ref)), 'producer branch must preserve current-run page-text refs');
     assert.ok(eventEvidenceRefs.some((ref) => /gui\.present[:/]final-answer/i.test(ref)), 'producer branch must preserve gui.present final-answer refs');
     assert.doesNotMatch(eventEvidenceText, /executeBoundedOperation|module\.invoke[^\n]*(?:browser\.)?(?:search_read|open_read)/i);
     assert.doesNotMatch(eventEvidenceText, /browser\.(?:search_read|open_read)|\b(?:search_read|open_read)\b/i);
-    assert.doesNotMatch(manifestText, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i);
+    const manifestEvidenceText = JSON.stringify({
+      ...manifest,
+      exactStartCommands: undefined,
+      exactRetestCommands: undefined,
+      strictRetestCommand: undefined,
+    });
+    assert.doesNotMatch(manifestEvidenceText, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i);
     assert.doesNotMatch(manifestText, /\/(?:Applications|Users|private|var|tmp)\/[^\s"']+/i);
     assert.doesNotMatch(manifestText, new RegExp(serviceKey));
     assert.doesNotMatch(manifestText, /provider\.example\.invalid/);
@@ -184,6 +191,7 @@ test('strict smoke rejects fixture producer proof as live product acceptance', a
           NODE_ENV: 'test',
           SCIFORGE_WORKSPACE_PATH: workspacePath,
           SCIFORGE_RUNTIME_API_KEY: 'SERVICE_ENV_SENTINEL_DO_NOT_LEAK_PRODUCER_STRICT_20260608',
+          SCIFORGE_MODEL_ROUTER_BASE_URL: 'https://provider.example.invalid/v1',
           SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://provider.example.invalid/v1',
           SCIFORGE_BROWSER_ACCEPTANCE_VALIDATE_ONLY: '',
         },
@@ -192,7 +200,7 @@ test('strict smoke rejects fixture producer proof as live product acceptance', a
     );
 
     assert.notEqual(result.status, 0, 'strict smoke must reject isolated fixture producer proof');
-    assert.match(result.stderr, /requires manifest\.status === passed; got blocked/);
+    assert.match(result.stderr, /requires manifest\.status === passed; (?:blocked manifest is not release acceptance|got blocked)/);
 
     const manifest = JSON.parse(await readFile(resolve(evidenceDir, 'manifest.json'), 'utf8')) as {
       status?: unknown;
@@ -253,7 +261,7 @@ test('validate-only strict smoke rejects passed manifests without materialized B
       '',
       `Command id: ${commandId}`,
       '',
-      'Actual task result: direct Browser source evidence was claimed in manifest refs.',
+      'Actual task result: diagnostic Browser primitive source evidence was claimed in manifest refs.',
       'This file intentionally does not create the browser-host-session source artifacts.',
       '',
     ].join('\n'), 'utf8');
@@ -412,7 +420,7 @@ test('validate-only strict smoke rejects forged historical negative-fixture sour
       '# Acceptance rubric',
       '',
       `Actual task result: Runtime Codex rendered a live answer for command ${commandId}.`,
-      'Evidence refs: direct browser_search, direct browser_read, source-page refs, and gui.present final-answer.',
+      'Evidence refs: diagnostic browser_search, diagnostic browser_read, source-page refs, and gui.present final-answer.',
       'Negative checks: fake passed states and missing source files must be rejected.',
       'Remaining risks: none for this validator negative case.',
       '',

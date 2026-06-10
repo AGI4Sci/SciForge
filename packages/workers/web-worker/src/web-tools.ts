@@ -6,6 +6,10 @@ import { promisify } from 'node:util';
 import type { JsonObject } from '../../../contracts/tool-worker/src/index';
 import type { Page } from 'playwright-core';
 import { createPlaywrightEdgeBrowserAutomationProvider } from '../../../observe/web/mcp/playwright-edge-provider';
+import {
+  WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS,
+  WEB_WORKER_SEARCH_PROVIDER_IDS,
+} from './provider-registry';
 
 const execFileAsync = promisify(execFile);
 
@@ -86,16 +90,16 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
         return {
           query,
           rawQuery,
-          provider: 'arxiv-api',
+          provider: WEB_WORKER_SEARCH_PROVIDER_IDS.arxivApi,
           providerQuery: arxivResponse.searchQuery,
           ...(arxivResponse.dateRange ? { dateRange: arxivResponse.dateRange } : {}),
           ...(arxivResponse.dateFallback ? { dateFallback: arxivResponse.dateFallback } : {}),
           results: arxivResponse.results,
         };
       }
-      fallbackErrors.push(`arxiv-api returned no records for ${arxivResponse.searchQuery}`);
+      fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.arxivApi} returned no records for ${arxivResponse.searchQuery}`);
     } catch (error) {
-      fallbackErrors.push(`arxiv-api: ${errorMessage(error)}`);
+      fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.arxivApi}: ${errorMessage(error)}`);
     }
     try {
       const browserResponse = await browserArxivSearch(query, limit, now, region);
@@ -103,8 +107,8 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
         return {
           query,
           rawQuery,
-          provider: 'arxiv-browser',
-          fallbackFrom: 'arxiv-api',
+          provider: WEB_WORKER_SEARCH_PROVIDER_IDS.arxivBrowser,
+          fallbackFrom: WEB_WORKER_SEARCH_PROVIDER_IDS.arxivApi,
           fallbackReasons: fallbackErrors,
           providerQuery: browserResponse.searchQuery,
           ...(browserResponse.dateRange ? { dateRange: browserResponse.dateRange } : {}),
@@ -112,9 +116,9 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
           results: browserResponse.results,
         };
       }
-      fallbackErrors.push(`arxiv-browser returned no arXiv records for ${browserResponse.searchQuery}`);
+      fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.arxivBrowser} returned no arXiv records for ${browserResponse.searchQuery}`);
     } catch (error) {
-      fallbackErrors.push(`arxiv-browser: ${errorMessage(error)}`);
+      fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.arxivBrowser}: ${errorMessage(error)}`);
     }
     throw new RetryableToolError(`arxiv providers could not satisfy explicit arXiv query: ${fallbackErrors.join('; ')}`);
   }
@@ -125,13 +129,13 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
       return {
         query,
         rawQuery,
-        provider: 'duckduckgo-html',
+        provider: WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtml,
         results: duckDuckGoResults,
       };
     }
-    fallbackErrors.push('duckduckgo-html returned no parseable results');
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtml} returned no parseable results`);
   } catch (error) {
-    fallbackErrors.push(`duckduckgo-html: ${errorMessage(error)}`);
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtml}: ${errorMessage(error)}`);
   }
 
   try {
@@ -144,14 +148,14 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
         ...browserResponse,
         query,
         rawQuery,
-        fallbackFrom: 'duckduckgo-html',
+        fallbackFrom: WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtml,
         fallbackReasons: fallbackErrors,
         results: browserResults,
       };
     }
-    fallbackErrors.push('playwright-chromium rendered search returned no parseable results');
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.playwrightChromium} rendered search returned no parseable results`);
   } catch (error) {
-    fallbackErrors.push(`playwright-chromium rendered search: ${errorMessage(error)}`);
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.playwrightChromium} rendered search: ${errorMessage(error)}`);
   }
 
   try {
@@ -160,15 +164,15 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
       return {
         query,
         rawQuery,
-        provider: 'europepmc',
-        fallbackFrom: 'duckduckgo-html',
+        provider: WEB_WORKER_SEARCH_PROVIDER_IDS.europePmc,
+        fallbackFrom: WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtml,
         fallbackReasons: fallbackErrors,
         results: europePmcResults,
       };
     }
-    fallbackErrors.push('europepmc returned no records');
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.europePmc} returned no records`);
   } catch (error) {
-    fallbackErrors.push(`europepmc: ${errorMessage(error)}`);
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.europePmc}: ${errorMessage(error)}`);
   }
 
   try {
@@ -177,15 +181,15 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
       return {
         query,
         rawQuery,
-        provider: 'crossref',
-        fallbackFrom: 'duckduckgo-html',
+        provider: WEB_WORKER_SEARCH_PROVIDER_IDS.crossref,
+        fallbackFrom: WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtml,
         fallbackReasons: fallbackErrors,
         results: crossrefResults,
       };
     }
-    fallbackErrors.push('crossref returned no records');
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.crossref} returned no records`);
   } catch (error) {
-    fallbackErrors.push(`crossref: ${errorMessage(error)}`);
+    fallbackErrors.push(`${WEB_WORKER_SEARCH_PROVIDER_IDS.crossref}: ${errorMessage(error)}`);
   }
 
   throw new RetryableToolError(`All search providers failed or returned no records: ${fallbackErrors.join('; ')}`);
@@ -221,8 +225,8 @@ async function renderedBrowserSearch(input: JsonObject): Promise<JsonObject> {
     return {
       query,
       rawQuery,
-      provider: 'playwright-chromium',
-      engine: engine === 'duckduckgo' ? 'duckduckgo-html-rendered' : 'bing-rendered',
+      provider: WEB_WORKER_SEARCH_PROVIDER_IDS.playwrightChromium,
+      engine: engine === 'duckduckgo' ? WEB_WORKER_SEARCH_PROVIDER_IDS.duckDuckGoHtmlRendered : WEB_WORKER_SEARCH_PROVIDER_IDS.bingRendered,
       searchUrl: searchUrl.toString(),
       finalUrl: page.url(),
       status: response?.status() ?? 0,
@@ -236,12 +240,12 @@ async function renderedBrowserSearch(input: JsonObject): Promise<JsonObject> {
 
 function browserSearchUrl(engine: 'bing' | 'duckduckgo', query: string, region: string): URL {
   if (engine === 'duckduckgo') {
-    const searchUrl = new URL('https://duckduckgo.com/html/');
+    const searchUrl = new URL(WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS.duckDuckGoHtml);
     searchUrl.searchParams.set('q', query);
     searchUrl.searchParams.set('kl', region);
     return searchUrl;
   }
-  const searchUrl = new URL('https://www.bing.com/search');
+  const searchUrl = new URL(WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS.bing);
   searchUrl.searchParams.set('q', query);
   if (region.startsWith('us')) {
     searchUrl.searchParams.set('cc', 'US');
@@ -254,7 +258,7 @@ function browserSearchUrl(engine: 'bing' | 'duckduckgo', query: string, region: 
 }
 
 async function duckDuckGoSearch(query: string, limit: number, region: string): Promise<WebSearchResult[]> {
-  const searchUrl = new URL('https://duckduckgo.com/html/');
+  const searchUrl = new URL(WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS.duckDuckGoHtml);
   searchUrl.searchParams.set('q', query);
   searchUrl.searchParams.set('kl', region);
 
@@ -286,7 +290,7 @@ async function arxivSearch(query: string, limit: number, now: Date, options: { i
 }
 
 async function arxivSearchOnce(query: string, limit: number, now: Date, options: { ignoreDateRange?: boolean } = {}): Promise<ArxivSearchResponse> {
-  const searchUrl = new URL('https://export.arxiv.org/api/query');
+  const searchUrl = new URL(WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS.arxivApi);
   const arxivQuery = arxivSearchQuery(query, now, options);
   searchUrl.searchParams.set('search_query', arxivQuery.searchQuery);
   searchUrl.searchParams.set('start', '0');
@@ -440,7 +444,7 @@ export async function browserFetch(input: JsonObject): Promise<JsonObject> {
       status: response?.status() ?? 0,
       ok: response?.ok() ?? false,
       contentType: headers['content-type'] ?? '',
-      provider: 'playwright-chromium',
+      provider: WEB_WORKER_SEARCH_PROVIDER_IDS.playwrightChromium,
       rendered: true,
       text: text.slice(0, maxChars),
       truncated: text.length > maxChars,
@@ -997,7 +1001,7 @@ function monthIndex(value: string): number {
 }
 
 async function europePmcSearch(query: string, limit: number): Promise<WebSearchResult[]> {
-  const searchUrl = new URL('https://www.ebi.ac.uk/europepmc/webservices/rest/search');
+  const searchUrl = new URL(WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS.europePmc);
   searchUrl.searchParams.set('format', 'json');
   searchUrl.searchParams.set('resultType', 'lite');
   searchUrl.searchParams.set('pageSize', String(limit));
@@ -1037,7 +1041,7 @@ async function europePmcSearch(query: string, limit: number): Promise<WebSearchR
 }
 
 async function crossrefSearch(query: string, limit: number): Promise<WebSearchResult[]> {
-  const searchUrl = new URL('https://api.crossref.org/works');
+  const searchUrl = new URL(WEB_WORKER_SEARCH_PROVIDER_ENDPOINTS.crossref);
   searchUrl.searchParams.set('rows', String(limit));
   searchUrl.searchParams.set('query.bibliographic', query);
 

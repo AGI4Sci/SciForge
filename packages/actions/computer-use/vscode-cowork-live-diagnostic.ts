@@ -51,6 +51,7 @@ export interface CurrentVSCodeCoWorkWindowObservation {
   titleRef: string;
   frontmostRef: string;
   fileRefs: string[];
+  nonUserFileScopeRef?: string;
   editorElementRef: string;
   focusedEditorRef?: string;
   selectionRef?: string;
@@ -84,6 +85,12 @@ export interface CurrentVSCodeCoWorkWindowSnapshot {
   focusedValue?: string;
   focusedDescription?: string;
   focusedContext?: string;
+  focusedSelectedTextRange?: string;
+  focusedInsertionPointLineNumber?: string;
+  editorMenuCopyEnabled?: boolean;
+  editorMenuCutEnabled?: boolean;
+  editorMenuToggleLineCommentEnabled?: boolean;
+  editorMenuExpandSelectionEnabled?: boolean;
   observedAtMs?: number;
 }
 
@@ -122,6 +129,12 @@ export interface CurrentVSCodeCoWorkLiveResolvedTextExecution
 export interface CurrentVSCodeCoWorkLiveKeyExecution
   extends CurrentVSCodeCoWorkLiveActionExecution {
   key: string;
+}
+
+export interface CurrentVSCodeCoWorkDiagnosticScratchBufferLifecycleInput {
+  runId: string;
+  activateCurrentVSCodeIfNeeded?: boolean;
+  scratchScopeRefs?: string[];
 }
 
 export interface CurrentVSCodeCoWorkLivePrimitivePortsOptions {
@@ -566,13 +579,17 @@ async function performDefaultCurrentVSCodeAction(
 ): Promise<void> {
   if (input.action.type === 'key') {
     const key = input.action.key;
-    if (key !== 'Command+1' && key !== 'Control+Backquote' && key !== 'Enter' && key !== 'Meta+Shift+P' && key !== 'Escape') {
+    if (key !== 'Command+1' && key !== 'Control+Backquote' && key !== 'Enter' && key !== 'Meta+P' && key !== 'Meta+Shift+F' && key !== 'Meta+Shift+P' && key !== 'Meta+S' && key !== 'Escape') {
       throw new Error('current-vscode-act-key-unsupported');
     }
     const hasTerminalTargetContext = hasTerminalContext(input.contextRefs);
     const hasPaletteTargetContext = hasCommandPaletteContext(input.contextRefs);
+    const hasEditorContext = input.focusedEditorRef?.startsWith('focused-editor:') === true;
     if (key === 'Control+Backquote' && !hasTerminalTargetContext) {
       throw new Error('current-vscode-act-terminal-ref-required');
+    }
+    if (key === 'Meta+S' && !hasEditorContext) {
+      throw new Error('current-vscode-act-focused-editor-ref-required');
     }
     if (key === 'Enter') {
       if (hasTerminalTargetContext && !hasTerminalInputContext(input.contextRefs)) {
@@ -636,6 +653,21 @@ on run argv
           delay 0.2
           return "pressed"
         end if
+        if keyName is "Meta+P" then
+          keystroke "p" using command down
+          delay 0.2
+          return "pressed"
+        end if
+        if keyName is "Meta+Shift+F" then
+          keystroke "f" using {command down, shift down}
+          delay 0.2
+          return "pressed"
+        end if
+        if keyName is "Meta+S" then
+          keystroke "s" using command down
+          delay 0.1
+          return "pressed"
+        end if
         if keyName is "Control+Backquote" then
           keystroke "\`" using control down
           return "pressed"
@@ -666,12 +698,31 @@ async function typeResolvedTextIntoCurrentVSCode(input: CurrentVSCodeCoWorkLiveR
     await execFileAsync('osascript', ['-e', `
 on run argv
   set textToType to item 1 of argv
+  set previousClipboard to ""
+  set hadClipboard to false
+  try
+    set previousClipboard to the clipboard
+    set hadClipboard to true
+  end try
   tell application "System Events"
     set vscodeProcesses to application processes whose bundle identifier is "com.microsoft.VSCode"
     if (count of vscodeProcesses) is 0 then error "current-vscode-process-missing"
     repeat with vscodeProcess in vscodeProcesses
       if frontmost of vscodeProcess is true then
-        keystroke textToType
+        try
+          set the clipboard to textToType
+          delay 0.05
+          keystroke "v" using command down
+          delay 0.2
+        on error errorMessage
+          try
+            if hadClipboard is true then set the clipboard to previousClipboard
+          end try
+          error errorMessage
+        end try
+        try
+          if hadClipboard is true then set the clipboard to previousClipboard
+        end try
         return "typed"
       end if
     end repeat
@@ -738,6 +789,24 @@ on run argv
     set focusedValue to ""
     set focusedDescription to ""
     set focusedContext to ""
+    set focusedSelectedTextRange to ""
+    set focusedInsertionPointLineNumber to ""
+    set editorMenuCopyEnabled to false
+    set editorMenuCutEnabled to false
+    set editorMenuToggleLineCommentEnabled to false
+    set editorMenuExpandSelectionEnabled to false
+    try
+      set editorMenuCopyEnabled to enabled of menu item "Copy" of menu "Edit" of menu bar 1 of targetProcess
+    end try
+    try
+      set editorMenuCutEnabled to enabled of menu item "Cut" of menu "Edit" of menu bar 1 of targetProcess
+    end try
+    try
+      set editorMenuToggleLineCommentEnabled to enabled of menu item "Toggle Line Comment" of menu "Edit" of menu bar 1 of targetProcess
+    end try
+    try
+      set editorMenuExpandSelectionEnabled to enabled of menu item "Expand Selection" of menu "Selection" of menu bar 1 of targetProcess
+    end try
     try
       set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
       try
@@ -754,6 +823,12 @@ on run argv
       try
         set focusedDescription to my singleLine(description of focusedElement as text)
         if focusedDescription is not "" then set collectedText to collectedText & linefeed & focusedDescription
+      end try
+      try
+        set focusedSelectedTextRange to my singleLine(value of attribute "AXSelectedTextRange" of focusedElement as text)
+      end try
+      try
+        set focusedInsertionPointLineNumber to my singleLine(value of attribute "AXInsertionPointLineNumber" of focusedElement as text)
       end try
       set currentElement to focusedElement
       repeat with ancestorIndex from 1 to 6
@@ -777,7 +852,7 @@ on run argv
         end try
       end repeat
     end try
-    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & focusedRole & linefeed & focusedName & linefeed & focusedValue & linefeed & focusedDescription & linefeed & focusedContext & linefeed & collectedText
+    return (unix id of targetProcess as text) & linefeed & windowTitle & linefeed & focusedRole & linefeed & focusedName & linefeed & focusedValue & linefeed & focusedDescription & linefeed & focusedContext & linefeed & focusedSelectedTextRange & linefeed & focusedInsertionPointLineNumber & linefeed & (editorMenuCopyEnabled as text) & linefeed & (editorMenuCutEnabled as text) & linefeed & (editorMenuToggleLineCommentEnabled as text) & linefeed & (editorMenuExpandSelectionEnabled as text) & linefeed & collectedText
   end tell
 end run
 `, input.activateIfNotFrontmost ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
@@ -789,6 +864,12 @@ end run
     focusedValue = '',
     focusedDescription = '',
     focusedContext = '',
+    focusedSelectedTextRange = '',
+    focusedInsertionPointLineNumber = '',
+    editorMenuCopyEnabled = '',
+    editorMenuCutEnabled = '',
+    editorMenuToggleLineCommentEnabled = '',
+    editorMenuExpandSelectionEnabled = '',
     ...textParts
   ] = stdout.trim().replace(/\r/g, '\n').split('\n');
   return currentVSCodeCoWorkWindowObservationFromSnapshot({
@@ -799,17 +880,194 @@ end run
     focusedValue,
     focusedDescription,
     focusedContext,
+    focusedSelectedTextRange,
+    focusedInsertionPointLineNumber,
+    editorMenuCopyEnabled: editorMenuCopyEnabled.trim().toLowerCase() === 'true',
+    editorMenuCutEnabled: editorMenuCutEnabled.trim().toLowerCase() === 'true',
+    editorMenuToggleLineCommentEnabled: editorMenuToggleLineCommentEnabled.trim().toLowerCase() === 'true',
+    editorMenuExpandSelectionEnabled: editorMenuExpandSelectionEnabled.trim().toLowerCase() === 'true',
     collectedText: textParts.join('\n'),
   });
+}
+
+export async function openCurrentVSCodeDiagnosticScratchBuffer(
+  input: CurrentVSCodeCoWorkDiagnosticScratchBufferLifecycleInput,
+): Promise<string[]> {
+  const runToken = safeRunId(input.runId);
+  try {
+    await execFileAsync('osascript', ['-e', `
+on frontmostVSCodeProcess(shouldActivate)
+  tell application "System Events"
+    set vscodeProcesses to application processes whose bundle identifier is "com.microsoft.VSCode"
+    if (count of vscodeProcesses) is 0 then error "current-vscode-process-missing"
+    repeat with vscodeProcess in vscodeProcesses
+      if frontmost of vscodeProcess is true then return vscodeProcess
+    end repeat
+    if shouldActivate is false then error "current-vscode-not-frontmost"
+    if (count of vscodeProcesses) is not 1 then error "current-vscode-process-ambiguous"
+    set candidateProcess to item 1 of vscodeProcesses
+    if (count of windows of candidateProcess) is not 1 then error "current-vscode-window-ambiguous"
+    set frontmost of candidateProcess to true
+    delay 0.2
+    return candidateProcess
+  end tell
+end frontmostVSCodeProcess
+
+on run argv
+  set shouldActivate to false
+  if (count of argv) > 0 and item 1 of argv is "1" then set shouldActivate to true
+tell application "System Events"
+  set vscodeProcess to my frontmostVSCodeProcess(shouldActivate)
+  try
+    click menu item "New Text File" of menu "File" of menu bar 1 of vscodeProcess
+  on error
+    keystroke "n" using command down
+  end try
+  delay 0.2
+  keystroke "1" using command down
+  delay 0.2
+  return "opened"
+end tell
+end run
+`, input.activateCurrentVSCodeIfNeeded === true ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+  } catch {
+    throw new Error('current-vscode-diagnostic-scratch-open-failed');
+  }
+  return [`diagnostic-scratch-buffer:current-vscode-cowork:${runToken}:open`];
+}
+
+export async function discardCurrentVSCodeDiagnosticScratchBuffer(
+  input: CurrentVSCodeCoWorkDiagnosticScratchBufferLifecycleInput,
+): Promise<string[]> {
+  const runToken = safeRunId(input.runId);
+  const requiresScratchScope = (input.scratchScopeRefs ?? []).some((ref) => ref.startsWith('file-ref:vscode:scratch:'))
+    && (input.scratchScopeRefs ?? []).some((ref) => ref.startsWith('non-user-file-scope:vscode:scratch:'));
+  if (!requiresScratchScope) {
+    return [`diagnostic-scratch-buffer:current-vscode-cowork:${runToken}:discard-skipped`];
+  }
+  try {
+    const { stdout } = await execFileAsync('osascript', ['-e', `
+on titleLooksLikeUntitledScratch(windowTitle)
+  set titleLength to length of windowTitle
+  if windowTitle starts with "Untitled-" then
+    if titleLength is 9 then return false
+    if my untitledNumberHasScratchDelimiter(text 10 thru titleLength of windowTitle) then return true
+  end if
+  set markerOffset to offset of "• Untitled-" in windowTitle
+  if markerOffset > 0 then
+    set startIndex to markerOffset + 11
+    if titleLength < startIndex then return false
+    if my untitledNumberHasScratchDelimiter(text startIndex thru titleLength of windowTitle) then return true
+  end if
+  return false
+end titleLooksLikeUntitledScratch
+
+on untitledNumberHasScratchDelimiter(suffixText)
+  set digitCount to 0
+  repeat with indexValue from 1 to length of suffixText
+    set charValue to text indexValue thru indexValue of suffixText
+    if charValue is in "0123456789" then
+      set digitCount to digitCount + 1
+    else
+      exit repeat
+    end if
+  end repeat
+  if digitCount is 0 then return false
+  if digitCount is length of suffixText then return true
+  set delimiterChar to text (digitCount + 1) thru (digitCount + 1) of suffixText
+  if delimiterChar is " " then return true
+  if delimiterChar is "-" then return true
+  if delimiterChar is "—" then return true
+  if delimiterChar is "–" then return true
+  return false
+end untitledNumberHasScratchDelimiter
+
+on run argv
+  set shouldActivate to false
+  if (count of argv) > 0 and item 1 of argv is "1" then set shouldActivate to true
+  set mustHaveScratchScope to false
+  if (count of argv) > 1 and item 2 of argv is "1" then set mustHaveScratchScope to true
+tell application "System Events"
+  set vscodeProcesses to application processes whose bundle identifier is "com.microsoft.VSCode"
+  if (count of vscodeProcesses) is 0 then error "current-vscode-process-missing"
+  set vscodeProcess to missing value
+  repeat with candidateProcess in vscodeProcesses
+    if frontmost of candidateProcess is true then
+      set vscodeProcess to candidateProcess
+      exit repeat
+    end if
+  end repeat
+  if vscodeProcess is missing value then
+    if shouldActivate is false then error "current-vscode-not-frontmost"
+    if (count of vscodeProcesses) is not 1 then error "current-vscode-process-ambiguous"
+    set vscodeProcess to item 1 of vscodeProcesses
+    if (count of windows of vscodeProcess) is not 1 then error "current-vscode-window-ambiguous"
+    set frontmost of vscodeProcess to true
+    delay 0.2
+  end if
+  if (count of windows of vscodeProcess) is 0 then return "closed"
+  set targetWindow to front window of vscodeProcess
+  set windowTitle to name of targetWindow as text
+  if my titleLooksLikeUntitledScratch(windowTitle) is false then return "skipped"
+  try
+    click menu item "Close Editor" of menu "File" of menu bar 1 of vscodeProcess
+  on error
+    keystroke "w" using command down
+  end try
+  delay 0.4
+  if (count of windows of vscodeProcess) > 0 then
+    set currentWindow to front window of vscodeProcess
+    if exists (sheet 1 of currentWindow) then
+      set currentSheet to sheet 1 of currentWindow
+      set clickedDiscard to false
+      set discardNames to {"Don't Save", "Don’t Save", "Delete", "Discard"}
+      repeat with discardName in discardNames
+        set discardButtonName to (discardName as text)
+        repeat with candidateButton in buttons of currentSheet
+          try
+            if (name of candidateButton as text) is discardButtonName then
+              click candidateButton
+              set clickedDiscard to true
+              exit repeat
+            end if
+          end try
+        end repeat
+        if clickedDiscard is true then exit repeat
+      end repeat
+      if clickedDiscard is false then error "current-vscode-scratch-discard-button-missing"
+      delay 0.2
+    end if
+  end if
+  return "closed"
+end tell
+end run
+`, input.activateCurrentVSCodeIfNeeded === true ? '1' : '0', requiresScratchScope ? '1' : '0'], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+    if (stdout.trim() === 'skipped') {
+      return [`diagnostic-scratch-buffer:current-vscode-cowork:${runToken}:discard-skipped`];
+    }
+  } catch {
+    throw new Error('current-vscode-diagnostic-scratch-discard-failed');
+  }
+  return [`diagnostic-scratch-buffer:current-vscode-cowork:${runToken}:discard`];
 }
 
 export function currentVSCodeCoWorkWindowObservationFromSnapshot(
   input: CurrentVSCodeCoWorkWindowSnapshot,
 ): CurrentVSCodeCoWorkWindowObservation {
   const observedAtMs = input.observedAtMs ?? Date.now();
-  const titleToken = tokenHash(input.windowTitle);
+  const scratchIdentity = untitledScratchIdentityFromSnapshot(input);
+  const currentFileIdentity = currentFileIdentityFromWindowTitle(input.windowTitle);
+  const hasCurrentFileIdentity = currentFileIdentity.length > 0;
+  const hasWindowIdentity = scratchIdentity !== undefined || hasCurrentFileIdentity;
+  const titleToken = tokenHash(scratchIdentity ?? currentFileIdentity);
   const textToken = tokenHash(input.collectedText);
-  const focusedEditorRef = focusedEditorRefFromSnapshot(input, titleToken);
+  const scratchEditor = scratchIdentity !== undefined;
+  const focusedEditorRef = hasWindowIdentity
+    ? focusedEditorRefFromSnapshot(input, titleToken, scratchEditor ? 'scratch' : 'current')
+    : undefined;
+  const editorSelectionRefs = focusedEditorRef
+    ? editorSelectionRefsFromSnapshot(input, titleToken, scratchEditor ? 'scratch' : 'current')
+    : {};
   const terminalRefs = terminalRefsFromSnapshot(input, titleToken, textToken);
   return {
     appRef: 'macos-app:com.microsoft.VSCode',
@@ -817,9 +1075,11 @@ export function currentVSCodeCoWorkWindowObservationFromSnapshot(
     windowRef: `window:vscode:${titleToken}`,
     titleRef: `text:title:${titleToken}`,
     frontmostRef: `frontmost:vscode:${titleToken}`,
-    fileRefs: [`file-ref:vscode:current:${titleToken}`],
+    fileRefs: hasWindowIdentity ? [`file-ref:vscode:${scratchEditor ? 'scratch' : 'current'}:${titleToken}`] : [],
+    ...(scratchEditor ? { nonUserFileScopeRef: `non-user-file-scope:vscode:scratch:${titleToken}` } : {}),
     editorElementRef: `element:vscode:editor:${titleToken}`,
     ...(focusedEditorRef ? { focusedEditorRef } : {}),
+    ...editorSelectionRefs,
     ...terminalRefs,
     visibleTextRef: `text:vscode:visible:${textToken}`,
     visibleTextSha256Ref: `text:vscode:visible-sha256:${textToken}`,
@@ -907,6 +1167,7 @@ function observationRefs(observed: CurrentVSCodeCoWorkWindowObservation): string
     observed.titleRef,
     observed.frontmostRef,
     ...observed.fileRefs,
+    observed.nonUserFileScopeRef,
     observed.editorElementRef,
     observed.focusedEditorRef,
     observed.selectionRef,
@@ -943,6 +1204,7 @@ function isSafeCurrentVSCodeContextRef(ref: string): boolean {
     'accessibility:',
     'action:',
     'computer-use-session:',
+    'cursor-ref:',
     'cursor-marker:',
     'decision:',
     'element:',
@@ -956,6 +1218,7 @@ function isSafeCurrentVSCodeContextRef(ref: string): boolean {
     'macos-app:',
     'observation:',
     'process:',
+    'range-ref:',
     'command-palette:',
     'command-palette-input:',
     'command-palette-items:',
@@ -964,6 +1227,8 @@ function isSafeCurrentVSCodeContextRef(ref: string): boolean {
     'command-palette-item-hash:',
     'scoped-input-adapter:',
     'scoped-input-lease:',
+    'selected-file:',
+    'selection-ref:',
     'stale-invalidation:',
     'text:',
     'terminal:',
@@ -1002,9 +1267,94 @@ function hasCommandPaletteItemContext(refs: string[] | undefined): boolean {
 function focusedEditorRefFromSnapshot(
   input: CurrentVSCodeCoWorkWindowSnapshot,
   titleToken: string,
+  scopeKind: 'current' | 'scratch' = 'current',
 ): string | undefined {
-  if (!hasFocusedEditorEvidence(input)) return undefined;
-  return `focused-editor:vscode:current:${titleToken}`;
+  if (scopeKind !== 'scratch' && !hasFocusedEditorEvidence(input) && !hasEditorMenuSelectionEvidence(input)) {
+    return undefined;
+  }
+  return `focused-editor:vscode:${scopeKind}:${titleToken}`;
+}
+
+function editorSelectionRefsFromSnapshot(
+  input: CurrentVSCodeCoWorkWindowSnapshot,
+  titleToken: string,
+  scopeKind: 'current' | 'scratch' = 'current',
+): Pick<CurrentVSCodeCoWorkWindowObservation, 'selectionRef' | 'cursorRef' | 'rangeRef'> {
+  const range = selectedTextRangeFromSnapshot(input.focusedSelectedTextRange);
+  const line = insertionPointLineFromSnapshot(input.focusedInsertionPointLineNumber);
+  const rangeToken = range && range.length > 0
+    ? `r${range.location}-l${range.length}`
+    : !range && scopeKind === 'current' && hasEditorMenuSelectionEvidence(input)
+      ? 'menu'
+    : range && scopeKind === 'scratch' && range.length === 0
+      ? 'caret'
+      : scopeKind === 'scratch'
+        ? 'caret'
+        : undefined;
+  const cursorToken = line !== undefined
+    ? `line${line}`
+    : !range && scopeKind === 'current' && hasEditorMenuSelectionEvidence(input)
+      ? 'menu'
+    : range
+      ? `offset${range.location}`
+      : scopeKind === 'scratch'
+        ? 'caret'
+        : undefined;
+  return {
+    ...(rangeToken ? { selectionRef: `selection-ref:vscode:${scopeKind}:${titleToken}:${rangeToken}` } : {}),
+    ...(cursorToken ? { cursorRef: `cursor-ref:vscode:${scopeKind}:${titleToken}:${cursorToken}` } : {}),
+    ...(rangeToken ? { rangeRef: `range-ref:vscode:${scopeKind}:${titleToken}:${[rangeToken, cursorToken].filter(Boolean).join('-')}` } : {}),
+  };
+}
+
+function isUntitledScratchEditorSnapshot(input: CurrentVSCodeCoWorkWindowSnapshot): boolean {
+  return untitledScratchIdentityFromSnapshot(input) !== undefined;
+}
+
+function untitledScratchIdentityFromSnapshot(input: CurrentVSCodeCoWorkWindowSnapshot): string | undefined {
+  return [
+    scratchIdentityFromFocusedValue(input.focusedName),
+    scratchIdentityFromFocusedValue(input.focusedValue),
+    scratchIdentityFromWindowTitle(input.windowTitle),
+  ].find((value): value is string => value !== undefined);
+}
+
+function scratchIdentityFromFocusedValue(value: string | undefined): string | undefined {
+  const match = value?.trim().match(/^(Untitled-\d+)(?=$|\s|[-—–])/iu);
+  return match?.[1];
+}
+
+function scratchIdentityFromWindowTitle(value: string | undefined): string | undefined {
+  const title = value?.trim();
+  if (!title) return undefined;
+  const leading = title.match(/^(Untitled-\d+)(?=$|\s|[-—–])/iu);
+  if (leading) return leading[1];
+  const dirtyUntitled = title.match(/(?:^|\s)•\s*(Untitled-\d+)(?=$|\s|[-—–])/iu);
+  return dirtyUntitled?.[1];
+}
+
+function currentFileIdentityFromWindowTitle(value: string | undefined): string {
+  const title = value?.trim() ?? '';
+  const dirtyMarker = title.match(/(?:^|\s)[•●]\s*(.+)$/u);
+  return dirtyMarker?.[1]?.trim() || title;
+}
+
+function selectedTextRangeFromSnapshot(value: string | undefined): { location: number; length: number } | undefined {
+  const match = value?.match(/(-?\d+)\D+(-?\d+)/u);
+  if (!match) return undefined;
+  const location = Number(match[1]);
+  const length = Number(match[2]);
+  if (!Number.isSafeInteger(location) || !Number.isSafeInteger(length) || location < 0 || length < 0) {
+    return undefined;
+  }
+  return { location, length };
+}
+
+function insertionPointLineFromSnapshot(value: string | undefined): number | undefined {
+  const match = value?.match(/\d+/u);
+  if (!match) return undefined;
+  const line = Number(match[0]);
+  return Number.isSafeInteger(line) && line >= 0 ? line : undefined;
 }
 
 function terminalRefsFromSnapshot(
@@ -1051,6 +1401,19 @@ function hasFocusedEditorEvidence(input: CurrentVSCodeCoWorkWindowSnapshot): boo
   if (hasBlockedVSCodeFocusTarget(focusFields)) return false;
   if (/AXTextArea/i.test(input.focusedRole ?? '')) return true;
   return hasMonacoEditorFocusEvidence(focusFields);
+}
+
+function hasEditorMenuSelectionEvidence(input: CurrentVSCodeCoWorkWindowSnapshot): boolean {
+  if (input.editorMenuCopyEnabled !== true || input.editorMenuCutEnabled !== true) return false;
+  if (input.editorMenuToggleLineCommentEnabled !== true && input.editorMenuExpandSelectionEnabled !== true) return false;
+  const focusFields = [
+    input.focusedRole,
+    input.focusedName,
+    input.focusedValue,
+    input.focusedDescription,
+    input.focusedContext,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  return focusFields.length === 0 || !hasBlockedVSCodeFocusTarget(focusFields);
 }
 
 function hasMonacoEditorFocusEvidence(focusFields: string[]): boolean {

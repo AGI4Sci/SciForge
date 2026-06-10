@@ -108,50 +108,50 @@ SciForge UI
 
 目标：把 P10 的 command palette special-case 收敛为通用 current VSCode operation bridge。Host 识别用户意图后只生成 structured operation；VSCode module 只做 readiness 和 refs 映射；Computer Use core 只执行 primitive。
 
-- [ ] [P12.0 Design] 定义 VSCode capability families 与 operation registry：`target/session`、`read/context`、`navigation/search`、`terminal`、`editor-edit`、`verifier/cleanup`。
-- [ ] [P12.1 Unit] explicit VSCode Computer Use ordinary chat 只生成 structured Host input；覆盖读取、导航、palette、terminal、diagnostics、preview/apply/save prompt 变体。
-- [ ] [P12.2 Code] 将 P10 bridge 改为 current VSCode operation bridge factory：输出 `target.vscodeCoWork.operation` / `operationRef` / `text-ref:`，不泄漏 raw label、raw command、raw path。
-- [ ] [P12.3 Static] no-bypass guard 覆盖新增入口：ordinary chat、native route、terminal output、history、completed action 都不能直接触发 app module operation 或 final answer。
-- [ ] [P12.4 Verify] 跑 VSCode bridge/native route/app module focused tests、UI event tests、typecheck、Computer Use no-bypass smoke。
+- [x] [P12.0 Design] 定义 VSCode capability families 与 operation registry：`target/session`、`read/context`、`navigation/search`、`terminal`、`editor-edit`、`verifier/cleanup`。
+- [x] [P12.1 Unit] explicit VSCode Computer Use ordinary chat 只生成 structured Host input；覆盖读取、导航、palette、terminal、diagnostics、preview/apply/save prompt 变体。
+- [x] [P12.2 Code] 将 P10 bridge 改为 current VSCode operation bridge factory：输出 `target.vscodeCoWork.operation` / `operationRef` / `text-ref:`，不泄漏 raw label、raw command、raw path。
+- [x] [P12.3 Static] no-bypass guard 覆盖新增入口：ordinary chat、native route、terminal output、history、completed action 都不能直接触发 app module operation 或 final answer。
+- [x] [P12.4 Verify] 跑 VSCode bridge/native route/app module focused tests、UI event tests、typecheck、Computer Use no-bypass smoke。
 
 验收：
 
-- [ ] 新增 VSCode 场景不需要改 native route special-case。
-- [ ] bridge factory 可以表达至少 5 类 operation，但 public result 仍只有 refs / safe summary / Host envelope。
-- [ ] 旧 command palette path 仍通过同一套 factory 工作。
+- [x] 新增 VSCode 场景不需要改 native route special-case。
+- [x] bridge factory 可以表达至少 5 类 operation，但 public result 仍只有 refs / safe summary / Host envelope。
+- [x] 旧 command palette path 仍通过同一套 factory 工作。
 
 ### P13：通用观察、读取与导航
 
 目标：先让 Host 能稳定知道 VSCode 当前看到了什么、当前 editor / file / selection 是什么，并能用通用导航能力改变当前上下文。
 
-- [ ] [P13.0 Unit] `observe-current-vscode` / `read-editor-context` 只产出 editor / file / selection / cursor / range / visible-text refs，不公开 raw visible text。
-- [ ] [P13.1 Code] 实现 read/context materializer；Host 可通过 refs 取得内部文本证据，public 只显示 safe summary 和 refs。
-- [ ] [P13.2 Unit] command palette 不再内置 `Help: About`；任意 palette query 必须来自 Host `text-ref:`。
-- [ ] [P13.3 Unit] `quick-open` / `workspace-search` 只接受 Host `text-ref:`、workspace resource ref 或 file ref；不能从 raw path / URL / 截图文字直接推断目标。
-- [ ] [P13.4 Live] 在单窗口 VSCode 上从 SciForge UI 跑一个无写入导航 dogfood：observe current editor -> open palette / quick open -> observe after -> release。
+- [x] [P13.0 Unit] `observe-current-vscode` / `read-editor-context` 只产出 editor / file / selection / cursor / range / visible-text refs，不公开 raw visible text。
+- [x] [P13.1 Code] 实现 read/context materializer；Host 可通过 refs 取得内部文本证据，public 只显示 safe summary 和 refs。
+- [x] [P13.2 Unit] command palette 不再内置 `Help: About`；任意 palette query 必须来自 Host `text-ref:`。
+- [x] [P13.3 Unit] `quick-open` / `workspace-search` 只接受 Host `text-ref:`、workspace resource ref 或 file ref；不能从 raw path / URL / 截图文字直接推断目标。
+- [x] [P13.4 Live] 在单窗口 VSCode 上从 SciForge UI 跑一个无写入导航 dogfood：observe current editor -> open palette / quick open -> observe after -> release。
 
 验收：
 
-- [ ] Host 能从 current VSCode 获得足够 context refs，为后续编辑任务选择目标。
-- [ ] navigation 能覆盖 palette 和至少一种非 palette 导航方式。
-- [ ] 每次 live dogfood 都 release input lease / adapter / cursor，并恢复焦点和鼠标位置。
+- [x] Host 能从 current VSCode 获得足够 context refs，为后续编辑任务选择目标。
+- [x] navigation 能覆盖 palette 和至少一种非 palette 导航方式。
+- [x] 每次 live dogfood 都 release input lease / adapter / cursor，并恢复焦点和鼠标位置。
 
 ### P14：通用编辑 Preview / Apply / Save
 
 目标：让 Host 能把模型生成的草稿安全地变成 VSCode 中的一次明确编辑，而不是让 VSCode module 或 Computer Use core 理解“润色”。
 
-- [ ] [P14.0 Unit] `preview-current-selection`：Host-owned provider 根据 selection/text refs 生成 draft / diff artifact refs；不写 VSCode。
-- [ ] [P14.1 Code] `apply-current-selection`：只从 structured Host operation + current scope refs + draft `text-ref:` 生成一个 `replace-selection` 或 `insert-draft` primitive candidate。
-- [ ] [P14.2 Unit] apply verifier 要求 same-window、same-editor、same-file、same-selection、after-observe、mutation verifier 和 cleanup refs。
-- [ ] [P14.3 Unit] `save-current-file` 只在已有 same-file + mutation verifier + Host action evidence 时生成一个 `Meta+S` primitive。
-- [ ] [P14.4 Mocked] UI 入口跑 preview -> apply -> observe -> verify -> save -> release，确认 public 不泄漏 raw selected text、raw diff、raw path 或 provider payload。
-- [ ] [P14.5 Live] 单窗口 VSCode 上跑一次真实编辑 live diagnostic；可使用当前用户文件或 scratch buffer，full-access 不额外请求类别确认，但目标不明确时必须 blocked。
+- [x] [P14.0 Unit] `preview-current-selection`：Host-owned provider 根据 selection/text refs 生成 draft / diff artifact refs；不写 VSCode。
+- [x] [P14.1 Code] `apply-current-selection`：只从 structured Host operation + current scope refs + draft `text-ref:` 生成一个 `replace-selection` 或 `insert-draft` primitive candidate。
+- [x] [P14.2 Unit] apply verifier 要求 same-window、same-editor、same-file、same-selection、after-observe、mutation verifier 和 cleanup refs。
+- [x] [P14.3 Unit] `save-current-file` 只在已有 same-file + mutation verifier + Host action evidence 时生成一个 `Meta+S` primitive。
+- [x] [P14.4 Mocked] UI 入口跑 preview -> apply -> observe -> verify -> save -> release，确认 public 不泄漏 raw selected text、raw diff、raw path 或 provider payload。
+- [x] [P14.5 Live] 单窗口 VSCode 上跑一次真实编辑 live diagnostic；可使用当前用户文件或 scratch buffer，full-access 不额外请求类别确认，但目标不明确时必须 blocked。
 
 验收：
 
-- [ ] “润色当前选区 / 应用当前草稿 / 保存当前文件”都是通用 operation composition。
-- [ ] apply 一次只执行一个 editor primitive，批量或全文改写必须由 Host 分解为多次 observe / apply / verify。
-- [ ] 保存真实文件不需要类别确认，但必须有 current refs、mutation verifier 和 Host action evidence。
+- [x] “润色当前选区 / 应用当前草稿 / 保存当前文件”都是通用 operation composition。
+- [x] apply 一次只执行一个 editor primitive，批量或全文改写必须由 Host 分解为多次 observe / apply / verify。
+- [x] 保存真实文件不需要类别确认，但必须有 current refs、mutation verifier 和 Host action evidence。
 
 ### P15：VSCode 真实复杂任务 Dogfood：论文润色
 
@@ -168,17 +168,21 @@ Host：bind/observe current VSCode -> read editor context refs -> call Model Rou
 
 任务拆分：
 
-- [ ] [P15.0 Unit] 将“润色当前论文选区”分解为 generic operation transcript：observe -> read context -> preview draft -> apply selection -> observe -> verify -> save -> release。
-- [ ] [P15.1 Unit] Host polish provider 只消费 Host-owned text/artifact refs；public answer 不输出原文全文、raw draft、raw diff 或 provider payload。
-- [ ] [P15.2 Mocked] 使用 paper-like text fixture 跑完整 transcript；验证每一步都是 generic VSCode operation，不出现 paper-specific operation id。
-- [ ] [P15.3 Live] 在单窗口 VSCode 上对当前 active selection / active paper file 跑一次真实论文润色；如果没有明确 selection 或 active editable editor，则 blocked-safe，不猜目标。
-- [ ] [P15.4 Verify] 跑 bridge/native route/app module/editor apply/save focused tests、UI event tests、typecheck、Computer Use no-bypass smoke。
-- [ ] [P15.5 Cleanup] live dogfood 后确认 release refs、input lease / adapter / cursor、前台焦点和鼠标位置恢复；不杀 VSCode、不清 profile。
+- [x] [P15.0 Unit] 将“润色当前论文选区”分解为 generic operation transcript：observe -> read context -> preview draft -> apply selection -> observe -> verify -> save -> release。
+- [x] [P15.1 Unit] Host polish provider 只消费 Host-owned text/artifact refs；public answer 不输出原文全文、raw draft、raw diff 或 provider payload。
+- [x] [P15.2 Mocked] 使用 paper-like text fixture 跑完整 transcript；验证每一步都是 generic VSCode operation，不出现 paper-specific operation id。
+- [x] [P15.3 Live] 在单窗口 VSCode 上对当前 active selection / active paper file 跑一次真实论文润色；如果没有明确 selection 或 active editable editor，则 blocked-safe，不猜目标。
+- [x] [P15.4 Verify] 跑 bridge/native route/app module/editor apply/save focused tests、UI event tests、typecheck、Computer Use no-bypass smoke。
+- [x] [P15.5 Cleanup] live dogfood 后确认 release refs、input lease / adapter / cursor、前台焦点和鼠标位置恢复；不杀 VSCode、不清 profile。
+
+Live evidence（2026-06-10）：先复现 blocked-safe：单窗口 VSCode dogfood 可绑定 current file/editor/freshness refs，但未暴露 selection/cursor/range refs 时，`apply-current-selection` 在 Host decision 阶段返回 `needs-confirmation:vscode-editor-narrow-apply:vscode-app-module:editor-scope-selection-required`，未执行 `act`，并 release `scoped-input-lease` / `scoped-input-adapter` / `cursor-marker` / `front-app-restore` / `mouse-position-restore`。
+
+Live evidence（2026-06-10）：修复后在单窗口 VSCode 当前文件 `tmp/current-vscode-p15-live/p15-paper-dogfood.md` 上完成真实 apply/save：scope diagnostic 产出同一 current token `d3d107e1ad4f284b` 下的 `file-ref:vscode:current:*`、`element:vscode:editor:*`、`focused-editor:vscode:current:*`、`selection-ref:vscode:current:*:menu`、`cursor-ref:vscode:current:*:menu`、`range-ref:vscode:current:*:menu-menu`；`apply-current-selection` live run `p15-current-selection-paper-polish-live-verified-file-write` 走 `bind -> observe -> host-decision -> act -> observe -> verify -> host-decision(save-current-file) -> act(save-current-file) -> control(release)`，包含 `verifier:vscode-app-module:same-file:*` / `same-window:*` / `same-editor:*` / `same-selection:*` / `mutation:*`、`action:vscode-app-module:save-current-file:meta-s`、`verifier:vscode-editor-narrow-apply:*:verified`，并 release `scoped-input-lease` / `scoped-input-adapter` / `cursor-marker` / `front-app-restore` / `mouse-position-restore`。磁盘文件内容已从 probe 文本变为 Host `text-ref:current-vscode-cowork:p15-selection-transform-draft` 对应的谨慎学术表述，未公开 raw selected text、raw draft、raw diff 或 provider payload。
 
 验收：
 
-- [ ] SciForge UI 中一句自然请求可以触发 Host-owned VSCode co-work，最终由 Host 返回用户可见 final answer。
-- [ ] 真实编辑发生在 Host 已绑定且验证过的 current editor / selection / file refs 上。
-- [ ] 润色任务没有专用旁路；同一套 read / preview / apply / save 能服务其它编辑任务。
-- [ ] public events 只包含 refs、safe summary、artifact refs、verifier refs 和 Host final-answer envelope。
-- [ ] shared-system-input 路径仍只标 `live-diagnostic`，不能宣称 `product-ready`。
+- [x] SciForge UI 中一句自然请求可以触发 Host-owned VSCode co-work，最终由 Host 返回用户可见 final answer。
+- [x] 真实编辑发生在 Host 已绑定且验证过的 current editor / selection / file refs 上。
+- [x] 润色任务没有专用旁路；同一套 read / preview / apply / save 能服务其它编辑任务。
+- [x] public events 只包含 refs、safe summary、artifact refs、verifier refs 和 Host final-answer envelope。
+- [x] shared-system-input 路径仍只标 `live-diagnostic`，不能宣称 `product-ready`。

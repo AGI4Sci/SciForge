@@ -5,14 +5,19 @@ import { test } from 'node:test';
 const settingsPageSource = readFileSync(new URL('./SettingsPage.tsx', import.meta.url), 'utf8');
 const catalogSource = readFileSync(new URL('./settingsModelCatalog.ts', import.meta.url), 'utf8');
 
-test('settings does not expose runtime provider API keys or base URLs in the GUI', () => {
+test('settings exposes write-only Model Router member model configuration in the GUI', () => {
   assert.doesNotMatch(settingsPageSource, /apiKeyVisible/);
   assert.doesNotMatch(settingsPageSource, /Show API key|显示 API key|Hide API key|隐藏 API key/);
   assert.doesNotMatch(settingsPageSource, /maskedSecretValue\(config\.apiKey\)/);
-  assert.doesNotMatch(settingsPageSource, /onChange\(\{ apiKey: event\.target\.value \}\)/);
-  assert.doesNotMatch(settingsPageSource, /onChange\(\{ modelBaseUrl: event\.target\.value \}\)/);
-  assert.doesNotMatch(settingsPageSource, /Provider Base URL/);
-  assert.doesNotMatch(settingsPageSource, />API Key</);
+  assert.match(settingsPageSource, /Router Member Model/);
+  assert.match(settingsPageSource, /Member Provider/);
+  assert.match(settingsPageSource, /Member Base URL/);
+  assert.match(settingsPageSource, /Member Model/);
+  assert.match(settingsPageSource, /Member API Key/);
+  assert.match(settingsPageSource, /onChange\(\{ modelProvider: event\.target\.value \}\)/);
+  assert.match(settingsPageSource, /onChange\(\{ modelBaseUrl: event\.target\.value \}\)/);
+  assert.match(settingsPageSource, /onChange\(\{ modelName: event\.target\.value \}\)/);
+  assert.match(settingsPageSource, /onChange\(\{ apiKey: event\.target\.value \}\)/);
 });
 
 test('settings copy states main chat and repair use Model Router instead of raw provider config', () => {

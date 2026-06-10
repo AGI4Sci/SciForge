@@ -3,6 +3,7 @@ import {
   createComputerUseAppModuleRegistry,
   validateComputerUseAppModuleReadiness,
   type ComputerUseAppModule,
+  type ComputerUseAppModuleObservation,
   type ComputerUseAppModulePrimitiveCandidate,
   type ComputerUseAppModuleReadiness,
 } from './computer-use-app-module-registry.js';
@@ -70,6 +71,7 @@ export function createDefaultComputerUseAppModuleMaterializer(options: {
       operation,
       moduleId: moduleMatch.module.moduleId,
       candidateModuleIds: moduleMatch.candidateModuleIds,
+      safeSummary: appModuleSafeSummary(moduleMatch.module, refs),
     });
   };
 }
@@ -85,6 +87,7 @@ function readinessResult(
     operation: string;
     moduleId: string | undefined;
     candidateModuleIds: string[];
+    safeSummary?: Record<string, unknown>;
   },
 ): CodexAgentHostComputerUseActMaterializerResult {
   const refs = publicAppModuleEvidenceRefs([
@@ -165,6 +168,7 @@ function readinessArtifact(
     operation: string;
     moduleId: string | undefined;
     candidateModuleIds: string[];
+    safeSummary?: Record<string, unknown>;
   },
   refs: string[],
 ): Record<string, unknown> {
@@ -186,6 +190,7 @@ function readinessArtifact(
       reasonRef: readiness.status === 'ready' ? undefined : readiness.reasonRef,
       primitive: readiness.status === 'ready' ? readinessPrimitiveForArtifact(readiness.primitive, context, refs) : undefined,
       evidenceRefs: refs.slice(0, 16),
+      safeSummary: context.safeSummary,
     }),
   };
 }
@@ -335,7 +340,7 @@ function publicAppModuleEvidenceRefs(
 ): string[] {
   const safeRefs = appModuleEvidenceRefs(refs);
   return isVSCodeEditorPublicProjection(context) || isVSCodeEditorOperationRequiredProjection(context, safeRefs)
-    ? editorScopePublicEvidenceRefs(safeRefs)
+    ? editorScopePublicEvidenceRefs(safeRefs, context.operation)
     : safeRefs;
 }
 
@@ -344,7 +349,8 @@ function isVSCodeEditorPublicProjection(context: {
   moduleId: string | undefined;
 }): boolean {
   return context.moduleId === 'vscode' && (
-    context.operation === 'editor-scope'
+    context.operation === 'read-editor-context'
+      || context.operation === 'editor-scope'
       || context.operation === 'insert-draft'
       || context.operation === 'replace-selection'
       || context.operation === 'save-current-file'
@@ -373,11 +379,11 @@ function isVSCodeEditorOperationRequiredProjection(
   );
 }
 
-function editorScopePublicEvidenceRefs(refs: string[]): string[] {
-  return uniqueStrings(refs.filter(safeEditorScopePublicRef)).slice(0, 64);
+function editorScopePublicEvidenceRefs(refs: string[], operation: string): string[] {
+  return uniqueStrings(refs.filter((ref) => safeEditorScopePublicRef(ref, operation))).slice(0, 64);
 }
 
-function safeEditorScopePublicRef(value: string): boolean {
+function safeEditorScopePublicRef(value: string, operation: string): boolean {
   const ref = value.trim();
   return safeAppModuleRef(ref) && (
     ref.startsWith('element:vscode:editor:')
@@ -388,6 +394,7 @@ function safeEditorScopePublicRef(value: string): boolean {
       || ref.startsWith('selection-ref:vscode:')
       || ref.startsWith('cursor-ref:vscode:')
       || ref.startsWith('range-ref:vscode:')
+      || (operation === 'read-editor-context' && ref.startsWith('text:vscode:visible:'))
       || ref.startsWith('text-ref:')
       || ref.startsWith('action:vscode-app-module:save-current-file:')
       || /^action:vscode:(?:insert-draft|replace-selection):[A-Za-z0-9._:-]+$/u.test(ref)
@@ -402,6 +409,34 @@ function safeEditorScopePublicRef(value: string): boolean {
       || ref.startsWith('blocked:vscode-app-module:')
       || ref.startsWith('needs-confirmation:vscode-app-module:')
   );
+}
+
+function appModuleSafeSummary(module: ComputerUseAppModule, refs: string[]): Record<string, unknown> | undefined {
+  let observation: ComputerUseAppModuleObservation | undefined;
+  try {
+    observation = module.normalizeObservation({ refs });
+  } catch {
+    return undefined;
+  }
+  const value = isRecord(observation) && isRecord(observation.safeSummary) ? observation.safeSummary : undefined;
+  if (!value) return undefined;
+  const identity = safeSummaryString(value.identity);
+  const freshness = safeSummaryString(value.freshness);
+  const concepts = stringList(value.concepts).filter((item) => safeSummaryString(item) === item).slice(0, 24);
+  return compactRecord({
+    identity,
+    freshness,
+    concepts: concepts.length ? concepts : undefined,
+  });
+}
+
+function safeSummaryString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > 120) return undefined;
+  if (!/^[a-z0-9][a-z0-9:._-]*$/i.test(text)) return undefined;
+  if (/raw|payload|secret|password|base64|https?|\/|\\|<|>|selectedtext|visibletext/i.test(text)) return undefined;
+  return text;
 }
 
 function safeAppModuleRef(value: string): boolean {

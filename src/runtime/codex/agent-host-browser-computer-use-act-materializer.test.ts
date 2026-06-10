@@ -73,6 +73,8 @@ test('BrowserHost Computer Use Act materializer executes a planned low-risk acti
 
 test('ordinary chat GUI intent routes Guard to a visible BrowserHostSession action through Act', async () => {
   const acted: Array<{ workspacePath: string; sessionId: string; input: BrowserHostSessionActionInput }> = [];
+  const attemptId = 'codex-command-browser-act-ordinary-chat-attempt-1';
+  const beforeEvidenceRef = `evidence:browser-host-session/verified/actions/${attemptId}/before-frame.png`;
   const materializer = createDefaultBrowserHostComputerUseActMaterializer({
     browserHostSessionManager: browserEvidenceManager({ acted }),
     actionPlanner: async () => ({
@@ -89,9 +91,9 @@ test('ordinary chat GUI intent routes Guard to a visible BrowserHostSession acti
     commandText: 'Scroll the current browser page to inspect visible results.',
     workspacePath: '/tmp/workspace',
     commandId: 'codex-command-browser-act-ordinary-chat',
-    attemptId: 'codex-command-browser-act-ordinary-chat-attempt-1',
+    attemptId,
     runtimeTruth: runtimeTruth({
-      observationRefs: ['browser-host-session:verified/frame.png'],
+      observationRefs: [beforeEvidenceRef],
       permissionRefs: ['permission:turn/codex-command-browser-act-ordinary-chat/ordinary-navigation'],
     }),
     computerUseActMaterializer: materializer,
@@ -102,7 +104,7 @@ test('ordinary chat GUI intent routes Guard to a visible BrowserHostSession acti
   assert.equal(acted[0]?.sessionId, 'verified');
   assert.equal(acted[0]?.input.action, 'scroll');
   assert.equal(acted[0]?.input.deltaY, 180);
-  assert.match(String(result?.event.message ?? ''), /BrowserHostSession/);
+  assert.match(String(result?.event.message ?? ''), /Computer Use Act materializer completed/);
   assert.doesNotMatch(JSON.stringify(result), /^\/computer-use|slash route only|gui\.present|ui:|fixture:|replay:/i);
 });
 
@@ -771,8 +773,10 @@ function runtimeTruth(options: {
   observationFresh?: boolean;
   targetBound?: boolean;
   permissionRefs?: string[];
+  scopedExecutorRefs?: string[];
   stopCancelPath?: boolean;
 } = {}): CodexAgentHostRuntimeTruth {
+  const scopedExecutorRefs = options.scopedExecutorRefs ?? ['computer-use:executor-scope:browser-host-session/verified'];
   return {
     schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
     source: 'test',
@@ -794,12 +798,14 @@ function runtimeTruth(options: {
     },
     permissions: {
       refs: options.permissionRefs ?? ['permission:turn/codex-command-browser-act/ordinary-navigation'],
+      scopedExecutorRefs,
       stopCancelPath: options.stopCancelPath ?? true,
     },
     refs: options.refs ?? [
       'browser-host-session:verified',
       'window-action-session:browser-host-session/verified',
       'adapter-registry:browser-host-session/computer-use',
+      ...scopedExecutorRefs,
       'browser-host-session:verified/stop',
       'cancel:runtime-turn/codex-command-browser-act',
     ],

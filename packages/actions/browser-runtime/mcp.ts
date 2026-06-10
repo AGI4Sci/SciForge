@@ -1,12 +1,20 @@
-import type { ModuleInvokeRequest } from '@sciforge-ui/runtime-contract/modules';
+import { moduleResult, type ModuleInvokeRequest, type ModuleInvokeResult } from '@sciforge-ui/runtime-contract/modules';
 import {
-  BROWSER_EXTRACT_TARGETS,
   BROWSER_PRIMITIVE_INPUT_SCHEMAS,
   BROWSER_PRIMITIVE_INTENTS,
-  BROWSER_PRIMITIVE_NAMES,
   BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
+  WEB_READ_TOOL_NAME,
+  WEB_SEARCH_TOOL_NAME,
+  WEB_TOOL_INPUT_SCHEMAS,
+  browserPrimitiveEnvelopeToWebToolResult,
+  validateWebToolInput,
   type BrowserPrimitiveName,
+  type BrowserPrimitiveEnvelope,
   type BrowserPrimitiveService,
+  type WebReadInput,
+  type WebSearchInput,
+  type WebToolName,
+  type WebToolResultEnvelope,
 } from './index.js';
 
 export const BROWSER_RUNTIME_MCP_PACKAGE_ID = '@agi4sci/sciforge-browser-runtime-action-provider' as const;
@@ -26,78 +34,14 @@ export interface BrowserRuntimeMcpCallToolRequest {
 export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
   return [
     {
-      name: browserRuntimeMcpToolName('search'),
-      description: 'Discover candidate web pages for a Host-provided query. Returns resources/evidenceState with candidate web_page resources, but does not read result pages. Use browser_read with a web_page resourceRef to materialize source/page text refs before citing or summarizing page content.',
-      inputSchema: objectSchema(['query'], {
-        query: { type: 'string', minLength: 1 },
-        engine: { enum: ['bing', 'duckduckgo'] },
-        locale: { type: 'string' },
-        region: { type: 'string' },
-        limit: { type: 'integer', minimum: 1, maximum: 20 },
-        budget: budgetSchema(),
-        constraints: constraintsSchema(),
-      }),
+      name: WEB_SEARCH_TOOL_NAME,
+      description: 'Codex-compatible ordinary search entry for a Host-provided query. Returns current-run web_search results, candidate page refs, and source links for ordinary search answers; ordinary search does not require web_read. Agent Host may escalate to web_read for URL summaries, direct quotes, page-level verification, or low-information/conflicting results.',
+      inputSchema: WEB_TOOL_INPUT_SCHEMAS.web_search,
     },
     {
-      name: browserRuntimeMcpToolName('navigate'),
-      description: 'Navigate to a Host-provided HTTP(S) URL and return browser session refs.',
-      inputSchema: objectSchema(['url'], {
-        url: { type: 'string', format: 'uri' },
-        sessionId: { type: 'string' },
-        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
-        capture: { enum: ['none', 'frame', 'screenshot'] },
-        constraints: constraintsSchema(),
-      }),
-    },
-    {
-      name: browserRuntimeMcpToolName('observe'),
-      description: 'Observe an existing browser session and return current state refs.',
-      inputSchema: objectSchema(['sessionId'], {
-        sessionId: { type: 'string', minLength: 1 },
-        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
-        capture: { enum: ['none', 'frame', 'screenshot'] },
-      }),
-    },
-    {
-      name: browserRuntimeMcpToolName('read'),
-      description: 'Materialize page content from a candidate web_page resourceRef, session, or explicitly ephemeral URL into refs-first source/page text evidence.',
-      inputSchema: objectSchema([], {
-        resourceRef: { type: 'string', minLength: 1 },
-        sessionId: { type: 'string' },
-        url: { type: 'string', format: 'uri' },
-        navigationMode: { enum: ['none', 'ephemeral'] },
-        includeText: { type: 'boolean' },
-        includeHtml: { type: 'boolean' },
-        maxTextChars: { type: 'integer', minimum: 1, maximum: 1_000_000 },
-        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
-      }),
-    },
-    {
-      name: browserRuntimeMcpToolName('extract'),
-      description: 'Parse already materialized refs for links, forms, dates, metadata, or repeated result items.',
-      inputSchema: objectSchema(['ref', 'extract'], {
-        ref: { type: 'string', minLength: 1 },
-        extract: {
-          type: 'array',
-          minItems: 1,
-          items: { enum: [...BROWSER_EXTRACT_TARGETS] },
-        },
-        maxItems: { type: 'integer', minimum: 1, maximum: 10_000 },
-      }),
-    },
-    {
-      name: browserRuntimeMcpToolName('download'),
-      description: 'Download an explicit URL or a current-session linkSelector target into session-scoped artifacts.',
-      inputSchema: objectSchema([], {
-        url: { type: 'string', format: 'uri' },
-        sessionId: { type: 'string' },
-        linkSelector: { type: 'string' },
-        saveScope: { const: 'session-artifacts' },
-        maxBytes: { type: 'number', exclusiveMinimum: 0 },
-        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
-        filenameHint: { type: 'string' },
-        constraints: constraintsSchema(),
-      }),
+      name: WEB_READ_TOOL_NAME,
+      description: 'Internal or advanced read capability for one Host-provided URL or web-page:{id} candidate ref. Use for URL summaries, direct quotes, page-level verification, diagnostics, or fallback read escalation. web_read source/page text refs are evidence: source page refs use web-source:{id}; page text refs use web-text:{id}.',
+      inputSchema: WEB_TOOL_INPUT_SCHEMAS.web_read,
     },
   ];
 }
@@ -105,70 +49,142 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
 export function createBrowserRuntimeMcpAdapter(service: BrowserPrimitiveService) {
   return {
     tools: browserRuntimeMcpTools,
-    callTool: async (request: BrowserRuntimeMcpCallToolRequest) => {
-      const primitive = browserRuntimeMcpPrimitiveFromToolName(request.name);
+    callTool: async (request: BrowserRuntimeMcpCallToolRequest): Promise<ModuleInvokeResult<WebToolResultEnvelope>> => {
+      const tool = browserRuntimeMcpWebToolName(request.name);
+      const validation = validateWebToolInput(request.name, request.arguments ?? {});
+      if (!tool || !validation.ok || !validation.tool || !validation.input) {
+        const error = validation.errors[0] ?? {
+          code: 'invalid_input' as const,
+          message: `unsupported_web_tool:${request.name}`,
+        };
+        return moduleResult({
+          moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
+          ok: false,
+          value: {
+            schemaVersion: 'sciforge.browser-runtime.web-tool-result.v1',
+            ok: false,
+            status: 'failed',
+            tool: tool ?? WEB_SEARCH_TOOL_NAME,
+            refs: [],
+            timings: {},
+            warnings: [],
+            error,
+          },
+          refs: [],
+          error: error.message,
+        });
+      }
+      const primitive = browserRuntimePrimitiveForWebTool(tool);
       const moduleRequest: ModuleInvokeRequest = {
         moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
-        intent: primitive ? BROWSER_PRIMITIVE_INTENTS[primitive] : request.name,
-        input: primitive ? browserRuntimeMcpToolInput(primitive, request.arguments ?? {}) : request.arguments ?? {},
+        intent: BROWSER_PRIMITIVE_INTENTS[primitive],
+        input: browserRuntimeMcpToolInput(tool, validation.input),
       };
-      return service.invoke(moduleRequest);
+      const result = await service.invoke(moduleRequest);
+      return browserRuntimeWebModuleResult(tool, result, providerForWebInput(tool, validation.input));
     },
   };
 }
 
-const BROWSER_RUNTIME_MCP_TOOL_TO_PRIMITIVE = new Map<string, BrowserPrimitiveName>(
-  BROWSER_PRIMITIVE_NAMES.map((primitive) => [browserRuntimeMcpToolName(primitive), primitive]),
+const BROWSER_RUNTIME_MCP_WEB_TOOL_TO_PRIMITIVE = new Map<WebToolName, BrowserPrimitiveName>(
+  [
+    [WEB_SEARCH_TOOL_NAME, 'search'],
+    [WEB_READ_TOOL_NAME, 'read'],
+  ],
 );
 
 export function browserRuntimeMcpToolName(primitive: BrowserPrimitiveName) {
+  if (primitive === 'search') return WEB_SEARCH_TOOL_NAME;
+  if (primitive === 'read') return WEB_READ_TOOL_NAME;
   return BROWSER_PRIMITIVE_INTENTS[primitive].replace(/[^a-zA-Z0-9_-]+/g, '_');
 }
 
-function browserRuntimeMcpPrimitiveFromToolName(name: string): BrowserPrimitiveName | undefined {
-  return BROWSER_RUNTIME_MCP_TOOL_TO_PRIMITIVE.get(name);
+function browserRuntimeMcpWebToolName(name: string): WebToolName | undefined {
+  if (name === WEB_SEARCH_TOOL_NAME || name === WEB_READ_TOOL_NAME) return name;
+  return undefined;
 }
 
-function browserRuntimeMcpToolInput(
-  primitive: BrowserPrimitiveName,
-  args: Record<string, unknown>,
-): Record<string, unknown> {
-  const input: Record<string, unknown> = {
-    ...args,
-    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS[primitive],
-  };
-  if (primitive === 'read' && typeof input.url === 'string' && input.url.trim() && !input.sessionId && !input.navigationMode) {
-    input.navigationMode = 'ephemeral';
+function browserRuntimePrimitiveForWebTool(tool: WebToolName): BrowserPrimitiveName {
+  return BROWSER_RUNTIME_MCP_WEB_TOOL_TO_PRIMITIVE.get(tool) ?? 'search';
+}
+
+function browserRuntimeMcpToolInput(tool: WebToolName, args: WebSearchInput | WebReadInput): Record<string, unknown> {
+  if (tool === WEB_SEARCH_TOOL_NAME) {
+    const search = args as WebSearchInput;
+    const constraints = search.safe_search
+      ? { ...(search.constraints ?? {}), safeSearch: search.safe_search }
+      : search.constraints;
+    return withoutUndefined({
+      schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.search,
+      query: search.query,
+      limit: search.limit,
+      locale: search.language,
+      region: search.region,
+      timeRange: search.time_range,
+      engine: search.provider,
+      budget: search.timeout_ms ? { maxTimeMs: search.timeout_ms } : undefined,
+      constraints,
+    });
   }
-  if (primitive === 'download' && !input.saveScope) {
-    input.saveScope = 'session-artifacts';
-  }
-  return input;
-}
-
-function objectSchema(required: string[], properties: Record<string, unknown>) {
-  return {
-    type: 'object',
-    additionalProperties: false,
-    required,
-    properties,
-  };
-}
-
-function budgetSchema() {
-  return objectSchema([], {
-    maxTimeMs: { type: 'number', exclusiveMinimum: 0 },
-    elapsedMs: { type: 'number', minimum: 0 },
-    maxBytes: { type: 'number', exclusiveMinimum: 0 },
-    bytesRead: { type: 'number', minimum: 0 },
+  const read = args as WebReadInput;
+  const format = read.format ?? 'markdown';
+  return withoutUndefined({
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+    url: read.url,
+    resourceRef: read.resourceRef,
+    navigationMode: read.url ? 'ephemeral' : undefined,
+    includeText: format === 'markdown' || format === 'text',
+    includeHtml: format === 'html',
+    maxTextChars: read.max_chars,
+    timeoutMs: read.timeout_ms,
   });
 }
 
-function constraintsSchema() {
-  return objectSchema([], {
-    allowedDomains: { type: 'array', items: { type: 'string' } },
-    blockedDomains: { type: 'array', items: { type: 'string' } },
-    safeSearch: { enum: ['off', 'moderate', 'strict'] },
-    requireUserConfirmationForCrossOrigin: { type: 'boolean' },
+function browserRuntimeWebModuleResult(
+  tool: WebToolName,
+  result: ModuleInvokeResult<BrowserPrimitiveEnvelope>,
+  provider?: string,
+): ModuleInvokeResult<WebToolResultEnvelope> {
+  if (!result.value) {
+    const error = {
+      code: tool === WEB_SEARCH_TOOL_NAME ? 'provider_unavailable' as const : 'read_failed' as const,
+      message: result.error ?? `${tool} failed`,
+    };
+    const value: WebToolResultEnvelope = {
+      schemaVersion: 'sciforge.browser-runtime.web-tool-result.v1',
+      ok: false,
+      status: 'failed',
+      tool,
+      provider,
+      refs: [],
+      timings: {},
+      warnings: [],
+      error,
+    };
+    return moduleResult({
+      moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
+      ok: false,
+      value,
+      refs: [],
+      error: error.message,
+    });
+  }
+  const value = browserPrimitiveEnvelopeToWebToolResult(tool, result.value, provider);
+  const refs = value.refs.map((ref) => ref.ref);
+  return moduleResult({
+    moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
+    ok: value.ok,
+    value,
+    refs,
+    error: value.ok ? undefined : value.error?.message ?? result.error,
   });
+}
+
+function providerForWebInput(tool: WebToolName, input: WebSearchInput | WebReadInput): string | undefined {
+  if (tool === WEB_SEARCH_TOOL_NAME) return (input as WebSearchInput).provider;
+  return undefined;
+}
+
+function withoutUndefined(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }

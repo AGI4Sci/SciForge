@@ -138,6 +138,34 @@ test('Agent Host local tool Act policy blocks Browser primitives for local-only 
   assert.match(decision.reason, /local-only|no-network|Browser primitive/i);
 });
 
+test('Agent Host local tool Act policy does not treat web_read guidance as a no-network request', () => {
+  const decision = evaluateAgentHostLocalToolAct({
+    toolName: 'module.invoke',
+    args: {
+      moduleId: 'web',
+      intent: 'web.search',
+      input: { query: '伊朗局势' },
+    },
+    moduleDescription: createModuleDescription({
+      moduleId: 'web',
+      title: 'Web Runtime',
+      summary: 'Web primitive module.',
+      intents: [
+        { name: 'web.search', sideEffect: 'external' },
+        { name: 'web.read', sideEffect: 'external' },
+      ],
+      facets: { refs: true },
+    }),
+    userInstruction: '使用 web_search 搜索一下伊朗局势。除非任务明确要求读取页面正文，不要强制使用 web_read。',
+    commandId: 'codex-command-web-read-guidance',
+    attemptId: 'attempt-1',
+  });
+
+  assert.equal(decision.status, 'auto');
+  assert.equal(decision.moduleId, 'web');
+  assert.equal(decision.intent, 'web.search');
+});
+
 test('Agent Host local tool Act policy allows approved workspace mutations only with runtime control path', () => {
   const decision = evaluateAgentHostLocalToolAct({
     toolName: 'module.invoke',

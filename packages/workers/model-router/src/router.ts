@@ -109,7 +109,9 @@ type RoutedResponse = {
   traceRef: string;
 };
 
-type TextControl = { type: 'final_answer'; content: string };
+type TextControl =
+  | { type: 'final_answer'; content: string }
+  | { type: 'need_more_visual_info'; target: string; question: string; reason?: string };
 
 const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024;
 
@@ -349,30 +351,85 @@ async function routeResponsesRequest(
   let outputText = '';
   let outputItems: JsonObject[] = [];
   try {
-    const textResult = await callTextReasoner({
-      profile,
-      secret: textSecret,
-      fetchImpl: context.fetchImpl,
-      userText: extracted.userText,
-      observations,
-      visualFailure: degraded,
-      calls,
-      request,
-      requestOptions: textReasonerRequestOptions,
-      toolNameAliases,
-    });
-    const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
-    if (hasToolCall) {
-      outputText = textResult.outputText;
-      outputItems = textResult.outputItems;
-    } else {
-      const control = parseTextControl(textResult.outputText);
-      outputText = publicProviderOutputText(
-        control?.type === 'final_answer' ? control.content : textResult.outputText,
+    let supplementRounds = 0;
+    const configuredSupplementRounds = profile.translators.vision?.maxSupplementRounds ?? 0;
+    const maxSupplementRounds = Number.isFinite(configuredSupplementRounds)
+      ? Math.max(0, Math.floor(configuredSupplementRounds))
+      : 0;
+
+    while (true) {
+      const textResult = await callTextReasoner({
         profile,
-        publicModelAlias,
-        traceRedactionSecrets,
-      );
+        secret: textSecret,
+        fetchImpl: context.fetchImpl,
+        userText: extracted.userText,
+        observations,
+        visualFailure: degraded,
+        calls,
+        request,
+        requestOptions: textReasonerRequestOptions,
+        toolNameAliases,
+      });
+      const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
+      if (hasToolCall) {
+        outputText = textResult.outputText;
+        outputItems = textResult.outputItems;
+        break;
+      }
+
+      const control = parseTextControl(textResult.outputText);
+      if (control?.type === 'final_answer') {
+        outputText = publicProviderOutputText(control.content, profile, publicModelAlias, traceRedactionSecrets);
+        break;
+      }
+
+      if (control?.type === 'need_more_visual_info' && supplementRounds < maxSupplementRounds && profile.translators.vision && visionSecret) {
+        const target = visionModalities.find((modality) => modality.id === control.target);
+        if (target) {
+          supplementRounds += 1;
+          const safeControl = sanitizeTextControl(control, profile, publicModelAlias, traceRedactionSecrets);
+          let supplementStatus: 'ok' | 'failed' = 'ok';
+          let supplementObservation: string;
+          try {
+            supplementObservation = await callVisionTranslator({
+              profile,
+              secret: visionSecret,
+              fetchImpl: context.fetchImpl,
+              instruction: visionSupplementInstruction(extracted.userText || 'Inspect the provided visual input.', target, safeControl),
+              modality: target,
+              phase: 'vision-supplement',
+              calls,
+            });
+          } catch (error) {
+            degraded = true;
+            supplementStatus = 'failed';
+            const summary = traceErrorSummary(error);
+            supplementObservation = [
+              `modality_input=${target.id}`,
+              'kind=vision.image',
+              'status=unavailable',
+              `reason=${summary}`,
+              'instruction=Answer from available context and explicitly state that the requested visual detail could not be inspected.',
+            ].join('\n');
+          }
+          observations.push(formatVisionSupplementObservation(target, safeControl, supplementObservation, supplementStatus));
+          await writeTraceJson(trace, `vision-supplement-${target.id}-${supplementRounds}.json`, {
+            schemaVersion: 'sciforge.model-router.vision-observation.v1',
+            phase: 'supplement',
+            status: supplementStatus,
+            targetIds: [target.id],
+            questionSummary: boundedTraceText(safeControl.question, profile, publicModelAlias, traceRedactionSecrets),
+            ...(safeControl.reason
+              ? { reasonSummary: boundedTraceText(safeControl.reason, profile, publicModelAlias, traceRedactionSecrets) }
+              : {}),
+            observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
+          });
+          continue;
+        }
+      }
+
+      outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
+      break;
     }
   } catch (error) {
     await writeRoutingTrace({
@@ -697,6 +754,36 @@ function formatCachedVisionTranslationObservation(modality: ModalityRef, cached:
     `translation_cache_version=${cached.version}`,
     'instruction=Use this cached structured visual observation unless the current request requires a targeted refinement for missing details.',
   ].join('\n');
+}
+
+function visionSupplementInstruction(userInstruction: string, modality: ModalityRef, control: Extract<TextControl, { type: 'need_more_visual_info' }>) {
+  return [
+    `User request: ${userInstruction}`,
+    `Target modality_input: ${modality.id}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    `Targeted follow-up question: ${control.question}`,
+    control.reason ? `Reason detail is needed: ${control.reason}` : '',
+    'Translate only the requested visual detail into concise textual evidence for the Agent Host.',
+    'Do not claim task completion and do not mention router internals.',
+  ].filter(Boolean).join('\n');
+}
+
+function formatVisionSupplementObservation(
+  modality: ModalityRef,
+  control: Extract<TextControl, { type: 'need_more_visual_info' }>,
+  observation: string,
+  status: 'ok' | 'failed',
+) {
+  return [
+    `Target modality_input: ${modality.id}`,
+    'kind=vision.image',
+    'phase=supplement',
+    `status=${status}`,
+    `question=${control.question}`,
+    control.reason ? `reason=${control.reason}` : '',
+    observation,
+  ].filter(Boolean).join('\n');
 }
 
 function storeVisionTranslationCacheEntry(
@@ -1066,10 +1153,36 @@ function parseTextControl(content: string): TextControl | undefined {
     if (parsed.type === 'final_answer' && typeof parsed.content === 'string') {
       return { type: 'final_answer', content: parsed.content };
     }
+    if (
+      parsed.type === 'need_more_visual_info'
+      && typeof parsed.target === 'string'
+      && typeof parsed.question === 'string'
+    ) {
+      return {
+        type: 'need_more_visual_info',
+        target: parsed.target,
+        question: parsed.question,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+      };
+    }
   } catch {
     return undefined;
   }
   return undefined;
+}
+
+function sanitizeTextControl(
+  control: Extract<TextControl, { type: 'need_more_visual_info' }>,
+  profile: ModelRouterProfile,
+  publicModelAlias: string,
+  sensitiveValues: string[],
+): Extract<TextControl, { type: 'need_more_visual_info' }> {
+  return {
+    type: 'need_more_visual_info',
+    target: control.target,
+    question: publicProviderOutputText(control.question, profile, publicModelAlias, sensitiveValues),
+    reason: control.reason ? publicProviderOutputText(control.reason, profile, publicModelAlias, sensitiveValues) : undefined,
+  };
 }
 
 function responseObject(result: RoutedResponse, messageItemId?: string): JsonObject {

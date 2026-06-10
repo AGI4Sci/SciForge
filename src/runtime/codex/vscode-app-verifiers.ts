@@ -114,13 +114,10 @@ export function verifyVSCodeMutationEvidence(input: {
   });
   if (sameEditor.status === 'blocked') return sameEditor;
 
-  const sameSelection = verifySameMutationRef({
+  const sameSelection = verifySameSelectionMutationRef({
     beforeRefs: input.beforeRefs,
+    actionRefs: input.actionRefs,
     afterRefs: input.afterRefs,
-    match: (ref) => ref.startsWith('selection-ref:vscode:'),
-    missingReasonRef: 'blocked:vscode-app-module:single-selection-ref-required',
-    driftReasonRef: 'blocked:vscode-app-module:selection-ref-drift',
-    verifierKind: 'same-selection',
   });
   if (sameSelection.status === 'blocked') return sameSelection;
 
@@ -174,6 +171,50 @@ function verifySameMutationRef(input: {
       `verifier:vscode-app-module:${input.verifierKind}:${safeToken(beforeRefs[0]) || input.verifierKind}`,
     ],
   };
+}
+
+function verifySameSelectionMutationRef(input: {
+  beforeRefs: string[];
+  actionRefs: string[];
+  afterRefs: string[];
+}): VSCodeAppVerifierResult {
+  const beforeRefs = uniqueStrings(input.beforeRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')));
+  const actionRefs = uniqueStrings(input.actionRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')));
+  const afterRefs = uniqueStrings(input.afterRefs.filter((ref) => ref.startsWith('selection-ref:vscode:')));
+  if (beforeRefs.length !== 1) {
+    return verifierBlocked('blocked:vscode-app-module:single-selection-ref-required', uniqueStrings([
+      ...beforeRefs,
+      ...afterRefs,
+    ]));
+  }
+  if (afterRefs.length === 1) {
+    if (beforeRefs[0] !== afterRefs[0]) {
+      return verifierBlocked('blocked:vscode-app-module:selection-ref-drift', uniqueStrings([
+        ...beforeRefs,
+        ...afterRefs,
+      ]));
+    }
+    return {
+      status: 'ready',
+      evidenceRefs: [
+        beforeRefs[0],
+        `verifier:vscode-app-module:same-selection:${safeToken(beforeRefs[0]) || 'same-selection'}`,
+      ],
+    };
+  }
+  if (afterRefs.length === 0 && actionRefs.includes(beforeRefs[0])) {
+    return {
+      status: 'ready',
+      evidenceRefs: [
+        beforeRefs[0],
+        `verifier:vscode-app-module:same-selection:${safeToken(beforeRefs[0]) || 'same-selection'}`,
+      ],
+    };
+  }
+  return verifierBlocked('blocked:vscode-app-module:single-selection-ref-required', uniqueStrings([
+    ...beforeRefs,
+    ...afterRefs,
+  ]));
 }
 
 function verifyMutationAfterObserve(afterRefs: string[]): VSCodeAppVerifierResult {

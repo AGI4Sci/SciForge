@@ -1,6 +1,6 @@
 # SciForge 文档地图
 
-最后更新：2026-06-08
+最后更新：2026-06-10
 
 ## 先读这些
 
@@ -21,7 +21,9 @@
 - SciForge 通过 Codex App Server protocol events 接收 final answer、tool、approval 和 done/error 状态，并确定性生成 `FinalAnswerEnvelope`。
 - Browser、Computer Use 和 artifact/verifier 都只是 Agent Host 可调用能力。
 - Browser、Computer Use 和未来拓展模块只提供信息输入和局部原子操作执行。
-- Browser 和 Computer Use 的新模块入口优先使用 primitive intents；Computer Use 只暴露 `bind`、`observe`、`act`、`run_procedure`、`control`。
+- 普通网页检索入口收敛为 Codex-compatible `web_search`，不新增 `web_search_custom` 或第二个普通搜索入口：优先使用 Codex native search，native 不可用或不足时才注册 SciForge 同名 fallback；`web_read` 保留为 internal / advanced read strategy。
+- `web_extract` 和 `web_batch_read` 不属于第一版默认 Agent tool surface。
+- Browser 内部 / fallback 模块入口保留 primitive intents；普通网页检索产品入口是 `web_search`。Computer Use 只暴露 `bind`、`observe`、`act`、`run_procedure`、`control`。
 - 用户级 completion truth 和 final answer 只由 Codex backend 产出。
 - 诊断路径、fixture、GUI projection、历史 run 和旧矩阵不能替代用户级验收。
 
@@ -54,5 +56,5 @@
 | [`runbooks/model-router-runtime-codex-runbook.md`](runbooks/model-router-runtime-codex-runbook.md) | Runtime Codex 使用 Model Router 的运行边界。 |
 | [`runbooks/model-router-mvp-acceptance-boundary.md`](runbooks/model-router-mvp-acceptance-boundary.md) | Model Router 当前最小验收边界。 |
 | [`runbooks/sciforge-web-reproduction.md`](runbooks/sciforge-web-reproduction.md) | 未来科研复现 workflow 的 refs-first 边界。 |
-| [`runbooks/browser-pane-dogfood-runbook.md`](runbooks/browser-pane-dogfood-runbook.md) | 历史 Browser pane dogfood 口径，仅供诊断。 |
+| [`runbooks/browser-pane-dogfood-runbook.md`](runbooks/browser-pane-dogfood-runbook.md) | 历史 Browser pane dogfood 口径，仅供诊断；其中旧 Browser search/read 术语不能覆盖 `web_search` / `web_read` 当前产品入口。 |
 | [`runbooks/virtual-app-screen-dogfood-runbook.md`](runbooks/virtual-app-screen-dogfood-runbook.md) | 历史 VirtualAppScreen dogfood 口径，仅供诊断。 |

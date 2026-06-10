@@ -586,13 +586,15 @@ test('Computer Use native route can run P10 current VSCode command palette live 
   const runnerCalls: Array<Record<string, unknown>> = [];
   const agentHostInput = {
     schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
-    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    source: 'codex-agent-host-current-vscode-operation',
     intentText: '请用 Computer Use 操纵当前 VSCode，打开并关闭命令面板。',
     singleTurnOverride: false,
     refs: [
       'intent:current-vscode-cowork',
       'intent:current-vscode-cowork-live-diagnostic',
       'chat-request:vscode-cowork:p10-command-palette:attempt-1',
+      'operation-ref:vscode:open-command-palette:p10-command-palette:attempt-1',
+      'text-ref:vscode:command-palette-query:p10-command-palette:attempt-1',
     ],
     readiness: {},
     target: {
@@ -600,8 +602,10 @@ test('Computer Use native route can run P10 current VSCode command palette live 
       vscodeCoWork: {
         requestRef: 'chat-request:vscode-cowork:p10-command-palette:attempt-1',
         operation: 'open-command-palette' as const,
-        diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
+        operationRef: 'operation-ref:vscode:open-command-palette:p10-command-palette:attempt-1',
+        family: 'navigation/search',
         targetMode: 'smart-detect-current-vscode-window',
+        paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10-command-palette:attempt-1',
       },
     },
     observation: {},
@@ -718,11 +722,92 @@ test('Computer Use native route can run P10 current VSCode command palette live 
   assert.doesNotMatch(JSON.stringify(events), /rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route requires Host command palette query text-ref instead of hard-coded fallback text', async () => {
+  const previousPaletteEnv = process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
+  process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV] = '1';
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'codex-agent-host-current-vscode-operation',
+    intentText: '请用 Computer Use 操纵当前 VSCode，打开命令面板。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p12-command-palette-missing-query:attempt-1',
+      'operation-ref:vscode:open-command-palette:p12-command-palette-missing-query:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p12-command-palette-missing-query:attempt-1',
+        operation: 'open-command-palette' as const,
+        operationRef: 'operation-ref:vscode:open-command-palette:p12-command-palette-missing-query:attempt-1',
+        family: 'navigation/search',
+        targetMode: 'smart-detect-current-vscode-window',
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+
+  try {
+    const stream = createComputerUseNativeRouteStream({
+      request: {
+        commandText: '请用 Computer Use 操纵当前 VSCode，打开命令面板。',
+        workspacePath: '/tmp/workspace',
+        commandId: 'native-route-vscode-cowork-p12-palette-missing-query',
+        attemptId: 'native-route-vscode-cowork-p12-palette-missing-query-attempt-1',
+        agentHostInput,
+      },
+      workspace: '/tmp/workspace',
+      provider: 'sciforge-provider',
+      model: 'sciforge-model',
+      profile: 'host-owned',
+      currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+        runnerCalls.push(input);
+        return {
+          status: 'completed',
+          message: 'hard-coded query fallback must not reach live runner',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          primitiveChainObserved: ['bind'],
+          evidenceRefs: ['window:vscode:paper'],
+          cleanupRefs: [],
+        };
+      },
+    });
+
+    assert.notEqual(stream, undefined);
+    const events = await collectStreamEvents(stream!);
+    const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+    const finalAnswer = done?.agentHostFinalAnswer as Record<string, unknown> | undefined;
+
+    assert.equal(runnerCalls.length, 0);
+    assert.equal(done?.status, 'blocked');
+    assert.equal(finalAnswer?.hostOwnsFinalAnswer, true);
+    assert.equal(finalAnswer?.computerUseCorePlanning, false);
+    assert.ok((done?.evidenceRefs as string[]).includes('blocked:vscode-cowork:palette-query-text-ref-required'));
+    assert.doesNotMatch(JSON.stringify(events), /Help: About|hard-coded query fallback|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+  } finally {
+    if (previousPaletteEnv === undefined) {
+      delete process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
+    } else {
+      process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV] = previousPaletteEnv;
+    }
+  }
+});
+
 test('Computer Use native route P10 command palette Host input can request selecting the observed current item', async () => {
   const runnerCalls: Array<Record<string, unknown>> = [];
   const agentHostInput = {
     schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
-    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    source: 'codex-agent-host-current-vscode-operation',
     intentText: '请用 Computer Use 操纵当前 VSCode，打开命令面板并执行 Help: About。',
     singleTurnOverride: false,
     refs: [
@@ -862,6 +947,557 @@ test('Computer Use native route P10 command palette Host input can request selec
   assert.doesNotMatch(JSON.stringify(events), /Help: About|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route can run current VSCode apply-current-selection save diagnostic from structured Host input', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'codex-agent-host-current-vscode-operation',
+    intentText: '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p15-polish-selection-save:attempt-1',
+      'operation-ref:vscode:apply-current-selection:p15-polish-selection-save:attempt-1',
+      'text-ref:vscode:draft:p15-polish-selection-save:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p15-polish-selection-save:attempt-1',
+        operation: 'apply-current-selection' as const,
+        operationRef: 'operation-ref:vscode:apply-current-selection:p15-polish-selection-save:attempt-1',
+        family: 'editor-edit',
+        targetMode: 'smart-detect-current-vscode-window',
+        draftTextRef: 'text-ref:vscode:draft:p15-polish-selection-save:attempt-1',
+        primitiveOperation: 'replace-selection',
+        requestedPrimitiveCount: 1,
+        saveAfterApply: true,
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p15-polish-selection-save',
+      attemptId: 'native-route-vscode-cowork-p15-polish-selection-save-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      assert.equal(((((input.agentHostInput as Record<string, unknown>).target as Record<string, unknown>).vscodeCoWork as Record<string, unknown>)?.draftTextRef), 'text-ref:vscode:draft:p15-polish-selection-save:attempt-1');
+      assert.equal(((((input.agentHostInput as Record<string, unknown>).target as Record<string, unknown>).vscodeCoWork as Record<string, unknown>)?.saveAfterApply), true);
+      return {
+        status: 'completed',
+        message: 'current VSCode current selection apply live diagnostic completed one primitive, observe, verify, save, and release',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: [
+          'bind',
+          'observe',
+          'host-decision',
+          'act',
+          'observe',
+          'verify',
+          'host-decision(save-current-file)',
+          'act(save-current-file)',
+          'control(release)',
+        ],
+        evidenceRefs: [
+          'chat-request:vscode-cowork:p15-polish-selection-save:attempt-1',
+          'text-ref:vscode:draft:p15-polish-selection-save:attempt-1',
+          'selected-file:vscode:paper',
+          'selection-ref:vscode:paper:current',
+          'action:vscode:replace-selection:p15-polish-selection-save',
+          'action:vscode-app-module:save-current-file:meta-s',
+          'verifier:vscode-editor-narrow-apply:p15-polish-selection-save:verified',
+        ],
+        cleanupRefs: [
+          'scoped-input-lease:current-vscode-cowork:p15-polish-selection-save',
+          'scoped-input-adapter:current-vscode-cowork:p15-polish-selection-save',
+          'cursor-marker:current-vscode-cowork:p15-polish-selection-save',
+          'front-app-restore:current-vscode-cowork:p15-polish-selection-save',
+          'mouse-position-restore:current-vscode-cowork:p15-polish-selection-save',
+        ],
+        agentHostInput,
+        agentHostFinalAnswer: {
+          schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+          source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+          status: 'completed',
+          text: 'current VSCode current selection apply live diagnostic completed one primitive, observe, verify, save, and release',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          hostOwnsFinalAnswer: true,
+          computerUseCorePlanning: false,
+          primitiveChainObserved: [
+            'bind',
+            'observe',
+            'host-decision',
+            'act',
+            'observe',
+            'verify',
+            'host-decision(save-current-file)',
+            'act(save-current-file)',
+            'control(release)',
+          ],
+          evidenceRefs: [
+            'text-ref:vscode:draft:p15-polish-selection-save:attempt-1',
+            'selected-file:vscode:paper',
+            'selection-ref:vscode:paper:current',
+            'verifier:vscode-editor-narrow-apply:p15-polish-selection-save:verified',
+          ],
+          cleanupRefs: [
+            'scoped-input-lease:current-vscode-cowork:p15-polish-selection-save',
+            'front-app-restore:current-vscode-cowork:p15-polish-selection-save',
+            'mouse-position-restore:current-vscode-cowork:p15-polish-selection-save',
+          ],
+        },
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const hostProducerEvidence = done?.hostProducerEvidence as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
+  assert.equal(hostProducerEvidence?.operation, 'apply-current-selection');
+  assert.equal(done?.status, 'completed');
+  assert.deepEqual(done?.primitiveChainObserved, [
+    'bind',
+    'observe',
+    'host-decision',
+    'act',
+    'observe',
+    'verify',
+    'host-decision(save-current-file)',
+    'act(save-current-file)',
+    'control(release)',
+  ]);
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.hostOwnsFinalAnswer, true);
+  assert.equal((done?.agentHostFinalAnswer as Record<string, unknown> | undefined)?.computerUseCorePlanning, false);
+  assert.ok((done?.evidenceRefs as string[]).includes('text-ref:vscode:draft:p15-polish-selection-save:attempt-1'));
+  assert.ok((done?.evidenceRefs as string[]).includes('verifier:vscode-editor-narrow-apply:p15-polish-selection-save:verified'));
+  assert.ok((done?.cleanupRefs as string[]).includes('front-app-restore:current-vscode-cowork:p15-polish-selection-save'));
+  assert.doesNotMatch(JSON.stringify(events), /paper-polish|polish-paper|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('Computer Use native route blocks current VSCode apply-current-selection sourced from ordinary chat bridge', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: 'intent:current-vscode-cowork',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p15-polish-ordinary-source:attempt-1',
+      'operation-ref:vscode:apply-current-selection:p15-polish-ordinary-source:attempt-1',
+      'text-ref:vscode:draft:p15-polish-ordinary-source:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p15-polish-ordinary-source:attempt-1',
+        operation: 'apply-current-selection' as const,
+        operationRef: 'operation-ref:vscode:apply-current-selection:p15-polish-ordinary-source:attempt-1',
+        family: 'editor-edit',
+        targetMode: 'smart-detect-current-vscode-window',
+        draftTextRef: 'text-ref:vscode:draft:p15-polish-ordinary-source:attempt-1',
+        primitiveOperation: 'replace-selection',
+        requestedPrimitiveCount: 1,
+        saveAfterApply: true,
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p15-polish-ordinary-source',
+      attemptId: 'native-route-vscode-cowork-p15-polish-ordinary-source-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'ordinary bridge write source must not reach live runner',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind'],
+        evidenceRefs: ['rawSelectedText:SECRET_SHOULD_NOT_LEAK'],
+        cleanupRefs: [],
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const finalAnswer = done?.agentHostFinalAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 0);
+  assert.equal(done?.status, 'blocked');
+  assert.deepEqual(done?.primitiveChainObserved, []);
+  assert.equal(finalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(finalAnswer?.computerUseCorePlanning, false);
+  assert.ok((done?.evidenceRefs as string[]).includes('blocked:vscode-cowork:structured-host-operation-required'));
+  assert.doesNotMatch(JSON.stringify(events), /ordinary bridge write source must not reach|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready/i);
+});
+
+test('Computer Use native route blocks apply-current-selection live diagnostic without Host draft text ref', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'codex-agent-host-current-vscode-operation',
+    intentText: '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p15-polish-missing-draft:attempt-1',
+      'operation-ref:vscode:apply-current-selection:p15-polish-missing-draft:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p15-polish-missing-draft:attempt-1',
+        operation: 'apply-current-selection' as const,
+        operationRef: 'operation-ref:vscode:apply-current-selection:p15-polish-missing-draft:attempt-1',
+        family: 'editor-edit',
+        targetMode: 'smart-detect-current-vscode-window',
+        primitiveOperation: 'replace-selection',
+        requestedPrimitiveCount: 1,
+        saveAfterApply: true,
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p15-polish-missing-draft',
+      attemptId: 'native-route-vscode-cowork-p15-polish-missing-draft-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'raw draft fallback must not reach live runner',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind'],
+        evidenceRefs: ['rawSelectedText:SECRET_SHOULD_NOT_LEAK'],
+        cleanupRefs: [],
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const finalAnswer = done?.agentHostFinalAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 0);
+  assert.equal(done?.status, 'blocked');
+  assert.equal(finalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(finalAnswer?.computerUseCorePlanning, false);
+  assert.ok((done?.evidenceRefs as string[]).includes('blocked:vscode-cowork:apply-current-selection-draft-text-ref-required'));
+  assert.doesNotMatch(JSON.stringify(events), /raw draft fallback|rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready/i);
+});
+
+test('Computer Use native route default apply-current-selection runner blocks before live bind without draft resolver', async () => {
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'codex-agent-host-current-vscode-operation',
+    intentText: 'intent:current-vscode-cowork',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p15-polish-default-no-resolver:attempt-1',
+      'operation-ref:vscode:apply-current-selection:p15-polish-default-no-resolver:attempt-1',
+      'text-ref:vscode:draft:p15-polish-default-no-resolver:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p15-polish-default-no-resolver:attempt-1',
+        operation: 'apply-current-selection' as const,
+        operationRef: 'operation-ref:vscode:apply-current-selection:p15-polish-default-no-resolver:attempt-1',
+        family: 'editor-edit',
+        targetMode: 'smart-detect-current-vscode-window',
+        draftTextRef: 'text-ref:vscode:draft:p15-polish-default-no-resolver:attempt-1',
+        primitiveOperation: 'replace-selection',
+        requestedPrimitiveCount: 1,
+        saveAfterApply: true,
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，润色当前选区并保存。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p15-polish-default-no-resolver',
+      attemptId: 'native-route-vscode-cowork-p15-polish-default-no-resolver-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const finalAnswer = done?.agentHostFinalAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(done?.status, 'blocked');
+  assert.deepEqual(done?.primitiveChainObserved, []);
+  assert.equal(finalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(finalAnswer?.computerUseCorePlanning, false);
+  assert.ok((done?.evidenceRefs as string[]).includes('blocked:vscode-cowork:apply-current-selection-draft-resolver-required'));
+  assert.doesNotMatch(JSON.stringify(done?.primitiveChainObserved ?? []), /bind|observe/i);
+  assert.doesNotMatch(JSON.stringify(events), /rawSelectedText|selectedText|rawDiff|providerPayload|data:image|base64|product-ready/i);
+});
+
+test('Computer Use native route can run current VSCode quick-open navigation live diagnostic from ordinary chat Host input', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: '请用 Computer Use 操纵当前 VSCode，使用 quick open 查找文件。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p13-quick-open:attempt-1',
+      'operation-ref:vscode:quick-open:p13-quick-open:attempt-1',
+      'text-ref:vscode:quick-open-query:p13-quick-open:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p13-quick-open:attempt-1',
+        operation: 'quick-open' as const,
+        operationRef: 'operation-ref:vscode:quick-open:p13-quick-open:attempt-1',
+        family: 'navigation/search',
+        targetMode: 'smart-detect-current-vscode-window',
+        quickOpenQueryTextRef: 'text-ref:vscode:quick-open-query:p13-quick-open:attempt-1',
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，使用 quick open 查找文件。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p13-quick-open-live',
+      attemptId: 'native-route-vscode-cowork-p13-quick-open-live-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'current VSCode navigation/search live diagnostic completed quick-open, observe, and release',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: [
+          'bind',
+          'observe',
+          'host-decision(quick-open)',
+          'act(quick-open)',
+          'observe',
+          'control(release)',
+        ],
+        evidenceRefs: [
+          'chat-request:vscode-cowork:p13-quick-open:attempt-1',
+          'text-ref:vscode:quick-open-query:p13-quick-open:attempt-1',
+          'action:vscode-app-module:quick-open:meta-p',
+          'freshness:vscode:quick-open-after',
+        ],
+        cleanupRefs: [
+          'scoped-input-lease:current-vscode-cowork:p13-quick-open',
+          'scoped-input-adapter:current-vscode-cowork:p13-quick-open',
+          'cursor-marker:current-vscode-cowork:p13-quick-open',
+          'front-app-restore:current-vscode-cowork:p13-quick-open',
+          'mouse-position-restore:current-vscode-cowork:p13-quick-open',
+        ],
+        agentHostInput,
+        agentHostFinalAnswer: {
+          schemaVersion: 'sciforge.codex-agent-host.current-vscode-cowork-final-answer.v1',
+          source: 'codex-agent-host-vscode-cowork-live-diagnostic',
+          status: 'completed',
+          text: 'current VSCode navigation/search live diagnostic completed quick-open, observe, and release',
+          maturity: 'live-diagnostic',
+          productReady: false,
+          hostOwnsFinalAnswer: true,
+          computerUseCorePlanning: false,
+          primitiveChainObserved: [
+            'bind',
+            'observe',
+            'host-decision(quick-open)',
+            'act(quick-open)',
+            'observe',
+            'control(release)',
+          ],
+          evidenceRefs: [
+            'text-ref:vscode:quick-open-query:p13-quick-open:attempt-1',
+            'action:vscode-app-module:quick-open:meta-p',
+            'freshness:vscode:quick-open-after',
+          ],
+          cleanupRefs: [
+            'scoped-input-lease:current-vscode-cowork:p13-quick-open',
+            'front-app-restore:current-vscode-cowork:p13-quick-open',
+            'mouse-position-restore:current-vscode-cowork:p13-quick-open',
+          ],
+        },
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const hostProducerEvidence = done?.hostProducerEvidence as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(runnerCalls[0]?.activateCurrentVSCodeIfNeeded, true);
+  assert.equal(hostProducerEvidence?.operation, 'quick-open');
+  assert.equal(done?.status, 'completed');
+  assert.equal(done?.productReady, false);
+  assert.ok((done?.cleanupRefs as string[]).includes('front-app-restore:current-vscode-cowork:p13-quick-open'));
+  assert.doesNotMatch(JSON.stringify(events), /raw-path|hidden query|\/Users\/|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('Computer Use native route blocks navigation/search live diagnostic without Host query text ref', async () => {
+  const runnerCalls: Array<Record<string, unknown>> = [];
+  const agentHostInput = {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1' as const,
+    source: 'ordinary-chat-current-vscode-computer-use-bridge',
+    intentText: '请用 Computer Use 操纵当前 VSCode，打开 workspace search 查找文本。',
+    singleTurnOverride: false,
+    refs: [
+      'intent:current-vscode-cowork',
+      'intent:current-vscode-cowork-live-diagnostic',
+      'chat-request:vscode-cowork:p13-workspace-search-missing-query:attempt-1',
+      'operation-ref:vscode:workspace-search:p13-workspace-search-missing-query:attempt-1',
+    ],
+    readiness: {},
+    target: {
+      kind: 'current-vscode-cowork' as const,
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:p13-workspace-search-missing-query:attempt-1',
+        operation: 'workspace-search' as const,
+        operationRef: 'operation-ref:vscode:workspace-search:p13-workspace-search-missing-query:attempt-1',
+        family: 'navigation/search',
+        targetMode: 'smart-detect-current-vscode-window',
+      },
+    },
+    observation: {},
+    permissions: {
+      refs: ['permission:turn/current-vscode-cowork/full-access'],
+      scopedExecutorRefs: ['computer-use:executor-scope:current-vscode'],
+      stopCancelPath: true,
+    },
+  };
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '请用 Computer Use 操纵当前 VSCode，打开 workspace search 查找文本。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-p13-workspace-search-missing-query',
+      attemptId: 'native-route-vscode-cowork-p13-workspace-search-missing-query-attempt-1',
+      agentHostInput,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+    currentVSCodeCoWorkLiveDiagnosticRunner: async (input) => {
+      runnerCalls.push(input);
+      return {
+        status: 'completed',
+        message: 'raw workspace search fallback must not reach live runner',
+        maturity: 'live-diagnostic',
+        productReady: false,
+        primitiveChainObserved: ['bind'],
+        evidenceRefs: ['action:vscode-app-module:workspace-search:meta-shift-f'],
+        cleanupRefs: [],
+      };
+    },
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = routeOutcomeEvent(events) as Record<string, unknown> | undefined;
+  const finalAnswer = done?.agentHostFinalAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(runnerCalls.length, 0);
+  assert.equal(done?.status, 'blocked');
+  assert.equal(finalAnswer?.hostOwnsFinalAnswer, true);
+  assert.equal(finalAnswer?.computerUseCorePlanning, false);
+  assert.ok((done?.evidenceRefs as string[]).includes('blocked:vscode-cowork:navigation-search-query-text-ref-required'));
+  assert.doesNotMatch(JSON.stringify(events), /raw workspace search fallback|raw-path|hidden query|\/Users\/|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
 test('Computer Use native route projects Host final answer when P10 command palette live diagnostic is env-blocked', async () => {
   const previousPaletteEnv = process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
   delete process.env[VSCODE_COWORK_PALETTE_LIVE_DIAGNOSTIC_ENV];
@@ -875,6 +1511,8 @@ test('Computer Use native route projects Host final answer when P10 command pale
         'intent:current-vscode-cowork',
         'intent:current-vscode-cowork-live-diagnostic',
         'chat-request:vscode-cowork:p10-command-palette-env-blocked:attempt-1',
+        'operation-ref:vscode:open-command-palette:p10-command-palette-env-blocked:attempt-1',
+        'text-ref:vscode:command-palette-query:p10-command-palette-env-blocked:attempt-1',
       ],
       readiness: {},
       target: {
@@ -882,8 +1520,10 @@ test('Computer Use native route projects Host final answer when P10 command pale
         vscodeCoWork: {
           requestRef: 'chat-request:vscode-cowork:p10-command-palette-env-blocked:attempt-1',
           operation: 'open-command-palette' as const,
+          operationRef: 'operation-ref:vscode:open-command-palette:p10-command-palette-env-blocked:attempt-1',
           diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
           targetMode: 'smart-detect-current-vscode-window',
+          paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10-command-palette-env-blocked:attempt-1',
         },
       },
       observation: {},
@@ -944,6 +1584,8 @@ test('Computer Use native route blocks P10 direct live diagnostic when Host targ
       'intent:current-vscode-cowork',
       'intent:current-vscode-cowork-live-diagnostic',
       'chat-request:vscode-cowork:p10-command-palette-ambiguous:attempt-1',
+      'operation-ref:vscode:open-command-palette:p10-command-palette-ambiguous:attempt-1',
+      'text-ref:vscode:command-palette-query:p10-command-palette-ambiguous:attempt-1',
     ],
     readiness: {},
     target: {
@@ -961,8 +1603,10 @@ test('Computer Use native route blocks P10 direct live diagnostic when Host targ
       vscodeCoWork: {
         requestRef: 'chat-request:vscode-cowork:p10-command-palette-ambiguous:attempt-1',
         operation: 'open-command-palette' as const,
+        operationRef: 'operation-ref:vscode:open-command-palette:p10-command-palette-ambiguous:attempt-1',
         diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
         targetMode: 'smart-detect-current-vscode-window',
+        paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10-command-palette-ambiguous:attempt-1',
         windowCandidates: [
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
           vscodeNativeRouteWindow({ windowRef: 'window:vscode:notes', titleRef: 'text:title:notes' }),
@@ -1034,6 +1678,8 @@ test('Computer Use native route blocks P10 direct live diagnostic when selected 
       'intent:current-vscode-cowork',
       'intent:current-vscode-cowork-live-diagnostic',
       'chat-request:vscode-cowork:p10-command-palette-conflict:attempt-1',
+      'operation-ref:vscode:open-command-palette:p10-command-palette-conflict:attempt-1',
+      'text-ref:vscode:command-palette-query:p10-command-palette-conflict:attempt-1',
     ],
     readiness: {},
     target: {
@@ -1041,8 +1687,10 @@ test('Computer Use native route blocks P10 direct live diagnostic when selected 
       vscodeCoWork: {
         requestRef: 'chat-request:vscode-cowork:p10-command-palette-conflict:attempt-1',
         operation: 'open-command-palette' as const,
+        operationRef: 'operation-ref:vscode:open-command-palette:p10-command-palette-conflict:attempt-1',
         diagnostic: 'p10-vscode-bind-observe-command-palette-open-close',
         targetMode: 'smart-detect-current-vscode-window',
+        paletteQueryTextRef: 'text-ref:vscode:command-palette-query:p10-command-palette-conflict:attempt-1',
         selectedWindowRef: 'window:vscode:paper',
         latestObservation: {
           windowRef: 'window:vscode:notes',

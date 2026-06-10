@@ -134,6 +134,28 @@ export function evaluateAgentHostLocalToolAct(input: AgentHostLocalToolActInput)
       evidenceRefs,
     };
   }
+  if (moduleId === 'web' && isWebPrimitiveIntent(intentName) && intent.requiresApproval !== true) {
+    if (localOnlyOrNoNetworkInstruction(input.userInstruction)) {
+      return blocked(input, {
+        reason: 'Web primitive is blocked by Agent Host local-only/no-network user instruction.',
+        moduleId,
+        functionName,
+        intent: intentName,
+        sideEffect,
+        evidenceRefs,
+      });
+    }
+    return {
+      status: 'auto',
+      reason: `module.invoke ${moduleId}.${intentName} is a Web primitive; the Web Runtime owns bounded execution, blockers, and confirmation.`,
+      toolName,
+      moduleId,
+      functionName,
+      intent: intentName,
+      sideEffect,
+      evidenceRefs,
+    };
+  }
   if (intent.returnsOperation === true && sideEffect === 'local' && intent.requiresApproval !== true) {
     return {
       status: 'auto',
@@ -199,16 +221,21 @@ export function evaluateAgentHostLocalToolAct(input: AgentHostLocalToolActInput)
 }
 
 const BROWSER_PRIMITIVE_INTENT_SET = new Set<string>(Object.values(BROWSER_PRIMITIVE_INTENTS));
+const WEB_PRIMITIVE_INTENT_SET = new Set<string>(['web.search', 'web.read']);
 
 function isBrowserPrimitiveIntent(value: string): boolean {
   return BROWSER_PRIMITIVE_INTENT_SET.has(value);
+}
+
+function isWebPrimitiveIntent(value: string): boolean {
+  return WEB_PRIMITIVE_INTENT_SET.has(value);
 }
 
 function localOnlyOrNoNetworkInstruction(value: string | undefined): boolean {
   if (!value?.trim()) return false;
   const text = value.toLowerCase().normalize('NFKC');
   return /(?:只用|仅用|只使用|仅使用).{0,12}(?:本地|当前|已有|现有|项目|上下文|文件|资料)/u.test(text)
-    || /(?:不要|禁止|不许|无需|别).{0,12}(?:联网|上网|浏览器|browser|web|internet|external)/iu.test(text)
+    || /(?:不要|禁止|不许|无需|别).{0,12}(?:联网|上网|浏览器|browser|\bweb\b|internet|external)/iu.test(text)
     || /(?:不联网|离线|本地上下文)/u.test(text)
     || /\b(?:no|without|do not|don't|dont|never)\s+(?:web|internet|browser|browsing|external)\b/i.test(text)
     || /\b(?:local context only|offline only|use only local context|use local context only)\b/i.test(text);

@@ -366,6 +366,84 @@ test('default Computer Use Act materializer selects a VSCode app module primitiv
   assert.doesNotMatch(JSON.stringify(result), /raw-|\/raw|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile|Generic WindowAction planner|taskOutcome":"satisfied/i);
 });
 
+test('default Computer Use Act materializer routes read-editor-context through VSCode app module with public refs and safe summary only', async () => {
+  let windowActionPlannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        windowActionPlannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Generic WindowAction planner must not infer VSCode editor context reads.',
+          evidenceRefs: ['action-ledger:planner/unexpected-vscode-editor-context-fallback'],
+        };
+      },
+    },
+  });
+  const editorContextRefs = [
+    'workspace-ref:vscode:primary',
+    'focused-editor:vscode:paper:1',
+    'selected-file:vscode:paper',
+    'selection-ref:vscode:paper:selection',
+    'cursor-ref:vscode:paper:cursor',
+    'range-ref:vscode:paper:range',
+    'text:vscode:visible:paper-context',
+    'terminal-output:vscode:paper:current',
+    'history:vscode:previous-run',
+    'action:vscode:previous:completed',
+  ];
+
+  const result = await materializer({
+    agentHostInput: vscodeAppModuleAgentHostInput('read-editor-context', editorContextRefs, {
+      rawVisibleText: 'Private selected paragraph that must remain internal.',
+    }),
+    preflight: vscodeAppModulePreflight(editorContextRefs),
+    commandText: 'Read the private selected paragraph from /Users/example/private-paper.md.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-vscode-read-editor-context',
+    attemptId: 'codex-command-default-vscode-read-editor-context-attempt-1',
+    runtimeTruth: vscodeAppModuleRuntimeTruth(editorContextRefs),
+  });
+
+  assert.equal(windowActionPlannerCalls, 0);
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.equal(result?.claimType, 'computer-use-app-module-primitive-candidate');
+  assert.equal(result?.completionTruth, undefined);
+  assert.ok(result?.executionUnits?.some((unit) =>
+    unit.tool === 'computer-use.app-module-registry'
+      && unit.moduleId === 'vscode'
+      && unit.operation === 'read-editor-context'
+      && unit.primitive === 'computer_use.observe'
+      && unit.status === 'candidate'
+  ));
+  assert.ok(result?.evidenceRefs.includes('selected-file:vscode:paper'));
+  assert.ok(result?.evidenceRefs.includes('selection-ref:vscode:paper:selection'));
+  assert.ok(result?.evidenceRefs.includes('cursor-ref:vscode:paper:cursor'));
+  assert.ok(result?.evidenceRefs.includes('range-ref:vscode:paper:range'));
+  assert.ok(result?.evidenceRefs.includes('text:vscode:visible:paper-context'));
+
+  const readinessArtifact = result?.artifacts?.find((artifact) => artifact.type === 'computer-use-app-module-readiness');
+  const readinessData = readinessArtifact?.data as Record<string, unknown> | undefined;
+  assert.deepEqual(readinessData?.safeSummary, {
+    identity: 'vscode-window-identity:ready',
+    freshness: 'vscode-observation:fresh',
+    concepts: [
+      'workspace',
+      'file',
+      'editor',
+      'selection',
+      'cursor',
+      'range',
+    ],
+  });
+
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /safeSummary/);
+  assert.match(serialized, /text:vscode:visible:paper-context/);
+  assert.doesNotMatch(serialized, /Private selected paragraph|private selected paragraph|private-paper|\/Users\/|rawVisibleText|rawSelectedText|selectedText|rawVisibleText|providerPayload|data:image|base64|Generic WindowAction planner|completionTruth|taskOutcome":"satisfied/i);
+});
+
 test('default Computer Use Act materializer selects command palette primitives only from structured Host operation refs', async () => {
   let windowActionPlannerCalls = 0;
   const materializer = createDefaultComputerUseActMaterializer({

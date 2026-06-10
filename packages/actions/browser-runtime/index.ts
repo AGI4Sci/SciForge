@@ -8,6 +8,126 @@ import {
 
 export const BROWSER_PRIMITIVE_SERVICE_MODULE_ID = 'browser' as const;
 export const BROWSER_PRIMITIVE_RESULT_SCHEMA = 'sciforge.browser-runtime.primitive-result.v1' as const;
+export const WEB_SEARCH_TOOL_NAME = 'web_search' as const;
+export const WEB_READ_TOOL_NAME = 'web_read' as const;
+export const WEB_TOOL_NAMES = [WEB_SEARCH_TOOL_NAME, WEB_READ_TOOL_NAME] as const;
+export const WEB_TOOL_RESULT_SCHEMA = 'sciforge.browser-runtime.web-tool-result.v1' as const;
+
+export const WEB_TOOL_INPUT_SCHEMA_VERSIONS = {
+  web_search: 'sciforge.browser-runtime.web-search-input.v1',
+  web_read: 'sciforge.browser-runtime.web-read-input.v1',
+} as const;
+
+export const WEB_RESOURCE_REF_PREFIXES = {
+  searchResultSet: 'web-search:',
+  discoveredPage: 'web-page:',
+  sourcePage: 'web-source:',
+  pageText: 'web-text:',
+} as const;
+
+export const WEB_ERROR_CODES = [
+  'invalid_input',
+  'unsafe_url',
+  'provider_unavailable',
+  'timeout',
+  'rate_limited',
+  'no_results',
+  'read_failed',
+  'extract_failed',
+  'needs_browser',
+  'needs_user_browser',
+] as const;
+
+export const WEB_SAFE_SEARCH_VALUES = ['off', 'moderate', 'strict'] as const;
+export const WEB_SEARCH_TIME_RANGES = ['day', 'week', 'month', 'year'] as const;
+export const WEB_READ_FORMATS = ['markdown', 'text', 'html', 'metadata'] as const;
+export const WEB_READ_RENDER_MODES = ['auto', 'static', 'browser'] as const;
+export const WEB_CACHE_POLICIES = ['default', 'bypass', 'refresh'] as const;
+export const WEB_TOOL_TIMEOUT_MS_MAX = 60_000 as const;
+export const WEB_SEARCH_LIMIT_MAX = 20 as const;
+export const WEB_READ_MAX_CHARS_MAX = 1_000_000 as const;
+
+export const WEB_TOOL_INPUT_SCHEMAS = {
+  web_search: objectSchema(['query'], {
+    query: { type: 'string', minLength: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: WEB_SEARCH_LIMIT_MAX },
+    language: { type: 'string', minLength: 1 },
+    region: { type: 'string', minLength: 1 },
+    time_range: { enum: [...WEB_SEARCH_TIME_RANGES] },
+    safe_search: { enum: [...WEB_SAFE_SEARCH_VALUES] },
+    provider: { type: 'string', minLength: 1 },
+    timeout_ms: { type: 'integer', minimum: 1, maximum: WEB_TOOL_TIMEOUT_MS_MAX },
+    constraints: webConstraintsSchema(),
+  }),
+  web_read: {
+    ...objectSchema([], {
+      url: { type: 'string', format: 'uri' },
+      resourceRef: {
+        type: 'string',
+        minLength: 1,
+        pattern: `^${escapeRegExp(WEB_RESOURCE_REF_PREFIXES.discoveredPage)}`,
+        description: 'A discovered page ref produced by web_search, formatted as web-page:{id}.',
+      },
+      format: { enum: [...WEB_READ_FORMATS] },
+      render: { enum: [...WEB_READ_RENDER_MODES] },
+      max_chars: { type: 'integer', minimum: 1, maximum: WEB_READ_MAX_CHARS_MAX },
+      timeout_ms: { type: 'integer', minimum: 1, maximum: WEB_TOOL_TIMEOUT_MS_MAX },
+      cache_policy: { enum: [...WEB_CACHE_POLICIES] },
+      constraints: webConstraintsSchema(),
+    }),
+    anyOf: [{ required: ['url'] }, { required: ['resourceRef'] }],
+  },
+} as const;
+
+export const WEB_TOOL_OUTPUT_SCHEMAS = {
+  web_search: objectSchema(['query', 'results', 'evidenceBoundary'], {
+    query: { type: 'string' },
+    provider: { type: 'string' },
+    results: {
+      type: 'array',
+      description: 'Current-run web_search results and snippets are candidate sources for ordinary search answers with source links.',
+      items: objectSchema(['rank', 'title', 'url', 'source', 'provider'], {
+        rank: { type: 'integer', minimum: 1 },
+        title: { type: 'string' },
+        url: { type: 'string', format: 'uri' },
+        snippet: { type: 'string' },
+        source: { type: 'string' },
+        publishedAt: { type: 'string' },
+        provider: { type: 'string' },
+      }),
+    },
+    refs: {
+      type: 'object',
+      description: 'Search refs use web-search:{id}; discovered candidate page refs use web-page:{id}. These refs identify result sets and source links for ordinary search; page text refs are only produced by read escalation.',
+    },
+    evidenceBoundary: {
+      type: 'string',
+      description: 'Ordinary search can be answered from current-run web_search results plus source links when sufficient; page-level detail, direct quotes, URL summaries, low-information results, or conflicting sources use read-required escalation. Ordinary search does not require web_read.',
+    },
+    diagnostics: { type: 'object' },
+  }),
+  web_read: objectSchema(['requestedUrl', 'finalUrl', 'refs', 'evidenceBoundary'], {
+    requestedUrl: { type: 'string' },
+    finalUrl: { type: 'string' },
+    title: { type: 'string' },
+    author: { type: 'string' },
+    publishedAt: { type: 'string' },
+    contentType: { type: 'string' },
+    language: { type: 'string' },
+    contentPreview: { type: 'string' },
+    textCharCount: { type: 'integer', minimum: 0 },
+    textSha1: { type: 'string' },
+    refs: {
+      type: 'object',
+      description: 'web_read source/page text refs are evidence: source page refs use web-source:{id}; page text refs use web-text:{id}.',
+    },
+    evidenceBoundary: {
+      type: 'string',
+      description: 'source/page text refs are evidence for the single read page; task-level synthesis remains outside Browser Runtime.',
+    },
+    diagnostics: { type: 'object' },
+  }),
+} as const;
 
 export const BROWSER_PRIMITIVE_INPUT_SCHEMAS = {
   search: 'sciforge.browser-runtime.search-input.v1',
@@ -34,10 +154,136 @@ export type BrowserPrimitiveName = typeof BROWSER_PRIMITIVE_NAMES[number];
 export type BrowserPrimitiveIntent = typeof BROWSER_PRIMITIVE_INTENTS[BrowserPrimitiveName];
 export type BrowserPrimitiveStatus = 'completed' | 'partial' | 'blocked' | 'needs-confirmation' | 'failed';
 export type BrowserCaptureMode = 'none' | 'frame' | 'screenshot';
-export type BrowserSearchEngine = 'bing' | 'duckduckgo';
+export type BrowserSearchEngine = string;
 export type BrowserSafeSearch = 'off' | 'moderate' | 'strict';
 export type BrowserReadNavigationMode = 'none' | 'ephemeral';
 export type BrowserExtractTarget = typeof BROWSER_EXTRACT_TARGETS[number];
+export type WebToolName = typeof WEB_TOOL_NAMES[number];
+export type WebErrorCode = typeof WEB_ERROR_CODES[number];
+export type WebSafeSearch = typeof WEB_SAFE_SEARCH_VALUES[number];
+export type WebSearchTimeRange = typeof WEB_SEARCH_TIME_RANGES[number];
+export type WebReadFormat = typeof WEB_READ_FORMATS[number];
+export type WebReadRenderMode = typeof WEB_READ_RENDER_MODES[number];
+export type WebCachePolicy = typeof WEB_CACHE_POLICIES[number];
+export type WebToolStatus = BrowserPrimitiveStatus;
+export type WebRefEvidence = 'candidate' | 'source' | 'diagnostic';
+export type WebRefKind = 'search_result_set' | 'discovered_page' | 'source_page' | 'page_text' | 'html' | 'diagnostic';
+
+export interface WebToolError {
+  code: WebErrorCode;
+  message: string;
+  retryable?: boolean;
+  refs?: string[];
+  provider?: string;
+}
+
+export interface WebToolWarning {
+  code: string;
+  message: string;
+  refs?: string[];
+}
+
+export interface WebToolTimings {
+  providerMs?: number;
+  fetchMs?: number;
+  renderMs?: number;
+  extractMs?: number;
+  parseMs?: number;
+  persistMs?: number;
+  totalMs?: number;
+}
+
+export interface WebToolRef {
+  ref: string;
+  kind: WebRefKind;
+  evidence: WebRefEvidence;
+  locator?: Record<string, unknown>;
+  title?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WebSearchInput {
+  query: string;
+  limit?: number;
+  language?: string;
+  region?: string;
+  time_range?: WebSearchTimeRange;
+  safe_search?: WebSafeSearch;
+  provider?: string;
+  timeout_ms?: number;
+  constraints?: WebToolConstraints;
+}
+
+export interface WebReadInput {
+  url?: string;
+  resourceRef?: string;
+  format?: WebReadFormat;
+  render?: WebReadRenderMode;
+  max_chars?: number;
+  timeout_ms?: number;
+  cache_policy?: WebCachePolicy;
+  constraints?: WebToolConstraints;
+}
+
+export interface WebToolConstraints {
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+}
+
+export interface WebSearchResultItem {
+  rank: number;
+  title: string;
+  url: string;
+  snippet?: string;
+  source: string;
+  publishedAt?: string;
+  provider: string;
+}
+
+export interface WebSearchOutput {
+  query: string;
+  provider?: string;
+  results: WebSearchResultItem[];
+  refs?: Record<string, unknown>;
+  evidenceBoundary: string;
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface WebReadOutput {
+  requestedUrl?: string;
+  finalUrl?: string;
+  title?: string;
+  author?: string;
+  publishedAt?: string;
+  contentType?: string;
+  language?: string;
+  contentPreview?: string;
+  textCharCount?: number;
+  textSha1?: string;
+  refs?: Record<string, unknown>;
+  evidenceBoundary: string;
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface WebToolResultEnvelope<T = WebSearchOutput | WebReadOutput> {
+  schemaVersion: typeof WEB_TOOL_RESULT_SCHEMA;
+  ok: boolean;
+  status: WebToolStatus;
+  tool: WebToolName;
+  provider?: string;
+  data?: T;
+  refs: WebToolRef[];
+  timings: WebToolTimings;
+  warnings: WebToolWarning[];
+  error?: WebToolError;
+}
+
+export interface WebToolValidationResult<T = WebSearchInput | WebReadInput> {
+  ok: boolean;
+  tool?: WebToolName;
+  input?: T;
+  errors: WebToolError[];
+}
 
 export interface BrowserPrimitiveBudget {
   maxTimeMs?: number;
@@ -111,6 +357,7 @@ export interface BrowserSearchInput {
   engine?: BrowserSearchEngine;
   locale?: string;
   region?: string;
+  timeRange?: WebSearchTimeRange | string;
   limit?: number;
   budget?: BrowserPrimitiveBudget;
   constraints?: BrowserPrimitiveConstraints;
@@ -407,6 +654,96 @@ export function validateBrowserPrimitiveInvokeRequest(request: ModuleInvokeReque
   };
 }
 
+export function validateWebToolInput(tool: string, inputValue: unknown): WebToolValidationResult {
+  if (!isWebToolName(tool)) {
+    return {
+      ok: false,
+      errors: [webToolError('invalid_input', `unsupported_web_tool:${tool}`)],
+    };
+  }
+  const input = record(inputValue);
+  if (!input) {
+    return {
+      ok: false,
+      tool,
+      errors: [webToolError('invalid_input', 'missing_input')],
+    };
+  }
+
+  const errors: WebToolError[] = [];
+  if (tool === WEB_SEARCH_TOOL_NAME) validateWebSearchInputRecord(input, errors);
+  if (tool === WEB_READ_TOOL_NAME) validateWebReadInputRecord(input, errors);
+
+  return {
+    ok: errors.length === 0,
+    tool,
+    input: errors.length === 0 ? input as unknown as WebSearchInput | WebReadInput : undefined,
+    errors,
+  };
+}
+
+export function createWebToolResultEnvelope<T = WebSearchOutput | WebReadOutput>(input: {
+  tool: WebToolName;
+  status: WebToolStatus;
+  provider?: string;
+  data?: T;
+  refs?: WebToolRef[];
+  timings?: WebToolTimings;
+  warnings?: WebToolWarning[];
+  error?: WebToolError;
+}): WebToolResultEnvelope<T> {
+  const ok = input.status === 'completed' || input.status === 'partial';
+  return {
+    schemaVersion: WEB_TOOL_RESULT_SCHEMA,
+    ok,
+    status: input.status,
+    tool: input.tool,
+    provider: input.provider,
+    data: input.data,
+    refs: uniqueWebToolRefs(input.refs ?? []),
+    timings: input.timings ?? {},
+    warnings: input.warnings ?? [],
+    error: input.error,
+  };
+}
+
+export function browserPrimitiveEnvelopeToWebToolResult(
+  tool: WebToolName,
+  primitive: BrowserPrimitiveEnvelope,
+  provider?: string,
+): WebToolResultEnvelope {
+  const warnings = primitive.diagnostics
+    .filter((diagnostic) => diagnostic.severity !== 'error')
+    .map((diagnostic) => ({
+      code: diagnostic.code,
+      message: diagnostic.message,
+      refs: diagnostic.refs,
+    }));
+  const errorDiagnostic = primitive.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
+  const error = primitive.status === 'completed' || primitive.status === 'partial'
+    ? undefined
+    : webToolError(
+      webErrorCodeForPrimitive(tool, primitive, errorDiagnostic),
+      primitive.blockedReason ?? errorDiagnostic?.message ?? `${tool} failed`,
+      errorDiagnostic?.retryable,
+      errorDiagnostic?.refs,
+      provider,
+    );
+
+  return createWebToolResultEnvelope({
+    tool,
+    status: primitive.status,
+    provider: provider ?? providerForPrimitive(tool, primitive.output),
+    data: tool === WEB_SEARCH_TOOL_NAME
+      ? webSearchOutputForPrimitive(primitive, provider)
+      : webReadOutputForPrimitive(primitive),
+    refs: webRefsForPrimitive(primitive),
+    timings: webTimingsForPrimitive(primitive),
+    warnings,
+    error,
+  });
+}
+
 export function browserPrimitiveModuleDescription(): ModuleDescription {
   return createModuleDescription({
     moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
@@ -504,7 +841,13 @@ function browserResourcesForSearch(output: unknown, originTool: BrowserPrimitive
   const searchOutput = record(output);
   if (!searchOutput) return [];
   const resources: BrowserResource[] = [];
-  const searchResultRef = stringAt(searchOutput, 'searchResultRef');
+  const searchQuery = stringAt(searchOutput, 'queryUsed') ?? stringAt(searchOutput, 'query');
+  const rawSearchResultRef = stringAt(searchOutput, 'searchResultRef');
+  const searchResultRef = rawSearchResultRef?.startsWith(WEB_RESOURCE_REF_PREFIXES.searchResultSet)
+    ? rawSearchResultRef
+    : searchQuery
+      ? webResourceRef(WEB_RESOURCE_REF_PREFIXES.searchResultSet, rawSearchResultRef ?? searchQuery)
+      : undefined;
   if (searchResultRef) {
     resources.push({
       ref: searchResultRef,
@@ -512,7 +855,7 @@ function browserResourcesForSearch(output: unknown, originTool: BrowserPrimitive
       status: 'discovered',
       originTool,
       locator: {
-        query: stringAt(searchOutput, 'queryUsed') ?? stringAt(searchOutput, 'query'),
+        query: searchQuery,
         searchUrl: stringAt(searchOutput, 'searchUrl'),
       },
       refs: [searchResultRef],
@@ -523,7 +866,7 @@ function browserResourcesForSearch(output: unknown, originTool: BrowserPrimitive
     const url = stringAt(item, 'url');
     if (!url || !isHttpUrl(url)) continue;
     resources.push({
-      ref: browserResourceRef('web_page', url),
+      ref: webResourceRef(WEB_RESOURCE_REF_PREFIXES.discoveredPage, url),
       kind: 'web_page',
       status: 'discovered',
       originTool,
@@ -742,9 +1085,9 @@ function browserEvidenceStateForPrimitive(
   }
   if (primitive === 'search') {
     return {
-      completed: [`Discovered ${resources.filter((resource) => resource.kind === 'web_page').length} candidate web page resource(s).`],
-      unknown: ['Candidate page bodies have not been read or materialized as source/page text refs.'],
-      boundary: 'Search results and snippets are not source evidence until browser.read materializes page text/source refs.',
+      completed: [`Discovered ${resources.filter((resource) => resource.kind === 'web_page').length} candidate web page resource(s) for ordinary search.`],
+      unknown: ['Candidate page bodies have not been read; page-level details, URL summaries, direct quotes, low-information results, or conflicting sources may need read-required escalation.'],
+      boundary: 'Current-run browser.search results can support ordinary search answers with source links when sufficient; page-level content uses read-required escalation.',
     };
   }
   if (primitive === 'navigate') {
@@ -806,6 +1149,10 @@ function browserResourceRef(kind: string, locator: string): string {
   return `browser:resource:${safeBrowserResourceSegment(kind)}:${stableBrowserResourceHash(locator)}`;
 }
 
+function webResourceRef(prefix: string, locator: string): string {
+  return `${prefix}${stableBrowserResourceHash(locator)}`;
+}
+
 function stableBrowserResourceHash(value: string): string {
   let hash = 0x811c9dc5;
   for (const char of value) {
@@ -819,13 +1166,374 @@ function safeBrowserResourceSegment(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '') || 'resource';
 }
 
+function validateWebSearchInputRecord(input: Record<string, unknown>, errors: WebToolError[]) {
+  rejectUnknownWebFields(input, [
+    'query',
+    'limit',
+    'language',
+    'region',
+    'time_range',
+    'safe_search',
+    'provider',
+    'timeout_ms',
+    'constraints',
+  ], errors);
+  if (!nonEmptyString(input.query)) errors.push(webToolError('invalid_input', 'missing_string:query'));
+  validateOptionalIntegerRangeWeb(input.limit, 'limit', 1, WEB_SEARCH_LIMIT_MAX, errors);
+  validateOptionalStringWeb(input.language, 'language', errors);
+  validateOptionalStringWeb(input.region, 'region', errors);
+  validateOptionalEnumWeb(input.time_range, WEB_SEARCH_TIME_RANGES, 'time_range', errors);
+  validateOptionalEnumWeb(input.safe_search, WEB_SAFE_SEARCH_VALUES, 'safe_search', errors);
+  validateOptionalStringWeb(input.provider, 'provider', errors);
+  validateOptionalIntegerRangeWeb(input.timeout_ms, 'timeout_ms', 1, WEB_TOOL_TIMEOUT_MS_MAX, errors);
+  validateOptionalWebConstraints(input.constraints, errors);
+}
+
+function validateWebReadInputRecord(input: Record<string, unknown>, errors: WebToolError[]) {
+  rejectUnknownWebFields(input, [
+    'url',
+    'resourceRef',
+    'format',
+    'render',
+    'max_chars',
+    'timeout_ms',
+    'cache_policy',
+    'constraints',
+  ], errors);
+  const hasUrl = nonEmptyString(input.url);
+  const hasResourceRef = nonEmptyString(input.resourceRef);
+  if (!hasUrl && !hasResourceRef) errors.push(webToolError('invalid_input', 'missing_read_source:url_or_resourceRef'));
+  if (hasUrl && hasResourceRef) errors.push(webToolError('invalid_input', 'ambiguous_read_source:choose_url_or_resourceRef'));
+  if (hasUrl) validateSafeWebUrl(input.url, 'url', errors);
+  if (hasResourceRef) {
+    validateOptionalStringWeb(input.resourceRef, 'resourceRef', errors);
+    if (!String(input.resourceRef).startsWith(WEB_RESOURCE_REF_PREFIXES.discoveredPage)) {
+      errors.push(webToolError('invalid_input', `resourceRef_type_mismatch:${WEB_RESOURCE_REF_PREFIXES.discoveredPage.slice(0, -1)}`));
+    }
+  }
+  validateOptionalEnumWeb(input.format, WEB_READ_FORMATS, 'format', errors);
+  validateOptionalEnumWeb(input.render, WEB_READ_RENDER_MODES, 'render', errors);
+  validateOptionalIntegerRangeWeb(input.max_chars, 'max_chars', 1, WEB_READ_MAX_CHARS_MAX, errors);
+  validateOptionalIntegerRangeWeb(input.timeout_ms, 'timeout_ms', 1, WEB_TOOL_TIMEOUT_MS_MAX, errors);
+  validateOptionalEnumWeb(input.cache_policy, WEB_CACHE_POLICIES, 'cache_policy', errors);
+  validateOptionalWebConstraints(input.constraints, errors);
+}
+
+function rejectUnknownWebFields(input: Record<string, unknown>, allowed: string[], errors: WebToolError[]) {
+  const allowedSet = new Set(allowed);
+  for (const field of Object.keys(input)) {
+    if (!allowedSet.has(field)) errors.push(webToolError('invalid_input', `unknown_input_field:${field}`));
+  }
+}
+
+function validateOptionalStringWeb(value: unknown, field: string, errors: WebToolError[]) {
+  if (value !== undefined && !nonEmptyString(value)) errors.push(webToolError('invalid_input', `invalid_string:${field}`));
+}
+
+function validateOptionalIntegerRangeWeb(
+  value: unknown,
+  field: string,
+  min: number,
+  max: number,
+  errors: WebToolError[],
+) {
+  if (value === undefined) return;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    errors.push(webToolError('invalid_input', `invalid_integer:${field}`));
+  }
+}
+
+function validateOptionalEnumWeb(value: unknown, allowed: readonly string[], field: string, errors: WebToolError[]) {
+  if (value !== undefined && (typeof value !== 'string' || !allowed.includes(value))) {
+    errors.push(webToolError('invalid_input', `invalid_enum:${field}`));
+  }
+}
+
+function validateOptionalWebConstraints(value: unknown, errors: WebToolError[]) {
+  if (value === undefined) return;
+  const constraints = record(value);
+  if (!constraints) {
+    errors.push(webToolError('invalid_input', 'invalid_object:constraints'));
+    return;
+  }
+  rejectUnknownWebFields(constraints, ['allowedDomains', 'blockedDomains'], errors);
+  validateOptionalStringArrayWeb(constraints.allowedDomains, 'constraints.allowedDomains', errors);
+  validateOptionalStringArrayWeb(constraints.blockedDomains, 'constraints.blockedDomains', errors);
+}
+
+function validateOptionalStringArrayWeb(value: unknown, field: string, errors: WebToolError[]) {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((item) => !nonEmptyString(item))) {
+    errors.push(webToolError('invalid_input', `invalid_string_array:${field}`));
+  }
+}
+
+function validateSafeWebUrl(value: unknown, field: string, errors: WebToolError[]) {
+  if (!nonEmptyString(value)) {
+    errors.push(webToolError('invalid_input', `missing_url:${field}`));
+    return;
+  }
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || isUnsafeWebHostname(url.hostname)) {
+      errors.push(webToolError('unsafe_url', `unsafe_url:${field}`));
+    }
+  } catch {
+    errors.push(webToolError('unsafe_url', `unsafe_url:${field}`));
+  }
+}
+
+function isUnsafeWebHostname(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return true;
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = octets;
+  return first === 0
+    || first === 10
+    || first === 127
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168);
+}
+
+function isWebToolName(tool: string): tool is WebToolName {
+  return WEB_TOOL_NAMES.includes(tool as WebToolName);
+}
+
+function webToolError(
+  code: WebErrorCode,
+  message: string,
+  retryable?: boolean,
+  refs?: string[],
+  provider?: string,
+): WebToolError {
+  return {
+    code,
+    message,
+    retryable,
+    refs,
+    provider,
+  };
+}
+
+function uniqueWebToolRefs(refs: WebToolRef[]): WebToolRef[] {
+  const byRef = new Map<string, WebToolRef>();
+  for (const ref of refs) {
+    if (!ref.ref.trim()) continue;
+    byRef.set(ref.ref, ref);
+  }
+  return [...byRef.values()];
+}
+
+function webSearchOutputForPrimitive(primitive: BrowserPrimitiveEnvelope, provider?: string): WebSearchOutput {
+  const output = record(primitive.output);
+  const resolvedProvider = provider ?? providerForPrimitive(WEB_SEARCH_TOOL_NAME, primitive.output);
+  const results = toRecordList(output?.results).map((item, index): WebSearchResultItem => {
+    const url = stringAt(item, 'url') ?? '';
+    return {
+      rank: typeof item.rank === 'number' && Number.isFinite(item.rank) ? item.rank : index + 1,
+      title: stringAt(item, 'title') ?? url,
+      url,
+      snippet: stringAt(item, 'snippet'),
+      source: stringAt(item, 'source') ?? hostnameForUrl(url) ?? stringAt(item, 'displayedUrl') ?? '',
+      publishedAt: stringAt(item, 'publishedAt'),
+      provider: stringAt(item, 'provider') ?? resolvedProvider ?? stringAt(output, 'engine') ?? 'unknown',
+    };
+  });
+  const searchRefs = primitive.resources
+    .filter((resource) => resource.kind === 'search_result_set')
+    .map((resource) => resource.ref);
+  const discoveredPages = primitive.resources
+    .filter((resource) => resource.kind === 'web_page' && resource.status === 'discovered')
+    .map((resource) => resource.ref);
+  return {
+    query: stringAt(output, 'queryUsed') ?? stringAt(output, 'query') ?? '',
+    provider: resolvedProvider,
+    results,
+    refs: {
+      searchResultSet: searchRefs,
+      discoveredPages,
+    },
+    evidenceBoundary: primitive.evidenceState.boundary
+      || 'Ordinary search can be answered from current-run web_search results plus source links when sufficient; page-level detail, direct quotes, URL summaries, low-information results, or conflicting sources use read-required escalation. Ordinary search does not require web_read.',
+    diagnostics: webDiagnosticsObject(primitive),
+  };
+}
+
+function webReadOutputForPrimitive(primitive: BrowserPrimitiveEnvelope): WebReadOutput {
+  const output = record(primitive.output);
+  const sourcePageRefs = primitive.resources
+    .filter((resource) => resource.kind === 'source_page')
+    .map((resource) => resource.ref);
+  const pageTextRefs = primitive.resources
+    .filter((resource) => resource.kind === 'page_text')
+    .map((resource) => resource.ref);
+  return {
+    requestedUrl: stringAt(output, 'requestedUrl') ?? stringAt(output, 'url'),
+    finalUrl: stringAt(output, 'finalUrl'),
+    title: stringAt(output, 'title'),
+    author: stringAt(output, 'author'),
+    publishedAt: stringAt(output, 'publishedAt'),
+    contentType: stringAt(output, 'contentType'),
+    language: stringAt(output, 'language'),
+    contentPreview: stringAt(output, 'textPreview'),
+    textCharCount: typeof output?.textCharCount === 'number' ? output.textCharCount : undefined,
+    textSha1: stringAt(output, 'textSha1'),
+    refs: {
+      sourcePage: sourcePageRefs,
+      pageText: pageTextRefs,
+      html: stringAt(output, 'htmlRef'),
+    },
+    evidenceBoundary: primitive.evidenceState.boundary
+      || 'web_read source/page text refs are evidence; Agent Host decides final answer sufficiency.',
+    diagnostics: webDiagnosticsObject(primitive),
+  };
+}
+
+function webRefsForPrimitive(primitive: BrowserPrimitiveEnvelope): WebToolRef[] {
+  const refs: WebToolRef[] = primitive.resources.map((resource) => webRefForBrowserResource(resource));
+  const knownRefs = new Set(refs.map((ref) => ref.ref));
+  for (const ref of primitive.refs) {
+    if (knownRefs.has(ref)) continue;
+    refs.push(webRefForRawRef(ref));
+  }
+  return refs;
+}
+
+function webRefForBrowserResource(resource: BrowserResource): WebToolRef {
+  if (resource.kind === 'search_result_set') {
+    return {
+      ref: normalizedWebRef(resource.ref, WEB_RESOURCE_REF_PREFIXES.searchResultSet, resource.locator?.query ?? resource.ref),
+      kind: 'search_result_set',
+      evidence: 'candidate',
+      locator: resource.locator,
+      title: resource.title,
+      metadata: resource.metadata,
+    };
+  }
+  if (resource.kind === 'web_page') {
+    return {
+      ref: normalizedWebRef(resource.ref, WEB_RESOURCE_REF_PREFIXES.discoveredPage, resource.locator?.url ?? resource.ref),
+      kind: 'discovered_page',
+      evidence: resource.status === 'read' ? 'source' : 'candidate',
+      locator: resource.locator,
+      title: resource.title,
+      metadata: resource.metadata,
+    };
+  }
+  if (resource.kind === 'source_page') {
+    return {
+      ref: normalizedWebRef(resource.ref, WEB_RESOURCE_REF_PREFIXES.sourcePage, resource.locator?.url ?? resource.ref),
+      kind: 'source_page',
+      evidence: 'source',
+      locator: resource.locator,
+      title: resource.title,
+      metadata: resource.metadata,
+    };
+  }
+  if (resource.kind === 'page_text') {
+    return {
+      ref: normalizedWebRef(resource.ref, WEB_RESOURCE_REF_PREFIXES.pageText, resource.locator?.url ?? resource.ref),
+      kind: 'page_text',
+      evidence: 'source',
+      locator: resource.locator,
+      title: resource.title,
+      metadata: resource.metadata,
+    };
+  }
+  return webRefForRawRef(resource.ref);
+}
+
+function webRefForRawRef(ref: string): WebToolRef {
+  if (ref.startsWith(WEB_RESOURCE_REF_PREFIXES.searchResultSet)) {
+    return { ref, kind: 'search_result_set', evidence: 'candidate' };
+  }
+  if (ref.startsWith(WEB_RESOURCE_REF_PREFIXES.discoveredPage)) {
+    return { ref, kind: 'discovered_page', evidence: 'candidate' };
+  }
+  if (ref.startsWith(WEB_RESOURCE_REF_PREFIXES.sourcePage)) {
+    return { ref, kind: 'source_page', evidence: 'source' };
+  }
+  if (ref.startsWith(WEB_RESOURCE_REF_PREFIXES.pageText)) {
+    return { ref, kind: 'page_text', evidence: 'source' };
+  }
+  return { ref, kind: 'diagnostic', evidence: 'diagnostic' };
+}
+
+function normalizedWebRef(ref: string, prefix: string, fallbackLocator: unknown): string {
+  if (ref.startsWith(prefix)) return ref;
+  return webResourceRef(prefix, String(fallbackLocator ?? ref));
+}
+
+function webTimingsForPrimitive(primitive: BrowserPrimitiveEnvelope): WebToolTimings {
+  const output = record(primitive.output);
+  const timings = record(output?.timings);
+  return {
+    providerMs: numberAt(timings, 'providerMs') ?? numberAt(timings, 'providerLatencyMs'),
+    fetchMs: numberAt(timings, 'fetchMs'),
+    renderMs: numberAt(timings, 'renderMs'),
+    extractMs: numberAt(timings, 'extractMs'),
+    parseMs: numberAt(timings, 'parseMs') ?? numberAt(timings, 'parseLatencyMs'),
+    persistMs: numberAt(timings, 'persistMs'),
+    totalMs: numberAt(timings, 'totalMs') ?? primitive.budget.elapsedMs,
+  };
+}
+
+function providerForPrimitive(tool: WebToolName, output: unknown): string | undefined {
+  const value = record(output);
+  if (!value) return undefined;
+  if (tool === WEB_SEARCH_TOOL_NAME) return stringAt(value, 'provider') ?? stringAt(value, 'engine');
+  return stringAt(value, 'provider');
+}
+
+function webDiagnosticsObject(primitive: BrowserPrimitiveEnvelope): Record<string, unknown> {
+  return {
+    status: primitive.status,
+    blockedReason: primitive.blockedReason,
+    diagnostics: primitive.diagnostics,
+  };
+}
+
+function webErrorCodeForPrimitive(
+  tool: WebToolName,
+  primitive: BrowserPrimitiveEnvelope,
+  diagnostic: BrowserDiagnostic | undefined,
+): WebErrorCode {
+  const text = `${primitive.blockedReason ?? ''} ${diagnostic?.code ?? ''} ${diagnostic?.message ?? ''}`.toLowerCase();
+  if (text.includes('unsafe')) return 'unsafe_url';
+  if (text.includes('timeout')) return 'timeout';
+  if (text.includes('rate') || text.includes('429')) return 'rate_limited';
+  if (text.includes('no_result') || text.includes('no result')) return 'no_results';
+  if (text.includes('extract')) return 'extract_failed';
+  if (text.includes('needs_user_browser') || text.includes('user browser') || text.includes('login') || text.includes('captcha')) {
+    return 'needs_user_browser';
+  }
+  if (text.includes('needs_browser') || text.includes('browser')) return 'needs_browser';
+  if (text.includes('provider') || text.includes('missing-port')) return 'provider_unavailable';
+  return tool === WEB_SEARCH_TOOL_NAME ? 'provider_unavailable' : 'read_failed';
+}
+
+function hostnameForUrl(value: string): string | undefined {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 function validateSearchInput(input: Record<string, unknown>, errors: string[]) {
   validateSchema(input, BROWSER_PRIMITIVE_INPUT_SCHEMAS.search, errors);
-  rejectUnknownFields(input, ['schemaVersion', 'query', 'engine', 'locale', 'region', 'limit', 'budget', 'constraints'], errors);
+  rejectUnknownFields(input, ['schemaVersion', 'query', 'engine', 'locale', 'region', 'timeRange', 'limit', 'budget', 'constraints'], errors);
   if (!nonEmptyString(input.query)) errors.push('missing_string:query');
-  validateOptionalEnum(input.engine, ['bing', 'duckduckgo'], 'engine', errors);
+  validateOptionalString(input.engine, 'engine', errors);
   validateOptionalString(input.locale, 'locale', errors);
   validateOptionalString(input.region, 'region', errors);
+  validateOptionalString(input.timeRange, 'timeRange', errors);
   validateOptionalIntegerRange(input.limit, 'limit', 1, 20, errors);
   validateOptionalBudget(input.budget, errors);
   validateOptionalConstraints(input.constraints, errors);
@@ -1017,7 +1725,7 @@ function browserPrimitiveSideEffect(primitive: BrowserPrimitiveName) {
 }
 
 function browserPrimitiveSummary(primitive: BrowserPrimitiveName) {
-  if (primitive === 'search') return 'Discover candidate URLs for a Host-provided query without reading result pages.';
+  if (primitive === 'search') return 'Run a Codex-compatible ordinary web_search fallback query and return result refs/source links without reading result pages.';
   if (primitive === 'navigate') return 'Navigate to a Host-provided URL and return session/navigation refs.';
   if (primitive === 'observe') return 'Return current Browser session state and visual/DOM evidence refs.';
   if (primitive === 'read') return 'Materialize current page or ephemeral URL content as refs-first source evidence.';
@@ -1037,9 +1745,34 @@ function mergeBudget(base: BrowserPrimitiveBudget, override: BrowserPrimitiveBud
   return { ...base, ...override };
 }
 
+function objectSchema(required: string[], properties: Record<string, unknown>) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required,
+    properties,
+  };
+}
+
+function webConstraintsSchema() {
+  return objectSchema([], {
+    allowedDomains: { type: 'array', items: { type: 'string' } },
+    blockedDomains: { type: 'array', items: { type: 'string' } },
+  });
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+function numberAt(value: Record<string, unknown> | undefined, key: string): number | undefined {
+  const item = value?.[key];
+  return typeof item === 'number' && Number.isFinite(item) ? item : undefined;
 }
 
 function stringAt(value: Record<string, unknown> | undefined, key: string): string | undefined {

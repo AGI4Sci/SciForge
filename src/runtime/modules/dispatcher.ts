@@ -18,6 +18,7 @@ import { createResourceModuleHandlers } from './resource-modules.js';
 import { createFilesModuleHandler } from './files-module-handler.js';
 import { createAutomationsModuleHandler } from './automations-module-handler.js';
 import { createBrowserRuntimeModuleHandler } from './bounded-operation-module-handlers.js';
+import { createWebRuntimeModuleHandler } from './web-runtime-module-handler.js';
 import { createComputerUsePrimitiveService } from '../../../packages/actions/computer-use/index.js';
 
 export interface RuntimeModuleHandler {
@@ -50,6 +51,7 @@ export const RUNTIME_MODULE_IDS = [
   'files',
   'automations',
   'capabilities',
+  'web',
   'browser',
   'computer_use',
   'verifier',
@@ -71,6 +73,7 @@ export function createRuntimeModuleRegistry(
     files: createFilesModuleHandler(),
     automations: createAutomationsModuleHandler(),
     capabilities: resourceHandlers.capabilities,
+    web: createWebRuntimeModuleHandler(),
     browser: createBrowserRuntimeModuleHandler(),
     computer_use: createComputerUsePrimitiveService(),
   };
