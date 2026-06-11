@@ -12,6 +12,7 @@ import {
   type NormalizedAgentEvent,
 } from './codex-event-normalizer.js';
 import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn, RuntimeInputObject } from './agent-cli-adapter.js';
+import { preextractVisionDescriptors } from './vision-preextract.js';
 
 export interface CodexAppServerStartTurnRequest {
   threadId?: string;
@@ -83,6 +84,13 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
     const commandId = input.commandId?.trim() || commandIdForText(commandText, workspace);
     const attemptId = input.attemptId?.trim() || attemptIdForCommand(commandId);
     const client = this.options.client ?? unavailableCodexAppServerClient();
+    // Vision Router: translate image inputs to natural-language descriptors before the
+    // turn so a text-only main agent can "see" them. No-op unless the service is configured.
+    const inputObjects = await preextractVisionDescriptors(input.inputObjects, {
+      workspacePath: workspace,
+      instruction: commandText,
+      abortSignal: input.abortSignal,
+    });
     const stream = await client.startTurn({
       threadId: input.codexSessionId,
       commandText,
@@ -91,7 +99,7 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       attemptId,
       profile: input.profile ?? this.options.profile,
       allowOpenAiRuntime: false,
-      inputObjects: input.inputObjects,
+      inputObjects,
       runtimeIntent: input.runtimeIntent,
       guiExtension: input.guiExtension,
       humanApproval: input.humanApproval,

@@ -1,0 +1,25 @@
+{
+  "name": "sciforge-vision-router-service",
+  "version": "0.1.0",
+  "description": "Standalone, pluggable SciForge service module: translates visual input (image/video frame) into natural-language evidence via Qwen3.7-Plus. Translate-only; never reasons.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "sciforge-vision-router": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "dev": "node --env-file-if-exists=.env --watch --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
