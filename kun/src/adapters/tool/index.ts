@@ -18,6 +18,7 @@ export * from './output-accumulator.js'
 export * from './read.js'
 export * from './truncate.js'
 export * from './web-tool-provider.js'
+export * from '../research/research-tool-provider.js'
 export * from './write.js'
 export {
   type BuiltinToolName,

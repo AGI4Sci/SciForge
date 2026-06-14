@@ -85,6 +85,8 @@ export function buildModelRouterSidecarLaunch(
   }
 
   const npmCommand = options.npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
+  const configArg = npmScriptPathArg(configPath)
+  const workspaceRootArg = npmScriptPathArg(settings.workspaceRoot || join(options.userDataDir, 'model-router'))
   return {
     ok: true,
     launch: {
@@ -101,9 +103,9 @@ export function buildModelRouterSidecarLaunch(
         '--port',
         String(port),
         '--config',
-        configPath,
+        configArg,
         '--workspace-root',
-        settings.workspaceRoot || join(options.userDataDir, 'model-router'),
+        workspaceRootArg,
         '--quiet'
       ],
       env,
@@ -308,4 +310,9 @@ function logModelRouterChildChunk(
   const normalized = text.replace(/\s+/g, ' ').trim()
   if (!normalized) return
   log(`Model Router sidecar ${stream}: ${normalized.slice(0, 1_000)}`)
+}
+
+function npmScriptPathArg(value: string): string {
+  if (process.platform !== 'win32' || !/\s/.test(value)) return value
+  return `"${value.replace(/"/g, '\\"')}"`
 }

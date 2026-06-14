@@ -102,6 +102,20 @@ export async function kunHttpRequestViaHost(
   const base = getRuntimeBaseUrlForSettings(settings)
   const pathNorm = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`
   const url = `${base}${pathNorm}`
+  try {
+    return await sendRuntimeRequest(settings, url, init)
+  } catch (error) {
+    if (!isRetryableRuntimeFetchError(error)) throw error
+    await ensureRuntime(settings)
+    return sendRuntimeRequest(settings, url, init)
+  }
+}
+
+async function sendRuntimeRequest(
+  settings: AppSettingsV1,
+  url: string,
+  init: RuntimeRequestInit
+): Promise<{ ok: boolean; status: number; body: string }> {
   const hdrs = runtimeAuthHeaders(settings)
   for (const [key, value] of Object.entries(init.headers ?? {})) {
     hdrs.set(key, value)
@@ -118,6 +132,22 @@ export async function kunHttpRequestViaHost(
   })
   const text = await res.text()
   return { ok: res.ok, status: res.status, body: text }
+}
+
+function isRetryableRuntimeFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const messages = [error.message]
+  const cause = (error as { cause?: unknown }).cause
+  if (cause instanceof Error) messages.push(cause.message)
+  const causeCode = typeof cause === 'object' && cause !== null
+    ? String((cause as { code?: unknown }).code ?? '')
+    : ''
+  const text = `${messages.join(' ')} ${causeCode}`.toLowerCase()
+  return text.includes('fetch failed') ||
+    text.includes('econnrefused') ||
+    text.includes('econnreset') ||
+    text.includes('socket') ||
+    text.includes('connect')
 }
 
 export { buildKunServeArgs, resolveKunExecutable }

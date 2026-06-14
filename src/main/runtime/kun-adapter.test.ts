@@ -109,4 +109,44 @@ describe('kunHttpRequestViaHost', () => {
     expect(seenUrl).toBe('/v1/usage?group_by=day&from=2026-06-01&to=2026-06-02&timezone=Asia%2FShanghai')
     expect(seenAuthorization).toBe('Bearer usage-token')
   })
+
+  it('re-ensures Kun and retries once when the first local fetch cannot connect', async () => {
+    let ensured = 0
+    let seenUrl = ''
+    const port = await listen((_req, res) => {
+      res.end(JSON.stringify({ ok: true }))
+    })
+    await new Promise<void>((resolve, reject) => {
+      server?.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    })
+    server = null
+
+    const response = await runtimeRequestViaHost(
+      settingsForPort(port),
+      '/v1/threads',
+      { method: 'GET' },
+      async () => {
+        ensured += 1
+        if (ensured !== 2) return
+        server = createServer((req, res) => {
+          seenUrl = req.url ?? ''
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ ok: true }))
+        })
+        await new Promise<void>((resolve, reject) => {
+          server?.once('error', reject)
+          server?.listen(port, '127.0.0.1', () => resolve())
+        })
+      }
+    )
+
+    expect(ensured).toBe(2)
+    expect(response.ok).toBe(true)
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({ ok: true })
+    expect(seenUrl).toBe('/v1/threads')
+  })
 })

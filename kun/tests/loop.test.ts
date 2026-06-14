@@ -61,6 +61,179 @@ describe('AgentLoop', () => {
     expect(request.contextInstructions?.join('\n')).not.toContain('shell commands appropriate for the host platform')
   })
 
+  it('automatically routes short latest-progress research prompts to research_search', async () => {
+    let observedRequest: ModelRequest | null = null
+    const researchTool = LocalToolHost.defineTool({
+      name: 'research_search',
+      description: 'Search scientific research sources',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const h = makeHarness(
+      {
+        provider: 'auto-research',
+        model: 'auto-research',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          observedRequest = request
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [researchTool, echoTool] }
+    )
+    await bootstrapThread(h, {
+      request: { prompt: '帮我调研一下AI protein design 方向最新发展' }
+    })
+
+    await h.loop.runTurn(h.threadId, h.turnId)
+
+    const request = observedRequest as ModelRequest | null
+    if (!request) throw new Error('expected model request')
+    expect(request.tools.map((tool) => tool.name)).toEqual(['research_search'])
+    const instructions = request.contextInstructions?.join('\n') ?? ''
+    expect(instructions).toContain('Call research_search before answering')
+    expect(instructions).toContain('["arxiv","biorxiv","semantic_scholar","cns"]')
+  })
+
+  it('does not advertise research_search again after a successful research result', async () => {
+    const observedRequests: ModelRequest[] = []
+    const researchTool = LocalToolHost.defineTool({
+      name: 'research_search',
+      description: 'Search scientific research sources',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      execute: async () => ({
+        output: {
+          papers: [{ title: 'AI protein design paper' }],
+          webResults: [],
+          diagnostics: [{ id: 'semantic_scholar', resultCount: 1 }]
+        }
+      })
+    })
+    let modelCalls = 0
+    const h = makeHarness(
+      {
+        provider: 'single-research',
+        model: 'single-research',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          observedRequests.push(request)
+          modelCalls += 1
+          if (modelCalls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_research_1',
+              toolName: 'research_search',
+              arguments: { query: 'AI protein design latest advances' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: 'done' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [researchTool] }
+    )
+    await bootstrapThread(h, {
+      request: { prompt: '帮我调研一下AI protein design 方向最新发展' }
+    })
+
+    await h.loop.runTurn(h.threadId, h.turnId)
+
+    expect(observedRequests).toHaveLength(2)
+    expect(observedRequests[0]?.tools.map((tool) => tool.name)).toEqual(['research_search'])
+    expect(observedRequests[1]?.tools.map((tool) => tool.name)).toEqual([])
+    expect(observedRequests[1]?.contextInstructions?.join('\n')).toContain(
+      'research_search already returned a successful result'
+    )
+  })
+
+  it('advertises research_search again for a later user turn in the same thread', async () => {
+    const observedRequests: ModelRequest[] = []
+    const researchTool = LocalToolHost.defineTool({
+      name: 'research_search',
+      description: 'Search scientific research sources',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      execute: async () => ({
+        output: {
+          papers: [{ title: 'AI protein design paper' }],
+          webResults: [],
+          diagnostics: [{ id: 'semantic_scholar', resultCount: 1 }]
+        }
+      })
+    })
+    let modelCalls = 0
+    const h = makeHarness(
+      {
+        provider: 'repeat-research',
+        model: 'repeat-research',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          observedRequests.push(request)
+          modelCalls += 1
+          if (modelCalls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_research_1',
+              toolName: 'research_search',
+              arguments: { query: 'AI protein design latest advances' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: 'done' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [researchTool] }
+    )
+    await bootstrapThread(h, {
+      request: { prompt: '帮我调研一下AI protein design 方向最新发展' }
+    })
+
+    await h.loop.runTurn(h.threadId, h.turnId)
+    const secondTurn = await h.turns.startTurn({
+      threadId: h.threadId,
+      request: { prompt: '再帮我调研一下AI drug discovery方向最新发展' }
+    })
+    h.turnId = secondTurn.turnId
+    await h.loop.runTurn(h.threadId, h.turnId)
+
+    expect(observedRequests).toHaveLength(3)
+    expect(observedRequests[0]?.tools.map((tool) => tool.name)).toEqual(['research_search'])
+    expect(observedRequests[1]?.tools.map((tool) => tool.name)).toEqual([])
+    expect(observedRequests[1]?.contextInstructions?.join('\n')).not.toContain('Tool use is disabled')
+    expect(observedRequests[2]?.tools.map((tool) => tool.name)).toEqual(['research_search'])
+    expect(observedRequests[2]?.contextInstructions?.join('\n')).toContain('Call research_search before answering')
+  })
+
   it('records elapsed seconds for active goals after a turn finishes', async () => {
     let nowMs = 1_000
     const h = makeHarness(
@@ -658,7 +831,7 @@ describe('AgentLoop', () => {
       {
         provider: 'storm-model',
         model: 'storm-model',
-        async *stream(): AsyncIterable<ModelStreamChunk> {
+        async *stream(request): AsyncIterable<ModelStreamChunk> {
           calls += 1
           if (calls <= 3) {
             yield {
@@ -670,6 +843,8 @@ describe('AgentLoop', () => {
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
+          expect(request.tools).toEqual([])
+          yield { kind: 'assistant_text_delta', text: 'final answer after duplicate suppression' }
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
@@ -689,10 +864,14 @@ describe('AgentLoop', () => {
 
     expect(status).toBe('completed')
     expect(executions).toBe(2)
-    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
-	    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : false).toBe(true)
+    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'completed' })
+    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : true).toBe(false)
 	    expect(stormResult?.kind === 'tool_result' ? JSON.stringify(stormResult.output) : '')
 	      .toContain('repeat-loop guard suppressed')
+    expect(items.find((item) =>
+      item.kind === 'assistant_text' &&
+      item.text === 'final answer after duplicate suppression'
+    )).toBeTruthy()
 	    expect(events.find((event) => event.kind === 'tool_storm_suppressed')).toMatchObject({
 	      kind: 'tool_storm_suppressed',
 	      callId: 'call_echo_3',

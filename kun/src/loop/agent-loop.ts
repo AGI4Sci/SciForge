@@ -135,6 +135,34 @@ const PLAN_READ_ONLY_TOOL_NAMES = new Set([
   'web_fetch'
 ])
 
+const RESEARCH_SEARCH_TOOL_NAME = 'research_search'
+
+const RESEARCH_DISCOVERY_INTENT_PATTERN =
+  /(调研|研究一下|探索|综述|文献|论文|最新|进展|发展|前沿|趋势|gap|空白|survey|review|literature|latest|progress|advance|trend|frontier|state[-\s]?of[-\s]?the[-\s]?art|sota)/i
+
+function shouldAutoInvokeResearchSearch(input: {
+  prompt: string
+  tools: readonly ModelToolSpec[]
+  stepIndex: number
+  finalizeWithoutTools: boolean
+  planTurnActive: boolean
+}): boolean {
+  if (input.finalizeWithoutTools || input.planTurnActive || input.stepIndex !== 0) return false
+  if (!input.tools.some((tool) => tool.name === RESEARCH_SEARCH_TOOL_NAME)) return false
+  return RESEARCH_DISCOVERY_INTENT_PATTERN.test(input.prompt)
+}
+
+function autoResearchSearchInstruction(prompt: string): string {
+  return [
+    'The latest user request appears to be a research-discovery request.',
+    `User request: ${escapeXmlText(prompt)}`,
+    `Call ${RESEARCH_SEARCH_TOOL_NAME} before answering, even if the user did not explicitly name the tool.`,
+    'Infer a concise English query from the request, set intent to "latest" when the request asks for latest progress/development, and choose the closest domain.',
+    'Prefer sources ["arxiv","biorxiv","semantic_scholar","cns"] for AI4S, biology, chemistry, protein, molecule, materials, or scientific topics.',
+    'After the tool returns, do not search again unless a required source failed. Answer in the user language with a synthesized summary, representative papers/web pages, evidence sources, and remaining gaps. Do not expose raw JSON.'
+  ].join(' ')
+}
+
 export function resolvePlanModeToolSpecs(
   toolSpecs: ModelToolSpec[],
   options: {
@@ -276,6 +304,29 @@ function hasSuccessfulCreatePlanResult(items: readonly TurnItem[], turnId: strin
   )
 }
 
+function hasSuccessfulToolResult(
+  items: readonly TurnItem[],
+  turnId: string,
+  toolName: string
+): boolean {
+  return items.some((item) =>
+    item.turnId === turnId &&
+    item.kind === 'tool_result' &&
+    item.toolName === toolName &&
+    item.status === 'completed' &&
+    item.isError !== true
+  )
+}
+
+function completedResearchSearchInstruction(): string {
+  return [
+    `${RESEARCH_SEARCH_TOOL_NAME} already returned a successful result in this turn.`,
+    'This internal synthesis step intentionally has no tools so the current user request can be answered from the search evidence already present in this same turn.',
+    'Do not describe search as disabled or unavailable, and do not imply this restriction applies to later user turns.',
+    'Use the existing tool evidence to answer now in the user language, with synthesized findings, representative papers/web pages, evidence sources, and gaps. Do not expose raw JSON.'
+  ].join(' ')
+}
+
 function latestUserMessageText(items: readonly TurnItem[], turnId: string): string {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]
@@ -369,6 +420,7 @@ export class AgentLoop {
   private readonly toolCatalogSnapshots = new Map<string, ToolCatalogSnapshot>()
   private readonly lastNoToolTextByTurn = new Map<string, string>()
   private readonly goalNoToolRecoveryStepsByTurn = new Map<string, number>()
+  private readonly finalizeWithoutToolsTurns = new Set<string>()
 
   constructor(opts: AgentLoopOptions) {
     this.opts = opts
@@ -431,6 +483,7 @@ export class AgentLoop {
       this.toolStormBreakers.delete(turnId)
       this.lastNoToolTextByTurn.delete(turnId)
       this.goalNoToolRecoveryStepsByTurn.delete(turnId)
+      this.finalizeWithoutToolsTurns.delete(turnId)
     }
   }
 
@@ -656,14 +709,34 @@ export class AgentLoop {
     }
     const tools = await this.opts.toolHost.listTools(toolContext)
     const toolSpecs: ModelToolSpec[] = tools
+    const finalizeWithoutTools = this.finalizeWithoutToolsTurns.has(turnId)
     const createPlanSatisfied = planTurnActive
       ? hasSuccessfulCreatePlanResult(healed.items, turnId)
       : false
-    const effectiveToolSpecs = resolvePlanModeToolSpecs(toolSpecs, {
-      planTurnActive,
-      createPlanSatisfied,
-      stepIndex
+    const researchSearchSatisfied = hasSuccessfulToolResult(
+      healed.items,
+      turnId,
+      RESEARCH_SEARCH_TOOL_NAME
+    )
+    const autoResearchSearch = shouldAutoInvokeResearchSearch({
+      prompt: turn?.prompt ?? '',
+      tools: toolSpecs,
+      stepIndex,
+      finalizeWithoutTools,
+      planTurnActive
     })
+    const candidateToolSpecs = autoResearchSearch
+      ? toolSpecs.filter((tool) => tool.name === RESEARCH_SEARCH_TOOL_NAME)
+      : researchSearchSatisfied
+        ? []
+      : toolSpecs
+    const effectiveToolSpecs = finalizeWithoutTools
+      ? []
+      : resolvePlanModeToolSpecs(candidateToolSpecs, {
+          planTurnActive,
+          createPlanSatisfied,
+          stepIndex
+        })
     const toolProviderMetadata = new Map(
       tools.map((tool) => [tool.name, { providerId: tool.providerId, providerKind: tool.providerKind }])
     )
@@ -728,6 +801,17 @@ export class AgentLoop {
       ...(activeTodoInstruction ? [activeTodoInstruction] : []),
       ...memoryInstructions(memories),
       ...skillResolution.instructions,
+      ...(autoResearchSearch ? [autoResearchSearchInstruction(turn?.prompt ?? '')] : []),
+      ...(researchSearchSatisfied ? [completedResearchSearchInstruction()] : []),
+      ...(finalizeWithoutTools
+        ? [
+            [
+              'Tool use has been disabled for this finalization step because the previous step attempted a duplicate tool call.',
+              'Use the successful tool result already present in the conversation history.',
+              'Do not request more searches or mention raw JSON; provide the final answer to the user now.'
+            ].join(' ')
+          ]
+        : []),
       ...(effectiveToolSpecs.some((tool) => tool.name === 'bash') ? [shellRuntimeInstruction()] : []),
       ...(toolCatalogDriftMessage ? [toolCatalogDriftMessage] : [])
     ]
@@ -1087,7 +1171,10 @@ export class AgentLoop {
       signal
     })
     if (dispatched === 'aborted') return 'aborted'
-    if (dispatched === 'all_suppressed') return 'stop'
+    if (dispatched === 'all_suppressed') {
+      this.finalizeWithoutToolsTurns.add(turnId)
+      return 'continue'
+    }
     return 'continue'
   }
 
@@ -1423,12 +1510,17 @@ export class AgentLoop {
       callId: input.call.callId,
       toolName: input.call.toolName,
       toolKind: input.call.toolKind ?? 'tool_call',
-      output: { error: input.reason ?? 'duplicate tool call suppressed by repeat-loop guard' },
-      isError: true
+      output: {
+        skipped: true,
+        reason: input.reason ?? 'duplicate tool call suppressed by repeat-loop guard',
+        instruction:
+          'Do not call the same tool again with identical arguments. Use the previous successful tool result in this turn and produce the final answer for the user.'
+      },
+      isError: false
     })
     const message = input.reason ?? 'duplicate tool call suppressed by repeat-loop guard'
     await this.opts.turns.updateItem(input.threadId, `item_tool_${input.turnId}_${input.call.callId}`, {
-      status: 'failed',
+      status: 'completed',
       finishedAt: this.opts.nowIso()
     } as Partial<TurnItem>)
     await this.opts.turns.applyItem(input.threadId, item)

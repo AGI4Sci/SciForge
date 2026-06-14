@@ -10,7 +10,7 @@ const RETRY_AFTER_RE =
   /\b(?:retry[-\s]?after|try again in|wait)\s*:?\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec|seconds?|m|min|minutes?)?\b/i
 
 export function parseRateLimitedToolResult(output: unknown): ParsedRateLimit | null {
-  const text = collectText(output).join('\n').trim()
+  const text = collectRateLimitCandidateText(output).join('\n').trim()
   if (!text || !RATE_LIMIT_RE.test(text)) return null
   const retryAfter = parseRetryAfterSeconds(text)
   return {
@@ -40,19 +40,27 @@ export function normalizeRateLimitedToolOutput(output: unknown): {
   }
 }
 
-function collectText(value: unknown, depth = 0): string[] {
-  if (depth > 4 || value == null) return []
+function collectRateLimitCandidateText(value: unknown): string[] {
+  if (value == null) return []
   if (typeof value === 'string') return [value]
-  if (typeof value === 'number' || typeof value === 'boolean') return [String(value)]
-  if (Array.isArray(value)) return value.flatMap((entry) => collectText(entry, depth + 1))
+  if (typeof value === 'number' || typeof value === 'boolean') return []
+  if (Array.isArray(value)) return []
   if (typeof value !== 'object') return []
+
+  const record = value as Record<string, unknown>
   const out: string[] = []
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof child === 'string' || typeof child === 'number' || typeof child === 'boolean') {
-      out.push(`${key}: ${String(child)}`)
-      continue
+  for (const key of ['error', 'message', 'reason', 'code']) {
+    const child = record[key]
+    if (typeof child === 'string' || typeof child === 'number') out.push(`${key}: ${String(child)}`)
+    if (child && typeof child === 'object' && !Array.isArray(child)) {
+      out.push(...collectRateLimitCandidateText(child))
     }
-    out.push(...collectText(child, depth + 1))
+  }
+  for (const key of ['status', 'statusCode', 'httpStatus']) {
+    const child = record[key]
+    if (child === 429 || child === '429') {
+      out.push(`${key}: 429`)
+    }
   }
   return out
 }

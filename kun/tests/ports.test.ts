@@ -372,6 +372,50 @@ describe('LocalToolHost', () => {
     })
   })
 
+  it('does not mark successful structured research outputs as rate limited', async () => {
+    const research = LocalToolHost.defineTool({
+      name: 'research_search',
+      description: 'research',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      policy: 'auto',
+      execute: async () => ({
+        output: {
+          answerGuidance: 'Use this tool result as internal evidence.',
+          papers: [],
+          webResults: [{
+            title: 'Request limit analysis in protein design',
+            url: 'https://example.test/article',
+            snippet: 'This paper discusses request limit constraints in benchmark design.',
+            source: 'semantic_scholar'
+          }],
+          diagnostics: [{ id: 'semantic_scholar', resultCount: 1 }]
+        }
+      })
+    })
+    const host = new LocalToolHost({ tools: [research] })
+    const result = await host.execute(
+      { callId: 'c_research', toolName: 'research_search', arguments: {} },
+      {
+        threadId: 'th',
+        turnId: 'tu',
+        workspace: '/tmp',
+        approvalPolicy: 'on-request',
+        abortSignal: new AbortController().signal,
+        awaitApproval: async () => 'allow'
+      }
+    )
+
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: false
+    })
+    if (result.item.kind === 'tool_result') {
+      expect(result.item.output).toMatchObject({
+        answerGuidance: 'Use this tool result as internal evidence.'
+      })
+    }
+  })
+
   it('enforces read-before-edit within the same turn', async () => {
     const read = LocalToolHost.defineTool({
       name: 'read',

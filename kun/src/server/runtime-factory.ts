@@ -18,6 +18,7 @@ import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
+import { buildResearchToolProviders } from '../adapters/research/research-tool-provider.js'
 import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-inspector.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import {
@@ -166,6 +167,7 @@ export async function createKunServeRuntime(
   })
   const mcpProviders = await buildMcpToolProviders(options.capabilities?.mcp)
   const webProviders = buildWebToolProviders(options.capabilities?.web)
+  const researchProviders = buildResearchToolProviders(options.capabilities?.research)
   const skillRuntime = await SkillRuntime.create(options.capabilities?.skills)
   const attachmentStore = options.capabilities?.attachments.enabled
     ? new FileAttachmentStore({
@@ -191,6 +193,7 @@ export async function createKunServeRuntime(
     },
     ...mcpProviders.providers,
     ...webProviders.providers,
+    ...researchProviders.providers,
     ...buildMemoryToolProviders(memoryStore)
   ]
   const childRegistry = new CapabilityRegistry(baseToolProviders)
@@ -241,6 +244,14 @@ export async function createKunServeRuntime(
       searchAvailable: webProviders.searchAvailable,
       provider: webProviders.provider,
       reason: webProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+    },
+    research: {
+      arxivAvailable: researchProviders.arxivAvailable,
+      biorxivAvailable: researchProviders.biorxivAvailable,
+      semanticScholarAvailable: researchProviders.semanticScholarAvailable,
+      tavilyAvailable: researchProviders.tavilyAvailable,
+      cnsAvailable: researchProviders.cnsAvailable,
+      reason: researchProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
     },
     skills: {
       configuredRoots: options.capabilities?.skills.roots.length,
@@ -354,6 +365,7 @@ export async function createKunServeRuntime(
       mcpServers: mcpProviders.diagnostics,
       mcpSearch: mcpProviders.search,
       webProviders: webProviders.diagnostics,
+      researchProviders: researchProviders.diagnostics,
       skills: skillRuntime.diagnostics(),
       attachments: attachmentStore
         ? await attachmentStore.diagnostics()

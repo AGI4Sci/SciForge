@@ -1,6 +1,7 @@
 export * from './model-client.js'
 export * from './tool-host.js'
 export * from './web-provider.js'
+export * from './research-provider.js'
 export * from './thread-store.js'
 export * from './session-store.js'
 export * from './event-bus.js'

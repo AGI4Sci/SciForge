@@ -13,6 +13,7 @@ import type { RuntimeInfoResponse } from '../../contracts/runtime-info.js'
 import type { McpServerDiagnostic } from '../../adapters/tool/mcp-tool-provider.js'
 import type { McpSearchRuntimeDiagnostic } from '../../adapters/tool/mcp-tool-search.js'
 import type { WebProviderDiagnostic } from '../../adapters/tool/web-tool-provider.js'
+import type { ResearchProviderDiagnostic } from '../../ports/research-provider.js'
 import type { SkillRuntimeDiagnostics } from '../../skills/skill-runtime.js'
 import type { AttachmentDiagnostics } from '../../contracts/attachments.js'
 import type { AttachmentStore } from '../../attachments/attachment-store.js'
@@ -25,6 +26,7 @@ export type RuntimeToolDiagnostics = {
   mcpServers: McpServerDiagnostic[]
   mcpSearch?: McpSearchRuntimeDiagnostic
   webProviders: WebProviderDiagnostic[]
+  researchProviders?: ResearchProviderDiagnostic[]
   skills: SkillRuntimeDiagnostics
   attachments: AttachmentDiagnostics
   memory: MemoryDiagnostics

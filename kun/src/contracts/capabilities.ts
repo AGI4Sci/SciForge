@@ -150,6 +150,21 @@ export const WebCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type WebCapabilityConfig = z.infer<typeof WebCapabilityConfig>
 
+export const ResearchCapabilityConfig = CapabilityToggleConfig.extend({
+  arxivEnabled: z.boolean().default(true),
+  biorxivEnabled: z.boolean().default(true),
+  semanticScholarEnabled: z.boolean().default(true),
+  tavilyEnabled: z.boolean().default(false),
+  cnsEnabled: z.boolean().default(false),
+  semanticScholarApiKey: z.string().default(''),
+  tavilyApiKey: z.string().default(''),
+  cnsDomains: z.array(z.string().min(1)).default(['nature.com', 'science.org', 'cell.com']),
+  defaultSinceYear: z.number().int().min(1991).max(3000).optional(),
+  maxResults: z.number().int().positive().max(50).default(10),
+  timeoutMs: z.number().int().positive().max(60_000).default(15_000)
+}).strict()
+export type ResearchCapabilityConfig = z.infer<typeof ResearchCapabilityConfig>
+
 export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
   roots: z.array(z.string().min(1)).default([]),
   legacySkillMd: z.boolean().default(true)
@@ -190,6 +205,7 @@ export const KunCapabilitiesConfig = z
   .object({
     mcp: McpCapabilityConfig.default(() => McpCapabilityConfig.parse({})),
     web: WebCapabilityConfig.default(() => WebCapabilityConfig.parse({})),
+    research: ResearchCapabilityConfig.default(() => ResearchCapabilityConfig.parse({})),
     skills: SkillsCapabilityConfig.default(() => SkillsCapabilityConfig.parse({})),
     subagents: SubagentsCapabilityConfig.default(() => SubagentsCapabilityConfig.parse({})),
     attachments: AttachmentsCapabilityConfig.default(() => AttachmentsCapabilityConfig.parse({})),
@@ -230,6 +246,14 @@ export const RuntimeCapabilityManifest = z
       fetch: RuntimeCapabilityState,
       search: RuntimeCapabilityState,
       provider: z.string().optional()
+    }).strict(),
+    research: RuntimeCapabilityState.extend({
+      arxiv: RuntimeCapabilityState,
+      biorxiv: RuntimeCapabilityState,
+      semanticScholar: RuntimeCapabilityState,
+      tavily: RuntimeCapabilityState,
+      cns: RuntimeCapabilityState,
+      maxResults: z.number().int().positive()
     }).strict(),
     skills: RuntimeCapabilityState.extend({
       configuredRoots: z.number().int().nonnegative(),
@@ -275,6 +299,14 @@ export function buildRuntimeCapabilityManifest(input: {
     provider?: string
     reason?: string
   }
+  research?: {
+    arxivAvailable?: boolean
+    biorxivAvailable?: boolean
+    semanticScholarAvailable?: boolean
+    tavilyAvailable?: boolean
+    cnsAvailable?: boolean
+    reason?: string
+  }
   skills?: {
     configuredRoots?: number
     discoveredSkills?: number
@@ -311,6 +343,45 @@ export function buildRuntimeCapabilityManifest(input: {
     input.web?.reason ?? 'web search provider is unavailable'
   )
   const webState = webCapabilityState(config.web.enabled, webFetchState, webSearchState, input.web?.reason)
+  const researchArxivState = providerCapabilityState(
+    config.research.enabled && config.research.arxivEnabled,
+    'arXiv research search is disabled by config',
+    input.research?.arxivAvailable === true,
+    input.research?.reason ?? 'arXiv research search is unavailable'
+  )
+  const researchBiorxivState = providerCapabilityState(
+    config.research.enabled && config.research.biorxivEnabled,
+    'bioRxiv research search is disabled by config',
+    input.research?.biorxivAvailable === true,
+    input.research?.reason ?? 'bioRxiv research search is unavailable'
+  )
+  const researchSemanticScholarState = providerCapabilityState(
+    config.research.enabled && config.research.semanticScholarEnabled,
+    'Semantic Scholar research search is disabled by config',
+    input.research?.semanticScholarAvailable === true,
+    input.research?.reason ?? 'Semantic Scholar research search is unavailable'
+  )
+  const researchTavilyState = providerCapabilityState(
+    config.research.enabled && config.research.tavilyEnabled,
+    'Tavily research search is disabled by config',
+    input.research?.tavilyAvailable === true,
+    input.research?.reason ?? 'Tavily research search is unavailable'
+  )
+  const researchCnsState = providerCapabilityState(
+    config.research.enabled && config.research.cnsEnabled,
+    'CNS official-site research search is disabled by config',
+    input.research?.cnsAvailable === true,
+    input.research?.reason ?? 'CNS official-site research search is unavailable'
+  )
+  const researchState = researchCapabilityState(
+    config.research.enabled,
+    researchArxivState,
+    researchBiorxivState,
+    researchSemanticScholarState,
+    researchTavilyState,
+    researchCnsState,
+    input.research?.reason
+  )
   const configuredSkillRoots = input.skills?.configuredRoots ?? config.skills.roots.length
   const discoveredSkills = input.skills?.discoveredSkills ?? 0
   const skillsState = skillsCapabilityState(config.skills.enabled, discoveredSkills, input.skills?.reason)
@@ -341,6 +412,15 @@ export function buildRuntimeCapabilityManifest(input: {
       fetch: webFetchState,
       search: webSearchState,
       provider: input.web?.provider ?? config.web.provider
+    },
+    research: {
+      ...researchState,
+      arxiv: researchArxivState,
+      biorxiv: researchBiorxivState,
+      semanticScholar: researchSemanticScholarState,
+      tavily: researchTavilyState,
+      cns: researchCnsState,
+      maxResults: config.research.maxResults
     },
     skills: {
       ...skillsState,
@@ -427,6 +507,40 @@ function webCapabilityState(
     enabled: true,
     available: false,
     reason: reason ?? 'no web providers available'
+  }
+}
+
+function researchCapabilityState(
+  enabled: boolean,
+  arxivState: RuntimeCapabilityState,
+  biorxivState: RuntimeCapabilityState,
+  semanticScholarState: RuntimeCapabilityState,
+  tavilyState: RuntimeCapabilityState,
+  cnsState: RuntimeCapabilityState,
+  reason: string | undefined
+): RuntimeCapabilityState {
+  if (!enabled) {
+    return {
+      status: 'disabled',
+      enabled: false,
+      available: false,
+      reason: 'research search is disabled by config'
+    }
+  }
+  if (
+    arxivState.available ||
+    biorxivState.available ||
+    semanticScholarState.available ||
+    tavilyState.available ||
+    cnsState.available
+  ) {
+    return { status: 'available', enabled: true, available: true }
+  }
+  return {
+    status: 'unavailable',
+    enabled: true,
+    available: false,
+    reason: reason ?? 'no research search providers available'
   }
 }
 

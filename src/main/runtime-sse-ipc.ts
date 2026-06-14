@@ -129,7 +129,8 @@ export async function* kunRuntimeEvents(
   settings: AppSettingsV1,
   threadId: string,
   sinceSeq: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  ensureRuntime?: (settings: AppSettingsV1) => Promise<void>
 ): AsyncIterable<RuntimeHostEventPayload> {
   const base = getRuntimeBaseUrlForSettings(settings)
   const headers: Record<string, string> = { Accept: 'text/event-stream' }
@@ -196,6 +197,7 @@ export async function* kunRuntimeEvents(
       if (e instanceof RuntimeSseHttpStatusError) throw e
       const msg = e instanceof Error ? e.message : String(e)
       if (/sse start timeout/i.test(msg) || /fetch failed/i.test(msg) || /network/i.test(msg)) {
+        await ensureRuntime?.(settings)
         await sleepWithAbort(reconnectDelayMs, signal)
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, SSE_RECONNECT_MAX_MS)
         continue

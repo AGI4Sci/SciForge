@@ -31,6 +31,7 @@ const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'ls',
   'web_search',
   'web_fetch',
+  'research_search',
   'create_plan',
   'user_input',
   'request_user_input'

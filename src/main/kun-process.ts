@@ -30,6 +30,7 @@ import {
   McpCapabilityConfig,
   McpServerConfig,
   MemoryCapabilityConfig,
+  ResearchCapabilityConfig,
   SkillsCapabilityConfig,
   SubagentsCapabilityConfig,
   WebCapabilityConfig
@@ -385,6 +386,7 @@ export async function syncGuiManagedKunConfig(
   const search = objectValue(mcp.search)
   const attachments = objectValue(capabilities.attachments)
   const web = objectValue(capabilities.web)
+  const research = objectValue(capabilities.research)
   const skills = objectValue(capabilities.skills)
   const storage = storageConfigForRuntime(runtime.storage)
   const mcpSearch = runtime.mcpSearch
@@ -409,6 +411,7 @@ export async function syncGuiManagedKunConfig(
         enabled: web.enabled === false ? false : true,
         fetchEnabled: web.fetchEnabled === false ? false : true
       },
+      research,
       skills: skillCapability,
       mcp: {
         ...mcp,
@@ -747,6 +750,9 @@ function sanitizeKunCapabilitiesConfig(value: unknown): Record<string, unknown> 
     next.attachments = parseKunConfigSection(AttachmentsCapabilityConfig, raw.attachments)
   }
   if ('memory' in raw) next.memory = parseKunConfigSection(MemoryCapabilityConfig, raw.memory)
+  if ('research' in raw) {
+    next.research = parseKunConfigSection(ResearchCapabilityConfig, raw.research)
+  }
   return next
 }
 
