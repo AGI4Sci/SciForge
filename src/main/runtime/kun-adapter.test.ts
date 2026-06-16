@@ -124,7 +124,7 @@ describe('kunHttpRequestViaHost', () => {
     })
     server = null
 
-    const response = await runtimeRequestViaHost(
+    const response = await kunHttpRequestViaHost(
       settingsForPort(port),
       '/v1/threads',
       { method: 'GET' },

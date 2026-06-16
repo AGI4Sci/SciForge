@@ -47,6 +47,17 @@ describe('buildMcpMarketplaceOverlay', () => {
             fetch: { status: 'disabled', enabled: false, available: false },
             search: { status: 'disabled', enabled: false, available: false }
           },
+          research: {
+            status: 'disabled',
+            enabled: false,
+            available: false,
+            arxiv: { status: 'disabled', enabled: false, available: false },
+            biorxiv: { status: 'disabled', enabled: false, available: false },
+            semanticScholar: { status: 'disabled', enabled: false, available: false },
+            tavily: { status: 'disabled', enabled: false, available: false },
+            cns: { status: 'disabled', enabled: false, available: false },
+            maxResults: 10
+          },
           skills: { status: 'disabled', enabled: false, available: false, configuredRoots: 0, discoveredSkills: 0 },
           subagents: { status: 'disabled', enabled: false, available: false, maxParallel: 0, maxChildRuns: 0 },
           attachments: {
@@ -144,6 +155,17 @@ describe('buildMcpMarketplaceOverlay', () => {
             available: false,
             fetch: { status: 'disabled', enabled: false, available: false },
             search: { status: 'disabled', enabled: false, available: false }
+          },
+          research: {
+            status: 'disabled',
+            enabled: false,
+            available: false,
+            arxiv: { status: 'disabled', enabled: false, available: false },
+            biorxiv: { status: 'disabled', enabled: false, available: false },
+            semanticScholar: { status: 'disabled', enabled: false, available: false },
+            tavily: { status: 'disabled', enabled: false, available: false },
+            cns: { status: 'disabled', enabled: false, available: false },
+            maxResults: 10
           },
           skills: { status: 'disabled', enabled: false, available: false, configuredRoots: 0, discoveredSkills: 0 },
           subagents: { status: 'disabled', enabled: false, available: false, maxParallel: 0, maxChildRuns: 0 },

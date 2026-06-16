@@ -576,7 +576,7 @@ describe('cli', () => {
     const manifest = RuntimeCapabilityManifest.parse(buildRuntimeCapabilityManifest({
       model: modelCapabilitiesForModel('deepseek-chat')
     }))
-    expect(manifest.contractVersion).toBe(1)
+    expect(manifest.contractVersion).toBe(2)
     expect(manifest.model.inputModalities).toContain('text')
     expect(manifest.mcp.available).toBe(false)
     expect(manifest.mcp.reason).toMatch(/disabled/)

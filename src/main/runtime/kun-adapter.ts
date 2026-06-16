@@ -114,7 +114,7 @@ export async function kunHttpRequestViaHost(
 async function sendRuntimeRequest(
   settings: AppSettingsV1,
   url: string,
-  init: RuntimeRequestInit
+  init: KunHttpRequestInit
 ): Promise<{ ok: boolean; status: number; body: string }> {
   const hdrs = runtimeAuthHeaders(settings)
   for (const [key, value] of Object.entries(init.headers ?? {})) {

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const RUNTIME_CAPABILITY_CONTRACT_VERSION = 1
+export const RUNTIME_CAPABILITY_CONTRACT_VERSION = 2
 
 export const RuntimeCapabilityStatus = z.enum(['available', 'disabled', 'unavailable'])
 export type RuntimeCapabilityStatus = z.infer<typeof RuntimeCapabilityStatus>

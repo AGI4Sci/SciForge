@@ -189,6 +189,14 @@ export type CoreRuntimeCapabilityManifestJson = {
     search: CoreRuntimeCapabilityStateJson
     provider?: string
   }
+  research: CoreRuntimeCapabilityStateJson & {
+    arxiv: CoreRuntimeCapabilityStateJson
+    biorxiv: CoreRuntimeCapabilityStateJson
+    semanticScholar: CoreRuntimeCapabilityStateJson
+    tavily: CoreRuntimeCapabilityStateJson
+    cns: CoreRuntimeCapabilityStateJson
+    maxResults: number
+  }
   skills: CoreRuntimeCapabilityStateJson & {
     configuredRoots: number
     discoveredSkills: number

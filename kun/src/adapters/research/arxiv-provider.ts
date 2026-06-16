@@ -6,6 +6,31 @@ import type {
 } from '../../ports/research-provider.js'
 
 const ARXIV_API_URL = 'https://export.arxiv.org/api/query'
+const ARXIV_MAX_QUERY_TERMS = 8
+const ARXIV_QUERY_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'advance',
+  'advances',
+  'for',
+  'in',
+  'latest',
+  'new',
+  'of',
+  'on',
+  'or',
+  'progress',
+  'recent',
+  'review',
+  'sota',
+  'survey',
+  'the',
+  'to',
+  'trend',
+  'trends',
+  'with'
+])
 
 export class ArxivResearchProvider implements ResearchSearchProvider {
   readonly id = 'arxiv'
@@ -47,11 +72,40 @@ export class ArxivResearchProvider implements ResearchSearchProvider {
   }
 }
 
-function buildArxivQuery(query: string, sinceYear: number | undefined): string {
-  const escaped = query.replace(/"/g, '')
-  const base = `all:"${escaped}"`
+export function buildArxivQuery(query: string, sinceYear: number | undefined): string {
+  const terms = arxivQueryTerms(query)
+  const base = terms.length > 0
+    ? terms.map(arxivTermClause).join(' AND ')
+    : `all:"${escapeArxivTerm(query)}"`
   if (!sinceYear) return base
   return `${base} AND submittedDate:[${sinceYear}01010000 TO 299912312359]`
+}
+
+function arxivQueryTerms(query: string): string[] {
+  const seen = new Set<string>()
+  const terms: string[] = []
+  for (const token of query.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? []) {
+    const normalized = token.toLowerCase()
+    if (normalized.length < 2) continue
+    if (/^20\d{2}$/.test(normalized)) continue
+    if (ARXIV_QUERY_STOP_WORDS.has(normalized)) continue
+    if (seen.has(normalized)) continue
+    seen.add(normalized)
+    terms.push(token)
+    if (terms.length >= ARXIV_MAX_QUERY_TERMS) break
+  }
+  return terms
+}
+
+function arxivTermClause(term: string): string {
+  const escaped = escapeArxivTerm(term)
+  return escaped.toLowerCase() === 'ai'
+    ? '(all:AI OR all:"artificial intelligence" OR all:"machine learning")'
+    : `all:"${escaped}"`
+}
+
+function escapeArxivTerm(term: string): string {
+  return term.replace(/["()]/g, '').trim()
 }
 
 function parseArxivFeed(xml: string): ResearchPaper[] {

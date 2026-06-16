@@ -112,6 +112,110 @@ describe('AgentLoop', () => {
     expect(instructions).toContain('["arxiv","biorxiv","semantic_scholar","cns"]')
   })
 
+  it('auto-routes varied scientific discovery prompts without depending on one fixed keyword', async () => {
+    const prompts = [
+      'survey graph neural operators for PDE turbulence recent progress',
+      'molecular docking SOTA benchmark papers',
+      '机器人强化学习 sim2real 前沿论文梳理'
+    ]
+    for (const prompt of prompts) {
+      let observedRequest: ModelRequest | null = null
+      const researchTool = LocalToolHost.defineTool({
+        name: 'research_search',
+        description: 'Search scientific research sources',
+        inputSchema: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+          required: ['query'],
+          additionalProperties: false
+        },
+        policy: 'auto',
+        execute: async () => ({ output: { ok: true } })
+      })
+      const echoTool = LocalToolHost.defineTool({
+        name: 'echo',
+        description: 'Echo text',
+        inputSchema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text']
+        },
+        policy: 'auto',
+        execute: async () => ({ output: { ok: true } })
+      })
+      const h = makeHarness(
+        {
+          provider: 'auto-research-generalized',
+          model: 'auto-research-generalized',
+          async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+            observedRequest = request
+            yield { kind: 'completed', stopReason: 'stop' }
+          }
+        },
+        { tools: [researchTool, echoTool] }
+      )
+      await bootstrapThread(h, { request: { prompt } })
+
+      await h.loop.runTurn(h.threadId, h.turnId)
+
+      const request = observedRequest as ModelRequest | null
+      if (!request) throw new Error('expected model request')
+      expect(request.tools.map((tool) => tool.name)).toEqual(['research_search'])
+    }
+  })
+
+  it('does not auto-route generic latest-progress prompts to research_search', async () => {
+    const researchTool = LocalToolHost.defineTool({
+      name: 'research_search',
+      description: 'Search scientific research sources',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false
+      },
+      policy: 'auto',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => ({ output: { ok: true } })
+    })
+    for (const prompt of [
+      '帮我看看这个应用最新进展为什么启动失败',
+      '分析这个 GitHub PR 最新进展和 CI failure',
+      'latest status of the release checklist'
+    ]) {
+      let observedRequest: ModelRequest | null = null
+      const h = makeHarness(
+        {
+          provider: 'generic-latest',
+          model: 'generic-latest',
+          async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+            observedRequest = request
+            yield { kind: 'completed', stopReason: 'stop' }
+          }
+        },
+        { tools: [researchTool, echoTool] }
+      )
+      await bootstrapThread(h, { request: { prompt } })
+
+      await h.loop.runTurn(h.threadId, h.turnId)
+
+      const request = observedRequest as ModelRequest | null
+      if (!request) throw new Error('expected model request')
+      expect(request.tools.map((tool) => tool.name)).toEqual(['research_search', 'echo'])
+      expect(request.contextInstructions?.join('\n') ?? '').not.toContain('Call research_search before answering')
+    }
+  })
+
   it('does not advertise research_search again after a successful research result', async () => {
     const observedRequests: ModelRequest[] = []
     const researchTool = LocalToolHost.defineTool({

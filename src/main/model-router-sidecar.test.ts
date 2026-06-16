@@ -149,10 +149,12 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.args).toContain(expectedConfigPath)
   })
 
-  it('quotes npm script path arguments on Windows when paths contain spaces', () => {
+  it('passes npm script path arguments raw when paths contain spaces', () => {
     const userDataDir = 'C:\\Temp\\DeepSeek GUI Data'
-    const expectedConfigPath = 'C:\\Temp\\DeepSeek GUI Data\\model-router\\config.json'
-    const result = buildModelRouterSidecarLaunch(settings(), {
+    const expectedConfigPath = join(userDataDir, 'model-router', 'config.json')
+    const current = settings()
+    current.workspaceRoot = 'C:\\Temp\\Workspace With Spaces'
+    const result = buildModelRouterSidecarLaunch(current, {
       userDataDir,
       env: {},
       npmCommand: 'npm.cmd'
@@ -162,14 +164,8 @@ describe('buildModelRouterSidecarLaunch', () => {
     if (!result.ok) return
     const configIndex = result.launch.args.indexOf('--config')
     const workspaceIndex = result.launch.args.indexOf('--workspace-root')
-    if (process.platform === 'win32') {
-      expect(result.launch.args[configIndex + 1]).toBe(
-        `"${expectedConfigPath}"`
-      )
-      expect(result.launch.args[workspaceIndex + 1]).toBe('/tmp/workspace')
-    } else {
-      expect(result.launch.args[configIndex + 1]).toBe(expectedConfigPath)
-    }
+    expect(result.launch.args[configIndex + 1]).toBe(expectedConfigPath)
+    expect(result.launch.args[workspaceIndex + 1]).toBe('C:\\Temp\\Workspace With Spaces')
   })
 
   it('creates a local Model Router config template without overwriting an existing file', async () => {
@@ -217,7 +213,7 @@ describe('buildModelRouterSidecarLaunch', () => {
       })
 
       expect(spawnImpl).toHaveBeenCalledWith(
-        process.platform === 'win32' ? 'npm.cmd' : 'npm',
+        process.platform === 'win32' ? 'cmd.exe' : 'npm',
         expect.arrayContaining(['--workspace', '@sciforge/model-router']),
         expect.objectContaining({
           cwd: '/repo/deepseek-gui',

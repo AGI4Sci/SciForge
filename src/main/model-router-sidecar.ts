@@ -84,15 +84,16 @@ export function buildModelRouterSidecarLaunch(
     env[VISION_TRANSLATOR_KEY_ENV] = vision.apiKey.trim()
   }
 
-  const npmCommand = options.npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
-  const configArg = npmScriptPathArg(configPath)
-  const workspaceRootArg = npmScriptPathArg(settings.workspaceRoot || join(options.userDataDir, 'model-router'))
+  const npmCommand = options.npmCommand ?? (process.platform === 'win32' ? 'cmd.exe' : 'npm')
+  const npmArgsPrefix = options.npmCommand ? [] : process.platform === 'win32' ? ['/d', '/s', '/c', 'npm.cmd'] : []
+  const workspaceRootArg = settings.workspaceRoot || join(options.userDataDir, 'model-router')
   return {
     ok: true,
     launch: {
       command: npmCommand,
       cwd: options.appRoot ?? process.cwd(),
       args: [
+        ...npmArgsPrefix,
         '--workspace',
         '@sciforge/model-router',
         'run',
@@ -103,7 +104,7 @@ export function buildModelRouterSidecarLaunch(
         '--port',
         String(port),
         '--config',
-        configArg,
+        configPath,
         '--workspace-root',
         workspaceRootArg,
         '--quiet'
@@ -310,9 +311,4 @@ function logModelRouterChildChunk(
   const normalized = text.replace(/\s+/g, ' ').trim()
   if (!normalized) return
   log(`Model Router sidecar ${stream}: ${normalized.slice(0, 1_000)}`)
-}
-
-function npmScriptPathArg(value: string): string {
-  if (process.platform !== 'win32' || !/\s/.test(value)) return value
-  return `"${value.replace(/"/g, '\\"')}"`
 }

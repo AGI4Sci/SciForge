@@ -137,8 +137,23 @@ const PLAN_READ_ONLY_TOOL_NAMES = new Set([
 
 const RESEARCH_SEARCH_TOOL_NAME = 'research_search'
 
-const RESEARCH_DISCOVERY_INTENT_PATTERN =
-  /(调研|研究一下|探索|综述|文献|论文|最新|进展|发展|前沿|趋势|gap|空白|survey|review|literature|latest|progress|advance|trend|frontier|state[-\s]?of[-\s]?the[-\s]?art|sota)/i
+const RESEARCH_DISCOVERY_ACTION_PATTERNS: RegExp[] = [
+  /调研|研究一下|探索|梳理|综述|文献|论文/i,
+  /\b(research|survey|review|literature|paper|papers|publication|publications)\b/i
+]
+const RESEARCH_DISCOVERY_INTENT_PATTERNS: RegExp[] = [
+  /最新|最近|进展|发展|前沿|趋势|空白|缺口|不足|问题/i,
+  /\b(latest|recent|progress|advance|advances|trend|frontier|sota|gap|limitation|open problem|state[-\s]?of[-\s]?the[-\s]?art)\b/i
+]
+const RESEARCH_SCIENTIFIC_DOMAIN_PATTERNS: RegExp[] = [
+  /\b(ai4s|ai for science|scientific machine learning|foundation model|neural operator)\b/i,
+  /\b(protein|genom|rna|dna|cell|bio|enzyme|antibody|biology|biomedical|omics)\b|蛋白|基因|细胞|生物|抗体/i,
+  /\b(molecule|molecular|chemical|chemistry|reaction|drug|ligand|docking|catalysis)\b|分子|化学|药物|配体|催化/i,
+  /\b(material|materials|crystal|battery|polymer|alloy|semiconductor|perovskite)\b|材料|晶体|电池|聚合物|合金|半导体/i,
+  /\b(physics|pde|fluid|turbulence|quantum|simulation|surrogate model)\b|物理|偏微分|流体|湍流|量子|仿真/i,
+  /\b(climate|weather|earth system|atmosphere|forecast|geospatial)\b|气候|天气|地球系统|大气|地理空间/i,
+  /\b(robotics|robot learning|embodied ai|control|reinforcement learning)\b|机器人|具身智能|控制|强化学习/i
+]
 
 function shouldAutoInvokeResearchSearch(input: {
   prompt: string
@@ -149,7 +164,15 @@ function shouldAutoInvokeResearchSearch(input: {
 }): boolean {
   if (input.finalizeWithoutTools || input.planTurnActive || input.stepIndex !== 0) return false
   if (!input.tools.some((tool) => tool.name === RESEARCH_SEARCH_TOOL_NAME)) return false
-  return RESEARCH_DISCOVERY_INTENT_PATTERN.test(input.prompt)
+  const scientificDomainScore = countPatternMatches(input.prompt, RESEARCH_SCIENTIFIC_DOMAIN_PATTERNS)
+  if (scientificDomainScore === 0) return false
+  const discoveryActionScore = countPatternMatches(input.prompt, RESEARCH_DISCOVERY_ACTION_PATTERNS)
+  const discoveryIntentScore = countPatternMatches(input.prompt, RESEARCH_DISCOVERY_INTENT_PATTERNS)
+  return discoveryActionScore > 0 || discoveryIntentScore > 0
+}
+
+function countPatternMatches(text: string, patterns: readonly RegExp[]): number {
+  return patterns.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0)
 }
 
 function autoResearchSearchInstruction(prompt: string): string {

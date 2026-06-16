@@ -47,7 +47,7 @@ describe('HTTP server', () => {
       }
     }
     expect(body.model).toBe('deepseek-chat')
-    expect(body.capabilities?.contractVersion).toBe(1)
+    expect(body.capabilities?.contractVersion).toBe(2)
     expect(body.capabilities?.model?.inputModalities).toContain('text')
     expect(body.capabilities?.model?.supportsToolCalling).toBe(true)
     expect(body.capabilities?.model?.contextWindowTokens).toBe(1_000_000)

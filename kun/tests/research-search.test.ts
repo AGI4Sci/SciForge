@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
 import { LocalToolHost } from '../src/adapters/tool/local-tool-host.js'
 import { buildResearchToolProviders } from '../src/adapters/research/research-tool-provider.js'
+import { buildArxivQuery } from '../src/adapters/research/arxiv-provider.js'
 import { planResearchQueries } from '../src/adapters/research/query-planner.js'
 import { KunCapabilitiesConfig } from '../src/contracts/capabilities.js'
 import type {
@@ -47,6 +48,18 @@ describe('research search', () => {
     })
     expect(plan.generatedQueries[0]).toBe('latest diffusion models for molecular generation')
     expect(plan.generatedQueries.some((query) => query.includes('molecular generation'))).toBe(true)
+  })
+
+  it('builds arXiv queries from topic terms instead of an over-specific full phrase', () => {
+    const query = buildArxivQuery('AI protein design latest advances', 2024)
+
+    expect(query).toContain('(all:AI OR all:"artificial intelligence" OR all:"machine learning")')
+    expect(query).toContain('all:"protein"')
+    expect(query).toContain('all:"design"')
+    expect(query).toContain('submittedDate:[202401010000 TO 299912312359]')
+    expect(query).not.toContain('all:"AI protein design latest advances"')
+    expect(query).not.toContain('latest')
+    expect(query).not.toContain('advances')
   })
 
   it('does not advertise research tools when disabled', () => {
