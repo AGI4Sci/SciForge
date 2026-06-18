@@ -116,6 +116,9 @@ const TodoPanel = lazy(() =>
 const ScheduleTasksView = lazy(() =>
   import('./schedule/ScheduleTasksView').then((module) => ({ default: module.ScheduleTasksView }))
 )
+const PaperRadarPanel = lazy(() =>
+  import('./paper/PaperRadarPanel').then((module) => ({ default: module.PaperRadarPanel }))
+)
 
 type PendingSddPlanTarget = {
   planId: string
@@ -527,6 +530,7 @@ export function Workbench(): ReactElement {
     return [...ordered]
   }, [composerPickList, writeAssistantModel])
   const stageInsetClass = 'ds-stage-inset'
+  const paperRadarEnabled = import.meta.env.DEV
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const keyboardShortcutBindings = useMemo(
     () => resolveKeyboardShortcutBindings(keyboardShortcuts),
@@ -817,6 +821,12 @@ export function Workbench(): ReactElement {
       setRightPanelMode(null)
     }
   }, [activeGuiPlan, rightPanelMode, setRightPanelMode])
+
+  useEffect(() => {
+    if (rightPanelMode === 'paper' && !paperRadarEnabled) {
+      setRightPanelMode(null)
+    }
+  }, [paperRadarEnabled, rightPanelMode, setRightPanelMode])
 
   useEffect(() => {
     if (
@@ -1938,6 +1948,11 @@ export function Workbench(): ReactElement {
                 onCollapse={closeRightPanel}
                 onOpenPlan={openGuiPlanPanel}
               />
+            ) : rightPanelMode === 'paper' && paperRadarEnabled ? (
+              <PaperRadarPanel
+                className="h-full max-h-full w-full"
+                onCollapse={closeRightPanel}
+              />
             ) : rightPanelMode === 'browser' ? (
               <DevBrowserPanel
                 blocks={devPreviewBlocks}
@@ -2124,6 +2139,7 @@ export function Workbench(): ReactElement {
                     rightPanelMode={rightPanelMode}
                     onToggleRightPanelMode={toggleRightPanelMode}
                     planPanelEnabled={Boolean(activeGuiPlan)}
+                    paperRadarEnabled={paperRadarEnabled}
                     sideChatCount={currentSideConversations.length}
                     sideChatRunningCount={currentSideRunningCount}
                     sideChatOpen={sidePanel.open}

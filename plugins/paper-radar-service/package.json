@@ -1,0 +1,28 @@
+{
+  "name": "sciforge-paper-radar-service",
+  "version": "0.1.0",
+  "description": "Standalone SciForge service for daily arXiv and bioRxiv metadata sync, local search, and daily paper digests.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "sciforge-paper-radar": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "dev": "node --env-file-if-exists=.env --watch --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.3.2",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "typescript": "^5.7.2"
+  }
+}

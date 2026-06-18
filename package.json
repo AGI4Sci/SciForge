@@ -7,6 +7,7 @@
   "type": "module",
   "workspaces": [
     "packages/workers/model-router",
+    "plugins/paper-radar-service",
     "plugins/vision-router-service",
     "plugins/sci-modality-router-service"
   ],
@@ -42,6 +43,9 @@
     "vision-router:start": "npm --workspace sciforge-vision-router-service run start",
     "vision-router:test": "npm --workspace sciforge-vision-router-service run test",
     "vision-router:typecheck": "npm --workspace sciforge-vision-router-service run typecheck",
+    "paper-radar:start": "npm --workspace sciforge-paper-radar-service run start",
+    "paper-radar:test": "npm --workspace sciforge-paper-radar-service run test",
+    "paper-radar:typecheck": "npm --workspace sciforge-paper-radar-service run typecheck",
     "mac:unquarantine": "bash ./scripts/mac-unquarantine.sh"
   },
   "dependencies": {

@@ -131,17 +131,20 @@ describe('electron-builder Kun packaging', () => {
     expect(bundledDirectoryFileSets).not.toEqual(expect.arrayContaining([
       'plugins',
       'plugins/vision-router-service',
-      'plugins/sci-modality-router-service'
+      'plugins/sci-modality-router-service',
+      'plugins/paper-radar-service'
     ]))
     expect(builderConfig.files).not.toEqual(expect.arrayContaining([
       'plugins/**/*',
       'plugins/vision-router-service/**/*',
-      'plugins/sci-modality-router-service/**/*'
+      'plugins/sci-modality-router-service/**/*',
+      'plugins/paper-radar-service/**/*'
     ]))
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
       '**/plugins/**/*',
       '**/plugins/vision-router-service/**/*',
       '**/plugins/sci-modality-router-service/**/*',
+      '**/plugins/paper-radar-service/**/*',
       '**/packages/workers/model-router/vision-router-service/**/*'
     ]))
   })
@@ -252,6 +255,7 @@ describe('root package workspace contracts', () => {
   it('exposes bundled workers and external plugin services through npm workspaces', () => {
     expect(rootPackage.workspaces).toEqual(expect.arrayContaining([
       'packages/workers/model-router',
+      'plugins/paper-radar-service',
       'plugins/vision-router-service',
       'plugins/sci-modality-router-service'
     ]))
@@ -263,7 +267,10 @@ describe('root package workspace contracts', () => {
       'model-router:test': 'npm --workspace @sciforge/model-router run test',
       'vision-router:start': 'npm --workspace sciforge-vision-router-service run start',
       'vision-router:test': 'npm --workspace sciforge-vision-router-service run test',
-      'vision-router:typecheck': 'npm --workspace sciforge-vision-router-service run typecheck'
+      'vision-router:typecheck': 'npm --workspace sciforge-vision-router-service run typecheck',
+      'paper-radar:start': 'npm --workspace sciforge-paper-radar-service run start',
+      'paper-radar:test': 'npm --workspace sciforge-paper-radar-service run test',
+      'paper-radar:typecheck': 'npm --workspace sciforge-paper-radar-service run typecheck'
     })
   })
 })

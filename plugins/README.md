@@ -8,6 +8,7 @@ and point the Model Router process at them with an env var.
 
 | Plug-in | Port | Endpoint | Translates | Upstream model(s) |
 |---|---|---|---|---|
+| [`paper-radar-service`](./paper-radar-service) | 3901 | `POST /sync/arxiv`, `POST /sync/biorxiv`, `GET /papers/search`, `POST /digest` | arXiv/bioRxiv metadata → searchable daily digest | arXiv OAI-PMH, bioRxiv API |
 | [`vision-router-service`](./vision-router-service) | 3899 | `POST /vision/translate` | image / video frame → text | Qwen3.7-Plus (cloud, OpenAI-compatible) |
 | [`sci-modality-router-service`](./sci-modality-router-service) | 3898 | `POST /modality/translate`, `GET /experts/status` | 6 scientific modalities → text evidence | expert-translator (GPU): ESM-2, Nucleotide-Transformer, ChemLLM, SciBERT×2, ChemBERTa |
 
