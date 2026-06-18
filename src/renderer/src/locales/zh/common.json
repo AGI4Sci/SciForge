@@ -869,6 +869,7 @@
   "inspector": "变更",
   "rightPanelChanges": "变更",
   "rightPanelBrowser": "预览",
+  "rightPanelEvidenceDag": "证据 DAG",
   "rightPanelRuntime": "运行时",
   "rightPanelPlan": "计划",
   "rightPanelTodo": "Todo",

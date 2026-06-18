@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Evidence DAG — SciForge</title>
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<!-- dagre = Sugiyama layered layout: clear direction + crossing minimisation -->
+<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<!-- node-html-label: render real HTML "cards" inside nodes (text in a container) -->
+<script src="https://unpkg.com/cytoscape-node-html-label@1.2.2/dist/cytoscape-node-html-label.min.js"></script>
+<style>
+  :root {
+    --bg:#0f1419; --panel:#171c24; --panel2:#1e2630; --line:#2a3340;
+    --fg:#e6edf3; --muted:#8b98a8; --accent:#4cc2ff;
+    --supported:#3fb950; --unverified:#7d8590; --source:#388bfd; --reasoning:#a371f7; --claim:#f0b03b;
+    --contradict:#f85149;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font:13px/1.5 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  #app { display:flex; flex-direction:column; height:100vh; }
+  header { display:flex; gap:10px; align-items:center; padding:8px 12px; background:var(--panel);
+    border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:14px; margin:0 8px 0 0; font-weight:600; letter-spacing:.3px; }
+  header .sp { flex:1; }
+  select,input,button { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:5px 9px; font-size:12px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:#1f6feb33; border-color:#1f6feb; }
+  label.chk { display:flex; align-items:center; gap:5px; color:var(--muted); cursor:pointer; }
+  #main { flex:1; display:flex; min-height:0; }
+  #cy { flex:1; background:
+      radial-gradient(circle at 1px 1px, #1c2530 1px, transparent 0) 0 0/22px 22px var(--bg); }
+  aside { width:340px; background:var(--panel); border-left:1px solid var(--line);
+    display:flex; flex-direction:column; overflow:hidden; }
+  .audit { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line);
+    border-bottom:1px solid var(--line); }
+  .metric { background:var(--panel); padding:9px 11px; }
+  .metric .v { font-size:18px; font-weight:600; }
+  .metric .k { font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; }
+  .sec { padding:11px 13px; border-bottom:1px solid var(--line); overflow:auto; }
+  .sec h2 { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin:0 0 8px; }
+  #inspector { flex:1; overflow:auto; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .row { display:flex; gap:8px; margin:5px 0; font-size:12px; }
+  .row .lab { color:var(--muted); min-width:78px; }
+  .row .val { flex:1; word-break:break-word; }
+  .content { background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:9px;
+    margin-top:6px; white-space:pre-wrap; max-height:200px; overflow:auto; }
+  .legend > summary { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;
+    cursor:pointer; list-style:none; user-select:none; }
+  .legend > summary::-webkit-details-marker { display:none; }
+  .legend > summary::before { content:'▸ '; }
+  .legend[open] > summary { margin-bottom:8px; }
+  .legend[open] > summary::before { content:'▾ '; }
+  .legend .lg-row { display:flex; flex-wrap:wrap; gap:4px 14px; margin-bottom:7px; }
+  .legend span { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:11px; }
+  .legend .vok { color:#3fb950; font-weight:800; }
+  .sw { width:14px; height:14px; display:inline-block; border:1px solid #0008; }
+  .sw.sq{border-radius:3px;} .sw.di{transform:rotate(45deg);} .sw.ci{border-radius:50%;}
+  .bar-sw { width:5px; height:14px; border-radius:2px; display:inline-block; }
+  .edge-sw { width:22px; height:0; border-top:3px solid #3fb950; display:inline-block; }
+  .edge-sw.contra { border-top:2px dashed #ff5c5c; }
+  .dash-sw { width:13px; height:13px; border:1.5px dashed #e3b341; border-radius:3px; display:inline-block; background:transparent; }
+  #status { font-size:11px; color:var(--muted); }
+  a.jump { color:var(--accent); text-decoration:none; }
+  .empty { color:var(--muted); padding:24px; text-align:center; }
+  #plus { position:fixed; display:none; align-items:center; justify-content:center;
+    min-width:24px; height:24px; padding:0 6px; border-radius:999px; z-index:50; cursor:pointer;
+    background:#1f6feb; color:#fff; font-size:13px; font-weight:700; border:2px solid #0c0f14;
+    box-shadow:0 2px 8px #0008; user-select:none; }
+  #plus:hover { background:#388bfd; }
+  /* node cards (node-html-label). pointer-events:none so cy still gets hover/click. */
+  .card { position:relative; width:210px; box-sizing:border-box; pointer-events:none;
+    background:#1b2330; border:1px solid #2a3340; border-radius:10px; padding:6px 9px 6px 15px;
+    box-shadow:0 2px 6px #0007; overflow:hidden;
+    font:12px/1.35 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .card .bar { position:absolute; left:0; top:0; bottom:0; width:6px; border-radius:10px 0 0 10px; }
+  .card-source   { background:#102439; } .card-source   .bar { background:#388bfd; }
+  .card-reasoning{ background:#211a36; } .card-reasoning .bar { background:#a371f7; }
+  .card-claim    { background:#2f2710; } .card-claim    .bar { background:#f0b03b; }
+  .card-head { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
+  .card-head .ic { font-size:12px; line-height:1; }
+  .card-head .tname { font-size:10px; font-weight:700; letter-spacing:.4px; color:#cdd9e5; }
+  .card-head .sp { margin-left:auto; }
+  .card-head .vok { font-size:12px; font-weight:800; color:#3fb950; line-height:1; }
+  .card-head .pn { font-size:9px; font-weight:700; color:#fff; background:#1f6feb; border-radius:999px; padding:1px 6px; }
+  .card-body { font-size:11.5px; color:#e6edf3; display:-webkit-box; -webkit-line-clamp:2;
+    -webkit-box-orient:vertical; overflow:hidden; }
+  .card-focus { border-color:#4cc2ff; box-shadow:0 0 0 2px #4cc2ff55, 0 2px 6px #0007; }
+  .card-ungrounded { border-color:#e3b341; border-style:dashed; }
+  .card .warn { font-size:9px; color:#1b1300; background:#e3b341; border-radius:4px; padding:0 4px; margin-left:4px; }
+  .card .warn-frag { background:#e8852e; color:#1b0e00; }
+  .card .lb { font-size:9px; font-weight:700; color:#1b1300; background:#e3b341; border-radius:999px; padding:1px 6px; }
+  .card-fragile { border-color:#e8852e; }
+  .card-reason { font-size:9.5px; color:#e8995a; line-height:1.25; margin-top:3px; }
+  .card-more { font-size:9px; color:#6b7685; margin-top:2px; }
+  /* 承重/脆弱 analysis panel */
+  #analysis { max-height:212px; overflow:auto; }
+  .an-grp { font-size:11px; color:var(--muted); margin:7px 0 4px; }
+  .an-grp b { color:var(--fg); }
+  .an-hint { font-size:9.5px; color:#6b7685; }
+  .an-item { font-size:11px; padding:4px 7px; border-radius:6px; cursor:pointer; margin-bottom:3px;
+    background:var(--panel2); border:1px solid var(--line); line-height:1.35; }
+  .an-item:hover { border-color:var(--accent); }
+  .an-cnt { display:inline-block; min-width:15px; text-align:center; font-weight:700; color:#1b1300;
+    background:#e3b341; border-radius:999px; padding:0 5px; font-size:10px; margin-right:3px; }
+  .an-ty { font-size:9px; font-weight:700; letter-spacing:.3px; margin-right:3px; }
+  .ty-source{color:#58a6ff} .ty-reasoning{color:#b692f6} .ty-claim{color:#f0b03b}
+  .an-rsn { color:#e8995a; font-size:10px; margin-top:2px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🔬 Evidence DAG</h1>
+    <select id="thread" title="thread"></select>
+    <button id="refresh" title="Refresh">↻ Refresh</button>
+    <label class="chk" title="Watch for new data and flag Refresh — never redraws while you're reading"><input type="checkbox" id="auto" checked /> watch</label>
+    <button id="verify" title="Re-run NLI verification">✓ Verify</button>
+    <span style="width:1px;height:20px;background:var(--line);margin:0 2px"></span>
+    <button id="collapseAll" title="Back to the Top-3 claim focus">⤡ Reset Top-3</button>
+    <button id="expandAll" title="Show every claim (evidence still expands on demand)">⤢ All claims</button>
+    <button id="sample" class="primary" title="Ingest a demo trace">＋ Load sample</button>
+    <span class="sp"></span>
+    <span id="status">—</span>
+  </header>
+  <div id="main">
+    <div id="cy"></div>
+    <div id="plus" title="Expand next layer">＋</div>
+    <aside>
+      <div class="audit" id="audit">
+        <div class="metric"><div class="v" id="m-cov">–</div><div class="k" title="% of conclusions that trace back to a source">Coverage</div></div>
+        <div class="metric"><div class="v" id="m-snd">–</div><div class="k" title="mean ν of the load-bearing support edges">Soundness</div></div>
+      </div>
+      <div class="sec" id="analysis"><h2>Load-bearing / Fragility</h2><div class="empty" style="padding:6px">—</div></div>
+      <div class="sec" id="inspector"><div class="empty"><b>Click a node</b> to isolate its evidence path (everything else fades; click empty space to clear).<br/>Hover a node marked <b>＋N</b> and click the <b>＋</b> to reveal its next layer.</div></div>
+      <details class="sec legend">
+        <summary>Legend</summary>
+        <div class="lg-row">
+          <span><i class="bar-sw" style="background:var(--source)"></i>📄 Source</span>
+          <span><i class="bar-sw" style="background:var(--reasoning)"></i>🧠 Reasoning</span>
+          <span><i class="bar-sw" style="background:var(--claim)"></i>🏁 Claim</span>
+        </div>
+        <div class="lg-row">
+          <span><i class="edge-sw"></i>Support ν (0–1, thicker=stronger)</span>
+          <span><i class="edge-sw contra"></i>Contradiction ν</span>
+          <span><i class="dash-sw"></i>Ungrounded</span>
+        </div>
+        <div class="lg-row">
+          <span><span class="vok">✓</span> Verified / source=evidence</span>
+          <span>⚠ Contested</span>
+          <span>🔑 Load-bearing</span>
+          <span>⚠ Fragile</span>
+          <span>🕸 Shared source</span>
+          <span>＋N Expand</span>
+        </div>
+        <div class="lg-row">
+          <span>⚡ If removed: <i class="bar-sw" style="background:#ff5c5c"></i>collapses · <i class="bar-sw" style="background:#e8852e"></i>weakened</span>
+        </div>
+      </details>
+    </aside>
+  </div>
+</div>
+<script>
+const API = location.origin; // same-origin (engine serves this page)
+const $ = (id) => document.getElementById(id);
+// ?thread=<id> focuses a specific thread (the GUI "Evidence DAG" button passes
+// the active thread id, so the view follows the conversation you're in).
+const Q_THREAD = new URLSearchParams(location.search).get('thread');
+let cy, currentThread = Q_THREAD || null, lastGraph = null;
+// load-bearing / fragility analysis, keyed by node id (filled per thread)
+let analysisData = null, lbMap = {}, fragMap = {}, prMap = {};
+function buildAnalysisMaps(a){
+  lbMap = {}; fragMap = {}; prMap = {};
+  (a.load_bearing||[]).forEach(x => lbMap[x.id] = x);
+  (a.fragile||[]).forEach(x => fragMap[x.id] = x);
+  (a.pseudo_robust||[]).forEach(x => prMap[x.id] = x);  // 假鲁棒:看似多支持实为同源
+}
+
+const SAMPLE = { trace: [
+  {id:"item_1",type:"message",role:"user",content:"Is creatine supplementation effective for increasing muscle strength?"},
+  {id:"item_2",type:"message",role:"assistant",content:"I'll search the literature and weigh the evidence."},
+  {id:"item_3",type:"tool_call",tool_name:"web_search",arguments:{q:"creatine monohydrate strength meta-analysis"}},
+  {id:"item_4",type:"tool_result",tool_name:"web_search",content:"A 2003 meta-analysis (Branch, Int J Sport Nutr Exerc Metab) of 100+ studies found creatine supplementation increases strength and lean mass vs placebo, especially for high-intensity resistance exercise."},
+  {id:"item_5",type:"message",role:"assistant",content:"The meta-analysis directly supports an effect on strength for resistance training."},
+  {id:"item_6",type:"tool_result",tool_name:"web_search",content:"Some studies report 'non-responders' whose muscle creatine uptake is low; effect sizes vary with baseline creatine and diet."},
+  {id:"item_7",type:"message",role:"assistant",content:"Creatine monohydrate is effective for increasing muscle strength in resistance training, though response varies between individuals."}
+]};
+
+function setStatus(t){ $("status").textContent = t; }
+
+const CARD_W = 210, CARD_H = 66;
+const cyStyle = [
+  // nodes are invisible boxes sized to the HTML card drawn on top (node-html-label).
+  { selector:'node', style:{ 'width':CARD_W, 'height':CARD_H, 'shape':'round-rectangle',
+      'background-opacity':0, 'border-width':0, 'label':'' } },
+  // selection / highlight draw a frame around the card
+  { selector:'node:selected', style:{ 'border-width':2, 'border-color':'#4cc2ff', 'border-opacity':1 } },
+  { selector:'edge', style:{
+      'width':2,'line-color':'#5a6b7a','target-arrow-color':'#5a6b7a','target-arrow-shape':'triangle',
+      'curve-style':'bezier','font-size':'11px','font-weight':'bold','color':'#eaf6ff',
+      'text-background-color':'#0d1117','text-background-opacity':0.92,'text-background-padding':3,
+      'text-background-shape':'round-rectangle','arrow-scale':1.1 } },
+  // supports edge = the confidence channel: ν (0–1) printed ON the line; both
+  // colour and thickness scale with ν so strength reads at a glance, number confirms.
+  { selector:'edge[rel="supports"]', style:{
+      'line-color':'mapData(weight, 0, 1, #4a6152, #3fb950)',
+      'target-arrow-color':'mapData(weight, 0, 1, #4a6152, #3fb950)',
+      'label':'data(nu)', 'width':'mapData(weight, 0, 1, 1.5, 7)',
+      'text-border-width':1, 'text-border-opacity':0.7,
+      'text-border-color':'mapData(weight, 0, 1, #4a6152, #3fb950)' } },
+  // contradicts: deliberately the loudest edge so it isn't lost among green
+  { selector:'edge[rel="contradicts"]', style:{ 'line-color':'#ff5c5c','target-arrow-color':'#ff5c5c',
+      'line-style':'dashed','width':'mapData(weight, 0, 1, 2, 7)','color':'#ff9b9b',
+      'label':(ele)=>{ const v=ele.data('nu'); return v ? ('✗ '+v) : '✗ contradicts'; },
+      'text-border-width':1,'text-border-opacity':0.7,'text-border-color':'#ff5c5c' } },
+  { selector:'edge[rel="refines"]', style:{ 'line-color':'#58a6ff','line-style':'dotted' } },
+  { selector:'edge[rel="prerequisite"]', style:{ 'line-color':'#d29922','line-style':'dashed' } },
+  { selector:'.faded', style:{ 'opacity':0.12 } },
+  { selector:'.hl', style:{ 'opacity':1 } },
+  { selector:'edge.hl', style:{ 'width':4 } },
+  // what-if reconcile blast radius: red = collapses, orange = weakened, blue = the removed node
+  { selector:'node.blast-inval',  style:{ 'border-width':3,'border-color':'#ff5c5c','border-opacity':1 } },
+  { selector:'node.blast-weak',   style:{ 'border-width':3,'border-color':'#e8852e','border-opacity':1 } },
+  { selector:'node.blast-source', style:{ 'border-width':3,'border-color':'#4cc2ff','border-opacity':1 } },
+];
+
+// --- progressive disclosure (van Ham & Perer: focus + expand-on-demand) ------
+// Default = the top-K claims (main conclusions). A visible node with hidden
+// direct predecessors shows "＋N"; hovering it surfaces a clickable ＋ that
+// reveals ONE hop (its direct evidence), which may itself be expandable.
+// Never dumps the whole graph at once.
+const TOP_K = 3;
+let anchors = [];            // claim ids shown as the starting focus
+let revealed = new Set();    // node ids whose direct predecessors are revealed
+let renderedThread = null;   // last thread rendered (to reset focus on thread switch)
+
+function buildIncoming(graph){
+  const inc = {};
+  graph.edges.forEach(e => { (inc[e.dst] = inc[e.dst] || []).push(e.src); });
+  return inc;
+}
+function ancestorsOf(startId, inc){
+  const seen = new Set(), stack = [startId];
+  while (stack.length){ const c = stack.pop();
+    for (const s of (inc[c] || [])){ if (!seen.has(s)){ seen.add(s); stack.push(s); } } }
+  seen.delete(startId);
+  return seen;
+}
+// importance of a claim ≈ evidence behind it (ancestor count), tie-break in-degree
+function rankClaims(graph){
+  const inc = buildIncoming(graph);
+  const inDeg = {}; graph.edges.forEach(e => { inDeg[e.dst] = (inDeg[e.dst]||0)+1; });
+  return graph.nodes.filter(n => n.type === 'claim')
+    .map(n => ({ id:n.id, s: ancestorsOf(n.id, inc).size*10 + (inDeg[n.id]||0) }))
+    .sort((a,b) => b.s - a.s).map(x => x.id);
+}
+function ensureAnchors(graph){
+  const ids = new Set(graph.nodes.map(n => n.id));
+  anchors = anchors.filter(id => ids.has(id));
+  if (anchors.length === 0){
+    const claims = rankClaims(graph);
+    anchors = (claims.length ? claims : graph.nodes.map(n=>n.id)).slice(0, TOP_K);
+  }
+}
+function computeView(graph){
+  const inc = buildIncoming(graph);
+  const visible = new Set(anchors);
+  let changed = true;
+  while (changed){ changed = false;
+    for (const nid of Array.from(visible)){
+      if (revealed.has(nid)) for (const p of (inc[nid]||[])){
+        if (!visible.has(p)){ visible.add(p); changed = true; } } }
+  }
+  const plus = {};   // visible node -> count of still-hidden direct predecessors
+  for (const nid of visible){
+    const hidden = (inc[nid]||[]).filter(p => !visible.has(p)).length;
+    if (hidden) plus[nid] = hidden;
+  }
+  const visEdges = new Set(graph.edges.filter(e => visible.has(e.src) && visible.has(e.dst)).map(e => e.id));
+  return { visible, visEdges, plus };
+}
+
+// normalised origin key for a source's ref — sources sharing it come from the
+// same paper/outlet (doi > arxiv > url > citation). Empty = no identifiable ref.
+function refKey(ref){
+  if(!ref || typeof ref!=='object') return '';
+  const v = ref.doi || ref.arxiv || ref.url || ref.citation || '';
+  return String(v).trim().toLowerCase().replace(/\s+/g,' ');
+}
+function toElements(graph){
+  ensureAnchors(graph);
+  const view = computeView(graph);
+  const hasIncoming = new Set(graph.edges.map(e => e.dst));
+  const hasOutgoing = new Set(graph.edges.map(e => e.src));
+  // same-origin sources (display-only): group ALL sources by ref key; a source
+  // sharing its ref with ≥1 other is flagged 'shared' — we do NOT merge the nodes,
+  // just hint that they come from one origin.
+  const srcGroups = {};
+  graph.nodes.forEach(n => {
+    if(n.type!=='source') return;
+    const k = refKey(n.ref); if(!k) return;
+    (srcGroups[k] || (srcGroups[k]=[])).push(n.id);
+  });
+  const nodes = graph.nodes.filter(n => view.visible.has(n.id)).map(n => {
+    const ungrounded = (n.type==='reasoning'||n.type==='claim') && !hasIncoming.has(n.id) ? 1 : 0;
+    const focus = (n.type==='claim' && !hasOutgoing.has(n.id)) ? 1 : 0;  // terminal conclusion
+    const lb = lbMap[n.id] ? lbMap[n.id].critical_count : 0;   // 承重: # conclusions that collapse without it
+    const fr = fragMap[n.id];                                   // 脆弱(含原因)
+    const fragReason = fr ? (fr.reasons||[]).join(' · ') : '';
+    const grp = (n.type==='source') ? srcGroups[refKey(n.ref)] : null;  // 同源 source 组
+    const shared = (grp && grp.length>=2) ? 1 : 0;
+    const sharedHint = shared
+      ? `same origin as ${grp.length-1} other source(s): ${esc(refKey(n.ref).slice(0,46))}`
+      : '';
+    return { data:{ id:n.id, type:n.type, status:n.status,
+      content:(n.content || '').slice(0, 220),
+      plus: view.plus[n.id] || 0, ungrounded, focus, lb,
+      fragile: fr?1:0, shared, fragReason, sharedHint, full:n } };
+  });
+  const edges = graph.edges.filter(e => view.visEdges.has(e.id)).map(e => ({ data:{
+    id:e.id, source:e.src, target:e.dst, rel:e.rel,
+    weight:(e.nli_score!=null ? e.nli_score : 0),
+    nu:(e.nli_score!=null)?(Number(e.nli_score).toFixed(2)):'' } }));
+  return [...nodes, ...edges];
+}
+
+function render(graph){
+  lastGraph = graph;
+  hidePlus();
+  cy.elements().remove();
+  cy.add(toElements(graph));
+  // dagre layered layout: rankDir LR => evidence (no incoming) leftmost, flow
+  // rightward to claims; crossing-minimised so support lines don't tangle.
+  const useDagre = cy.nodes().length > 0 && window.dagre;
+  cy.layout(useDagre
+    ? { name:'dagre', rankDir:'LR', nodeSep:34, rankSep:80, edgeSep:16, ranker:'network-simplex', padding:30 }
+    : { name:'breadthfirst', directed:true, spacingFactor:1.1, padding:24 }
+  ).run();
+  cy.fit(undefined, 40);
+  setStatus(`${cy.nodes().length}/${graph.nodes.length} nodes shown · ${anchors.length} claim(s) in focus · hover a node and click ＋ to expand`);
+}
+
+function expandOneHop(id){ if (id && lastGraph){ revealed.add(id); render(lastGraph); } }
+function resetView(){ revealed = new Set(); anchors = []; if (lastGraph) render(lastGraph); }
+function showAllClaims(){
+  if (!lastGraph) return;
+  anchors = lastGraph.nodes.filter(n => n.type === 'claim').map(n => n.id);
+  render(lastGraph);
+}
+
+// floating "＋" expand button (hover affordance)
+let plusHideTimer = null;
+function hidePlus(){ const el = $("plus"); if (el) el.style.display = 'none'; }
+function showPlusFor(node){
+  const el = $("plus"); if (!el) return;
+  const cnt = node.data('plus'); if (!cnt){ hidePlus(); return; }
+  const p = node.renderedPosition(); const r = $("cy").getBoundingClientRect();
+  el.textContent = '＋' + cnt;
+  el.dataset.target = node.id();
+  el.style.left = (r.left + p.x + 14) + 'px';
+  el.style.top  = (r.top  + p.y - 30) + 'px';
+  el.style.display = 'flex';
+}
+
+async function api(path, opts){
+  const r = await fetch(API+path, opts);
+  return r.json();
+}
+
+async function loadThreads(){
+  const res = await api('/threads');
+  const threads = (res.data && res.data.threads) || [];  // newest-first from engine
+  // If a ?thread was requested but isn't known yet (no completed turn fed), still
+  // show it so the user sees they're focused on it.
+  const opts = [...threads];
+  if (currentThread && !opts.includes(currentThread)) opts.unshift(currentThread);
+  const sel = $("thread");
+  sel.innerHTML = opts.length ? opts.map(t=>`<option>${t}</option>`).join('')
+    : '<option value="">(no threads — Load sample)</option>';
+  if (opts.length && !currentThread) currentThread = opts[0];  // default = newest
+  if (currentThread) sel.value = currentThread;
+}
+
+let extractRetry = null, extractTries = 0, verifyTriedFor = null, renderedSig = null;
+async function loadGraph(){
+  if (extractRetry) { clearTimeout(extractRetry); extractRetry = null; }
+  if (!currentThread) { return; }
+  try {
+    const g = await api(`/threads/${encodeURIComponent(currentThread)}/graph`);
+    if (!g.ok) {
+      if (cy) cy.elements().remove();
+      ['m-cov','m-snd'].forEach(id=>$(id).textContent='–');
+      // A just-finished turn feeds the whole thread; extraction (one LLM call over
+      // the full conversation) can take tens of seconds for long threads. Auto-retry
+      // so the DAG shows up on its own instead of looking broken.
+      if (extractTries < 20) {
+        extractTries++;
+        $("inspector").innerHTML = '<div class="empty">Extracting the DAG — a long conversation can take tens of seconds.<br/>Auto-refreshing (attempt ' + extractTries + ')…</div>';
+        setStatus(`${currentThread}: extracting… auto-retry ${extractTries}/20`);
+        extractRetry = setTimeout(loadGraph, 4000);
+      } else {
+        $("inspector").innerHTML = '<div class="empty">No DAG yet for this thread.<br/>Check that: (1) the engine is running, (2) this thread has completed at least one turn, (3) SCIFORGE_EVIDENCE_DAG_SERVICE_URL was set at startup (use the launcher script).<br/>Click Refresh to retry.</div>';
+        setStatus(`${currentThread}: ${g.error&&g.error.code||'no graph'} (auto-retry stopped)`);
+      }
+      return;
+    }
+    extractTries = 0;
+    // reset focus to Top-3 only when the thread actually changed; auto-refresh
+    // (same thread) must preserve the expert's expansions.
+    if (currentThread !== renderedThread){ anchors = []; revealed = new Set(); renderedThread = currentThread; }
+    render(g.data.graph);
+    renderedSig = sigOf(g.data);   // remember what's on screen; the watcher diffs against this
+    markUpdated(false);            // clear any "updated" flag now that we're current
+    // If the graph has supports edges but none are scored, verification never ran
+    // (e.g. imported graph, or ingest auto-verify was off) — run it once so the
+    // confidence (ν) shows up instead of an all-blank graph.
+    const eds = g.data.graph.edges;
+    const needsVerify = eds.some(e=>e.rel==='supports') && !eds.some(e=>e.rel==='supports' && e.nli_score!=null);
+    if (needsVerify && verifyTriedFor !== currentThread){
+      verifyTriedFor = currentThread;
+      setStatus(`${currentThread}: auto-verifying (NLI)…`);
+      try { await api(`/threads/${encodeURIComponent(currentThread)}/verify`,
+        {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({threshold:0.7})}); } catch(_){}
+      return loadGraph();
+    }
+    const m = await api(`/threads/${encodeURIComponent(currentThread)}/metrics`);
+    if (m.ok) showMetrics(m.data);
+    // load-bearing / fragility — populate maps, mark cards, fill the panel
+    const a = await api(`/threads/${encodeURIComponent(currentThread)}/analysis`);
+    if (a.ok){
+      analysisData = a.data; buildAnalysisMaps(a.data); showAnalysis(a.data);
+      if ((a.data.load_bearing||[]).length || (a.data.fragile||[]).length) render(lastGraph);
+    }
+  } catch(e){ setStatus('error: '+e.message); }
+}
+
+function showMetrics(m){
+  $("m-cov").textContent = (m.provenance_coverage*100).toFixed(0)+'%';
+  $("m-snd").textContent = Number(m.provenance_soundness).toFixed(2);
+}
+
+function noisyOr(scores){ let p=1; for(const s of scores) p*=(1-Math.max(0,Math.min(1,s))); return 1-p; }
+// support strength of a node = noisy-OR over its incoming scored supports edges
+// (same aggregation the engine uses for status). null = no scored support edge.
+function supportStrength(nodeId){
+  if(!lastGraph) return null;
+  const ins = lastGraph.edges.filter(e=>e.dst===nodeId && e.rel==='supports' && e.nli_score!=null);
+  if(!ins.length) return null;
+  return { nu: noisyOr(ins.map(e=>e.nli_score)), n: ins.length };
+}
+function confRowHtml(d){
+  if(d.type==='source') return '';   // a source is input evidence; type row already says so
+  const ss = supportStrength(d.id);
+  if(ss==null)
+    return `<div class="row"><span class="lab">support</span><span class="val"><span class="pill" style="background:#3a3f4833;color:#aeb7c2">no scored support edge</span></span></div>`;
+  const col = ss.nu>=0.7?'var(--supported)':(ss.nu>=0.4?'#d2a922':'#d2691e');
+  return `<div class="row"><span class="lab">support</span><span class="val">`
+    + `<span class="pill" style="background:${col}33;color:${col}">ν=${ss.nu.toFixed(2)}${ss.nu>=0.7?' ✓':''}</span> `
+    + `<span style="color:var(--muted)">${ss.n} edge(s) · noisy-OR</span></span></div>`;
+}
+function showAnalysis(a){
+  const lb = a.load_bearing||[], pr = a.pseudo_robust||[];
+  // Fragility is shown PER-NODE on the cards now (each fragile node states its own
+  // reason), so this panel only summarises load-bearing + shared-source structure.
+  if(!lb.length && !pr.length){
+    $("analysis").innerHTML = '<h2>Load-bearing / Shared source</h2><div class="empty" style="padding:6px;font-size:11px">No single-point dependencies or hidden shared sources.</div>';
+    return;
+  }
+  let h = '<h2>Load-bearing / Shared source</h2>';
+  if(lb.length){
+    h += `<div class="an-grp">🔑 <b>Load-bearing</b> <span class="an-hint">remove it → claims collapse</span></div>`;
+    lb.slice(0,5).forEach(x => {
+      h += `<div class="an-item" data-id="${x.id}" data-kind="lb"><span class="an-cnt">${x.critical_count}</span>`
+        + `<span class="an-ty ty-${x.type}">${TNAME[x.type]||x.type}</span>${esc(x.content.slice(0,54))}</div>`;
+    });
+  }
+  if(pr.length){
+    // 假鲁棒揭示:点开 → 高亮该结论的多条路径 + 把同源 source 标蓝
+    h += `<div class="an-grp">🕸 <b>Single-source funnel</b> <span class="an-hint">claim looks multi-supported but funnels through one source</span></div>`;
+    pr.slice(0,5).forEach(x => {
+      h += `<div class="an-item" data-id="${x.id}" data-kind="pr">`
+        + `<span class="an-cnt" title="apparent support paths → real sources">${x.n_support_edges}→1</span>`
+        + `${esc(x.content.slice(0,48))}`
+        + `<div class="an-rsn">all paths → ${esc((x.shared_source_brief[0]||'').slice(0,42))}</div></div>`;
+    });
+  }
+  $("analysis").innerHTML = h;
+  $("analysis").querySelectorAll('.an-item').forEach(el =>
+    el.onclick = () => focusAnalysis(el.dataset.id, el.dataset.kind));
+}
+
+// click a 承重/脆弱 entry => reveal + highlight its "blast radius": for a
+// load-bearing node, the conclusions that collapse without it; for a fragile
+// conclusion, its single point(s) of failure.
+function focusAnalysis(id, kind){
+  if(!lastGraph) return;
+  // 假鲁棒揭示(Shared-source Reveal):画出该结论的整条证据子树,把那个被所有路径
+  // 共享的 source 标成蓝色 —— 一眼戳破「看着 N 路支持,其实 1 个来源」。
+  if(kind==='pr' && prMap[id]){
+    const { nodes, edges } = chainOf(id, 'up');     // full evidence prefix of the claim
+    if(!anchors.includes(id)) anchors = [id, ...anchors];
+    nodes.forEach(n=>revealed.add(n));
+    render(lastGraph);
+    cy.elements().addClass('faded').removeClass('hl blast-source blast-inval blast-weak');
+    cy.nodes().filter(n=>nodes.has(n.id())).removeClass('faded').addClass('hl');
+    cy.edges().filter(e=>edges.has(e.id())).removeClass('faded').addClass('hl');
+    (prMap[id].shared_source||[]).forEach(s=>cy.getElementById(s).addClass('blast-source'));
+    const node = cy.getElementById(id); if(node && node.length){ node.select(); inspect(node); }
+    setStatus(`🕸 Hidden shared source: ${prMap[id].n_support_edges} support path(s) all funnel through 1 source (blue)`);
+    return;
+  }
+  const set = new Set([id]);
+  if(kind==='lb' && lbMap[id]) (lbMap[id].critical_for||[]).forEach(c=>set.add(c));
+  if(kind==='frag' && fragMap[id]) (fragMap[id].spof||[]).forEach(s=>set.add(s));
+  if(!anchors.includes(id)) anchors = [id, ...anchors];
+  set.forEach(n=>revealed.add(n));
+  render(lastGraph);
+  cy.elements().addClass('faded').removeClass('hl');
+  cy.nodes().filter(n=>set.has(n.id())).removeClass('faded').addClass('hl');
+  cy.edges().filter(e=>set.has(e.source().id())&&set.has(e.target().id())).removeClass('faded').addClass('hl');
+  const node = cy.getElementById(id); if(node && node.length){ node.select(); inspect(node); }
+  setStatus(kind==='lb'
+    ? `🔑 Load-bearing: removing this collapses ${(lbMap[id].critical_for||[]).length} claim(s) (highlighted)`
+    : `⚠ Fragile: ${(fragMap[id].reasons||[]).join(' · ')}`);
+}
+
+function analysisRowsHtml(d){
+  let h = '';
+  const lb = lbMap[d.id];
+  if(lb) h += `<div class="row"><span class="lab">load-bearing</span><span class="val">`
+    + `<span class="pill" style="background:#e3b34133;color:#e3b341" title="removing this collapses these claims">🔑 ${lb.critical_count} claim(s) depend on it</span></span></div>`;
+  const fr = fragMap[d.id];
+  if(fr) h += `<div class="row"><span class="lab">fragile</span><span class="val">`
+    + `<span class="pill" style="background:#e8852e33;color:#e8995a">⚠ ${esc(fr.reasons.join(' · '))}</span></span></div>`;
+  const pr = prMap[d.id];
+  if(pr) h += `<div class="row"><span class="lab">shared src</span><span class="val">`
+    + `<span class="pill" style="background:#4cc2ff22;color:#7cd4ff" title="all ${pr.n_support_edges} support paths funnel through one source">🕸 ${pr.n_support_edges} paths → 1 source</span></span></div>`;
+  return h;
+}
+function inspect(n){
+  const d = n.data('full');
+  const ref = d.ref ? Object.entries(d.ref).map(([k,v])=>`${k}: ${v}`).join('<br/>') : '—';
+  $("inspector").innerHTML = `
+    <h2>Inspector</h2>
+    <div class="row"><span class="lab">type</span><span class="val">${d.type}${d.reasoning_type?` · ${d.reasoning_type}`:''}</span></div>
+    ${confRowHtml(d)}
+    ${analysisRowsHtml(d)}
+    <div class="row"><span class="lab">trace_ref</span><span class="val"><a class="jump" title="trace step id this node maps back to">${d.trace_ref||'—'}</a></span></div>
+    ${d.type==='source'?`<div class="row"><span class="lab">ref</span><span class="val">${ref}</span></div>`:''}
+    ${d.type==='source'?`<div class="row"><span class="lab">source</span><span class="val">${d.source_type?esc(d.source_type):'—'}${d.credibility?` · <b style="color:${CRED_COL[d.credibility]||'#8aa1b4'}">${esc(d.credibility)}</b> credibility`:''}</span></div>`:''}
+    <div class="content">${(d.content||'').replace(/</g,'&lt;')}</div>
+    ${n.data('plus')?`<button id="fold" style="margin-top:10px">＋ Expand (${n.data('plus')})</button>`:''}
+    <button id="whatif" class="primary" style="margin-top:10px" title="Simulate removing this — which conclusions collapse, which only weaken?">⚡ What if removed?</button>
+    <button id="clr" style="margin-top:10px">clear highlight</button>
+  `;
+  const fb = $("fold"); if (fb) fb.onclick = ()=>expandOneHop(d.id);
+  $("whatif").onclick = ()=>whatIf(d.id);
+  $("clr").onclick = clearHl;
+}
+
+function clearHl(){ cy.elements().removeClass('faded hl blast-inval blast-weak blast-source'); }
+
+// --- What-if reconcile (阶段二扰动): simulate removing a node, show the diff ---
+// "If this source were retracted, which conclusions collapse?" Read-only — never
+// mutates the stored graph. Reveals + colours the blast radius and explains why.
+async function whatIf(nodeId){
+  if(!currentThread || !lastGraph) return;
+  setStatus('⚡ Simulating removal (reconcile)…');
+  let r;
+  try {
+    r = await api(`/threads/${encodeURIComponent(currentThread)}/reconcile`,
+      {method:'POST',headers:{'content-type':'application/json'},
+       body:JSON.stringify({remove_nodes:[nodeId],threshold:0.7})});
+  } catch(e){ setStatus('reconcile error: '+e.message); return; }
+  if(!r.ok){ setStatus('reconcile failed: '+(r.error&&r.error.message||'')); return; }
+  const d = r.data;
+  const affected = [...d.invalidated, ...d.weakened, ...d.now_conflicting].map(x=>x.id);
+  if(!anchors.includes(nodeId)) anchors = [nodeId, ...anchors];
+  [nodeId, ...affected].forEach(n=>revealed.add(n));
+  render(lastGraph);
+  cy.elements().removeClass('faded hl blast-inval blast-weak blast-source');
+  cy.getElementById(nodeId).addClass('blast-source');
+  d.invalidated.forEach(x=>cy.getElementById(x.id).addClass('blast-inval'));
+  d.weakened.forEach(x=>cy.getElementById(x.id).addClass('blast-weak'));
+  d.now_conflicting.forEach(x=>cy.getElementById(x.id).addClass('blast-weak'));
+  showReconcile(nodeId, d);
+  const s = d.summary;
+  setStatus(`⚡ Remove this → ${s.n_invalidated} collapse · ${s.n_weakened} weakened (${s.affected_subgraph_size}-node subgraph)`);
+}
+function showReconcile(nodeId, d){
+  const removing = (lastGraph.nodes.find(n=>n.id===nodeId)||{}).content || nodeId;
+  const item = (x)=>`<div class="an-item" data-id="${x.id}">${esc((x.content||'').slice(0,56))}`
+    + `<div class="an-rsn">${esc(x.why||'')}</div></div>`;
+  let h = `<h2>What-if: remove this</h2>`
+    + `<div class="row"><span class="lab">removing</span><span class="val">${esc(removing.slice(0,90))}</span></div>`
+    + `<div class="an-grp"><b style="color:#ff7b72">${d.summary.n_invalidated}</b> collapse · `
+    + `<b style="color:#e8995a">${d.summary.n_weakened}</b> weakened · subgraph ${d.summary.affected_subgraph_size}</div>`;
+  if(d.invalidated.length){ h += `<div class="an-grp">💥 <b>Collapses</b> <span class="an-hint">loses all evidence</span></div>`; d.invalidated.forEach(x=>h+=item(x)); }
+  if(d.weakened.length){ h += `<div class="an-grp">▽ <b>Weakened</b> <span class="an-hint">still reaches a source</span></div>`; d.weakened.forEach(x=>h+=item(x)); }
+  if(d.now_conflicting.length){ h += `<div class="an-grp">⚔ <b>Now conflicting</b></div>`; d.now_conflicting.forEach(x=>h+=item(x)); }
+  if(!d.invalidated.length && !d.weakened.length && !d.now_conflicting.length)
+    h += `<div class="empty" style="padding:6px;font-size:11px">Nothing downstream depends on this — safe to remove.</div>`;
+  h += `<button id="clr" style="margin-top:10px">clear</button>`;
+  $("inspector").innerHTML = h;
+  $("inspector").querySelectorAll('.an-item').forEach(el => el.onclick = ()=>{
+    const node = cy.getElementById(el.dataset.id); if(node && node.length){ node.select(); inspect(node); focusChain(el.dataset.id,'up'); }
+  });
+  $("clr").onclick = clearHl;
+}
+
+// Reasoning prefix / path: the supports-chain leading to (dir 'up') or out of
+// (dir 'down') a node. Computed client-side from lastGraph — instant, no network.
+function chainOf(nodeId, dir){
+  const nodes = new Set([nodeId]), edges = new Set();
+  if(!lastGraph) return { nodes, edges };
+  const adj = {};
+  lastGraph.edges.forEach(e => {
+    if(e.rel !== 'supports') return;          // evidence chain = supports edges
+    const k = dir==='up' ? e.dst : e.src, v = dir==='up' ? e.src : e.dst;
+    (adj[k] = adj[k] || []).push({ v, id:e.id });
+  });
+  const stack = [nodeId];
+  while(stack.length){ const c = stack.pop();
+    for(const {v, id} of (adj[c]||[])){ edges.add(id); if(!nodes.has(v)){ nodes.add(v); stack.push(v); } } }
+  return { nodes, edges };
+}
+// Click a claim/reasoning => isolate its reasoning path (fade everything else).
+// This is the main way to read a dense graph: one click, one chain.
+function focusChain(nodeId, dir){
+  if(!lastGraph) return;
+  const { nodes, edges } = chainOf(nodeId, dir);
+  const visible = new Set(cy.nodes().map(n=>n.id()));
+  const needRender = [...nodes].some(n => !visible.has(n));   // reveal collapsed parts only if needed
+  if(needRender){
+    if(!anchors.includes(nodeId)) anchors = [nodeId, ...anchors];
+    nodes.forEach(n => revealed.add(n));
+    render(lastGraph);
+  }
+  cy.elements().addClass('faded').removeClass('hl');
+  cy.nodes().filter(n=>nodes.has(n.id())).removeClass('faded').addClass('hl');
+  cy.edges().filter(e=>edges.has(e.id())).removeClass('faded').addClass('hl');
+  setStatus(dir==='up'
+    ? `Evidence path → this conclusion (${nodes.size} nodes; click empty space to clear)`
+    : `What depends on this source (${nodes.size} nodes; click empty space to clear)`);
+}
+
+const ICON = { source:'📄', reasoning:'🧠', claim:'🏁' };
+const TNAME = { source:'SOURCE', reasoning:'REASONING', claim:'CLAIM' };
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// source credibility colour (display only — does not affect ν/status)
+const CRED_COL = { high:'#3fb950', medium:'#d29922', low:'#f85149' };
+function srcBadge(n){
+  if(!n || (!n.source_type && !n.credibility)) return '';
+  const cr = n.credibility, col = CRED_COL[cr] || '#8aa1b4';
+  return `<span class="stype" title="source type · credibility (display only)"`
+    + ` style="font-size:10px;font-weight:700;color:var(--muted);background:#ffffff10;`
+    + `border:1px solid var(--line);border-radius:5px;padding:0 5px;margin-left:5px">`
+    + `${n.source_type?esc(n.source_type):'source'}${cr?` · <b style="color:${col}">${esc(cr)}</b>`:''}</span>`;
+}
+function cardTpl(d){
+  const verified = d.type==='source' || d.status==='supported';
+  // EXACTLY ONE top-right badge, mutually exclusive (priority high→low):
+  //   shared-source  > fragile  > load-bearing  > verified  > none
+  // contested / ungrounded are NOT separate badges — they are fragile REASONS,
+  // written into the card body below (so every fragile node states why it's fragile).
+  let badge = '';
+  if(d.shared)       badge = `<span class="lb" style="background:#4cc2ff;color:#04121f" title="Shared source — ${esc(d.sharedHint||'same origin as another source')}">🔗 shared</span>`;
+  else if(d.fragile) badge = `<span class="warn warn-frag" title="Fragile — ${esc(d.fragReason||'')}">⚠ fragile</span>`;
+  else if(d.lb)      badge = `<span class="lb" title="Load-bearing — ${d.lb} claim(s) collapse without it">🔑${d.lb}</span>`;
+  else if(verified)  badge = `<span class="vok" title="${d.type==='source'?'Source — evidence by definition':'Evidence support ν≥0.7'}">✓</span>`;
+  // the specific reason printed on the card (shared-source hint, else fragile reason)
+  const reason = d.shared ? (d.sharedHint||'') : (d.fragile ? (d.fragReason||'') : '');
+  const cls = `card card-${d.type}` + (d.focus?' card-focus':'') + (d.fragile?' card-fragile':'');
+  return `<div class="${cls}"><span class="bar"></span>`
+    + `<div class="card-head"><span class="ic">${ICON[d.type]||'•'}</span>`
+    + `<span class="tname">${TNAME[d.type]||d.type}</span>`
+    + (d.type==='source'?srcBadge(d.full):``)
+    + `<span class="sp"></span>`
+    + badge
+    + `</div><div class="card-body">${esc(d.content)}</div>`
+    + (reason?`<div class="card-reason">⚠ ${esc(reason)}</div>`:``)
+    + (d.plus?`<div class="card-more">＋${d.plus} more evidence</div>`:``)
+    + `</div>`;
+}
+
+function initCy(){
+  cy = cytoscape({ container:$("cy"), style:cyStyle, elements:[],
+    wheelSensitivity:0.2, minZoom:0.2, maxZoom:2.5 });
+  if (cy.nodeHtmlLabel) cy.nodeHtmlLabel([{ query:'node',
+    halign:'center', valign:'center', halignBox:'center', valignBox:'center', tpl: cardTpl }]);
+  cy.on('tap','node', e=>{ const n=e.target; inspect(n);
+    focusChain(n.id(), n.data('type')==='source' ? 'down' : 'up'); });
+  cy.on('tap', e=>{ if(e.target===cy){ clearHl(); } });
+  // hover an expandable node => show the floating ＋ ; right-click = expand one hop
+  cy.on('mouseover','node', e=>{ if(e.target.data('plus')) showPlusFor(e.target); });
+  cy.on('mouseout','node', ()=>{ plusHideTimer = setTimeout(hidePlus, 220); });
+  cy.on('cxttap','node', e=>{ if(e.target.data('plus')) expandOneHop(e.target.id()); });
+  cy.on('pan zoom drag', hidePlus);
+  const pl = $("plus");
+  pl.onmouseenter = ()=>{ if(plusHideTimer) clearTimeout(plusHideTimer); };
+  pl.onmouseleave = hidePlus;
+  pl.onclick = ()=>{ const t = pl.dataset.target; hidePlus(); expandOneHop(t); };
+}
+
+// --- live watch (non-intrusive) ------------------------------------------
+// A new turn must NEVER redraw the graph while you're reading it (re-layout
+// would lose your zoom / selection / trace-back). So the timer only POLLS for
+// changes and flags the Refresh button; the canvas stays put until you click.
+function sigOf(data){
+  const s = (data && data.summary) || {};
+  return JSON.stringify([s.node_count, s.edge_count, s.nodes_by_status]);
+}
+function markUpdated(on){
+  const b = $("refresh");
+  if(on){ b.textContent = '↻ Refresh •'; b.style.color = '#e3b341'; b.style.borderColor = '#e3b341'; b.title = 'Graph updated — click to refresh'; }
+  else  { b.textContent = '↻ Refresh';   b.style.color = '';        b.style.borderColor = '';        b.title = 'Refresh'; }
+}
+async function pollChanges(){
+  if(!currentThread || renderedSig === null) return;  // nothing rendered yet to diff against
+  try{
+    const g = await api(`/threads/${encodeURIComponent(currentThread)}/graph`);
+    if(g && g.ok && sigOf(g.data) !== renderedSig) markUpdated(true);
+  }catch(_){}
+}
+
+// --- controls ---
+$("thread").onchange = e=>{ currentThread = e.target.value; renderedSig = null; markUpdated(false); loadGraph(); };
+$("refresh").onclick = loadGraph;
+$("verify").onclick = async ()=>{
+  if(!currentThread) return; setStatus('verifying…');
+  const r = await api(`/threads/${encodeURIComponent(currentThread)}/verify`,
+    {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({threshold:0.7})});
+  setStatus(r.ok?`verified: ${r.data.status_changes.length} status changes`:'verify failed');
+  loadGraph();
+};
+$("sample").onclick = async ()=>{
+  const tid = 'ui-sample';
+  setStatus('ingesting sample (extract + auto-verify, ~10–20s)…');
+  const r = await api(`/threads/${tid}/ingest-trace`,
+    {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(SAMPLE)});
+  if(!r.ok){ setStatus('ingest failed: '+(r.error&&r.error.message||'')); return; }
+  await loadThreads(); currentThread = tid; $("thread").value = tid; loadGraph();
+};
+$("expandAll").onclick = showAllClaims;          // show every conclusion (still 1-hop)
+$("collapseAll").onclick = resetView;            // back to top-3 focus
+let timer = null;
+$("auto").onchange = e=>{
+  if(e.target.checked){ timer = setInterval(pollChanges, 3000); } else { clearInterval(timer); timer=null; markUpdated(false); }
+};
+
+initCy();
+loadThreads().then(loadGraph);
+// "watch" defaults ON: it only polls for changes and flags Refresh — it never
+// redraws while you read (the checkbox `checked` only sets UI state — start here).
+if($("auto").checked && !timer){ timer = setInterval(pollChanges, 3000); }
+</script>
+</body>
+</html>

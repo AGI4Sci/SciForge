@@ -1,0 +1,40 @@
+{
+  "thread_id": "sample-llm-hallucination",
+  "title": "Do larger LLMs hallucinate less? (4 turns · contradiction + prerequisite + refinement)",
+  "note": "Real, checkable. Exercises: a direct contradiction (scaling helps vs inverse-scaling), a prerequisite (retrieval grounding before factual reliability), and a refined multi-source conclusion.",
+  "trace": [
+    {"id": "llm_t1_u", "type": "message", "role": "user",
+     "content": "Do larger language models hallucinate less than smaller ones?"},
+    {"id": "llm_t1_call", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "scaling laws language model accuracy fewer factual errors"}},
+    {"id": "llm_t1_res", "type": "tool_result", "tool_name": "web_search",
+     "content": "Scaling-laws work (Kaplan et al. 2020; Brown et al. 2020, GPT-3) shows larger models achieve lower loss and higher accuracy on many knowledge and reasoning benchmarks, and few-shot factual QA accuracy generally improves with parameter count."},
+    {"id": "llm_t1_a", "type": "message", "role": "assistant",
+     "content": "Larger models score higher on many knowledge benchmarks, so on average they make fewer factual errors on standard QA as scale increases."},
+
+    {"id": "llm_t2_u", "type": "message", "role": "user",
+     "content": "But I've read that bigger models can be MORE confidently wrong. Is that true?"},
+    {"id": "llm_t2_call", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "TruthfulQA inverse scaling larger models imitate human falsehoods"}},
+    {"id": "llm_t2_res", "type": "tool_result", "tool_name": "web_search",
+     "content": "Lin et al. 2022 (TruthfulQA) found that on questions where humans hold common misconceptions, LARGER models were often LESS truthful than smaller ones — they more faithfully imitate popular human falsehoods. The Inverse Scaling Prize collected further tasks where performance degrades with scale."},
+    {"id": "llm_t2_a", "type": "message", "role": "assistant",
+     "content": "On TruthfulQA, larger models can be less truthful, more readily reproducing common human misconceptions. This contradicts the simple claim that scale uniformly reduces hallucination."},
+    {"id": "llm_t2_reason", "type": "message", "role": "assistant",
+     "content": "So scale reduces some retrieval-style factual errors but does not fix hallucination in general; the failure mode (imitating plausible falsehoods) is not solved by parameters alone."},
+
+    {"id": "llm_t3_u", "type": "message", "role": "user",
+     "content": "Does giving the model retrieval help?"},
+    {"id": "llm_t3_call", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "retrieval augmented generation reduces hallucination grounding citations"}},
+    {"id": "llm_t3_res", "type": "tool_result", "tool_name": "web_search",
+     "content": "Retrieval-augmented generation (Lewis et al. 2020) and subsequent work show that grounding generations in retrieved documents reduces hallucination and enables verifiable citations, because the model conditions on external evidence rather than parametric memory."},
+    {"id": "llm_t3_reason", "type": "message", "role": "assistant",
+     "content": "Access to retrieved evidence is a prerequisite for grounded, verifiable answers; without external grounding, larger models still hallucinate on long-tail or misconception-prone facts."},
+
+    {"id": "llm_t4_u", "type": "message", "role": "user",
+     "content": "Summarize the real answer."},
+    {"id": "llm_t4_claim", "type": "message", "role": "assistant",
+     "content": "Refined answer: increasing model size reduces many factual errors on average but does NOT eliminate hallucination — on misconception-prone questions larger models can be worse — so reliable factuality requires retrieval-grounding rather than scale alone."}
+  ]
+}

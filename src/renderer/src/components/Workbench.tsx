@@ -2133,6 +2133,20 @@ export function Workbench(): ReactElement {
                       runtimeCapabilities?.sideConversations !== false
                     }
                     onOpenSideChat={openSideChat}
+                    onOpenEvidenceDag={() => {
+                      // Open the evidence-dag engine's web UI in the external browser
+                      // (the launcher fixes EDAG_PORT=3897). ?thread=<id> makes the
+                      // page follow the active conversation. The renderer can't read
+                      // the main-process SCIFORGE_EVIDENCE_DAG_SERVICE_URL, so the
+                      // origin is the launcher's fixed local port.
+                      const id = (activeThreadId ?? '').trim()
+                      const url = id
+                        ? `http://127.0.0.1:3897/?thread=${encodeURIComponent(id)}`
+                        : 'http://127.0.0.1:3897/'
+                      if (typeof window.dsGui?.openExternal === 'function') {
+                        void window.dsGui.openExternal(url).catch(() => undefined)
+                      }
+                    }}
                   />
                 </div>
               </div>

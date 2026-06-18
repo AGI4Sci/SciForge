@@ -1,0 +1,36 @@
+{
+  "thread_id": "sample-intermittent-fasting",
+  "title": "Intermittent fasting & metabolic health (a keystone trial, two cohorts, a contradicted study, one ungrounded aside)",
+  "note": "Real, checkable. Exercises the phase-2 reconcile / what-if + fragility surface: a keystone TREAT trial reasoned about from two angles, two independent cohorts converging on one claim, a 2019 study contradicted by a 2022 re-analysis (contradicts edge), and one ungrounded throwaway opinion (no source) that should be flagged fragile. Strict NLI tends to score these modestly — an honest 'evidence is softer than it sounds' picture.",
+  "trace": [
+    {"id": "t1", "type": "message", "role": "user",
+     "content": "Does intermittent fasting actually improve metabolic health, or is it just calorie restriction in disguise?"},
+
+    {"id": "t2", "type": "message", "role": "assistant",
+     "content": "I'll gather the strongest clinical evidence and weigh it before concluding."},
+
+    {"id": "t3", "type": "tool_result", "tool_name": "web_search",
+     "content": "The TREAT randomized controlled trial (Lowe et al., JAMA Internal Medicine 2020) assigned participants to time-restricted eating vs a consistent-meals control and measured weight and metabolic markers over 12 weeks."},
+
+    {"id": "t4", "type": "message", "role": "assistant",
+     "content": "Reading the TREAT trial: the weight change it reported was modest and not clearly better than the control, which is one angle on whether time-restricted eating adds anything beyond calorie reduction."},
+
+    {"id": "t5", "type": "message", "role": "assistant",
+     "content": "A second angle on the same TREAT trial: its lean-mass findings suggested a portion of the lost weight was lean mass, which I take as a caution that time-restricted eating is not obviously superior."},
+
+    {"id": "t6", "type": "tool_result", "tool_name": "web_search",
+     "content": "A separate prospective cohort study (Cohort-Nurses 2018) following thousands of participants associated earlier eating windows with modestly better insulin sensitivity."},
+
+    {"id": "t7", "type": "tool_result", "tool_name": "web_search",
+     "content": "An independent cohort study in a different population (Cohort-EU 2021) also reported an association between time-restricted eating and improved glycemic markers."},
+
+    {"id": "t8", "type": "tool_result", "tool_name": "web_search",
+     "content": "A small 2019 crossover study claimed time-restricted eating produced large fat-loss effects independent of calories."},
+
+    {"id": "t9", "type": "tool_result", "tool_name": "web_search",
+     "content": "A 2022 re-analysis disputed that 2019 crossover study, finding its large independent fat-loss effect disappeared after correcting for an energy-intake measurement error."},
+
+    {"id": "t10", "type": "message", "role": "assistant",
+     "content": "Synthesizing: time-restricted eating is associated with modestly better glycemic markers, and its weight effect is largely explained by reduced calorie intake rather than meal timing per se. The claim that it causes large calorie-independent fat loss is contested. As a practical aside, I'd guess most people will find fasting easier to sustain than counting calories."}
+  ]
+}

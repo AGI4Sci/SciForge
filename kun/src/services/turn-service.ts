@@ -12,6 +12,7 @@ import { makeUserItem, makeErrorItem } from '../domain/item.js'
 import { appendTurnItem, createTurnRecord, finishTurn, replaceTurnItem, startTurn as startTurnRecord } from '../domain/turn.js'
 import { touchThread } from '../domain/thread.js'
 import type { RuntimeEventRecorder } from './runtime-event-recorder.js'
+import { feedEvidenceDag } from './evidence-dag-feed.js'
 
 export type TurnServiceDeps = {
   threadStore: ThreadStore
@@ -252,6 +253,15 @@ export class TurnService {
     })
     if (errorItem) {
       await this.appendItem(input.threadId, errorItem)
+    }
+    // Feed the completed turn into its thread's evidence DAG (merge mode), so the
+    // DAG accumulates across the conversation. Fire-and-forget + fail-open: gated
+    // by SCIFORGE_EVIDENCE_DAG_SERVICE_URL, never blocks or breaks the turn.
+    if (input.status === 'completed') {
+      const turn = await this.getTurn(input.threadId, input.turnId)
+      if (turn) {
+        void feedEvidenceDag(input.threadId, turn.items).catch(() => {})
+      }
     }
   }
 

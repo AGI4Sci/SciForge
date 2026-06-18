@@ -16,6 +16,7 @@ import {
   ListTodo,
   Loader2,
   MessageCircleMore,
+  Network,
   RefreshCw,
   Terminal
 } from 'lucide-react'
@@ -33,6 +34,7 @@ type Props = {
   sideChatOpen?: boolean
   sideChatEnabled?: boolean
   onOpenSideChat?: () => void
+  onOpenEvidenceDag?: () => void
 }
 
 export function WorkbenchTopBar({
@@ -43,7 +45,8 @@ export function WorkbenchTopBar({
   sideChatRunningCount = 0,
   sideChatOpen = false,
   sideChatEnabled = true,
-  onOpenSideChat
+  onOpenSideChat,
+  onOpenEvidenceDag
 }: Props): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const [editors, setEditors] = useState<EditorInfo[]>([])
@@ -335,6 +338,18 @@ export function WorkbenchTopBar({
           {sideChatRunningCount > 0 ? (
             <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.18)]" />
           ) : null}
+        </button>
+      ) : null}
+
+      {onOpenEvidenceDag ? (
+        <button
+          type="button"
+          onClick={onOpenEvidenceDag}
+          className="rounded-full border border-transparent bg-white/38 px-2.5 py-1.5 text-ds-faint opacity-90 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:hover:bg-white/8"
+          aria-label={t('rightPanelEvidenceDag', { defaultValue: 'Evidence DAG' })}
+          title={t('rightPanelEvidenceDag', { defaultValue: 'Evidence DAG' })}
+        >
+          <Network className="h-4 w-4" strokeWidth={1.75} />
         </button>
       ) : null}
 

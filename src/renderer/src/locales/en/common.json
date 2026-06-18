@@ -869,6 +869,7 @@
   "inspector": "Changes",
   "rightPanelChanges": "Changes",
   "rightPanelBrowser": "Preview",
+  "rightPanelEvidenceDag": "Evidence DAG",
   "rightPanelRuntime": "Runtime",
   "rightPanelPlan": "Plan",
   "rightPanelTodo": "Todo",
