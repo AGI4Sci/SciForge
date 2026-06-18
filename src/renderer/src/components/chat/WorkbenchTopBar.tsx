@@ -16,13 +16,14 @@ import {
   ListTodo,
   Loader2,
   MessageCircleMore,
+  Newspaper,
   RefreshCw,
   Terminal
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
 
-export type RightPanelMode = 'todo' | 'changes' | 'browser' | 'file' | 'plan' | 'sdd-ai' | null
+export type RightPanelMode = 'todo' | 'changes' | 'browser' | 'file' | 'plan' | 'sdd-ai' | 'paper' | null
 
 type Props = {
   rightPanelMode: RightPanelMode
@@ -55,6 +56,7 @@ export function WorkbenchTopBar({
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const items = [
     { mode: 'todo' as const, label: t('rightPanelTodo'), icon: ListTodo },
+    { mode: 'paper' as const, label: t('rightPanelPaperRadar'), icon: Newspaper },
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: 'browser' as const, label: t('rightPanelBrowser'), icon: Globe2 }

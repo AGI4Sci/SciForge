@@ -176,6 +176,17 @@ function createApi(): DsGuiApi {
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)
     },
+    paperRadar: {
+      status: () => invoke('paperRadar:status'),
+      syncArxiv: (payload) => invoke('paperRadar:sync-arxiv', payload),
+      syncBiorxiv: (payload) => invoke('paperRadar:sync-biorxiv', payload),
+      syncProfile: (payload) => invoke('paperRadar:sync-profile', payload),
+      listProfiles: () => invoke('paperRadar:profiles:list'),
+      saveProfile: (payload) => invoke('paperRadar:profiles:save', payload),
+      search: (payload) => invoke('paperRadar:search', payload),
+      rank: (payload) => invoke('paperRadar:rank', payload),
+      digest: (payload) => invoke('paperRadar:digest', payload)
+    },
     onRuntimeStatus: (handler) => onChannel('runtime:status', handler),
     agentRuntime: {
       connect: (runtimeId) => invoke('agentRuntime:connect', { runtimeId }),

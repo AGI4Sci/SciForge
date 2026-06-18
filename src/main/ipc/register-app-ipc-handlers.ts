@@ -63,6 +63,13 @@ import {
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
+  paperRadarArxivSyncPayloadSchema,
+  paperRadarBiorxivSyncPayloadSchema,
+  paperRadarDigestPayloadSchema,
+  paperRadarProfilePayloadSchema,
+  paperRadarProfileSyncPayloadSchema,
+  paperRadarRankPayloadSchema,
+  paperRadarSearchPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
   shellOpenExternalUrlSchema,
@@ -150,6 +157,17 @@ import { retrieveWriteContext } from '../services/write-retrieval-service'
 import { requestSpeechTranscription } from '../services/speech-to-text-service'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
+import {
+  digestPaperRadar,
+  getPaperRadarStatus,
+  listPaperRadarProfiles,
+  rankPaperRadar,
+  savePaperRadarProfile,
+  searchPaperRadar,
+  syncPaperRadarArxiv,
+  syncPaperRadarBiorxiv,
+  syncPaperRadarProfile
+} from '../paper-radar-sidecar'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 
@@ -479,6 +497,30 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     applySettingsPatch(
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch
     )
+  )
+
+  handleInvoke('paperRadar:status', async () => getPaperRadarStatus())
+  handleInvoke('paperRadar:sync-arxiv', async (_, payload: unknown) =>
+    syncPaperRadarArxiv(parseIpcPayload('paperRadar:sync-arxiv', paperRadarArxivSyncPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('paperRadar:sync-biorxiv', async (_, payload: unknown) =>
+    syncPaperRadarBiorxiv(parseIpcPayload('paperRadar:sync-biorxiv', paperRadarBiorxivSyncPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('paperRadar:sync-profile', async (_, payload: unknown) =>
+    syncPaperRadarProfile(parseIpcPayload('paperRadar:sync-profile', paperRadarProfileSyncPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('paperRadar:profiles:list', async () => listPaperRadarProfiles())
+  handleInvoke('paperRadar:profiles:save', async (_, payload: unknown) =>
+    savePaperRadarProfile(parseIpcPayload('paperRadar:profiles:save', paperRadarProfilePayloadSchema, payload ?? {}))
+  )
+  handleInvoke('paperRadar:search', async (_, payload: unknown) =>
+    searchPaperRadar(parseIpcPayload('paperRadar:search', paperRadarSearchPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('paperRadar:rank', async (_, payload: unknown) =>
+    rankPaperRadar(parseIpcPayload('paperRadar:rank', paperRadarRankPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('paperRadar:digest', async (_, payload: unknown) =>
+    digestPaperRadar(parseIpcPayload('paperRadar:digest', paperRadarDigestPayloadSchema, payload ?? {}))
   )
 
   const requireAgentRuntime = (): NonNullable<RegisterAppIpcHandlersOptions['agentRuntime']> => {

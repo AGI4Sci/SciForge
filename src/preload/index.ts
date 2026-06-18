@@ -114,6 +114,17 @@ const api = {
   speechToText: {
     transcribe: transcribeSpeech
   },
+  paperRadar: {
+    status: () => ipcRenderer.invoke('paperRadar:status'),
+    syncArxiv: (payload) => ipcRenderer.invoke('paperRadar:sync-arxiv', payload),
+    syncBiorxiv: (payload) => ipcRenderer.invoke('paperRadar:sync-biorxiv', payload),
+    syncProfile: (payload) => ipcRenderer.invoke('paperRadar:sync-profile', payload),
+    listProfiles: () => ipcRenderer.invoke('paperRadar:profiles:list'),
+    saveProfile: (payload) => ipcRenderer.invoke('paperRadar:profiles:save', payload),
+    search: (payload) => ipcRenderer.invoke('paperRadar:search', payload),
+    rank: (payload) => ipcRenderer.invoke('paperRadar:rank', payload),
+    digest: (payload) => ipcRenderer.invoke('paperRadar:digest', payload)
+  },
   agentRuntime: {
     connect: (runtimeId) => ipcRenderer.invoke('agentRuntime:connect', { runtimeId }),
     capabilities: (runtimeId) => ipcRenderer.invoke('agentRuntime:capabilities', { runtimeId }),

@@ -116,6 +116,9 @@ const TodoPanel = lazy(() =>
 const ScheduleTasksView = lazy(() =>
   import('./schedule/ScheduleTasksView').then((module) => ({ default: module.ScheduleTasksView }))
 )
+const PaperRadarPanel = lazy(() =>
+  import('./paper/PaperRadarPanel').then((module) => ({ default: module.PaperRadarPanel }))
+)
 
 type PendingSddPlanTarget = {
   planId: string
@@ -1937,6 +1940,11 @@ export function Workbench(): ReactElement {
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
                 onOpenPlan={openGuiPlanPanel}
+              />
+            ) : rightPanelMode === 'paper' ? (
+              <PaperRadarPanel
+                className="h-full max-h-full w-full"
+                onCollapse={closeRightPanel}
               />
             ) : rightPanelMode === 'browser' ? (
               <DevBrowserPanel

@@ -38,6 +38,7 @@ import type { GuiUpdateState } from '../shared/gui-update'
 import { isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
 import { ensureModelRouterConfigFile, ensureModelRouterSidecar, stopModelRouterSidecar } from './model-router-sidecar'
+import { ensurePaperRadarSidecar, stopPaperRadarSidecar } from './paper-radar-sidecar'
 import {
   kunRuntimeAdapter,
   getRuntimeBaseUrlForSettings,
@@ -296,6 +297,7 @@ async function stopManagedRuntimes(): Promise<void> {
       discordBotRuntime?.stop()
       clawRuntime?.stop()
       await stopModelRouterSidecar()
+      await stopPaperRadarSidecar()
       stopWeixinBridgeRuntime()
       await codexRuntime?.stop()
       await kunRuntimeAdapter.stopAndWait()
@@ -1286,6 +1288,17 @@ app.whenReady().then(async () => {
       message: error instanceof Error ? error.message : String(error)
     })
   })
+  if (!app.isPackaged) {
+    void ensurePaperRadarSidecar({
+      userDataDir: app.getPath('userData'),
+      appRoot: app.getAppPath(),
+      log: (message) => logWarn('paper-radar', message)
+    }).catch((error) => {
+      logWarn('paper-radar', 'Failed to auto-start Paper Radar.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
     adapters: [

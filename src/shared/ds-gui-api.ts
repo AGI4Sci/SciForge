@@ -79,6 +79,24 @@ import type {
   SpeechTranscriptionRequest,
   SpeechTranscriptionResult
 } from './speech-to-text'
+import type {
+  PaperRadarApiResult,
+  PaperRadarArxivSyncInput,
+  PaperRadarBiorxivSyncInput,
+  PaperRadarDigestInput,
+  PaperRadarDigestResult,
+  PaperRadarProfile,
+  PaperRadarProfileListResult,
+  PaperRadarProfileSaveResult,
+  PaperRadarProfileSyncInput,
+  PaperRadarProfileSyncResult,
+  PaperRadarRankInput,
+  PaperRadarRankResult,
+  PaperRadarSearchInput,
+  PaperRadarSearchResult,
+  PaperRadarStatus,
+  PaperRadarSyncResult
+} from './paper-radar'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type PathOpenResult = { ok: boolean; message?: string }
@@ -411,6 +429,17 @@ export type DsGuiApi = {
   ) => Promise<WriteRichClipboardResult>
   speechToText: {
     transcribe: (payload: SpeechTranscriptionRequest) => Promise<SpeechTranscriptionResult>
+  }
+  paperRadar: {
+    status: () => Promise<PaperRadarStatus>
+    syncArxiv: (payload: PaperRadarArxivSyncInput) => Promise<PaperRadarApiResult<PaperRadarSyncResult>>
+    syncBiorxiv: (payload: PaperRadarBiorxivSyncInput) => Promise<PaperRadarApiResult<PaperRadarSyncResult>>
+    syncProfile: (payload: PaperRadarProfileSyncInput) => Promise<PaperRadarApiResult<PaperRadarProfileSyncResult>>
+    listProfiles: () => Promise<PaperRadarApiResult<PaperRadarProfileListResult>>
+    saveProfile: (payload: PaperRadarProfile) => Promise<PaperRadarApiResult<PaperRadarProfileSaveResult>>
+    search: (payload: PaperRadarSearchInput) => Promise<PaperRadarApiResult<PaperRadarSearchResult>>
+    rank: (payload: PaperRadarRankInput) => Promise<PaperRadarApiResult<PaperRadarRankResult>>
+    digest: (payload: PaperRadarDigestInput) => Promise<PaperRadarApiResult<PaperRadarDigestResult>>
   }
   onRuntimeStatus: (handler: (payload: KunRuntimeStatusPayload) => void) => () => void
   agentRuntime: {
