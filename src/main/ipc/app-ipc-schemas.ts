@@ -695,6 +695,83 @@ export const skillListPayloadSchema = z
   })
   .strict()
 
+export const scientificSkillsMcpConfigPayloadSchema = z
+  .object({
+    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
+  })
+  .strict()
+
+export const scientificPlottingMcpConfigPayloadSchema = z
+  .object({
+    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
+  })
+  .strict()
+
+export const scientificPlottingStatusPayloadSchema = z
+  .object({
+    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
+  })
+  .strict()
+
+const scientificPlottingCropBoxPayloadSchema = z
+  .object({
+    unit: z.enum(['ratio', 'pixel']).optional(),
+    x: z.number().finite().nonnegative(),
+    y: z.number().finite().nonnegative(),
+    width: z.number().finite().positive(),
+    height: z.number().finite().positive()
+  })
+  .strict()
+
+export const scientificPlottingPrepareReferencePayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    sourcePath: trimmedString(MAX_PATH_LENGTH),
+    sourceType: z.enum(['image', 'pdf']).optional(),
+    page: z.number().int().positive().max(10_000).optional(),
+    cropBox: scientificPlottingCropBoxPayloadSchema.optional(),
+    figureId: z.string().trim().max(128).optional(),
+    outputDir: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    dpi: z.number().int().min(72).max(600).optional(),
+    extractStyle: z.boolean().optional()
+  })
+  .strict()
+
+export const scientificSkillsInstallPayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    backend: z.enum(['git', 'npx']).optional(),
+    ref: z.string().trim().min(1).max(128).optional()
+  })
+  .strict()
+
+export const figureStyleExtractPayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    sourcePath: trimmedString(MAX_PATH_LENGTH),
+    sourceType: z.enum(['image', 'pdf']).optional(),
+    figureId: z.string().trim().max(128).optional(),
+    notes: z.string().trim().max(1_000).optional()
+  })
+  .strict()
+
+export const figureStyleEvaluatePayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    referencePath: trimmedString(MAX_PATH_LENGTH),
+    outputPath: trimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
+export const figureStyleReviewPayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    referencePath: trimmedString(MAX_PATH_LENGTH),
+    outputPath: trimmedString(MAX_PATH_LENGTH),
+    minOverall: z.number().min(0.5).max(0.98).optional()
+  })
+  .strict()
+
 export const rootPathSchema = trimmedString(MAX_PATH_LENGTH)
 export const deepseekConfigContentSchema = z.string().max(MAX_CONFIG_FILE_BYTES)
 

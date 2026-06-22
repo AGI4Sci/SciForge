@@ -53,12 +53,16 @@ import { createClawRuntime, type ClawRuntime } from './claw-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { runClawScheduleMcpServerFromArgv } from './claw-schedule-mcp-server'
+import { runScientificSkillsMcpServerFromArgv } from './scientific-skills-mcp-server'
+import { runScientificPlottingMcpServerFromArgv } from './scientific-plotting-mcp-server'
 import {
   clawScheduleMcpSettingsChanged,
   resolveKunMcpJsonPath,
   syncClawScheduleMcpConfig,
   type ClawScheduleMcpLaunchConfig
 } from './claw-schedule-mcp-config'
+import { SCIENTIFIC_SKILLS_MCP_FLAG, type ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
+import { SCIENTIFIC_PLOTTING_MCP_FLAG, type ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
 import {
@@ -121,6 +125,9 @@ function syncWeixinBridgeRuntime(settings: AppSettingsV1): void {
 
 const runningClawScheduleMcpServer =
   process.argv.includes('--gui-schedule-mcp-server') || process.argv.includes('--claw-schedule-mcp-server')
+const runningScientificSkillsMcpServer = process.argv.includes(SCIENTIFIC_SKILLS_MCP_FLAG)
+const runningScientificPlottingMcpServer = process.argv.includes(SCIENTIFIC_PLOTTING_MCP_FLAG)
+const runningHeadlessMcpServer = runningClawScheduleMcpServer || runningScientificSkillsMcpServer || runningScientificPlottingMcpServer
 
 function resolveLogDirectory(): string {
   return join(app.getPath('userData'), 'logs')
@@ -133,6 +140,22 @@ function resolvePreloadPath(): string {
 }
 
 function getClawScheduleMcpLaunchConfig(): ClawScheduleMcpLaunchConfig {
+  return {
+    appPath: app.getAppPath(),
+    execPath: process.execPath,
+    isPackaged: app.isPackaged
+  }
+}
+
+function getScientificSkillsMcpLaunchConfig(): ScientificSkillsMcpLaunchConfig {
+  return {
+    appPath: app.getAppPath(),
+    execPath: process.execPath,
+    isPackaged: app.isPackaged
+  }
+}
+
+function getScientificPlottingMcpLaunchConfig(): ScientificPlottingMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
     execPath: process.execPath,
@@ -162,7 +185,7 @@ function runtimeJsonError(code: string, message: string): Error {
 
 traceStartup('main module evaluated')
 
-if (runningClawScheduleMcpServer && process.platform === 'darwin') {
+if (runningHeadlessMcpServer && process.platform === 'darwin') {
   app.dock.hide()
 }
 
@@ -174,7 +197,7 @@ if (runningClawScheduleMcpServer && process.platform === 'darwin') {
 configureAppIdentity()
 configureLinuxWaylandImeSwitches()
 
-if (!runningClawScheduleMcpServer && process.platform === 'win32') {
+if (!runningHeadlessMcpServer && process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID)
 }
 
@@ -378,10 +401,10 @@ function installDevPreviewWebviewGuards(): void {
 const appIcon = createAppIcon(deepseekLogoPng)
 const trayIcon = createAppIcon(deepseekTrayPng)
 traceStartup('app icon loaded', { source: deepseekLogoPng.startsWith('data:') ? 'data-url' : 'path' })
-const gotSingleInstanceLock = runningClawScheduleMcpServer || app.requestSingleInstanceLock()
+const gotSingleInstanceLock = runningHeadlessMcpServer || app.requestSingleInstanceLock()
 traceStartup('single instance lock checked', {
   gotSingleInstanceLock,
-  skippedForClawScheduleMcpServer: runningClawScheduleMcpServer
+  skippedForHeadlessMcpServer: runningHeadlessMcpServer
 })
 
 function trayLabels(locale: AppSettingsV1['locale']): { show: string; quit: string; tooltip: string } {
@@ -1240,7 +1263,17 @@ async function waitForManagedRuntimeReadyBeforeStop(
   }
 }
 
-if (runningClawScheduleMcpServer) {
+if (runningScientificPlottingMcpServer) {
+  void runScientificPlottingMcpServerFromArgv(process.argv).catch((error) => {
+    console.error('[scientific-plotting-mcp] server failed:', error)
+    process.exit(1)
+  })
+} else if (runningScientificSkillsMcpServer) {
+  void runScientificSkillsMcpServerFromArgv(process.argv).catch((error) => {
+    console.error('[scientific-skills-mcp] server failed:', error)
+    process.exit(1)
+  })
+} else if (runningClawScheduleMcpServer) {
   void runClawScheduleMcpServerFromArgv(process.argv).catch((error) => {
     console.error('[claw-schedule-mcp] server failed:', error)
     process.exit(1)
@@ -1465,6 +1498,8 @@ app.whenReady().then(async () => {
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
+    getScientificSkillsMcpLaunchConfig,
+    getScientificPlottingMcpLaunchConfig,
     logError
   })
 

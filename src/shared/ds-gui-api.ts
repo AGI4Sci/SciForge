@@ -79,6 +79,19 @@ import type {
   SpeechTranscriptionRequest,
   SpeechTranscriptionResult
 } from './speech-to-text'
+import type {
+  FigureStyleExtractRequest,
+  FigureStyleExtractResult,
+  FigureStyleReviewRequest,
+  FigureStyleReviewResult,
+  FigureStyleSimilarityRequest,
+  FigureStyleSimilarityResult
+} from './figure-style'
+import type {
+  ScientificPlottingPrepareReferenceRequest,
+  ScientificPlottingPrepareReferenceResult,
+  ScientificPlottingStatusResult
+} from './scientific-plotting'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type PathOpenResult = { ok: boolean; message?: string }
@@ -180,6 +193,81 @@ export type SkillListResult =
   | { ok: false; message: string }
 export type DeepseekConfigFileResult = { path: string; content: string; exists: boolean }
 export type DeepseekConfigSaveResult = { ok: true; path: string }
+export type ScientificSkillsMcpConfigResult =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false; message: string }
+export type ScientificPlottingMcpConfigResult =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false; message: string }
+export type ScientificSkillsInstallRequest = {
+  workspaceRoot: string
+  backend?: 'git' | 'npx'
+  ref?: string
+}
+export type ScientificSkillsInstallResult =
+  | {
+      ok: true
+      status: 'installed' | 'already_installed'
+      backend: 'git' | 'npx'
+      targetPath: string
+      commit?: string
+      provenancePath?: string
+      stdoutTail?: string
+      stderrTail?: string
+    }
+  | {
+      ok: false
+      status:
+        | 'invalid_workspace'
+        | 'invalid_existing_target'
+        | 'clone_failed'
+        | 'verification_failed'
+        | 'npx_failed'
+        | 'not_discovered_after_npx'
+        | 'unexpected_error'
+      backend?: 'git' | 'npx'
+      targetPath?: string
+      message: string
+      stdoutTail?: string
+      stderrTail?: string
+    }
+export type ScientificSkillsStatusResult =
+  | {
+      ok: true
+      installed: boolean
+      skillCount: number
+      fingerprint: string
+      indexedAt: string
+      roots: Array<{
+        path: string
+        source: string
+        exists: boolean
+        skillCount: number
+        error?: string
+      }>
+      validationErrors: Array<{ path: string; message: string }>
+      plottingPack: {
+        total: number
+        installed: number
+        missing: number
+        items: Array<{
+          skillId: string
+          label: string
+          installed: boolean
+          name?: string
+          description?: string
+          entryPath?: string
+          dependencyRisk?: string
+          validationErrors: string[]
+        }>
+      }
+      installHint?: string
+      onDemandPolicy: {
+        mode: 'manual-approval'
+        summary: string
+      }
+    }
+  | { ok: false; message: string }
 export type ModelRouterConfigOpenResult =
   | { ok: true; path: string }
   | { ok: false; path: string; message: string }
@@ -365,12 +453,24 @@ export type DsGuiApi = {
     forceTakeover?: boolean
   ) => Promise<DiscordGuardResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
+  pickWorkspaceFile: (defaultPath?: string) => Promise<WorkspacePickResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>
   getDeepseekConfigFile: () => Promise<DeepseekConfigFileResult>
   setDeepseekConfigFile: (content: string) => Promise<DeepseekConfigSaveResult>
   openDeepseekConfigDir: () => Promise<PathOpenResult>
+  buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
+  buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
+  getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
+  installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
+  getScientificPlottingStatus: (workspaceRoot?: string) => Promise<ScientificPlottingStatusResult>
+  prepareScientificPlottingReference: (
+    request: ScientificPlottingPrepareReferenceRequest
+  ) => Promise<ScientificPlottingPrepareReferenceResult>
+  extractFigureStyle: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
+  evaluateFigureStyle: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
+  reviewFigureStyle: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>
   openModelRouterConfigFile: () => Promise<ModelRouterConfigOpenResult>
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>

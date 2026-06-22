@@ -49,3 +49,9 @@ TestResults.xml
 
 ### Internal docs
 docs/R2_RELEASE.md
+
+### Local SciForge runtime artifacts
+.agents/
+.sciforge/
+tmp/
+presentations/

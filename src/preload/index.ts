@@ -42,6 +42,8 @@ const api = {
     }),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
+  pickWorkspaceFile: (defaultPath) =>
+    ipcRenderer.invoke('workspace:pick-file', defaultPath),
   listSkills: (workspaceRoot) =>
     ipcRenderer.invoke('skill:list', { workspaceRoot }),
   saveSkillFile: (rootPath, skillName, content) =>
@@ -54,6 +56,24 @@ const api = {
     ipcRenderer.invoke('deepseek:config:write', content),
   openDeepseekConfigDir: () =>
     ipcRenderer.invoke('deepseek:config:open-dir'),
+  buildScientificSkillsMcpConfig: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
+  buildScientificPlottingMcpConfig: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+  getScientificSkillsStatus: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:scientific-skills-status', { workspaceRoot }),
+  installScientificSkills: (request) =>
+    ipcRenderer.invoke('scientific-skills:install', request),
+  getScientificPlottingStatus: (workspaceRoot) =>
+    ipcRenderer.invoke('scientific-plotting:status', { workspaceRoot }),
+  prepareScientificPlottingReference: (request) =>
+    ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
+  extractFigureStyle: (request) =>
+    ipcRenderer.invoke('figure-style:extract', request),
+  evaluateFigureStyle: (request) =>
+    ipcRenderer.invoke('figure-style:evaluate', request),
+  reviewFigureStyle: (request) =>
+    ipcRenderer.invoke('figure-style:review', request),
   openModelRouterConfigFile: () =>
     ipcRenderer.invoke('modelRouter:config:open'),
   getGitBranches: (workspaceRoot) =>

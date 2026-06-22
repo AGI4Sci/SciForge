@@ -4,6 +4,7 @@ import {
   customMcpConfigFragment,
   mcpConfigHasServer,
   mcpMarketplaceItemsFromConfigAndDiagnostics,
+  scientificSkillsInstallTargetForWorkspace,
   mergeMcpJsonConfig,
   skillMarketplaceItemsFromDiscoveredSkills
 } from './PluginMarketplaceView'
@@ -90,6 +91,13 @@ describe('PluginMarketplaceView MCP config helpers', () => {
     })
 
     expect(mcpConfigHasServer(content, 'github')).toBe(true)
+  })
+
+  it('keeps the K-Dense installer scoped to the workspace .agents tree', () => {
+    expect(scientificSkillsInstallTargetForWorkspace('/tmp/workspace')).toBe(
+      '/tmp/workspace/.agents/skills/scientific-agent-skills'
+    )
+    expect(scientificSkillsInstallTargetForWorkspace('')).toBe('')
   })
 
   it('turns configured MCP servers into personal marketplace items', () => {

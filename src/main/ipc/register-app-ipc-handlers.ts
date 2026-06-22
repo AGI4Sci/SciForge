@@ -57,7 +57,10 @@ import {
   clawTaskFromTextPayloadSchema,
   deepseekConfigContentSchema,
   desktopCommandSchema,
+  figureStyleEvaluatePayloadSchema,
+  figureStyleReviewPayloadSchema,
   defaultPathSchema,
+  figureStyleExtractPayloadSchema,
   gitBranchPayloadSchema,
   guiUpdateChannelSchema,
   logErrorPayloadSchema,
@@ -65,6 +68,11 @@ import {
   openEditorPathPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
+  scientificPlottingPrepareReferencePayloadSchema,
+  scientificPlottingMcpConfigPayloadSchema,
+  scientificPlottingStatusPayloadSchema,
+  scientificSkillsInstallPayloadSchema,
+  scientificSkillsMcpConfigPayloadSchema,
   shellOpenExternalUrlSchema,
   speechTranscriptionPayloadSchema,
   skillListPayloadSchema,
@@ -86,6 +94,41 @@ import {
   writeRetrievalPayloadSchema,
   workspaceRootSchema
 } from './app-ipc-schemas'
+import {
+  buildScientificSkillsMcpConfigFragment,
+  type ScientificSkillsMcpLaunchConfig
+} from '../scientific-skills-mcp-config'
+import {
+  buildScientificPlottingMcpConfigFragment,
+  type ScientificPlottingMcpLaunchConfig
+} from '../scientific-plotting-mcp-config'
+import {
+  getScientificPlottingStatus,
+  prepareScientificPlottingReference
+} from '../scientific-plotting-engine'
+import {
+  buildScientificSkillsIndex,
+  buildScientificSkillsStatusSummary
+} from '../scientific-skills-index'
+import {
+  installScientificSkills,
+  type ScientificSkillsInstallRequest,
+  type ScientificSkillsInstallResult
+} from '../scientific-skills-installer'
+import { evaluateFigureStyleSimilarity, extractFigureStyle, reviewFigureStyleOutput } from '../figure-style-extractor'
+import type {
+  FigureStyleExtractRequest,
+  FigureStyleExtractResult,
+  FigureStyleReviewRequest,
+  FigureStyleReviewResult,
+  FigureStyleSimilarityRequest,
+  FigureStyleSimilarityResult
+} from '../../shared/figure-style'
+import type {
+  ScientificPlottingPrepareReferenceRequest,
+  ScientificPlottingPrepareReferenceResult,
+  ScientificPlottingStatusResult
+} from '../../shared/scientific-plotting'
 import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
@@ -236,6 +279,16 @@ type RegisterAppIpcHandlersOptions = {
   readGuiUpdateState: () => Promise<GuiUpdateState>
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
+  getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
+  getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
+  installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
+  getScientificPlottingStatus?: () => Promise<ScientificPlottingStatusResult>
+  prepareScientificPlottingReference?: (
+    request: ScientificPlottingPrepareReferenceRequest
+  ) => Promise<ScientificPlottingPrepareReferenceResult>
+  extractFigureStyle?: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
+  evaluateFigureStyle?: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
+  reviewFigureStyle?: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>
   logError: (category: string, message: string, detail?: unknown) => void
   transcribeSpeech?: (
     settings: AppSettingsV1,
@@ -349,6 +402,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
+    getScientificSkillsMcpLaunchConfig,
+    getScientificPlottingMcpLaunchConfig,
+    installScientificSkills: installScientificSkillsHandler = installScientificSkills,
+    getScientificPlottingStatus: getScientificPlottingStatusHandler = getScientificPlottingStatus,
+    prepareScientificPlottingReference: prepareScientificPlottingReferenceHandler = prepareScientificPlottingReference,
+    extractFigureStyle: extractFigureStyleHandler = extractFigureStyle,
+    evaluateFigureStyle: evaluateFigureStyleHandler = evaluateFigureStyleSimilarity,
+    reviewFigureStyle: reviewFigureStyleHandler = reviewFigureStyleOutput,
     logError,
     transcribeSpeech = requestSpeechTranscription
   } = options
@@ -867,6 +928,32 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
+  handleInvoke('workspace:pick-file', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
+    const normalizedDefaultPath = parseIpcPayload(
+      'workspace:pick-file',
+      z.object({ defaultPath: defaultPathSchema }).strict(),
+      { defaultPath }
+    ).defaultPath
+    const options: Electron.OpenDialogOptions = {
+      title: 'Select reference figure',
+      defaultPath: normalizedDefaultPath,
+      properties: ['openFile', 'dontAddToRecent'],
+      filters: [
+        { name: 'Figures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }
+    const mainWindow = getMainWindow()
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options)
+    return {
+      canceled: result.canceled,
+      path: result.canceled ? null : (result.filePaths[0] ?? null)
+    }
+  })
+
   handleInvoke(
     'skill:save-file',
     async (_, payload: unknown) => {
@@ -895,6 +982,174 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const request = parseIpcPayload('skill:list', skillListPayloadSchema, payload)
     const settings = await store.load()
     return listGuiSkills(settings, request.workspaceRoot)
+  })
+
+  handleInvoke('mcp:scientific-skills-config', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'mcp:scientific-skills-config',
+      scientificSkillsMcpConfigPayloadSchema,
+      payload
+    )
+    try {
+      const launch = getScientificSkillsMcpLaunchConfig?.() ?? {
+        appPath: app.getAppPath(),
+        execPath: process.execPath,
+        isPackaged: app.isPackaged
+      }
+      return {
+        ok: true as const,
+        config: buildScientificSkillsMcpConfigFragment(launch, request.workspaceRoot)
+      }
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('mcp:scientific-skills-status', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'mcp:scientific-skills-status',
+      scientificSkillsMcpConfigPayloadSchema,
+      payload
+    )
+    try {
+      const summary = buildScientificSkillsStatusSummary(
+        await buildScientificSkillsIndex({ workspaceRoot: request.workspaceRoot })
+      )
+      return {
+        ok: true as const,
+        ...summary
+      }
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('mcp:scientific-plotting-config', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'mcp:scientific-plotting-config',
+      scientificPlottingMcpConfigPayloadSchema,
+      payload
+    )
+    try {
+      const launch = getScientificPlottingMcpLaunchConfig?.() ?? {
+        appPath: app.getAppPath(),
+        execPath: process.execPath,
+        isPackaged: app.isPackaged
+      }
+      return {
+        ok: true as const,
+        config: buildScientificPlottingMcpConfigFragment(launch, request.workspaceRoot)
+      }
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('scientific-plotting:status', async (_, payload: unknown) => {
+    parseIpcPayload(
+      'scientific-plotting:status',
+      scientificPlottingStatusPayloadSchema,
+      payload
+    )
+    try {
+      return getScientificPlottingStatusHandler()
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('scientific-plotting:prepare-reference', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'scientific-plotting:prepare-reference',
+      scientificPlottingPrepareReferencePayloadSchema,
+      payload
+    )
+    try {
+      return prepareScientificPlottingReferenceHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        status: 'invalid_request' as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('scientific-skills:install', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'scientific-skills:install',
+      scientificSkillsInstallPayloadSchema,
+      payload
+    )
+    try {
+      return installScientificSkillsHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        status: 'unexpected_error' as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('figure-style:extract', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'figure-style:extract',
+      figureStyleExtractPayloadSchema,
+      payload
+    )
+    try {
+      return extractFigureStyleHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('figure-style:evaluate', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'figure-style:evaluate',
+      figureStyleEvaluatePayloadSchema,
+      payload
+    )
+    try {
+      return evaluateFigureStyleHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('figure-style:review', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'figure-style:review',
+      figureStyleReviewPayloadSchema,
+      payload
+    )
+    try {
+      return reviewFigureStyleHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
   })
 
   handleInvoke('skill:open-root', async (_, rootPath: unknown) => {

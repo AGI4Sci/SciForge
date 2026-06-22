@@ -54,11 +54,11 @@ function persistBoolean(key: string, value: boolean): void {
 
 function readStoredRightPanelMode(): RightPanelMode {
   const raw = readBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
-  return raw === 'todo' || raw === 'changes' || raw === 'browser' ? raw : null
+  return raw === 'todo' || raw === 'changes' || raw === 'browser' || raw === 'figure-style' ? raw : null
 }
 
 function persistRightPanelMode(mode: RightPanelMode): void {
-  if (mode === 'todo' || mode === 'changes' || mode === 'browser') {
+  if (mode === 'todo' || mode === 'changes' || mode === 'browser' || mode === 'figure-style') {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, mode)
   } else {
     removeBrowserStorageItem(RIGHT_PANEL_MODE_KEY)

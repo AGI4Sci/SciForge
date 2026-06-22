@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { dialog, shell } from 'electron'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -20,8 +21,12 @@ vi.mock('electron', () => ({
   app: {
     quit: vi.fn()
   },
-  dialog: {},
-  shell: {},
+  dialog: {
+    showOpenDialog: vi.fn()
+  },
+  shell: {
+    openExternal: vi.fn(async () => undefined)
+  },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (event: unknown, payload?: unknown) => Promise<unknown>) => {
       handlers.set(channel, handler)
@@ -111,6 +116,9 @@ function waitForAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
 describe('registerAppIpcHandlers', () => {
   beforeEach(() => {
     handlers.clear()
+    vi.mocked(dialog.showOpenDialog).mockReset()
+    vi.mocked(shell.openExternal).mockClear()
+    vi.unstubAllEnvs()
   })
 
   it('rejects invalid settings patches at the handler boundary', async () => {
@@ -704,6 +712,584 @@ describe('registerAppIpcHandlers', () => {
     } finally {
       rmSync(tempRoot, { recursive: true, force: true })
     }
+  })
+
+  it('builds the scientific skills MCP config fragment through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions({
+      getScientificSkillsMcpLaunchConfig: () => ({
+        appPath: '/tmp/deepseek-gui-app',
+        execPath: '/tmp/electron',
+        isPackaged: false
+      })
+    }))
+
+    await expect(handlers.get('mcp:scientific-skills-config')?.({}, {
+      workspaceRoot: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      ok: true,
+      config: {
+        servers: {
+          scientific_skills: {
+            enabled: true,
+            transport: 'stdio',
+            command: '/tmp/electron',
+            args: [
+              '/tmp/deepseek-gui-app/out/main/scientific-skills-mcp-node-entry.js',
+              '--scientific-skills-mcp-server',
+              '--workspace-root',
+              '/tmp/workspace'
+            ],
+            env: { ELECTRON_RUN_AS_NODE: '1' },
+            trustScope: 'workspace',
+            trustedWorkspaceRoots: ['/tmp/workspace']
+          }
+        }
+      }
+    })
+  })
+
+  it('builds the scientific plotting MCP config fragment through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions({
+      getScientificPlottingMcpLaunchConfig: () => ({
+        appPath: '/tmp/deepseek-gui-app',
+        execPath: '/tmp/electron',
+        isPackaged: false
+      })
+    }))
+
+    await expect(handlers.get('mcp:scientific-plotting-config')?.({}, {
+      workspaceRoot: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      ok: true,
+      config: {
+        servers: {
+          scientific_plotting: {
+            enabled: true,
+            transport: 'stdio',
+            command: '/tmp/electron',
+            args: [
+              '/tmp/deepseek-gui-app/out/main/scientific-plotting-mcp-node-entry.js',
+              '--scientific-plotting-mcp-server',
+              '--workspace-root',
+              '/tmp/workspace'
+            ],
+            env: { ELECTRON_RUN_AS_NODE: '1' },
+            trustScope: 'workspace',
+            trustedWorkspaceRoots: ['/tmp/workspace']
+          }
+        }
+      }
+    })
+  })
+
+  it('returns scientific skills local status and curated plotting pack through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const workspace = mkdtempSync(join(tmpdir(), 'scientific-skills-ipc-'))
+    const skillDir = join(workspace, '.agents', 'skills', 'scientific-agent-skills', 'skills', 'matplotlib')
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: matplotlib',
+      'description: Publication plotting.',
+      'allowed-tools: Read',
+      '---',
+      '# Matplotlib',
+      '',
+      'Plan static publication figures.'
+    ].join('\n'))
+
+    try {
+      registerAppIpcHandlers(registerOptions())
+
+      await expect(handlers.get('mcp:scientific-skills-status')?.({}, {
+        workspaceRoot: workspace
+      })).resolves.toMatchObject({
+        ok: true,
+        installed: true,
+        plottingPack: {
+          total: 6,
+          items: expect.arrayContaining([
+            expect.objectContaining({
+              skillId: 'matplotlib',
+              installed: true
+            })
+          ])
+        }
+      })
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('runs the scientific skills installer through IPC with schema validation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const installScientificSkills = vi.fn(async () => ({
+      ok: true as const,
+      status: 'installed' as const,
+      backend: 'git' as const,
+      targetPath: '/tmp/workspace/.agents/skills/scientific-agent-skills',
+      commit: '0123456'
+    }))
+
+    registerAppIpcHandlers(registerOptions({ installScientificSkills }))
+
+    await expect(handlers.get('scientific-skills:install')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      backend: 'git',
+      ref: 'main'
+    })).resolves.toMatchObject({
+      ok: true,
+      status: 'installed',
+      targetPath: '/tmp/workspace/.agents/skills/scientific-agent-skills'
+    })
+    expect(installScientificSkills).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      backend: 'git',
+      ref: 'main'
+    })
+
+    await expect(handlers.get('scientific-skills:install')?.({}, {
+      backend: 'git'
+    })).rejects.toThrow('Invalid payload for scientific-skills:install')
+  })
+
+  it('opens a reference figure picker through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    vi.mocked(dialog.showOpenDialog).mockResolvedValue({
+      canceled: false,
+      filePaths: ['/tmp/workspace/figures/reference.png'],
+      bookmarks: []
+    })
+
+    registerAppIpcHandlers(registerOptions())
+
+    await expect(
+      handlers.get('workspace:pick-file')?.({}, '/tmp/workspace')
+    ).resolves.toEqual({
+      canceled: false,
+      path: '/tmp/workspace/figures/reference.png'
+    })
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(expect.objectContaining({
+      defaultPath: '/tmp/workspace',
+      properties: ['openFile', 'dontAddToRecent'],
+      filters: expect.arrayContaining([
+        expect.objectContaining({ name: 'Figures' })
+      ])
+    }))
+  })
+
+  it('routes figure style extraction through IPC with schema validation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const figureStyleSpec = {
+      version: 1 as const,
+      source: { path: '/tmp/workspace/fig.png', type: 'image' as const },
+      canvas: { width: 640, height: 420, aspectRatio: 1.524, background: '#ffffff' },
+      palette: {
+        colors: ['#222222', '#d24b4b'],
+        background: '#ffffff',
+        ink: '#222222',
+        accent: ['#d24b4b'],
+        colorMode: 'limited' as const
+      },
+      typography: {
+        fontFamily: 'Arial',
+        axisSize: 8,
+        labelSize: 9,
+        titleSize: 11,
+        weight: 'regular' as const
+      },
+      layout: {
+        panelGrid: '1x1',
+        panelLabels: 'unknown' as const,
+        margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 },
+        gutter: 'balanced' as const
+      },
+      axes: {
+        spine: 'left-bottom' as const,
+        tickDirection: 'out' as const,
+        grid: true,
+        gridTone: 'light' as const,
+        gridColor: '#e2e2df',
+        gridAlpha: 0.52,
+        gridLineWidth: 0.4
+      },
+      marks: {
+        lineWidth: 1.2,
+        markerSize: 3,
+        errorBarStyle: 'unknown' as const,
+        density: 'balanced' as const
+      },
+      annotations: {
+        significance: 'unknown' as const,
+        legend: 'frameless' as const
+      },
+      export: {
+        formats: ['pdf' as const, 'svg' as const, 'png' as const],
+        dpi: 300,
+        transparent: false
+      },
+      confidence: {
+        overall: 0.72,
+        palette: 0.8,
+        layout: 0.7,
+        axes: 0.75,
+        typography: 0.35
+      }
+    }
+    const extractFigureStyle = vi.fn(async () => ({
+      ok: true as const,
+      spec: figureStyleSpec,
+      applyPlan: {
+        styleSpec: figureStyleSpec,
+        plottingWorkflow: {
+          recommendedSkills: ['scientific-visualization', 'matplotlib'],
+          recommendedLibraries: ['Matplotlib', 'Seaborn'],
+          nextControlledTool: 'SciForge DataFigure Engine',
+          guardrails: ['Use the reference figure only as style guidance.']
+        },
+        matplotlibHints: {
+          rcParams: {
+            'axes.grid': true,
+            'axes.edgecolor': '#222222',
+            'font.family': 'Arial'
+          },
+          palette: ['#d24b4b'],
+          layoutNotes: ['Use 1x1 panel layout.']
+        }
+      },
+      diagnostics: {
+        analyzedAt: '2026-06-21T00:00:00.000Z',
+        sampledPixels: 42,
+        foregroundRatio: 0.1,
+        darkPixelRatio: 0.03,
+        chromaRatio: 0.02,
+        warnings: []
+      }
+    }))
+
+    registerAppIpcHandlers(registerOptions({ extractFigureStyle }))
+
+    await expect(handlers.get('figure-style:extract')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'fig.png',
+      sourceType: 'image',
+      figureId: 'Fig. 1',
+      notes: 'paper style'
+    })).resolves.toMatchObject({
+      ok: true,
+      spec: {
+        source: { path: '/tmp/workspace/fig.png', type: 'image' }
+      }
+    })
+    expect(extractFigureStyle).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'fig.png',
+      sourceType: 'image',
+      figureId: 'Fig. 1',
+      notes: 'paper style'
+    })
+
+    await expect(handlers.get('figure-style:extract')?.({}, {
+      workspaceRoot: '/tmp/workspace'
+    })).rejects.toThrow('Invalid payload for figure-style:extract')
+  })
+
+  it('routes scientific plotting status and reference preparation through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const getScientificPlottingStatus = vi.fn(async () => ({
+      ok: true as const,
+      serverName: 'scientific_plotting' as const,
+      version: '0.1.0',
+      renderer: {
+        kind: 'matplotlib' as const,
+        pythonCommand: 'python3',
+        available: true,
+        version: '3.9.4'
+      },
+      referencePreparation: {
+        imageCrop: true as const,
+        pdfCrop: {
+          available: true,
+          command: 'pdftoppm'
+        },
+        defaultRelativeDir: '.sciforge/figure-references' as const
+      },
+      reviewPackets: {
+        defaultRelativeDir: '.sciforge/figure-reviews' as const,
+        readsRenderManifests: true as const,
+        writesMarkdownAndJson: true as const
+      },
+      styleProfiles: {
+        builtIn: 5,
+        acceptsStyleProfileId: true as const,
+        defaultProfileIds: ['nature-2021-alphafold-fig2']
+      },
+      supportedTemplates: [
+        'line' as const,
+        'scatter' as const,
+        'bar' as const,
+        'heatmap' as const,
+        'schematic-grid' as const
+      ],
+      outputPolicy: {
+        defaultRelativeDir: '.sciforge/figures',
+        writesOnlyInsideWorkspace: true as const,
+        formats: ['png'] as ['png']
+      },
+      degraded: false,
+      guardrails: ['Only first-party renderer code is executed.']
+    }))
+    const prepareScientificPlottingReference = vi.fn(async () => ({
+      ok: true as const,
+      status: 'prepared' as const,
+      source: {
+        path: '/tmp/workspace/paper.pdf',
+        type: 'pdf' as const,
+        page: 2,
+        width: 800,
+        height: 480
+      },
+      cropBox: {
+        unit: 'pixel' as const,
+        x: 80,
+        y: 96,
+        width: 560,
+        height: 240
+      },
+      croppedImagePath: '/tmp/workspace/.sciforge/figure-references/fig-2a.png',
+      referenceManifestPath: '/tmp/workspace/.sciforge/figure-references/fig-2a.reference.json',
+      referenceManifest: {
+        version: 1 as const,
+        tool: 'scientific_plotting_prepare_reference' as const,
+        createdAt: '2026-06-21T00:00:00.000Z',
+        requestHash: 'a'.repeat(64),
+        source: {
+          path: '/tmp/workspace/paper.pdf',
+          type: 'pdf' as const,
+          page: 2,
+          width: 800,
+          height: 480
+        },
+        cropBox: {
+          unit: 'pixel' as const,
+          x: 80,
+          y: 96,
+          width: 560,
+          height: 240
+        },
+        croppedImagePath: '/tmp/workspace/.sciforge/figure-references/fig-2a.png',
+        warnings: [],
+        nextWorkflow: {
+          referencePath: '/tmp/workspace/.sciforge/figure-references/fig-2a.png',
+          suggestedProfileTool: 'scientific_plotting_style_profiles' as const,
+          suggestedPlanTool: 'scientific_plotting_plan' as const,
+          suggestedRenderTool: 'scientific_plotting_render' as const,
+          suggestedReviewTool: 'scientific_plotting_review' as const,
+          guardrails: ['Use the cropped PNG as the review reference.']
+        }
+      },
+      warnings: []
+    }))
+
+    registerAppIpcHandlers(registerOptions({
+      getScientificPlottingStatus,
+      prepareScientificPlottingReference
+    }))
+
+    await expect(handlers.get('scientific-plotting:status')?.({}, {
+      workspaceRoot: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      ok: true,
+      referencePreparation: {
+        pdfCrop: { available: true }
+      },
+      reviewPackets: {
+        defaultRelativeDir: '.sciforge/figure-reviews'
+      },
+      styleProfiles: {
+        acceptsStyleProfileId: true
+      }
+    })
+    expect(getScientificPlottingStatus).toHaveBeenCalledTimes(1)
+
+    await expect(handlers.get('scientific-plotting:prepare-reference')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      cropBox: {
+        unit: 'ratio',
+        x: 0.1,
+        y: 0.2,
+        width: 0.7,
+        height: 0.5
+      }
+    })).resolves.toMatchObject({
+      ok: true,
+      status: 'prepared',
+      croppedImagePath: '/tmp/workspace/.sciforge/figure-references/fig-2a.png'
+    })
+    expect(prepareScientificPlottingReference).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      cropBox: {
+        unit: 'ratio',
+        x: 0.1,
+        y: 0.2,
+        width: 0.7,
+        height: 0.5
+      }
+    })
+
+    await expect(handlers.get('scientific-plotting:prepare-reference')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper.pdf',
+      cropBox: {
+        unit: 'ratio',
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 1
+      }
+    })).rejects.toThrow('Invalid payload for scientific-plotting:prepare-reference')
+  })
+
+  it('routes figure style similarity evaluation through IPC with schema validation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const evaluateFigureStyle = vi.fn(async () => ({
+      ok: true as const,
+      score: {
+        overall: 0.86,
+        palette: 0.9,
+        background: 0.88,
+        axes: 0.8,
+        grid: 0.84,
+        layout: 0.82,
+        marks: 0.74,
+        warnings: []
+      },
+      diagnostics: {
+        reference: {
+          analyzedAt: '2026-06-21T00:00:00.000Z',
+          sampledPixels: 42,
+          foregroundRatio: 0.1,
+          darkPixelRatio: 0.03,
+          chromaRatio: 0.02,
+          warnings: []
+        },
+        output: {
+          analyzedAt: '2026-06-21T00:00:01.000Z',
+          sampledPixels: 43,
+          foregroundRatio: 0.11,
+          darkPixelRatio: 0.031,
+          chromaRatio: 0.021,
+          warnings: []
+        }
+      }
+    }))
+
+    registerAppIpcHandlers(registerOptions({ evaluateFigureStyle }))
+
+    await expect(handlers.get('figure-style:evaluate')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png'
+    })).resolves.toMatchObject({
+      ok: true,
+      score: { overall: 0.86 }
+    })
+    expect(evaluateFigureStyle).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png'
+    })
+
+    await expect(handlers.get('figure-style:evaluate')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png'
+    })).rejects.toThrow('Invalid payload for figure-style:evaluate')
+  })
+
+  it('routes figure style review through IPC with schema validation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const reviewFigureStyle = vi.fn(async () => ({
+      ok: true as const,
+      status: 'repairable' as const,
+      score: {
+        overall: 0.7,
+        palette: 0.9,
+        background: 0.4,
+        axes: 0.8,
+        grid: 0.84,
+        layout: 0.82,
+        marks: 0.74,
+        warnings: ['Canvas or axes background differs from the reference figure.']
+      },
+      issues: [{
+        id: 'background' as const,
+        severity: 'warning' as const,
+        metric: 'background' as const,
+        score: 0.4,
+        message: 'Background differs.',
+        autoRepairable: true
+      }],
+      autoRepair: {
+        shouldRerender: true,
+        reason: 'Rerender with patch.',
+        rcParamsPatch: { 'figure.facecolor': '#ffffff' },
+        layoutHints: [],
+        guardrails: ['Do not change source data.']
+      },
+      diagnostics: {
+        reference: {
+          analyzedAt: '2026-06-21T00:00:00.000Z',
+          sampledPixels: 42,
+          foregroundRatio: 0.1,
+          darkPixelRatio: 0.03,
+          chromaRatio: 0.02,
+          warnings: []
+        },
+        output: {
+          analyzedAt: '2026-06-21T00:00:01.000Z',
+          sampledPixels: 43,
+          foregroundRatio: 0.11,
+          darkPixelRatio: 0.031,
+          chromaRatio: 0.021,
+          warnings: []
+        }
+      }
+    }))
+
+    registerAppIpcHandlers(registerOptions({ reviewFigureStyle }))
+
+    await expect(handlers.get('figure-style:review')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png',
+      minOverall: 0.8
+    })).resolves.toMatchObject({
+      ok: true,
+      status: 'repairable',
+      autoRepair: { shouldRerender: true }
+    })
+    expect(reviewFigureStyle).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png',
+      minOverall: 0.8
+    })
+
+    await expect(handlers.get('figure-style:review')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      minOverall: 1.5
+    })).rejects.toThrow('Invalid payload for figure-style:review')
   })
 
   it('opens the local Model Router config file through the injected handler', async () => {

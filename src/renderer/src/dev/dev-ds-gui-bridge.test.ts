@@ -124,6 +124,113 @@ describe('dev dsGui browser bridge', () => {
     })
   })
 
+  it('forwards figure style review calls through the dev bridge server', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { ok: true, status: 'pass', score: { overall: 0.9 } }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevDsGuiBridge } = await import('./dev-ds-gui-bridge')
+
+    installDevDsGuiBridge()
+    await window.dsGui.reviewFigureStyle({
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png'
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:5174/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'figure-style:review',
+          payload: {
+            workspaceRoot: '/tmp/workspace',
+            referencePath: 'figures/reference.png',
+            outputPath: 'figures/output.png'
+          }
+        })
+      })
+    )
+  })
+
+  it('forwards scientific plotting MCP config calls through the dev bridge server', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { ok: true, config: { servers: { scientific_plotting: {} } } }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevDsGuiBridge } = await import('./dev-ds-gui-bridge')
+
+    installDevDsGuiBridge()
+    await window.dsGui.buildScientificPlottingMcpConfig('/tmp/workspace')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:5174/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'mcp:scientific-plotting-config',
+          payload: {
+            workspaceRoot: '/tmp/workspace'
+          }
+        })
+      })
+    )
+  })
+
+  it('forwards scientific plotting reference preparation through the dev bridge server', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: {
+        ok: true,
+        status: 'prepared',
+        croppedImagePath: '/tmp/workspace/.sciforge/figure-references/fig-2a.png'
+      }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevDsGuiBridge } = await import('./dev-ds-gui-bridge')
+
+    installDevDsGuiBridge()
+    await window.dsGui.prepareScientificPlottingReference({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      cropBox: {
+        unit: 'ratio',
+        x: 0.1,
+        y: 0.2,
+        width: 0.7,
+        height: 0.5
+      }
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:5174/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'scientific-plotting:prepare-reference',
+          payload: {
+            workspaceRoot: '/tmp/workspace',
+            sourcePath: 'paper.pdf',
+            sourceType: 'pdf',
+            page: 2,
+            cropBox: {
+              unit: 'ratio',
+              x: 0.1,
+              y: 0.2,
+              width: 0.7,
+              height: 0.5
+            }
+          }
+        })
+      })
+    )
+  })
+
   it('does not replace the real Electron preload bridge', async () => {
     const existing = { platform: 'electron' }
     installWindow(existing)

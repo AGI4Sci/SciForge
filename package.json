@@ -42,6 +42,7 @@
     "vision-router:start": "npm --workspace sciforge-vision-router-service run start",
     "vision-router:test": "npm --workspace sciforge-vision-router-service run test",
     "vision-router:typecheck": "npm --workspace sciforge-vision-router-service run typecheck",
+    "smoke:scientific-plotting-style": "node ./scripts/scientific-plotting-style-regression.mjs",
     "mac:unquarantine": "bash ./scripts/mac-unquarantine.sh"
   },
   "dependencies": {
@@ -54,6 +55,7 @@
     "@codemirror/view": "^6.43.0",
     "@larksuiteoapi/node-sdk": "^1.64.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@napi-rs/canvas": "^0.1.100",
     "@tencent-weixin/openclaw-weixin": "2.4.3",
     "@tiptap/core": "3.26.0",
     "@tiptap/extension-image": "3.26.0",

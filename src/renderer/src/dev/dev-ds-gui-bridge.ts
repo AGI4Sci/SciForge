@@ -138,6 +138,7 @@ function createApi(): DsGuiApi {
         ...(forceTakeover ? { forceTakeover } : {})
       }),
     pickWorkspaceDirectory: (defaultPath) => invoke('workspace:pick-directory', defaultPath),
+    pickWorkspaceFile: (defaultPath) => invoke('workspace:pick-file', defaultPath),
     listSkills: (workspaceRoot) => invoke('skill:list', { workspaceRoot }),
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),
@@ -145,6 +146,24 @@ function createApi(): DsGuiApi {
     getDeepseekConfigFile: () => invoke('deepseek:config:read'),
     setDeepseekConfigFile: (content) => invoke('deepseek:config:write', content),
     openDeepseekConfigDir: () => invoke('deepseek:config:open-dir'),
+    buildScientificSkillsMcpConfig: (workspaceRoot) =>
+      invoke('mcp:scientific-skills-config', { workspaceRoot }),
+    buildScientificPlottingMcpConfig: (workspaceRoot) =>
+      invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+    getScientificSkillsStatus: (workspaceRoot) =>
+      invoke('mcp:scientific-skills-status', { workspaceRoot }),
+    installScientificSkills: (request) =>
+      invoke('scientific-skills:install', request),
+    getScientificPlottingStatus: (workspaceRoot) =>
+      invoke('scientific-plotting:status', { workspaceRoot }),
+    prepareScientificPlottingReference: (request) =>
+      invoke('scientific-plotting:prepare-reference', request),
+    extractFigureStyle: (request) =>
+      invoke('figure-style:extract', request),
+    evaluateFigureStyle: (request) =>
+      invoke('figure-style:evaluate', request),
+    reviewFigureStyle: (request) =>
+      invoke('figure-style:review', request),
     openModelRouterConfigFile: () => invoke('modelRouter:config:open'),
     getGitBranches: (workspaceRoot) => invoke('git:branches', workspaceRoot),
     switchGitBranch: (workspaceRoot, branch) =>

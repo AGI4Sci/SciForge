@@ -92,7 +92,6 @@ import {
   relativeWorkspacePath,
   type ComposerFileContextEntry
 } from '../lib/composer-file-references'
-
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
 )
@@ -101,6 +100,9 @@ const DevBrowserPanel = lazy(() =>
 )
 const PluginMarketplaceView = lazy(() =>
   import('./PluginMarketplaceView').then((module) => ({ default: module.PluginMarketplaceView }))
+)
+const FigureStylePanel = lazy(() =>
+  import('./figure-style/FigureStylePanel').then((module) => ({ default: module.FigureStylePanel }))
 )
 const WorkspaceFilePreviewPanel = lazy(() =>
   import('./WorkspaceFilePreviewPanel').then((module) => ({
@@ -1957,6 +1959,12 @@ export function Workbench(): ReactElement {
                 onVerifyPlan={() => void verifyGuiPlan()}
                 onReplanChanged={(changedIds) => void replanChangedRequirements(changedIds)}
               />
+            ) : rightPanelMode === 'figure-style' ? (
+              <FigureStylePanel
+                workspaceRoot={workspaceRoot}
+                className="h-full max-h-full w-full"
+                onCollapse={closeRightPanel}
+              />
             ) : (
               <WorkspaceFilePreviewPanel
                 target={filePreviewTarget}
@@ -2057,7 +2065,7 @@ export function Workbench(): ReactElement {
         ) : route === 'write' ? (
           <>
             {writeRuntimeBannerMessage ? renderRuntimeBanner(writeRuntimeBannerMessage, runtimeErrorDetail) : null}
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <WriteWorkspaceView
                 leftSidebarCollapsed={leftSidebarCollapsed}
                 onToggleLeftSidebar={toggleLeftSidebar}
@@ -2072,7 +2080,7 @@ export function Workbench(): ReactElement {
           <>
         {error && !(runtimeConnection !== 'ready' && !activeThreadId) ? renderRuntimeBanner(error, runtimeErrorDetail) : null}
 
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className={`flex min-h-0 min-w-0 flex-1 ${activeSddDraft ? '' : stageInsetClass}`}>
           {activeSddDraft ? (
             <SddDraftEditorView

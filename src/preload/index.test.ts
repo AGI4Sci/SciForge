@@ -60,6 +60,174 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('modelRouter:config:open')
   })
 
+  it('exposes scientific skills MCP config IPC', async () => {
+    const api = exposedApi as {
+      buildScientificSkillsMcpConfig(workspaceRoot?: string): Promise<unknown>
+    }
+
+    await api.buildScientificSkillsMcpConfig('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('mcp:scientific-skills-config', {
+      workspaceRoot: '/tmp/workspace'
+    })
+  })
+
+  it('exposes scientific plotting MCP config IPC', async () => {
+    const api = exposedApi as {
+      buildScientificPlottingMcpConfig(workspaceRoot?: string): Promise<unknown>
+    }
+
+    await api.buildScientificPlottingMcpConfig('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('mcp:scientific-plotting-config', {
+      workspaceRoot: '/tmp/workspace'
+    })
+  })
+
+  it('exposes scientific skills local status IPC', async () => {
+    const api = exposedApi as {
+      getScientificSkillsStatus(workspaceRoot?: string): Promise<unknown>
+    }
+
+    await api.getScientificSkillsStatus('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('mcp:scientific-skills-status', {
+      workspaceRoot: '/tmp/workspace'
+    })
+  })
+
+  it('exposes scientific skills install IPC', async () => {
+    const api = exposedApi as {
+      installScientificSkills(request: unknown): Promise<unknown>
+    }
+
+    await api.installScientificSkills({
+      workspaceRoot: '/tmp/workspace',
+      backend: 'git',
+      ref: 'main'
+    })
+
+    expect(invoke).toHaveBeenCalledWith('scientific-skills:install', {
+      workspaceRoot: '/tmp/workspace',
+      backend: 'git',
+      ref: 'main'
+    })
+  })
+
+  it('exposes scientific plotting status IPC', async () => {
+    const api = exposedApi as {
+      getScientificPlottingStatus(workspaceRoot?: string): Promise<unknown>
+    }
+
+    await api.getScientificPlottingStatus('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('scientific-plotting:status', {
+      workspaceRoot: '/tmp/workspace'
+    })
+  })
+
+  it('exposes scientific plotting reference preparation IPC', async () => {
+    const api = exposedApi as {
+      prepareScientificPlottingReference(request: unknown): Promise<unknown>
+    }
+
+    await api.prepareScientificPlottingReference({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'papers/reference.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      cropBox: {
+        unit: 'ratio',
+        x: 0.1,
+        y: 0.2,
+        width: 0.7,
+        height: 0.5
+      }
+    })
+
+    expect(invoke).toHaveBeenCalledWith('scientific-plotting:prepare-reference', {
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'papers/reference.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      cropBox: {
+        unit: 'ratio',
+        x: 0.1,
+        y: 0.2,
+        width: 0.7,
+        height: 0.5
+      }
+    })
+  })
+
+  it('exposes figure style extraction IPC', async () => {
+    const api = exposedApi as {
+      extractFigureStyle(request: unknown): Promise<unknown>
+    }
+
+    await api.extractFigureStyle({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'figures/reference.png',
+      sourceType: 'image',
+      figureId: 'Fig. 2A'
+    })
+
+    expect(invoke).toHaveBeenCalledWith('figure-style:extract', {
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'figures/reference.png',
+      sourceType: 'image',
+      figureId: 'Fig. 2A'
+    })
+  })
+
+  it('exposes figure style evaluation IPC', async () => {
+    const api = exposedApi as {
+      evaluateFigureStyle(request: unknown): Promise<unknown>
+    }
+
+    await api.evaluateFigureStyle({
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png'
+    })
+
+    expect(invoke).toHaveBeenCalledWith('figure-style:evaluate', {
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png'
+    })
+  })
+
+  it('exposes figure style review IPC', async () => {
+    const api = exposedApi as {
+      reviewFigureStyle(request: unknown): Promise<unknown>
+    }
+
+    await api.reviewFigureStyle({
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png',
+      minOverall: 0.82
+    })
+
+    expect(invoke).toHaveBeenCalledWith('figure-style:review', {
+      workspaceRoot: '/tmp/workspace',
+      referencePath: 'figures/reference.png',
+      outputPath: 'figures/output.png',
+      minOverall: 0.82
+    })
+  })
+
+  it('exposes workspace file picking IPC', async () => {
+    const api = exposedApi as {
+      pickWorkspaceFile(defaultPath?: string): Promise<unknown>
+    }
+
+    await api.pickWorkspaceFile('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('workspace:pick-file', '/tmp/workspace')
+  })
+
   it('exposes real file paths from picked or dropped files', () => {
     const api = exposedApi as {
       getPathForFile(file: File): string
