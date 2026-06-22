@@ -1,0 +1,11 @@
+# run artifacts (screenshots, traces) + generated eval assets
+cua-runs/
+eval/_assets/
+*.log
+# secrets / local config
+.env
+config.local.json
+# python
+__pycache__/
+*.pyc
+.venv/
