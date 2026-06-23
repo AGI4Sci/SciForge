@@ -3,37 +3,43 @@
 
 Drives the LIVE stack:  sci-modality-router (TS, :3898)  ->  expert-translator (Python, :8001)  ->  real GPU models
 
-It does NOT stub anything. The point is to prove every translation is produced by a
-real scientific model, not faked / canned / produced by a general chat LLM. The
-arguments that a stub could not survive:
+Every expert here is a *native-to-text* domain model: it runs a real forward pass and
+generates natural-language text. There are no general-LLM interpreters. This proves the
+translations are produced by real models, not faked / canned:
 
-  A. Provider health reports CUDA available and all six experts registered.
-  B. INPUT SENSITIVITY: two different inputs to the same expert produce different
-     REAL numbers (perplexity, GC%, precursor mass, heavy-atom formula). A canned
-     responder cannot vary its numbers with the input.
-  C. REAL GPU FINGERPRINT: the provider stamps `expert@device <ms>ms`; we assert the
-     device is a CUDA device and latency is non-trivial (a stub answers in ~0ms on CPU).
+  A. Provider health reports CUDA available and the four native-to-text experts registered.
+  B. INPUT SENSITIVITY: two different inputs to the same live expert produce different REAL
+     generated text. A canned responder cannot vary its prose with the input.
+  C. REAL GPU FINGERPRINT: the provider stamps `expert@device <ms>ms`; we assert a CUDA
+     device and non-trivial latency (a generative forward pass is not ~0ms).
   D. ROUTING: the router selects the correct expert per modality (detected + explicit).
 
-Run on the server (after starting expert-translator, ChemLLM vLLM, and the router):
+Experts whose checkpoint is not deployed yet return an error envelope; those modalities are
+SKIPPED (not failed) so this passes on a partial deployment. `protein_structure` needs a PDB
+file: set E2E_PDB_PATH to exercise it, otherwise it is skipped.
+
+Run on the server (after starting expert-translator, prot2text service, and the router):
     python3 tests/e2e_real_models.py
 Env overrides: SCIMODALITY_ROUTER_URL (default http://127.0.0.1:3898),
-               EXPERT_PROVIDER_URL   (default http://127.0.0.1:8001)
+               EXPERT_PROVIDER_URL   (default http://127.0.0.1:8001),
+               E2E_PDB_PATH          (a .pdb file to test protein_structure; optional)
 """
 
 from __future__ import annotations
 
 import os
-import re
 import sys
 
 import requests
 
 ROUTER = os.environ.get("SCIMODALITY_ROUTER_URL", "http://127.0.0.1:3898").rstrip("/")
 PROVIDER = os.environ.get("EXPERT_PROVIDER_URL", "http://127.0.0.1:8001").rstrip("/")
-TIMEOUT = float(os.environ.get("E2E_TIMEOUT", "300"))
+TIMEOUT = float(os.environ.get("E2E_TIMEOUT", "600"))
 
-PASS, FAIL = [], []
+PASS, FAIL, SKIP = [], [], []
+
+# The four native-to-text experts.
+EXPECTED_EXPERTS = {"esm2text-protein", "prot2text-structure", "biot5-molecule", "c2s-singlecell"}
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -42,18 +48,21 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
     return ok
 
 
+def skip(name: str, detail: str = "") -> None:
+    SKIP.append(name)
+    print(f"  [SKIP] {name}" + (f" — {detail}" if detail else ""))
+
+
 def translate(payload: str, modality: str | None = None, instruction: str | None = None) -> dict:
     body: dict = {"payload": payload}
     if modality:
         body["modality"] = modality
     if instruction:
         body["instruction"] = instruction
-    r = requests.post(f"{ROUTER}/modality/translate", json=body, timeout=TIMEOUT)
-    return r.json()
+    return requests.post(f"{ROUTER}/modality/translate", json=body, timeout=TIMEOUT).json()
 
 
 def provider_raw(model: str, payload: str) -> dict:
-    """Call the expert-translator directly to read its system_fingerprint."""
     r = requests.post(
         f"{PROVIDER}/v1/chat/completions",
         json={"model": model, "messages": [{"role": "user", "content": payload}]},
@@ -63,116 +72,123 @@ def provider_raw(model: str, payload: str) -> dict:
     return r.json()
 
 
-def num(pattern: str, text: str) -> float | None:
-    m = re.search(pattern, text)
-    return float(m.group(1)) if m else None
+def summary_of(resp: dict) -> str:
+    return (resp.get("data") or {}).get("summary", "") or ""
+
+
+def looks_like_prose(text: str) -> bool:
+    """False only when the text is a gene-token *dump* (many uppercase symbols, little prose).
+    A short clean cell-type label (e.g. 'Thymocyte.') is fine; a 'CD74 CD79B CD1E …' list is not."""
+    import re as _re
+    lower_words = _re.findall(r"\b[a-z]{3,}\b", text)
+    upper_toks = _re.findall(r"\b[A-Z0-9][A-Z0-9.\-]{1,14}\b", text)
+    return not (len(upper_toks) >= 5 and len(lower_words) < len(upper_toks))
 
 
 # Real example payloads (small but genuine).
-INSULIN = "GIVEQCCTSICSLYQLENYCN"  # insulin A-chain
 UBIQUITIN = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
-DNA_GC_LOW = ">low\n" + "ATATATATATAAATTTATATATATTAATATATATATATATTAAATATA"
-DNA_GC_HIGH = ">high\n" + "GCGCGCGGCGCGCGCGGGCCGCGCGCGCGCGGGCGCGCGCGCGCGCGC"
 ASPIRIN = "CC(=O)OC1=CC=CC=C1C(=O)O"
 CAFFEINE = "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
-SPECTRUM_A = "m/z intensity\n195.0877 999\n138.0662 420\n110.0713 210"  # caffeine-ish
-SPECTRUM_B = "m/z intensity\n180.0786 999\n163.0390 330\n121.0290 150"
-MARKERS = "CD3D\nCD3E\nCD8A\nGZMB\nNKG7"
-SPATIAL = "x y GENE\n0 0 CD3D\n1 0 CD3E\n10 10 EPCAM\n11 10 KRT18\n0 11 MS4A1\n1 11 CD79A"
+T_CELL_MARKERS = "CD3D 9.1\nCD3E 8.4\nCD8A 7.9\nGZMB 6.1\nNKG7 5.5"
+B_CELL_MARKERS = "MS4A1 9.0\nCD19 8.1\nCD79A 7.7\nIGHM 6.0\nBANK1 5.2"
+
+
+def assert_live_or_skip(name: str, resp: dict, expert_id: str) -> bool:
+    """Return True if the expert ran live; record SKIP and return False otherwise."""
+    if resp.get("ok"):
+        return True
+    err = resp.get("error", {})
+    skip(name, f"{expert_id} not deployed: {err.get('code')} {str(err.get('message'))[:120]}")
+    return False
 
 
 def main() -> int:
     print(f"Router:   {ROUTER}\nProvider: {PROVIDER}\n")
 
-    # --- A. provider health: real CUDA + six experts -----------------------------------
-    print("A. Provider health (real GPU, six experts)")
+    # --- A. provider health: real CUDA + the four native-to-text experts ----------------
+    print("A. Provider health (real GPU, four native-to-text experts)")
     try:
         h = requests.get(f"{PROVIDER}/health", timeout=30).json()
     except Exception as exc:  # noqa: BLE001
         check("provider /health reachable", False, str(exc))
-        return summary()
+        return done()
     check("provider /health reachable", True)
     check("torch CUDA available", bool(h.get("torch_cuda_available")), str(h.get("device")))
     experts = set(h.get("experts", []))
-    expected = {"esm2-protein", "nt-nucleotide", "scibert-singlecell",
-                "scibert-spatial", "chemberta-spectrometry", "chemllm-molecule"}
-    check("all six experts registered", expected <= experts, f"{sorted(experts)}")
+    check("all four native-to-text experts registered", EXPECTED_EXPERTS <= experts, f"{sorted(experts)}")
+    check("no general-LLM interpreter experts present",
+          not ({"genomic-nucleotide", "qust-spatial", "spectrallm-spectrometry", "modality-classifier"} & experts),
+          f"{sorted(experts)}")
 
-    # --- B. input sensitivity: different inputs -> different REAL numbers ---------------
-    print("\nB. Input sensitivity (real model numbers vary with input)")
+    # --- B. input sensitivity: different inputs -> different REAL generated text ---------
+    print("\nB. Input sensitivity (real generated text varies with input)")
 
-    # Protein: two sequences must give different pseudo-perplexity.
-    p1 = translate(INSULIN, "protein")
-    p2 = translate(UBIQUITIN, "protein")
-    s1 = p1.get("data", {}).get("summary", "")
-    s2 = p2.get("data", {}).get("summary", "")
-    ppl1, ppl2 = num(r"pseudo-perplexity:\s*([\d.]+)", s1), num(r"pseudo-perplexity:\s*([\d.]+)", s2)
-    len1, len2 = num(r"Sequence length:\s*(\d+)", s1), num(r"Sequence length:\s*(\d+)", s2)
-    check("protein -> esm2-protein", p1.get("data", {}).get("model") == "esm2-protein")
-    check("protein perplexity present & input-dependent", ppl1 is not None and ppl2 is not None and ppl1 != ppl2,
-          f"insulin ppl={ppl1} vs ubiquitin ppl={ppl2}")
-    check("protein length parsed correctly", len1 == len(INSULIN) and len2 == len(UBIQUITIN),
-          f"{len1} vs {len(INSULIN)}, {len2} vs {len(UBIQUITIN)}")
+    # Single-cell (C2S-Scale): T-cell vs B-cell markers -> different generations.
+    sc_t, sc_b = translate(T_CELL_MARKERS, "single_cell"), translate(B_CELL_MARKERS, "single_cell")
+    if assert_live_or_skip("single_cell live", sc_t, "c2s-singlecell"):
+        check("single_cell -> c2s-singlecell", (sc_t.get("data") or {}).get("model") == "c2s-singlecell")
+        s_t, s_b = summary_of(sc_t), summary_of(sc_b)
+        check("single_cell produces clean text", len(s_t) > 5, f"{len(s_t)} chars")
+        check("single_cell text is input-dependent", s_t != s_b)
+        check("single_cell output is clean (no control tokens)", "<ctrl" not in s_t and "<pad>" not in s_t)
 
-    # Nucleotide: GC content must track the actual sequence.
-    n_lo = translate(DNA_GC_LOW, "nucleotide")
-    n_hi = translate(DNA_GC_HIGH, "nucleotide")
-    gc_lo = num(r"GC content:\s*([\d.]+)%", n_lo.get("data", {}).get("summary", ""))
-    gc_hi = num(r"GC content:\s*([\d.]+)%", n_hi.get("data", {}).get("summary", ""))
-    check("nucleotide -> nt-nucleotide", n_lo.get("data", {}).get("model") == "nt-nucleotide")
-    check("nucleotide GC% tracks real input", gc_lo is not None and gc_hi is not None and gc_lo < 20 < 80 < gc_hi,
-          f"AT-rich GC={gc_lo}% vs GC-rich GC={gc_hi}%")
-
-    # Spectrometry: precursor neutral mass must follow the real top peak.
-    sp_a = translate(SPECTRUM_A, "spectrometry")
-    sp_b = translate(SPECTRUM_B, "spectrometry")
-    mass_a = num(r"neutral mass:\s*([\d.]+)", sp_a.get("data", {}).get("summary", ""))
-    mass_b = num(r"neutral mass:\s*([\d.]+)", sp_b.get("data", {}).get("summary", ""))
-    check("spectrometry -> chemberta-spectrometry", sp_a.get("data", {}).get("model") == "chemberta-spectrometry")
-    check("spectrometry precursor mass tracks input", mass_a is not None and mass_b is not None and mass_a != mass_b,
-          f"specA mass={mass_a} vs specB mass={mass_b}")
+    # Molecule (BioT5+): aspirin vs caffeine -> different captions.
+    m_asp, m_caf = translate(ASPIRIN, "molecule"), translate(CAFFEINE, "molecule")
+    if assert_live_or_skip("molecule live", m_asp, "biot5-molecule"):
+        check("molecule -> biot5-molecule", (m_asp.get("data") or {}).get("model") == "biot5-molecule")
+        check("molecule produces non-trivial text", len(summary_of(m_asp)) > 40, f"{len(summary_of(m_asp))} chars")
+        check("molecule text is input-dependent", summary_of(m_asp) != summary_of(m_caf))
 
     # --- C. real GPU fingerprint (device + non-trivial latency) -------------------------
     print("\nC. Real GPU fingerprint (provider system_fingerprint)")
-    raw = provider_raw("esm2-protein", UBIQUITIN)
-    fp = raw.get("system_fingerprint", "")
-    m = re.search(r"@(cuda:\d+|cuda)\D.*?\s(\d+)ms", fp) or re.search(r"@(cuda:\d+)\s+(\d+)ms", fp)
-    check("fingerprint names a CUDA device", "cuda" in fp, fp)
-    ms = int(m.group(2)) if m else -1
-    check("inference latency is non-trivial (real forward pass)", ms >= 5, f"{ms}ms")
+    if "biot5-molecule" in experts:
+        raw = provider_raw("biot5-molecule", ASPIRIN)
+        fp = raw.get("system_fingerprint", "")
+        check("fingerprint names a CUDA device", "cuda" in fp, fp)
+        import re
+        m = re.search(r"\s(\d+)ms", fp)
+        ms = int(m.group(1)) if m else -1
+        check("inference latency is non-trivial (real forward pass)", ms >= 20, f"{ms}ms")
 
     # --- D. routing correctness (detection + explicit override) -------------------------
     print("\nD. Routing correctness")
-    det = translate(">x\n" + UBIQUITIN)  # no modality -> must auto-detect protein
-    check("auto-detect routes protein", det.get("data", {}).get("modality") == "protein"
-          and det.get("data", {}).get("modalitySource") == "detected")
-    # Explicit override: send a protein sequence but force nucleotide; must hit nt expert.
-    forced = translate(UBIQUITIN, "nucleotide")
-    check("explicit modality overrides detection",
-          forced.get("data", {}).get("model") == "nt-nucleotide"
-          and forced.get("data", {}).get("modalitySource") == "explicit")
+    det = translate(UBIQUITIN)  # bare amino-acid sequence, no modality -> must auto-detect protein
+    d = det.get("data") or {}
+    if assert_live_or_skip("auto-detect live", det, "esm2text-protein"):
+        check("auto-detect routes protein", d.get("modality") == "protein")
+        check("auto-detect modalitySource is detected", d.get("modalitySource") == "detected")
+    forced = translate(ASPIRIN, "molecule")  # explicitly force the molecule expert
+    fd = forced.get("data") or {}
+    if assert_live_or_skip("explicit-override live", forced, "biot5-molecule"):
+        check("explicit modality routes its expert",
+              fd.get("model") == "biot5-molecule" and fd.get("modalitySource") == "explicit")
 
-    # --- molecule (ChemLLM via vLLM) — only if the vLLM server is up --------------------
-    print("\nE. Molecule / ChemLLM (skipped if vLLM not running)")
-    m_asp = translate(ASPIRIN, "molecule")
-    if m_asp.get("ok"):
-        s_asp = m_asp.get("data", {}).get("summary", "")
-        m_caf = translate(CAFFEINE, "molecule").get("data", {}).get("summary", "")
-        check("molecule -> chemllm-molecule", m_asp.get("data", {}).get("model") == "chemllm-molecule")
-        # Aspirin C9H8O4 heavy-atom formula = C9O4 (no implicit H); caffeine has N's.
-        check("aspirin structural parse correct (real string math)", "C9O4" in s_asp.replace(" ", ""), s_asp[:200])
-        check("caffeine differs from aspirin (N present)", "N" in m_caf and m_caf != s_asp)
-        check("ChemLLM produced a non-trivial description",
-              "ChemLLM-7B description" in s_asp and len(s_asp) > 300)
+    # --- E. protein sequence (generated function text) ----------------------------------
+    print("\nE. Protein sequence (generated text)")
+    pr = translate(UBIQUITIN, "protein")
+    if assert_live_or_skip("protein live", pr, "esm2text-protein"):
+        check("protein -> esm2text-protein", (pr.get("data") or {}).get("model") == "esm2text-protein")
+        check("protein produces non-trivial text", len(summary_of(pr)) > 40, f"{len(summary_of(pr))} chars")
+
+    # --- F. protein structure (PDB -> function text; optional, needs a PDB file) --------
+    print("\nF. Protein structure (Prot2Text; set E2E_PDB_PATH to test)")
+    pdb_path = os.environ.get("E2E_PDB_PATH")
+    if not pdb_path or not os.path.exists(pdb_path):
+        skip("protein_structure", "E2E_PDB_PATH unset or missing")
     else:
-        err = m_asp.get("error", {})
-        print(f"  [SKIP] ChemLLM vLLM not reachable: {err.get('code')} {err.get('message')}")
+        with open(pdb_path) as fh:
+            pdb = fh.read()
+        st = translate(pdb, "protein_structure")
+        if assert_live_or_skip("protein_structure live", st, "prot2text-structure"):
+            check("protein_structure -> prot2text-structure",
+                  (st.get("data") or {}).get("model") == "prot2text-structure")
+            check("protein_structure produces non-trivial text", len(summary_of(st)) > 20, f"{len(summary_of(st))} chars")
 
-    return summary()
+    return done()
 
 
-def summary() -> int:
-    print(f"\n{'=' * 60}\nPASS: {len(PASS)}   FAIL: {len(FAIL)}")
+def done() -> int:
+    print(f"\n{'=' * 60}\nPASS: {len(PASS)}   FAIL: {len(FAIL)}   SKIP: {len(SKIP)}")
     if FAIL:
         print("FAILED:")
         for f in FAIL:

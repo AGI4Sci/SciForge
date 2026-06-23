@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 RUN="$HERE/run"
 log() { printf '[scimodality-stop] %s\n' "$*"; }
 
-for key in scimodality experts chemllm; do
+for key in scimodality experts; do
   pidf="$RUN/$key.pid"
   if [ -f "$pidf" ]; then
     pid=$(cat "$pidf")
@@ -16,7 +16,7 @@ for key in scimodality experts chemllm; do
 done
 
 # Port-based backups (no pattern self-match risk).
-for port in "${SCIMODALITY_ROUTER_PORT:-3898}" "${EXPERT_TRANSLATOR_PORT:-8001}" "${CHEMLLM_PORT:-8000}"; do
+for port in "${SCIMODALITY_ROUTER_PORT:-3898}" "${EXPERT_TRANSLATOR_PORT:-8001}"; do
   fuser -k "${port}/tcp" 2>/dev/null && log "freed port $port"
 done
 

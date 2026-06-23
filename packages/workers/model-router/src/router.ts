@@ -173,6 +173,11 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
   const env = options.env ?? processEnvSnapshot();
   const workspaceRoot = options.workspaceRoot ?? process.cwd();
   const visionTranslationCache = new Map<string, VisionTranslationCacheEntry>();
+  // Caches scientific-file expert translations by file-content sha. An agentic turn is several
+  // router requests (one per tool round); the uploaded file rides along on each, so without this
+  // we'd re-call the GPU expert every round. With it, the expert runs once and its output is
+  // re-surfaced (the visible block) on every round, including the final answer the user sees.
+  const scientificTranslationCache = new Map<string, ScientificEvidence>();
   const toolCallCache: ToolCallCache = new Map();
 
   return createServer(async (request, response) => {
@@ -226,6 +231,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               workspaceRoot,
               request,
               visionTranslationCache,
+              scientificTranslationCache,
               toolCallCache,
               responseId,
             }),
@@ -238,6 +244,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           workspaceRoot,
           request,
           visionTranslationCache,
+          scientificTranslationCache,
           toolCallCache,
         });
         return sendJson(response, 200, responseObject(result));
@@ -269,6 +276,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               workspaceRoot,
               request,
               visionTranslationCache,
+              scientificTranslationCache,
               toolCallCache,
               responseId,
             }),
@@ -281,6 +289,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           workspaceRoot,
           request,
           visionTranslationCache,
+          scientificTranslationCache,
           toolCallCache,
         });
         return sendJson(response, 200, responseToAnthropicMessage(responseObject(result), body));
@@ -390,6 +399,7 @@ async function routeResponsesRequest(
     workspaceRoot: string;
     request: IncomingMessage;
     visionTranslationCache: Map<string, VisionTranslationCacheEntry>;
+    scientificTranslationCache: Map<string, ScientificEvidence>;
     toolCallCache: ToolCallCache;
     responseId?: string;
   },
@@ -412,6 +422,7 @@ async function routeResponsesRequest(
   };
   const calls: ProviderCallRecord[] = [];
   const observations: string[] = [];
+  const scientificEvidence: ScientificEvidence[] = [];
   let degraded = false;
   const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
   const traceRedactionSecrets = [textSecret, visionSecret]
@@ -444,9 +455,10 @@ async function routeResponsesRequest(
     for (const item of unsupportedModalities) {
       // 1) Scientific file (.fasta / .smi / .mol / .mgf …) + standalone sci-modality service configured:
       //    translate to natural-language evidence via real GPU expert models (pluggable module owns retry).
-      const expert = await translateScientificModalityObservation(item, context.workspaceRoot, context.env, context.fetchImpl);
+      const expert = await translateScientificModalityObservation(item, context.workspaceRoot, context.env, context.fetchImpl, context.scientificTranslationCache);
       if (expert) {
-        observations.push(expert);
+        observations.push(expert.observation);
+        scientificEvidence.push(expert.evidence);
         continue;
       }
       // 2) Otherwise, if the ref is a readable workspace text file (e.g. .txt / .csv / unmatched scientific
@@ -643,6 +655,15 @@ async function routeResponsesRequest(
   }
   if (degraded && !mentionsModalityUnavailable(outputText)) {
     outputText = `${degradedUnavailablePrefix(extracted.modalities)} ${outputText}`;
+  }
+  // Transparency: surface each scientific expert's raw output verbatim at the top of the answer.
+  if (scientificEvidence.length > 0) {
+    const block = formatScientificEvidenceBlock(scientificEvidence);
+    outputText = outputText ? `${block}${outputText}` : block.trimEnd();
+    // On tool-call turns there may be no message item; prepend one so the block still shows.
+    if (outputItems.length > 0 && !outputItems.some((item) => item.type === 'message')) {
+      outputItems = [messageOutputItem(block.trimEnd()), ...outputItems];
+    }
   }
   if (!outputItems.length) outputItems = outputText ? [messageOutputItem(outputText)] : [];
   rememberFunctionCalls(context.toolCallCache, outputItems);
@@ -865,12 +886,27 @@ async function readWorkspaceTextModalityObservation(item: ModalityRef, workspace
 // owns modality auto-detection + retry/robustness. Translation-only: it returns evidence, never answers.
 // Returns undefined (fail-open) when the service is unconfigured, the ref is not a scientific file, the
 // file is unreadable/binary, or the call fails — callers then fall back to text inlining.
+type ScientificEvidence = { modalityInputId: string; modality: string; model: string; summary: string };
+
+function buildScientificObservation(item: ModalityRef, evidence: ScientificEvidence): string {
+  return [
+    `modality_input=${item.id}`,
+    `kind=${item.kind}`,
+    'status=ok',
+    `source=sci-modality:${evidence.modality}/${evidence.model}`,
+    'instruction=The referenced scientific file was analyzed by a domain expert model. Treat the following evidence as the inspected modality and answer the user question from it; do not search the filesystem for it.',
+    'evidence:',
+    evidence.summary,
+  ].join('\n');
+}
+
 async function translateScientificModalityObservation(
   item: ModalityRef,
   workspaceRoot: string,
   env: Record<string, string | undefined>,
   fetchImpl: typeof fetch,
-): Promise<string | undefined> {
+  cache?: Map<string, ScientificEvidence>,
+): Promise<{ observation: string; evidence: ScientificEvidence } | undefined> {
   const serviceUrl = (env.SCIFORGE_SCIMODALITY_SERVICE_URL ?? '').trim();
   if (!serviceUrl) return undefined;
   const target = workspaceImageTarget(item, workspaceRoot);
@@ -882,6 +918,13 @@ async function translateScientificModalityObservation(
     if (bytes.subarray(0, 8192).includes(0)) return undefined; // looks binary
     const payload = bytes.toString('utf8');
     if (!payload.trim()) return undefined;
+
+    // Cache by file-content sha: the same uploaded file rides every tool round of one agentic
+    // turn, so translate once and re-surface the block (incl. on the final answer) without re-
+    // calling the GPU expert.
+    const cacheKey = createHash('sha256').update(payload).digest('hex');
+    const cached = cache?.get(cacheKey);
+    if (cached) return { observation: buildScientificObservation(item, cached), evidence: cached };
 
     const timeoutMs = Number(env.SCIFORGE_SCIMODALITY_SERVICE_TIMEOUT_MS ?? '') || 1_800_000;
     const controller = new AbortController();
@@ -902,24 +945,38 @@ async function translateScientificModalityObservation(
     }
     if (!ok || !json || json.ok !== true) return undefined;
     const data = (isRecord(json.data) ? json.data : {}) as JsonObject;
-    const summary = (typeof json.summary === 'string' && json.summary.trim())
-      ? json.summary
-      : (typeof data.summary === 'string' ? data.summary : '');
+    // Prefer the full multi-line evidence (data.summary) over the bounded preview (json.summary)
+    // so both the reasoner and the user-facing transparency block see the expert's raw output.
+    const summary = (typeof data.summary === 'string' && data.summary.trim())
+      ? data.summary
+      : (typeof json.summary === 'string' ? json.summary : '');
     if (!summary.trim()) return undefined;
     const model = typeof data.model === 'string' ? data.model : 'sci-modality';
     const modality = typeof data.modality === 'string' ? data.modality : 'scientific';
-    return [
-      `modality_input=${item.id}`,
-      `kind=${item.kind}`,
-      'status=ok',
-      `source=sci-modality:${modality}/${model}`,
-      'instruction=The referenced scientific file was analyzed by a domain expert model. Treat the following evidence as the inspected modality and answer the user question from it; do not search the filesystem for it.',
-      'evidence:',
-      summary,
-    ].join('\n');
+    const evidence: ScientificEvidence = { modalityInputId: item.id, modality, model, summary };
+    cache?.set(cacheKey, evidence);
+    return { observation: buildScientificObservation(item, evidence), evidence };
   } catch {
     return undefined;
   }
+}
+
+// Transparency: a user-facing block that shows each scientific expert's RAW output verbatim,
+// plus which expert the router selected. Prepended to the final answer so SciForge surfaces what
+// the (translate-only) domain model actually emitted instead of hiding it behind the reasoner.
+function formatScientificEvidenceBlock(evidence: ScientificEvidence[]): string {
+  const sections = evidence
+    .map((e) => `#### 🔬 ${e.modality} expert — raw output\nRouted to expert model \`${e.model}\` (translate-only).\n\n\`\`\`\n${e.summary.trim()}\n\`\`\``)
+    .join('\n\n');
+  return [
+    '> **SciForge Model Router — expert translation (transparent)**',
+    '> Your scientific input was routed to a domain expert model whose only job is to translate it to text. Its raw output is shown verbatim below.',
+    '',
+    sections,
+    '',
+    '---',
+    '',
+  ].join('\n');
 }
 
 async function materializeWorkspaceImageRefs(modalities: ModalityRef[], workspaceRoot: string): Promise<ModalityRef[]> {

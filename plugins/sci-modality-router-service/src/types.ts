@@ -34,27 +34,19 @@ export type ServiceResult<T = unknown> =
 // --- modality_translate operation -------------------------------------------
 
 /**
- * The six scientific modalities this router translates. Each maps to one real
- * expert model running on GPU behind the expert-translator provider. The main
- * agent (DeepSeek V4) is text-only, so these non-text inputs must be turned into
- * natural-language evidence before the agent can "see" them.
+ * The scientific modalities this router translates. Each maps to one expert that is a real
+ * domain model whose **native output is text** (no general-LLM interpreters). The main agent
+ * (DeepSeek V4) is text-only, so these non-text inputs must be turned into natural-language
+ * evidence before the agent can "see" them. Model names reflect what is actually deployed
+ * (see provider/server.py and provider/experts/*).
  */
 export type Modality =
-  | 'protein' // amino-acid sequence (FASTA) -> ESM-2
-  | 'nucleotide' // DNA/RNA sequence (FASTA) -> Nucleotide Transformer
-  | 'molecule' // SMILES / small molecule -> ChemLLM
-  | 'single_cell' // scRNA-seq expression / marker genes -> SciBERT
-  | 'spatial' // spatial transcriptomics (cells x genes + coords) -> SciBERT
-  | 'spectrometry'; // MS / spectra peak list -> ChemBERTa
+  | 'protein' // amino-acid sequence (FASTA) -> Esm2Text-Base (ESM-2 + GPT, sequence-only)
+  | 'protein_structure' // protein 3D structure (PDB/mmCIF) -> Prot2Text-Large (ESM-2 + RGCN + GPT-2)
+  | 'molecule' // SMILES / small molecule -> BioT5+ (T5 SELFIES->caption)
+  | 'single_cell'; // scRNA-seq expression / marker genes -> C2S-Scale (Cell2Sentence, Gemma-2)
 
-export const MODALITIES: readonly Modality[] = [
-  'protein',
-  'nucleotide',
-  'molecule',
-  'single_cell',
-  'spatial',
-  'spectrometry',
-] as const;
+export const MODALITIES: readonly Modality[] = ['protein', 'protein_structure', 'molecule', 'single_cell'] as const;
 
 export interface ModalityTranslateRequest {
   /** The raw scientific payload as text (FASTA, SMILES, expression matrix, peak list, …). */
@@ -77,7 +69,7 @@ export interface ModalityTranslation {
   summary: string;
   /** Which modality was translated (echoes the resolved modality). */
   modality: Modality;
-  /** Which expert model produced the evidence (e.g. `esm2-protein`). */
+  /** Which expert model produced the evidence (e.g. `prott3-protein`). */
   model: string;
   /** Whether the modality was auto-detected (`detected`) or caller-supplied (`explicit`). */
   modalitySource: 'explicit' | 'detected';

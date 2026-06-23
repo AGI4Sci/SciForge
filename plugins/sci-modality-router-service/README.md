@@ -2,17 +2,18 @@
 
 A **standalone, pluggable** SciForge service module — the scientific-data sibling of the
 [Vision Router](../vision-router-service/), and a peer plugin module beside it. It translates a
-**non-text scientific input** (protein/DNA sequence, small molecule, single-cell or spatial
-expression matrix, mass spectrum) into **natural-language evidence** using real expert models on
-GPU, so a text-only main agent (DeepSeek V4) can "see" the data.
+**non-text scientific input** (protein sequence or 3D structure, small molecule, single-cell
+expression) into **natural-language evidence** using real expert models on GPU, so a text-only
+main agent (DeepSeek V4) can "see" the data.
 
-- **Translate-only.** Each expert reports what its model measured (sequence stats, model
-  scores, salient features, uncertainty). It never reasons, answers the user, gives advice,
-  draws conclusions, or claims task completion. Reasoning stays with the main agent.
-- **Real models, no cheating.** Every translation is produced by a real forward pass through
-  a domain model (ESM-2, Nucleotide Transformer, ChemLLM, SciBERT, ChemBERTa). The prose is
-  composed strictly from real numeric outputs — never invented. The provider stamps a
-  `system_fingerprint` (`expert@device <ms>ms`) on every response.
+- **Translate-only.** Each expert describes what its model generated about the input. It
+  never reasons, answers the user, gives advice, draws conclusions, or claims task
+  completion. Reasoning stays with the main agent.
+- **Native-to-text models, no cheating.** Every translation is the natural-language text
+  *generated* by a real domain model (Esm2Text, Prot2Text, BioT5+, C2S-Scale) on a real forward
+  pass — never invented, and never a prompted general LLM. The provider stamps a
+  `system_fingerprint` (`expert@device <ms>ms`) on every response. Experts load lazily on
+  first use.
 - **Independent.** No dependency on the SciForge main repo. Zero runtime npm dependencies
   (Node 20+ `node:http` + `fetch`).
 - **Template-conformant.** Returns the `ServiceResult` envelope from
@@ -24,7 +25,7 @@ GPU, so a text-only main agent (DeepSeek V4) can "see" the data.
 
 ```
 GUI/Kun/Codex input_object ref  ──>  Model Router  ──HTTP──>  sci-modality-router-service (this, TS)  ──OpenAI-compat──>  provider/ (Python, GPU)
-       workspace file ref              gating + fallback       ServiceResult contract + retry                  six real expert models
+       workspace file ref              gating + fallback       ServiceResult contract + retry                  four native-to-text expert models
 ```
 
 - **This service** owns the `ServiceResult` contract, modality detection, and robustness.
@@ -32,25 +33,39 @@ GUI/Kun/Codex input_object ref  ──>  Model Router  ──HTTP──>  sci-mo
 - **Model Router** is the only in-repo caller. Runtimes pass structured workspace file refs; they
   do not read `SCIFORGE_SCIMODALITY_SERVICE_URL` or call this service directly.
 - **`provider/`** is the GPU "model provider" — the `expert-translator` FastAPI app (port 8001),
-  analogue of the Qwen endpoint. It runs on the GPU server; each of the six modalities maps to
-  one registered expert model. The molecule expert delegates to ChemLLM-7B served by vLLM.
+  analogue of the Qwen endpoint. It runs on the GPU server; each of the four modalities maps to
+  one registered **native-to-text** expert model that loads lazily on first request.
 
-## The six modalities
+## The four modalities
 
-| Modality | Expert id | Real model |
-|---|---|---|
-| `protein` | `esm2-protein` | facebook/esm2_t12_35M_UR50D |
-| `nucleotide` | `nt-nucleotide` | InstaDeepAI/nucleotide-transformer-v2-50m |
-| `molecule` | `chemllm-molecule` | AI4Chem/ChemLLM-7B-Chat (vLLM) |
-| `single_cell` | `scibert-singlecell` | allenai/scibert_scivocab_uncased |
-| `spatial` | `scibert-spatial` | allenai/scibert_scivocab_uncased (spatial backend) |
-| `spectrometry` | `chemberta-spectrometry` | DeepChem/ChemBERTa-77M-MTR |
+Every expert is a genuine domain model whose **native output is text** — there are no general-LLM
+interpreters and nothing is composed from hand-rolled numeric summaries. We only support modalities
+for which an open, commercially-usable, natively-to-text model deploys cleanly; modalities whose
+only options are encoders, structure generators, or non-commercial weights are deliberately omitted
+(see the note below) rather than faked with a prompted general LLM.
+
+| Modality | Expert id | Model (native text output) | Notes |
+|---|---|---|---|
+| `protein` | `esm2text-protein` | Esm2Text-Base (ESM-2 + GPT, sequence-only) | sequence → function description; Prot2Text family |
+| `protein_structure` | `prot2text-structure` | Prot2Text-Large (ESM-2 + RGCN + GPT-2) | 3D structure (PDB) → function description; runs in an isolated `p2t` micro-service (graphein + DSSP) |
+| `molecule` | `biot5-molecule` | BioT5+ (T5, SELFIES→caption) | SMILES → caption; ChEBI-20 captioning SOTA among open checkpoints |
+| `single_cell` | `c2s-singlecell` | C2S-Scale-Gemma-2-27B (Cell2Sentence) | scRNA-seq "cell sentence" → cell-type text |
+
+**Deliberately not supported** (no clean native-to-text + open + commercial model): `nucleotide`
+(ChatNT is non-commercial; genomic foundation models emit task tokens, not text), `spectrometry`
+(MS models output structures/SMILES, not text), `spatial` (no open spatial→text model — C2S
+degenerates to gene-list dumps on mixed regions). These are rejected at detection rather than
+translated by a stand-in LLM.
+
+All download via `HF_ENDPOINT=https://hf-mirror.com` (behind the GFW) into `$EXPERT_MODEL_DIR`.
+Weights live on the shared mount (`/fs-computility-new/.../sciforge-expert-models`).
 
 ## Run
 
 ```bash
-# 1) Provider (on the GPU server): the six expert models
-cd provider && bash start.sh           # FastAPI on :8001 (cuda:1); ChemLLM via vLLM on :8000 (cuda:0)
+# 1) Provider (on the GPU server): the four native-to-text experts (lazy-loaded)
+cd provider && HF_ENDPOINT=https://hf-mirror.com bash start.sh   # FastAPI on :8001 (cuda:0)
+# protein_structure also needs the isolated Prot2Text micro-service: bash start_prot2text.sh (:8002)
 
 # 2) This module (calls the provider)
 npm install
@@ -128,6 +143,9 @@ Model Router consumes this module during input routing:
   reads the workspace file text, POSTs it here (`/modality/translate`), and injects the returned
   evidence into the text reasoner. When unset or unavailable, Model Router falls back to readable
   raw text where safe.
+- **Router transparency.** Model Router does not hide this step: it prepends the expert's **raw
+  output verbatim** (and the chosen expert model id) to the answer, so SciForge users see exactly
+  what the translate-only domain model emitted, separate from the main agent's reasoning.
 
 ## Test
 
@@ -141,4 +159,5 @@ cd ../SciForge-dev && npm run smoke:scimodality-preextract
 
 The real-model end-to-end proof (no cheating) lives in [`tests/e2e_real_models.py`](tests/e2e_real_models.py) —
 it drives this service against the live GPU provider and asserts real model fingerprints and that
-distinct inputs yield distinct real outputs (18/18).
+distinct inputs yield distinct generated text across all four modalities. (Any expert whose weights
+are absent is skipped rather than failed, so it still passes on a partial deployment.)
