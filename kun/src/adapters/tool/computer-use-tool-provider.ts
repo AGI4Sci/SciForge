@@ -103,16 +103,30 @@ export function buildComputerUseToolProviders(
             // The user already approved this call via the Kun approval gate
             // (policy: on-request), so we forward execute+approve. The plugin
             // is the final gate (CUA_ALLOW_EXECUTE) and owns retry/robustness.
+            // Stable id so we can tell the plugin to STOP this exact run on abort.
+            const requestId =
+              globalThis.crypto?.randomUUID?.() ??
+              `cua-${Date.now()}-${Math.random().toString(36).slice(2)}`
             const controller = new AbortController()
             const timeout = setTimeout(() => controller.abort(), resolved.timeoutMs)
-            const onAbort = (): void => controller.abort()
+            const onAbort = (): void => {
+              controller.abort()
+              // Aborting the fetch only drops our HTTP connection; the plugin's
+              // run loop keeps driving the desktop. POST cancel so it actually
+              // stops the mouse/keyboard between steps. Fire-and-forget.
+              void fetch(`${resolved.serviceUrl}/computer-use/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ requestId })
+              }).catch(() => {})
+            }
             context.abortSignal.addEventListener('abort', onAbort)
 
             try {
               const response = await fetch(`${resolved.serviceUrl}/computer-use/run`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ instruction, execute: true, approve: true }),
+                body: JSON.stringify({ instruction, execute: true, approve: true, requestId }),
                 signal: controller.signal
               })
 

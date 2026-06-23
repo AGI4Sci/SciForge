@@ -47,5 +47,11 @@ rad.json
 #Test results file
 TestResults.xml
 
+### Computer-Use local runtime / secrets
+*-secrets.local.ps1
+*.local.log
+*.local.log.err
+computer-use-plugin/cua-runs/
+
 ### Internal docs
 docs/R2_RELEASE.md

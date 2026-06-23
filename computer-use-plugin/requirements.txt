@@ -1,11 +1,8 @@
-# Computer-Use plugin. Core agent loop = gui-agents (Agent-S / AgentS2_5).
-gui-agents>=0.3.2
-# Executor (local desktop control) — cross-platform.
+# Computer-Use plugin — native GUI-Owl-1.5 driver (no Agent-S).
+# Model HTTP client (talks to the GUI-Owl vLLM OpenAI-compatible endpoint).
+requests>=2.31.0
+# Executor: local desktop control — cross-platform.
 pyautogui>=0.9.54
 mss>=9.0.0
 pyperclip>=1.8.2
 Pillow>=10.0.0
-requests>=2.31.0
-# Headless boxes: use the headless OpenCV (no libGL) and pin numpy for numba.
-opencv-python-headless>=4.9.0
-numpy>=2.0,<2.3

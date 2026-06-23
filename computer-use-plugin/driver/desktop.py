@@ -30,7 +30,7 @@ pyautogui.PAUSE = 0.05
 class DesktopExecutor:
     dry_run: bool = False
     monitor: int = 1                      # mss monitor index (1 = primary; 0 = all)
-    settle_s: float = 0.4                 # wait after an action for the UI to settle
+    settle_s: float = 0.25                # wait after an action for the UI to settle
     log: List[str] = field(default_factory=list)
 
     # --- perception -----------------------------------------------------------
@@ -74,6 +74,19 @@ class DesktopExecutor:
 
     def right_click(self, x, y):
         self.click(x, y, button="right")
+
+    def middle_click(self, x, y):
+        self.click(x, y, button="middle")
+
+    def triple_click(self, x, y):
+        self.click(x, y, clicks=3)
+
+    def left_click_drag(self, x, y):
+        """Press-and-drag from the CURRENT cursor position to (x, y)."""
+        sx, sy = self._to_screen(x, y)
+        if self._guard(f"left_click_drag(->{x:.0f},{y:.0f})"):
+            pyautogui.dragTo(sx, sy, duration=0.5, button="left")
+            time.sleep(self.settle_s)
 
     def move(self, x, y):
         sx, sy = self._to_screen(x, y)

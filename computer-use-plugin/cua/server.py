@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from PIL import Image
 
 from . import result as R
+from . import cancel
 from .config import CONFIG
 from .runner import run_task
 
@@ -64,18 +65,26 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/version":
             return self._send(200, {"ok": True, "data": {
                 "service": R.SERVICE_ID, "version": VERSION,
-                "planner": CONFIG.planner_model, "grounder": CONFIG.grounder_model,
+                "model": CONFIG.model_name, "engine": "gui-owl-native",
                 "allowExecute": CONFIG.allow_execute}})
         return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
 
     def do_POST(self):
-        if self.path != "/computer-use/run":
+        if self.path not in ("/computer-use/run", "/computer-use/cancel"):
             return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
         try:
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception as e:  # noqa: BLE001
             return self._send(400, R.err("INVALID_ARGUMENT", f"bad json: {e}"))
+        # Cancel: flip the flag the in-flight run checks between steps so it stops
+        # driving the desktop. Runs on a separate thread from the run loop.
+        if self.path == "/computer-use/cancel":
+            rid = body.get("requestId")
+            if not rid:
+                return self._send(400, R.err("INVALID_ARGUMENT", "requestId is required"))
+            cancel.request_cancel(rid)
+            return self._send(200, {"ok": True, "data": {"cancelled": rid}})
         try:
             provider = _screenshot_provider(body)
             res = run_task(
@@ -92,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     srv = ThreadingHTTPServer(("127.0.0.1", CONFIG.port), Handler)
     print(f"computer-use plugin on http://127.0.0.1:{CONFIG.port} "
-          f"(planner={CONFIG.planner_model}, grounder={CONFIG.grounder_model}, "
+          f"(model={CONFIG.model_name} @ {CONFIG.model_base_url}, "
           f"allow_execute={CONFIG.allow_execute})")
     srv.serve_forever()
 

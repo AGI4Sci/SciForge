@@ -261,7 +261,7 @@ class DesktopOverlay:
 # --- pyautogui integration ---------------------------------------------------
 
 def install_pyautogui_overlay(overlay: DesktopOverlay,
-                              min_move_duration: float = 0.35) -> "callable":
+                              min_move_duration: float = 0.2) -> "callable":
     """Monkeypatch pyautogui mouse primitives to drive ``overlay``.
 
     Returns an uninstaller that restores the originals. The wrappers:
