@@ -90,6 +90,19 @@ if (-not $NoTunnel) {
     for ($i = 0; $i -lt 30 -and -not (Test-Port $lp); $i++) { Start-Sleep -Milliseconds 500 }
     if (Test-Port $lp) { Info "隧道就绪" } else { Warn "隧道端口未就绪 (GUI-Owl 可能未启动或仍在加载)" }
   } else { Warn "未配置 CUA_SSH_HOST, 跳过隧道" }
+
+  # Probe the actual model endpoint, not just the tunnel socket: the SSH listener
+  # can be up while the remote GUI-Owl vLLM server is down (then every computer_use
+  # call fails with a connection reset). Warn clearly so the cause is obvious.
+  $modelUrl = ($env:CUA_MODEL_BASE_URL.TrimEnd('/')) + "/models"
+  $modelOk = $false
+  try { Invoke-WebRequest $modelUrl -UseBasicParsing -TimeoutSec 5 | Out-Null; $modelOk = $true } catch {}
+  if ($modelOk) { Info "GUI-Owl 模型端点可达: $($env:CUA_MODEL_BASE_URL)" }
+  else {
+    Warn "GUI-Owl 模型端点无响应: $($env:CUA_MODEL_BASE_URL)"
+    Warn "  -> 请在 GPU 服务器上启动模型: ssh -p $($env:CUA_SSH_PORT) $($env:CUA_SSH_USER)@$($env:CUA_SSH_HOST)  然后  bash /root/serve-gui-owl.sh"
+    Warn "  (模型未起时, computer_use 会因连接被重置而报错)"
+  }
 }
 
 # --- 4. Computer-Use service -------------------------------------------------
