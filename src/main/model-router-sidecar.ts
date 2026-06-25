@@ -184,11 +184,19 @@ export async function ensureModelRouterSidecar(
   await writeManagedModelRouterConfigFile(settings, { userDataDir: options.userDataDir })
   const spawnImpl = options.spawnImpl ?? spawn
   options.log?.(`Starting Model Router sidecar from ${postStopLaunch.launch.cwd}.`)
-  modelRouterChild = spawnImpl(postStopLaunch.launch.command, postStopLaunch.launch.args, {
+  // On Windows the command is `npm.cmd`; Node >= 18.20 refuses to spawn a `.cmd`
+  // without a shell (throws EINVAL). Use a shell on win32 and quote any args that
+  // contain spaces/special chars so cmd.exe parses them correctly.
+  const useShell = process.platform === 'win32'
+  const spawnArgs = useShell
+    ? postStopLaunch.launch.args.map(quoteWindowsShellArg)
+    : postStopLaunch.launch.args
+  modelRouterChild = spawnImpl(postStopLaunch.launch.command, spawnArgs, {
     cwd: postStopLaunch.launch.cwd,
     env: postStopLaunch.launch.env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false
+    detached: false,
+    shell: useShell
   })
   modelRouterLaunchSignature = modelRouterManagedLaunchSignature(postStopLaunch.launch)
   const child = modelRouterChild
@@ -295,6 +303,13 @@ function providerConfig(
     apiKeyEnv,
     model: provider.model
   }
+}
+
+// When spawning through a Windows shell (cmd.exe), wrap args containing spaces or
+// shell metacharacters in double quotes so they survive command-line parsing.
+function quoteWindowsShellArg(arg: string): string {
+  if (arg.length > 0 && !/[\s"&|<>^()]/.test(arg)) return arg
+  return `"${arg.replace(/"/g, '\\"')}"`
 }
 
 function localPortFromRouterBaseUrl(baseUrl: string): number | null {
