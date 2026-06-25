@@ -18,6 +18,7 @@ import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
+import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
 import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-inspector.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import {
@@ -274,7 +275,10 @@ export async function createKunServeRuntime(
       available: true,
       tools: buildTodoLocalTools(threadService)
     },
-    ...buildDelegationToolProviders(delegationRuntime)
+    ...buildDelegationToolProviders(delegationRuntime),
+    // GUI-Owl computer-use: advertised only when SCIFORGE_CUA_SERVICE_URL is set
+    // (env-gated, fail-closed). Every call is gated by the approval policy.
+    ...buildComputerUseToolProviders()
   ])
   const toolHost = new LocalToolHost({ registry, readTracker: true })
   const loop = new AgentLoop({

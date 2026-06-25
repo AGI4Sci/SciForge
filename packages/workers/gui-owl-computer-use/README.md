@@ -96,9 +96,13 @@ curl -s localhost:3900/computer-use/run \
   -d '{"instruction":"open Notepad and type hello","execute":true,"approve":true}'
 ```
 
-For a one-click local real-machine acceptance run (tunnel + service + sample
-tasks) see [`一键启动-computer-use.bat`](一键启动-computer-use.bat) /
-[`启动-sciforge-computer-use.ps1`](启动-sciforge-computer-use.ps1).
+Standalone service smoke test (no GUI): start `--http`, then
+`python accept.py --task "open Notepad"` (add `--execute` for real actions).
+
+To launch the **full SciForge GUI with this module wired in** (so the in-app
+agent gets a `computer_use` tool), use the repo-root one-click launcher
+`一键启动-computer-use.bat` / `启动-sciforge-computer-use.ps1`, which starts the
+SSH tunnel + this service, sets `SCIFORGE_CUA_SERVICE_URL`, and runs `npm run dev`.
 
 ## Config
 
