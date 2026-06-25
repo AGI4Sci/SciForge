@@ -14,9 +14,14 @@ CKPT=${CKPT:-/fs-computility-new/upzd_share/shared/cua/models/GUI-Owl-1.5-32B-In
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
 export VLLM_ATTENTION_BACKEND=TORCH_SDPA
 export VLLM_USE_FLASHINFER_SAMPLER=0
+# CUDA graphs are ON by default — without nvcc/flash-attn this is the main decode
+# speedup (~2x vs eager). Set ENFORCE_EAGER=1 to fall back to eager mode if you
+# hit graph-capture errors or OOM.
+EAGER=""
+[ -n "${ENFORCE_EAGER:-}" ] && EAGER="--enforce-eager"
 exec /root/miniconda3/envs/cua/bin/python -m vllm.entrypoints.openai.api_server \
   --model "$CKPT" --served-model-name gui-owl \
-  --max-model-len 32768 --enforce-eager \
+  --max-model-len 32768 $EAGER \
   --mm-processor-kwargs '{"min_pixels":3136,"max_pixels":10035200}' \
   --limit-mm-per-prompt '{"image":2}' \
   --tensor-parallel-size 2 --gpu-memory-utilization 0.90 \
