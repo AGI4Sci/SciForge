@@ -72,6 +72,12 @@ This worker is **not** a duplicate of the existing
 | Cross-platform desktop executor | `driver/desktop.py` |
 | Click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
+| GUI-Owl 32B vLLM serve script (runs on the GPU box) | `server/serve-gui-owl-32b.sh` |
+| One-click launcher: tunnel + service + SciForge GUI | `一键启动-computer-use.bat`, `启动-sciforge-computer-use.ps1` |
+| Launcher secrets template (copy to `启动-secrets.local.ps1`) | `启动-secrets.example.ps1` |
+
+Everything for the module lives in this one folder; see **Integration touchpoints**
+below for the few unavoidable edits elsewhere in the app.
 
 ## MCP tools
 
@@ -105,9 +111,22 @@ Standalone service smoke test (no GUI): start `--http`, then
 `python accept.py --task "open Notepad"` (add `--execute` for real actions).
 
 To launch the **full SciForge GUI with this module wired in** (so the in-app
-agent gets a `computer_use` tool), use the repo-root one-click launcher
-`一键启动-computer-use.bat` / `启动-sciforge-computer-use.ps1`, which starts the
-SSH tunnel + this service, sets `SCIFORGE_CUA_SERVICE_URL`, and runs `npm run dev`.
+agent gets a `computer_use` tool), double-click `一键启动-computer-use.bat`
+(or run `启动-sciforge-computer-use.ps1`) **in this folder**: it builds the SSH
+tunnel to the GUI-Owl box, starts this service, sets `SCIFORGE_CUA_SERVICE_URL`,
+then runs `npm run dev` from the repo root.
+
+## Integration touchpoints (outside this folder)
+
+The module is self-contained here; the only edits elsewhere in the app are the
+minimal wiring needed to expose it to the agent runtime:
+
+| File | Why |
+|---|---|
+| `kun/src/adapters/tool/computer-use-tool-provider.ts` (+ test) | the Kun `computer_use` tool that calls this service over HTTP |
+| `kun/src/server/runtime-factory.ts` | registers the tool provider (1 import + 1 spread) |
+| `src/main/kun-process.ts` | disables the built-in browser/native `computer_use` MCP when this module is active (avoids a duplicate tool name) |
+| `src/main/model-router-sidecar.ts` | unrelated Windows fix: spawn `npm.cmd` via a shell (Node EINVAL) so the Model Router can auto-start |
 
 ## Config
 

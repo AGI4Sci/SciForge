@@ -1,6 +1,3 @@
-### Computer-Use launcher secrets (machine-specific; never commit)
-启动-secrets.local.ps1
-
 ### Node / Electron
 node_modules/
 out/

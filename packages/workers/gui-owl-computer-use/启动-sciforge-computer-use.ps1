@@ -36,9 +36,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$here = $PSScriptRoot
-Set-Location $here
-$worker = Join-Path $here "packages\workers\gui-owl-computer-use"
+# This script lives in the worker folder; the repo root is 3 levels up
+# (packages/workers/gui-owl-computer-use -> repo). GUI runs from the repo root.
+$worker = $PSScriptRoot
+$repo = (Resolve-Path (Join-Path $worker "..\..\..")).Path
 
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $env:PYTHONUTF8 = "1"
@@ -49,8 +50,8 @@ function Warn($m) { Write-Host "[cua] $m" -ForegroundColor Yellow }
 function Die($m)  { Write-Host "[cua] $m" -ForegroundColor Red; exit 1 }
 
 # --- 1. secrets / config -----------------------------------------------------
-$secretsLocal   = Join-Path $here "启动-secrets.local.ps1"
-$secretsExample = Join-Path $here "启动-secrets.example.ps1"
+$secretsLocal   = Join-Path $worker "启动-secrets.local.ps1"
+$secretsExample = Join-Path $worker "启动-secrets.example.ps1"
 if (Test-Path $secretsLocal) { Info "loading 启动-secrets.local.ps1"; . $secretsLocal }
 elseif (Test-Path $secretsExample) { Warn "未找到 启动-secrets.local.ps1, 暂用 .example 默认值"; . $secretsExample }
 else { Die "缺少 secrets 配置 (启动-secrets.local.ps1 / .example)" }
@@ -119,9 +120,10 @@ try {
     if ($ok) { Info "Computer-Use 服务就绪" } else { Warn "服务未就绪 (依赖未装? 试试 -Install)" }
   } else { Info "跳过服务启动 (-SkipService); 请确保 $($env:SCIFORGE_CUA_SERVICE_URL) 已在运行" }
 
-  # --- 5. launch the GUI -----------------------------------------------------
+  # --- 5. launch the GUI (from the repo root) --------------------------------
   Info "启动 SciForge GUI (npm run dev)  —  在对话框里直接用中文下达桌面任务"
   Info "computer_use 工具已通过 SCIFORGE_CUA_SERVICE_URL=$($env:SCIFORGE_CUA_SERVICE_URL) 接入"
+  Set-Location $repo
   & npm run dev
 }
 finally {
