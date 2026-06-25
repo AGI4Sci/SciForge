@@ -57,6 +57,9 @@ type ComputerUseRunData = {
   screen?: number[]
   steps?: ComputerUseRunStep[]
   stepCount?: number
+  // What GUI-Owl read off the screen and reported back (via the answer/ask
+  // action). This is how the host agent gets observed content, not just actions.
+  answer?: string
 }
 
 export function buildComputerUseToolProviders(
@@ -76,17 +79,21 @@ export function buildComputerUseToolProviders(
           name: 'computer_use',
           description:
             'Control the user\'s real desktop to accomplish a GUI task (click, type, scroll, ' +
-            'open apps). Give one clear natural-language instruction describing the goal, e.g. ' +
-            '"open Notepad and type the meeting agenda" or "in the open browser, click the ' +
-            'Download button". Returns a step-by-step trace of what was planned and done — it ' +
-            'does NOT guarantee the task succeeded, so verify the result. Each call asks the ' +
-            'user for approval before touching the mouse/keyboard.',
+            'open apps) using the GUI-Owl vision agent. Give one clear natural-language ' +
+            'instruction, e.g. "open Notepad and type the meeting agenda" or "in the open ' +
+            'browser, click the Download button". To READ information off the screen, phrase ' +
+            'it as a question (e.g. "open this job posting and tell me the salary range shown") ' +
+            '— the agent reads the page and returns its finding in the result\'s `answer` field. ' +
+            'Returns a step-by-step trace plus `answer`; it does NOT guarantee success, so ' +
+            'verify. Each call asks the user for approval before touching the mouse/keyboard.',
           inputSchema: {
             type: 'object',
             properties: {
               instruction: {
                 type: 'string',
-                description: 'The desktop task in natural language.'
+                description:
+                  'The desktop task in natural language. For information-gathering, ask a ' +
+                  'question so the agent reports back what it read in `answer`.'
               }
             },
             required: ['instruction'],
@@ -169,6 +176,9 @@ export function buildComputerUseToolProviders(
                   platform: data.platform,
                   screen: data.screen,
                   stepCount: data.stepCount ?? steps.length,
+                  // Content GUI-Owl read off the screen and reported back. Present
+                  // when the instruction asked a question; empty for act-only tasks.
+                  ...(data.answer ? { answer: data.answer } : {}),
                   steps,
                   summary: payload.summary
                 }

@@ -185,6 +185,7 @@ def _run_loop(cfg: Config, instruction: str, screenshot_provider: ScreenshotProv
               request_id: str, started: float) -> Dict[str, Any]:
     img = first
     status = "exhausted_steps"
+    answer_text = ""                            # what GUI-Owl reports back (answer/ask)
     history: List[Dict[str, str]] = []          # {"output", "image"} per step
     recent_actions: List[str] = []              # for the repeat-loop guard
     progress_status = ""                         # Reflector's running progress note
@@ -231,10 +232,12 @@ def _run_loop(cfg: Config, instruction: str, screenshot_provider: ScreenshotProv
         low = action_type.lower()
         if low in _TERMINAL:
             if low in ("interact", "call_user"):
-                step_rec["terminal"] = low; steps.append(step_rec)
-                status = "needs_user"; break
+                answer_text = (args or {}).get("text", "") or ""
+                step_rec["terminal"] = low; step_rec["text"] = answer_text
+                steps.append(step_rec); status = "needs_user"; break
             if low == "answer":
-                step_rec["terminal"] = "answer"; step_rec["answer"] = (args or {}).get("text", "")
+                answer_text = (args or {}).get("text", "") or ""
+                step_rec["terminal"] = "answer"; step_rec["answer"] = answer_text
                 steps.append(step_rec); status = "agent_reported_done"; break
             ok = str((args or {}).get("status", "success")).lower() != "failure"
             step_rec["terminal"] = action_type; steps.append(step_rec)
@@ -304,10 +307,16 @@ def _run_loop(cfg: Config, instruction: str, screenshot_provider: ScreenshotProv
 
     summary = (f"{len(steps)} step(s); status={status}; "
                f"{'executed' if really_execute else 'dry-run (no actions performed)'}.")
+    if answer_text:
+        summary += f" answer: {answer_text[:200]}"
     data = {
         "status": status,                 # NOT a completion claim; host decides
         "executed": really_execute,
         "instruction": instruction,
+        # What GUI-Owl read off the screen and reported back (via the `answer` /
+        # `interact` action). Empty if it only acted and never reported. This is
+        # how the host agent gets observed CONTENT, not just the action trace.
+        "answer": answer_text,
         "platform": _OS_NAME,
         "screen": [w, h],
         "steps": steps,
