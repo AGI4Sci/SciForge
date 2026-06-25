@@ -377,7 +377,14 @@ async function startKunChildOnce(
         execPath: process.execPath,
         isPackaged: app.isPackaged
       },
-      enabled: isComputerUseEnabledForRuntime(settings, 'kun')
+      // The GUI-Owl computer-use worker (kun local `computer_use` tool, advertised
+      // when SCIFORGE_CUA_SERVICE_URL is set) supersedes the built-in browser/native
+      // computer-use MCP. They both expose a tool named `computer_use`, which the
+      // CapabilityRegistry rejects as a duplicate — so when GUI-Owl is active, the
+      // built-in MCP is disabled for Kun and GUI-Owl becomes the sole `computer_use`.
+      enabled:
+        isComputerUseEnabledForRuntime(settings, 'kun') &&
+        !process.env.SCIFORGE_CUA_SERVICE_URL?.trim()
     }
   })
   lastResolvedBinary = resolution.command === process.execPath
