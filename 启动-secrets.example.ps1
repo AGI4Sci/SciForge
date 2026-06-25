@@ -17,13 +17,14 @@ $env:CUA_LOCAL_PORT  = "4243"              # 本地转发端口
 # --- Computer-Use 服务 (worker) 调用的模型端点 -------------------------------
 # 默认指向上面的本地隧道。生产环境应改为 SciForge model router 的 OpenAI 兼容网关。
 $env:CUA_MODEL_BASE_URL = "http://127.0.0.1:$($env:CUA_LOCAL_PORT)/v1"
-$env:CUA_MODEL          = "gui-owl"        # 须与 serve-gui-owl.sh 的 --served-model-name 一致
+$env:CUA_MODEL          = "gui-owl"        # served-model-name; 服务器跑 32B (server/serve-gui-owl-32b.sh)
 $env:CUA_MODEL_API_KEY  = "EMPTY"          # vLLM 无需鉴权; 走网关时填真实 key
 
 # --- Computer-Use 服务端口 / 行为 --------------------------------------------
 $env:CUA_PORT         = "3900"             # HTTP sidecar 端口 (GUI 通过它调用)
-$env:CUA_MAX_STEPS    = "12"
-$env:CUA_REFLECT      = "true"
+$env:CUA_MAX_STEPS    = "15"
+# GUI-Owl 32B 端到端足够强, 关闭 reflector 提速 (用 8B 时再设 "true")。
+$env:CUA_REFLECT      = "false"
 $env:CUA_SHOW_OVERLAY = "true"             # 真机执行时显示鼠标高亮 (仅 Windows)
 
 # 说明: 是否允许真机执行由启动脚本控制:

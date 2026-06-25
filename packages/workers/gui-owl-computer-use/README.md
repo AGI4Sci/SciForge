@@ -4,21 +4,26 @@ GUI-Owl-1.5 **vision** computer-use worker: turn one natural-language task into
 real desktop actions (click / type / scroll / open apps) on the user's own
 **Windows / macOS / Linux** machine.
 
-One end-to-end model — **GUI-Owl-1.5-8B** (Qwen3-VL based) — is the whole agent:
-it reads the screen *and* decides each action (no separate planner/grounder, no
-Agent-S). After each action the official **Mobile-Agent-v3 Reflector** verifies
-the before/after screenshots and self-corrects.
+Computer-use is delegated **end-to-end to one model — GUI-Owl-1.5-32B**
+(Qwen3-VL based). That single model is the whole agent: it reads the screen,
+plans, grounds (pixel coords) *and* decides when to stop — **no planner/grounder
+split, no Agent-S, and the main agent (DeepSeek) does not plan the steps**; it
+just hands the whole task to `computer_use`. The optional Mobile-Agent-v3
+Reflector is **off by default** for the 32B (it's strong enough end-to-end).
 
 ```
                 ┌──────────────────────────────────────────────┐
-task ──▶        │  observe → GUI-Owl plans+grounds → act → reflect → …  │
-                │   model  → GUI-Owl-1.5 (remote vLLM / model router)   │
+task ──▶        │  observe → GUI-Owl plans+grounds+decides → act → …    │
+                │   model  → GUI-Owl-1.5-32B (remote vLLM, served "gui-owl") │
                 │   act    → DesktopExecutor (local, the only OS layer) │
                 └──────────────────────────────────────────────┘
 ```
 
 The model is remote (it only sees screenshots + text); the executor runs locally
-where the desktop is. No Linux VM required.
+where the desktop is. No Linux VM required. Serve it with
+[`server/serve-gui-owl-32b.sh`](server/serve-gui-owl-32b.sh) (tensor-parallel
+across 2 GPUs). The 8B variant also works — just point `CUA_MODEL_BASE_URL` at it
+and set `CUA_REFLECT=true`.
 
 ## Relationship to `@sciforge/computer-use`
 
