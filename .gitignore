@@ -6,6 +6,7 @@ dist/
 .deepseek/
 .codex-runtime/
 .claude-code-runtime/
+.scimodality-run/
 *.log
 .DS_Store
 

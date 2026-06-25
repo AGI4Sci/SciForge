@@ -188,7 +188,11 @@ export async function ensureModelRouterSidecar(
     cwd: postStopLaunch.launch.cwd,
     env: postStopLaunch.launch.env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false
+    detached: false,
+    // Windows: the launch command is `npm.cmd`, and modern Node refuses to spawn a .cmd/.bat
+    // batch file without a shell (throws `spawn EINVAL`). Run it through the shell on win32 so
+    // the Model Router sidecar actually starts. (Args here are repo-controlled, no shell metachars.)
+    shell: process.platform === 'win32'
   })
   modelRouterLaunchSignature = modelRouterManagedLaunchSignature(postStopLaunch.launch)
   const child = modelRouterChild
