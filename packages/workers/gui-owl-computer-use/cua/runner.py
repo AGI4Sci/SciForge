@@ -204,6 +204,7 @@ def _run_loop(cfg: Config, instruction: str, screenshot_provider: ScreenshotProv
         # Ask GUI-Owl for the next step.
         try:
             messages = owl_agent.build_messages(instruction, history, img,
+                                                image_window=cfg.image_window,
                                                 progress_status=progress_status,
                                                 replan_hint=replan_hint)
             output_text = owl_agent.call_owl(

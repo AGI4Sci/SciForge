@@ -122,51 +122,73 @@ def _png_data_url(img: Image.Image) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def build_messages(instruction: str, history: List[Dict[str, str]],
-                   cur_img: Image.Image, progress_status: str = "",
-                   replan_hint: bool = False) -> List[Dict[str, Any]]:
-    """One model turn: system prompt + summarized prior actions + current image.
-
-    We send only the CURRENT screenshot (robust to a server's image-per-prompt
-    limit) and summarize previous steps as text, matching the official script's
-    no-history-image fallback path.
-
-    When the Reflector is on, each history item may carry `reflect_outcome`
-    (A/B/C) and `reflect_error`; failed steps are annotated so the model learns
-    from them, and the running `progress_status` / `replan_hint` are appended.
-    """
-    prev = []
-    for i, item in enumerate(history):
-        text = item.get("output", "")
-        if "Action:" in text and "<tool_call>" in text:
-            text = text.split("Action:")[1].split("<tool_call>")[0].strip()
-        outcome = item.get("reflect_outcome")
-        if outcome in ("B", "C"):
-            err = (item.get("reflect_error") or "").strip()
-            detail = f": {err}" if err and err.lower() != "none" else ""
-            text = f"{text} [reflection: FAILED ({outcome}){detail}]"
-        prev.append(f"Step {i + 1}: {text}")
-    prev_str = "\n".join(prev) if prev else "None"
-
-    instruction_prompt = (
+def _preamble(instruction: str) -> str:
+    """Official first-turn user text (X-PLUG/MobileAgent gui_owl.py)."""
+    return (
         "Please generate the next move according to the UI screenshot, "
         "instruction and previous actions.\n\n"
         f"Instruction: {instruction}\n\n"
-        f"Previous actions:\n{prev_str}"
+        "Previous actions:\nNo previous action."
     )
+
+
+def _image_part(src: Any) -> Dict[str, Any]:
+    img = src if isinstance(src, Image.Image) else Image.open(src)
+    return {"type": "image_url", "image_url": {"url": _png_data_url(img)}}
+
+
+def build_messages(instruction: str, history: List[Dict[str, str]],
+                   cur_img: Image.Image, image_window: int = 2,
+                   progress_status: str = "", replan_hint: bool = False
+                   ) -> List[Dict[str, Any]]:
+    """Build the official GUI-Owl multi-turn conversation for the current step.
+
+    A real growing chat (one task = one run = one conversation):
+
+        system : action space
+        user   : [task text, screenshot_0]   assistant: action_0
+        user   : [screenshot_1]              assistant: action_1
+        ...
+        user   : [screenshot_i]              <- current; the model answers this
+
+    Sliding window (official `cut_current_messages(last_image=N)`): only the most
+    recent `image_window` user turns keep their screenshot; older user turns drop
+    the image (the assistant action outputs carry that history forward as text),
+    which also keeps the request within the vLLM image-per-prompt cap.
+
+    `history[k]` = {"output": raw model output for step k, "image": screenshot path}.
+    The task text always stays in user turn 0 even after its image is windowed out.
+    When the Reflector is on, its running `progress_status` / `replan_hint` are
+    attached to the current turn.
+    """
+    msgs: List[Dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    n_user = len(history) + 1                       # prior observations + current
+    keep_from = max(0, n_user - max(1, image_window))
+
+    for k, item in enumerate(history):
+        parts: List[Dict[str, Any]] = []
+        if k == 0:
+            parts.append({"type": "text", "text": _preamble(instruction)})
+        if k >= keep_from:
+            parts.append(_image_part(item.get("image")))
+        elif k != 0:
+            parts.append({"type": "text", "text": "(screenshot from this step omitted)"})
+        msgs.append({"role": "user", "content": parts})
+        msgs.append({"role": "assistant",
+                     "content": [{"type": "text", "text": item.get("output", "")}]})
+
+    cur_parts: List[Dict[str, Any]] = []
+    if not history:
+        cur_parts.append({"type": "text", "text": _preamble(instruction)})
     if progress_status:
-        instruction_prompt += f"\n\nProgress so far: {progress_status}"
+        cur_parts.append({"type": "text", "text": f"Progress so far: {progress_status}"})
     if replan_hint:
-        instruction_prompt += (
-            "\n\nNote: your recent actions did not make progress. Step back and "
-            "rethink your overall approach before choosing the next action.")
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": [
-            {"type": "text", "text": instruction_prompt},
-            {"type": "image_url", "image_url": {"url": _png_data_url(cur_img)}},
-        ]},
-    ]
+        cur_parts.append({"type": "text", "text":
+                          "Note: your recent actions did not make progress. Step back "
+                          "and rethink your overall approach before choosing the next action."})
+    cur_parts.append(_image_part(cur_img))
+    msgs.append({"role": "user", "content": cur_parts})
+    return msgs
 
 
 def call_owl(base_url: str, model: str, api_key: str,

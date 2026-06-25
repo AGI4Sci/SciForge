@@ -71,6 +71,41 @@ def test_owl_parsing_optional():
     assert owl_agent.to_screen([500, 250], 1000, 800) == (500, 200)
 
 
+def test_build_messages_official_multiturn_optional():
+    """Official GUI-Owl multi-turn: alternating roles, sliding 2-image window,
+    task text retained in turn 0, older screenshots dropped. Skips if PIL absent."""
+    try:
+        import io, tempfile, os as _os
+        from PIL import Image
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+    d = tempfile.mkdtemp()
+    paths = []
+    for i in range(3):  # 3 completed steps -> step0,1,2 ; current = step3
+        p = _os.path.join(d, f"s{i}.png")
+        Image.new("RGB", (64, 48), (i, i, i)).save(p)
+        paths.append(p)
+    history = [{"output": f"Action: act{i}\n<tool_call>{{}}</tool_call>", "image": paths[i]}
+               for i in range(3)]
+    cur = Image.new("RGB", (64, 48), (9, 9, 9))
+    msgs = owl_agent.build_messages("open Notepad", history, cur, image_window=2)
+
+    assert msgs[0]["role"] == "system"
+    roles = [m["role"] for m in msgs[1:]]
+    assert roles == ["user", "assistant", "user", "assistant", "user", "assistant", "user"], roles
+    # exactly image_window (2) images across the whole conversation
+    n_imgs = sum(1 for m in msgs for part in (m["content"] if isinstance(m["content"], list) else [])
+                 if isinstance(part, dict) and part.get("type") == "image_url")
+    assert n_imgs == 2, n_imgs
+    # task text stays in the first user turn even though its image was windowed out
+    first_user = msgs[1]
+    assert any(p.get("type") == "text" and "open Notepad" in p["text"] for p in first_user["content"])
+    assert all(p.get("type") != "image_url" for p in first_user["content"])  # step0 image dropped
+    # current (last) user turn carries an image
+    assert any(p.get("type") == "image_url" for p in msgs[-1]["content"])
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

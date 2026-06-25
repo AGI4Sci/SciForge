@@ -18,6 +18,11 @@ class Config:
         "CUA_MODEL_API_KEY", os.environ.get("CUA_GROUNDER_API_KEY", "EMPTY"))
     # loop / safety
     max_steps: int = int(os.environ.get("CUA_MAX_STEPS", "12"))
+    # Official GUI-Owl sliding window: how many of the most recent steps keep their
+    # screenshot in the prompt (older steps drop the image; the assistant action
+    # outputs carry them forward as text). Must be <= the vLLM --limit-mm-per-prompt
+    # image cap (the serve script uses 2). Mirrors cut_current_messages(last_image=N).
+    image_window: int = int(os.environ.get("CUA_IMAGE_WINDOW", "2"))
     # seconds to wait after a real action for the UI to settle
     settle_s: float = float(os.environ.get("CUA_SETTLE_S", "0.25"))
     # loop guard: if the agent repeats essentially the same action this many times
