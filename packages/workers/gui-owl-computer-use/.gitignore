@@ -1,0 +1,14 @@
+# local secrets / config
+.env
+启动-secrets.local.ps1
+
+# run artifacts (screenshots + traces)
+cua-runs/
+*.png
+!tests/**/*.png
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/

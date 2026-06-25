@@ -1,0 +1,34 @@
+{
+  "name": "@sciforge/gui-owl-computer-use",
+  "version": "0.1.0",
+  "private": false,
+  "description": "GUI-Owl-1.5 vision computer-use worker: turns one natural-language task into real desktop actions (click/type/scroll) via an autonomous VLM loop with Mobile-Agent-v3 reflection. Exposed as an MCP stdio server and an HTTP ServiceResult sidecar.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "runtime": "python",
+    "skillFacing": false,
+    "sideEffects": "host-ui, process, network, filesystem",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": true,
+    "entry": {
+      "mcp": "python -m cua.cli --stdio",
+      "http": "python -m cua.cli --http"
+    }
+  },
+  "files": [
+    "cua",
+    "driver",
+    "tests",
+    "requirements.txt",
+    ".env.example",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "setup": "python -m pip install -r requirements.txt",
+    "start": "python -m cua.cli --stdio",
+    "start:http": "python -m cua.cli --http",
+    "test": "python -m pytest -q tests || python tests/test_contract.py"
+  }
+}
