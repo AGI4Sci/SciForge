@@ -1,0 +1,17 @@
+# expert-translator provider — native-to-text scientific experts (lazy-loaded).
+# Install into a CUDA-enabled Python 3.10+ env (e.g. `conda create -n serve python=3.10`).
+# Install a torch build matching your CUDA before the rest:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1
+transformers>=4.44     # Gemma-2 (C2S-Scale) and T5 seq2seq (BioT5+) support
+accelerate>=0.30       # device placement / efficient loading for the generative experts
+einops>=0.7            # imported by some experts' custom modeling code
+sentencepiece>=0.1.99  # Gemma / T5 tokenizers
+selfies>=2.1           # SMILES -> SELFIES for the BioT5+ molecule expert
+huggingface_hub>=0.23  # snapshot_download (use HF_ENDPOINT=https://hf-mirror.com behind the GFW)
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+
+# protein_structure (Prot2Text) is NOT served from this env — it runs in a separate `p2t`
+# conda env (graphein + the DSSP binary) behind prot2text_service.py. See DEPLOYMENT.md.

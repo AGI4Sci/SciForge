@@ -15,9 +15,9 @@
     "packages/workers/write-assist",
     "packages/workers/paper-radar",
     "packages/workers/runtime-inspector",
+    "packages/workers/sci-modality-router",
     "plugins/paper-radar-service",
-    "plugins/vision-router-service",
-    "plugins/sci-modality-router-service"
+    "plugins/vision-router-service"
   ],
   "scripts": {
     "dev": "npm run build:kun && electron-vite dev",
@@ -78,6 +78,9 @@
     "paper-radar:start": "npm --workspace sciforge-paper-radar-service run start",
     "paper-radar:test": "npm --workspace sciforge-paper-radar-service run test",
     "paper-radar:typecheck": "npm --workspace sciforge-paper-radar-service run typecheck",
+    "sci-modality-router:start": "npm --workspace @sciforge/sci-modality-router run start",
+    "sci-modality-router:test": "npm --workspace @sciforge/sci-modality-router run test",
+    "sci-modality-router:typecheck": "npm --workspace @sciforge/sci-modality-router run typecheck",
     "mac:unquarantine": "bash ./scripts/mac-unquarantine.sh"
   },
   "dependencies": {

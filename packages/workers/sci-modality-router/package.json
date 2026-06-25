@@ -1,0 +1,50 @@
+{
+  "name": "@sciforge/sci-modality-router",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge sci-modality router worker: translates non-text scientific inputs (protein sequence, protein 3D structure, molecule, single-cell) into natural-language evidence via real native-to-text GPU expert models. Translate-only; never reasons. Called by @sciforge/model-router during input pre-extraction.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false,
+    "packagingStrategy": "server-side GPU service: runs on the GPU host (or locally against a tunneled provider), not bundled into the desktop app. Model Router reaches it via SCIFORGE_SCIMODALITY_SERVICE_URL."
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "sciforge-sci-modality-router": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./server": "./src/server.ts",
+    "./experts": "./src/experts.ts",
+    "./types": "./src/types.ts"
+  },
+  "files": [
+    "src",
+    "provider",
+    "deploy",
+    "tests",
+    ".env.example",
+    "package.json",
+    "README.md",
+    "DEPLOYMENT.md"
+  ],
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "dev": "node --env-file-if-exists=.env --watch --import tsx src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

@@ -20,22 +20,20 @@ const MAX_BACKOFF_MS = 15_000;
  * running a real forward pass on GPU.
  */
 export const EXPERT_MODEL: Record<Modality, string> = {
-  protein: 'esm2-protein',
-  nucleotide: 'nt-nucleotide',
-  molecule: 'chemllm-molecule',
-  single_cell: 'scibert-singlecell',
-  spatial: 'scibert-spatial',
-  spectrometry: 'chemberta-spectrometry',
+  protein: 'esm2text-protein',
+  protein_structure: 'prot2text-structure',
+  molecule: 'biot5-molecule',
+  single_cell: 'c2s-singlecell',
 };
 
 // Translate-only system prompt. Mirrors the Vision Router contract: turn the
 // scientific input into faithful textual evidence; do NOT reason, plan, answer
-// the user, draw conclusions, or claim task completion. The expert models compose
-// prose strictly from their own real numeric outputs.
+// the user, draw conclusions, or claim task completion. Each expert is a domain
+// model that natively generates the description; this just states the contract.
 const SYSTEM_PROMPT = [
   'You are a SciForge scientific-modality translator.',
   'Convert the provided non-text scientific input into concise, faithful textual evidence for another agent.',
-  'Report only what the model measured: sequence/structure statistics, model scores, salient features, and uncertainty.',
+  "Report only what the model generated about the input: its description, salient features, and uncertainty.",
   'Do not reason about the task, answer the user, give advice, draw biological/chemical conclusions,',
   'or claim task completion. You translate scientific signal into words — nothing more.',
 ].join(' ');
@@ -159,7 +157,6 @@ function buildUserText(modality: Modality, payload: string, instruction: string 
 // --- modality detection -----------------------------------------------------
 
 const AA = 'ACDEFGHIKLMNPQRSTVWY';
-const NT = 'ACGTUN';
 
 /** Split into trimmed, non-empty lines — the shared shape every tabular detector works on. */
 function nonEmptyLines(text: string): string[] {
@@ -167,61 +164,73 @@ function nonEmptyLines(text: string): string[] {
 }
 
 /**
- * Best-effort modality detection from a raw text payload. Deliberately
- * conservative and ordered most-specific-first; throws UndetectableModalityError
- * when it cannot tell, so callers fail loudly rather than translating with the
- * wrong expert. An explicit `modality` on the request always bypasses this.
+ * Rule-based modality detection for the four natively-to-text experts (protein, protein
+ * structure, molecule, single cell). Pure and deterministic, ordered most-specific-first;
+ * throws UndetectableModalityError when no rule matches, so an unsupported input fails loudly
+ * rather than being mis-translated. An explicit `modality` on the request always bypasses this.
  */
 export function detectModality(payload: string): Modality {
   const text = payload.trim();
   if (!text) throw new UndetectableModalityError();
-  const lower = text.toLowerCase();
 
-  // 1) Mass spectrometry: keyword, or many 2-column numeric "m/z intensity" peak rows.
-  if (/\bm\/z\b|\bmass spec|\bms\/ms\b|\bspectrum\b|precursor/i.test(text) || looksLikePeakList(text)) {
-    return 'spectrometry';
+  // 1) Protein 3D structure: PDB (ATOM/HETATM records) or mmCIF (_atom_site loop). Checked first
+  //    — a structure file also carries sequence that would otherwise mis-route to `protein`.
+  if (looksLikePDB(text) || looksLikeMmcif(text)) return 'protein_structure';
+
+  // 2) Single-cell expression: gene:value tables, or a bare gene-marker list (one symbol per line).
+  if (looksLikeExpressionTable(text) || looksLikeMarkerList(text)) return 'single_cell';
+
+  // 3) Protein sequence: a FASTA-headed body, a multi-line pure-letter block, or a single
+  //    whitespace-free token, dominated by the 20 amino-acid codes. Prose is rejected by shape.
+  const seq = sequenceCandidate(text);
+  if (seq && seq.length >= 10 && !looksLikeSmiles(text) && fractionIn(seq, AA) >= 0.85) {
+    return 'protein';
   }
 
-  // 2) Spatial transcriptomics: a coordinate+feature grid ("<x> <y> <gene>" rows), an explicit
-  //    x/y coordinate header, or a spatial keyword. Checked before single-cell because spatial
-  //    rows also carry gene names.
-  if (looksLikeSpatialGrid(text) || hasCoordinateColumns(text)) {
-    return 'spatial';
-  }
-
-  // 3) Single-cell expression: gene:value tables, or a bare gene-marker list (one symbol per line).
-  if (looksLikeExpressionTable(text) || looksLikeMarkerList(text)) {
-    return /\b(spatial|tissue|niche)\b/i.test(lower) ? 'spatial' : 'single_cell';
-  }
-
-  // 4) Sequence payloads: only a FASTA-headed body or a single whitespace-free token
-  //    qualifies — this rejects natural-language prose, whose letters otherwise overlap
-  //    heavily with the 20 amino-acid codes. Strip headers, then inspect the alphabet.
-  const hadHeader = /^>/m.test(text);
-  const bodyTokens = text
-    .replace(/^>.*$/gm, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-  const isSequenceShaped = hadHeader || bodyTokens.length === 1;
-  if (isSequenceShaped) {
-    const letters = stripToLetters(text);
-    if (letters.length >= 10) {
-      const ntFrac = fractionIn(letters, NT);
-      if (ntFrac >= 0.9 && !looksLikeSmiles(text)) return 'nucleotide';
-      const aaFrac = fractionIn(letters, AA);
-      if (aaFrac >= 0.85 && !looksLikeSmiles(text)) return 'protein';
-    }
-  }
-
-  // 5) SMILES / small molecule: single token with bond/branch/ring grammar.
-  if (looksLikeSmiles(text)) return 'molecule';
+  // 4) SMILES / small molecule: a bare token or an annotated line (e.g. "SMILES: CCO").
+  if (smilesCandidate(text)) return 'molecule';
 
   throw new UndetectableModalityError();
 }
 
-function stripToLetters(text: string): string {
-  const body = text.replace(/^>.*$/gm, ' '); // drop FASTA headers
-  return body.replace(/[^A-Za-z]/g, '').toUpperCase();
+/**
+ * Return the cleaned upper-case letters if the payload is shaped like a biological sequence,
+ * else null. Accepts: a FASTA-headed body (first record only — multiple records are not merged),
+ * a multi-line block whose every line is a pure-letter run, or a single whitespace-free token.
+ * Prose is rejected because its lines contain spaces/punctuation.
+ */
+function sequenceCandidate(text: string): string | null {
+  if (/^>/m.test(text)) {
+    // Take only the first FASTA record's body so two sequences are never concatenated.
+    const afterFirstHeader = text.replace(/^[\s\S]*?^>.*$\n?/m, '');
+    const body = afterFirstHeader.split(/^>.*$/m)[0] ?? afterFirstHeader;
+    return body.replace(/[^A-Za-z]/g, '').toUpperCase() || null;
+  }
+  const lines = nonEmptyLines(text);
+  if (lines.length === 0) return null;
+  // Every line must be a pure-letter run; otherwise it's prose or a table, not a raw sequence.
+  if (!lines.every((line) => /^[A-Za-z]+$/.test(line))) return null;
+  return lines.join('').toUpperCase() || null;
+}
+
+/** mmCIF structure file: an _atom_site loop (the coordinate table), the CIF equivalent of PDB ATOM records. */
+function looksLikeMmcif(text: string): boolean {
+  return /^\s*loop_/m.test(text) && /_atom_site\.(group_PDB|Cartn_x|label_atom_id)/m.test(text);
+}
+
+/**
+ * Find a SMILES token in the payload, tolerating an annotated line like "SMILES: CCO" and
+ * surrounding label lines. Mirrors the molecule expert's parser so detection is not stricter
+ * than what the expert can actually consume.
+ */
+function smilesCandidate(text: string): string | null {
+  for (const raw of nonEmptyLines(text)) {
+    const line = raw.replace(/^\s*smiles\s*[:=]\s*/i, '');
+    if (/^[#>]|^\/\//.test(line)) continue;
+    const token = line.split(/\s+/)[0] ?? '';
+    if (looksLikeSmiles(token)) return token;
+  }
+  return null;
 }
 
 function fractionIn(letters: string, alphabet: string): number {
@@ -231,25 +240,26 @@ function fractionIn(letters: string, alphabet: string): number {
   return hits / letters.length;
 }
 
+// PDB 3D structure: standard ATOM/HETATM coordinate records (column-aligned), optionally
+// with a HEADER. Require several ATOM records so a stray "ATOM" word in prose never matches.
+function looksLikePDB(text: string): boolean {
+  const rows = nonEmptyLines(text);
+  let atomRecords = 0;
+  for (const row of rows) {
+    if (/^(ATOM|HETATM)\s+\d+\s+/.test(row)) atomRecords++;
+    if (atomRecords >= 8) return true;
+  }
+  return false;
+}
+
 function looksLikeSmiles(text: string): boolean {
   const t = text.trim();
   if (/\s/.test(t) || t.length < 2 || t.length > 600) return false; // SMILES is a single token
   if (!/[A-Za-z]/.test(t)) return false;
   // Bond/branch/ring grammar that sequences never contain.
-  const grammar = /[()[\]=#@+\-\\/.]|[0-9]/;
+  const grammar = /[()\[\]=#@+\-\\/.]|[0-9]/;
   const organic = /[BCNOPSFIbcnops]/;
   return grammar.test(t) && organic.test(t);
-}
-
-function looksLikePeakList(text: string): boolean {
-  const rows = nonEmptyLines(text);
-  if (rows.length < 3) return false;
-  let pairRows = 0;
-  for (const row of rows) {
-    // "mz<sep>intensity" with at least one decimal m/z value.
-    if (/^\d+\.\d+[\s,;:\t]+\d+(\.\d+)?$/.test(row)) pairRows++;
-  }
-  return pairRows >= Math.max(3, Math.floor(rows.length * 0.6));
 }
 
 function looksLikeExpressionTable(text: string): boolean {
@@ -264,20 +274,6 @@ function looksLikeExpressionTable(text: string): boolean {
   return /\b(gene|cell|expression|counts?|umi|cluster|marker)\b/i.test(text) && /[,\t]/.test(text);
 }
 
-// Spatial transcriptomics grid: rows of "<x> <y> <gene>" (two numeric coordinates + a feature
-// token), tolerating an optional "x y gene" header line. Whitespace/comma/tab separated.
-function looksLikeSpatialGrid(text: string): boolean {
-  const rows = nonEmptyLines(text);
-  if (rows.length < 3) return false;
-  const headerLooksSpatial = /^x[\s,\t]+y\b/i.test(rows[0] ?? '');
-  let gridRows = 0;
-  for (const row of rows) {
-    if (/^-?\d+(\.\d+)?[\s,\t]+-?\d+(\.\d+)?[\s,\t]+[A-Za-z][A-Za-z0-9_.-]*$/.test(row)) gridRows++;
-  }
-  const dataRows = rows.length - (headerLooksSpatial ? 1 : 0);
-  return gridRows >= Math.max(2, Math.floor(dataRows * 0.6));
-}
-
 // Bare gene-marker list: 3+ lines, each a single gene-symbol-like token (HGNC style, contains an
 // uppercase letter; rejects lowercase prose and multi-word lines).
 function looksLikeMarkerList(text: string): boolean {
@@ -288,10 +284,6 @@ function looksLikeMarkerList(text: string): boolean {
     if (/^[A-Za-z][A-Za-z0-9.-]{1,11}$/.test(row) && /[A-Z]/.test(row)) geneRows++;
   }
   return geneRows >= Math.max(3, Math.floor(rows.length * 0.8));
-}
-
-function hasCoordinateColumns(text: string): boolean {
-  return /\b(x[_ ]?coord|y[_ ]?coord|spatial_?\d|array_(row|col)|imagerow|imagecol)\b/i.test(text);
 }
 
 /** Exponential backoff (base, 2×, 4×, …) capped at MAX_BACKOFF_MS. */

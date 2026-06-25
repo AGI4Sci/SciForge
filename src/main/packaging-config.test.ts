@@ -317,17 +317,17 @@ describe('electron-builder Kun packaging', () => {
     expect(bundledDirectoryFileSets).not.toEqual(expect.arrayContaining([
       'plugins',
       'plugins/vision-router-service',
-      'plugins/sci-modality-router-service'
+      'packages/workers/sci-modality-router'
     ]))
     expect(builderConfig.files).not.toEqual(expect.arrayContaining([
       'plugins/**/*',
       'plugins/vision-router-service/**/*',
-      'plugins/sci-modality-router-service/**/*'
+      'packages/workers/sci-modality-router/**/*'
     ]))
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
       '**/plugins/**/*',
       '**/plugins/vision-router-service/**/*',
-      '**/plugins/sci-modality-router-service/**/*',
+      '**/packages/workers/sci-modality-router/**/*',
       '**/packages/workers/model-router/vision-router-service/**/*'
     ]))
     expect(bundledDirectoryFileSets).toEqual(expect.arrayContaining([
@@ -365,7 +365,7 @@ describe('electron-builder Kun packaging', () => {
       'packages/workers/model-router/vision-router-service/package.json',
       'packages/workers/model-router/vision-router-service/src/index.ts',
       'plugins/vision-router-service/package.json',
-      'plugins/sci-modality-router-service/package.json'
+      'packages/workers/sci-modality-router/package.json'
     ]))
 
     const root = tempRoot()
@@ -710,7 +710,7 @@ describe('root package workspace contracts', () => {
       'packages/workers/computer-use',
       'packages/workers/model-router',
       'plugins/vision-router-service',
-      'plugins/sci-modality-router-service'
+      'packages/workers/sci-modality-router'
     ]))
     expect(rootPackage.workspaces).not.toEqual(expect.arrayContaining([
       'packages/workers/model-router/vision-router-service'

@@ -64,7 +64,7 @@ async function handle(
 }
 
 // Live availability of each expert model. Pings the expert provider's /health (which lists the
-// loaded models) and maps the six modalities -> their expert -> online/offline. Cheap; safe to poll.
+// loaded models) and maps the four modalities -> their expert -> online/offline. Cheap; safe to poll.
 async function expertsStatusRoute(
   res: ServerResponse,
   options: SciModalityRouterOptions,
@@ -137,7 +137,7 @@ async function translateRoute(
     return sendJson(res, 400, badRequest(`unknown modality ${String(body.modality)}; expected one of ${MODALITIES.join(', ')}`));
   }
 
-  // Resolve modality: explicit wins, else auto-detect.
+  // Resolve modality: explicit wins, else rule-based auto-detection.
   let modality: Modality;
   let modalitySource: 'explicit' | 'detected';
   if (body.modality) {
@@ -158,7 +158,7 @@ async function translateRoute(
       `payload=${body.payload.length}b objectId=${body.objectId ?? '-'}`,
   );
 
-  // Abort the (possibly long, retrying) upstream call if the caller disconnects before we reply.
+  // Abort the (possibly long, retrying) upstream expert call if the caller disconnects.
   const upstream = new AbortController();
   res.on('close', () => {
     if (!res.writableEnded) upstream.abort();

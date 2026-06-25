@@ -1,6 +1,6 @@
 #!/bin/bash
 # Acceptance check: drives the LIVE stack (module :3898 -> experts :8001 -> real GPU models)
-# with genuine example inputs for all six modalities and asserts real, input-sensitive numbers.
+# with genuine example inputs for all four modalities and asserts real, input-sensitive numbers.
 set -u
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 MODULE_DIR="$(cd "$HERE/.." && pwd)"

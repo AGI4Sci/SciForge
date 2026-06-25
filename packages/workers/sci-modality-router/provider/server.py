@@ -1,18 +1,21 @@
 """SciForge expert-translator service.
 
-OpenAI-compatible /v1/chat/completions that dispatches to one of SIX domain
-experts — the GPU "model provider" behind the standalone sci-modality-router
-service module. Each expert produces text strictly from real model outputs:
+OpenAI-compatible /v1/chat/completions that dispatches to one of FOUR domain experts
+— the GPU "model provider" behind the standalone sci-modality-router service module.
+Every expert is a real domain model whose **native output is text**: it runs a real
+forward pass that generates a natural-language description of the input. There are NO
+general-LLM interpreters here — only models that natively translate their modality to
+text. Experts are translate-only (describe, never solve the task) and load lazily on
+first use, so the provider boots instantly and unused modalities cost no VRAM.
 
-  esm2-protein           protein sequence   ESM-2 35M            (HF, cuda:1)
-  nt-nucleotide          DNA/RNA sequence   Nucleotide-Tf 50M    (HF, cuda:1)
-  scibert-singlecell     scRNA-seq / markers SciBERT             (HF, cuda:1)
-  scibert-spatial        spatial omics      SciBERT + KMeans      (HF, cuda:1)
-  chemberta-spectrometry MS / spectra       ChemBERTa-77M         (HF, cuda:1)
-  chemllm-molecule       SMILES / molecule  ChemLLM-7B-Chat       (vLLM, cuda:0)
+  esm2text-protein         protein sequence  Esm2Text-Base (ESM-2 + GPT, seq-only)
+  prot2text-structure      protein PDB/mmCIF Prot2Text-Large (ESM-2 + RGCN + GPT-2) [via p2t service]
+  biot5-molecule           SMILES / molecule BioT5+ (T5 SELFIES->caption, ChEBI-20 SOTA)
+  c2s-singlecell           scRNA-seq         C2S-Scale-Gemma-2-27B (Cell2Sentence)
 
-The molecule expert delegates to ChemLLM-7B served by vLLM (see serve-chemllm.sh);
-the other five run a real HF forward pass on cuda:1. GPU 0 is reserved for ChemLLM.
+Every expert's output is natural-language text from a real forward pass; nothing is
+fabricated. Experts load lazily on first request, so the provider boots instantly and
+only used modalities consume VRAM.
 
 Bind: 127.0.0.1:8001  (EXPERT_TRANSLATOR_HOST / EXPERT_TRANSLATOR_PORT to override)
 """
@@ -29,28 +32,27 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from experts.protein import ProteinExpert
-from experts.nucleotide import NucleotideExpert
+from experts.protein_structure import ProteinStructureExpert
 from experts.singlecell import SingleCellExpert
-from experts.spatial import SpatialExpert
-from experts.spectrometry import SpectrometryExpert
 from experts.molecule import MoleculeExpert
 
-DEVICE = os.environ.get("EXPERT_DEVICE", "cuda:1")
+DEVICE = os.environ.get("EXPERT_DEVICE", "cuda:0")
+# C2S-Scale-27B (~54GB) gets its own GPU (C2S_DEVICE) so it doesn't contend with the smaller
+# experts (BioT5 + Esm2Text, together <5GB) which share DEVICE. Override with C2S_DEVICE if needed.
+C2S_DEVICE = os.environ.get("C2S_DEVICE", "cuda:1")
 HOST = os.environ.get("EXPERT_TRANSLATOR_HOST", "127.0.0.1")
 PORT = int(os.environ.get("EXPERT_TRANSLATOR_PORT", "8001"))
-MODEL_DIR = os.environ.get("EXPERT_MODEL_DIR", "/root/expert-models")
+MODEL_DIR = os.environ.get("EXPERT_MODEL_DIR", "/fs-computility-new/upzd_share/shared/sciforge-expert-models")
 
-print(f"[expert-translator] loading encoder experts on {DEVICE} ...", flush=True)
-_singlecell_backend = SingleCellExpert(f"{MODEL_DIR}/scibert", device=DEVICE)
+# Construct experts (cheap — models load lazily on first request, not here). Every expert is a
+# genuine domain model that natively outputs text; there are no general-LLM interpreters.
+print(f"[expert-translator] registering native-to-text experts (lazy load, device={DEVICE}, c2s={C2S_DEVICE}) ...", flush=True)
 EXPERTS: dict[str, Any] = {
-    "esm2-protein": ProteinExpert(f"{MODEL_DIR}/esm2-35M", device=DEVICE),
-    "nt-nucleotide": NucleotideExpert(f"{MODEL_DIR}/nucleotide-transformer-50M", device=DEVICE),
-    "scibert-singlecell": _singlecell_backend,
-    "scibert-spatial": SpatialExpert(_singlecell_backend),
-    "chemberta-spectrometry": SpectrometryExpert(f"{MODEL_DIR}/chemberta-77M", device=DEVICE),
-    # ChemLLM is a remote vLLM call (cuda:0); constructing it loads nothing, so it is always
-    # registered. A molecule request fails with 502 if the vLLM server is not up.
-    "chemllm-molecule": MoleculeExpert(),
+    "esm2text-protein": ProteinExpert(f"{MODEL_DIR}/esm2text-base", device=DEVICE),
+    # Structure expert proxies to the isolated p2t micro-service (graphein+DSSP env).
+    "prot2text-structure": ProteinStructureExpert(),
+    "biot5-molecule": MoleculeExpert(f"{MODEL_DIR}/biot5-plus-base-chebi20", device=DEVICE),
+    "c2s-singlecell": SingleCellExpert(f"{MODEL_DIR}/c2s-scale-gemma2-27b", device=C2S_DEVICE),
 }
 print(f"[expert-translator] ready. registered models: {list(EXPERTS)}", flush=True)
 
@@ -67,7 +69,7 @@ class ChatRequest(BaseModel):
     max_tokens: int | None = None
 
 
-app = FastAPI(title="SciForge Expert Translator", version="2.0.0")
+app = FastAPI(title="SciForge Expert Translator", version="3.0.0")
 
 
 @app.get("/v1/models")
@@ -88,6 +90,7 @@ def health() -> dict[str, Any]:
         "device": DEVICE,
         "torch_cuda_available": torch.cuda.is_available(),
         "experts": list(EXPERTS),
+        "loaded": [name for name, e in EXPERTS.items() if getattr(getattr(e, "_lm", None), "loaded", False)],
     }
 
 
