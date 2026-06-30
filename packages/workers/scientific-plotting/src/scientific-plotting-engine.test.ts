@@ -158,6 +158,14 @@ describe('scientific plotting engine', () => {
       recommendedTemplate: 'multi-panel',
       controlledTool: 'scientific_plotting_render'
     })
+
+    await expect(planScientificPlotting({
+      task: 'Draw a flowchart explaining the reinforcement learning workflow.'
+    })).resolves.toMatchObject({
+      ok: true,
+      recommendedTemplate: 'flowchart',
+      controlledTool: 'scientific_plotting_render'
+    })
   })
 
   it('uses a StyleSpec reference profile when planning a vague style-transfer task', async () => {
@@ -653,6 +661,36 @@ describe('scientific plotting engine', () => {
       expect(attention).toMatchObject({ ok: true, status: 'rendered' })
       if (!attention.ok) return
       expect((await stat(attention.outputPath)).size).toBeGreaterThan(1000)
+
+      const flowchart = await renderScientificPlot({
+        workspaceRoot: workspace,
+        template: 'flowchart',
+        figureId: 'flowchart-smoke',
+        labels: {
+          title: 'Controlled workflow'
+        },
+        data: {
+          nodes: [
+            { id: 'goal', label: 'Research goal' },
+            { id: 'data', label: 'Collect data' },
+            { id: 'train', label: 'Train model' },
+            { id: 'eval', label: 'Evaluate result' }
+          ],
+          edges: [
+            { from: 'goal', to: 'data' },
+            { from: 'data', to: 'train' },
+            { from: 'train', to: 'eval' }
+          ]
+        }
+      })
+      expect(flowchart).toMatchObject({ ok: true, status: 'rendered' })
+      if (!flowchart.ok) return
+      expect((await stat(flowchart.outputPath)).size).toBeGreaterThan(1000)
+      expect(flowchart.attempts[0]?.rendererDiagnostics).toMatchObject({
+        layoutNotes: expect.arrayContaining([
+          'Rendered directed flowchart with explicit arrows.'
+        ])
+      })
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
@@ -666,6 +704,7 @@ describe('scientific plotting engine', () => {
     }
     expect(status.ok && status.supportedTemplates).toEqual(expect.arrayContaining([
       'box-violin',
+      'flowchart',
       'histogram-density',
       'multi-panel'
     ]))

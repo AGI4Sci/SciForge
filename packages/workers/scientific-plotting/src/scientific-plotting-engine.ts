@@ -362,9 +362,9 @@ export async function planScientificPlotting(
       recommendedSkills: [
         'scientific-visualization',
         'matplotlib',
-        template === 'schematic-grid' ? 'scientific-schematics' : 'seaborn'
+        template === 'schematic-grid' || template === 'flowchart' ? 'scientific-schematics' : 'seaborn'
       ],
-      recommendedLibraries: template === 'schematic-grid'
+      recommendedLibraries: template === 'schematic-grid' || template === 'flowchart'
         ? ['Matplotlib', 'Scientific schematics']
         : template === 'multi-panel'
           ? ['Matplotlib', 'Seaborn', 'GridSpec']
@@ -2325,8 +2325,8 @@ function buildTemplateAdvice(
     messages.push('Foreground mark density differs; this often requires a better template or semantic renderer, not another style-only repair.')
     nextActions.push('Keep the data unchanged and review whether the selected controlled template matches the reference figure type.')
   }
-  if (score && selectedTemplate === 'schematic-grid' && (score.axes < 0.62 || score.grid < 0.62)) {
-    messages.push('Schematic panels may score low on axes/grid because reference diagrams contain structural gray marks.')
+  if (score && (selectedTemplate === 'schematic-grid' || selectedTemplate === 'flowchart') && (score.axes < 0.62 || score.grid < 0.62)) {
+    messages.push('Schematic and flowchart panels may score low on axes/grid because reference diagrams contain structural marks rather than measured axes.')
     nextActions.push('Treat axes/grid warnings as diagnostic context for schematic templates.')
   }
   if (score && (selectedTemplate === 'heatmap' || selectedTemplate === 'attention-map') && score.palette < 0.68) {
@@ -2358,7 +2358,11 @@ function buildTemplateAlternatives(
     add(referenceProfile.recommendedTemplate, 'Reference-profile fallback.')
   }
   add(taskTemplate, 'Task-text fallback.')
-  if (selectedTemplate === 'schematic-grid') add('bar', 'Use when the schematic is actually categorical data.')
+  if (selectedTemplate === 'flowchart') add('schematic-grid', 'Use when the diagram is a conceptual layout rather than a directed process.')
+  if (selectedTemplate === 'schematic-grid') {
+    add('flowchart', 'Use when the schematic is actually a directed workflow or process.')
+    add('bar', 'Use when the schematic is actually categorical data.')
+  }
   if (selectedTemplate === 'bar') add('errorbar-bar', 'Use when categorical comparisons need visible uncertainty.')
   if (selectedTemplate === 'errorbar-bar') add('bar', 'Use when uncertainty is not present.')
   if (selectedTemplate === 'bar' || selectedTemplate === 'errorbar-bar') {
@@ -2489,7 +2493,7 @@ function templateReadyCandidates(
           ? 'multi-panel'
           : template === 'heatmap' || template === 'attention-map'
             ? 'matrix'
-            : template === 'schematic-grid'
+            : template === 'schematic-grid' || template === 'flowchart'
               ? 'network'
               : 'template-ready',
         dataSignals: [template],
@@ -2749,7 +2753,7 @@ function summarizeTemplateReadyData(template: ScientificPlottingTemplate, data: 
       seriesCount: data.series.length
     }
   }
-  if (isRecord(data) && template === 'schematic-grid' && Array.isArray(data.nodes)) {
+  if (isRecord(data) && (template === 'schematic-grid' || template === 'flowchart') && Array.isArray(data.nodes)) {
     return { inputShape: 'network', groupCount: data.nodes.length }
   }
   return { inputShape: 'template-ready' }
@@ -3124,13 +3128,23 @@ function validateTemplateData(template: ScientificPlottingTemplate, data: unknow
     }
     return
   }
-  const nodes = data.nodes
-  if (!Array.isArray(nodes) || nodes.length === 0 || nodes.length > MAX_SCHEMATIC_NODES) {
-    throw new Error(`schematic-grid data.nodes must include 1-${MAX_SCHEMATIC_NODES} nodes.`)
-  }
-  for (const node of nodes) {
-    if (!isRecord(node) || typeof node.label !== 'string' || !node.label.trim()) {
-      throw new Error('schematic-grid nodes must include labels.')
+  if (template === 'schematic-grid' || template === 'flowchart') {
+    const nodes = data.nodes
+    if (!Array.isArray(nodes) || nodes.length === 0 || nodes.length > MAX_SCHEMATIC_NODES) {
+      throw new Error(`${template} data.nodes must include 1-${MAX_SCHEMATIC_NODES} nodes.`)
+    }
+    for (const node of nodes) {
+      if (!isRecord(node) || typeof node.label !== 'string' || !node.label.trim()) {
+        throw new Error(`${template} nodes must include labels.`)
+      }
+    }
+    if (template === 'flowchart' && data.edges !== undefined) {
+      if (!Array.isArray(data.edges)) throw new Error('flowchart data.edges must be an array when provided.')
+      for (const edge of data.edges) {
+        if (!isRecord(edge) || edge.from === undefined || edge.to === undefined) {
+          throw new Error('flowchart edges must include from and to.')
+        }
+      }
     }
   }
 }
@@ -3167,7 +3181,8 @@ function inferTemplateSignalsFromText(text: string): ScientificPlottingTemplate[
   add('scatter', /scatter|embedding|umap|tsne|point cloud|散点|降维/i)
   add('errorbar-bar', /error\s*bar|confidence interval|ci\b|uncertainty|误差棒|置信区间|不确定性/i)
   add('bar', /bar|category|comparison|benchmark|柱状|条形|分类|基准/i)
-  add('schematic-grid', /schematic|diagram|workflow|mechanism|array programming|numpy|示意|机制|流程/i)
+  add('flowchart', /flow\s*chart|flowchart|workflow|pipeline|process flow|decision tree|pathway|流程图|流程|工作流|管线|步骤|路径/i)
+  add('schematic-grid', /schematic|diagram|mechanism|array programming|numpy|示意|机制/i)
   add('line', /line|curve|trend|time series|trajectory|折线|曲线|趋势|时间序列/i)
   return signals
 }
@@ -3178,7 +3193,7 @@ function kindForTemplate(
 ): ScientificPlottingReferenceProfile['kind'] {
   if (score < 0.28) return 'unknown'
   if (template === 'heatmap' || template === 'attention-map') return 'matrix'
-  if (template === 'schematic-grid') return 'schematic'
+  if (template === 'schematic-grid' || template === 'flowchart') return 'schematic'
   if (template === 'multi-panel') return 'mixed'
   return 'chart'
 }
@@ -3193,6 +3208,7 @@ function templateReason(template: ScientificPlottingTemplate): string {
   if (template === 'box-violin') return 'grouped distributions with optional individual observations'
   if (template === 'histogram-density') return 'distribution shape or density comparisons'
   if (template === 'multi-panel') return 'a compact multi-panel scientific figure'
+  if (template === 'flowchart') return 'a directed process or workflow diagram'
   return 'a simple scientific schematic'
 }
 
@@ -3204,6 +3220,7 @@ function requiredInputsForTemplate(template: ScientificPlottingTemplate): string
   if (template === 'box-violin') return ['groups[].name', 'groups[].values', 'optional showPoints/mode']
   if (template === 'histogram-density') return ['series[].values', 'optional bins/density']
   if (template === 'multi-panel') return ['panels[].template', 'panels[].data', 'optional columns and labels']
+  if (template === 'flowchart') return ['nodes[].id', 'nodes[].label', 'optional edges[].from/to']
   if (template === 'schematic-grid') return ['nodes[].label', 'optional edges', 'optional labels']
   return ['series[].y', 'optional series[].x', 'optional labels']
 }
@@ -3270,7 +3287,7 @@ function builtInStyleProfiles(): ScientificPlottingStyleProfile[] {
       venue: 'Nature',
       sourceLabel: 'NumPy paper schematic smoke reference',
       description: 'Clean explanatory schematic style with white background, minimal axes, muted blues/yellows, and compact labels.',
-      recommendedTemplates: ['schematic-grid', 'multi-panel', 'bar'],
+      recommendedTemplates: ['schematic-grid', 'flowchart', 'multi-panel', 'bar'],
       tags: ['nature', 'numpy', 'schematic', 'software', 'light', 'minimal'],
       styleSpec: profileStyleSpec({
         id: 'nature-2020-numpy-fig1',
@@ -4693,11 +4710,13 @@ elif template == "multi-panel":
             for series_index, item in enumerate(panel_data.get("series") or []):
                 values = finite_list(item.get("values") or [])
                 axis.hist(values, bins=int(panel_data.get("bins") or 18), density=bool(panel_data.get("density", True)), alpha=0.25, label=item.get("name") or f"Series {series_index + 1}")
-        elif panel_template == "schematic-grid":
+        elif panel_template == "schematic-grid" or panel_template == "flowchart":
             axis.axis("off")
             nodes = panel_data.get("nodes") or []
             for node_index, node in enumerate(nodes[:4]):
                 axis.text(0.5, 0.84 - node_index * 0.22, str(node.get("label") or ""), ha="center", va="center", fontsize=min(label_size, 7.5), bbox={"boxstyle": "round,pad=0.18", "facecolor": palette[node_index % len(palette)], "alpha": 0.12, "edgecolor": mpl.rcParams.get("axes.edgecolor", "#222222")})
+                if panel_template == "flowchart" and node_index < min(len(nodes), 4) - 1:
+                    axis.annotate("", xy=(0.5, 0.76 - node_index * 0.22), xytext=(0.5, 0.70 - node_index * 0.22), arrowprops={"arrowstyle": "-|>", "lw": 0.55, "color": mpl.rcParams.get("axes.edgecolor", "#222222"), "alpha": 0.65})
         set_labels_from(axis, panel_labels)
         if panel_labels.get("legend", False):
             handles, legend_labels = axis.get_legend_handles_labels()
@@ -4716,6 +4735,135 @@ elif template == "multi-panel":
         fig.suptitle(labels.get("title"), fontsize=title_size, y=1.02)
     renderer_diagnostics["multiPanelCount"] = len(panels)
     add_layout_note(f"Rendered {len(panels)} controlled subpanels in a {rows}x{columns} layout.")
+elif template == "flowchart":
+    nodes = data.get("nodes") or []
+    raw_edges = data.get("edges") or []
+    node_ids = []
+    for index, node in enumerate(nodes):
+        node_ids.append(str(node.get("id") or node.get("key") or index))
+    node_id_set = set(node_ids)
+    auto_edges = False
+    if not raw_edges and len(node_ids) > 1:
+        auto_edges = True
+        raw_edges = [{"from": node_ids[index], "to": node_ids[index + 1]} for index in range(len(node_ids) - 1)]
+    edges = []
+    for edge in raw_edges:
+        start_id = str(edge.get("from"))
+        end_id = str(edge.get("to"))
+        if start_id in node_id_set and end_id in node_id_set:
+            edges.append({"from": start_id, "to": end_id, "label": edge.get("label")})
+    positions = {}
+    box_width = 1.18
+    box_height = 0.42
+    if auto_edges and len(nodes) > 6:
+        columns = int(math.ceil(math.sqrt(len(nodes) * 1.6)))
+        rows = int(math.ceil(len(nodes) / max(1, columns)))
+        for index, node_id in enumerate(node_ids):
+            row_index = index // columns
+            col_index = index % columns
+            col = col_index if row_index % 2 == 0 else columns - 1 - col_index
+            row = rows - 1 - row_index
+            positions[node_id] = (col * 1.65 + 0.85, row * 0.92 + 0.62)
+        ax.set_xlim(0, columns * 1.65)
+        ax.set_ylim(0, rows * 0.92 + 0.45)
+    else:
+        levels = {node_id: 0 for node_id in node_ids}
+        for _ in range(max(1, len(node_ids))):
+            changed = False
+            for edge in edges:
+                start_level = levels.get(edge["from"], 0)
+                next_level = min(len(node_ids) - 1, start_level + 1)
+                if levels.get(edge["to"], 0) < next_level:
+                    levels[edge["to"]] = next_level
+                    changed = True
+            if not changed:
+                break
+        grouped = {}
+        for node_id in node_ids:
+            grouped.setdefault(levels.get(node_id, 0), []).append(node_id)
+        columns = max(grouped.keys(), default=0) + 1
+        rows = max([len(items) for items in grouped.values()] or [1])
+        for level, items in grouped.items():
+            for item_index, node_id in enumerate(items):
+                y_offset = (rows - len(items)) * 0.5
+                positions[node_id] = (level * 1.75 + 0.85, (rows - 1 - item_index - y_offset) * 0.92 + 0.62)
+        ax.set_xlim(0, max(1, columns) * 1.75)
+        ax.set_ylim(0, max(1, rows) * 0.92 + 0.45)
+    ax.axis("off")
+    def wrap_flow_label(value):
+        text = str(value or "")
+        if len(text) <= 13 or " " not in text:
+            return text
+        words = text.split()
+        lines = []
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if len(candidate) <= 12:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return "\n".join(lines[:3])
+    def flow_font_size(label):
+        base = as_float(mpl.rcParams.get("font.size", 8), 8)
+        longest = max([len(part) for part in str(label).split("\n")] or [0])
+        if longest > 15:
+            return min(base, 6.4)
+        if longest > 11:
+            return min(base, 7.0)
+        return min(base, 8.0)
+    def boundary_points(start, end):
+        sx, sy = start
+        ex, ey = end
+        dx = ex - sx
+        dy = ey - sy
+        if abs(dx) >= abs(dy):
+            start_offset = (box_width / 2 + 0.04 if dx >= 0 else -box_width / 2 - 0.04, 0)
+            end_offset = (-box_width / 2 - 0.04 if dx >= 0 else box_width / 2 + 0.04, 0)
+        else:
+            start_offset = (0, box_height / 2 + 0.04 if dy >= 0 else -box_height / 2 - 0.04)
+            end_offset = (0, -box_height / 2 - 0.04 if dy >= 0 else box_height / 2 + 0.04)
+        return (sx + start_offset[0], sy + start_offset[1]), (ex + end_offset[0], ey + end_offset[1])
+    for edge in edges:
+        start = positions.get(edge["from"])
+        end = positions.get(edge["to"])
+        if not start or not end:
+            continue
+        start_edge, end_edge = boundary_points(start, end)
+        arrow = FancyArrowPatch(
+            start_edge,
+            end_edge,
+            arrowstyle="-|>",
+            mutation_scale=11,
+            linewidth=0.85,
+            color=mpl.rcParams.get("axes.edgecolor", "#222222"),
+            alpha=0.76,
+            connectionstyle="arc3,rad=0.04",
+            zorder=1,
+        )
+        ax.add_patch(arrow)
+        if edge.get("label"):
+            ax.text((start_edge[0] + end_edge[0]) / 2, (start_edge[1] + end_edge[1]) / 2 + 0.08, str(edge.get("label")), ha="center", va="center", fontsize=min(label_size, 6.4), color=mpl.rcParams.get("text.color", "#222222"), zorder=4)
+    for index, node in enumerate(nodes):
+        node_id = node_ids[index]
+        x, y = positions.get(node_id, (0, 0))
+        color = node.get("color") or palette[index % len(palette)]
+        rect = Rectangle((x - box_width / 2, y - box_height / 2), box_width, box_height, facecolor=color, edgecolor=mpl.rcParams.get("axes.edgecolor", "#222222"), linewidth=0.85, alpha=0.16, zorder=2)
+        ax.add_patch(rect)
+        label = wrap_flow_label(node.get("label", ""))
+        ax.text(x, y, label, ha="center", va="center", fontsize=flow_font_size(label), color=mpl.rcParams.get("text.color", "#222222"), wrap=True, linespacing=0.94, zorder=3)
+    renderer_diagnostics["flowchartNodeCount"] = len(nodes)
+    renderer_diagnostics["flowchartEdgeCount"] = len(edges)
+    if auto_edges:
+        add_layout_note("Rendered directed flowchart with inferred sequential arrows because no edges were provided.")
+    else:
+        add_layout_note("Rendered directed flowchart with explicit arrows.")
+    if labels.get("title"):
+        ax.set_title(labels.get("title"), pad=4, fontsize=title_size)
 elif template == "schematic-grid":
     nodes = data.get("nodes") or []
     edges = data.get("edges") or []
@@ -4910,7 +5058,7 @@ for figure_axis in fig.axes:
     except Exception:
         pass
 
-if template not in ("schematic-grid", "heatmap", "attention-map", "multi-panel"):
+if template not in ("schematic-grid", "flowchart", "heatmap", "attention-map", "multi-panel"):
     if mpl.rcParams.get("axes.grid"):
         ax.grid(True)
     for spine in ("top", "right"):

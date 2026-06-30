@@ -188,6 +188,7 @@ export const SCIENTIFIC_PLOTTING_TEMPLATES = [
   'box-violin',
   'histogram-density',
   'multi-panel',
+  'flowchart',
   'schematic-grid'
 ] as const
 
