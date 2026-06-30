@@ -80,7 +80,9 @@ function workspaceRootFor(inputWorkspaceRoot: string | undefined, options: McpLa
   return workspaceRoot
 }
 
-  const templateSchema = z.enum(SCIENTIFIC_PLOTTING_TEMPLATES)
+const TEMPLATE_SELECTION_DESCRIPTION = 'Template selection guide: use flowchart for directed workflows, pipelines, process steps, decision trees, arrows, or pathways; use schematic-grid only for conceptual module/mechanism layouts without a strict direction; use bar/errorbar-bar for categorical summaries; use line/scatter for measured x-y data; use heatmap/attention-map for matrices; use box-violin or histogram-density for distributions; use multi-panel only when combining several controlled panels.'
+
+const templateSchema = z.enum(SCIENTIFIC_PLOTTING_TEMPLATES).describe(TEMPLATE_SELECTION_DESCRIPTION)
 const cropBoxSchema = z.object({
   unit: z.enum(['ratio', 'pixel']).optional(),
   x: z.number(),
@@ -100,7 +102,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_status', {
     title: 'Scientific Plotting MCP Status',
-    description: 'Report the controlled SciForge scientific plotting renderer status, supported templates, and artifact policy.',
+    description: 'Report the controlled SciForge scientific plotting renderer status, supported templates, model-facing template selection guide, and artifact policy.',
     annotations: READ_ONLY_ANNOTATIONS
   }, async () => {
     try {
@@ -156,7 +158,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_plan', {
     title: 'Plan Scientific Plot',
-    description: 'Plan a controlled scientific plot from user intent. Does not emit executable shell or Python commands.',
+    description: `Plan a controlled scientific plot from user intent and choose the best template before rendering. ${TEMPLATE_SELECTION_DESCRIPTION} Does not emit executable shell or Python commands.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1),
@@ -186,7 +188,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_map_data', {
     title: 'Map Data To Scientific Plot',
-    description: 'Map structured data or tabular records into a controlled scientific_plotting_render request. Does not render or write files.',
+    description: `Map structured data or tabular records into a controlled scientific_plotting_render request after choosing a template. ${TEMPLATE_SELECTION_DESCRIPTION} Does not render or write files.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1),
@@ -250,7 +252,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_render', {
     title: 'Render Scientific Plot',
-    description: 'Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair.',
+    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} If unsure, call scientific_plotting_plan or scientific_plotting_map_data first.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       template: templateSchema,
@@ -312,7 +314,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_style_transfer', {
     title: 'Run Scientific Plotting Style Transfer',
-    description: 'Run the v2 controlled paper-figure style-transfer workflow: prepare/reference-match, plan, map data, render, review, and write a review packet.',
+    description: `Run the v2 controlled paper-figure style-transfer workflow: prepare/reference-match, plan, map data, render, review, and write a review packet. ${TEMPLATE_SELECTION_DESCRIPTION}`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1),

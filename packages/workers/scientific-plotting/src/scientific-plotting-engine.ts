@@ -11,6 +11,7 @@ import type {
 } from './types'
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
+  SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES,
   type ScientificPlottingAttempt,
   type ScientificPlottingAutoRepairOptions,
   type ScientificPlottingCropBox,
@@ -41,8 +42,10 @@ import {
   type ScientificPlottingStyleTransferManifest,
   type ScientificPlottingStyleTransferRequest,
   type ScientificPlottingStyleTransferResult,
+  type ScientificPlottingTemplate,
   type ScientificPlottingTemplateAdvice,
-  type ScientificPlottingTemplate
+  type ScientificPlottingTemplateGuide,
+  type ScientificPlottingTemplateSelection
 } from './types'
 import {
   buildFigureStyleApplyPlan,
@@ -169,6 +172,7 @@ export async function getScientificPlottingStatus(): Promise<ScientificPlottingS
       defaultProfileIds: styleProfiles.map((profile) => profile.id)
     },
     supportedTemplates: [...SCIENTIFIC_PLOTTING_TEMPLATES],
+    templateGuides: scientificPlottingTemplateGuides(),
     outputPolicy: {
       defaultRelativeDir: DEFAULT_OUTPUT_RELATIVE_DIR,
       writesOnlyInsideWorkspace: true,
@@ -345,6 +349,8 @@ export async function planScientificPlotting(
       styleProfile: recommendedProfile
     } : {}),
     ...(styleProfileMatches ? { styleProfileMatches } : {}),
+    templateSelection: buildTemplateSelection(template, request, referenceProfile),
+    templateGuides: scientificPlottingTemplateGuides(),
     templateAlternatives: buildTemplateAlternatives(template, taskTemplate, referenceProfile),
     requiredInputs: requiredInputsForTemplate(template),
     styleInputs: isStyleTransfer
@@ -2299,6 +2305,40 @@ function referenceTraitsFromStyle(
     colorMode: styleSpec.palette.colorMode,
     panelGrid: styleSpec.layout.panelGrid,
     textSignals: inferTemplateSignalsFromText(text)
+  }
+}
+
+function scientificPlottingTemplateGuides(): ScientificPlottingTemplateGuide[] {
+  return SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES.map((guide) => ({
+    template: guide.template,
+    useWhen: [...guide.useWhen],
+    avoidWhen: [...guide.avoidWhen],
+    expectedData: [...guide.expectedData],
+    modelSelectionHint: guide.modelSelectionHint
+  }))
+}
+
+function templateGuideFor(template: ScientificPlottingTemplate): ScientificPlottingTemplateGuide {
+  return scientificPlottingTemplateGuides().find((guide) => guide.template === template) ?? scientificPlottingTemplateGuides()[0]
+}
+
+function buildTemplateSelection(
+  selectedTemplate: ScientificPlottingTemplate,
+  request: ScientificPlottingPlanRequest,
+  referenceProfile: ScientificPlottingReferenceProfile | undefined
+): ScientificPlottingTemplateSelection {
+  const guide = templateGuideFor(selectedTemplate)
+  return {
+    selectedTemplate,
+    selectedBy: request.templateHint === selectedTemplate
+      ? 'templateHint'
+      : referenceProfile?.recommendedTemplate === selectedTemplate
+        ? 'referenceProfile'
+        : 'taskIntent',
+    useWhen: [...guide.useWhen],
+    avoidWhen: [...guide.avoidWhen],
+    expectedData: [...guide.expectedData],
+    modelSelectionHint: guide.modelSelectionHint
   }
 }
 

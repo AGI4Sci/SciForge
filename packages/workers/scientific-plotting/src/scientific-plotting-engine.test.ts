@@ -159,12 +159,28 @@ describe('scientific plotting engine', () => {
       controlledTool: 'scientific_plotting_render'
     })
 
-    await expect(planScientificPlotting({
+    const flowchartPlan = await planScientificPlotting({
       task: 'Draw a flowchart explaining the reinforcement learning workflow.'
-    })).resolves.toMatchObject({
+    })
+    expect(flowchartPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'scientific_plotting_render',
+      templateSelection: expect.objectContaining({
+        selectedTemplate: 'flowchart',
+        selectedBy: 'taskIntent',
+        modelSelectionHint: expect.stringContaining('flowchart')
+      }),
+      templateGuides: expect.arrayContaining([
+        expect.objectContaining({
+          template: 'flowchart',
+          modelSelectionHint: expect.stringContaining('directed')
+        }),
+        expect.objectContaining({
+          template: 'schematic-grid',
+          avoidWhen: expect.arrayContaining([expect.stringContaining('flowchart')])
+        })
+      ])
     })
   })
 
@@ -707,6 +723,16 @@ describe('scientific plotting engine', () => {
       'flowchart',
       'histogram-density',
       'multi-panel'
+    ]))
+    expect(status.ok && status.templateGuides).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        template: 'flowchart',
+        useWhen: expect.arrayContaining([expect.stringContaining('workflows')])
+      }),
+      expect.objectContaining({
+        template: 'schematic-grid',
+        modelSelectionHint: expect.stringContaining('flowchart instead')
+      })
     ]))
 
     const workspace = await tempWorkspace()

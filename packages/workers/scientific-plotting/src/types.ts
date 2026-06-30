@@ -194,6 +194,103 @@ export const SCIENTIFIC_PLOTTING_TEMPLATES = [
 
 export type ScientificPlottingTemplate = typeof SCIENTIFIC_PLOTTING_TEMPLATES[number]
 
+export type ScientificPlottingTemplateGuide = {
+  template: ScientificPlottingTemplate
+  useWhen: readonly string[]
+  avoidWhen: readonly string[]
+  expectedData: readonly string[]
+  modelSelectionHint: string
+}
+
+export const SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES = [
+  {
+    template: 'line',
+    useWhen: ['trends over an ordered x-axis', 'time series or dose-response curves', 'multiple comparable series'],
+    avoidWhen: ['categorical summaries without ordering', 'directed workflow diagrams'],
+    expectedData: ['series[] with x/y points or rows containing x and one or more y columns'],
+    modelSelectionHint: 'Choose line when the main relation is change along an ordered axis.'
+  },
+  {
+    template: 'scatter',
+    useWhen: ['point clouds', 'correlation or embedding plots', 'x/y observations with optional groups'],
+    avoidWhen: ['aggregated category bars', 'matrix heatmaps'],
+    expectedData: ['points[] with x/y values or tabular numeric x and y columns'],
+    modelSelectionHint: 'Choose scatter when individual observations matter more than connected trends.'
+  },
+  {
+    template: 'bar',
+    useWhen: ['categorical comparisons', 'ranked or grouped summary values', 'counts or totals by class'],
+    avoidWhen: ['distribution shape is important', 'uncertainty is central'],
+    expectedData: ['categories with numeric values or grouped tabular summaries'],
+    modelSelectionHint: 'Choose bar for simple category-level summaries.'
+  },
+  {
+    template: 'errorbar-bar',
+    useWhen: ['categorical summaries with uncertainty', 'mean plus standard error or confidence interval'],
+    avoidWhen: ['raw distribution display', 'no uncertainty values are available'],
+    expectedData: ['categories with value and error/ci fields'],
+    modelSelectionHint: 'Choose errorbar-bar instead of bar when uncertainty is part of the claim.'
+  },
+  {
+    template: 'heatmap',
+    useWhen: ['generic numeric matrices', 'feature-by-sample tables', 'correlation or intensity grids'],
+    avoidWhen: ['token attention maps', 'freeform diagrams'],
+    expectedData: ['matrix as number[][] with optional rowLabels and colLabels'],
+    modelSelectionHint: 'Choose heatmap for a numeric matrix where color encodes value.'
+  },
+  {
+    template: 'attention-map',
+    useWhen: ['token attention or alignment matrices', 'model-head or sequence-to-sequence attention panels'],
+    avoidWhen: ['generic heatmaps without token/model semantics'],
+    expectedData: ['matrix with source/target labels or attention-specific row/column labels'],
+    modelSelectionHint: 'Choose attention-map only when the matrix represents attention, alignment, or token interactions.'
+  },
+  {
+    template: 'box-violin',
+    useWhen: ['distribution comparison by category', 'raw sample values should remain visible', 'box, violin, or swarm-like statistical panels'],
+    avoidWhen: ['only summary values are available', 'ordered time trends'],
+    expectedData: ['groups[] with values[] or tabular category plus numeric value columns'],
+    modelSelectionHint: 'Choose box-violin when spread, outliers, or sample distributions matter.'
+  },
+  {
+    template: 'histogram-density',
+    useWhen: ['single or grouped distribution shape', 'residuals or score distributions', 'histogram/KDE style panels'],
+    avoidWhen: ['category means', 'node-link workflows'],
+    expectedData: ['values[] or groups[] with values[]'],
+    modelSelectionHint: 'Choose histogram-density when the question is the shape of a numeric distribution.'
+  },
+  {
+    template: 'multi-panel',
+    useWhen: ['a figure composed of several coordinated panels', 'mixed chart types in one publication figure'],
+    avoidWhen: ['a single standalone chart is enough', 'a directed process should be one flowchart'],
+    expectedData: ['panels[] where each panel has a controlled template and data'],
+    modelSelectionHint: 'Choose multi-panel to combine several controlled plots into one figure.'
+  },
+  {
+    template: 'flowchart',
+    useWhen: ['directed workflows or pipelines', 'process steps connected by arrows', 'decision trees, pathways, or cause-effect chains'],
+    avoidWhen: ['unordered concept maps', 'module layouts without direction', 'ordinary categorical data'],
+    expectedData: ['nodes[] with id and label', 'optional edges[] with from/to; if omitted, steps are connected sequentially'],
+    modelSelectionHint: 'Choose flowchart for any request that says flowchart, workflow, pipeline, process, steps, arrows, or directed path.'
+  },
+  {
+    template: 'schematic-grid',
+    useWhen: ['conceptual schematics', 'module or mechanism diagrams', 'labeled blocks without a strict direction'],
+    avoidWhen: ['the user asks for a flowchart/workflow/pipeline', 'data needs axes or measured values'],
+    expectedData: ['nodes[] with labels and optional groups; edges are not emphasized'],
+    modelSelectionHint: 'Choose schematic-grid for conceptual layouts; choose flowchart instead when arrows or sequence are required.'
+  }
+] as const satisfies readonly ScientificPlottingTemplateGuide[]
+
+export type ScientificPlottingTemplateSelection = {
+  selectedTemplate: ScientificPlottingTemplate
+  selectedBy: 'templateHint' | 'referenceProfile' | 'taskIntent'
+  useWhen: string[]
+  avoidWhen: string[]
+  expectedData: string[]
+  modelSelectionHint: string
+}
+
 export type ScientificPlottingReferenceProfile = {
   kind: 'chart' | 'matrix' | 'schematic' | 'mixed' | 'unknown'
   recommendedTemplate: ScientificPlottingTemplate
@@ -494,6 +591,8 @@ export type ScientificPlottingPlanResult =
       styleProfileId?: string
       styleProfile?: ScientificPlottingStyleProfileSummary
       styleProfileMatches?: ScientificPlottingStyleProfileMatch[]
+      templateSelection: ScientificPlottingTemplateSelection
+      templateGuides: ScientificPlottingTemplateGuide[]
       templateAlternatives: Array<{
         template: ScientificPlottingTemplate
         reason: string
@@ -542,6 +641,7 @@ export type ScientificPlottingStatusResult =
         defaultProfileIds: string[]
       }
       supportedTemplates: ScientificPlottingTemplate[]
+      templateGuides: ScientificPlottingTemplateGuide[]
       outputPolicy: {
         defaultRelativeDir: string
         writesOnlyInsideWorkspace: true
