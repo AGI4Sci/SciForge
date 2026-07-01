@@ -616,6 +616,53 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
     ])
   })
 
+  it('maps local runtime user input events to the shared request id shape', async () => {
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({
+      request: vi.fn(async () => jsonResponse({})),
+      events: async function* () {
+        yield {
+          kind: 'user_input_requested',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          itemId: 'input-item',
+          inputId: 'input-1',
+          seq: 8,
+          timestamp: '2026-06-02T00:00:02.000Z',
+          questions: [{
+            id: 'scope',
+            header: 'Scope',
+            question: 'Choose scope',
+            options: [{ label: 'Demo', description: 'Small run' }]
+          }]
+        }
+      }
+    })
+
+    const events = []
+    for await (const event of adapter.subscribeEvents?.(
+      { settings: buildSettings() },
+      { runtimeId: 'sciforge', threadId: 'thread-1', sinceSeq: 0 }
+    ) ?? []) {
+      events.push(event)
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'user_input_requested',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'input-item',
+        requestId: 'input-1',
+        questions: [{
+          id: 'scope',
+          header: 'Scope',
+          question: 'Choose scope',
+          options: [{ label: 'Demo', description: 'Small run' }]
+        }]
+      })
+    ])
+  })
+
   it('maps local runtime assistant reasoning deltas to neutral reasoning events', async () => {
     const adapter = createLocalRuntimeAgentRuntimeAdapter({
       request: vi.fn(async () => jsonResponse({})),

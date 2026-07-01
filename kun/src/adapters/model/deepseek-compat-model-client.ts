@@ -132,7 +132,7 @@ type ChatCompletionPostResult =
   | { kind: 'response'; response: Response }
   | { kind: 'error'; message: string; code?: string }
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000
 const DEFAULT_MESSAGES_MAX_TOKENS = 4096
 
 /**
@@ -1378,16 +1378,23 @@ function messagesToResponsesInput(messages: ChatMessage[]): Array<Record<string,
     if (content !== undefined && !(Array.isArray(content) && content.length === 0)) {
       input.push({
         role: message.role,
-        content
+        content,
+        ...(message.role === 'assistant' && message.reasoning_content !== undefined
+          ? { reasoning_content: reasoningContentOrSpace(message.reasoning_content) }
+          : {})
       })
     }
-    for (const call of message.tool_calls ?? []) {
+    const toolCalls = message.tool_calls ?? []
+    for (const [callIndex, call] of toolCalls.entries()) {
       input.push({
         type: 'function_call',
         call_id: call.id,
         name: call.function.name,
         arguments: call.function.arguments,
-        status: 'completed'
+        status: 'completed',
+        ...(callIndex === 0 && message.reasoning_content !== undefined
+          ? { reasoning_content: reasoningContentOrSpace(message.reasoning_content) }
+          : {})
       })
     }
   }

@@ -1042,6 +1042,38 @@ function mapLocalRuntimeEvent(value: unknown, fallbackThreadId: string): AgentRu
     }
   }
 
+  if (kind === 'user_input_requested') {
+    const requestId = stringValue(record.requestId) || stringValue(record.inputId)
+    return {
+      kind: 'user_input_requested',
+      threadId,
+      runtimeId: SCIFORGE_RUNTIME_ID,
+      seq,
+      createdAt,
+      turnId,
+      itemId: itemId || optionalString(record.itemId),
+      requestId,
+      questions: localRuntimeInputQuestions(record.questions)
+    }
+  }
+
+  if (kind === 'user_input_resolved') {
+    const requestId = stringValue(record.requestId) || stringValue(record.inputId)
+    return {
+      kind: 'user_input_resolved',
+      threadId,
+      runtimeId: SCIFORGE_RUNTIME_ID,
+      seq,
+      createdAt,
+      turnId,
+      itemId: itemId || optionalString(record.itemId),
+      requestId,
+      status: localRuntimeUserInputStatus(record.status),
+      answers: localRuntimeInputAnswers(record.answers),
+      message: optionalString(record.message) ?? optionalString(record.error)
+    }
+  }
+
   if (kind === 'goal_updated' || kind === 'goal_cleared') {
     const goal = asRecord(record.goal)
     return {
@@ -1118,6 +1150,60 @@ function mapLocalRuntimeTurnLifecycleState(kind: string): Extract<AgentRuntimeEv
   if (kind === 'turn_aborted') return 'aborted'
   if (kind === 'turn_steered') return 'steered'
   return 'started'
+}
+
+function localRuntimeInputQuestions(value: unknown): Extract<
+  AgentRuntimeEvent,
+  { kind: 'user_input_requested' }
+>['questions'] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((question) => {
+    const record = asRecord(question)
+    if (!record) return []
+    const id = stringValue(record.id)
+    const text = stringValue(record.question)
+    if (!id || !text) return []
+    return [{
+      id,
+      header: stringValue(record.header) || 'Input',
+      question: text,
+      options: Array.isArray(record.options)
+        ? record.options.flatMap((option) => {
+            const optionRecord = asRecord(option)
+            if (!optionRecord) return []
+            const label = stringValue(optionRecord.label)
+            if (!label) return []
+            return [{ label, description: stringValue(optionRecord.description) }]
+          })
+        : []
+    }]
+  })
+}
+
+function localRuntimeInputAnswers(value: unknown): Extract<
+  AgentRuntimeEvent,
+  { kind: 'user_input_resolved' }
+>['answers'] {
+  if (!Array.isArray(value)) return undefined
+  const answers = value.flatMap((answer) => {
+    const record = asRecord(answer)
+    if (!record) return []
+    const id = stringValue(record.id)
+    const answerValue = stringValue(record.value)
+    if (!id || !answerValue) return []
+    const label = optionalString(record.label)
+    return [{ id, value: answerValue, ...(label ? { label } : {}) }]
+  })
+  return answers.length > 0 ? answers : undefined
+}
+
+function localRuntimeUserInputStatus(value: unknown): Extract<
+  AgentRuntimeEvent,
+  { kind: 'user_input_resolved' }
+>['status'] {
+  const status = stringValue(value)
+  if (status === 'submitted' || status === 'cancelled' || status === 'error') return status
+  return 'cancelled'
 }
 
 function compactionEventDetail(record: Record<string, unknown>): string | undefined {

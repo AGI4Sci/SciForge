@@ -320,7 +320,10 @@ function blockFromItem(item: AgentRuntimeItem): ChatBlock | null {
       }
     case 'user_input':
       {
-        const requestId = stringMeta(item.meta, 'requestId') ?? item.id
+        const requestId =
+          requestIdMeta(item.meta, 'codexRequestId') ??
+          stringMeta(item.meta, 'requestId') ??
+          item.id
         const questions = questionsMeta(item.meta)
         return {
           kind: 'user_input',
@@ -477,6 +480,40 @@ function mergeRepeatedToolBlocks(blocks: ChatBlock[]): ChatBlock[] {
   return changed ? merged : blocks
 }
 
+function mergeRepeatedUserInputBlocks(blocks: ChatBlock[]): ChatBlock[] {
+  let changed = false
+  const merged: ChatBlock[] = []
+  const inputIndexes = new Map<string, number>()
+  for (const block of blocks) {
+    if (block.kind !== 'user_input') {
+      merged.push(block)
+      continue
+    }
+    const key = block.requestId.trim() || block.id
+    const existingIndex = inputIndexes.get(key)
+    if (existingIndex === undefined) {
+      inputIndexes.set(key, merged.length)
+      merged.push(block)
+      continue
+    }
+    const existing = merged[existingIndex]
+    if (!existing || existing.kind !== 'user_input') {
+      merged.push(block)
+      continue
+    }
+    changed = true
+    merged[existingIndex] = {
+      ...existing,
+      ...block,
+      createdAt: existing.createdAt ?? block.createdAt,
+      questions: block.questions.length > 0 ? block.questions : existing.questions,
+      answers: block.answers ?? existing.answers,
+      errorMessage: block.errorMessage ?? existing.errorMessage
+    }
+  }
+  return changed ? merged : blocks
+}
+
 function settleTerminalSnapshotBlocks(blocks: ChatBlock[], outcome: TerminalSnapshotOutcome | null): ChatBlock[] {
   if (!outcome) return blocks
   let changed = false
@@ -621,10 +658,10 @@ export class AgentRuntimeProvider implements AgentProvider {
     this.rememberThreadRuntime(detail.id, detail.runtimeId)
     this.rememberInteractionRequests(detail.id, detail.runtimeId, items)
     const latestTurn = latestTurnFromDetail(detail)
-    const rawBlocks = mergeRepeatedToolBlocks(items.flatMap((item) => {
+    const rawBlocks = mergeRepeatedUserInputBlocks(mergeRepeatedToolBlocks(items.flatMap((item) => {
       const block = blockFromItem(item)
       return block ? [block] : []
-    }))
+    })))
     return {
       blocks: settleTerminalSnapshotBlocks(
         rawBlocks,

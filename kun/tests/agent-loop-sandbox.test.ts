@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CREATE_PLAN_TOOL_NAME } from '../src/adapters/tool/create-plan-tool.js'
 import { LocalToolHost, buildDefaultLocalTools, type LocalTool } from '../src/adapters/tool/local-tool-host.js'
+import { resolvePlanModeToolSpecs } from '../src/loop/agent-loop.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
 import { bootstrapThread, makeHarness } from './loop-test-harness.js'
 
@@ -156,9 +157,12 @@ describe('AgentLoop sandbox policy', () => {
         'ls',
         'web_search',
         'web_fetch',
+        'request_user_input',
         CREATE_PLAN_TOOL_NAME
       ])
       expect(toolNames).toContain(CREATE_PLAN_TOOL_NAME)
+      expect(toolNames).toContain('request_user_input')
+      expect(toolNames).not.toContain('user_input')
       expect(toolNames.filter((name) => !allowedPlanTools.has(name))).toEqual([])
       expect(toolNames).not.toContain('bash')
       expect(toolNames).not.toContain('edit')
@@ -167,5 +171,24 @@ describe('AgentLoop sandbox policy', () => {
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
+  })
+
+  it('keeps one structured user-input tool available after plan exploration', () => {
+    const tools = [
+      { name: 'read', description: '', inputSchema: {} },
+      { name: 'bash', description: '', inputSchema: {} },
+      { name: 'request_user_input', description: '', inputSchema: {} },
+      { name: 'user_input', description: '', inputSchema: {} },
+      { name: CREATE_PLAN_TOOL_NAME, description: '', inputSchema: {} }
+    ] as ModelRequest['tools']
+
+    expect(resolvePlanModeToolSpecs(tools, {
+      planTurnActive: true,
+      createPlanSatisfied: false,
+      stepIndex: 1
+    }).map((tool) => tool.name)).toEqual([
+      'request_user_input',
+      CREATE_PLAN_TOOL_NAME
+    ])
   })
 })

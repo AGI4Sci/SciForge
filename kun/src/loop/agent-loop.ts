@@ -145,9 +145,11 @@ type ToolDispatchOutcome =
  */
 export const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode.',
-  'Investigate the task first using read-only tools: prefer `read`, `grep`, `find`, and `ls` to gather the facts you need.',
+  'Investigate the task first using read-only tools: use `ls` or `find` for file discovery, `grep` for text search, and `read` for specific files.',
+  'Keep the first exploration pass small: usually 2-4 read-only tool calls are enough before drafting the plan.',
   'Do NOT modify project files, apply edits, run shell commands, or run mutating commands in this mode.',
-  'When you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
+  'If a blocking user decision is missing, call the `request_user_input` tool (or `user_input` if that is the advertised name) with concise structured questions; do not ask blocking plan questions as ordinary assistant prose.',
+  'Only when you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
   'Use `operation: "draft"` for the first plan, and `operation: "refine"` when revising an existing plan; you may call `create_plan` multiple times as the plan evolves.',
   'Write concrete, actionable steps (summary, implementation steps, tests, risks) rather than vague intentions.',
   'After saving, give the user a short summary of the plan and what to review.'
@@ -161,6 +163,12 @@ const PLAN_READ_ONLY_TOOL_NAMES = new Set([
   'web_search',
   'web_fetch'
 ])
+const PLAN_INTERVIEW_TOOL_NAMES = new Set(['request_user_input', 'user_input'])
+
+function isPlanModeInterviewTool(toolName: string, preferredInterviewToolName: string | null): boolean {
+  return PLAN_INTERVIEW_TOOL_NAMES.has(toolName) &&
+    (preferredInterviewToolName === null || toolName === preferredInterviewToolName)
+}
 
 export function resolvePlanModeToolSpecs(
   toolSpecs: ModelToolSpec[],
@@ -175,9 +183,20 @@ export function resolvePlanModeToolSpecs(
   if (!options.planTurnActive || options.createPlanSatisfied) return toolSpecs
   const readOnly = options.readOnlyToolNames ?? PLAN_READ_ONLY_TOOL_NAMES
   const planTool = options.planToolName ?? CREATE_PLAN_TOOL_NAME
+  const preferredInterviewToolName = toolSpecs.some((tool) => tool.name === 'request_user_input')
+    ? 'request_user_input'
+    : toolSpecs.some((tool) => tool.name === 'user_input')
+      ? 'user_input'
+      : null
   return options.stepIndex === 0
-    ? toolSpecs.filter((tool) => tool.name === planTool || readOnly.has(tool.name))
-    : toolSpecs.filter((tool) => tool.name === planTool)
+    ? toolSpecs.filter((tool) =>
+        tool.name === planTool ||
+        readOnly.has(tool.name) ||
+        isPlanModeInterviewTool(tool.name, preferredInterviewToolName)
+      )
+    : toolSpecs.filter((tool) =>
+        tool.name === planTool || isPlanModeInterviewTool(tool.name, preferredInterviewToolName)
+      )
 }
 
 function goalContinuationInstruction(goal: ThreadGoal | undefined): string | null {
@@ -344,6 +363,17 @@ function latestUserMessageText(items: readonly TurnItem[], turnId: string): stri
     }
   }
   return ''
+}
+
+function looksLikePlanModeClarificationText(text: string): boolean {
+  const normalized = text.trim()
+  if (!normalized) return false
+  const hasPlanShape =
+    /(^|\n)#{1,3}\s*(plan|implementation|verification|acceptance criteria|scope|risks|实施计划|执行计划|验收标准|验证|范围|风险)/i
+      .test(normalized)
+  if (hasPlanShape) return false
+  return /需要你回答|请.*作答|请.*回答|关键问题|澄清|确认.*关键|clarify|clarifying|answer.*questions?|which.*should|what.*should/i
+    .test(normalized)
 }
 
 function allowedToolNamesWithGuiStateTools(
@@ -1052,6 +1082,7 @@ export class AgentLoop {
           request.requiredToolName === CREATE_PLAN_TOOL_NAME &&
           textAccumulator.value.trim()
         ) {
+          if (looksLikePlanModeClarificationText(textAccumulator.value)) return 'stop'
           const callId = this.opts.ids.next('call_plan')
           const provider = toolProviderMetadata.get(CREATE_PLAN_TOOL_NAME)
           const toolKind = toolKinds.get(CREATE_PLAN_TOOL_NAME)

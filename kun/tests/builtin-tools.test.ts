@@ -152,6 +152,53 @@ describe('Local runtime built-in tools', () => {
     })
   })
 
+  it('normalizes stringified structured GUI input questions', async () => {
+    const seenInputs: Array<{
+      questions: Array<{ question: string; options: Array<{ label: string; description: string }> }>
+    }> = []
+    await host.execute(
+      {
+        callId: 'call_input_stringified',
+        toolName: 'request_user_input',
+        arguments: {
+          questions: JSON.stringify([
+            {
+              id: 'compute',
+              header: 'Compute',
+              question: '可用算力资源是什么？',
+              options: [
+                { label: '单卡', description: '如 RTX 3060/4060/4090。' },
+                { label: '多卡 / 集群', description: '多张 GPU 或集群资源。' }
+              ]
+            }
+          ])
+        }
+      },
+      {
+        ...buildContext(workspace),
+        awaitUserInput: async (input) => {
+          seenInputs.push(input)
+          return {
+            status: 'submitted',
+            answers: [{ id: 'compute', label: '单卡', value: '单卡' }]
+          }
+        }
+      }
+    )
+
+    expect(seenInputs[0]?.questions).toEqual([
+      {
+        id: 'compute',
+        header: 'Compute',
+        question: '可用算力资源是什么？',
+        options: [
+          { label: '单卡', description: '如 RTX 3060/4060/4090。' },
+          { label: '多卡 / 集群', description: '多张 GPU 或集群资源。' }
+        ]
+      }
+    ])
+  })
+
   it('exposes pi-style coding and read-only tool groups', () => {
     expect(buildCodingBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
     expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
@@ -265,6 +312,8 @@ describe('Local runtime built-in tools', () => {
     expect(String(readOutput.content)).toContain('virtual file')
     const findOutput = await executeTool(customHost, workspace, 'find', { pattern: '*.ts' })
     expect(findOutput.backend).toBe('custom')
+    const findByGlobOutput = await executeTool(customHost, workspace, 'find', { glob: '*.ts' })
+    expect(findByGlobOutput.backend).toBe('custom')
     const grepOutput = await executeTool(customHost, workspace, 'grep', { pattern: 'needle' })
     expect(grepOutput.backend).toBe('custom')
     const bashOutput = await executeTool(customHost, workspace, 'bash', { command: 'echo ignored' })

@@ -595,6 +595,7 @@ async function routeResponsesRequest(
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
   const usage = emptyResponseUsage();
   const hasToolTranscriptInput = responseInputHasToolTranscript(request.input);
+  const hasAssistantReasoningInput = responseInputHasAssistantReasoning(request.input);
   const requestForTextReasoner = hasToolTranscriptInput
     ? {
       ...request,
@@ -605,7 +606,7 @@ async function routeResponsesRequest(
     : request;
   const textReasonerRequestOptions = chatRequestOptionsFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model);
   const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
-  const textReasonerMessages = hasToolTranscriptInput
+  const textReasonerMessages = hasToolTranscriptInput || hasAssistantReasoningInput
     ? chatMessagesFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model)
     : [];
 
@@ -2139,6 +2140,13 @@ function responseInputHasToolTranscript(input: unknown): boolean {
   return Array.isArray(input) && input.some((item) => {
     if (!isRecord(item)) return false;
     return item.type === 'function_call' || item.type === 'function_call_output';
+  });
+}
+
+function responseInputHasAssistantReasoning(input: unknown): boolean {
+  return Array.isArray(input) && input.some((item) => {
+    if (!isRecord(item)) return false;
+    return item.role === 'assistant' && typeof item.reasoning_content === 'string' && item.reasoning_content.trim().length > 0;
   });
 }
 

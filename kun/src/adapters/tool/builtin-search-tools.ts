@@ -83,15 +83,21 @@ export function createFindLocalTool(options: FindLocalToolOptions = {}): LocalTo
       type: 'object',
       properties: {
         pattern: { type: 'string' },
+        glob: {
+          type: 'string',
+          description: 'Alias for pattern. Use this when thinking in file glob terms, e.g. "**/*.json".'
+        },
         path: { type: 'string' },
         limit: { type: 'number' }
       },
-      required: ['pattern'],
       additionalProperties: false
     },
     policy: 'auto',
     execute: async (args, context) => withToolBoundary(async () => {
-      const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : ''
+      const pattern =
+        typeof args.pattern === 'string' && args.pattern.trim()
+          ? args.pattern.trim()
+          : typeof args.glob === 'string' ? args.glob.trim() : ''
       if (!pattern) return { output: { error: 'pattern is required' }, isError: true }
       const rawPath = typeof args.path === 'string' && args.path.trim() ? args.path : '.'
       const limit = normalizePositiveInteger(args.limit, options.defaultLimit ?? DEFAULT_FIND_LIMIT)

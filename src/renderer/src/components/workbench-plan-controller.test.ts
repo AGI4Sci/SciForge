@@ -3,6 +3,7 @@ import { createGuiPlanArtifact } from '../plan/plan-store'
 import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
+  extractPlanModeOriginalRequest,
   resolvePlanTurnWorkspaceRoot
 } from './workbench-plan-controller'
 
@@ -72,5 +73,46 @@ describe('workbench plan controller helpers', () => {
       sourceRequest: 'Build Login: OAuth / SSO?',
       title: 'build-login-oauth-sso-2'
     })
+  })
+
+  it('extracts the visible user query from long-horizon plan prompts', () => {
+    const wrappedPrompt = [
+      '# Plan Mode Prompt',
+      '',
+      'Schema: sciforge.plan-mode-prompt.v3',
+      '',
+      '## Original User Request',
+      '<user_request>',
+      '阅读Deepseek R1,并在本地复现',
+      '</user_request>',
+      '',
+      '## Available Context',
+      '- Workspace root: D:/Project/SciForge'
+    ].join('\n')
+
+    expect(extractPlanModeOriginalRequest(wrappedPrompt)).toBe('阅读Deepseek R1,并在本地复现')
+    const result = buildDraftGuiPlanTurnOverrides({
+      request: extractPlanModeOriginalRequest(wrappedPrompt),
+      workspaceRoot: '/Users/codex/app/',
+      activeThreadId: 'thread-current'
+    })
+    expect(result.guiPlan.sourceRequest).toBe('阅读Deepseek R1,并在本地复现')
+    expect(result.guiPlan.relativePath).not.toContain('plan-mode-prompt')
+  })
+
+  it('unescapes XML-safe user requests from plan prompts', () => {
+    const wrappedPrompt = [
+      '# Plan Mode Prompt',
+      '',
+      '## Original User Request',
+      '<user_request>',
+      '整理 A &amp; B &lt;draft&gt;',
+      '</user_request>',
+      '',
+      '## Available Context',
+      '- Workspace root: D:/Project/SciForge'
+    ].join('\n')
+
+    expect(extractPlanModeOriginalRequest(wrappedPrompt)).toBe('整理 A & B <draft>')
   })
 })

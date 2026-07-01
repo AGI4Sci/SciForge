@@ -60,6 +60,22 @@ function mergeFileChangeBlocks(changes: ResolvedFileChangeBlock[]): ToolBlock[] 
   return merged
 }
 
+function isInternalUserInputToolBlock(block: ChatBlock): boolean {
+  if (block.kind !== 'tool') return false
+  const toolName = typeof block.meta?.toolName === 'string' ? block.meta.toolName.trim() : ''
+  if (toolName === 'request_user_input' || toolName === 'user_input') return true
+  return /^(request_user_input|user_input)\s*:/i.test(block.summary.trim())
+}
+
+function latestUserInputBlockIndexes(blocks: ChatBlock[]): Map<string, number> {
+  const latestIndexes = new Map<string, number>()
+  for (const [index, block] of blocks.entries()) {
+    if (block.kind !== 'user_input') continue
+    latestIndexes.set(block.requestId.trim() || block.id, index)
+  }
+  return latestIndexes
+}
+
 /**
  * Pure derivation of a turn's three view slices:
  *  - `processBlocks`: chronological reasoning/tool/compaction/approval
@@ -87,6 +103,7 @@ export function deriveTurnSections({
   const fallbackFinalAssistantId = !isProcessing && trailingAssistantStart === turn.blocks.length
     ? [...turn.blocks].reverse().find((block) => block.kind === 'assistant' && splitThink(block.text).content.trim())?.id
     : undefined
+  const latestInputIndexes = latestUserInputBlockIndexes(turn.blocks)
 
   for (const [index, block] of turn.blocks.entries()) {
     if (block.kind === 'assistant') {
@@ -103,6 +120,12 @@ export function deriveTurnSections({
           assistantContentBlocks.push(contentBlock)
         }
       }
+      continue
+    }
+    if (isInternalUserInputToolBlock(block)) {
+      continue
+    }
+    if (block.kind === 'user_input' && latestInputIndexes.get(block.requestId.trim() || block.id) !== index) {
       continue
     }
     if (isProcessBlock(block)) {

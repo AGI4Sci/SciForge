@@ -2032,6 +2032,52 @@ describe('AgentLoop', () => {
     }
   })
 
+  it('does not materialize clarification prose as a GUI plan', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-loop-plan-clarification-text-'))
+    try {
+      const h = makeHarness(
+        {
+          provider: 'planner',
+          model: 'planner',
+          async *stream(): AsyncIterable<ModelStreamChunk> {
+            yield {
+              kind: 'assistant_text_delta',
+              text: '## 总结\n我需要你回答以下关键问题：请逐一作答。\n'
+            }
+            yield { kind: 'completed', stopReason: 'stop' }
+          }
+        },
+        { tools: buildDefaultLocalTools() }
+      )
+      await bootstrapThread(h, {
+        workspace,
+        request: {
+          prompt: '阅读Deepseek R1,并在本地复现',
+          mode: 'plan',
+          guiPlan: {
+            operation: 'draft',
+            workspaceRoot: workspace,
+            relativePath: '.sciforge/plan/deepseek-r1.md',
+            planId: `${workspace}:.sciforge/plan/deepseek-r1.md`,
+            sourceRequest: '阅读Deepseek R1,并在本地复现'
+          }
+        }
+      })
+
+      const status = await h.loop.runTurn(h.threadId, h.turnId)
+      const items = await h.sessionStore.loadItems(h.threadId)
+
+      expect(status).toBe('completed')
+      expect(items.some((item) =>
+        item.kind === 'tool_result' &&
+        item.toolName === CREATE_PLAN_TOOL_NAME
+      )).toBe(false)
+      await expect(readFile(join(workspace, '.sciforge/plan/deepseek-r1.md'), 'utf8')).rejects.toThrow()
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('materializes assistant plan text for plan-mode turns without a reserved context', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'kun-loop-plan-free-form-text-'))
     try {

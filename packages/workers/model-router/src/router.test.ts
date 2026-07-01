@@ -2360,6 +2360,57 @@ test('responses tool outputs restore cached function calls stripped by app-serve
   }
 });
 
+test('responses assistant text history preserves reasoning_content for thinking providers', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-assistant-reasoning-history-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-final-after-clarification', JSON.stringify({
+        type: 'final_answer',
+        content: 'Use a small demo reproduction.'
+      })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: 'Plan the DeepSeek-R1 reproduction.' }],
+          },
+          {
+            role: 'assistant',
+            content: 'What scale should the reproduction target?',
+            reasoning_content: 'Need to clarify reproduction scope before planning.',
+          },
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: 'Make it a small demo.' }],
+          },
+        ],
+        reasoning: { effort: 'high' },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      (calls[0]?.body.messages as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
+      'Need to clarify reproduction scope before planning.'
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test('responses tool outputs expose provider 400 bodies without retry-side request mutation', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-http-400-'));
   const calls: CapturedFetch[] = [];

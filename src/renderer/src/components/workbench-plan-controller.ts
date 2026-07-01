@@ -129,6 +129,23 @@ export function buildDraftGuiPlanTurnOverrides(input: {
   }
 }
 
+export function extractPlanModeOriginalRequest(text: string): string {
+  const normalized = text.trim()
+  const marker = '## Original User Request'
+  const markerIndex = normalized.indexOf(marker)
+  if (markerIndex < 0) return normalized
+  const afterMarker = normalized.slice(markerIndex + marker.length).trim()
+  const nextSectionIndex = afterMarker.search(/\n##\s+/)
+  const requestSection = (nextSectionIndex >= 0 ? afterMarker.slice(0, nextSectionIndex) : afterMarker).trim()
+  const taggedRequest = requestSection.match(/<user_request>\s*([\s\S]*?)\s*<\/user_request>/i)?.[1]
+  const request = (taggedRequest ?? requestSection)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .trim()
+  return request && request !== '(empty prompt with attachments/context only)' ? request : normalized
+}
+
 export function useWorkbenchPlanController({
   blocks,
   busy,
@@ -228,8 +245,9 @@ export function useWorkbenchPlanController({
     const planOverrides = planTurnOverrides(targetWorkspaceRoot, currentChatState.activeThreadId)
     const { workspaceRoot: _workspaceRoot, ...messageOverrides } = overrides ?? {}
     const remoteTargetId = messageOverrides.remoteTargetId ?? currentChatState.remoteTargetId ?? undefined
+    const sourceRequest = extractPlanModeOriginalRequest(text)
     const guiPlan = messageOverrides.guiPlan ?? planOverrides?.guiPlan ?? buildDraftGuiPlanTurnOverrides({
-      request: text,
+      request: sourceRequest,
       workspaceRoot: targetWorkspaceRoot,
       activeThreadId: currentChatState.activeThreadId,
       existingRelativePaths: await readExistingPlanRelativePaths(targetWorkspaceRoot)

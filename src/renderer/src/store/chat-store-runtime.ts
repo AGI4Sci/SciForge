@@ -1154,8 +1154,20 @@ export function buildThreadEventSink(
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       set((s) => {
-        if (s.blocks.some((b) => b.kind === 'user_input' && b.requestId === req.requestId)) {
-          return {}
+        const existingIndex = s.blocks.findIndex((b) => b.kind === 'user_input' && b.requestId === req.requestId)
+        if (existingIndex >= 0) {
+          const blocks = [...s.blocks]
+          const existing = blocks[existingIndex]
+          if (existing?.kind === 'user_input') {
+            blocks[existingIndex] = {
+              ...existing,
+              id: req.itemId,
+              requestId: req.requestId,
+              questions: req.questions.length > 0 ? req.questions : existing.questions,
+              status: existing.status === 'pending' ? 'pending' : existing.status
+            }
+          }
+          return { blocks, error: clearRuntimeStreamRecoveringError(s.error) }
         }
         const flushed = flushLiveBlocks(s)
         const baseBlocks = flushed.blocks ?? s.blocks

@@ -411,6 +411,57 @@ describe('AgentRuntimeProvider', () => {
     })
   })
 
+  it('dedupes persisted user input items with the same request id', async () => {
+    vi.stubGlobal('window', {
+      sciforge: {
+        getSettings: vi.fn(async () => settings('codex')),
+        setSettings: vi.fn(),
+        agentRuntime: {
+          readThread: vi.fn(async () => ({
+            id: 'thread-input-duplicate',
+            runtimeId: 'codex',
+            title: 'Input thread',
+            updatedAt: '2026-06-11T00:00:00.000Z',
+            latestSeq: 4,
+            items: [
+              {
+                id: 'input-old',
+                kind: 'user_input',
+                summary: 'Pick deployment target',
+                status: 'pending',
+                meta: {
+                  requestId: 'request-1',
+                  questions: [{ id: 'target', header: 'Target', question: 'Where?', options: [] }]
+                },
+                createdAt: '2026-06-11T00:00:01.000Z'
+              },
+              {
+                id: 'input-new',
+                kind: 'user_input',
+                summary: 'Pick deployment target',
+                status: 'pending',
+                meta: {
+                  requestId: 'request-1',
+                  questions: [{ id: 'target', header: 'Target', question: 'Where?', options: [] }]
+                },
+                createdAt: '2026-06-11T00:00:02.000Z'
+              }
+            ]
+          }))
+        },
+        forbiddenDirectCall: vi.fn(),
+      }
+    })
+    const provider = new AgentRuntimeProvider()
+    provider.rememberThreadRuntime('thread-input-duplicate', 'codex')
+
+    const detail = await provider.getThreadDetail('thread-input-duplicate')
+
+    expect(detail.blocks.filter((block) => block.kind === 'user_input')).toEqual([
+      expect.objectContaining({ kind: 'user_input', id: 'input-new', requestId: 'request-1' })
+    ])
+  })
+
   it('settles stale running tool items from terminal thread snapshots', async () => {
     vi.stubGlobal('window', {
       sciforge: {

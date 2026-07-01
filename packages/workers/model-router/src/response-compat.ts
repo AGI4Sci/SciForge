@@ -477,10 +477,11 @@ function responseInputItemToMessage(
   const content = Array.isArray(item.content)
     ? chatContentFromResponseParts(item.content)
     : stringValue(item.content) || '';
-  return {
+  return compactJsonObject({
     role,
     content,
-  };
+    reasoning_content: role === 'assistant' ? stringValue(item.reasoning_content) || undefined : undefined,
+  });
 }
 
 function responseInputFunctionCallToChatToolCall(

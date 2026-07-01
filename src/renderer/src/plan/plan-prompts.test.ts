@@ -20,9 +20,11 @@ describe('plan-prompts', () => {
     })
     expect(prompt).toContain('The GUI will save your answer')
     expect(prompt).toContain('create_plan')
-    expect(prompt).toContain('Do not call any other tools')
     expect(prompt).toContain(GUI_PLAN_OPEN_TAG)
     expect(prompt).toContain(GUI_PLAN_CLOSE_TAG)
+    expect(prompt).toContain('request_user_input')
+    expect(prompt).toContain('read-only investigation tools')
+    expect(prompt).toContain('acceptance criteria')
     expect(prompt).toContain('Add auth')
   })
 

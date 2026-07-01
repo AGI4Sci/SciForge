@@ -121,6 +121,69 @@ describe('deriveTurnSections', () => {
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
   })
 
+  it('hides internal user-input tool calls while keeping the input card', () => {
+    const result = processingSections({
+      blocks: [
+        {
+          kind: 'tool',
+          id: 'tool_input',
+          summary: 'request_user_input: {"questions":[{"question":"Pick one"}]}',
+          status: 'running',
+          toolKind: 'tool_call',
+          detail: '{"questions":[{"question":"Pick one"}]}',
+          meta: { toolName: 'request_user_input' }
+        },
+        {
+          kind: 'user_input',
+          id: 'input_card',
+          requestId: 'in_1',
+          questions: [
+            {
+              id: 'scope',
+              header: 'Scope',
+              question: '复现的粒度是什么？',
+              options: [{ label: 'Demo', description: '小规模验证。' }]
+            }
+          ],
+          status: 'pending'
+        }
+      ]
+    })
+
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['input_card'])
+  })
+
+  it('dedupes repeated user-input cards by request id', () => {
+    const questions = [
+      {
+        id: 'scope',
+        header: 'Scope',
+        question: '复现的粒度是什么？',
+        options: [{ label: 'Demo', description: '小规模验证。' }]
+      }
+    ]
+    const result = processingSections({
+      blocks: [
+        {
+          kind: 'user_input',
+          id: 'input_old',
+          requestId: 'in_1',
+          questions,
+          status: 'pending'
+        },
+        {
+          kind: 'user_input',
+          id: 'input_new',
+          requestId: 'in_1',
+          questions,
+          status: 'pending'
+        }
+      ]
+    })
+
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['input_new'])
+  })
+
   it('extracts file changes from JSON-wrapped tool output diffs', () => {
     const patch = [
       'diff --git a/demo.ts b/demo.ts',

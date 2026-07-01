@@ -8,6 +8,7 @@ import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
 import { sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot } from '@shared/sdd-trace'
+import { maybeBuildLongHorizonPrompt } from '@shared/long-horizon-prompt'
 import {
   findKeyboardShortcutCommand,
   keyboardEventToShortcut,
@@ -1806,6 +1807,12 @@ export function Workbench(): ReactElement {
           ? t('composerFileOnlyDisplay', { count: fileReferences.length })
           : t('composerImageOnlyDisplay')
     const messageText = v || emptyPrompt
+    const shouldUsePlanPrompt =
+      mode === 'plan' &&
+      route === 'chat' &&
+      !isImageGenerationIntent &&
+      !activeSddDraft &&
+      !activeThreadIsRemoteChannel
     const prepareChatMessage = async (): Promise<{ text: string; displayText?: string } | null> => {
       const userVisibleText = isImageGenerationIntent
         ? buildImageGenerationDisplayText(v || emptyDisplayText || messageText)
@@ -1817,9 +1824,24 @@ export function Workbench(): ReactElement {
             ...(activeThreadId ? { threadId: activeThreadId } : {})
           })
         : messageText
+      const preparedRuntimeMessageText = maybeBuildLongHorizonPrompt({
+        enabled: shouldUsePlanPrompt,
+        userPrompt: runtimeMessageText,
+        mode,
+        workspaceRoot: normalizeWorkspaceRoot(activeThread?.workspace || workspaceRoot) || undefined,
+        attachments: attachments.map((attachment) => ({
+          name: attachment.name || attachment.id,
+          kind: attachment.mimeType
+        })),
+        fileReferences: fileReferences.map((reference) => ({
+          relativePath: reference.relativePath,
+          path: reference.path,
+          kind: reference.kind
+        }))
+      }).text
       if (fileReferences.length === 0) {
         return {
-          text: runtimeMessageText,
+          text: preparedRuntimeMessageText,
           ...(userVisibleText ? { displayText: userVisibleText } : {})
         }
       }
@@ -1833,7 +1855,7 @@ export function Workbench(): ReactElement {
       try {
         const fileContext = await readComposerFileContextEntries(fileReferences, workspace)
         return {
-          text: buildComposerFileContextPrompt(runtimeMessageText, fileContext),
+          text: buildComposerFileContextPrompt(preparedRuntimeMessageText, fileContext),
           ...(userVisibleText ? { displayText: userVisibleText } : {})
         }
       } catch (error) {

@@ -613,15 +613,16 @@ function normalizeUserInputQuestions(
   question: string
   options: Array<{ label: string; description: string }>
 }> {
-  const rawQuestions = Array.isArray(args.questions) ? args.questions : null
+  const rawQuestions = arrayFromValue(args.questions)
   if (rawQuestions && rawQuestions.length > 0) {
     const questions = rawQuestions
       .map((question, index) => normalizeUserInputQuestion(question, index, fallbackId))
       .filter((question) => question !== null)
     if (questions.length > 0) return questions
   }
-  const options = Array.isArray(args.options)
-    ? args.options
+  const rawOptions = arrayFromValue(args.options)
+  const options = rawOptions
+    ? rawOptions
         .map((option) => normalizeUserInputOption(option))
         .filter((option) => option !== null)
     : []
@@ -633,6 +634,19 @@ function normalizeUserInputQuestions(
       options
     }
   ]
+}
+
+function arrayFromValue(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
 }
 
 function normalizeUserInputQuestion(
@@ -651,8 +665,9 @@ function normalizeUserInputQuestion(
     ? raw.question.trim()
     : null
   if (!question) return null
-  const options = Array.isArray(raw.options)
-    ? raw.options
+  const rawOptions = arrayFromValue(raw.options)
+  const options = rawOptions
+    ? rawOptions
         .map((option) => normalizeUserInputOption(option))
         .filter((option) => option !== null)
     : []

@@ -428,6 +428,69 @@ describe('DeepseekCompatModelClient', () => {
     ])
   })
 
+  it('preserves assistant reasoning_content when serializing history to Responses input', async () => {
+    const sentBodies: Array<{ input?: Array<Record<string, unknown>> }> = []
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      sentBodies.push(JSON.parse(String(init?.body ?? '{}')))
+      return new Response(JSON.stringify({
+        id: 'resp_reasoning_round_trip',
+        status: 'completed',
+        output_text: 'done'
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const client = new DeepseekCompatModelClient({
+      baseUrl: 'http://127.0.0.1:3892/v1',
+      apiKey: 'local-router-key',
+      model: 'sciforge-router',
+      endpointFormat: 'responses',
+      fetchImpl,
+      nonStreaming: true,
+      forceDefaultModel: true
+    })
+    const request = buildRequest(new AbortController().signal)
+    request.reasoningEffort = 'max'
+    request.history = [
+      makeUserItem({
+        id: 'user_1',
+        turnId: 'turn_1',
+        threadId: 'thr_1',
+        text: 'Plan the DeepSeek-R1 reproduction.'
+      }),
+      makeAssistantReasoningItem({
+        id: 'reasoning_1',
+        turnId: 'turn_2',
+        threadId: 'thr_1',
+        text: 'Need to clarify reproduction scope before planning.',
+        status: 'completed'
+      }),
+      makeAssistantTextItem({
+        id: 'text_1',
+        turnId: 'turn_2',
+        threadId: 'thr_1',
+        text: 'What scale should the reproduction target?',
+        status: 'completed'
+      }),
+      makeUserItem({
+        id: 'user_2',
+        turnId: 'turn_3',
+        threadId: 'thr_1',
+        text: 'Make it a small demo.'
+      })
+    ]
+
+    for await (const _chunk of client.stream(request)) {
+      // drain
+    }
+
+    const assistantInput = sentBodies[0]?.input?.find((item) =>
+      item.role === 'assistant' && item.content === 'What scale should the reproduction target?'
+    )
+    expect(assistantInput?.reasoning_content).toBe('Need to clarify reproduction scope before planning.')
+  })
+
   it('uses the Anthropic Messages API format when selected', async () => {
     const sentUrls: string[] = []
     const sentBodies: Array<Record<string, unknown>> = []
