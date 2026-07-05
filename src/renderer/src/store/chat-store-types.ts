@@ -118,7 +118,7 @@ export type SideConversation = {
   threadId: string
   runtimeId?: AgentRuntimeId
   parentThreadId: string
-  source?: 'side' | 'child_agent'
+  source?: 'side' | 'child_agent' | 'pdf_annotation'
   title: string
   createdAt: string
   /** Timestamp the snapshot was taken from the parent. */
@@ -270,7 +270,16 @@ export type ChatState = {
    * while the active thread is running. Does not change `activeThreadId`.
    * If `seedText` is provided, immediately sends it as the first turn.
    */
-  spawnSideConversation: (seedText?: string) => Promise<string | null>
+  spawnSideConversation: (
+    seedText?: string,
+    options?: {
+      source?: SideConversation['source']
+      title?: string
+      openPanel?: boolean
+      allowStandalone?: boolean
+      standalone?: boolean
+    }
+  ) => Promise<string | null>
   /**
    * Attach an existing auxiliary thread to the isolated right-side
    * conversation state without changing the active main thread.

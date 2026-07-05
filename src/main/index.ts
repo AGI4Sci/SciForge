@@ -78,6 +78,7 @@ import { RuntimeContextLedgerService } from './services/runtime-context-ledger-s
 import { GitCheckpointService } from './services/git-checkpoint-service'
 import { SharedMemoryService } from './services/shared-memory-service'
 import { RuntimeGoalService } from './services/runtime-goal-service'
+import { ResearchCardService } from './services/research-card-service'
 import { WorkspaceReferenceService } from './services/workspace-reference-service'
 import { VisibleContextService, visibleContextSnapshotPath } from './services/visible-context-service'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
@@ -1522,6 +1523,7 @@ app.whenReady().then(async () => {
   const gitCheckpointService = new GitCheckpointService(app.getPath('userData'))
   const sharedMemoryService = new SharedMemoryService(app.getPath('userData'))
   const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
+  const researchCardService = new ResearchCardService(app.getPath('userData'))
   const workspaceReferenceService = new WorkspaceReferenceService()
   const visibleContextService = new VisibleContextService(app.getPath('userData'))
   const agentRuntimeHost = createAgentRuntimeHost({
@@ -1775,6 +1777,7 @@ app.whenReady().then(async () => {
     resolveRuntimeConfigPath: resolveLocalRuntimeMcpJsonPath,
     openModelRouterConfigFile,
     getPaperRadarService: () => getPaperRadarWorkerService(),
+    researchCards: researchCardService,
     onRuntimeMcpConfigWritten: async () => {
       const settings = await store.load()
       queueRuntimeMcpConfigApply(settings)

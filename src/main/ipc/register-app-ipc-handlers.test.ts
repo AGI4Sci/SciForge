@@ -75,6 +75,12 @@ vi.mock('../services/pdf-annotation-sidecar-service', () => ({
     manifest: pdfAnnotationSidecarFixture.manifest,
     exportedAt: '2026-06-22T00:02:00.000Z'
   })),
+  exportPdfAnnotationAdobePdf: vi.fn(async () => ({
+    ok: true,
+    path: '/tmp/workspace/paper.annotated.pdf',
+    annotationCount: 3,
+    exportedAt: '2026-06-22T00:02:30.000Z'
+  })),
   importPdfAnnotationSidecarPackage: vi.fn(async () => ({
     ok: true,
     sidecar: pdfAnnotationSidecarFixture,
@@ -271,6 +277,71 @@ describe('registerAppIpcHandlers', () => {
     expect(result).toEqual({ ok: true, data: { papers: [], count: 0 } })
   })
 
+  it('routes Research Cards IPC requests through the service', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const researchCards = {
+      list: vi.fn(async () => []),
+      create: vi.fn(async (input) => ({ id: 'rc-1', ...input })),
+      update: vi.fn(async (input) => ({ id: input.cardId, ...input.patch })),
+      archive: vi.fn(async (input) => ({ id: input.cardId, archived: input.archived !== false }))
+    }
+
+    registerAppIpcHandlers(registerOptions({ researchCards: researchCards as never }))
+
+    await expect(handlers.get('researchCards:list')?.({}, { kind: 'claim', query: '  SPO11  ' }))
+      .resolves.toEqual([])
+    await expect(handlers.get('researchCards:create')?.({}, {
+      kind: 'claim',
+      title: '  SPO11 trigger claim  ',
+      stage: 'draft'
+    })).resolves.toMatchObject({
+      id: 'rc-1',
+      kind: 'claim',
+      title: 'SPO11 trigger claim',
+      stage: 'draft'
+    })
+    await expect(handlers.get('researchCards:update')?.({}, {
+      cardId: 'rc-1',
+      patch: { status: 'needs_evidence' }
+    })).resolves.toMatchObject({
+      id: 'rc-1',
+      status: 'needs_evidence'
+    })
+    await expect(handlers.get('researchCards:archive')?.({}, { cardId: 'rc-1' }))
+      .resolves.toMatchObject({ id: 'rc-1', archived: true })
+
+    expect(researchCards.list).toHaveBeenCalledWith({ kind: 'claim', query: 'SPO11' })
+    expect(researchCards.create).toHaveBeenCalledWith({
+      kind: 'claim',
+      title: 'SPO11 trigger claim',
+      stage: 'draft'
+    })
+    expect(researchCards.update).toHaveBeenCalledWith({
+      cardId: 'rc-1',
+      patch: { status: 'needs_evidence' }
+    })
+    expect(researchCards.archive).toHaveBeenCalledWith({ cardId: 'rc-1' })
+  })
+
+  it('validates Research Cards payloads before resolving the service', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const researchCards = {
+      list: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      archive: vi.fn()
+    }
+
+    registerAppIpcHandlers(registerOptions({ researchCards: researchCards as never }))
+
+    await expect(handlers.get('researchCards:create')?.({}, {
+      kind: 'claim',
+      title: 'Claim',
+      stage: 'not-a-stage'
+    })).rejects.toThrow(/Invalid payload for researchCards:create/)
+    expect(researchCards.create).not.toHaveBeenCalled()
+  })
+
   it('routes PDF annotation sidecar IPC calls through the service', async () => {
     const pdfAnnotations = await import('../services/pdf-annotation-sidecar-service')
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
@@ -301,6 +372,14 @@ describe('registerAppIpcHandlers', () => {
       ok: true,
       path: '/tmp/workspace/paper.dsgui-pdf.zip'
     })
+    await expect(handlers.get('pdfAnnotations:exportPdf')?.({}, {
+      ...target,
+      sidecar: pdfAnnotationSidecarFixture
+    })).resolves.toMatchObject({
+      ok: true,
+      path: '/tmp/workspace/paper.annotated.pdf',
+      annotationCount: 3
+    })
     await expect(handlers.get('pdfAnnotations:import')?.({}, {
       ...target,
       packageBase64: 'ZmFrZS16aXA=',
@@ -327,6 +406,12 @@ describe('registerAppIpcHandlers', () => {
       pageCount: 12,
       sidecar: pdfAnnotationSidecarFixture,
       anonymizeAuthors: true
+    })
+    expect(pdfAnnotations.exportPdfAnnotationAdobePdf).toHaveBeenCalledWith({
+      pdfPath: '/tmp/workspace/paper.pdf',
+      workspaceRoot: '/tmp/workspace',
+      pageCount: 12,
+      sidecar: pdfAnnotationSidecarFixture
     })
     expect(pdfAnnotations.importPdfAnnotationSidecarPackage).toHaveBeenCalledWith({
       pdfPath: '/tmp/workspace/paper.pdf',

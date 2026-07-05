@@ -29,10 +29,20 @@ import {
   TERMINAL_MAX_SESSION_ID_LENGTH
 } from '../../shared/terminal'
 import { WRITE_EXPORT_FORMATS } from '../../shared/write-export'
+import {
+  RESEARCH_CARD_DECISIONS,
+  RESEARCH_CARD_KINDS,
+  RESEARCH_CARD_ORIGINS,
+  RESEARCH_CARD_PRIORITIES,
+  RESEARCH_CARD_REF_KINDS,
+  RESEARCH_CARD_STAGES,
+  RESEARCH_CARD_STATUSES
+} from '../../shared/research-cards'
 export {
   pdfAnnotationSidecarTargetSchema as pdfAnnotationSidecarLoadPayloadSchema,
   pdfAnnotationSidecarSavePayloadSchema,
   pdfAnnotationSidecarExportPayloadSchema,
+  pdfAnnotationPdfExportPayloadSchema,
   pdfAnnotationSidecarImportPayloadSchema
 } from '../../shared/pdf-annotations'
 export {
@@ -99,6 +109,13 @@ const taskStatusSchema = z.enum(['idle', 'running', 'success', 'error'])
 const scheduleReasoningEffortSchema = z.enum(SCHEDULE_REASONING_EFFORT_IDS)
 const speechToTextProtocolSchema = z.enum(SPEECH_TO_TEXT_PROTOCOLS)
 const paperRadarSourceSchema = z.enum(['arxiv', 'biorxiv'])
+const researchCardKindSchema = z.enum(RESEARCH_CARD_KINDS)
+const researchCardStatusSchema = z.enum(RESEARCH_CARD_STATUSES)
+const researchCardStageSchema = z.enum(RESEARCH_CARD_STAGES)
+const researchCardPrioritySchema = z.enum(RESEARCH_CARD_PRIORITIES)
+const researchCardRefKindSchema = z.enum(RESEARCH_CARD_REF_KINDS)
+const researchCardOriginKindSchema = z.enum(RESEARCH_CARD_ORIGINS)
+const researchCardDecisionSchema = z.enum(RESEARCH_CARD_DECISIONS)
 const agentThreadIdsSchema = z.object({
   sciforge: z.string().max(MAX_ID_LENGTH).optional(),
   codex: z.string().max(MAX_ID_LENGTH).optional(),
@@ -347,6 +364,96 @@ export const paperRadarDigestPayloadSchema = paperRadarSearchPayloadSchema.exten
   keywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
   excludeKeywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
   days: z.number().int().positive().max(365).optional()
+}).strict()
+
+const researchCardMetadataSchema = z.record(z.string(), z.unknown())
+
+const researchCardRefSchema = z.object({
+  kind: researchCardRefKindSchema,
+  id: trimmedString(512),
+  label: z.string().trim().max(512).optional(),
+  uri: z.string().trim().max(MAX_URL_LENGTH).optional(),
+  metadata: researchCardMetadataSchema.optional()
+}).strict()
+
+const researchCardOriginSchema = z.object({
+  kind: researchCardOriginKindSchema,
+  id: z.string().trim().max(512).optional(),
+  label: z.string().trim().max(512).optional()
+}).strict()
+
+const researchCardDecisionPayloadSchema = z.object({
+  value: researchCardDecisionSchema,
+  reason: z.string().trim().max(2_000).optional(),
+  decidedBy: z.string().trim().max(256).optional(),
+  decidedAt: z.string().trim().max(64)
+}).strict()
+
+export const researchCardListPayloadSchema = z.object({
+  workspaceRoot: defaultPathSchema,
+  kind: researchCardKindSchema.optional(),
+  status: researchCardStatusSchema.optional(),
+  stage: researchCardStageSchema.optional(),
+  threadId: optionalTrimmedString(MAX_ID_LENGTH),
+  query: z.string().trim().max(1_000).optional(),
+  tags: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
+  includeArchived: z.boolean().optional(),
+  limit: z.number().int().positive().max(500).optional()
+}).strict()
+
+export const researchCardCreatePayloadSchema = z.object({
+  id: optionalTrimmedString(MAX_ID_LENGTH),
+  kind: researchCardKindSchema,
+  title: z.string().trim().min(1).max(300),
+  summary: z.string().trim().max(4_000).optional(),
+  status: researchCardStatusSchema.optional(),
+  stage: researchCardStageSchema.optional(),
+  priority: researchCardPrioritySchema.optional(),
+  workspaceRoot: defaultPathSchema,
+  runtimeId: agentRuntimeIdSchema.optional(),
+  threadId: optionalTrimmedString(MAX_ID_LENGTH),
+  turnId: optionalTrimmedString(MAX_ID_LENGTH),
+  evidenceRefs: z.array(researchCardRefSchema).max(200).optional(),
+  artifactRefs: z.array(researchCardRefSchema).max(200).optional(),
+  sourceRefs: z.array(researchCardRefSchema).max(200).optional(),
+  relatedCardIds: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
+  tags: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
+  decision: researchCardDecisionPayloadSchema.optional(),
+  nextAction: z.string().trim().max(2_000).optional(),
+  createdFrom: researchCardOriginSchema.optional(),
+  metadata: researchCardMetadataSchema.optional()
+}).strict()
+
+const researchCardUpdatePatchSchema = z.object({
+  title: z.string().trim().min(1).max(300).optional(),
+  summary: z.string().trim().max(4_000).nullable().optional(),
+  status: researchCardStatusSchema.optional(),
+  stage: researchCardStageSchema.optional(),
+  priority: researchCardPrioritySchema.optional(),
+  workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional(),
+  runtimeId: agentRuntimeIdSchema.nullable().optional(),
+  threadId: z.string().trim().max(MAX_ID_LENGTH).nullable().optional(),
+  turnId: z.string().trim().max(MAX_ID_LENGTH).nullable().optional(),
+  evidenceRefs: z.array(researchCardRefSchema).max(200).optional(),
+  artifactRefs: z.array(researchCardRefSchema).max(200).optional(),
+  sourceRefs: z.array(researchCardRefSchema).max(200).optional(),
+  relatedCardIds: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
+  tags: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
+  decision: researchCardDecisionPayloadSchema.nullable().optional(),
+  nextAction: z.string().trim().max(2_000).nullable().optional(),
+  createdFrom: researchCardOriginSchema.optional(),
+  metadata: researchCardMetadataSchema.nullable().optional(),
+  archived: z.boolean().optional()
+}).strict()
+
+export const researchCardUpdatePayloadSchema = z.object({
+  cardId: trimmedString(MAX_ID_LENGTH),
+  patch: researchCardUpdatePatchSchema
+}).strict()
+
+export const researchCardArchivePayloadSchema = z.object({
+  cardId: trimmedString(MAX_ID_LENGTH),
+  archived: z.boolean().optional()
 }).strict()
 
 const modelProviderPatchSchema = z.object({

@@ -11,6 +11,7 @@ Invariants (the whole audit story rests on these):
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -160,6 +161,9 @@ def new_id(prefix: str) -> str:
 class Store:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")

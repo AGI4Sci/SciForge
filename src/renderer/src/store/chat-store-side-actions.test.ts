@@ -28,6 +28,8 @@ class FakeProvider implements AgentProvider {
     blocks: [],
     latestSeq: 0
   }
+  createMock = vi.fn()
+  connectMock = vi.fn()
   subscribeError: Error | null = null
   forkMock = vi.fn()
   getDetailMock = vi.fn()
@@ -46,12 +48,23 @@ class FakeProvider implements AgentProvider {
   rememberThreadRuntime(threadId: string, runtimeId?: NormalizedThread['runtimeId']) {
     this.rememberMock(threadId, runtimeId)
   }
-  async connect() {}
+  async connect() {
+    this.connectMock()
+  }
   async listThreads(): Promise<NormalizedThread[]> {
     return []
   }
-  async createThread(): Promise<NormalizedThread> {
-    throw new Error('not used')
+  async createThread(input: Parameters<AgentProvider['createThread']>[0]): Promise<NormalizedThread> {
+    this.createMock(input)
+    return {
+      id: 'standalone-side-thread',
+      title: input.title ?? 'Standalone side',
+      updatedAt: '2026-06-02T00:00:00.000Z',
+      model: 'deepseek-chat',
+      mode: input.mode ?? 'agent',
+      workspace: input.workspace,
+      status: 'idle'
+    }
   }
   async getThreadDetail(threadId: string) {
     this.getDetailMock(threadId)
@@ -288,6 +301,136 @@ describe('chat-store-side-actions', () => {
     expect(provider.forkMock).toHaveBeenCalledWith('thr_main', { relation: 'side', title: 'Paren · side' })
     // A dedicated subscription was started for the side thread.
     expect(provider.subscribeMock).toHaveBeenCalledWith('side_thr_main', 0, expect.anything(), expect.anything())
+  })
+
+  it('spawns PDF annotation side conversations without opening the regular side panel', async () => {
+    const { actions, state, provider } = buildHarness()
+
+    const id = await actions.spawnSideConversation('Answer this selected PDF text.', {
+      source: 'pdf_annotation',
+      title: 'PDF: selected text',
+      openPanel: false
+    })
+
+    expect(id).toBe('side_thr_main')
+    expect(state.activeThreadId).toBe('thr_main')
+    expect(state.sidePanel.open).toBe(false)
+    expect(state.sidePanel.activeSideId).toBeNull()
+    expect(state.sideConversations[id!]).toEqual(
+      expect.objectContaining({
+        source: 'pdf_annotation',
+        title: 'PDF: selected text',
+        parentThreadId: 'thr_main',
+        busy: true
+      })
+    )
+    expect(provider.forkMock).toHaveBeenCalledWith('thr_main', { relation: 'side', title: 'PDF: selected text' })
+    expect(provider.sendMock).toHaveBeenCalledWith('side_thr_main', 'Answer this selected PDF text.', {
+      model: 'deepseek-chat',
+      reasoningEffort: 'max'
+    })
+  })
+
+  it('spawns PDF annotation answers as standalone hidden side threads when fork is unavailable', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = {
+      ...provider.capabilities,
+      fork: false,
+      sideConversations: false
+    }
+
+    const id = await actions.spawnSideConversation('Answer this selected PDF text.', {
+      source: 'pdf_annotation',
+      title: 'PDF: selected text',
+      openPanel: false,
+      allowStandalone: true
+    })
+
+    expect(id).toBe('standalone-side-thread')
+    expect(state.activeThreadId).toBe('thr_main')
+    expect(state.sidePanel.open).toBe(false)
+    expect(state.sideConversations[id!]).toEqual(
+      expect.objectContaining({
+        source: 'pdf_annotation',
+        title: 'PDF: selected text',
+        parentThreadId: 'thr_main',
+        busy: true
+      })
+    )
+    expect(provider.forkMock).not.toHaveBeenCalled()
+    expect(provider.createMock).toHaveBeenCalledWith({
+      title: 'PDF: selected text',
+      mode: 'agent',
+      workspace: '/tmp'
+    })
+    expect(provider.updateRelationMock).toHaveBeenCalledWith('standalone-side-thread', 'side')
+    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer this selected PDF text.', {
+      model: 'deepseek-chat',
+      reasoningEffort: 'max'
+    })
+  })
+
+  it('spawns standalone PDF annotation answers without an active main thread', async () => {
+    const { actions, state, provider } = buildHarness({ activeThreadId: null })
+
+    const id = await actions.spawnSideConversation('Answer without a main thread.', {
+      source: 'pdf_annotation',
+      title: 'PDF: standalone',
+      openPanel: false,
+      allowStandalone: true,
+      standalone: true
+    })
+
+    expect(id).toBe('standalone-side-thread')
+    expect(state.activeThreadId).toBeNull()
+    expect(state.sidePanel.open).toBe(false)
+    expect(state.sideConversations[id!]).toEqual(
+      expect.objectContaining({
+        source: 'pdf_annotation',
+        title: 'PDF: standalone',
+        parentThreadId: 'standalone-side-thread',
+        busy: true
+      })
+    )
+    expect(provider.forkMock).not.toHaveBeenCalled()
+    expect(provider.createMock).toHaveBeenCalledWith({
+      title: 'PDF: standalone',
+      mode: undefined,
+      workspace: '/tmp'
+    })
+    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer without a main thread.', {
+      model: 'deepseek-chat',
+      reasoningEffort: 'max'
+    })
+  })
+
+  it('connects the runtime before spawning standalone PDF annotation answers', async () => {
+    const { actions, state, provider } = buildHarness({
+      activeThreadId: null,
+      runtimeConnection: 'idle'
+    })
+
+    const id = await actions.spawnSideConversation('Answer after connecting.', {
+      source: 'pdf_annotation',
+      title: 'PDF: reconnect',
+      openPanel: false,
+      allowStandalone: true,
+      standalone: true
+    })
+
+    expect(id).toBe('standalone-side-thread')
+    expect(provider.connectMock).toHaveBeenCalledTimes(1)
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toBeNull()
+    expect(provider.createMock).toHaveBeenCalledWith({
+      title: 'PDF: reconnect',
+      mode: undefined,
+      workspace: '/tmp'
+    })
+    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer after connecting.', {
+      model: 'deepseek-chat',
+      reasoningEffort: 'max'
+    })
   })
 
   it('openSideConversationDraft opens the side surface without forking a thread', () => {

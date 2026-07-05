@@ -207,12 +207,34 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('paperRadar:digest', { profile: 'lab_default', days: 7, topK: 5 })
   })
 
+  it('exposes Research Cards IPC methods through the preload bridge', async () => {
+    const api = exposedApi as {
+      researchCards: {
+        list(payload?: unknown): Promise<unknown>
+        create(payload: unknown): Promise<unknown>
+        update(payload: unknown): Promise<unknown>
+        archive(payload: unknown): Promise<unknown>
+      }
+    }
+
+    await api.researchCards.list({ kind: 'claim' })
+    await api.researchCards.create({ kind: 'claim', title: 'SPO11 trigger claim' })
+    await api.researchCards.update({ cardId: 'rc-1', patch: { status: 'needs_evidence' } })
+    await api.researchCards.archive({ cardId: 'rc-1' })
+
+    expect(invoke).toHaveBeenCalledWith('researchCards:list', { kind: 'claim' })
+    expect(invoke).toHaveBeenCalledWith('researchCards:create', { kind: 'claim', title: 'SPO11 trigger claim' })
+    expect(invoke).toHaveBeenCalledWith('researchCards:update', { cardId: 'rc-1', patch: { status: 'needs_evidence' } })
+    expect(invoke).toHaveBeenCalledWith('researchCards:archive', { cardId: 'rc-1' })
+  })
+
   it('exposes PDF annotation sidecar IPC methods through the preload bridge', async () => {
     const api = exposedApi as {
       pdfAnnotations: {
         load(payload: unknown): Promise<unknown>
         save(payload: unknown): Promise<unknown>
         export(payload: unknown): Promise<unknown>
+        exportPdf(payload: unknown): Promise<unknown>
         import(payload: unknown): Promise<unknown>
       }
     }
@@ -239,11 +261,13 @@ describe('preload agentRuntime bridge', () => {
     await api.pdfAnnotations.load(target)
     await api.pdfAnnotations.save({ ...target, sidecar })
     await api.pdfAnnotations.export({ ...target, sidecar, anonymizeAuthors: true })
+    await api.pdfAnnotations.exportPdf({ ...target, sidecar })
     await api.pdfAnnotations.import({ ...target, packageBase64: 'ZmFrZS16aXA=' })
 
     expect(invoke).toHaveBeenCalledWith('pdfAnnotations:load', target)
     expect(invoke).toHaveBeenCalledWith('pdfAnnotations:save', { ...target, sidecar })
     expect(invoke).toHaveBeenCalledWith('pdfAnnotations:export', { ...target, sidecar, anonymizeAuthors: true })
+    expect(invoke).toHaveBeenCalledWith('pdfAnnotations:exportPdf', { ...target, sidecar })
     expect(invoke).toHaveBeenCalledWith('pdfAnnotations:import', { ...target, packageBase64: 'ZmFrZS16aXA=' })
   })
 

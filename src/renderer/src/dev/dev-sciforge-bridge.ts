@@ -367,6 +367,7 @@ function createApi(): SciForgeApi {
       load: (payload) => invoke('pdfAnnotations:load', payload),
       save: (payload) => invoke('pdfAnnotations:save', payload),
       export: (payload) => invoke('pdfAnnotations:export', payload),
+      exportPdf: (payload) => invoke('pdfAnnotations:exportPdf', payload),
       import: (payload) => invoke('pdfAnnotations:import', payload)
     },
     visibleContext: {
@@ -386,6 +387,12 @@ function createApi(): SciForgeApi {
       search: (payload) => invoke('paperRadar:search', payload),
       rank: (payload) => invoke('paperRadar:rank', payload),
       digest: (payload) => invoke('paperRadar:digest', payload)
+    },
+    researchCards: {
+      list: (input) => invoke('researchCards:list', input ?? {}),
+      create: (input) => invoke('researchCards:create', input),
+      update: (input) => invoke('researchCards:update', input),
+      archive: (input) => invoke('researchCards:archive', input)
     },
     onRuntimeStatus: (handler) => onChannel('runtime:status', handler),
     agentRuntime: {

@@ -144,6 +144,7 @@
     "lucide-react": "^0.544.0",
     "node-pty": "^1.1.0",
     "openclaw": "file:vendor/openclaw-shim",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "5.4.394",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import {
   getModelRouterSettings,
   resolveRuntimeModelRouterSettings,
@@ -151,6 +152,7 @@ export async function ensureProjectDagSidecar(
     throw new Error(result.reason)
   }
   const launch = result.launch
+  ensureProjectDagDirectories(launch)
   applyProjectDagRuntimeEnv(launch)
 
   const signature = projectDagLaunchSignatureValue(launch)
@@ -176,12 +178,11 @@ export async function ensureProjectDagSidecar(
     detached: false
   })
   projectDagLaunchSignature = signature
-  projectDagReadyPromise = waitForProjectDagHealth(
-    launch.baseUrl,
-    launch.runtimeToken,
-    DEFAULT_READY_TIMEOUT_MS
-  )
   const child = projectDagChild
+  projectDagReadyPromise = Promise.race([
+    waitForProjectDagHealth(launch.baseUrl, launch.runtimeToken, DEFAULT_READY_TIMEOUT_MS),
+    waitForProjectDagChildExit(child)
+  ])
   attachProjectDagChildLogging(child, options.log)
   child.once('error', (error) => {
     options.log?.(`Project DAG sidecar failed to start: ${error.message}`)
@@ -273,6 +274,26 @@ async function waitForProjectDagHealth(
 function applyProjectDagRuntimeEnv(launch: ProjectDagLaunch): void {
   process.env[PROJECT_DAG_SERVICE_URL_ENV] = launch.baseUrl
   process.env[PROJECT_DAG_API_KEY_ENV] = launch.runtimeToken
+}
+
+function ensureProjectDagDirectories(launch: ProjectDagLaunch): void {
+  mkdirSync(launch.sessionDir, { recursive: true })
+  mkdirSync(dirname(launch.dbPath), { recursive: true })
+}
+
+function waitForProjectDagChildExit(child: ChildProcess): Promise<never> {
+  return new Promise((_, reject) => {
+    child.once('error', (error) => {
+      reject(new Error(`Project DAG sidecar failed to start: ${error.message}`))
+    })
+    child.once('exit', (code, signal) => {
+      reject(
+        new Error(
+          `Project DAG sidecar exited before becoming ready (code=${code ?? 'null'}, signal=${signal ?? 'null'}).`
+        )
+      )
+    })
+  })
 }
 
 function localPortFromBaseUrl(baseUrl: string): number | null {

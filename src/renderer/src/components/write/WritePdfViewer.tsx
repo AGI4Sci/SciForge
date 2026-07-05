@@ -18,7 +18,6 @@ import {
   FileText,
   HelpCircle,
   Highlighter,
-  Languages,
   Loader2,
   MessageSquare,
   Minus,
@@ -2032,7 +2031,7 @@ export function WritePdfViewer({
   const quoteButtonStyle = useMemo<CSSProperties | undefined>(() => {
     const rect = committedSelection?.anchorRect
     if (!rect) return undefined
-    const width = onAnnotationAction ? (onQuoteSelection ? 236 : 198) : 122
+    const width = onAnnotationAction ? (onQuoteSelection ? 198 : 160) : 122
     const left = clamp(rect.left + rect.width / 2 - width / 2, 12, window.innerWidth - width - 12)
     const top = clamp(rect.bottom + 8, 12, window.innerHeight - 44)
     return { left, top, width }
@@ -2085,7 +2084,7 @@ export function WritePdfViewer({
       emitSelection(nextSelection)
     }
     const width = onAnnotationAction || onQuoteSelection ? 190 : 174
-    const height = onAnnotationAction || onQuoteSelection ? 232 : 48
+    const height = onAnnotationAction || onQuoteSelection ? 200 : 48
     setContextMenu({
       left: clamp(event.clientX, 8, window.innerWidth - width - 8),
       top: clamp(event.clientY, 8, window.innerHeight - height - 8),
@@ -2358,14 +2357,6 @@ export function WritePdfViewer({
               <button
                 type="button"
                 className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-ds-hover"
-                onClick={() => performSelectionAction('translation', contextSelection)}
-              >
-                <Languages className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="truncate">{label('writePdfAnnotateTranslate', 'Translate')}</span>
-              </button>
-              <button
-                type="button"
-                className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-ds-hover"
                 onClick={() => performSelectionAction('question', contextSelection)}
               >
                 <HelpCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
@@ -2423,15 +2414,6 @@ export function WritePdfViewer({
                 onClick={() => performSelectionAction('comment')}
               >
                 <MessageSquare className="h-3.5 w-3.5" strokeWidth={2} />
-              </button>
-              <button
-                type="button"
-                className="write-pdf-icon-button"
-                title={label('writePdfAnnotateTranslate', 'Translate')}
-                aria-label={label('writePdfAnnotateTranslate', 'Translate')}
-                onClick={() => performSelectionAction('translation')}
-              >
-                <Languages className="h-3.5 w-3.5" strokeWidth={2} />
               </button>
               <button
                 type="button"

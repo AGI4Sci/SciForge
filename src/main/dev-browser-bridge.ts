@@ -58,6 +58,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'write:inline-completion',
   'write:retrieve-context',
   'pdfAnnotations:load',
+  'pdfAnnotations:exportPdf',
   'computer-use:permissions',
   'computer-use:status',
   'paperRadar:status',

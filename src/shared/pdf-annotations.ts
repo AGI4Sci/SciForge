@@ -174,6 +174,19 @@ export type PdfAnnotationSidecarExportResult =
     }
   | { ok: false; message: string }
 
+export type PdfAnnotationPdfExportPayload = PdfAnnotationSidecarTarget & {
+  sidecar?: PdfAnnotationSidecar
+}
+
+export type PdfAnnotationPdfExportResult =
+  | {
+      ok: true
+      path: string
+      annotationCount: number
+      exportedAt: string
+    }
+  | { ok: false; message: string }
+
 export type PdfAnnotationSidecarImportPayload = PdfAnnotationSidecarTarget & {
   packagePath?: string
   packageBase64?: string
@@ -335,6 +348,12 @@ export const pdfAnnotationSidecarExportPayloadSchema = pdfAnnotationSidecarTarge
   .extend({
     sidecar: pdfAnnotationSidecarSchema.optional(),
     anonymizeAuthors: z.boolean().optional()
+  })
+  .strict()
+
+export const pdfAnnotationPdfExportPayloadSchema = pdfAnnotationSidecarTargetSchema
+  .extend({
+    sidecar: pdfAnnotationSidecarSchema.optional()
   })
   .strict()
 

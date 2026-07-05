@@ -3,9 +3,11 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import JSZip from 'jszip'
+import { PDFDocument } from 'pdf-lib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createEmptyPdfAnnotationSidecar, createPdfAnchor } from '../../shared/pdf-annotations'
 import {
+  exportPdfAnnotationAdobePdf,
   exportPdfAnnotationSidecarPackage,
   importPdfAnnotationSidecarPackage,
   loadPdfAnnotationSidecar,
@@ -18,6 +20,12 @@ async function createTempWorkspace(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-pdf-annotations-'))
   tempDirs.push(dir)
   return dir
+}
+
+async function writeBlankPdf(path: string): Promise<void> {
+  const pdf = await PDFDocument.create()
+  pdf.addPage([600, 800])
+  await writeFile(path, Buffer.from(await pdf.save({ useObjectStreams: false })))
 }
 
 afterEach(async () => {
@@ -239,6 +247,99 @@ describe('pdf annotation sidecar service', () => {
     expect(imported.ok).toBe(true)
     if (!imported.ok) return
     expect(imported.fingerprintMatched).toBe(true)
+  })
+
+  it('exports sidecar threads as Adobe-editable PDF annotations', async () => {
+    const workspaceRoot = await createTempWorkspace()
+    const pdfPath = join(workspaceRoot, 'paper.pdf')
+    await writeBlankPdf(pdfPath)
+    const loaded = await loadPdfAnnotationSidecar({ pdfPath, workspaceRoot, pageCount: 1 })
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+
+    const now = '2026-07-05T00:00:00.000Z'
+    const highlightAnchor = createPdfAnchor({
+      id: 'anchor-highlight',
+      rects: [{ page: 1, x: 0.18, y: 0.2, width: 0.26, height: 0.04 }],
+      quote: 'highlighted crystal motif',
+      pdfFingerprint: loaded.pdfFingerprint,
+      createdAt: now,
+      updatedAt: now
+    })
+    const commentAnchor = createPdfAnchor({
+      id: 'anchor-comment',
+      rects: [{ page: 1, x: 0.5, y: 0.34, width: 0.18, height: 0.05 }],
+      quote: 'coordination environment',
+      pdfFingerprint: loaded.pdfFingerprint,
+      createdAt: now,
+      updatedAt: now
+    })
+
+    const exported = await exportPdfAnnotationAdobePdf({
+      pdfPath,
+      workspaceRoot,
+      sidecar: {
+        ...loaded.sidecar,
+        anchors: [highlightAnchor, commentAnchor],
+        annotations: [
+          {
+            id: 'annotation-highlight',
+            threadId: 'thread-highlight',
+            anchorId: 'anchor-highlight',
+            kind: 'highlight',
+            body: 'Important evidence.',
+            color: '#ffcc33',
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: 'annotation-comment',
+            threadId: 'thread-comment',
+            anchorId: 'anchor-comment',
+            kind: 'comment',
+            body: 'Check the coordination environment.',
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        threads: [
+          {
+            id: 'thread-highlight',
+            kind: 'highlight',
+            anchorIds: ['anchor-highlight'],
+            annotationIds: ['annotation-highlight'],
+            status: 'open',
+            title: 'Evidence highlight',
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: 'thread-comment',
+            kind: 'comment',
+            anchorIds: ['anchor-comment'],
+            annotationIds: ['annotation-comment'],
+            status: 'open',
+            title: 'Coordination note',
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        updatedAt: now,
+        manifest: {
+          ...loaded.sidecar.manifest,
+          updatedAt: now
+        }
+      }
+    })
+
+    expect(exported.ok).toBe(true)
+    if (!exported.ok) return
+    expect(exported.path.endsWith('paper.annotated.pdf')).toBe(true)
+    expect(exported.annotationCount).toBe(2)
+    const content = await readFile(exported.path, 'latin1')
+    expect(content).toContain('/Subtype /Highlight')
+    expect(content).toContain('/Subtype /Text')
+    expect(content).toContain('/QuadPoints')
   })
 
   it('requires relocation opt-in when package fingerprint does not match', async () => {

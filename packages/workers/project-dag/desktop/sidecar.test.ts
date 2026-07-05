@@ -1,6 +1,9 @@
 import { type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultModelRouterSettings,
@@ -123,6 +126,66 @@ describe('Project DAG sidecar launch', () => {
       expect(requests.map((request) => request.path)).toEqual(['/version', '/version'])
       expect(requests.every((request) => request.authorization === 'Bearer project-token')).toBe(true)
     })
+  })
+
+  it('creates session and database directories before spawning the sidecar', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-project-dag-sidecar-'))
+    const spawnMock = vi.fn(() => createMockChild())
+    const sessionDir = join(root, 'missing', 'sessions')
+    const dbPath = join(root, 'missing', 'project-dag', 'project.db')
+
+    try {
+      await withProjectDagServer((_, response, requestCount) => {
+        if (requestCount === 1) {
+          response.writeHead(503)
+          response.end()
+          return
+        }
+        sendJson(response, 200, {
+          ok: true,
+          data: { service: 'project-dag-engine', version: '0.1.0' }
+        })
+      }, async (baseUrl) => {
+        await ensureProjectDagSidecar(settings(), {
+          userDataDir: root,
+          appRoot: '/app/root',
+          env: {
+            ...projectDagEnv(baseUrl),
+            PDAG_SESSION_DIR: sessionDir,
+            PDAG_DB_PATH: dbPath
+          } as NodeJS.ProcessEnv,
+          spawnImpl: spawnMock as unknown as ProjectDagSpawn
+        })
+
+        expect(spawnMock).toHaveBeenCalledOnce()
+        expect(existsSync(sessionDir)).toBe(true)
+        expect(existsSync(join(root, 'missing', 'project-dag'))).toBe(true)
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails promptly when the spawned sidecar exits before becoming healthy', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-project-dag-sidecar-exit-'))
+    const spawnMock = vi.fn(() => {
+      const child = createMockChild()
+      setImmediate(() => child.emit('exit', 1, null))
+      return child
+    })
+
+    try {
+      await expect(
+        ensureProjectDagSidecar(settings(), {
+          userDataDir: root,
+          appRoot: '/app/root',
+          env: projectDagEnv('http://127.0.0.1:9'),
+          spawnImpl: spawnMock as unknown as ProjectDagSpawn
+        })
+      ).rejects.toThrow('Project DAG sidecar exited before becoming ready')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

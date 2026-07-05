@@ -95,17 +95,47 @@ describe('WritePdfAnnotationsPanel', () => {
       sidecar: panelSidecar(),
       selectedThreadId: 'thread-b',
       initialKind: 'question',
+      questionReplies: {
+        'thread-b': {
+          text: 'Yes, temperature can matter by changing local disorder.',
+          turns: [
+            {
+              id: 'side-thread:user-1',
+              role: 'user',
+              text: 'Why does this measurement change?'
+            },
+            {
+              id: 'side-thread:assistant-1',
+              role: 'assistant',
+              text: 'It changes because the anisotropic axis rotates relative to the measurement direction.'
+            },
+            {
+              id: 'side-thread:user-2',
+              role: 'user',
+              text: 'Does temperature matter too?'
+            },
+            {
+              id: 'side-thread:assistant-2',
+              role: 'assistant',
+              text: 'Yes, temperature can matter by changing local disorder.'
+            }
+          ]
+        }
+      },
       onSelectThread: vi.fn(),
       onReopenThread: vi.fn(),
       onDeleteThread: vi.fn(),
       onEditAnnotation: vi.fn(),
+      onAskQuestion: vi.fn(),
       onExportPackage: vi.fn(),
+      onExportPdf: vi.fn(),
       onImportPackage: vi.fn(),
       onReloadSidecar: vi.fn()
     }))
 
     expect(html).toContain('PDF annotations')
     expect(html).toContain('Export package')
+    expect(html).toContain('Export PDF')
     expect(html).toContain('Import package')
     expect(html).toContain('Reload annotations')
     expect(html).toContain('Text highlights')
@@ -113,7 +143,13 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Current')
     expect(html).toContain('All')
     expect(html).toContain('Why does this measurement change?')
+    expect(html).toContain('Translate selection')
+    expect(html).toContain('Follow up')
+    expect(html).toContain('Does temperature matter too?')
+    expect(html).toContain('Agent answer')
+    expect(html).toContain('anisotropic axis rotates')
     expect(html).not.toContain('A comment on the claim.')
+    expect(html).not.toContain('Translation</option>')
     expect(html).toContain('aria-label="Select annotation thread"')
     expect(html).toContain('aria-label="Reopen thread"')
     expect(html).toContain('aria-label="Edit annotation"')

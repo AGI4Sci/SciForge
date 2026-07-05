@@ -7,10 +7,12 @@ import type {
 import type { VisibleContextResource } from '@shared/visible-context'
 import {
   createPdfAnchor,
+  type PdfAnnotation,
   type PdfAnnotationKind,
   type PdfAnnotationSidecar,
   type PdfAnnotationThread
 } from '@shared/pdf-annotations'
+import type { ChatBlock } from '../agent/types'
 import {
   Check,
   ChevronRight,
@@ -37,6 +39,7 @@ import {
   type WheelEvent as ReactWheelEvent
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { formatFilePathForDisplay } from '../lib/diff-stats'
 import {
   resolveContentZoomWheel,
@@ -51,18 +54,24 @@ import {
   renderFallbackCodeHtml
 } from '../lib/code-highlighting'
 import {
+  addPdfAnnotationToThread,
   createPdfAnnotationThread,
   deletePdfAnnotationThread,
   mergePdfAnnotationContribution,
   reopenPdfAnnotationThread,
   resolvePdfAnnotationThread,
   updatePdfAnnotation,
+  updatePdfAnnotationThread,
   type PdfAnnotationThreadSummary
 } from '../write/pdf-annotations'
+import { useChatStore } from '../store/chat-store'
+import type { SideConversation } from '../store/chat-store-types'
 import { WriteMarkdownPreview } from './write/WriteMarkdownPreview'
 import {
   WritePdfAnnotationsPanel,
-  type WritePdfAnnotationDisplayMode
+  type WritePdfAnnotationDisplayMode,
+  type WritePdfQuestionAssistantReply,
+  type WritePdfQuestionTurn
 } from './write/WritePdfAnnotationsPanel'
 import {
   WritePdfViewer,
@@ -202,16 +211,170 @@ function makeLocalId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function compactInlineText(value = ''): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function clipInlineText(value = '', maxChars = 96): string {
+  const compact = compactInlineText(value)
+  if (compact.length <= maxChars) return compact
+  return `${compact.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`
+}
+
 function annotationKindForAction(action: WritePdfAnnotationAction): PdfAnnotationKind | null {
   if (action === 'copy') return null
   if (action === 'comment') return 'comment'
-  if (action === 'translation') return 'translation'
+  if (action === 'translation') return 'question'
   if (action === 'question') return 'question'
   return 'highlight'
 }
 
 function overlayKindForThread(thread: PdfAnnotationThread): WritePdfAnnotationOverlay['kind'] {
   return thread.kind
+}
+
+function assistantTextAfterLatestUser(blocks: readonly ChatBlock[], liveAssistant = ''): string {
+  let lastUserIndex = -1
+  blocks.forEach((block, index) => {
+    if (block.kind === 'user') lastUserIndex = index
+  })
+  const assistantBlocks = blocks
+    .slice(lastUserIndex + 1)
+    .filter((block): block is Extract<ChatBlock, { kind: 'assistant' }> => block.kind === 'assistant')
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+  const live = liveAssistant.trim()
+  return [...assistantBlocks, ...(live ? [live] : [])].join('\n\n').trim()
+}
+
+type PdfQuestionSideBlockTurn = {
+  blockId: string
+  sourceMessageId: string
+  kind: 'question' | 'answer'
+  role: 'user' | 'assistant'
+  text: string
+  createdAt?: string
+}
+
+function pdfQuestionBlockSourceMessageId(sideThreadId: string, blockId: string): string {
+  return `${sideThreadId}:${blockId}`
+}
+
+function pdfQuestionBlockTurns(side: SideConversation): PdfQuestionSideBlockTurn[] {
+  return side.blocks
+    .filter((block): block is Extract<ChatBlock, { kind: 'user' | 'assistant' }> =>
+      (block.kind === 'user' || block.kind === 'assistant') && Boolean(block.text.trim())
+    )
+    .map((block) => ({
+      blockId: block.id,
+      sourceMessageId: pdfQuestionBlockSourceMessageId(side.threadId, block.id),
+      kind: block.kind === 'user' ? 'question' : 'answer',
+      role: block.kind === 'user' ? 'user' : 'assistant',
+      text: block.text.trim(),
+      ...(block.createdAt ? { createdAt: block.createdAt } : {})
+    }))
+}
+
+function pdfQuestionTurnsFromSide(side: SideConversation): WritePdfQuestionTurn[] {
+  const turns: WritePdfQuestionTurn[] = pdfQuestionBlockTurns(side).map((turn) => ({
+    id: turn.sourceMessageId,
+    role: turn.role,
+    text: turn.text
+  }))
+  const liveAssistant = side.liveAssistant.trim()
+  if (liveAssistant) {
+    turns.push({
+      id: `${side.threadId}:live-assistant`,
+      role: 'assistant',
+      text: liveAssistant,
+      busy: side.busy
+    })
+  }
+  return turns
+}
+
+function pdfQuestionPreviousDiscussion(summary: PdfAnnotationThreadSummary): string {
+  return summary.annotations
+    .filter((annotation) => annotation.kind === 'question' || annotation.kind === 'answer' || annotation.kind === 'translation')
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .map((annotation) => {
+      const text = annotation.body.trim()
+      if (!text) return ''
+      const speaker = annotation.kind === 'question' ? 'User' : 'Agent'
+      return `${speaker}: ${text}`
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function findPdfQuestionPersistedAnnotation(
+  annotations: readonly PdfAnnotation[],
+  threadId: string,
+  sideThreadId: string,
+  turn: PdfQuestionSideBlockTurn
+): PdfAnnotation | undefined {
+  return annotations.find((annotation) =>
+    annotation.threadId === threadId &&
+    annotation.kind === turn.kind &&
+    annotation.sourceMessageId === turn.sourceMessageId
+  ) ?? annotations.find((annotation) =>
+    annotation.threadId === threadId &&
+    annotation.kind === turn.kind &&
+    annotation.sourceMessageId === sideThreadId
+  )
+}
+
+function pdfQuestionTurnNeedsPersistence(
+  sidecar: PdfAnnotationSidecar,
+  thread: PdfAnnotationThread,
+  side: SideConversation,
+  turn: PdfQuestionSideBlockTurn
+): boolean {
+  const existing = findPdfQuestionPersistedAnnotation(sidecar.annotations, thread.id, side.threadId, turn)
+  return !existing ||
+    existing.kind !== turn.kind ||
+    existing.body !== turn.text ||
+    existing.sourceMessageId !== turn.sourceMessageId
+}
+
+function pageRangeText(summary: PdfAnnotationThreadSummary): string {
+  if (summary.pageStart == null || summary.pageEnd == null) return ''
+  return summary.pageStart === summary.pageEnd
+    ? `page ${summary.pageStart}`
+    : `pages ${summary.pageStart}-${summary.pageEnd}`
+}
+
+function buildPdfAnnotationQuestionPrompt(input: {
+  question: string
+  summary: PdfAnnotationThreadSummary
+  pdfPath: string
+  workspaceRoot: string
+  intent?: 'question' | 'translate'
+  previousDiscussion?: string
+}): string {
+  const pageRange = pageRangeText(input.summary)
+  const quote = input.summary.anchors
+    .map((anchor) => anchor.quote.trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+  const context = [
+    'You are answering a lightweight by-the-way PDF question inside SciForge\'s right sidebar.',
+    'Answer directly in the right-sidebar style: concise, helpful, and grounded in the selected PDF text.',
+    'Do not edit files, create tasks, or ask the user to switch threads.',
+    input.intent === 'translate'
+      ? 'The user chose the translation shortcut. Translate the selected text into the user\'s language, then briefly explain important domain terms.'
+      : 'If the question cannot be answered from the selection alone, say what extra page or context is needed.',
+    '',
+    `PDF path: ${input.pdfPath}`,
+    input.workspaceRoot ? `Workspace: ${input.workspaceRoot}` : '',
+    pageRange ? `Anchor: ${pageRange}` : '',
+    quote ? `Selected PDF text:\n"""\n${quote}\n"""` : 'Selected PDF region: visual/image anchor without extractable text.',
+    input.previousDiscussion ? `Previous discussion for this PDF selection:\n${input.previousDiscussion}` : '',
+    '',
+    `User question:\n${input.question.trim()}`
+  ].filter(Boolean)
+  return context.join('\n')
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -270,7 +433,7 @@ export function WorkspaceFilePreviewPanel({
   const [pdfSidecar, setPdfSidecar] = useState<PdfAnnotationSidecar | null>(null)
   const [pdfSidecarPath, setPdfSidecarPath] = useState<string | null>(null)
   const [pdfAnnotationsOpen, setPdfAnnotationsOpen] = useState(false)
-  const [pdfAnnotationPackageAction, setPdfAnnotationPackageAction] = useState<'export' | 'import' | 'reload' | null>(null)
+  const [pdfAnnotationPackageAction, setPdfAnnotationPackageAction] = useState<'export' | 'export-pdf' | 'import' | 'reload' | null>(null)
   const [selectedPdfThreadId, setSelectedPdfThreadId] = useState<string | null>(null)
   const [hoveredPdfThreadId, setHoveredPdfThreadId] = useState<string | null>(null)
   const [pdfAnnotationDisplayMode, setPdfAnnotationDisplayMode] = useState<WritePdfAnnotationDisplayMode>('current')
@@ -281,6 +444,13 @@ export function WorkspaceFilePreviewPanel({
   const pdfSidecarSaveTimerRef = useRef<number | null>(null)
   const pdfSidecarLoadKeyRef = useRef('')
   const pdfAnnotationImportInputRef = useRef<HTMLInputElement | null>(null)
+  const pdfQuestionData = useChatStore(
+    useShallow((s) => ({
+      sideConversations: s.sideConversations,
+      spawnSideConversation: s.spawnSideConversation,
+      sendSideMessage: s.sendSideMessage
+    }))
+  )
 
   useEffect(() => {
     if (!target) {
@@ -325,9 +495,11 @@ export function WorkspaceFilePreviewPanel({
     }
   }, [previewReloadKey, target, workspaceRoot])
 
+  const previewIdentityPath = result?.ok ? result.path : target?.path
+
   useEffect(() => {
     setPreviewScale(DEFAULT_PREVIEW_SCALE)
-  }, [result?.ok ? result.path : target?.path])
+  }, [previewIdentityPath])
 
   useEffect(() => {
     if (!result?.ok || result.kind !== 'text' || !result.line) return
@@ -555,6 +727,164 @@ export function WorkspaceFilePreviewPanel({
     }
   }, [pdfSidecar, savePdfSidecarSoon, showPdfNotice])
 
+  const pdfQuestionReplies = useMemo<Record<string, WritePdfQuestionAssistantReply>>(() => {
+    if (!pdfSidecar) return {}
+    const replies: Record<string, WritePdfQuestionAssistantReply> = {}
+    for (const thread of pdfSidecar.threads) {
+      if (thread.kind !== 'question' || !thread.sourceMessageId) continue
+      const side = pdfQuestionData.sideConversations[thread.sourceMessageId]
+      if (!side || side.source !== 'pdf_annotation') continue
+      replies[thread.id] = {
+        text: assistantTextAfterLatestUser(side.blocks, side.liveAssistant),
+        busy: side.busy,
+        error: side.error,
+        sideThreadId: side.threadId,
+        turns: pdfQuestionTurnsFromSide(side)
+      }
+    }
+    return replies
+  }, [pdfQuestionData.sideConversations, pdfSidecar])
+
+  const askPdfAnnotationQuestion = useCallback(async (
+    threadId: string,
+    question: string,
+    summary: PdfAnnotationThreadSummary,
+    options?: { intent?: 'question' | 'translate' }
+  ): Promise<void> => {
+    const trimmed = question.trim()
+    if (!trimmed || !pdfPath) return
+
+    const existingSideThreadId = summary.thread.sourceMessageId
+    const existingSide = existingSideThreadId ? pdfQuestionData.sideConversations[existingSideThreadId] : undefined
+    const prompt = buildPdfAnnotationQuestionPrompt({
+      question: trimmed,
+      summary,
+      pdfPath,
+      workspaceRoot: pdfWorkspaceRoot,
+      intent: options?.intent,
+      previousDiscussion: existingSide || !summary.thread.sourceMessageId ? '' : pdfQuestionPreviousDiscussion(summary)
+    })
+    const title = `PDF: ${clipInlineText(trimmed, 48)}`
+    let sideThreadId = existingSide?.threadId ?? null
+    if (existingSide) {
+      const sent = await pdfQuestionData.sendSideMessage(existingSide.threadId, prompt)
+      if (!sent) {
+        showPdfNotice({ tone: 'error', message: t('writePdfAnnotationQuestionFailed') })
+        return
+      }
+    } else {
+      sideThreadId = await pdfQuestionData.spawnSideConversation(prompt, {
+        source: 'pdf_annotation',
+        title,
+        openPanel: false,
+        allowStandalone: true,
+        standalone: true
+      })
+    }
+    if (!sideThreadId) {
+      showPdfNotice({ tone: 'error', message: t('writePdfAnnotationQuestionFailed') })
+      return
+    }
+
+    const now = new Date().toISOString()
+    updatePdfSidecar((current) => {
+      let next = current
+      if (!summary.thread.sourceMessageId) {
+        const questionAnnotation =
+          current.annotations.find((annotation) => annotation.threadId === threadId && annotation.kind === 'question') ??
+          current.annotations.find((annotation) => annotation.id === summary.firstAnnotation?.id)
+        if (questionAnnotation) {
+          next = updatePdfAnnotation(next, questionAnnotation.id, {
+            kind: 'question',
+            body: trimmed,
+            sourceText: summary.quote || questionAnnotation.sourceText,
+            sourceMessageId: sideThreadId,
+            updatedAt: now
+          })
+        } else {
+          next = addPdfAnnotationToThread(next, threadId, {
+            id: makeLocalId('pdf-question'),
+            kind: 'question',
+            body: trimmed,
+            sourceText: summary.quote,
+            sourceMessageId: sideThreadId,
+            createdAt: now
+          })
+        }
+      }
+      return updatePdfAnnotationThread(next, threadId, {
+        kind: 'question',
+        sourceMessageId: sideThreadId,
+        status: 'open',
+        title: clipInlineText(trimmed || summary.quote, 96),
+        updatedAt: now
+      })
+    })
+  }, [
+    pdfPath,
+    pdfQuestionData,
+    pdfWorkspaceRoot,
+    showPdfNotice,
+    t,
+    updatePdfSidecar
+  ])
+
+  useEffect(() => {
+    if (!pdfSidecar) return
+    const sideConversations = pdfQuestionData.sideConversations
+    let shouldPersist = false
+    for (const thread of pdfSidecar.threads) {
+      if (thread.kind !== 'question' || !thread.sourceMessageId) continue
+      const side = sideConversations[thread.sourceMessageId]
+      if (!side || side.source !== 'pdf_annotation') continue
+      const turns = pdfQuestionBlockTurns(side)
+      if (turns.some((turn) => pdfQuestionTurnNeedsPersistence(pdfSidecar, thread, side, turn))) {
+        shouldPersist = true
+        break
+      }
+    }
+    if (!shouldPersist) return
+
+    updatePdfSidecar((current) => {
+      let next = current
+      const now = new Date().toISOString()
+      for (const thread of current.threads) {
+        if (thread.kind !== 'question' || !thread.sourceMessageId) continue
+        const side = sideConversations[thread.sourceMessageId]
+        if (!side || side.source !== 'pdf_annotation') continue
+        const sourceText = next.anchors.find((anchor) => thread.anchorIds.includes(anchor.id))?.quote
+        for (const turn of pdfQuestionBlockTurns(side)) {
+          const existing = findPdfQuestionPersistedAnnotation(next.annotations, thread.id, side.threadId, turn)
+          if (existing) {
+            if (
+              existing.kind !== turn.kind ||
+              existing.body !== turn.text ||
+              existing.sourceMessageId !== turn.sourceMessageId
+            ) {
+              next = updatePdfAnnotation(next, existing.id, {
+                kind: turn.kind,
+                body: turn.text,
+                ...(sourceText ? { sourceText } : {}),
+                sourceMessageId: turn.sourceMessageId,
+                updatedAt: now
+              })
+            }
+            continue
+          }
+          next = addPdfAnnotationToThread(next, thread.id, {
+            id: makeLocalId(turn.kind === 'question' ? 'pdf-question' : 'pdf-answer'),
+            kind: turn.kind,
+            body: turn.text,
+            ...(sourceText ? { sourceText } : {}),
+            sourceMessageId: turn.sourceMessageId,
+            createdAt: turn.createdAt ?? now
+          })
+        }
+      }
+      return next
+    })
+  }, [pdfQuestionData.sideConversations, pdfSidecar, updatePdfSidecar])
+
   const pdfAnnotationOverlays = useMemo<WritePdfAnnotationOverlay[]>(() => {
     if (!pdfSidecar) return []
     return pdfSidecar.threads.map((thread) => {
@@ -759,11 +1089,7 @@ export function WorkspaceFilePreviewPanel({
       pdfFingerprint: pdfSidecar.pdfFingerprint,
       createdAt: now
     })
-    const body = kind === 'translation'
-      ? t('writePdfAnnotationTranslationPending')
-      : kind === 'question'
-        ? t('writePdfAnnotationQuestionPending')
-        : ''
+    const body = action === 'translation' ? t('writePdfAnnotationTranslatePrompt') : ''
     const threadId = makeLocalId('pdf-thread')
     updatePdfSidecar((current) => createPdfAnnotationThread({
       ...current,
@@ -772,13 +1098,13 @@ export function WorkspaceFilePreviewPanel({
       id: threadId,
       kind,
       anchorIds: [anchor.id],
+      ...(kind === 'question' ? { title: clipInlineText(sourceText, 96) } : {}),
       annotations: [{
         id: makeLocalId('pdf-ann'),
         anchorId: anchor.id,
         kind,
         body,
-        sourceText,
-        ...(kind === 'translation' ? { targetLanguage: t('writePdfAnnotationDefaultTargetLanguage') } : {})
+        sourceText
       }],
       createdAt: now
     }))
@@ -828,7 +1154,7 @@ export function WorkspaceFilePreviewPanel({
   }, [updatePdfSidecar])
 
   const exportPdfAnnotationPackage = useCallback(async (): Promise<void> => {
-    if (!pdfPath || !pdfSidecar) return
+    if (!pdfPath || !pdfSidecar || pdfAnnotationPackageAction) return
     if (typeof window.sciforge?.pdfAnnotations?.export !== 'function') {
       showPdfNotice({ tone: 'error', message: t('writePdfAnnotationExportUnavailable') })
       return
@@ -862,7 +1188,47 @@ export function WorkspaceFilePreviewPanel({
     } finally {
       setPdfAnnotationPackageAction(null)
     }
-  }, [pdfPath, pdfSidecar, pdfWorkspaceRoot, showPdfNotice, t])
+  }, [pdfAnnotationPackageAction, pdfPath, pdfSidecar, pdfWorkspaceRoot, showPdfNotice, t])
+
+  const exportPdfAnnotationPdf = useCallback(async (): Promise<void> => {
+    if (!pdfPath || !pdfSidecar || pdfAnnotationPackageAction) return
+    if (typeof window.sciforge?.pdfAnnotations?.exportPdf !== 'function') {
+      showPdfNotice({ tone: 'error', message: t('writePdfAnnotationExportPdfUnavailable') })
+      return
+    }
+
+    setPdfAnnotationPackageAction('export-pdf')
+    try {
+      const exportResult = await window.sciforge.pdfAnnotations.exportPdf({
+        pdfPath,
+        workspaceRoot: pdfWorkspaceRoot,
+        sidecar: pdfSidecar
+      })
+      if (!exportResult.ok) {
+        showPdfNotice({
+          tone: 'error',
+          message: t('writePdfAnnotationExportPdfFailed', { message: exportResult.message })
+        })
+        return
+      }
+      showPdfNotice({
+        tone: 'success',
+        message: t('writePdfAnnotationExportPdfSuccess', {
+          file: fileNameFromPath(exportResult.path),
+          count: exportResult.annotationCount
+        })
+      })
+    } catch (error) {
+      showPdfNotice({
+        tone: 'error',
+        message: t('writePdfAnnotationExportPdfFailed', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    } finally {
+      setPdfAnnotationPackageAction(null)
+    }
+  }, [pdfAnnotationPackageAction, pdfPath, pdfSidecar, pdfWorkspaceRoot, showPdfNotice, t])
 
   const importPdfAnnotationPackageFile = useCallback(async (file: File): Promise<void> => {
     if (!pdfPath) return
@@ -1207,6 +1573,7 @@ export function WorkspaceFilePreviewPanel({
                   annotationDisplayMode={pdfAnnotationDisplayMode}
                   className="h-full max-h-full w-full border-l-0"
                   exportingPackage={pdfAnnotationPackageAction === 'export'}
+                  exportingPdf={pdfAnnotationPackageAction === 'export-pdf'}
                   importingPackage={pdfAnnotationPackageAction === 'import'}
                   reloadingSidecar={pdfAnnotationPackageAction === 'reload'}
                   onAnnotationDisplayModeChange={setPdfAnnotationDisplayMode}
@@ -1216,7 +1583,12 @@ export function WorkspaceFilePreviewPanel({
                   onReopenThread={(threadId) => reopenPdfAnnotation(threadId)}
                   onDeleteThread={(threadId) => deletePdfAnnotation(threadId)}
                   onEditAnnotation={editPdfAnnotation}
+                  onAskQuestion={(threadId, question, summary, options) => {
+                    void askPdfAnnotationQuestion(threadId, question, summary, options)
+                  }}
+                  questionReplies={pdfQuestionReplies}
                   onExportPackage={() => void exportPdfAnnotationPackage()}
+                  onExportPdf={() => void exportPdfAnnotationPdf()}
                   onImportPackage={openPdfAnnotationPackagePicker}
                   onReloadSidecar={() => void reloadPdfAnnotationSidecar()}
                   onCollapse={() => setPdfAnnotationsOpen(false)}

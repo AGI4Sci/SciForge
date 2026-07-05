@@ -4,13 +4,25 @@ import { readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import JSZip from 'jszip'
 import {
+  PDFArray,
+  PDFDocument,
+  PDFHexString,
+  PDFName,
+  PDFString,
+  type PDFPage
+} from 'pdf-lib'
+import {
   PDF_ANNOTATION_DEFAULT_DIR,
   PDF_ANNOTATION_PACKAGE_SUFFIX,
   createEmptyPdfAnnotationSidecar,
   migratePdfAnnotationSidecar,
   pdfAnnotationSidecarSchema,
   stablePdfAnnotationSidecar,
+  type PdfAnchor,
+  type PdfAnnotation,
   type PdfAnnotationAuthor,
+  type PdfAnnotationPdfExportPayload,
+  type PdfAnnotationPdfExportResult,
   type PdfAnnotationSidecar,
   type PdfAnnotationSidecarExportPayload,
   type PdfAnnotationSidecarExportResult,
@@ -44,6 +56,8 @@ type ResolvedPdfTarget = {
   defaultSidecarPath: string
   exportPackageTarget: ResolvedWorkspaceWriteTarget
   exportPackagePath: string
+  exportPdfTarget: ResolvedWorkspaceWriteTarget
+  exportPdfPath: string
   fingerprint: PdfFingerprint
 }
 
@@ -57,6 +71,7 @@ type PdfAnnotationLoadCandidate = {
 type ResolvePdfAnnotationTargetOptions = {
   createDefaultSidecarParents?: boolean
   createExportPackageParents?: boolean
+  createExportPdfParents?: boolean
 }
 
 function normalizeWorkspaceRoot(workspaceRoot: string | undefined): string | undefined {
@@ -130,6 +145,11 @@ async function resolvePdfAnnotationTarget(
     sidecarRoot,
     { createParentDirectories: options?.createExportPackageParents ?? false }
   )
+  const exportPdfTarget = await resolveSafeWorkspaceWriteTarget(
+    `${withoutPdfExtension(basename(pdfPath))}.annotated.pdf`,
+    sidecarRoot,
+    { createParentDirectories: options?.createExportPdfParents ?? false }
+  )
   return {
     pdfPath,
     workspaceRoot,
@@ -138,6 +158,8 @@ async function resolvePdfAnnotationTarget(
     defaultSidecarPath: defaultSidecarTarget.path,
     exportPackageTarget,
     exportPackagePath: exportPackageTarget.path,
+    exportPdfTarget,
+    exportPdfPath: exportPdfTarget.path,
     fingerprint
   }
 }
@@ -328,6 +350,251 @@ function anonymizeAuthors(authors: PdfAnnotationAuthor[]): PdfAnnotationAuthor[]
     anonymous: true,
     updatedAt: new Date().toISOString()
   }))
+}
+
+function pdfDateString(date = new Date()): string {
+  const value = (part: number, size = 2) => String(part).padStart(size, '0')
+  return `D:${date.getUTCFullYear()}${value(date.getUTCMonth() + 1)}${value(date.getUTCDate())}${value(date.getUTCHours())}${value(date.getUTCMinutes())}${value(date.getUTCSeconds())}Z`
+}
+
+function compactAnnotationText(value = ''): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function annotationKindLabel(kind: PdfAnnotation['kind']): string {
+  if (kind === 'highlight') return 'Highlight'
+  if (kind === 'comment') return 'Comment'
+  if (kind === 'note') return 'Note'
+  if (kind === 'translation') return 'Translation'
+  if (kind === 'question') return 'Question'
+  return 'Answer'
+}
+
+function parseAnnotationColor(value: string | undefined, fallback: [number, number, number]): [number, number, number] {
+  const hex = value?.trim().match(/^#?([0-9a-f]{6})$/i)?.[1]
+  if (!hex) return fallback
+  return [
+    Number.parseInt(hex.slice(0, 2), 16) / 255,
+    Number.parseInt(hex.slice(2, 4), 16) / 255,
+    Number.parseInt(hex.slice(4, 6), 16) / 255
+  ]
+}
+
+function getOrCreatePdfAnnots(page: PDFPage, pdf: PDFDocument): PDFArray {
+  const existing = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray)
+  if (existing) return existing
+  const annots = pdf.context.obj([])
+  page.node.set(PDFName.of('Annots'), annots)
+  return annots
+}
+
+function normalizedRectToPdf(
+  anchor: PdfAnchor,
+  rect: PdfAnchor['rects'][number],
+  page: PDFPage
+): { left: number; bottom: number; right: number; top: number } {
+  const { width, height } = page.getSize()
+  const left = rect.x * width
+  const right = (rect.x + rect.width) * width
+  const top = (1 - rect.y) * height
+  const bottom = (1 - rect.y - rect.height) * height
+  const minX = Math.max(0, Math.min(left, right))
+  const maxX = Math.min(width, Math.max(left, right))
+  const minY = Math.max(0, Math.min(bottom, top))
+  const maxY = Math.min(height, Math.max(bottom, top))
+  if (maxX > minX && maxY > minY) return { left: minX, bottom: minY, right: maxX, top: maxY }
+
+  const fallbackPage = Math.max(1, anchor.pageStart)
+  const fallbackTop = fallbackPage === rect.page ? top : height - 72
+  return {
+    left: 72,
+    bottom: Math.max(36, fallbackTop - 18),
+    right: 90,
+    top: Math.max(54, fallbackTop)
+  }
+}
+
+function threadExportContents(input: {
+  title: string
+  quote: string
+  annotations: PdfAnnotation[]
+}): string {
+  const parts: string[] = []
+  if (input.title) parts.push(input.title)
+  if (input.quote) parts.push(`Selected text:\n${input.quote}`)
+  for (const annotation of input.annotations) {
+    const body = annotation.body.trim()
+    if (!body) continue
+    parts.push(`${annotationKindLabel(annotation.kind)}:\n${body}`)
+  }
+  return parts.join('\n\n').trim() || input.quote || input.title || 'SciForge annotation'
+}
+
+function addHighlightAnnotation(input: {
+  pdf: PDFDocument
+  page: PDFPage
+  id: string
+  rect: { left: number; bottom: number; right: number; top: number }
+  contents: string
+  color: [number, number, number]
+  modifiedAt: string
+}): void {
+  const context = input.pdf.context
+  const annotation = context.obj({
+    Type: PDFName.of('Annot'),
+    Subtype: PDFName.of('Highlight'),
+    Rect: [
+      input.rect.left,
+      input.rect.bottom,
+      input.rect.right,
+      input.rect.top
+    ],
+    QuadPoints: [
+      input.rect.left,
+      input.rect.top,
+      input.rect.right,
+      input.rect.top,
+      input.rect.left,
+      input.rect.bottom,
+      input.rect.right,
+      input.rect.bottom
+    ],
+    Contents: PDFHexString.fromText(input.contents),
+    T: PDFHexString.fromText('SciForge'),
+    NM: PDFHexString.fromText(input.id),
+    M: PDFString.of(input.modifiedAt),
+    C: input.color,
+    CA: 0.35,
+    F: 4
+  })
+  getOrCreatePdfAnnots(input.page, input.pdf).push(context.register(annotation))
+}
+
+function addTextAnnotation(input: {
+  pdf: PDFDocument
+  page: PDFPage
+  id: string
+  rect: { left: number; bottom: number; right: number; top: number }
+  contents: string
+  color: [number, number, number]
+  modifiedAt: string
+}): void {
+  const context = input.pdf.context
+  const left = input.rect.left
+  const top = input.rect.top
+  const iconSize = 18
+  const annotation = context.obj({
+    Type: PDFName.of('Annot'),
+    Subtype: PDFName.of('Text'),
+    Rect: [
+      left,
+      Math.max(0, top - iconSize),
+      left + iconSize,
+      top
+    ],
+    Contents: PDFHexString.fromText(input.contents),
+    T: PDFHexString.fromText('SciForge'),
+    NM: PDFHexString.fromText(input.id),
+    M: PDFString.of(input.modifiedAt),
+    Name: PDFName.of('Comment'),
+    Open: false,
+    C: input.color,
+    F: 4
+  })
+  getOrCreatePdfAnnots(input.page, input.pdf).push(context.register(annotation))
+}
+
+function annotationsForThread(sidecar: PdfAnnotationSidecar, threadId: string): PdfAnnotation[] {
+  return sidecar.annotations
+    .filter((annotation) => annotation.threadId === threadId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+}
+
+export async function exportPdfAnnotationAdobePdf(
+  payload: PdfAnnotationPdfExportPayload
+): Promise<PdfAnnotationPdfExportResult> {
+  try {
+    const resolved = await resolvePdfAnnotationTarget(payload, { createExportPdfParents: true })
+    const loaded = payload.sidecar
+      ? { ok: true as const, sidecar: payload.sidecar }
+      : await loadPdfAnnotationSidecar(payload)
+    if (!loaded.ok) return loaded
+
+    const sidecar = withResolvedFingerprint(loaded.sidecar, resolved)
+    const pdf = await PDFDocument.load(await readFile(resolved.pdfPath), { ignoreEncryption: true })
+    const anchorsById = new Map(sidecar.anchors.map((anchor) => [anchor.id, anchor]))
+    const modifiedAt = pdfDateString()
+    let annotationCount = 0
+
+    for (const thread of sidecar.threads) {
+      const threadAnnotations = annotationsForThread(sidecar, thread.id)
+      const title = compactAnnotationText(thread.title ?? '')
+      const quote = compactAnnotationText(
+        thread.anchorIds
+          .map((anchorId) => anchorsById.get(anchorId)?.quote ?? '')
+          .filter(Boolean)
+          .join('\n\n')
+      )
+      const contents = threadExportContents({ title, quote, annotations: threadAnnotations })
+      if (!contents) continue
+
+      for (const anchorId of thread.anchorIds) {
+        const anchor = anchorsById.get(anchorId)
+        if (!anchor || anchor.rects.length === 0) continue
+        const rectsByPage = new Map<number, PdfAnchor['rects']>()
+        for (const rect of anchor.rects) {
+          const pageIndex = rect.page - 1
+          if (pageIndex < 0 || pageIndex >= pdf.getPageCount()) continue
+          rectsByPage.set(rect.page, [...(rectsByPage.get(rect.page) ?? []), rect])
+        }
+
+        for (const [pageNumber, rects] of rectsByPage) {
+          const page = pdf.getPage(pageNumber - 1)
+          const firstRect = normalizedRectToPdf(anchor, rects[0], page)
+          if (thread.kind === 'highlight') {
+            const annotation = threadAnnotations.find((item) => item.kind === 'highlight') ?? threadAnnotations[0]
+            const color = parseAnnotationColor(annotation?.color, [1, 0.82, 0.16])
+            for (const [index, rect] of rects.entries()) {
+              addHighlightAnnotation({
+                pdf,
+                page,
+                id: `${thread.id}-${anchor.id}-${pageNumber}-${index}`,
+                rect: normalizedRectToPdf(anchor, rect, page),
+                contents,
+                color,
+                modifiedAt
+              })
+              annotationCount += 1
+            }
+          } else {
+            addTextAnnotation({
+              pdf,
+              page,
+              id: `${thread.id}-${anchor.id}-${pageNumber}`,
+              rect: firstRect,
+              contents,
+              color: thread.kind === 'question' || thread.kind === 'answer'
+                ? [0.42, 0.32, 0.9]
+                : [0.12, 0.56, 0.94],
+              modifiedAt
+            })
+            annotationCount += 1
+          }
+        }
+      }
+    }
+
+    const bytes = Buffer.from(await pdf.save({ useObjectStreams: false }))
+    await writeSafeWorkspaceFile(resolved.exportPdfTarget, bytes)
+    return {
+      ok: true,
+      path: resolved.exportPdfPath,
+      annotationCount,
+      exportedAt: new Date().toISOString()
+    }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 export async function exportPdfAnnotationSidecarPackage(

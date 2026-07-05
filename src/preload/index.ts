@@ -246,10 +246,17 @@ const api = {
     rank: (payload) => ipcRenderer.invoke('paperRadar:rank', payload),
     digest: (payload) => ipcRenderer.invoke('paperRadar:digest', payload)
   },
+  researchCards: {
+    list: (input) => ipcRenderer.invoke('researchCards:list', input ?? {}),
+    create: (input) => ipcRenderer.invoke('researchCards:create', input),
+    update: (input) => ipcRenderer.invoke('researchCards:update', input),
+    archive: (input) => ipcRenderer.invoke('researchCards:archive', input)
+  },
   pdfAnnotations: {
     load: (payload) => ipcRenderer.invoke('pdfAnnotations:load', payload),
     save: (payload) => ipcRenderer.invoke('pdfAnnotations:save', payload),
     export: (payload) => ipcRenderer.invoke('pdfAnnotations:export', payload),
+    exportPdf: (payload) => ipcRenderer.invoke('pdfAnnotations:exportPdf', payload),
     import: (payload) => ipcRenderer.invoke('pdfAnnotations:import', payload)
   },
   visibleContext: {

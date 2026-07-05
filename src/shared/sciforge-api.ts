@@ -115,6 +115,8 @@ import type {
   PaperRadarSyncResult
 } from './paper-radar'
 import type {
+  PdfAnnotationPdfExportPayload,
+  PdfAnnotationPdfExportResult,
   PdfAnnotationSidecarExportPayload,
   PdfAnnotationSidecarExportResult,
   PdfAnnotationSidecarImportPayload,
@@ -152,6 +154,13 @@ import type {
   SciforgeCanvasSelectionSaveRequest,
   SciforgeCanvasStatusResult
 } from './sciforge-canvas'
+import type {
+  ResearchCard,
+  ResearchCardArchiveInput,
+  ResearchCardCreateInput,
+  ResearchCardListInput,
+  ResearchCardUpdateInput
+} from './research-cards'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type PathOpenResult = { ok: boolean; message?: string }
@@ -803,10 +812,17 @@ export type SciForgeApi = {
     rank: (payload: PaperRadarRankInput) => Promise<PaperRadarApiResult<PaperRadarRankResult>>
     digest: (payload: PaperRadarDigestInput) => Promise<PaperRadarApiResult<PaperRadarDigestResult>>
   }
+  researchCards: {
+    list: (input?: ResearchCardListInput) => Promise<ResearchCard[]>
+    create: (input: ResearchCardCreateInput) => Promise<ResearchCard>
+    update: (input: ResearchCardUpdateInput) => Promise<ResearchCard>
+    archive: (input: ResearchCardArchiveInput) => Promise<ResearchCard>
+  }
   pdfAnnotations?: {
     load: (payload: PdfAnnotationSidecarTarget) => Promise<PdfAnnotationSidecarLoadResult>
     save: (payload: PdfAnnotationSidecarSavePayload) => Promise<PdfAnnotationSidecarSaveResult>
     export: (payload: PdfAnnotationSidecarExportPayload) => Promise<PdfAnnotationSidecarExportResult>
+    exportPdf: (payload: PdfAnnotationPdfExportPayload) => Promise<PdfAnnotationPdfExportResult>
     import: (payload: PdfAnnotationSidecarImportPayload) => Promise<PdfAnnotationSidecarImportResult>
   }
   visibleContext: {

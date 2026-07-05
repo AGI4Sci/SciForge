@@ -99,6 +99,23 @@ class CompileTests(unittest.TestCase):
         self.engine.store.close()
         self.tmp.cleanup()
 
+    def test_engine_creates_nested_database_parent_directory(self):
+        other = tempfile.TemporaryDirectory()
+        engine = None
+        try:
+            sessions = os.path.join(other.name, "threads")
+            db_path = os.path.join(other.name, "missing", "project-dag", "project.db")
+            os.makedirs(sessions)
+
+            engine = Engine(db_path, sessions, judge=make_judge())
+
+            self.assertTrue(os.path.exists(os.path.dirname(db_path)))
+            self.assertTrue(os.path.exists(db_path))
+        finally:
+            if engine is not None:
+                engine.store.close()
+            other.cleanup()
+
     # M1: promote + watermark + idempotent
     def test_basic_promote_and_idempotent(self):
         write_session(self.sessions, "s1",

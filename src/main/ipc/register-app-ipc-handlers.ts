@@ -97,6 +97,11 @@ import {
   paperRadarProfileSyncPayloadSchema,
   paperRadarRankPayloadSchema,
   paperRadarSearchPayloadSchema,
+  researchCardArchivePayloadSchema,
+  researchCardCreatePayloadSchema,
+  researchCardListPayloadSchema,
+  researchCardUpdatePayloadSchema,
+  pdfAnnotationPdfExportPayloadSchema,
   pdfAnnotationSidecarExportPayloadSchema,
   pdfAnnotationSidecarImportPayloadSchema,
   pdfAnnotationSidecarLoadPayloadSchema,
@@ -227,6 +232,7 @@ import type {
   SpeechTranscriptionResult
 } from '../../shared/speech-to-text'
 import type { PaperRadarApiResult } from '../../shared/paper-radar'
+import type { ResearchCardService } from '../services/research-card-service'
 import type {
   AgentRuntimeApprovalResolveInput,
   AgentRuntimeEventSubscribeInput,
@@ -282,6 +288,7 @@ import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
 import {
+  exportPdfAnnotationAdobePdf,
   exportPdfAnnotationSidecarPackage,
   importPdfAnnotationSidecarPackage,
   loadPdfAnnotationSidecar,
@@ -375,6 +382,7 @@ type RegisterAppIpcHandlersOptions = {
   resolveRuntimeConfigPath: () => string
   openModelRouterConfigFile: (settings: AppSettingsV1) => Promise<ModelRouterConfigOpenResult>
   getPaperRadarService?: () => PaperRadarWorkerService | null
+  researchCards?: ResearchCardService
   onRuntimeMcpConfigWritten?: (path: string, content: string) => Promise<void> | void
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
@@ -826,6 +834,34 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return service
   }
 
+  const requireResearchCardService = (): ResearchCardService => {
+    if (!options.researchCards) {
+      throw new Error('Research card service is not initialized.')
+    }
+    return options.researchCards
+  }
+
+  handleInvoke('researchCards:list', async (_, payload: unknown) =>
+    requireResearchCardService().list(
+      parseIpcPayload('researchCards:list', researchCardListPayloadSchema, payload ?? {})
+    )
+  )
+  handleInvoke('researchCards:create', async (_, payload: unknown) =>
+    requireResearchCardService().create(
+      parseIpcPayload('researchCards:create', researchCardCreatePayloadSchema, payload)
+    )
+  )
+  handleInvoke('researchCards:update', async (_, payload: unknown) =>
+    requireResearchCardService().update(
+      parseIpcPayload('researchCards:update', researchCardUpdatePayloadSchema, payload)
+    )
+  )
+  handleInvoke('researchCards:archive', async (_, payload: unknown) =>
+    requireResearchCardService().archive(
+      parseIpcPayload('researchCards:archive', researchCardArchivePayloadSchema, payload)
+    )
+  )
+
   const paperRadarRequest = async <T>(request: () => Promise<PaperRadarApiResult<T>>): Promise<PaperRadarApiResult<T>> => {
     try {
       return await request()
@@ -886,6 +922,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('pdfAnnotations:export', async (_, payload: unknown) =>
     exportPdfAnnotationSidecarPackage(
       parseIpcPayload('pdfAnnotations:export', pdfAnnotationSidecarExportPayloadSchema, payload)
+    )
+  )
+  handleInvoke('pdfAnnotations:exportPdf', async (_, payload: unknown) =>
+    exportPdfAnnotationAdobePdf(
+      parseIpcPayload('pdfAnnotations:exportPdf', pdfAnnotationPdfExportPayloadSchema, payload)
     )
   )
   handleInvoke('pdfAnnotations:import', async (_, payload: unknown) =>
