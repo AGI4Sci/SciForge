@@ -1022,7 +1022,7 @@ export class RemoteChannelRuntime {
     if (channel && remoteSession && this.findChannelConversation(channel, remoteSession)) {
       return false
     }
-    return provider === 'discord' || chatType === 'group'
+    return provider === 'discord' || provider === 'zulip' || chatType === 'group'
   }
 
   private shouldHandleIncomingByGuard(input: {
@@ -2707,6 +2707,63 @@ export class RemoteChannelRuntime {
     return { ok: true }
   }
 
+  private async mirrorThreadMessageToZulip(
+    channel: RemoteChannelV1,
+    conversation: RemoteChannelConversationV1 | undefined,
+    threadId: string,
+    text: string,
+    direction: 'user' | 'assistant'
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (!this.deps.sendZulipChannelMessage) {
+      return { ok: false, message: 'Zulip bot runtime is not initialized.' }
+    }
+    const credential = channel.platformCredential?.kind === 'zulip'
+      ? channel.platformCredential
+      : undefined
+    const to =
+      conversation?.chatId.trim() ||
+      channel.remoteSession?.chatId.trim() ||
+      credential?.streamId.trim() ||
+      ''
+    if (!to) return { ok: false, message: 'No target Zulip stream is available yet.' }
+    const topicName =
+      conversation?.remoteThreadId.trim() ||
+      channel.remoteSession?.threadId.trim() ||
+      credential?.topicName.trim() ||
+      ''
+    const prefix = direction === 'user' ? '**From SciForge**\n\n' : ''
+    for (const [index, chunk] of splitRemoteChannelReplyText('zulip', `${prefix}${text}`.trim()).entries()) {
+      const result = await runRemoteChannelProviderRetry(
+        'zulip',
+        () => this.deps.sendZulipChannelMessage!({
+          channelId: to,
+          topicName,
+          text: chunk
+        }),
+        { shouldRetryResult: (item) => !item.ok }
+      )
+      if (!result.ok) {
+        const failure = remoteChannelFailureResult({
+          message: providerSendFailureMessage('Zulip', result.message),
+          kind: 'provider_send_failed',
+          details: { threadId, direction, channelId: channel.id, to, topicName, chunkIndex: index }
+        })
+        this.deps.logError('remote-channel-zulip', 'Failed to mirror remote channel message to Zulip', {
+          message: failure.message,
+          failureKind: failure.failureKind,
+          threadId,
+          direction,
+          channelId: channel.id,
+          to,
+          topicName,
+          chunkIndex: index
+        })
+        return failure
+      }
+    }
+    return { ok: true }
+  }
+
   async mirrorThreadMessageToIm(
     threadId: string,
     text: string,
@@ -2728,6 +2785,15 @@ export class RemoteChannelRuntime {
     }
     if (target.channel.provider === 'discord') {
       return this.mirrorThreadMessageToDiscord(
+        target.channel,
+        target.conversation,
+        threadId,
+        trimmed,
+        direction
+      )
+    }
+    if (target.channel.provider === 'zulip') {
+      return this.mirrorThreadMessageToZulip(
         target.channel,
         target.conversation,
         threadId,

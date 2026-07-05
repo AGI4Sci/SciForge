@@ -180,6 +180,9 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
       method: 'POST',
       headers,
       body: JSON.stringify({ channel, payload })
+    }).catch((error) => {
+      const reason = error instanceof Error && error.message ? ` ${error.message}` : ''
+      throw new Error(`Desktop dev bridge is not reachable at ${bridgeUrl}. Start or restart the Electron dev app, then retry.${reason}`)
     })
     const envelope = await response.json().catch(() => ({
       ok: false,
@@ -260,6 +263,24 @@ function createApi(): SciForgeApi {
       invoke('discord:test-send', { channelId, text, ...(channelConfigId ? { channelConfigId } : {}) }),
     setDiscordGuard: (enabled, channelConfigId, forceTakeover) =>
       invoke('discord:set-guard', {
+        enabled,
+        ...(channelConfigId ? { channelConfigId } : {}),
+        ...(forceTakeover ? { forceTakeover } : {})
+      }),
+    getZulipBotStatus: () => invoke('zulip:status'),
+    configureZulipBot: (payload) => invoke('zulip:configure', payload),
+    listZulipStreams: () => invoke('zulip:streams'),
+    listZulipTopics: (streamId) => invoke('zulip:topics', { streamId }),
+    bindZulipChannel: (payload) => invoke('zulip:bind-channel', payload),
+    testZulipChannel: (channelId, text, channelConfigId, topicName) =>
+      invoke('zulip:test-send', {
+        channelId,
+        ...(text ? { text } : {}),
+        ...(channelConfigId ? { channelConfigId } : {}),
+        ...(topicName ? { topicName } : {})
+      }),
+    setZulipGuard: (enabled, channelConfigId, forceTakeover) =>
+      invoke('zulip:set-guard', {
         enabled,
         ...(channelConfigId ? { channelConfigId } : {}),
         ...(forceTakeover ? { forceTakeover } : {})

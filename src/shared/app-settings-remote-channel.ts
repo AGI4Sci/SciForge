@@ -32,6 +32,7 @@ import {
 } from './app-settings-normalizers'
 
 function defaultRemoteChannelLabel(provider: RemoteChannelProvider): string {
+  if (provider === 'zulip') return 'zulip bot'
   if (provider === 'discord') return 'discord bot'
   return provider === 'weixin' ? 'weixin agent' : 'feishu agent'
 }
@@ -47,6 +48,11 @@ function normalizeLegacyDefaultRemoteChannelName(provider: RemoteChannelProvider
   if (provider === 'discord') {
     return lower === 'discord' || lower === 'discord agent' || lower === 'discord bot'
       ? 'discord bot'
+      : trimmed
+  }
+  if (provider === 'zulip') {
+    return lower === 'zulip' || lower === 'zulip agent' || lower === 'zulip bot'
+      ? 'zulip bot'
       : trimmed
   }
   if (lower === 'feishu agent' || lower === 'feishu / lark') return 'feishu agent'
@@ -132,7 +138,8 @@ export function normalizeRemoteChannelSettings(input: RemoteChannelSettingsPatch
           raw.provider === null ||
           raw.provider === 'feishu' ||
           raw.provider === 'weixin' ||
-          raw.provider === 'discord'
+          raw.provider === 'discord' ||
+          raw.provider === 'zulip'
         )
       })
     : []

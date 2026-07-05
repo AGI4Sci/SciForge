@@ -6,6 +6,7 @@ import {
   type RemoteChannelAgentProfileV1,
   type RemoteChannelV1,
   type RemoteChannelDiscordPlatformCredentialV1,
+  type RemoteChannelZulipPlatformCredentialV1,
   type RemoteChannelModel
 } from '@shared/app-settings'
 import { SettingsCard, SettingRow, Toggle } from './settings-controls'
@@ -89,9 +90,26 @@ function discordCredential(channel: RemoteChannelV1): RemoteChannelDiscordPlatfo
   return channel.platformCredential?.kind === 'discord' ? channel.platformCredential : null
 }
 
+function zulipCredential(channel: RemoteChannelV1): RemoteChannelZulipPlatformCredentialV1 | null {
+  return channel.platformCredential?.kind === 'zulip' ? channel.platformCredential : null
+}
+
 export function hasDiscordGuardConflict(form: AppSettingsV1, channel: RemoteChannelV1): boolean {
   if (!channel.enabled) return false
   const credential = discordCredential(channel)
+  if (!credential) return false
+  const owner = (
+    credential.guardOwnerInstallationId ||
+    credential.installationId ||
+    ''
+  ).trim()
+  const current = (form.installationId ?? '').trim()
+  return Boolean(owner && current && owner !== current)
+}
+
+export function hasZulipGuardConflict(form: AppSettingsV1, channel: RemoteChannelV1): boolean {
+  if (!channel.enabled) return false
+  const credential = zulipCredential(channel)
   if (!credential) return false
   const owner = (
     credential.guardOwnerInstallationId ||
@@ -124,6 +142,32 @@ export function discordGuardOwnerPatch(
           }
         : {})
     }
+  }
+}
+
+export function zulipGuardOwnerPatch(
+  form: AppSettingsV1,
+  channel: RemoteChannelV1,
+  enabled: boolean
+): Partial<RemoteChannelV1> {
+  const credential = zulipCredential(channel)
+  if (!credential) return { enabled }
+  const now = new Date().toISOString()
+  const installationId = form.installationId ?? ''
+  return {
+    enabled,
+    guardMode: enabled ? 'all_messages' : channel.guardMode,
+    platformCredential: {
+      ...credential,
+      installationId: credential.installationId || installationId,
+      ...(enabled
+        ? {
+            guardOwnerInstallationId: installationId,
+            guardOwnerUpdatedAt: now
+          }
+        : {})
+    },
+    updatedAt: now
   }
 }
 
@@ -205,7 +249,10 @@ export function ConnectPhoneSettingsSection({ ctx }: { ctx: ConnectPhoneSettings
           form.remoteChannel.channels.map((channel) => {
             const name = channel.agentProfile.name.trim() || channel.label
             const discord = discordCredential(channel)
+            const zulip = zulipCredential(channel)
             const discordConflict = hasDiscordGuardConflict(form, channel)
+            const zulipConflict = hasZulipGuardConflict(form, channel)
+            const guardConflict = discordConflict || zulipConflict
             return (
               <div key={channel.id} className="px-3 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -226,9 +273,14 @@ export function ConnectPhoneSettingsSection({ ctx }: { ctx: ConnectPhoneSettings
                         })}
                       </div>
                     ) : null}
-                    {discord ? (
+                    {zulip ? (
+                      <div className="mt-1 text-[12px] leading-5 text-ds-faint">
+                        {zulip.streamName || zulip.streamId}{zulip.topicName ? ` · #${zulip.topicName}` : ''}
+                      </div>
+                    ) : null}
+                    {discord || zulip ? (
                       <div className="mt-1 text-[12px] leading-5 text-ds-muted">
-                        {t('connectPhoneDiscordLocalOnlineGuard')}
+                        {discord ? t('connectPhoneDiscordLocalOnlineGuard') : t('connectPhoneZulipLocalOnlineGuard')}
                       </div>
                     ) : null}
                   </div>
@@ -236,6 +288,8 @@ export function ConnectPhoneSettingsSection({ ctx }: { ctx: ConnectPhoneSettings
                     <span className="text-[12px] font-medium text-ds-muted">
                       {discordConflict
                         ? t('connectPhoneDiscordGuardConflictState')
+                        : zulipConflict
+                          ? t('connectPhoneDiscordGuardConflictState')
                         : channel.enabled
                           ? t('connectPhoneManageAgentEnabled')
                           : t('connectPhoneManageAgentDisabled')}
@@ -249,24 +303,39 @@ export function ConnectPhoneSettingsSection({ ctx }: { ctx: ConnectPhoneSettings
                           channel.id,
                           channel.provider === 'discord'
                             ? discordGuardOwnerPatch(form, channel, value)
-                            : { enabled: value }
+                            : channel.provider === 'zulip'
+                              ? zulipGuardOwnerPatch(form, channel, value)
+                              : { enabled: value }
                         )}
                     />
                   </div>
                 </div>
 
-                {discordConflict ? (
+                {guardConflict ? (
                   <div className="mt-3 rounded-xl border border-amber-300/70 bg-amber-50 px-3 py-2 text-[12.5px] leading-5 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-                    <div className="font-semibold">{t('connectPhoneDiscordGuardConflictTitle')}</div>
+                    <div className="font-semibold">
+                      {discordConflict ? t('connectPhoneDiscordGuardConflictTitle') : t('connectPhoneZulipConflictTitle')}
+                    </div>
                     <div className="mt-1">
                       {t('connectPhoneDiscordGuardConflictDesc', {
-                        owner: discord?.guardOwnerInstallationId || discord?.installationId || ''
+                        owner: discord?.guardOwnerInstallationId ||
+                          discord?.installationId ||
+                          zulip?.guardOwnerInstallationId ||
+                          zulip?.installationId ||
+                          ''
                       })}
                     </div>
                     <button
                       type="button"
                       onClick={() =>
-                        updateChannel(form, update, channel.id, discordGuardOwnerPatch(form, channel, true))
+                        updateChannel(
+                          form,
+                          update,
+                          channel.id,
+                          discordConflict
+                            ? discordGuardOwnerPatch(form, channel, true)
+                            : zulipGuardOwnerPatch(form, channel, true)
+                        )
                       }
                       className="mt-2 rounded-lg border border-amber-400/60 bg-white px-2.5 py-1.5 text-[12px] font-semibold text-amber-900 shadow-sm transition hover:bg-amber-100 dark:border-amber-300/30 dark:bg-amber-300/10 dark:text-amber-100 dark:hover:bg-amber-300/15"
                     >

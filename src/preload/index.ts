@@ -94,6 +94,27 @@ const api = {
       ...(channelConfigId ? { channelConfigId } : {}),
       ...(forceTakeover ? { forceTakeover } : {})
     }),
+  getZulipBotStatus: () => ipcRenderer.invoke('zulip:status'),
+  configureZulipBot: (payload) =>
+    ipcRenderer.invoke('zulip:configure', payload),
+  listZulipStreams: () => ipcRenderer.invoke('zulip:streams'),
+  listZulipTopics: (streamId) =>
+    ipcRenderer.invoke('zulip:topics', { streamId }),
+  bindZulipChannel: (payload) =>
+    ipcRenderer.invoke('zulip:bind-channel', payload),
+  testZulipChannel: (channelId, text, channelConfigId, topicName) =>
+    ipcRenderer.invoke('zulip:test-send', {
+      channelId,
+      ...(text ? { text } : {}),
+      ...(channelConfigId ? { channelConfigId } : {}),
+      ...(topicName ? { topicName } : {})
+    }),
+  setZulipGuard: (enabled, channelConfigId, forceTakeover) =>
+    ipcRenderer.invoke('zulip:set-guard', {
+      enabled,
+      ...(channelConfigId ? { channelConfigId } : {}),
+      ...(forceTakeover ? { forceTakeover } : {})
+    }),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   pickWorkspaceFile: (defaultPath) =>

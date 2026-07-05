@@ -38,6 +38,11 @@ import {
   discordGuildChannelsPayloadSchema,
   discordSetGuardPayloadSchema,
   discordTestSendPayloadSchema,
+  zulipBindChannelPayloadSchema,
+  zulipConfigurePayloadSchema,
+  zulipSetGuardPayloadSchema,
+  zulipStreamTopicsPayloadSchema,
+  zulipTestSendPayloadSchema,
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeListThreadsPayloadSchema,
   agentRuntimeReadThreadPayloadSchema,
@@ -237,6 +242,7 @@ import type {
 import type { JsonSettingsStore } from '../settings-store'
 import type { RemoteChannelRuntime } from '../remote-channel-runtime'
 import type { DiscordBotRuntime } from '../discord-bot-runtime'
+import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
 import type { PaperRadarWorkerService } from '../services/paper-radar-worker-service'
 import { checkWorkflowCode, type WorkflowRuntime } from '../workflow-runtime'
@@ -350,6 +356,7 @@ type RegisterAppIpcHandlersOptions = {
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getRemoteChannelRuntime: () => RemoteChannelRuntime | null
   getDiscordBotRuntime?: () => DiscordBotRuntime | null
+  getZulipBotRuntime?: () => ZulipBotRuntime | null
   visibleContext?: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
@@ -608,6 +615,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     fetchUpstreamModels,
     getRemoteChannelRuntime,
     getDiscordBotRuntime,
+    getZulipBotRuntime,
     visibleContext,
     getScheduleRuntime,
     getWorkflowRuntime = () => null,
@@ -913,6 +921,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const runtime = getDiscordBotRuntime?.()
     if (!runtime) {
       throw new Error('Discord bot runtime is not initialized.')
+    }
+    return runtime
+  }
+
+  const requireZulipBotRuntime = (): ZulipBotRuntime => {
+    const runtime = getZulipBotRuntime?.()
+    if (!runtime) {
+      throw new Error('Zulip bot runtime is not initialized.')
     }
     return runtime
   }
@@ -1304,6 +1320,65 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       payload
     )
     return requireDiscordBotRuntime().setGuard(request.enabled, {
+      channelConfigId: request.channelConfigId,
+      forceTakeover: request.forceTakeover
+    })
+  })
+
+  handleInvoke('zulip:status', async () =>
+    requireZulipBotRuntime().status()
+  )
+
+  handleInvoke('zulip:configure', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'zulip:configure',
+      zulipConfigurePayloadSchema,
+      payload
+    )
+    return requireZulipBotRuntime().configure(request)
+  })
+
+  handleInvoke('zulip:streams', async () =>
+    requireZulipBotRuntime().listStreams()
+  )
+
+  handleInvoke('zulip:topics', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'zulip:topics',
+      zulipStreamTopicsPayloadSchema,
+      payload
+    )
+    return requireZulipBotRuntime().listTopics(request.streamId)
+  })
+
+  handleInvoke('zulip:bind-channel', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'zulip:bind-channel',
+      zulipBindChannelPayloadSchema,
+      payload
+    )
+    return requireZulipBotRuntime().bindChannel(request)
+  })
+
+  handleInvoke('zulip:test-send', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'zulip:test-send',
+      zulipTestSendPayloadSchema,
+      payload
+    )
+    return requireZulipBotRuntime().testSend(request.channelId, request.text, {
+      channelConfigId: request.channelConfigId,
+      topicName: request.topicName
+    })
+  })
+
+  handleInvoke('zulip:set-guard', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'zulip:set-guard',
+      zulipSetGuardPayloadSchema,
+      payload
+    )
+    return requireZulipBotRuntime().setGuard(request.enabled, {
       channelConfigId: request.channelConfigId,
       forceTakeover: request.forceTakeover
     })

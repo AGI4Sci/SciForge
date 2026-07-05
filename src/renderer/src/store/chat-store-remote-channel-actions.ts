@@ -348,7 +348,13 @@ export function createRemoteChannelActions(options: CreateRemoteChannelActionsOp
       const duplicateProvider = settings.remoteChannel.channels.find((channel) => channel.provider === provider)
       if (duplicateProvider) {
         const providerLabel =
-          provider === 'discord' ? 'Discord' : provider === 'weixin' ? 'WeChat' : 'Feishu / Lark'
+          provider === 'discord'
+            ? 'Discord'
+            : provider === 'zulip'
+              ? 'Zulip'
+              : provider === 'weixin'
+                ? 'WeChat'
+                : 'Feishu / Lark'
         throw new Error(i18n.t('common:connectPhoneProviderAlreadyConnected', { provider: providerLabel }))
       }
 

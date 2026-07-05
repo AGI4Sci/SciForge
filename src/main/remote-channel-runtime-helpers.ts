@@ -81,6 +81,11 @@ export type RemoteChannelRuntimeDeps = {
     channelId: string
     text: string
   }) => Promise<{ ok: true; messageId: string } | { ok: false; message: string }>
+  sendZulipChannelMessage?: (options: {
+    channelId: string
+    text: string
+    topicName?: string
+  }) => Promise<{ ok: true; messageId: string } | { ok: false; message: string }>
   createScheduledTaskFromText?: (
     text: string,
     options?: { workspaceRoot?: string | null; modelHint?: string | null; mode?: RemoteChannelRunMode | null }
@@ -233,6 +238,26 @@ export const REMOTE_CHANNEL_PROVIDER_CAPABILITIES: Record<RemoteChannelProvider,
     label: 'Discord',
     aliases: ['discord'],
     maxMessageLength: 2_000,
+    markdown: {
+      supported: true,
+      preserveCodeBlocks: true
+    },
+    attachments: {
+      file: { supported: false, maxCount: 0, maxBytes: 0 },
+      image: { supported: false, maxCount: 0, maxBytes: 0 },
+      link: { supported: true, maxCount: 20, maxBytes: 0 }
+    },
+    retry: {
+      maxAttempts: 3,
+      initialDelayMs: 750,
+      maxDelayMs: 5_000
+    }
+  },
+  zulip: {
+    provider: 'zulip',
+    label: 'Zulip',
+    aliases: ['zulip'],
+    maxMessageLength: 10_000,
     markdown: {
       supported: true,
       preserveCodeBlocks: true
@@ -967,6 +992,7 @@ export function normalizeIncomingProvider(value: unknown, fallback: RemoteChanne
   const raw = asString(value).toLowerCase()
   if (raw === 'weixin' || raw === 'wechat') return 'weixin'
   if (raw === 'discord') return 'discord'
+  if (raw === 'zulip') return 'zulip'
   return raw === 'feishu' ? 'feishu' : fallback
 }
 

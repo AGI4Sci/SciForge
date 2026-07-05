@@ -15,7 +15,7 @@ export type ScheduleTaskStatus = 'idle' | 'running' | 'success' | 'error'
 export type ScheduleModel = 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
 export type ScheduleReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
 export type RemoteChannelRunMode = ScheduleRunMode
-export type RemoteChannelProvider = 'feishu' | 'weixin' | 'discord'
+export type RemoteChannelProvider = 'feishu' | 'weixin' | 'discord' | 'zulip'
 export type RemoteChannelGuardModeV1 = 'only_mention' | 'all_messages' | 'off'
 export type RemoteChannelModel = ScheduleModel
 
@@ -438,10 +438,26 @@ export type RemoteChannelDiscordPlatformCredentialV1 = {
   createdAt: string
 }
 
+export type RemoteChannelZulipPlatformCredentialV1 = {
+  kind: 'zulip'
+  realmUrl: string
+  botEmail: string
+  botUserId: string
+  botFullName: string
+  streamId: string
+  streamName: string
+  topicName: string
+  installationId?: string
+  guardOwnerInstallationId?: string
+  guardOwnerUpdatedAt?: string
+  createdAt: string
+}
+
 export type RemoteChannelPlatformCredentialV1 =
   | RemoteChannelFeishuPlatformCredentialV1
   | RemoteChannelWeixinPlatformCredentialV1
   | RemoteChannelDiscordPlatformCredentialV1
+  | RemoteChannelZulipPlatformCredentialV1
 
 export type RemoteChannelRemoteSessionV1 = {
   chatId: string

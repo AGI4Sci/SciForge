@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Loader2,
   LogOut,
+  MessageSquare,
   QrCode,
   RefreshCw,
   Settings,
@@ -27,7 +28,10 @@ import type {
   ConnectPhoneInstallQrResult,
   DiscordBotStatus,
   DiscordChannel,
-  DiscordGuild
+  DiscordGuild,
+  ZulipBotStatus,
+  ZulipStream,
+  ZulipTopic
 } from '@shared/sciforge-api'
 import {
   type ConnectPhoneInstallQrState,
@@ -68,13 +72,14 @@ type WeixinInstallRequest = {
 
 type ConnectPhoneInstallRequest = FeishuInstallRequest | WeixinInstallRequest
 
-type ConnectPhonePanelTarget = ConnectPhoneInstallTarget | 'discord'
+type ConnectPhonePanelTarget = ConnectPhoneInstallTarget | 'discord' | 'zulip'
 
 const CONNECT_PHONE_SIDEBAR_TARGETS: readonly ConnectPhonePanelTarget[] = [
   'feishu',
   'lark',
   'weixin',
-  'discord'
+  'discord',
+  'zulip'
 ]
 const INITIAL_QR_STATE: ConnectPhoneInstallQrState = {
   status: 'idle',
@@ -121,13 +126,14 @@ export function connectPhoneInstallRequestOptions(
 }
 
 function isPhoneInstallTarget(target: ConnectPhonePanelTarget): target is ConnectPhoneInstallTarget {
-  return target !== 'discord'
+  return target !== 'discord' && target !== 'zulip'
 }
 
 function connectPhoneTargetLabel(
   t: (k: string, opts?: Record<string, unknown>) => string,
   target: ConnectPhonePanelTarget
 ): string {
+  if (target === 'zulip') return t('connectPhoneTargetZulip')
   return target === 'discord' ? t('connectPhoneTargetDiscord') : connectPhoneInstallTargetLabel(t, target)
 }
 
@@ -503,9 +509,9 @@ export function ConnectPhoneSidebarPanel({
       <div className="px-1 pb-3">
         <div className="flex items-center gap-2 text-[12px] font-normal text-[#9aa5b5] dark:text-white/35">
           <ConnectPhoneTargetLogo target={target} className="h-4 w-4" />
-          <span>{target === 'discord' ? t('connectPhoneTargetDiscord') : t('connectPhoneLabel')}</span>
+          <span>{target === 'discord' || target === 'zulip' ? connectPhoneTargetLabel(t, target) : t('connectPhoneLabel')}</span>
         </div>
-        <div className="mt-3 grid grid-cols-4 gap-1 rounded-xl border border-ds-border bg-ds-card p-1">
+        <div className="mt-3 grid grid-cols-5 gap-1 rounded-xl border border-ds-border bg-ds-card p-1">
           {CONNECT_PHONE_SIDEBAR_TARGETS.map((item) => {
             const active = target === item
             return (
@@ -530,6 +536,12 @@ export function ConnectPhoneSidebarPanel({
 
       {target === 'discord' ? (
         <DiscordBotSetupPanel
+          t={t}
+          channels={channels}
+          defaultWorkspaceRoot={workspaceRoot}
+        />
+      ) : target === 'zulip' ? (
+        <ZulipBotSetupPanel
           t={t}
           channels={channels}
           defaultWorkspaceRoot={workspaceRoot}
@@ -1483,9 +1495,622 @@ export function DiscordBotSetupPanel({
   )
 }
 
+export function ZulipBotSetupPanel({
+  t,
+  channels: configuredChannels,
+  defaultWorkspaceRoot = ''
+}: {
+  t: (k: string, opts?: Record<string, unknown>) => string
+  channels: RemoteChannelV1[]
+  defaultWorkspaceRoot?: string
+}): ReactElement {
+  const currentWorkspaceRoot = normalizeConnectPhoneWorkspaceRoot(defaultWorkspaceRoot)
+  const [status, setStatus] = useState<ZulipBotStatus>({
+    configured: false,
+    connected: false,
+    enabled: false,
+    channels: []
+  })
+  const [realmUrl, setRealmUrl] = useState('')
+  const [botEmail, setBotEmail] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [streams, setStreams] = useState<ZulipStream[]>([])
+  const [topics, setTopics] = useState<ZulipTopic[]>([])
+  const [selectedStreamId, setSelectedStreamId] = useState('')
+  const [topicName, setTopicName] = useState('sciforge')
+  const [workspaceRoot, setWorkspaceRoot] = useState(() => currentWorkspaceRoot)
+  const [agentName, setAgentName] = useState('zulip bot')
+  const [loadingStatus, setLoadingStatus] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [loadingStreams, setLoadingStreams] = useState(false)
+  const [loadingTopics, setLoadingTopics] = useState(false)
+  const [binding, setBinding] = useState(false)
+  const [tested, setTested] = useState(false)
+  const [error, setError] = useState('')
+  const zulipStatuses = status.channels ?? []
+  const selectedStream = streams.find((stream) => stream.id === selectedStreamId)
+  const selectedChannelStatus = zulipStatuses.find((item) =>
+    item.streamId === selectedStreamId &&
+    (item.topicName || '') === topicName.trim()
+  ) ?? zulipStatuses.find((item) => item.streamId === selectedStreamId)
+  const selectedChannelConfigId = selectedChannelStatus?.channelConfigId
+  const statusConflict = selectedChannelStatus?.conflict ?? status.conflict
+  const statusAccessError = selectedChannelStatus?.accessError ||
+    zulipStatuses.find((item) => item.accessError)?.accessError ||
+    ''
+  const configuredZulipChannels = configuredChannels.filter((channel) => channel.provider === 'zulip')
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    if (typeof window.sciforge?.getZulipBotStatus !== 'function') return
+    setLoadingStatus(true)
+    try {
+      const next = await window.sciforge.getZulipBotStatus()
+      setStatus(next)
+      setRealmUrl((current) => current || next.realmUrl || '')
+      setBotEmail((current) => current || next.botEmail || next.bot?.botEmail || '')
+      setSelectedStreamId((current) => current || next.streamId || '')
+      setTopicName((current) => current || next.topicName || 'sciforge')
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoadingStatus(false)
+    }
+  }, [])
+
+  const refreshStreams = useCallback(async (): Promise<void> => {
+    if (typeof window.sciforge?.listZulipStreams !== 'function') return
+    setLoadingStreams(true)
+    setError('')
+    try {
+      const result = await window.sciforge.listZulipStreams()
+      if (!result.ok) {
+        setError(result.message)
+        return
+      }
+      setStreams(result.streams)
+      setSelectedStreamId((current) => {
+        if (current && result.streams.some((stream) => stream.id === current)) return current
+        if (status.streamId && result.streams.some((stream) => stream.id === status.streamId)) return status.streamId
+        return result.streams[0]?.id ?? ''
+      })
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoadingStreams(false)
+    }
+  }, [status.streamId])
+
+  const refreshTopics = useCallback(async (streamId: string): Promise<void> => {
+    if (!streamId || typeof window.sciforge?.listZulipTopics !== 'function') return
+    setLoadingTopics(true)
+    setError('')
+    try {
+      const result = await window.sciforge.listZulipTopics(streamId)
+      if (!result.ok) {
+        setError(result.message)
+        setTopics([])
+        return
+      }
+      setTopics(result.topics)
+      setTopicName((current) => current || status.topicName || result.topics[0]?.name || 'sciforge')
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+      setTopics([])
+    } finally {
+      setLoadingTopics(false)
+    }
+  }, [status.topicName])
+
+  useEffect(() => {
+    void refreshStatus()
+  }, [refreshStatus])
+
+  useEffect(() => {
+    if (!(status.tokenConfigured ?? status.configured)) return
+    void refreshStreams()
+  }, [refreshStreams, status.configured, status.tokenConfigured])
+
+  useEffect(() => {
+    if (!selectedStreamId) {
+      setTopics([])
+      return
+    }
+    void refreshTopics(selectedStreamId)
+  }, [refreshTopics, selectedStreamId])
+
+  useEffect(() => {
+    if (!selectedChannelStatus) return
+    setWorkspaceRoot(resolveConnectPhoneWorkspaceRoot(
+      selectedChannelStatus.workspaceRoot,
+      currentWorkspaceRoot
+    ))
+    setAgentName((current) => current === 'zulip bot' ? selectedChannelStatus.agentName || current : current)
+  }, [currentWorkspaceRoot, selectedChannelStatus])
+
+  useEffect(() => {
+    if (selectedChannelStatus) return
+    setWorkspaceRoot((current) => current || currentWorkspaceRoot)
+  }, [currentWorkspaceRoot, selectedChannelStatus])
+
+  const configure = async (): Promise<void> => {
+    if (!realmUrl.trim() || !botEmail.trim() || !apiKey.trim()) {
+      setError(t('connectPhoneZulipRequired'))
+      return
+    }
+    if (typeof window.sciforge?.configureZulipBot !== 'function') {
+      setError(t('connectPhoneZulipUnavailable'))
+      return
+    }
+    setSaving(true)
+    setError('')
+    setTested(false)
+    try {
+      const result = await window.sciforge.configureZulipBot({
+        realmUrl: realmUrl.trim(),
+        botEmail: botEmail.trim(),
+        apiKey: apiKey.trim()
+      })
+      if (!result.ok) {
+        setError(result.message)
+        return
+      }
+      setApiKey('')
+      setStatus(result.status)
+      setRealmUrl(result.status.realmUrl || realmUrl)
+      setBotEmail(result.status.botEmail || result.status.bot?.botEmail || botEmail)
+      await refreshStreams()
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const testAndEnable = async (): Promise<void> => {
+    if (!selectedStream) {
+      setError(t('connectPhoneZulipSelectStreamFirst'))
+      return
+    }
+    if (
+      typeof window.sciforge?.bindZulipChannel !== 'function' ||
+      typeof window.sciforge?.testZulipChannel !== 'function' ||
+      typeof window.sciforge?.setZulipGuard !== 'function'
+    ) {
+      setError(t('connectPhoneZulipUnavailable'))
+      return
+    }
+    setBinding(true)
+    setError('')
+    setTested(false)
+    try {
+      const bindingWorkspaceRoot = resolveConnectPhoneWorkspaceRoot(workspaceRoot, currentWorkspaceRoot)
+      const bind = await window.sciforge.bindZulipChannel({
+        ...(selectedChannelConfigId ? { channelConfigId: selectedChannelConfigId } : {}),
+        streamId: selectedStream.id,
+        streamName: selectedStream.name,
+        topicName: topicName.trim() || 'sciforge',
+        enabled: false,
+        workspaceRoot: bindingWorkspaceRoot,
+        model: 'auto',
+        agentProfile: {
+          name: agentName.trim() || 'zulip bot'
+        }
+      })
+      if (!bind.ok) {
+        setError(bind.message)
+        return
+      }
+      setStatus(bind.status)
+      const test = await window.sciforge.testZulipChannel(
+        selectedStream.id,
+        t('connectPhoneZulipTestMessage'),
+        bind.channelConfigId,
+        topicName.trim() || 'sciforge'
+      )
+      if (!test.ok) {
+        setError(test.message)
+        return
+      }
+      setTested(true)
+      const guard = await window.sciforge.setZulipGuard(true, bind.channelConfigId)
+      if (!guard.ok) {
+        setError(guard.message)
+        if (guard.status) setStatus(guard.status)
+        return
+      }
+      setStatus(guard.status)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBinding(false)
+    }
+  }
+
+  const setGuardForChannel = async (
+    channelConfigId: string,
+    enabled: boolean,
+    forceTakeover = false
+  ): Promise<void> => {
+    if (!channelConfigId || typeof window.sciforge?.setZulipGuard !== 'function') return
+    setBinding(true)
+    setError('')
+    try {
+      const result = await window.sciforge.setZulipGuard(enabled, channelConfigId, forceTakeover)
+      if (result.ok) {
+        setStatus(result.status)
+        return
+      }
+      setError(result.message)
+      if (result.status) setStatus(result.status)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBinding(false)
+    }
+  }
+
+  const setupSteps = [
+    { label: t('connectPhoneZulipStepServer'), done: Boolean(status.realmUrl || realmUrl.trim()) },
+    { label: t('connectPhoneZulipStepToken'), done: status.tokenConfigured ?? status.configured },
+    { label: t('connectPhoneZulipStepStream'), done: Boolean(status.streamId || selectedStreamId) },
+    { label: t('connectPhoneZulipStepGuard'), done: Boolean(status.enabled && (status.connected || tested)) }
+  ]
+
+  return (
+    <div className="mx-1 flex flex-col rounded-[12px] border border-ds-border bg-ds-card px-3 py-3 shadow-sm">
+      <div className="flex h-[132px] w-full items-center justify-center rounded-[10px] border border-[#ececea] bg-white p-2">
+        <div className="grid justify-items-center gap-3 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-[14px] bg-[#52c2a8]/12 text-[#1c8f76]">
+            <MessageSquare className="h-8 w-8" strokeWidth={1.8} />
+          </div>
+          <div className="max-w-[220px] text-[12px] leading-5 text-ds-faint">
+            {t('connectPhoneZulipConfigureHint')}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 text-center text-[12px] leading-5 text-[#8d95a1]">
+        <div className="inline-flex items-center justify-center gap-1.5 font-medium text-[#68707c] dark:text-white/55">
+          <MessageSquare className="h-4 w-4" strokeWidth={1.8} />
+          {t('connectPhoneZulipJoinTitle')}
+        </div>
+        {status.bot?.botFullName ? (
+          <div className="mt-1 font-medium text-ds-muted">
+            {t('connectPhoneZulipBotReady', { name: status.bot.botFullName })}
+          </div>
+        ) : null}
+      </div>
+
+      <label className="mt-3 block">
+        <span className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
+          {t('connectPhoneZulipRealmUrl')}
+        </span>
+        <input
+          className="h-8 w-full rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 text-[12.5px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-[#1c8f76]/45 focus:ring-1 focus:ring-[#1c8f76]/25"
+          value={realmUrl}
+          onChange={(event) => setRealmUrl(event.target.value)}
+          placeholder={t('connectPhoneZulipRealmUrlPlaceholder')}
+        />
+      </label>
+      <label className="mt-3 block">
+        <span className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
+          {t('connectPhoneZulipBotEmail')}
+        </span>
+        <input
+          className="h-8 w-full rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 text-[12.5px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-[#1c8f76]/45 focus:ring-1 focus:ring-[#1c8f76]/25"
+          value={botEmail}
+          onChange={(event) => setBotEmail(event.target.value)}
+          placeholder={t('connectPhoneZulipBotEmailPlaceholder')}
+        />
+      </label>
+      <label className="mt-3 block">
+        <span className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
+          {(status.tokenConfigured ?? status.configured)
+            ? t('connectPhoneZulipTokenConfigured')
+            : t('connectPhoneZulipApiKey')}
+        </span>
+        <input
+          type="password"
+          className="h-8 w-full rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 text-[12.5px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-[#1c8f76]/45 focus:ring-1 focus:ring-[#1c8f76]/25"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+          placeholder={(status.tokenConfigured ?? status.configured)
+            ? t('connectPhoneZulipTokenReplacePlaceholder')
+            : t('connectPhoneZulipApiKeyPlaceholder')}
+        />
+      </label>
+      <button
+        type="button"
+        onClick={() => void configure()}
+        disabled={saving || !realmUrl.trim() || !botEmail.trim() || !apiKey.trim()}
+        className="mt-2 inline-flex min-h-[30px] w-full items-center justify-center gap-1.5 rounded-[8px] bg-[#222323] px-2.5 py-1.5 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-black disabled:cursor-not-allowed disabled:bg-ds-subtle disabled:text-ds-faint disabled:shadow-none dark:bg-white dark:text-black"
+      >
+        {saving ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+        ) : (
+          <Settings className="h-3.5 w-3.5" strokeWidth={1.8} />
+        )}
+        {saving ? t('connectPhoneZulipSavingToken') : t('connectPhoneZulipSaveToken')}
+      </button>
+
+      <div className="mt-2 rounded-[10px] border border-[#1c8f76]/15 bg-[#1c8f76]/5 px-2.5 py-2">
+        <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#1c8f76]">
+          <Settings className="h-3.5 w-3.5" strokeWidth={1.8} />
+          {t('connectPhoneZulipTokenTitle')}
+        </div>
+        <div className="mt-1 text-[11.5px] leading-5 text-ds-muted">
+          {t('connectPhoneZulipTokenHint')}
+        </div>
+      </div>
+
+      {(status.tokenConfigured ?? status.configured) ? (
+        <div className="mt-3 grid gap-2">
+          <label className="block">
+            <span className="mb-1.5 flex items-center justify-between text-[11.5px] font-semibold text-ds-muted">
+              {t('connectPhoneZulipStream')}
+              <button
+                type="button"
+                onClick={() => void refreshStreams()}
+                disabled={loadingStreams}
+                className="inline-flex items-center gap-1 text-[11px] text-[#1c8f76] disabled:opacity-50"
+              >
+                {loadingStreams ? (
+                  <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.8} />
+                ) : (
+                  <RefreshCw className="h-3 w-3" strokeWidth={1.8} />
+                )}
+                {t('connectPhoneDiscordRefresh')}
+              </button>
+            </span>
+            <select
+              className="h-8 w-full rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 text-[12.5px] text-ds-ink outline-none focus:border-[#1c8f76]/45 focus:ring-1 focus:ring-[#1c8f76]/25"
+              value={selectedStreamId}
+              onChange={(event) => {
+                setSelectedStreamId(event.target.value)
+                setTopicName('sciforge')
+              }}
+              disabled={loadingStreams || streams.length === 0}
+            >
+              {streams.length === 0 ? (
+                <option value="">{t('connectPhoneZulipNoStreams')}</option>
+              ) : (
+                <option value="">{t('connectPhoneZulipChooseStream')}</option>
+              )}
+              {streams.map((stream) => (
+                <option key={stream.id} value={stream.id}>{stream.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
+              {t('connectPhoneZulipTopic')}
+            </span>
+            <input
+              className="h-8 w-full rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 text-[12.5px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-[#1c8f76]/45 focus:ring-1 focus:ring-[#1c8f76]/25"
+              list="zulip-topic-options"
+              value={topicName}
+              onChange={(event) => setTopicName(event.target.value)}
+              placeholder={loadingTopics ? t('connectPhoneZulipLoadingTopics') : t('connectPhoneZulipTopicPlaceholder')}
+            />
+            <datalist id="zulip-topic-options">
+              {topics.map((topic) => (
+                <option key={topic.name} value={topic.name} />
+              ))}
+            </datalist>
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-[11.5px] font-semibold text-ds-muted">
+              {t('connectPhoneDiscordAgentName')}
+            </span>
+            <input
+              className="h-8 w-full rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 text-[12.5px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-[#1c8f76]/45 focus:ring-1 focus:ring-[#1c8f76]/25"
+              value={agentName}
+              onChange={(event) => setAgentName(event.target.value)}
+              placeholder={t('connectPhoneDiscordAgentNamePlaceholder')}
+            />
+          </label>
+
+          <div className="rounded-[8px] bg-ds-main/45 px-2.5 py-2 text-[11.5px] leading-5 text-ds-faint">
+            {t('connectPhoneZulipLocalOnlineGuard')}
+          </div>
+
+          {statusConflict ? (
+            <div className="rounded-[8px] border border-amber-300/70 bg-amber-50 px-2.5 py-2 text-[11.5px] leading-5 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+              <div className="font-semibold">{t('connectPhoneZulipConflictTitle')}</div>
+              <div className="mt-1">
+                {t('connectPhoneDiscordConflictDesc', { owner: statusConflict.ownerInstallationId })}
+              </div>
+              <button
+                type="button"
+                onClick={() => void setGuardForChannel(statusConflict.channelConfigId, true, true)}
+                disabled={binding}
+                className="mt-2 rounded-[7px] border border-amber-400/60 bg-white px-2 py-1 text-[11.5px] font-semibold text-amber-900 shadow-sm transition hover:bg-amber-100 disabled:opacity-50 dark:border-amber-300/30 dark:bg-amber-300/10 dark:text-amber-100 dark:hover:bg-amber-300/15"
+              >
+                {t('connectPhoneDiscordTakeover')}
+              </button>
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <button
+              type="button"
+              onClick={() => void testAndEnable()}
+              disabled={binding || !selectedStream}
+              className="inline-flex min-h-[32px] items-center justify-center gap-1.5 rounded-[8px] bg-[#1c8f76] px-2.5 py-1.5 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-[#15745f] disabled:cursor-not-allowed disabled:bg-ds-subtle disabled:text-ds-faint disabled:shadow-none"
+            >
+              {binding ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.8} />
+              )}
+              {binding ? t('connectPhoneZulipTesting') : t('connectPhoneZulipTestEnable')}
+            </button>
+            {selectedChannelStatus?.enabled ? (
+              <button
+                type="button"
+                onClick={() => void setGuardForChannel(selectedChannelStatus.channelConfigId, false)}
+                disabled={binding}
+                className="inline-flex min-h-[32px] items-center justify-center rounded-[8px] border border-ds-border bg-ds-main/55 px-2.5 py-1.5 text-[12.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
+              >
+                {t('connectPhoneDiscordPause')}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-3 grid gap-1.5">
+        {setupSteps.map((step, index) => (
+          <div
+            key={step.label}
+            className="flex min-h-[28px] items-center justify-between gap-2 rounded-[8px] border border-ds-border-muted/70 bg-ds-main/40 px-2 py-1.5"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span
+                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${
+                  step.done
+                    ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-300'
+                    : 'bg-ds-hover text-ds-faint'
+                }`}
+              >
+                {step.done ? <CheckCircle2 className="h-3 w-3" strokeWidth={2} /> : index + 1}
+              </span>
+              <span className="truncate text-[11.5px] font-medium text-ds-muted">
+                {step.label}
+              </span>
+            </span>
+            <span
+              className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold ${
+                step.done
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                  : 'bg-[#1c8f76]/10 text-[#1c8f76]'
+              }`}
+            >
+              {step.done ? t('connectPhoneDiscordStatusReady') : t('connectPhoneDiscordStatusTodo')}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {zulipStatuses.length > 0 ? (
+        <div className="mt-3 grid gap-1.5">
+          <div className="text-[11.5px] font-semibold text-ds-muted">
+            {t('connectPhoneZulipConfiguredChannels')}
+          </div>
+          {zulipStatuses.map((item) => {
+            const workspaceLabel = connectPhoneWorkspaceLabel(
+              item.workspaceRoot,
+              t('connectPhoneDiscordWorkspaceDefault')
+            )
+            const configuredChannel = configuredZulipChannels.find((channel) => channel.id === item.channelConfigId)
+            const recentMessage = latestConnectPhoneRecentMessage(configuredChannel)
+            return (
+              <div
+                key={item.channelConfigId}
+                className="rounded-[8px] border border-ds-border-muted/70 bg-ds-main/40 px-2.5 py-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[12px] font-semibold text-ds-ink">
+                      {zulipBindingLabel(item.streamName || item.streamId, item.topicName)}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-ds-faint" title={workspaceLabel}>
+                      {workspaceLabel}
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold ${
+                      item.conflict || item.accessError
+                        ? 'bg-amber-500/12 text-amber-700 dark:text-amber-200'
+                        : item.enabled
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                          : 'bg-ds-hover text-ds-faint'
+                    }`}
+                  >
+                    {item.conflict
+                      ? t('connectPhoneDiscordConflictState')
+                      : item.accessError
+                        ? t('connectPhoneDiscordUnavailableState')
+                      : item.enabled
+                        ? t('connectPhoneDiscordGuardOn')
+                        : t('connectPhoneDiscordGuardPaused')}
+                  </span>
+                </div>
+                {recentMessage ? (
+                  <div
+                    className="mt-1.5 truncate rounded-[7px] bg-ds-subtle/70 px-2 py-1.5 text-[11px] leading-5 text-ds-muted"
+                    title={connectPhoneRecentMessageLabel(recentMessage)}
+                  >
+                    {t('connectPhoneRecentMessage', {
+                      message: connectPhoneRecentMessageLabel(recentMessage)
+                    })}
+                  </div>
+                ) : null}
+                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void setGuardForChannel(item.channelConfigId, item.conflict ? true : !item.enabled, Boolean(item.conflict))}
+                    disabled={binding}
+                    className="inline-flex min-h-[28px] items-center justify-center rounded-[7px] border border-ds-border bg-ds-main/55 px-2 py-1 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
+                  >
+                    {item.conflict
+                      ? t('connectPhoneDiscordTakeover')
+                      : item.enabled
+                        ? t('connectPhoneDiscordPause')
+                        : t('connectPhoneDiscordResume')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedStreamId(item.streamId)
+                      setTopicName(item.topicName || 'sciforge')
+                    }}
+                    className="inline-flex min-h-[28px] items-center justify-center rounded-[7px] border border-ds-border bg-ds-main/55 px-2 py-1 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    {t('connectPhoneDiscordEditBinding')}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : configuredZulipChannels.length > 0 ? (
+        <div className="mt-3 rounded-[8px] bg-ds-main/45 px-2.5 py-2 text-[11.5px] leading-5 text-ds-faint">
+          {t('connectPhoneZulipConfiguredFallback', { count: configuredZulipChannels.length })}
+        </div>
+      ) : null}
+
+      <div className="mt-2 rounded-[8px] bg-ds-main/45 px-2.5 py-2 text-[11.5px] leading-5 text-ds-faint">
+        {loadingStatus ? t('connectPhoneZulipLoadingStatus') : statusConflict
+          ? t('connectPhoneZulipGuardConflict')
+          : statusAccessError
+            ? statusAccessError
+          : status.enabled
+            ? status.connected
+              ? t('connectPhoneZulipGuardConnected')
+              : t('connectPhoneZulipGuardConnecting')
+            : t('connectPhoneZulipGuardOff')}
+      </div>
+      {error ? (
+        <div className="mt-2 rounded-[8px] bg-red-500/10 px-2.5 py-2 text-[11.5px] leading-5 text-red-600 dark:text-red-300">
+          {error}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function discordChannelLabel(name: string): string {
   const trimmed = name.trim().replace(/^#/, '')
   return trimmed ? `#${trimmed}` : 'Discord'
+}
+
+function zulipBindingLabel(streamName: string, topicName: string): string {
+  const stream = streamName.trim() || 'Zulip'
+  const topic = topicName.trim()
+  return topic ? `${stream} · #${topic}` : stream
 }
 
 function ConnectPhoneTargetLogo({
@@ -1496,6 +2121,7 @@ function ConnectPhoneTargetLogo({
   className?: string
 }): ReactElement {
   if (target === 'discord') return <DiscordLogo className={className} />
+  if (target === 'zulip') return <MessageSquare className={className} strokeWidth={1.8} />
   return <RemoteChannelProviderLogo provider={connectPhoneProviderForTarget(target)} className={className} />
 }
 

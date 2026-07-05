@@ -91,7 +91,7 @@ const mcpSearchModeSchema = z.enum(['direct', 'search', 'auto'])
 const localRuntimeStorageBackendSchema = z.enum(['hybrid', 'file'])
 const localRuntimeCompactionSummaryModeSchema = z.enum(['heuristic', 'model'])
 const runModeSchema = z.enum(['agent', 'plan'])
-const remoteChannelProviderSchema = z.enum(['feishu', 'weixin', 'discord'])
+const remoteChannelProviderSchema = z.enum(['feishu', 'weixin', 'discord', 'zulip'])
 const remoteChannelGuardModeSchema = z.enum(['only_mention', 'all_messages', 'off'])
 const connectPhoneInstallProviderSchema = z.enum(['feishu', 'weixin'])
 const scheduleKindSchema = z.enum(['manual', 'interval', 'daily', 'at'])
@@ -598,6 +598,20 @@ const remoteChannelPlatformCredentialPatchSchema = z.union([
     guildName: z.string().max(512).optional(),
     channelId: z.string().max(MAX_ID_LENGTH).optional(),
     channelName: z.string().max(512).optional(),
+    installationId: z.string().max(128).optional(),
+    guardOwnerInstallationId: z.string().max(128).optional(),
+    guardOwnerUpdatedAt: z.string().max(128).optional(),
+    createdAt: z.string().max(128).optional()
+  }).strict(),
+  z.object({
+    kind: z.literal('zulip'),
+    realmUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
+    botEmail: z.string().trim().max(512).optional(),
+    botUserId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+    botFullName: z.string().trim().max(512).optional(),
+    streamId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+    streamName: z.string().trim().max(512).optional(),
+    topicName: z.string().trim().max(512).optional(),
     installationId: z.string().max(128).optional(),
     guardOwnerInstallationId: z.string().max(128).optional(),
     guardOwnerUpdatedAt: z.string().max(128).optional(),
@@ -1881,6 +1895,51 @@ export const discordTestSendPayloadSchema = z
   .strict()
 
 export const discordSetGuardPayloadSchema = z
+  .object({
+    enabled: z.boolean(),
+    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+    forceTakeover: z.boolean().optional()
+  })
+  .strict()
+
+export const zulipConfigurePayloadSchema = z
+  .object({
+    realmUrl: z.string().trim().min(1).max(MAX_URL_LENGTH),
+    botEmail: z.string().trim().min(3).max(512),
+    apiKey: z.string().trim().min(8).max(4_096)
+  })
+  .strict()
+
+export const zulipStreamTopicsPayloadSchema = z
+  .object({
+    streamId: trimmedString(MAX_ID_LENGTH)
+  })
+  .strict()
+
+export const zulipBindChannelPayloadSchema = z
+  .object({
+    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),
+    streamId: trimmedString(MAX_ID_LENGTH),
+    streamName: z.string().trim().max(512).optional(),
+    topicName: z.string().trim().max(512).optional(),
+    enabled: z.boolean().optional(),
+    workspaceRoot: defaultPathSchema,
+    model: z.union([z.enum(REMOTE_CHANNEL_MODEL_IDS), trimmedString(128)]).optional(),
+    runtimeId: agentRuntimeIdSchema.optional(),
+    agentProfile: remoteChannelAgentProfilePatchSchema.optional()
+  })
+  .strict()
+
+export const zulipTestSendPayloadSchema = z
+  .object({
+    channelId: trimmedString(MAX_ID_LENGTH),
+    topicName: z.string().trim().max(512).optional(),
+    text: z.string().trim().min(1).max(10_000).optional(),
+    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional()
+  })
+  .strict()
+
+export const zulipSetGuardPayloadSchema = z
   .object({
     enabled: z.boolean(),
     channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),

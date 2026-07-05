@@ -51,6 +51,7 @@ export function normalizeRunMode(value: unknown): RemoteChannelRunMode {
 export function normalizeImProvider(value: unknown): RemoteChannelProvider {
   if (value === 'weixin') return 'weixin'
   if (value === 'discord') return 'discord'
+  if (value === 'zulip') return 'zulip'
   return 'feishu'
 }
 

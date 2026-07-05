@@ -27,11 +27,18 @@ export function remoteGuardChannelTitle(channel: RemoteChannelV1): string {
     const channelName = channel.platformCredential.channelName.trim() || channel.platformCredential.channelId.trim()
     return channelName ? `#${channelName}` : 'Discord'
   }
+  if (channel.platformCredential?.kind === 'zulip') {
+    const stream = channel.platformCredential.streamName.trim() || channel.platformCredential.streamId.trim()
+    const topic = channel.platformCredential.topicName.trim()
+    if (stream && topic) return `${stream} · #${topic}`
+    return stream || 'Zulip'
+  }
   return channel.label.trim() || channel.agentProfile.name.trim() || remoteGuardProviderLabel(channel.provider)
 }
 
 export function remoteGuardProviderLabel(provider: RemoteChannelV1['provider']): string {
   if (provider === 'discord') return 'Discord'
+  if (provider === 'zulip') return 'Zulip'
   if (provider === 'weixin') return 'WeChat'
   return 'Feishu / Lark'
 }

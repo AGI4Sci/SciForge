@@ -17,6 +17,7 @@ export const REMOTE_CHANNEL_AGENT_INSTRUCTIONS_HEADING = '[Remote channel agent 
 export const REMOTE_CHANNEL_FEISHU_INBOUND_MESSAGE_HEADING = '[Feishu / Lark inbound message]'
 export const REMOTE_CHANNEL_DISCORD_INBOUND_MESSAGE_HEADING = '[Discord inbound message]'
 export const REMOTE_CHANNEL_WEIXIN_INBOUND_MESSAGE_HEADING = '[WeChat inbound message]'
+export const REMOTE_CHANNEL_ZULIP_INBOUND_MESSAGE_HEADING = '[Zulip inbound message]'
 export const SCHEDULE_CURRENT_USER_REQUEST_HEADING = '[Current scheduled task]'
 export const SCHEDULE_MANAGED_INSTRUCTIONS_HEADING = '[Schedule managed instructions]'
 
@@ -25,13 +26,15 @@ const REMOTE_CHANNEL_SKILL_POLICY_PREFIX = 'Remote channel skill policy:'
 const REMOTE_CHANNEL_PROVIDER_DISPLAY_LABELS: Record<RemoteChannelProvider, string> = {
   feishu: 'Feishu / Lark',
   weixin: 'WeChat',
-  discord: 'Discord'
+  discord: 'Discord',
+  zulip: 'Zulip'
 }
 
 const REMOTE_CHANNEL_INBOUND_MESSAGE_HEADINGS: Record<RemoteChannelProvider, string> = {
   feishu: REMOTE_CHANNEL_FEISHU_INBOUND_MESSAGE_HEADING,
   weixin: REMOTE_CHANNEL_WEIXIN_INBOUND_MESSAGE_HEADING,
-  discord: REMOTE_CHANNEL_DISCORD_INBOUND_MESSAGE_HEADING
+  discord: REMOTE_CHANNEL_DISCORD_INBOUND_MESSAGE_HEADING,
+  zulip: REMOTE_CHANNEL_ZULIP_INBOUND_MESSAGE_HEADING
 }
 
 export type RemoteChannelUserPromptDisplay = {
@@ -130,6 +133,27 @@ export function normalizeRemoteChannelPlatformCredential(input: unknown): Remote
       createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString()
     }
   }
+  if (raw.kind === 'zulip') {
+    const realmUrl = typeof raw.realmUrl === 'string' ? raw.realmUrl.trim().replace(/\/+$/, '') : ''
+    const botEmail = typeof raw.botEmail === 'string' ? raw.botEmail.trim() : ''
+    const streamId = typeof raw.streamId === 'string' ? raw.streamId.trim() : ''
+    const streamName = typeof raw.streamName === 'string' ? raw.streamName.trim() : ''
+    if (!realmUrl || !botEmail || !streamId || !streamName) return undefined
+    return {
+      kind: raw.kind,
+      realmUrl,
+      botEmail,
+      botUserId: typeof raw.botUserId === 'string' ? raw.botUserId.trim() : '',
+      botFullName: typeof raw.botFullName === 'string' ? raw.botFullName.trim() : '',
+      streamId,
+      streamName,
+      topicName: typeof raw.topicName === 'string' ? raw.topicName.trim() : '',
+      installationId: typeof raw.installationId === 'string' ? raw.installationId.trim() : '',
+      guardOwnerInstallationId: typeof raw.guardOwnerInstallationId === 'string' ? raw.guardOwnerInstallationId.trim() : '',
+      guardOwnerUpdatedAt: typeof raw.guardOwnerUpdatedAt === 'string' ? raw.guardOwnerUpdatedAt : '',
+      createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString()
+    }
+  }
   if (raw.kind !== 'feishu') return undefined
   const appId = typeof raw.appId === 'string' ? raw.appId.trim() : ''
   const appSecret = typeof raw.appSecret === 'string' ? raw.appSecret.trim() : ''
@@ -174,7 +198,7 @@ export function normalizeRemoteChannelLastFailure(input: unknown, fallbackProvid
   const remoteThreadId = typeof raw.remoteThreadId === 'string' ? raw.remoteThreadId.trim().slice(0, 512) : ''
   const threadId = typeof raw.threadId === 'string' ? raw.threadId.trim().slice(0, 512) : ''
   return {
-    provider: raw.provider === 'feishu' || raw.provider === 'weixin' || raw.provider === 'discord'
+    provider: raw.provider === 'feishu' || raw.provider === 'weixin' || raw.provider === 'discord' || raw.provider === 'zulip'
       ? raw.provider
       : fallbackProvider,
     message,

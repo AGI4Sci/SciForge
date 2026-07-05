@@ -538,6 +538,81 @@ export type DiscordTestSendResult =
 export type DiscordGuardResult =
   | { ok: true; status: DiscordBotStatus }
   | { ok: false; message: string; status?: DiscordBotStatus; conflict?: DiscordGuardConflictStatus }
+export type ZulipBotInfo = {
+  realmUrl: string
+  botEmail: string
+  botUserId: string
+  botFullName: string
+}
+export type ZulipStream = {
+  id: string
+  name: string
+}
+export type ZulipTopic = {
+  name: string
+  maxId?: number
+}
+export type ZulipGuardConflictStatus = {
+  channelConfigId: string
+  streamId: string
+  streamName: string
+  topicName: string
+  ownerInstallationId: string
+  currentInstallationId: string
+  takeoverAvailable: boolean
+  message: string
+}
+export type ZulipBotChannelStatus = {
+  channelConfigId: string
+  streamId: string
+  streamName: string
+  topicName: string
+  label: string
+  enabled: boolean
+  connected: boolean
+  conflict?: ZulipGuardConflictStatus
+  guardOwnerInstallationId?: string
+  guardOwnerUpdatedAt?: string
+  workspaceRoot: string
+  model: string
+  runtimeId?: AgentRuntimeId
+  agentName: string
+  accessError?: string
+}
+export type ZulipBotStatus = {
+  installationId?: string
+  realmUrl?: string
+  botEmail?: string
+  tokenConfigured?: boolean
+  configured: boolean
+  connected: boolean
+  enabled: boolean
+  bot?: ZulipBotInfo
+  channels?: ZulipBotChannelStatus[]
+  conflict?: ZulipGuardConflictStatus
+  streamId?: string
+  streamName?: string
+  topicName?: string
+  message?: string
+}
+export type ZulipConfigureResult =
+  | { ok: true; status: ZulipBotStatus }
+  | { ok: false; message: string }
+export type ZulipStreamListResult =
+  | { ok: true; streams: ZulipStream[] }
+  | { ok: false; message: string }
+export type ZulipTopicListResult =
+  | { ok: true; topics: ZulipTopic[] }
+  | { ok: false; message: string }
+export type ZulipBindChannelResult =
+  | { ok: true; status: ZulipBotStatus; channelConfigId: string }
+  | { ok: false; message: string }
+export type ZulipTestSendResult =
+  | { ok: true; messageId: string }
+  | { ok: false; message: string }
+export type ZulipGuardResult =
+  | { ok: true; status: ZulipBotStatus }
+  | { ok: false; message: string; status?: ZulipBotStatus; conflict?: ZulipGuardConflictStatus }
 export type LocalRuntimeStatusState =
   | 'starting'
   | 'running'
@@ -602,6 +677,36 @@ export type SciForgeApi = {
     channelConfigId?: string,
     forceTakeover?: boolean
   ) => Promise<DiscordGuardResult>
+  getZulipBotStatus: () => Promise<ZulipBotStatus>
+  configureZulipBot: (payload: {
+    realmUrl: string
+    botEmail: string
+    apiKey: string
+  }) => Promise<ZulipConfigureResult>
+  listZulipStreams: () => Promise<ZulipStreamListResult>
+  listZulipTopics: (streamId: string) => Promise<ZulipTopicListResult>
+  bindZulipChannel: (payload: {
+    channelConfigId?: string
+    streamId: string
+    streamName?: string
+    topicName?: string
+    enabled?: boolean
+    workspaceRoot?: string
+    model?: string
+    runtimeId?: AgentRuntimeId
+    agentProfile?: Partial<RemoteChannelAgentProfileV1>
+  }) => Promise<ZulipBindChannelResult>
+  testZulipChannel: (
+    channelId: string,
+    text?: string,
+    channelConfigId?: string,
+    topicName?: string
+  ) => Promise<ZulipTestSendResult>
+  setZulipGuard: (
+    enabled: boolean,
+    channelConfigId?: string,
+    forceTakeover?: boolean
+  ) => Promise<ZulipGuardResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   pickWorkspaceFile: (defaultPath?: string) => Promise<WorkspacePickResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>

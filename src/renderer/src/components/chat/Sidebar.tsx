@@ -375,9 +375,11 @@ function SidebarRemoteProviderPill({
 }): ReactElement {
   const label = provider === 'discord'
     ? 'Discord'
-    : provider === 'weixin'
-      ? 'WeChat'
-      : 'Feishu'
+    : provider === 'zulip'
+      ? 'Zulip'
+      : provider === 'weixin'
+        ? 'WeChat'
+        : 'Feishu'
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-ds-border-muted bg-ds-subtle/70 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-ds-faint">
       <MessageSquare className="h-2.5 w-2.5" strokeWidth={1.8} />
@@ -390,6 +392,12 @@ function sidebarRemoteChannelTitle(channel: RemoteChannelV1): string {
   if (channel.platformCredential?.kind === 'discord') {
     const name = channel.platformCredential.channelName.trim() || channel.platformCredential.channelId.trim()
     return name ? `#${name}` : 'Discord'
+  }
+  if (channel.platformCredential?.kind === 'zulip') {
+    const stream = channel.platformCredential.streamName.trim() || channel.platformCredential.streamId.trim()
+    const topic = channel.platformCredential.topicName.trim()
+    if (stream && topic) return `${stream} · #${topic}`
+    return stream || 'Zulip'
   }
   return channel.label.trim() || channel.agentProfile.name.trim() || remoteChannelSidebarProviderLabel(channel.provider)
 }
@@ -431,6 +439,7 @@ function sidebarRemoteMessageLabel(message: NonNullable<RemoteChannelV1['recentM
 
 function remoteChannelSidebarProviderLabel(provider: RemoteChannelV1['provider']): string {
   if (provider === 'discord') return 'Discord'
+  if (provider === 'zulip') return 'Zulip'
   if (provider === 'weixin') return 'WeChat'
   return 'Feishu / Lark'
 }

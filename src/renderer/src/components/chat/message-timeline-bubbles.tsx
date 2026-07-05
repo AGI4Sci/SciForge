@@ -258,6 +258,7 @@ function messageSourceLabel(
   const normalizedSource = source?.toLowerCase() ?? ''
   if (normalizedSource) {
     if (normalizedSource.includes('discord')) return 'Discord'
+    if (normalizedSource.includes('zulip')) return 'Zulip'
     if (normalizedSource.includes('weixin') || normalizedSource.includes('wechat')) return 'WeChat'
     if (normalizedSource.includes('feishu') || normalizedSource.includes('lark')) return 'Feishu / Lark'
     if (normalizedSource === 'im' || normalizedSource === 'remote' || normalizedSource === 'claw') {
@@ -277,6 +278,7 @@ function normalizeMessageSourceLabel(label: string | undefined, remoteProviderLa
   if (!normalized) return remoteProviderLabel || 'Desktop'
   const lower = normalized.toLowerCase()
   if (lower.includes('discord')) return 'Discord'
+  if (lower.includes('zulip')) return 'Zulip'
   if (lower.includes('weixin') || lower.includes('wechat')) return 'WeChat'
   if (lower.includes('feishu') || lower.includes('lark')) return 'Feishu / Lark'
   if (lower === 'desktop' || lower === 'ui' || lower === 'user') return 'Desktop'

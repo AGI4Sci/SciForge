@@ -285,6 +285,7 @@ export function watchedRemoteChannelThreadIdsFromChannels(
 
 export function remoteChannelProviderDisplayLabel(provider: RemoteChannelProvider): string {
   if (provider === 'discord') return 'Discord'
+  if (provider === 'zulip') return 'Zulip'
   if (provider === 'weixin') return 'WeChat'
   return 'Feishu / Lark'
 }
@@ -471,6 +472,7 @@ export function hydrateBlockModelLabels(threadId: string, blocks: ChatBlock[]): 
 
 function defaultRemoteChannelProviderLabel(provider: RemoteChannelProvider): string {
   if (provider === 'discord') return 'discord bot'
+  if (provider === 'zulip') return 'zulip bot'
   if (provider === 'weixin') return 'weixin agent'
   return 'feishu agent'
 }

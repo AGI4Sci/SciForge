@@ -88,6 +88,7 @@ import {
 import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
+import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { createWorkflowRuntime, type WorkflowRuntime } from './workflow-runtime'
 import {
@@ -328,6 +329,7 @@ let store: JsonSettingsStore
 let logDir = ''
 let remoteChannelRuntime: RemoteChannelRuntime | null = null
 let discordBotRuntime: DiscordBotRuntime | null = null
+let zulipBotRuntime: ZulipBotRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
@@ -481,6 +483,7 @@ async function stopManagedRuntimes(): Promise<void> {
       workflowRuntime?.stop()
       scheduleRuntime?.stop()
       discordBotRuntime?.stop()
+      zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
       codeNavigationService?.shutdown()
       paperRadarWorkerService?.close()
@@ -1576,6 +1579,23 @@ app.whenReady().then(async () => {
     },
     logError
   })
+  zulipBotRuntime = createZulipBotRuntime({
+    store,
+    userDataPath: app.getPath('userData'),
+    handleIncomingMessage: async (input) => {
+      if (!remoteChannelRuntime) return { ok: false, message: 'Remote channel runtime is not initialized.' }
+      return remoteChannelRuntime.handleIncomingImMessage(input)
+    },
+    onSettingsChanged: (settings) => {
+      scheduleRuntime?.sync(settings)
+      workflowRuntime?.sync(settings)
+      remoteChannelRuntime?.sync(settings)
+      discordBotRuntime?.sync(settings)
+      zulipBotRuntime?.sync(settings)
+      syncWeixinBridgeRuntime(settings)
+    },
+    logError
+  })
   remoteChannelRuntime = createRemoteChannelRuntime({
     store,
     agentRuntime: agentRuntimeHost,
@@ -1586,11 +1606,15 @@ app.whenReady().then(async () => {
     sendDiscordChannelMessage: (options) =>
       discordBotRuntime?.sendChannelMessage(options) ??
       Promise.resolve({ ok: false, message: 'Discord bot runtime is not initialized.' }),
+    sendZulipChannelMessage: (options) =>
+      zulipBotRuntime?.sendChannelMessage(options) ??
+      Promise.resolve({ ok: false, message: 'Zulip bot runtime is not initialized.' }),
     createScheduledTaskFromText: (text, options) =>
       scheduleRuntime?.createScheduledTaskFromText(text, options) ?? Promise.resolve({ kind: 'noop' })
   })
   remoteChannelRuntime.sync(initial)
   discordBotRuntime.sync(initial)
+  zulipBotRuntime.sync(initial)
   configureWeixinBridgeRuntimeContextProvider(async () => {
     const settings = await store.load()
     const channel = settings.remoteChannel.channels.find((item) => item.enabled && item.provider === 'weixin')
@@ -1690,6 +1714,7 @@ app.whenReady().then(async () => {
     workflowRuntime?.sync(saved)
     remoteChannelRuntime?.sync(saved)
     discordBotRuntime?.sync(saved)
+    zulipBotRuntime?.sync(saved)
     syncWeixinBridgeRuntime(saved)
     syncLoginItemSettings(saved)
     syncTray(saved)
@@ -1731,6 +1756,7 @@ app.whenReady().then(async () => {
     fetchUpstreamModels: fetchModels,
     getRemoteChannelRuntime: () => remoteChannelRuntime,
     getDiscordBotRuntime: () => discordBotRuntime,
+    getZulipBotRuntime: () => zulipBotRuntime,
     visibleContext: visibleContextService,
     setRemoteChannelActiveThreadContext: (payload) => {
       remoteChannelActiveThreadContext = payload

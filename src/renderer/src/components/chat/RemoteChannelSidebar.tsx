@@ -352,6 +352,7 @@ function shortThreadId(threadId: string): string {
 
 export function remoteChannelProviderDisplayLabel(provider: RemoteChannelV1['provider']): string {
   if (provider === 'discord') return 'Discord'
+  if (provider === 'zulip') return 'Zulip'
   if (provider === 'weixin') return 'WeChat'
   return 'Feishu / Lark'
 }
@@ -382,6 +383,9 @@ export function RemoteChannelProviderLogo({
         />
       </svg>
     )
+  }
+  if (provider === 'zulip') {
+    return <MessageSquare className={className} strokeWidth={1.8} />
   }
   if (provider === 'weixin') {
     return (
