@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES,
   SCIENTIFIC_SKILLS_ENV_ROOT,
+  buildScientificExternalSkillCatalog,
   buildScientificSkillsStatusSummary,
   buildScientificSkillsIndex,
   planScientificSkills,
@@ -31,6 +33,34 @@ afterEach(async () => {
 })
 
 describe('scientific skills index', () => {
+  it('exposes external skill catalog as an additive CNS/domain layer', () => {
+    const catalog = buildScientificExternalSkillCatalog({
+      figureNeeds: ['mechanism_schematic', 'summary_figure'],
+      domain: 'life science'
+    })
+    const ids = catalog.map((item) => item.skillId)
+
+    expect(ids).toContain('scientific-visualization')
+    expect(ids).toContain('nature-figure')
+    expect(ids).toContain('nature-academic-search')
+    expect(ids).toContain('nature-reader')
+    expect(ids).toContain('pathway-enrichment')
+    expect(ids).toContain('claude-code-skills')
+    expect(ids).toContain('openai-codex-skills')
+    expect(catalog.find((item) => item.skillId === 'nature-figure')).toMatchObject({
+      sourceKind: 'cns',
+      source: 'Yuan1z0825/nature-skills',
+      readOnly: true,
+      executionPolicy: 'read-only-planning'
+    })
+    expect(catalog.find((item) => item.skillId === 'claude-code-skills')).toMatchObject({
+      sourceKind: 'compat',
+      status: 'compatible-standard'
+    })
+    expect(JSON.stringify(catalog)).not.toMatch(/SciVisAgentSkills|Paraview|ChartMimic|SciFig/)
+    expect(EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES).toContain('KuangshiAi/SciVisAgentSkills')
+  })
+
   it('discovers repo roots, parses K-Dense-style frontmatter, and searches Chinese/English terms', async () => {
     const root = await tempDir()
     await writeSkill(root, 'matplotlib', [

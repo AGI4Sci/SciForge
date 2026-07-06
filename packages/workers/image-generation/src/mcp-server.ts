@@ -1,10 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { IMAGE_EDIT_MODES, IMAGE_GENERATION_MCP_FLAG, IMAGE_GENERATION_MODES, IMAGE_OUTPUT_FORMATS } from './contract'
+import { IMAGE_DRAWING_INTENTS, IMAGE_EDIT_MODES, IMAGE_GENERATION_MCP_FLAG, IMAGE_GENERATION_MODES, IMAGE_OUTPUT_FORMATS } from './contract'
 import type {
   ImageGenerationEditFromCanvasPacketRequest,
   ImageGenerationPlanRequest,
+  ImageGenerationRecipe,
   ImageGenerationRenderRequest,
   ImageGenerationReviewPacketRequest,
   ImageGenerationReviewRequest
@@ -79,14 +80,25 @@ const sizeSchema = z.object({
   height: z.number().int().min(128).max(4096)
 }).strict()
 
+const IMAGE_GENERATION_ROUTING_DESCRIPTION = 'Use image_generation for semantic/creative visual generation: flowcharts or diagrams from long prose, infographics, covers, posters, and illustrative scientific visuals. Use scientific_plotting only for structured numeric charts or explicit compact node-edge diagrams.'
+
 const recipeSchema = z.object({
   mode: z.enum(IMAGE_GENERATION_MODES),
-  prompt: z.string().trim().min(1).max(8000),
+  prompt: z.string().trim().min(1).max(16000).describe(IMAGE_GENERATION_ROUTING_DESCRIPTION),
+  model: z.string().trim().max(160).optional(),
   negativePrompt: z.string().trim().max(4000).optional(),
   size: sizeSchema,
   stylePreset: z.string().trim().max(160).optional(),
   referencePath: z.string().trim().max(4096).optional(),
-  outputFormat: z.enum(IMAGE_OUTPUT_FORMATS).optional()
+  outputFormat: z.enum(IMAGE_OUTPUT_FORMATS).optional(),
+  intent: z.enum(IMAGE_DRAWING_INTENTS).optional(),
+  drawingBrief: z.unknown().optional(),
+  diagramSpec: z.unknown().optional(),
+  frameworkDesignPlan: z.unknown().optional(),
+  confirmation: z.object({
+    status: z.enum(['required', 'confirmed'])
+  }).strict().optional(),
+  promptProfile: z.enum(['default', 'flowchart-light-v1', 'framework-spec-v1', 'framework-layered-draft-v1']).optional()
 }).strict()
 
 export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promise<boolean> {
@@ -100,7 +112,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_status', {
     title: 'Image Generation MCP Status',
-    description: 'Report the controlled SciForge image generation provider status and artifact policy.',
+    description: `Report the controlled SciForge image generation provider status, visual routing guidance, and artifact policy. ${IMAGE_GENERATION_ROUTING_DESCRIPTION}`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional()
     },
@@ -116,10 +128,11 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_plan', {
     title: 'Plan Image Generation',
-    description: 'Convert a user image request into a controlled image_generation_render recipe. Does not write files. For scientific figures, plan generated rasters as visual composition/base layers only; final labels, axes, numeric data, citations, scale bars, molecular annotations, and other scientific claims must be overlaid by deterministic scripts such as scientific_plotting.',
+    description: `Convert a user image request into a controlled image_generation_render recipe. ${IMAGE_GENERATION_ROUTING_DESCRIPTION} Does not write files. For scientific figures, plan generated rasters as visual composition/base layers only; final labels, axes, numeric data, citations, scale bars, molecular annotations, and other scientific claims must be overlaid by deterministic scripts such as scientific_plotting.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(8000),
+      drawingIntent: z.enum(IMAGE_DRAWING_INTENTS).optional(),
       modeHint: z.enum(IMAGE_GENERATION_MODES).optional(),
       size: z.object({
         width: z.number().int().min(128).max(4096).optional(),
@@ -137,6 +150,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       const request: ImageGenerationPlanRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         task: input.task,
+        ...(input.drawingIntent ? { drawingIntent: input.drawingIntent } : {}),
         ...(input.modeHint ? { modeHint: input.modeHint } : {}),
         ...(input.size ? { size: input.size } : {}),
         ...(input.stylePreset ? { stylePreset: input.stylePreset } : {}),
@@ -154,7 +168,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_render', {
     title: 'Render Image Generation Artifact',
-    description: 'Render a controlled image artifact from a structured recipe and write a SciForge artifact manifest for Canvas import. For scientific figures, gpt-image-style providers are visual composition/base-image tools only; publication labels, axes, numeric data, citations, scale bars, molecular annotations, and other scientific claims must be added by deterministic scripts such as scientific_plotting.',
+    description: `Render a controlled image artifact from a structured recipe and write a SciForge artifact manifest for Canvas import. ${IMAGE_GENERATION_ROUTING_DESCRIPTION} For scientific figures, gpt-image-style providers are visual composition/base-image tools only; publication labels, axes, numeric data, citations, scale bars, molecular annotations, and other scientific claims must be added by deterministic scripts such as scientific_plotting.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       recipe: recipeSchema,
@@ -170,7 +184,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     try {
       const request: ImageGenerationRenderRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        recipe: input.recipe,
+        recipe: input.recipe as ImageGenerationRecipe,
         ...(input.imageId ? { imageId: input.imageId } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
         ...(input.reviewReferencePath ? { reviewReferencePath: input.reviewReferencePath } : {}),

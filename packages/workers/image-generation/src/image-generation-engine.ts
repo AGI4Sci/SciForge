@@ -2,13 +2,23 @@ import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { IMAGE_GENERATION_VISUAL_ROUTING } from './types'
 import type {
+  DiagramLayer,
+  DiagramLayerBounds,
+  DiagramLayerManifest,
+  DrawingBrief,
+  FrameworkDesignPlan,
+  FrameworkDiagramSpec,
+  FrameworkRegion,
   ImageEditIntent,
+  ImageDrawingIntent,
   ImageGenerationEditFromCanvasPacketRequest,
   ImageGenerationEditFromCanvasPacketResult,
   ImageGenerationManifest,
   ImageGenerationPlanRequest,
   ImageGenerationPlanResult,
+  ImageGenerationProvider,
   ImageGenerationRecipe,
   ImageGenerationRenderRequest,
   ImageGenerationRenderResult,
@@ -18,13 +28,16 @@ import type {
   ImageGenerationReviewResult,
   ImageGenerationStatus,
   ImageGenerationUsagePolicy,
+  ImageGenerationVisualRouting,
   ImageSize
 } from './types'
 
 const RENDERER_VERSION = '0.1.0'
+const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
 const DEFAULT_SIZE: ImageSize = { width: 1024, height: 1024 }
 const MAX_IMAGE_SIZE = 4096
 const MIN_IMAGE_SIZE = 128
+const IMAGE_SIZE_GRANULARITY = 16
 const ARTIFACT_DIR = '.sciforge/artifacts'
 const IMAGE_DIR = '.sciforge/images'
 const LOCAL_MODEL_ROUTER_BASE_URL_ERROR =
@@ -50,7 +63,7 @@ type ProviderRenderInput = {
 }
 
 type ProviderRenderResult = {
-  provider: 'image-endpoint' | 'placeholder'
+  provider: ImageGenerationProvider
   placeholder: boolean
   warnings: string[]
 }
@@ -79,10 +92,12 @@ export async function getImageGenerationStatus(workspaceRoot?: string): Promise<
     ok: true,
     provider,
     configured: provider === 'image-endpoint',
+    defaultModel: imageModel(),
     supportedModes: ['text_to_image', 'image_to_image', 'variation'],
     supportedEditModes: ['inpaint', 'replace', 'erase', 'outpaint', 'upscale', 'style_transfer'],
     outputDir: root ? join(root, IMAGE_DIR) : IMAGE_DIR,
     artifactDir: root ? join(root, ARTIFACT_DIR) : ARTIFACT_DIR,
+    visualRouting: imageGenerationVisualRouting(),
     warnings: [
       ...(provider === 'placeholder'
         ? ['No image model is configured. Other SciForge features are unaffected, but text-to-image and Canvas image edits require configuring an image model first.']
@@ -99,23 +114,50 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
     warnings.push('Image model is not configured; rendering will return provider_not_configured until an image model is configured in Settings.')
   }
   const size = normalizeSize(request.size, warnings)
+  const task = request.task.trim()
+  const intent = request.drawingIntent ?? classifyDrawingIntent(task, request.stylePreset)
+  const drawingBrief = intent === 'flowchart' ? buildFlowchartBrief(task) : undefined
+  const diagramSpec = intent === 'framework_diagram' ? buildFrameworkDiagramSpec(task, size) : undefined
+  const frameworkDesignPlan = diagramSpec ? buildFrameworkDesignPlan(task, diagramSpec) : undefined
+  const rawPrompt = diagramSpec
+    ? compileFrameworkDiagramPrompt(task, diagramSpec)
+    : drawingBrief
+      ? compileFlowchartPrompt(task, drawingBrief)
+      : task
+  const prompt = enhanceImageGenerationPrompt(rawPrompt, request.stylePreset)
   const recipe: ImageGenerationRecipe = {
     mode: request.modeHint ?? (request.referencePath ? 'image_to_image' : 'text_to_image'),
-    prompt: request.task.trim(),
+    prompt,
     size,
     ...(request.stylePreset?.trim() ? { stylePreset: request.stylePreset.trim() } : {}),
     ...(request.referencePath?.trim() ? { referencePath: request.referencePath.trim() } : {}),
-    outputFormat: 'png'
+    outputFormat: 'png',
+    intent,
+    ...(drawingBrief ? { drawingBrief, promptProfile: 'flowchart-light-v1' as const } : {}),
+    ...(diagramSpec
+      ? {
+          diagramSpec,
+          frameworkDesignPlan,
+          confirmation: { status: 'required' as const },
+          promptProfile: 'framework-layered-draft-v1' as const
+        }
+      : {})
+  }
+  const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(task)
+  if (upstreamResearchWorkflow?.recommended) {
+    warnings.push(upstreamResearchWorkflow.reason)
   }
   const usagePolicy = scientificUsagePolicyForRecipe(recipe)
   pushUsagePolicyWarning(warnings, usagePolicy)
   void workspaceRoot
   return {
     ok: true,
-    task: request.task.trim(),
+    task,
     recipe,
     suggestedRenderTool: 'image_generation_render',
     suggestedReviewTool: 'image_generation_review',
+    ...(upstreamResearchWorkflow ? { upstreamResearchWorkflow } : {}),
+    visualRouting: imageGenerationVisualRouting(),
     artifactPolicy: usagePolicy
       ? 'Render writes a PNG visual base layer plus .sciforge/artifacts/*.generated-image.artifact.json for Canvas import; publication labels and data must be added by deterministic scripts.'
       : 'Render writes PNG output plus .sciforge/artifacts/*.generated-image.artifact.json for Canvas import.',
@@ -126,7 +168,17 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
       'Run image_generation_edit_from_canvas_packet to create a new before/after artifact.',
       ...(usagePolicy ? ['For scientific figures, script all labels, axes, data traces, citations, scale bars, and molecular annotations after rendering the base image.'] : [])
     ],
+    requiresConfirmation: Boolean(frameworkDesignPlan),
+    ...(frameworkDesignPlan ? { confirmationSummary: frameworkDesignPlan.confirmationSummary } : {}),
     warnings
+  }
+}
+
+function imageGenerationVisualRouting(): ImageGenerationVisualRouting {
+  return {
+    useImageGenerationWhen: [...IMAGE_GENERATION_VISUAL_ROUTING.useImageGenerationWhen],
+    useScientificPlottingWhen: [...IMAGE_GENERATION_VISUAL_ROUTING.useScientificPlottingWhen],
+    modelSelectionHint: IMAGE_GENERATION_VISUAL_ROUTING.modelSelectionHint
   }
 }
 
@@ -137,6 +189,19 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     const recipe = normalizeRecipe(request.recipe, warnings)
     const usagePolicy = scientificUsagePolicyForRecipe(recipe)
     pushUsagePolicyWarning(warnings, usagePolicy)
+    const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(recipe.prompt)
+    if (upstreamResearchWorkflow?.recommended && !hasResearchEvidenceInPrompt(recipe.prompt, recipe.referencePath)) {
+      return {
+        ok: false,
+        status: 'research_required',
+        message: 'Scientific paper-style images must be grounded before final rendering. Build a scientific_plotting_research_brief, search/read related papers and figure evidence, then call image_generation_render with the resulting full prompt or referencePath.',
+        upstreamResearchWorkflow,
+        warnings: [
+          ...warnings,
+          'Rendering was blocked to avoid producing an ungrounded scientific figure.'
+        ]
+      }
+    }
     const imageId = slugForId(request.imageId ?? 'generated-image-' + new Date().toISOString())
     const outputDir = await resolveOutputDir(workspaceRoot, request.outputDir)
     await mkdir(outputDir, { recursive: true })
@@ -149,6 +214,40 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(request.reviewReferencePath ? { referencePath: request.reviewReferencePath } : {})
     })
     const manifestPath = join(outputDir, imageId + '.manifest.json')
+    const diagramSpecPath = recipe.intent === 'framework_diagram' && recipe.diagramSpec
+      ? join(outputDir, imageId + '.diagram-spec.json')
+      : undefined
+    const frameworkDesignPlanPath = recipe.intent === 'framework_diagram' && recipe.frameworkDesignPlan
+      ? join(outputDir, imageId + '.framework-design-plan.json')
+      : undefined
+    if (diagramSpecPath && recipe.diagramSpec) {
+      await writeJson(diagramSpecPath, {
+        version: 1,
+        kind: 'sciforge_framework_diagram_spec',
+        createdAt: new Date().toISOString(),
+        promptProfile: recipe.promptProfile ?? 'framework-spec-v1',
+        workspaceRoot,
+        outputPath,
+        spec: recipe.diagramSpec
+      })
+    }
+    if (frameworkDesignPlanPath && recipe.frameworkDesignPlan) {
+      await writeJson(frameworkDesignPlanPath, {
+        ...recipe.frameworkDesignPlan,
+        createdAt: new Date().toISOString(),
+        workspaceRoot,
+        outputPath
+      })
+    }
+    const diagramLayerManifestPath = await writeDiagramLayerManifestIfNeeded({
+      workspaceRoot,
+      outputDir,
+      imageId,
+      outputPath,
+      recipe,
+      diagramSpecPath,
+      frameworkDesignPlanPath
+    })
     const manifest: ImageGenerationManifest = {
       version: 1,
       renderer: 'sciforge-image-generation-mcp',
@@ -161,6 +260,11 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(request.canvasId ? { canvasId: request.canvasId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       recipe,
+      ...(recipe.intent ? { intent: recipe.intent } : {}),
+      ...(diagramSpecPath ? { diagramSpecPath } : {}),
+      ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
+      ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+      ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
       provider: providerResult.provider,
       review,
       ...(usagePolicy ? { usagePolicy } : {}),
@@ -176,6 +280,11 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       manifestPath,
       title: recipe.prompt.slice(0, 90) || imageId,
       referencePath: recipe.referencePath,
+      intent: recipe.intent,
+      diagramSpecPath,
+      frameworkDesignPlanPath,
+      diagramLayerManifestPath,
+      promptProfile: recipe.promptProfile,
       ...(request.canvasId ? { canvasId: request.canvasId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(usagePolicy ? { usagePolicy } : {}),
@@ -188,6 +297,9 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       outputPath,
       manifestPath,
       artifactManifestPath,
+      ...(diagramSpecPath ? { diagramSpecPath } : {}),
+      ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
+      ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
       provider: providerResult.provider,
       review,
       ...(usagePolicy ? { usagePolicy } : {}),
@@ -201,6 +313,457 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       warnings
     }
   }
+}
+
+function buildUpstreamResearchWorkflow(task: string): ImageGenerationPlanResult['upstreamResearchWorkflow'] | undefined {
+  if (!requiresPaperGroundedPrompt(task)) return undefined
+  return {
+    recommended: true,
+    reason: 'This looks like a scientific paper-style diagram/figure. First gather related paper figures, captions, style cues, and the user analysis angle before final image rendering.',
+    suggestedBriefTool: 'scientific_plotting_research_brief',
+    suggestedSearchTool: 'research_search',
+    promptRequirements: [
+      'reference papers with titles/venues/years and figure/caption hints',
+      'figure conclusion and evidence logic',
+      'user analysis angle',
+      'visual archetype, layout, palette, typography, and annotation style',
+      'final controlled image_generation recipe or prompt'
+    ]
+  }
+}
+
+function requiresPaperGroundedPrompt(task: string): boolean {
+  const text = task.toLowerCase()
+  const scientificSignal = /transformer|reinforcement|attention|neural|model architecture|protein|cell|gene|molecular|clinical|nature|science|cell|paper|scientific|research|论文|文献|科研|实验|模型|机制|顶刊|顶会/i.test(text)
+  const figureSignal = /flow\s*chart|flowchart|workflow|pipeline|diagram|architecture|mechanism|schematic|infographic|figure|流程图|流程|工作流|管线|示意图|机制图|模型结构|架构图|信息图|论文图|图形摘要/i.test(text)
+  return scientificSignal && figureSignal
+}
+
+function shouldEnhanceSemanticVisualPrompt(prompt: string): boolean {
+  if (/SciForge semantic visual brief|full-canvas composition|最终视觉图|视觉增强要求/i.test(prompt)) return false
+  return /flow\s*chart|flowchart|workflow|pipeline|diagram|architecture|mechanism|schematic|infographic|figure|model structure|流程图|流程|工作流|管线|示意图|机制图|模型结构|架构图|信息图|论文图|图形摘要/i.test(prompt)
+}
+
+function enhanceImageGenerationPrompt(prompt: string, stylePreset?: string): string {
+  const base = prompt.trim()
+  if (!shouldEnhanceSemanticVisualPrompt(base)) return base
+  const style = stylePreset?.trim()
+  return [
+    base,
+    '',
+    'SciForge semantic visual brief:',
+    '- Treat any upstream scientific_plotting or diagram draft as structure only; create the polished final visual, not a tiny box draft.',
+    '- Use a full-canvas composition with clear hierarchy, large readable labels, grouped modules, directional arrows, and visual emphasis on the key scientific/technical relationships.',
+    '- Prefer a publication-grade schematic style: clean typography, balanced spacing, subtle color coding, light background, and concise annotations.',
+    '- Fill the canvas with meaningful content while preserving the requested scientific semantics; avoid sparse center-only layouts, overlapping labels, illegible microtext, and generic placeholder blocks.',
+    '- For model architecture or workflow figures, show inputs, core stages, outputs, side effects/context, and feedback/control loops when relevant.',
+    ...(style ? [`- Style preset: ${style}.`] : []),
+    '- Output: one self-contained high-resolution PNG-style figure suitable for review on SciForge Canvas.'
+  ].join('\n')
+}
+
+function hasResearchEvidenceInPrompt(prompt: string, referencePath?: string): boolean {
+  if (referencePath?.trim()) return true
+  return /reference papers?|candidate papers?|figure evidence|figure conclusion|evidence logic|literatureStrategy|scientific_plotting_research_brief|paper figures?|相关论文|参考论文|图注|证据链|分析角度/i.test(prompt)
+}
+
+function classifyDrawingIntent(task: string, stylePreset?: string): ImageDrawingIntent {
+  const text = `${task}\n${stylePreset ?? ''}`.toLowerCase()
+  if (/framework|architecture|model structure|method overview|encoder|decoder|transformer|resnet|diffusion|gnn|llm|架构|框架|模型结构|方法概览|机制图/.test(text)) {
+    return 'framework_diagram'
+  }
+  if (/flow\s*chart|flowchart|workflow|pipeline|process|流程图|工作流|管线|步骤/.test(text)) {
+    return 'flowchart'
+  }
+  return 'general_image'
+}
+
+function buildFlowchartBrief(task: string): DrawingBrief {
+  const steps = extractCandidateSteps(task, 10)
+  return {
+    version: 1,
+    drawingType: 'flowchart',
+    direction: /top|vertical|纵向|自上而下/.test(task) ? 'top-to-bottom' : 'left-to-right',
+    steps,
+    arrows: steps.slice(0, -1).map((step, index) => `${step} -> ${steps[index + 1]}`),
+    styleRules: [
+      'Use a polished full-canvas flowchart layout instead of a sparse tiny box draft.',
+      'Use readable labels, clear arrows, grouped stages, and balanced spacing.',
+      'Use publication-style colors with a light background and concise annotations.'
+    ],
+    negativeRules: [
+      'Do not make overlapping labels.',
+      'Do not produce a center-only miniature diagram.',
+      'Do not invent numerical data.'
+    ]
+  }
+}
+
+function compileFlowchartPrompt(task: string, brief: DrawingBrief): string {
+  return [
+    task,
+    '',
+    'SciForge DrawingBrief v1:',
+    JSON.stringify(brief, null, 2),
+    '',
+    'Generate the final visual from this brief. The brief is a semantic scaffold, not a request for a tiny draft.'
+  ].join('\n')
+}
+
+function buildFrameworkDiagramSpec(task: string, size: ImageSize): FrameworkDiagramSpec {
+  const frameworkType = classifyFrameworkType(task)
+  const panels = extractFrameworkPanels(task, frameworkType)
+  const nodes = panels.flatMap((panel) =>
+    panel.contents.map((label, index) => ({
+      id: slugForId(`${panel.id}-${index + 1}`),
+      label,
+      kind: inferFrameworkNodeKind(label),
+      panelId: panel.id,
+      required: true
+    }))
+  )
+  const edges = nodes.slice(0, -1).map((node, index) => ({
+    from: node.id,
+    to: nodes[index + 1].id,
+    style: 'solid' as const
+  }))
+  return {
+    version: 1,
+    frameworkType,
+    canvas: {
+      aspect: size.width >= size.height * 1.45 ? 'very_wide' : size.width >= size.height ? 'wide' : 'tall',
+      flow: panels.length > 2 ? 'multi-panel' : 'left-to-right',
+      density: nodes.length > 14 ? 'dense' : nodes.length > 7 ? 'moderate' : 'light',
+      size
+    },
+    panels,
+    nodes,
+    edges,
+    callouts: [
+      {
+        title: 'Key mechanism',
+        details: ['Highlight the main information path and the component that explains the requested analysis angle.']
+      }
+    ],
+    styleRules: [
+      'Paper-style framework figure with clear module grouping.',
+      'Readable typography, concise labels, and directional arrows.',
+      'Use color to separate conceptual regions, not decorative gradients.'
+    ],
+    negativeRules: [
+      'Do not use illegible microtext.',
+      'Do not collapse all modules into generic boxes.',
+      'Do not alter scientific facts or data.'
+    ],
+    checklist: [
+      'All required modules are visible.',
+      'Inputs, core mechanism, and outputs are distinguishable.',
+      'The figure can be refined in Canvas using layer metadata.'
+    ]
+  }
+}
+
+function buildFrameworkDesignPlan(task: string, spec: FrameworkDiagramSpec): FrameworkDesignPlan {
+  const panelLayouts = layoutFrameworkPanels(spec)
+  const regions: FrameworkRegion[] = panelLayouts.map(({ panel, bbox }, index) => ({
+    id: `region-${panel.id}`,
+    title: panel.title,
+    kind: 'panel',
+    panelId: panel.id,
+    purpose: panel.role,
+    bbox,
+    placeholderId: `SF${String(index + 1).padStart(2, '0')}`,
+    assetPolicy: 'none',
+    prompt: panel.contents.join('; '),
+    editable: true,
+    sourceSpecRef: panel.id
+  }))
+  return {
+    version: 1,
+    kind: 'sciforge_framework_design_plan',
+    canvas: spec.canvas,
+    layoutSummary: `${spec.frameworkType} / ${spec.canvas.flow} / ${spec.canvas.density}`,
+    panels: spec.panels,
+    regions,
+    arrowStrategy: 'Use directional arrows to show the main information flow and feedback where needed.',
+    textStrategy: 'Keep labels short and large enough for a paper figure thumbnail.',
+    styleStrategy: 'Use subdued scientific colors with one accent for the core mechanism.',
+    confirmationSummary: [
+      'Framework diagram plan:',
+      `- Type: ${spec.frameworkType}`,
+      `- Layout: ${spec.canvas.flow}`,
+      `- Panels: ${spec.panels.map((panel) => panel.title).join(', ')}`,
+      `- Required nodes: ${spec.nodes.map((node) => node.label).join(' -> ')}`,
+      `- Source task: ${task.slice(0, 240)}`
+    ].join('\n'),
+    checklist: spec.checklist
+  }
+}
+
+function compileFrameworkDiagramPrompt(task: string, spec: FrameworkDiagramSpec): string {
+  return [
+    task,
+    '',
+    'Draw a confirmed scientific framework diagram from FrameworkDiagramSpec v1.',
+    'Use the spec as semantic ground truth. Produce one polished, full-canvas visual with editable sidecar layers.',
+    '',
+    'FrameworkDiagramSpec v1:',
+    JSON.stringify(spec, null, 2)
+  ].join('\n')
+}
+
+async function writeDiagramLayerManifestIfNeeded(input: {
+  workspaceRoot: string
+  outputDir: string
+  imageId: string
+  outputPath: string
+  recipe: ImageGenerationRecipe
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+}): Promise<string | undefined> {
+  if (!input.recipe.intent || input.recipe.intent === 'general_image') return undefined
+  const size = input.recipe.size
+  const layers = input.recipe.diagramSpec
+    ? compileFrameworkDiagramLayers(input.recipe.diagramSpec)
+    : input.recipe.drawingBrief
+      ? compileFlowchartLayers(input.recipe.drawingBrief, size)
+      : []
+  if (layers.length === 0) return undefined
+  const manifest: DiagramLayerManifest = {
+    version: 1,
+    kind: 'sciforge_diagram_layers',
+    createdAt: new Date().toISOString(),
+    source: {
+      intent: input.recipe.intent,
+      ...(input.recipe.promptProfile ? { promptProfile: input.recipe.promptProfile } : {}),
+      ...(input.diagramSpecPath ? { diagramSpecPath: input.diagramSpecPath } : {}),
+      ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
+      previewPath: input.outputPath
+    },
+    canvas: {
+      width: size.width,
+      height: size.height,
+      background: '#ffffff',
+      layout: input.recipe.diagramSpec?.canvas.flow ?? input.recipe.drawingBrief?.direction ?? 'freeform'
+    },
+    layers: [
+      {
+        id: 'preview-background',
+        type: 'image',
+        label: 'Full draft preview',
+        bbox: { x: 0, y: 0, w: size.width, h: size.height },
+        zIndex: 0,
+        assetPath: input.outputPath,
+        editable: false,
+        origin: 'draft_background',
+        confidence: 1
+      },
+      ...layers
+    ]
+  }
+  const manifestPath = join(input.outputDir, input.imageId + '.diagram-layers.json')
+  await writeJson(manifestPath, manifest)
+  return manifestPath
+}
+
+function compileFlowchartLayers(brief: DrawingBrief, size: ImageSize): DiagramLayer[] {
+  const count = Math.max(1, brief.steps.length)
+  const horizontal = brief.direction === 'left-to-right'
+  const margin = 96
+  const boxW = horizontal ? Math.min(220, (size.width - margin * 2) / count * 0.76) : Math.min(360, size.width - margin * 2)
+  const boxH = 82
+  const layers: DiagramLayer[] = []
+  for (const [index, step] of brief.steps.entries()) {
+    const x = horizontal
+      ? margin + index * ((size.width - margin * 2) / count) + ((size.width - margin * 2) / count - boxW) / 2
+      : (size.width - boxW) / 2
+    const y = horizontal
+      ? (size.height - boxH) / 2
+      : margin + index * ((size.height - margin * 2) / count) + ((size.height - margin * 2) / count - boxH) / 2
+    layers.push({
+      id: `node-${index + 1}`,
+      type: 'node',
+      label: step,
+      bbox: { x, y, w: boxW, h: boxH },
+      zIndex: index + 1,
+      editable: true,
+      origin: 'generated_from_spec',
+      confidence: 0.86
+    })
+    if (index > 0) {
+      layers.push({
+        id: `edge-${index}`,
+        type: 'edge',
+        from: `node-${index}`,
+        to: `node-${index + 1}`,
+        zIndex: 100 + index,
+        editable: true,
+        origin: 'generated_from_spec',
+        confidence: 0.82
+      })
+    }
+  }
+  return layers
+}
+
+function compileFrameworkDiagramLayers(spec: FrameworkDiagramSpec): DiagramLayer[] {
+  const layers: DiagramLayer[] = []
+  for (const { panel, bbox } of layoutFrameworkPanels(spec)) {
+    layers.push({
+      id: `panel-${panel.id}`,
+      type: 'panel',
+      label: panel.title,
+      bbox,
+      zIndex: 1,
+      sourceSpecRef: panel.id,
+      editable: true,
+      origin: 'generated_from_spec',
+      confidence: 0.88
+    })
+    const panelNodes = spec.nodes.filter((node) => node.panelId === panel.id)
+    panelNodes.forEach((node, index) => {
+      const nodeW = Math.min(240, Math.max(120, bbox.w * 0.72))
+      const nodeH = 58
+      const x = bbox.x + (bbox.w - nodeW) / 2
+      const y = bbox.y + 72 + index * Math.max(70, (bbox.h - 130) / Math.max(1, panelNodes.length))
+      layers.push({
+        id: node.id,
+        type: 'node',
+        label: node.label,
+        bbox: { x, y, w: nodeW, h: nodeH },
+        zIndex: 10 + index,
+        sourceSpecRef: node.id,
+        editable: true,
+        origin: 'generated_from_spec',
+        confidence: 0.84
+      })
+    })
+  }
+  spec.edges.forEach((edge, index) => {
+    layers.push({
+      id: `edge-${edge.from}-${edge.to}`,
+      type: 'edge',
+      label: edge.label,
+      from: edge.from,
+      to: edge.to,
+      zIndex: 200 + index,
+      editable: true,
+      origin: 'generated_from_spec',
+      confidence: 0.8
+    })
+  })
+  spec.callouts.forEach((callout, index) => {
+    layers.push({
+      id: `callout-${index + 1}`,
+      type: 'callout',
+      label: `${callout.title}: ${callout.details.join('; ')}`,
+      bbox: { x: 48, y: 48 + index * 82, w: Math.min(360, spec.canvas.size.width * 0.32), h: 64 },
+      zIndex: 300 + index,
+      editable: true,
+      origin: 'generated_from_spec',
+      confidence: 0.78
+    })
+  })
+  return layers
+}
+
+function extractCandidateSteps(task: string, limit: number): string[] {
+  const lines = task
+    .split(/\n|[;；。]/)
+    .map((line) => line.replace(/^\s*[-*•\d.)、]+/, '').trim())
+    .filter((line) => line.length > 0)
+  const arrowParts = task.split(/->|→|=>|⇒/).map((part) => part.trim()).filter(Boolean)
+  const candidates = arrowParts.length >= 2 ? arrowParts : lines
+  const cleaned = candidates
+    .map((item) => item.replace(/\s+/g, ' ').slice(0, 90))
+    .filter((item, index, array) => array.findIndex((other) => other.toLowerCase() === item.toLowerCase()) === index)
+  if (cleaned.length >= 2) return cleaned.slice(0, limit)
+  return ['Input / context', 'Core method', 'Analysis / reasoning', 'Output / conclusion']
+}
+
+function classifyFrameworkType(task: string): FrameworkDiagramSpec['frameworkType'] {
+  const text = task.toLowerCase()
+  if (/train|inference|训练|推理/.test(text)) return 'training_inference'
+  if (/architecture|encoder|decoder|transformer|resnet|model|模型|架构/.test(text)) return 'model_architecture'
+  if (/multi[-\s]?panel|多\s*panel|多图|综合图/.test(text)) return 'multi_panel_method'
+  if (/data|dataset|output|数据|输出/.test(text)) return 'data_to_output_system'
+  return 'method_pipeline'
+}
+
+function extractFrameworkPanels(
+  task: string,
+  frameworkType: FrameworkDiagramSpec['frameworkType']
+): FrameworkDiagramSpec['panels'] {
+  const steps = extractCandidateSteps(task, 12)
+  if (/encoder|decoder|transformer|attention|编码器|解码器|注意力/i.test(task)) {
+    return [
+      {
+        id: 'encoder',
+        title: 'Encoder / Input Path',
+        role: 'Represent input embedding, positional encoding, attention blocks, and residual normalization.',
+        placement: 'left',
+        contents: ['Input embedding', 'Positional encoding', 'Self attention', 'Add & Norm', 'Feed forward']
+      },
+      {
+        id: 'decoder',
+        title: 'Decoder / Output Path',
+        role: 'Represent shifted outputs, masked attention, cross attention, and probabilities.',
+        placement: 'right',
+        contents: ['Output embedding', 'Masked attention', 'Cross attention', 'Add & Norm', 'Linear', 'Softmax']
+      }
+    ]
+  }
+  if (frameworkType === 'training_inference') {
+    return [
+      { id: 'training', title: 'Training', role: 'Model optimization path.', placement: 'top', contents: steps.slice(0, Math.ceil(steps.length / 2)) },
+      { id: 'inference', title: 'Inference', role: 'Deployment and prediction path.', placement: 'bottom', contents: steps.slice(Math.ceil(steps.length / 2)) }
+    ]
+  }
+  const chunkSize = Math.max(2, Math.ceil(steps.length / 3))
+  return [
+    { id: 'input', title: 'Input', role: 'Input data, context, or problem setup.', placement: 'left', contents: steps.slice(0, chunkSize) },
+    { id: 'method', title: 'Core Method', role: 'Central mechanism or model components.', placement: 'center', contents: steps.slice(chunkSize, chunkSize * 2) },
+    { id: 'output', title: 'Output', role: 'Results, decision, or conclusion.', placement: 'right', contents: steps.slice(chunkSize * 2) }
+  ].filter((panel) => panel.contents.length > 0)
+}
+
+function inferFrameworkNodeKind(label: string): FrameworkDiagramSpec['nodes'][number]['kind'] {
+  const text = label.toLowerCase()
+  if (/input|prompt|data|dataset|输入|数据/.test(text)) return 'input'
+  if (/output|probabilit|result|class|输出|结果/.test(text)) return 'output'
+  if (/loss|objective|损失|目标/.test(text)) return 'loss'
+  if (/model|network|attention|encoder|decoder|transformer|resnet|模型|网络|注意力|编码|解码/.test(text)) return 'model'
+  if (/module|block|layer|模块|层/.test(text)) return 'module'
+  return 'process'
+}
+
+function layoutFrameworkPanels(spec: FrameworkDiagramSpec): Array<{ panel: FrameworkDiagramSpec['panels'][number]; bbox: DiagramLayerBounds }> {
+  const panels = spec.panels.length ? spec.panels : extractFrameworkPanels('', spec.frameworkType)
+  const { width, height } = spec.canvas.size
+  const margin = 72
+  const gap = 36
+  if (spec.canvas.flow === 'top-to-bottom' || spec.canvas.flow === 'two-row') {
+    const panelH = (height - margin * 2 - gap * (panels.length - 1)) / Math.max(1, panels.length)
+    return panels.map((panel, index) => ({
+      panel,
+      bbox: {
+        x: margin,
+        y: margin + index * (panelH + gap),
+        w: width - margin * 2,
+        h: panelH
+      }
+    }))
+  }
+  const panelW = (width - margin * 2 - gap * (panels.length - 1)) / Math.max(1, panels.length)
+  return panels.map((panel, index) => ({
+    panel,
+    bbox: {
+      x: margin + index * (panelW + gap),
+      y: margin,
+      w: panelW,
+      h: height - margin * 2
+    }
+  }))
 }
 
 export async function editImageFromCanvasPacket(
@@ -231,7 +794,7 @@ export async function editImageFromCanvasPacket(
       outputPath: string
       manifestPath: string
       artifactManifestPath: string
-      provider: 'image-endpoint' | 'placeholder'
+      provider: ImageGenerationProvider
     }> = []
     for (const [index, intent] of intents.entries()) {
       const imageId = slugForId(request.imageId ?? 'edited-image-' + new Date().toISOString() + '-' + (index + 1))
@@ -278,7 +841,7 @@ export async function editImageFromCanvasPacket(
     }
     return {
       ok: true,
-      status: outputs.some((output) => output.provider === 'image-endpoint') ? 'edited' : 'edited_placeholder',
+      status: outputs.some((output) => output.provider !== 'placeholder') ? 'edited' : 'edited_placeholder',
       intents,
       outputs,
       warnings
@@ -395,6 +958,9 @@ function providerKindForReadOnly(warnings: string[]): 'image-endpoint' | 'placeh
 }
 
 async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderRenderResult> {
+  const controlledEditResult = await renderControlledImageEdit(input)
+  if (controlledEditResult) return controlledEditResult
+
   if (providerKind() === 'image-endpoint') {
     try {
       await renderWithConfiguredImageEndpoint(input)
@@ -414,6 +980,115 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
     placeholder: true,
     warnings: ['Rendered with placeholder provider because SCIFORGE_IMAGE_ALLOW_PLACEHOLDER=1 is set and no Model Router image endpoint is configured.']
   }
+}
+
+async function renderControlledImageEdit(input: ProviderRenderInput): Promise<ProviderRenderResult | null> {
+  const intent = input.editIntent
+  if (!intent?.sourcePath) return null
+
+  const sourcePath = await resolveWorkspacePath(input.workspaceRoot, intent.sourcePath)
+  const source = await loadImage(sourcePath)
+  const canvas = createCanvas(source.width, source.height)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(source, 0, 0)
+
+  const warnings: string[] = []
+  if (isColorEditInstruction(intent.instruction)) {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    applyControlledColorEdit(imageData.data, intent.instruction)
+    ctx.putImageData(imageData, 0, 0)
+    warnings.push('Applied a source-preserving controlled color edit; layout, text, and composition were kept from the original image.')
+  } else {
+    warnings.push('Canvas image edit kept the source image unchanged because this edit is not yet mapped to a safe source-preserving transform.')
+  }
+
+  await writeFile(input.outputPath, canvas.toBuffer('image/png'))
+  return {
+    provider: 'controlled-edit',
+    placeholder: false,
+    warnings
+  }
+}
+
+function isColorEditInstruction(instruction: string): boolean {
+  return /color|colour|palette|tone|hue|tint|theme|recolor|配色|颜色|色彩|色调|换色|改色|换个颜色|换颜色|调色/i.test(instruction)
+}
+
+function applyControlledColorEdit(data: Uint8ClampedArray, instruction: string): void {
+  const targetHue = preferredHueFromInstruction(instruction)
+  const genericHueShift = 54 / 360
+
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3]
+    if (alpha < 16) continue
+
+    const r = data[i] / 255
+    const g = data[i + 1] / 255
+    const b = data[i + 2] / 255
+    const hsl = rgbToHsl(r, g, b)
+
+    // Keep black/gray text, white backgrounds, and thin axis marks readable.
+    if (hsl.l < 0.12 || hsl.l > 0.94 || hsl.s < 0.08) continue
+
+    const nextHue = targetHue ?? ((hsl.h + genericHueShift) % 1)
+    const nextSaturation = clamp01(Math.max(0.22, hsl.s * 1.12))
+    const nextLightness = clamp01(0.08 + hsl.l * 0.9)
+    const [nextR, nextG, nextB] = hslToRgb(nextHue, nextSaturation, nextLightness)
+
+    data[i] = Math.round(nextR * 255)
+    data[i + 1] = Math.round(nextG * 255)
+    data[i + 2] = Math.round(nextB * 255)
+  }
+}
+
+function preferredHueFromInstruction(instruction: string): number | undefined {
+  const text = instruction.toLowerCase()
+  if (/red|红/.test(text)) return 0 / 360
+  if (/orange|橙/.test(text)) return 30 / 360
+  if (/yellow|黄/.test(text)) return 52 / 360
+  if (/green|绿/.test(text)) return 135 / 360
+  if (/cyan|teal|青|湖蓝/.test(text)) return 180 / 360
+  if (/blue|蓝/.test(text)) return 215 / 360
+  if (/purple|violet|紫/.test(text)) return 275 / 360
+  if (/pink|rose|粉/.test(text)) return 330 / 360
+  return undefined
+}
+
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return { h: 0, s: 0, l }
+
+  const delta = max - min
+  const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min)
+  let h = 0
+  if (max === r) h = (g - b) / delta + (g < b ? 6 : 0)
+  else if (max === g) h = (b - r) / delta + 2
+  else h = (r - g) / delta + 4
+  return { h: h / 6, s, l }
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  if (s === 0) return [l, l, l]
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  return [
+    hueToRgb(p, q, h + 1 / 3),
+    hueToRgb(p, q, h),
+    hueToRgb(p, q, h - 1 / 3)
+  ]
+}
+
+function hueToRgb(p: number, q: number, t: number): number {
+  let value = t
+  if (value < 0) value += 1
+  if (value > 1) value -= 1
+  if (value < 1 / 6) return p + (q - p) * 6 * value
+  if (value < 1 / 2) return q
+  if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6
+  return p
 }
 
 function allowPlaceholderProvider(): boolean {
@@ -484,6 +1159,10 @@ function normalizeLocalModelRouterV1BaseUrl(rawBaseUrl: string): string {
 function isAllowedLocalModelRouterHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
   return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1'
+}
+
+function imageModel(): string {
+  return process.env.SCIFORGE_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL
 }
 
 async function renderWithImageEndpoint(
@@ -688,16 +1367,23 @@ function drawWrappedText(
 
 function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): ImageGenerationRecipe {
   if (!recipe || typeof recipe !== 'object') throw new Error('recipe is required.')
-  const prompt = recipe.prompt?.trim()
+  const prompt = enhanceImageGenerationPrompt(recipe.prompt?.trim() ?? '', recipe.stylePreset)
   if (!prompt) throw new Error('recipe.prompt is required.')
   return {
     mode: recipe.mode ?? 'text_to_image',
     prompt,
+    ...(recipe.model?.trim() ? { model: recipe.model.trim() } : {}),
     ...(recipe.negativePrompt?.trim() ? { negativePrompt: recipe.negativePrompt.trim() } : {}),
     size: normalizeSize(recipe.size, warnings),
     ...(recipe.stylePreset?.trim() ? { stylePreset: recipe.stylePreset.trim() } : {}),
     ...(recipe.referencePath?.trim() ? { referencePath: recipe.referencePath.trim() } : {}),
-    outputFormat: recipe.outputFormat ?? 'png'
+    outputFormat: recipe.outputFormat ?? 'png',
+    ...(recipe.intent ? { intent: recipe.intent } : {}),
+    ...(recipe.drawingBrief ? { drawingBrief: recipe.drawingBrief } : {}),
+    ...(recipe.diagramSpec ? { diagramSpec: recipe.diagramSpec } : {}),
+    ...(recipe.frameworkDesignPlan ? { frameworkDesignPlan: recipe.frameworkDesignPlan } : {}),
+    ...(recipe.confirmation ? { confirmation: recipe.confirmation } : {}),
+    ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {})
   }
 }
 
@@ -739,7 +1425,19 @@ function normalizeSize(size: Partial<ImageSize> | undefined, warnings: string[])
   const height = clampInteger(size?.height ?? DEFAULT_SIZE.height, MIN_IMAGE_SIZE, MAX_IMAGE_SIZE)
   if (size?.width !== undefined && width !== size.width) warnings.push('Requested width was clamped to supported range.')
   if (size?.height !== undefined && height !== size.height) warnings.push('Requested height was clamped to supported range.')
-  return { width, height }
+  const providerWidth = alignImageSize(width)
+  const providerHeight = alignImageSize(height)
+  if (providerWidth !== width || providerHeight !== height) {
+    warnings.push(
+      'Requested image size was adjusted to ' + providerWidth + 'x' + providerHeight + ' for image-provider compatibility.'
+    )
+  }
+  return { width: providerWidth, height: providerHeight }
+}
+
+function alignImageSize(value: number): number {
+  const aligned = Math.floor(value / IMAGE_SIZE_GRANULARITY) * IMAGE_SIZE_GRANULARITY
+  return Math.max(MIN_IMAGE_SIZE, Math.min(MAX_IMAGE_SIZE, aligned || MIN_IMAGE_SIZE))
 }
 
 async function resolveOutputDir(workspaceRoot: string, outputDir?: string): Promise<string> {
@@ -786,6 +1484,11 @@ async function writeImageArtifactManifest(input: {
   threadId?: string
   usagePolicy?: ImageGenerationUsagePolicy
   title: string
+  intent?: ImageDrawingIntent
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
+  promptProfile?: ImageGenerationRecipe['promptProfile']
   review?: ImageGenerationReviewResult
 }): Promise<string> {
   const artifactsDir = join(input.workspaceRoot, ARTIFACT_DIR)
@@ -805,6 +1508,11 @@ async function writeImageArtifactManifest(input: {
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
     ...(input.referencePath ? { referencePath: input.referencePath } : {}),
+    ...(input.intent ? { intent: input.intent } : {}),
+    ...(input.diagramSpecPath ? { diagramSpecPath: input.diagramSpecPath } : {}),
+    ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
+    ...(input.diagramLayerManifestPath ? { diagramLayerManifestPath: input.diagramLayerManifestPath } : {}),
+    ...(input.promptProfile ? { promptProfile: input.promptProfile } : {}),
     title: input.title,
     ...(input.usagePolicy ? { usagePolicy: input.usagePolicy } : {}),
     ...(input.review?.ok ? { reviewScore: input.review.score } : {})

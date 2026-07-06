@@ -13,6 +13,16 @@ export type SciforgeCanvasArtifactKind = typeof SCIFORGE_CANVAS_ARTIFACT_KINDS[n
 
 export type SciforgeCanvasPlacement = 'right' | 'left' | 'below'
 
+export type SciforgeCanvasEngine = 'drawio' | 'tldraw'
+
+export type SciforgeCanvasDrawioSnapshot = {
+  engine: 'drawio'
+  diagramXml: string
+  diagramPath?: string
+  legacySnapshotPath?: string
+  updatedAt?: string
+}
+
 export type SciforgeCanvasBounds = {
   x: number
   y: number
@@ -61,6 +71,9 @@ export type SciforgeCanvasArtifactMetadata = {
   renderedSlideIndex?: number
   manifestPath?: string
   styleSpecPath?: string
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
   reviewScore?: FigureStyleSimilarityScore
   referencePath?: string
   projectPath?: string
@@ -86,6 +99,8 @@ export type SciforgeCanvasOpenResult =
       canvasId: string
       canvasDir: string
       canvasPath: string
+      engine?: SciforgeCanvasEngine
+      drawioPath?: string
       assetsDir: string
       selectionPath: string
       snapshot: unknown
@@ -111,6 +126,8 @@ export type SciforgeCanvasSaveResult =
       status: 'saved'
       canvasId: string
       canvasPath: string
+      engine?: SciforgeCanvasEngine
+      drawioPath?: string
       updatedAt: string
     }
   | {
@@ -137,6 +154,9 @@ export type SciforgeCanvasInsertArtifactRequest = {
   renderedSlideIndex?: number
   manifestPath?: string
   styleSpecPath?: string
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
   referencePath?: string
   projectPath?: string
   svgPath?: string
@@ -197,6 +217,7 @@ export type SciforgeCanvasStatusResult =
       version: string
       workspaceRoot?: string
       defaultRelativeDir: '.sciforge/canvases'
+      canvasEngine?: SciforgeCanvasEngine
       supportedArtifactKinds: SciforgeCanvasArtifactKind[]
       cowartCompatibility: {
         aiImageHolderMeta: 'cowartAiImageHolder'
@@ -300,6 +321,9 @@ export type SciforgeCanvasRecentArtifact = {
   sourcePath?: string
   previewPath?: string
   styleSpecPath?: string
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
   referencePath?: string
   projectPath?: string
   svgPath?: string
@@ -360,6 +384,9 @@ export type SciforgeArtifactManifest = {
   previewPath?: string
   manifestPath?: string
   styleSpecPath?: string
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
   referencePath?: string
   projectPath?: string
   svgPath?: string

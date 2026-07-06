@@ -10,6 +10,7 @@ import type {
   SciforgeArtifactManifest,
   SciforgeCanvasArtifactMetadata,
   SciforgeCanvasBounds,
+  SciforgeCanvasDrawioSnapshot,
   SciforgeCanvasImportRecentArtifactsRequest,
   SciforgeCanvasImportRecentArtifactsResult,
   SciforgeCanvasInsertArtifactRequest,
@@ -19,6 +20,7 @@ import type {
   SciforgeCanvasOpenResult,
   SciforgeCanvasReviewPacket,
   SciforgeCanvasReviewPacketAnnotation,
+  SciforgeCanvasReviewPacketArtifact,
   SciforgeCanvasReviewPacketRequest,
   SciforgeCanvasReviewPacketResult,
   SciforgeCanvasSaveRequest,
@@ -50,6 +52,7 @@ type CanvasPaths = {
   canvasId: string
   canvasDir: string
   canvasPath: string
+  drawioPath: string
   assetsDir: string
   selectionPath: string
   packetPath: string
@@ -74,16 +77,51 @@ type PptxPreviewResult = {
   pageNumber: number
 }
 
+type DiagramLayerBounds = {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+type DiagramLayer = {
+  id: string
+  type: string
+  label?: string
+  bbox?: DiagramLayerBounds
+  zIndex?: number
+  style?: Record<string, string | number | boolean>
+  assetPath?: string | null
+  editable?: boolean
+  origin?: string
+  from?: string
+  to?: string
+}
+
+type DiagramLayerManifest = {
+  version: 1
+  kind: 'sciforge_diagram_layers'
+  canvas: {
+    width: number
+    height: number
+    background?: string
+    layout?: string
+  }
+  layers: DiagramLayer[]
+}
+
 const SERVER_VERSION = '0.1.0'
 const DEFAULT_CANVAS_ID = 'default'
 const CANVAS_ROOT_RELATIVE = '.sciforge/canvases'
 const DEFAULT_PAGE_ID = 'page:sciforge-canvas'
 const DEFAULT_PAGE_NAME = 'SciForge Canvas'
+const DEFAULT_DRAWIO_PAGE_ID = 'sciforge-canvas'
 const DEFAULT_PAGE_INDEX = 'a1'
 const DEFAULT_IMAGE_WIDTH = 640
 const PLACEHOLDER_WIDTH = 460
 const PLACEHOLDER_HEIGHT = 260
 const MAX_IMAGE_BYTES = 40 * 1024 * 1024
+const DRAWIO_INLINE_IMAGE_MAX_BYTES = 1_500_000
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg'])
 const RECENT_ARTIFACT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg', '.pptx'])
 const RECENT_ARTIFACT_DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -143,6 +181,7 @@ export async function getSciforgeCanvasStatus(
     ...(workspaceRoot?.trim() ? { workspaceRoot: await resolveWorkspaceRoot(workspaceRoot) } : {}),
     defaultRelativeDir: CANVAS_ROOT_RELATIVE,
     supportedArtifactKinds: [...SCIFORGE_CANVAS_ARTIFACT_KINDS],
+    canvasEngine: 'drawio' as const,
     cowartCompatibility: {
       aiImageHolderMeta: 'cowartAiImageHolder',
       annotationArrowMeta: 'cowartAnnotationArrow',
@@ -152,6 +191,7 @@ export async function getSciforgeCanvasStatus(
     },
     guardrails: [
       'Canvas state and assets are written only inside the selected workspace.',
+      'New canvases are stored as draw.io XML; legacy tldraw snapshots are retained for migration only.',
       'Cowart-compatible metadata is preserved for AI image holders, annotation arrows, and before/after edits.',
       'Scientific plot and ppt-master source artifacts are not overwritten.',
       'Canvas review packets describe requested adjustments; they do not directly mutate scientific data or ppt-master projects.'
@@ -174,10 +214,37 @@ export async function openOrCreateSciforgeCanvas(
   try {
     const paths = await resolveCanvasPaths(request.workspaceRoot, request.canvasId)
     await mkdir(paths.assetsDir, { recursive: true })
-    const existed = await fileExists(paths.canvasPath)
-    const snapshot = existed ? await readCanvasSnapshot(paths) : createInitialCanvasSnapshot()
-    if (!existed) await writeJsonAtomic(paths.canvasPath, snapshot)
+    if (process.env.SCIFORGE_CANVAS_ENGINE === 'tldraw') {
+      const existed = await fileExists(paths.canvasPath)
+      const snapshot = existed ? await readCanvasSnapshot(paths) : createInitialCanvasSnapshot()
+      if (!existed) await writeJsonAtomic(paths.canvasPath, snapshot)
+      const selection = await readSelectionState(paths)
+      return {
+        ok: true,
+        status: existed ? 'opened' : 'created',
+        workspaceRoot: paths.workspaceRoot,
+        canvasId: paths.canvasId,
+        canvasDir: paths.canvasDir,
+        canvasPath: paths.canvasPath,
+        engine: 'tldraw',
+        assetsDir: paths.assetsDir,
+        selectionPath: paths.selectionPath,
+        snapshot,
+        selection,
+        warnings: []
+      }
+    }
+    const existed = await fileExists(paths.drawioPath)
+    const diagramXml = existed ? await readFile(paths.drawioPath, 'utf8') : createInitialDrawioXml(paths.canvasId)
+    if (!existed) await writeFile(paths.drawioPath, diagramXml, 'utf8')
     const selection = await readSelectionState(paths)
+    const snapshot: SciforgeCanvasDrawioSnapshot = {
+      engine: 'drawio',
+      diagramXml,
+      diagramPath: paths.drawioPath,
+      ...(await fileExists(paths.canvasPath) ? { legacySnapshotPath: paths.canvasPath } : {}),
+      updatedAt: new Date().toISOString()
+    }
     return {
       ok: true,
       status: existed ? 'opened' : 'created',
@@ -185,6 +252,8 @@ export async function openOrCreateSciforgeCanvas(
       canvasId: paths.canvasId,
       canvasDir: paths.canvasDir,
       canvasPath: paths.canvasPath,
+      engine: 'drawio',
+      drawioPath: paths.drawioPath,
       assetsDir: paths.assetsDir,
       selectionPath: paths.selectionPath,
       snapshot,
@@ -206,6 +275,20 @@ export async function saveSciforgeCanvasSnapshot(
 ): Promise<SciforgeCanvasSaveResult> {
   try {
     const paths = await resolveCanvasPaths(request.workspaceRoot, request.canvasId)
+    if (isDrawioSnapshot(request.snapshot)) {
+      await mkdir(paths.canvasDir, { recursive: true })
+      const diagramXml = normalizeDrawioXml(request.snapshot.diagramXml)
+      await writeFile(paths.drawioPath, diagramXml, 'utf8')
+      return {
+        ok: true,
+        status: 'saved',
+        canvasId: paths.canvasId,
+        canvasPath: paths.canvasPath,
+        engine: 'drawio',
+        drawioPath: paths.drawioPath,
+        updatedAt: new Date().toISOString()
+      }
+    }
     const snapshot = normalizeSnapshot(request.snapshot)
     await mkdir(paths.assetsDir, { recursive: true })
     await writeJsonAtomic(paths.canvasPath, snapshot)
@@ -214,6 +297,7 @@ export async function saveSciforgeCanvasSnapshot(
       status: 'saved',
       canvasId: paths.canvasId,
       canvasPath: paths.canvasPath,
+      engine: 'tldraw',
       updatedAt: new Date().toISOString()
     }
   } catch (error) {
@@ -261,9 +345,6 @@ export async function insertSciforgeCanvasArtifact(
   try {
     const paths = await resolveCanvasPaths(request.workspaceRoot, request.canvasId)
     await mkdir(paths.assetsDir, { recursive: true })
-    const snapshot = await ensureCanvasSnapshot(paths)
-    const pageId = findPageId(snapshot) ?? DEFAULT_PAGE_ID
-    ensurePageRecord(snapshot, pageId)
     let artifact = await buildArtifactMetadata(request, paths.workspaceRoot, warnings)
     artifact = await prepareCanvasArtifactPreview({
       artifact,
@@ -271,6 +352,24 @@ export async function insertSciforgeCanvasArtifact(
       paths,
       warnings
     })
+    if (await shouldUseDrawioCanvas(paths)) {
+      const result = await insertDrawioArtifact({
+        paths,
+        artifact,
+        request,
+        warnings
+      })
+      return {
+        ...result,
+        status: request.dryRun ? 'planned' : 'inserted',
+        dryRun: Boolean(request.dryRun),
+        warnings
+      }
+    }
+
+    const snapshot = await ensureCanvasSnapshot(paths)
+    const pageId = findPageId(snapshot) ?? DEFAULT_PAGE_ID
+    ensurePageRecord(snapshot, pageId)
     const anchorShape = request.anchorShapeId ? snapshot.store[request.anchorShapeId] : null
     const parentId = anchorShape?.parentId && snapshot.store[String(anchorShape.parentId)]?.typeName === 'page'
       ? String(anchorShape.parentId)
@@ -330,8 +429,9 @@ export async function importRecentSciforgeCanvasArtifacts(
   try {
     const paths = await resolveCanvasPaths(request.workspaceRoot, request.canvasId)
     await mkdir(paths.assetsDir, { recursive: true })
-    const snapshot = await ensureCanvasSnapshot(paths)
-    const existingPaths = request.includeExisting ? new Set<string>() : artifactPathsInSnapshot(snapshot)
+    const existingPaths = request.includeExisting
+      ? new Set<string>()
+      : await artifactPathsForCanvas(paths)
     const limit = Math.min(
       RECENT_ARTIFACT_MAX_LIMIT,
       Math.max(1, Math.floor(request.limit ?? RECENT_ARTIFACT_DEFAULT_LIMIT))
@@ -366,6 +466,9 @@ export async function importRecentSciforgeCanvasArtifacts(
         ...(artifact.manifestPath ? { manifestPath: artifact.manifestPath } : {}),
         ...(artifact.previewPath ? { previewPath: artifact.previewPath } : {}),
         ...(artifact.styleSpecPath ? { styleSpecPath: artifact.styleSpecPath } : {}),
+        ...(artifact.diagramSpecPath ? { diagramSpecPath: artifact.diagramSpecPath } : {}),
+        ...(artifact.frameworkDesignPlanPath ? { frameworkDesignPlanPath: artifact.frameworkDesignPlanPath } : {}),
+        ...(artifact.diagramLayerManifestPath ? { diagramLayerManifestPath: artifact.diagramLayerManifestPath } : {}),
         ...(artifact.referencePath ? { referencePath: artifact.referencePath } : {}),
         ...(artifact.projectPath ? { projectPath: artifact.projectPath } : {}),
         ...(artifact.caption ? { caption: artifact.caption } : {}),
@@ -414,6 +517,28 @@ export async function exportSciforgeCanvasReviewPacket(
   const warnings: string[] = []
   try {
     const paths = await resolveCanvasPaths(request.workspaceRoot, request.canvasId)
+    if (await fileExists(paths.drawioPath)) {
+      const xml = normalizeDrawioXml(await readFile(paths.drawioPath, 'utf8'))
+      const selection = await readSelectionState(paths)
+      const packet = buildDrawioReviewPacket({
+        canvasId: paths.canvasId,
+        title: request.title?.trim() || `SciForge Canvas Review ${paths.canvasId}`,
+        xml,
+        selection
+      })
+      const packetPath = request.packetId?.trim()
+        ? join(paths.canvasDir, `${sanitizeId(request.packetId, 'review-packet')}.json`)
+        : paths.packetPath
+      await writeJsonAtomic(packetPath, packet)
+      return {
+        ok: true,
+        status: 'created',
+        canvasId: paths.canvasId,
+        packetPath,
+        packet,
+        warnings
+      }
+    }
     const snapshot = await readCanvasSnapshot(paths)
     const selection = await readSelectionState(paths)
     const packet = buildReviewPacket({
@@ -454,6 +579,7 @@ async function resolveCanvasPaths(workspaceRoot: string, canvasId?: string): Pro
     canvasId: normalizedCanvasId,
     canvasDir,
     canvasPath: join(canvasDir, 'canvas.json'),
+    drawioPath: join(canvasDir, 'canvas.drawio.xml'),
     assetsDir: join(canvasDir, 'assets'),
     selectionPath: join(canvasDir, 'selection.json'),
     packetPath: join(canvasDir, 'review-packet.json'),
@@ -476,6 +602,36 @@ function sanitizeId(raw: string | undefined, fallback: string): string {
     .slice(0, 120)
   if (!value || value === '.' || value === '..') return fallback
   return value
+}
+
+function isDrawioSnapshot(value: unknown): value is SciforgeCanvasDrawioSnapshot {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<SciforgeCanvasDrawioSnapshot>
+  return record.engine === 'drawio' && typeof record.diagramXml === 'string'
+}
+
+function normalizeDrawioXml(value: string): string {
+  const xml = value.trim()
+  if (!xml) throw new Error('Expected draw.io XML.')
+  if (!xml.includes('<mxfile') && !xml.includes('<mxGraphModel')) {
+    throw new Error('Expected a draw.io mxfile or mxGraphModel document.')
+  }
+  return xml
+}
+
+function createInitialDrawioXml(canvasId: string): string {
+  const now = new Date().toISOString()
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="SciForge" modified="${escapeXmlAttribute(now)}" agent="SciForge Canvas" version="1.0">
+  <diagram id="${escapeXmlAttribute(DEFAULT_DRAWIO_PAGE_ID)}" name="${escapeXmlAttribute(canvasId || DEFAULT_PAGE_NAME)}">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>`
 }
 
 function createInitialCanvasSnapshot(): TldrawSnapshot {
@@ -572,6 +728,20 @@ async function readCanvasSnapshot(paths: CanvasPaths): Promise<TldrawSnapshot> {
   return snapshot
 }
 
+async function shouldUseDrawioCanvas(paths: CanvasPaths): Promise<boolean> {
+  if (process.env.SCIFORGE_CANVAS_ENGINE === 'tldraw') return false
+  if (await fileExists(paths.drawioPath)) return true
+  return true
+}
+
+async function ensureDrawioXml(paths: CanvasPaths): Promise<string> {
+  if (await fileExists(paths.drawioPath)) return normalizeDrawioXml(await readFile(paths.drawioPath, 'utf8'))
+  const xml = createInitialDrawioXml(paths.canvasId)
+  await mkdir(paths.canvasDir, { recursive: true })
+  await writeFile(paths.drawioPath, xml, 'utf8')
+  return xml
+}
+
 function ensurePageRecord(snapshot: TldrawSnapshot, pageId: string): void {
   if (snapshot.store[pageId]?.typeName === 'page') return
   snapshot.store[pageId] = {
@@ -624,6 +794,9 @@ async function buildArtifactMetadata(
   const renderedFromPptxPath = await resolveOptionalPath(request.renderedFromPptxPath, workspaceRoot)
   const manifestPath = await resolveOptionalPath(request.manifestPath, workspaceRoot)
   const styleSpecPath = await resolveOptionalPath(request.styleSpecPath, workspaceRoot)
+  const diagramSpecPath = await resolveOptionalPath(request.diagramSpecPath, workspaceRoot)
+  const frameworkDesignPlanPath = await resolveOptionalPath(request.frameworkDesignPlanPath, workspaceRoot)
+  const diagramLayerManifestPath = await resolveOptionalPath(request.diagramLayerManifestPath, workspaceRoot)
   const referencePath = await resolveOptionalPath(request.referencePath, workspaceRoot)
   const projectPath = await resolveOptionalExistingDirectory(request.projectPath, workspaceRoot)
   const svgPath = await resolveOptionalPath(request.svgPath, workspaceRoot)
@@ -641,6 +814,9 @@ async function buildArtifactMetadata(
     ...(request.renderedSlideIndex !== undefined ? { renderedSlideIndex: request.renderedSlideIndex } : {}),
     ...(manifestPath ? { manifestPath } : {}),
     ...(styleSpecPath ? { styleSpecPath } : {}),
+    ...(diagramSpecPath ? { diagramSpecPath } : {}),
+    ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
+    ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
     ...(referencePath ? { referencePath } : {}),
     ...(projectPath ? { projectPath } : {}),
     ...(svgPath ? { svgPath } : {}),
@@ -883,6 +1059,210 @@ function buildShapeMeta(
   return meta
 }
 
+async function insertDrawioArtifact(input: {
+  paths: CanvasPaths
+  artifact: SciforgeCanvasArtifactMetadata
+  request: SciforgeCanvasInsertArtifactRequest
+  warnings: string[]
+}): Promise<Extract<SciforgeCanvasInsertArtifactResult, { ok: true }>> {
+  const xml = await ensureDrawioXml(input.paths)
+  if (input.artifact.diagramLayerManifestPath) {
+    return insertDrawioDiagramLayers({
+      ...input,
+      xml
+    })
+  }
+  const sourcePath = displayPathForArtifact(input.artifact)
+  const isPlaceholder = input.artifact.pptxPath && input.request.artifactKind === 'ppt_export' && !sourcePath
+  let sourceStat: Awaited<ReturnType<typeof stat>> | null = null
+  let assetFile: string | undefined
+  let imageSize: ImageDimensions = {
+    width: finiteNumber(input.request.displayWidth, isPlaceholder ? PLACEHOLDER_WIDTH : DEFAULT_IMAGE_WIDTH),
+    height: finiteNumber(input.request.displayHeight, isPlaceholder ? PLACEHOLDER_HEIGHT : Math.round(DEFAULT_IMAGE_WIDTH * 0.65))
+  }
+  let imageDataUri: string | null = null
+  let mimeType: string | undefined
+
+  if (!isPlaceholder) {
+    if (!sourcePath) throw new Error('No displayable artifact path was provided.')
+    sourceStat = await stat(sourcePath)
+    if (!sourceStat.isFile()) throw new Error(`Artifact path is not a file: ${sourcePath}`)
+    if (sourceStat.size > MAX_IMAGE_BYTES) throw new Error(`Artifact is too large for canvas insertion: ${sourcePath}`)
+    const ext = extensionFromName(sourcePath)
+    mimeType = mimeTypeForExtension(ext) ?? undefined
+    if (!mimeType) throw new Error(`Unsupported image artifact extension: ${ext}`)
+    const bytes = await readFile(sourcePath)
+    imageSize = readImageDimensions(sourcePath, bytes)
+    if (sourceStat.size <= DRAWIO_INLINE_IMAGE_MAX_BYTES) {
+      imageDataUri = `data:${mimeType};base64,${bytes.toString('base64')}`
+    } else {
+      input.warnings.push('Artifact is too large to inline in draw.io XML; inserted as a metadata placeholder.')
+    }
+    const unique = await uniqueFilePath(input.paths.assetsDir, input.request.fileName || basename(sourcePath))
+    assetFile = unique.filePath
+    if (!input.request.dryRun) {
+      await mkdir(input.paths.assetsDir, { recursive: true })
+      await copyFile(sourcePath, assetFile)
+    }
+  }
+
+  const width = finiteNumber(
+    input.request.displayWidth,
+    Math.min(imageSize.width, isPlaceholder ? PLACEHOLDER_WIDTH : DEFAULT_IMAGE_WIDTH)
+  )
+  const height = finiteNumber(
+    input.request.displayHeight,
+    isPlaceholder ? PLACEHOLDER_HEIGHT : Math.round(width * (imageSize.height / Math.max(1, imageSize.width)))
+  )
+  const bounds = chooseDrawioPlacement(xml, width, height, Math.max(0, finiteNumber(input.request.margin, 64)))
+  const shapeId = uniqueDrawioCellId(xml, input.artifact.title || input.request.fileName || 'artifact')
+  const artifact = {
+    ...input.artifact,
+    ...(assetFile ? { previewPath: input.artifact.previewPath ?? assetFile } : {})
+  }
+  const meta = buildShapeMeta(input.request, artifact)
+  const title = input.artifact.title || input.request.fileName || basename(sourcePath || input.artifact.pptxPath || 'SciForge artifact')
+  const cellXml = imageDataUri
+    ? createDrawioImageCell({
+      id: shapeId,
+      title,
+      imageDataUri,
+      bounds,
+      meta
+    })
+    : createDrawioPlaceholderCell({
+      id: shapeId,
+      title,
+      subtitle: isPlaceholder
+        ? 'PPTX export preview unavailable'
+        : sourcePath
+          ? basename(sourcePath)
+          : 'SciForge artifact',
+      bounds,
+      meta
+    })
+
+  if (!input.request.dryRun) {
+    await writeFile(input.paths.drawioPath, insertDrawioCellXml(xml, cellXml), 'utf8')
+  }
+
+  return {
+    ok: true,
+    status: 'inserted',
+    canvasId: input.paths.canvasId,
+    canvasDir: input.paths.canvasDir,
+    canvasPath: input.paths.canvasPath,
+    assetFile,
+    assetId: assetFile ? `asset:${basename(assetFile)}` : undefined,
+    shapeId,
+    pageId: DEFAULT_DRAWIO_PAGE_ID,
+    parentId: '1',
+    bounds,
+    artifact,
+    warnings: input.warnings,
+    dryRun: Boolean(input.request.dryRun)
+  }
+}
+
+async function insertDrawioDiagramLayers(input: {
+  paths: CanvasPaths
+  artifact: SciforgeCanvasArtifactMetadata
+  request: SciforgeCanvasInsertArtifactRequest
+  warnings: string[]
+  xml: string
+}): Promise<Extract<SciforgeCanvasInsertArtifactResult, { ok: true }>> {
+  if (!input.artifact.diagramLayerManifestPath) throw new Error('diagramLayerManifestPath is required.')
+  const manifest = parseDiagramLayerManifest(JSON.parse(await readFile(input.artifact.diagramLayerManifestPath, 'utf8')) as unknown)
+  const sourcePath = displayPathForArtifact(input.artifact)
+  const manifestWidth = Math.max(1, manifest.canvas.width)
+  const manifestHeight = Math.max(1, manifest.canvas.height)
+  const requestedWidth = finiteNumber(input.request.displayWidth, Math.min(manifestWidth, DEFAULT_IMAGE_WIDTH))
+  const requestedHeight = finiteNumber(input.request.displayHeight, Math.round(requestedWidth * manifestHeight / manifestWidth))
+  const bounds = chooseDrawioPlacement(input.xml, requestedWidth, requestedHeight, Math.max(0, finiteNumber(input.request.margin, 64)))
+  const scaleX = bounds.w / manifestWidth
+  const scaleY = bounds.h / manifestHeight
+  const metaBase = buildShapeMeta(input.request, input.artifact)
+  const usedXmlParts: string[] = []
+  const layerIdMap = new Map<string, string>()
+  const sortedLayers = [...manifest.layers].sort((a, b) => finiteNumber(a.zIndex, 0) - finiteNumber(b.zIndex, 0))
+
+  for (const layer of sortedLayers) {
+    if (layer.type === 'edge') continue
+    const layerBounds = scaledLayerBounds(layer.bbox, bounds, scaleX, scaleY)
+    if (!layerBounds) continue
+    const cellId = uniqueDrawioCellId(input.xml + usedXmlParts.join('\n'), layer.id || 'diagram-layer')
+    layerIdMap.set(layer.id, cellId)
+    const layerMeta = {
+      ...metaBase,
+      sciforgeDiagramLayer: true,
+      sciforgeDiagramLayerId: layer.id,
+      sciforgeDiagramLayerType: layer.type,
+      sciforgeDiagramLayerEditable: layer.editable !== false,
+      sciforgeDiagramLayerManifestPath: input.artifact.diagramLayerManifestPath
+    }
+    const assetPath = await resolveDiagramLayerAsset(layer, input.paths.workspaceRoot, sourcePath)
+    if (layer.type === 'image' && assetPath) {
+      const imageCell = await createDrawioImageCellFromFile({
+        id: cellId,
+        title: layer.label || input.artifact.title || 'Diagram preview',
+        path: assetPath,
+        bounds: layerBounds,
+        meta: layerMeta,
+        warnings: input.warnings
+      })
+      usedXmlParts.push(imageCell)
+      continue
+    }
+    usedXmlParts.push(createDrawioDiagramVertexCell({
+      id: cellId,
+      layer,
+      bounds: layerBounds,
+      meta: layerMeta
+    }))
+  }
+
+  for (const layer of sortedLayers.filter((item) => item.type === 'edge')) {
+    const source = layer.from ? layerIdMap.get(layer.from) : undefined
+    const target = layer.to ? layerIdMap.get(layer.to) : undefined
+    if (!source || !target) continue
+    const cellId = uniqueDrawioCellId(input.xml + usedXmlParts.join('\n'), layer.id || 'diagram-edge')
+    usedXmlParts.push(createDrawioEdgeCell({
+      id: cellId,
+      value: layer.label || '',
+      source,
+      target,
+      meta: {
+        ...metaBase,
+        sciforgeDiagramLayer: true,
+        sciforgeDiagramLayerId: layer.id,
+        sciforgeDiagramLayerType: layer.type,
+        sciforgeDiagramLayerEditable: layer.editable !== false,
+        sciforgeDiagramLayerManifestPath: input.artifact.diagramLayerManifestPath
+      }
+    }))
+  }
+
+  if (!input.request.dryRun && usedXmlParts.length) {
+    await writeFile(input.paths.drawioPath, insertDrawioCellXml(input.xml, usedXmlParts.join('\n')), 'utf8')
+  }
+
+  const shapeId = usedXmlParts.length ? [...layerIdMap.values()][0] ?? uniqueDrawioCellId(input.xml, 'diagram') : uniqueDrawioCellId(input.xml, 'diagram')
+  return {
+    ok: true,
+    status: 'inserted',
+    canvasId: input.paths.canvasId,
+    canvasDir: input.paths.canvasDir,
+    canvasPath: input.paths.canvasPath,
+    shapeId,
+    pageId: DEFAULT_DRAWIO_PAGE_ID,
+    parentId: '1',
+    bounds,
+    artifact: input.artifact,
+    warnings: input.warnings,
+    dryRun: Boolean(input.request.dryRun)
+  }
+}
+
 async function insertImageArtifact(input: {
   snapshot: TldrawSnapshot
   paths: CanvasPaths
@@ -1057,6 +1437,375 @@ function insertPlaceholderArtifact(input: {
   }
 }
 
+function createDrawioImageCell(input: {
+  id: string
+  title: string
+  imageDataUri: string
+  bounds: SciforgeCanvasBounds
+  meta: JsonRecord
+}): string {
+  const style = [
+    'shape=image',
+    `image=${encodeURIComponent(input.imageDataUri)}`,
+    'imageAspect=0',
+    'aspect=fixed',
+    'verticalLabelPosition=bottom',
+    'verticalAlign=top',
+    'html=1'
+  ].join(';')
+  return createDrawioVertexCell({
+    id: input.id,
+    value: input.title,
+    style,
+    bounds: input.bounds,
+    meta: input.meta
+  })
+}
+
+function parseDiagramLayerManifest(value: unknown): DiagramLayerManifest {
+  const record = asRecord(value)
+  const canvas = asRecord(record?.canvas)
+  const layers = Array.isArray(record?.layers) ? record.layers : []
+  if (record?.kind !== 'sciforge_diagram_layers' || record.version !== 1 || !canvas) {
+    throw new Error('Invalid diagram layer manifest.')
+  }
+  const width = finiteNumber(canvas.width, 0)
+  const height = finiteNumber(canvas.height, 0)
+  if (width <= 0 || height <= 0) throw new Error('Diagram layer manifest is missing canvas size.')
+  return {
+    version: 1,
+    kind: 'sciforge_diagram_layers',
+    canvas: {
+      width,
+      height,
+      ...(typeof canvas.background === 'string' ? { background: canvas.background } : {}),
+      ...(typeof canvas.layout === 'string' ? { layout: canvas.layout } : {})
+    },
+    layers: layers
+      .map((item): DiagramLayer | null => {
+        const layer = asRecord(item)
+        if (!layer) return null
+        const id = typeof layer.id === 'string' && layer.id.trim() ? layer.id.trim() : undefined
+        const type = typeof layer.type === 'string' && layer.type.trim() ? layer.type.trim() : undefined
+        if (!id || !type) return null
+        const bboxRecord = asRecord(layer.bbox)
+        const bbox = bboxRecord
+          ? {
+            x: finiteNumber(bboxRecord.x, 0),
+            y: finiteNumber(bboxRecord.y, 0),
+            w: finiteNumber(bboxRecord.w, 0),
+            h: finiteNumber(bboxRecord.h, 0)
+          }
+          : undefined
+        const style = asRecord(layer.style)
+        return {
+          id,
+          type,
+          ...(typeof layer.label === 'string' ? { label: layer.label } : {}),
+          ...(bbox && bbox.w > 0 && bbox.h > 0 ? { bbox } : {}),
+          ...(Number.isFinite(Number(layer.zIndex)) ? { zIndex: Number(layer.zIndex) } : {}),
+          ...(style ? { style: normalizeDiagramLayerStyle(style) } : {}),
+          ...(typeof layer.assetPath === 'string' ? { assetPath: layer.assetPath } : {}),
+          ...(typeof layer.editable === 'boolean' ? { editable: layer.editable } : {}),
+          ...(typeof layer.origin === 'string' ? { origin: layer.origin } : {}),
+          ...(typeof layer.from === 'string' ? { from: layer.from } : {}),
+          ...(typeof layer.to === 'string' ? { to: layer.to } : {})
+        }
+      })
+      .filter((item): item is DiagramLayer => item !== null)
+  }
+}
+
+function normalizeDiagramLayerStyle(style: JsonRecord): Record<string, string | number | boolean> {
+  const normalized: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(style)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      normalized[key] = value
+    }
+  }
+  return normalized
+}
+
+function scaledLayerBounds(
+  bbox: DiagramLayerBounds | undefined,
+  canvasBounds: SciforgeCanvasBounds,
+  scaleX: number,
+  scaleY: number
+): SciforgeCanvasBounds | null {
+  if (!bbox || bbox.w <= 0 || bbox.h <= 0) return null
+  return {
+    x: canvasBounds.x + bbox.x * scaleX,
+    y: canvasBounds.y + bbox.y * scaleY,
+    w: Math.max(8, bbox.w * scaleX),
+    h: Math.max(8, bbox.h * scaleY)
+  }
+}
+
+async function resolveDiagramLayerAsset(
+  layer: DiagramLayer,
+  workspaceRoot: string,
+  fallbackPath: string | undefined
+): Promise<string | null> {
+  if (typeof layer.assetPath === 'string' && layer.assetPath.trim()) {
+    try {
+      return await resolveTargetPathWithinWorkspace(layer.assetPath, workspaceRoot)
+    } catch {
+      return null
+    }
+  }
+  if (layer.type === 'image' && fallbackPath) return fallbackPath
+  return null
+}
+
+async function createDrawioImageCellFromFile(input: {
+  id: string
+  title: string
+  path: string
+  bounds: SciforgeCanvasBounds
+  meta: JsonRecord
+  warnings: string[]
+}): Promise<string> {
+  const info = await stat(input.path)
+  if (!info.isFile()) throw new Error(`Diagram layer asset is not a file: ${input.path}`)
+  const mimeType = mimeTypeForExtension(extensionFromName(input.path))
+  if (!mimeType || info.size > DRAWIO_INLINE_IMAGE_MAX_BYTES) {
+    if (info.size > DRAWIO_INLINE_IMAGE_MAX_BYTES) {
+      input.warnings.push(`Diagram layer asset is too large to inline: ${relativePath(dirname(input.path), input.path)}`)
+    }
+    return createDrawioPlaceholderCell({
+      id: input.id,
+      title: input.title,
+      subtitle: basename(input.path),
+      bounds: input.bounds,
+      meta: input.meta
+    })
+  }
+  const imageDataUri = `data:${mimeType};base64,${(await readFile(input.path)).toString('base64')}`
+  return createDrawioImageCell({
+    id: input.id,
+    title: input.title,
+    imageDataUri,
+    bounds: input.bounds,
+    meta: input.meta
+  })
+}
+
+function createDrawioDiagramVertexCell(input: {
+  id: string
+  layer: DiagramLayer
+  bounds: SciforgeCanvasBounds
+  meta: JsonRecord
+}): string {
+  const style = styleForDiagramLayer(input.layer)
+  return createDrawioVertexCell({
+    id: input.id,
+    value: escapeHtml(input.layer.label || ''),
+    style,
+    bounds: input.bounds,
+    meta: input.meta
+  })
+}
+
+function createDrawioEdgeCell(input: {
+  id: string
+  value: string
+  source: string
+  target: string
+  meta: JsonRecord
+}): string {
+  const style = [
+    'edgeStyle=orthogonalEdgeStyle',
+    'rounded=1',
+    'orthogonalLoop=1',
+    'jettySize=auto',
+    'html=1',
+    'strokeWidth=1.8',
+    'strokeColor=#334155',
+    'endArrow=block',
+    'endFill=1',
+    'fontSize=11',
+    'fontColor=#334155'
+  ].join(';')
+  return [
+    `        <mxCell id="${escapeXmlAttribute(input.id)}" value="${escapeXmlAttribute(input.value)}" style="${escapeXmlAttribute(style)}" edge="1" parent="1" source="${escapeXmlAttribute(input.source)}" target="${escapeXmlAttribute(input.target)}" sciforgeMeta="${escapeXmlAttribute(encodeJsonAttribute(input.meta))}">`,
+    '          <mxGeometry relative="1" as="geometry"/>',
+    '        </mxCell>'
+  ].join('\n')
+}
+
+function styleForDiagramLayer(layer: DiagramLayer): string {
+  const style = layer.style ?? {}
+  const fillColor = stringStyle(style.fillColor) ?? stringStyle(style.fill) ?? defaultFillForDiagramLayer(layer.type)
+  const strokeColor = stringStyle(style.strokeColor) ?? stringStyle(style.stroke) ?? defaultStrokeForDiagramLayer(layer.type)
+  const fontColor = stringStyle(style.fontColor) ?? '#0f172a'
+  const strokeWidth = numberStyle(style.strokeWidth, 1.4)
+  const fontSize = numberStyle(style.fontSize, layer.type === 'label' ? 12 : 11)
+  if (layer.type === 'label' || layer.type === 'text') {
+    return [
+      'text',
+      'html=1',
+      'whiteSpace=wrap',
+      'strokeColor=none',
+      'fillColor=none',
+      `fontColor=${fontColor}`,
+      `fontSize=${fontSize}`,
+      'align=center',
+      'verticalAlign=middle',
+      'resizable=1'
+    ].join(';')
+  }
+  const dashed = Boolean(style.dashed) || layer.type === 'group' || layer.type === 'panel'
+  return [
+    'rounded=1',
+    'whiteSpace=wrap',
+    'html=1',
+    `fillColor=${fillColor}`,
+    `strokeColor=${strokeColor}`,
+    `strokeWidth=${strokeWidth}`,
+    `fontColor=${fontColor}`,
+    `fontSize=${fontSize}`,
+    'spacing=8',
+    'align=center',
+    'verticalAlign=middle',
+    ...(dashed ? ['dashed=1'] : [])
+  ].join(';')
+}
+
+function defaultFillForDiagramLayer(type: string): string {
+  if (type === 'group' || type === 'panel') return '#f8fafc'
+  if (type === 'input') return '#dbeafe'
+  if (type === 'output') return '#dcfce7'
+  if (type === 'operation') return '#fed7aa'
+  if (type === 'attention') return '#e0e7ff'
+  return '#f1f5f9'
+}
+
+function defaultStrokeForDiagramLayer(type: string): string {
+  if (type === 'group' || type === 'panel') return '#94a3b8'
+  if (type === 'input') return '#60a5fa'
+  if (type === 'output') return '#4ade80'
+  if (type === 'operation') return '#fb923c'
+  if (type === 'attention') return '#818cf8'
+  return '#64748b'
+}
+
+function stringStyle(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function numberStyle(value: unknown, fallback: number): number {
+  return Number.isFinite(Number(value)) ? Number(value) : fallback
+}
+
+function createDrawioPlaceholderCell(input: {
+  id: string
+  title: string
+  subtitle: string
+  bounds: SciforgeCanvasBounds
+  meta: JsonRecord
+}): string {
+  return createDrawioVertexCell({
+    id: input.id,
+    value: `<b>${escapeHtml(input.title)}</b><br><font color="#64748b">${escapeHtml(input.subtitle)}</font>`,
+    style: 'rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;dashed=1;spacing=16;fontColor=#0f172a;',
+    bounds: input.bounds,
+    meta: {
+      ...input.meta,
+      sciforgeCanvasPlaceholder: true
+    }
+  })
+}
+
+function createDrawioVertexCell(input: {
+  id: string
+  value: string
+  style: string
+  bounds: SciforgeCanvasBounds
+  meta: JsonRecord
+}): string {
+  return [
+    `        <mxCell id="${escapeXmlAttribute(input.id)}" value="${escapeXmlAttribute(input.value)}" style="${escapeXmlAttribute(input.style)}" vertex="1" parent="1" sciforgeMeta="${escapeXmlAttribute(encodeJsonAttribute(input.meta))}">`,
+    `          <mxGeometry x="${roundForXml(input.bounds.x)}" y="${roundForXml(input.bounds.y)}" width="${roundForXml(input.bounds.w)}" height="${roundForXml(input.bounds.h)}" as="geometry"/>`,
+    '        </mxCell>'
+  ].join('\n')
+}
+
+function insertDrawioCellXml(xml: string, cellXml: string): string {
+  const rootClose = '</root>'
+  const index = xml.lastIndexOf(rootClose)
+  if (index === -1) throw new Error('Invalid draw.io XML: missing root close tag.')
+  return `${xml.slice(0, index)}${cellXml}\n      ${xml.slice(index)}`
+}
+
+function uniqueDrawioCellId(xml: string, label: string): string {
+  const base = `shape:${sanitizeId(label, 'artifact').toLowerCase()}`
+  let candidate = base
+  let counter = 1
+  while (xml.includes(`id="${escapeXmlAttribute(candidate)}"`)) {
+    candidate = `${base}-${counter}`
+    counter += 1
+  }
+  return candidate
+}
+
+function chooseDrawioPlacement(xml: string, width: number, height: number, margin: number): SciforgeCanvasBounds {
+  const bounds = parseDrawioBounds(xml)
+  if (bounds.length === 0) {
+    return { x: 80, y: 80, w: width, h: height }
+  }
+  const maxY = Math.max(...bounds.map((item) => item.y + item.h))
+  return {
+    x: 80,
+    y: Math.ceil((maxY + margin) / 20) * 20,
+    w: width,
+    h: height
+  }
+}
+
+function parseDrawioBounds(xml: string): SciforgeCanvasBounds[] {
+  const results: SciforgeCanvasBounds[] = []
+  const pattern = /<mxGeometry\b[^>]*\bx="([^"]+)"[^>]*\by="([^"]+)"[^>]*\bwidth="([^"]+)"[^>]*\bheight="([^"]+)"/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(xml))) {
+    const x = Number(match[1])
+    const y = Number(match[2])
+    const w = Number(match[3])
+    const h = Number(match[4])
+    if ([x, y, w, h].every(Number.isFinite)) results.push({ x, y, w, h })
+  }
+  return results
+}
+
+function encodeJsonAttribute(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
+}
+
+function decodeJsonAttribute(value: string | undefined): JsonRecord | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown
+    return asRecord(parsed)
+  } catch {
+    return null
+  }
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function escapeHtml(value: string): string {
+  return escapeXmlAttribute(value).replace(/'/g, '&#39;')
+}
+
+function roundForXml(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2)
+}
+
 async function discoverRecentCanvasArtifacts(input: {
   workspaceRoot: string
   canvasId: string
@@ -1191,6 +1940,9 @@ async function artifactFromManifest(
     sourcePath: manifest.sourcePath,
     previewPath: manifest.previewPath,
     styleSpecPath: manifest.styleSpecPath,
+    diagramSpecPath: manifest.diagramSpecPath,
+    frameworkDesignPlanPath: manifest.frameworkDesignPlanPath,
+    diagramLayerManifestPath: manifest.diagramLayerManifestPath,
     referencePath: manifest.referencePath,
     projectPath: manifest.projectPath,
     svgPath: manifest.svgPath,
@@ -1334,6 +2086,9 @@ function artifactPathsInSnapshot(snapshot: TldrawSnapshot): Set<string> {
       'renderedFromPptxPath',
       'manifestPath',
       'styleSpecPath',
+      'diagramSpecPath',
+      'frameworkDesignPlanPath',
+      'diagramLayerManifestPath',
       'referencePath',
       'svgPath',
       'pptxPath'
@@ -1343,6 +2098,197 @@ function artifactPathsInSnapshot(snapshot: TldrawSnapshot): Set<string> {
     }
   }
   return paths
+}
+
+async function artifactPathsForCanvas(paths: CanvasPaths): Promise<Set<string>> {
+  if (await fileExists(paths.drawioPath)) return artifactPathsInDrawioXml(await readFile(paths.drawioPath, 'utf8'))
+  const snapshot = await ensureCanvasSnapshot(paths)
+  return artifactPathsInSnapshot(snapshot)
+}
+
+function artifactPathsInDrawioXml(xml: string): Set<string> {
+  const paths = new Set<string>()
+  for (const artifact of artifactsInDrawioXml(xml)) {
+    for (const key of [
+      'outputPath',
+      'sourcePath',
+      'previewPath',
+      'renderedPagePath',
+      'renderedFromPptxPath',
+      'manifestPath',
+      'styleSpecPath',
+      'diagramSpecPath',
+      'frameworkDesignPlanPath',
+      'diagramLayerManifestPath',
+      'referencePath',
+      'svgPath',
+      'pptxPath'
+    ]) {
+      const value = (artifact as unknown as JsonRecord)[key]
+      if (typeof value === 'string' && value.trim()) paths.add(value)
+    }
+  }
+  return paths
+}
+
+type DrawioCellRecord = {
+  id: string
+  value?: string
+  style?: string
+  vertex?: boolean
+  edge?: boolean
+  meta?: JsonRecord | null
+  bounds?: SciforgeCanvasBounds | null
+}
+
+function parseDrawioCells(xml: string): DrawioCellRecord[] {
+  const cells: DrawioCellRecord[] = []
+  const pattern = /<mxCell\b([^>]*?)(?:\/>|>([\s\S]*?)<\/mxCell>)/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(xml))) {
+    const attrs = parseXmlAttributes(match[1] ?? '')
+    const id = attrs.id
+    if (!id || id === '0' || id === '1') continue
+    const body = match[2] ?? ''
+    const boundsMatch = /<mxGeometry\b([^>]*)\/?>/.exec(body)
+    const geoAttrs = boundsMatch ? parseXmlAttributes(boundsMatch[1] ?? '') : {}
+    const x = Number(geoAttrs.x ?? 0)
+    const y = Number(geoAttrs.y ?? 0)
+    const w = Number(geoAttrs.width ?? 0)
+    const h = Number(geoAttrs.height ?? 0)
+    cells.push({
+      id,
+      value: attrs.value,
+      style: attrs.style,
+      vertex: attrs.vertex === '1',
+      edge: attrs.edge === '1',
+      meta: decodeJsonAttribute(attrs.sciforgeMeta),
+      bounds: [x, y, w, h].every(Number.isFinite) && (w > 0 || h > 0)
+        ? { x, y, w, h }
+        : null
+    })
+  }
+  return cells
+}
+
+function parseXmlAttributes(input: string): Record<string, string> {
+  const attrs: Record<string, string> = {}
+  const pattern = /([a-zA-Z_:][\w:.-]*)="([^"]*)"/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(input))) {
+    attrs[match[1]] = decodeXmlAttribute(match[2])
+  }
+  return attrs
+}
+
+function decodeXmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+}
+
+function artifactsInDrawioXml(xml: string): Array<SciforgeCanvasArtifactMetadata & {
+  shapeId: string
+  bounds?: SciforgeCanvasBounds | null
+}> {
+  return parseDrawioCells(xml)
+    .filter((cell) => cell.meta?.sciforgeCanvasArtifact === true)
+    .map((cell) => {
+      const artifact = asRecord(cell.meta?.sciforgeArtifact) as SciforgeCanvasArtifactMetadata | null
+      return {
+        ...(artifact ?? { artifactKind: 'image' as const }),
+        shapeId: cell.id,
+        bounds: cell.bounds ?? null
+      }
+    })
+}
+
+function buildDrawioReviewPacket(input: {
+  canvasId: string
+  title: string
+  xml: string
+  selection: SciforgeCanvasSelectionState
+}): SciforgeCanvasReviewPacket {
+  const cells = parseDrawioCells(input.xml)
+  const artifacts = artifactsInDrawioXml(input.xml)
+  const annotationsFromXml = cells
+    .filter((cell) => !cell.meta?.sciforgeCanvasArtifact && isDrawioAnnotationCell(cell))
+    .map<SciforgeCanvasReviewPacketAnnotation>((cell) => ({
+      shapeId: cell.id,
+      annotationKind: cell.edge || (cell.style ?? '').includes('endArrow=') ? 'arrow' : 'box',
+      bounds: cell.bounds ?? null,
+      text: cleanDrawioValue(cell.value),
+      color: colorFromDrawioStyle(cell.style),
+      sourceShapeId: typeof cell.meta?.cowartAnnotationSourceShapeId === 'string'
+        ? cell.meta.cowartAnnotationSourceShapeId
+        : undefined
+    }))
+  const annotations = mergeReviewAnnotations(
+    annotationsFromXml,
+    input.selection.selectedShapes
+      .filter(isReviewAnnotationSelectedShape)
+      .map(annotationFromSelectedShape)
+  )
+  const modificationSuggestions = buildModificationSuggestions({ artifacts, annotations })
+  return {
+    version: 1,
+    tool: 'sciforge_canvas_export_review_packet',
+    createdAt: new Date().toISOString(),
+    canvasId: input.canvasId,
+    ...(input.canvasId.startsWith('thread-') && input.canvasId.length > 'thread-'.length
+      ? { threadId: input.canvasId.slice('thread-'.length) }
+      : {}),
+    title: input.title,
+    artifacts,
+    annotations,
+    selectedShapes: input.selection.selectedShapes,
+    modificationSuggestions,
+    adjustmentRequests: artifacts.map((artifact) => ({
+      artifactKind: artifact.artifactKind,
+      shapeId: artifact.shapeId,
+      nextControlledTool: nextControlledToolForArtifact(artifact.artifactKind, {
+        artifact
+      }),
+      reason: reasonForAdjustment(artifact.artifactKind)
+    })),
+    guardrails: [
+      'Canvas review packets are advisory and do not mutate original artifacts.',
+      'draw.io cells are interpreted as review annotations unless they carry SciForge artifact metadata.',
+      'Use image_generation_edit_from_canvas_packet for visual redraw, beautification, schematic, flowchart, architecture, and summary-figure edits.',
+      'Use scientific_plotting_render for numeric/statistical chart adjustments that preserve data semantics.',
+      'PPT adjustments should remain review annotations in v1 unless a later SVG white-list edit path is enabled.'
+    ]
+  }
+}
+
+function isDrawioAnnotationCell(cell: DrawioCellRecord): boolean {
+  if (cell.edge) return true
+  const value = cleanDrawioValue(cell.value)
+  const style = cell.style ?? ''
+  return Boolean(value) ||
+    style.includes('shape=callout') ||
+    style.includes('rounded=') ||
+    style.includes('ellipse') ||
+    style.includes('endArrow=')
+}
+
+function cleanDrawioValue(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  const text = value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .trim()
+  return text || undefined
+}
+
+function colorFromDrawioStyle(style: string | undefined): string | undefined {
+  if (!style) return undefined
+  const match = /(?:strokeColor|fontColor|fillColor)=([^;]+)/.exec(style)
+  return match?.[1]
 }
 
 function buildReviewPacket(input: {
@@ -1402,12 +2348,15 @@ function buildReviewPacket(input: {
     adjustmentRequests: artifacts.map((artifact) => ({
       artifactKind: artifact.artifactKind,
       shapeId: artifact.shapeId,
-      nextControlledTool: nextControlledToolForArtifact(artifact.artifactKind),
+      nextControlledTool: nextControlledToolForArtifact(artifact.artifactKind, {
+        artifact
+      }),
       reason: reasonForAdjustment(artifact.artifactKind)
     })),
     guardrails: [
       'Canvas review packets are advisory and do not mutate original artifacts.',
-      'Scientific plot adjustments should be applied through scientific_plotting_render.',
+      'Use image_generation_edit_from_canvas_packet for visual redraw, beautification, schematic, flowchart, architecture, and summary-figure edits.',
+      'Use scientific_plotting_render for numeric/statistical chart adjustments that preserve data semantics.',
       'PPT adjustments should remain review annotations in v1 unless a later SVG white-list edit path is enabled.'
     ]
   }
@@ -1480,8 +2429,11 @@ function buildModificationSuggestions(input: {
         targetShapeId: target.shapeId,
         artifactKind: target.artifactKind,
         ...(target.slideIndex !== undefined ? { slideIndex: target.slideIndex } : {}),
-        nextControlledTool: nextControlledToolForArtifact(target.artifactKind),
-        safety: safetyForModification(target.artifactKind)
+        nextControlledTool: nextControlledToolForArtifact(target.artifactKind, {
+          artifact: target,
+          instruction
+        }),
+        safety: safetyForModification(target.artifactKind, instruction, target)
       } : {
         nextControlledTool: 'sciforge_canvas_get_selection',
         safety: 'No source artifact is linked yet; keep this as a review note until the user selects or anchors the intended target.'
@@ -1541,25 +2493,66 @@ function labelForArtifact(artifact: SciforgeCanvasArtifactMetadata): string {
   return 'the image artifact'
 }
 
-function safetyForModification(kind: SciforgeCanvasArtifactKind): string {
+function safetyForModification(
+  kind: SciforgeCanvasArtifactKind,
+  instruction?: string,
+  artifact?: SciforgeCanvasReviewPacketArtifact
+): string {
+  if (kind === 'scientific_plot' && shouldUseImageGenerationForScientificPlot(instruction, artifact)) {
+    return 'Create a new visually enhanced before/after image artifact; keep the original scientific plot unchanged.'
+  }
   if (kind === 'scientific_plot') return 'Use controlled plotting tools only; do not change data semantics.'
   if (kind === 'generated_image' || kind === 'edited_image' || kind === 'image') return 'Create a new before/after image artifact; do not overwrite the original.'
   if (kind === 'ppt_slide' || kind === 'ppt_export') return 'Keep this as a review packet in v1; do not automatically rewrite ppt-master source files.'
   return 'Create a new before/after artifact; do not overwrite the original.'
 }
 
-function nextControlledToolForArtifact(kind: SciforgeCanvasArtifactKind): string {
-  if (kind === 'scientific_plot') return 'scientific_plotting_render'
+function nextControlledToolForArtifact(
+  kind: SciforgeCanvasArtifactKind,
+  context?: {
+    artifact?: SciforgeCanvasReviewPacketArtifact
+    instruction?: string
+  }
+): string {
+  if (kind === 'scientific_plot') {
+    return shouldUseImageGenerationForScientificPlot(context?.instruction, context?.artifact)
+      ? 'image_generation_edit_from_canvas_packet'
+      : 'scientific_plotting_render'
+  }
   if (kind === 'generated_image' || kind === 'edited_image' || kind === 'image') return 'image_generation_edit_from_canvas_packet'
   if (kind === 'ppt_slide' || kind === 'ppt_export') return 'ppt_master_review_or_regenerate'
   return 'sciforge_canvas_insert_artifact'
 }
 
 function reasonForAdjustment(kind: SciforgeCanvasArtifactKind): string {
-  if (kind === 'scientific_plot') return 'Convert visual annotations into controlled style/layout changes without altering data semantics.'
+  if (kind === 'scientific_plot') return 'Route data-chart adjustments to scientific_plotting_render and visual redraw/beautification requests to image_generation_edit_from_canvas_packet.'
   if (kind === 'generated_image' || kind === 'edited_image' || kind === 'image') return 'Convert Canvas annotations into a non-destructive image edit and insert the new artifact beside the original.'
   if (kind === 'ppt_slide' || kind === 'ppt_export') return 'Keep annotations as a review packet in v1; do not automatically rewrite ppt-master source files.'
   return 'Use as before/after visual context.'
+}
+
+function shouldUseImageGenerationForScientificPlot(
+  instruction?: string,
+  artifact?: SciforgeCanvasReviewPacketArtifact
+): boolean {
+  const text = [
+    instruction,
+    artifact?.title,
+    artifact?.caption,
+    artifact?.sourceTool,
+    artifact?.outputPath,
+    artifact?.sourcePath,
+    artifact?.manifestPath
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  if (!text) return false
+  if (/\b(axis|axes|tick|legend|grid|marker|line width|linewidth|font size|font|scale|bar|scatter|heatmap|error bar|p[-\s]?value)\b/.test(text)) {
+    return false
+  }
+  return /太简单|简单了|美化|重画|重新画|重绘|好看|漂亮|视觉|风格|示意|机制|流程图|架构|结构图|模型图|总结图|综述图|论文图|diagram|flowchart|schematic|architecture|redraw|beautify|polish|too simple|make it better|visual|summary figure|graphical abstract/.test(text)
 }
 
 function plainTextFromRichText(value: unknown): string | undefined {

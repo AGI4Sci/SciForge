@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   exportSciforgeCanvasReviewPacket,
   importRecentSciforgeCanvasArtifacts,
@@ -20,6 +20,52 @@ async function makeWorkspace(): Promise<string> {
 }
 
 describe('SciForge Canvas engine', () => {
+  beforeEach(() => {
+    process.env.SCIFORGE_CANVAS_ENGINE = 'tldraw'
+  })
+
+  afterEach(() => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+  })
+
+  it('uses draw.io XML as the default canvas engine and exports review packets', async () => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+    const workspaceRoot = await makeWorkspace()
+    const plotPath = join(workspaceRoot, 'plot.png')
+    await writeFile(plotPath, PNG_1X1)
+
+    const opened = await openOrCreateSciforgeCanvas({ workspaceRoot, canvasId: 'drawio-review' })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(opened.engine).toBe('drawio')
+    expect(opened.drawioPath).toMatch(/canvas\.drawio\.xml$/)
+    expect(JSON.stringify(opened.snapshot)).toContain('"engine":"drawio"')
+
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      canvasId: 'drawio-review',
+      artifactKind: 'scientific_plot',
+      outputPath: plotPath,
+      title: 'Drawio plot'
+    })
+    expect(inserted.ok).toBe(true)
+    if (!inserted.ok) return
+    const xml = await readFile(join(inserted.canvasDir, 'canvas.drawio.xml'), 'utf8')
+    expect(xml).toContain('mxfile')
+    expect(xml).toContain('sciforgeMeta')
+    expect(xml).toContain('Drawio plot')
+
+    const packet = await exportSciforgeCanvasReviewPacket({
+      workspaceRoot,
+      canvasId: 'drawio-review',
+      title: 'Drawio review'
+    })
+    expect(packet.ok).toBe(true)
+    if (!packet.ok) return
+    expect(packet.packet.artifacts).toHaveLength(1)
+    expect(packet.packet.artifacts[0].artifactKind).toBe('scientific_plot')
+  })
+
   it('creates a workspace canvas and inserts a scientific plot artifact with Cowart-compatible metadata', async () => {
     const workspaceRoot = await makeWorkspace()
     const plotPath = join(workspaceRoot, 'plot.png')
@@ -137,6 +183,58 @@ describe('SciForge Canvas engine', () => {
       nextControlledTool: 'scientific_plotting_render',
       status: 'draft'
     })
+  })
+
+  it('routes visual redraw requests for scientific plots to image generation edits', async () => {
+    const workspaceRoot = await makeWorkspace()
+    const plotPath = join(workspaceRoot, 'transformer-flowchart.png')
+    await writeFile(plotPath, PNG_1X1)
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      artifactKind: 'scientific_plot',
+      outputPath: plotPath,
+      title: 'Transformer flowchart draft'
+    })
+    expect(inserted.ok).toBe(true)
+    if (!inserted.ok) return
+
+    const snapshot = JSON.parse(await readFile(inserted.canvasPath, 'utf8'))
+    snapshot.store['shape:visual-redraw-annotation'] = {
+      id: 'shape:visual-redraw-annotation',
+      typeName: 'shape',
+      type: 'arrow',
+      parentId: 'page:sciforge-canvas',
+      index: 'b1',
+      x: 12,
+      y: 20,
+      rotation: 0,
+      isLocked: false,
+      opacity: 1,
+      meta: {
+        cowartAnnotationArrow: true,
+        cowartAnnotationSourceShapeId: inserted.shapeId
+      },
+      props: {
+        start: { x: 0, y: 0 },
+        end: { x: 80, y: 20 },
+        color: 'red',
+        richText: { type: 'doc', content: [{ type: 'text', text: '这个图画得太简单了，重新画成论文级流程图' }] }
+      }
+    }
+    await writeFile(inserted.canvasPath, `${JSON.stringify(snapshot, null, 2)}\n`)
+
+    const packet = await exportSciforgeCanvasReviewPacket({ workspaceRoot, title: 'Review' })
+    expect(packet.ok).toBe(true)
+    if (!packet.ok) return
+    expect(packet.packet.modificationSuggestions[0]).toMatchObject({
+      annotationShapeId: 'shape:visual-redraw-annotation',
+      targetShapeId: inserted.shapeId,
+      artifactKind: 'scientific_plot',
+      instruction: '这个图画得太简单了，重新画成论文级流程图',
+      nextControlledTool: 'image_generation_edit_from_canvas_packet',
+      status: 'draft'
+    })
+    expect(packet.packet.modificationSuggestions[0]?.safety).toContain('visually enhanced')
   })
 
   it('exports box annotations as review packet area targets', async () => {

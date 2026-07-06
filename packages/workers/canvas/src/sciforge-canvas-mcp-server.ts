@@ -113,7 +113,7 @@ export async function runSciforgeCanvasMcpServerFromArgv(argv: string[]): Promis
 
   server.registerTool('sciforge_canvas_open_or_create', {
     title: 'Open Or Create SciForge Canvas',
-    description: 'Create or read a workspace-local SciForge Canvas tldraw snapshot and selection state.',
+    description: 'Create or read a workspace-local SciForge Canvas draw.io XML document, with legacy tldraw snapshot compatibility.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       canvasId: z.string().trim().max(120).optional()
@@ -146,6 +146,9 @@ export async function runSciforgeCanvasMcpServerFromArgv(argv: string[]): Promis
       renderedSlideIndex: z.number().int().nonnegative().optional(),
       manifestPath: z.string().trim().max(4096).optional(),
       styleSpecPath: z.string().trim().max(4096).optional(),
+      diagramSpecPath: z.string().trim().max(4096).optional(),
+      frameworkDesignPlanPath: z.string().trim().max(4096).optional(),
+      diagramLayerManifestPath: z.string().trim().max(4096).optional(),
       referencePath: z.string().trim().max(4096).optional(),
       projectPath: z.string().trim().max(4096).optional(),
       svgPath: z.string().trim().max(4096).optional(),

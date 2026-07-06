@@ -1,5 +1,6 @@
 export type * from './types.js'
 export {
+  IMAGE_DRAWING_INTENTS,
   IMAGE_EDIT_MODES,
   IMAGE_GENERATION_MODES,
   IMAGE_OUTPUT_FORMATS

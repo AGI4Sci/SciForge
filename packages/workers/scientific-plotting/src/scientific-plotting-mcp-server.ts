@@ -6,12 +6,14 @@ import {
   type ScientificPlottingDataMappingRequest,
   type ScientificPlottingPrepareReferenceRequest,
   type ScientificPlottingRenderRequest,
+  type ScientificPlottingResearchBriefRequest,
   type ScientificPlottingReviewPacketRequest,
   type ScientificPlottingReviewRequest,
   type ScientificPlottingStyleProfilesRequest,
   type ScientificPlottingStyleTransferRequest
 } from './types'
 import {
+  createScientificPlottingResearchBrief,
   createScientificPlottingReviewPacket,
   getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
@@ -80,7 +82,7 @@ function workspaceRootFor(inputWorkspaceRoot: string | undefined, options: McpLa
   return workspaceRoot
 }
 
-const TEMPLATE_SELECTION_DESCRIPTION = 'Template selection guide: use flowchart for directed workflows, pipelines, process steps, decision trees, arrows, or pathways; use schematic-grid only for conceptual module/mechanism layouts without a strict direction; use bar/errorbar-bar for categorical summaries; use line/scatter for measured x-y data; use heatmap/attention-map for matrices; use box-violin or histogram-density for distributions; use multi-panel only when combining several controlled panels.'
+const TEMPLATE_SELECTION_DESCRIPTION = 'Template selection guide: use scientific_plotting for structured numeric/table/matrix data and paper-figure draft/spec planning. Use image_generation for final flowcharts, model architecture diagrams, mechanisms, infographics, covers, posters, or illustrative diagrams where the image model should choose layout/icons/composition. Within scientific_plotting: flowchart/schematic-grid are draft structures only and scientific_plotting_render will return a draft handoff instead of a final PNG; use bar/errorbar-bar for categorical summaries; use line/scatter for measured x-y data; use heatmap/attention-map for matrices; use box-violin or histogram-density for distributions; use multi-panel only when combining controlled numeric/statistical panels.'
 
 const templateSchema = z.enum(SCIENTIFIC_PLOTTING_TEMPLATES).describe(TEMPLATE_SELECTION_DESCRIPTION)
 const cropBoxSchema = z.object({
@@ -153,6 +155,53 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       )
     } catch (error) {
       return errorResult(`Failed to list scientific plotting style profiles: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  server.registerTool('scientific_plotting_research_brief', {
+    title: 'Build Scientific Figure Research Brief',
+    description: 'Create a read-only CNS/domain-aware paper-figure brief before rendering: figure need classification, reference-paper strategy, figure conclusion, evidence logic, archetype, data requirements, and next controlled tool. Does not search the web, execute scripts, or write files.',
+    inputSchema: {
+      workspaceRoot: z.string().trim().min(1).optional(),
+      task: z.string().trim().min(1),
+      domain: z.string().trim().max(120).optional(),
+      targetVenue: z.string().trim().max(120).optional(),
+      dataSummary: z.string().trim().max(4000).optional(),
+      referenceFigureNotes: z.string().trim().max(4000).optional(),
+      candidatePapers: z.array(z.object({
+        title: z.string().trim().min(1).max(500),
+        venue: z.string().trim().max(120).optional(),
+        year: z.number().int().min(1800).max(2200).optional(),
+        source: z.string().trim().max(160).optional(),
+        url: z.string().trim().max(2048).optional(),
+        doi: z.string().trim().max(240).optional(),
+        figureHints: z.array(z.string().trim().max(300)).max(12).optional(),
+        notes: z.string().trim().max(1200).optional()
+      }).strict()).max(8).optional(),
+      maxPapers: z.number().int().min(0).max(8).optional()
+    },
+    annotations: READ_ONLY_ANNOTATIONS
+  }, async (input) => {
+    try {
+      const request: ScientificPlottingResearchBriefRequest = {
+        ...(input.workspaceRoot || options.workspaceRoot ? { workspaceRoot: input.workspaceRoot ?? options.workspaceRoot } : {}),
+        task: input.task,
+        ...(input.domain ? { domain: input.domain } : {}),
+        ...(input.targetVenue ? { targetVenue: input.targetVenue } : {}),
+        ...(input.dataSummary ? { dataSummary: input.dataSummary } : {}),
+        ...(input.referenceFigureNotes ? { referenceFigureNotes: input.referenceFigureNotes } : {}),
+        ...(input.candidatePapers ? { candidatePapers: input.candidatePapers } : {}),
+        ...(input.maxPapers !== undefined ? { maxPapers: input.maxPapers } : {})
+      }
+      const brief = await createScientificPlottingResearchBrief(request)
+      return textResult(
+        brief.ok
+          ? jsonSummary('Scientific plotting research brief.', brief)
+          : jsonSummary('Scientific plotting research brief failed.', brief),
+        { brief }
+      )
+    } catch (error) {
+      return errorResult(`Failed to build scientific plotting research brief: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 
@@ -252,7 +301,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_render', {
     title: 'Render Scientific Plot',
-    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} If unsure, call scientific_plotting_plan or scientific_plotting_map_data first.`,
+    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} For flowchart/schematic-grid inputs, this tool returns a diagram draft handoff and the next step is image_generation_plan/image_generation_render. If unsure, call scientific_plotting_plan or scientific_plotting_map_data first.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       template: templateSchema,

@@ -521,7 +521,7 @@ export function FigureStylePanel({
           </div>
         </div>
         <div className="px-4 pb-3">
-          <div className="grid grid-cols-2 gap-1 rounded-[8px] border border-ds-border-muted bg-ds-surface-subtle p-1 dark:bg-white/6">
+          <div className="grid grid-cols-2 gap-1 rounded-[8px] border border-ds-border-muted bg-[var(--ds-chip-muted-bg)] p-1 shadow-[var(--ds-shadow-chip)]">
             {[
               { page: 'style' as const, label: t('figureStyleTabStyle'), icon: SlidersHorizontal },
               { page: 'canvas' as const, label: t('figureStyleTabCanvas'), icon: Frame }
@@ -533,10 +533,10 @@ export function FigureStylePanel({
                   key={item.page}
                   type="button"
                   onClick={() => setActivePage(item.page)}
-                  className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[7px] px-2.5 py-1.5 text-[12.5px] font-semibold transition ${
+                  className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[7px] border px-2.5 py-1.5 text-[12.5px] font-semibold transition ${
                     active
-                      ? 'bg-white text-ds-ink shadow-[0_1px_3px_rgba(15,23,42,0.08)] dark:bg-white/12 dark:text-white'
-                      : 'text-ds-muted hover:bg-white/62 hover:text-ds-ink dark:hover:bg-white/8'
+                      ? 'border-accent/35 bg-[var(--ds-chip-active)] text-ds-ink shadow-[var(--ds-shadow-chip)]'
+                      : 'border-transparent bg-transparent text-ds-muted hover:bg-[var(--ds-chip-hover)] hover:text-ds-ink'
                   }`}
                   aria-pressed={active}
                 >

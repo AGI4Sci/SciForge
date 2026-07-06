@@ -79,8 +79,17 @@ function UserMessageBubble({
     () => runtimeContextUserTextForDisplay(block.text),
     [block.text]
   )
-  const displayText = parsedMetaClawPrompt?.text ?? metaDisplayText ?? parsedRemoteChannelPrompt?.text ?? legacyRuntimeDisplayText
-  const canEdit = !metaDisplayText
+  const legacyCanvasReviewDisplayText = useMemo(
+    () => canvasReviewUserTextForDisplay(block.text),
+    [block.text]
+  )
+  const displayText =
+    parsedMetaClawPrompt?.text ??
+    metaDisplayText ??
+    parsedRemoteChannelPrompt?.text ??
+    legacyCanvasReviewDisplayText ??
+    legacyRuntimeDisplayText
+  const canEdit = !metaDisplayText && !legacyCanvasReviewDisplayText
   const showClawInboundCard = isRemoteChannelMessage && parsedRemoteChannelPrompt?.inbound === true
 
   useEffect(() => {
@@ -302,6 +311,17 @@ const LEGACY_RUNTIME_CONTEXT_END_MARKERS = [
   'If the objective is achieved, say so clearly in the final answer. The GUI goal status is controlled by the shared /goal commands.',
   '</sciforge_runtime_instruction>'
 ] as const
+
+const CANVAS_REVIEW_DISPLAY_TEXT = '请根据我在画布上的标注生成修改版。'
+
+function canvasReviewUserTextForDisplay(text: string): string | null {
+  const trimmed = text.trimStart()
+  if (trimmed.startsWith('[SciForge Canvas review request]')) return CANVAS_REVIEW_DISPLAY_TEXT
+  if (trimmed.startsWith('按照当前画布标注修改生成结果，生成新版本并插入回当前画布。')) {
+    return CANVAS_REVIEW_DISPLAY_TEXT
+  }
+  return null
+}
 
 function runtimeContextUserTextForDisplay(text: string): string {
   let current = text
@@ -982,7 +1002,13 @@ function MessageBubbleComponent({
     )
   }
   if (block.kind === 'tool') {
-    return <ToolEntry block={block} nested={nested} />
+    return (
+      <ToolEntry
+        block={block}
+        nested={nested}
+        onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
+      />
+    )
   }
   if (block.kind === 'user_input') {
     return <UserInputBubble block={block} nested={nested} />
@@ -1081,7 +1107,15 @@ function MessageBubbleComponent({
   return <></>
 }
 
-function ToolEntry({ block, nested = false }: { block: ToolBlock; nested?: boolean }): ReactElement {
+function ToolEntry({
+  block,
+  nested = false,
+  onOpenImageArtifactInCanvas
+}: {
+  block: ToolBlock
+  nested?: boolean
+  onOpenImageArtifactInCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+}): ReactElement {
   const { t } = useTranslation('common')
   const [open, setOpen] = useState(() => block.status === 'error' || block.status === 'running')
 
@@ -1178,7 +1212,11 @@ function ToolEntry({ block, nested = false }: { block: ToolBlock; nested?: boole
           )
         ) : null}
       </button>
-      <TimelineImagesFromMeta meta={block.meta} variant="tool" />
+      <TimelineImagesFromMeta
+        meta={block.meta}
+        variant="tool"
+        onOpenCanvas={onOpenImageArtifactInCanvas}
+      />
       {effectiveOpen && hasDetail ? (
         <div className="ds-panel-strip min-w-0 border-t border-ds-border-muted/60 px-4 py-3">
           {patchText !== undefined ? (

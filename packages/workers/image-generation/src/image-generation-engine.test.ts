@@ -1,8 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createCanvas, loadImage } from '@napi-rs/canvas'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  editImageFromCanvasPacket,
   getImageGenerationStatus,
   planImageGeneration,
   renderImageGeneration
@@ -49,7 +51,74 @@ describe('image generation engine', () => {
     expect(status.ok).toBe(true)
     expect(status.provider).toBe('placeholder')
     expect(status.configured).toBe(false)
+    expect(status.defaultModel).toBe('gpt-image-2')
     expect(status.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('plans semantic flowcharts from prose as image-generation work', async () => {
+    const plan = await planImageGeneration({
+      workspaceRoot,
+      task: '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator usage from a paper excerpt.'
+    })
+
+    expect(plan.ok).toBe(true)
+    expect(plan.recipe.mode).toBe('text_to_image')
+    expect(plan.suggestedRenderTool).toBe('image_generation_render')
+    expect(plan.upstreamResearchWorkflow).toMatchObject({
+      recommended: true,
+      suggestedBriefTool: 'scientific_plotting_research_brief',
+      suggestedSearchTool: 'research_search'
+    })
+    expect(plan.visualRouting.modelSelectionHint).toContain('prose-to-visual flowcharts')
+    expect(plan.visualRouting.useScientificPlottingWhen.join(' ')).toContain('structured numeric data charts')
+    expect(plan.recipe.prompt).toContain('SciForge semantic visual brief')
+    expect(plan.recipe.prompt).toContain('full-canvas composition')
+  })
+
+  it('does not expand ordinary image prompts with semantic diagram instructions', async () => {
+    const task = 'A clean science illustration with several labeled regions'
+    const plan = await planImageGeneration({
+      workspaceRoot,
+      task
+    })
+
+    expect(plan.ok).toBe(true)
+    expect(plan.recipe.prompt).toBe(task)
+  })
+
+  it('normalizes requested image size to provider-compatible multiples of 16', async () => {
+    const plan = await planImageGeneration({
+      workspaceRoot,
+      task: 'A clean scientific cover-style illustration',
+      size: { width: 1280, height: 900 }
+    })
+
+    expect(plan.ok).toBe(true)
+    expect(plan.recipe.size).toEqual({ width: 1280, height: 896 })
+    expect(plan.warnings.join(' ')).toContain('1280x896')
+  })
+
+  it('blocks ungrounded scientific semantic figure rendering until research brief evidence exists', async () => {
+    process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER = '1'
+
+    const result = await renderImageGeneration({
+      workspaceRoot,
+      imageId: 'transformer-flowchart',
+      recipe: {
+        mode: 'text_to_image',
+        prompt: '新建一张流程图，介绍 Transformer 框架和 Attention 数据流。',
+        size: { width: 1024, height: 768 },
+        outputFormat: 'png'
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected render to require research first')
+    expect(result.status).toBe('research_required')
+    expect(result.upstreamResearchWorkflow).toMatchObject({
+      recommended: true,
+      suggestedBriefTool: 'scientific_plotting_research_brief'
+    })
   })
 
   it('renders a non-destructive placeholder artifact when explicitly enabled for local tests', async () => {
@@ -87,6 +156,7 @@ describe('image generation engine', () => {
       workspaceRoot,
       task: 'A Nature Methods scientific diagram of meiotic entry with labeled TF and kinase data traces',
       stylePreset: 'scientific_diagram',
+      referencePath: 'research-briefs/meiotic-entry-figure-evidence.json',
       size: { width: 768, height: 512 }
     })
 
@@ -270,6 +340,7 @@ describe('image generation engine', () => {
       recipe: {
         mode: 'text_to_image',
         prompt: 'Scientific figure showing meiotic entry labels and quantitative data tracks',
+        referencePath: 'research-briefs/meiotic-entry-figure-evidence.json',
         size: { width: 512, height: 512 },
         outputFormat: 'png'
       }
@@ -318,6 +389,46 @@ describe('image generation engine', () => {
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
       'http://127.0.0.1:3892/v1/images/generations'
     ])
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'sciforge-router'
+    })
+  })
+
+  it('defaults configured Model Router image endpoint requests to the router model alias', async () => {
+    const pngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === 'http://127.0.0.1:3892/v1/images/generations') {
+        return new Response(JSON.stringify({
+          data: [{ b64_json: pngBase64 }]
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      throw new Error('Unexpected URL ' + url)
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await renderImageGeneration({
+      workspaceRoot,
+      imageId: 'default-model-image',
+      recipe: {
+        mode: 'text_to_image',
+        prompt: 'A tiny generated image',
+        size: { width: 512, height: 512 },
+        outputFormat: 'png'
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'sciforge-router'
+    })
   })
 
   it('retries the images endpoint with a text field for providers that do not accept prompt', async () => {
@@ -372,5 +483,64 @@ describe('image generation engine', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ prompt: 'A tiny generated image' })
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ text: 'A tiny generated image' })
+  })
+
+  it('keeps Canvas color edits source-preserving instead of running unrelated text-to-image generation', async () => {
+    const sourcePath = join(workspaceRoot, 'source-diagram.png')
+    const canvas = createCanvas(240, 160)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 240, 160)
+    ctx.fillStyle = '#93c5fd'
+    ctx.fillRect(24, 30, 76, 44)
+    ctx.fillStyle = '#86efac'
+    ctx.fillRect(138, 30, 76, 44)
+    ctx.strokeStyle = '#111827'
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(100, 52)
+    ctx.lineTo(138, 52)
+    ctx.stroke()
+    ctx.fillStyle = '#111827'
+    ctx.font = '16px sans-serif'
+    ctx.fillText('A', 56, 58)
+    ctx.fillText('B', 170, 58)
+    writeFileSync(sourcePath, canvas.toBuffer('image/png'))
+
+    const result = await editImageFromCanvasPacket({
+      workspaceRoot,
+      imageId: 'color-edited-diagram',
+      reviewPacket: {
+        version: 1,
+        canvasId: 'thread-test',
+        artifacts: [
+          {
+            shapeId: 'shape:diagram',
+            artifactKind: 'generated_image',
+            outputPath: 'source-diagram.png',
+            title: 'Diagram'
+          }
+        ],
+        modificationSuggestions: [
+          {
+            targetShapeId: 'shape:diagram',
+            annotationShapeId: 'shape:annotation',
+            instruction: '换个颜色'
+          }
+        ]
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    expect(result.status).toBe('edited')
+    expect(result.outputs[0]?.provider).toBe('controlled-edit')
+    expect(existsSync(result.outputs[0]!.outputPath)).toBe(true)
+    expect(readFileSync(result.outputs[0]!.outputPath).equals(readFileSync(sourcePath))).toBe(false)
+    expect(result.warnings.join(' ')).toContain('source-preserving controlled color edit')
+
+    const output = await loadImage(result.outputs[0]!.outputPath)
+    expect(output.width).toBe(240)
+    expect(output.height).toBe(160)
   })
 })

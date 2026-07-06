@@ -289,6 +289,14 @@ describe('GUI MCP runtime registry', () => {
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
     }
+
+    expect(codex.find((server) => server.id === 'scientific_plotting')?.enabledTools).toEqual(
+      expect.arrayContaining([
+        'scientific_plotting_plan',
+        'scientific_plotting_research_brief',
+        'scientific_plotting_render'
+      ])
+    )
   })
 
   it('does not build a Claude Code MCP config without computer-use launch input', () => {
