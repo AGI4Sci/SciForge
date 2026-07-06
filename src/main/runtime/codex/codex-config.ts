@@ -5,6 +5,8 @@ import {
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   getCodexRuntimeSettings,
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
   resolveRuntimeModelRouterSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
@@ -196,6 +198,9 @@ type CodexModelRouterConfig = {
 }
 
 function codexModelRouterConfig(settings: AppSettingsV1): CodexModelRouterConfig {
+  if (!isModelRouterTextReasonerConfigured(getModelRouterSettings(settings))) {
+    throw new Error('Codex Model Router text reasoner Base URL, API key, and model name are required.')
+  }
   const router = resolveRuntimeModelRouterSettings(settings)
   const baseUrl = router.baseUrl.trim().replace(/\/+$/, '')
   if (!baseUrl) throw new Error('Codex Model Router base URL is required.')

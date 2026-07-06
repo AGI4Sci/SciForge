@@ -1,11 +1,7 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
 
-const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:5174'
+const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
 const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
-const TOKEN_STORAGE_KEY = 'sciforge.dev-browser-bridge.token'
-const TOKEN_HEADER = 'X-SciForge-Bridge-Token'
-const TOKEN_QUERY_PARAM = 'sciforgeBridgeToken'
-const TOKEN_BOOTSTRAP_PATH = '/bootstrap'
 
 type BridgeEnvelope<T> =
   | { ok: true; payload: T }
@@ -21,11 +17,13 @@ type ChannelHandler = (payload: never) => void
 let installed = false
 let eventSource: EventSource | null = null
 let clientId = ''
-let bridgeUrl = DEFAULT_BRIDGE_URL
-let bridgeToken = ''
-let bridgeTokenBootstrap: Promise<string> | null = null
-let bridgeTokenFromSession = false
+let bridgeUrl = ''
 const channelHandlers = new Map<string, Set<ChannelHandler>>()
+
+function defaultBridgeUrl(): string {
+  const origin = typeof window !== 'undefined' ? window.location?.origin : ''
+  return origin ? `${origin}${DEV_BRIDGE_PROXY_PATH}` : 'http://127.0.0.1:5174'
+}
 
 function detectPlatform(): string {
   const platform = globalThis.navigator?.platform?.toLowerCase?.() ?? ''
@@ -51,14 +49,6 @@ function storageSet(storage: Storage | undefined, key: string, value: string): v
   }
 }
 
-function storageRemove(storage: Storage | undefined, key: string): void {
-  try {
-    storage?.removeItem(key)
-  } catch {
-    /* best effort only */
-  }
-}
-
 function resolveClientId(): string {
   const existing = storageGet(globalThis.sessionStorage, CLIENT_ID_STORAGE_KEY)
   if (existing) return existing
@@ -67,93 +57,23 @@ function resolveClientId(): string {
   return created
 }
 
-function resolveBridgeToken(): string {
-  const params = new URLSearchParams(window.location?.search ?? '')
-  const fromQuery = params.get('devBrowserBridgeToken')?.trim() ||
-    params.get('sciforgeBridgeToken')?.trim() ||
-    ''
-  if (fromQuery) {
-    storageSet(globalThis.sessionStorage, TOKEN_STORAGE_KEY, fromQuery)
-    return fromQuery
-  }
-  const fromEnv = (import.meta.env.VITE_SCIFORGE_DEV_BROWSER_BRIDGE_TOKEN ?? '').trim()
-  if (fromEnv) return fromEnv
-  const fromSession = storageGet(globalThis.sessionStorage, TOKEN_STORAGE_KEY)?.trim() || ''
-  bridgeTokenFromSession = Boolean(fromSession)
-  return fromSession
-}
-
-function resetEventSource(): void {
-  eventSource?.close()
-  eventSource = null
-}
-
-function rememberBridgeToken(token: string): string {
-  const trimmed = token.trim()
-  if (!trimmed) return ''
-  if (bridgeToken && bridgeToken !== trimmed) resetEventSource()
-  bridgeToken = trimmed
-  bridgeTokenFromSession = false
-  storageSet(globalThis.sessionStorage, TOKEN_STORAGE_KEY, trimmed)
-  return trimmed
-}
-
-function forgetBridgeToken(): void {
-  bridgeToken = ''
-  bridgeTokenFromSession = false
-  bridgeTokenBootstrap = null
-  storageRemove(globalThis.sessionStorage, TOKEN_STORAGE_KEY)
-  resetEventSource()
-}
-
-async function ensureBridgeToken(options: { refresh?: boolean } = {}): Promise<string> {
-  if (bridgeToken && !options.refresh && !bridgeTokenFromSession) return bridgeToken
-  if (!bridgeTokenBootstrap) {
-    bridgeTokenBootstrap = (async () => {
-      try {
-        const response = await fetch(new URL(TOKEN_BOOTSTRAP_PATH, bridgeUrl).toString(), {
-          method: 'GET',
-          headers: {
-            'X-SciForge-Client': clientId
-          }
-        })
-        const envelope = await response.json().catch(() => null) as { ok?: boolean; token?: unknown } | null
-        if (response.ok && envelope?.ok === true && typeof envelope.token === 'string') {
-          return rememberBridgeToken(envelope.token)
-        }
-      } catch {
-        /* The desktop dev bridge may not be running yet. Keep the old explicit-token path working. */
-      }
-      return bridgeToken
-    })()
-  }
-  const token = await bridgeTokenBootstrap
-  if (!token) bridgeTokenBootstrap = null
-  return token
-}
-
 function ensureEventSource(): void {
   if (eventSource || typeof EventSource === 'undefined') return
-  void (async () => {
-    await ensureBridgeToken()
-    if (eventSource || typeof EventSource === 'undefined') return
-    const eventsUrl = new URL('/events', bridgeUrl)
-    eventsUrl.searchParams.set('clientId', clientId)
-    if (bridgeToken) eventsUrl.searchParams.set(TOKEN_QUERY_PARAM, bridgeToken)
-    eventSource = new EventSource(eventsUrl.toString())
-    eventSource.addEventListener('bridge-message', (event) => {
-      let message: BridgeMessage
-      try {
-        message = JSON.parse(event.data) as BridgeMessage
-      } catch {
-        return
-      }
-      if (!message || typeof message.channel !== 'string') return
-      for (const handler of channelHandlers.get(message.channel) ?? []) {
-        handler(message.payload as never)
-      }
-    })
-  })()
+  const eventsUrl = new URL(`${bridgeUrl.replace(/\/$/, '')}/events`)
+  eventsUrl.searchParams.set('clientId', clientId)
+  eventSource = new EventSource(eventsUrl.toString())
+  eventSource.addEventListener('bridge-message', (event) => {
+    let message: BridgeMessage
+    try {
+      message = JSON.parse(event.data) as BridgeMessage
+    } catch {
+      return
+    }
+    if (!message || typeof message.channel !== 'string') return
+    for (const handler of channelHandlers.get(message.channel) ?? []) {
+      handler(message.payload as never)
+    }
+  })
 }
 
 function onChannel<T>(channel: string, handler: (payload: T) => void): () => void {
@@ -169,36 +89,21 @@ function onChannel<T>(channel: string, handler: (payload: T) => void): () => voi
 }
 
 async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
-  await ensureBridgeToken()
-  const send = async (): Promise<{ response: Response; envelope: BridgeEnvelope<T> }> => {
-    const headers: Record<string, string> = {
+  const response = await fetch(`${bridgeUrl}/invoke`, {
+    method: 'POST',
+    headers: {
       'Content-Type': 'application/json',
       'X-SciForge-Client': clientId
-    }
-    if (bridgeToken) headers[TOKEN_HEADER] = bridgeToken
-    const response = await fetch(`${bridgeUrl}/invoke`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ channel, payload })
-    }).catch((error) => {
-      const reason = error instanceof Error && error.message ? ` ${error.message}` : ''
-      throw new Error(`Desktop dev bridge is not reachable at ${bridgeUrl}. Start or restart the Electron dev app, then retry.${reason}`)
-    })
-    const envelope = await response.json().catch(() => ({
-      ok: false,
-      message: `Bridge returned HTTP ${response.status}.`
-    })) as BridgeEnvelope<T>
-    return { response, envelope }
-  }
-  let { response, envelope } = await send()
-  if (response.status === 401 && bridgeToken) {
-    forgetBridgeToken()
-    await ensureBridgeToken({ refresh: true })
-    const retry = await send()
-    response = retry.response
-    envelope = retry.envelope
-    ensureEventSource()
-  }
+    },
+    body: JSON.stringify({ channel, payload })
+  }).catch((error) => {
+    const reason = error instanceof Error && error.message ? ` ${error.message}` : ''
+    throw new Error(`Desktop dev bridge is not reachable at ${bridgeUrl}. Start or restart the Electron dev app, then retry.${reason}`)
+  })
+  const envelope = await response.json().catch(() => ({
+    ok: false,
+    message: `Bridge returned HTTP ${response.status}.`
+  })) as BridgeEnvelope<T>
   if (!envelope.ok) {
     throw new Error(envelope.message ?? `Bridge request failed for ${channel}.`)
   }
@@ -227,11 +132,14 @@ function createApi(): SciForgeApi {
       modelHint: options?.modelHint,
       mode: options?.mode
     })
+  const onSettingsChanged: SciForgeApi['onSettingsChanged'] = (handler) =>
+    onChannel('settings:changed', handler)
 
   return {
     platform: detectPlatform(),
     getSettings: () => invoke('settings:get'),
     setSettings: (partial) => invoke('settings:set', partial),
+    onSettingsChanged,
     fetchUpstreamModels: () => invoke('upstream:models'),
     getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
@@ -346,6 +254,7 @@ function createApi(): SciForgeApi {
     previewWorkspaceHtml: (options) => invoke('file:preview-workspace-html', options),
     readWorkspaceImage: (options) => invoke('file:read-workspace-image', options),
     writeWorkspaceFile: (payload) => invoke('file:write-workspace', payload),
+    writeWorkspaceDocxText: (payload) => invoke('file:write-docx-text', payload),
     createWorkspaceFile: (payload) => invoke('file:create-workspace', payload),
     createWorkspaceDirectory: (payload) => invoke('file:create-workspace-directory', payload),
     saveWorkspaceClipboardImage: (payload) => invoke('file:save-workspace-clipboard-image', payload),
@@ -437,6 +346,7 @@ function createApi(): SciForgeApi {
     requestComputerUsePermission: (kind) => invoke('computer-use:request-permission', kind),
     getComputerUseStatus: () => invoke('computer-use:status'),
     getEvidenceDagView: (input) => invoke('evidenceDag:view', input),
+    runEvidenceDagAudit: (input) => invoke('evidenceDag:audit-run', input),
     exportProjectDag: (input) => invoke('projectDag:export', input),
     showTurnCompleteNotification: (payload) => invoke('notification:turn-complete', payload),
     getAppVersion: () => invoke('app:version'),
@@ -463,13 +373,17 @@ function isLocalBrowserHost(): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
 }
 
+function hasElectronPreloadBridge(): boolean {
+  return typeof window.sciforge?.onDevPreviewNavigate === 'function'
+}
+
 export function installDevSciForgeBridge(): void {
-  if (installed || typeof window === 'undefined' || window.sciforge) return
+  if (installed || typeof window === 'undefined') return
   if (!import.meta.env.DEV && !isLocalBrowserHost()) return
+  if (hasElectronPreloadBridge()) return
   installed = true
-  bridgeUrl = DEFAULT_BRIDGE_URL
+  bridgeUrl = defaultBridgeUrl()
   clientId = resolveClientId()
-  bridgeToken = resolveBridgeToken()
   window.sciforge = createApi()
   ensureEventSource()
 }

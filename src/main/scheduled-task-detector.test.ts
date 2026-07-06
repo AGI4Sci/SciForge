@@ -15,6 +15,16 @@ import { detectScheduledTaskRequest } from './scheduled-task-detector'
 
 function settings(): AppSettingsV1 {
   const provider = defaultModelProviderSettings()
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
+  modelRouter.publicModelAlias = 'sciforge-router'
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
   provider.apiKey = 'sk-remote-provider'
   provider.baseUrl = 'https://remote-provider.example/v1'
   provider.providers[0] = {
@@ -28,12 +38,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     provider,
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      baseUrl: 'http://127.0.0.1:49876/v1',
-      publicModelAlias: 'sciforge-router',
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter,
     agents: {
       sciforge: defaultLocalRuntimeSettings()
     },

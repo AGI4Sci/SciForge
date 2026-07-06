@@ -24,6 +24,7 @@ import {
   agentRuntimeStartTurnPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
+  evidenceDagAuditRunPayloadSchema,
   evidenceDagViewPayloadSchema,
   isSafeOpenExternalUrl,
   pdfAnnotationSidecarImportPayloadSchema,
@@ -108,6 +109,25 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: 'thread-1'
     })
+  })
+
+  it('accepts Evidence DAG audit run payloads with bounded threshold', () => {
+    expect(evidenceDagAuditRunPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: ' thread-1 ',
+      threshold: 0.8
+    })).toEqual({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      threshold: 0.8
+    })
+    expect(() =>
+      evidenceDagAuditRunPayloadSchema.parse({
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        threshold: 2
+      })
+    ).toThrow()
   })
 
   it('accepts generated and edited image artifacts for SciForge Canvas insertion', () => {
@@ -500,12 +520,17 @@ describe('app-ipc-schemas', () => {
           maxChildRuns: 4
         }
       },
-      imageGeneration: {
-        enabled: true,
-        provider: 'openai-compatible',
-        baseUrl: 'https://api.example.test/v1',
-        apiKey: 'image-key',
-        model: 'image-model'
+      modelRouter: {
+        profiles: {
+          default: {
+            imageGenerator: {
+              provider: 'openai-compatible',
+              baseUrl: 'https://api.example.test/v1',
+              apiKey: 'image-key',
+              model: 'image-model'
+            }
+          }
+        }
       },
       agents: {
         sciforge: {
@@ -546,6 +571,47 @@ describe('app-ipc-schemas', () => {
         model: '',
         language: '',
         timeoutMs: 60000
+      },
+      remoteExecutor: {
+        enabled: true,
+        defaultTargetId: 'hpc-1',
+        targets: [{
+          id: 'hpc-1',
+          label: 'HPC',
+          enabled: true,
+          kind: 'slurm',
+          remoteWorkspaceRoot: '/remote/workspace',
+          ssh: {
+            host: 'login.example.edu',
+            user: 'alice',
+            port: 22,
+            pythonPath: '/usr/bin/python3',
+            identityFile: '/Users/alice/.ssh/id_ed25519'
+          },
+          slurm: {
+            defaults: {
+              partition: 'gpu',
+              account: 'lab',
+              qos: 'normal',
+              timeLimit: '01:00:00',
+              nodes: 1,
+              ntasks: 1,
+              cpusPerTask: 8,
+              gpus: 1,
+              memory: '32G',
+              constraint: 'a100',
+              gres: 'gpu:a100:1',
+              extraArgs: ['--exclusive']
+            }
+          },
+          trustedWorkspaces: [{
+            workspaceRoot: '/repo/project',
+            targetFingerprint: 'fp-1',
+            trustedAt: '2026-01-01T00:00:00.000Z',
+            trustedBy: 'user',
+            approvalBypass: true
+          }]
+        }]
       }
     })
 
@@ -559,8 +625,9 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.claude?.configDir).toBe('/tmp/claude-code')
     expect(payload.write?.inlineCompletion?.maxTokens).toBe(128)
     expect(payload.speechToText?.baseUrl).toBe('')
-    expect(payload.imageGeneration?.enabled).toBe(true)
-    expect(payload.imageGeneration?.model).toBe('image-model')
+    expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
+    expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
+    expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
   })
 
   it('rejects Local Runtime credential override patches', () => {

@@ -21,6 +21,17 @@ import {
 } from './claude-code-config'
 
 function settings(): AppSettingsV1 {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
+  modelRouter.publicModelAlias = 'sciforge-router'
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
+
   return {
     version: 1,
     locale: 'en',
@@ -37,12 +48,7 @@ function settings(): AppSettingsV1 {
         extraArgs: ['--allowedTools', 'Edit']
       }
     },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      baseUrl: 'http://127.0.0.1:49876/v1',
-      publicModelAlias: 'sciforge-router',
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter,
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },
@@ -200,6 +206,18 @@ describe('claude-code config launch helpers', () => {
     })
 
     expect(launch.sdkOptions.mcpServers).toBeUndefined()
+  })
+
+  it('rejects launch options when the text reasoner is incomplete', async () => {
+    const current = settings()
+    current.modelRouter!.profiles.default.textReasoner.baseUrl = ''
+
+    await expect(prepareClaudeCodeSdkLaunch({
+      settings: current,
+      text: 'hello',
+      workspace: '/tmp/workspace',
+      managedConfigDir: '/tmp/claude-managed'
+    })).rejects.toThrow('text reasoner')
   })
 
   it('does not inject the shared computer-use MCP server when computer use is disabled', async () => {

@@ -8,7 +8,6 @@ import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultAgentCapabilitySettings,
-  defaultImageGenerationSettings,
   defaultKeyboardShortcuts,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   defaultLocalRuntimeSettings,
@@ -33,6 +32,18 @@ vi.mock('electron', () => ({
 
 let tempRoot: string | null = null
 
+function configuredModelRouterSettings() {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
+  return modelRouter
+}
+
 function createSettings(binaryPath: string, port = 8899): AppSettingsV1 {
   const runtimeDataDir = tempRoot ? join(tempRoot, 'runtime') : join(tmpdir(), 'sciforge-local-runtime-test')
   return {
@@ -41,10 +52,7 @@ function createSettings(binaryPath: string, port = 8899): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     provider: defaultModelProviderSettings(),
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter: configuredModelRouterSettings(),
     agents: {
       sciforge: {
         ...defaultLocalRuntimeSettings(port),
@@ -152,6 +160,22 @@ afterEach(async () => {
 })
 
 describe('startLocalRuntimeChild', () => {
+  it('rejects before starting when the text reasoner is incomplete', async () => {
+    const script = writeScript(
+      'text-reasoner-missing-child.js',
+      [
+        "process.stdout.write('should not start\\n')",
+        "setInterval(() => {}, 1_000)"
+      ].join('\n')
+    )
+    const current = createSettings(script)
+    current.modelRouter!.profiles.default.textReasoner.apiKey = ''
+
+    const module = await import('./local-runtime-process')
+    await expect(module.startLocalRuntimeChild(current)).rejects.toThrow('text reasoner')
+    expect(module.isLocalRuntimeChildRunning()).toBe(false)
+  })
+
   it('waits for the explicit local runtime ready marker before resolving', async () => {
     const script = writeScript(
       'ready-child.js',
@@ -704,14 +728,22 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
     const module = await import('./local-runtime-process')
+    const modelRouter = configuredModelRouterSettings()
     const settings = {
       ...createSettings('/tmp/fake-local-runtime-child.js'),
-      imageGeneration: {
-        ...defaultImageGenerationSettings(),
-        enabled: true,
-        baseUrl: 'http://127.0.0.1:4321/v1',
-        apiKey: 'test-image-key',
-        model: 'test-image-model'
+      modelRouter: {
+        ...modelRouter,
+        profiles: {
+          default: {
+            ...modelRouter.profiles.default,
+            imageGenerator: {
+              ...modelRouter.profiles.default.imageGenerator,
+              baseUrl: 'http://127.0.0.1:4321/v1',
+              apiKey: 'test-image-key',
+              model: 'test-image-model'
+            }
+          }
+        }
       }
     }
 

@@ -32,6 +32,20 @@ type QueryCall = {
   options?: ClaudeAgentSdkOptions
 }
 
+function configuredModelRouterSettings() {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
+  modelRouter.publicModelAlias = 'sciforge-router'
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
+  return modelRouter
+}
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -48,12 +62,7 @@ function settings(): AppSettingsV1 {
         extraArgs: ['--allowedTools', 'Edit']
       }
     },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      baseUrl: 'http://127.0.0.1:49876/v1',
-      publicModelAlias: 'sciforge-router',
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter: configuredModelRouterSettings(),
     workspaceRoot: '/tmp/sciforge-workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },

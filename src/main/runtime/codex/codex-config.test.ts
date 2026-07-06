@@ -20,6 +20,17 @@ import {
 import { codexRuntimeEnv, expandHome, prepareCodexAppServerLaunch } from './codex-config'
 
 function settings(codexHome: string): AppSettingsV1 {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
+  modelRouter.publicModelAlias = DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
+
   return {
     version: 1,
     locale: 'en',
@@ -35,12 +46,7 @@ function settings(codexHome: string): AppSettingsV1 {
         extraArgs: ['--profile', 'sciforge']
       }
     },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      baseUrl: 'http://127.0.0.1:49876/v1',
-      publicModelAlias: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter,
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },
@@ -478,19 +484,29 @@ describe('codex config launch helpers', () => {
 
   it('rejects non-local Model Router URLs', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
+    const current = settings(codexHome)
 
     await expect(prepareCodexAppServerLaunch({
       settings: {
-        ...settings(codexHome),
+        ...current,
         modelRouter: {
-          ...defaultModelRouterSettings(),
-          baseUrl: 'https://router.example.com/v1',
-          publicModelAlias: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-          runtimeApiKey: 'local-runtime-router-key'
+          ...current.modelRouter!,
+          baseUrl: 'https://router.example.com/v1'
         }
       },
       env: {}
     })).rejects.toThrow('Model Router base URL must be local')
+  })
+
+  it('rejects launch config when the text reasoner is incomplete', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
+    const current = settings(codexHome)
+    current.modelRouter!.profiles.default.textReasoner.model = ''
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: current,
+      env: {}
+    })).rejects.toThrow('text reasoner')
   })
 
   it('keeps external env clean and appends loopback no_proxy entries', () => {

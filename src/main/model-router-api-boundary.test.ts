@@ -172,6 +172,9 @@ function isAllowedBoundaryMarker(hit: DirectCallHit): boolean {
   if (hit.file === 'kun/src/contracts/model-endpoint-format.ts') {
     return hit.marker === 'chat completions endpoint' || hit.marker === 'messages endpoint'
   }
+  if (hit.file === 'src/main/zulip-bot-runtime.ts') {
+    return hit.marker === 'messages endpoint' && hit.text.includes("'/api/v1/messages'")
+  }
   if (hit.file === 'src/main/upstream-provider-env.ts') {
     return true
   }

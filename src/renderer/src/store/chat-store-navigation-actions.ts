@@ -62,7 +62,10 @@ import {
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
-  scheduleStartupRuntimeProbe,
+  scheduleRuntimeBootRetry,
+  scheduleRuntimeReconnectProbe,
+  stopRuntimeBootRetry,
+  stopRuntimeReconnectProbe,
   stopRuntimeThreadRefreshPoll,
   stopTurnCompletionPoll,
   syncRuntimeThreadRefreshPoll
@@ -100,6 +103,19 @@ const DEFAULT_THREAD_LIST_LIMIT = 80
 const EXPANDED_THREAD_LIST_LIMIT = 200
 const DEFAULT_SIDEBAR_DETAIL_INSPECTION_LIMIT = 12
 const EXPANDED_SIDEBAR_DETAIL_INSPECTION_LIMIT = 40
+const RUNTIME_PROBE_TIMEOUT_MS = 8_000
+
+function withRuntimeProbeTimeout<T>(task: Promise<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  const timeoutTask = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out while connecting to the local runtime.`))
+    }, RUNTIME_PROBE_TIMEOUT_MS)
+  })
+  return Promise.race([task, timeoutTask]).finally(() => {
+    if (timeout) clearTimeout(timeout)
+  })
+}
 
 function stateHasRecoverableActiveTurn(state: ChatState): boolean {
   return state.busy || Boolean(state.currentTurnId) || state.blocks.some(hasPendingRuntimeWork)
@@ -265,17 +281,16 @@ export function createNavigationActions(
           'Preload bridge missing (window.sciforge). Restart the app or check BrowserWindow preload path.'
         )
       }
-      const settings = await rendererRuntimeClient.getSettings({ forceRefresh: true })
       const p = getProvider()
-      await p.connect()
+      await withRuntimeProbeTimeout(p.connect(), 'Runtime probe')
+      stopRuntimeBootRetry()
+      stopRuntimeReconnectProbe()
       set({ runtimeConnection: 'ready', error: null, runtimeErrorDetail: null })
       void get().loadComposerModels()
-      if (prev !== 'ready' || mode === 'user') {
-        try {
-          await get().refreshThreads()
-        } catch {
-          /* refreshThreads sets state */
-        }
+      try {
+        await get().refreshThreads()
+      } catch {
+        /* refreshThreads sets state */
       }
       syncRuntimeThreadRefreshPoll(get)
       if (get().activeThreadId && stateHasRecoverableActiveTurn(get())) {
@@ -285,6 +300,7 @@ export function createNavigationActions(
       const msg = formatRuntimeError(e)
       const detail = runtimeErrorDetail(e)
       const needsSettings = shouldOpenSettingsForError(e)
+      if (!needsSettings) scheduleRuntimeReconnectProbe(get)
       if (mode === 'user') {
         stopRuntimeThreadRefreshPoll()
         stopTurnCompletionPoll()
@@ -328,6 +344,7 @@ export function createNavigationActions(
           return
         }
         const settings = await rendererRuntimeClient.getSettings({ forceRefresh: true })
+        stopRuntimeBootRetry()
         const workspaceRoot = normalizeWorkspaceRoot(settings.workspaceRoot)
         const hiddenCodeWorkspaceRoots = restoreHiddenCodeWorkspaceRoots(
           readHiddenCodeWorkspaceRoots(),
@@ -374,8 +391,9 @@ export function createNavigationActions(
         if (fromStorage) {
           set({ composerModel: fromStorage })
         }
-        scheduleStartupRuntimeProbe(get)
+        await get().probeRuntime('user')
       } catch (e) {
+        if (!shouldOpenSettingsForError(e)) scheduleRuntimeBootRetry(get)
         set({
           error: formatRuntimeError(e),
           runtimeErrorDetail: runtimeErrorDetail(e),

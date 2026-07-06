@@ -5,6 +5,8 @@ import type { Options as ClaudeAgentSdkOptions } from '@anthropic-ai/claude-agen
 import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   getClaudeRuntimeSettings,
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
   resolveRuntimeModelRouterSettings,
   type AppSettingsV1,
   type ApprovalPolicy,
@@ -243,6 +245,9 @@ function claudeModelRouterConfig(settings: AppSettingsV1): {
   apiKey: string
   model: string
 } {
+  if (!isModelRouterTextReasonerConfigured(getModelRouterSettings(settings))) {
+    throw new Error('Claude Code Model Router text reasoner Base URL, API key, and model name are required.')
+  }
   const router = resolveRuntimeModelRouterSettings(settings)
   const baseUrl = router.baseUrl.trim().replace(/\/+$/, '')
   if (!baseUrl) throw new Error('Claude Code Model Router base URL is required.')

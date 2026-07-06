@@ -73,10 +73,19 @@ export type ModelRouterMemberProviderSettingsV1 = {
   maxSupplementRounds?: number
 }
 
+export type ModelRouterScientificTranslatorSettingsV1 = {
+  baseUrl: string
+  apiKey: string
+  model: string
+  timeoutMs?: number
+}
+
 export type ModelRouterProfileSettingsV1 = {
   textReasoner: ModelRouterMemberProviderSettingsV1
+  imageGenerator: ModelRouterMemberProviderSettingsV1
   translators: {
     vision: ModelRouterMemberProviderSettingsV1
+    scientific: ModelRouterScientificTranslatorSettingsV1
   }
 }
 
@@ -94,10 +103,15 @@ export type ModelRouterSettingsV1 = {
 export type ModelRouterMemberProviderSettingsPatchV1 =
   Partial<ModelRouterMemberProviderSettingsV1>
 
+export type ModelRouterScientificTranslatorSettingsPatchV1 =
+  Partial<ModelRouterScientificTranslatorSettingsV1>
+
 export type ModelRouterProfileSettingsPatchV1 = {
   textReasoner?: ModelRouterMemberProviderSettingsPatchV1
+  imageGenerator?: ModelRouterMemberProviderSettingsPatchV1
   translators?: {
     vision?: ModelRouterMemberProviderSettingsPatchV1
+    scientific?: ModelRouterScientificTranslatorSettingsPatchV1
   }
 }
 
@@ -110,18 +124,6 @@ export type ModelRouterSettingsPatchV1 = Partial<
 }
 
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
-
-export type ImageGenerationProviderV1 = 'openai-compatible'
-
-export type ImageGenerationSettingsV1 = {
-  enabled: boolean
-  provider: ImageGenerationProviderV1
-  baseUrl: string
-  apiKey: string
-  model: string
-}
-
-export type ImageGenerationSettingsPatchV1 = Partial<ImageGenerationSettingsV1>
 
 export type AgentThreadIdsV1 = Partial<Record<AgentRuntimeId, string>>
 
@@ -1420,7 +1422,6 @@ export type AppSettingsV1 = {
   uiFontScale: UiFontScale
   provider: ModelProviderSettingsV1
   modelRouter?: ModelRouterSettingsV1
-  imageGeneration?: ImageGenerationSettingsV1
   runtimeGuards?: RuntimeGuardSettingsV1
   agentCapabilities?: AgentCapabilitySettingsV1
   computerUse?: ComputerUseSettingsV1
@@ -1443,11 +1444,10 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
+  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities'>
 > & {
   provider?: ModelProviderSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
-  imageGeneration?: ImageGenerationSettingsPatchV1
   runtimeGuards?: RuntimeGuardSettingsPatchV1
   agentCapabilities?: AgentCapabilitySettingsPatchV1
   computerUse?: ComputerUseSettingsPatchV1

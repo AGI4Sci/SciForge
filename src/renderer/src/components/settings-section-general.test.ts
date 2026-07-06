@@ -18,11 +18,26 @@ import { GeneralSettingsSection } from './settings-section-general'
 
 const labels: Record<string, string> = {
   sectionGeneral: 'Basics',
-  apiKey: 'Provider member API key',
-  apiKeySharedDesc: 'Required for the provider member that the local Model Router uses by default.',
-  baseUrl: 'Provider member URL',
-  baseUrlSharedDesc: 'Default provider member URL.',
-  baseUrlPlaceholder: 'http://127.0.0.1:3892/v1',
+  modelRouterModels: 'Model Router models',
+  modelRouterRoleBaseUrl: 'Base URL',
+  modelRouterRoleApiKey: 'API key',
+  modelRouterRoleModel: 'Model name',
+  modelRouterTextReasoner: 'Text understanding and reasoning',
+  modelRouterTextReasonerDesc: 'Default model.',
+  modelRouterTextReasonerBaseUrlPlaceholder: 'https://api.example.com/v1',
+  modelRouterTextReasonerModelPlaceholder: 'deepseek-v4-pro',
+  modelRouterVisionTranslator: 'Image understanding',
+  modelRouterVisionTranslatorDesc: 'Vision model.',
+  modelRouterVisionTranslatorBaseUrlPlaceholder: 'https://api.example.com/v1',
+  modelRouterVisionTranslatorModelPlaceholder: 'qwen-vl-max',
+  modelRouterImageGenerator: 'Image generation',
+  modelRouterImageGeneratorDesc: 'Image model.',
+  modelRouterImageGeneratorBaseUrlPlaceholder: 'https://api.example.com/v1',
+  modelRouterImageGeneratorModelPlaceholder: 'gpt-image-2',
+  modelRouterScientificTranslator: 'Scientific modality translation',
+  modelRouterScientificTranslatorDesc: 'Scientific model.',
+  modelRouterScientificTranslatorBaseUrlPlaceholder: 'http://127.0.0.1:3898',
+  modelRouterScientificTranslatorModelPlaceholder: 'sci-modality',
   modelRouterConfigFile: 'Model Router config file',
   modelRouterConfigFileDesc: 'Edit provider members, routing rules, and upstream credentials in the local config file.',
   modelRouterOpenConfigFile: 'Open Model Router config file',
@@ -127,11 +142,7 @@ describe('GeneralSettingsSection', () => {
         t,
         tCommon: t,
         form: buildSettings(),
-        activeApiKey: 'sk-test',
         update: vi.fn(),
-        updateSharedCredential: vi.fn(),
-        sharedApiKey: 'sk-test',
-        sharedBaseUrl: '',
         showApiKey: false,
         setShowApiKey: vi.fn(),
         selectControlClass: 'select-control',
@@ -155,7 +166,44 @@ describe('GeneralSettingsSection', () => {
       }
     }))
 
+    expect(html).toContain('Model Router models')
+    expect(html).toContain('Text understanding and reasoning')
+    expect(html).toContain('Image understanding')
+    expect(html).toContain('Image generation')
+    expect(html).toContain('Scientific modality translation')
     expect(html).toContain('Model Router config file')
     expect(html).toContain('Open Model Router config file')
+  })
+
+  it('keeps Model Router API keys hidden by default', () => {
+    const html = renderToStaticMarkup(createElement(GeneralSettingsSection, {
+      ctx: {
+        t,
+        tCommon: t,
+        form: buildSettings(),
+        update: vi.fn(),
+        selectControlClass: 'select-control',
+        openOnboardingPreview: vi.fn(),
+        pickWorkspace: vi.fn(),
+        resetWorkspaceToDefault: vi.fn(),
+        workspacePickerError: null,
+        guiUpdateInfo: null,
+        checkingGuiUpdate: false,
+        downloadingGuiUpdate: false,
+        installingGuiUpdate: false,
+        guiUpdateDownloaded: false,
+        guiUpdateProgress: null,
+        guiUpdateError: null,
+        checkGuiUpdate: vi.fn(),
+        downloadGuiUpdate: vi.fn(),
+        installGuiUpdate: vi.fn(),
+        logPath: '/tmp/sciforge.log',
+        logDirOpenError: null,
+        setLogDirOpenError: vi.fn()
+      }
+    }))
+
+    expect(html.match(/type="password"/g)).toHaveLength(4)
+    expect(html).not.toContain('type="text" autoComplete="off" placeholder="sk-..."')
   })
 })

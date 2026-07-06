@@ -8,15 +8,12 @@ import {
   type AppSettingsPatch,
   type CodexRuntimeSettingsPatchV1,
   type ClaudeRuntimeSettingsPatchV1,
-  getActiveAgentApiKey,
   getClaudeRuntimeSettings,
   getCodexRuntimeSettings,
-  getImageGenerationSettings,
   getLocalRuntimeSettings,
-  getModelProviderSettings,
+  getModelRouterSettings,
   isLocalRuntimeInsecure,
   type AppSettingsV1,
-  type ImageGenerationSettingsPatchV1,
 } from '@shared/app-settings'
 import type {
   AgentRuntimeGitCheckpoint,
@@ -51,7 +48,7 @@ import {
 } from './settings-utils'
 import { loadLocalRuntimeDiagnostics } from '../lib/load-local-runtime-diagnostics'
 import { createSettingsMemoryActions } from '../lib/settings-memory-actions'
-import { emitRendererSettingsChanged } from '../lib/keyboard-shortcut-settings'
+import { SETTINGS_CHANGED_EVENT, emitRendererSettingsChanged } from '../lib/keyboard-shortcut-settings'
 import type { InlineNotice } from './settings-controls'
 import {
   AgentsSettingsSection,
@@ -130,7 +127,6 @@ export function SettingsView(): ReactElement {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showApiKey, setShowApiKey] = useState(false)
-  const [showImageGenerationApiKey, setShowImageGenerationApiKey] = useState(false)
   const [showRuntimeToken, setShowRuntimeToken] = useState(false)
   const [logPath, setLogPath] = useState('')
   const [logDirOpenError, setLogDirOpenError] = useState<string | null>(null)
@@ -212,6 +208,18 @@ export function SettingsView(): ReactElement {
   }, [])
 
   useEffect(() => {
+    const onSettingsChanged = (event: Event): void => {
+      const next = coerceRendererSettings((event as CustomEvent<AppSettingsV1>).detail)
+      setForm(next)
+      void applyI18n(next.locale)
+      void reloadUiSettings()
+      void probeRuntime('background')
+    }
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+  }, [applyI18n, probeRuntime, reloadUiSettings])
+
+  useEffect(() => {
     if (!formTheme || !formUiFontScale) return
     applyTheme(formTheme)
     applyUiFontScale(formUiFontScale)
@@ -225,7 +233,8 @@ export function SettingsView(): ReactElement {
   useEffect(() => {
     if (!form || initializedCategory.current) return
     initializedCategory.current = true
-    if (!getActiveAgentApiKey(form).trim()) {
+    const textReasoner = getModelRouterSettings(form).profiles.default.textReasoner
+    if (!textReasoner.apiKey.trim() || !textReasoner.baseUrl.trim() || !textReasoner.model.trim()) {
       setCategory('general')
     }
   }, [form])
@@ -677,9 +686,12 @@ export function SettingsView(): ReactElement {
   const localRuntime = getLocalRuntimeSettings(form)
   const codex = getCodexRuntimeSettings(form)
   const claude = getClaudeRuntimeSettings(form)
-  const provider = getModelProviderSettings(form)
-  const imageGeneration = getImageGenerationSettings(form)
-  const activeApiKey = getActiveAgentApiKey(form)
+  const textReasoner = getModelRouterSettings(form).profiles.default.textReasoner
+  const textReasonerConfigured = Boolean(
+    textReasoner.apiKey.trim() &&
+    textReasoner.baseUrl.trim() &&
+    textReasoner.model.trim()
+  )
 
   const update = (partial: SettingsPatch): void => {
     const next = mergeSettings(form, partial)
@@ -693,16 +705,6 @@ export function SettingsView(): ReactElement {
 
   const updateLocalRuntime = (patch: Partial<AppSettingsV1['agents']['sciforge']>): void => {
     update({ agents: localRuntimeSettingsPatch(patch) })
-  }
-
-  const sharedApiKey = provider.apiKey
-  const sharedBaseUrl = provider.baseUrl
-  const updateSharedCredential = (patch: { apiKey?: string; baseUrl?: string }): void => {
-    update({ provider: patch })
-  }
-
-  const updateImageGeneration = (patch: ImageGenerationSettingsPatchV1): void => {
-    update({ imageGeneration: patch })
   }
 
   const updateCodex = (patch: CodexRuntimeSettingsPatchV1): void => {
@@ -762,24 +764,15 @@ export function SettingsView(): ReactElement {
     t,
     tCommon,
     form,
-    provider,
     localRuntime,
-    imageGeneration,
     codex,
     claude,
-    activeApiKey,
     update,
     updateLocalRuntime,
     updateCodex,
     updateClaude,
-    updateSharedCredential,
-    updateImageGeneration,
-    sharedApiKey,
-    sharedBaseUrl,
     showApiKey,
     setShowApiKey,
-    showImageGenerationApiKey,
-    setShowImageGenerationApiKey,
     showRuntimeToken,
     setShowRuntimeToken,
     portError,
@@ -868,7 +861,7 @@ export function SettingsView(): ReactElement {
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
         <div className="mx-auto max-w-3xl">
-          {!activeApiKey.trim() ? (
+          {!textReasonerConfigured ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
               <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
               <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">

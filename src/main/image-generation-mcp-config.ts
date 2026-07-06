@@ -13,7 +13,7 @@ import {
   IMAGE_GENERATION_TOOL_SIDE_EFFECTS
 } from '../../packages/workers/image-generation/src/contract'
 import {
-  getImageGenerationSettings,
+  getModelRouterSettings,
   type AppSettingsV1,
 } from '../shared/app-settings'
 import { resolveRuntimeModelRouterSettings } from '../shared/app-settings-model-router'
@@ -125,10 +125,10 @@ export function imageGenerationMcpEnabledTools(): string[] {
 }
 
 export function imageGenerationMcpSettingsChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
-  const a = getImageGenerationSettings(prev)
-  const b = getImageGenerationSettings(next)
-  const aConfigured = a.enabled && Boolean(a.apiKey.trim())
-  const bConfigured = b.enabled && Boolean(b.apiKey.trim())
+  const a = getModelRouterSettings(prev).profiles.default.imageGenerator
+  const b = getModelRouterSettings(next).profiles.default.imageGenerator
+  const aConfigured = Boolean(a.apiKey.trim() && a.baseUrl.trim() && a.model.trim())
+  const bConfigured = Boolean(b.apiKey.trim() && b.baseUrl.trim() && b.model.trim())
 
   if (aConfigured !== bConfigured) return true
   if (!aConfigured && !bConfigured) return false
@@ -148,8 +148,8 @@ export function imageGenerationMcpEnv(
   void launch
   const env: Record<string, string> = { ...ELECTRON_RUN_AS_NODE_ENV }
   if (!settings) return env
-  const imageGeneration = getImageGenerationSettings(settings)
-  if (!imageGeneration?.enabled || !imageGeneration.apiKey.trim() || !imageGeneration.baseUrl.trim()) return env
+  const imageGenerator = getModelRouterSettings(settings).profiles.default.imageGenerator
+  if (!imageGenerator.apiKey.trim() || !imageGenerator.baseUrl.trim() || !imageGenerator.model.trim()) return env
   const router = resolveRuntimeModelRouterSettings(settings)
   if (!router.baseUrl || !router.apiKey || !router.model) return env
   env.SCIFORGE_MODEL_ROUTER_BASE_URL = router.baseUrl

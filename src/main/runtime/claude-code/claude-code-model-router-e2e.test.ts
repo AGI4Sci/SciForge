@@ -46,6 +46,20 @@ type CapturedClaudeRequest = {
   env: NodeJS.ProcessEnv
 }
 
+function configuredModelRouterSettings(baseUrl: string) {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.baseUrl = baseUrl
+  modelRouter.publicModelAlias = 'sciforge-router'
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text.example/v1',
+    apiKey: 'text-provider-key',
+    model: 'text-model'
+  }
+  return modelRouter
+}
+
 function settings(input: { workspaceRoot: string; modelRouterBaseUrl: string }): AppSettingsV1 {
   return {
     version: 1,
@@ -63,12 +77,7 @@ function settings(input: { workspaceRoot: string; modelRouterBaseUrl: string }):
         extraArgs: ['--allowedTools', 'Edit']
       }
     },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      baseUrl: input.modelRouterBaseUrl,
-      publicModelAlias: 'sciforge-router',
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter: configuredModelRouterSettings(input.modelRouterBaseUrl),
     workspaceRoot: input.workspaceRoot,
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },

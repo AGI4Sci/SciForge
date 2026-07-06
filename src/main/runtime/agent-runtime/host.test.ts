@@ -1036,12 +1036,23 @@ describe('AgentRuntimeHost', () => {
                 apiKey: 'private-provider-secret',
                 model: 'private-provider-model'
               },
+              imageGenerator: {
+                provider: 'private-image',
+                baseUrl: 'https://private-image.example/v1',
+                apiKey: 'private-image-secret',
+                model: 'private-image-model'
+              },
               translators: {
                 vision: {
                   provider: 'private-vision',
                   baseUrl: 'https://private-vision.example/v1',
                   apiKey: 'private-vision-secret',
                   model: 'private-vision-model'
+                },
+                scientific: {
+                  baseUrl: 'http://127.0.0.1:3898',
+                  apiKey: 'private-scientific-secret',
+                  model: 'private-scientific-model'
                 }
               }
             }
@@ -3064,8 +3075,7 @@ describe('AgentRuntimeHost', () => {
           trace: [
             { id: 'u1', type: 'message', role: 'user', content: 'question' },
             { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-          ],
-          merge: true
+          ]
         })
       })
     )

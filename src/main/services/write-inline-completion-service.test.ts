@@ -26,6 +26,14 @@ import { clearWriteRetrievalCache } from './write-retrieval-service'
 
 function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion']> = {}): AppSettingsV1 {
   const write = defaultWriteSettings()
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.runtimeApiKey = 'sk-router'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
   return {
     version: 1,
     locale: 'en',
@@ -35,10 +43,7 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
 	    agents: {
 	      sciforge: defaultLocalRuntimeSettings()
 	    },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      runtimeApiKey: 'sk-router'
-    },
+    modelRouter,
     workspaceRoot: '/tmp/workspace',
     log: {
       enabled: true,

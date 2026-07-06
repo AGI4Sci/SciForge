@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS,
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
   resolveWriteInlineCompletionModel,
@@ -574,6 +576,11 @@ export async function requestWriteInlineCompletion(
   if (settings.write.inlineCompletion.enabled === false) {
     appendInlineCompletionPreflightFailure(startedAt, settings, request, 'Inline completion is disabled.')
     return { ok: false, message: 'Inline completion is disabled.' }
+  }
+  if (!isModelRouterTextReasonerConfigured(getModelRouterSettings(settings))) {
+    const message = 'Model Router text reasoner is not configured for inline completion.'
+    appendInlineCompletionPreflightFailure(startedAt, settings, request, message)
+    return { ok: false, message }
   }
 
   const apiKey = resolveWriteInlineCompletionApiKey(settings)

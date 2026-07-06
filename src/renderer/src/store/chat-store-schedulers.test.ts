@@ -4,6 +4,10 @@ import {
   clearBusyWatchdog,
   requestRuntimeThreadRefresh,
   resetBusyRecoveryAttempts,
+  scheduleRuntimeBootRetry,
+  scheduleRuntimeReconnectProbe,
+  stopRuntimeBootRetry,
+  stopRuntimeReconnectProbe,
   stopRuntimeThreadRefreshPoll,
   syncRuntimeThreadRefreshPoll
 } from './chat-store-schedulers'
@@ -148,6 +152,8 @@ describe('syncRuntimeThreadRefreshPoll', () => {
   })
   afterEach(() => {
     stopRuntimeThreadRefreshPoll()
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
@@ -310,5 +316,89 @@ describe('syncRuntimeThreadRefreshPoll', () => {
     expect(refreshThreads).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(refreshThreads).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('scheduleRuntimeReconnectProbe', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+  })
+
+  it('probes in the background until the runtime becomes ready', async () => {
+    const probeRuntime = vi.fn(async () => undefined)
+    const h = makeHarness({
+      runtimeConnection: 'offline',
+      probeRuntime
+    } as Partial<ChatState>)
+
+    scheduleRuntimeReconnectProbe(h.get, { minDelayMs: 10, maxDelayMs: 20 })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(probeRuntime).toHaveBeenCalledWith('background')
+
+    h.set({ runtimeConnection: 'ready' } as Partial<ChatState>)
+    await vi.advanceTimersByTimeAsync(20)
+
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('backs off retries while the runtime remains offline', async () => {
+    const probeRuntime = vi.fn(async () => undefined)
+    const h = makeHarness({
+      runtimeConnection: 'offline',
+      probeRuntime
+    } as Partial<ChatState>)
+
+    scheduleRuntimeReconnectProbe(h.get, { minDelayMs: 10, maxDelayMs: 20 })
+    await vi.advanceTimersByTimeAsync(10)
+    await vi.advanceTimersByTimeAsync(19)
+
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(probeRuntime).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('scheduleRuntimeBootRetry', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    stopRuntimeBootRetry()
+    vi.useRealTimers()
+  })
+
+  it('retries a full boot after startup settings fail', async () => {
+    const boot = vi.fn(async () => undefined)
+    const h = makeHarness({
+      runtimeConnection: 'offline',
+      boot
+    } as Partial<ChatState>)
+
+    scheduleRuntimeBootRetry(h.get, { delayMs: 10 })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(boot).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not schedule another boot retry while one is pending', async () => {
+    const boot = vi.fn(async () => undefined)
+    const h = makeHarness({
+      runtimeConnection: 'offline',
+      boot
+    } as Partial<ChatState>)
+
+    scheduleRuntimeBootRetry(h.get, { delayMs: 10 })
+    scheduleRuntimeBootRetry(h.get, { delayMs: 10 })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(boot).toHaveBeenCalledTimes(1)
   })
 })

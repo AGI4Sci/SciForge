@@ -1,8 +1,7 @@
 import { type ReactElement, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  getActiveAgentApiKey,
-  getModelProviderSettings,
+  getModelRouterSettings,
   normalizeAppSettings,
   type AppSettingsPatch,
   type AppSettingsV1
@@ -34,7 +33,7 @@ export function InitialSetupDialog(): ReactElement {
   const [error, setError] = useState<string | null>(null)
   const formRef = useRef<AppSettingsV1 | null>(null)
   const isPreview = initialSetupMode === 'preview'
-  const provider = form ? getModelProviderSettings(form) : null
+  const textReasoner = form ? getModelRouterSettings(form).profiles.default.textReasoner : null
 
   const setCurrentForm = (next: AppSettingsV1 | null): void => {
     formRef.current = next
@@ -59,17 +58,31 @@ export function InitialSetupDialog(): ReactElement {
     if (!current) return
     const next = normalizeAppSettings({
       ...current,
-      ...patch,
-      provider: {
-        ...current.provider,
-        ...(patch.provider ?? {})
-      }
+      ...patch
     } as AppSettingsV1)
     setCurrentForm(next)
   }
 
-  const updateProvider = (patch: Partial<AppSettingsV1['provider']>): void => {
-    updateForm({ provider: patch })
+  const updateTextReasoner = (patch: { apiKey?: string; baseUrl?: string; model?: string }): void => {
+    const current = formRef.current
+    if (!current) return
+    const router = getModelRouterSettings(current)
+    const next = normalizeAppSettings({
+      ...current,
+      modelRouter: {
+        ...router,
+        profiles: {
+          default: {
+            ...router.profiles.default,
+            textReasoner: {
+              ...router.profiles.default.textReasoner,
+              ...patch
+            }
+          }
+        }
+      }
+    })
+    setCurrentForm(next)
   }
 
   const handleThemeChange = (theme: ThemePref) => {
@@ -87,7 +100,12 @@ export function InitialSetupDialog(): ReactElement {
   const handleSave = async () => {
     const current = formRef.current
     if (!current) return
-    if (!getActiveAgentApiKey(current).trim()) {
+    const currentTextReasoner = getModelRouterSettings(current).profiles.default.textReasoner
+    if (
+      !currentTextReasoner.apiKey.trim() ||
+      !currentTextReasoner.baseUrl.trim() ||
+      !currentTextReasoner.model.trim()
+    ) {
       setError(t('firstRunApiKeyValidation'))
       return
     }
@@ -210,13 +228,13 @@ export function InitialSetupDialog(): ReactElement {
 
           <div className="space-y-2.5 sm:space-y-3.5">
             <label className={labelClass}>
-              {t('apiKey')}
+              {t('modelRouterRoleApiKey')}
             </label>
             <div className="relative">
               <input
                 type={showApiKey ? 'text' : 'password'}
-                value={provider?.apiKey ?? ''}
-                onChange={(e) => updateProvider({ apiKey: e.target.value })}
+                value={textReasoner?.apiKey ?? ''}
+                onChange={(e) => updateTextReasoner({ apiKey: e.target.value })}
                 placeholder="sk-..."
                 autoComplete="off"
                 autoCorrect="off"
@@ -241,13 +259,26 @@ export function InitialSetupDialog(): ReactElement {
 
           <div className="space-y-2.5 sm:space-y-3.5">
             <label className={labelClass}>
-              {t('baseUrl')}
+              {t('modelRouterRoleBaseUrl')}
             </label>
             <input
               type="text"
-              value={provider?.baseUrl ?? ''}
-              onChange={(e) => updateProvider({ baseUrl: e.target.value })}
-              placeholder="http://127.0.0.1:3892/v1"
+              value={textReasoner?.baseUrl ?? ''}
+              onChange={(e) => updateTextReasoner({ baseUrl: e.target.value })}
+              placeholder={t('modelRouterTextReasonerBaseUrlPlaceholder')}
+              className={fieldClass}
+            />
+          </div>
+
+          <div className="space-y-2.5 sm:space-y-3.5">
+            <label className={labelClass}>
+              {t('modelRouterRoleModel')}
+            </label>
+            <input
+              type="text"
+              value={textReasoner?.model ?? ''}
+              onChange={(e) => updateTextReasoner({ model: e.target.value })}
+              placeholder={t('modelRouterTextReasonerModelPlaceholder')}
               className={fieldClass}
             />
           </div>

@@ -12,8 +12,10 @@ import './styles/workflow-canvas.css'
 import App from './App'
 import './i18n'
 import { installDevSciForgeBridge } from './dev/dev-sciforge-bridge'
+import { rendererRuntimeClient } from './agent/runtime-client'
 
 installDevSciForgeBridge()
+rendererRuntimeClient.startSettingsChangeListener()
 document.documentElement.dataset.platform = window.sciforge?.platform ?? 'unknown'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

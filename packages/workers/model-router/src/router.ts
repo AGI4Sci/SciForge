@@ -41,6 +41,7 @@ export interface ModelRouterProviderConfig {
 export interface ModelRouterScientificTranslatorConfig {
   baseUrl: string;
   tokenEnv: string;
+  model: string;
   timeoutMs?: number;
 }
 
@@ -564,7 +565,7 @@ function modelRouterHealthzUpstreamDiagnostic(
   }
   const scientificTranslator = profile.translators.scientific;
   if (scientificTranslator) {
-    if (!scientificTranslator.baseUrl || !scientificTranslator.tokenEnv) {
+    if (!scientificTranslator.baseUrl || !scientificTranslator.tokenEnv || !scientificTranslator.model) {
       return {
         category: 'repo-bug',
         ok: false,
@@ -1249,7 +1250,7 @@ function optionalSecretForProvider(config: ModelRouterProviderConfig, env: Recor
 }
 
 function validateScientificTranslatorConfig(config: ModelRouterScientificTranslatorConfig) {
-  if (!config.baseUrl || !config.tokenEnv) {
+  if (!config.baseUrl || !config.tokenEnv || !config.model) {
     throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" is missing required service configuration.');
   }
   try {
@@ -1647,9 +1648,10 @@ async function translateScientificModalityObservation(
   fetchImpl: typeof fetch,
   cache?: Map<string, ScientificEvidence>,
 ): Promise<{ observation: string; evidence: ScientificEvidence } | undefined> {
-  const serviceUrl = service?.baseUrl.trim() ?? '';
+  if (!service) return undefined;
+  const serviceUrl = service.baseUrl.trim();
   if (!serviceUrl) return undefined;
-  const serviceToken = (env[service?.tokenEnv ?? ''] ?? '').trim();
+  const serviceToken = (env[service.tokenEnv] ?? '').trim();
   if (!serviceToken) return undefined;
   const target = await workspaceImageTarget(item, workspaceRoot);
   if (!target || !isScientificModalityPath(target.relativeRef)) return undefined;
@@ -1676,7 +1678,7 @@ async function translateScientificModalityObservation(
       const resp = await fetchImpl(`${serviceUrl.replace(/\/+$/, '')}/modality/translate`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` },
-        body: JSON.stringify({ payload, objectId: item.id }),
+        body: JSON.stringify({ payload, objectId: item.id, model: service.model }),
         signal: controller.signal,
       });
       ok = resp.ok;

@@ -33,6 +33,18 @@ import type {
 import type { CodexThreadEventPayload } from './codex-runtime-api'
 import type { CodexDynamicMcpClient } from './codex-dynamic-mcp-tools'
 
+function configuredModelRouterSettings() {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
+  return modelRouter
+}
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -45,10 +57,7 @@ function settings(): AppSettingsV1 {
       sciforge: defaultLocalRuntimeSettings(),
       codex: defaultCodexRuntimeSettings()
     },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter: configuredModelRouterSettings(),
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },

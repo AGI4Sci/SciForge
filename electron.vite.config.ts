@@ -38,6 +38,18 @@ export default defineConfig({
     }
   },
   renderer: {
+    server: {
+      // Bind the web dev surface on both loopback families so browser debugging
+      // works whether localhost resolves to ::1 or 127.0.0.1.
+      host: '::',
+      proxy: {
+        '/__sciforge-dev-bridge': {
+          target: 'http://127.0.0.1:5174',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/__sciforge-dev-bridge/, '')
+        }
+      }
+    },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),

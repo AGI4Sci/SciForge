@@ -4403,6 +4403,7 @@ function testScientificTranslatorConfig(): NonNullable<ModelRouterConfig['profil
   return {
     baseUrl: 'http://sci-modality.example:3898',
     tokenEnv: 'SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN',
+    model: 'sci-modality',
   };
 }
 

@@ -496,7 +496,7 @@ describe('registerAppIpcHandlers', () => {
     ).rejects.toThrow(/Evidence DAG service is not reachable/)
   })
 
-  it('backfills the active thread into Evidence DAG when loading the view', async () => {
+  it('keeps Evidence DAG view read-only without backfilling the active thread', async () => {
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
     const fetchMock = stubEvidenceDagReady()
@@ -524,26 +524,144 @@ describe('registerAppIpcHandlers', () => {
       url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1#token=test-token'
     })
 
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        'http://127.0.0.1:4897/threads/codex%3Athread-1/ingest-trace',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            authorization: 'Bearer test-token',
-            'content-type': 'application/json'
-          }),
-          body: JSON.stringify({
-            trace: [
-              { id: 'u1', type: 'message', role: 'user', content: 'question' },
-              { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-            ],
-            merge: true
-          })
-        })
-      )
+    expect(agentRuntime.readThread).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:4897/threads/codex%3Athread-1/ingest-trace',
+      expect.anything()
+    )
+  })
+
+  it('runs a manual Evidence DAG audit after synchronously backfilling the active thread', async () => {
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url)
+      if (href.endsWith('/version')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: { service: 'evidence-dag-engine' }
+        }), { status: 200 })
+      }
+      if (href.endsWith('/threads/codex%3Athread-1/ingest-trace')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: { summary: { node_count: 2 }, audited: true }
+        }), { status: 200 })
+      }
+      if (href.endsWith('/threads/codex%3Athread-1/audit-runs')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: {
+            id: 'audit:1',
+            risk_digest: { total_findings: 2, highest_severity: 'major' }
+          }
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
     })
-    expect(agentRuntime.readThread).toHaveBeenCalledWith({ runtimeId: 'codex', threadId: 'thread-1' })
+    vi.stubGlobal('fetch', fetchMock)
+    const agentRuntime = {
+      readThread: vi.fn(async () => ({
+        id: 'thread-1',
+        runtimeId: 'codex',
+        title: 'Thread',
+        updatedAt: '2026-06-26T00:00:00.000Z',
+        latestSeq: 1,
+        items: [
+          { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
+          { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
+        ]
+      }))
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(
+      handlers.get('evidenceDag:audit-run')?.({}, {
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        threshold: 0.7
+      })
+    ).resolves.toEqual({
+      threadId: 'thread-1',
+      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1#token=test-token',
+      riskDigest: { total_findings: 2, highest_severity: 'major' }
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4897/threads/codex%3Athread-1/ingest-trace',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          trace: [
+            { id: 'u1', type: 'message', role: 'user', content: 'question' },
+            { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
+          ]
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4897/threads/codex%3Athread-1/audit-runs',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          trigger: 'manual',
+          threshold: 0.7
+        })
+      })
+    )
+  })
+
+  it('does not run a manual Evidence DAG audit when strict backfill fails', async () => {
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url)
+      if (href.endsWith('/version')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: { service: 'evidence-dag-engine' }
+        }), { status: 200 })
+      }
+      if (href.endsWith('/threads/codex%3Athread-1/ingest-trace')) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: { message: 'extract failed' }
+        }), { status: 500 })
+      }
+      if (href.endsWith('/threads/codex%3Athread-1/audit-runs')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: { risk_digest: { total_findings: 0, highest_severity: 'none' } }
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const agentRuntime = {
+      readThread: vi.fn(async () => ({
+        id: 'thread-1',
+        runtimeId: 'codex',
+        title: 'Thread',
+        updatedAt: '2026-06-26T00:00:00.000Z',
+        latestSeq: 1,
+        items: [{ id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' }]
+      }))
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(
+      handlers.get('evidenceDag:audit-run')?.({}, {
+        runtimeId: 'codex',
+        threadId: 'thread-1'
+      })
+    ).rejects.toThrow(/extract failed/)
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:4897/threads/codex%3Athread-1/audit-runs',
+      expect.anything()
+    )
   })
 
   it('returns a dispatcher for dev browser bridge calls that uses the same handlers', async () => {

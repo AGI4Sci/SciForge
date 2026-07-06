@@ -54,6 +54,14 @@ const api = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
+  onSettingsChanged: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      settings: Parameters<typeof handler>[0]
+    ) => handler(settings)
+    ipcRenderer.on('settings:changed', wrapped)
+    return () => ipcRenderer.removeListener('settings:changed', wrapped)
+  },
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   getConnectPhoneStatus,
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
@@ -192,6 +200,8 @@ const api = {
     ipcRenderer.invoke('file:read-workspace-image', options),
   writeWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:write-workspace', payload),
+  writeWorkspaceDocxText: (payload) =>
+    ipcRenderer.invoke('file:write-docx-text', payload),
   createWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:create-workspace', payload),
   createWorkspaceDirectory: (payload) =>
@@ -343,6 +353,7 @@ const api = {
     ipcRenderer.invoke('computer-use:request-permission', kind),
   getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
   getEvidenceDagView: (input) => ipcRenderer.invoke('evidenceDag:view', input),
+  runEvidenceDagAudit: (input) => ipcRenderer.invoke('evidenceDag:audit-run', input),
   exportProjectDag: (input) => ipcRenderer.invoke('projectDag:export', input),
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),

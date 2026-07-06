@@ -45,6 +45,8 @@ import type {
   WorkspaceFileChangePayload,
   WorkspaceFileCreatePayload,
   WorkspaceFileCreateResult,
+  WorkspaceDocxTextWritePayload,
+  WorkspaceDocxTextWriteResult,
   WorkspaceFileResolveResult,
   WorkspaceFileTarget,
   WorkspaceFileWatchPayload,
@@ -440,6 +442,16 @@ export type EvidenceDagViewResult = {
   url: string
   threadId?: string
 }
+export type EvidenceDagAuditRunRequest = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  threshold?: number
+}
+export type EvidenceDagAuditRunResult = {
+  url: string
+  threadId: string
+  riskDigest?: unknown
+}
 export type ProjectDagExportRequest = {
   goalTitle?: string
   goalDescription?: string
@@ -643,6 +655,7 @@ export type SciForgeApi = {
   platform: string
   getSettings: () => Promise<AppSettingsV1>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
+  onSettingsChanged: (handler: (settings: AppSettingsV1) => void) => () => void
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
@@ -765,6 +778,7 @@ export type SciForgeApi = {
   previewWorkspaceHtml: (options: WorkspaceFileTarget) => Promise<WorkspaceHtmlPreviewResult>
   readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>
   writeWorkspaceFile: (payload: WorkspaceFileWritePayload) => Promise<WorkspaceFileWriteResult>
+  writeWorkspaceDocxText: (payload: WorkspaceDocxTextWritePayload) => Promise<WorkspaceDocxTextWriteResult>
   createWorkspaceFile: (payload: WorkspaceFileCreatePayload) => Promise<WorkspaceFileCreateResult>
   createWorkspaceDirectory: (
     payload: WorkspaceDirectoryCreatePayload
@@ -879,6 +893,7 @@ export type SciForgeApi = {
   ) => Promise<ComputerUsePermissions>
   getComputerUseStatus: () => Promise<ComputerUseStatusView>
   getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
+  runEvidenceDagAudit: (input: EvidenceDagAuditRunRequest) => Promise<EvidenceDagAuditRunResult>
   exportProjectDag: (input: ProjectDagExportRequest) => Promise<ProjectDagExportResult>
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload

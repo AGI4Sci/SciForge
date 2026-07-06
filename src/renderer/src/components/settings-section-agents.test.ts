@@ -2,14 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  DEFAULT_MODEL_PROVIDER_ID,
   defaultModelRouterSettings,
   defaultCodexRuntimeSettings,
-  defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
-  type ModelProviderProfileV1
+  defaultLocalRuntimeSettings
 } from '@shared/app-settings'
-import { AgentsSettingsSection, codexRuntimeSettingsPatch, modelProvidersSettingsPatch } from './settings-section-agents'
+import { AgentsSettingsSection, codexRuntimeSettingsPatch } from './settings-section-agents'
 
 const labels: Record<string, string> = {
   agentsQuickBase: 'Base',
@@ -84,9 +81,6 @@ const labels: Record<string, string> = {
   claudeExtraArgs: 'Extra arguments',
   claudeExtraArgsDesc: 'Extra arguments description',
   claudeExtraArgsPlaceholder: '--allowedTools Edit',
-  localRuntimeProvider: 'Provider',
-  localRuntimeProviderDesc: 'Provider description',
-  modelProviderApiKeyPlaceholder: 'Provider API key',
   localRuntimeServiceAdvanced: 'Local Runtime service settings',
   localRuntimeServiceAdvancedDesc: 'Local Runtime service settings description',
   autoStart: 'Auto start',
@@ -332,7 +326,6 @@ function baseCtx(): Record<string, unknown> {
     localRuntime,
     codex,
     activeAgentRuntime: 'sciforge',
-    activeApiKey: '',
     update: noop,
     updateLocalRuntime: noop,
     updateCodex: noop,
@@ -420,51 +413,6 @@ function baseCtx(): Record<string, unknown> {
 }
 
 describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
-  it('builds a single patch when adding and selecting a model provider', () => {
-    const provider = defaultModelProviderSettings()
-    const customProvider = {
-      id: 'custom-provider-2',
-      name: 'Custom Provider',
-      apiKey: '',
-      baseUrl: 'https://api.example.com/v1',
-      models: []
-    } satisfies ModelProviderProfileV1
-
-    const patch = modelProvidersSettingsPatch({
-      provider,
-      providers: [...provider.providers, customProvider],
-      sciforge: { providerId: customProvider.id }
-    })
-
-    expect(patch.provider?.providers).toEqual([...provider.providers, customProvider])
-    expect(patch.agents?.sciforge?.providerId).toBe(customProvider.id)
-  })
-
-  it('builds a single patch when removing the active model provider', () => {
-    const provider = defaultModelProviderSettings()
-
-    const patch = modelProvidersSettingsPatch({
-      provider: {
-        ...provider,
-        providers: [
-          ...provider.providers,
-          {
-            id: 'custom-provider-2',
-            name: 'Custom Provider',
-            apiKey: '',
-            baseUrl: 'https://api.example.com/v1',
-            models: []
-          }
-        ]
-      },
-      providers: provider.providers,
-      sciforge: { providerId: DEFAULT_MODEL_PROVIDER_ID }
-    })
-
-    expect(patch.provider?.providers).toEqual(provider.providers)
-    expect(patch.agents?.sciforge?.providerId).toBe(DEFAULT_MODEL_PROVIDER_ID)
-  })
-
   it('wraps Codex runtime changes in agents.codex without touching SciForge Runtime settings', () => {
     const patch = codexRuntimeSettingsPatch({
       command: 'codex-dev',
@@ -530,12 +478,23 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
               apiKey: 'text-key',
               model: 'text-model'
             },
+            imageGenerator: {
+              provider: 'openai-compatible',
+              baseUrl: 'https://image-member.example/v1',
+              apiKey: 'image-key',
+              model: 'image-model'
+            },
             translators: {
               vision: {
                 provider: 'qwen-compatible',
                 baseUrl: 'https://vision-member.example/v1',
                 apiKey: 'vision-key',
                 model: 'vision-model'
+              },
+              scientific: {
+                baseUrl: 'http://127.0.0.1:3898',
+                apiKey: 'scientific-key',
+                model: 'scientific-model'
               }
             }
           }
@@ -565,6 +524,8 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).not.toContain('Provider member URL')
     expect(html).not.toContain('Provider member API key')
     expect(html).not.toContain('Provider member model')
+    expect(html).not.toContain('Provider API key')
+    expect(html).not.toContain('Provider description')
     expect(html).not.toContain('value="openai-compatible"')
     expect(html).not.toContain('value="qwen-compatible"')
     expect(html).toContain('provider auth blocked')
@@ -575,9 +536,8 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
   it('does not render Local Runtime credential override fields', () => {
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
 
-    expect(html).toContain('Provider')
-    expect(html).toContain('API key')
-    expect(html).toContain('Base URL')
+    expect(html).not.toContain('Provider API key')
+    expect(html).not.toContain('Provider description')
     expect(html).not.toContain('Local Runtime API key')
     expect(html).not.toContain('Local Runtime base URL')
     expect(html).not.toContain('Override API key')
@@ -729,37 +689,6 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
 
     expect(html.match(/value="suggest"/g)).toHaveLength(1)
     expect(html.match(/value="external-sandbox"/g)).toHaveLength(1)
-  })
-
-  it('renders custom model provider id as editable', () => {
-    const provider = defaultModelProviderSettings()
-    const customProvider = {
-      id: 'custom-provider-2',
-      name: 'Custom Provider',
-      apiKey: '',
-      baseUrl: 'https://api.example.com/v1',
-      models: []
-    } satisfies ModelProviderProfileV1
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, {
-      ctx: {
-        ...baseCtx(),
-        provider: {
-          ...provider,
-          providers: [...provider.providers, customProvider]
-        },
-        localRuntime: {
-          ...defaultLocalRuntimeSettings(),
-          providerId: customProvider.id
-        }
-      }
-    }))
-    const providerIdInput = html.match(/<input[^>]+value="custom-provider-2"[^>]*>/)?.[0]
-
-    expect(providerIdInput).toBeTruthy()
-    expect(providerIdInput).not.toContain('readOnly')
-    expect(providerIdInput).not.toContain('readonly')
-    expect(html).not.toContain('Endpoint format')
-    expect(html).not.toContain('value="messages"')
   })
 
   it('keeps advanced agent controls behind collapsed disclosures', () => {

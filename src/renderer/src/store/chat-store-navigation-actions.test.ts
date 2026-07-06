@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentRuntimeId } from '@shared/app-settings'
+import type { AgentRuntimeId, AppSettingsV1 } from '@shared/app-settings'
 import type { NormalizedThread } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { rememberProviderThreadRuntime } from './chat-store-runtime-helpers'
-import { stopRuntimeThreadRefreshPoll } from './chat-store-schedulers'
+import { stopRuntimeBootRetry, stopRuntimeReconnectProbe, stopRuntimeThreadRefreshPoll } from './chat-store-schedulers'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -123,6 +123,8 @@ describe('chat-store-navigation-actions refreshThreads', () => {
 
   beforeEach(() => {
     stopRuntimeThreadRefreshPoll()
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
     vi.useRealTimers()
     registryMock.getProvider.mockReset()
     runtimeClientMock.getSettings.mockReset()
@@ -143,6 +145,8 @@ describe('chat-store-navigation-actions refreshThreads', () => {
 
   afterEach(() => {
     stopRuntimeThreadRefreshPoll()
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
     vi.useRealTimers()
   })
 
@@ -562,6 +566,190 @@ describe('chat-store-runtime helper defaults', () => {
     rememberProviderThreadRuntime(provider, 'legacy-thread', [thread('legacy-thread')])
 
     expect(provider.rememberThreadRuntime).not.toHaveBeenCalled()
+  })
+})
+
+describe('chat-store-navigation-actions boot', () => {
+  beforeEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    runtimeClientMock.getSettings.mockReset()
+    runtimeClientMock.setSettings.mockReset()
+    const documentElement = {
+      dataset: {} as Record<string, string>,
+      setAttribute: vi.fn(),
+      getAttribute: vi.fn(() => 'en'),
+      style: { setProperty: vi.fn() }
+    }
+    vi.stubGlobal('document', {
+      documentElement,
+      visibilityState: 'visible',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })
+    vi.stubGlobal('window', {
+      sciforge: {},
+      matchMedia: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn()
+      })),
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      },
+      dispatchEvent: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })
+  })
+
+  afterEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('probes the runtime immediately after loading settings', async () => {
+    const settings = {
+      version: 1,
+      locale: 'en',
+      theme: 'system',
+      uiFontScale: 'small',
+      activeAgentRuntime: 'codex',
+      workspaceRoot: '/workspace/sciforge',
+      modelRouter: { runtimeApiKey: 'runtime-key' },
+      agents: {},
+      remoteChannel: { channels: [] }
+    } as unknown as AppSettingsV1
+    runtimeClientMock.getSettings.mockResolvedValue(settings)
+    let state: ChatState
+    state = {
+      runtimeConnection: 'idle',
+      error: 'stale',
+      runtimeErrorDetail: 'stale detail',
+      composerPickList: [],
+      codeWorkspaceRoots: [],
+      hiddenCodeWorkspaceRoots: [],
+      applyI18nFromSettings: vi.fn(async () => undefined),
+      probeRuntime: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+
+    await actions.boot()
+
+    expect(runtimeClientMock.getSettings).toHaveBeenCalledWith({ forceRefresh: true })
+    expect(state.probeRuntime).toHaveBeenCalledWith('user')
+  })
+})
+
+describe('chat-store-navigation-actions probeRuntime', () => {
+  beforeEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    registryMock.getProvider.mockReset()
+    runtimeClientMock.getSettings.mockReset()
+    runtimeClientMock.setSettings.mockReset()
+    vi.stubGlobal('window', {
+      sciforge: {},
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      }
+    })
+  })
+
+  afterEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+  })
+
+  it('times out a stalled runtime probe instead of leaving the UI checking forever', async () => {
+    vi.useFakeTimers()
+    const provider = {
+      connect: vi.fn(() => new Promise<void>(() => undefined))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    runtimeClientMock.getSettings.mockResolvedValue({ activeAgentRuntime: 'codex' })
+    const state = {
+      runtimeConnection: 'idle',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    state.probeRuntime = actions.probeRuntime
+
+    const task = actions.probeRuntime('user')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(state.runtimeConnection).toBe('checking')
+
+    await vi.advanceTimersByTimeAsync(8_000)
+    await task
+
+    expect(state.runtimeConnection).toBe('offline')
+    expect(state.error).toMatch(/timed out/)
+  })
+
+  it('refreshes sidebar threads after any successful runtime probe', async () => {
+    const provider = {
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'ready',
+      error: 'stale',
+      runtimeErrorDetail: 'stale detail',
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      watchTurnCompletion: {},
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('background')
+
+    expect(provider.connect).toHaveBeenCalledTimes(1)
+    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
+    expect(state.error).toBeNull()
   })
 })
 

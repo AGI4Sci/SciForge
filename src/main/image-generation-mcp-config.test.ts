@@ -6,7 +6,6 @@ import {
 } from './image-generation-mcp-config'
 import {
   defaultConnectPhoneSettings,
-  defaultImageGenerationSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
@@ -16,11 +15,12 @@ import {
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1,
-  type ImageGenerationSettingsPatchV1
+  type ModelRouterMemberProviderSettingsPatchV1
 } from '../shared/app-settings'
 
-function createSettings(imageGeneration: ImageGenerationSettingsPatchV1 = {}): AppSettingsV1 {
+function createSettings(imageGenerator: ModelRouterMemberProviderSettingsPatchV1 = {}): AppSettingsV1 {
   const remoteChannel = defaultRemoteChannelSettings()
+  const modelRouter = defaultModelRouterSettings()
   return {
     version: 1,
     locale: 'en',
@@ -28,10 +28,19 @@ function createSettings(imageGeneration: ImageGenerationSettingsPatchV1 = {}): A
     uiFontScale: 'small',
     provider: defaultModelProviderSettings(),
     modelRouter: {
-      ...defaultModelRouterSettings(),
+      ...modelRouter,
       baseUrl: 'http://127.0.0.1:3892/v1',
       publicModelAlias: 'sciforge-router',
-      runtimeApiKey: 'router-runtime-key'
+      runtimeApiKey: 'router-runtime-key',
+      profiles: {
+        default: {
+          ...modelRouter.profiles.default,
+          imageGenerator: {
+            ...modelRouter.profiles.default.imageGenerator,
+            ...imageGenerator
+          }
+        }
+      }
     },
     agents: {
       sciforge: defaultLocalRuntimeSettings()
@@ -47,10 +56,6 @@ function createSettings(imageGeneration: ImageGenerationSettingsPatchV1 = {}): A
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    imageGeneration: {
-      ...defaultImageGenerationSettings(),
-      ...imageGeneration
-    },
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: {
@@ -80,7 +85,7 @@ const launch: ImageGenerationMcpLaunchConfig = {
 describe('image generation MCP config', () => {
   it('passes Model Router image endpoint settings through stdio MCP env', () => {
     const server = buildImageGenerationMcpServerConfig(launch, '/tmp/workspace', createSettings({
-      enabled: true,
+      provider: 'openai-compatible',
       apiKey: 'image-key',
       baseUrl: 'http://image-provider.example/v1',
       model: 'qwen-image-2.0-pro'
@@ -104,7 +109,7 @@ describe('image generation MCP config', () => {
 
   it('requests a runtime restart when image worker launch env changes', () => {
     const configured = createSettings({
-      enabled: true,
+      provider: 'openai-compatible',
       apiKey: 'old-key',
       baseUrl: 'http://127.0.0.1:3888/v1',
       model: 'qwen-image-2.0-pro'
@@ -113,8 +118,8 @@ describe('image generation MCP config', () => {
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings())).toBe(false)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({ model: 'gpt-image-2' }))).toBe(false)
     expect(imageGenerationMcpSettingsChanged(createSettings(), configured)).toBe(true)
-    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ ...configured.imageGeneration, apiKey: 'new-key' }))).toBe(true)
-    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ ...configured.imageGeneration, baseUrl: 'http://127.0.0.1:3999/v1' }))).toBe(true)
-    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ ...configured.imageGeneration, model: 'gpt-image-2' }))).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'new-key', baseUrl: 'http://127.0.0.1:3888/v1', model: 'qwen-image-2.0-pro' }))).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'old-key', baseUrl: 'http://127.0.0.1:3999/v1', model: 'qwen-image-2.0-pro' }))).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'old-key', baseUrl: 'http://127.0.0.1:3888/v1', model: 'gpt-image-2' }))).toBe(true)
   })
 })

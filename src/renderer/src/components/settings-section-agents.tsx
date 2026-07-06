@@ -8,8 +8,6 @@ import type {
   CodexRuntimeSettingsPatchV1,
   ModelRouterSettingsPatchV1,
   ModelRouterSettingsV1,
-  ModelProviderProfileV1,
-  ModelProviderSettingsV1,
   SandboxMode
 } from '@shared/app-settings'
 import {
@@ -17,20 +15,17 @@ import {
   codexSettingsPatch,
   defaultComputerUseSettings,
   DEFAULT_COMPUTER_USE_BACKEND,
-  DEFAULT_MODEL_PROVIDER_ID,
   DEFAULT_LOCAL_RUNTIME_DATA_DIR,
   defaultCodexRuntimeSettings,
   defaultClaudeRuntimeSettings,
   defaultRuntimeGuardSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   getCodexRuntimeSettings,
   getClaudeRuntimeSettings,
   getComputerUseSettings,
   getModelRouterSettings,
   isLocalRuntimeInsecure,
-  normalizeRuntimeGuardSettings,
-  normalizeModelProviderId
+  normalizeRuntimeGuardSettings
 } from '@shared/app-settings'
 import type {
   ComputerUsePermissionKind,
@@ -262,22 +257,6 @@ const EMPTY_TOKEN_ECONOMY_SAVINGS_STATE: TokenEconomySavingsState = {
   summary: null
 }
 
-export function modelProvidersSettingsPatch(input: {
-  provider: ModelProviderSettingsV1
-  providers: ModelProviderProfileV1[]
-  sciforge?: Partial<AppSettingsV1['agents']['sciforge']>
-}): AppSettingsPatch {
-  const defaultProvider = input.providers.find((item) => item.id === DEFAULT_MODEL_PROVIDER_ID)
-  return {
-    provider: {
-      apiKey: defaultProvider?.apiKey ?? input.provider.apiKey,
-      baseUrl: defaultProvider?.baseUrl ?? input.provider.baseUrl,
-      providers: input.providers
-    },
-    ...(input.sciforge ? { agents: { sciforge: input.sciforge } } : {})
-  }
-}
-
 export function codexRuntimeSettingsPatch(codex: CodexRuntimeSettingsPatchV1): AppSettingsPatch {
   return {
     agents: codexSettingsPatch(codex)
@@ -400,7 +379,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     t,
     tCommon,
     form,
-    provider: providerFromContext,
     localRuntime,
     codex: codexFromContext,
     claude: claudeFromContext,
@@ -691,60 +669,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   }
   const textInputClass =
     'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-  const provider = providerFromContext ?? form.provider ?? defaultModelProviderSettings()
-  const modelProviders = provider.providers as ModelProviderProfileV1[]
-  const activeProviderId = localRuntime.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
-  const activeProvider = modelProviders.find((item) => item.id === activeProviderId) ?? modelProviders[0]
-  const updateModelProviders = (
-    providers: ModelProviderProfileV1[],
-    sciforgePatch?: Partial<AppSettingsV1['agents']['sciforge']>
-  ): void => {
-    update(modelProvidersSettingsPatch({
-      provider,
-      providers,
-      sciforge: sciforgePatch
-    }))
-  }
-  const updateModelProvider = (id: string, patch: Partial<ModelProviderProfileV1>): void => {
-    updateModelProviders(modelProviders.map((item) => item.id === id ? { ...item, ...patch } : item))
-  }
-  const updateModelProviderId = (id: string, value: string): void => {
-    if (id === DEFAULT_MODEL_PROVIDER_ID) return
-    const nextId = normalizeModelProviderId(value)
-    if (!nextId || nextId === id) return
-    if (modelProviders.some((item) => item.id === nextId && item.id !== id)) return
-    updateModelProviders(
-      modelProviders.map((item) => item.id === id ? { ...item, id: nextId } : item),
-      activeProviderId === id ? { providerId: nextId } : undefined
-    )
-  }
-  const addModelProvider = (): void => {
-    const baseId = 'custom-provider'
-    let index = modelProviders.length + 1
-    let id = `${baseId}-${index}`
-    const used = new Set(modelProviders.map((item) => item.id))
-    while (used.has(id)) {
-      index += 1
-      id = `${baseId}-${index}`
-    }
-    const nextProvider: ModelProviderProfileV1 = {
-      id,
-      name: t('modelProviderNewName', { index }),
-      apiKey: '',
-      baseUrl: 'https://api.example.com/v1',
-      models: []
-    }
-    updateModelProviders([...modelProviders, nextProvider], { providerId: id })
-  }
-  const removeModelProvider = (id: string): void => {
-    if (id === DEFAULT_MODEL_PROVIDER_ID) return
-    const nextProviders = modelProviders.filter((item) => item.id !== id)
-    updateModelProviders(
-      nextProviders,
-      activeProviderId === id ? { providerId: DEFAULT_MODEL_PROVIDER_ID } : undefined
-    )
-  }
-  const canEditActiveProviderId = Boolean(activeProvider && activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID)
   return (
             <>
               <div className="mb-6 flex flex-wrap gap-2">
@@ -1096,105 +1020,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                       description={t('localRuntimeServiceAdvancedDesc')}
                     >
                       <div className="divide-y divide-ds-border-muted">
-                  <SettingRow
-                    title={t('localRuntimeProvider')}
-                    description={t('localRuntimeProviderDesc')}
-                    wideControl
-                    control={
-                      <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
-                        <div className="space-y-2">
-                          <select
-                            className={selectControlClass}
-                            value={activeProvider?.id ?? DEFAULT_MODEL_PROVIDER_ID}
-                            onChange={(e) => updateLocalRuntime({ providerId: e.target.value })}
-                          >
-                            {modelProviders.map((item) => (
-                              <option key={item.id} value={item.id}>{item.name}</option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={addModelProvider}
-                            className="inline-flex h-9 items-center gap-2 rounded-full border border-ds-border bg-ds-card px-3 text-[12.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
-                          >
-                            <Plus className="h-3.5 w-3.5" strokeWidth={1.9} />
-                            {t('modelProviderAdd')}
-                          </button>
-                        </div>
-                        {activeProvider ? (
-                          <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-main/35 p-3">
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                                {t('modelProviderName')}
-                                <input
-                                  className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                                  value={activeProvider.name}
-                                  onChange={(e) => updateModelProvider(activeProvider.id, { name: e.target.value })}
-                                />
-                              </label>
-                              <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                                {t('modelProviderId')}
-                                <input
-                                  className={`w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] font-normal shadow-sm ${
-                                    canEditActiveProviderId
-                                      ? 'text-ds-ink focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-                                      : 'text-ds-faint'
-                                  }`}
-                                  value={activeProvider.id}
-                                  readOnly={!canEditActiveProviderId}
-                                  spellCheck={false}
-                                  onChange={(e) => updateModelProviderId(activeProvider.id, e.target.value)}
-                                />
-                              </label>
-                            </div>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderApiKey')}
-                              <SecretInput
-                                value={activeProvider.apiKey}
-                                onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
-                                visible={showApiKey}
-                                onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                                placeholder={t('modelProviderApiKeyPlaceholder')}
-                                autoComplete="off"
-                                showLabel={t('showSecret')}
-                                hideLabel={t('hideSecret')}
-                              />
-                            </label>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderBaseUrl')}
-                              <input
-                                className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                                value={activeProvider.baseUrl}
-                                placeholder={t('baseUrlPlaceholder')}
-                                onChange={(e) => updateModelProvider(activeProvider.id, { baseUrl: e.target.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderModels')}
-                              <textarea
-                                className="min-h-24 w-full min-w-0 resize-y rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[12.5px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                                value={activeProvider.models.join('\n')}
-                                placeholder="deepseek-v4-pro&#10;deepseek-v4-flash"
-                                onChange={(e) => updateModelProvider(activeProvider.id, {
-                                  models: e.target.value.split('\n').map((item) => item.trim()).filter(Boolean)
-                                })}
-                              />
-                            </label>
-                            {activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
-                              <button
-                                type="button"
-                                onClick={() => removeModelProvider(activeProvider.id)}
-                                className="inline-flex h-9 w-fit items-center gap-2 rounded-full border border-red-200/70 bg-red-50 px-3 text-[12.5px] font-medium text-red-700 transition hover:bg-red-100 dark:border-red-900/70 dark:bg-red-950/25 dark:text-red-200 dark:hover:bg-red-950/40"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                                {t('modelProviderRemove')}
-                              </button>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                    }
-                  />
                   <SettingRow
                     title={t('port')}
                     description={t('portDesc')}

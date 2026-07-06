@@ -60,6 +60,17 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('modelRouter:config:open')
   })
 
+  it('exposes Evidence DAG audit IPC', async () => {
+    const api = exposedApi as {
+      runEvidenceDagAudit(payload: unknown): Promise<unknown>
+    }
+    const payload = { runtimeId: 'codex', threadId: 'thread-1' }
+
+    await api.runEvidenceDagAudit(payload)
+
+    expect(invoke).toHaveBeenCalledWith('evidenceDag:audit-run', payload)
+  })
+
   it('exposes real file paths from picked or dropped files', () => {
     const api = exposedApi as {
       getPathForFile(file: File): string
@@ -93,10 +104,16 @@ describe('preload agentRuntime bridge', () => {
     const api = exposedApi as {
       readWorkspaceFile(options: unknown): Promise<unknown>
       previewWorkspaceHtml(options: unknown): Promise<unknown>
+      writeWorkspaceDocxText(options: unknown): Promise<unknown>
     }
 
     await api.readWorkspaceFile({ path: 'paper.pdf', workspaceRoot: '/tmp/workspace' })
     await api.previewWorkspaceHtml({ path: 'status.html', workspaceRoot: '/tmp/workspace' })
+    await api.writeWorkspaceDocxText({
+      path: 'paper.docx',
+      workspaceRoot: '/tmp/workspace',
+      paragraphs: [{ index: 1, text: 'edited' }]
+    })
 
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
       path: 'paper.pdf',
@@ -105,6 +122,11 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('file:preview-workspace-html', {
       path: 'status.html',
       workspaceRoot: '/tmp/workspace'
+    })
+    expect(invoke).toHaveBeenCalledWith('file:write-docx-text', {
+      path: 'paper.docx',
+      workspaceRoot: '/tmp/workspace',
+      paragraphs: [{ index: 1, text: 'edited' }]
     })
   })
 

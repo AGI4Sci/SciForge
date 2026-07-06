@@ -50,16 +50,22 @@ function settingsWith(
   tasks: ScheduledTaskV1[] = [],
   schedulePatch: AppSettingsPatch['schedule'] = {}
 ): AppSettingsV1 {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'text-secret',
+    model: 'text-model'
+  }
+
   return {
     version: 1,
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
     provider: defaultModelProviderSettings(),
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter,
     agents: {
       sciforge: defaultLocalRuntimeSettings()
     },

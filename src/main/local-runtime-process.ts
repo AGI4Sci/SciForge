@@ -8,6 +8,8 @@ import { dirname, join } from 'node:path'
 import {
   defaultLocalRuntimeTokenEconomySettings,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
   isLocalRuntimeInsecure,
   normalizeAgentCapabilitySettings,
   normalizeRuntimeGuardSettings,
@@ -303,6 +305,9 @@ async function startLocalRuntimeChildOnce(
   settings: AppSettingsV1,
   runtime: ResolvedLocalRuntimeSettingsV1
 ): Promise<void> {
+  if (!isModelRouterTextReasonerConfigured(getModelRouterSettings(settings))) {
+    throw new Error('Model Router text reasoner Base URL, API key, and model name are required before starting SciForge Runtime.')
+  }
   if (!runtime.apiKey.trim()) {
     throw new Error('Model Router runtime API key is required before starting SciForge Runtime.')
   }

@@ -66,6 +66,7 @@ import {
   remoteChannelTaskFromTextPayloadSchema,
   runtimeConfigContentSchema,
   desktopCommandSchema,
+  evidenceDagAuditRunPayloadSchema,
   evidenceDagViewPayloadSchema,
   projectDagExportPayloadSchema,
   defaultPathSchema,
@@ -122,6 +123,7 @@ import {
   workspaceEntryDeletePayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
+  workspaceDocxTextWritePayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
@@ -202,6 +204,7 @@ import {
   EVIDENCE_DAG_SERVICE_URL_ENV,
   evidenceDagApiKeyFromEnv,
   evidenceDagServiceUrlFromEnv,
+  evidenceDagThreadId,
   evidenceDagUiUrl
 } from '../../../packages/workers/evidence-dag/desktop/contract'
 import {
@@ -271,6 +274,7 @@ import {
   renameWorkspaceEntry,
   resolveWorkspaceFile,
   saveWorkspaceClipboardImage,
+  writeWorkspaceDocxText,
   writeWorkspaceFile
 } from '../services/workspace-service'
 import {
@@ -475,6 +479,37 @@ async function assertEvidenceDagServiceReachable(
   } finally {
     clearTimeout(timer)
   }
+}
+
+async function requestEvidenceDagJson(
+  serviceUrl: string,
+  apiKey: string,
+  path: string,
+  init: RequestInit = {},
+  fetchImpl: typeof fetch | undefined = globalThis.fetch
+): Promise<unknown> {
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('Evidence DAG fetch API is unavailable.')
+  }
+  const headers = new Headers(init.headers)
+  headers.set('authorization', `Bearer ${apiKey}`)
+  if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json')
+  const response = await fetchImpl(`${serviceUrl}${path}`, {
+    ...init,
+    headers
+  })
+  const body = await response.json().catch(() => null) as {
+    ok?: boolean
+    data?: unknown
+    error?: { message?: unknown }
+  } | null
+  if (!response.ok || body?.ok !== true) {
+    const message = typeof body?.error?.message === 'string'
+      ? body.error.message
+      : `Evidence DAG returned HTTP ${response.status}`
+    throw new Error(message)
+  }
+  return body.data
 }
 
 function evidenceDagBackfillItems(detail: AgentRuntimeThreadDetail): AgentRuntimeItem[] {
@@ -1992,6 +2027,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
     )
   )
+  handleInvoke('file:write-docx-text', async (_, payload: unknown) =>
+    writeWorkspaceDocxText(
+      parseIpcPayload('file:write-docx-text', workspaceDocxTextWritePayloadSchema, payload)
+    )
+  )
   handleInvoke('file:create-workspace', async (_, payload: unknown) =>
     createWorkspaceFile(
       parseIpcPayload('file:create-workspace', workspaceFileCreatePayloadSchema, payload)
@@ -2142,28 +2182,59 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     await ensureEvidenceDagReady?.()
     const config = evidenceDagViewConfig(process.env)
     await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
-    const backfillThreadId = input.threadId?.trim()
-    const backfillRuntimeId = input.runtimeId
-    if (agentRuntime && backfillThreadId && backfillRuntimeId) {
-      void agentRuntime.readThread({
-        runtimeId: backfillRuntimeId,
-        threadId: backfillThreadId
-      }).then((detail) =>
-        feedEvidenceDag({
-          runtimeId: backfillRuntimeId,
-          threadId: backfillThreadId,
-          items: evidenceDagBackfillItems(detail)
-        })
-      ).catch(() => undefined)
-    }
+    const threadId = input.threadId?.trim()
     return {
       url: evidenceDagUiUrl({
         runtimeId: input.runtimeId,
-        threadId: backfillThreadId,
+        threadId,
         serviceUrl: config.serviceUrl,
         apiKey: config.apiKey
       }),
-      ...(backfillThreadId ? { threadId: backfillThreadId } : {})
+      ...(threadId ? { threadId } : {})
+    }
+  })
+  handleInvoke('evidenceDag:audit-run', async (_, payload: unknown) => {
+    const input = parseIpcPayload('evidenceDag:audit-run', evidenceDagAuditRunPayloadSchema, payload)
+    await ensureEvidenceDagReady?.()
+    const config = evidenceDagViewConfig(process.env)
+    await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
+    if (!agentRuntime) {
+      throw new Error('Agent runtime is required to build the current thread Evidence DAG before auditing.')
+    }
+    const detail = await agentRuntime.readThread({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId
+    })
+    await feedEvidenceDag({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      items: evidenceDagBackfillItems(detail),
+      failOpen: false
+    })
+    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const audit = await requestEvidenceDagJson(
+      config.serviceUrl,
+      config.apiKey,
+      `/threads/${encodeURIComponent(engineThreadId)}/audit-runs`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          trigger: 'manual',
+          threshold: input.threshold ?? 0.7
+        })
+      }
+    )
+    return {
+      url: evidenceDagUiUrl({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        serviceUrl: config.serviceUrl,
+        apiKey: config.apiKey
+      }),
+      threadId: input.threadId,
+      riskDigest: audit && typeof audit === 'object' && 'risk_digest' in audit
+        ? (audit as { risk_digest?: unknown }).risk_digest
+        : undefined
     }
   })
   handleInvoke('projectDag:export', async (_, payload: unknown) => {

@@ -59,6 +59,8 @@ export interface ModalityTranslateRequest {
   modality?: Modality;
   /** Optional user context so the translator knows what matters. NOT a task to solve. */
   instruction?: string;
+  /** Optional router-selected scientific model/profile label for tracing and future expert routing. */
+  model?: string;
   /** Opaque id echoed back into provenance/descriptor (e.g. the upload object id). */
   objectId?: string;
   requestId?: string;

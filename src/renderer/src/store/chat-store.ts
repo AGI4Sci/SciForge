@@ -201,3 +201,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   ...createMaintenanceActions({ set, get, sseAbortRef })
 }))
+
+if (import.meta.env.DEV && typeof document !== 'undefined') {
+  const publishDevState = (): void => {
+    const state = useChatStore.getState()
+    const root = document.documentElement
+    root.dataset.sciforgeRuntimeConnection = state.runtimeConnection
+    root.dataset.sciforgeThreadCount = String(state.threads.length)
+    root.dataset.sciforgeActiveRuntime = state.activeAgentRuntime
+    root.dataset.sciforgeRuntimeError = state.error ?? ''
+  }
+  publishDevState()
+  useChatStore.subscribe(publishDevState)
+}

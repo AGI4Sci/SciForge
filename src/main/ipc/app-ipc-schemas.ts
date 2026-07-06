@@ -476,6 +476,13 @@ const modelRouterMemberProviderPatchSchema = z.object({
   maxSupplementRounds: z.number().int().min(0).max(3).optional()
 }).strict()
 
+const modelRouterScientificTranslatorPatchSchema = z.object({
+  baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
+  apiKey: z.string().max(MAX_BODY_BYTES).optional(),
+  model: z.string().trim().max(128).optional(),
+  timeoutMs: z.number().int().min(1).max(3_600_000).optional()
+}).strict()
+
 const modelRouterPatchSchema = z.object({
   enabled: z.boolean().optional(),
   baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
@@ -485,19 +492,13 @@ const modelRouterPatchSchema = z.object({
   profiles: z.object({
     default: z.object({
       textReasoner: modelRouterMemberProviderPatchSchema.optional(),
+      imageGenerator: modelRouterMemberProviderPatchSchema.optional(),
       translators: z.object({
-        vision: modelRouterMemberProviderPatchSchema.optional()
+        vision: modelRouterMemberProviderPatchSchema.optional(),
+        scientific: modelRouterScientificTranslatorPatchSchema.optional()
       }).strict().optional()
     }).strict().optional()
   }).strict().optional()
-}).strict()
-
-const imageGenerationPatchSchema = z.object({
-  enabled: z.boolean().optional(),
-  provider: z.enum(['openai-compatible']).optional(),
-  baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
-  apiKey: z.string().max(MAX_BODY_BYTES).optional(),
-  model: z.string().trim().max(128).optional()
 }).strict()
 
 const localRuntimePatchSchema = z.object({
@@ -1338,6 +1339,58 @@ const workflowSettingsPatchSchema = z
   })
   .strict()
 
+const remoteExecutorSshSettingsPatchSchema = z.object({
+  host: optionalTrimmedString(512),
+  user: optionalTrimmedString(256),
+  port: z.number().int().min(1).max(65_535).optional(),
+  pythonPath: defaultPathSchema,
+  identityFile: defaultPathSchema
+}).strict()
+
+const remoteExecutorSlurmDefaultsPatchSchema = z.object({
+  partition: optionalTrimmedString(256),
+  account: optionalTrimmedString(256),
+  qos: optionalTrimmedString(256),
+  timeLimit: optionalTrimmedString(128),
+  nodes: z.number().int().positive().max(1_000_000).optional(),
+  ntasks: z.number().int().positive().max(1_000_000).optional(),
+  cpusPerTask: z.number().int().positive().max(1_000_000).optional(),
+  gpus: z.number().int().positive().max(1_000_000).optional(),
+  memory: optionalTrimmedString(128),
+  constraint: optionalTrimmedString(512),
+  gres: optionalTrimmedString(512),
+  extraArgs: z.array(z.string().trim().max(512)).max(100).optional()
+}).strict()
+
+const remoteExecutorSlurmSettingsPatchSchema = z.object({
+  defaults: remoteExecutorSlurmDefaultsPatchSchema.optional()
+}).strict()
+
+const remoteExecutorTrustedWorkspacePatchSchema = z.object({
+  workspaceRoot: defaultPathSchema,
+  targetFingerprint: optionalTrimmedString(512),
+  trustedAt: optionalTrimmedString(128),
+  trustedBy: optionalTrimmedString(256),
+  approvalBypass: z.literal(true).optional()
+}).strict()
+
+const remoteExecutorTargetPatchSchema = z.object({
+  id: optionalTrimmedString(128),
+  label: optionalTrimmedString(256),
+  enabled: z.boolean().optional(),
+  kind: z.enum(['ssh', 'slurm']).optional(),
+  ssh: remoteExecutorSshSettingsPatchSchema.optional(),
+  remoteWorkspaceRoot: defaultPathSchema,
+  slurm: remoteExecutorSlurmSettingsPatchSchema.optional(),
+  trustedWorkspaces: z.array(remoteExecutorTrustedWorkspacePatchSchema).max(200).optional()
+}).strict()
+
+const remoteExecutorSettingsPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  defaultTargetId: optionalTrimmedString(128),
+  targets: z.array(remoteExecutorTargetPatchSchema).max(100).optional()
+}).strict()
+
 export const workflowRunNodePayloadSchema = z
   .object({
     workflowId: trimmedString(MAX_ID_LENGTH),
@@ -1375,7 +1428,6 @@ const settingsPatchObjectSchema = z.object({
   uiFontScale: uiFontScaleSchema.optional(),
   provider: modelProviderPatchSchema.optional(),
   modelRouter: modelRouterPatchSchema.optional(),
-  imageGeneration: imageGenerationPatchSchema.optional(),
   runtimeGuards: runtimeGuardPatchSchema.optional(),
   agentCapabilities: agentCapabilityPatchSchema.optional(),
   computerUse: computerUsePatchSchema.optional(),
@@ -1396,6 +1448,7 @@ const settingsPatchObjectSchema = z.object({
   connectPhone: connectPhoneSettingsPatchSchema.optional(),
   schedule: scheduleSettingsPatchSchema.optional(),
   workflow: workflowSettingsPatchSchema.optional(),
+  remoteExecutor: remoteExecutorSettingsPatchSchema.optional(),
   guiUpdate: z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
@@ -1679,6 +1732,20 @@ export const workspaceFileWritePayloadSchema = z
   })
   .strict()
 
+export const workspaceDocxTextWritePayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    paragraphs: z.array(z.object({
+      index: z.number().int().positive().max(1_000_000),
+      text: z.string().max(MAX_BODY_BYTES)
+    }).strict()).max(20_000)
+  })
+  .refine((payload) => payload.paragraphs.reduce((sum, paragraph) => sum + paragraph.text.length, 0) <= MAX_BODY_BYTES, {
+    message: 'DOCX edited text is too large.'
+  })
+  .strict()
+
 export const workspaceFileCreatePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
@@ -1894,6 +1961,14 @@ export const evidenceDagViewPayloadSchema = z
   .object({
     threadId: optionalTrimmedString(MAX_ID_LENGTH),
     runtimeId: agentRuntimeIdSchema.optional()
+  })
+  .strict()
+
+export const evidenceDagAuditRunPayloadSchema = z
+  .object({
+    threadId: trimmedString(MAX_ID_LENGTH),
+    runtimeId: agentRuntimeIdSchema,
+    threshold: z.number().min(0).max(1).optional()
   })
   .strict()
 

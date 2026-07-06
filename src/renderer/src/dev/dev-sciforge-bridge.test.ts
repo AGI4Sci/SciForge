@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type MockEvent = {
   data: string
@@ -31,21 +31,30 @@ class MockEventSource {
 
 const storage = new Map<string, string>()
 
-function installWindow(existingSciForge?: unknown, search = ''): void {
+function installWindow(existingSciForge?: unknown, search = '', userAgent = 'Mozilla/5.0 Chrome/127 Safari/537.36'): void {
   const windowValue = {
     sciforge: existingSciForge,
-    location: { search },
+    location: {
+      origin: 'http://localhost:5173',
+      hostname: 'localhost',
+      search
+    },
     sessionStorage: {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
-      setItem: vi.fn((key: string, value: string) => storage.set(key, value))
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key))
     }
   }
   Object.defineProperty(globalThis, 'window', {
-      value: windowValue,
-      configurable: true
-    })
-    Object.defineProperty(globalThis, 'sessionStorage', {
-      value: windowValue.sessionStorage,
+    value: windowValue,
+    configurable: true
+  })
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    value: windowValue.sessionStorage,
+    configurable: true
+  })
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { platform: 'MacIntel', userAgent },
     configurable: true
   })
 }
@@ -66,48 +75,16 @@ describe('dev sciforge browser bridge', () => {
     })
   })
 
-  it('refreshes a cached session token before opening bridge channels', async () => {
-    storage.set('sciforge.dev-browser-bridge.token', 'stale-token')
-    installWindow()
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      if (String(input).endsWith('/bootstrap')) {
-        return new Response(JSON.stringify({ ok: true, token: 'fresh-token' }))
-      }
-      return new Response(JSON.stringify({
-        ok: true,
-        payload: { activeAgentRuntime: 'codex' }
-      }))
-    })
-    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
-    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
-
-    installDevSciForgeBridge()
-    await window.sciforge.getSettings()
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/bootstrap',
-      expect.objectContaining({ method: 'GET' })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'X-SciForge-Bridge-Token': 'fresh-token'
-        })
-      })
-    )
-    await vi.waitFor(() => {
-      expect(MockEventSource.instances[0]?.url).toBe(
-        'http://127.0.0.1:5174/events?clientId=client-1&sciforgeBridgeToken=fresh-token'
-      )
-    })
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
-  it('installs window.sciforge in a plain dev browser with a bootstrapped session token', async () => {
-    installWindow()
+  it('installs window.sciforge in a plain dev browser without token bootstrap', async () => {
+    storage.set('sciforge.dev-browser-bridge.token', 'stale-token')
+    installWindow(undefined, '?devBrowserBridgeToken=query-token-123')
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input).endsWith('/bootstrap')) {
-        return new Response(JSON.stringify({ ok: true, token: 'boot-token-123' }))
+        throw new Error('unexpected bootstrap request')
       }
       return new Response(JSON.stringify({
         ok: true,
@@ -124,21 +101,11 @@ describe('dev sciforge browser bridge', () => {
       { id: 'thread-1', runtimeId: 'codex', title: 'Thread', updatedAt: '2026-06-12T00:00:00.000Z' }
     ])
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/bootstrap',
-      expect.objectContaining({
-        method: 'GET',
-        headers: expect.objectContaining({
-          'X-SciForge-Client': 'client-1'
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
-          'X-SciForge-Client': 'client-1',
-          'X-SciForge-Bridge-Token': 'boot-token-123'
+          'X-SciForge-Client': 'client-1'
         }),
         body: JSON.stringify({
           channel: 'agentRuntime:listThreads',
@@ -146,42 +113,15 @@ describe('dev sciforge browser bridge', () => {
         })
       })
     )
-    expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty(
-      'X-SciForge-Bridge-Token',
-      'sciforge-dev-browser-bridge'
-    )
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/bootstrap'))).toBe(false)
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('X-SciForge-Bridge-Token')
+    const unsubscribe = window.sciforge.agentRuntime.onEvent(vi.fn())
     await vi.waitFor(() => {
       expect(MockEventSource.instances[0]?.url).toBe(
-        'http://127.0.0.1:5174/events?clientId=client-1&sciforgeBridgeToken=boot-token-123'
+        'http://localhost:5173/__sciforge-dev-bridge/events?clientId=client-1'
       )
     })
-  })
-
-  it('sends a configured bridge token with invoke requests', async () => {
-    installWindow(undefined, '?devBrowserBridgeToken=query-token-123')
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      payload: {}
-    })))
-    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
-    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
-
-    installDevSciForgeBridge()
-    await window.sciforge.getSettings()
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'X-SciForge-Bridge-Token': 'query-token-123'
-        })
-      })
-    )
-    await vi.waitFor(() => {
-      expect(MockEventSource.instances[0]?.url).toBe(
-        'http://127.0.0.1:5174/events?clientId=client-1&sciforgeBridgeToken=query-token-123'
-      )
-    })
+    unsubscribe()
   })
 
   it('dispatches bridge SSE messages through preload-shaped event subscriptions', async () => {
@@ -198,6 +138,7 @@ describe('dev sciforge browser bridge', () => {
 
     await vi.waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1)
+      expect(MockEventSource.instances[0].url).toBe('http://localhost:5173/__sciforge-dev-bridge/events?clientId=client-1')
     })
     MockEventSource.instances[0].emit('bridge-message', {
       channel: 'agentRuntime:event',
@@ -229,7 +170,7 @@ describe('dev sciforge browser bridge', () => {
     await window.sciforge.pdfAnnotations?.load({ pdfPath: '/tmp/paper.pdf', workspaceRoot: '/tmp' })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -254,7 +195,7 @@ describe('dev sciforge browser bridge', () => {
 
     expect(result).toMatchObject({ ok: true, url: 'http://127.0.0.1:59000/status.html' })
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -299,7 +240,7 @@ describe('dev sciforge browser bridge', () => {
 
     expect(created).toEqual({ ok: true, sessionId: 'terminal:test:main', ownerToken: 'owner-token' })
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -309,7 +250,7 @@ describe('dev sciforge browser bridge', () => {
       })
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -319,7 +260,7 @@ describe('dev sciforge browser bridge', () => {
       })
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -329,7 +270,7 @@ describe('dev sciforge browser bridge', () => {
       })
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -372,7 +313,7 @@ describe('dev sciforge browser bridge', () => {
     unsubscribe()
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -382,7 +323,7 @@ describe('dev sciforge browser bridge', () => {
       })
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -396,7 +337,7 @@ describe('dev sciforge browser bridge', () => {
       })
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:5174/invoke',
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -413,14 +354,73 @@ describe('dev sciforge browser bridge', () => {
     expect(handler).toHaveBeenCalledWith({ channelId: 'channel-1', threadId: 'thread-1' })
   })
 
-  it('does not replace the real Electron preload bridge', async () => {
-    const existing = { platform: 'electron' }
+  it('replaces a stale browser bridge in a plain dev browser', async () => {
+    const existing = {
+      platform: 'browser',
+      getSettings: vi.fn(() => new Promise(() => undefined))
+    }
     installWindow(existing)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { activeAgentRuntime: 'codex' }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.getSettings()
+
+    expect(window.sciforge).not.toBe(existing)
+    expect(existing.getSettings).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'settings:get'
+        })
+      })
+    )
+  })
+
+  it('does not replace the real Electron preload bridge', async () => {
+    const existing = {
+      platform: 'darwin',
+      onDevPreviewNavigate: vi.fn()
+    }
+    installWindow(existing, '', 'Mozilla/5.0 Electron/38.0 Safari/537.36')
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
 
     installDevSciForgeBridge()
 
     expect(window.sciforge).toBe(existing)
     expect(MockEventSource.instances).toHaveLength(0)
+  })
+
+  it('replaces Electron-looking non-preload host bridges in the browser dev surface', async () => {
+    const existing = {
+      platform: 'electron',
+      getSettings: vi.fn(() => new Promise(() => undefined))
+    }
+    installWindow(existing, '', 'Mozilla/5.0 Electron/38.0 Safari/537.36')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { activeAgentRuntime: 'codex' }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.getSettings()
+
+    expect(window.sciforge).not.toBe(existing)
+    expect(existing.getSettings).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'settings:get'
+        })
+      })
+    )
   })
 })

@@ -60,6 +60,7 @@ function envModelRouterConfig(): ModelRouterConfig {
     translators.scientific = {
       baseUrl: scientificBaseUrl,
       tokenEnv: process.env.SCIFORGE_SCIMODALITY_SERVICE_TOKEN_ENV || 'SCIFORGE_SCIMODALITY_SERVICE_TOKEN',
+      model: requiredEnv('SCIFORGE_SCIMODALITY_SERVICE_MODEL'),
       timeoutMs: numberEnv('SCIFORGE_SCIMODALITY_SERVICE_TIMEOUT_MS'),
     };
   }

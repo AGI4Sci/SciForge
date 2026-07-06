@@ -4,6 +4,8 @@ import {
   type AppSettingsV1,
   type ModelRouterMemberProviderSettingsPatchV1,
   type ModelRouterMemberProviderSettingsV1,
+  type ModelRouterScientificTranslatorSettingsPatchV1,
+  type ModelRouterScientificTranslatorSettingsV1,
   type ModelRouterSettingsPatchV1,
   type ModelRouterSettingsV1
 } from './app-settings-types'
@@ -23,8 +25,10 @@ export function defaultModelRouterSettings(): ModelRouterSettingsV1 {
     profiles: {
       default: {
         textReasoner: defaultModelRouterMemberProvider('openai-compatible'),
+        imageGenerator: defaultModelRouterMemberProvider('openai-compatible'),
         translators: {
-          vision: defaultModelRouterMemberProvider('qwen-compatible')
+          vision: defaultModelRouterMemberProvider('qwen-compatible'),
+          scientific: defaultModelRouterScientificTranslator()
         }
       }
     }
@@ -49,10 +53,18 @@ export function normalizeModelRouterSettings(
           rawDefaultProfile?.textReasoner,
           defaultProfile.textReasoner
         ),
+        imageGenerator: normalizeModelRouterMemberProvider(
+          rawDefaultProfile?.imageGenerator,
+          defaultProfile.imageGenerator
+        ),
         translators: {
           vision: normalizeModelRouterMemberProvider(
             rawDefaultProfile?.translators?.vision,
             defaultProfile.translators.vision
+          ),
+          scientific: normalizeModelRouterScientificTranslator(
+            rawDefaultProfile?.translators?.scientific,
+            defaultProfile.translators.scientific
           )
         }
       }
@@ -74,10 +86,18 @@ export function mergeModelRouterSettings(
           ...safeCurrent.profiles.default.textReasoner,
           ...(patch?.profiles?.default?.textReasoner ?? {})
         },
+        imageGenerator: {
+          ...safeCurrent.profiles.default.imageGenerator,
+          ...(patch?.profiles?.default?.imageGenerator ?? {})
+        },
         translators: {
           vision: {
             ...safeCurrent.profiles.default.translators.vision,
             ...(patch?.profiles?.default?.translators?.vision ?? {})
+          },
+          scientific: {
+            ...safeCurrent.profiles.default.translators.scientific,
+            ...(patch?.profiles?.default?.translators?.scientific ?? {})
           }
         }
       }
@@ -119,9 +139,28 @@ export function resolveRuntimeModelRouterSettings(settings: AppSettingsV1): {
   }
 }
 
+export function isModelRouterTextReasonerConfigured(
+  modelRouter: ModelRouterSettingsV1
+): boolean {
+  const textReasoner = modelRouter.profiles.default.textReasoner
+  return Boolean(
+    textReasoner.baseUrl.trim() &&
+    textReasoner.apiKey.trim() &&
+    textReasoner.model.trim()
+  )
+}
+
 function defaultModelRouterMemberProvider(provider: string): ModelRouterMemberProviderSettingsV1 {
   return {
     provider,
+    baseUrl: '',
+    apiKey: '',
+    model: ''
+  }
+}
+
+function defaultModelRouterScientificTranslator(): ModelRouterScientificTranslatorSettingsV1 {
+  return {
     baseUrl: '',
     apiKey: '',
     model: ''
@@ -142,6 +181,19 @@ function normalizeModelRouterMemberProvider(
   }
 }
 
+function normalizeModelRouterScientificTranslator(
+  input: ModelRouterScientificTranslatorSettingsPatchV1 | undefined,
+  defaults: ModelRouterScientificTranslatorSettingsV1
+): ModelRouterScientificTranslatorSettingsV1 {
+  const timeoutMs = optionalPositiveInteger(input?.timeoutMs)
+  return {
+    baseUrl: optionalString(input?.baseUrl) || defaults.baseUrl,
+    apiKey: optionalString(input?.apiKey),
+    model: optionalString(input?.model) || defaults.model,
+    ...(timeoutMs === undefined ? {} : { timeoutMs })
+  }
+}
+
 function normalizeModelRouterPublicModelAlias(value: unknown, fallback: string): string {
   return nonEmptyString(value, fallback)
 }
@@ -157,4 +209,10 @@ function optionalString(value: unknown): string {
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   return Math.max(0, Math.floor(value))
+}
+
+function optionalPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  const normalized = Math.floor(value)
+  return normalized > 0 ? normalized : undefined
 }

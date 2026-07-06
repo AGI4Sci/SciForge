@@ -1,5 +1,4 @@
 import { EventEmitter } from 'node:events'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { AppBridgeSender } from './ipc/register-app-ipc-handlers'
@@ -8,100 +7,172 @@ import { isLocalHttpBodyTooLargeError, readIncomingMessageBody } from './local-h
 const DEFAULT_DEV_BROWSER_BRIDGE_PORT = 5174
 const MAX_INVOKE_BODY_BYTES = 2_000_000
 const CLIENT_DESTROY_DELAY_MS = 1_000
-export const DEV_BROWSER_BRIDGE_TOKEN_HEADER = 'X-SciForge-Bridge-Token'
-export const DEV_BROWSER_BRIDGE_TOKEN_QUERY_PARAM = 'sciforgeBridgeToken'
-const DEV_BROWSER_BRIDGE_TOKEN_BYTES = 32
-const DEFAULT_DEV_BROWSER_BRIDGE_BOOTSTRAP_ORIGINS = new Set([
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://[::1]:5173'
-])
 const DEV_BROWSER_BRIDGE_ALLOWED_HEADERS = [
   'Content-Type',
-  'Authorization',
-  'X-SciForge-Client',
-  DEV_BROWSER_BRIDGE_TOKEN_HEADER
+  'X-SciForge-Client'
 ].join(',')
 
-// The bridge is protected by a per-dev-session token and is used to run the
-// full app in an external browser during development. Keep unrelated host
-// write actions opt-in, but allow the runtime channels the workbench needs.
+// The bridge is gated to localhost renderer origins and is only started for
+// development builds. The browser dev surface is intentionally expected to
+// match the Electron preload API so product work can be debugged in a normal
+// browser without a second feature matrix.
+// Keep this list in lockstep with src/preload/index.ts and
+// src/renderer/src/dev/dev-sciforge-bridge.ts; tests enforce that cleanup
+// refactors do not silently remove web parity again.
 export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
-  'settings:get',
-  'settings:set',
-  'upstream:models',
-  'connectPhone:status',
-  'schedule:status',
-  'workflow:status',
-  'workflow:code:check',
-  'discord:status',
-  'discord:guilds',
-  'discord:channels',
-  'zulip:status',
-  'zulip:configure',
-  'zulip:streams',
-  'zulip:topics',
-  'zulip:bind-channel',
-  'zulip:test-send',
-  'zulip:set-guard',
-  'skill:list',
-  'runtimeConfig:read',
-  'git:branches',
-  'editor:list',
-  'file:resolve-workspace',
-  'file:list-workspace-directory',
-  'file:read-workspace',
-  'file:preview-workspace-html',
-  'file:read-workspace-image',
-  'file:watch-workspace',
-  'file:unwatch-workspace',
-  'write:inline-completion',
-  'write:retrieve-context',
-  'pdfAnnotations:load',
-  'pdfAnnotations:exportPdf',
+  'agentRuntime:auxiliary',
+  'agentRuntime:capabilities',
+  'agentRuntime:compactThread',
+  'agentRuntime:connect',
+  'agentRuntime:deleteThread',
+  'agentRuntime:forkThread',
+  'agentRuntime:interruptTurn',
+  'agentRuntime:listThreads',
+  'agentRuntime:readThread',
+  'agentRuntime:renameThread',
+  'agentRuntime:resolveApproval',
+  'agentRuntime:resolveUserInput',
+  'agentRuntime:resumeSession',
+  'agentRuntime:startThread',
+  'agentRuntime:startTurn',
+  'agentRuntime:steerTurn',
+  'agentRuntime:stopEvents',
+  'agentRuntime:subscribeEvents',
+  'agentRuntime:updateThreadRelation',
+  'agentRuntime:usage',
+  'app:version',
+  'clipboard:read-image',
   'computer-use:permissions',
+  'computer-use:request-permission',
   'computer-use:status',
-  'paperRadar:status',
-  'paperRadar:profiles:list',
-  'paperRadar:search',
-  'paperRadar:rank',
-  'paperRadar:digest',
+  'connectPhone:install:poll',
+  'connectPhone:install:qrcode',
+  'connectPhone:status',
+  'desktop:command',
+  'discord:bind-channel',
+  'discord:channels',
+  'discord:configure-client',
+  'discord:configure-proxy',
+  'discord:configure-token',
+  'discord:guilds',
+  'discord:set-guard',
+  'discord:status',
+  'discord:test-send',
+  'editor:list',
+  'editor:open-path',
+  'evidenceDag:audit-run',
+  'evidenceDag:view',
+  'figure-style:evaluate',
+  'figure-style:extract',
+  'figure-style:review',
+  'file:copy-workspace-entry',
+  'file:create-workspace',
+  'file:create-workspace-directory',
+  'file:delete-workspace-entry',
+  'file:list-workspace-directory',
+  'file:move-workspace-entry',
+  'file:preview-workspace-html',
+  'file:read-workspace',
+  'file:read-workspace-image',
+  'file:rename-workspace-entry',
+  'file:resolve-workspace',
+  'file:save-workspace-clipboard-image',
+  'file:unwatch-workspace',
+  'file:watch-workspace',
+  'file:write-docx-text',
+  'file:write-workspace',
+  'git:branches',
+  'git:create-and-switch-branch',
+  'git:switch-branch',
+  'gui:update-check',
+  'gui:update-download',
+  'gui:update-install',
+  'gui:update-state',
+  'log:error',
+  'log:get-path',
+  'log:open-dir',
+  'mcp:image-generation-config',
+  'mcp:ppt-master-config',
+  'mcp:scientific-plotting-config',
+  'mcp:scientific-skills-config',
+  'mcp:scientific-skills-status',
   'mcp:sciforge-canvas-config',
-  'sciforge-canvas:status',
+  'modelRouter:config:open',
+  'notification:turn-complete',
+  'paperRadar:digest',
+  'paperRadar:profiles:list',
+  'paperRadar:profiles:save',
+  'paperRadar:rank',
+  'paperRadar:search',
+  'paperRadar:status',
+  'paperRadar:sync-arxiv',
+  'paperRadar:sync-biorxiv',
+  'paperRadar:sync-profile',
+  'pdfAnnotations:export',
+  'pdfAnnotations:exportPdf',
+  'pdfAnnotations:import',
+  'pdfAnnotations:load',
+  'pdfAnnotations:save',
+  'projectDag:export',
+  'remoteChannel:active-thread-context',
+  'remoteChannel:message:mirror',
+  'remoteChannel:task:create-from-text',
+  'researchCards:archive',
+  'researchCards:create',
+  'researchCards:list',
+  'researchCards:update',
+  'runtimeConfig:open-dir',
+  'runtimeConfig:read',
+  'runtimeConfig:write',
+  'schedule:status',
+  'schedule:task:create-from-text',
+  'schedule:task:run',
+  'scientific-plotting:prepare-reference',
+  'scientific-plotting:status',
+  'scientific-skills:install',
+  'sciforge-canvas:export-review-packet',
+  'sciforge-canvas:import-recent-artifacts',
+  'sciforge-canvas:insert-artifact',
   'sciforge-canvas:open',
   'sciforge-canvas:save',
   'sciforge-canvas:save-selection',
-  'sciforge-canvas:insert-artifact',
-  'sciforge-canvas:import-recent-artifacts',
-  'sciforge-canvas:export-review-packet',
-  'agentRuntime:capabilities',
-  'agentRuntime:connect',
-  'agentRuntime:listThreads',
-  'agentRuntime:startThread',
-  'agentRuntime:readThread',
-  'agentRuntime:startTurn',
-  'agentRuntime:interruptTurn',
-  'agentRuntime:steerTurn',
-  'agentRuntime:subscribeEvents',
-  'agentRuntime:stopEvents',
-  'agentRuntime:renameThread',
-  'agentRuntime:deleteThread',
-  'agentRuntime:compactThread',
-  'agentRuntime:forkThread',
-  'agentRuntime:resumeSession',
-  'agentRuntime:updateThreadRelation',
-  'agentRuntime:usage',
-  'agentRuntime:auxiliary',
-  'agentRuntime:resolveApproval',
-  'agentRuntime:resolveUserInput',
+  'sciforge-canvas:status',
+  'settings:get',
+  'settings:set',
+  'shell:open-external',
+  'skill:list',
+  'skill:open-root',
+  'skill:save-file',
+  'speech:transcribe',
   'terminal:create',
-  'terminal:write',
-  'terminal:resize',
   'terminal:dispose',
-  'app:version',
-  'gui:update-state',
-  'gui:update-check',
-  'log:get-path'
+  'terminal:resize',
+  'terminal:write',
+  'upstream:models',
+  'visibleContext:get',
+  'visibleContext:publish',
+  'workflow:approval:resolve',
+  'workflow:code:check',
+  'workflow:node:run',
+  'workflow:node:test',
+  'workflow:run',
+  'workflow:status',
+  'workflow:stop',
+  'workspace:pick-directory',
+  'workspace:pick-file',
+  'write:copy-rich-text',
+  'write:export',
+  'write:inline-completion',
+  'write:inline-completion-debug:clear',
+  'write:inline-completion-debug:list',
+  'write:retrieve-context',
+  'zulip:bind-channel',
+  'zulip:configure',
+  'zulip:set-guard',
+  'zulip:status',
+  'zulip:streams',
+  'zulip:test-send',
+  'zulip:topics'
 ] as const
 
 export type DevBrowserBridgeDispatcher = {
@@ -111,7 +182,6 @@ export type DevBrowserBridgeDispatcher = {
 export type DevBrowserBridgeServer = {
   server: Server
   url: string
-  token: string
   send: (channel: string, ...args: unknown[]) => void
   close: () => Promise<void>
 }
@@ -120,10 +190,8 @@ type StartDevBrowserBridgeServerOptions = {
   dispatcher: DevBrowserBridgeDispatcher
   host?: string
   port?: number
-  token?: string
   allowedChannels?: readonly string[]
   allowAllChannels?: boolean
-  bootstrapOrigins?: readonly string[]
 }
 
 class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
@@ -197,24 +265,6 @@ function isAllowedOrigin(origin: string | undefined): boolean {
   }
 }
 
-function normalizeOrigin(value: string | undefined): string | null {
-  if (!value) return null
-  try {
-    return new URL(value).origin
-  } catch {
-    return null
-  }
-}
-
-function createBootstrapOriginSet(origins: readonly string[] | undefined): ReadonlySet<string> {
-  if (!origins) return DEFAULT_DEV_BROWSER_BRIDGE_BOOTSTRAP_ORIGINS
-  return new Set(
-    origins
-      .map((origin) => normalizeOrigin(origin))
-      .filter((origin): origin is string => Boolean(origin))
-  )
-}
-
 function applyCors(request: IncomingMessage, response: ServerResponse): boolean {
   const origin = request.headers.origin
   if (typeof origin === 'string') {
@@ -227,6 +277,7 @@ function applyCors(request: IncomingMessage, response: ServerResponse): boolean 
   }
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   response.setHeader('Access-Control-Allow-Headers', DEV_BROWSER_BRIDGE_ALLOWED_HEADERS)
+  response.setHeader('Access-Control-Allow-Private-Network', 'true')
   return true
 }
 
@@ -241,45 +292,6 @@ function normalizeClientId(value: string | string[] | undefined): string {
   const trimmed = raw?.trim() ?? ''
   if (/^[A-Za-z0-9._:-]{1,128}$/.test(trimmed)) return trimmed
   return 'default'
-}
-
-function normalizeHeaderValue(value: string | string[] | undefined): string {
-  const raw = Array.isArray(value) ? value[0] : value
-  return raw?.trim() ?? ''
-}
-
-function normalizeToken(value: string | undefined): string | undefined {
-  const token = value?.trim()
-  return token || undefined
-}
-
-function createBridgeToken(configuredToken: string | undefined): string {
-  return normalizeToken(configuredToken) ?? randomBytes(DEV_BROWSER_BRIDGE_TOKEN_BYTES).toString('hex')
-}
-
-function timingSafeStringEqual(actual: string, expected: string): boolean {
-  const actualBuffer = Buffer.from(actual, 'utf8')
-  const expectedBuffer = Buffer.from(expected, 'utf8')
-  if (actualBuffer.byteLength !== expectedBuffer.byteLength) return false
-  return timingSafeEqual(actualBuffer, expectedBuffer)
-}
-
-function parseAuthorizationBearer(value: string): string {
-  const match = /^Bearer\s+(.+)$/i.exec(value)
-  return match?.[1]?.trim() ?? ''
-}
-
-function getBridgeToken(request: IncomingMessage, requestUrl?: URL): string {
-  const primary = normalizeHeaderValue(request.headers[DEV_BROWSER_BRIDGE_TOKEN_HEADER.toLowerCase()])
-  if (primary) return primary
-  const bearer = parseAuthorizationBearer(normalizeHeaderValue(request.headers.authorization))
-  if (bearer) return bearer
-  return normalizeToken(requestUrl?.searchParams.get(DEV_BROWSER_BRIDGE_TOKEN_QUERY_PARAM) ?? undefined) ?? ''
-}
-
-function hasValidBridgeToken(request: IncomingMessage, expectedToken: string, requestUrl?: URL): boolean {
-  const providedToken = getBridgeToken(request, requestUrl)
-  return Boolean(providedToken) && timingSafeStringEqual(providedToken, expectedToken)
 }
 
 function createAllowedChannelSet(channels: readonly string[] | undefined): ReadonlySet<string> {
@@ -313,9 +325,7 @@ export async function startDevBrowserBridgeServer(
 ): Promise<DevBrowserBridgeServer> {
   const host = options.host ?? '127.0.0.1'
   const port = options.port ?? DEFAULT_DEV_BROWSER_BRIDGE_PORT
-  const token = createBridgeToken(options.token)
   const allowedChannels = createAllowedChannelSet(options.allowedChannels)
-  const bootstrapOrigins = createBootstrapOriginSet(options.bootstrapOrigins)
   const clients = new Map<string, DevBrowserBridgeClient>()
   let nextClientNumericId = 1
 
@@ -344,29 +354,7 @@ export async function startDevBrowserBridgeServer(
       return
     }
 
-    if (request.method === 'GET' && requestUrl.pathname === '/bootstrap') {
-      const requestOrigin = normalizeOrigin(
-        typeof request.headers.origin === 'string' ? request.headers.origin : undefined
-      )
-      if (!requestOrigin || !bootstrapOrigins.has(requestOrigin)) {
-        writeJson(response, 403, {
-          ok: false,
-          message: 'Dev browser bridge bootstrap origin is not allowed.'
-        })
-        return
-      }
-      writeJson(response, 200, { ok: true, token })
-      return
-    }
-
     if (request.method === 'GET' && requestUrl.pathname === '/events') {
-      if (!hasValidBridgeToken(request, token, requestUrl)) {
-        writeJson(response, 401, {
-          ok: false,
-          message: 'Dev browser bridge token is missing or invalid.'
-        })
-        return
-      }
       const clientId = normalizeClientId(requestUrl.searchParams.get('clientId') ?? undefined)
       const client = getClient(clientId)
       response.writeHead(200, {
@@ -380,13 +368,6 @@ export async function startDevBrowserBridgeServer(
     }
 
     if (request.method === 'POST' && requestUrl.pathname === '/invoke') {
-      if (!hasValidBridgeToken(request, token)) {
-        writeJson(response, 401, {
-          ok: false,
-          message: 'Dev browser bridge token is missing or invalid.'
-        })
-        return
-      }
       void (async () => {
         try {
           const body = parseInvokeBody(await readJsonBody(request))
@@ -427,7 +408,6 @@ export async function startDevBrowserBridgeServer(
   return {
     server,
     url,
-    token,
     send: (channel, ...args) => {
       for (const client of clients.values()) {
         client.send(channel, ...args)

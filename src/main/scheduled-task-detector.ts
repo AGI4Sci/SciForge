@@ -2,6 +2,8 @@ import type { AppSettingsV1, ScheduleRunMode, ScheduledTaskV1 } from '../shared/
 import {
   DEFAULT_SCHEDULE_MODEL,
   DEFAULT_SCHEDULE_REASONING_EFFORT,
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
   resolveRuntimeModelRouterSettings
 } from '../shared/app-settings'
 import { buildModelRouterResponsesUrl } from '../shared/model-router-url'
@@ -242,6 +244,7 @@ function resolveDetectorModelRouterRuntime(settings: AppSettingsV1): {
     ? settings.modelRouter.baseUrl.trim()
     : ''
   if (!rawBaseUrl) return null
+  if (!isModelRouterTextReasonerConfigured(getModelRouterSettings(settings))) return null
   const runtime = resolveRuntimeModelRouterSettings(settings)
   const baseUrl = runtime.baseUrl.trim()
   const apiKey = runtime.apiKey.trim()

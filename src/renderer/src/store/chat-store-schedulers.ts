@@ -9,11 +9,17 @@ let runtimeThreadRefreshPollTimer: ReturnType<typeof setTimeout> | null = null
 let runtimeThreadRefreshInFlight = false
 let runtimeThreadRefreshIdleDelayMs = 0
 let runtimeThreadRefreshFocusCleanup: (() => void) | null = null
+let runtimeReconnectProbeTimer: ReturnType<typeof setTimeout> | null = null
+let runtimeReconnectProbeAttempt = 0
+let runtimeBootRetryTimer: ReturnType<typeof setTimeout> | null = null
 
 const ACTIVE_RUNTIME_THREAD_REFRESH_POLL_MS = 5_000
 const FOCUSED_IDLE_RUNTIME_THREAD_REFRESH_POLL_MS = 30_000
 const HIDDEN_IDLE_RUNTIME_THREAD_REFRESH_POLL_MS = 120_000
 const MAX_IDLE_RUNTIME_THREAD_REFRESH_POLL_MS = 120_000
+const RUNTIME_RECONNECT_PROBE_MIN_MS = 1_500
+const RUNTIME_RECONNECT_PROBE_MAX_MS = 10_000
+const RUNTIME_BOOT_RETRY_MS = 1_500
 
 type RuntimeThreadRefreshPollOptions = {
   activeIntervalMs?: number
@@ -108,6 +114,61 @@ export function stopRuntimeThreadRefreshPoll(): void {
   runtimeThreadRefreshFocusCleanup = null
   runtimeThreadRefreshInFlight = false
   runtimeThreadRefreshIdleDelayMs = 0
+}
+
+export function stopRuntimeReconnectProbe(): void {
+  if (runtimeReconnectProbeTimer) {
+    clearTimeout(runtimeReconnectProbeTimer)
+    runtimeReconnectProbeTimer = null
+  }
+  runtimeReconnectProbeAttempt = 0
+}
+
+export function scheduleRuntimeReconnectProbe(
+  get: ChatStoreGet,
+  options: { minDelayMs?: number; maxDelayMs?: number } = {}
+): void {
+  if (runtimeReconnectProbeTimer || get().runtimeConnection === 'ready') return
+  const minDelayMs = options.minDelayMs ?? RUNTIME_RECONNECT_PROBE_MIN_MS
+  const maxDelayMs = options.maxDelayMs ?? RUNTIME_RECONNECT_PROBE_MAX_MS
+  const delay = Math.min(
+    maxDelayMs,
+    minDelayMs * Math.max(1, 2 ** runtimeReconnectProbeAttempt)
+  )
+  runtimeReconnectProbeTimer = setTimeout(() => {
+    runtimeReconnectProbeTimer = null
+    if (get().runtimeConnection === 'ready') {
+      runtimeReconnectProbeAttempt = 0
+      return
+    }
+    runtimeReconnectProbeAttempt += 1
+    void get().probeRuntime('background').finally(() => {
+      if (get().runtimeConnection === 'ready') {
+        runtimeReconnectProbeAttempt = 0
+        return
+      }
+      scheduleRuntimeReconnectProbe(get, options)
+    })
+  }, delay)
+}
+
+export function stopRuntimeBootRetry(): void {
+  if (runtimeBootRetryTimer) {
+    clearTimeout(runtimeBootRetryTimer)
+    runtimeBootRetryTimer = null
+  }
+}
+
+export function scheduleRuntimeBootRetry(
+  get: ChatStoreGet,
+  options: { delayMs?: number } = {}
+): void {
+  if (runtimeBootRetryTimer || get().runtimeConnection === 'ready') return
+  runtimeBootRetryTimer = setTimeout(() => {
+    runtimeBootRetryTimer = null
+    if (get().runtimeConnection === 'ready') return
+    void get().boot()
+  }, options.delayMs ?? RUNTIME_BOOT_RETRY_MS)
 }
 
 function hasActiveRuntimeTurn(state: ChatState): boolean {

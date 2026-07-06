@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, shell, Tray } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -21,9 +21,10 @@ import {
   mergeConnectPhoneSettings,
   mergeLocalRuntimeSettings,
   mergeRemoteChannelSettings,
+  mergeRemoteExecutorSettings,
   mergeAgentCapabilitySettings,
   mergeComputerUseSettings,
-  mergeImageGenerationSettings,
+  mergeModelRouterSettings,
   mergeModelProviderSettings,
   mergeScheduleSettings,
   mergeWorkflowSettings,
@@ -44,7 +45,14 @@ import type { GuiUpdateState } from '../shared/gui-update'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
 import { decideDevPreviewPopup } from './dev-preview-popup-policy'
-import { ensureModelRouterConfigFile, ensureModelRouterSidecar, stopModelRouterSidecar } from './model-router-sidecar'
+import {
+  ensureModelRouterConfigFile,
+  ensureModelRouterSidecar,
+  modelRouterConfigPath,
+  stopModelRouterSidecar,
+  syncModelRouterConfigFileFromSettings,
+  syncModelRouterSettingsFromConfigFile
+} from './model-router-sidecar'
 import {
   ensureEvidenceDagSidecar,
   stopEvidenceDagSidecar
@@ -117,7 +125,6 @@ import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migrati
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
 import {
-  DEV_BROWSER_BRIDGE_TOKEN_HEADER,
   startDevBrowserBridgeServer,
   type DevBrowserBridgeServer
 } from './dev-browser-bridge'
@@ -347,6 +354,10 @@ let isQuitting = false
 let devBrowserBridgeServer: DevBrowserBridgeServer | null = null
 let codexRuntimePrewarmTimer: ReturnType<typeof setTimeout> | null = null
 let codexRuntimePrewarmPromise: Promise<void> | null = null
+let modelRouterConfigWatcher: FSWatcher | null = null
+let modelRouterConfigWatchTimer: ReturnType<typeof setTimeout> | null = null
+let modelRouterConfigWatchSuppressUntil = 0
+let modelRouterConfigFileSyncPromise: Promise<void> | null = null
 let remoteChannelActiveThreadContext: {
   threadId: string
   runtimeId?: AgentRuntimeId
@@ -358,10 +369,6 @@ type GuiUpdaterModule = typeof import('./gui-updater')
 
 let guiUpdaterModulePromise: Promise<GuiUpdaterModule> | null = null
 let guiUpdaterInitialized = false
-
-function resolveDevBrowserBridgeToken(): string | undefined {
-  return process.env.SCIFORGE_DEV_BROWSER_BRIDGE_TOKEN?.trim() || undefined
-}
 
 function emitRemoteChannelActivity(payload: {
   channelId: string
@@ -382,6 +389,64 @@ const codexRuntimeEventSink: CodexRuntimeEventSink = {
     }
     devBrowserBridgeServer?.send(channel, payload)
   }
+}
+
+function emitSettingsChanged(settings: AppSettingsV1): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('settings:changed', settings)
+  }
+  devBrowserBridgeServer?.send('settings:changed', settings)
+}
+
+function suppressModelRouterConfigFileWatch(durationMs = 1_000): void {
+  modelRouterConfigWatchSuppressUntil = Date.now() + durationMs
+}
+
+function stopModelRouterConfigWatcher(): void {
+  if (modelRouterConfigWatchTimer) {
+    clearTimeout(modelRouterConfigWatchTimer)
+    modelRouterConfigWatchTimer = null
+  }
+  try {
+    modelRouterConfigWatcher?.close()
+  } catch (error) {
+    logWarn('model-router', 'Failed to close Model Router config watcher.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  }
+  modelRouterConfigWatcher = null
+}
+
+function startModelRouterConfigWatcher(
+  userDataDir: string,
+  onExternalChange: () => void
+): void {
+  stopModelRouterConfigWatcher()
+  const configPath = modelRouterConfigPath(userDataDir)
+  const configDir = dirname(configPath)
+  try {
+    modelRouterConfigWatcher = watch(configDir, (_event, filename) => {
+      const changed = typeof filename === 'string' ? filename : ''
+      if (changed && changed !== 'config.json') return
+      if (Date.now() < modelRouterConfigWatchSuppressUntil) return
+      if (modelRouterConfigWatchTimer) clearTimeout(modelRouterConfigWatchTimer)
+      modelRouterConfigWatchTimer = setTimeout(() => {
+        modelRouterConfigWatchTimer = null
+        if (Date.now() < modelRouterConfigWatchSuppressUntil) return
+        onExternalChange()
+      }, 250)
+    })
+  } catch (error) {
+    logWarn('model-router', 'Failed to start Model Router config watcher.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+    return
+  }
+  modelRouterConfigWatcher.on('error', (error) => {
+    logWarn('model-router', 'Model Router config watcher failed.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
 }
 
 function getCodexRuntime(): CodexRuntimeService {
@@ -1472,7 +1537,18 @@ app.whenReady().then(async () => {
 
   store = new JsonSettingsStore(app.getPath('userData'))
   traceStartup('settings load:start')
-  const initial = await store.load()
+  let initial = await store.load()
+  initial = await syncModelRouterSettingsFromConfigFile(initial, {
+    userDataDir: app.getPath('userData')
+  }).then(async (synced) => {
+    if (JSON.stringify(synced.modelRouter) === JSON.stringify(initial.modelRouter)) return initial
+    return store.patch({ modelRouter: synced.modelRouter })
+  }).catch((error) => {
+    logWarn('model-router', 'Failed to sync Model Router settings from config file during startup.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+    return initial
+  })
   traceStartup('settings load:done')
   setLocalRuntimeUnexpectedExitHandler(handleUnexpectedLocalRuntimeExit)
   appBehavior = initial.appBehavior
@@ -1498,6 +1574,13 @@ app.whenReady().then(async () => {
     retentionDays: initial.log.retentionDays
   })
   traceStartup('logger configured')
+  await syncModelRouterConfigFileFromSettings(initial, {
+    userDataDir: app.getPath('userData')
+  }).catch((error) => {
+    logWarn('model-router', 'Failed to write Model Router config file during startup.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
   void ensureModelRouterSidecar(initial, {
     userDataDir: app.getPath('userData'),
     appRoot: app.getAppPath(),
@@ -1640,11 +1723,12 @@ app.whenReady().then(async () => {
     const {
       agents: agentsPatch,
       provider: providerPatch,
+      modelRouter: modelRouterPatch,
       agentCapabilities: agentCapabilitiesPatch,
-      imageGeneration: imageGenerationPatch,
       computerUse: computerUsePatch,
       speechToText: speechToTextPatch,
       connectPhone: connectPhonePatch,
+      remoteExecutor: remoteExecutorPatch,
       ...restPatch
     } = partial
     const next = normalizeAppSettings({
@@ -1654,8 +1738,8 @@ app.whenReady().then(async () => {
       ),
       ...restPatch,
       provider: mergeModelProviderSettings(prev.provider, providerPatch),
+      modelRouter: mergeModelRouterSettings(prev.modelRouter, modelRouterPatch),
       agentCapabilities: mergeAgentCapabilitySettings(prev.agentCapabilities, agentCapabilitiesPatch),
-      imageGeneration: mergeImageGenerationSettings(prev.imageGeneration, imageGenerationPatch),
       computerUse: mergeComputerUseSettings(prev.computerUse, computerUsePatch),
       log: { ...prev.log, ...(partial.log ?? {}) },
       notifications: { ...prev.notifications, ...(partial.notifications ?? {}) },
@@ -1675,12 +1759,14 @@ app.whenReady().then(async () => {
       connectPhone: mergeConnectPhoneSettings(prev.connectPhone, connectPhonePatch),
       schedule: mergeScheduleSettings(prev.schedule, partial.schedule),
       workflow: mergeWorkflowSettings(prev.workflow, partial.workflow),
+      remoteExecutor: mergeRemoteExecutorSettings(prev.remoteExecutor, remoteExecutorPatch),
       guiUpdate: { ...prev.guiUpdate, ...(partial.guiUpdate ?? {}) }
     } as AppSettingsV1)
     if (prev.log.enabled !== next.log.enabled || prev.log.retentionDays !== next.log.retentionDays) {
       configureLogger({ enabled: next.log.enabled, retentionDays: next.log.retentionDays })
     }
     const saved = await store.patch(partial)
+    emitSettingsChanged(saved)
     await syncScheduleMcpConfig(saved, getScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[schedule-mcp] failed to sync config after settings change:', error)
     })
@@ -1693,6 +1779,15 @@ app.whenReady().then(async () => {
     queueRuntimeSettingsApply(prev, saved)
     scheduleCodexRuntimePrewarm(saved, 'settings-switch')
     if (partial.modelRouter) {
+      suppressModelRouterConfigFileWatch()
+      await syncModelRouterConfigFileFromSettings(saved, {
+        userDataDir: app.getPath('userData')
+      }).catch((error) => {
+        logWarn('model-router', 'Failed to sync Model Router config file after settings change.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+      suppressModelRouterConfigFileWatch()
       void ensureModelRouterSidecar(saved, {
         userDataDir: app.getPath('userData'),
         appRoot: app.getAppPath(),
@@ -1732,9 +1827,31 @@ app.whenReady().then(async () => {
   const openModelRouterConfigFile = async (settings: AppSettingsV1) => {
     let path = join(app.getPath('userData'), 'model-router', 'config.json')
     try {
-      const ensured = await ensureModelRouterConfigFile(settings, {
+      const syncedSettings = await syncModelRouterSettingsFromConfigFile(settings, {
         userDataDir: app.getPath('userData')
       })
+      let effectiveSettings = settings
+      if (JSON.stringify(syncedSettings.modelRouter) !== JSON.stringify(settings.modelRouter)) {
+        const prev = await store.load()
+        effectiveSettings = await store.patch({ modelRouter: syncedSettings.modelRouter })
+        emitSettingsChanged(effectiveSettings)
+        queueRuntimeSettingsApply(prev, effectiveSettings)
+        scheduleCodexRuntimePrewarm(effectiveSettings, 'settings-switch')
+        void ensureModelRouterSidecar(effectiveSettings, {
+          userDataDir: app.getPath('userData'),
+          appRoot: app.getAppPath(),
+          log: (message) => logWarn('model-router', message)
+        }).catch((error) => {
+          logWarn('model-router', 'Failed to auto-start Model Router after config file open.', {
+            message: error instanceof Error ? error.message : String(error)
+          })
+        })
+      }
+      suppressModelRouterConfigFileWatch()
+      const ensured = await ensureModelRouterConfigFile(effectiveSettings, {
+        userDataDir: app.getPath('userData')
+      })
+      suppressModelRouterConfigFileWatch()
       path = ensured.path
       const message = await shell.openPath(path)
       if (message) {
@@ -1749,6 +1866,57 @@ app.whenReady().then(async () => {
       }
     }
   }
+
+  const applyExternalModelRouterConfigFileChange = (): void => {
+    if (modelRouterConfigFileSyncPromise) return
+    const task = (async () => {
+      const prev = await store.load()
+      const synced = await syncModelRouterSettingsFromConfigFile(prev, {
+        userDataDir: app.getPath('userData')
+      })
+      if (JSON.stringify(synced.modelRouter) === JSON.stringify(prev.modelRouter)) return
+
+      const saved = await store.patch({ modelRouter: synced.modelRouter })
+      emitSettingsChanged(saved)
+      queueRuntimeSettingsApply(prev, saved)
+      scheduleCodexRuntimePrewarm(saved, 'settings-switch')
+      void ensureModelRouterSidecar(saved, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('model-router', message)
+      }).catch((error) => {
+        logWarn('model-router', 'Failed to auto-start Model Router after config file change.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+      void ensureEvidenceDagSidecar(saved, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('evidence-dag', message)
+      }).catch((error) => {
+        logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after config file change.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+      scheduleRuntime?.sync(saved)
+      workflowRuntime?.sync(saved)
+      remoteChannelRuntime?.sync(saved)
+      discordBotRuntime?.sync(saved)
+      zulipBotRuntime?.sync(saved)
+      syncWeixinBridgeRuntime(saved)
+    })().catch((error) => {
+      logWarn('model-router', 'Failed to sync Model Router settings from config file change.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }).finally(() => {
+      if (modelRouterConfigFileSyncPromise === task) {
+        modelRouterConfigFileSyncPromise = null
+      }
+    })
+    modelRouterConfigFileSyncPromise = task
+  }
+
+  startModelRouterConfigWatcher(app.getPath('userData'), applyExternalModelRouterConfigFileChange)
 
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
@@ -1815,15 +1983,13 @@ app.whenReady().then(async () => {
   })
 
   if (!app.isPackaged && process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0') {
-    const devBrowserBridgeToken = resolveDevBrowserBridgeToken()
     void startDevBrowserBridgeServer({
       dispatcher: appBridgeDispatcher,
-      token: devBrowserBridgeToken,
       allowAllChannels: true
     }).then((server) => {
       devBrowserBridgeServer = server
       console.info(`[sciforge dev] browser bridge listening at ${server.url}`)
-      console.info(`[sciforge dev] browser bridge requires ${DEV_BROWSER_BRIDGE_TOKEN_HEADER}: ${server.token}`)
+      console.info('[sciforge dev] browser bridge accepts localhost renderer origins')
     }).catch((error) => {
       console.warn('[sciforge dev] failed to start browser bridge:', error)
     })
@@ -1876,6 +2042,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  stopModelRouterConfigWatcher()
   const server = devBrowserBridgeServer
   devBrowserBridgeServer = null
   void server?.close().catch((error) => {

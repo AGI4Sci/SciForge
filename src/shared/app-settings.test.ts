@@ -1224,6 +1224,7 @@ describe('agent runtime settings', () => {
         profiles: {
           default: {
             textReasoner: defaultModelRouterSettings().profiles.default.textReasoner,
+            imageGenerator: defaultModelRouterSettings().profiles.default.imageGenerator,
             translators: {
               vision: {
                 provider: 'openai-compatible',
@@ -1231,7 +1232,8 @@ describe('agent runtime settings', () => {
                 apiKey: 'vision-key',
                 model: 'vision-model',
                 maxSupplementRounds: 1.9
-              }
+              },
+              scientific: defaultModelRouterSettings().profiles.default.translators.scientific
             }
           }
         }

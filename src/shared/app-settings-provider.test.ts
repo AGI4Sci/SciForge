@@ -12,11 +12,21 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
+  isModelRouterTextReasonerConfigured,
   resolveLocalRuntimeSettings,
   type AppSettingsV1
 } from './app-settings'
 
 function settings(): AppSettingsV1 {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://text-provider.example/v1',
+    apiKey: 'sk-text',
+    model: 'text-model'
+  }
+
   return {
     version: 1,
     locale: 'en',
@@ -35,10 +45,7 @@ function settings(): AppSettingsV1 {
         }
       ]
     },
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter,
     agents: {
       sciforge: {
         ...defaultLocalRuntimeSettings(),
@@ -83,5 +90,12 @@ describe('model provider settings', () => {
     expect(runtime.apiKey).toBe('local-runtime-router-key')
     expect(runtime.baseUrl).toBe('http://127.0.0.1:3892/v1')
     expect(runtime.model).toBe(DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS)
+  })
+
+  it('recognizes incomplete text reasoner settings independently of router credentials', () => {
+    const current = settings()
+    current.modelRouter!.profiles.default.textReasoner.apiKey = ''
+
+    expect(isModelRouterTextReasonerConfigured(current.modelRouter!)).toBe(false)
   })
 })
