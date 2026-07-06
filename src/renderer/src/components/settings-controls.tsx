@@ -97,10 +97,12 @@ export function InlineNoticeView({
 
 export function SettingsCard({
   title,
+  action,
   children,
   className = ''
 }: {
   title: string
+  action?: ReactNode
   children: ReactNode
   className?: string
 }): ReactElement {
@@ -108,8 +110,9 @@ export function SettingsCard({
     <section
       className={`rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
     >
-      <div className="border-b border-ds-border-muted px-5 py-3">
+      <div className="flex flex-col gap-3 border-b border-ds-border-muted px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       <div className="divide-y divide-ds-border-muted px-2 py-1">{children}</div>
     </section>

@@ -1,15 +1,17 @@
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import type {
   ApprovalPolicy,
   AppSettingsV1,
   SandboxMode
 } from '@shared/app-settings'
 import {
-  defaultImageGenerationSettings
+  defaultImageGenerationSettings,
+  getModelProviderSettings,
+  getModelRouterSettings
 } from '@shared/app-settings'
 import type { GuiUpdateChannel } from '@shared/gui-update'
 import type { SkillRootId } from '../lib/skill-root-preference'
-import { FolderOpen, PencilLine, RefreshCw, Settings } from 'lucide-react'
+import { FolderOpen, PencilLine, RefreshCw, RotateCcw, Save, Settings } from 'lucide-react'
 import { GuiUpdateControl } from './settings-gui-update'
 import {
   InlineNoticeView,
@@ -25,12 +27,9 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
     t,
     tCommon,
     form,
-    activeApiKey,
     update,
-    updateSharedCredential,
     updateImageGeneration,
-    sharedApiKey,
-    sharedBaseUrl,
+    saveBasicsModelConfig,
     showApiKey,
     setShowApiKey,
     showImageGenerationApiKey,
@@ -86,10 +85,88 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const startMinimizedSupported = platform === 'win32'
   const desktopBehavior = form.appBehavior
   const imageGenerationSettings = form.imageGeneration ?? defaultImageGenerationSettings()
+  const modelRouterSettings = getModelRouterSettings(form)
+  const modelProviderSettings = getModelProviderSettings(form)
+  const defaultModelName = modelRouterSettings.profiles.default.textReasoner.model
+  const savedApiKey = modelProviderSettings.apiKey
+  const savedBaseUrl = modelProviderSettings.baseUrl
+  const [draftApiKey, setDraftApiKey] = useState(savedApiKey)
+  const [draftBaseUrl, setDraftBaseUrl] = useState(savedBaseUrl)
+  const [draftDefaultModelName, setDraftDefaultModelName] = useState(defaultModelName)
+  const [modelConfigSaving, setModelConfigSaving] = useState(false)
+  const [modelConfigNotice, setModelConfigNotice] =
+    useState<{ tone: 'error' | 'info' | 'success'; message: string } | null>(null)
   const updateImageGenerationSettings =
     typeof updateImageGeneration === 'function'
       ? updateImageGeneration
       : (patch: Partial<NonNullable<AppSettingsV1['imageGeneration']>>) => update({ imageGeneration: patch })
+
+  useEffect(() => {
+    setDraftApiKey(savedApiKey)
+    setDraftBaseUrl(savedBaseUrl)
+    setDraftDefaultModelName(defaultModelName)
+  }, [savedApiKey, savedBaseUrl, defaultModelName])
+
+  const modelConfigChanged =
+    draftApiKey !== savedApiKey ||
+    draftBaseUrl !== savedBaseUrl ||
+    draftDefaultModelName !== defaultModelName
+  const saveModelConfigDraft = async (): Promise<void> => {
+    const apiKey = draftApiKey.trim()
+    const baseUrl = draftBaseUrl.trim()
+    const model = draftDefaultModelName.trim()
+    if (!apiKey) {
+      setModelConfigNotice({
+        tone: 'error',
+        message: t('modelConfigApiKeyRequired')
+      })
+      return
+    }
+    if (!model) {
+      setModelConfigNotice({
+        tone: 'error',
+        message: t('modelConfigModelNameRequired')
+      })
+      return
+    }
+    if (typeof saveBasicsModelConfig !== 'function') {
+      setModelConfigNotice({
+        tone: 'error',
+        message: t('modelConfigSaveUnavailable')
+      })
+      return
+    }
+    setModelConfigSaving(true)
+    setModelConfigNotice(null)
+    try {
+      const next = await saveBasicsModelConfig({ apiKey, baseUrl, model })
+      const nextProvider = getModelProviderSettings(next)
+      const nextModel = getModelRouterSettings(next).profiles.default.textReasoner.model
+      setDraftApiKey(nextProvider.apiKey)
+      setDraftBaseUrl(nextProvider.baseUrl)
+      setDraftDefaultModelName(nextModel)
+      setModelConfigNotice({
+        tone: 'success',
+        message: t('modelConfigSaved')
+      })
+    } catch (error) {
+      setModelConfigNotice({
+        tone: 'error',
+        message: t('modelConfigSaveError', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    } finally {
+      setModelConfigSaving(false)
+    }
+  }
+
+  const resetModelConfigDraft = (): void => {
+    setDraftApiKey(savedApiKey)
+    setDraftBaseUrl(savedBaseUrl)
+    setDraftDefaultModelName(defaultModelName)
+    setModelConfigNotice(null)
+  }
   const [modelRouterConfigNotice, setModelRouterConfigNotice] =
     useState<{ tone: 'error' | 'info' | 'success'; message: string } | null>(null)
   const openModelRouterConfigFile = async (): Promise<void> => {
@@ -126,19 +203,46 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
 
   return (
             <>
-              <SettingsCard title={t('sectionGeneral')}>
+              <SettingsCard
+                title={t('sectionGeneral')}
+                action={
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveModelConfigDraft()}
+                      disabled={!modelConfigChanged || modelConfigSaving}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/10 px-3 py-2 text-[13px] font-medium text-accent shadow-sm transition hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Save className="h-4 w-4" />
+                      {modelConfigSaving ? t('modelConfigSaving') : t('modelConfigSave')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetModelConfigDraft}
+                      disabled={!modelConfigChanged || modelConfigSaving}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      {t('modelConfigReset')}
+                    </button>
+                  </div>
+                }
+              >
                 <SettingRow
                   title={t('apiKey')}
                   description={t('apiKeySharedDesc')}
                   control={
                     <SecretInput
-                      value={sharedApiKey}
-                      onChange={(value) => updateSharedCredential({ apiKey: value })}
+                      value={draftApiKey}
+                      onChange={(value) => {
+                        setDraftApiKey(value)
+                        setModelConfigNotice(null)
+                      }}
                       visible={showApiKey}
                       onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
                       placeholder="sk-..."
                       autoComplete="off"
-                      invalid={!activeApiKey.trim()}
+                      invalid={!draftApiKey.trim()}
                       showLabel={t('showSecret')}
                       hideLabel={t('hideSecret')}
                       className="md:max-w-md"
@@ -152,9 +256,31 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                     <input
                       className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
                       placeholder={t('baseUrlPlaceholder')}
-                      value={sharedBaseUrl}
-                      onChange={(e) => updateSharedCredential({ baseUrl: e.target.value })}
+                      value={draftBaseUrl}
+                      onChange={(e) => {
+                        setDraftBaseUrl(e.target.value)
+                        setModelConfigNotice(null)
+                      }}
                     />
+                  }
+                />
+                <SettingRow
+                  title={t('defaultModelName')}
+                  description={t('defaultModelNameDesc')}
+                  control={
+                    <div className="grid gap-2 md:max-w-md">
+                      <input
+                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                        placeholder={t('defaultModelNamePlaceholder')}
+                        value={draftDefaultModelName}
+                        spellCheck={false}
+                        onChange={(e) => {
+                          setDraftDefaultModelName(e.target.value)
+                          setModelConfigNotice(null)
+                        }}
+                      />
+                      {modelConfigNotice ? <InlineNoticeView notice={modelConfigNotice} /> : null}
+                    </div>
                   }
                 />
                 <SettingRow

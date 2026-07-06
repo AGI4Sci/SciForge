@@ -18,6 +18,8 @@ import {
   agentRuntimeSettingsEnvelope,
   getLocalRuntimeSettings,
   getActiveAgentRuntime,
+  getModelProviderProfile,
+  getModelRouterSettings,
   mergeConnectPhoneSettings,
   mergeLocalRuntimeSettings,
   mergeRemoteChannelSettings,
@@ -44,7 +46,12 @@ import type { GuiUpdateState } from '../shared/gui-update'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
 import { decideDevPreviewPopup } from './dev-preview-popup-policy'
-import { ensureModelRouterConfigFile, ensureModelRouterSidecar, stopModelRouterSidecar } from './model-router-sidecar'
+import {
+  ensureModelRouterConfigFile,
+  ensureModelRouterSidecar,
+  stopModelRouterSidecar,
+  updateModelRouterConfigDefaultTextReasoner
+} from './model-router-sidecar'
 import {
   ensureEvidenceDagSidecar,
   stopEvidenceDagSidecar
@@ -1693,6 +1700,30 @@ app.whenReady().then(async () => {
     queueRuntimeSettingsApply(prev, saved)
     scheduleCodexRuntimePrewarm(saved, 'settings-switch')
     if (partial.modelRouter) {
+      const previousRouter = getModelRouterSettings(prev)
+      const savedRouter = getModelRouterSettings(saved)
+      const previousRuntime = getLocalRuntimeSettings(prev)
+      const savedRuntime = getLocalRuntimeSettings(saved)
+      const previousProvider = getModelProviderProfile(prev, previousRuntime.providerId)
+      const savedProvider = getModelProviderProfile(saved, savedRuntime.providerId)
+      const previousDefaultTextModel = previousRouter.profiles.default.textReasoner.model
+      const savedDefaultTextModel = savedRouter.profiles.default.textReasoner.model
+      const previousDefaultTextBaseUrl =
+        previousRouter.profiles.default.textReasoner.baseUrl.trim() || previousProvider.baseUrl.trim()
+      const savedDefaultTextBaseUrl =
+        savedRouter.profiles.default.textReasoner.baseUrl.trim() || savedProvider.baseUrl.trim()
+      if (
+        previousDefaultTextModel !== savedDefaultTextModel ||
+        previousDefaultTextBaseUrl !== savedDefaultTextBaseUrl
+      ) {
+        await updateModelRouterConfigDefaultTextReasoner(saved, {
+          userDataDir: app.getPath('userData')
+        }).catch((error) => {
+          logWarn('model-router', 'Failed to update Model Router default text provider config.', {
+            message: error instanceof Error ? error.message : String(error)
+          })
+        })
+      }
       void ensureModelRouterSidecar(saved, {
         userDataDir: app.getPath('userData'),
         appRoot: app.getAppPath(),

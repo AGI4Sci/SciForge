@@ -1443,7 +1443,7 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
+  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
   provider?: ModelProviderSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1

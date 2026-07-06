@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   DEFAULT_LOCAL_RUNTIME_MODEL,
@@ -195,6 +195,18 @@ function isBlockedStandaloneModelRouterEnv(key: string): boolean {
   return isPrefixedEnv(key, STANDALONE_MODEL_ROUTER_ENV_PREFIXES)
 }
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function jsonRecordOrCreate(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = parent[key]
+  if (isJsonRecord(value)) return value
+  const next: Record<string, unknown> = {}
+  parent[key] = next
+  return next
+}
+
 export async function ensureModelRouterConfigFile(
   settings: AppSettingsV1,
   options: { userDataDir: string; env?: NodeJS.ProcessEnv }
@@ -208,8 +220,47 @@ export async function ensureModelRouterConfigFile(
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     created = true
   }
-  await writeManagedModelRouterConfigFile(settings, { userDataDir: options.userDataDir, env: options.env })
+  if (created) {
+    await writeManagedModelRouterConfigFile(settings, { userDataDir: options.userDataDir, env: options.env })
+  }
   return { path, created }
+}
+
+export async function updateModelRouterConfigDefaultTextReasoner(
+  settings: AppSettingsV1,
+  options: { userDataDir: string; env?: NodeJS.ProcessEnv }
+): Promise<{ path: string; updated: boolean }> {
+  const path = modelRouterConfigPath(options.userDataDir)
+  await mkdir(join(options.userDataDir, 'model-router'), { recursive: true })
+  let raw = ''
+  try {
+    raw = await readFile(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    await writeManagedModelRouterConfigFile(settings, { userDataDir: options.userDataDir, env: options.env })
+    return { path, updated: true }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { path, updated: false }
+  }
+  if (!isJsonRecord(parsed)) return { path, updated: false }
+
+  const defaultTextReasoner = defaultModelRouterSidecarConfig(
+    settings,
+    options.userDataDir,
+    options.env
+  ).profiles.default.textReasoner
+  const profiles = jsonRecordOrCreate(parsed, 'profiles')
+  const defaultProfile = jsonRecordOrCreate(profiles, 'default')
+  const textReasoner = jsonRecordOrCreate(defaultProfile, 'textReasoner')
+  textReasoner.baseUrl = defaultTextReasoner.baseUrl
+  textReasoner.model = defaultTextReasoner.model
+  await writeFile(path, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: 'utf8' })
+  return { path, updated: true }
 }
 
 export async function ensureModelRouterSidecar(
@@ -257,7 +308,7 @@ export async function ensureModelRouterSidecar(
     options.log?.(postStopLaunch.reason)
     return
   }
-  await writeManagedModelRouterConfigFile(settings, { userDataDir: options.userDataDir, env: options.env })
+  await ensureModelRouterConfigFile(settings, { userDataDir: options.userDataDir, env: options.env })
   const spawnImpl = options.spawnImpl ?? spawn
   options.log?.(`Starting Model Router sidecar from ${postStopLaunch.launch.cwd}.`)
   // On Windows the command is `npm.cmd`; Node >= 18.20 refuses to spawn a `.cmd`

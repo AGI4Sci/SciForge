@@ -23,6 +23,24 @@ const labels: Record<string, string> = {
   baseUrl: 'Provider member URL',
   baseUrlSharedDesc: 'Default provider member URL.',
   baseUrlPlaceholder: 'http://127.0.0.1:3892/v1',
+  defaultModelName: 'Default model name',
+  defaultModelNameDesc: 'Model ID written to profiles.default.textReasoner.model.',
+  defaultModelNamePlaceholder: 'deepseek-v4-pro',
+  modelConfigSave: 'Save config',
+  modelConfigSaving: 'Saving config',
+  modelConfigReset: 'Reset',
+  modelConfigSaved: 'Model config saved.',
+  modelConfigApiKeyRequired: 'Enter an API key before saving.',
+  modelConfigModelNameRequired: 'Enter a model name before saving.',
+  modelConfigSaveError: 'Could not save model config: {{message}}',
+  modelConfigSaveUnavailable: 'Model config saver is unavailable.',
+  defaultModelNameSave: 'Save',
+  defaultModelNameSaving: 'Saving',
+  defaultModelNameReset: 'Reset',
+  defaultModelNameSaved: 'Default model name saved.',
+  defaultModelNameRequired: 'Enter a model name before saving.',
+  defaultModelNameSaveError: 'Could not save default model name: {{message}}',
+  defaultModelNameSaveUnavailable: 'Default model name saver is unavailable.',
   modelRouterConfigFile: 'Model Router config file',
   modelRouterConfigFileDesc: 'Edit provider members, routing rules, and upstream credentials in the local config file.',
   modelRouterOpenConfigFile: 'Open Model Router config file',
@@ -130,6 +148,7 @@ describe('GeneralSettingsSection', () => {
         activeApiKey: 'sk-test',
         update: vi.fn(),
         updateSharedCredential: vi.fn(),
+        saveBasicsModelConfig: vi.fn(),
         sharedApiKey: 'sk-test',
         sharedBaseUrl: '',
         showApiKey: false,
@@ -157,5 +176,8 @@ describe('GeneralSettingsSection', () => {
 
     expect(html).toContain('Model Router config file')
     expect(html).toContain('Open Model Router config file')
+    expect(html).toContain('Default model name')
+    expect(html).toContain('Save config')
+    expect(html).toContain('Reset')
   })
 })

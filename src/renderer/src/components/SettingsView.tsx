@@ -705,6 +705,27 @@ export function SettingsView(): ReactElement {
     update({ imageGeneration: patch })
   }
 
+  const saveBasicsModelConfig = async (config: { apiKey: string; baseUrl: string; model: string }): Promise<AppSettingsV1> => {
+    const next = coerceRendererSettings(await rendererRuntimeClient.setSettings({
+      provider: {
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl
+      },
+      modelRouter: {
+        profiles: {
+          default: {
+            textReasoner: { model: config.model }
+          }
+        }
+      }
+    }))
+    setForm(next)
+    emitRendererSettingsChanged(next)
+    void reloadUiSettings()
+    void probeRuntime('background')
+    return next
+  }
+
   const updateCodex = (patch: CodexRuntimeSettingsPatchV1): void => {
     update({ agents: codexSettingsPatch(patch) })
   }
@@ -774,6 +795,7 @@ export function SettingsView(): ReactElement {
     updateClaude,
     updateSharedCredential,
     updateImageGeneration,
+    saveBasicsModelConfig,
     sharedApiKey,
     sharedBaseUrl,
     showApiKey,

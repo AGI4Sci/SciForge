@@ -24,7 +24,8 @@ import {
   buildModelRouterSidecarLaunch,
   ensureModelRouterSidecar,
   ensureModelRouterConfigFile,
-  modelRouterConfigPath
+  modelRouterConfigPath,
+  updateModelRouterConfigDefaultTextReasoner
 } from './model-router-sidecar'
 
 function settings(): AppSettingsV1 {
@@ -313,7 +314,7 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.args).toContain('/tmp/sciforge-user-data/model-router/config.json')
   })
 
-  it('writes the current local Model Router config template and repairs stale files', async () => {
+  it('writes the current local Model Router config template without overwriting existing files', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-config-'))
     try {
       const current = settings()
@@ -339,10 +340,54 @@ describe('buildModelRouterSidecarLaunch', () => {
       expect(content).not.toContain('text-secret')
 
       await writeFile(created.path, '', 'utf8')
-      const repaired = await ensureModelRouterConfigFile(current, { userDataDir })
+      const existing = await ensureModelRouterConfigFile(current, { userDataDir })
       const afterSecondEnsure = await readFile(created.path, 'utf8')
-      expect(repaired.created).toBe(false)
-      expect(afterSecondEnsure).toBe(content)
+      expect(existing.created).toBe(false)
+      expect(afterSecondEnsure).toBe('')
+    } finally {
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('updates only default textReasoner URL and model in an existing Model Router config', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-config-model-'))
+    try {
+      const current = settings()
+      current.modelRouter!.profiles.default.textReasoner.model = 'custom-default-model'
+      current.modelRouter!.profiles.default.textReasoner.baseUrl = ''
+      current.provider.baseUrl = 'https://custom-default.example/v1'
+      await mkdir(join(userDataDir, 'model-router'), { recursive: true })
+      await writeFile(modelRouterConfigPath(userDataDir), `${JSON.stringify({
+        publicModelAlias: 'manual-router',
+        profiles: {
+          default: {
+            traceRoot: '/manual/traces',
+            textReasoner: {
+              provider: 'manual-provider',
+              baseUrl: 'https://manual.example/v1',
+              apiKeyEnv: 'MANUAL_TEXT_KEY',
+              model: 'old-model'
+            },
+            customRoutingRule: { keep: true }
+          }
+        },
+        customTopLevel: true
+      })}\n`, 'utf8')
+
+      const result = await updateModelRouterConfigDefaultTextReasoner(current, { userDataDir })
+      const parsed = JSON.parse(await readFile(result.path, 'utf8'))
+
+      expect(result.updated).toBe(true)
+      expect(parsed.publicModelAlias).toBe('manual-router')
+      expect(parsed.customTopLevel).toBe(true)
+      expect(parsed.profiles.default.traceRoot).toBe('/manual/traces')
+      expect(parsed.profiles.default.customRoutingRule).toEqual({ keep: true })
+      expect(parsed.profiles.default.textReasoner).toEqual({
+        provider: 'manual-provider',
+        baseUrl: 'https://custom-default.example/v1',
+        apiKeyEnv: 'MANUAL_TEXT_KEY',
+        model: 'custom-default-model'
+      })
     } finally {
       await rm(userDataDir, { recursive: true, force: true })
     }
@@ -424,7 +469,7 @@ describe('buildModelRouterSidecarLaunch', () => {
     }
   })
 
-  it('rewrites the managed config before spawning the sidecar', async () => {
+  it('preserves an existing Model Router config before spawning the sidecar', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-sidecar-config-'))
     const current = settings()
     current.modelRouter!.baseUrl = 'http://127.0.0.1:45990/v1'
@@ -453,10 +498,8 @@ describe('buildModelRouterSidecarLaunch', () => {
 
       const content = await readFile(modelRouterConfigPath(userDataDir), 'utf8')
       const parsed = JSON.parse(content)
-      expect(parsed.publicModelAlias).toBe('sciforge-router')
-      expect(parsed.profiles.default.textReasoner.baseUrl).toBe('http://127.0.0.1:48767/v1')
-      expect(parsed.profiles.default.textReasoner.model).toBe('deepseek-v4-pro')
-      expect(content).toContain('"apiKeyEnv": "SCIFORGE_MODEL_ROUTER_TEXT_API_KEY"')
+      expect(parsed.publicModelAlias).toBe('stale-router')
+      expect(parsed.profiles).toBeUndefined()
       expect(content).not.toContain('provider-secret')
       expect(spawnImpl).toHaveBeenCalledTimes(1)
       child.emit('exit', 0, null)
