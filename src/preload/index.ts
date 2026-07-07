@@ -274,6 +274,10 @@ const api = {
     exportPdf: (payload) => ipcRenderer.invoke('pdfAnnotations:exportPdf', payload),
     import: (payload) => ipcRenderer.invoke('pdfAnnotations:import', payload)
   },
+  pdfReview: {
+    generate: (payload) => ipcRenderer.invoke('pdfReview:generate', payload),
+    improveAnnotation: (payload) => ipcRenderer.invoke('pdfReview:improveAnnotation', payload)
+  },
   visibleContext: {
     publish: (snapshot) => ipcRenderer.invoke('visibleContext:publish', snapshot),
     get: () => ipcRenderer.invoke('visibleContext:get')

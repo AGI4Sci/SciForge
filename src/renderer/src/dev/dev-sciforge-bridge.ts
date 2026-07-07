@@ -283,6 +283,10 @@ function createApi(): SciForgeApi {
       exportPdf: (payload) => invoke('pdfAnnotations:exportPdf', payload),
       import: (payload) => invoke('pdfAnnotations:import', payload)
     },
+    pdfReview: {
+      generate: (payload) => invoke('pdfReview:generate', payload),
+      improveAnnotation: (payload) => invoke('pdfReview:improveAnnotation', payload)
+    },
     visibleContext: {
       publish: (snapshot) => invoke('visibleContext:publish', snapshot),
       get: () => invoke('visibleContext:get')

@@ -92,6 +92,15 @@ vi.mock('../services/pdf-annotation-sidecar-service', () => ({
   }))
 }))
 
+const { pdfReviewServiceMock } = vi.hoisted(() => ({
+  pdfReviewServiceMock: {
+    generatePdfReviewAnnotations: vi.fn(),
+    improvePdfReviewAnnotation: vi.fn()
+  }
+}))
+
+vi.mock('../services/pdf-review-service', () => pdfReviewServiceMock)
+
 const { writeExportServiceMock } = vi.hoisted(() => ({
   writeExportServiceMock: {
     exportWriteDocument: vi.fn(async (payload: { format?: string }) => ({
@@ -365,6 +374,25 @@ describe('registerAppIpcHandlers', () => {
     vi.clearAllMocks()
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
+    pdfReviewServiceMock.generatePdfReviewAnnotations.mockResolvedValue({
+      ok: true,
+      mode: 'auto',
+      sidecar: pdfAnnotationSidecarFixture,
+      path: '/tmp/workspace/.sciforge/pdf-annotations/sha256.json',
+      commentCount: 2,
+      skippedCount: 0,
+      generatedAt: '2026-07-07T01:00:00.000Z'
+    })
+    pdfReviewServiceMock.improvePdfReviewAnnotation.mockResolvedValue({
+      ok: true,
+      sidecar: pdfAnnotationSidecarFixture,
+      path: '/tmp/workspace/.sciforge/pdf-annotations/sha256.json',
+      threadId: 'thread-1',
+      annotationId: 'ann-1',
+      modificationAdvice: 'Clarify the benchmark gap.',
+      revisedContent: 'Revised benchmark gap text.',
+      generatedAt: '2026-07-07T01:05:00.000Z'
+    })
   })
 
   it('registers only canonical remote channel mirror IPC', async () => {
@@ -762,6 +790,59 @@ describe('registerAppIpcHandlers', () => {
       })
     ).rejects.toThrow(/Invalid payload for pdfAnnotations:import/)
     expect(pdfAnnotations.importPdfAnnotationSidecarPackage).not.toHaveBeenCalled()
+  })
+
+  it('routes PDF review generation and improvement IPC through the service', async () => {
+    const pdfReview = await import('../services/pdf-review-service')
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const target = {
+      pdfPath: ' /tmp/workspace/paper.pdf ',
+      workspaceRoot: ' /tmp/workspace '
+    }
+
+    registerAppIpcHandlers(registerOptions())
+
+    await expect(handlers.get('pdfReview:generate')?.({}, {
+      ...target,
+      maxComments: 4,
+      selection: {
+        text: 'selected paragraph',
+        rects: [{ page: 1, x: 0.12, y: 0.24, width: 0.4, height: 0.05 }]
+      }
+    })).resolves.toMatchObject({
+      ok: true,
+      mode: 'auto',
+      commentCount: 2
+    })
+    await expect(handlers.get('pdfReview:improveAnnotation')?.({}, {
+      ...target,
+      sidecar: pdfAnnotationSidecarFixture,
+      threadId: ' thread-1 ',
+      annotationId: ' ann-1 ',
+      userComment: 'Clarify the benchmark gap.'
+    })).resolves.toMatchObject({
+      ok: true,
+      threadId: 'thread-1',
+      annotationId: 'ann-1'
+    })
+
+    expect(pdfReview.generatePdfReviewAnnotations).toHaveBeenCalledWith({
+      pdfPath: '/tmp/workspace/paper.pdf',
+      workspaceRoot: '/tmp/workspace',
+      maxComments: 4,
+      selection: {
+        text: 'selected paragraph',
+        rects: [{ page: 1, x: 0.12, y: 0.24, width: 0.4, height: 0.05 }]
+      }
+    }, settings())
+    expect(pdfReview.improvePdfReviewAnnotation).toHaveBeenCalledWith({
+      pdfPath: '/tmp/workspace/paper.pdf',
+      workspaceRoot: '/tmp/workspace',
+      sidecar: pdfAnnotationSidecarFixture,
+      threadId: 'thread-1',
+      annotationId: 'ann-1',
+      userComment: 'Clarify the benchmark gap.'
+    }, settings())
   })
 
   it('returns an Evidence DAG view URL with a runtime-scoped thread id', async () => {

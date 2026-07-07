@@ -49,13 +49,26 @@ declare module 'pdfjs-dist/build/pdf.mjs' {
 }
 
 declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
-  export type TextContentItem = { str?: string }
+  export type TextContentItem = {
+    str?: string
+    width?: number
+    height?: number
+    transform?: number[]
+    hasEOL?: boolean
+  }
   export type TextContent = {
     items: TextContentItem[]
     styles?: Record<string, unknown>
     lang?: string
   }
+  export type PageViewport = {
+    width: number
+    height: number
+    scale: number
+    rotation: number
+  }
   export type PDFPageProxy = {
+    getViewport: (options: { scale: number; rotation?: number }) => PageViewport
     getTextContent: () => Promise<TextContent>
     cleanup: () => void
   }

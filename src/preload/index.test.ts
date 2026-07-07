@@ -304,6 +304,45 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('pdfAnnotations:import', { ...target, packageBase64: 'ZmFrZS16aXA=' })
   })
 
+  it('exposes PDF review IPC methods through the preload bridge', async () => {
+    const api = exposedApi as {
+      pdfReview: {
+        generate(payload: unknown): Promise<unknown>
+        improveAnnotation(payload: unknown): Promise<unknown>
+      }
+    }
+    const target = { pdfPath: '/tmp/workspace/paper.pdf', workspaceRoot: '/tmp/workspace' }
+    const sidecar = {
+      schemaVersion: 1,
+      version: 0,
+      manifest: {
+        app: 'sciforge.pdf-annotations',
+        schemaVersion: 1,
+        privacy: { explicitOnly: true, chatTranscriptEmbedded: false },
+        contribution: { reviewableJson: true, mergeKey: 'threadId', conflictResolution: 'updatedAt' },
+        createdAt: '2026-06-22T00:00:00.000Z',
+        updatedAt: '2026-06-22T00:00:00.000Z'
+      },
+      pdfFingerprint: { sha256: 'sha256', size: 1 },
+      anchors: [],
+      annotations: [],
+      threads: [],
+      authors: [],
+      updatedAt: '2026-06-22T00:00:00.000Z'
+    }
+
+    await api.pdfReview.generate(target)
+    await api.pdfReview.improveAnnotation({ ...target, sidecar, threadId: 'thread-1', annotationId: 'ann-1' })
+
+    expect(invoke).toHaveBeenCalledWith('pdfReview:generate', target)
+    expect(invoke).toHaveBeenCalledWith('pdfReview:improveAnnotation', {
+      ...target,
+      sidecar,
+      threadId: 'thread-1',
+      annotationId: 'ann-1'
+    })
+  })
+
   it('exposes visible context IPC methods through the preload bridge', async () => {
     const api = exposedApi as {
       visibleContext: {

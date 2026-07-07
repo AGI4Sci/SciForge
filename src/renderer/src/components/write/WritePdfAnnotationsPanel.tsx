@@ -16,13 +16,14 @@ import {
   Hash,
   Languages,
   Layers3,
-  LocateFixed,
   Loader2,
+  LocateFixed,
   MessageSquareText,
   Pencil,
   RefreshCw,
   RotateCcw,
   SendHorizontal,
+  Sparkles,
   StickyNote,
   Trash2,
   Upload,
@@ -76,6 +77,7 @@ export type WritePdfAnnotationsPanelProps = {
   exportingPdf?: boolean
   importingPackage?: boolean
   reloadingSidecar?: boolean
+  improvingThreadId?: string | null
   onSelectThread?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
   onHoverThread?: (threadId: string | null, summary?: PdfAnnotationThreadSummary) => void
   onAnnotationDisplayModeChange?: (mode: WritePdfAnnotationDisplayMode) => void
@@ -89,6 +91,7 @@ export type WritePdfAnnotationsPanelProps = {
     summary: PdfAnnotationThreadSummary,
     options?: { intent?: 'question' | 'translate' }
   ) => void
+  onImproveAnnotation?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
   onExportPackage?: () => void
   onExportPdf?: () => void
   onImportPackage?: () => void
@@ -276,6 +279,7 @@ export function WritePdfAnnotationsPanel({
   exportingPdf = false,
   importingPackage = false,
   reloadingSidecar = false,
+  improvingThreadId = null,
   onSelectThread,
   onHoverThread,
   onAnnotationDisplayModeChange,
@@ -284,6 +288,7 @@ export function WritePdfAnnotationsPanel({
   onDeleteThread,
   onEditAnnotation,
   onAskQuestion,
+  onImproveAnnotation,
   onExportPackage,
   onExportPdf,
   onImportPackage,
@@ -661,6 +666,7 @@ export function WritePdfAnnotationsPanel({
                 dismissedAutoEditThreadId !== summary.thread.id
               const editing = Boolean(firstAnnotationId && (editingAnnotationId === firstAnnotationId || autoEditing))
               const editorBody = editingAnnotationId === firstAnnotationId ? editingBody : firstAnnotation?.body ?? ''
+              const improving = improvingThreadId === summary.thread.id
               return (
                 <li
                   key={summary.thread.id}
@@ -742,6 +748,20 @@ export function WritePdfAnnotationsPanel({
                         title={t('writePdfAnnotationsEdit')}
                       >
                         <Pencil className="h-4 w-4" strokeWidth={1.9} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onImproveAnnotation?.(summary.thread.id, summary)}
+                        disabled={!onImproveAnnotation || !firstAnnotationId || improving}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Improve with SciForge"
+                        title="Improve with SciForge"
+                      >
+                        {improving ? (
+                          <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.9} />
+                        ) : (
+                          <Sparkles className="h-4 w-4" strokeWidth={1.9} />
+                        )}
                       </button>
                       <button
                         type="button"
@@ -947,6 +967,19 @@ export function WritePdfAnnotationsPanel({
                         >
                           <Pencil className="h-3.5 w-3.5" strokeWidth={1.9} />
                           {t('writePdfAnnotationsEdit')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onImproveAnnotation?.(summary.thread.id, summary)}
+                          disabled={!onImproveAnnotation || !firstAnnotationId || improving}
+                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-[11.5px] font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                        >
+                          {improving ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+                          ) : (
+                            <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
+                          )}
+                          Improve with SciForge
                         </button>
                         <button
                           type="button"

@@ -21,12 +21,16 @@ import {
   ExternalLink,
   FileCode2,
   FilePenLine,
+  FileText,
   Eye,
   Loader2,
   MessageSquareText,
   PanelRightClose,
   RefreshCw,
-  Save
+  Save,
+  Sparkles,
+  SquareDashedMousePointer,
+  StickyNote
 } from 'lucide-react'
 import {
   useEffect,
@@ -116,9 +120,13 @@ type BreadcrumbItem = {
 type MarkdownFilePreviewMode = 'source' | 'split' | 'preview'
 type HtmlFilePreviewMode = 'source' | 'preview'
 type TextFileSaveState = 'idle' | 'saving' | 'saved' | 'error'
+type PdfReviewScope = 'document' | 'selection'
 
 const COPY_RESET_MS = 1400
 const PDF_SIDECAR_SAVE_DEBOUNCE_MS = 180
+const PDF_REVIEW_DEFAULT_MAX_COMMENTS = 8
+const PDF_REVIEW_MIN_COMMENTS = 1
+const PDF_REVIEW_MAX_COMMENTS = 50
 const PREVIEW_MIN_SCALE = 0.65
 const PREVIEW_MAX_SCALE = 2.4
 const PREVIEW_SCALE_STEP = 0.1
@@ -213,6 +221,11 @@ function extensionBadge(path: string, language: string): string {
 
 function makeLocalId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function clampPdfReviewMaxComments(value: number): number {
+  if (!Number.isFinite(value)) return PDF_REVIEW_DEFAULT_MAX_COMMENTS
+  return Math.min(PDF_REVIEW_MAX_COMMENTS, Math.max(PDF_REVIEW_MIN_COMMENTS, Math.floor(value)))
 }
 
 function compactInlineText(value = ''): string {
@@ -449,8 +462,13 @@ export function WorkspaceFilePreviewPanel({
   const [pdfSidecarPath, setPdfSidecarPath] = useState<string | null>(null)
   const [pdfAnnotationsOpen, setPdfAnnotationsOpen] = useState(false)
   const [pdfAnnotationPackageAction, setPdfAnnotationPackageAction] = useState<'export' | 'export-pdf' | 'import' | 'reload' | null>(null)
+  const [pdfReviewGenerating, setPdfReviewGenerating] = useState(false)
+  const [pdfReviewScope, setPdfReviewScope] = useState<PdfReviewScope>('document')
+  const [pdfReviewMaxComments, setPdfReviewMaxComments] = useState(PDF_REVIEW_DEFAULT_MAX_COMMENTS)
+  const [pdfReviewSelection, setPdfReviewSelection] = useState<WritePdfSelection | null>(null)
   const [selectedPdfThreadId, setSelectedPdfThreadId] = useState<string | null>(null)
   const [hoveredPdfThreadId, setHoveredPdfThreadId] = useState<string | null>(null)
+  const [pdfReviewImprovingThreadId, setPdfReviewImprovingThreadId] = useState<string | null>(null)
   const [pdfAnnotationDisplayMode, setPdfAnnotationDisplayMode] = useState<WritePdfAnnotationDisplayMode>('current')
   const [pdfJumpToRect, setPdfJumpToRect] = useState<WritePdfSelectionPageRect | null>(null)
   const [pdfNotice, setPdfNotice] = useState<PreviewNotice | null>(null)
@@ -514,6 +532,8 @@ export function WorkspaceFilePreviewPanel({
 
   useEffect(() => {
     setPreviewScale(DEFAULT_PREVIEW_SCALE)
+    setPdfReviewScope('document')
+    setPdfReviewSelection(null)
   }, [previewIdentityPath])
 
   useEffect(() => {
@@ -569,6 +589,10 @@ export function WorkspaceFilePreviewPanel({
   const annotationTargetPath = pdfPath ?? docxPath
   const annotationTargetMtimeMs = pdfMtimeMs ?? docxResult?.mtimeMs ?? null
   const annotationDocumentKind: 'pdf' | 'docx' | null = pdfPath ? 'pdf' : docxPath ? 'docx' : null
+  const pdfReviewHasSelection = Boolean(pdfReviewSelection?.rects?.length)
+  const pdfReviewSelectionLabel = pdfReviewHasSelection
+    ? `${pdfReviewSelection?.charCount ?? pdfReviewSelection?.text.length ?? 0} chars`
+    : 'No selection'
   const textPreviewActive = result?.ok && result.kind === 'text'
   const markdownPreviewActive = textPreviewActive && isMarkdownPreviewPath(result.path)
   const htmlPreviewActive = textPreviewActive && isHtmlPreviewPath(result.path)
@@ -599,6 +623,12 @@ export function WorkspaceFilePreviewPanel({
   const zoomPreviewOut = useCallback((): void => {
     setPreviewScale((value) => nextPreviewScale(value, -1))
   }, [])
+
+  useEffect(() => {
+    if (!pdfReviewHasSelection && pdfReviewScope === 'selection') {
+      setPdfReviewScope('document')
+    }
+  }, [pdfReviewHasSelection, pdfReviewScope])
 
   const handlePreviewZoomWheel = useCallback((event: ReactWheelEvent<HTMLElement>): void => {
     const direction = resolveContentZoomWheel(event)
@@ -1109,6 +1139,12 @@ export function WorkspaceFilePreviewPanel({
     }
   }, [annotationTargetMtimeMs, annotationTargetPath, pdfWorkspaceRoot, previewReloadKey, showPdfNotice, t])
 
+  const rememberPdfReviewSelection = useCallback((pdfSelection: WritePdfSelection): void => {
+    if (pdfSelection.rects?.length) {
+      setPdfReviewSelection(pdfSelection)
+    }
+  }, [])
+
   const addPdfAnnotationFromSelection = useCallback((action: WritePdfAnnotationAction, pdfSelection: WritePdfSelection): void => {
     if (!pdfSidecar) {
       showPdfNotice({ tone: 'error', message: t('writePdfAnnotationSidecarUnavailable') })
@@ -1246,6 +1282,43 @@ export function WorkspaceFilePreviewPanel({
       updatedAt: now
     }))
   }, [updatePdfSidecar])
+
+  const improvePdfAnnotation = useCallback(async (threadId: string, summary: PdfAnnotationThreadSummary): Promise<void> => {
+    if (!pdfPath || !pdfSidecar) return
+    const annotationId = summary.firstAnnotation?.id
+    if (!annotationId) {
+      showPdfNotice({ tone: 'error', message: 'Select an annotation before asking SciForge for improvement advice.' })
+      return
+    }
+    if (typeof window.sciforge?.pdfReview?.improveAnnotation !== 'function') {
+      showPdfNotice({ tone: 'error', message: 'SciForge PDF improvement advice is unavailable in this runtime.' })
+      return
+    }
+
+    setPdfReviewImprovingThreadId(threadId)
+    setPdfNotice(null)
+    try {
+      const improveResult = await window.sciforge.pdfReview.improveAnnotation({
+        pdfPath,
+        workspaceRoot: pdfWorkspaceRoot,
+        sidecar: pdfSidecar,
+        threadId,
+        annotationId
+      })
+      if (!improveResult.ok) {
+        showPdfNotice({ tone: 'error', message: improveResult.message })
+        return
+      }
+      setPdfSidecar(improveResult.sidecar)
+      setPdfAnnotationsOpen(true)
+      setSelectedPdfThreadId(threadId)
+      showPdfNotice({ tone: 'success', message: 'SciForge added improvement advice to the selected PDF comment.' })
+    } catch (error) {
+      showPdfNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setPdfReviewImprovingThreadId(null)
+    }
+  }, [pdfPath, pdfSidecar, pdfWorkspaceRoot, showPdfNotice])
 
   const exportPdfAnnotationPackage = useCallback(async (): Promise<void> => {
     if (!pdfPath || !pdfSidecar || pdfAnnotationPackageAction) return
@@ -1460,6 +1533,63 @@ export function WorkspaceFilePreviewPanel({
     setPdfAnnotationsOpen(true)
   }, [annotationTargetPath])
 
+  const generateSciForgePdfReview = useCallback(async (): Promise<void> => {
+    if (!pdfPath) return
+    if (typeof window.sciforge?.pdfReview?.generate !== 'function') {
+      showPdfNotice({ tone: 'error', message: 'SciForge PDF review generation is unavailable in this runtime.' })
+      return
+    }
+    const maxComments = clampPdfReviewMaxComments(pdfReviewMaxComments)
+    const reviewSelection = pdfReviewScope === 'selection' && pdfReviewSelection?.rects?.length
+      ? {
+          text: pdfReviewSelection.text.trim() || undefined,
+          rects: pdfReviewSelection.rects,
+          pageStart: pdfReviewSelection.pageStart,
+          pageEnd: pdfReviewSelection.pageEnd
+        }
+      : undefined
+    if (pdfReviewScope === 'selection' && !reviewSelection) {
+      showPdfNotice({ tone: 'error', message: 'Select text or a region in the PDF before reviewing a selection.' })
+      return
+    }
+
+    setPdfReviewGenerating(true)
+    setPdfNotice(null)
+    try {
+      const reviewResult = await window.sciforge.pdfReview.generate({
+        pdfPath,
+        workspaceRoot: pdfWorkspaceRoot,
+        maxComments,
+        replaceExisting: pdfReviewScope === 'document',
+        ...(reviewSelection ? { selection: reviewSelection } : {})
+      })
+      if (!reviewResult.ok) {
+        showPdfNotice({ tone: 'error', message: reviewResult.message })
+        return
+      }
+      setPdfSidecar(reviewResult.sidecar)
+      setPdfAnnotationsOpen(true)
+      setPdfAnnotationDisplayMode('all')
+      const firstThread = reviewResult.sidecar.threads.find((thread) => thread.id.startsWith('sciforge-review-thread-'))
+      setSelectedPdfThreadId(firstThread?.id ?? null)
+      const firstAnchorId = firstThread?.anchorIds[0]
+      const firstRect = firstAnchorId
+        ? reviewResult.sidecar.anchors.find((anchor) => anchor.id === firstAnchorId)?.rects[0]
+        : undefined
+      if (firstRect) setPdfJumpToRect({ ...firstRect })
+      showPdfNotice({
+        tone: 'success',
+        message: reviewResult.gifPath
+          ? `SciForge review generated ${reviewResult.commentCount}/${maxComments} PDF comments. GIF: ${fileNameFromPath(reviewResult.gifPath)}`
+          : `SciForge review generated ${reviewResult.commentCount}/${maxComments} PDF comments.`
+      })
+    } catch (error) {
+      showPdfNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setPdfReviewGenerating(false)
+    }
+  }, [pdfPath, pdfReviewMaxComments, pdfReviewScope, pdfReviewSelection, pdfWorkspaceRoot, showPdfNotice])
+
   const openInEditor = (): void => {
     const path = result?.ok ? result.path : target?.path
     if (!path) return
@@ -1622,6 +1752,76 @@ export function WorkspaceFilePreviewPanel({
         ) : null}
       </div>
 
+      {result?.ok && result.kind === 'pdf' ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-ds-border-muted bg-ds-surface-subtle/70 px-3 py-2 text-[12px] text-ds-muted dark:bg-white/[0.035]">
+          <div className="inline-flex h-8 shrink-0 overflow-hidden rounded-md border border-ds-border-muted bg-ds-card">
+            <button
+              type="button"
+              onClick={() => setPdfReviewScope('document')}
+              className={`flex items-center gap-1.5 px-2.5 font-semibold transition ${
+                pdfReviewScope === 'document' ? 'bg-accent/10 text-accent' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+              }`}
+              title="Review full PDF"
+              aria-label="Review full PDF"
+              aria-pressed={pdfReviewScope === 'document'}
+            >
+              <FileText className="h-3.5 w-3.5" strokeWidth={1.9} />
+              <span>Document</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPdfReviewScope('selection')}
+              disabled={!pdfReviewHasSelection}
+              className={`flex items-center gap-1.5 border-l border-ds-border-muted px-2.5 font-semibold transition ${
+                pdfReviewScope === 'selection'
+                  ? 'bg-accent/10 text-accent'
+                  : pdfReviewHasSelection
+                    ? 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                    : 'cursor-not-allowed text-ds-faint'
+              }`}
+              title={pdfReviewHasSelection ? 'Review selected PDF region' : 'Select text or a region in the PDF first'}
+              aria-label={pdfReviewHasSelection ? 'Review selected PDF region' : 'Select text or a region in the PDF first'}
+              aria-pressed={pdfReviewScope === 'selection'}
+            >
+              <SquareDashedMousePointer className="h-3.5 w-3.5" strokeWidth={1.9} />
+              <span>Selection</span>
+            </button>
+          </div>
+          <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-card px-2 font-semibold text-ds-muted">
+            <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.9} />
+            <span>Comments</span>
+            <input
+              type="number"
+              min={PDF_REVIEW_MIN_COMMENTS}
+              max={PDF_REVIEW_MAX_COMMENTS}
+              value={pdfReviewMaxComments}
+              onChange={(event) => setPdfReviewMaxComments(clampPdfReviewMaxComments(Number(event.currentTarget.value)))}
+              onBlur={() => setPdfReviewMaxComments((value) => clampPdfReviewMaxComments(value))}
+              className="h-6 w-12 rounded border border-ds-border-muted bg-transparent px-1 text-center font-mono text-[12px] text-ds-ink outline-none focus:border-accent"
+              aria-label="Maximum PDF review comments"
+            />
+          </label>
+          <span className="min-w-0 flex-1 truncate text-[11px] text-ds-faint">
+            {pdfReviewScope === 'selection' ? pdfReviewSelectionLabel : 'Full PDF'}
+          </span>
+          <button
+            type="button"
+            onClick={() => void generateSciForgePdfReview()}
+            disabled={pdfReviewGenerating || (pdfReviewScope === 'selection' && !pdfReviewHasSelection)}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-3 font-semibold text-accent transition hover:bg-accent/15 disabled:cursor-not-allowed disabled:border-ds-border-muted disabled:bg-ds-surface-subtle disabled:text-ds-faint"
+            title="Generate SciForge PDF review"
+            aria-label="Generate SciForge PDF review"
+          >
+            {pdfReviewGenerating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
+            )}
+            <span>Review</span>
+          </button>
+        </div>
+      ) : null}
+
       <div className="flex min-h-0 flex-1 flex-col">
         {!target ? (
           <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] leading-6 text-ds-muted">
@@ -1658,7 +1858,7 @@ export function WorkspaceFilePreviewPanel({
                 annotationOverlays={visiblePdfAnnotationOverlays}
                 activeAnnotationId={activePdfAnnotationId}
                 jumpToRect={pdfJumpToRect}
-                onSelectionChange={() => undefined}
+                onSelectionChange={rememberPdfReviewSelection}
                 onAnnotationAction={addPdfAnnotationFromSelection}
                 onAnnotationSelect={selectPdfAnnotationOverlay}
                 onOpenAnnotations={openPdfAnnotations}
@@ -1676,6 +1876,7 @@ export function WorkspaceFilePreviewPanel({
                   exportingPdf={pdfAnnotationPackageAction === 'export-pdf'}
                   importingPackage={pdfAnnotationPackageAction === 'import'}
                   reloadingSidecar={pdfAnnotationPackageAction === 'reload'}
+                  improvingThreadId={pdfReviewImprovingThreadId}
                   onAnnotationDisplayModeChange={setPdfAnnotationDisplayMode}
                   onSelectThread={selectPdfAnnotationThread}
                   onHoverThread={(threadId) => setHoveredPdfThreadId(threadId)}
@@ -1687,6 +1888,7 @@ export function WorkspaceFilePreviewPanel({
                     void askPdfAnnotationQuestion(threadId, question, summary, options)
                   }}
                   questionReplies={pdfQuestionReplies}
+                  onImproveAnnotation={(threadId, summary) => void improvePdfAnnotation(threadId, summary)}
                   onExportPackage={() => void exportPdfAnnotationPackage()}
                   onExportPdf={() => void exportPdfAnnotationPdf()}
                   onImportPackage={openPdfAnnotationPackagePicker}

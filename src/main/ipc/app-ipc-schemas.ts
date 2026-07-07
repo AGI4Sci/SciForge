@@ -48,6 +48,10 @@ export {
 export {
   visibleContextSnapshotSchema as visibleContextPublishPayloadSchema
 } from '../../shared/visible-context'
+export {
+  pdfReviewGeneratePayloadSchema,
+  pdfReviewImproveAnnotationPayloadSchema
+} from '../../shared/pdf-review'
 
 const MAX_BODY_BYTES = 2_000_000
 const MAX_PATH_LENGTH = 4_096

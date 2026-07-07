@@ -127,6 +127,7 @@ describe('WritePdfAnnotationsPanel', () => {
       onDeleteThread: vi.fn(),
       onEditAnnotation: vi.fn(),
       onAskQuestion: vi.fn(),
+      onImproveAnnotation: vi.fn(),
       onExportPackage: vi.fn(),
       onExportPdf: vi.fn(),
       onImportPackage: vi.fn(),
@@ -145,6 +146,7 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Why does this measurement change?')
     expect(html).toContain('Translate selection')
     expect(html).toContain('Follow up')
+    expect(html).toContain('Improve with SciForge')
     expect(html).toContain('aria-label="Resize editor"')
     expect(html).toContain('Does temperature matter too?')
     expect(html).toContain('Agent answer')

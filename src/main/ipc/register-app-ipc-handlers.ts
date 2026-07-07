@@ -113,6 +113,8 @@ import {
   pdfAnnotationSidecarLoadPayloadSchema,
   pdfAnnotationSidecarSavePayloadSchema,
   visibleContextPublishPayloadSchema,
+  pdfReviewGeneratePayloadSchema,
+  pdfReviewImproveAnnotationPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
   shellOpenExternalUrlSchema,
@@ -316,6 +318,10 @@ import {
   loadPdfAnnotationSidecar,
   savePdfAnnotationSidecar
 } from '../services/pdf-annotation-sidecar-service'
+import {
+  generatePdfReviewAnnotations,
+  improvePdfReviewAnnotation
+} from '../services/pdf-review-service'
 import { workspaceHtmlPreviewService } from '../services/workspace-html-preview-service'
 import { feedEvidenceDag } from '../runtime/evidence-dag-feed'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
@@ -1253,6 +1259,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('pdfAnnotations:import', async (_, payload: unknown) =>
     importPdfAnnotationSidecarPackage(
       parseIpcPayload('pdfAnnotations:import', pdfAnnotationSidecarImportPayloadSchema, payload)
+    )
+  )
+  handleInvoke('pdfReview:generate', async (_, payload: unknown) =>
+    generatePdfReviewAnnotations(
+      parseIpcPayload('pdfReview:generate', pdfReviewGeneratePayloadSchema, payload),
+      await store.load()
+    )
+  )
+  handleInvoke('pdfReview:improveAnnotation', async (_, payload: unknown) =>
+    improvePdfReviewAnnotation(
+      parseIpcPayload('pdfReview:improveAnnotation', pdfReviewImproveAnnotationPayloadSchema, payload),
+      await store.load()
     )
   )
 

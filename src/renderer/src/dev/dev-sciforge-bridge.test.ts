@@ -181,6 +181,61 @@ describe('dev sciforge browser bridge', () => {
     )
   })
 
+  it('forwards PDF review calls through the dev bridge', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { ok: true, mode: 'auto', commentCount: 2, skippedCount: 0 }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.pdfReview?.generate({ pdfPath: '/tmp/paper.pdf', workspaceRoot: '/tmp' })
+    await window.sciforge.pdfReview?.improveAnnotation({
+      pdfPath: '/tmp/paper.pdf',
+      workspaceRoot: '/tmp',
+      sidecar: {
+        schemaVersion: 1,
+        version: 0,
+        manifest: {
+          app: 'sciforge.pdf-annotations',
+          schemaVersion: 1,
+          privacy: { explicitOnly: true, chatTranscriptEmbedded: false },
+          contribution: { reviewableJson: true, mergeKey: 'threadId', conflictResolution: 'updatedAt' },
+          createdAt: '2026-06-22T00:00:00.000Z',
+          updatedAt: '2026-06-22T00:00:00.000Z'
+        },
+        pdfFingerprint: { sha256: 'sha256', size: 1 },
+        anchors: [],
+        annotations: [],
+        threads: [],
+        authors: [],
+        updatedAt: '2026-06-22T00:00:00.000Z'
+      },
+      threadId: 'thread-1',
+      annotationId: 'ann-1'
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'pdfReview:generate',
+          payload: { pdfPath: '/tmp/paper.pdf', workspaceRoot: '/tmp' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"channel":"pdfReview:improveAnnotation"')
+      })
+    )
+  })
+
   it('forwards workspace HTML preview calls through the dev bridge', async () => {
     installWindow()
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({

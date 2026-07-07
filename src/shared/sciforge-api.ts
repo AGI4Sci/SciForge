@@ -133,6 +133,12 @@ import type {
 } from './pdf-annotations'
 import type { VisibleContextSnapshot } from './visible-context'
 import type {
+  PdfReviewGeneratePayload,
+  PdfReviewGenerateResult,
+  PdfReviewImproveAnnotationPayload,
+  PdfReviewImproveAnnotationResult
+} from './pdf-review'
+import type {
   FigureStyleExtractRequest,
   FigureStyleExtractReferenceRequest,
   FigureStyleExtractReferenceResult,
@@ -853,6 +859,10 @@ export type SciForgeApi = {
     export: (payload: PdfAnnotationSidecarExportPayload) => Promise<PdfAnnotationSidecarExportResult>
     exportPdf: (payload: PdfAnnotationPdfExportPayload) => Promise<PdfAnnotationPdfExportResult>
     import: (payload: PdfAnnotationSidecarImportPayload) => Promise<PdfAnnotationSidecarImportResult>
+  }
+  pdfReview?: {
+    generate: (payload: PdfReviewGeneratePayload) => Promise<PdfReviewGenerateResult>
+    improveAnnotation: (payload: PdfReviewImproveAnnotationPayload) => Promise<PdfReviewImproveAnnotationResult>
   }
   visibleContext: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>

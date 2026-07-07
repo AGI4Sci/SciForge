@@ -32,6 +32,8 @@ import {
   isSafeOpenExternalUrl,
   pdfAnnotationSidecarImportPayloadSchema,
   pdfAnnotationSidecarLoadPayloadSchema,
+  pdfReviewGeneratePayloadSchema,
+  pdfReviewImproveAnnotationPayloadSchema,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
@@ -563,6 +565,81 @@ describe('app-ipc-schemas', () => {
         pdfPath: '/tmp/workspace/paper.pdf',
         packageBase64: 'ZmFrZS16aXA=',
         transcript: 'not allowed'
+      })
+    ).toThrow(/Unrecognized key/)
+  })
+
+  it('accepts PDF review generation and improvement payloads', () => {
+    const sidecar = {
+      schemaVersion: 1,
+      version: 0,
+      manifest: {
+        app: 'sciforge.pdf-annotations',
+        schemaVersion: 1,
+        privacy: { explicitOnly: true, chatTranscriptEmbedded: false },
+        contribution: { reviewableJson: true, mergeKey: 'threadId', conflictResolution: 'updatedAt' },
+        createdAt: '2026-06-22T00:00:00.000Z',
+        updatedAt: '2026-06-22T00:00:00.000Z'
+      },
+      pdfFingerprint: { sha256: 'sha256', size: 1 },
+      anchors: [],
+      annotations: [],
+      threads: [],
+      authors: [],
+      updatedAt: '2026-06-22T00:00:00.000Z'
+    }
+
+    expect(pdfReviewGeneratePayloadSchema.parse({
+      pdfPath: ' /tmp/workspace/paper.pdf ',
+      workspaceRoot: ' /tmp/workspace ',
+      maxComments: 8,
+      selection: {
+        text: ' selected benchmark paragraph ',
+        rects: [{ page: 2, x: 0.1, y: 0.2, width: 0.3, height: 0.04 }],
+        pageStart: 2,
+        pageEnd: 2
+      },
+      replaceExisting: true
+    })).toEqual({
+      pdfPath: '/tmp/workspace/paper.pdf',
+      workspaceRoot: '/tmp/workspace',
+      maxComments: 8,
+      selection: {
+        text: 'selected benchmark paragraph',
+        rects: [{ page: 2, x: 0.1, y: 0.2, width: 0.3, height: 0.04 }],
+        pageStart: 2,
+        pageEnd: 2
+      },
+      replaceExisting: true
+    })
+
+    expect(() =>
+      pdfReviewGeneratePayloadSchema.parse({
+        pdfPath: '/tmp/workspace/paper.pdf',
+        selection: {}
+      })
+    ).toThrow(/PDF review selection/)
+
+    expect(pdfReviewImproveAnnotationPayloadSchema.parse({
+      pdfPath: ' /tmp/workspace/paper.pdf ',
+      workspaceRoot: ' /tmp/workspace ',
+      sidecar,
+      threadId: ' thread-1 ',
+      annotationId: ' ann-1 ',
+      userComment: 'Please make this claim more concrete.'
+    })).toMatchObject({
+      pdfPath: '/tmp/workspace/paper.pdf',
+      workspaceRoot: '/tmp/workspace',
+      threadId: 'thread-1',
+      annotationId: 'ann-1',
+      userComment: 'Please make this claim more concrete.'
+    })
+
+    expect(() =>
+      pdfReviewGeneratePayloadSchema.parse({
+        pdfPath: '/tmp/workspace/paper.pdf',
+        workspaceRoot: '/tmp/workspace',
+        unexpected: true
       })
     ).toThrow(/Unrecognized key/)
   })
