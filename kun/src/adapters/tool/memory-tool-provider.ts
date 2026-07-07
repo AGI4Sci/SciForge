@@ -32,11 +32,12 @@ export function buildMemoryToolProviders(store: MemoryStore | undefined): Capabi
           const content = typeof args.content === 'string' ? args.content.trim() : ''
           if (!content) return { output: { error: 'content is required' }, isError: true }
           const scope = args.scope === 'user' || args.scope === 'project' ? args.scope : 'workspace'
-          const workspace = typeof args.workspace === 'string' ? args.workspace : context.workspace
+          const workspaceOverride = typeof args.workspace === 'string' ? args.workspace : undefined
+          const workspace = workspaceOverride ?? context.workspace
           const project = typeof args.project === 'string'
             ? args.project
             : scope === 'project'
-              ? context.project ?? workspace
+              ? workspaceOverride !== undefined ? workspace : context.project ?? workspace
               : undefined
           return {
             output: {

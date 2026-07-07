@@ -172,7 +172,12 @@ function inScope(record: MemoryRecord, filter: MemoryScopeFilter): boolean {
   if (!matchesTurnContext(record, filter)) return false
   if (record.scope === 'user') return true
   if (record.scope === 'workspace') return Boolean(filter.workspace && record.workspace === filter.workspace)
-  return Boolean(filter.project && record.project === filter.project)
+  return Boolean(
+    filter.workspace &&
+    filter.project &&
+    record.workspace === filter.workspace &&
+    record.project === filter.project
+  )
 }
 
 function matchesTurnContext(record: MemoryRecord, filter: MemoryScopeFilter): boolean {

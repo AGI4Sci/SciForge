@@ -75,6 +75,12 @@ describe('Memory store and recall', () => {
       workspace: '/tmp/ws',
       project: 'project-b'
     })
+    const sameProjectOtherWorkspace = await store.create({
+      content: 'Project pnpm setup',
+      scope: 'project',
+      workspace: '/tmp/other',
+      project: 'project-a'
+    })
     const draft = await store.create({
       content: 'Draft pnpm setup',
       scope: 'project',
@@ -102,8 +108,20 @@ describe('Memory store and recall', () => {
     })).map((item) => item.id)
     expect(idsForProjectA).toEqual(expect.arrayContaining([user.id, workspace.id, projectA.id]))
     expect(idsForProjectA).not.toContain(projectB.id)
+    expect(idsForProjectA).not.toContain(sameProjectOtherWorkspace.id)
     expect(idsForProjectA).not.toContain(draft.id)
     expect(idsForProjectA).not.toContain(refine.id)
+
+    const idsForOtherWorkspaceSameProject = (await store.retrieve({
+      query: 'pnpm setup',
+      workspace: '/tmp/other',
+      project: 'project-a',
+      threadMode: 'agent',
+      taskType: 'agent',
+      limit: 10
+    })).map((item) => item.id)
+    expect(idsForOtherWorkspaceSameProject).toContain(sameProjectOtherWorkspace.id)
+    expect(idsForOtherWorkspaceSameProject).not.toContain(projectA.id)
 
     const idsWithoutProject = (await store.retrieve({
       query: 'pnpm setup',
@@ -288,6 +306,49 @@ describe('Memory store and recall', () => {
         taskType: 'agent'
       })
     ])
+  })
+
+  it('defaults project-scoped memory tool writes to an overridden workspace', async () => {
+    const store = createStore()
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildMemoryToolProviders(store))
+    })
+
+    const result = await host.execute({
+      callId: 'call_1',
+      toolName: 'memory_create',
+      arguments: { content: 'Project memory', scope: 'project', workspace: '/tmp/other' }
+    }, {
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      workspace: '/tmp/ws',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent',
+      approvalPolicy: 'on-request',
+      abortSignal: new AbortController().signal,
+      awaitApproval: async () => 'allow'
+    })
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
+    expect(await store.list({
+      workspace: '/tmp/other',
+      project: '/tmp/other',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })).toEqual([
+      expect.objectContaining({
+        scope: 'project',
+        workspace: '/tmp/other',
+        project: '/tmp/other'
+      })
+    ])
+    expect(await store.list({
+      workspace: '/tmp/other',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })).toEqual([])
   })
 
   it('passes project and task scope into memory retrieval from agent turns', async () => {

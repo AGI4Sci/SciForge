@@ -242,7 +242,12 @@ function inScope(record: AgentRuntimeMemoryRecord, filter: MemoryScopeFilter): b
   if (!matchesTurnContext(record, filter)) return false
   if (record.scope === 'user') return true
   if (record.scope === 'workspace') return Boolean(filter.workspace && sameWorkspace(record.workspace, filter.workspace))
-  return Boolean(filter.project && record.project === filter.project)
+  return Boolean(
+    filter.workspace &&
+    filter.project &&
+    sameWorkspace(record.workspace, filter.workspace) &&
+    record.project === filter.project
+  )
 }
 
 function hasScopeFilter(filter: MemoryScopeFilter): boolean {

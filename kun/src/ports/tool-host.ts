@@ -58,8 +58,9 @@ export type ToolHostContext = {
   project?: string
   /**
    * Thread mode advertised by the GUI. SciForge Runtime restricts plan tools
-   * to `plan` threads plus `planDraft`/`planRefine` turn kinds. The
-   * field is optional for backward compatibility with older call sites.
+   * to `plan` threads plus `draft`/`refine` operations, which map to the
+   * `plan_draft`/`plan_refine` memory task types. The field is optional
+   * for backward compatibility with older call sites.
    */
   threadMode?: MemoryThreadMode
   /** Derived task category used to scope long-term memory recall. */

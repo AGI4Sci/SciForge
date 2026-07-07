@@ -58,6 +58,7 @@ describe('SharedMemoryService', () => {
   it('strictly scopes project and turn-specific memory retrieval', async () => {
     const dataDir = await tempDir()
     const workspace = await tempDir()
+    const otherWorkspace = await tempDir()
     const service = new SharedMemoryService(dataDir)
     const userMemory = await service.create({
       text: 'Global pnpm preference',
@@ -80,6 +81,12 @@ describe('SharedMemoryService', () => {
       workspace,
       project: 'project-b'
     })
+    const sameProjectOtherWorkspace = await service.create({
+      text: 'Other workspace pnpm preference',
+      scope: 'project',
+      workspace: otherWorkspace,
+      project: projectMemory.project!
+    })
 
     const agentIds = (await service.retrieveForTurn({
       workspace,
@@ -91,6 +98,17 @@ describe('SharedMemoryService', () => {
     expect(agentIds).toEqual(expect.arrayContaining([userMemory.id, projectMemory.id]))
     expect(agentIds).not.toContain(planUserMemory.id)
     expect(agentIds).not.toContain(otherProjectMemory.id)
+    expect(agentIds).not.toContain(sameProjectOtherWorkspace.id)
+
+    const otherWorkspaceIds = (await service.retrieveForTurn({
+      workspace: otherWorkspace,
+      project: projectMemory.project!,
+      threadMode: 'agent',
+      taskType: 'agent',
+      prompt: 'pnpm preference'
+    })).map((record) => record.id)
+    expect(otherWorkspaceIds).toContain(sameProjectOtherWorkspace.id)
+    expect(otherWorkspaceIds).not.toContain(projectMemory.id)
 
     const noProjectIds = (await service.retrieveForTurn({
       workspace,
