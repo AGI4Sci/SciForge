@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_DEV_PREVIEW_URL } from '@shared/dev-preview-url'
 import type { ChatBlock } from '../agent/types'
 import {
   extractAutoOpenDevPreviewUrls,
@@ -71,6 +72,19 @@ describe('dev preview detection', () => {
 
     expect(extractDetectedDevPreviewUrls(blocks)).toEqual(['http://localhost:5173/'])
     expect(extractAutoOpenDevPreviewUrls(blocks)).toEqual(['http://localhost:5173/'])
+  })
+
+  it('falls back to the default Vite preview URL when Vite output omits the URL', () => {
+    const blocks: ChatBlock[] = [
+      commandExecutionBlock({
+        command: 'npm run dev',
+        status: 'running',
+        detail: 'VITE v5.4.0  ready in 180 ms\n'
+      })
+    ]
+
+    expect(extractDetectedDevPreviewUrls(blocks)).toEqual([DEFAULT_DEV_PREVIEW_URL])
+    expect(extractAutoOpenDevPreviewUrls(blocks)).toEqual([DEFAULT_DEV_PREVIEW_URL])
   })
 
   it('ignores runtime API URLs even when they are local', () => {

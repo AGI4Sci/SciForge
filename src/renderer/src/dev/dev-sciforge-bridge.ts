@@ -229,6 +229,10 @@ function createApi(): SciForgeApi {
       invoke('sciforge-canvas:export-review-packet', request),
     extractFigureStyle: (request) =>
       invoke('figure-style:extract', request),
+    extractFigureStyleReference: (request) =>
+      invoke('figure-style:extract-reference', request),
+    saveFigureStyleSpec: (request) =>
+      invoke('figure-style:save-spec', request),
     evaluateFigureStyle: (request) =>
       invoke('figure-style:evaluate', request),
     reviewFigureStyle: (request) =>
@@ -293,6 +297,7 @@ function createApi(): SciForgeApi {
       syncProfile: (payload) => invoke('paperRadar:sync-profile', payload),
       listProfiles: () => invoke('paperRadar:profiles:list'),
       saveProfile: (payload) => invoke('paperRadar:profiles:save', payload),
+      review: (payload) => invoke('paperRadar:review', payload),
       search: (payload) => invoke('paperRadar:search', payload),
       rank: (payload) => invoke('paperRadar:rank', payload),
       digest: (payload) => invoke('paperRadar:digest', payload)

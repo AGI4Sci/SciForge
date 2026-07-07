@@ -175,11 +175,11 @@ describe('image generation engine', () => {
     const pngBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
     process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
-    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://localhost:3892'
     process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === 'http://127.0.0.1:3892/v1/images/generations') {
+      if (url === 'http://localhost:3892/v1/images/generations') {
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer router-runtime-key')
         expect(JSON.parse(String(init?.body ?? '{}'))).toMatchObject({ model: 'sciforge-router' })
         return new Response(JSON.stringify({
@@ -210,8 +210,35 @@ describe('image generation engine', () => {
     expect(existsSync(result.outputPath)).toBe(true)
     expect(readFileSync(result.outputPath).toString('base64')).toBe(pngBase64)
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
-      'http://127.0.0.1:3892/v1/images/generations'
+      'http://localhost:3892/v1/images/generations'
     ])
+  })
+
+  it('rejects external Model Router image base URLs before calling fetch', async () => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'https://api.openai.example/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const fetchMock = vi.fn()
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await renderImageGeneration({
+      workspaceRoot,
+      imageId: 'external-router-base-url',
+      recipe: {
+        mode: 'text_to_image',
+        prompt: 'A tiny generated image',
+        size: { width: 512, height: 512 },
+        outputFormat: 'png'
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected render to fail')
+    expect(result.status).toBe('provider_failed')
+    expect(result.message).toMatch(/SCIFORGE_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router/)
+    expect(result.message).not.toContain('router-runtime-key')
+    expect(result.message).not.toContain('api.openai.example')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('asks the image endpoint for unlabeled scientific base images', async () => {

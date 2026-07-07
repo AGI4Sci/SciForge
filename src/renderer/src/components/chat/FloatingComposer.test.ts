@@ -1167,7 +1167,8 @@ describe('FloatingComposer capability controls', () => {
 
     expect(html).toContain('deepseek-v4-pro')
     expect(html).toContain('Ultra')
-    expect(html).toContain('Runtime, model, and reasoning settings')
+    expect(html).toContain('Execution runtime, Model Router, model, and reasoning settings')
+    expect(html).toContain('model chain managed by Model Router')
     expect(html).not.toContain('>Auto<')
     expect(html).not.toContain('<option value=""></option>')
     expect(html).not.toContain('Default (thread)')
@@ -1189,12 +1190,13 @@ describe('FloatingComposer capability controls', () => {
 
     expect(html).toContain('deepseek-v4-flash')
     expect(html).toContain('High')
-    expect(html).toContain('Runtime, model, and reasoning settings')
+    expect(html).toContain('Execution runtime, Model Router, model, and reasoning settings')
+    expect(html).toContain('model chain managed by Model Router')
     expect(html).toContain('aria-haspopup="menu"')
     expect(html).not.toContain('<input')
   })
 
-  it('shows the active runtime as a short lowercase label in the model picker', () => {
+  it('shows the active execution runtime as a short label in the model picker', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerModelPicker, {
         compact: true,
@@ -1210,9 +1212,10 @@ describe('FloatingComposer capability controls', () => {
       })
     )
 
-    expect(html).toContain('claude')
+    expect(html).toContain('Execution: claude')
     expect(html).not.toContain('Claude Code CLI')
-    expect(html).toContain('Runtime, model, and reasoning settings')
+    expect(html).toContain('Execution runtime, Model Router, model, and reasoning settings')
+    expect(html).toContain('model chain managed by Model Router')
   })
 
   it('shows a plan badge in the input toolbar when plan mode is enabled', () => {

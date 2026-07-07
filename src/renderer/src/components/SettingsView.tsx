@@ -126,7 +126,6 @@ export function SettingsView(): ReactElement {
   const [connectPhoneWorkspacePickerError, setConnectPhoneWorkspacePickerError] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [showApiKey, setShowApiKey] = useState(false)
   const [showRuntimeToken, setShowRuntimeToken] = useState(false)
   const [logPath, setLogPath] = useState('')
   const [logDirOpenError, setLogDirOpenError] = useState<string | null>(null)
@@ -771,8 +770,6 @@ export function SettingsView(): ReactElement {
     updateLocalRuntime,
     updateCodex,
     updateClaude,
-    showApiKey,
-    setShowApiKey,
     showRuntimeToken,
     setShowRuntimeToken,
     portError,

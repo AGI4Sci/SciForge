@@ -732,6 +732,7 @@ export type WorkflowWebhookTriggerConfigV1 = {
 export type WorkflowAiAgentConfigV1 = {
   prompt: string
   workspaceRoot: string
+  runtimeId?: AgentRuntimeId
   providerId: string
   model: string
   reasoningEffort: ScheduleReasoningEffort

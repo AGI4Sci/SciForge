@@ -21,26 +21,6 @@ const labels: Record<string, string> = {
   agentRuntimeCodex: 'Codex app-server',
   agentRuntimeClaude: 'Claude Code CLI',
   modelRouter: 'Model Router',
-  modelRouterDesc: 'Routes local runtimes through a managed local endpoint.',
-  modelRouterHealth: 'Health',
-  modelRouterHealthDesc: 'Current local router status.',
-  modelRouterHealthHealthy: 'healthy',
-  modelRouterHealthUnavailable: 'unavailable',
-  modelRouterHealthProviderAuthBlocked: 'provider auth blocked',
-  modelRouterHealthProviderNetwork: 'provider network timeout',
-  modelRouterHealthProviderBadResponse: 'provider bad response',
-  modelRouterHealthProviderError: 'provider error',
-  modelRouterHealthStatic: 'Health check is not connected yet.',
-  modelRouterHealthMissing: 'Router settings are incomplete.',
-  modelRouterBaseUrl: 'Local router base URL',
-  modelRouterBaseUrlDesc: 'Base URL used by local runtimes.',
-  modelRouterAutoStart: 'Auto-start Model Router',
-  modelRouterAutoStartDesc: 'Start the local router when runtimes need it.',
-  modelRouterRuntimeApiKey: 'Runtime API key',
-  modelRouterRuntimeApiKeyDesc: 'Auto-generated local credential used between the app and router.',
-  modelRouterRuntimeApiKeyPlaceholder: 'Local router key',
-  modelRouterPublicModelAlias: 'Public model alias',
-  modelRouterPublicModelAliasDesc: 'Alias exposed to local runtimes.',
   modelRouterConfigFile: 'Model Router config file',
   modelRouterConfigFileDesc: 'Edit provider members, routing rules, and upstream credentials in the local config file.',
   modelRouterOpenConfigFile: 'Open Model Router config file',
@@ -57,12 +37,6 @@ const labels: Record<string, string> = {
   codexProfile: 'Profile',
   codexProfileDesc: 'Profile description',
   codexProfilePlaceholder: 'default',
-  codexModel: 'Model',
-  codexModelDesc: 'Model description',
-  codexModelPlaceholder: 'auto',
-  codexModelProvider: 'Model provider',
-  codexModelProviderDesc: 'Model provider description',
-  codexModelProviderPlaceholder: 'auto',
   codexExtraArgs: 'Extra arguments',
   codexExtraArgsDesc: 'Extra arguments description',
   codexExtraArgsPlaceholder: '--search',
@@ -92,8 +66,6 @@ const labels: Record<string, string> = {
   localRuntimeBinaryPlaceholder: 'Bundled Local Runtime',
   localRuntimeDataDir: 'Data dir',
   localRuntimeDataDirDesc: 'Data dir description',
-  localRuntimeModel: 'Model',
-  localRuntimeModelDesc: 'Model description',
   localRuntimeTokenEconomy: 'Token-saving mode',
   localRuntimeTokenEconomyDesc: 'Token-saving mode description',
   localRuntimeTokenEconomySavings: 'Saved {{tokens}} / {{cost}}',
@@ -330,8 +302,6 @@ function baseCtx(): Record<string, unknown> {
     updateLocalRuntime: noop,
     updateCodex: noop,
     updateActiveAgentRuntime: noop,
-    showApiKey: false,
-    setShowApiKey: noop,
     showRuntimeToken: false,
     setShowRuntimeToken: noop,
     portError: '',
@@ -451,10 +421,9 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).toContain('value="/tmp/codex-home"')
     expect(html).toContain('Profile')
     expect(html).toContain('value="work"')
-    expect(html).toContain('Model')
-    expect(html).toContain('value="gpt-5-codex"')
-    expect(html).toContain('Model provider')
-    expect(html).toContain('value="openai"')
+    expect(html).not.toContain('value="gpt-5-codex"')
+    expect(html).not.toContain('Model provider')
+    expect(html).not.toContain('value="openai"')
     expect(html).toContain('Approval policy')
     expect(html).toContain('Sandbox mode')
     expect(html).toContain('Extra arguments')
@@ -462,7 +431,7 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).toContain('--quiet')
   })
 
-  it('renders Model Router settings with a config file button and no member provider form', () => {
+  it('omits Model Router service settings and member provider forms from Agents', () => {
     const ctx = baseCtx() as Record<string, any>
     const router = defaultModelRouterSettings()
     ctx.form = {
@@ -501,23 +470,16 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
         }
       }
     }
-    ctx.modelRouterHealth = {
-      status: 'provider_auth_blocked',
-      message: 'blocked by member credentials'
-    }
 
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
 
-    expect(html).toContain('Model Router')
-    expect(html).toContain('Local router base URL')
-    expect(html).toContain('value="http://127.0.0.1:3892/v1"')
-    expect(html).toContain('Auto-start Model Router')
-    expect(html).toContain('Runtime API key')
-    expect(html).toContain('Auto-generated local credential used between the app and router.')
-    expect(html).toContain('Public model alias')
-    expect(html).toContain('value="sciforge-router"')
-    expect(html).toContain('Model Router config file')
-    expect(html).toContain('Open Model Router config file')
+    expect(html).not.toContain('Model Router')
+    expect(html).not.toContain('Local router base URL')
+    expect(html).not.toContain('Auto-start Model Router')
+    expect(html).not.toContain('Runtime API key')
+    expect(html).not.toContain('Public model alias')
+    expect(html).not.toContain('Model Router config file')
+    expect(html).not.toContain('Open Model Router config file')
     expect(html).not.toContain('Text member provider')
     expect(html).not.toContain('Vision member provider')
     expect(html).not.toContain('Provider member ID')
@@ -528,8 +490,6 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).not.toContain('Provider description')
     expect(html).not.toContain('value="openai-compatible"')
     expect(html).not.toContain('value="qwen-compatible"')
-    expect(html).toContain('provider auth blocked')
-    expect(html).toContain('blocked by member credentials')
     expect(html).not.toMatch(/direct upstream provider/i)
   })
 
@@ -542,33 +502,6 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).not.toContain('Local Runtime base URL')
     expect(html).not.toContain('Override API key')
     expect(html).not.toContain('Override base URL')
-  })
-
-  it('maps Model Router health statuses into visible labels', () => {
-    const cases = [
-      ['healthy', 'healthy'],
-      ['unavailable', 'unavailable'],
-      ['provider-auth blocked', 'provider auth blocked'],
-      ['provider_network', 'provider network timeout'],
-      ['provider-bad-response', 'provider bad response'],
-      ['provider_error', 'provider error']
-    ] as const
-
-    for (const [status, label] of cases) {
-      const ctx = baseCtx() as Record<string, any>
-      ctx.form = {
-        ...ctx.form,
-        modelRouter: {
-          ...defaultModelRouterSettings(),
-          runtimeApiKey: 'local-runtime-key'
-        }
-      }
-      ctx.modelRouterHealth = { status }
-
-      const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
-
-      expect(html).toContain(label)
-    }
   })
 
   it('labels the bottom permissions section as runtime-specific when Codex is active', () => {

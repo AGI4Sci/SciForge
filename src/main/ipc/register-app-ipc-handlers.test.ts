@@ -92,6 +92,23 @@ vi.mock('../services/pdf-annotation-sidecar-service', () => ({
   }))
 }))
 
+const { writeExportServiceMock } = vi.hoisted(() => ({
+  writeExportServiceMock: {
+    exportWriteDocument: vi.fn(async (payload: { format?: string }) => ({
+      ok: true,
+      path: '/tmp/workspace/report.html',
+      format: payload.format ?? 'html',
+      exportedAt: '2026-07-07T01:00:00.000Z'
+    })),
+    copyWriteDocumentAsRichText: vi.fn(async () => ({
+      ok: true,
+      copiedAt: '2026-07-07T01:00:00.000Z'
+    }))
+  }
+}))
+
+vi.mock('../services/write-export-service', () => writeExportServiceMock)
+
 function settings(): AppSettingsV1 {
   return {
     version: 1,
@@ -182,6 +199,88 @@ function stubEvidenceDagReady(status = 200) {
   return fetchMock
 }
 
+function evidenceDagRiskDigest(highestSeverity: 'blocker' | 'major' | 'minor' | 'info' | 'none') {
+  return {
+    status: highestSeverity === 'none' ? 'clean' : 'risks_found',
+    total_findings: highestSeverity === 'none' ? 0 : 1,
+    counts_by_severity: {
+      blocker: highestSeverity === 'blocker' ? 1 : 0,
+      major: highestSeverity === 'major' ? 1 : 0,
+      minor: highestSeverity === 'minor' ? 1 : 0,
+      info: highestSeverity === 'info' ? 1 : 0
+    },
+    highest_severity: highestSeverity,
+    recommendation: highestSeverity === 'major'
+      ? 'revise_or_accept_risk_before_commit'
+      : highestSeverity === 'blocker'
+        ? 'block_commit_until_resolved'
+        : highestSeverity === 'none'
+          ? 'no_action_needed'
+          : 'continue_with_attention'
+  }
+}
+
+function stubEvidenceDagExportAudit(highestSeverity: 'blocker' | 'major' | 'minor' | 'info' | 'none') {
+  vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
+  vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
+  const fetchMock = vi.fn(async (url: string | URL | Request) => {
+    const href = String(url)
+    if (href.endsWith('/version')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        data: { service: 'evidence-dag-engine' }
+      }), { status: 200 })
+    }
+    if (href.endsWith('/threads/codex%3Athread-1/ingest-trace')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        data: { summary: { node_count: 2 } }
+      }), { status: 200 })
+    }
+    if (href.endsWith('/threads/codex%3Athread-1/audit-runs')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          id: 'audit:write-export',
+          completed_at: new Date().toISOString(),
+          risk_digest: evidenceDagRiskDigest(highestSeverity)
+        }
+      }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function writeExportPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    path: '/tmp/workspace/report.md',
+    workspaceRoot: '/tmp/workspace',
+    format: 'html',
+    content: '# Report',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    ...overrides
+  }
+}
+
+function writeExportAgentRuntime() {
+  return {
+    readThread: vi.fn(async () => ({
+      id: 'thread-1',
+      runtimeId: 'codex',
+      title: 'Report',
+      updatedAt: '2026-07-07T01:00:00.000Z',
+      latestSeq: 2,
+      items: [
+        { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'Draft the report.' },
+        { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'Report content.' }
+      ]
+    }))
+  }
+}
+
 function createPaperRadarServiceMock() {
   return {
     status: vi.fn(async () => ({ ok: true, service: 'sciforge.paper-radar', stats: { papers: 0, arxiv: 0, biorxiv: 0 } })),
@@ -190,10 +289,73 @@ function createPaperRadarServiceMock() {
     syncProfile: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', results: [] } })),
     listProfiles: vi.fn(async () => ({ ok: true, data: { profiles: [] } })),
     saveProfile: vi.fn(async () => ({ ok: true, data: { profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] } } })),
+    review: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', generatedAt: '2026-06-21T00:00:00.000Z', count: 0, papers: [], syncResults: [] } })),
     search: vi.fn(async () => ({ ok: true, data: { papers: [], count: 0 } })),
     rank: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', count: 0, papers: [] } })),
     digest: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', generatedAt: '2026-06-21T00:00:00.000Z', count: 0, papers: [] } })),
     close: vi.fn()
+  }
+}
+
+function figureStyleExtractionFixture() {
+  const spec = {
+    version: 1 as const,
+    source: { path: 'figures/reference.png', type: 'image' as const, figureId: 'Fig. 2A' },
+    canvas: { width: 640, height: 420, aspectRatio: 1.52, background: '#ffffff' },
+    palette: {
+      colors: ['#222222', '#d24b4b'],
+      background: '#ffffff',
+      ink: '#222222',
+      accent: ['#d24b4b'],
+      colorMode: 'limited' as const
+    },
+    typography: { fontFamily: 'Arial', axisSize: 8, labelSize: 9, titleSize: 11, weight: 'regular' as const },
+    layout: {
+      panelGrid: '1x1',
+      panelLabels: 'unknown' as const,
+      margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 },
+      gutter: 'balanced' as const
+    },
+    axes: {
+      spine: 'left-bottom' as const,
+      tickDirection: 'out' as const,
+      grid: true,
+      gridTone: 'light' as const,
+      gridColor: '#e2e2df',
+      gridAlpha: 0.52,
+      gridLineWidth: 0.4
+    },
+    marks: { lineWidth: 1.2, markerSize: 3, errorBarStyle: 'unknown' as const, density: 'balanced' as const },
+    annotations: { significance: 'unknown' as const, legend: 'frameless' as const },
+    export: { formats: ['pdf' as const, 'svg' as const, 'png' as const], dpi: 300, transparent: false },
+    confidence: { overall: 0.72, palette: 0.8, layout: 0.7, axes: 0.75, typography: 0.35 }
+  }
+
+  return {
+    ok: true as const,
+    spec,
+    applyPlan: {
+      styleSpec: spec,
+      plottingWorkflow: {
+        recommendedSkills: ['scientific-visualization'],
+        recommendedLibraries: ['Matplotlib'],
+        nextControlledTool: 'SciForge DataFigure Engine',
+        guardrails: ['Keep generated figures auditable.']
+      },
+      matplotlibHints: {
+        rcParams: { 'axes.grid': true },
+        palette: ['#d24b4b'],
+        layoutNotes: ['Use 1x1 panel layout.']
+      }
+    },
+    diagnostics: {
+      analyzedAt: '2026-07-07T00:00:00.000Z',
+      sampledPixels: 10,
+      foregroundRatio: 0.3,
+      darkPixelRatio: 0.2,
+      chromaRatio: 0.1,
+      warnings: []
+    }
   }
 }
 
@@ -275,6 +437,171 @@ describe('registerAppIpcHandlers', () => {
     expect(getPaperRadarService).toHaveBeenCalledTimes(1)
     expect(paperRadar.search).toHaveBeenCalledWith({ query: 'protein design', topK: 5 })
     expect(result).toEqual({ ok: true, data: { papers: [], count: 0 } })
+  })
+
+  it('routes Paper Radar review through the high-level worker command', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const paperRadar = createPaperRadarServiceMock()
+    const getPaperRadarService = vi.fn(() => paperRadar as never)
+
+    registerAppIpcHandlers(registerOptions({ getPaperRadarService }))
+
+    const input = {
+      profile: {
+        name: ' protein_focus ',
+        keywords: ['protein design'],
+        excludeKeywords: ['review'],
+        arxivCategories: ['q-bio'],
+        biorxivSubjects: ['bioinformatics']
+      },
+      days: 7,
+      topK: 12,
+      maxRecords: 200
+    }
+    const handler = handlers.get('paperRadar:review')
+    const result = await handler?.({}, input)
+
+    expect(getPaperRadarService).toHaveBeenCalledTimes(1)
+    expect(paperRadar.review).toHaveBeenCalledWith({
+      profile: {
+        name: 'protein_focus',
+        keywords: ['protein design'],
+        excludeKeywords: ['review'],
+        arxivCategories: ['q-bio'],
+        biorxivSubjects: ['bioinformatics']
+      },
+      days: 7,
+      topK: 12,
+      maxRecords: 200
+    })
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        profile: 'lab_default',
+        generatedAt: '2026-06-21T00:00:00.000Z',
+        count: 0,
+        papers: [],
+        syncResults: []
+      }
+    })
+  })
+
+  it('routes Figure Style reference extraction through the high-level IPC command', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const extraction = figureStyleExtractionFixture()
+    const croppedImagePath = '/tmp/workspace/.sciforge/scientific-plotting/references/fig-2a.png'
+    const preparedReference = {
+      ok: true as const,
+      status: 'prepared' as const,
+      source: {
+        path: '/tmp/workspace/paper/main.pdf',
+        type: 'pdf' as const,
+        page: 2,
+        width: 1000,
+        height: 800
+      },
+      cropBox: { unit: 'pixel' as const, x: 10, y: 20, width: 700, height: 500 },
+      croppedImagePath,
+      referenceManifestPath: '/tmp/workspace/.sciforge/scientific-plotting/references/fig-2a.reference.json',
+      referenceManifest: {
+        version: 1 as const,
+        tool: 'scientific_plotting_prepare_reference' as const,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        requestHash: 'hash',
+        source: {
+          path: '/tmp/workspace/paper/main.pdf',
+          type: 'pdf' as const,
+          page: 2,
+          width: 1000,
+          height: 800
+        },
+        cropBox: { unit: 'pixel' as const, x: 10, y: 20, width: 700, height: 500 },
+        croppedImagePath,
+        warnings: [],
+        nextWorkflow: {
+          referencePath: croppedImagePath,
+          suggestedProfileTool: 'scientific_plotting_style_profiles' as const,
+          suggestedPlanTool: 'scientific_plotting_plan' as const,
+          suggestedRenderTool: 'scientific_plotting_render' as const,
+          suggestedReviewTool: 'scientific_plotting_review' as const,
+          guardrails: []
+        }
+      },
+      warnings: []
+    }
+    const prepareScientificPlottingReference = vi.fn(async () => preparedReference)
+    const extractFigureStyle = vi.fn(async () => extraction)
+
+    registerAppIpcHandlers(registerOptions({
+      prepareScientificPlottingReference,
+      extractFigureStyle
+    }))
+
+    const result = await handlers.get('figure-style:extract-reference')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper/main.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      dpi: 180,
+      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      figureId: ' Fig. 2A ',
+      notes: ' style only '
+    })
+
+    expect(prepareScientificPlottingReference).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper/main.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      dpi: 180,
+      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      figureId: 'Fig. 2A',
+      extractStyle: true
+    })
+    expect(extractFigureStyle).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: '.sciforge/scientific-plotting/references/fig-2a.png',
+      sourceType: 'image',
+      figureId: 'Fig. 2A',
+      notes: 'style only'
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      sourcePath: '.sciforge/scientific-plotting/references/fig-2a.png',
+      sourceType: 'image',
+      preparedReference,
+      extraction
+    })
+  })
+
+  it('saves Figure Style specs through the dedicated IPC command', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'sciforge-figure-style-')))
+    const extraction = figureStyleExtractionFixture()
+    try {
+      registerAppIpcHandlers(registerOptions())
+
+      const result = await handlers.get('figure-style:save-spec')?.({}, {
+        workspaceRoot,
+        path: ' .sciforge/figure-styles/custom.json ',
+        spec: extraction.spec,
+        applyPlan: extraction.applyPlan,
+        diagnostics: extraction.diagnostics
+      })
+
+      expect(result).toMatchObject({
+        ok: true,
+        path: join(workspaceRoot, '.sciforge/figure-styles/custom.json')
+      })
+      const saved = JSON.parse(readFileSync(join(workspaceRoot, '.sciforge/figure-styles/custom.json'), 'utf8'))
+      expect(saved).toEqual({
+        spec: extraction.spec,
+        applyPlan: extraction.applyPlan,
+        diagnostics: extraction.diagnostics
+      })
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
   })
 
   it('routes Research Cards IPC requests through the service', async () => {
@@ -663,6 +990,118 @@ describe('registerAppIpcHandlers', () => {
       expect.anything()
     )
   })
+
+  it('rejects write export when Evidence DAG audit has blocker findings', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    stubEvidenceDagExportAudit('blocker')
+    const agentRuntime = writeExportAgentRuntime()
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(
+      handlers.get('write:export')?.({}, writeExportPayload())
+    ).rejects.toThrow(/blocker risks/)
+    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
+  })
+
+  it('rejects write export when Evidence DAG audit has major findings without confirmation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    stubEvidenceDagExportAudit('major')
+    const agentRuntime = writeExportAgentRuntime()
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(
+      handlers.get('write:export')?.({}, writeExportPayload())
+    ).rejects.toThrow(/evidenceDagGateOverride/)
+    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
+  })
+
+  it('treats unavailable Evidence DAG audit as missing audit for write export', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const agentRuntime = writeExportAgentRuntime()
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(
+      handlers.get('write:export')?.({}, writeExportPayload())
+    ).rejects.toThrow(/audit is missing/)
+    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
+
+    await expect(
+      handlers.get('write:export')?.({}, writeExportPayload({ evidenceDagGateOverride: true }))
+    ).resolves.toMatchObject({
+      ok: true,
+      evidenceDagGate: {
+        auditState: 'missing',
+        requiresOverride: true,
+        overrideConfirmed: true,
+        advisory: true
+      }
+    })
+    expect(writeExportServiceMock.exportWriteDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows write export when Evidence DAG audit has major findings with confirmation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    stubEvidenceDagExportAudit('major')
+    const agentRuntime = writeExportAgentRuntime()
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(
+      handlers.get('write:export')?.({}, writeExportPayload({ evidenceDagGateOverride: true }))
+    ).resolves.toMatchObject({
+      ok: true,
+      evidenceDagGate: {
+        policy: 'evidence-dag-high-impact-gate',
+        auditState: 'fresh',
+        highestSeverity: 'major',
+        requiresOverride: true,
+        overrideConfirmed: true,
+        advisory: true,
+        runtimeId: 'codex',
+        threadId: 'thread-1'
+      }
+    })
+    expect(writeExportServiceMock.exportWriteDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/tmp/workspace/report.md',
+        format: 'html',
+        content: '# Report'
+      }),
+      { parentWindow: null }
+    )
+    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalledWith(
+      expect.objectContaining({ evidenceDagGateOverride: true }),
+      expect.anything()
+    )
+  })
+
+  it.each(['minor', 'none'] as const)(
+    'allows write export when Evidence DAG audit highest severity is %s',
+    async (highestSeverity) => {
+      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+      stubEvidenceDagExportAudit(highestSeverity)
+      const agentRuntime = writeExportAgentRuntime()
+
+      registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+      await expect(
+        handlers.get('write:export')?.({}, writeExportPayload())
+      ).resolves.toMatchObject({
+        ok: true,
+        evidenceDagGate: {
+          auditState: 'fresh',
+          highestSeverity,
+          requiresOverride: false,
+          overrideConfirmed: false,
+          advisory: highestSeverity !== 'none'
+        }
+      })
+      expect(writeExportServiceMock.exportWriteDocument).toHaveBeenCalled()
+    }
+  )
 
   it('returns a dispatcher for dev browser bridge calls that uses the same handlers', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')

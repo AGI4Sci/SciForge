@@ -2,19 +2,22 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomUUID } from 'node:crypto'
 import { URL } from 'node:url'
 import type {
-  AgentRuntimeId,
   AppSettingsV1,
   ScheduleReasoningEffort,
   ScheduleRunMode,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
   ScheduleTaskFromTextResult,
-  ScheduledTaskV1
+  ScheduledTaskV1,
+  WorkflowRunResult,
+  WorkflowRuntimeStatus
 } from '../shared/app-settings'
 import {
   DEFAULT_SCHEDULE_MODEL,
+  SCHEDULE_WORKFLOW_ID_PREFIX,
   normalizeAgentRuntimeId,
-  normalizeScheduleReasoningEffort
+  normalizeScheduleReasoningEffort,
+  scheduleTaskWorkflowId
 } from '../shared/app-settings'
 import {
   buildScheduledTaskFromDetectedRequest,
@@ -22,20 +25,12 @@ import {
 } from './scheduled-task-detector'
 import { isAuthorizedInternalHttpRequest } from './internal-http-secret'
 import {
-  SCHEDULER_INTERVAL_MS,
-  TASK_RESPONSE_TIMEOUT_MS,
   asString,
-  computeScheduleNextRunAt,
-  hasEnabledScheduledTask,
   internalUrl,
   nestedRecord,
   parseJsonObject,
   readRequestBody,
-  runPromptViaRuntime,
-  summarizeTaskResult,
-  waitForAssistantTextViaRuntime,
   writeJson,
-  type RunPromptOptions,
   type ScheduleRuntimeDeps
 } from './schedule-runtime-helpers'
 
@@ -48,66 +43,47 @@ export function scheduledThreadTitle(title: string): string {
   return suffix ? `${prefix} ${suffix}` : prefix
 }
 
-function withAgentThreadId(
-  current: Partial<Record<AgentRuntimeId, string>> | undefined,
-  runtimeId: AgentRuntimeId,
-  threadId: string
-): Partial<Record<AgentRuntimeId, string>> {
-  const next: Partial<Record<AgentRuntimeId, string>> = { ...(current ?? {}) }
-  const trimmed = threadId.trim()
-  if (trimmed) next[runtimeId] = trimmed
-  else delete next[runtimeId]
-  return next
-}
-
-function withScheduleThreadMapping(
-  task: ScheduledTaskV1,
-  runtimeId: AgentRuntimeId,
-  threadId: string
-): ScheduledTaskV1 {
-  const trimmed = threadId.trim()
-  return {
-    ...task,
-    runtimeId,
-    agentThreadIds: withAgentThreadId(task.agentThreadIds, runtimeId, trimmed)
-  }
+export type ScheduleWorkflowRunner = {
+  runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
+  status: () => Promise<WorkflowRuntimeStatus>
 }
 
 export class ScheduleRuntime {
   private readonly deps: ScheduleRuntimeDeps
-  private scheduler: ReturnType<typeof setInterval> | null = null
+  private readonly workflowRunner?: ScheduleWorkflowRunner
   private server: Server | null = null
   private serverKey = ''
-  private runningTaskIds = new Set<string>()
   private powerSaveBlockerId: number | null = null
 
-  constructor(deps: ScheduleRuntimeDeps) {
+  constructor(deps: ScheduleRuntimeDeps, workflowRunner?: ScheduleWorkflowRunner) {
     this.deps = deps
+    this.workflowRunner = workflowRunner
   }
 
   sync(settings: AppSettingsV1): void {
     this.syncInternalServer(settings)
-    this.startScheduler()
-    this.syncPowerSaveBlocker(settings)
-    void this.ensureNextRuns(settings)
+    this.syncPowerSaveBlocker()
   }
 
   stop(): void {
-    if (this.scheduler) {
-      clearInterval(this.scheduler)
-      this.scheduler = null
-    }
     this.closeInternalServer()
     this.stopPowerSaveBlocker()
   }
 
   async status(): Promise<ScheduleRuntimeStatus> {
     const settings = await this.deps.store.load()
+    const workflowStatus = await this.workflowRunner?.status().catch(() => null)
     return {
       internalServerRunning: this.server !== null,
       internalUrl: internalUrl(settings),
-      runningTaskIds: [...this.runningTaskIds],
-      powerSaveBlockerActive: this.isPowerSaveBlockerActive()
+      runningTaskIds: (workflowStatus?.runningWorkflowIds ?? [])
+        .map((workflowId) =>
+          workflowId.startsWith(SCHEDULE_WORKFLOW_ID_PREFIX)
+            ? workflowId.slice(SCHEDULE_WORKFLOW_ID_PREFIX.length)
+            : ''
+        )
+        .filter(Boolean),
+      powerSaveBlockerActive: Boolean(workflowStatus?.powerSaveBlockerActive)
     }
   }
 
@@ -115,7 +91,15 @@ export class ScheduleRuntime {
     const settings = await this.deps.store.load()
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return { ok: false, message: 'Task not found.' }
-    return this.runTaskInternal(task, false)
+    if (!task.prompt.trim()) return { ok: false, message: 'Task prompt is empty.' }
+    if (!this.workflowRunner) return { ok: false, message: 'Workflow runtime is not initialized.' }
+    const result = await this.workflowRunner.runWorkflow(scheduleTaskWorkflowId(task.id))
+    if (!result.ok) return result
+    return {
+      ok: true,
+      threadId: result.runId,
+      message: result.message || 'Started'
+    }
   }
 
   async createScheduledTaskFromText(
@@ -210,7 +194,6 @@ export class ScheduleRuntime {
       agentThreadIds: {}
     }
     const saved = await this.createTask(task)
-    await this.ensureNextRuns(await this.deps.store.load())
     return saved
   }
 
@@ -247,208 +230,6 @@ export class ScheduleRuntime {
     })
     this.sync(saved)
     return saved.schedule.tasks.every((item) => item.id !== taskId)
-  }
-
-  private startScheduler(): void {
-    if (this.scheduler) return
-    this.scheduler = setInterval(() => {
-      void this.tick()
-    }, SCHEDULER_INTERVAL_MS)
-    this.scheduler.unref?.()
-    void this.tick()
-  }
-
-  private async tick(): Promise<void> {
-    const settings = await this.deps.store.load()
-    if (!settings.schedule.enabled) return
-    await this.ensureNextRuns(settings)
-    const fresh = await this.deps.store.load()
-    const now = Date.now()
-    for (const task of fresh.schedule.tasks) {
-      if (!task.enabled || task.schedule.kind === 'manual') continue
-      if (this.runningTaskIds.has(task.id)) continue
-      const dueAt = Date.parse(task.nextRunAt)
-      if (!Number.isFinite(dueAt) || dueAt > now) continue
-      void this.runTaskInternal(task, true)
-    }
-  }
-
-  private async ensureNextRuns(settings: AppSettingsV1): Promise<void> {
-    if (!settings.schedule.enabled) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    let changed = false
-    const now = new Date()
-    const tasks = settings.schedule.tasks.map((task) => {
-      const wasInterrupted = task.lastStatus === 'running' && !this.runningTaskIds.has(task.id)
-      if (!task.enabled || task.schedule.kind === 'manual' || this.runningTaskIds.has(task.id)) {
-        if (!wasInterrupted) return task
-        changed = true
-        return {
-          ...task,
-          ...(task.schedule.kind === 'at' ? { enabled: false } : {}),
-          nextRunAt: task.schedule.kind === 'at' ? '' : task.nextRunAt,
-          lastStatus: 'error' as const,
-          lastMessage: 'Task was interrupted before completion.',
-          updatedAt: now.toISOString()
-        }
-      }
-      if (task.nextRunAt && !wasInterrupted) return task
-      changed = true
-      return {
-        ...task,
-        nextRunAt: computeScheduleNextRunAt(task, now),
-        ...(wasInterrupted
-          ? {
-              lastStatus: 'error' as const,
-              lastMessage: 'Task was interrupted before completion.',
-              updatedAt: now.toISOString()
-            }
-          : {})
-      }
-    })
-    if (!changed) {
-      this.syncPowerSaveBlocker(settings)
-      return
-    }
-    const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
-    this.syncPowerSaveBlocker(saved)
-  }
-
-  private async updateTask(
-    taskId: string,
-    updater: (task: ScheduledTaskV1, settings: AppSettingsV1) => ScheduledTaskV1
-  ): Promise<AppSettingsV1> {
-    const settings = await this.deps.store.load()
-    const tasks = settings.schedule.tasks.map((task) => task.id === taskId ? updater(task, settings) : task)
-    const saved = await this.deps.store.patch({ schedule: { ...settings.schedule, tasks } })
-    this.syncPowerSaveBlocker(saved)
-    return saved
-  }
-
-  private async runTaskInternal(task: ScheduledTaskV1, scheduled: boolean): Promise<ScheduleRunResult> {
-    if (this.runningTaskIds.has(task.id)) {
-      return { ok: false, message: 'Task is already running.' }
-    }
-    if (scheduled && (!task.enabled || task.schedule.kind === 'manual')) {
-      return { ok: false, message: 'Task is not scheduled.' }
-    }
-    if (!task.prompt.trim()) {
-      return { ok: false, message: 'Task prompt is empty.' }
-    }
-
-    this.runningTaskIds.add(task.id)
-    await this.updateTask(task.id, (current) => ({
-      ...current,
-      lastStatus: 'running',
-      lastMessage: 'Running',
-      nextRunAt: '',
-      updatedAt: new Date().toISOString()
-    }))
-
-    try {
-      const settings = await this.deps.store.load()
-      const runtimeId = normalizeAgentRuntimeId(task.runtimeId)
-      const result = await this.runPrompt(settings, {
-        prompt: task.prompt,
-        title: scheduledThreadTitle(task.title),
-        workspaceRoot: task.workspaceRoot || this.resolveDefaultWorkspaceRoot(settings),
-        model: task.model,
-        reasoningEffort: task.reasoningEffort,
-        mode: task.mode,
-        waitForResult: false,
-        responseTimeoutMs: TASK_RESPONSE_TIMEOUT_MS,
-        runtimeId
-      })
-      if (!result.ok) {
-        const finishedAt = new Date()
-        await this.updateTask(task.id, (current) => ({
-          ...current,
-          ...(current.schedule.kind === 'at' ? { enabled: false } : {}),
-          lastRunAt: finishedAt.toISOString(),
-          nextRunAt: current.schedule.kind === 'at' ? '' : computeScheduleNextRunAt(current, finishedAt),
-          lastStatus: 'error',
-          lastMessage: result.message,
-          updatedAt: finishedAt.toISOString()
-        }))
-        this.runningTaskIds.delete(task.id)
-        return result
-      }
-
-      const startedAt = new Date()
-      await this.updateTask(task.id, (current) => ({
-        ...withScheduleThreadMapping(current, runtimeId, result.threadId),
-        lastRunAt: startedAt.toISOString(),
-        nextRunAt: '',
-        lastStatus: 'running',
-        lastMessage: result.message ?? 'Started',
-        updatedAt: startedAt.toISOString()
-      }))
-      void this.monitorTaskTurn(task.id, result.threadId, result.turnId ?? '', runtimeId)
-      return result
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const finishedAt = new Date()
-      await this.updateTask(task.id, (current) => ({
-        ...current,
-        lastRunAt: finishedAt.toISOString(),
-        nextRunAt: computeScheduleNextRunAt(current, finishedAt),
-        lastStatus: 'error',
-        lastMessage: message,
-        updatedAt: finishedAt.toISOString()
-      }))
-      this.runningTaskIds.delete(task.id)
-      return { ok: false, message }
-    }
-  }
-
-  private async monitorTaskTurn(
-    taskId: string,
-    threadId: string,
-    turnId: string,
-    runtimeId: AgentRuntimeId = 'sciforge'
-  ): Promise<void> {
-    try {
-      const text = await waitForAssistantTextViaRuntime(
-        this.deps,
-        runtimeId,
-        threadId,
-        turnId,
-        TASK_RESPONSE_TIMEOUT_MS
-      )
-      const finishedAt = new Date()
-      await this.updateTask(taskId, (current) => ({
-        ...withScheduleThreadMapping(current, runtimeId, threadId),
-        ...(current.schedule.kind === 'at' ? { enabled: false } : {}),
-        nextRunAt: current.schedule.kind === 'at' ? '' : computeScheduleNextRunAt(current, finishedAt),
-        lastStatus: 'success',
-        lastMessage: summarizeTaskResult(text),
-        updatedAt: finishedAt.toISOString()
-      }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const finishedAt = new Date()
-      await this.updateTask(taskId, (current) => ({
-        ...withScheduleThreadMapping(
-          current,
-          runtimeId,
-          threadId || current.agentThreadIds?.[runtimeId] || ''
-        ),
-        ...(current.schedule.kind === 'at' ? { enabled: false } : {}),
-        nextRunAt: current.schedule.kind === 'at' ? '' : computeScheduleNextRunAt(current, finishedAt),
-        lastStatus: 'error',
-        lastMessage: message,
-        updatedAt: finishedAt.toISOString()
-      }))
-      this.deps.logError('schedule-task', 'Scheduled task failed', { message, taskId, threadId })
-    } finally {
-      this.runningTaskIds.delete(taskId)
-    }
-  }
-
-  private async runPrompt(settings: AppSettingsV1, options: RunPromptOptions): Promise<ScheduleRunResult> {
-    return runPromptViaRuntime(this.deps, settings, options)
   }
 
   private resolveDefaultWorkspaceRoot(settings: AppSettingsV1): string {
@@ -618,19 +399,8 @@ export class ScheduleRuntime {
     }
   }
 
-  private syncPowerSaveBlocker(settings: AppSettingsV1): void {
-    const shouldKeepAwake =
-      settings.schedule.keepAwake &&
-      settings.schedule.enabled &&
-      hasEnabledScheduledTask(settings)
-    if (!shouldKeepAwake) {
-      this.stopPowerSaveBlocker()
-      return
-    }
-    if (this.isPowerSaveBlockerActive()) return
-    const blocker = this.deps.powerSaveBlocker
-    if (!blocker) return
-    this.powerSaveBlockerId = blocker.start('prevent-app-suspension')
+  private syncPowerSaveBlocker(): void {
+    this.stopPowerSaveBlocker()
   }
 
   private stopPowerSaveBlocker(): void {
@@ -646,19 +416,11 @@ export class ScheduleRuntime {
       })
     }
   }
-
-  private isPowerSaveBlockerActive(): boolean {
-    const blocker = this.deps.powerSaveBlocker
-    const id = this.powerSaveBlockerId
-    if (!blocker || id == null) return false
-    try {
-      return blocker.isStarted(id)
-    } catch {
-      return false
-    }
-  }
 }
 
-export function createScheduleRuntime(deps: ScheduleRuntimeDeps): ScheduleRuntime {
-  return new ScheduleRuntime(deps)
+export function createScheduleRuntime(
+  deps: ScheduleRuntimeDeps,
+  workflowRunner?: ScheduleWorkflowRunner
+): ScheduleRuntime {
+  return new ScheduleRuntime(deps, workflowRunner)
 }

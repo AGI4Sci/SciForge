@@ -123,6 +123,17 @@ export type PaperRadarDigestResult = {
   papers: PaperRadarRecord[]
 }
 
+export type PaperRadarReviewInput = {
+  profile: PaperRadarProfile
+  days?: number
+  topK?: number
+  maxRecords?: number
+}
+
+export type PaperRadarReviewResult = PaperRadarDigestResult & {
+  syncResults: PaperRadarSyncResult[]
+}
+
 export type PaperRadarApiResult<T> =
   | { ok: true; data: T; summary?: string }
   | { ok: false; message: string }

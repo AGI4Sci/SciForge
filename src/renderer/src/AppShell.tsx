@@ -14,8 +14,15 @@ const InitialSetupDialog = lazy(() =>
   }))
 )
 
-function RouteFallback(): React.ReactElement {
-  return <div className="h-full bg-ds-main" />
+export function RouteFallback(): React.ReactElement {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-ds-main text-ds-muted">
+      <div className="inline-flex items-center gap-2 rounded-[8px] border border-ds-border-muted bg-ds-card px-3 py-2 text-[12px] font-medium shadow-sm">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden />
+        <span>Restoring workspace...</span>
+      </div>
+    </div>
+  )
 }
 
 export default function AppShell(): React.ReactElement {

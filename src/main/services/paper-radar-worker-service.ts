@@ -17,6 +17,8 @@ import type {
   PaperRadarProfileSyncResult,
   PaperRadarRankInput,
   PaperRadarRankResult,
+  PaperRadarReviewInput,
+  PaperRadarReviewResult,
   PaperRadarSearchInput,
   PaperRadarSearchResult,
   PaperRadarStatus,
@@ -38,6 +40,7 @@ export type PaperRadarWorkerService = {
   syncProfile(input: PaperRadarProfileSyncInput): Promise<PaperRadarApiResult<PaperRadarProfileSyncResult>>
   listProfiles(): Promise<PaperRadarApiResult<PaperRadarProfileListResult>>
   saveProfile(input: PaperRadarProfile): Promise<PaperRadarApiResult<PaperRadarProfileSaveResult>>
+  review(input: PaperRadarReviewInput): Promise<PaperRadarApiResult<PaperRadarReviewResult>>
   search(input: PaperRadarSearchInput): Promise<PaperRadarApiResult<PaperRadarSearchResult>>
   rank(input: PaperRadarRankInput): Promise<PaperRadarApiResult<PaperRadarRankResult>>
   digest(input: PaperRadarDigestInput): Promise<PaperRadarApiResult<PaperRadarDigestResult>>
@@ -135,6 +138,46 @@ class LocalPaperRadarWorkerService implements PaperRadarWorkerService {
     })
   }
 
+  async review(input: PaperRadarReviewInput): Promise<PaperRadarApiResult<PaperRadarReviewResult>> {
+    return apiResult(async () => {
+      const days = input.days ?? 7
+      const saved = this.service.saveProfile({
+        name: input.profile.name,
+        description: input.profile.description,
+        keywords: input.profile.keywords,
+        exclude_keywords: input.profile.excludeKeywords,
+        arxiv_categories: input.profile.arxivCategories,
+        biorxiv_subjects: input.profile.biorxivSubjects,
+        dry_run: false,
+        preview: false,
+        confirmed: true,
+        confirmation_id: 'gui-paper-radar-review-profile-save'
+      })
+      const { from, to } = reviewDateRange(days)
+      const sync = await this.service.syncProfile({
+        profile: saved.profile.name,
+        from,
+        to,
+        max_records: input.maxRecords,
+        dry_run: false,
+        preview: false,
+        confirmed: true,
+        confirmation_id: 'gui-paper-radar-review-sync'
+      })
+      const digest = await this.service.digest({
+        profile: saved.profile.name,
+        keywords: input.profile.keywords,
+        exclude_keywords: input.profile.excludeKeywords,
+        days,
+        top_k: input.topK
+      })
+      return {
+        ...digest,
+        syncResults: sync.preview ? [] : sync.results
+      }
+    })
+  }
+
   async search(input: PaperRadarSearchInput): Promise<PaperRadarApiResult<PaperRadarSearchResult>> {
     return apiResult(async () => this.service.search({
       query: input.query,
@@ -176,6 +219,16 @@ function rankInput(input: PaperRadarRankInput | PaperRadarDigestInput) {
     keywords: input.keywords,
     exclude_keywords: input.excludeKeywords,
     days: input.days
+  }
+}
+
+function reviewDateRange(days = 1): { from: string; to: string } {
+  const today = new Date()
+  const fromDate = new Date(today)
+  fromDate.setDate(today.getDate() - Math.max(1, days))
+  return {
+    from: fromDate.toISOString().slice(0, 10),
+    to: today.toISOString().slice(0, 10)
   }
 }
 

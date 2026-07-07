@@ -11,11 +11,18 @@ import {
   defaultWorkflowSettings,
   defaultWriteSettings,
   mergeScheduleSettings,
+  scheduleTaskWorkflowId,
   type AppSettingsPatch,
   type AppSettingsV1,
-  type ScheduledTaskV1
+  type ScheduledTaskV1,
+  type WorkflowRuntimeStatus
 } from '../shared/app-settings'
-import { ScheduleRuntime, computeScheduleNextRunAt, scheduledThreadTitle } from './schedule-runtime'
+import {
+  ScheduleRuntime,
+  computeScheduleNextRunAt,
+  scheduledThreadTitle,
+  type ScheduleWorkflowRunner
+} from './schedule-runtime'
 import type { ScheduleRuntimeDeps } from './schedule-runtime-helpers'
 
 function makeTask(patch: Partial<ScheduledTaskV1> = {}): ScheduledTaskV1 {
@@ -119,15 +126,25 @@ function unusedAgentRuntime(): ScheduleRuntimeDeps['agentRuntime'] {
 function createRuntime(
   initial: AppSettingsV1,
   forbiddenDirectCall = vi.fn(),
-  agentRuntime: unknown = unusedAgentRuntime()
+  agentRuntime: unknown = unusedAgentRuntime(),
+  workflowRunner: ScheduleWorkflowRunner = {
+    runWorkflow: vi.fn(async () => ({ ok: true as const, runId: 'workflow-run-1', status: 'running' as const, message: 'Started' })),
+    status: vi.fn(async (): Promise<WorkflowRuntimeStatus> => ({
+      runningWorkflowIds: [],
+      nodeStatus: {},
+      nodeResults: {},
+      powerSaveBlockerActive: false,
+      pendingApprovals: []
+    }))
+  }
 ) {
   const store = createStore(initial)
   const runtime = new ScheduleRuntime({
     store: store as never,
     agentRuntime: agentRuntime as ScheduleRuntimeDeps['agentRuntime'],
     logError: vi.fn()
-  })
-  return { runtime, store, forbiddenDirectCall, agentRuntime }
+  }, workflowRunner)
+  return { runtime, store, forbiddenDirectCall, agentRuntime, workflowRunner }
 }
 
 async function findAvailablePort(): Promise<number> {
@@ -228,468 +245,69 @@ describe('ScheduleRuntime', () => {
     expect('tasks' in store.read().remoteChannel).toBe(false)
   })
 
-  it('starts a SciForge thread through agentRuntime with a Schedule title and records running status', async () => {
+  it('delegates manual Schedule runs to the compiled Workflow runtime', async () => {
     const task = makeTask({ reasoningEffort: 'max' })
     const forbiddenDirectCall = vi.fn()
-    const agentRuntime = {
-      startThread: vi.fn(async () => ({
-        id: 'thr_1',
-        runtimeId: 'sciforge',
-        title: '[Scheduled task] Task',
-        updatedAt: '2026-06-02T00:00:00.000Z'
-      })),
-      startTurn: vi.fn(async () => ({ threadId: 'thr_1', turnId: 'turn_1' })),
-      readThread: vi.fn()
-    }
-    const { runtime, store } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
-    ;(runtime as unknown as { monitorTaskTurn: () => void }).monitorTaskTurn = vi.fn()
+    const agentRuntime = unusedAgentRuntime()
+    const { runtime, workflowRunner } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
 
     await expect(runtime.runTask(task.id)).resolves.toMatchObject({
       ok: true,
-      threadId: 'thr_1',
-      turnId: 'turn_1'
+      threadId: 'workflow-run-1',
+      message: 'Started'
     })
 
+    expect(workflowRunner.runWorkflow).toHaveBeenCalledWith(scheduleTaskWorkflowId(task.id))
+    expect(agentRuntime.startThread).not.toHaveBeenCalled()
+    expect(agentRuntime.startTurn).not.toHaveBeenCalled()
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
-    expect(agentRuntime.startThread).toHaveBeenCalledWith({
-      runtimeId: 'sciforge',
-      title: '[Scheduled task] Task',
-      workspace: '/tmp/workspace',
-      model: 'auto',
-      mode: 'agent'
-    })
-    expect(agentRuntime.startTurn).toHaveBeenCalledWith({
-      runtimeId: 'sciforge',
-      threadId: 'thr_1',
-      text: expect.stringContaining('Run the task'),
-      workspace: '/tmp/workspace',
-      mode: 'agent',
-      model: 'auto',
-      reasoningEffort: 'max',
-      governanceProfile: 'remote_guard'
-    })
-    expect(store.read().schedule.tasks[0]).toMatchObject({
-      lastStatus: 'running',
-      lastMessage: 'Started',
-      agentThreadIds: { sciforge: 'thr_1' }
-    })
-    expect(store.read().schedule.tasks[0]).not.toHaveProperty('lastThreadId')
   })
 
-  it('runs Codex scheduled tasks through agentRuntime and saves the Codex thread id', async () => {
-    const task = makeTask({
-      runtimeId: 'codex',
-      agentThreadIds: { sciforge: 'sciforge-thread' }
-    })
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = {
-      startThread: vi.fn(async () => ({
-        id: 'codex-thread',
-        runtimeId: 'codex',
-        title: '[Scheduled task] Task',
-        updatedAt: '2026-06-02T00:00:00.000Z'
-      })),
-      startTurn: vi.fn(async () => ({ threadId: 'codex-thread', turnId: 'codex-turn' })),
-      readThread: vi.fn()
-    }
-    const { runtime, store } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
-    ;(runtime as unknown as { monitorTaskTurn: () => void }).monitorTaskTurn = vi.fn()
-
-    await expect(runtime.runTask(task.id)).resolves.toMatchObject({
-      ok: true,
-      threadId: 'codex-thread',
-      turnId: 'codex-turn'
-    })
-
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-    expect(agentRuntime.startThread).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      workspace: '/tmp/workspace',
-      title: '[Scheduled task] Task',
-      mode: 'agent',
-      model: 'auto'
-    })
-    expect(agentRuntime.startTurn).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      text: expect.stringContaining('Run the task'),
-      workspace: '/tmp/workspace',
-      mode: 'agent',
-      model: 'auto',
-      reasoningEffort: 'medium',
-      governanceProfile: 'remote_guard'
-    })
-    expect(store.read().schedule.tasks[0]).toMatchObject({
-      runtimeId: 'codex',
-      lastStatus: 'running',
-      lastMessage: 'Started',
-      agentThreadIds: {
-        sciforge: 'sciforge-thread',
-        codex: 'codex-thread'
-      }
-    })
-    expect(store.read().schedule.tasks[0]).not.toHaveProperty('lastThreadId')
-  })
-
-  it('runs SciForge scheduled tasks through agentRuntime when the host is available', async () => {
-    const task = makeTask({ runtimeId: 'sciforge' })
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = {
-      startThread: vi.fn(async () => ({
-        id: 'sciforge-host-thread',
-        runtimeId: 'sciforge',
-        title: '[Scheduled task] Task',
-        updatedAt: '2026-06-02T00:00:00.000Z'
-      })),
-      startTurn: vi.fn(async () => ({ threadId: 'sciforge-host-thread', turnId: 'sciforge-host-turn' })),
-      readThread: vi.fn()
-    }
-    const { runtime, store } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
-    ;(runtime as unknown as { monitorTaskTurn: () => void }).monitorTaskTurn = vi.fn()
-
-    await expect(runtime.runTask(task.id)).resolves.toMatchObject({
-      ok: true,
-      threadId: 'sciforge-host-thread',
-      turnId: 'sciforge-host-turn'
-    })
-
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-    expect(agentRuntime.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'sciforge',
-      workspace: '/tmp/workspace',
-      title: '[Scheduled task] Task'
-    }))
-    expect(agentRuntime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'sciforge',
-      threadId: 'sciforge-host-thread',
-      text: expect.stringContaining('Run the task')
-    }))
-    expect(store.read().schedule.tasks[0]).toMatchObject({
-      runtimeId: 'sciforge',
-      lastStatus: 'running',
-      agentThreadIds: {
-        sciforge: 'sciforge-host-thread'
-      }
-    })
-    expect(store.read().schedule.tasks[0]).not.toHaveProperty('lastThreadId')
-  })
-
-  it('records an error when agentRuntime rejects scheduled runs', async () => {
+  it('returns Workflow runtime errors without falling back to direct agent execution', async () => {
     const task = makeTask({ runtimeId: 'sciforge' })
     const forbiddenDirectCall = vi.fn()
     const agentRuntime = unusedAgentRuntime()
-    vi.mocked(agentRuntime.startThread).mockRejectedValue(new Error('AgentRuntimeHost rejected the scheduled run.'))
-    const { runtime, store } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
+    const workflowRunner = {
+      runWorkflow: vi.fn(async () => ({ ok: false as const, message: 'Workflow rejected the scheduled run.' })),
+      status: vi.fn(async (): Promise<WorkflowRuntimeStatus> => ({
+        runningWorkflowIds: [],
+        nodeStatus: {},
+        nodeResults: {},
+        powerSaveBlockerActive: false,
+        pendingApprovals: []
+      }))
+    }
+    const { runtime, store } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime, workflowRunner)
 
     await expect(runtime.runTask(task.id)).resolves.toMatchObject({
       ok: false,
-      message: expect.stringContaining('AgentRuntimeHost rejected the scheduled run')
+      message: 'Workflow rejected the scheduled run.'
     })
 
+    expect(workflowRunner.runWorkflow).toHaveBeenCalledWith(scheduleTaskWorkflowId(task.id))
+    expect(agentRuntime.startThread).not.toHaveBeenCalled()
+    expect(store.read().schedule.tasks[0]).toMatchObject({ lastStatus: 'idle', lastMessage: '' })
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
-    expect(store.read().schedule.tasks[0]).toMatchObject({
-      lastStatus: 'error',
-      lastMessage: expect.stringContaining('AgentRuntimeHost rejected the scheduled run')
-    })
   })
 
-  it('reads assistant text from the agentRuntime thread detail shape', async () => {
+  it('projects schedule-owned Workflow runtime status back to Schedule status', async () => {
     const task = makeTask()
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = {
-      startThread: vi.fn(async () => ({
-        id: 'thr_1',
-        runtimeId: 'sciforge',
-        title: 'demo',
-        updatedAt: '2026-06-02T00:00:00.000Z'
-      })),
-      startTurn: vi.fn(async () => ({ threadId: 'thr_1', turnId: 'turn_1' })),
-      readThread: vi.fn(async () => ({
-        id: 'thr_1',
-        status: 'idle',
-        turns: [
-          {
-            id: 'turn_1',
-            status: 'completed',
-            items: [{ kind: 'assistant_text', text: 'scheduled task completed' }]
-          }
-        ]
+    const workflowRunner = {
+      runWorkflow: vi.fn(async () => ({ ok: true as const, runId: 'run-1', status: 'running' as const, message: 'Started' })),
+      status: vi.fn(async (): Promise<WorkflowRuntimeStatus> => ({
+        runningWorkflowIds: [scheduleTaskWorkflowId(task.id), 'workflow-2'],
+        nodeStatus: {},
+        nodeResults: {},
+        powerSaveBlockerActive: true,
+        pendingApprovals: []
       }))
     }
-    const { runtime } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
+    const { runtime } = createRuntime(settingsWith([task]), vi.fn(), unusedAgentRuntime(), workflowRunner)
 
-    const result = await (runtime as unknown as {
-      runPrompt: (
-        settingsArg: AppSettingsV1,
-        options: {
-          prompt: string
-          title: string
-          workspaceRoot: string
-          model: string
-          reasoningEffort: ScheduledTaskV1['reasoningEffort']
-          mode: ScheduledTaskV1['mode']
-          waitForResult: boolean
-          responseTimeoutMs: number
-        }
-      ) => Promise<{ ok: boolean; text?: string }>
-    }).runPrompt(settingsWith([task]), {
-      prompt: 'hello',
-      title: 'demo',
-      workspaceRoot: '/tmp/workspace',
-      model: 'auto',
-      reasoningEffort: 'medium',
-      mode: 'agent',
-      waitForResult: true,
-      responseTimeoutMs: 2_000
+    await expect(runtime.status()).resolves.toMatchObject({
+      runningTaskIds: [task.id],
+      powerSaveBlockerActive: true
     })
-
-    expect(result).toMatchObject({ ok: true, text: 'scheduled task completed' })
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-    expect(agentRuntime.readThread).toHaveBeenCalledWith({ runtimeId: 'sciforge', threadId: 'thr_1' })
-  })
-
-  it('waits for the current scheduled turn to complete before returning final text', async () => {
-    const task = makeTask()
-    let getCount = 0
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = {
-      startThread: vi.fn(async () => ({
-        id: 'thr_1',
-        runtimeId: 'sciforge',
-        title: 'demo',
-        updatedAt: '2026-06-02T00:00:00.000Z'
-      })),
-      startTurn: vi.fn(async () => ({ threadId: 'thr_1', turnId: 'turn_current' })),
-      readThread: vi.fn(async () => {
-        getCount += 1
-        return getCount === 1
-          ? {
-              id: 'thr_1',
-              status: 'running',
-              turns: [
-                {
-                  id: 'turn_previous',
-                  status: 'completed',
-                  items: [{ kind: 'assistant_text', text: 'previous scheduled reply' }]
-                },
-                {
-                  id: 'turn_current',
-                  status: 'running',
-                  items: [{ kind: 'assistant_text', text: 'intermediate scheduled reply' }]
-                }
-              ]
-            }
-          : {
-              id: 'thr_1',
-              status: 'idle',
-              turns: [
-                {
-                  id: 'turn_previous',
-                  status: 'completed',
-                  items: [{ kind: 'assistant_text', text: 'previous scheduled reply' }]
-                },
-                {
-                  id: 'turn_current',
-                  status: 'completed',
-                  items: [
-                    { kind: 'assistant_text', text: 'intermediate scheduled reply' },
-                    { kind: 'assistant_text', text: 'final scheduled reply' }
-                  ]
-                }
-              ]
-            }
-      })
-    }
-    const { runtime } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
-
-    const result = await (runtime as unknown as {
-      runPrompt: (
-        settingsArg: AppSettingsV1,
-        options: {
-          prompt: string
-          title: string
-          workspaceRoot: string
-          model: string
-          reasoningEffort: ScheduledTaskV1['reasoningEffort']
-          mode: ScheduledTaskV1['mode']
-          waitForResult: boolean
-          responseTimeoutMs: number
-        }
-      ) => Promise<{ ok: boolean; text?: string }>
-    }).runPrompt(settingsWith([task]), {
-      prompt: 'hello',
-      title: 'demo',
-      workspaceRoot: '/tmp/workspace',
-      model: 'auto',
-      reasoningEffort: 'medium',
-      mode: 'agent',
-      waitForResult: true,
-      responseTimeoutMs: 2_500
-    })
-
-    expect(result).toMatchObject({ ok: true, text: 'final scheduled reply' })
-    expect(getCount).toBe(2)
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-  })
-
-  it('does not return historical scheduled text when the current turn fails', async () => {
-    const task = makeTask()
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = {
-      startThread: vi.fn(async () => ({
-        id: 'thr_1',
-        runtimeId: 'sciforge',
-        title: 'demo',
-        updatedAt: '2026-06-02T00:00:00.000Z'
-      })),
-      startTurn: vi.fn(async () => ({ threadId: 'thr_1', turnId: 'turn_current' })),
-      readThread: vi.fn(async () => ({
-        id: 'thr_1',
-        status: 'idle',
-        turns: [
-          {
-            id: 'turn_previous',
-            status: 'completed',
-            items: [{ kind: 'assistant_text', text: 'previous scheduled reply' }]
-          },
-          {
-            id: 'turn_current',
-            status: 'failed',
-            items: []
-          }
-        ]
-      }))
-    }
-    const { runtime } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
-
-    await expect((runtime as unknown as {
-      runPrompt: (
-        settingsArg: AppSettingsV1,
-        options: {
-          prompt: string
-          title: string
-          workspaceRoot: string
-          model: string
-          reasoningEffort: ScheduledTaskV1['reasoningEffort']
-          mode: ScheduledTaskV1['mode']
-          waitForResult: boolean
-          responseTimeoutMs: number
-        }
-      ) => Promise<{ ok: boolean; text?: string }>
-    }).runPrompt(settingsWith([task]), {
-      prompt: 'hello',
-      title: 'demo',
-      workspaceRoot: '/tmp/workspace',
-      model: 'auto',
-      reasoningEffort: 'medium',
-      mode: 'agent',
-      waitForResult: true,
-      responseTimeoutMs: 2_000
-    })).rejects.toThrow('Agent turn failed.')
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-  })
-
-  it('disables one-time tasks after monitored completion', async () => {
-    const task = makeTask({
-      lastStatus: 'running',
-      schedule: {
-        kind: 'at',
-        everyMinutes: 60,
-        timeOfDay: '09:00',
-        atTime: '2099-06-03T09:00:00.000Z'
-      }
-    })
-    const agentRuntime = {
-      startThread: vi.fn(),
-      startTurn: vi.fn(),
-      readThread: vi.fn(async () => ({
-        id: 'thr_1',
-        status: 'idle',
-        turns: [
-          {
-            id: 'turn_1',
-            status: 'completed',
-            items: [{ kind: 'assistant_text', text: 'done' }]
-          }
-        ]
-      }))
-    }
-    const { runtime, store } = createRuntime(settingsWith([task]), vi.fn(), agentRuntime)
-
-    await (runtime as unknown as {
-      monitorTaskTurn: (taskId: string, threadId: string, turnId: string) => Promise<void>
-    }).monitorTaskTurn(task.id, 'thr_1', 'turn_1')
-
-    expect(store.read().schedule.tasks[0]).toMatchObject({
-      enabled: false,
-      nextRunAt: '',
-      lastStatus: 'success',
-      lastMessage: 'done',
-      agentThreadIds: { sciforge: 'thr_1' }
-    })
-    expect(store.read().schedule.tasks[0]).not.toHaveProperty('lastThreadId')
-    expect(agentRuntime.readThread).toHaveBeenCalledWith({ runtimeId: 'sciforge', threadId: 'thr_1' })
-  })
-
-  it('does not auto-run manual tasks during tick', async () => {
-    const task = makeTask({
-      schedule: { kind: 'manual', everyMinutes: 60, timeOfDay: '09:00', atTime: '' },
-      nextRunAt: '2026-06-02T00:00:00.000Z'
-    })
-    const forbiddenDirectCall = vi.fn()
-    const { runtime } = createRuntime(settingsWith([task]), forbiddenDirectCall)
-
-    await (runtime as unknown as { tick: () => Promise<void> }).tick()
-
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-  })
-
-  it('marks interrupted running tasks as errors during next-run recovery', async () => {
-    const task = makeTask({
-      lastStatus: 'running',
-      schedule: { kind: 'interval', everyMinutes: 10, timeOfDay: '09:00', atTime: '' }
-    })
-    const initial = settingsWith([task])
-    const { runtime, store } = createRuntime(initial)
-
-    await (runtime as unknown as {
-      ensureNextRuns: (settings: AppSettingsV1) => Promise<void>
-    }).ensureNextRuns(initial)
-
-    expect(store.read().schedule.tasks[0].lastStatus).toBe('error')
-    expect(store.read().schedule.tasks[0].lastMessage).toBe('Task was interrupted before completion.')
-    expect(Date.parse(store.read().schedule.tasks[0].nextRunAt)).toBeGreaterThan(0)
-  })
-
-  it('uses the power save blocker only for enabled automatic schedules', () => {
-    const started = new Set<number>()
-    const powerSaveBlocker = {
-      start: vi.fn(() => {
-        started.add(1)
-        return 1
-      }),
-      stop: vi.fn((id: number) => {
-        started.delete(id)
-      }),
-      isStarted: vi.fn((id: number) => started.has(id))
-    }
-    const runtime = new ScheduleRuntime({
-      store: createStore(settingsWith()) as never,
-      agentRuntime: unusedAgentRuntime(),
-      logError: vi.fn(),
-      powerSaveBlocker
-    })
-    const scheduled = settingsWith([
-      makeTask({ schedule: { kind: 'daily', everyMinutes: 60, timeOfDay: '09:00', atTime: '' } })
-    ], { keepAwake: true })
-
-    ;(runtime as unknown as { syncPowerSaveBlocker: (settings: AppSettingsV1) => void })
-      .syncPowerSaveBlocker(scheduled)
-    expect(powerSaveBlocker.start).toHaveBeenCalledWith('prevent-app-suspension')
-
-    ;(runtime as unknown as { syncPowerSaveBlocker: (settings: AppSettingsV1) => void })
-      .syncPowerSaveBlocker({ ...scheduled, schedule: { ...scheduled.schedule, keepAwake: false } })
-    expect(powerSaveBlocker.stop).toHaveBeenCalledWith(1)
   })
 
   it('serves status, run, and detect-from-text through the authenticated internal HTTP API', async () => {

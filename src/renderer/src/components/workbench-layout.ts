@@ -78,7 +78,7 @@ export function persistRightPanelMode(mode: RightPanelMode): void {
 }
 
 export function shouldCloseRightPanelOnThreadChange(mode: RightPanelMode): boolean {
-  return mode === 'browser' || mode === 'child-agents'
+  return mode === 'child-agents'
 }
 
 export function fitWorkbenchWidths(

@@ -1,8 +1,20 @@
 import type {
   FigureStyleExtractResult,
-  FigureStyleSimilarityResult,
-  FigureStyleSpec
+  FigureStyleSimilarityResult
 } from '@shared/figure-style'
+import {
+  DEFAULT_FIGURE_STYLE_CROP_BOX_DRAFT,
+  FIGURE_STYLE_IMAGE_SOURCE_EXTENSIONS,
+  buildFigureStyleArtifactPath,
+  extensionFromFigureStylePath as extensionFromPath,
+  figureStyleSpecPayload,
+  fileNameFromFigureStylePath as fileNameFromPath,
+  inferFigureStyleSourceType,
+  normalizeRatioCropBoxDraft,
+  serializeFigureStyleSpecPayload,
+  workspaceRelativeFigurePath,
+  type FigureStyleCropBoxDraft
+} from '@shared/figure-style-actions'
 import type {
   ScientificPlottingPrepareReferenceResult,
   ScientificPlottingStatusResult
@@ -59,71 +71,6 @@ type Props = {
 }
 
 const COPY_RESET_MS = 1400
-const IMAGE_SOURCE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp'])
-
-export type FigureStyleCropBoxDraft = {
-  x: string
-  y: string
-  width: string
-  height: string
-}
-
-export const DEFAULT_FIGURE_STYLE_CROP_BOX_DRAFT: FigureStyleCropBoxDraft = {
-  x: '0',
-  y: '0',
-  width: '1',
-  height: '1'
-}
-
-function fileNameFromPath(path: string): string {
-  return path.split(/[/\\]/).filter(Boolean).pop() ?? path
-}
-
-function normalizePanelPath(path: string): string {
-  return path.trim().replace(/\\/g, '/').replace(/\/+$/g, '')
-}
-
-function extensionFromPath(path: string): string {
-  const name = fileNameFromPath(path)
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? name.slice(dot).toLowerCase() : ''
-}
-
-export function inferFigureStyleSourceType(path: string): 'image' | 'pdf' {
-  return extensionFromPath(path) === '.pdf' ? 'pdf' : 'image'
-}
-
-export function workspaceRelativeFigurePath(filePath: string, workspaceRoot: string): string | null {
-  const normalizedFile = normalizePanelPath(filePath)
-  if (!normalizedFile) return null
-  if (!normalizedFile.startsWith('/') && !/^[A-Za-z]:\//.test(normalizedFile)) return normalizedFile
-
-  const normalizedRoot = normalizePanelPath(workspaceRoot)
-  if (!normalizedRoot) return null
-  const rootWithSlash = `${normalizedRoot}/`
-  const fileForCompare = normalizedFile.toLowerCase()
-  const rootForCompare = rootWithSlash.toLowerCase()
-  if (!fileForCompare.startsWith(rootForCompare)) return null
-  return normalizedFile.slice(rootWithSlash.length)
-}
-
-function safeArtifactSegment(value: string, fallback: string): string {
-  const normalized = value
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 72)
-  return normalized || fallback
-}
-
-export function buildFigureStyleArtifactPath(spec: FigureStyleSpec, now = new Date()): string {
-  const stamp = now.toISOString().replace(/[^0-9A-Za-z]+/g, '').slice(0, 15)
-  const sourceName = safeArtifactSegment(
-    spec.source.figureId || fileNameFromPath(spec.source.path).replace(/\.[^.]+$/g, ''),
-    'reference-style'
-  )
-  return `.sciforge/figure-styles/${stamp}-${sourceName}.json`
-}
 
 function confidenceLabel(value: number): string {
   if (value >= 0.75) return 'high'
@@ -133,32 +80,6 @@ function confidenceLabel(value: number): string {
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`
-}
-
-function clampRatio(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback
-  return Math.min(1, Math.max(0, value))
-}
-
-export function normalizeRatioCropBoxDraft(
-  draft: FigureStyleCropBoxDraft
-): { unit: 'ratio'; x: number; y: number; width: number; height: number } | null {
-  const x = clampRatio(Number(draft.x), 0)
-  const y = clampRatio(Number(draft.y), 0)
-  const maxWidth = Math.max(0.01, 1 - x)
-  const maxHeight = Math.max(0.01, 1 - y)
-  const width = Math.min(maxWidth, Math.max(0.01, Number(draft.width)))
-  const height = Math.min(maxHeight, Math.max(0.01, Number(draft.height)))
-  if (![x, y, width, height].every(Number.isFinite)) return null
-  return { unit: 'ratio', x, y, width, height }
-}
-
-function stylePayload(result: Extract<FigureStyleExtractResult, { ok: true }>): string {
-  return `${JSON.stringify({
-    spec: result.spec,
-    applyPlan: result.applyPlan,
-    diagnostics: result.diagnostics
-  }, null, 2)}\n`
 }
 
 function firstDroppedFile(event: DragEvent): File | null {
@@ -275,16 +196,14 @@ export function FigureStylePanel({
     Boolean(workspaceRoot.trim()) &&
     Boolean(sourcePath.trim()) &&
     !busy &&
-    typeof window.sciforge?.extractFigureStyle === 'function'
+    typeof window.sciforge?.extractFigureStyleReference === 'function'
   const canPrepareReference =
     Boolean(workspaceRoot.trim()) &&
     Boolean(sourcePath.trim()) &&
     !prepareBusy &&
     typeof window.sciforge?.prepareScientificPlottingReference === 'function'
   const pdfCropUnavailable = sourceType === 'pdf' && plottingStatus?.ok && !plottingStatus.referencePreparation.pdfCrop.available
-  const canPrimaryAction = sourceType === 'pdf'
-    ? canPrepareReference && !pdfCropUnavailable && typeof window.sciforge?.extractFigureStyle === 'function'
-    : canExtract
+  const canPrimaryAction = canExtract && (sourceType !== 'pdf' || (!prepareBusy && !pdfCropUnavailable))
   const canExport = Boolean(okResult) && !busy
   const canEvaluate =
     Boolean(okResult) &&
@@ -309,7 +228,7 @@ export function FigureStylePanel({
       return
     }
     const ext = extensionFromPath(relativePath)
-    if (ext !== '.pdf' && !IMAGE_SOURCE_EXTENSIONS.has(ext)) {
+    if (ext !== '.pdf' && !FIGURE_STYLE_IMAGE_SOURCE_EXTENSIONS.has(ext)) {
       setMessage(t('figureStyleUnsupportedReference'))
       return
     }
@@ -341,7 +260,7 @@ export function FigureStylePanel({
       return
     }
     const ext = extensionFromPath(relativePath)
-    if (!IMAGE_SOURCE_EXTENSIONS.has(ext)) {
+    if (!FIGURE_STYLE_IMAGE_SOURCE_EXTENSIONS.has(ext)) {
       setMessage(t('figureStyleUnsupportedOutput'))
       return
     }
@@ -409,10 +328,10 @@ export function FigureStylePanel({
     const page = Math.max(1, Math.trunc(Number(pdfPage) || 1))
     const dpi = Math.min(600, Math.max(72, Math.trunc(Number(referenceDpi) || 160)))
     setPrepareBusy(true)
-    setBusy(true)
     setMessage('')
     setSavedPath('')
     setScoreResult(null)
+    setResult(null)
     try {
       const prepared = await window.sciforge.prepareScientificPlottingReference({
         workspaceRoot,
@@ -438,30 +357,16 @@ export function FigureStylePanel({
       }
       setSourcePath(relativeCrop)
       setSourceType('image')
-      const extracted = await window.sciforge.extractFigureStyle({
-        workspaceRoot,
-        sourcePath: relativeCrop,
-        sourceType: 'image',
-        ...(figureId.trim() ? { figureId: figureId.trim() } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {})
-      })
-      setResult(extracted)
-      if (!extracted.ok) setMessage(extracted.message)
     } catch (error) {
       setPreparedReference(null)
       setResult(null)
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
       setPrepareBusy(false)
-      setBusy(false)
     }
   }
 
   const extract = async (): Promise<void> => {
-    if (sourceType === 'pdf') {
-      await prepareReference()
-      return
-    }
     if (!sourcePath.trim()) {
       setMessage(t('figureStyleSourceRequired'))
       return
@@ -470,28 +375,58 @@ export function FigureStylePanel({
       setMessage(t('figureStyleWorkspaceRequired'))
       return
     }
-    if (typeof window.sciforge?.extractFigureStyle !== 'function') {
+    if (typeof window.sciforge?.extractFigureStyleReference !== 'function') {
       setMessage(t('figureStyleUnavailable'))
       return
     }
+    const trimmedSourcePath = sourcePath.trim()
+    const trimmedFigureId = figureId.trim()
+    const trimmedNotes = notes.trim()
+    const pdfCropBox = sourceType === 'pdf' ? normalizeRatioCropBoxDraft(cropBoxDraft) : undefined
+    if (sourceType === 'pdf' && !pdfCropBox) {
+      setMessage(t('figureStyleCropInvalid'))
+      return
+    }
+    const page = Math.max(1, Math.trunc(Number(pdfPage) || 1))
+    const dpi = Math.min(600, Math.max(72, Math.trunc(Number(referenceDpi) || 160)))
     setBusy(true)
+    if (sourceType === 'pdf') setPrepareBusy(true)
     setMessage('')
     setSavedPath('')
     setScoreResult(null)
     try {
-      const next = await window.sciforge.extractFigureStyle({
-        workspaceRoot,
-        sourcePath: sourcePath.trim(),
-        sourceType,
-        ...(figureId.trim() ? { figureId: figureId.trim() } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {})
-      })
-      setResult(next)
-      if (!next.ok) setMessage(next.message)
+      const next = sourceType === 'pdf'
+        ? await window.sciforge.extractFigureStyleReference({
+            workspaceRoot,
+            sourcePath: trimmedSourcePath,
+            sourceType: 'pdf',
+            page,
+            dpi,
+            cropBox: pdfCropBox ?? undefined,
+            ...(trimmedFigureId ? { figureId: trimmedFigureId } : {}),
+            ...(trimmedNotes ? { notes: trimmedNotes } : {})
+          })
+        : await window.sciforge.extractFigureStyleReference({
+            workspaceRoot,
+            sourcePath: trimmedSourcePath,
+            sourceType: 'image',
+            ...(trimmedFigureId ? { figureId: trimmedFigureId } : {}),
+            ...(trimmedNotes ? { notes: trimmedNotes } : {})
+          })
+      setPreparedReference(next.preparedReference ?? null)
+      if (!next.ok) {
+        setResult(next.extraction ?? null)
+        setMessage(next.message)
+        return
+      }
+      setSourcePath(next.sourcePath)
+      setSourceType(next.sourceType)
+      setResult(next.extraction)
     } catch (error) {
       setResult(null)
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
+      setPrepareBusy(false)
       setBusy(false)
     }
   }
@@ -499,7 +434,7 @@ export function FigureStylePanel({
   const copySpec = async (): Promise<void> => {
     if (!okResult || !navigator?.clipboard?.writeText) return
     try {
-      await navigator.clipboard.writeText(stylePayload(okResult))
+      await navigator.clipboard.writeText(serializeFigureStyleSpecPayload(figureStyleSpecPayload(okResult)))
       setCopied(true)
       if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
       copyResetRef.current = window.setTimeout(() => setCopied(false), COPY_RESET_MS)
@@ -510,7 +445,7 @@ export function FigureStylePanel({
 
   const saveSpec = async (): Promise<void> => {
     if (!okResult) return
-    if (typeof window.sciforge?.writeWorkspaceFile !== 'function') {
+    if (typeof window.sciforge?.saveFigureStyleSpec !== 'function') {
       setMessage(t('figureStyleSaveUnavailable'))
       return
     }
@@ -518,10 +453,10 @@ export function FigureStylePanel({
     setMessage('')
     try {
       const path = buildFigureStyleArtifactPath(okResult.spec)
-      const saved = await window.sciforge.writeWorkspaceFile({
+      const saved = await window.sciforge.saveFigureStyleSpec({
         workspaceRoot,
         path,
-        content: stylePayload(okResult)
+        ...figureStyleSpecPayload(okResult)
       })
       if (!saved.ok) {
         setMessage(saved.message)

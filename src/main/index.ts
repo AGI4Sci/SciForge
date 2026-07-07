@@ -1634,13 +1634,6 @@ app.whenReady().then(async () => {
   })
   runtimeIdleListThreads = (input) => agentRuntimeHost.listThreads(input)
 
-  scheduleRuntime = createScheduleRuntime({
-    store,
-    agentRuntime: agentRuntimeHost,
-    logError,
-    powerSaveBlocker
-  })
-  scheduleRuntime.sync(initial)
   workflowRuntime = createWorkflowRuntime({
     store,
     agentRuntime: agentRuntimeHost,
@@ -1648,6 +1641,25 @@ app.whenReady().then(async () => {
     powerSaveBlocker
   })
   workflowRuntime.sync(initial)
+  scheduleRuntime = createScheduleRuntime({
+    store,
+    agentRuntime: agentRuntimeHost,
+    logError,
+    powerSaveBlocker
+  }, {
+    runWorkflow: (workflowId, input) => {
+      if (!workflowRuntime) return Promise.resolve({ ok: false as const, message: 'Workflow runtime is not initialized.' })
+      return workflowRuntime.runWorkflow(workflowId, input)
+    },
+    status: () => workflowRuntime?.status() ?? Promise.resolve({
+      runningWorkflowIds: [],
+      nodeStatus: {},
+      nodeResults: {},
+      powerSaveBlockerActive: false,
+      pendingApprovals: []
+    })
+  })
+  scheduleRuntime.sync(initial)
   discordBotRuntime = createDiscordBotRuntime({
     store,
     userDataPath: app.getPath('userData'),

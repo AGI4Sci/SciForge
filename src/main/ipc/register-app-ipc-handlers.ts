@@ -1,7 +1,7 @@
 import { app, dialog, ipcMain, shell, type BrowserWindow, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import {
@@ -71,8 +71,10 @@ import {
   projectDagExportPayloadSchema,
   defaultPathSchema,
   figureStyleEvaluatePayloadSchema,
+  figureStyleExtractReferencePayloadSchema,
   figureStyleReviewPayloadSchema,
   figureStyleExtractPayloadSchema,
+  figureStyleSaveSpecPayloadSchema,
   pptMasterMcpConfigPayloadSchema,
   sciforgeCanvasImportRecentArtifactsPayloadSchema,
   sciforgeCanvasInsertArtifactPayloadSchema,
@@ -97,6 +99,7 @@ import {
   paperRadarProfilePayloadSchema,
   paperRadarProfileSyncPayloadSchema,
   paperRadarRankPayloadSchema,
+  paperRadarReviewPayloadSchema,
   paperRadarSearchPayloadSchema,
   researchCardArchivePayloadSchema,
   researchCardCreatePayloadSchema,
@@ -188,12 +191,20 @@ import {
 } from '../../../packages/workers/scientific-plotting/src/figure-style-extractor'
 import type {
   FigureStyleExtractRequest,
+  FigureStyleExtractReferenceRequest,
+  FigureStyleExtractReferenceResult,
   FigureStyleExtractResult,
   FigureStyleReviewRequest,
   FigureStyleReviewResult,
+  FigureStyleSaveSpecRequest,
+  FigureStyleSaveSpecResult,
   FigureStyleSimilarityRequest,
   FigureStyleSimilarityResult
 } from '../../shared/figure-style'
+import {
+  buildFigureStyleArtifactPath,
+  serializeFigureStyleSpecPayload
+} from '../../shared/figure-style-actions'
 import type {
   ScientificPlottingPrepareReferenceRequest,
   ScientificPlottingPrepareReferenceResult,
@@ -234,6 +245,10 @@ import type {
   SpeechTranscriptionRequest,
   SpeechTranscriptionResult
 } from '../../shared/speech-to-text'
+import {
+  evaluateEvidenceDagHighImpactGate,
+  type EvidenceDagGateMetadata
+} from '../../shared/evidence-dag-gate'
 import type { PaperRadarApiResult } from '../../shared/paper-radar'
 import type { ResearchCardService } from '../services/research-card-service'
 import type {
@@ -416,6 +431,10 @@ type RegisterAppIpcHandlersOptions = {
   extractFigureStyle?: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
   evaluateFigureStyle?: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
   reviewFigureStyle?: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>
+  extractFigureStyleReference?: (
+    request: FigureStyleExtractReferenceRequest
+  ) => Promise<FigureStyleExtractReferenceResult>
+  saveFigureStyleSpec?: (request: FigureStyleSaveSpecRequest) => Promise<FigureStyleSaveSpecResult>
   logError: (category: string, message: string, detail?: unknown) => void
   ensureEvidenceDagReady?: () => Promise<void>
   ensureProjectDagReady?: () => Promise<void>
@@ -430,6 +449,25 @@ function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unkn
   if (parsed.success) return parsed.data
   const issue = parsed.error.issues[0]
   throw new Error(`Invalid payload for ${channel}: ${issue?.message ?? 'Bad request.'}`)
+}
+
+function inferFigureStyleReferenceSourceType(
+  sourcePath: string,
+  explicit?: FigureStyleExtractReferenceRequest['sourceType']
+): 'image' | 'pdf' {
+  if (explicit) return explicit
+  return sourcePath.trim().toLowerCase().endsWith('.pdf') ? 'pdf' : 'image'
+}
+
+function workspaceRelativePathForIpc(path: string, workspaceRoot: string): string | null {
+  const trimmedPath = path.trim()
+  if (!trimmedPath) return null
+  if (!isAbsolute(trimmedPath) && !/^[A-Za-z]:[\\/]/.test(trimmedPath)) {
+    return trimmedPath.replace(/\\/g, '/')
+  }
+  const relativePath = relative(workspaceRoot, trimmedPath)
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) return null
+  return relativePath.replace(/\\/g, '/')
 }
 
 const EVIDENCE_DAG_VIEW_HEALTH_TIMEOUT_MS = 1500
@@ -515,6 +553,110 @@ async function requestEvidenceDagJson(
 function evidenceDagBackfillItems(detail: AgentRuntimeThreadDetail): AgentRuntimeItem[] {
   if (detail.items?.length) return [...detail.items]
   return (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
+}
+
+type WriteExportIpcPayload = z.infer<typeof writeExportPayloadSchema>
+
+type EvidenceDagAuditForGate = {
+  riskDigest?: unknown
+  auditCompletedAt?: string
+  auditUnavailableReason?: string
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function optionalStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function evidenceDagAuditRunForGate(audit: unknown): EvidenceDagAuditForGate {
+  const record = objectRecord(audit)
+  if (!record) {
+    return { auditUnavailableReason: 'Evidence DAG audit response was empty.' }
+  }
+  const riskDigest = record.risk_digest ?? record.riskDigest
+  if (!riskDigest) {
+    return { auditUnavailableReason: 'Evidence DAG audit response did not include risk_digest.' }
+  }
+  return {
+    riskDigest,
+    auditCompletedAt:
+      optionalStringField(record, 'completed_at') ??
+      optionalStringField(record, 'completedAt')
+  }
+}
+
+async function collectWriteExportEvidenceDagAudit(
+  input: WriteExportIpcPayload,
+  options: {
+    agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
+    ensureEvidenceDagReady?: RegisterAppIpcHandlersOptions['ensureEvidenceDagReady']
+  }
+): Promise<EvidenceDagAuditForGate> {
+  const runtimeId = input.runtimeId
+  const threadId = input.threadId?.trim()
+  if (!runtimeId || !threadId) {
+    return { auditUnavailableReason: 'write:export did not include runtimeId and threadId.' }
+  }
+  if (!options.agentRuntime) {
+    return { auditUnavailableReason: 'Agent runtime is required to build the current thread Evidence DAG.' }
+  }
+
+  try {
+    await options.ensureEvidenceDagReady?.()
+    const config = evidenceDagViewConfig(process.env)
+    await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
+    const detail = await options.agentRuntime.readThread({ runtimeId, threadId })
+    await feedEvidenceDag({
+      runtimeId,
+      threadId,
+      items: evidenceDagBackfillItems(detail),
+      failOpen: false
+    })
+    const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
+    const audit = await requestEvidenceDagJson(
+      config.serviceUrl,
+      config.apiKey,
+      `/threads/${encodeURIComponent(engineThreadId)}/audit-runs`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          trigger: 'write:export',
+          threshold: 0.7
+        })
+      }
+    )
+    return evidenceDagAuditRunForGate(audit)
+  } catch (error) {
+    return {
+      auditUnavailableReason: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+function withWriteExportEvidenceDagContext(
+  metadata: EvidenceDagGateMetadata,
+  input: WriteExportIpcPayload
+): EvidenceDagGateMetadata & { runtimeId?: AgentRuntimeId; threadId?: string } {
+  return {
+    ...metadata,
+    ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
+    ...(input.threadId ? { threadId: input.threadId } : {})
+  }
+}
+
+function writeExportServicePayload(input: WriteExportIpcPayload) {
+  return {
+    path: input.path,
+    workspaceRoot: input.workspaceRoot,
+    format: input.format,
+    content: input.content
+  }
 }
 
 const PROJECT_DAG_GOAL_TIMEOUT_MS = 5_000
@@ -693,6 +835,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     extractFigureStyle: extractFigureStyleHandler = extractFigureStyle,
     evaluateFigureStyle: evaluateFigureStyleHandler = evaluateFigureStyleSimilarity,
     reviewFigureStyle: reviewFigureStyleHandler = reviewFigureStyleOutput,
+    extractFigureStyleReference: extractFigureStyleReferenceOverride,
+    saveFigureStyleSpec: saveFigureStyleSpecOverride,
     logError,
     ensureEvidenceDagReady,
     ensureProjectDagReady,
@@ -714,6 +858,106 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (!handler) throw new Error(`Unknown app bridge channel: ${channel}`)
     return handler({ sender }, payload)
   }
+
+  const defaultExtractFigureStyleReference = async (
+    request: FigureStyleExtractReferenceRequest
+  ): Promise<FigureStyleExtractReferenceResult> => {
+    const sourceType = inferFigureStyleReferenceSourceType(request.sourcePath, request.sourceType)
+    if (sourceType === 'pdf') {
+      const preparedReference = await prepareScientificPlottingReferenceHandler({
+        workspaceRoot: request.workspaceRoot,
+        sourcePath: request.sourcePath,
+        sourceType: 'pdf',
+        ...(request.page ? { page: request.page } : {}),
+        ...(request.cropBox ? { cropBox: request.cropBox } : {}),
+        ...(request.figureId?.trim() ? { figureId: request.figureId.trim() } : {}),
+        ...(request.outputDir?.trim() ? { outputDir: request.outputDir.trim() } : {}),
+        ...(request.dpi ? { dpi: request.dpi } : {}),
+        extractStyle: true
+      })
+      if (!preparedReference.ok) {
+        return {
+          ok: false,
+          message: preparedReference.message,
+          sourceType,
+          preparedReference
+        }
+      }
+
+      const sourcePath = workspaceRelativePathForIpc(preparedReference.croppedImagePath, request.workspaceRoot)
+      if (!sourcePath) {
+        return {
+          ok: false,
+          message: 'Prepared figure style reference path is outside the workspace.',
+          sourceType,
+          preparedReference
+        }
+      }
+      const extraction = await extractFigureStyleHandler({
+        workspaceRoot: request.workspaceRoot,
+        sourcePath,
+        sourceType: 'image',
+        ...(request.figureId?.trim() ? { figureId: request.figureId.trim() } : {}),
+        ...(request.notes?.trim() ? { notes: request.notes.trim() } : {})
+      })
+      if (!extraction.ok) {
+        return {
+          ok: false,
+          message: extraction.message,
+          sourcePath,
+          sourceType: 'image',
+          preparedReference,
+          extraction
+        }
+      }
+      return {
+        ok: true,
+        sourcePath,
+        sourceType: 'image',
+        preparedReference,
+        extraction
+      }
+    }
+
+    const extraction = await extractFigureStyleHandler({
+      workspaceRoot: request.workspaceRoot,
+      sourcePath: request.sourcePath,
+      sourceType: 'image',
+      ...(request.figureId?.trim() ? { figureId: request.figureId.trim() } : {}),
+      ...(request.notes?.trim() ? { notes: request.notes.trim() } : {})
+    })
+    if (!extraction.ok) {
+      return {
+        ok: false,
+        message: extraction.message,
+        sourcePath: request.sourcePath,
+        sourceType: 'image',
+        extraction
+      }
+    }
+    return {
+      ok: true,
+      sourcePath: request.sourcePath,
+      sourceType: 'image',
+      extraction
+    }
+  }
+
+  const extractFigureStyleReferenceHandler =
+    extractFigureStyleReferenceOverride ?? defaultExtractFigureStyleReference
+
+  const defaultSaveFigureStyleSpec = async (
+    request: FigureStyleSaveSpecRequest
+  ): Promise<FigureStyleSaveSpecResult> => {
+    const path = request.path?.trim() || buildFigureStyleArtifactPath(request.spec)
+    return writeWorkspaceFile({
+      workspaceRoot: request.workspaceRoot,
+      path,
+      content: serializeFigureStyleSpecPayload(request)
+    })
+  }
+
+  const saveFigureStyleSpecHandler = saveFigureStyleSpecOverride ?? defaultSaveFigureStyleSpec
 
   const disposeWorkspaceFileWatch = (watchId: string): boolean => {
     const record = workspaceFileWatchers.get(watchId)
@@ -930,6 +1174,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('paperRadar:profiles:save', async (_, payload: unknown) => {
     const input = parseIpcPayload('paperRadar:profiles:save', paperRadarProfilePayloadSchema, payload ?? {})
     return paperRadarRequest(() => requirePaperRadarService().saveProfile(input))
+  })
+  handleInvoke('paperRadar:review', async (_, payload: unknown) => {
+    const input = parseIpcPayload('paperRadar:review', paperRadarReviewPayloadSchema, payload ?? {})
+    return paperRadarRequest(() => requirePaperRadarService().review(input))
   })
   handleInvoke('paperRadar:search', async (_, payload: unknown) => {
     const input = parseIpcPayload('paperRadar:search', paperRadarSearchPayloadSchema, payload ?? {})
@@ -1844,6 +2092,38 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
+  handleInvoke('figure-style:extract-reference', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'figure-style:extract-reference',
+      figureStyleExtractReferencePayloadSchema,
+      payload
+    ) as FigureStyleExtractReferenceRequest
+    try {
+      return extractFigureStyleReferenceHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('figure-style:save-spec', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'figure-style:save-spec',
+      figureStyleSaveSpecPayloadSchema,
+      payload
+    ) as FigureStyleSaveSpecRequest
+    try {
+      return saveFigureStyleSpecHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
   handleInvoke('figure-style:evaluate', async (_, payload: unknown) => {
     const request = parseIpcPayload(
       'figure-style:evaluate',
@@ -2125,12 +2405,29 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('file:unwatch-workspace', async (_, watchId: unknown) =>
     disposeWorkspaceFileWatch(parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId))
   )
-  handleInvoke('write:export', async (_, payload: unknown) =>
-    exportWriteDocument(
-      parseIpcPayload('write:export', writeExportPayloadSchema, payload),
-      { parentWindow: getMainWindow() }
-    )
-  )
+  handleInvoke('write:export', async (_, payload: unknown) => {
+    const input = parseIpcPayload('write:export', writeExportPayloadSchema, payload)
+    const audit = await collectWriteExportEvidenceDagAudit(input, {
+      agentRuntime,
+      ensureEvidenceDagReady
+    })
+    const gate = evaluateEvidenceDagHighImpactGate({
+      action: 'write:export',
+      riskDigest: audit.riskDigest,
+      auditCompletedAt: audit.auditCompletedAt,
+      auditUnavailableReason: audit.auditUnavailableReason,
+      overrideConfirmed: input.evidenceDagGateOverride === true,
+      requireFreshAudit: true
+    })
+    if (!gate.allowed) {
+      throw new Error(gate.message)
+    }
+    const result = await exportWriteDocument(writeExportServicePayload(input), { parentWindow: getMainWindow() })
+    return {
+      ...result,
+      evidenceDagGate: withWriteExportEvidenceDagContext(gate.metadata, input)
+    }
+  })
   handleInvoke('write:copy-rich-text', async (_, payload: unknown) =>
     copyWriteDocumentAsRichText(
       parseIpcPayload('write:copy-rich-text', writeRichClipboardPayloadSchema, payload)

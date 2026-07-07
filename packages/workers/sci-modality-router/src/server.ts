@@ -5,6 +5,7 @@ import {
   ClientAbortError,
   detectModality,
   EXPERT_MODEL,
+  normalizeExpertConfig,
   ProviderError,
   translateModality,
   UndetectableModalityError,
@@ -29,12 +30,14 @@ export interface SciModalityRouterOptions {
 
 export function createSciModalityRouterServer(options: SciModalityRouterOptions): Server {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const experts = normalizeExpertConfig(options.experts);
+  const resolvedOptions = { ...options, experts };
   const maxBodyBytes = normalizeMaxBodyBytes(options.maxBodyBytes);
   const runtimeToken = normalizeRuntimeToken(options.runtimeToken);
   const now = options.now ?? (() => new Date());
 
   return createServer((req, res) => {
-    handle(req, res, options, fetchImpl, now, { runtimeToken, maxBodyBytes }).catch((error) => {
+    handle(req, res, resolvedOptions, fetchImpl, now, { runtimeToken, maxBodyBytes }).catch((error) => {
       sendJson(res, 500, errorResult('INTERNAL_ERROR', messageOf(error), false));
     });
   });
@@ -61,8 +64,8 @@ async function handle(
       service: SERVICE_ID,
       version: SERVICE_VERSION,
       provider: {
-        kind: 'openai-compatible',
-        configured: Boolean(options.experts.baseUrl && options.experts.apiKey),
+        kind: 'local-model-router',
+        configured: Boolean(options.experts.baseUrl && options.experts.runtimeApiKey),
         expertCount: MODALITIES.length,
       },
       modalities: MODALITIES,
@@ -77,8 +80,8 @@ async function handle(
   return sendJson(res, 404, errorResult('NOT_FOUND', `No route for ${req.method} ${url.pathname}`, false));
 }
 
-// Live availability of each expert model. Pings the expert provider's /health (which lists the
-// registered expert ids) and maps the four modalities -> their expert -> online/offline. Cheap; safe to poll.
+// Live availability of the local Model Router boundary. The individual expert runtime remains
+// behind Model Router; this service never probes or configures an arbitrary external provider.
 async function expertsStatusRoute(
   res: ServerResponse,
   options: SciModalityRouterOptions,
@@ -87,15 +90,13 @@ async function expertsStatusRoute(
 ): Promise<void> {
   const base = options.experts.baseUrl.replace(/\/v1\/?$/i, '').replace(/\/+$/, '');
   let reachable = false;
-  let device: string | undefined;
-  const registered = new Set<string>();
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     let resp: Response;
     try {
       resp = await fetchImpl(`${base}/health`, {
-        headers: { authorization: `Bearer ${options.experts.apiKey}` },
+        headers: { authorization: `Bearer ${options.experts.runtimeApiKey}` },
         signal: controller.signal,
       });
     } finally {
@@ -103,22 +104,18 @@ async function expertsStatusRoute(
     }
     if (resp.ok) {
       reachable = true;
-      const body = (await resp.json().catch(() => ({}))) as { experts?: unknown; device?: unknown };
-      if (Array.isArray(body.experts)) for (const e of body.experts) registered.add(String(e));
-      if (typeof body.device === 'string') device = body.device;
     }
   } catch {
     reachable = false;
   }
   const experts = MODALITIES.map((modality) => {
     const model = EXPERT_MODEL[modality];
-    return { modality, model, online: reachable && registered.has(model) };
+    return { modality, model, online: reachable };
   });
   return sendJson(res, 200, {
     ok: true,
     service: SERVICE_ID,
-    providerReachable: reachable,
-    device,
+    modelRouterReachable: reachable,
     experts,
     checkedAt: now().toISOString(),
   });
@@ -222,7 +219,7 @@ function classify(error: unknown): { status: number; err: ServiceError } {
       return { status: 502, err: { code: 'UNAUTHENTICATED', message: error.message, retryable: false } };
     }
     if (error.httpStatus === 404) {
-      // Expert model not registered by the provider — a config error, not transient.
+      // Expert model not registered behind local Model Router — a config error, not transient.
       return { status: 502, err: { code: 'NOT_FOUND', message: error.message, retryable: false } };
     }
     if (error.httpStatus === 429) {
@@ -231,7 +228,7 @@ function classify(error: unknown): { status: number; err: ServiceError } {
     return { status: 502, err: { code: 'UNAVAILABLE', message: error.message, retryable: true } };
   }
   if (error instanceof Error && error.name === 'AbortError') {
-    return { status: 504, err: { code: 'TIMEOUT', message: 'expert provider timed out', retryable: true } };
+    return { status: 504, err: { code: 'TIMEOUT', message: 'local Model Router expert call timed out', retryable: true } };
   }
   return { status: 500, err: { code: 'INTERNAL_ERROR', message: messageOf(error), retryable: false } };
 }

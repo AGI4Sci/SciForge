@@ -352,6 +352,13 @@ export const paperRadarProfilePayloadSchema = z.object({
   biorxivSubjects: z.array(z.string().trim().min(1).max(128)).max(50)
 }).strict()
 
+export const paperRadarReviewPayloadSchema = z.object({
+  profile: paperRadarProfilePayloadSchema,
+  days: z.number().int().positive().max(365).optional(),
+  topK: z.number().int().positive().max(100).optional(),
+  maxRecords: z.number().int().positive().max(2_000).optional()
+}).strict()
+
 export const paperRadarRankPayloadSchema = paperRadarSearchPayloadSchema.extend({
   profile: z.string().trim().max(128).optional(),
   keywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
@@ -1660,6 +1667,32 @@ export const figureStyleExtractPayloadSchema = z
   })
   .strict()
 
+export const figureStyleExtractReferencePayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    sourcePath: trimmedString(MAX_PATH_LENGTH),
+    sourceType: z.enum(['image', 'pdf']).optional(),
+    page: z.number().int().positive().max(10_000).optional(),
+    cropBox: scientificPlottingCropBoxPayloadSchema.optional(),
+    figureId: z.string().trim().max(128).optional(),
+    outputDir: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    dpi: z.number().int().min(72).max(600).optional(),
+    notes: z.string().trim().max(1_000).optional()
+  })
+  .strict()
+
+const figureStyleJsonObjectPayloadSchema = z.record(z.string(), z.unknown())
+
+export const figureStyleSaveSpecPayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    path: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    spec: figureStyleJsonObjectPayloadSchema,
+    applyPlan: figureStyleJsonObjectPayloadSchema,
+    diagnostics: figureStyleJsonObjectPayloadSchema
+  })
+  .strict()
+
 export const figureStyleEvaluatePayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
@@ -1814,7 +1847,10 @@ export const writeExportPayloadSchema = z
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
     format: z.enum(WRITE_EXPORT_FORMATS),
-    content: z.string().max(MAX_BODY_BYTES)
+    content: z.string().max(MAX_BODY_BYTES),
+    threadId: optionalTrimmedString(MAX_ID_LENGTH),
+    runtimeId: agentRuntimeIdSchema.optional(),
+    evidenceDagGateOverride: z.boolean().optional()
   })
   .strict()
 

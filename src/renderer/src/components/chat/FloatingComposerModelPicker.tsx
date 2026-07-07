@@ -150,7 +150,9 @@ export function FloatingComposerModelPicker({
     modelLabel,
     reasoningEnabled ? currentReasoningLabel : ''
   ].filter(Boolean)
-  const controlsTitle = controlLabels.join(' / ')
+  const controlsTitle = t('composerModelControlsTitle', {
+    controls: controlLabels.join(' / ')
+  })
   const currentModel = composerModel.trim()
   const selectedProviderId = providerMenuGroups.find((group) =>
     group.modelIds.includes(currentModel)
@@ -298,11 +300,23 @@ export function FloatingComposerModelPicker({
           style={menuStyle}
           className={className}
         >
+        <div className="mb-1 rounded-lg bg-ds-hover/60 px-2.5 py-2">
+          <div className="text-[12px] font-semibold leading-4 text-ds-ink">
+            {t('composerModelRouterRoute')}
+          </div>
+          <div className="mt-0.5 text-[11.5px] leading-4 text-ds-faint">
+            {t('composerModelRouterRouteHint')}
+          </div>
+        </div>
+        <MenuSeparator />
         {runtimeEnabled ? (
           <>
             <MenuSectionTitle icon={<Bot className="h-3.5 w-3.5" strokeWidth={1.9} />}>
               {t('composerRuntime')}
             </MenuSectionTitle>
+            <div className="-mt-1 px-2 pb-1 text-[11.5px] leading-4 text-ds-faint">
+              {t('composerRuntimeHint')}
+            </div>
             <div className="flex flex-col gap-1">
               {RUNTIME_OPTIONS.map((option) => (
                 <PickerRow
@@ -474,7 +488,7 @@ export function FloatingComposerModelPicker({
         aria-expanded={menuOpen}
         aria-haspopup="menu"
         aria-label={t('composerModelControls')}
-        title={t('composerModelControls')}
+        title={controlsTitle}
       >
         <span className="min-w-0 whitespace-nowrap">{modelLabel}</span>
         {runtimeEnabled ? (

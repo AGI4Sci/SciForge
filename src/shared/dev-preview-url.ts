@@ -1,4 +1,7 @@
-export const DEFAULT_DEV_PREVIEW_URL = 'http://127.0.0.1:5173/'
+export const DEFAULT_DEV_PREVIEW_HOST = '127.0.0.1'
+export const DEFAULT_DEV_PREVIEW_PORT = 5173
+export const DEFAULT_DEV_PREVIEW_ADDRESS = `${DEFAULT_DEV_PREVIEW_HOST}:${DEFAULT_DEV_PREVIEW_PORT}`
+export const DEFAULT_DEV_PREVIEW_URL = `http://${DEFAULT_DEV_PREVIEW_ADDRESS}/`
 export const DEV_PREVIEW_NAVIGATE_CHANNEL = 'dev-preview:navigate'
 
 function stripIpv6Brackets(hostname: string): string {
@@ -74,4 +77,8 @@ export function normalizeDevPreviewUrlInput(input: string): string | null {
 
 export function isAllowedDevPreviewUrl(value: string): boolean {
   return normalizeDevPreviewUrlInput(value) !== null
+}
+
+export function isDefaultDevPreviewUrl(value: string): boolean {
+  return normalizeDevPreviewUrlInput(value) === DEFAULT_DEV_PREVIEW_URL
 }

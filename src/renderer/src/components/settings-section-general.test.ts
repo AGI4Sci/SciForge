@@ -143,8 +143,6 @@ describe('GeneralSettingsSection', () => {
         tCommon: t,
         form: buildSettings(),
         update: vi.fn(),
-        showApiKey: false,
-        setShowApiKey: vi.fn(),
         selectControlClass: 'select-control',
         openOnboardingPreview: vi.fn(),
         pickWorkspace: vi.fn(),

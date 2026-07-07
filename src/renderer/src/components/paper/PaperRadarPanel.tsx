@@ -1,12 +1,10 @@
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ChevronRight,
   Clipboard,
   Database,
   ExternalLink,
   FileText,
-  RefreshCw,
   Search,
   Settings2,
   Sparkles,
@@ -21,7 +19,6 @@ type Props = {
   onCollapse?: () => void
 }
 
-type ResultMode = 'digest' | 'search'
 type Relevance = NonNullable<PaperRadarRecord['relevance']>
 
 const DEFAULT_PROFILE_NAME = 'default'
@@ -45,7 +42,6 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
   const [papers, setPapers] = useState<PaperRadarRecord[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
-  const [activeMode, setActiveMode] = useState<ResultMode>('digest')
   const [lastDigestAt, setLastDigestAt] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<PaperRadarSyncResult[] | null>(null)
 
@@ -54,7 +50,8 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
   const arxivCategoryList = useMemo(() => parseList(arxivCategories), [arxivCategories])
   const biorxivSubjectList = useMemo(() => parseList(biorxivSubjects), [biorxivSubjects])
 
-  const groupedPapers = useMemo(() => groupPapers(papers), [papers])
+  const visiblePapers = useMemo(() => filterPapersByQuery(papers, query), [papers, query])
+  const groupedPapers = useMemo(() => groupPapers(visiblePapers), [visiblePapers])
   const profileOptions = useMemo(() => dedupeProfileOptions(profiles), [profiles])
   const resultCounts = useMemo(() => ({
     high: groupedPapers.high.length,
@@ -112,101 +109,27 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
     return result.data.profile
   }
 
-  const runProfileSync = async (): Promise<PaperRadarSyncResult[]> => {
-    const today = new Date()
-    const fromDate = new Date(today)
-    fromDate.setDate(today.getDate() - Math.max(1, days))
-    const from = fromDate.toISOString().slice(0, 10)
-    const to = today.toISOString().slice(0, 10)
-    const profile = await saveCurrentProfile()
-    const sync = await window.sciforge.paperRadar.syncProfile({
-      profile: profile.name,
-      from,
-      to,
-      maxRecords: 200
-    })
-    if (!sync.ok) throw new Error(friendlyPaperRadarError(sync.message, t))
-    setLastSync(sync.data.results)
-    return sync.data.results
-  }
-
-  const runSync = async (): Promise<void> => {
-    if (!window.sciforge?.paperRadar) return
-    setBusy(true)
-    setMessage(null)
-    try {
-      const results = await runProfileSync()
-      setMessage(syncMessage(results, t))
-      await refreshStatus()
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
+  const reviewResults = async (): Promise<void> => {
+    if (typeof window.sciforge?.paperRadar?.review !== 'function') {
+      setMessage(t('paperRadarStaleService'))
+      return
     }
-  }
-
-  const runDailyRadar = async (): Promise<void> => {
-    if (!window.sciforge?.paperRadar) return
     setBusy(true)
     setMessage(null)
     try {
-      const profile = await saveCurrentProfile()
-      const results = await runProfileSync()
-      const digest = await window.sciforge.paperRadar.digest({
-        profile: profile.name,
-        keywords: keywordList,
-        excludeKeywords: excludeKeywordList,
+      const result = await window.sciforge.paperRadar.review({
+        profile: currentProfile(),
         days,
-        topK: DEFAULT_TOP_K
-      })
-      if (!digest.ok) throw new Error(friendlyPaperRadarError(digest.message, t))
-      setActiveMode('digest')
-      setPapers(digest.data.papers)
-      setLastDigestAt(digest.data.generatedAt)
-      setMessage(`${syncMessage(results, t)} ${t('paperRadarDigestDone', { count: digest.data.count })}`)
-      await refreshStatus()
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const runSearch = async (): Promise<void> => {
-    if (!window.sciforge?.paperRadar) return
-    setBusy(true)
-    setMessage(null)
-    try {
-      const result = await window.sciforge.paperRadar.search({ query, topK: DEFAULT_TOP_K })
-      if (!result.ok) throw new Error(friendlyPaperRadarError(result.message, t))
-      setActiveMode('search')
-      setPapers(result.data.papers)
-      setLastDigestAt(null)
-      setMessage(t('paperRadarFound', { count: result.data.count }))
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const runDigest = async (): Promise<void> => {
-    if (!window.sciforge?.paperRadar) return
-    setBusy(true)
-    setMessage(null)
-    try {
-      const result = await window.sciforge.paperRadar.digest({
-        profile: (await saveCurrentProfile()).name,
-        keywords: keywordList,
-        excludeKeywords: excludeKeywordList,
-        days,
-        topK: DEFAULT_TOP_K
+        topK: DEFAULT_TOP_K,
+        maxRecords: 200
       })
       if (!result.ok) throw new Error(friendlyPaperRadarError(result.message, t))
-      setActiveMode('digest')
       setPapers(result.data.papers)
       setLastDigestAt(result.data.generatedAt)
-      setMessage(t('paperRadarDigestDone', { count: result.data.count }))
+      setLastSync(result.data.syncResults)
+      setMessage(`${syncMessage(result.data.syncResults, t)} ${t('paperRadarDigestDone', { count: result.data.count })}`)
+      await loadProfiles(profileName || DEFAULT_PROFILE_NAME)
+      await refreshStatus()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -219,7 +142,7 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
       profileName,
       days,
       generatedAt: lastDigestAt,
-      papers,
+      papers: visiblePapers,
       counts: resultCounts,
       t
     })
@@ -236,17 +159,10 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
   }
 
   const renderPaperGroups = (): ReactElement => {
-    if (!papers.length) {
+    if (!visiblePapers.length) {
       return (
         <div className="rounded-md border border-dashed border-ds-border px-3 py-8 text-center text-[13px] text-ds-faint">
-          {t('paperRadarEmpty')}
-        </div>
-      )
-    }
-    if (activeMode === 'search') {
-      return (
-        <div className="grid gap-2">
-          {papers.map((paper) => renderPaperCard(paper, openExternal, t))}
+          {papers.length ? t('paperRadarFilterEmpty') : t('paperRadarEmpty')}
         </div>
       )
     }
@@ -308,33 +224,13 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
           </div>
           <button
             type="button"
-            onClick={() => void runDailyRadar()}
+            onClick={() => void reviewResults()}
             disabled={busy}
             className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
           >
             <Sparkles className={`h-4 w-4 ${busy ? 'animate-pulse' : ''}`} strokeWidth={1.9} />
-            {t('paperRadarUpdateDaily')}
+            {t('paperRadarReviewResults')}
           </button>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => void runSync()}
-              disabled={busy}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-ds-border bg-ds-sidebar px-3 py-2 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} strokeWidth={1.8} />
-              {t('paperRadarSyncOnly')}
-            </button>
-            <button
-              type="button"
-              onClick={() => void runDigest()}
-              disabled={busy}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-ds-border bg-ds-sidebar px-3 py-2 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
-              {t('paperRadarDigestOnly')}
-            </button>
-          </div>
           {lastSync ? (
             <div className="flex flex-wrap gap-1.5 text-[11px] text-ds-faint">
               {lastSync.map((item) => (
@@ -441,23 +337,16 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
 
         <section className="grid gap-2 rounded-md border border-ds-border bg-ds-panel p-3">
           <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-            {t('paperRadarSearch')}
+            {t('paperRadarFilterResults')}
             <div className="flex gap-2">
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 className="min-w-0 flex-1 rounded-md border border-ds-border bg-ds-sidebar px-3 py-2 text-[13px] font-normal text-ds-ink outline-none transition focus:border-accent"
               />
-              <button
-                type="button"
-                onClick={() => void runSearch()}
-                disabled={busy}
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-ds-border bg-ds-sidebar text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-55"
-                aria-label={t('paperRadarSearch')}
-                title={t('paperRadarSearch')}
-              >
+              <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-ds-border bg-ds-sidebar text-ds-muted">
                 <Search className="h-4 w-4" strokeWidth={1.9} />
-              </button>
+              </div>
             </div>
           </label>
         </section>
@@ -472,18 +361,18 @@ export function PaperRadarPanel({ className = '', onCollapse }: Props): ReactEle
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
               <div className="text-[12px] font-semibold text-ds-muted">
-                {activeMode === 'digest' ? t('paperRadarDigestResults') : t('paperRadarSearchResults')}
+                {t('paperRadarDigestResults')}
               </div>
               <div className="mt-0.5 text-[11px] text-ds-faint">
-                {activeMode === 'digest'
-                  ? t('paperRadarDigestStats', { high: resultCounts.high, medium: resultCounts.medium, low: resultCounts.low })
-                  : t('paperRadarFound', { count: papers.length })}
+                {query.trim()
+                  ? t('paperRadarVisibleCount', { visible: visiblePapers.length, total: papers.length })
+                  : t('paperRadarDigestStats', { high: resultCounts.high, medium: resultCounts.medium, low: resultCounts.low })}
               </div>
             </div>
             <button
               type="button"
               onClick={() => void copyDigest()}
-              disabled={!papers.length}
+              disabled={!visiblePapers.length}
               className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-ds-border bg-ds-panel text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
               aria-label={t('paperRadarCopyDigest')}
               title={t('paperRadarCopyDigest')}
@@ -577,6 +466,25 @@ function renderPaperCard(
 
 function parseList(value: string): string[] {
   return value.split(/[,\n]/).map((item) => item.trim()).filter(Boolean)
+}
+
+export function filterPapersByQuery(papers: PaperRadarRecord[], query: string): PaperRadarRecord[] {
+  const terms = parseList(query.toLowerCase())
+  if (!terms.length) return papers
+  return papers.filter((paper) => {
+    const haystack = [
+      paper.title,
+      paper.abstract,
+      paper.source,
+      paper.externalId,
+      paper.publishedAt,
+      paper.reason ?? '',
+      ...paper.authors,
+      ...paper.categories,
+      ...paper.subjects
+    ].join('\n').toLowerCase()
+    return terms.every((term) => haystack.includes(term))
+  })
 }
 
 function groupPapers(papers: PaperRadarRecord[]): Record<Relevance, PaperRadarRecord[]> {

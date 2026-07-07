@@ -2,6 +2,14 @@
 from __future__ import annotations
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlparse, urlunparse
+
+
+LOCAL_MODEL_ROUTER_BASE_URL_ERROR = (
+    "CUA_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router "
+    "(http://127.0.0.1:<port>/v1, http://localhost:<port>/v1, or "
+    "http://[::1]:<port>/v1)."
+)
 
 
 def _env(name: str, default: str = "") -> str:
@@ -21,6 +29,23 @@ def _bool_env(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() == "true"
+
+
+def _normalize_local_model_router_base_url(raw: str) -> str:
+    base = raw.strip()
+    if not base:
+        return ""
+    parsed = urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+    if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+    if (parsed.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+    path = parsed.path.rstrip("/")
+    if path not in ("", "/v1", "/v1/responses"):
+        raise ValueError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+    return urlunparse((parsed.scheme, parsed.netloc, "/v1", "", "", ""))
 
 
 @dataclass
@@ -77,6 +102,9 @@ class Config:
     show_overlay: bool = field(default_factory=lambda: _bool_env("CUA_SHOW_OVERLAY", True))
     port: int = field(default_factory=lambda: _int_env("CUA_PORT", 3900))
     artifact_dir: str = field(default_factory=lambda: _env("CUA_ARTIFACT_DIR", os.path.join(os.getcwd(), "cua-runs")))
+
+    def __post_init__(self) -> None:
+        self.model_base_url = _normalize_local_model_router_base_url(self.model_base_url)
 
 
 CONFIG = Config()

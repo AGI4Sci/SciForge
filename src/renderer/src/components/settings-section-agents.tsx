@@ -6,8 +6,6 @@ import type {
   AppSettingsV1,
   ClaudeRuntimeSettingsPatchV1,
   CodexRuntimeSettingsPatchV1,
-  ModelRouterSettingsPatchV1,
-  ModelRouterSettingsV1,
   SandboxMode
 } from '@shared/app-settings'
 import {
@@ -160,75 +158,6 @@ function checkpointStatusPill(status: string | undefined): string {
   if (status === 'restored') return 'border-blue-400/30 bg-blue-500/10 text-blue-700 dark:text-blue-200'
   if (status === 'blocked') return 'border-amber-300/60 bg-amber-500/10 text-amber-800 dark:text-amber-200'
   return 'border-red-300/50 bg-red-500/10 text-red-700 dark:text-red-200'
-}
-
-type ModelRouterHealthDisplayStatus =
-  | 'healthy'
-  | 'unavailable'
-  | 'provider_auth_blocked'
-  | 'provider_network'
-  | 'provider_bad_response'
-  | 'provider_error'
-
-type ModelRouterHealthDisplay = {
-  status: ModelRouterHealthDisplayStatus
-  labelKey: string
-  message?: string
-  messageKey?: string
-}
-
-const MODEL_ROUTER_HEALTH_LABEL_KEYS: Record<ModelRouterHealthDisplayStatus, string> = {
-  healthy: 'modelRouterHealthHealthy',
-  unavailable: 'modelRouterHealthUnavailable',
-  provider_auth_blocked: 'modelRouterHealthProviderAuthBlocked',
-  provider_network: 'modelRouterHealthProviderNetwork',
-  provider_bad_response: 'modelRouterHealthProviderBadResponse',
-  provider_error: 'modelRouterHealthProviderError'
-}
-
-function modelRouterHealthPill(status: ModelRouterHealthDisplayStatus): string {
-  if (status === 'healthy') {
-    return 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-  }
-  if (status === 'provider_auth_blocked' || status === 'provider_network') {
-    return 'border-amber-300/60 bg-amber-500/10 text-amber-800 dark:border-amber-700/70 dark:text-amber-200'
-  }
-  return 'border-red-300/50 bg-red-500/10 text-red-700 dark:text-red-200'
-}
-
-function normalizeModelRouterHealthStatus(status: unknown): ModelRouterHealthDisplayStatus | null {
-  if (status === 'healthy') return 'healthy'
-  if (status === 'provider_auth_blocked' || status === 'provider-auth blocked') return 'provider_auth_blocked'
-  if (status === 'provider_network' || status === 'provider-network') return 'provider_network'
-  if (status === 'provider_bad_response' || status === 'provider-bad-response') return 'provider_bad_response'
-  if (status === 'provider_error' || status === 'provider-error') return 'provider_error'
-  if (status === 'unavailable' || status === 'not_configured') return 'unavailable'
-  return null
-}
-
-function modelRouterHealthDisplay(
-  input: unknown,
-  router: ModelRouterSettingsV1
-): ModelRouterHealthDisplay {
-  const record = input && typeof input === 'object' ? input as Record<string, unknown> : null
-  const status = normalizeModelRouterHealthStatus(record?.status)
-  if (status) {
-    return {
-      status,
-      labelKey: MODEL_ROUTER_HEALTH_LABEL_KEYS[status],
-      message: typeof record?.message === 'string' ? record.message : undefined
-    }
-  }
-  const missingConfig =
-    !router.enabled ||
-    !router.baseUrl.trim() ||
-    !router.runtimeApiKey.trim() ||
-    !router.publicModelAlias.trim()
-  return {
-    status: 'unavailable',
-    labelKey: MODEL_ROUTER_HEALTH_LABEL_KEYS.unavailable,
-    messageKey: missingConfig ? 'modelRouterHealthMissing' : 'modelRouterHealthStatic'
-  }
 }
 
 function compactList(values: unknown, empty: string): string {
@@ -386,8 +315,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     updateLocalRuntime,
     updateCodex,
     updateClaude,
-    showApiKey,
-    setShowApiKey,
     showRuntimeToken,
     setShowRuntimeToken,
     portError,
@@ -432,7 +359,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     loadMcpConfig,
     openMcpConfigDir,
     runtimeInfo,
-    modelRouterHealth,
     toolDiagnostics,
     memoryRecords,
     memoryScopeFilter,
@@ -524,6 +450,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     backend: 'hybrid',
     sqlitePath: ''
   }
+  const modelRouter = form ? getModelRouterSettings(form) : defaultModelRouterSettings()
   const contextCompaction = localRuntime.contextCompaction ?? {
     defaultSoftThreshold: 16000,
     defaultHardThreshold: 24000,
@@ -533,7 +460,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     summaryInputMaxBytes: 98304
   }
   const modelContext = modelContextProfileSummary({
-    model: localRuntime.model,
+    model: modelRouter.publicModelAlias,
     fallbackSoftThreshold: contextCompaction.defaultSoftThreshold,
     fallbackHardThreshold: contextCompaction.defaultHardThreshold
   })
@@ -615,44 +542,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   }
   const codex = codexFromContext ?? (form ? getCodexRuntimeSettings(form) : defaultCodexRuntimeSettings())
   const claude = claudeFromContext ?? (form ? getClaudeRuntimeSettings(form) : defaultClaudeRuntimeSettings())
-  const modelRouter = form ? getModelRouterSettings(form) : defaultModelRouterSettings()
-  const modelRouterHealthView = modelRouterHealthDisplay(modelRouterHealth, modelRouter)
-  const [modelRouterConfigNotice, setModelRouterConfigNotice] =
-    useState<{ tone: 'error' | 'info' | 'success'; message: string } | null>(null)
-  const updateModelRouter = (patch: ModelRouterSettingsPatchV1): void => {
-    update({ modelRouter: patch })
-  }
-  const openModelRouterConfigFile = async (): Promise<void> => {
-    const api = window.sciforge as typeof window.sciforge & {
-      openModelRouterConfigFile?: () => Promise<{ ok: boolean; message?: string }>
-    }
-    if (typeof api?.openModelRouterConfigFile !== 'function') {
-      setModelRouterConfigNotice({
-        tone: 'error',
-        message: t('modelRouterOpenConfigFileUnavailable')
-      })
-      return
-    }
-    setModelRouterConfigNotice(null)
-    try {
-      const result = await api.openModelRouterConfigFile()
-      if (!result.ok) {
-        setModelRouterConfigNotice({
-          tone: 'error',
-          message: t('modelRouterOpenConfigFileError', {
-            message: result.message || tCommon('unknownError')
-          })
-        })
-      }
-    } catch (error) {
-      setModelRouterConfigNotice({
-        tone: 'error',
-        message: t('modelRouterOpenConfigFileError', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-    }
-  }
   const updateCodexRuntime = (patch: CodexRuntimeSettingsPatchV1): void => {
     if (typeof updateCodex === 'function') {
       updateCodex(patch)
@@ -683,105 +572,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 
               <div ref={agentsSectionRef}>
                 <SettingsCard title={t('agents')}>
-                  <SettingRow
-                    title={t('modelRouter')}
-                    description={t('modelRouterDesc')}
-                    wideControl
-                    control={
-                      <div className="grid gap-4 rounded-xl border border-ds-border-muted bg-ds-main/35 p-3">
-                        <div className="flex flex-col gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2 sm:flex-row sm:items-start sm:justify-between">
-                          <span className="min-w-0">
-                            <span className="block text-[13px] font-semibold text-ds-ink">
-                              {t('modelRouterHealth')}
-                            </span>
-                            <span className="mt-0.5 block text-[12px] leading-5 text-ds-muted">
-                              {modelRouterHealthView.message ?? t(modelRouterHealthView.messageKey ?? 'modelRouterHealthDesc')}
-                            </span>
-                          </span>
-                          <span
-                            className={`inline-flex w-fit shrink-0 items-center rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${modelRouterHealthPill(modelRouterHealthView.status)}`}
-                          >
-                            {t(modelRouterHealthView.labelKey)}
-                          </span>
-                        </div>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                            {t('modelRouterBaseUrl')}
-                            <span className="font-normal leading-5 text-ds-faint">{t('modelRouterBaseUrlDesc')}</span>
-                            <input
-                              className={textInputClass}
-                              value={modelRouter.baseUrl}
-                              placeholder={t('baseUrlPlaceholder')}
-                              onChange={(e) => updateModelRouter({ baseUrl: e.target.value })}
-                            />
-                          </label>
-                          <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                            {t('modelRouterPublicModelAlias')}
-                            <span className="font-normal leading-5 text-ds-faint">
-                              {t('modelRouterPublicModelAliasDesc')}
-                            </span>
-                            <input
-                              className={textInputClass}
-                              value={modelRouter.publicModelAlias}
-                              spellCheck={false}
-                              onChange={(e) => updateModelRouter({ publicModelAlias: e.target.value })}
-                            />
-                          </label>
-                        </div>
-                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                          <div className="flex items-center justify-between gap-3 rounded-xl border border-ds-border bg-ds-card px-3 py-2">
-                            <span className="min-w-0">
-                              <span className="block text-[13px] font-semibold text-ds-ink">
-                                {t('modelRouterAutoStart')}
-                              </span>
-                              <span className="mt-0.5 block text-[12px] leading-5 text-ds-muted">
-                                {t('modelRouterAutoStartDesc')}
-                              </span>
-                            </span>
-                            <Toggle
-                              checked={modelRouter.autoStart}
-                              onChange={(autoStart) => updateModelRouter({ autoStart })}
-                            />
-                          </div>
-                          <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                            {t('modelRouterRuntimeApiKey')}
-                            <span className="font-normal leading-5 text-ds-faint">
-                              {t('modelRouterRuntimeApiKeyDesc')}
-                            </span>
-                            <SecretInput
-                              value={modelRouter.runtimeApiKey}
-                              onChange={(runtimeApiKey) => updateModelRouter({ runtimeApiKey })}
-                              visible={showRuntimeToken}
-                              onToggleVisibility={() => setShowRuntimeToken((value: boolean) => !value)}
-                              placeholder={t('modelRouterRuntimeApiKeyPlaceholder')}
-                              autoComplete="off"
-                              showLabel={t('showSecret')}
-                              hideLabel={t('hideSecret')}
-                            />
-                          </label>
-                        </div>
-                        <div className="flex flex-col gap-3 rounded-xl border border-ds-border bg-ds-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                          <span className="min-w-0">
-                            <span className="block text-[13px] font-semibold text-ds-ink">
-                              {t('modelRouterConfigFile')}
-                            </span>
-                            <span className="mt-0.5 block text-[12px] leading-5 text-ds-muted">
-                              {t('modelRouterConfigFileDesc')}
-                            </span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => void openModelRouterConfigFile()}
-                            className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                          >
-                            <FolderOpen className="h-4 w-4" />
-                            {t('modelRouterOpenConfigFile')}
-                          </button>
-                        </div>
-                        {modelRouterConfigNotice ? <InlineNoticeView notice={modelRouterConfigNotice} /> : null}
-                      </div>
-                    }
-                  />
                   <SettingRow
                     title={t('codexRuntime')}
                     description={t('codexRuntimeDesc')}
@@ -827,26 +617,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                               value={codex.profile}
                               placeholder={t('codexProfilePlaceholder')}
                               onChange={(e) => updateCodexRuntime({ profile: e.target.value })}
-                            />
-                          </label>
-                          <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                            {t('codexModel')}
-                            <span className="font-normal leading-5 text-ds-faint">{t('codexModelDesc')}</span>
-                            <input
-                              className={textInputClass}
-                              value={codex.model}
-                              placeholder={t('codexModelPlaceholder')}
-                              onChange={(e) => updateCodexRuntime({ model: e.target.value })}
-                            />
-                          </label>
-                          <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                            {t('codexModelProvider')}
-                            <span className="font-normal leading-5 text-ds-faint">{t('codexModelProviderDesc')}</span>
-                            <input
-                              className={textInputClass}
-                              value={codex.modelProvider}
-                              placeholder={t('codexModelProviderPlaceholder')}
-                              onChange={(e) => updateCodexRuntime({ modelProvider: e.target.value })}
                             />
                           </label>
                           <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
@@ -1064,17 +834,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                         placeholder={DEFAULT_LOCAL_RUNTIME_DATA_DIR}
                         value={localRuntime.dataDir}
                         onChange={(e) => updateLocalRuntime({ dataDir: e.target.value })}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('localRuntimeModel')}
-                    description={t('localRuntimeModelDesc')}
-                    control={
-                      <input
-                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
-                        value={localRuntime.model}
-                        onChange={(e) => updateLocalRuntime({ model: e.target.value })}
                       />
                     }
                   />

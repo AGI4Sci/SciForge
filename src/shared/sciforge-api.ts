@@ -111,6 +111,8 @@ import type {
   PaperRadarProfileSyncResult,
   PaperRadarRankInput,
   PaperRadarRankResult,
+  PaperRadarReviewInput,
+  PaperRadarReviewResult,
   PaperRadarSearchInput,
   PaperRadarSearchResult,
   PaperRadarStatus,
@@ -131,9 +133,13 @@ import type {
 import type { VisibleContextSnapshot } from './visible-context'
 import type {
   FigureStyleExtractRequest,
+  FigureStyleExtractReferenceRequest,
+  FigureStyleExtractReferenceResult,
   FigureStyleExtractResult,
   FigureStyleReviewRequest,
   FigureStyleReviewResult,
+  FigureStyleSaveSpecRequest,
+  FigureStyleSaveSpecResult,
   FigureStyleSimilarityRequest,
   FigureStyleSimilarityResult
 } from './figure-style'
@@ -758,6 +764,10 @@ export type SciForgeApi = {
     request: SciforgeCanvasReviewPacketRequest
   ) => Promise<SciforgeCanvasReviewPacketResult>
   extractFigureStyle: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
+  extractFigureStyleReference: (
+    request: FigureStyleExtractReferenceRequest
+  ) => Promise<FigureStyleExtractReferenceResult>
+  saveFigureStyleSpec: (request: FigureStyleSaveSpecRequest) => Promise<FigureStyleSaveSpecResult>
   evaluateFigureStyle: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
   reviewFigureStyle: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
@@ -822,6 +832,7 @@ export type SciForgeApi = {
     syncProfile: (payload: PaperRadarProfileSyncInput) => Promise<PaperRadarApiResult<PaperRadarProfileSyncResult>>
     listProfiles: () => Promise<PaperRadarApiResult<PaperRadarProfileListResult>>
     saveProfile: (payload: PaperRadarProfile) => Promise<PaperRadarApiResult<PaperRadarProfileSaveResult>>
+    review: (payload: PaperRadarReviewInput) => Promise<PaperRadarApiResult<PaperRadarReviewResult>>
     search: (payload: PaperRadarSearchInput) => Promise<PaperRadarApiResult<PaperRadarSearchResult>>
     rank: (payload: PaperRadarRankInput) => Promise<PaperRadarApiResult<PaperRadarRankResult>>
     digest: (payload: PaperRadarDigestInput) => Promise<PaperRadarApiResult<PaperRadarDigestResult>>

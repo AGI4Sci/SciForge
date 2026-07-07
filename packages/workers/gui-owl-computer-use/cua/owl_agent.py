@@ -24,6 +24,7 @@ import io
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from PIL import Image
@@ -112,6 +113,10 @@ SYSTEM_PROMPT = (
 )
 
 GROUNDING_DIM = 1000  # the model's normalized coordinate space
+LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR = (
+    "CUA_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router "
+    "/v1/responses endpoint (127.0.0.1, localhost, or [::1])."
+)
 
 
 def _png_data_url(img: Image.Image) -> str:
@@ -214,14 +219,20 @@ def call_owl(base_url: str, model: str, api_key: str,
 
 
 def _model_router_responses_url(base_url: str) -> str:
-    base = base_url.strip().rstrip("/")
+    base = base_url.strip()
     if not base:
-        raise RuntimeError("CUA_MODEL_ROUTER_BASE_URL is required.")
-    if base.endswith("/responses"):
-        return base
-    if base.endswith("/v1"):
-        return base + "/responses"
-    return base + "/v1/responses"
+        raise RuntimeError("CUA_MODEL_ROUTER_BASE_URL is required; configure the local SciForge Model Router.")
+    parsed = urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
+    if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
+        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
+    if (parsed.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
+    path = parsed.path.rstrip("/")
+    if path not in ("", "/v1", "/v1/responses"):
+        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
+    return urlunparse((parsed.scheme, parsed.netloc, "/v1/responses", "", "", ""))
 
 
 def _messages_to_responses_input(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:

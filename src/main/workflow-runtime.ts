@@ -13,6 +13,8 @@ import {
 } from '../../packages/workers/search/src/research-service'
 import type {
   AppSettingsV1,
+  AgentRuntimeId,
+  ScheduledTaskV1,
   WorkflowCodeCheckResult,
   WorkflowCodeLanguage,
   WorkflowConditionConfigV1,
@@ -37,6 +39,11 @@ import type {
   WorkflowScheduleV1,
   WorkflowV1
 } from '../shared/app-settings'
+import {
+  normalizeAgentRuntimeId,
+  isScheduleOwnedWorkflow,
+  scheduleTaskIdFromWorkflow
+} from '../shared/app-settings'
 import { resolveRuntimeModelRouterSettings } from '../shared/app-settings-model-router'
 import { MAX_WORKFLOW_RUNS, normalizeWorkflow } from '../shared/app-settings-workflow'
 import { buildModelRouterResponsesUrl } from '../shared/model-router-url'
@@ -45,7 +52,6 @@ import { researchSearchEnvForGuiMcp } from './research-search-mcp-server'
 import { isAuthorizedInternalHttpRequest } from './internal-http-secret'
 import {
   SCHEDULER_INTERVAL_MS,
-  hasEnabledScheduledTask,
   parseJsonObject,
   readRequestBody,
   resolveScheduleModelConfig,
@@ -103,6 +109,16 @@ function activeScheduleTriggers(workflow: WorkflowV1): ScheduleTriggerNode[] {
 
 export function workflowHasScheduleTrigger(workflow: WorkflowV1): boolean {
   return activeScheduleTriggers(workflow).length > 0
+}
+
+function hasEnabledScheduleOwnedWorkflow(settings: AppSettingsV1): boolean {
+  return settings.workflow.workflows.some((workflow) =>
+    workflow.enabled && isScheduleOwnedWorkflow(workflow) && workflowHasScheduleTrigger(workflow)
+  )
+}
+
+function workflowHasOneShotAtTrigger(workflow: WorkflowV1): boolean {
+  return activeScheduleTriggers(workflow).some((node) => node.config.schedule.kind === 'at')
 }
 
 export function hasEnabledScheduledWorkflow(settings: AppSettingsV1): boolean {
@@ -244,6 +260,56 @@ function uniqueWorkflowName(base: string, usedNames: Set<string>): string {
     if (!usedNames.has(candidate.toLowerCase())) return candidate
   }
   return `${normalized} (${Date.now()})`
+}
+
+function withAgentThreadId(
+  current: ScheduledTaskV1['agentThreadIds'],
+  runtimeId: AgentRuntimeId,
+  threadId: string
+): ScheduledTaskV1['agentThreadIds'] {
+  const trimmed = threadId.trim()
+  if (!trimmed) return current
+  return {
+    ...(current ?? {}),
+    [runtimeId]: trimmed
+  }
+}
+
+function latestWorkflowThreadId(workflow: WorkflowV1): string {
+  for (let runIndex = workflow.runs.length - 1; runIndex >= 0; runIndex -= 1) {
+    const results = workflow.runs[runIndex].nodeResults
+    for (let resultIndex = results.length - 1; resultIndex >= 0; resultIndex -= 1) {
+      const threadId = results[resultIndex].threadId.trim()
+      if (threadId) return threadId
+    }
+  }
+  return ''
+}
+
+function workflowRuntimeId(workflow: WorkflowV1, settings: AppSettingsV1): AgentRuntimeId {
+  const agentNode = workflow.nodes.find((node) => node.type === 'ai-agent')
+  return normalizeAgentRuntimeId(agentNode?.type === 'ai-agent' ? agentNode.config.runtimeId : settings.activeAgentRuntime)
+}
+
+function mirrorScheduleTaskFromWorkflow(
+  task: ScheduledTaskV1,
+  workflow: WorkflowV1,
+  settings: AppSettingsV1
+): ScheduledTaskV1 {
+  const runtimeId = workflowRuntimeId(workflow, settings)
+  const threadId = latestWorkflowThreadId(workflow)
+  const oneShotFinished = workflowHasOneShotAtTrigger(workflow) && workflow.lastStatus !== 'running'
+  return {
+    ...task,
+    ...(oneShotFinished ? { enabled: false } : {}),
+    lastRunAt: workflow.lastRunAt,
+    nextRunAt: oneShotFinished ? '' : workflow.nextRunAt,
+    lastStatus: workflow.lastStatus,
+    lastMessage: workflow.lastMessage,
+    updatedAt: workflow.updatedAt,
+    runtimeId,
+    agentThreadIds: withAgentThreadId(task.agentThreadIds, runtimeId, threadId)
+  }
 }
 
 function readPath(payload: WorkflowPayload, path: string): unknown {
@@ -2039,8 +2105,10 @@ export class WorkflowRuntime {
       if (!workflow.enabled || !scheduled || this.runningWorkflowIds.has(workflow.id)) {
         if (!wasInterrupted) return workflow
         changed = true
+        const oneShot = workflowHasOneShotAtTrigger(workflow)
         return {
           ...workflow,
+          ...(oneShot ? { enabled: false, nextRunAt: '' } : {}),
           lastStatus: 'error' as const,
           lastMessage: 'Workflow was interrupted before completion.',
           updatedAt: now.toISOString()
@@ -2053,6 +2121,7 @@ export class WorkflowRuntime {
         nextRunAt: computeWorkflowNextRunAt(workflow, now),
         ...(wasInterrupted
           ? {
+              ...(workflowHasOneShotAtTrigger(workflow) ? { enabled: false, nextRunAt: '' } : {}),
               lastStatus: 'error' as const,
               lastMessage: 'Workflow was interrupted before completion.',
               updatedAt: now.toISOString()
@@ -2064,7 +2133,22 @@ export class WorkflowRuntime {
       this.syncPowerSaveBlocker(settings)
       return
     }
-    const saved = await this.deps.store.patch({ workflow: { ...settings.workflow, workflows } })
+    const scheduleOwnedByTaskId = new Map<string, WorkflowV1>()
+    for (const workflow of workflows) {
+      if (!isScheduleOwnedWorkflow(workflow)) continue
+      const taskId = scheduleTaskIdFromWorkflow(workflow)
+      if (taskId) scheduleOwnedByTaskId.set(taskId, workflow)
+    }
+    const scheduleTasks = settings.schedule.tasks.map((task) => {
+      const workflow = scheduleOwnedByTaskId.get(task.id)
+      return workflow ? mirrorScheduleTaskFromWorkflow(task, workflow, settings) : task
+    })
+    const saved = await this.deps.store.patch({
+      workflow: { ...settings.workflow, workflows },
+      ...(scheduleOwnedByTaskId.size > 0
+        ? { schedule: { ...settings.schedule, tasks: scheduleTasks } }
+        : {})
+    })
     this.syncPowerSaveBlocker(saved)
   }
 
@@ -2073,10 +2157,31 @@ export class WorkflowRuntime {
     updater: (workflow: WorkflowV1) => WorkflowV1
   ): Promise<AppSettingsV1> {
     const settings = await this.deps.store.load()
+    let nextWorkflow: WorkflowV1 | null = null
     const workflows = settings.workflow.workflows.map((workflow) =>
-      workflow.id === workflowId ? updater(workflow) : workflow
+      workflow.id === workflowId ? (nextWorkflow = updater(workflow)) : workflow
     )
-    const saved = await this.deps.store.patch({ workflow: { ...settings.workflow, workflows } })
+    const scheduleTaskId = nextWorkflow && isScheduleOwnedWorkflow(nextWorkflow)
+      ? scheduleTaskIdFromWorkflow(nextWorkflow)
+      : ''
+    const scheduleTask = scheduleTaskId
+      ? settings.schedule.tasks.find((task) => task.id === scheduleTaskId)
+      : undefined
+    const saved = await this.deps.store.patch({
+      workflow: { ...settings.workflow, workflows },
+      ...(nextWorkflow && scheduleTask
+        ? {
+            schedule: {
+              ...settings.schedule,
+              tasks: settings.schedule.tasks.map((task) =>
+                task.id === scheduleTask.id
+                  ? mirrorScheduleTaskFromWorkflow(task, nextWorkflow as WorkflowV1, settings)
+                  : task
+              )
+            }
+          }
+        : {})
+    })
     this.syncPowerSaveBlocker(saved)
     return saved
   }
@@ -2157,10 +2262,11 @@ export class WorkflowRuntime {
       const finishedAt = new Date()
       await this.updateWorkflow(workflow.id, (current) => ({
         ...current,
+        ...(workflowHasOneShotAtTrigger(current) ? { enabled: false } : {}),
         lastRunAt: finishedAt.toISOString(),
         lastStatus: runStatus,
         lastMessage: runMessage,
-        nextRunAt: computeWorkflowNextRunAt(current, finishedAt),
+        nextRunAt: workflowHasOneShotAtTrigger(current) ? '' : computeWorkflowNextRunAt(current, finishedAt),
         updatedAt: finishedAt.toISOString(),
         runs: current.runs.map((entry) =>
           entry.id === runId
@@ -2489,6 +2595,7 @@ export class WorkflowRuntime {
           ...(modelConfig.providerId ? { providerId: modelConfig.providerId } : {}),
           reasoningEffort: modelConfig.reasoningEffort,
           mode: node.config.mode,
+          ...(node.config.runtimeId ? { runtimeId: node.config.runtimeId } : {}),
           waitForResult: true,
           responseTimeoutMs: AI_NODE_RESPONSE_TIMEOUT_MS
         })
@@ -2871,12 +2978,11 @@ export class WorkflowRuntime {
 
   private syncPowerSaveBlocker(settings: AppSettingsV1): void {
     const shouldKeepAwake =
-      settings.workflow.keepAwake && settings.workflow.enabled && hasEnabledScheduledWorkflow(settings)
+      settings.workflow.enabled &&
+      hasEnabledScheduledWorkflow(settings) &&
+      (settings.workflow.keepAwake || (settings.schedule.keepAwake && hasEnabledScheduleOwnedWorkflow(settings)))
     if (!shouldKeepAwake) {
-      // Only release if the schedule runtime is not also keeping the app awake.
-      if (!(settings.schedule.keepAwake && settings.schedule.enabled && hasEnabledScheduledTask(settings))) {
-        this.stopPowerSaveBlocker()
-      }
+      this.stopPowerSaveBlocker()
       return
     }
     if (this.isPowerSaveBlockerActive()) return

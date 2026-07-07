@@ -161,6 +161,10 @@ const api = {
     ipcRenderer.invoke('sciforge-canvas:export-review-packet', request),
   extractFigureStyle: (request) =>
     ipcRenderer.invoke('figure-style:extract', request),
+  extractFigureStyleReference: (request) =>
+    ipcRenderer.invoke('figure-style:extract-reference', request),
+  saveFigureStyleSpec: (request) =>
+    ipcRenderer.invoke('figure-style:save-spec', request),
   evaluateFigureStyle: (request) =>
     ipcRenderer.invoke('figure-style:evaluate', request),
   reviewFigureStyle: (request) =>
@@ -252,6 +256,7 @@ const api = {
     syncProfile: (payload) => ipcRenderer.invoke('paperRadar:sync-profile', payload),
     listProfiles: () => ipcRenderer.invoke('paperRadar:profiles:list'),
     saveProfile: (payload) => ipcRenderer.invoke('paperRadar:profiles:save', payload),
+    review: (payload) => ipcRenderer.invoke('paperRadar:review', payload),
     search: (payload) => ipcRenderer.invoke('paperRadar:search', payload),
     rank: (payload) => ipcRenderer.invoke('paperRadar:rank', payload),
     digest: (payload) => ipcRenderer.invoke('paperRadar:digest', payload)

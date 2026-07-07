@@ -138,6 +138,10 @@ function normalizeWebhookMethod(value: unknown): WorkflowWebhookMethod {
     : 'ANY'
 }
 
+function normalizeOptionalRuntimeId(value: unknown): 'sciforge' | 'codex' | 'claude' | undefined {
+  return value === 'sciforge' || value === 'codex' || value === 'claude' ? value : undefined
+}
+
 function normalizeWorkflowSchedule(value: unknown): WorkflowScheduleV1 {
   const s = record(value)
   return {
@@ -358,6 +362,9 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
         config: {
           prompt: asText(config.prompt),
           workspaceRoot: asTrimmed(config.workspaceRoot),
+          ...(normalizeOptionalRuntimeId(config.runtimeId)
+            ? { runtimeId: normalizeOptionalRuntimeId(config.runtimeId) }
+            : {}),
           providerId: asTrimmed(config.providerId),
           model: asTrimmed(config.model),
           reasoningEffort: normalizeScheduleReasoningEffort(config.reasoningEffort),

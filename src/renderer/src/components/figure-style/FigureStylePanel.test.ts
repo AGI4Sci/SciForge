@@ -5,7 +5,7 @@ import {
   inferFigureStyleSourceType,
   normalizeRatioCropBoxDraft,
   workspaceRelativeFigurePath
-} from './FigureStylePanel'
+} from '@shared/figure-style-actions'
 
 const baseSpec: FigureStyleSpec = {
   version: 1,

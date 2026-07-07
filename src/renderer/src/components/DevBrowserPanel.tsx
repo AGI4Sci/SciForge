@@ -16,7 +16,9 @@ import {
 } from 'lucide-react'
 import type { ChatBlock } from '../agent/types'
 import {
+  DEFAULT_DEV_PREVIEW_ADDRESS,
   DEFAULT_DEV_PREVIEW_URL,
+  isDefaultDevPreviewUrl,
   normalizeDevPreviewUrlInput
 } from '@shared/dev-preview-url'
 import {
@@ -77,6 +79,10 @@ function readStoredUrl(): string | null {
 }
 
 function persistUrl(url: string): void {
+  if (isDefaultDevPreviewUrl(url)) {
+    removeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY)
+    return
+  }
   writeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY, url)
 }
 
@@ -107,8 +113,8 @@ export function resolveInitialDevBrowserUrl(input: {
   normalizedPreferredUrl?: string | null
   storedUrl?: string | null
   latestDetectedUrl?: string | null
-}): string | null {
-  return input.normalizedPreferredUrl ?? input.storedUrl ?? input.latestDetectedUrl ?? null
+}): string {
+  return input.normalizedPreferredUrl ?? input.storedUrl ?? input.latestDetectedUrl ?? DEFAULT_DEV_PREVIEW_URL
 }
 
 export function canUseElectronWebviewEnvironment(input: {
@@ -165,7 +171,7 @@ export function DevBrowserPanel({
   })
   const preferredUrlRef = useRef<string | null>(normalizedPreferredUrl)
   const [activeUrl, setActiveUrl] = useState<string | null>(initialUrl)
-  const [draftUrl, setDraftUrl] = useState(() => (initialUrl ? formatAddressInput(initialUrl) : ''))
+  const [draftUrl, setDraftUrl] = useState(() => formatAddressInput(initialUrl))
   const [autoFollow, setAutoFollow] = useState(readStoredAutoFollow)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -372,9 +378,9 @@ export function DevBrowserPanel({
     iframeLoadedUrlRef.current = null
     setIframeReloadNonce(0)
     setPreviewInstanceNonce((nonce) => nonce + 1)
-    setDraftUrl('')
-    setLoading(false)
-    setActiveUrl(null)
+    setDraftUrl(formatAddressInput(DEFAULT_DEV_PREVIEW_URL))
+    setLoading(true)
+    setActiveUrl(DEFAULT_DEV_PREVIEW_URL)
     removeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY)
   }
 
@@ -587,8 +593,23 @@ export function DevBrowserPanel({
       </div>
 
       {loadError ? (
-        <div className="shrink-0 border-b border-red-200/70 bg-red-50/85 px-3 py-2 text-[11px] leading-5 text-red-800 dark:border-red-900/50 dark:bg-red-950/35 dark:text-red-100">
-          {loadError}
+        <div className="flex shrink-0 items-center gap-2 border-b border-red-200/70 bg-red-50/85 px-3 py-2 text-[11px] leading-5 text-red-800 dark:border-red-900/50 dark:bg-red-950/35 dark:text-red-100">
+          <span className="min-w-0 flex-1">{loadError}</span>
+          {activeUrl ? (
+            <button
+              type="button"
+              onClick={reload}
+              className="shrink-0 rounded-full bg-red-900/10 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 transition hover:bg-red-900/20 dark:bg-red-100/10 dark:text-red-100 dark:hover:bg-red-100/20"
+            >
+              {t('browserRetry')}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!useElectronWebview ? (
+        <div className="shrink-0 border-b border-ds-border-muted bg-ds-surface-subtle/70 px-3 py-1.5 text-[11px] leading-5 text-ds-muted dark:bg-white/[0.04]">
+          {t('browserLimitedMode')}
         </div>
       ) : null}
 
@@ -600,7 +621,7 @@ export function DevBrowserPanel({
               {t('browserEmptyTitle')}
             </div>
             <div className="mt-2 text-[12px] font-medium text-ds-faint">
-              {t('browserEmptySubtitle')}
+              {t('browserEmptySubtitle', { url: DEFAULT_DEV_PREVIEW_ADDRESS })}
             </div>
             <button
               type="button"
@@ -609,11 +630,11 @@ export function DevBrowserPanel({
                   loadUrl(primaryDetectedUrl, { keepAutoFollow: primaryDetectedUrl === latestDetectedUrl })
                   return
                 }
-                setAutoFollow(true)
+                loadUrl(DEFAULT_DEV_PREVIEW_URL)
               }}
               className="mt-6 inline-flex h-8 items-center justify-center rounded-full bg-ds-surface-subtle px-3 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
             >
-              {t('browserShowAll')}
+              {primaryDetectedUrl ? t('browserShowAll') : t('browserOpenDefault')}
             </button>
           </div>
         ) : useElectronWebview ? (

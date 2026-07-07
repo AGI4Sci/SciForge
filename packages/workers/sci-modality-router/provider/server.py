@@ -1,12 +1,13 @@
-"""SciForge expert-translator service.
+"""SciForge local expert-translator runtime.
 
-OpenAI-compatible /v1/chat/completions that dispatches to configured domain experts
-behind the Model-Router-managed sci-modality worker.
+OpenAI-compatible /v1/chat/completions compatibility layer for local domain experts
+behind the Model-Router-managed sci-modality worker. It does not accept or forward to
+arbitrary upstream LLM providers.
 Every expert is a real domain model whose **native output is text**: it runs a real
 forward pass that generates a natural-language description of the input. There are NO
 general-LLM interpreters here — only models that natively translate their modality to
 text. Experts are translate-only (describe, never solve the task) and load lazily on
-first use, so the provider boots instantly and unused modalities cost no VRAM.
+first use, so the runtime boots instantly and unused modalities cost no VRAM.
 
   esm2text-protein         protein sequence  Esm2Text-Base (ESM-2 + GPT, seq-only)
   prot2text-structure      protein PDB/mmCIF Prot2Text-Large (ESM-2 + RGCN + GPT-2) [via p2t service]
@@ -14,7 +15,7 @@ first use, so the provider boots instantly and unused modalities cost no VRAM.
   c2s-singlecell           scRNA-seq         C2S-Scale-Gemma-2-27B (Cell2Sentence)
 
 Every expert's output is natural-language text from a real forward pass; nothing is
-fabricated. Experts load lazily on first request, so the provider boots instantly and
+fabricated. Experts load lazily on first request, so the runtime boots instantly and
 only used modalities consume VRAM.
 
 Bind: 127.0.0.1:8001  (EXPERT_TRANSLATOR_HOST / EXPERT_TRANSLATOR_PORT to override)
@@ -40,7 +41,7 @@ from experts.molecule import MoleculeExpert
 
 if os.environ.get("SCIFORGE_ENABLE_LOCAL_EXPERT_PROVIDER", "").strip() != "1":
     raise RuntimeError(
-        "Local expert provider is disabled by default. Set "
+        "Local expert runtime is disabled by default. Set "
         "SCIFORGE_ENABLE_LOCAL_EXPERT_PROVIDER=1 only after verifying the model licenses."
     )
 
@@ -51,13 +52,19 @@ C2S_DEVICE = os.environ.get("C2S_DEVICE", "cuda:1")
 HOST = os.environ.get("EXPERT_TRANSLATOR_HOST", "127.0.0.1")
 PORT = int(os.environ.get("EXPERT_TRANSLATOR_PORT", "8001"))
 MODEL_DIR = os.environ.get("EXPERT_MODEL_DIR", "").strip()
-EXPERT_PROVIDER_API_KEY = os.environ.get("EXPERT_PROVIDER_API_KEY", "").strip()
+LEGACY_EXPERT_PROVIDER_API_KEY = os.environ.get("EXPERT_PROVIDER_API_KEY", "").strip()
+EXPERT_TRANSLATOR_RUNTIME_TOKEN = os.environ.get("EXPERT_TRANSLATOR_RUNTIME_TOKEN", "").strip()
+if LEGACY_EXPERT_PROVIDER_API_KEY:
+    raise RuntimeError(
+        "EXPERT_PROVIDER_API_KEY is not supported. Use EXPERT_TRANSLATOR_RUNTIME_TOKEN "
+        "for the local expert-translator runtime bearer token."
+    )
 MAX_BODY_BYTES = int(os.environ.get("EXPERT_TRANSLATOR_MAX_BODY_BYTES", str(40 * 1024 * 1024)))
 
 if not MODEL_DIR:
     raise RuntimeError("EXPERT_MODEL_DIR is required; commercial builds do not bundle expert weights.")
-if not EXPERT_PROVIDER_API_KEY:
-    raise RuntimeError("EXPERT_PROVIDER_API_KEY is required to start the expert-translator provider.")
+if not EXPERT_TRANSLATOR_RUNTIME_TOKEN:
+    raise RuntimeError("EXPERT_TRANSLATOR_RUNTIME_TOKEN is required to start the local expert-translator runtime.")
 if MAX_BODY_BYTES <= 0:
     raise RuntimeError("EXPERT_TRANSLATOR_MAX_BODY_BYTES must be positive.")
 
@@ -86,7 +93,7 @@ class ChatRequest(BaseModel):
     max_tokens: int | None = None
 
 
-app = FastAPI(title="SciForge Expert Translator", version="3.0.0")
+app = FastAPI(title="SciForge Local Expert Translator", version="3.0.0")
 
 
 @app.middleware("http")
@@ -190,7 +197,7 @@ def _has_valid_bearer(value: str | None) -> bool:
     if not value:
         return False
     scheme, _, token = value.partition(" ")
-    return scheme.lower() == "bearer" and secrets.compare_digest(token.strip(), EXPERT_PROVIDER_API_KEY)
+    return scheme.lower() == "bearer" and secrets.compare_digest(token.strip(), EXPERT_TRANSLATOR_RUNTIME_TOKEN)
 
 
 if __name__ == "__main__":

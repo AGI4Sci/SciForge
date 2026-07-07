@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """End-to-end "no cheating" proof for the SciForge sci-modality router.
 
-Drives the LIVE stack:  sci-modality-router (TS, :3898)  ->  expert-translator (Python, :8001)  ->  real GPU models
+Drives the LIVE stack:  sci-modality-router (TS, :3898)  ->  local Model Router (/v1)  ->  expert-translator (Python, :8001)  ->  real GPU models
 
 Every expert here is a *native-to-text* domain model: it runs a real forward pass and
 generates natural-language text. There are no general-LLM interpreters. This proves the
 translations are produced by real models, not faked / canned:
 
-  A. Provider health reports CUDA available and the four native-to-text experts registered.
+  A. Local expert runtime health reports CUDA available and the four native-to-text experts registered.
   B. INPUT SENSITIVITY: two different inputs to the same live expert produce different REAL
      generated text. A canned responder cannot vary its prose with the input.
-  C. REAL GPU FINGERPRINT: the provider stamps `expert@device <ms>ms`; we assert a CUDA
+  C. REAL GPU FINGERPRINT: the local expert runtime stamps `expert@device <ms>ms`; we assert a CUDA
      device and non-trivial latency (a generative forward pass is not ~0ms).
   D. ROUTING: the router selects the correct expert per modality (detected + explicit).
 
@@ -18,13 +18,13 @@ Experts whose checkpoint is not deployed yet return an error envelope; those mod
 SKIPPED (not failed) so this passes on a partial deployment. `protein_structure` needs a PDB
 file: set E2E_PDB_PATH to exercise it, otherwise it is skipped.
 
-Run on the server (after starting expert-translator, prot2text service, and the router):
+Run on the server (after starting expert-translator, prot2text service, local Model Router, and the router):
     python3 tests/e2e_real_models.py
 Required env: SCIMODALITY_ROUTER_URL,
               SCIMODALITY_ROUTER_RUNTIME_TOKEN,
-              EXPERT_PROVIDER_URL,
-              EXPERT_PROVIDER_API_KEY,
-               E2E_PDB_PATH          (a .pdb file to test protein_structure; optional)
+              LOCAL_EXPERT_RUNTIME_URL,
+              EXPERT_TRANSLATOR_RUNTIME_TOKEN,
+              E2E_PDB_PATH          (a .pdb file to test protein_structure; optional)
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ def required_env(name: str) -> str:
 
 ROUTER = required_env("SCIMODALITY_ROUTER_URL").rstrip("/")
 ROUTER_TOKEN = required_env("SCIMODALITY_ROUTER_RUNTIME_TOKEN")
-PROVIDER = required_env("EXPERT_PROVIDER_URL").rstrip("/")
-PROVIDER_TOKEN = required_env("EXPERT_PROVIDER_API_KEY")
+LOCAL_EXPERT_RUNTIME = required_env("LOCAL_EXPERT_RUNTIME_URL").rstrip("/")
+LOCAL_EXPERT_RUNTIME_TOKEN = required_env("EXPERT_TRANSLATOR_RUNTIME_TOKEN")
 TIMEOUT = float(os.environ.get("E2E_TIMEOUT", "600"))
 
 PASS, FAIL, SKIP = [], [], []
@@ -78,10 +78,10 @@ def translate(payload: str, modality: str | None = None, instruction: str | None
     ).json()
 
 
-def provider_raw(model: str, payload: str) -> dict:
+def local_expert_runtime_raw(model: str, payload: str) -> dict:
     r = requests.post(
-        f"{PROVIDER}/v1/chat/completions",
-        headers={"Authorization": f"Bearer {PROVIDER_TOKEN}"},
+        f"{LOCAL_EXPERT_RUNTIME}/v1/chat/completions",
+        headers={"Authorization": f"Bearer {LOCAL_EXPERT_RUNTIME_TOKEN}"},
         json={"model": model, "messages": [{"role": "user", "content": payload}]},
         timeout=TIMEOUT,
     )
@@ -120,20 +120,20 @@ def assert_live_or_skip(name: str, resp: dict, expert_id: str) -> bool:
 
 
 def main() -> int:
-    print(f"Router:   {ROUTER}\nProvider: {PROVIDER}\n")
+    print(f"Router:               {ROUTER}\nLocal expert runtime: {LOCAL_EXPERT_RUNTIME}\n")
 
-    # --- A. provider health: real CUDA + the four native-to-text experts ----------------
-    print("A. Provider health (real GPU, four native-to-text experts)")
+    # --- A. local expert runtime health: real CUDA + the four native-to-text experts ----
+    print("A. Local expert runtime health (real GPU, four native-to-text experts)")
     try:
         h = requests.get(
-            f"{PROVIDER}/health",
-            headers={"Authorization": f"Bearer {PROVIDER_TOKEN}"},
+            f"{LOCAL_EXPERT_RUNTIME}/health",
+            headers={"Authorization": f"Bearer {LOCAL_EXPERT_RUNTIME_TOKEN}"},
             timeout=30,
         ).json()
     except Exception as exc:  # noqa: BLE001
-        check("provider /health reachable", False, str(exc))
+        check("local expert runtime /health reachable", False, str(exc))
         return done()
-    check("provider /health reachable", True)
+    check("local expert runtime /health reachable", True)
     check("torch CUDA available", bool(h.get("torch_cuda_available")), str(h.get("device")))
     experts = set(h.get("experts", []))
     check("all four native-to-text experts registered", EXPECTED_EXPERTS <= experts, f"{sorted(experts)}")
@@ -161,9 +161,9 @@ def main() -> int:
         check("molecule text is input-dependent", summary_of(m_asp) != summary_of(m_caf))
 
     # --- C. real GPU fingerprint (device + non-trivial latency) -------------------------
-    print("\nC. Real GPU fingerprint (provider system_fingerprint)")
+    print("\nC. Real GPU fingerprint (local expert runtime system_fingerprint)")
     if "biot5-molecule" in experts:
-        raw = provider_raw("biot5-molecule", ASPIRIN)
+        raw = local_expert_runtime_raw("biot5-molecule", ASPIRIN)
         fp = raw.get("system_fingerprint", "")
         check("fingerprint names a CUDA device", "cuda" in fp, fp)
         import re

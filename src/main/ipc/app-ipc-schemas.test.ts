@@ -26,6 +26,8 @@ import {
   connectPhoneInstallPollPayloadSchema,
   evidenceDagAuditRunPayloadSchema,
   evidenceDagViewPayloadSchema,
+  figureStyleExtractReferencePayloadSchema,
+  figureStyleSaveSpecPayloadSchema,
   isSafeOpenExternalUrl,
   pdfAnnotationSidecarImportPayloadSchema,
   pdfAnnotationSidecarLoadPayloadSchema,
@@ -150,6 +152,60 @@ describe('app-ipc-schemas', () => {
       artifactKind: 'edited_image',
       outputPath: '.sciforge/images/cover-v2.png'
     }).artifactKind).toBe('edited_image')
+  })
+
+  it('accepts bounded Figure Style reference extraction payloads', () => {
+    expect(figureStyleExtractReferencePayloadSchema.parse({
+      workspaceRoot: ' /tmp/workspace ',
+      sourcePath: ' paper/main.pdf ',
+      sourceType: 'pdf',
+      page: 2,
+      dpi: 180,
+      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      figureId: ' Fig. 2A ',
+      notes: ' Use only visual style. '
+    })).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      sourcePath: 'paper/main.pdf',
+      sourceType: 'pdf',
+      page: 2,
+      dpi: 180,
+      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      figureId: 'Fig. 2A',
+      notes: 'Use only visual style.'
+    })
+
+    expect(() =>
+      figureStyleExtractReferencePayloadSchema.parse({
+        workspaceRoot: '/tmp/workspace',
+        sourcePath: 'paper/main.pdf',
+        cropBox: { unit: 'ratio', x: 0, y: 0, width: 0, height: 1 }
+      })
+    ).toThrow()
+  })
+
+  it('accepts Figure Style spec save payloads with controlled artifact paths', () => {
+    expect(figureStyleSaveSpecPayloadSchema.parse({
+      workspaceRoot: ' /tmp/workspace ',
+      path: ' .sciforge/figure-styles/style.json ',
+      spec: { version: 1 },
+      applyPlan: { plottingWorkflow: {} },
+      diagnostics: { warnings: [] }
+    })).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      path: '.sciforge/figure-styles/style.json',
+      spec: { version: 1 },
+      applyPlan: { plottingWorkflow: {} },
+      diagnostics: { warnings: [] }
+    })
+
+    expect(() =>
+      figureStyleSaveSpecPayloadSchema.parse({
+        workspaceRoot: '/tmp/workspace',
+        spec: { version: 1 },
+        applyPlan: {}
+      })
+    ).toThrow()
   })
 
   it('accepts neutral agent runtime event subscription and control payloads', () => {
@@ -1322,12 +1378,18 @@ describe('app-ipc-schemas', () => {
       path: '/tmp/workspace/draft.md',
       workspaceRoot: '/tmp/workspace',
       format: 'docx',
-      content: '# Draft'
+      content: '# Draft',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      evidenceDagGateOverride: true
     })
 
     expect(payload.path).toBe('/tmp/workspace/draft.md')
     expect(payload.format).toBe('docx')
     expect(payload.content).toBe('# Draft')
+    expect(payload.runtimeId).toBe('codex')
+    expect(payload.threadId).toBe('thread-1')
+    expect(payload.evidenceDagGateOverride).toBe(true)
 
     expect(writeExportPayloadSchema.parse({
       path: '/tmp/workspace/draft.md',

@@ -47,6 +47,7 @@ import {
   normalizeKeyboardShortcuts,
   normalizeAppSettings,
   normalizeAgentRuntimeId,
+  reconcileScheduleWorkflows,
   type AppSettingsPatch,
   type AppSettingsV1,
   type RemoteChannelV1,
@@ -299,6 +300,11 @@ const defaultSettings = (): AppSettingsV1 => ({
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
   const migrated = parsed
   const defaults = defaultSettings()
+  const schedule = mergeScheduleSettings(defaults.schedule, migrated.schedule)
+  const workflow = reconcileScheduleWorkflows(
+    mergeWorkflowSettings(defaults.workflow, migrated.workflow),
+    schedule
+  )
   return {
     version: 1,
     installationId: migrated.installationId ?? defaults.installationId,
@@ -335,8 +341,8 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     write: mergeWriteSettings(defaults.write, migrated.write),
     remoteChannel: mergeRemoteChannelSettings(defaults.remoteChannel, migrated.remoteChannel),
     connectPhone: mergeConnectPhoneSettings(defaults.connectPhone, migrated.connectPhone),
-    schedule: mergeScheduleSettings(defaults.schedule, migrated.schedule),
-    workflow: mergeWorkflowSettings(defaults.workflow, migrated.workflow),
+    schedule,
+    workflow,
     remoteExecutor: mergeRemoteExecutorSettings(defaults.remoteExecutor, migrated.remoteExecutor),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
     codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : ''
@@ -475,6 +481,11 @@ export class JsonSettingsStore {
       applyCodexRuntimePatch(applyLocalRuntimePatch(cur, agentsPatch?.sciforge), agentsPatch?.codex),
       agentsPatch?.claude
     )
+    const schedule = mergeScheduleSettings(cur.schedule, partial.schedule)
+    const workflow = reconcileScheduleWorkflows(
+      mergeWorkflowSettings(cur.workflow, partial.workflow),
+      schedule
+    )
     const next = withGeneratedLocalIds(normalizeStoredSettings({
       ...patchedRuntimeSettings,
       installationId: partial.installationId ?? cur.installationId,
@@ -505,8 +516,8 @@ export class JsonSettingsStore {
       speechToText: mergeSpeechToTextSettings(cur.speechToText, speechToTextPatch),
       remoteChannel: mergeRemoteChannelSettings(cur.remoteChannel, partial.remoteChannel),
       connectPhone: mergeConnectPhoneSettings(cur.connectPhone, connectPhonePatch),
-      schedule: mergeScheduleSettings(cur.schedule, partial.schedule),
-      workflow: mergeWorkflowSettings(cur.workflow, partial.workflow),
+      schedule,
+      workflow,
       remoteExecutor: mergeRemoteExecutorSettings(cur.remoteExecutor, remoteExecutorPatch),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     }))

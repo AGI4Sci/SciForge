@@ -3318,6 +3318,7 @@ test('scientific file uploads are translated to evidence via the managed sci-mod
     assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
     assert.match(textBody, /source=sci-modality:protein\/esm2text-protein/);
     assert.doesNotMatch(textBody, /status=unsupported/);
+    assert.doesNotMatch(textBody, /risk_marker=scientific_modality_risk:low|fallback_marker=workspace_text_fallback|MQIFVKTLTGK/);
     const traceText = await readTraceBundle(workspaceRoot);
     assert.match(traceText, /"roleAlias":\s*"translators\.scientific"/);
     assert.match(traceText, /"serviceBindingSha256":\s*"sha256:[a-f0-9]{64}"/);
@@ -3327,8 +3328,8 @@ test('scientific file uploads are translated to evidence via the managed sci-mod
   }
 });
 
-test('legacy sci-modality service env alone does not activate scientific translation', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-scimodality-legacy-env-'));
+test('high-risk scientific uploads fail closed when the scientific translator is not configured', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-scimodality-missing-'));
   await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-sci'), { recursive: true });
   await writeFile(join(workspaceRoot, '.sciforge', 'uploads', 'session-sci', 'ubiquitin.fasta'), '>p\nMQIFVKTLTGK\n');
   const calls: CapturedFetch[] = [];
@@ -3341,9 +3342,7 @@ test('legacy sci-modality service env alone does not activate scientific transla
       SCIFORGE_SCIMODALITY_SERVICE_TOKEN: 'legacy-token',
     },
     workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'Used safe fallback text.' })),
-    ]),
+    fetchImpl: captureFetch(calls, []),
   });
 
   try {
@@ -3363,16 +3362,108 @@ test('legacy sci-modality service env alone does not activate scientific transla
       }),
     });
 
-    assert.equal(response.status, 200);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
-    assert.doesNotMatch(JSON.stringify(calls[0]?.body), /source=sci-modality/);
+    assert.equal(response.status, 503);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.error?.code, 'scientific_translator_required');
+    assert.match(body.error?.message ?? '', /configure translators\.scientific/i);
+    assert.match(body.error?.message ?? '', /raw object text was not sent/i);
+    assert.equal(calls.length, 0);
   } finally {
     await server.close();
   }
 });
 
-test('workspace file materialization rejects symlink escapes before provider calls', async () => {
+test('high-risk scientific uploads fail closed when expert translation fails', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-scimodality-failure-'));
+  await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-sci'), { recursive: true });
+  await writeFile(join(workspaceRoot, '.sciforge', 'uploads', 'session-sci', 'ligand.smi'), 'CC(=O)OC1=CC=CC=C1C(=O)O\n');
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ scientificTranslator: testScientificTranslatorConfig() }),
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'sci-modality-runtime-token',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      Response.json({ ok: false, error: { message: 'translator unavailable with secret' } }, { status: 503 }),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'What molecule is this?' },
+            { type: 'input_object', ref: '.sciforge/uploads/session-sci/ligand.smi', mimeType: 'text/plain', title: 'ligand.smi' },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 502);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.error?.code, 'scientific_translation_failed');
+    assert.match(body.error?.message ?? '', /expert translator/i);
+    assert.match(body.error?.message ?? '', /raw object text was not sent/i);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0]?.url ?? '', /\/modality\/translate$/);
+    assert.equal(calls.some((call) => call.url === 'https://text.example/v1/chat/completions'), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('low-risk textual uploads fall back with explicit risk and fallback markers', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-low-risk-fallback-'));
+  await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-sci'), { recursive: true });
+  await writeFile(join(workspaceRoot, '.sciforge', 'uploads', 'session-sci', 'notes.txt'), 'Plain project notes.\n');
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The notes say plain project notes.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Summarize the notes.' },
+            { type: 'input_object', ref: '.sciforge/uploads/session-sci/notes.txt', mimeType: 'text/plain', title: 'notes.txt' },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    const textBody = JSON.stringify(calls[0]?.body);
+    assert.match(textBody, /risk_marker=scientific_modality_risk:low/);
+    assert.match(textBody, /fallback_marker=workspace_text_fallback/);
+    assert.match(textBody, /Plain project notes/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('high-risk workspace symlink escapes fail closed before provider calls', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-symlink-'));
   const outsideRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-outside-'));
   const outsideSecretPath = join(outsideRoot, 'secret.fasta');
@@ -3389,9 +3480,7 @@ test('workspace file materialization rejects symlink escapes before provider cal
       SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'sci-modality-runtime-token',
     },
     workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'No readable in-workspace evidence.' })),
-    ]),
+    fetchImpl: captureFetch(calls, []),
   });
 
   try {
@@ -3411,10 +3500,11 @@ test('workspace file materialization rejects symlink escapes before provider cal
       }),
     });
 
-    assert.equal(response.status, 200);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
-    assert.doesNotMatch(JSON.stringify(calls[0]?.body), /SHOULD_NOT_LEAK_TO_PROVIDER/);
+    assert.equal(response.status, 502);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.error?.code, 'scientific_translation_failed');
+    assert.doesNotMatch(JSON.stringify(body), /SHOULD_NOT_LEAK_TO_PROVIDER/);
+    assert.equal(calls.length, 0);
   } finally {
     await server.close();
   }

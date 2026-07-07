@@ -154,6 +154,104 @@ def test_model_calls_use_model_router_responses_optional():
     assert "input_image" in serialized and "data:image/png;base64,AAAA" in serialized
 
 
+def test_model_router_responses_url_normalizes_local_base_optional():
+    """Local router base URLs may omit /v1; the worker posts to /v1/responses."""
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    assert owl_agent._model_router_responses_url("http://localhost:3892") == "http://localhost:3892/v1/responses"
+    assert owl_agent._model_router_responses_url("http://127.0.0.1:3892/v1/") == "http://127.0.0.1:3892/v1/responses"
+    assert owl_agent._model_router_responses_url("http://[::1]:3892/v1/responses") == "http://[::1]:3892/v1/responses"
+
+
+def test_model_router_rejects_external_base_url_optional():
+    """CUA_MODEL_ROUTER_BASE_URL cannot be repointed at a raw external provider."""
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    calls = []
+    original_post = owl_agent.requests.post
+
+    def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        raise AssertionError("external base URL should be rejected before HTTP")
+
+    try:
+        owl_agent.requests.post = fake_post
+        try:
+            owl_agent.call_owl(
+                "https://api.openai.example/v1",
+                "sciforge-router",
+                "runtime-token-secret",
+                [{"role": "user", "content": "inspect"}],
+            )
+        except RuntimeError as e:
+            msg = str(e)
+        else:  # pragma: no cover
+            raise AssertionError("external base URL should raise RuntimeError")
+    finally:
+        owl_agent.requests.post = original_post
+
+    assert not calls
+    assert "local SciForge Model Router" in msg
+    assert "/v1/responses" in msg
+    assert "runtime-token-secret" not in msg
+    assert "api.openai.example" not in msg
+
+
+def test_config_normalizes_local_model_router_base_url_optional():
+    """Config stores a local Model Router base URL normalized to /v1."""
+    try:
+        from cua.config import Config
+    except Exception:  # noqa: BLE001
+        return
+
+    old = {name: os.environ.get(name) for name in ["CUA_MODEL_ROUTER_BASE_URL"]}
+    try:
+        os.environ["CUA_MODEL_ROUTER_BASE_URL"] = "http://[::1]:3892/v1/responses"
+        cfg = Config()
+    finally:
+        for name, value in old.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    assert cfg.model_base_url == "http://[::1]:3892/v1"
+
+
+def test_config_rejects_external_model_router_base_url_optional():
+    """Config validation rejects external provider URLs without leaking secrets."""
+    try:
+        from cua.config import Config
+    except Exception:  # noqa: BLE001
+        return
+
+    old = {name: os.environ.get(name) for name in ["CUA_MODEL_ROUTER_BASE_URL"]}
+    try:
+        os.environ["CUA_MODEL_ROUTER_BASE_URL"] = "https://token-secret@api.openai.example/v1"
+        try:
+            Config()
+        except ValueError as e:
+            msg = str(e)
+        else:  # pragma: no cover
+            raise AssertionError("external base URL should raise ValueError")
+    finally:
+        for name, value in old.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    assert "local SciForge Model Router" in msg
+    assert "token-secret" not in msg
+    assert "api.openai.example" not in msg
+
+
 def test_config_ignores_legacy_direct_provider_env_optional():
     """Legacy direct provider env must not silently re-enable raw model access."""
     try:

@@ -39,7 +39,10 @@ describe('shouldCloseRightPanelOnThreadChange', () => {
   })
 
   it('closes thread-bound right panels across thread changes', () => {
-    expect(shouldCloseRightPanelOnThreadChange('browser')).toBe(true)
     expect(shouldCloseRightPanelOnThreadChange('child-agents')).toBe(true)
+  })
+
+  it('keeps the web preview open across thread changes', () => {
+    expect(shouldCloseRightPanelOnThreadChange('browser')).toBe(false)
   })
 })

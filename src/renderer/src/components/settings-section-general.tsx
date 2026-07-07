@@ -92,8 +92,6 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
     tCommon,
     form,
     update,
-    showRuntimeToken,
-    setShowRuntimeToken,
     portError,
     selectControlClass,
     openOnboardingPreview,

@@ -12,7 +12,8 @@ import {
   DEFAULT_SCHEDULE_MODEL,
   buildScheduleRuntimePrompt,
   normalizeAgentRuntimeId,
-  normalizeScheduleReasoningEffort
+  normalizeScheduleReasoningEffort,
+  resolveRuntimeModelRouterSettings
 } from '../shared/app-settings'
 import type {
   AgentRuntimeThread,
@@ -158,10 +159,10 @@ export function resolveScheduleModelConfig(
   input: { providerId?: string; model?: string; reasoningEffort?: unknown },
   fallbackProviderId = ''
 ): ScheduleModelConfig {
-  const model = normalizeTaskModel(input.model ?? settings.schedule.model) ?? DEFAULT_SCHEDULE_MODEL
+  const routerModel = resolveRuntimeModelRouterSettings(settings).model
   return {
     providerId: (input.providerId ?? '').trim() || fallbackProviderId.trim(),
-    model,
+    model: normalizeTaskModel(routerModel) ?? DEFAULT_SCHEDULE_MODEL,
     reasoningEffort: normalizeScheduleReasoningEffort(input.reasoningEffort)
   }
 }

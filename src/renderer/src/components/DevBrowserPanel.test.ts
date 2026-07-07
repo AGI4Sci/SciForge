@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_DEV_PREVIEW_URL } from '@shared/dev-preview-url'
 import {
   canUseElectronWebviewEnvironment,
   resolveDevPreviewNavigateEventUrl,
@@ -38,14 +39,14 @@ describe('DevBrowserPanel webview environment detection', () => {
 })
 
 describe('DevBrowserPanel initial URL resolution', () => {
-  it('stays blank when no preview URL source exists', () => {
+  it('uses the default local Vite preview when no URL source exists', () => {
     expect(
       resolveInitialDevBrowserUrl({
         normalizedPreferredUrl: null,
         storedUrl: null,
         latestDetectedUrl: null
       })
-    ).toBeNull()
+    ).toBe(DEFAULT_DEV_PREVIEW_URL)
   })
 
   it('prefers explicit preview URL sources in order', () => {

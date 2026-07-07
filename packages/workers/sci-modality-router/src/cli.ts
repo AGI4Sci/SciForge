@@ -1,8 +1,8 @@
 // Executable entry point for the sci-modality router worker.
-// Reads provider/listen config from the environment, starts the HTTP service, and
+// Reads local Model Router/listen config from the environment, starts the HTTP service, and
 // shuts down cleanly on SIGINT/SIGTERM. The library surface lives in ./index.ts.
 import { createSciModalityRouterServer, SCIMODALITY_ROUTER_RUNTIME_TOKEN_ENV } from './server.js';
-import type { ExpertConfig } from './experts.js';
+import { MODEL_ROUTER_BASE_URL_ENV, expertConfigFromModelRouterEnv } from './experts.js';
 import { MODALITIES } from './types.js';
 
 function requiredEnv(name: string): string {
@@ -11,15 +11,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const experts: ExpertConfig = {
-  baseUrl: requiredEnv('EXPERT_PROVIDER_BASE_URL'),
-  apiKey: requiredEnv('EXPERT_PROVIDER_API_KEY'),
-  // The main agent cannot read these modalities, so this service owns "keep trying until the
-  // expert answers": each attempt waits generously and transient failures are retried (experts.ts).
-  timeoutMs: Number(process.env.EXPERT_PROVIDER_TIMEOUT_MS ?? 180_000),
-  maxAttempts: Number(process.env.EXPERT_PROVIDER_MAX_ATTEMPTS ?? 6),
-  retryBaseMs: Number(process.env.EXPERT_PROVIDER_RETRY_BASE_MS ?? 1_500),
-};
+const experts = expertConfigFromModelRouterEnv(process.env);
 
 const host = process.env.SCIMODALITY_ROUTER_HOST ?? '127.0.0.1';
 const port = Number(process.env.SCIMODALITY_ROUTER_PORT ?? 3898);
@@ -31,7 +23,9 @@ const maxBodyBytes = process.env.SCIMODALITY_ROUTER_MAX_BODY_BYTES
 const server = createSciModalityRouterServer({ experts, runtimeToken, maxBodyBytes });
 server.listen(port, host, () => {
   console.log(`SciForge Sci-Modality Router listening at http://${host}:${port}`);
-  console.log(`Expert provider: configured=true kind=openai-compatible experts=${MODALITIES.length} tokenGuard=enabled`);
+  console.log(
+    `Local Model Router: configured=true env=${MODEL_ROUTER_BASE_URL_ENV} experts=${MODALITIES.length} tokenGuard=enabled`,
+  );
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

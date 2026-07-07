@@ -1,12 +1,15 @@
 import { createElement } from 'react'
+import type { ReactElement } from 'react'
 import type { ErrorInfo } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AppErrorBoundary } from './AppErrorBoundary'
+import { useChatStore } from '../store/chat-store'
+import { AppErrorBoundary, recoverAppErrorBoundaryToWorkbench } from './AppErrorBoundary'
 
 describe('AppErrorBoundary', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    useChatStore.setState({ route: 'chat' })
   })
 
   it('renders children when no error occurs', () => {
@@ -36,5 +39,24 @@ describe('AppErrorBoundary', () => {
       stack: error.stack,
       componentStack: '\n    at Child'
     })
+  })
+
+  it('renders retry, workbench, and reload recovery actions', () => {
+    const boundary = new AppErrorBoundary({ children: null })
+    boundary.state = AppErrorBoundary.getDerivedStateFromError(new Error('boom'))
+
+    const html = renderToStaticMarkup(boundary.render() as ReactElement)
+
+    expect(html).toContain('Try again')
+    expect(html).toContain('Workbench')
+    expect(html).toContain('Reload')
+  })
+
+  it('returns the app route to the chat workbench for recovery', () => {
+    useChatStore.setState({ route: 'settings' })
+
+    recoverAppErrorBoundaryToWorkbench()
+
+    expect(useChatStore.getState().route).toBe('chat')
   })
 })

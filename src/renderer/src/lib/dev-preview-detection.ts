@@ -1,5 +1,8 @@
 import type { ChatBlock } from '../agent/types'
-import { normalizeDevPreviewUrlInput } from '@shared/dev-preview-url'
+import {
+  DEFAULT_DEV_PREVIEW_URL,
+  normalizeDevPreviewUrlInput
+} from '@shared/dev-preview-url'
 
 const MAX_DETECTED_URLS = 4
 const NEARBY_URL_CONTEXT_CHARS = 120
@@ -9,6 +12,7 @@ const DEV_SERVER_COMMAND_RE =
   /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)|vite(?:\s|$)|next\s+dev|nuxt\s+dev|astro\s+dev|remix\s+dev|webpack(?:-dev-server|\s+serve)|react-scripts\s+start|storybook(?:\s+dev)?|svelte-kit\s+dev)\b/i
 const DEV_SERVER_OUTPUT_RE =
   /\b(?:vite v?\d|local:\s*https?:\/\/|network:\s*https?:\/\/|ready in \d+(?:\.\d+)?\s*(?:ms|s)|ready on\s+https?:\/\/|started server|server started|compiled successfully|webpack compiled|app running at|serving at|listening on\s+https?:\/\/)\b/i
+const DEFAULT_DEV_PREVIEW_SIGNAL_RE = /\b(?:vite v?\d|electron-vite|vite(?:\s|$))\b/i
 const DEV_PREVIEW_ASSISTANT_ACTION_RE =
   /\b(?:open|visit|browse|view|check(?:\s+it)?\s+out|go\s+to)\b|(?:打开|访问|前往|查看)/i
 const DEV_PREVIEW_ASSISTANT_STATUS_RE =
@@ -101,6 +105,23 @@ function blockCanAdvertiseDevPreview(
   return true
 }
 
+function blockCanUseDefaultDevPreviewUrl(block: ChatBlock, text: string): boolean {
+  if (!DEFAULT_DEV_PREVIEW_SIGNAL_RE.test(text)) return false
+
+  if (block.kind === 'assistant') {
+    return DEV_SERVER_OUTPUT_RE.test(text) && !NON_PREVIEW_CONTEXT_RE.test(text)
+  }
+
+  if (block.kind !== 'tool') return false
+  if (block.toolKind && block.toolKind !== 'command_execution') return false
+  if (block.status === 'error') return false
+
+  const commandText = commandTextFromBlock(block)
+  const commandOrOutput = [commandText, text].filter(Boolean).join('\n')
+  if (!DEFAULT_DEV_PREVIEW_SIGNAL_RE.test(commandOrOutput)) return false
+  return DEV_SERVER_COMMAND_RE.test(commandText) || DEV_SERVER_OUTPUT_RE.test(text)
+}
+
 function urlLooksLikePagePreview(url: string): boolean {
   try {
     const parsed = new URL(url)
@@ -125,6 +146,7 @@ function collectDetectedDevPreviewUrls(
     const text = textFromBlock(block)
     if (!blockCanAdvertiseDevPreview(block, text, mode)) continue
     const outputLooksLikeDevServer = DEV_SERVER_OUTPUT_RE.test(text)
+    let blockHadPreviewUrl = false
 
     for (const match of text.matchAll(LOCAL_URL_CANDIDATE_RE)) {
       if (
@@ -134,9 +156,21 @@ function collectDetectedDevPreviewUrls(
         continue
       }
       const normalized = normalizeDevPreviewUrlInput(trimUrlCandidate(match[0]))
-      if (!normalized || !urlLooksLikePagePreview(normalized) || seen.has(normalized)) continue
+      if (!normalized || !urlLooksLikePagePreview(normalized)) continue
+      blockHadPreviewUrl = true
+      if (seen.has(normalized)) continue
       seen.add(normalized)
       urls.push(normalized)
+      if (urls.length >= MAX_DETECTED_URLS) return urls
+    }
+
+    if (
+      !blockHadPreviewUrl &&
+      !seen.has(DEFAULT_DEV_PREVIEW_URL) &&
+      blockCanUseDefaultDevPreviewUrl(block, text)
+    ) {
+      seen.add(DEFAULT_DEV_PREVIEW_URL)
+      urls.push(DEFAULT_DEV_PREVIEW_URL)
       if (urls.length >= MAX_DETECTED_URLS) return urls
     }
   }

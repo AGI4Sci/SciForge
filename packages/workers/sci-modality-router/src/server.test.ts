@@ -4,20 +4,20 @@ import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 
 import { createSciModalityRouterServer } from './server.js';
-import { detectModality, EXPERT_MODEL } from './experts.js';
+import { detectModality, EXPERT_MODEL, expertConfigFromModelRouterEnv } from './experts.js';
 import type { ExpertConfig } from './experts.js';
 import type { Modality, ModalityTranslation, ServiceResult } from './types.js';
 
 const experts: ExpertConfig = {
-  baseUrl: 'http://provider.test/v1',
-  apiKey: 'test-key',
+  baseUrl: 'http://127.0.0.1:3892/v1',
+  runtimeApiKey: 'test-router-runtime-key',
   timeoutMs: 5_000,
   maxAttempts: 1,
   retryBaseMs: 1,
 };
 const runtimeToken = 'sci-modality-test-token';
 
-// A fake OpenAI-compatible expert-translator. Echoes the requested expert model id so tests can
+// A fake local Model Router /v1. Echoes the requested expert model id so tests can
 // assert the router selected the right expert; never invents scientific content.
 function stubFetch(reply: { status?: number; content?: (model: string) => string } = {}): {
   fetch: typeof fetch;
@@ -30,6 +30,7 @@ function stubFetch(reply: { status?: number; content?: (model: string) => string
     calls++;
     const url = String(input);
     assert.ok(url.endsWith('/chat/completions'), `unexpected upstream url: ${url}`);
+    assert.equal(headerValue(init?.headers, 'authorization'), `Bearer ${experts.runtimeApiKey}`);
     const sent = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
     lastModel = sent.model;
     const status = reply.status ?? 200;
@@ -38,6 +39,18 @@ function stubFetch(reply: { status?: number; content?: (model: string) => string
     return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
   }) as unknown as typeof fetch;
   return { fetch: impl, lastModel: () => lastModel, calls: () => calls };
+}
+
+function headerValue(headers: HeadersInit | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) return headers.get(name) ?? undefined;
+  const lowerName = name.toLowerCase();
+  if (Array.isArray(headers)) {
+    const found = headers.find(([key]) => key.toLowerCase() === lowerName);
+    return found?.[1];
+  }
+  const record = headers as Record<string, string>;
+  return record[name] ?? record[lowerName];
 }
 
 async function withServer(
@@ -80,13 +93,63 @@ test('health and version respond, version lists all modalities', async () => {
     const version = await (await fetch(`${base}/version`, { headers: authHeaders() })).json();
     assert.equal(version.service, 'sciforge.sci-modality-router');
     assert.deepEqual(version.provider, {
-      kind: 'openai-compatible',
+      kind: 'local-model-router',
       configured: true,
       expertCount: 4,
     });
     assert.equal(JSON.stringify(version).includes(experts.baseUrl), false);
     assert.equal(version.modalities.length, 4);
   });
+});
+
+test('local Model Router env resolves to a normalized /v1 config', () => {
+  const config = expertConfigFromModelRouterEnv({
+    SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://localhost:3892/v1/',
+    SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'runtime-secret',
+  });
+  assert.equal(config.baseUrl, 'http://localhost:3892/v1');
+  assert.equal(config.runtimeApiKey, 'runtime-secret');
+  assert.equal(config.timeoutMs, 180_000);
+  assert.equal(config.maxAttempts, 6);
+  assert.equal(config.retryBaseMs, 1_500);
+});
+
+test('external Model Router base URLs are rejected without leaking configured values', () => {
+  const secret = 'sk-secret-value-that-must-not-leak';
+  assert.throws(
+    () =>
+      createSciModalityRouterServer({
+        experts: { ...experts, baseUrl: 'https://external-provider.example/v1', runtimeApiKey: secret },
+        fetchImpl: stubFetch().fetch,
+        runtimeToken,
+      }),
+    (error) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /local SciForge Model Router URL/);
+      assert.doesNotMatch(error.message, /external-provider\.example/);
+      assert.doesNotMatch(error.message, /sk-secret-value-that-must-not-leak/);
+      return true;
+    },
+  );
+});
+
+test('legacy EXPERT_PROVIDER env does not enable a direct provider bypass', () => {
+  const secret = 'legacy-secret-that-must-not-leak';
+  assert.throws(
+    () =>
+      expertConfigFromModelRouterEnv({
+        EXPERT_PROVIDER_BASE_URL: 'https://legacy-provider.example/v1',
+        EXPERT_PROVIDER_API_KEY: secret,
+      }),
+    (error) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Legacy EXPERT_PROVIDER_\*/);
+      assert.match(error.message, /SCIFORGE_MODEL_ROUTER_BASE_URL/);
+      assert.doesNotMatch(error.message, /legacy-provider\.example/);
+      assert.doesNotMatch(error.message, /legacy-secret-that-must-not-leak/);
+      return true;
+    },
+  );
 });
 
 test('requests require the runtime bearer token', async () => {
@@ -175,7 +238,7 @@ test('unknown explicit modality is rejected', async () => {
   });
 });
 
-test('upstream auth failure maps to UNAUTHENTICATED', async () => {
+test('local Model Router auth failure maps to UNAUTHENTICATED', async () => {
   await withServer(stubFetch({ status: 401 }).fetch, async (base) => {
     const res = await post(base, { modality: 'molecule', payload: 'CCO' });
     assert.equal(res.status, 502);
@@ -184,7 +247,7 @@ test('upstream auth failure maps to UNAUTHENTICATED', async () => {
   });
 });
 
-test('unknown expert (provider 404) maps to NOT_FOUND, not retried', async () => {
+test('unknown expert (Model Router 404) maps to NOT_FOUND, not retried', async () => {
   const res404 = stubFetch({ status: 404 });
   await withServer(
     res404.fetch,
@@ -196,10 +259,10 @@ test('unknown expert (provider 404) maps to NOT_FOUND, not retried', async () =>
     },
     { ...experts, maxAttempts: 4, retryBaseMs: 1 },
   );
-  assert.equal(res404.calls(), 1, 'provider 404 is not retried');
+  assert.equal(res404.calls(), 1, 'Model Router 404 is not retried');
 });
 
-// A stateful provider that fails the first `failures` calls with `status`, then succeeds.
+// A stateful local Model Router stub that fails the first `failures` calls with `status`, then succeeds.
 function flakyFetch(failures: number, status: number): { fetch: typeof fetch; calls: () => number } {
   let calls = 0;
   const impl = (async () => {

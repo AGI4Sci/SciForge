@@ -27,6 +27,8 @@ const MAX_IMAGE_SIZE = 4096
 const MIN_IMAGE_SIZE = 128
 const ARTIFACT_DIR = '.sciforge/artifacts'
 const IMAGE_DIR = '.sciforge/images'
+const LOCAL_MODEL_ROUTER_BASE_URL_ERROR =
+  'SCIFORGE_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router (http://127.0.0.1:<port>/v1, http://localhost:<port>/v1, or http://[::1]:<port>/v1).'
 const SCIENTIFIC_BASE_IMAGE_WARNING =
   'Scientific figure image generation is for visual composition/base layers only. Overlay labels, axes, numeric data, citations, molecular annotations, and other scientific claims with deterministic scripts such as scientific_plotting.'
 const SCIENTIFIC_BASE_IMAGE_PROVIDER_INSTRUCTION =
@@ -71,7 +73,8 @@ type ReviewPacketSuggestion = {
 
 export async function getImageGenerationStatus(workspaceRoot?: string): Promise<ImageGenerationStatus> {
   const root = normalizeWorkspaceRoot(workspaceRoot)
-  const provider = providerKind()
+  const warnings: string[] = []
+  const provider = providerKindForReadOnly(warnings)
   return {
     ok: true,
     provider,
@@ -80,16 +83,19 @@ export async function getImageGenerationStatus(workspaceRoot?: string): Promise<
     supportedEditModes: ['inpaint', 'replace', 'erase', 'outpaint', 'upscale', 'style_transfer'],
     outputDir: root ? join(root, IMAGE_DIR) : IMAGE_DIR,
     artifactDir: root ? join(root, ARTIFACT_DIR) : ARTIFACT_DIR,
-    warnings: provider === 'placeholder'
-      ? ['No image model is configured. Other SciForge features are unaffected, but text-to-image and Canvas image edits require configuring an image model first.']
-      : []
+    warnings: [
+      ...(provider === 'placeholder'
+        ? ['No image model is configured. Other SciForge features are unaffected, but text-to-image and Canvas image edits require configuring an image model first.']
+        : []),
+      ...warnings
+    ]
   }
 }
 
 export async function planImageGeneration(request: ImageGenerationPlanRequest): Promise<ImageGenerationPlanResult> {
   const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
   const warnings: string[] = []
-  if (providerKind() === 'placeholder' && !allowPlaceholderProvider()) {
+  if (providerKindForReadOnly(warnings) === 'placeholder' && !allowPlaceholderProvider()) {
     warnings.push('Image model is not configured; rendering will return provider_not_configured until an image model is configured in Settings.')
   }
   const size = normalizeSize(request.size, warnings)
@@ -379,6 +385,15 @@ function providerKind(): 'image-endpoint' | 'placeholder' {
     : 'placeholder'
 }
 
+function providerKindForReadOnly(warnings: string[]): 'image-endpoint' | 'placeholder' {
+  try {
+    return providerKind()
+  } catch (error) {
+    warnings.push(error instanceof Error ? error.message : String(error))
+    return 'placeholder'
+  }
+}
+
 async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderRenderResult> {
   if (providerKind() === 'image-endpoint') {
     try {
@@ -432,7 +447,8 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
 
 function configuredModelRouterImageEndpoint(): { apiKey: string; baseUrl: string; model: string } | null {
   const apiKey = process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY?.trim()
-  const baseUrl = process.env.SCIFORGE_MODEL_ROUTER_BASE_URL?.trim().replace(/\/$/, '')
+  const rawBaseUrl = process.env.SCIFORGE_MODEL_ROUTER_BASE_URL?.trim()
+  const baseUrl = rawBaseUrl ? normalizeLocalModelRouterV1BaseUrl(rawBaseUrl) : ''
   if (!apiKey || !baseUrl) return null
   return {
     apiKey,
@@ -448,6 +464,26 @@ function imageEndpointBaseUrlCandidates(baseUrl: string): string[] {
     ? [normalized]
     : [normalized + '/v1', normalized]
   return [...new Set(candidates)]
+}
+
+function normalizeLocalModelRouterV1BaseUrl(rawBaseUrl: string): string {
+  let url: URL
+  try {
+    url = new URL(rawBaseUrl)
+  } catch {
+    throw new ProviderError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new ProviderError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+  if (url.username || url.password || url.search || url.hash) throw new ProviderError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+  if (!isAllowedLocalModelRouterHost(url.hostname)) throw new ProviderError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+  const path = url.pathname.replace(/\/+$/, '')
+  if (path && path !== '/v1') throw new ProviderError(LOCAL_MODEL_ROUTER_BASE_URL_ERROR)
+  return url.origin + '/v1'
+}
+
+function isAllowedLocalModelRouterHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1'
 }
 
 async function renderWithImageEndpoint(

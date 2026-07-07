@@ -213,6 +213,7 @@ describe('preload agentRuntime bridge', () => {
       paperRadar: {
         status(): Promise<unknown>
         syncProfile(payload: unknown): Promise<unknown>
+        review(payload: unknown): Promise<unknown>
         search(payload: unknown): Promise<unknown>
         digest(payload: unknown): Promise<unknown>
       }
@@ -220,11 +221,21 @@ describe('preload agentRuntime bridge', () => {
 
     await api.paperRadar.status()
     await api.paperRadar.syncProfile({ profile: 'lab_default', maxRecords: 20 })
+    await api.paperRadar.review({
+      profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] },
+      days: 7,
+      topK: 5
+    })
     await api.paperRadar.search({ query: 'protein design', topK: 5 })
     await api.paperRadar.digest({ profile: 'lab_default', days: 7, topK: 5 })
 
     expect(invoke).toHaveBeenCalledWith('paperRadar:status')
     expect(invoke).toHaveBeenCalledWith('paperRadar:sync-profile', { profile: 'lab_default', maxRecords: 20 })
+    expect(invoke).toHaveBeenCalledWith('paperRadar:review', {
+      profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] },
+      days: 7,
+      topK: 5
+    })
     expect(invoke).toHaveBeenCalledWith('paperRadar:search', { query: 'protein design', topK: 5 })
     expect(invoke).toHaveBeenCalledWith('paperRadar:digest', { profile: 'lab_default', days: 7, topK: 5 })
   })

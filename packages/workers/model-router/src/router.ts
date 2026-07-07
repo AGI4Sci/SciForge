@@ -213,12 +213,13 @@ const RECENT_PROVIDER_AUTH_ERROR_TTL_MS = 30 * 60 * 1000;
 // Uploaded scientific files (sequence / structure / spectra) that a domain expert model can read.
 // These are classified as 'document' for routing but, when the Model-Router-managed sci-modality
 // worker is configured through `translators.scientific`, are translated to natural-language
-// evidence instead of being inlined as raw text.
-const SCIENTIFIC_MODALITY_EXTENSIONS =
+// evidence instead of being inlined as raw text. Treat these extensions as high risk: they can carry
+// sequence, chemistry, structure, or variant information that must not be sent raw to the reasoner.
+const HIGH_RISK_SCIENTIFIC_MODALITY_EXTENSIONS =
   /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)(?:$|[?#])/i;
 
 function isScientificModalityPath(path: string): boolean {
-  return SCIENTIFIC_MODALITY_EXTENSIONS.test(path);
+  return HIGH_RISK_SCIENTIFIC_MODALITY_EXTENSIONS.test(path);
 }
 
 export function createModelRouterServer(options: ModelRouterServerOptions): Server {
@@ -866,6 +867,15 @@ async function routeResponsesRequest(
 
   if (unsupportedModalities.length > 0) {
     for (const item of unsupportedModalities) {
+      const scientificRisk = await classifyScientificModalityRisk(item, context.workspaceRoot);
+      if (scientificRisk.level === 'high' && !isScientificTranslatorUsable(profile.translators.scientific, context.env)) {
+        throw routerError(
+          503,
+          'scientific_translator_required',
+          'High-risk scientific objects require a configured Model Router scientific expert translator. Configure translators.scientific for expert translation; the raw object text was not sent to the reasoner.',
+          'scientificTranslator',
+        );
+      }
       // 1) Scientific file (.fasta / .smi / .mol / .mgf …) + managed sci-modality worker configured:
       //    translate to natural-language evidence (the worker owns retry).
       const expert = await translateScientificModalityObservation(
@@ -881,8 +891,16 @@ async function routeResponsesRequest(
         scientificEvidence.push(expert.evidence);
         continue;
       }
-      // 2) Otherwise, if the ref is a readable workspace text file (e.g. .txt / .csv / unmatched scientific
-      //    file when the service is down), inline its content so the text reasoner can answer directly.
+      if (scientificRisk.level === 'high') {
+        throw routerError(
+          502,
+          'scientific_translation_failed',
+          'High-risk scientific object translation failed. Configure or repair the Model Router scientific expert translator; the raw object text was not sent to the reasoner.',
+          'scientificTranslator',
+        );
+      }
+      // 2) Otherwise, if the ref is a readable low-risk workspace text file (e.g. .txt / .csv with no
+      //    high-risk scientific extension), inline its content with explicit audit markers.
       const inlined = await readWorkspaceTextModalityObservation(item, context.workspaceRoot);
       if (inlined) {
         observations.push(inlined);
@@ -1595,8 +1613,9 @@ function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, 
   return undefined;
 }
 
-// Inline a readable workspace text file (e.g. uploaded .txt / .csv / unmatched scientific file) as the
-// observation so the text reasoner can answer directly instead of blindly searching the filesystem.
+// Inline a readable low-risk workspace text file (e.g. uploaded .txt / .csv without high-risk
+// scientific extensions) as the observation so the text reasoner can answer directly instead of
+// blindly searching the filesystem.
 async function readWorkspaceTextModalityObservation(item: ModalityRef, workspaceRoot: string): Promise<string | undefined> {
   const target = await workspaceImageTarget(item, workspaceRoot);
   if (!target) return undefined;
@@ -1611,6 +1630,11 @@ async function readWorkspaceTextModalityObservation(item: ModalityRef, workspace
       `modality_input=${item.id}`,
       `kind=${item.kind}`,
       'status=ok',
+      'risk_marker=scientific_modality_risk:low',
+      'risk_level=low',
+      'risk_reason=no_high_risk_scientific_extension_detected',
+      'fallback_marker=workspace_text_fallback',
+      'fallback_reason=low_risk_textual_object_without_expert_translation',
       `source=workspace-file:${target.relativeRef}`,
       'instruction=The referenced file was read directly. Treat the following contents as the inspected modality and answer the user question from it; do not search the filesystem for it.',
       'content:',
@@ -1621,11 +1645,36 @@ async function readWorkspaceTextModalityObservation(item: ModalityRef, workspace
   }
 }
 
+type ScientificModalityRisk = {
+  level: 'high' | 'low';
+};
+
+async function classifyScientificModalityRisk(item: ModalityRef, workspaceRoot: string): Promise<ScientificModalityRisk> {
+  const candidates = [
+    item.safeRef,
+    item.title,
+    item.materializationPath,
+  ];
+  const target = await workspaceImageTarget(item, workspaceRoot);
+  if (target) candidates.push(target.relativeRef);
+  return candidates.some((candidate) => Boolean(candidate && isScientificModalityPath(candidate)))
+    ? { level: 'high' }
+    : { level: 'low' };
+}
+
+function isScientificTranslatorUsable(
+  service: ModelRouterScientificTranslatorConfig | undefined,
+  env: Record<string, string | undefined>,
+): boolean {
+  if (!service?.baseUrl.trim() || !service.tokenEnv.trim() || !service.model.trim()) return false;
+  return Boolean((env[service.tokenEnv] ?? '').trim());
+}
+
 // Translate an uploaded scientific file to natural-language evidence via the Model-Router-managed
 // sci-modality worker. Gated by `profile.translators.scientific`; the worker owns modality
 // auto-detection + retry/robustness. Translation-only: it returns evidence, never answers. Returns
-// undefined (fail-open) when the service is unconfigured, the ref is not a scientific file, the file is
-// unreadable/binary, or the call fails — callers then fall back to text inlining.
+// undefined when the service is unconfigured, the ref is not a scientific file, the file is
+// unreadable/binary, or the call fails; callers decide whether to fail closed by risk level.
 type ScientificEvidence = { modalityInputId: string; modality: string; model: string; summary: string };
 
 function buildScientificObservation(item: ModalityRef, evidence: ScientificEvidence): string {
