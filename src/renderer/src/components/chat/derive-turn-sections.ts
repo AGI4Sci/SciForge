@@ -12,10 +12,11 @@ import {
 } from './message-timeline-turns'
 
 export type TurnAssistantBlock = Extract<ChatBlock, { kind: 'assistant' }>
+export type TurnConversationBlock = Extract<ChatBlock, { kind: 'assistant' | 'approval' | 'user_input' }>
 
 export type TurnSections = {
   processBlocks: ChatBlock[]
-  assistantContentBlocks: TurnAssistantBlock[]
+  conversationBlocks: TurnConversationBlock[]
   turnFileChanges: ToolBlock[]
 }
 
@@ -78,10 +79,10 @@ function latestUserInputBlockIndexes(blocks: ChatBlock[]): Map<string, number> {
 
 /**
  * Pure derivation of a turn's three view slices:
- *  - `processBlocks`: chronological reasoning/tool/compaction/approval
+ *  - `processBlocks`: chronological reasoning/tool/compaction
  *    trace, including in-flight assistant output while a turn is processing.
- *  - `assistantContentBlocks`: assistant content that should render as the
- *    visible message body once it is no longer part of the active work timeline.
+ *  - `conversationBlocks`: assistant content and user-facing interaction cards
+ *    that should render directly in the conversation.
  *  - `turnFileChanges`: successful file_change tool blocks whose detail
  *    is a unified diff, with paths normalised for display.
  *
@@ -97,8 +98,9 @@ export function deriveTurnSections({
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
   const processBlocks: ChatBlock[] = []
-  const assistantContentBlocks: TurnAssistantBlock[] = []
+  const conversationBlocks: TurnConversationBlock[] = []
   let latestAssistantContentBlock: TurnAssistantBlock | null = null
+  let renderedAssistantContentCount = 0
   const trailingAssistantStart = isProcessing ? turn.blocks.length : findTrailingAssistantContentStart(turn.blocks)
   const fallbackFinalAssistantId = !isProcessing && trailingAssistantStart === turn.blocks.length
     ? [...turn.blocks].reverse().find((block) => block.kind === 'assistant' && splitThink(block.text).content.trim())?.id
@@ -117,9 +119,14 @@ export function deriveTurnSections({
         if (isProcessing || (index < trailingAssistantStart && block.id !== fallbackFinalAssistantId)) {
           processBlocks.push(contentBlock)
         } else {
-          assistantContentBlocks.push(contentBlock)
+          conversationBlocks.push(contentBlock)
+          renderedAssistantContentCount += 1
         }
       }
+      continue
+    }
+    if (block.kind === 'approval') {
+      conversationBlocks.push(block)
       continue
     }
     if (isInternalUserInputToolBlock(block)) {
@@ -128,13 +135,17 @@ export function deriveTurnSections({
     if (block.kind === 'user_input' && latestInputIndexes.get(block.requestId.trim() || block.id) !== index) {
       continue
     }
+    if (block.kind === 'user_input') {
+      conversationBlocks.push(block)
+      continue
+    }
     if (isProcessBlock(block)) {
       processBlocks.push(block)
     }
   }
 
-  if (!isProcessing && assistantContentBlocks.length === 0 && latestAssistantContentBlock) {
-    assistantContentBlocks.push(latestAssistantContentBlock)
+  if (!isProcessing && renderedAssistantContentCount === 0 && latestAssistantContentBlock) {
+    conversationBlocks.push(latestAssistantContentBlock)
   }
 
   if (liveProcessText.trim()) {
@@ -167,5 +178,5 @@ export function deriveTurnSections({
         return [{ ...block, detail: detailText, filePath: resolvedFilePath }]
       }))
 
-  return { processBlocks, assistantContentBlocks, turnFileChanges }
+  return { processBlocks, conversationBlocks, turnFileChanges }
 }

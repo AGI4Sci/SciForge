@@ -10,9 +10,11 @@ import json
 import os
 import re
 import time
+import uuid
 from typing import Optional
 
 from . import analysis as _analysis
+from . import audit as _audit
 from . import metrics as _metrics
 from . import provjson
 from . import reconcile as _reconcile
@@ -27,6 +29,7 @@ class Engine:
         self.llm = llm
         self.storage_dir = storage_dir
         self._graphs: dict[str, ThreadGraph] = {}
+        self._audit_runs: dict[str, list[dict]] = {}
         self._updated: dict[str, float] = {}  # thread_id -> last-write time (for recency)
         self._last_delta: dict[str, dict] = {}  # thread_id -> ids added by last ingest
         self._meta_tid_cache: dict[str, tuple[float, str]] = {}  # file -> (mtime, thread_id)
@@ -37,22 +40,23 @@ class Engine:
         self._updated[thread_id] = time.time()
 
     # --- thread lifecycle ---------------------------------------------------
-    def ingest_trace(self, thread_id: str, trace: list[dict], *, merge: bool = False) -> ThreadGraph:
+    def ingest_trace(self, thread_id: str, trace: list[dict], *, rebuild: bool = False) -> ThreadGraph:
         """Extract a trace into the thread's graph.
 
-        merge=False (default, back-compatible): REPLACE the thread's graph with a
-        fresh extraction of `trace` (feed the whole conversation each time).
+        By default, each trace is treated as a completed-turn delta and merged
+        into the existing thread DAG. Use rebuild=True only for an explicit full
+        graph rebuild from a whole-conversation trace.
 
-        merge=True: extract `trace` as a DELTA (typically just the latest turn)
-        and ACCUMULATE it into the thread's existing graph — the DAG grows across
-        the conversation instead of resetting. Newly added node/edge ids are
-        recorded in `last_delta(thread_id)` so the caller can verify only the new
-        supports edges.
+        Newly added node/edge ids are recorded in `last_delta(thread_id)` so the
+        caller can verify only the new supports edges.
         """
         if self.llm is None:
             raise RuntimeError("no LLM configured for extraction")
         extracted = extract_dag(trace, self.llm, thread_id)
-        if merge:
+        if rebuild:
+            graph = extracted
+            delta = {"new_nodes": list(extracted.nodes), "new_edges": list(extracted.edges)}
+        else:
             base = self.get(thread_id)
             if base is None:
                 graph = extracted
@@ -60,9 +64,6 @@ class Engine:
             else:
                 delta = base.merge_from(extracted)
                 graph = base
-        else:
-            graph = extracted
-            delta = {"new_nodes": list(extracted.nodes), "new_edges": list(extracted.edges)}
         self._graphs[thread_id] = graph
         self._last_delta[thread_id] = delta
         self._touch(thread_id)
@@ -148,6 +149,34 @@ class Engine:
     def analysis(self, thread_id: str, *, threshold: float = 0.7) -> dict:
         return _analysis.analyze(self.require(thread_id), threshold=threshold)
 
+    def audit(self, thread_id: str, *, trigger: str = "manual", threshold: float = 0.7) -> dict:
+        run = _audit.run_audit(
+            self.require(thread_id),
+            threshold=threshold,
+            trigger=trigger,
+            run_id=f"audit:{uuid.uuid4().hex[:12]}",
+        )
+        latest = self.latest_audit(thread_id)
+        if trigger == "auto" and latest is not None \
+                and latest.get("dag_digest") == run.get("dag_digest") \
+                and latest.get("threshold") == run.get("threshold"):
+            return latest
+        runs = [run, *self.audit_runs(thread_id)]
+        self._audit_runs[thread_id] = runs[:50]
+        self._persist_audit(thread_id)
+        return run
+
+    def audit_runs(self, thread_id: str) -> list[dict]:
+        if thread_id in self._audit_runs:
+            return self._audit_runs[thread_id]
+        loaded = self._load_audit_from_disk(thread_id)
+        self._audit_runs[thread_id] = loaded
+        return loaded
+
+    def latest_audit(self, thread_id: str) -> Optional[dict]:
+        runs = self.audit_runs(thread_id)
+        return runs[0] if runs else None
+
     def reconcile(self, thread_id: str, *, remove_nodes=(), remove_edges=(),
                   add_contradicts=(), threshold: float = 0.7) -> dict:
         """Read-only what-if 扰动:模拟删源/删边后哪些结论坍塌,不改动已存的图。"""
@@ -165,6 +194,10 @@ class Engine:
         return graph
 
     # --- persistence --------------------------------------------------------
+    @staticmethod
+    def _safe_thread_filename(thread_id: str) -> str:
+        return re.sub(r'[/\\:<>"|?*]', "_", thread_id)
+
     def _path(self, thread_id: str) -> Optional[str]:
         if not self.storage_dir:
             return None
@@ -174,14 +207,32 @@ class Engine:
         # directory ends up with no `.prov.json` file at all and persistence
         # fails without an error. Ids without these characters keep the exact
         # same filename as before (backward compatible).
-        safe = re.sub(r'[/\\:<>"|?*]', "_", thread_id)
+        safe = self._safe_thread_filename(thread_id)
         return os.path.join(self.storage_dir, f"{safe}.prov.json")
+
+    def _audit_path(self, thread_id: str) -> Optional[str]:
+        if not self.storage_dir:
+            return None
+        return os.path.join(self.storage_dir, f"{self._safe_thread_filename(thread_id)}.audit.json")
 
     def _persist(self, thread_id: str) -> None:
         path = self._path(thread_id)
         if path and thread_id in self._graphs:
-            with open(path, "w", encoding="utf-8") as fh:
+            tmp = f"{path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(provjson.dumps(self._graphs[thread_id]))
+            os.replace(tmp, path)
+
+    def _persist_audit(self, thread_id: str) -> None:
+        path = self._audit_path(thread_id)
+        if path and thread_id in self._audit_runs:
+            tmp = f"{path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({
+                    "thread_id": thread_id,
+                    "runs": self._audit_runs[thread_id],
+                }, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
 
     def _load_from_disk(self, thread_id: str) -> Optional[ThreadGraph]:
         path = self._path(thread_id)
@@ -189,3 +240,15 @@ class Engine:
             with open(path, encoding="utf-8") as fh:
                 return provjson.loads(fh.read())
         return None
+
+    def _load_audit_from_disk(self, thread_id: str) -> list[dict]:
+        path = self._audit_path(thread_id)
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    doc = json.load(fh)
+                runs = doc.get("runs") if isinstance(doc, dict) else doc
+                return runs if isinstance(runs, list) else []
+            except (OSError, ValueError):
+                return []
+        return []

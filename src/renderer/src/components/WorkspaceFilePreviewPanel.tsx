@@ -80,6 +80,10 @@ import {
   type WritePdfSelection,
   type WritePdfSelectionPageRect
 } from './write/WritePdfViewer'
+import {
+  WriteDocxViewer,
+  type WriteDocxAnnotationOverlay
+} from './write/WriteDocxViewer'
 import { WriteMarkdownEditor } from './write/WriteMarkdownEditor'
 
 type Props = {
@@ -221,6 +225,15 @@ function clipInlineText(value = '', maxChars = 96): string {
   return `${compact.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`
 }
 
+function selectionContextInText(documentText: string, selectedText: string): { before: string; after: string } {
+  const index = documentText.indexOf(selectedText)
+  if (index < 0) return { before: '', after: '' }
+  return {
+    before: documentText.slice(Math.max(0, index - 500), index),
+    after: documentText.slice(index + selectedText.length, index + selectedText.length + 500)
+  }
+}
+
 function annotationKindForAction(action: WritePdfAnnotationAction): PdfAnnotationKind | null {
   if (action === 'copy') return null
   if (action === 'comment') return 'comment'
@@ -347,11 +360,13 @@ function pageRangeText(summary: PdfAnnotationThreadSummary): string {
 function buildPdfAnnotationQuestionPrompt(input: {
   question: string
   summary: PdfAnnotationThreadSummary
-  pdfPath: string
+  documentPath: string
   workspaceRoot: string
+  documentKind?: 'pdf' | 'docx'
   intent?: 'question' | 'translate'
   previousDiscussion?: string
 }): string {
+  const documentLabel = input.documentKind === 'docx' ? 'DOCX document' : 'PDF'
   const pageRange = pageRangeText(input.summary)
   const quote = input.summary.anchors
     .map((anchor) => anchor.quote.trim())
@@ -359,18 +374,18 @@ function buildPdfAnnotationQuestionPrompt(input: {
     .join('\n\n')
     .trim()
   const context = [
-    'You are answering a lightweight by-the-way PDF question inside SciForge\'s right sidebar.',
-    'Answer directly in the right-sidebar style: concise, helpful, and grounded in the selected PDF text.',
+    `You are answering a lightweight by-the-way ${documentLabel} question inside SciForge's right sidebar.`,
+    `Answer directly in the right-sidebar style: concise, helpful, and grounded in the selected ${documentLabel} text.`,
     'Do not edit files, create tasks, or ask the user to switch threads.',
     input.intent === 'translate'
       ? 'The user chose the translation shortcut. Translate the selected text into the user\'s language, then briefly explain important domain terms.'
       : 'If the question cannot be answered from the selection alone, say what extra page or context is needed.',
     '',
-    `PDF path: ${input.pdfPath}`,
+    `${documentLabel} path: ${input.documentPath}`,
     input.workspaceRoot ? `Workspace: ${input.workspaceRoot}` : '',
     pageRange ? `Anchor: ${pageRange}` : '',
-    quote ? `Selected PDF text:\n"""\n${quote}\n"""` : 'Selected PDF region: visual/image anchor without extractable text.',
-    input.previousDiscussion ? `Previous discussion for this PDF selection:\n${input.previousDiscussion}` : '',
+    quote ? `Selected ${documentLabel} text:\n"""\n${quote}\n"""` : `Selected ${documentLabel} region: visual/image anchor without extractable text.`,
+    input.previousDiscussion ? `Previous discussion for this ${documentLabel} selection:\n${input.previousDiscussion}` : '',
     '',
     `User question:\n${input.question.trim()}`
   ].filter(Boolean)
@@ -546,9 +561,14 @@ export function WorkspaceFilePreviewPanel({
   const currentFileName = displayPath ? fileNameFromPath(displayPath) : t('filePreviewTitle')
   const badge = extensionBadge(result?.ok ? result.path : target?.path ?? '', language)
   const pdfResult = result?.ok && result.kind === 'pdf' ? result : null
+  const docxResult = result?.ok && result.kind === 'docx' ? result : null
   const pdfPath = pdfResult?.path ?? null
+  const docxPath = docxResult?.path ?? null
   const pdfWorkspaceRoot = target?.workspaceRoot ?? workspaceRoot
   const pdfMtimeMs = pdfResult?.mtimeMs ?? null
+  const annotationTargetPath = pdfPath ?? docxPath
+  const annotationTargetMtimeMs = pdfMtimeMs ?? docxResult?.mtimeMs ?? null
+  const annotationDocumentKind: 'pdf' | 'docx' | null = pdfPath ? 'pdf' : docxPath ? 'docx' : null
   const textPreviewActive = result?.ok && result.kind === 'text'
   const markdownPreviewActive = textPreviewActive && isMarkdownPreviewPath(result.path)
   const htmlPreviewActive = textPreviewActive && isHtmlPreviewPath(result.path)
@@ -693,12 +713,12 @@ export function WorkspaceFilePreviewPanel({
   }, [])
 
   const savePdfSidecarSoon = useCallback((sidecar: PdfAnnotationSidecar): void => {
-    if (!pdfPath || typeof window.sciforge?.pdfAnnotations?.save !== 'function') return
+    if (!annotationTargetPath || typeof window.sciforge?.pdfAnnotations?.save !== 'function') return
     if (pdfSidecarSaveTimerRef.current) window.clearTimeout(pdfSidecarSaveTimerRef.current)
     pdfSidecarSaveTimerRef.current = window.setTimeout(() => {
       pdfSidecarSaveTimerRef.current = null
       void window.sciforge?.pdfAnnotations?.save({
-        pdfPath,
+        pdfPath: annotationTargetPath,
         workspaceRoot: pdfWorkspaceRoot,
         sidecar
       }).then((saveResult) => {
@@ -712,7 +732,7 @@ export function WorkspaceFilePreviewPanel({
         showPdfNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
       })
     }, PDF_SIDECAR_SAVE_DEBOUNCE_MS)
-  }, [pdfPath, pdfWorkspaceRoot, showPdfNotice])
+  }, [annotationTargetPath, pdfWorkspaceRoot, showPdfNotice])
 
   const updatePdfSidecar = useCallback((updater: (sidecar: PdfAnnotationSidecar) => PdfAnnotationSidecar): PdfAnnotationSidecar | null => {
     if (!pdfSidecar) return null
@@ -752,19 +772,20 @@ export function WorkspaceFilePreviewPanel({
     options?: { intent?: 'question' | 'translate' }
   ): Promise<void> => {
     const trimmed = question.trim()
-    if (!trimmed || !pdfPath) return
+    if (!trimmed || !annotationTargetPath || !annotationDocumentKind) return
 
     const existingSideThreadId = summary.thread.sourceMessageId
     const existingSide = existingSideThreadId ? pdfQuestionData.sideConversations[existingSideThreadId] : undefined
     const prompt = buildPdfAnnotationQuestionPrompt({
       question: trimmed,
       summary,
-      pdfPath,
+      documentPath: annotationTargetPath,
       workspaceRoot: pdfWorkspaceRoot,
+      documentKind: annotationDocumentKind,
       intent: options?.intent,
       previousDiscussion: existingSide || !summary.thread.sourceMessageId ? '' : pdfQuestionPreviousDiscussion(summary)
     })
-    const title = `PDF: ${clipInlineText(trimmed, 48)}`
+    const title = `${annotationDocumentKind === 'docx' ? 'DOCX' : 'PDF'}: ${clipInlineText(trimmed, 48)}`
     let sideThreadId = existingSide?.threadId ?? null
     if (existingSide) {
       const sent = await pdfQuestionData.sendSideMessage(existingSide.threadId, prompt)
@@ -821,7 +842,8 @@ export function WorkspaceFilePreviewPanel({
       })
     })
   }, [
-    pdfPath,
+    annotationDocumentKind,
+    annotationTargetPath,
     pdfQuestionData,
     pdfWorkspaceRoot,
     showPdfNotice,
@@ -907,6 +929,26 @@ export function WorkspaceFilePreviewPanel({
     if (!activePdfAnnotationId) return []
     return pdfAnnotationOverlays.filter((overlay) => overlay.id === activePdfAnnotationId)
   }, [activePdfAnnotationId, pdfAnnotationDisplayMode, pdfAnnotationOverlays])
+  const docxAnnotationOverlays = useMemo<WriteDocxAnnotationOverlay[]>(() => {
+    if (!pdfSidecar) return []
+    return pdfSidecar.threads.flatMap((thread) => {
+      const anchorIds = new Set(thread.anchorIds)
+      return pdfSidecar.anchors
+        .filter((anchor) => anchorIds.has(anchor.id) && anchor.quote.trim())
+        .map((anchor) => ({
+          id: thread.id,
+          kind: overlayKindForThread(thread),
+          status: thread.status,
+          quote: anchor.quote
+        }))
+    })
+  }, [pdfSidecar])
+  const visibleDocxAnnotationOverlays = useMemo<WriteDocxAnnotationOverlay[]>(() => {
+    if (pdfAnnotationDisplayMode === 'hidden') return []
+    if (pdfAnnotationDisplayMode === 'all') return docxAnnotationOverlays
+    if (!activePdfAnnotationId) return []
+    return docxAnnotationOverlays.filter((overlay) => overlay.id === activePdfAnnotationId)
+  }, [activePdfAnnotationId, docxAnnotationOverlays, pdfAnnotationDisplayMode])
   const visibleContextResources = useMemo<VisibleContextResource[]>(() => {
     const previewPath = result?.ok ? result.path : target?.path
     if (!previewPath) return []
@@ -928,14 +970,14 @@ export function WorkspaceFilePreviewPanel({
       mtimeMs: result?.ok && 'mtimeMs' in result ? result.mtimeMs : undefined
     }]
 
-    if (pdfPath && pdfSidecar) {
+    if (annotationTargetPath && annotationDocumentKind && pdfSidecar) {
       const sidecarRelativePath = pdfSidecarPath
         ? relativePathForVisibleContext(pdfSidecarPath, pdfWorkspaceRoot)
         : undefined
       resources.push({
-        kind: 'pdfAnnotations',
+        kind: annotationDocumentKind === 'pdf' ? 'pdfAnnotations' : 'documentAnnotations',
         role: 'annotation-sidecar',
-        title: 'PDF annotations',
+        title: annotationDocumentKind === 'pdf' ? 'PDF annotations' : 'Document annotations',
         accessHint: 'Use gui_workspace_read with workspaceRoot and relativePath to inspect annotation JSON only when needed.',
         workspaceRoot: pdfWorkspaceRoot,
         path: pdfSidecarPath ?? undefined,
@@ -950,7 +992,8 @@ export function WorkspaceFilePreviewPanel({
         selectedThreadId: selectedPdfThreadId,
         updatedAt: pdfSidecar.updatedAt,
         metadata: {
-          pdfPath,
+          documentPath: annotationTargetPath,
+          documentKind: annotationDocumentKind,
           pdfFingerprint: pdfSidecar.pdfFingerprint.sha256,
           displayMode: pdfAnnotationDisplayMode,
           annotationsPanelOpen: pdfAnnotationsOpen
@@ -960,9 +1003,10 @@ export function WorkspaceFilePreviewPanel({
 
     return resources
   }, [
+    annotationDocumentKind,
+    annotationTargetPath,
     pdfAnnotationDisplayMode,
     pdfAnnotationsOpen,
-    pdfPath,
     pdfSidecar,
     pdfSidecarPath,
     pdfWorkspaceRoot,
@@ -1020,7 +1064,7 @@ export function WorkspaceFilePreviewPanel({
   ])
 
   useEffect(() => {
-    if (!pdfPath || pdfMtimeMs == null) {
+    if (!annotationTargetPath || annotationTargetMtimeMs == null) {
       pdfSidecarLoadKeyRef.current = ''
       setPdfSidecar(null)
       setPdfSidecarPath(null)
@@ -1029,7 +1073,7 @@ export function WorkspaceFilePreviewPanel({
       setPdfJumpToRect(null)
       return
     }
-    const loadKey = `${pdfWorkspaceRoot}\n${pdfPath}\n${pdfMtimeMs}\n${previewReloadKey}`
+    const loadKey = `${pdfWorkspaceRoot}\n${annotationTargetPath}\n${annotationTargetMtimeMs}\n${previewReloadKey}`
     if (pdfSidecarLoadKeyRef.current === loadKey) return
     pdfSidecarLoadKeyRef.current = loadKey
     setPdfSidecar(null)
@@ -1044,7 +1088,7 @@ export function WorkspaceFilePreviewPanel({
 
     let cancelled = false
     void window.sciforge.pdfAnnotations.load({
-      pdfPath,
+      pdfPath: annotationTargetPath,
       workspaceRoot: pdfWorkspaceRoot
     }).then((loadResult) => {
       if (cancelled || pdfSidecarLoadKeyRef.current !== loadKey) return
@@ -1063,7 +1107,7 @@ export function WorkspaceFilePreviewPanel({
     return () => {
       cancelled = true
     }
-  }, [pdfMtimeMs, pdfPath, pdfWorkspaceRoot, previewReloadKey, showPdfNotice, t])
+  }, [annotationTargetMtimeMs, annotationTargetPath, pdfWorkspaceRoot, previewReloadKey, showPdfNotice, t])
 
   const addPdfAnnotationFromSelection = useCallback((action: WritePdfAnnotationAction, pdfSelection: WritePdfSelection): void => {
     if (!pdfSidecar) {
@@ -1111,6 +1155,56 @@ export function WorkspaceFilePreviewPanel({
     setSelectedPdfThreadId(threadId)
     setPdfAnnotationsOpen(true)
   }, [pdfSidecar, showPdfNotice, t, updatePdfSidecar])
+
+  const addDocxAnnotationFromSelection = useCallback((action: WritePdfAnnotationAction, docxSelection: WritePdfSelection): void => {
+    if (!pdfSidecar || !docxResult) {
+      showPdfNotice({ tone: 'error', message: t('writeDocxAnnotationSidecarUnavailable') })
+      return
+    }
+    const sourceText = docxSelection.text.trim()
+    if (!sourceText) {
+      showPdfNotice({ tone: 'error', message: t('writeDocxAnnotationAnchorUnavailable') })
+      return
+    }
+    const kind = annotationKindForAction(action)
+    if (!kind) {
+      showPdfNotice({ tone: 'success', message: t('writePdfAnnotationCopied') })
+      return
+    }
+    const now = new Date().toISOString()
+    const context = selectionContextInText(docxResult.content, sourceText)
+    const anchor = createPdfAnchor({
+      id: makeLocalId('docx-anchor'),
+      kind: 'text',
+      rects: [],
+      quote: sourceText,
+      contextBefore: context.before,
+      contextAfter: context.after,
+      pdfFingerprint: pdfSidecar.pdfFingerprint,
+      createdAt: now
+    })
+    const body = action === 'translation' ? t('writeDocxAnnotationTranslatePrompt') : ''
+    const threadId = makeLocalId('docx-thread')
+    updatePdfSidecar((current) => createPdfAnnotationThread({
+      ...current,
+      anchors: [...current.anchors, anchor]
+    }, {
+      id: threadId,
+      kind,
+      anchorIds: [anchor.id],
+      ...(kind === 'question' ? { title: clipInlineText(sourceText, 96) } : {}),
+      annotations: [{
+        id: makeLocalId('docx-ann'),
+        anchorId: anchor.id,
+        kind,
+        body,
+        sourceText
+      }],
+      createdAt: now
+    }))
+    setSelectedPdfThreadId(threadId)
+    setPdfAnnotationsOpen(true)
+  }, [docxResult, pdfSidecar, showPdfNotice, t, updatePdfSidecar])
 
   const selectPdfAnnotationThread = useCallback((threadId: string, summary: PdfAnnotationThreadSummary): void => {
     setSelectedPdfThreadId(threadId)
@@ -1299,7 +1393,7 @@ export function WorkspaceFilePreviewPanel({
   }, [pdfPath, pdfSidecar, pdfWorkspaceRoot, savePdfSidecarSoon, showPdfNotice, t])
 
   const reloadPdfAnnotationSidecar = useCallback(async (): Promise<void> => {
-    if (!pdfPath) return
+    if (!annotationTargetPath) return
     if (typeof window.sciforge?.pdfAnnotations?.load !== 'function') {
       showPdfNotice({ tone: 'error', message: t('writePdfAnnotationReloadUnavailable') })
       return
@@ -1308,7 +1402,7 @@ export function WorkspaceFilePreviewPanel({
     setPdfAnnotationPackageAction('reload')
     try {
       const loadResult = await window.sciforge.pdfAnnotations.load({
-        pdfPath,
+        pdfPath: annotationTargetPath,
         workspaceRoot: pdfWorkspaceRoot
       })
       if (!loadResult.ok) {
@@ -1351,7 +1445,7 @@ export function WorkspaceFilePreviewPanel({
     } finally {
       setPdfAnnotationPackageAction(null)
     }
-  }, [pdfPath, pdfSidecar, pdfWorkspaceRoot, savePdfSidecarSoon, showPdfNotice, t])
+  }, [annotationTargetPath, pdfSidecar, pdfWorkspaceRoot, savePdfSidecarSoon, showPdfNotice, t])
 
   const openPdfAnnotationPackagePicker = useCallback((): void => {
     if (!pdfPath || pdfAnnotationPackageAction) return
@@ -1362,9 +1456,9 @@ export function WorkspaceFilePreviewPanel({
   }, [pdfAnnotationPackageAction, pdfPath])
 
   const openPdfAnnotations = useCallback((): void => {
-    if (!pdfPath) return
+    if (!annotationTargetPath) return
     setPdfAnnotationsOpen(true)
-  }, [pdfPath])
+  }, [annotationTargetPath])
 
   const openInEditor = (): void => {
     const path = result?.ok ? result.path : target?.path
@@ -1421,13 +1515,13 @@ export function WorkspaceFilePreviewPanel({
         </button>
 
         <div className="ds-code-sidebar-actions">
-          {result?.ok && result.kind === 'pdf' ? (
+          {result?.ok && (result.kind === 'pdf' || result.kind === 'docx') ? (
             <button
               type="button"
               onClick={() => setPdfAnnotationsOpen((open) => !open)}
               className={`ds-code-sidebar-icon-button ${pdfAnnotationsOpen ? 'bg-accent/10 text-accent' : ''}`}
-              title={t('filePreviewOpenPdfAnnotations')}
-              aria-label={t('filePreviewOpenPdfAnnotations')}
+              title={result.kind === 'docx' ? t('filePreviewOpenDocxAnnotations') : t('filePreviewOpenPdfAnnotations')}
+              aria-label={result.kind === 'docx' ? t('filePreviewOpenDocxAnnotations') : t('filePreviewOpenPdfAnnotations')}
               aria-pressed={pdfAnnotationsOpen}
             >
               <MessageSquareText className="h-4 w-4" strokeWidth={1.9} />
@@ -1517,7 +1611,13 @@ export function WorkspaceFilePreviewPanel({
         {result?.ok ? (
           <span className="shrink-0 font-mono text-[10px] text-ds-faint">
             {formatBytes(result.size)}
-            {result.kind === 'pdf' ? ' · PDF' : result.kind === 'image' ? ' · IMG' : language ? ` · ${language}` : ''}
+            {result.kind === 'pdf'
+              ? ' · PDF'
+              : result.kind === 'docx'
+                ? ' · DOCX'
+                : result.kind === 'image'
+                  ? ' · IMG'
+                  : language ? ` · ${language}` : ''}
           </span>
         ) : null}
       </div>
@@ -1608,6 +1708,59 @@ export function WorkspaceFilePreviewPanel({
                 if (file) void importPdfAnnotationPackageFile(file)
               }}
             />
+          </div>
+        ) : result?.ok && result.kind === 'docx' ? (
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            <div className="relative flex min-h-0 min-w-0 flex-1">
+              {pdfNotice ? (
+                <div className={`absolute left-3 right-3 top-3 z-30 rounded-lg border px-3 py-2 text-[12px] leading-5 shadow-sm ${
+                  pdfNotice.tone === 'success'
+                    ? 'border-emerald-500/25 bg-emerald-50/95 text-emerald-800 dark:bg-emerald-950/85 dark:text-emerald-100'
+                    : 'border-red-500/25 bg-red-50/95 text-red-800 dark:bg-red-950/85 dark:text-red-100'
+                }`}>
+                  {pdfNotice.message}
+                </div>
+              ) : null}
+              <WriteDocxViewer
+                filePath={result.path}
+                paragraphs={result.paragraphs}
+                content={result.content}
+                size={result.size}
+                mtimeMs={result.mtimeMs}
+                workspaceRoot={target.workspaceRoot ?? workspaceRoot}
+                annotationOverlays={visibleDocxAnnotationOverlays}
+                activeAnnotationId={activePdfAnnotationId}
+                onAnnotationAction={addDocxAnnotationFromSelection}
+                onAnnotationSelect={selectPdfAnnotationOverlay}
+                onOpenAnnotations={openPdfAnnotations}
+                className="flex-1"
+              />
+            </div>
+            {pdfAnnotationsOpen ? (
+              <div className="z-20 w-[clamp(300px,34%,380px)] shrink-0 border-l border-ds-border-muted bg-white dark:bg-ds-canvas">
+                <WritePdfAnnotationsPanel
+                  documentKind="docx"
+                  sidecar={pdfSidecar}
+                  selectedThreadId={selectedPdfThreadId}
+                  annotationDisplayMode={pdfAnnotationDisplayMode}
+                  className="h-full max-h-full w-full border-l-0"
+                  reloadingSidecar={pdfAnnotationPackageAction === 'reload'}
+                  onAnnotationDisplayModeChange={setPdfAnnotationDisplayMode}
+                  onSelectThread={selectPdfAnnotationThread}
+                  onHoverThread={(threadId) => setHoveredPdfThreadId(threadId)}
+                  onResolveThread={(threadId) => resolvePdfAnnotation(threadId)}
+                  onReopenThread={(threadId) => reopenPdfAnnotation(threadId)}
+                  onDeleteThread={(threadId) => deletePdfAnnotation(threadId)}
+                  onEditAnnotation={editPdfAnnotation}
+                  onAskQuestion={(threadId, question, summary, options) => {
+                    void askPdfAnnotationQuestion(threadId, question, summary, options)
+                  }}
+                  questionReplies={pdfQuestionReplies}
+                  onReloadSidecar={() => void reloadPdfAnnotationSidecar()}
+                  onCollapse={() => setPdfAnnotationsOpen(false)}
+                />
+              </div>
+            ) : null}
           </div>
         ) : result?.ok && result.kind === 'image' ? (
           <div className="flex min-h-0 flex-1 flex-col bg-ds-main/70">

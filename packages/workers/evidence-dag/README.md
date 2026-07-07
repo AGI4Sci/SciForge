@@ -7,12 +7,13 @@ with an NLI judge, and serialises losslessly to **PROV-JSON**. It is the engine 
 package's `desktop/` modules and are called from the SciForge desktop app.
 
 The service returns structured **`ServiceResult`** evidence only (graph, provenance,
-metrics) — never a user-level final answer or completion truth.
+metrics, audit findings) — never a user-level final answer or completion truth.
 
 > **Scope (phase 1):** one **thread == one graph**. Status is limited to
-> `supported / unverified`; `contradicts` edges are extracted and exposed but never
-> adjudicated. `fragile / conflicting / invalidated`, source quality/retraction, ATMS
-> labels, and Reconcile-write are phase 2+.
+> `supported / unverified / conflicting`; `contradicts` edges are extracted, scored
+> when a verifier is available, and exposed. `fragile`, load-bearing, weak support,
+> hidden shared-source, and audit findings are computed as read-only views; Reconcile-write,
+> source retraction feeds, and ATMS labels remain phase 2+.
 
 ## Layout
 
@@ -27,6 +28,7 @@ metrics) — never a user-level final answer or completion truth.
 | Four AAR metrics | `src/evidence_dag/metrics.py` |
 | Load-bearing / fragility / hidden shared-source (dominator analysis) | `src/evidence_dag/analysis.py` |
 | Reconcile / what-if 扰动 (deterministic, read-only) | `src/evidence_dag/reconcile.py` |
+| Evidence Audit Runs (deterministic adversarial findings + risk digest) | `src/evidence_dag/audit.py` |
 | Engine facade + per-thread persistence | `src/evidence_dag/service.py` |
 | HTTP service (`ServiceResult`) | `src/evidence_dag/server.py` |
 | Bundled Workbench UI (graph view, served at `/`) | `ui/index.html` |
@@ -75,12 +77,14 @@ SCIFORGE_EVIDENCE_DAG_API_KEY=dev-token python samples/load.py
 GET  /health
 GET  /version
 GET  /                                                 # bundled web UI
-POST /threads/{id}/ingest-trace   {"trace":[ {id,type,role?,tool_name?,content} ... ], "merge?":bool, "verify?":bool}
+POST /threads/{id}/ingest-trace   {"trace":[ {id,type,role?,tool_name?,content} ... ], "rebuild?":bool, "verify?":bool}
 GET  /threads/{id}/graph
 POST /threads/{id}/verify         {"threshold":0.7}
 GET  /threads/{id}/provenance?node=<nodeId>
 GET  /threads/{id}/metrics
 GET  /threads/{id}/analysis?threshold=0.7              # load-bearing / fragility / hidden shared-source
+GET  /threads/{id}/audit-runs                          # latest + persisted audit runs
+POST /threads/{id}/audit-runs      {"trigger":"manual","threshold":0.7,"verify?":bool}
 POST /threads/{id}/reconcile      {"remove_nodes":[...],"remove_edges":[...],"add_contradicts":[...]}
 GET  /threads/{id}/prov-json                           # export
 POST /threads/{id}/prov-json      {"doc":{...}}        # import / reload
@@ -101,8 +105,14 @@ depend on), **fragile** conclusions (ungrounded / single-source / contested), an
 **hidden shared-source** claims (look multi-supported but every path funnels through one
 source). `/reconcile` is a deterministic **what-if** — simulate removing sources/edges (or
 adding a contradiction) and get the blast radius (which conclusions collapse / weaken /
-turn conflicting); it never mutates the graph. `ingest-trace` with `merge:true` grows the
-thread's graph incrementally across turns; default replaces it (whole-conversation re-extract).
+turn conflicting); it never mutates the graph. `/audit-runs` converts the current graph and
+analysis view into adversarial findings such as ungrounded claims, unresolved contradictions,
+weak support, single-source dependencies, hidden shared-source, load-bearing evidence, and
+low-credibility sources. Audit runs are persisted next to the thread graph as `.audit.json`,
+carry a stable `dag_digest`, and do not mutate the DAG. `ingest-trace` grows the thread's
+graph incrementally across turns by default; `rebuild:true` explicitly replaces the graph
+from a whole-conversation trace. Ingest runs a lightweight advisory audit by default
+(`EDAG_AUTO_AUDIT=1`) and deduplicates auto-runs for unchanged DAG digests.
 
 ## Config (env)
 
@@ -112,6 +122,7 @@ thread's graph incrementally across turns; default replaces it (whole-conversati
 | `EDAG_MODEL_ROUTER_API_KEY` | — | Model Router runtime bearer key |
 | `EDAG_MODEL_ROUTER_MODEL` | `sciforge-router` | public Model Router alias |
 | `EDAG_AUTO_VERIFY` | `1` | auto-verify supports edges right after ingest |
+| `EDAG_AUTO_AUDIT` | `1` | run a quick advisory audit after ingest; duplicate DAG digests reuse the latest auto run |
 | `EDAG_STORAGE_DIR` | — | if set, each thread's DAG is persisted as PROV-JSON |
 | `EDAG_HOST` / `EDAG_PORT` | `127.0.0.1` / `3897` | HTTP bind |
 | `SCIFORGE_EVIDENCE_DAG_API_KEY` | — | required bearer token for JSON APIs/feed |
@@ -133,6 +144,7 @@ they enter one Evidence-DAG seam. Touch points in the app:
 | Mapping + feed (pure mapping + fail-open client) | `src/main/runtime/evidence-dag-feed.ts` |
 | Call site (completed turn, fire-and-forget) | `src/main/runtime/agent-runtime/host.ts` |
 | Resolve UI view | `evidenceDag:view` IPC + Workbench right-panel Evidence DAG item |
+| Manual build + audit current thread | `evidenceDag:audit-run` IPC + Workbench Evidence DAG audit button |
 
 GUI main-process env. In normal app runs `desktop/sidecar.ts` fills these from the
 managed sidecar config; manual env remains useful for diagnostics:

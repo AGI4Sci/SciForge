@@ -362,7 +362,7 @@ function MessageTurn({
   const [workExpandedOverride, setWorkExpandedOverride] = useState<boolean | null>(null)
   const workExpanded = workExpandedOverride ?? isProcessing
 
-  const { processBlocks, assistantContentBlocks, turnFileChanges } = useMemo(
+  const { processBlocks, conversationBlocks, turnFileChanges } = useMemo(
     () =>
       deriveTurnSections({
         turn,
@@ -438,11 +438,11 @@ function MessageTurn({
         </div>
       ) : null}
 
-      {assistantContentBlocks.map((block) => (
+      {conversationBlocks.map((block) => (
         <MessageBubble
           key={block.id}
           block={block}
-          markdownImages={turnArtifactImages}
+          markdownImages={block.kind === 'assistant' ? turnArtifactImages : undefined}
           onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
         />
       ))}

@@ -549,6 +549,8 @@ input,
 textarea,
 [contenteditable='true'],
 .ds-markdown,
+.ds-selectable-text,
+.ds-selectable-text *,
 .ds-user-message-bubble,
 .ds-code-block-html,
 .ds-file-preview-code-html,
@@ -557,6 +559,12 @@ textarea,
 pre {
   user-select: text;
   -webkit-user-select: text;
+}
+
+.ds-selectable-text :is(button, [role='button'], input, textarea, select, option, summary),
+.ds-selectable-text:is(button, [role='button']) {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 * {

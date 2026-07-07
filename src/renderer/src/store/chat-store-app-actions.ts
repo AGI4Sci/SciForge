@@ -69,6 +69,13 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     },
 
     setActiveAgentRuntime: async (runtimeId: AgentRuntimeId) => {
+      const previousRuntimeId = get().activeAgentRuntime
+      set({
+        activeAgentRuntime: runtimeId,
+        runtimeConnection: 'checking',
+        error: null,
+        runtimeErrorDetail: null
+      })
       try {
         const saved = await rendererRuntimeClient.setSettings({ activeAgentRuntime: runtimeId })
         const activeAgentRuntime = getActiveAgentRuntime(saved)
@@ -81,6 +88,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         await get().probeRuntime('user')
       } catch (error) {
         set({
+          activeAgentRuntime: previousRuntimeId,
           error: error instanceof Error ? error.message : String(error),
           runtimeConnection: 'offline'
         })

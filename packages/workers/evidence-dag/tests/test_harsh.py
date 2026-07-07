@@ -424,6 +424,28 @@ class TestServerRobustness(unittest.TestCase):
         self.assertEqual(sm, 200)
         self.assertIn("provenance_coverage", dm["data"])
 
+    def test_manual_and_auto_audit_runs(self):
+        trace = {"trace": [{"id": "step-1", "type": "tool_result", "content": "Evidence."},
+                           {"id": "step-2", "type": "message", "content": "Claim."}]}
+        status, data = self._req("POST", "/threads/audit-flow/ingest-trace", trace)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["data"]["audited"])
+        self.assertIn("total_findings", data["data"]["audit"])
+
+        status, data = self._req("GET", "/threads/audit-flow/audit-runs")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(len(data["data"]["runs"]), 1)
+        self.assertEqual(data["data"]["latest"]["trigger"], "auto")
+
+        status, data = self._req("POST", "/threads/audit-flow/audit-runs",
+                                 {"trigger": "manual", "threshold": 0.7})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["data"]["trigger"], "manual")
+        self.assertIn("findings", data["data"])
+
+        status, _ = self._req("GET", "/threads/missing-thread/audit-runs")
+        self.assertEqual(status, 404)
+
     def test_thread_route_decodes_runtime_scoped_ids(self):
         trace = {"trace": [{"id": "step-1", "type": "message", "content": "Claim."}]}
         status, _ = self._req("POST", "/threads/claude%3Athread%2Fone/ingest-trace", trace)

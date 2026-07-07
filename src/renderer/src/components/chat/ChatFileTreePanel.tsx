@@ -138,6 +138,13 @@ export function rewriteRenamedPath(value: string, previousPath: string, nextPath
   return normalized.startsWith(prefix) ? `${next}/${normalized.slice(prefix.length)}` : normalized
 }
 
+export function shouldProcessInitialDirectory(
+  processedNonce: number | null,
+  initialDirectory: FileTreeInitialDirectory | null | undefined
+): initialDirectory is FileTreeInitialDirectory {
+  return Boolean(initialDirectory && processedNonce !== initialDirectory.nonce)
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
@@ -179,8 +186,12 @@ export function ChatFileTreePanel({
   const [renameDialog, setRenameDialog] = useState<FileTreeRenameDialogState | null>(null)
   const [fileClipboard, setFileClipboard] = useState<FileTreeClipboardState | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const processedInitialDirectoryNonceRef = useRef<number | null>(null)
   const selectedGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0]
   const root = selectedGroup?.workspaceRoot.trim() ?? ''
+  const rootKey = useMemo(() => pathKey(root), [root])
+  const activeRootKeyRef = useRef(rootKey)
+  activeRootKeyRef.current = rootKey
   const selectedKey = useMemo(() => pathKey(selectedPath ?? ''), [selectedPath])
   const focusedDirectoryKey = useMemo(() => pathKey(focusedDirectoryPath), [focusedDirectoryPath])
   const selectedReferenceKeys = useMemo(
@@ -205,13 +216,13 @@ export function ChatFileTreePanel({
   }, [root])
 
   useEffect(() => {
-    if (!initialDirectory) return
+    if (!shouldProcessInitialDirectory(processedInitialDirectoryNonceRef.current, initialDirectory)) return
     const nextRoot = normalizePath(initialDirectory.workspaceRoot)
     const nextPath = normalizePath(initialDirectory.path)
     const matchingGroup = groups.find((group) => pathKey(group.workspaceRoot) === pathKey(nextRoot))
-    if (matchingGroup && matchingGroup.id !== selectedGroupId) {
-      setSelectedGroupId(matchingGroup.id)
-    }
+    if (nextRoot && !matchingGroup) return
+    processedInitialDirectoryNonceRef.current = initialDirectory.nonce
+    if (matchingGroup) setSelectedGroupId((current) => current === matchingGroup.id ? current : matchingGroup.id)
     setFocusedDirectoryPath(nextPath)
     setPendingScrollPath(nextPath)
     setExpanded((current) => {
@@ -219,10 +230,12 @@ export function ChatFileTreePanel({
       for (const path of ancestorDirectoryPaths(nextPath)) next.add(path)
       return next
     })
-  }, [groups, initialDirectory, selectedGroupId])
+  }, [groups, initialDirectory])
 
   const loadDirectory = useCallback((path: string): void => {
     if (!root) return
+    const requestRoot = root
+    const requestRootKey = rootKey
     const provider = getProvider()
     if (!provider.listWorkspaceReferences) {
       setDirectories((current) => ({
@@ -245,11 +258,12 @@ export function ChatFileTreePanel({
       }
     }))
     void provider.listWorkspaceReferences({
-        workspaceRoot: root,
+        workspaceRoot: requestRoot,
         ...(path ? { path } : {}),
         limit: 300
       })
       .then((result) => {
+        if (activeRootKeyRef.current !== requestRootKey) return
         setDirectories((current) => ({
           ...current,
           [key]: result?.ok
@@ -266,6 +280,7 @@ export function ChatFileTreePanel({
         }))
       })
       .catch((error) => {
+        if (activeRootKeyRef.current !== requestRootKey) return
         setDirectories((current) => ({
           ...current,
           [key]: {
@@ -275,7 +290,7 @@ export function ChatFileTreePanel({
           }
         }))
       })
-  }, [root, t])
+  }, [root, rootKey, t])
 
   useEffect(() => {
     for (const path of expanded) {

@@ -92,6 +92,64 @@ function buildHarness(initialState: Partial<ChatState> = {}): {
 }
 
 describe('chat-store app actions', () => {
+  it('optimistically shows the selected runtime while settings save', async () => {
+    const deferred: { resolve: (settings: AppSettingsV1) => void } = {
+      resolve: () => undefined
+    }
+    const setSettings = vi.fn(() => new Promise<AppSettingsV1>((resolve) => {
+      deferred.resolve = resolve
+    }))
+    vi.stubGlobal('window', {
+      sciforge: {
+        setSettings
+      }
+    })
+    const probeRuntime = vi.fn(async () => undefined)
+    const { actions, state } = buildHarness({
+      activeAgentRuntime: 'codex',
+      runtimeConnection: 'ready',
+      runtimeErrorDetail: 'old error',
+      error: 'old error',
+      probeRuntime
+    })
+
+    const task = actions.setActiveAgentRuntime('sciforge')
+
+    expect(state.activeAgentRuntime).toBe('sciforge')
+    expect(state.runtimeConnection).toBe('checking')
+    expect(state.error).toBeNull()
+    expect(state.runtimeErrorDetail).toBeNull()
+    expect(setSettings).toHaveBeenCalledWith({ activeAgentRuntime: 'sciforge' })
+
+    deferred.resolve({ activeAgentRuntime: 'sciforge' } as AppSettingsV1)
+    await task
+
+    expect(probeRuntime).toHaveBeenCalledWith('user')
+  })
+
+  it('rolls runtime selection back when settings save fails', async () => {
+    vi.stubGlobal('window', {
+      sciforge: {
+        setSettings: vi.fn(async () => {
+          throw new Error('save failed')
+        })
+      }
+    })
+    const probeRuntime = vi.fn(async () => undefined)
+    const { actions, state } = buildHarness({
+      activeAgentRuntime: 'codex',
+      runtimeConnection: 'ready',
+      probeRuntime
+    })
+
+    await actions.setActiveAgentRuntime('sciforge')
+
+    expect(state.activeAgentRuntime).toBe('codex')
+    expect(state.runtimeConnection).toBe('offline')
+    expect(state.error).toBe('save failed')
+    expect(probeRuntime).not.toHaveBeenCalled()
+  })
+
   it('opens a remote guard entry without selecting its mapped local thread', () => {
     const { actions, state } = buildHarness()
 

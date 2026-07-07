@@ -448,6 +448,49 @@ describe('AgentRuntimeProvider', () => {
     })
   })
 
+  it('uses the runtime request id for persisted approval blocks', async () => {
+    vi.stubGlobal('window', {
+      sciforge: {
+        getSettings: vi.fn(async () => settings('codex')),
+        setSettings: vi.fn(),
+        agentRuntime: {
+          readThread: vi.fn(async () => ({
+            id: 'thread-approval',
+            runtimeId: 'codex',
+            title: 'Approval thread',
+            updatedAt: '2026-06-11T00:00:00.000Z',
+            latestSeq: 4,
+            items: [
+              {
+                id: 'call_approval',
+                kind: 'approval',
+                summary: 'Run command?',
+                status: 'pending',
+                meta: {
+                  approvalId: 'call_approval',
+                  codexRequestId: 39,
+                  codexRequestKind: 'approval'
+                }
+              }
+            ]
+          }))
+        }
+      }
+    })
+    const provider = new AgentRuntimeProvider()
+    provider.rememberThreadRuntime('thread-approval', 'codex')
+
+    const detail = await provider.getThreadDetail('thread-approval')
+
+    expect(detail.blocks).toContainEqual(
+      expect.objectContaining({
+        kind: 'approval',
+        id: 'call_approval',
+        approvalId: '39'
+      })
+    )
+  })
+
   it('dedupes persisted user input items with the same request id', async () => {
     vi.stubGlobal('window', {
       sciforge: {

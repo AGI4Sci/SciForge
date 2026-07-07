@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, realpath, readdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import JSZip from 'jszip'
 
 vi.mock('electron', () => ({
   app: {
@@ -32,6 +33,7 @@ import {
   renameWorkspaceEntry,
   resolveWorkspaceFile,
   saveWorkspaceClipboardImage,
+  writeWorkspaceDocxText,
   writeWorkspaceFile
 } from './workspace-service'
 
@@ -51,6 +53,34 @@ describe('workspace-service boundary checks', () => {
     await writeFile(join(workspaceRoot, 'inside.txt'), 'inside', 'utf8')
     await writeFile(outsideFile, 'outside', 'utf8')
   })
+
+  async function writeMinimalDocx(path: string): Promise<void> {
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '<Default Extension="xml" ContentType="application/xml"/>',
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
+      '</Types>'
+    ].join(''))
+    zip.file('_rels/.rels', [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>',
+      '</Relationships>'
+    ].join(''))
+    zip.file('word/document.xml', [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+      '<w:body>',
+      '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Study note</w:t></w:r></w:p>',
+      '<w:p><w:r><w:t>First paragraph</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>with tab</w:t></w:r></w:p>',
+      '</w:body>',
+      '</w:document>'
+    ].join(''))
+    await writeFile(path, await zip.generateAsync({ type: 'nodebuffer' }))
+  }
 
   it('allows files inside the selected workspace', async () => {
     const result = await resolveWorkspaceFile({
@@ -373,6 +403,63 @@ describe('workspace-service boundary checks', () => {
     expect(result.size).toBe(pdfBytes.length)
     expect(result.truncated).toBe(false)
     expect(result.mtimeMs).toBeGreaterThan(0)
+  })
+
+  it('extracts DOCX paragraphs through the generic workspace file reader', async () => {
+    const docxPath = join(workspaceRoot, 'notes', 'commentary.docx')
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    await writeMinimalDocx(docxPath)
+
+    const result = await readWorkspaceFile({
+      path: 'notes/commentary.docx',
+      workspaceRoot
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    if (result.kind !== 'docx') {
+      throw new Error(`Expected DOCX preview, received ${result.kind}`)
+    }
+
+    expect(result.path).toBe(await realpath(docxPath))
+    expect(result.mimeType).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    expect(result.content).toContain('Study note')
+    expect(result.content).toContain('First paragraph\twith tab')
+    expect(result.paragraphs).toEqual([
+      expect.objectContaining({ index: 1, text: 'Study note', style: 'Heading1' }),
+      expect.objectContaining({ index: 2, text: 'First paragraph\twith tab' })
+    ])
+    expect(result.truncated).toBe(false)
+    expect(result.mtimeMs).toBeGreaterThan(0)
+  })
+
+  it('writes edited DOCX paragraph text while preserving a readable document package', async () => {
+    const docxPath = join(workspaceRoot, 'notes', 'editable.docx')
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    await writeMinimalDocx(docxPath)
+
+    const saveResult = await writeWorkspaceDocxText({
+      path: 'notes/editable.docx',
+      workspaceRoot,
+      paragraphs: [
+        { index: 1, text: 'Updated study note' },
+        { index: 2, text: 'Changed paragraph\twith tab\nand safe XML chars: & < > "' }
+      ]
+    })
+
+    expect(saveResult.ok).toBe(true)
+    if (!saveResult.ok) return
+    expect(saveResult.paragraphCount).toBe(2)
+
+    const readResult = await readWorkspaceFile({
+      path: 'notes/editable.docx',
+      workspaceRoot
+    })
+
+    expect(readResult.ok).toBe(true)
+    if (!readResult.ok || readResult.kind !== 'docx') return
+    expect(readResult.content).toContain('Updated study note')
+    expect(readResult.content).toContain('Changed paragraph\twith tab\nand safe XML chars: & < > "')
   })
 
   it('labels text previews from the generic workspace file reader', async () => {

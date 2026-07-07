@@ -429,7 +429,7 @@ function reviewFromItem(item: AgentRuntimeItem): ReviewEventPayload {
 }
 
 function approvalFromItem(item: AgentRuntimeItem): ApprovalRequestPayload {
-  const approvalId = stringMeta(item.meta, 'approvalId') ?? item.id
+  const approvalId = requestIdMeta(item.meta, 'codexRequestId') ?? stringMeta(item.meta, 'approvalId') ?? item.id
   const meta = runtimeDisclosureMetaFromRecord(item.meta)
   return {
     approvalId,
@@ -466,6 +466,13 @@ function userInputFromItem(item: AgentRuntimeItem): {
 function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = meta?.[key]
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function requestIdMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key]
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return undefined
 }
 
 function questionsMeta(meta: Record<string, unknown> | undefined): UserInputQuestion[] {

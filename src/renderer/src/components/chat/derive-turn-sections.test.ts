@@ -34,7 +34,7 @@ describe('deriveTurnSections', () => {
       { kind: 'reasoning', id: 'reasoning', text: 'The user greeted me.' }
     ])
 
-    expect(result.assistantContentBlocks).toEqual([
+    expect(result.conversationBlocks).toEqual([
       { kind: 'assistant', id: 'answer', text: '你好！' }
     ])
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['reasoning'])
@@ -52,7 +52,7 @@ describe('deriveTurnSections', () => {
       }
     ])
 
-    expect(result.assistantContentBlocks).toEqual([
+    expect(result.conversationBlocks).toEqual([
       { kind: 'assistant', id: 'preface', text: '我先检查一下。' }
     ])
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
@@ -92,7 +92,7 @@ describe('deriveTurnSections', () => {
       { kind: 'assistant', id: 'next', text: 'The issue link above should still be visible.' }
     ])
 
-    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual([
+    expect(result.conversationBlocks.map((block) => block.id)).toEqual([
       'next'
     ])
     expect(result.processBlocks.map((block) => block.id)).toEqual([
@@ -117,7 +117,7 @@ describe('deriveTurnSections', () => {
       }
     ])
 
-    expect(result.assistantContentBlocks).toEqual([])
+    expect(result.conversationBlocks).toEqual([])
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
   })
 
@@ -150,7 +150,8 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.processBlocks.map((block) => block.id)).toEqual(['input_card'])
+    expect(result.processBlocks).toEqual([])
+    expect(result.conversationBlocks.map((block) => block.id)).toEqual(['input_card'])
   })
 
   it('dedupes repeated user-input cards by request id', () => {
@@ -181,7 +182,33 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.processBlocks.map((block) => block.id)).toEqual(['input_new'])
+    expect(result.processBlocks).toEqual([])
+    expect(result.conversationBlocks.map((block) => block.id)).toEqual(['input_new'])
+  })
+
+  it('renders approval cards directly in the conversation instead of process work', () => {
+    const result = processingSections({
+      blocks: [
+        {
+          kind: 'approval',
+          id: 'approval-card',
+          approvalId: 'approval-1',
+          summary: 'Run command?',
+          toolName: 'command execution',
+          status: 'pending'
+        },
+        {
+          kind: 'tool',
+          id: 'tool_1',
+          summary: 'read',
+          status: 'running',
+          toolKind: 'tool_call'
+        }
+      ]
+    })
+
+    expect(result.conversationBlocks.map((block) => block.id)).toEqual(['approval-card'])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1'])
   })
 
   it('extracts file changes from JSON-wrapped tool output diffs', () => {
@@ -267,7 +294,7 @@ describe('deriveTurnSections', () => {
       liveContent: '这里是正在生成的回答。'
     })
 
-    expect(result.assistantContentBlocks).toEqual([])
+    expect(result.conversationBlocks).toEqual([])
     expect(result.processBlocks).toEqual([
       { kind: 'reasoning', id: 'live-reasoning', text: 'private reasoning' }
     ])
@@ -307,7 +334,7 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.assistantContentBlocks).toEqual([])
+    expect(result.conversationBlocks).toEqual([])
     expect(result.processBlocks).toEqual([
       { kind: 'assistant', id: 'answer', text: '先给你一部分结果。' },
       {
@@ -341,7 +368,7 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.assistantContentBlocks).toEqual([])
+    expect(result.conversationBlocks).toEqual([])
     expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1', 'answer', 'tool_2'])
   })
 })

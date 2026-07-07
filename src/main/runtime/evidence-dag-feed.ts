@@ -19,6 +19,7 @@ type FeedOptions = {
   items: readonly AgentRuntimeItem[]
   env?: Record<string, string | undefined>
   fetchImpl?: typeof fetch
+  failOpen?: boolean
 }
 
 function stringifyOutput(value: unknown): string {
@@ -112,16 +113,24 @@ export async function feedEvidenceDag(options: FeedOptions): Promise<void> {
   )
   try {
     const engineThreadId = evidenceDagThreadId(options.runtimeId, options.threadId)
-    await (options.fetchImpl ?? fetch)(`${base}/threads/${encodeURIComponent(engineThreadId)}/ingest-trace`, {
+    const response = await (options.fetchImpl ?? fetch)(`${base}/threads/${encodeURIComponent(engineThreadId)}/ingest-trace`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`
       },
-      body: JSON.stringify({ trace, merge: true }),
+      body: JSON.stringify({ trace }),
       signal: controller.signal
     })
-  } catch {
+    const body = await response.json().catch(() => null) as { ok?: boolean; error?: { message?: unknown } } | null
+    if (!response.ok || body?.ok === false) {
+      const message = typeof body?.error?.message === 'string'
+        ? body.error.message
+        : `Evidence DAG ingest returned HTTP ${response.status}`
+      throw new Error(message)
+    }
+  } catch (error) {
+    if (options.failOpen === false) throw error
     // fail-open: the DAG is best-effort; never break the runtime turn.
   } finally {
     clearTimeout(timer)

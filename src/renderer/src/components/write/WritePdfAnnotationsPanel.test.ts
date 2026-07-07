@@ -145,9 +145,12 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Why does this measurement change?')
     expect(html).toContain('Translate selection')
     expect(html).toContain('Follow up')
+    expect(html).toContain('aria-label="Resize editor"')
     expect(html).toContain('Does temperature matter too?')
     expect(html).toContain('Agent answer')
     expect(html).toContain('anisotropic axis rotates')
+    expect(html.match(/aria-label="Copy message"/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(html.match(/ds-selectable-text/g)?.length).toBeGreaterThanOrEqual(4)
     expect(html).not.toContain('A comment on the claim.')
     expect(html).not.toContain('Translation</option>')
     expect(html).toContain('aria-label="Select annotation thread"')
@@ -169,5 +172,28 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Save')
     expect(html).toContain('Cancel')
     expect(html).toContain('aria-label="Edit annotation"')
+    expect(html).toContain('aria-label="Resize editor"')
+  })
+
+  it('renders document annotation copy without PDF-only package and page controls', () => {
+    const html = renderToStaticMarkup(createElement(WritePdfAnnotationsPanel, {
+      documentKind: 'docx',
+      sidecar: panelSidecar(),
+      selectedThreadId: 'thread-b',
+      onSelectThread: vi.fn(),
+      onEditAnnotation: vi.fn(),
+      onAskQuestion: vi.fn(),
+      onReloadSidecar: vi.fn()
+    }))
+
+    expect(html).toContain('Document annotations')
+    expect(html).toContain('Ask about this document selection...')
+    expect(html).toContain('aria-label="Document selection question"')
+    expect(html).toContain('Reload annotations')
+    expect(html).not.toContain('PDF annotations')
+    expect(html).not.toContain('Export package')
+    expect(html).not.toContain('Export PDF')
+    expect(html).not.toContain('Import package')
+    expect(html).not.toContain('placeholder="Page"')
   })
 })

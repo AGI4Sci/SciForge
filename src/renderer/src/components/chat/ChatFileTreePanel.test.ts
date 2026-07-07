@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   composerReferenceFromWorkspaceReference,
   renamedRelativePath,
-  rewriteRenamedPath
+  rewriteRenamedPath,
+  shouldProcessInitialDirectory
 } from './ChatFileTreePanel'
 
 describe('ChatFileTreePanel helpers', () => {
@@ -47,5 +48,14 @@ describe('ChatFileTreePanel helpers', () => {
     expect(rewriteRenamedPath('pdfs/nested/file.pdf', 'pdfs', 'papers')).toBe('papers/nested/file.pdf')
     expect(rewriteRenamedPath('pdfs', 'pdfs', 'papers')).toBe('papers')
     expect(rewriteRenamedPath('pdfs-other/file.pdf', 'pdfs', 'papers')).toBe('pdfs-other/file.pdf')
+  })
+
+  it('processes initial directory requests only once per nonce', () => {
+    const request = { workspaceRoot: '/workspace/project-a', path: 'src', nonce: 3 }
+
+    expect(shouldProcessInitialDirectory(null, request)).toBe(true)
+    expect(shouldProcessInitialDirectory(2, request)).toBe(true)
+    expect(shouldProcessInitialDirectory(3, request)).toBe(false)
+    expect(shouldProcessInitialDirectory(3, null)).toBe(false)
   })
 })

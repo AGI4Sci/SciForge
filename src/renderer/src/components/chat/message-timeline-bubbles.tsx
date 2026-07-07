@@ -174,7 +174,7 @@ function UserMessageBubble({
         <RemoteChannelInboundMessageCard display={parsedRemoteChannelPrompt} text={displayText} />
       ) : (
         <div className="ds-user-message-bubble min-w-0">
-          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left">
+          <div className="ds-selectable-text whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left">
             {displayText}
           </div>
           <MessageSourceTag label={sourceLabel} align="right" />
@@ -227,7 +227,7 @@ function RemoteChannelInboundMessageCard({
         <MessageSquareQuote className="h-3.5 w-3.5" strokeWidth={1.8} />
         <span>{t('remoteChannelTimelineInbound', { source: display.sourceLabel ?? t('connectPhoneLabel') })}</span>
       </div>
-      <div className="mt-2 whitespace-pre-wrap break-words text-[15px] leading-6 text-ds-ink [overflow-wrap:anywhere]">
+      <div className="ds-selectable-text mt-2 whitespace-pre-wrap break-words text-[15px] leading-6 text-ds-ink [overflow-wrap:anywhere]">
         {text}
       </div>
       {meta.length > 0 ? (
@@ -955,7 +955,7 @@ export function MessageBubble({
       : null
     return (
       <div className="group/message flex min-w-0 max-w-full flex-col">
-        <div className="ds-markdown ds-chat-answer min-w-0 max-w-full text-ds-ink">
+        <div className="ds-markdown ds-chat-answer ds-selectable-text min-w-0 max-w-full text-ds-ink">
           <MarkdownImageArtifactProvider images={markdownImages} onOpenCanvas={onOpenImageArtifactInCanvas}>
             <AssistantMarkdown text={block.text} streaming={streaming} />
           </MarkdownImageArtifactProvider>
@@ -989,6 +989,14 @@ export function MessageBubble({
   }
   if (block.kind === 'approval') {
     const done = block.status !== 'pending'
+    const approvalToneClass =
+      block.status === 'error'
+        ? 'border-red-300/80 bg-red-500/10 dark:border-red-800/60 dark:bg-red-950/35'
+        : block.status === 'allowed'
+          ? 'border-emerald-300/80 bg-emerald-500/10 dark:border-emerald-800/60 dark:bg-emerald-950/35'
+          : block.status === 'denied'
+            ? 'border-ds-border bg-ds-card/95'
+            : 'border-amber-300/90 bg-amber-50 text-ds-ink shadow-[0_16px_42px_rgba(180,83,9,0.14)] dark:border-amber-800/70 dark:bg-amber-950/35'
     const statusLabel =
       block.status === 'allowed'
         ? t('approvalAllowed')
@@ -999,11 +1007,9 @@ export function MessageBubble({
             : t('approvalPending')
     return (
       <div
-        className={`rounded-[22px] border px-4 py-4 text-[13px] leading-6 shadow-[0_12px_30px_rgba(86,103,136,0.04)] ${
-          block.status === 'error'
-            ? 'border-red-300/80 bg-red-500/10 dark:border-red-800/60 dark:bg-red-950/35'
-            : 'border-accent/35 bg-[linear-gradient(180deg,rgba(79,124,255,0.08),rgba(79,124,255,0.12))] text-ds-ink'
-        }`}
+        role={block.status === 'pending' ? 'alert' : undefined}
+        aria-live={block.status === 'pending' ? 'assertive' : undefined}
+        className={`rounded-[22px] border px-4 py-4 text-[13px] leading-6 ${approvalToneClass}`}
       >
         <div className="font-semibold text-accent">{t('approvalTitle')}</div>
         {block.toolName ? (

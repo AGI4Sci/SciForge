@@ -1,4 +1,11 @@
-import { useMemo, useState, type ReactElement } from 'react'
+import {
+  useMemo,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement
+} from 'react'
 import {
   CheckCircle2,
   Circle,
@@ -35,6 +42,7 @@ import {
   type PdfAnnotationThreadSort,
   type PdfAnnotationThreadSummary
 } from '../../write/pdf-annotations'
+import { CopyTextButton } from '../CopyTextButton'
 
 export type WritePdfAnnotationDisplayMode = 'hidden' | 'current' | 'all'
 
@@ -56,6 +64,7 @@ export type WritePdfQuestionAssistantReply = {
 
 export type WritePdfAnnotationsPanelProps = {
   sidecar: PdfAnnotationSidecar | null
+  documentKind?: 'pdf' | 'docx'
   selectedThreadId?: string | null
   annotationDisplayMode?: WritePdfAnnotationDisplayMode
   initialKind?: PdfAnnotationKind | 'all'
@@ -89,6 +98,81 @@ export type WritePdfAnnotationsPanelProps = {
 }
 
 type PdfQuestionDisplayStatus = 'draft' | 'pending' | 'answering' | 'answered' | 'accepted'
+
+const RESIZABLE_TEXTAREA_MIN_HEIGHT = 82
+const RESIZABLE_TEXTAREA_MAX_HEIGHT = 520
+const QUESTION_TEXTAREA_DEFAULT_HEIGHT = 108
+const EDIT_TEXTAREA_DEFAULT_HEIGHT = 164
+
+function clampTextareaHeight(value: number): number {
+  return Math.min(RESIZABLE_TEXTAREA_MAX_HEIGHT, Math.max(RESIZABLE_TEXTAREA_MIN_HEIGHT, Math.round(value)))
+}
+
+function ResizableTextarea({
+  value,
+  onChange,
+  onKeyDown,
+  placeholder,
+  ariaLabel,
+  resizeLabel,
+  height,
+  onHeightChange,
+  autoFocus = false,
+  minHeight = RESIZABLE_TEXTAREA_MIN_HEIGHT
+}: {
+  value: string
+  onChange: (value: string) => void
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void
+  placeholder: string
+  ariaLabel: string
+  resizeLabel: string
+  height: number
+  onHeightChange: (height: number) => void
+  autoFocus?: boolean
+  minHeight?: number
+}): ReactElement {
+  const clampedHeight = clampTextareaHeight(Math.max(height, minHeight))
+  const style = { height: clampedHeight } satisfies CSSProperties
+
+  const beginResize = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    event.preventDefault()
+    const startY = event.clientY
+    const startHeight = clampedHeight
+    const onPointerMove = (moveEvent: PointerEvent): void => {
+      onHeightChange(clampTextareaHeight(startHeight + moveEvent.clientY - startY))
+    }
+    const onPointerUp = (): void => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+    }
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp, { once: true })
+  }
+
+  return (
+    <div className="grid gap-1">
+      <textarea
+        autoFocus={autoFocus}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        style={style}
+        className="w-full resize-none rounded-lg border border-ds-border-muted bg-white px-3 py-2 text-[12.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/50 focus:ring-2 focus:ring-accent/10 dark:bg-white/7"
+        aria-label={ariaLabel}
+      />
+      <button
+        type="button"
+        onPointerDown={beginResize}
+        className="flex h-4 cursor-ns-resize items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+        aria-label={resizeLabel}
+        title={resizeLabel}
+      >
+        <span className="h-1 w-10 rounded-full bg-current opacity-35" />
+      </button>
+    </div>
+  )
+}
 
 function kindAccent(kind: PdfAnnotationKind): string {
   if (kind === 'highlight') return 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
@@ -180,6 +264,7 @@ function questionStatusLabel(status: PdfQuestionDisplayStatus, t: (key: string) 
 
 export function WritePdfAnnotationsPanel({
   sidecar,
+  documentKind = 'pdf',
   selectedThreadId = null,
   annotationDisplayMode = 'current',
   initialKind = 'all',
@@ -207,6 +292,7 @@ export function WritePdfAnnotationsPanel({
   questionReplies = {}
 }: WritePdfAnnotationsPanelProps): ReactElement {
   const { t } = useTranslation('common')
+  const pdfMode = documentKind === 'pdf'
   const [kind, setKind] = useState<PdfAnnotationKind | 'all'>(initialKind)
   const [status, setStatus] = useState<PdfAnnotationThreadStatus | 'all'>(initialStatus)
   const [pageValue, setPageValue] = useState(initialPage != null && initialPage > 0 ? String(initialPage) : '')
@@ -215,6 +301,7 @@ export function WritePdfAnnotationsPanel({
   const [editingBody, setEditingBody] = useState('')
   const [dismissedAutoEditThreadId, setDismissedAutoEditThreadId] = useState<string | null>(null)
   const [questionDrafts, setQuestionDrafts] = useState<Record<string, string>>({})
+  const [textareaHeights, setTextareaHeights] = useState<Record<string, number>>({})
   const page = pageValue.trim() ? Number(pageValue) : null
   const summaries = useMemo(() => {
     if (!sidecar) return []
@@ -222,17 +309,17 @@ export function WritePdfAnnotationsPanel({
       filter: {
         kind,
         status,
-        page: page != null && Number.isFinite(page) && page > 0 ? page : null
+        page: pdfMode && page != null && Number.isFinite(page) && page > 0 ? page : null
       },
       sort
     })
-  }, [kind, page, sidecar, sort, status])
+  }, [kind, page, pdfMode, sidecar, sort, status])
   const totalThreadCount = sidecar?.threads.length ?? 0
   const totalAnnotationCount = sidecar?.annotations.length ?? 0
   const totalAnchorCount = sidecar?.anchors.length ?? 0
   const totalAuthorCount = sidecar?.authors.length ?? 0
-  const sourcePdfName = sidecar?.manifest.sourcePdfName || sidecar?.pdfFingerprint.fileName || ''
-  const hasFilter = kind !== 'all' || status !== 'all' || Boolean(pageValue.trim())
+  const sourceDocumentName = sidecar?.manifest.sourcePdfName || sidecar?.pdfFingerprint.fileName || ''
+  const hasFilter = kind !== 'all' || status !== 'all' || (pdfMode && Boolean(pageValue.trim()))
   const packageActionBusy = exportingPackage || exportingPdf || importingPackage || reloadingSidecar
   const exportDisabled = !sidecar || !onExportPackage || packageActionBusy
   const exportPdfDisabled = !sidecar || !onExportPdf || packageActionBusy
@@ -242,23 +329,34 @@ export function WritePdfAnnotationsPanel({
     {
       mode: 'hidden',
       label: t('writePdfAnnotationsDisplayHidden'),
-      title: t('writePdfAnnotationsDisplayHiddenTitle'),
+      title: pdfMode ? t('writePdfAnnotationsDisplayHiddenTitle') : t('writeDocxAnnotationsDisplayHiddenTitle'),
       icon: <EyeOff className="h-3.5 w-3.5" strokeWidth={1.9} />
     },
     {
       mode: 'current',
       label: t('writePdfAnnotationsDisplayCurrent'),
-      title: t('writePdfAnnotationsDisplayCurrentTitle'),
+      title: pdfMode ? t('writePdfAnnotationsDisplayCurrentTitle') : t('writeDocxAnnotationsDisplayCurrentTitle'),
       icon: <LocateFixed className="h-3.5 w-3.5" strokeWidth={1.9} />
     },
     {
       mode: 'all',
       label: t('writePdfAnnotationsDisplayAll'),
-      title: t('writePdfAnnotationsDisplayAllTitle'),
+      title: pdfMode ? t('writePdfAnnotationsDisplayAllTitle') : t('writeDocxAnnotationsDisplayAllTitle'),
       icon: <Layers3 className="h-3.5 w-3.5" strokeWidth={1.9} />
     }
   ]
   const kindFilterValues = PDF_ANNOTATION_KIND_VALUES.filter((item) => item !== 'translation')
+  const titleLabel = pdfMode ? t('writePdfAnnotations') : t('writeDocxAnnotations')
+  const emptyLabel = pdfMode ? t('writePdfAnnotationsEmpty') : t('writeDocxAnnotationsEmpty')
+  const noMatchesLabel = pdfMode ? t('writePdfAnnotationsNoMatches') : t('writeDocxAnnotationsNoMatches')
+  const questionPlaceholder = pdfMode
+    ? t('writePdfAnnotationsQuestionPlaceholder')
+    : t('writeDocxAnnotationsQuestionPlaceholder')
+  const followUpPlaceholder = pdfMode
+    ? t('writePdfAnnotationsFollowUpPlaceholder')
+    : t('writeDocxAnnotationsFollowUpPlaceholder')
+  const questionInputLabel = pdfMode ? t('writePdfAnnotationsQuestionInput') : t('writeDocxAnnotationsQuestionInput')
+  const translatePrompt = pdfMode ? t('writePdfAnnotationTranslatePrompt') : t('writeDocxAnnotationTranslatePrompt')
 
   const startEditing = (summary: PdfAnnotationThreadSummary): void => {
     const firstAnnotation = summary.firstAnnotation
@@ -287,6 +385,10 @@ export function WritePdfAnnotationsPanel({
     setQuestionDrafts((current) => ({ ...current, [threadId]: value }))
   }
 
+  const setTextareaHeight = (key: string, value: number): void => {
+    setTextareaHeights((current) => ({ ...current, [key]: clampTextareaHeight(value) }))
+  }
+
   const sendQuestion = (
     summary: PdfAnnotationThreadSummary,
     question: string,
@@ -306,7 +408,7 @@ export function WritePdfAnnotationsPanel({
             <StickyNote className="h-4 w-4" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[13px] font-semibold text-ds-ink">{t('writePdfAnnotations')}</h2>
+            <h2 className="truncate text-[13px] font-semibold text-ds-ink">{titleLabel}</h2>
             <p className="mt-0.5 text-[11.5px] text-ds-faint">
               {t('writePdfAnnotationsCount', { count: summaries.length, total: totalThreadCount })}
             </p>
@@ -326,46 +428,50 @@ export function WritePdfAnnotationsPanel({
           )}
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => setExportPreviewOpen(true)}
-            disabled={exportDisabled}
-            className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
-            aria-label={t('writePdfAnnotationsExportPackage')}
-            title={t('writePdfAnnotationsExportPackage')}
-          >
-            <Download className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-            <span className="truncate">
-              {exportingPackage ? t('writePdfAnnotationsExportingPackage') : t('writePdfAnnotationsExportPackage')}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onExportPdf?.()}
-            disabled={exportPdfDisabled}
-            className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
-            aria-label={t('writePdfAnnotationsExportPdf')}
-            title={t('writePdfAnnotationsExportPdf')}
-          >
-            <FileDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-            <span className="truncate">
-              {exportingPdf ? t('writePdfAnnotationsExportingPdf') : t('writePdfAnnotationsExportPdf')}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onImportPackage?.()}
-            disabled={importDisabled}
-            className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
-            aria-label={t('writePdfAnnotationsImportPackage')}
-            title={t('writePdfAnnotationsImportPackage')}
-          >
-            <Upload className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-            <span className="truncate">
-              {importingPackage ? t('writePdfAnnotationsImportingPackage') : t('writePdfAnnotationsImportPackage')}
-            </span>
-          </button>
+        <div className={`mt-3 grid gap-2 ${pdfMode ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {pdfMode ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setExportPreviewOpen(true)}
+                disabled={exportDisabled}
+                className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                aria-label={t('writePdfAnnotationsExportPackage')}
+                title={t('writePdfAnnotationsExportPackage')}
+              >
+                <Download className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="truncate">
+                  {exportingPackage ? t('writePdfAnnotationsExportingPackage') : t('writePdfAnnotationsExportPackage')}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onExportPdf?.()}
+                disabled={exportPdfDisabled}
+                className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                aria-label={t('writePdfAnnotationsExportPdf')}
+                title={t('writePdfAnnotationsExportPdf')}
+              >
+                <FileDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="truncate">
+                  {exportingPdf ? t('writePdfAnnotationsExportingPdf') : t('writePdfAnnotationsExportPdf')}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onImportPackage?.()}
+                disabled={importDisabled}
+                className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                aria-label={t('writePdfAnnotationsImportPackage')}
+                title={t('writePdfAnnotationsImportPackage')}
+              >
+                <Upload className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="truncate">
+                  {importingPackage ? t('writePdfAnnotationsImportingPackage') : t('writePdfAnnotationsImportPackage')}
+                </span>
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             onClick={() => onReloadSidecar?.()}
@@ -381,7 +487,7 @@ export function WritePdfAnnotationsPanel({
           </button>
         </div>
 
-        {exportPreviewOpen && sidecar ? (
+        {pdfMode && exportPreviewOpen && sidecar ? (
           <div className="mt-2 rounded-lg border border-accent/18 bg-accent/5 p-2 text-[11.5px] text-ds-muted">
             <div className="flex min-w-0 items-center gap-2">
               <div className="min-w-0 flex-1 font-semibold text-ds-ink">
@@ -399,7 +505,7 @@ export function WritePdfAnnotationsPanel({
             </div>
             <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1">
               <dt>{t('writePdfAnnotationsExportPreviewPdf')}</dt>
-              <dd className="truncate text-right font-medium text-ds-ink">{sourcePdfName || '-'}</dd>
+              <dd className="truncate text-right font-medium text-ds-ink">{sourceDocumentName || '-'}</dd>
               <dt>{t('writePdfAnnotationsExportPreviewThreads')}</dt>
               <dd className="text-right font-medium text-ds-ink">{totalThreadCount}</dd>
               <dt>{t('writePdfAnnotationsExportPreviewAnnotations')}</dt>
@@ -435,9 +541,11 @@ export function WritePdfAnnotationsPanel({
           </div>
         ) : null}
 
-        <p className="mt-2 text-[11px] leading-5 text-ds-faint">
-          {t('writePdfAnnotationsContributionHint')}
-        </p>
+        {pdfMode ? (
+          <p className="mt-2 text-[11px] leading-5 text-ds-faint">
+            {t('writePdfAnnotationsContributionHint')}
+          </p>
+        ) : null}
 
         <div className="mt-3">
           <div className="mb-1.5 text-[11px] font-semibold text-ds-faint">
@@ -467,7 +575,7 @@ export function WritePdfAnnotationsPanel({
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_92px] gap-2">
+        <div className={`mt-3 grid gap-2 ${pdfMode ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_92px]' : 'grid-cols-2'}`}>
           <select
             value={kind}
             onChange={(event) => setKind(event.target.value as PdfAnnotationKind | 'all')}
@@ -492,31 +600,33 @@ export function WritePdfAnnotationsPanel({
               <option key={item} value={item}>{annotationStatusLabel(item, t)}</option>
             ))}
           </select>
-          <div className="flex min-w-0 items-center rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-ds-muted focus-within:border-accent/50 dark:bg-white/6">
-            <Hash className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-            <input
-              value={pageValue}
-              onChange={(event) => setPageValue(event.target.value)}
-              min={1}
-              type="number"
-              inputMode="numeric"
-              placeholder={t('writePdfAnnotationsPageFilterShort')}
-              className="min-w-0 flex-1 bg-transparent px-1 text-[12px] font-medium text-ds-ink outline-none placeholder:text-ds-faint"
-              aria-label={t('writePdfAnnotationsPageFilter')}
-              title={t('writePdfAnnotationsPageFilter')}
-            />
-            {pageValue ? (
-              <button
-                type="button"
-                onClick={() => setPageValue('')}
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                aria-label={t('writePdfAnnotationsClearPageFilter')}
-                title={t('writePdfAnnotationsClearPageFilter')}
-              >
-                <X className="h-3.5 w-3.5" strokeWidth={2} />
-              </button>
-            ) : null}
-          </div>
+          {pdfMode ? (
+            <div className="flex min-w-0 items-center rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-ds-muted focus-within:border-accent/50 dark:bg-white/6">
+              <Hash className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+              <input
+                value={pageValue}
+                onChange={(event) => setPageValue(event.target.value)}
+                min={1}
+                type="number"
+                inputMode="numeric"
+                placeholder={t('writePdfAnnotationsPageFilterShort')}
+                className="min-w-0 flex-1 bg-transparent px-1 text-[12px] font-medium text-ds-ink outline-none placeholder:text-ds-faint"
+                aria-label={t('writePdfAnnotationsPageFilter')}
+                title={t('writePdfAnnotationsPageFilter')}
+              />
+              {pageValue ? (
+                <button
+                  type="button"
+                  onClick={() => setPageValue('')}
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                  aria-label={t('writePdfAnnotationsClearPageFilter')}
+                  title={t('writePdfAnnotationsClearPageFilter')}
+                >
+                  <X className="h-3.5 w-3.5" strokeWidth={2} />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -525,7 +635,7 @@ export function WritePdfAnnotationsPanel({
           <ul className="grid gap-2">
             {summaries.map((summary) => {
               const selected = selectedThreadId === summary.thread.id
-              const pageLabel = formatPageRange(summary, t)
+              const pageLabel = pdfMode ? formatPageRange(summary, t) : ''
               const firstAnnotation = summary.firstAnnotation
               const firstAnnotationId = firstAnnotation?.id
               const isQuestion = summary.kind === 'question'
@@ -541,6 +651,8 @@ export function WritePdfAnnotationsPanel({
                 summary.thread.sourceMessageId || questionTurns.length > 1 || latestAssistantText(questionTurns)
               )
               const questionDraft = questionDrafts[summary.thread.id] ?? (hasQuestionConversation ? '' : questionBody)
+              const questionTextareaKey = `question:${summary.thread.id}`
+              const editTextareaKey = `edit:${summary.thread.id}`
               const answerBusy = Boolean(questionReply?.busy)
               const answerError = questionReply?.error?.trim() ?? ''
               const showQuestionConversation = isQuestion && (questionTurns.length > 0 || answerBusy || answerError)
@@ -648,9 +760,9 @@ export function WritePdfAnnotationsPanel({
                       <div className="grid gap-2">
                         {selected ? (
                           <div className="grid gap-2">
-                            <textarea
+                            <ResizableTextarea
                               value={questionDraft}
-                              onChange={(event) => setQuestionDraft(summary.thread.id, event.target.value)}
+                              onChange={(value) => setQuestionDraft(summary.thread.id, value)}
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
                                   sendQuestion(summary, questionDraft)
@@ -658,17 +770,20 @@ export function WritePdfAnnotationsPanel({
                               }}
                               placeholder={
                                 hasQuestionConversation
-                                  ? t('writePdfAnnotationsFollowUpPlaceholder')
-                                  : t('writePdfAnnotationsQuestionPlaceholder')
+                                  ? followUpPlaceholder
+                                  : questionPlaceholder
                               }
-                              className="min-h-[76px] w-full resize-y rounded-lg border border-ds-border-muted bg-white px-3 py-2 text-[12.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/50 focus:ring-2 focus:ring-accent/10 dark:bg-white/7"
-                              aria-label={t('writePdfAnnotationsQuestionInput')}
+                              ariaLabel={questionInputLabel}
+                              resizeLabel={t('writePdfAnnotationsTextareaResize')}
+                              height={textareaHeights[questionTextareaKey] ?? QUESTION_TEXTAREA_DEFAULT_HEIGHT}
+                              onHeightChange={(height) => setTextareaHeight(questionTextareaKey, height)}
+                              minHeight={96}
                             />
                             <div className="flex flex-wrap items-center justify-end gap-2">
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const prompt = t('writePdfAnnotationTranslatePrompt')
+                                  const prompt = translatePrompt
                                   setQuestionDraft(summary.thread.id, prompt)
                                   sendQuestion(summary, prompt, 'translate')
                                 }}
@@ -694,8 +809,13 @@ export function WritePdfAnnotationsPanel({
                             </div>
                           </div>
                         ) : questionBody ? (
-                          <div className="rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-2 text-[12px] leading-5 text-ds-muted [overflow-wrap:anywhere] dark:bg-white/6">
+                          <div className="ds-selectable-text relative rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-2 pr-9 text-[12px] leading-5 text-ds-muted [overflow-wrap:anywhere] dark:bg-white/6">
                             {questionBody}
+                            <CopyTextButton
+                              text={questionBody}
+                              iconOnly
+                              className="absolute right-1.5 top-1.5"
+                            />
                           </div>
                         ) : null}
 
@@ -735,8 +855,13 @@ export function WritePdfAnnotationsPanel({
                                           : t('writePdfAnnotationsAnswer')
                                         : t('writePdfAnnotationsQuestionTurn')}
                                     </span>
+                                    <CopyTextButton
+                                      text={turn.text}
+                                      iconOnly
+                                      className="ml-auto -mr-1"
+                                    />
                                   </div>
-                                  <div className="whitespace-pre-wrap text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere]">
+                                  <div className="ds-selectable-text whitespace-pre-wrap text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere]">
                                     {turn.text}
                                   </div>
                                 </div>
@@ -775,20 +900,22 @@ export function WritePdfAnnotationsPanel({
                       </div>
                     ) : selected && firstAnnotationId && editing ? (
                       <div className="grid gap-2">
-                        <textarea
+                        <ResizableTextarea
                           autoFocus
                           value={editorBody}
-                          onChange={(event) => {
+                          onChange={(value) => {
                             setEditingAnnotationId(firstAnnotationId)
-                            setEditingBody(event.target.value)
+                            setEditingBody(value)
                           }}
                           onKeyDown={(event) => {
                             if (event.key === 'Escape') cancelEditing(summary)
                             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveEditing(summary)
                           }}
                           placeholder={t('writePdfAnnotationsEditPlaceholder')}
-                          className="min-h-[82px] w-full resize-y rounded-lg border border-ds-border-muted bg-white px-3 py-2 text-[12.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/50 focus:ring-2 focus:ring-accent/10 dark:bg-white/7"
-                          aria-label={t('writePdfAnnotationsEdit')}
+                          ariaLabel={t('writePdfAnnotationsEdit')}
+                          resizeLabel={t('writePdfAnnotationsTextareaResize')}
+                          height={textareaHeights[editTextareaKey] ?? EDIT_TEXTAREA_DEFAULT_HEIGHT}
+                          onHeightChange={(height) => setTextareaHeight(editTextareaKey, height)}
                         />
                         <div className="flex items-center justify-end gap-2">
                           <button
@@ -839,7 +966,7 @@ export function WritePdfAnnotationsPanel({
           </ul>
         ) : (
           <div className="flex min-h-full items-center justify-center px-4 text-center text-[13px] leading-6 text-ds-muted">
-            {sidecar && hasFilter ? t('writePdfAnnotationsNoMatches') : t('writePdfAnnotationsEmpty')}
+            {sidecar && hasFilter ? noMatchesLabel : emptyLabel}
           </div>
         )}
       </div>

@@ -12,6 +12,7 @@ import {
 } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import JSZip from 'jszip'
 import type {
   WorkspaceClipboardImageSavePayload,
   WorkspaceClipboardImageSaveResult,
@@ -35,7 +36,11 @@ import type {
   WorkspaceFileTarget,
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult,
+  WorkspaceDocxTextWritePayload,
+  WorkspaceDocxTextWriteResult,
   WorkspaceImageReadResult,
+  WorkspaceDocxParagraph,
+  WorkspaceFileReadDocxResult,
   WorkspaceFileReadPdfResult
 } from '../../shared/workspace-file'
 import { createWorkspaceIntelService } from '../../../packages/workers/workspace-intel/src/index.js'
@@ -59,7 +64,9 @@ import {
 const MAX_FILE_PREVIEW_BYTES = 1_500_000
 const MAX_IMAGE_PREVIEW_BYTES = 12 * 1024 * 1024
 const MAX_PDF_PREVIEW_BYTES = 64 * 1024 * 1024
+const MAX_DOCX_PREVIEW_BYTES = 64 * 1024 * 1024
 const WORKSPACE_IMAGE_DIR = 'img'
+const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 const WORKSPACE_IMAGE_MIME_BY_EXT = new Map([
   ['.png', 'image/png'],
@@ -139,6 +146,141 @@ async function readWorkspacePdfFromResolvedPath(
   }
 }
 
+function decodeXmlText(value: string): string {
+  return value.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (entity, body: string) => {
+    if (body.startsWith('#x')) {
+      const codePoint = Number.parseInt(body.slice(2), 16)
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity
+    }
+    if (body.startsWith('#')) {
+      const codePoint = Number.parseInt(body.slice(1), 10)
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity
+    }
+    if (body === 'amp') return '&'
+    if (body === 'lt') return '<'
+    if (body === 'gt') return '>'
+    if (body === 'quot') return '"'
+    if (body === 'apos') return '\''
+    return entity
+  })
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+function docxParagraphStyle(paragraphXml: string): string | undefined {
+  const match = paragraphXml.match(/<w:pStyle\b[^>]*(?:w:val|val)="([^"]+)"/)
+  return match?.[1] ? decodeXmlText(match[1]) : undefined
+}
+
+function extractDocxParagraphText(paragraphXml: string): string {
+  const parts: string[] = []
+  const tokenPattern = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/>|<w:br\b[^>]*\/>|<w:cr\b[^>]*\/>/g
+  for (const match of paragraphXml.matchAll(tokenPattern)) {
+    if (match[1] !== undefined) {
+      parts.push(decodeXmlText(match[1]))
+    } else if (match[0].startsWith('<w:tab')) {
+      parts.push('\t')
+    } else {
+      parts.push('\n')
+    }
+  }
+  return parts.join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function extractDocxParagraphs(documentXml: string): WorkspaceDocxParagraph[] {
+  const paragraphs: WorkspaceDocxParagraph[] = []
+  const paragraphPattern = /<w:p\b[\s\S]*?<\/w:p>/g
+  let documentIndex = 0
+  for (const match of documentXml.matchAll(paragraphPattern)) {
+    documentIndex += 1
+    const paragraphXml = match[0]
+    const text = extractDocxParagraphText(paragraphXml)
+    if (!text) continue
+    const style = docxParagraphStyle(paragraphXml)
+    paragraphs.push({
+      id: `docx-p-${documentIndex}`,
+      index: documentIndex,
+      text,
+      ...(style ? { style } : {})
+    })
+  }
+  return paragraphs
+}
+
+function renderEditedDocxRuns(text: string, paragraphXml: string): string {
+  const runProperties = paragraphXml.match(/<w:rPr\b[\s\S]*?<\/w:rPr>/)?.[0] ?? ''
+  const runs: string[] = []
+  const pieces = text.split(/(\t|\r\n|\n|\r)/)
+  for (const piece of pieces) {
+    if (!piece) continue
+    if (piece === '\t') {
+      runs.push(`<w:r>${runProperties}<w:tab/></w:r>`)
+    } else if (piece === '\n' || piece === '\r' || piece === '\r\n') {
+      runs.push(`<w:r>${runProperties}<w:br/></w:r>`)
+    } else {
+      runs.push(`<w:r>${runProperties}<w:t xml:space="preserve">${escapeXmlText(piece)}</w:t></w:r>`)
+    }
+  }
+  return runs.join('')
+}
+
+function replaceEditedDocxParagraphs(
+  documentXml: string,
+  paragraphs: readonly WorkspaceDocxTextWritePayload['paragraphs'][number][]
+): { documentXml: string; updatedCount: number } {
+  const edits = new Map<number, string>()
+  for (const paragraph of paragraphs) {
+    edits.set(paragraph.index, paragraph.text)
+  }
+  let documentIndex = 0
+  let updatedCount = 0
+  const nextDocumentXml = documentXml.replace(
+    /(<w:p\b[^>]*>)([\s\S]*?)(<\/w:p>)/g,
+    (full, open: string, inner: string, close: string) => {
+      documentIndex += 1
+      if (!edits.has(documentIndex)) return full
+      updatedCount += 1
+      const paragraphProperties = inner.match(/^\s*(<w:pPr\b[\s\S]*?<\/w:pPr>)/)?.[1] ?? ''
+      return `${open}${paragraphProperties}${renderEditedDocxRuns(edits.get(documentIndex) ?? '', full)}${close}`
+    }
+  )
+  return { documentXml: nextDocumentXml, updatedCount }
+}
+
+async function readWorkspaceDocxFromResolvedPath(
+  targetPath: string,
+  fileInfo: WorkspaceFileStat,
+  payload: WorkspaceFileTarget
+): Promise<WorkspaceFileReadDocxResult | { ok: false; message: string }> {
+  if (fileInfo.size > MAX_DOCX_PREVIEW_BYTES) {
+    return { ok: false, message: 'This DOCX file is too large to preview.' }
+  }
+
+  const bytes = await readFile(targetPath)
+  const zip = await JSZip.loadAsync(bytes)
+  const documentXml = await zip.file('word/document.xml')?.async('string')
+  if (!documentXml) return { ok: false, message: 'This DOCX file does not contain word/document.xml.' }
+  const paragraphs = extractDocxParagraphs(documentXml)
+  return {
+    ok: true,
+    kind: 'docx',
+    path: targetPath,
+    content: paragraphs.map((paragraph) => paragraph.text).join('\n\n'),
+    paragraphs,
+    mimeType: DOCX_MIME_TYPE,
+    size: fileInfo.size,
+    truncated: false,
+    mtimeMs: fileInfo.mtimeMs,
+    ...workspaceFilePosition(payload)
+  }
+}
+
 async function readWorkspaceTextFromWorkspaceIntel(
   targetPath: string,
   payload: WorkspaceFileTarget
@@ -205,6 +347,9 @@ export async function readWorkspaceFile(payload: WorkspaceFileTarget): Promise<W
     if (ext === '.pdf') {
       return readWorkspacePdfFromResolvedPath(targetPath, fileInfo, payload)
     }
+    if (ext === '.docx') {
+      return readWorkspaceDocxFromResolvedPath(targetPath, fileInfo, payload)
+    }
 
     return readWorkspaceTextFromWorkspaceIntel(targetPath, payload)
   } catch (error) {
@@ -266,6 +411,57 @@ export async function writeWorkspaceFile(
       ok: true,
       path: target.path,
       savedAt: new Date().toISOString()
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+export async function writeWorkspaceDocxText(
+  payload: WorkspaceDocxTextWritePayload
+): Promise<WorkspaceDocxTextWriteResult> {
+  try {
+    if (payload.paragraphs.length === 0) {
+      return { ok: false, message: 'No DOCX paragraphs were provided.' }
+    }
+    const target = await resolveSafeWorkspaceWriteTarget(payload.path, payload.workspaceRoot, {
+      createParentDirectories: false
+    })
+    if (extensionFromName(target.path).toLowerCase() !== '.docx') {
+      return { ok: false, message: 'DOCX text editing is only supported for .docx files.' }
+    }
+    const fileInfo = await stat(target.path)
+    if (fileInfo.isDirectory()) {
+      return { ok: false, message: 'Cannot edit a directory as DOCX.' }
+    }
+    if (fileInfo.size > MAX_DOCX_PREVIEW_BYTES) {
+      return { ok: false, message: 'This DOCX file is too large to edit.' }
+    }
+
+    const bytes = await readFile(target.path)
+    const zip = await JSZip.loadAsync(bytes)
+    const documentFile = zip.file('word/document.xml')
+    const documentXml = await documentFile?.async('string')
+    if (!documentXml) return { ok: false, message: 'This DOCX file does not contain word/document.xml.' }
+
+    const updated = replaceEditedDocxParagraphs(documentXml, payload.paragraphs)
+    if (updated.updatedCount !== payload.paragraphs.length) {
+      return {
+        ok: false,
+        message: `Only ${updated.updatedCount} of ${payload.paragraphs.length} DOCX paragraphs could be located.`
+      }
+    }
+    zip.file('word/document.xml', updated.documentXml)
+    const nextBytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await writeSafeWorkspaceFile(target, nextBytes)
+    return {
+      ok: true,
+      path: target.path,
+      savedAt: new Date().toISOString(),
+      paragraphCount: updated.updatedCount
     }
   } catch (error) {
     return {

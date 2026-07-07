@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, Network, PanelRightClose, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Loader2, Network, PanelRightClose, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentRuntimeId } from '@shared/app-settings'
@@ -20,6 +20,8 @@ export function EvidenceDagPanel({
   const { t } = useTranslation('common')
   const [view, setView] = useState<EvidenceDagViewResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const [auditing, setAuditing] = useState(false)
+  const [auditSummary, setAuditSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [requestNonce, setRequestNonce] = useState(0)
   const [frameNonce, setFrameNonce] = useState(0)
@@ -57,6 +59,36 @@ export function EvidenceDagPanel({
 
   const subtitle = view?.threadId || threadId || t('evidenceDagGlobalView')
 
+  const runAudit = (): void => {
+    const runEvidenceDagAudit = window.sciforge?.runEvidenceDagAudit
+    if (typeof runEvidenceDagAudit !== 'function') {
+      setError(t('evidenceDagUnavailable'))
+      return
+    }
+    if (!threadId || !runtimeId) return
+    setAuditing(true)
+    setError(null)
+    setAuditSummary(null)
+    void runEvidenceDagAudit({
+      runtimeId,
+      threadId
+    }).then((result) => {
+      setView({ url: result.url, threadId: result.threadId })
+      const digest = result.riskDigest as {
+        total_findings?: unknown
+        highest_severity?: unknown
+      } | undefined
+      const count = typeof digest?.total_findings === 'number' ? digest.total_findings : 0
+      const severity = typeof digest?.highest_severity === 'string' ? digest.highest_severity : 'none'
+      setAuditSummary(t('evidenceDagAuditSummary', { count, severity }))
+      setFrameNonce((current) => current + 1)
+    }).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }).finally(() => {
+      setAuditing(false)
+    })
+  }
+
   return (
     <aside className={`ds-no-drag flex min-h-0 min-w-0 flex-col border-l border-ds-border bg-ds-sidebar ${className}`}>
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
@@ -65,9 +97,19 @@ export function EvidenceDagPanel({
             <Network className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <span>{t('rightPanelEvidenceDag')}</span>
           </div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">{subtitle}</div>
+          <div className="mt-1 truncate text-[11.5px] text-ds-faint">{auditSummary || subtitle}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={runAudit}
+            disabled={loading || auditing || !threadId || !runtimeId}
+            className="rounded-lg p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label={auditing ? t('evidenceDagAuditRunning') : t('evidenceDagAudit')}
+            title={auditing ? t('evidenceDagAuditRunning') : t('evidenceDagAudit')}
+          >
+            <ShieldCheck className={`h-4 w-4 ${auditing ? 'animate-pulse' : ''}`} strokeWidth={1.75} />
+          </button>
           <button
             type="button"
             onClick={() => setRequestNonce((current) => current + 1)}

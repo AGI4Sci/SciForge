@@ -11,7 +11,6 @@ import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { useChatStore } from '../../store/chat-store'
 import { DiffView } from '../DiffView'
 import { AssistantMarkdown } from './AssistantMarkdown'
-import { MessageBubble } from './message-timeline-bubbles'
 import { blockHasPendingRuntimeWork, splitThink } from './message-timeline-turns'
 import { formatDuration, formatToolTitle } from './message-timeline-tools'
 import { remoteToolMetadataChips, remoteToolSummarySuffix } from './remote-tool-metadata'
@@ -89,7 +88,6 @@ function isProcessSectionActive(section: ProcessSection, processing: boolean): b
 }
 
 function isRequestUserInputTool(block: ChatBlock): boolean {
-  if (block.kind === 'user_input' && block.status === 'pending') return true
   if (block.kind !== 'tool' || block.status !== 'running') return false
   const toolName = typeof block.meta?.toolName === 'string' ? block.meta.toolName.trim() : ''
   if (toolName === 'request_user_input' || toolName === 'user_input') return true
@@ -199,8 +197,6 @@ export function ProcessSectionRow({
   const hasError = section.blocks.some(
     (block) =>
       (block.kind === 'tool' && block.status === 'error') ||
-      (block.kind === 'approval' && block.status === 'error') ||
-      (block.kind === 'user_input' && block.status === 'error') ||
       (block.kind === 'system' && block.severity === 'error')
   )
   const defaultExpanded =
@@ -316,9 +312,8 @@ function processBlockIsRunningTool(block: ChatBlock, processing: boolean): boole
 function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): boolean {
   return (
     processing &&
-    ((block.kind === 'compaction' && block.status === 'running') ||
-      (block.kind === 'approval' && block.status === 'pending') ||
-      (block.kind === 'user_input' && block.status === 'pending'))
+    block.kind === 'compaction' &&
+    block.status === 'running'
   )
 }
 
@@ -335,8 +330,6 @@ function processBlockHasError(block: ChatBlock): boolean {
   return (
     (block.kind === 'tool' && block.status === 'error') ||
     (block.kind === 'compaction' && block.status === 'error') ||
-    (block.kind === 'approval' && block.status === 'error') ||
-    (block.kind === 'user_input' && block.status === 'error') ||
     (block.kind === 'system' && block.severity === 'error')
   )
 }
@@ -593,13 +586,8 @@ function summarizeExecutionSection(
   let fileCount = 0
   let commandCount = 0
   let toolCount = 0
-  let approvalCount = 0
 
   for (const block of blocks) {
-    if (block.kind === 'approval') {
-      approvalCount += 1
-      continue
-    }
     if (block.kind !== 'tool') continue
     if (block.toolKind === 'file_change') {
       fileCount += 1
@@ -625,11 +613,6 @@ function summarizeExecutionSection(
   }
   if (toolCount > 0) {
     parts.push(toolCount === 1 ? t('groupUsedTool') : t('groupUsedTools', { count: toolCount }))
-  }
-  if (approvalCount > 0) {
-    parts.push(
-      approvalCount === 1 ? t('groupApproval') : t('groupApprovals', { count: approvalCount })
-    )
   }
 
   if (parts.length > 0) return parts.join(' · ')
@@ -729,8 +712,6 @@ type ProcessDetail =
   | { kind: 'reasoning'; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; text: string; isPatch: boolean; isError: boolean; filePath?: string }
-  | { kind: 'approval' }
-  | { kind: 'user_input' }
   | { kind: 'text'; text: string }
 
 function summarizeProcessText(text: string, max = 96): string {
@@ -826,7 +807,7 @@ function RuntimeMetaBadges({
   block: ChatBlock
   t: (key: string, opts?: Record<string, unknown>) => string
 }): ReactElement | null {
-  const meta = block.kind === 'tool' || block.kind === 'approval' || block.kind === 'user' ? block.meta : undefined
+  const meta = block.kind === 'tool' || block.kind === 'user' ? block.meta : undefined
   if (!meta) return null
   const sources = readMetaSources(meta)
   const remoteChips = block.kind === 'tool' ? remoteToolMetadataChips(meta, t) : []
@@ -991,8 +972,6 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
     }
     return { kind: 'text', text: detailText }
   }
-  if (block.kind === 'approval') return { kind: 'approval' }
-  if (block.kind === 'user_input') return { kind: 'user_input' }
   if (block.kind === 'system' && block.text.trim()) {
     if (block.detail?.trim()) return { kind: 'text', text: block.detail }
     // Short system messages already fit in the summary line — skip the
@@ -1057,12 +1036,6 @@ function ProcessEntryDetail({
   if (detail.kind === 'text') {
     return <p className="whitespace-pre-wrap text-[13.5px] leading-6 text-ds-muted">{detail.text}</p>
   }
-  if (detail.kind === 'approval' && block.kind === 'approval') {
-    return <MessageBubble block={block} nested />
-  }
-  if (detail.kind === 'user_input' && block.kind === 'user_input') {
-    return <MessageBubble block={block} nested />
-  }
   return null
 }
 
@@ -1089,12 +1062,6 @@ function describeProcessBlock(
       })
     }
     return block.auto === true ? t('compactionAutoCompleted') : t('compactionManualCompleted')
-  }
-  if (block.kind === 'approval') {
-    return block.summary || t('approvalTitle')
-  }
-  if (block.kind === 'user_input') {
-    return t('userInputTitle')
   }
   if (block.kind === 'system') {
     return block.text

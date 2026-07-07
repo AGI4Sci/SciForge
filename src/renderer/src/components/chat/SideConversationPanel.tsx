@@ -26,6 +26,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useChatStore } from '../../store/chat-store'
 import type { ChatBlock } from '../../agent/types'
+import { CopyTextButton } from '../CopyTextButton'
 
 type Props = {
   className?: string
@@ -116,8 +117,13 @@ function SideMessageBubble({ block }: { block: ChatBlock }): ReactElement | null
   if (block.kind === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[86%] rounded-[14px] bg-ds-card px-3 py-2 text-[13px] leading-5 text-ds-ink shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
-          <div className="ds-markdown whitespace-pre-wrap break-words">{block.text}</div>
+        <div className="group/side-message relative max-w-[86%] rounded-[14px] bg-ds-card px-3 py-2 pr-9 text-[13px] leading-5 text-ds-ink shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
+          <div className="ds-markdown ds-selectable-text whitespace-pre-wrap break-words">{block.text}</div>
+          <CopyTextButton
+            text={block.text}
+            iconOnly
+            className="absolute right-1.5 top-1.5 opacity-65 group-hover/side-message:opacity-100"
+          />
         </div>
       </div>
     )
@@ -125,12 +131,19 @@ function SideMessageBubble({ block }: { block: ChatBlock }): ReactElement | null
   if (block.kind === 'assistant') {
     const streaming = block.id === 'live-assistant'
     return (
-      <div className="ds-markdown ds-chat-answer min-w-0 max-w-full text-[13px] leading-5 text-ds-ink">
-        {streaming ? (
-          <span>{block.text}</span>
-        ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
-        )}
+      <div className="group/side-message relative min-w-0 max-w-full pr-8">
+        <div className="ds-markdown ds-chat-answer ds-selectable-text min-w-0 max-w-full text-[13px] leading-5 text-ds-ink">
+          {streaming ? (
+            <span>{block.text}</span>
+          ) : (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+          )}
+        </div>
+        <CopyTextButton
+          text={block.text}
+          iconOnly
+          className="absolute right-0 top-0 opacity-65 group-hover/side-message:opacity-100"
+        />
       </div>
     )
   }

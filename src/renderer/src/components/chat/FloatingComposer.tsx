@@ -94,10 +94,10 @@ import {
 import { useComposerDraft } from './use-composer-draft'
 import {
   SPEECH_TRANSCRIPTION_MAX_DURATION_MS,
-  getImageGenerationSettings,
+  getModelRouterSettings,
   type AgentRuntimeId,
   type AppSettingsV1,
-  type ImageGenerationSettingsV1
+  type ModelRouterMemberProviderSettingsV1
 } from '@shared/app-settings'
 import {
   useSpeechToTextSettings,
@@ -529,19 +529,19 @@ function shouldShowThreadContextState(state: AgentRuntimeContextState): boolean 
 }
 
 export function isImageGenerationConfigured(
-  settings: Pick<ImageGenerationSettingsV1, 'enabled' | 'apiKey' | 'baseUrl' | 'model'> | null | undefined
+  settings: Pick<ModelRouterMemberProviderSettingsV1, 'apiKey' | 'baseUrl' | 'model'> | null | undefined
 ): boolean {
-  return Boolean(settings?.enabled && settings.apiKey.trim() && settings.baseUrl.trim() && settings.model.trim())
+  return Boolean(settings?.apiKey.trim() && settings.baseUrl.trim() && settings.model.trim())
 }
 
-function useImageGenerationComposerSettings(): ImageGenerationSettingsV1 | null {
-  const [imageGeneration, setImageGeneration] = useState<ImageGenerationSettingsV1 | null>(null)
+function useImageGenerationComposerSettings(): ModelRouterMemberProviderSettingsV1 | null {
+  const [imageGeneration, setImageGeneration] = useState<ModelRouterMemberProviderSettingsV1 | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     let cancelled = false
     const apply = (settings: AppSettingsV1): void => {
-      if (!cancelled) setImageGeneration(getImageGenerationSettings(settings))
+      if (!cancelled) setImageGeneration(getModelRouterSettings(settings).profiles.default.imageGenerator)
     }
 
     if (typeof window.sciforge?.getSettings === 'function') {

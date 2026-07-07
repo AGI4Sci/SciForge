@@ -24,6 +24,17 @@ export type WorkspaceFileWritePayload = {
   contentBase64?: string
 }
 
+export type WorkspaceDocxTextParagraphWrite = {
+  index: number
+  text: string
+}
+
+export type WorkspaceDocxTextWritePayload = {
+  path: string
+  workspaceRoot?: string
+  paragraphs: WorkspaceDocxTextParagraphWrite[]
+}
+
 export type WorkspaceFileCreatePayload = {
   path: string
   workspaceRoot: string
@@ -83,7 +94,7 @@ export type ClipboardImageReadResult =
     }
   | { ok: false; message: string }
 
-export type WorkspaceFilePreviewKind = 'text' | 'pdf'
+export type WorkspaceFilePreviewKind = 'text' | 'pdf' | 'docx'
 
 export type WorkspaceFileReadTextResult = {
   ok: true
@@ -111,9 +122,31 @@ export type WorkspaceFileReadPdfResult = {
   column?: number
 }
 
+export type WorkspaceDocxParagraph = {
+  id: string
+  index: number
+  text: string
+  style?: string
+}
+
+export type WorkspaceFileReadDocxResult = {
+  ok: true
+  kind: 'docx'
+  path: string
+  content: string
+  paragraphs: WorkspaceDocxParagraph[]
+  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  size: number
+  truncated: false
+  mtimeMs: number
+  line?: number
+  column?: number
+}
+
 export type WorkspaceFileReadResult =
   | WorkspaceFileReadTextResult
   | WorkspaceFileReadPdfResult
+  | WorkspaceFileReadDocxResult
   | { ok: false; message: string }
 
 export type WorkspaceImageReadResult =
@@ -157,6 +190,15 @@ export type WorkspaceFileWriteResult =
       ok: true
       path: string
       savedAt: string
+    }
+  | { ok: false; message: string }
+
+export type WorkspaceDocxTextWriteResult =
+  | {
+      ok: true
+      path: string
+      savedAt: string
+      paragraphCount: number
     }
   | { ok: false; message: string }
 

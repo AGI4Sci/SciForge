@@ -59,8 +59,6 @@ export function isProcessBlock(block: ChatBlock): boolean {
     block.kind === 'reasoning' ||
     block.kind === 'tool' ||
     block.kind === 'compaction' ||
-    block.kind === 'approval' ||
-    block.kind === 'user_input' ||
     block.kind === 'system'
   )
 }

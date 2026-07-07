@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -53,10 +54,23 @@ const LINE_MERGE_WINDOW = 6
 const TEXT_LAYER_TOKEN_HIT_PAD_X = 2
 const TEXT_LAYER_TOKEN_HIT_PAD_Y = 5
 const TEXT_LAYER_TOKEN_MAX_PICK_DISTANCE = 18
+const MAX_SEARCH_HIGHLIGHTS_PER_PAGE = 240
 
 type PageText = {
   page: number
   text: string
+}
+
+type WritePdfSearchIndexItem = {
+  page: number
+  pageMatchIndex: number
+  globalIndex: number
+}
+
+type WritePdfSearchHighlight = {
+  rect: WritePdfSelectionPageRect
+  active: boolean
+  matchIndex: number
 }
 
 type ViewportRect = {
@@ -342,6 +356,39 @@ const PDF_VIEWER_CSS = `
   position: absolute;
   border-radius: 3px;
   background: var(--write-selection-bg, var(--ds-selection));
+}
+
+.write-pdf-search-rect {
+  position: absolute;
+  z-index: 1;
+  border-radius: 2px;
+  background: rgba(250, 204, 21, 0.38);
+  box-shadow: 0 0 0 1px rgba(180, 83, 9, 0.2);
+  mix-blend-mode: multiply;
+}
+
+.write-pdf-search-rect[data-active='true'] {
+  z-index: 2;
+  background: rgba(59, 130, 246, 0.32);
+  outline: 2px solid rgba(37, 99, 235, 0.9);
+  outline-offset: 1px;
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.18),
+    0 0 16px rgba(37, 99, 235, 0.28);
+}
+
+[data-theme='dark'] .write-pdf-search-rect {
+  background: rgba(250, 204, 21, 0.3);
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.2);
+  mix-blend-mode: screen;
+}
+
+[data-theme='dark'] .write-pdf-search-rect[data-active='true'] {
+  background: rgba(56, 189, 248, 0.3);
+  outline-color: rgba(125, 211, 252, 0.9);
+  box-shadow:
+    0 0 0 3px rgba(56, 189, 248, 0.18),
+    0 0 16px rgba(56, 189, 248, 0.3);
 }
 
 .write-pdf-viewer[data-live-selection] .write-pdf-selection-rect {
@@ -683,6 +730,33 @@ function rectStyleFromNormalizedRect(
   }
 }
 
+function pageRectsFromViewportRectsForPage(
+  pageElement: HTMLElement,
+  page: number,
+  rects: ViewportRect[]
+): WritePdfSelectionPageRect[] {
+  const pageRect = pageElement.getBoundingClientRect()
+  const out: WritePdfSelectionPageRect[] = []
+
+  for (const rect of rects) {
+    if (!intersects(rect, pageRect)) continue
+    const left = Math.max(rect.left, pageRect.left)
+    const right = Math.min(rect.right, pageRect.right)
+    const top = Math.max(rect.top, pageRect.top)
+    const bottom = Math.min(rect.bottom, pageRect.bottom)
+    if (right <= left || bottom <= top) continue
+    out.push({
+      page,
+      x: clamp01((left - pageRect.left) / pageRect.width),
+      y: clamp01((top - pageRect.top) / pageRect.height),
+      width: clamp01((right - left) / pageRect.width),
+      height: clamp01((bottom - top) / pageRect.height)
+    })
+  }
+
+  return out
+}
+
 function anchorRectFromViewportRect(rect: ViewportRect): WritePdfSelectionAnchorRect {
   return {
     left: rect.left,
@@ -973,6 +1047,110 @@ function joinTextLayerTokens(tokens: TextLayerToken[]): string {
     text += noSpaceBefore || noSpaceAfter ? token.text : ` ${token.text}`
   }
   return text.trim()
+}
+
+function findTextOccurrences(text: string, query: string): number[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return []
+  const haystack = text.toLowerCase()
+  const starts: number[] = []
+  let cursor = 0
+  while (cursor < haystack.length) {
+    const index = haystack.indexOf(needle, cursor)
+    if (index < 0) break
+    starts.push(index)
+    cursor = index + Math.max(1, needle.length)
+  }
+  return starts
+}
+
+function buildPdfSearchIndex(pageTexts: PageText[], query: string): WritePdfSearchIndexItem[] {
+  const matches: WritePdfSearchIndexItem[] = []
+  for (const page of pageTexts) {
+    const occurrences = findTextOccurrences(page.text, query)
+    for (let index = 0; index < occurrences.length; index += 1) {
+      matches.push({
+        page: page.page,
+        pageMatchIndex: index,
+        globalIndex: matches.length
+      })
+    }
+  }
+  return matches.sort((a, b) => a.page - b.page || a.pageMatchIndex - b.pageMatchIndex)
+    .map((match, index) => ({ ...match, globalIndex: index }))
+}
+
+function joinTextLayerTokensWithOffsets(tokens: TextLayerToken[]): {
+  text: string
+  parts: Array<{ token: TextLayerToken; start: number; end: number }>
+} {
+  let text = ''
+  const parts: Array<{ token: TextLayerToken; start: number; end: number }> = []
+  for (const token of [...tokens].sort((a, b) => a.order - b.order)) {
+    if (text) {
+      const previous = text.at(-1) ?? ''
+      const noSpaceBefore = /^[,.;:?!%)]/.test(token.text)
+      const noSpaceAfter = previous === '(' || previous === '['
+      if (!noSpaceBefore && !noSpaceAfter) text += ' '
+    }
+    const start = text.length
+    text += token.text
+    parts.push({ token, start, end: text.length })
+  }
+  return { text: text.trim(), parts }
+}
+
+function searchHighlightsFromTextLayer(
+  pageElement: HTMLElement,
+  page: number,
+  query: string,
+  activePageMatchIndex: number | null
+): WritePdfSearchHighlight[] {
+  const needle = query.trim()
+  if (!needle) return []
+  const tokens = collectTextLayerTokens(pageElement, pageElement)
+  if (tokens.length === 0) return []
+  const joined = joinTextLayerTokensWithOffsets(tokens)
+  const occurrences = findTextOccurrences(joined.text, needle)
+  if (occurrences.length === 0) return []
+  const highlightedIndexes = Array.from(
+    { length: Math.min(MAX_SEARCH_HIGHLIGHTS_PER_PAGE, occurrences.length) },
+    (_, index) => index
+  )
+  if (
+    activePageMatchIndex != null &&
+    activePageMatchIndex >= MAX_SEARCH_HIGHLIGHTS_PER_PAGE &&
+    activePageMatchIndex < occurrences.length
+  ) {
+    highlightedIndexes.push(activePageMatchIndex)
+  }
+
+  const highlights: WritePdfSearchHighlight[] = []
+  for (const matchIndex of highlightedIndexes) {
+    const matchStart = occurrences[matchIndex]
+    const matchEnd = matchStart + needle.length
+    const rects: DOMRect[] = []
+    for (const part of joined.parts) {
+      if (part.end <= matchStart || part.start >= matchEnd) continue
+      const localStart = Math.max(0, matchStart - part.start)
+      const localEnd = Math.min(part.token.text.length, matchEnd - part.start)
+      if (localEnd <= localStart) continue
+      const rect = rectFromTextRange(
+        part.token.node,
+        part.token.start + localStart,
+        part.token.start + localEnd,
+        part.token.rect
+      )
+      if (rect) rects.push(rect)
+    }
+
+    const pageRects = pageRectsFromViewportRectsForPage(pageElement, page, mergeRectsIntoLineBars(rects))
+    const active = activePageMatchIndex === matchIndex
+    for (const rect of pageRects) {
+      highlights.push({ rect, active, matchIndex })
+    }
+  }
+  return highlights
 }
 
 function selectionFromTextLayerTokens(
@@ -1427,6 +1605,8 @@ function WritePdfPage({
   document,
   pageNumber,
   scale,
+  searchQuery,
+  activeSearchMatchIndex,
   selectionRects,
   annotationOverlays,
   activeAnnotationId,
@@ -1436,15 +1616,20 @@ function WritePdfPage({
   document: PDFDocumentProxy
   pageNumber: number
   scale: number
+  searchQuery: string
+  activeSearchMatchIndex: number | null
   selectionRects: WritePdfSelectionPageRect[]
   annotationOverlays: WritePdfAnnotationOverlay[]
   activeAnnotationId?: string | null
   onAnnotationSelect?: (annotationId: string) => void
   onPageText: (page: PageText) => void
 }): ReactElement {
+  const pageRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const textLayerRef = useRef<HTMLDivElement | null>(null)
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
+  const [textLayerRevision, setTextLayerRevision] = useState(0)
+  const [searchHighlights, setSearchHighlights] = useState<WritePdfSearchHighlight[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -1455,6 +1640,7 @@ function WritePdfPage({
       const textLayer = textLayerRef.current
       if (!canvas || !textLayer) return
       textLayer.replaceChildren()
+      setSearchHighlights([])
       const page: PDFPageProxy = await document.getPage(pageNumber)
       if (cancelled) {
         page.cleanup()
@@ -1499,6 +1685,7 @@ function WritePdfPage({
           .join(' ')
           .trim()
         onPageText({ page: pageNumber, text: pageText })
+        setTextLayerRevision((value) => value + 1)
       }
       page.cleanup()
     }
@@ -1514,8 +1701,18 @@ function WritePdfPage({
     }
   }, [document, onPageText, pageNumber, scale])
 
+  useEffect(() => {
+    const pageElement = pageRef.current
+    if (!pageElement || !pageSize || !searchQuery.trim()) {
+      setSearchHighlights([])
+      return
+    }
+    setSearchHighlights(searchHighlightsFromTextLayer(pageElement, pageNumber, searchQuery, activeSearchMatchIndex))
+  }, [activeSearchMatchIndex, pageNumber, pageSize, searchQuery, textLayerRevision])
+
   return (
     <div
+      ref={pageRef}
       className="write-pdf-page"
       data-write-pdf-page={pageNumber}
       style={pageSize ? { width: pageSize.width, height: pageSize.height } : undefined}
@@ -1523,6 +1720,14 @@ function WritePdfPage({
       <canvas ref={canvasRef} className="write-pdf-canvas" />
       <div ref={textLayerRef} className="write-pdf-text-layer textLayer" />
       <div className="write-pdf-overlay-layer">
+        {searchHighlights.map((highlight, index) => (
+          <span
+            key={`search-${pageNumber}-${highlight.matchIndex}-${index}-${highlight.rect.x}-${highlight.rect.y}`}
+            className="write-pdf-search-rect"
+            data-active={highlight.active ? 'true' : undefined}
+            style={rectStyleFromNormalizedRect(highlight.rect, pageSize)}
+          />
+        ))}
         {annotationOverlays.flatMap((overlay) => overlay.rects.map((rect, index) => {
           const markerLabel = overlay.label ?? annotationMarkerLabel(overlay.kind)
           const marker = markerLabel && index === 0
@@ -1607,6 +1812,7 @@ export function WritePdfViewer({
   const [pageInput, setPageInput] = useState(String(Math.max(1, Math.round(initialPage))))
   const [currentPage, setCurrentPage] = useState(Math.max(1, Math.round(initialPage)))
   const [searchQuery, setSearchQuery] = useState('')
+  const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const [pageTexts, setPageTexts] = useState<PageText[]>([])
   const [committedSelection, setCommittedSelection] = useState<WritePdfSelection | null>(null)
@@ -1791,14 +1997,10 @@ export function WritePdfViewer({
   }, [updateCurrentPageFromScroll])
 
   const searchMatches = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase()
-    if (!query) return []
-    return pageTexts
-      .filter((page) => page.text.toLowerCase().includes(query))
-      .map((page) => page.page)
-      .sort((a, b) => a - b)
-  }, [pageTexts, searchQuery])
-  const firstSearchPage = searchMatches[0] ?? null
+    return buildPdfSearchIndex(pageTexts, deferredSearchQuery)
+  }, [deferredSearchQuery, pageTexts])
+  const activeSearchMatch = searchMatches[Math.min(searchIndex, Math.max(0, searchMatches.length - 1))] ?? null
+  const firstSearchPage = searchMatches[0]?.page ?? null
   const allPageTextLoaded = pageCount > 0 && pageTexts.length >= pageCount
   const pdfHasText = pageTexts.some((page) => page.text.trim().length > 0)
   const visualSelectionEnabled = allPageTextLoaded && !pdfHasText
@@ -1833,14 +2035,33 @@ export function WritePdfViewer({
   useEffect(() => {
     setSearchIndex(0)
     if (firstSearchPage != null) scrollToPage(firstSearchPage)
-  }, [firstSearchPage, scrollToPage, searchQuery])
+  }, [deferredSearchQuery, firstSearchPage, scrollToPage])
+
+  useEffect(() => {
+    setSearchIndex((index) => {
+      if (searchMatches.length === 0) return 0
+      return Math.min(index, searchMatches.length - 1)
+    })
+  }, [searchMatches.length])
 
   const jumpSearch = useCallback((direction: 1 | -1): void => {
     if (searchMatches.length === 0) return
     const nextIndex = (searchIndex + direction + searchMatches.length) % searchMatches.length
     setSearchIndex(nextIndex)
-    scrollToPage(searchMatches[nextIndex])
+    scrollToPage(searchMatches[nextIndex].page)
   }, [scrollToPage, searchIndex, searchMatches])
+
+  useEffect(() => {
+    if (!activeSearchMatch || !deferredSearchQuery.trim()) return
+    const frame = window.requestAnimationFrame(() => {
+      const root = rootRef.current
+      const activeRect = root?.querySelector<HTMLElement>('.write-pdf-search-rect[data-active="true"]')
+      if (activeRect) {
+        activeRect.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeSearchMatch, deferredSearchQuery, rootRef])
 
   const syncSelection = useCallback((): void => {
     const root = rootRef.current
@@ -2290,6 +2511,10 @@ export function WritePdfViewer({
                   document={pdfDocument}
                   pageNumber={pageNumber}
                   scale={scale}
+                  searchQuery={activeSearchMatch?.page === pageNumber ? deferredSearchQuery : ''}
+                  activeSearchMatchIndex={
+                    activeSearchMatch?.page === pageNumber ? activeSearchMatch.pageMatchIndex : null
+                  }
                   selectionRects={committedRectsByPage.get(pageNumber) ?? []}
                   annotationOverlays={annotationOverlaysByPage.get(pageNumber) ?? []}
                   activeAnnotationId={activeAnnotationId}

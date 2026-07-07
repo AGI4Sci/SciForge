@@ -26,16 +26,7 @@ export default function AppShell(): React.ReactElement {
   const hasDesktopTitleBar = supportsDesktopTitleBar(platform)
 
   useEffect(() => {
-    let frame = 0
-    const timer = window.setTimeout(() => {
-      frame = window.requestAnimationFrame(() => {
-        void boot()
-      })
-    }, 0)
-    return () => {
-      window.clearTimeout(timer)
-      if (frame) window.cancelAnimationFrame(frame)
-    }
+    void boot()
   }, [boot])
 
   return (

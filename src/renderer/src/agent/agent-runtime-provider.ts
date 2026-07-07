@@ -327,7 +327,10 @@ function blockFromItem(item: AgentRuntimeItem): ChatBlock | null {
         kind: 'approval',
         id: item.id,
         createdAt: item.createdAt,
-        approvalId: stringMeta(item.meta, 'approvalId') ?? item.id,
+        approvalId:
+          requestIdMeta(item.meta, 'codexRequestId') ??
+          stringMeta(item.meta, 'approvalId') ??
+          item.id,
         summary: item.summary?.trim() || item.text?.trim() || 'Approval required',
         toolName: stringMeta(item.meta, 'toolName'),
         status: visibleStatus(item.status) === 'error'

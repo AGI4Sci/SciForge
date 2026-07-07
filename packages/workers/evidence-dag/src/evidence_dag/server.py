@@ -13,6 +13,8 @@ Endpoints:
   GET  /threads/{id}/provenance?node=ID                              -> provenance sub-DAG
   GET  /threads/{id}/metrics                                         -> 4 AAR metrics
   GET  /threads/{id}/analysis?threshold=0.7                          -> load-bearing / fragility / pseudo-robust
+  GET  /threads/{id}/audit-runs                                      -> persisted audit runs
+  POST /threads/{id}/audit-runs         body {"trigger":"manual"}     -> run adversarial audit
   GET  /threads/{id}/prov-json                                       -> PROV-JSON export
   POST /threads/{id}/prov-json           body {"doc":{...}}          -> import/reload
 """
@@ -288,6 +290,11 @@ class Handler(BaseHTTPRequestHandler):
             if action == "analysis":
                 thr = float((qs.get("threshold") or ["0.7"])[0])
                 return self._send(200, ok(self.engine.analysis(tid, threshold=thr), operation="analysis", request_id=rid, started=started))
+            if action == "audit-runs":
+                self.engine.require(tid)
+                runs = self.engine.audit_runs(tid)
+                return self._send(200, ok({"runs": runs, "latest": runs[0] if runs else None},
+                                          operation="audit-runs.list", request_id=rid, started=started))
             if action == "provenance":
                 node = (qs.get("node") or [None])[0]
                 if not node:
@@ -314,31 +321,44 @@ class Handler(BaseHTTPRequestHandler):
                 trace = body.get("trace")
                 if not isinstance(trace, list):
                     return self._send(400, err("INVALID_ARGUMENT", "body.trace must be a list", operation="ingest-trace", request_id=rid, started=started))
-                # merge=true => accumulate this (delta) trace into the thread's
-                # existing graph so the DAG grows across a conversation; default
-                # false replaces the graph (whole-conversation re-extract).
-                merge = bool(body.get("merge", False))
-                g = self.engine.ingest_trace(tid, trace, merge=merge)
+                # Default: accumulate this completed-turn delta into the thread
+                # graph. Explicit rebuild is reserved for whole-thread rebuilds.
+                rebuild = bool(body.get("rebuild", False))
+                g = self.engine.ingest_trace(tid, trace, rebuild=rebuild)
                 delta = self.engine.last_delta(tid)
                 # Auto-verify after ingest (default on) so ν/status are ready
-                # immediately — the UI/poller sees a scored graph. In merge mode we
-                # only score the edges this turn added (incremental); a full ingest
-                # scores everything.
+                # immediately — the UI/poller sees a scored graph. For normal
+                # completed-turn deltas we only score newly added edges; a rebuild
+                # scores the full graph.
                 auto_verify = body.get("verify", os.environ.get("EDAG_AUTO_VERIFY", "1") != "0")
                 verified = None
+                threshold = float(body.get("threshold", 0.7))
                 if auto_verify and self.engine.llm is not None:
                     try:
-                        verified = self.engine.verify(tid, threshold=float(body.get("threshold", 0.7)),
-                                                       only_unscored=merge)
+                        verified = self.engine.verify(tid, threshold=threshold, only_unscored=not rebuild)
                     except Exception:  # noqa: BLE001 — verify is best-effort; ingest already succeeded
                         verified = None
-                added = f"+{len(delta['new_nodes'])} nodes / +{len(delta['new_edges'])} edges" if merge else \
-                        f"{len(g.nodes)} nodes / {len(g.edges)} edges"
+                auto_audit = body.get("audit", os.environ.get("EDAG_AUTO_AUDIT", "1") != "0")
+                audit_run = None
+                if auto_audit:
+                    try:
+                        audit_run = self.engine.audit(
+                            tid,
+                            trigger="auto",
+                            threshold=threshold,
+                        )
+                    except Exception:  # noqa: BLE001 — audit is advisory; ingest already succeeded
+                        audit_run = None
+                added = f"{len(g.nodes)} nodes / {len(g.edges)} edges" if rebuild else \
+                        f"+{len(delta['new_nodes'])} nodes / +{len(delta['new_edges'])} edges"
                 return self._send(200, ok({"summary": g.summary(), "verified": verified is not None,
-                                           "merged": merge, "delta": delta},
-                                          summary=(f"merged {added} (now {len(g.nodes)} nodes / {len(g.edges)} edges)" if merge
-                                                   else f"extracted {added}")
-                                          + (f"; verified ({len(verified['status_changes'])} status changes)" if verified else ""),
+                                           "audited": audit_run is not None,
+                                           "audit": audit_run["risk_digest"] if audit_run else None,
+                                           "rebuilt": rebuild, "delta": delta},
+                                          summary=(f"rebuilt {added}" if rebuild
+                                                   else f"merged {added} (now {len(g.nodes)} nodes / {len(g.edges)} edges)")
+                                          + (f"; verified ({len(verified['status_changes'])} status changes)" if verified else "")
+                                          + (f"; audit ({audit_run['risk_digest']['total_findings']} finding(s))" if audit_run else ""),
                                           operation="ingest-trace", request_id=rid, started=started))
             if action == "verify":
                 threshold = float(body.get("threshold", 0.7))
@@ -357,6 +377,19 @@ class Handler(BaseHTTPRequestHandler):
                                           summary=f"{s['n_invalidated']} invalidated / {s['blast_radius']} affected"
                                                   f" (subgraph {s['affected_subgraph_size']})",
                                           operation="reconcile", request_id=rid, started=started))
+            if action == "audit-runs":
+                threshold = float(body.get("threshold", 0.7))
+                if body.get("verify"):
+                    self.engine.verify(tid, threshold=threshold, only_unscored=True)
+                run = self.engine.audit(
+                    tid,
+                    trigger=str(body.get("trigger", "manual")),
+                    threshold=threshold,
+                )
+                return self._send(200, ok(run,
+                                          summary=f"{run['risk_digest']['total_findings']} finding(s); "
+                                                  f"{run['risk_digest']['highest_severity']}",
+                                          operation="audit-runs.create", request_id=rid, started=started))
             if action == "prov-json":
                 doc = body.get("doc")
                 if not isinstance(doc, dict):

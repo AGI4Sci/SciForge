@@ -214,7 +214,7 @@ class _SequencedLLM:
 
 
 class TestIncrementalMerge(unittest.TestCase):
-    """merge=True accumulates each turn into one growing per-thread DAG."""
+    """Default ingest accumulates each turn into one growing per-thread DAG."""
 
     TURN1 = ('{"nodes":[{"tmp_id":"s1","type":"source","content":"Source one.","trace_ref":"t1"},'
              '{"tmp_id":"c1","type":"claim","content":"Claim one.","trace_ref":"t1"}],'
@@ -225,18 +225,18 @@ class TestIncrementalMerge(unittest.TestCase):
              '{"tmp_id":"c2","type":"claim","content":"Claim two.","trace_ref":"t2"}],'
              '"edges":[{"src":"s2","dst":"c2","rel":"supports"}]}')
 
-    def test_merge_grows_and_preserves_status(self):
+    def test_default_ingest_grows_and_preserves_status(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             eng = Engine(_SequencedLLM([self.TURN1, self.TURN2], nli=0.9), storage_dir=d)
 
-            g1 = eng.ingest_trace("conv", [{"id": "t1", "type": "message", "content": "turn1"}], merge=True)
+            g1 = eng.ingest_trace("conv", [{"id": "t1", "type": "message", "content": "turn1"}])
             eng.verify("conv", only_unscored=True)
             self.assertEqual(len(g1.nodes), 2)
             c1 = next(n for n in g1.nodes.values() if n.content == "Claim one.")
             self.assertEqual(c1.status, NodeStatus.SUPPORTED)
 
-            g2 = eng.ingest_trace("conv", [{"id": "t2", "type": "message", "content": "turn2"}], merge=True)
+            g2 = eng.ingest_trace("conv", [{"id": "t2", "type": "message", "content": "turn2"}])
             # Source one deduped (not duplicated); only s2 + c2 are new.
             self.assertEqual(len(g2.nodes), 4)
             delta = eng.last_delta("conv")
@@ -254,11 +254,10 @@ class TestIncrementalMerge(unittest.TestCase):
             c2 = next(n for n in g2.nodes.values() if n.content == "Claim two.")
             self.assertEqual(c2.status, NodeStatus.SUPPORTED)
 
-    def test_default_ingest_still_replaces(self):
-        # merge=False (default) keeps the original "replace" semantics.
+    def test_explicit_rebuild_replaces(self):
         eng = Engine(_SequencedLLM([self.TURN1, self.TURN2], nli=0.9))
         eng.ingest_trace("conv", [{"id": "t1", "type": "message", "content": "x"}])
-        g = eng.ingest_trace("conv", [{"id": "t2", "type": "message", "content": "y"}])
+        g = eng.ingest_trace("conv", [{"id": "t2", "type": "message", "content": "y"}], rebuild=True)
         self.assertEqual(len(g.nodes), 3)  # only turn 2's nodes, turn 1 discarded
 
 

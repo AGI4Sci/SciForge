@@ -133,6 +133,19 @@
   .an-ty { font-size:9px; font-weight:700; letter-spacing:.3px; margin-right:3px; }
   .ty-source{color:var(--source)} .ty-reasoning{color:var(--reasoning)} .ty-claim{color:var(--claim)}
   .an-rsn { color:#9a3412; font-size:10px; margin-top:2px; }
+  #auditFindings { max-height:230px; overflow:auto; }
+  .riskbar { display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-bottom:7px; }
+  .risk-pill { display:inline-flex; align-items:center; gap:3px; border-radius:999px; border:1px solid var(--line);
+    padding:1px 7px; font-size:10px; font-weight:700; }
+  .risk-blocker { color:#991b1b; background:#fee2e2; border-color:#fecaca; }
+  .risk-major { color:#9a3412; background:#ffedd5; border-color:#fed7aa; }
+  .risk-minor { color:#854d0e; background:#fef3c7; border-color:#fde68a; }
+  .risk-info { color:#1d4ed8; background:#dbeafe; border-color:#bfdbfe; }
+  .finding { font-size:11px; padding:6px 7px; border:1px solid var(--line); border-radius:7px;
+    background:var(--panel2); margin-bottom:5px; cursor:pointer; line-height:1.35; }
+  .finding:hover { border-color:#9db6e8; background:#f3f7ff; }
+  .finding .ft { font-weight:750; color:var(--fg); }
+  .finding .fx { color:var(--muted); margin-top:2px; }
   @media (max-width: 560px) {
     #main { flex-direction:column; }
     #cy { min-height:48vh; min-width:0; }
@@ -149,6 +162,7 @@
     <button id="refresh" title="Refresh">↻ Refresh</button>
     <label class="chk" title="Watch for new data and flag Refresh — never redraws while you're reading"><input type="checkbox" id="auto" checked /> watch</label>
     <button id="verify" title="Re-run NLI verification">✓ Verify</button>
+    <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit now</button>
     <span class="toolbar-sep"></span>
     <button id="collapseAll" title="Back to the Top-3 claim focus">⤡ Reset Top-3</button>
     <button id="expandAll" title="Show every claim (evidence still expands on demand)">⤢ All claims</button>
@@ -163,6 +177,7 @@
         <div class="metric"><div class="v" id="m-cov">–</div><div class="k" title="% of conclusions that trace back to a source">Coverage</div></div>
         <div class="metric"><div class="v" id="m-snd">–</div><div class="k" title="mean ν of the load-bearing support edges">Soundness</div></div>
       </div>
+      <div class="sec" id="auditFindings"><h2>Evidence Audit</h2><div class="empty" style="padding:6px">No audit run loaded.</div></div>
       <div class="sec" id="analysis"><h2>Load-bearing / Fragility</h2><div class="empty" style="padding:6px">—</div></div>
       <div class="sec" id="inspector"><div class="empty"><b>Click a node</b> to isolate its evidence path (everything else fades; click empty space to clear).<br/>Hover a node marked <b>＋N</b> and click the <b>＋</b> to reveal its next layer.</div></div>
       <details class="sec legend">
@@ -591,6 +606,7 @@ async function loadGraph(){
     if (!g.ok) {
       if (cy) cy.elements().remove();
       ['m-cov','m-snd'].forEach(id=>$(id).textContent='–');
+      showAuditRun(null);
       // A just-finished turn feeds the whole thread; extraction (one LLM call over
       // the full conversation) can take tens of seconds for long threads. Auto-retry
       // so the DAG shows up on its own instead of looking broken.
@@ -634,6 +650,7 @@ async function loadGraph(){
       analysisData = a.data; buildAnalysisMaps(a.data); showAnalysis(a.data);
       if ((a.data.load_bearing||[]).length || (a.data.fragile||[]).length) render(lastGraph);
     }
+    await loadAuditRuns();
   } catch(e){ setStatus('error: '+e.message); }
 }
 
@@ -690,6 +707,66 @@ function showAnalysis(a){
   $("analysis").innerHTML = h;
   $("analysis").querySelectorAll('.an-item').forEach(el =>
     el.onclick = () => focusAnalysis(el.dataset.id, el.dataset.kind));
+}
+
+function showAuditRun(run){
+  if(!run){
+    $("auditFindings").innerHTML = '<h2>Evidence Audit</h2><div class="empty" style="padding:6px;font-size:11px">No audit run yet. Click Audit now after the graph loads.</div>';
+    return;
+  }
+  const d = run.risk_digest || {};
+  const counts = d.counts_by_severity || {};
+  let h = '<h2>Evidence Audit</h2>';
+  h += `<div class="riskbar" title="Latest audit: ${esc(run.trigger||'manual')}">`
+    + `<span class="risk-pill risk-blocker">${counts.blocker||0} blocker</span>`
+    + `<span class="risk-pill risk-major">${counts.major||0} major</span>`
+    + `<span class="risk-pill risk-minor">${counts.minor||0} minor</span>`
+    + `<span class="risk-pill risk-info">${counts.info||0} info</span>`
+    + `</div>`;
+  const findings = run.findings || [];
+  if(!findings.length){
+    h += '<div class="empty" style="padding:6px;font-size:11px">No audit risks found for the current graph.</div>';
+  } else {
+    findings.slice(0,8).forEach(f => {
+      const sev = f.severity || 'info';
+      const target = (f.target && f.target.content) || f.target_id || '';
+      h += `<div class="finding" data-id="${escAttr(f.target_id)}">`
+        + `<div><span class="risk-pill risk-${sev}">${esc(sev)}</span> <span class="ft">${esc(f.title||f.finding_type)}</span></div>`
+        + `<div class="fx">${esc(target.slice(0,82))}</div>`
+        + `</div>`;
+    });
+    if(findings.length > 8) h += `<div class="an-hint">${findings.length - 8} more finding(s) hidden in this compact view.</div>`;
+  }
+  $("auditFindings").innerHTML = h;
+  $("auditFindings").querySelectorAll('.finding').forEach(el =>
+    el.onclick = () => {
+      if(el.dataset.id) activateNode(el.dataset.id, 'up');
+    });
+}
+
+async function loadAuditRuns(){
+  if(!currentThread) return;
+  try{
+    const r = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`);
+    if(r.ok) showAuditRun(r.data.latest);
+  }catch(_){}
+}
+
+async function runAuditNow(){
+  if(!currentThread) return;
+  setStatus(`${currentThread}: auditing…`);
+  try{
+    const r = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`, {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({trigger:'manual',threshold:0.7})
+    });
+    if(!r.ok){ setStatus('audit failed'); return; }
+    showAuditRun(r.data);
+    setStatus(`audit: ${r.data.risk_digest.total_findings} finding(s), highest ${r.data.risk_digest.highest_severity}`);
+  }catch(e){
+    setStatus('audit error: '+e.message);
+  }
 }
 
 // click a 承重/脆弱 entry => reveal + highlight its "blast radius": for a
@@ -948,6 +1025,7 @@ $("verify").onclick = async ()=>{
   setStatus(r.ok?`verified: ${r.data.status_changes.length} status changes`:'verify failed');
   loadGraph();
 };
+$("auditNow").onclick = runAuditNow;
 $("expandAll").onclick = showAllClaims;          // show every conclusion (still 1-hop)
 $("collapseAll").onclick = resetView;            // back to top-3 focus
 let timer = null;

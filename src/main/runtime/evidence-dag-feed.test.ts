@@ -91,7 +91,7 @@ describe('Evidence DAG runtime feed', () => {
     })).toBe(false)
   })
 
-  it('posts merge-mode traces with runtime-scoped, URL-encoded thread ids', async () => {
+  it('posts completed-turn traces with runtime-scoped, URL-encoded thread ids', async () => {
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }))
 
     await feedEvidenceDag({
@@ -114,11 +114,29 @@ describe('Evidence DAG runtime feed', () => {
           'content-type': 'application/json'
         }),
         body: JSON.stringify({
-          trace: [{ id: 'u1', type: 'message', role: 'user', content: 'hello' }],
-          merge: true
+          trace: [{ id: 'u1', type: 'message', role: 'user', content: 'hello' }]
         })
       })
     )
+  })
+
+  it('throws on failed ingest when failOpen is disabled', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      ok: false,
+      error: { message: 'extract failed' }
+    }), { status: 500 }))
+
+    await expect(feedEvidenceDag({
+      runtimeId: 'claude',
+      threadId: 'thread',
+      items: [{ id: 'u1', kind: 'user_message', text: 'hello' }],
+      env: {
+        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897/',
+        SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret'
+      },
+      fetchImpl,
+      failOpen: false
+    })).rejects.toThrow(/extract failed/)
   })
 
   it('does not post when the service URL has no non-empty API key', async () => {
