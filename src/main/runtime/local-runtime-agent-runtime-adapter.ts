@@ -334,6 +334,9 @@ async function localRuntimeAuxiliary(
           context,
           `${LOCAL_RUNTIME_MEMORY_PATH}${queryString({
             workspace: optionalString(optionsPayload.workspace),
+            project: optionalString(optionsPayload.project),
+            thread_mode: optionalString(optionsPayload.threadMode),
+            task_type: optionalString(optionsPayload.taskType),
             include_deleted: booleanOrUndefined(optionsPayload.includeDeleted)
           })}`,
           { method: 'GET' }

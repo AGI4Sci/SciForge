@@ -32,6 +32,7 @@ import type {
   AgentRuntimeMemoryRecord,
   AgentRuntimeThread,
   AgentRuntimeThreadGoal,
+  AgentRuntimeThreadGuiPlan,
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
   AgentRuntimeThreadReadInput,
@@ -573,13 +574,18 @@ export class AgentRuntimeHost {
       case 'createMemory': {
         const service = this.options.services?.memory
         if (!service) return { handled: false }
+        const scope = memoryScope(payload.scope)
+        const workspace = optionalString(payload.workspace) || (scope === 'project' ? context.settings.workspaceRoot : undefined)
+        const project = optionalString(payload.project) || (scope === 'project' ? projectKeyForWorkspace(workspace) : undefined)
         return {
           handled: true,
           value: await service.create({
             text: requiredString(payload, 'text'),
-            scope: optionalString(payload.scope) as never,
-            workspace: optionalString(payload.workspace),
-            project: optionalString(payload.project),
+            ...(scope ? { scope } : {}),
+            ...(workspace ? { workspace } : {}),
+            ...(project ? { project } : {}),
+            ...(memoryThreadMode(payload.threadMode) ? { threadMode: memoryThreadMode(payload.threadMode) } : {}),
+            ...(memoryTaskType(payload.taskType) ? { taskType: memoryTaskType(payload.taskType) } : {}),
             tags: arrayOfStrings(payload.tags),
             confidence: numberValue(payload.confidence),
             disabled: payload.disabled === true
@@ -590,11 +596,18 @@ export class AgentRuntimeHost {
         const service = this.options.services?.memory
         if (!service) return { handled: false }
         const options = recordPayload(payload.options)
+        const workspace = optionalString(options.workspace ?? payload.workspace) || context.settings.workspaceRoot
+        const project = optionalString(options.project ?? payload.project) || projectKeyForWorkspace(workspace)
+        const threadMode = memoryThreadMode(options.threadMode ?? payload.threadMode)
+        const taskType = memoryTaskType(options.taskType ?? payload.taskType)
         return {
           handled: true,
           value: await service.list({
             scope: optionalString(options.scope ?? payload.scope) as never,
-            workspace: optionalString(options.workspace ?? payload.workspace) || context.settings.workspaceRoot,
+            workspace,
+            ...(project ? { project } : {}),
+            ...(threadMode ? { threadMode } : {}),
+            ...(taskType ? { taskType } : {}),
             includeDeleted: (options.includeDeleted ?? payload.includeDeleted) === true,
             includeDisabled: (options.includeDisabled ?? payload.includeDisabled) === true,
             query: optionalString(options.query ?? payload.query),
@@ -1045,8 +1058,13 @@ export class AgentRuntimeHost {
   ): Promise<AgentRuntimeTurnStartInput> {
     const service = this.options.services?.memory
     if (!service) return input
+    const workspace = input.workspace || context.settings.workspaceRoot
+    const threadMode = memoryThreadMode(input.mode) ?? (input.guiPlan ? 'plan' : 'agent')
     const records = await service.retrieveForTurn({
-      workspace: input.workspace || context.settings.workspaceRoot,
+      workspace,
+      ...(projectKeyForWorkspace(workspace) ? { project: projectKeyForWorkspace(workspace) } : {}),
+      threadMode,
+      taskType: memoryTaskTypeForTurn(threadMode, input.guiPlan),
       prompt: input.text,
       limit: 8
     })
@@ -2156,6 +2174,30 @@ function ledgerEvidenceKind(value: unknown): AgentRuntimeContextLedgerEvidence['
 
 function memoryScope(value: unknown): AgentRuntimeContextLedgerMemory['scope'] {
   return value === 'user' || value === 'project' || value === 'workspace' ? value : undefined
+}
+
+function memoryThreadMode(value: unknown): AgentRuntimeMemoryRecord['threadMode'] {
+  return value === 'agent' || value === 'plan' ? value : undefined
+}
+
+function memoryTaskType(value: unknown): AgentRuntimeMemoryRecord['taskType'] {
+  return value === 'agent' || value === 'plan' || value === 'plan_draft' || value === 'plan_refine'
+    ? value
+    : undefined
+}
+
+function memoryTaskTypeForTurn(
+  threadMode: NonNullable<AgentRuntimeMemoryRecord['threadMode']>,
+  guiPlan: AgentRuntimeThreadGuiPlan | undefined
+): NonNullable<AgentRuntimeMemoryRecord['taskType']> {
+  if (guiPlan?.operation === 'draft') return 'plan_draft'
+  if (guiPlan?.operation === 'refine') return 'plan_refine'
+  return threadMode === 'plan' ? 'plan' : 'agent'
+}
+
+function projectKeyForWorkspace(workspace: string | undefined): string | undefined {
+  const trimmed = workspace?.trim()
+  return trimmed || undefined
 }
 
 function memorySource(value: unknown): AgentRuntimeContextLedgerMemory['source'] {

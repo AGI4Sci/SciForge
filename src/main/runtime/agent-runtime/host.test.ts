@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -2552,6 +2552,38 @@ describe('AgentRuntimeHost', () => {
         workspace: otherWorkspace
       }
     })
+    await host.auxiliary({
+      runtimeId: 'sciforge',
+      operation: 'createMemory',
+      payload: {
+        text: 'Project memory for runtime tests.',
+        scope: 'project',
+        workspace: workspaceRoot
+      }
+    })
+    const defaultProjectMemory = await host.auxiliary({
+      runtimeId: 'sciforge',
+      operation: 'createMemory',
+      payload: {
+        text: 'Default project memory for runtime tests.',
+        scope: 'project'
+      }
+    }) as { workspace?: string; project?: string }
+    const canonicalWorkspaceRoot = await realpath(workspaceRoot)
+    expect(defaultProjectMemory).toMatchObject({
+      workspace: canonicalWorkspaceRoot,
+      project: canonicalWorkspaceRoot
+    })
+    await host.auxiliary({
+      runtimeId: 'claude',
+      operation: 'createMemory',
+      payload: {
+        text: 'Other project memory must not leak.',
+        scope: 'project',
+        workspace: workspaceRoot,
+        project: 'other-project'
+      }
+    })
 
     await expect(host.auxiliary({
       runtimeId: 'codex',
@@ -2585,8 +2617,11 @@ describe('AgentRuntimeHost', () => {
       const input = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
       expect(input?.text).toContain('User prefers verbose technical answers.')
       expect(input?.text).toContain('Workspace uses Vitest for runtime tests.')
+      expect(input?.text).toContain('Project memory for runtime tests.')
+      expect(input?.text).toContain('Default project memory for runtime tests.')
       expect(input?.text).not.toContain('Workspace uses Jest for runtime tests.')
       expect(input?.text).not.toContain('Other workspace memory must not leak.')
+      expect(input?.text).not.toContain('Other project memory must not leak.')
       expect(input?.text).not.toContain('Disabled memory must not inject.')
       expect(input?.text).not.toContain('Deleted memory must not inject.')
     }
@@ -2615,14 +2650,15 @@ describe('AgentRuntimeHost', () => {
     let editingContent = ''
     let editingId: string | null = null
     const provider = {
-      createMemory: async (input: { content: string; scope?: 'user' | 'workspace' | 'project'; workspace?: string }) => {
+      createMemory: async (input: { content: string; scope?: 'user' | 'workspace' | 'project'; workspace?: string; project?: string }) => {
         const record = await host.auxiliary({
           runtimeId: 'codex',
           operation: 'createMemory',
           payload: {
             text: input.content,
             scope: input.scope,
-            workspace: input.workspace
+            workspace: input.workspace,
+            project: input.project
           }
         }) as { id: string; text: string; scope: 'user' | 'workspace' | 'project'; workspace?: string; tags: string[]; createdAt: string; updatedAt: string }
         return {

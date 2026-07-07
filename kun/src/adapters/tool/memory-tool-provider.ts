@@ -19,6 +19,9 @@ export function buildMemoryToolProviders(store: MemoryStore | undefined): Capabi
             content: { type: 'string' },
             scope: { type: 'string', enum: ['user', 'workspace', 'project'] },
             workspace: { type: 'string' },
+            project: { type: 'string' },
+            threadMode: { type: 'string', enum: ['agent', 'plan'] },
+            taskType: { type: 'string', enum: ['agent', 'plan', 'plan_draft', 'plan_refine'] },
             tags: { type: 'array', items: { type: 'string' } }
           },
           required: ['content'],
@@ -28,12 +31,30 @@ export function buildMemoryToolProviders(store: MemoryStore | undefined): Capabi
         execute: async (args, context) => {
           const content = typeof args.content === 'string' ? args.content.trim() : ''
           if (!content) return { output: { error: 'content is required' }, isError: true }
+          const scope = args.scope === 'user' || args.scope === 'project' ? args.scope : 'workspace'
+          const workspace = typeof args.workspace === 'string' ? args.workspace : context.workspace
+          const project = typeof args.project === 'string'
+            ? args.project
+            : scope === 'project'
+              ? context.project ?? workspace
+              : undefined
           return {
             output: {
               memory: await store.create({
                 content,
-                scope: args.scope === 'user' || args.scope === 'project' ? args.scope : 'workspace',
-                workspace: typeof args.workspace === 'string' ? args.workspace : context.workspace,
+                scope,
+                workspace,
+                ...(project ? { project } : {}),
+                ...(args.threadMode === 'agent' || args.threadMode === 'plan'
+                  ? { threadMode: args.threadMode }
+                  : context.threadMode
+                    ? { threadMode: context.threadMode }
+                    : {}),
+                ...(isMemoryTaskType(args.taskType)
+                  ? { taskType: args.taskType }
+                  : context.taskType
+                    ? { taskType: context.taskType }
+                    : {}),
                 sourceThreadId: context.threadId,
                 sourceTurnId: context.turnId,
                 tags: Array.isArray(args.tags) ? args.tags.filter((tag): tag is string => typeof tag === 'string') : []
@@ -85,4 +106,8 @@ export function buildMemoryToolProviders(store: MemoryStore | undefined): Capabi
       })
     ]
   }]
+}
+
+function isMemoryTaskType(value: unknown): value is 'agent' | 'plan' | 'plan_draft' | 'plan_refine' {
+  return value === 'agent' || value === 'plan' || value === 'plan_draft' || value === 'plan_refine'
 }

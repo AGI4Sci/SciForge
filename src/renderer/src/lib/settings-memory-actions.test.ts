@@ -58,7 +58,8 @@ describe('createSettingsMemoryActions', () => {
     expect(createMemory).toHaveBeenCalledWith({
       content: 'Remember CJK 检索 should work.',
       scope: 'project',
-      workspace: '/workspace/project'
+      workspace: '/workspace/project',
+      project: '/workspace/project'
     })
     expect(records.map((record) => record.id)).toEqual(['mem_2', 'mem_1'])
     expect(records[0]?.content).toBe('Remember CJK 检索 should work.')

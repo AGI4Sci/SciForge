@@ -55,6 +55,62 @@ describe('SharedMemoryService', () => {
     expect(await service.list({ includeDeleted: false })).toHaveLength(1)
   })
 
+  it('strictly scopes project and turn-specific memory retrieval', async () => {
+    const dataDir = await tempDir()
+    const workspace = await tempDir()
+    const service = new SharedMemoryService(dataDir)
+    const userMemory = await service.create({
+      text: 'Global pnpm preference',
+      scope: 'user'
+    })
+    const planUserMemory = await service.create({
+      text: 'Plan-only pnpm preference',
+      scope: 'user',
+      threadMode: 'plan',
+      taskType: 'plan_refine'
+    })
+    const projectMemory = await service.create({
+      text: 'Project A pnpm preference',
+      scope: 'project',
+      workspace
+    })
+    const otherProjectMemory = await service.create({
+      text: 'Project B pnpm preference',
+      scope: 'project',
+      workspace,
+      project: 'project-b'
+    })
+
+    const agentIds = (await service.retrieveForTurn({
+      workspace,
+      project: projectMemory.project!,
+      threadMode: 'agent',
+      taskType: 'agent',
+      prompt: 'pnpm preference'
+    })).map((record) => record.id)
+    expect(agentIds).toEqual(expect.arrayContaining([userMemory.id, projectMemory.id]))
+    expect(agentIds).not.toContain(planUserMemory.id)
+    expect(agentIds).not.toContain(otherProjectMemory.id)
+
+    const noProjectIds = (await service.retrieveForTurn({
+      workspace,
+      threadMode: 'agent',
+      taskType: 'agent',
+      prompt: 'pnpm preference'
+    })).map((record) => record.id)
+    expect(noProjectIds).toContain(userMemory.id)
+    expect(noProjectIds).not.toContain(projectMemory.id)
+
+    const planIds = (await service.retrieveForTurn({
+      workspace,
+      project: projectMemory.project!,
+      threadMode: 'plan',
+      taskType: 'plan_refine',
+      prompt: 'pnpm preference'
+    })).map((record) => record.id)
+    expect(planIds).toEqual(expect.arrayContaining([userMemory.id, planUserMemory.id, projectMemory.id]))
+  })
+
   it('does not follow a symlinked app-data memory store target', async () => {
     const dataDir = await tempDir()
     const outsideDir = await tempDir()

@@ -2,6 +2,10 @@ import { z } from 'zod'
 
 export const MemoryScope = z.enum(['user', 'workspace', 'project'])
 export type MemoryScope = z.infer<typeof MemoryScope>
+export const MemoryThreadMode = z.enum(['agent', 'plan'])
+export type MemoryThreadMode = z.infer<typeof MemoryThreadMode>
+export const MemoryTaskType = z.enum(['agent', 'plan', 'plan_draft', 'plan_refine'])
+export type MemoryTaskType = z.infer<typeof MemoryTaskType>
 
 export const MemoryRecord = z.object({
   id: z.string().min(1),
@@ -9,6 +13,8 @@ export const MemoryRecord = z.object({
   scope: MemoryScope,
   workspace: z.string().optional(),
   project: z.string().optional(),
+  threadMode: MemoryThreadMode.optional(),
+  taskType: MemoryTaskType.optional(),
   sourceThreadId: z.string().optional(),
   sourceTurnId: z.string().optional(),
   tags: z.array(z.string()).default([]),
@@ -25,6 +31,8 @@ export const MemoryCreateRequest = z.object({
   scope: MemoryScope.default('workspace'),
   workspace: z.string().optional(),
   project: z.string().optional(),
+  threadMode: MemoryThreadMode.optional(),
+  taskType: MemoryTaskType.optional(),
   sourceThreadId: z.string().optional(),
   sourceTurnId: z.string().optional(),
   tags: z.array(z.string()).default([]),

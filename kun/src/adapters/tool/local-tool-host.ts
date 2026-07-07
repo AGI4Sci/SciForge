@@ -609,14 +609,16 @@ function regexMatches(pattern: string, value: string): boolean {
 
 function hookContext(
   context: ToolHostContext
-): Pick<ToolHostContext, 'threadId' | 'turnId' | 'workspace' | 'threadMode' | 'approvalPolicy' | 'sandboxMode'> {
+): Pick<ToolHostContext, 'threadId' | 'turnId' | 'workspace' | 'project' | 'threadMode' | 'taskType' | 'approvalPolicy' | 'sandboxMode'> {
   return {
     threadId: context.threadId,
     turnId: context.turnId,
     workspace: context.workspace,
     approvalPolicy: context.approvalPolicy,
     ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
-    ...(context.threadMode ? { threadMode: context.threadMode } : {})
+    ...(context.project ? { project: context.project } : {}),
+    ...(context.threadMode ? { threadMode: context.threadMode } : {}),
+    ...(context.taskType ? { taskType: context.taskType } : {})
   }
 }
 

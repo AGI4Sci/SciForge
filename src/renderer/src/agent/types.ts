@@ -627,6 +627,8 @@ export interface AgentProvider {
     scope?: AgentRuntimeMemoryRecord['scope']
     workspace?: string
     project?: string
+    threadMode?: AgentRuntimeMemoryRecord['threadMode']
+    taskType?: AgentRuntimeMemoryRecord['taskType']
     tags?: string[]
     confidence?: number
     disabled?: boolean
@@ -634,6 +636,9 @@ export interface AgentProvider {
   listMemories?(options?: {
     scope?: AgentRuntimeMemoryRecord['scope']
     workspace?: string
+    project?: string
+    threadMode?: AgentRuntimeMemoryRecord['threadMode']
+    taskType?: AgentRuntimeMemoryRecord['taskType']
     includeDeleted?: boolean
     includeDisabled?: boolean
     query?: string

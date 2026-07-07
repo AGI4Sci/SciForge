@@ -412,6 +412,8 @@ export type AgentRuntimeGitCheckpoint = {
 }
 
 export type AgentRuntimeMemoryScope = 'user' | 'project' | 'workspace'
+export type AgentRuntimeMemoryThreadMode = 'agent' | 'plan'
+export type AgentRuntimeMemoryTaskType = 'agent' | 'plan' | 'plan_draft' | 'plan_refine'
 
 export type AgentRuntimeMemoryRecord = {
   id: string
@@ -419,6 +421,8 @@ export type AgentRuntimeMemoryRecord = {
   scope: AgentRuntimeMemoryScope
   workspace?: string
   project?: string
+  threadMode?: AgentRuntimeMemoryThreadMode
+  taskType?: AgentRuntimeMemoryTaskType
   tags: string[]
   confidence?: number
   disabled?: boolean

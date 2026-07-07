@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type {
   AgentRuntimeMemoryRecord,
-  AgentRuntimeMemoryScope
+  AgentRuntimeMemoryScope,
+  AgentRuntimeMemoryTaskType,
+  AgentRuntimeMemoryThreadMode
 } from '../../shared/agent-runtime-contract'
 import {
   atomicWriteAppDataJson,
@@ -13,11 +15,21 @@ type StoredMemory = {
   records: AgentRuntimeMemoryRecord[]
 }
 
+type MemoryScopeFilter = {
+  workspace?: string
+  project?: string
+  threadMode?: AgentRuntimeMemoryThreadMode
+  taskType?: AgentRuntimeMemoryTaskType
+}
+
 const SHARED_MEMORY_STORE = ['shared-memory', 'memories.json'] as const
 
 export type MemoryListInput = {
   scope?: AgentRuntimeMemoryScope
   workspace?: string
+  project?: string
+  threadMode?: AgentRuntimeMemoryThreadMode
+  taskType?: AgentRuntimeMemoryTaskType
   includeDeleted?: boolean
   includeDisabled?: boolean
   query?: string
@@ -32,12 +44,19 @@ export class SharedMemoryService {
   async list(input: MemoryListInput = {}): Promise<AgentRuntimeMemoryRecord[]> {
     const store = await this.load()
     const workspace = input.workspace?.trim() ? await safeCanonical(input.workspace) : ''
+    const project = projectKeyForInput(input.project, input.workspace, workspace)
+    const scopeFilter: MemoryScopeFilter = {
+      workspace,
+      ...(project ? { project } : {}),
+      ...(input.threadMode ? { threadMode: input.threadMode } : {}),
+      ...(input.taskType ? { taskType: input.taskType } : {})
+    }
     const queryTokens = tokenize(input.query ?? '')
     const records = store.records
       .filter((record) => !input.scope || record.scope === input.scope)
       .filter((record) => input.includeDeleted === true || record.deleted !== true)
       .filter((record) => input.includeDisabled === true || record.disabled !== true)
-      .filter((record) => !workspace || record.scope === 'user' || sameWorkspace(record.workspace, workspace))
+      .filter((record) => inScope(record, scopeFilter))
       .filter((record) => queryTokens.length === 0 || matchesTokens(record, queryTokens))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     return records.slice(0, Math.max(1, Math.min(input.limit ?? 200, 500)))
@@ -48,6 +67,8 @@ export class SharedMemoryService {
     scope?: AgentRuntimeMemoryScope
     workspace?: string
     project?: string
+    threadMode?: AgentRuntimeMemoryThreadMode
+    taskType?: AgentRuntimeMemoryTaskType
     tags?: string[]
     confidence?: number
     disabled?: boolean
@@ -55,12 +76,16 @@ export class SharedMemoryService {
     const text = input.text.trim()
     if (!text) throw new Error('Memory text is required.')
     const now = new Date().toISOString()
+    const workspace = input.workspace?.trim() ? await safeCanonical(input.workspace) : ''
+    const project = projectKeyForInput(input.project, input.workspace, workspace) || (input.scope === 'project' ? workspace : '')
     const record: AgentRuntimeMemoryRecord = {
       id: `mem_${Date.now()}_${randomUUID()}`,
       text,
       scope: input.scope ?? 'user',
-      ...(input.workspace?.trim() ? { workspace: await safeCanonical(input.workspace) } : {}),
-      ...(input.project?.trim() ? { project: input.project.trim() } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(project ? { project } : {}),
+      ...(input.threadMode ? { threadMode: input.threadMode } : {}),
+      ...(input.taskType ? { taskType: input.taskType } : {}),
       tags: normalizeTags(input.tags),
       confidence: normalizeConfidence(input.confidence),
       disabled: input.disabled === true,
@@ -89,6 +114,8 @@ export class SharedMemoryService {
       ...(patch.scope ? { scope: patch.scope } : {}),
       ...(typeof patch.workspace === 'string' ? { workspace: await safeCanonical(patch.workspace) } : {}),
       ...(typeof patch.project === 'string' ? { project: patch.project.trim() } : {}),
+      ...(isMemoryThreadMode(patch.threadMode) ? { threadMode: patch.threadMode } : {}),
+      ...(isMemoryTaskType(patch.taskType) ? { taskType: patch.taskType } : {}),
       ...(Array.isArray(patch.tags) ? { tags: normalizeTags(patch.tags) } : {}),
       ...(typeof patch.confidence === 'number' ? { confidence: normalizeConfidence(patch.confidence) } : {}),
       ...(typeof patch.disabled === 'boolean' ? { disabled: patch.disabled } : {}),
@@ -107,16 +134,31 @@ export class SharedMemoryService {
 
   async retrieveForTurn(input: {
     workspace?: string
+    project?: string
+    threadMode?: AgentRuntimeMemoryThreadMode
+    taskType?: AgentRuntimeMemoryTaskType
     prompt: string
     limit?: number
   }): Promise<AgentRuntimeMemoryRecord[]> {
     const limit = input.limit ?? 8
     const store = await this.load()
+    const workspace = input.workspace?.trim() ? await safeCanonical(input.workspace) : ''
+    const project = projectKeyForInput(input.project, input.workspace, workspace)
+    const scopeFilter: MemoryScopeFilter = {
+      workspace,
+      ...(project ? { project } : {}),
+      ...(input.threadMode ? { threadMode: input.threadMode } : {}),
+      ...(input.taskType ? { taskType: input.taskType } : {})
+    }
     const userMemories = store.records
       .filter((record) => record.scope === 'user' && record.disabled !== true && record.deleted !== true)
+      .filter((record) => matchesTurnContext(record, scopeFilter))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     const matched = await this.list({
       workspace: input.workspace,
+      ...(input.project ? { project: input.project } : {}),
+      ...(input.threadMode ? { threadMode: input.threadMode } : {}),
+      ...(input.taskType ? { taskType: input.taskType } : {}),
       includeDeleted: false,
       includeDisabled: false,
       query: input.prompt,
@@ -164,6 +206,8 @@ function normalizeRecord(value: unknown): AgentRuntimeMemoryRecord | null {
     scope,
     ...(stringValue(record.workspace) ? { workspace: stringValue(record.workspace) } : {}),
     ...(stringValue(record.project) ? { project: stringValue(record.project) } : {}),
+    ...(isMemoryThreadMode(record.threadMode) ? { threadMode: record.threadMode } : {}),
+    ...(isMemoryTaskType(record.taskType) ? { taskType: record.taskType } : {}),
     tags: Array.isArray(record.tags) ? normalizeTags(record.tags) : [],
     ...(typeof record.confidence === 'number' ? { confidence: normalizeConfidence(record.confidence) } : {}),
     disabled: record.disabled === true,
@@ -178,9 +222,37 @@ async function safeCanonical(path: string | undefined): Promise<string> {
   return value ? canonicalPath(value) : ''
 }
 
+function projectKeyForInput(
+  project: string | undefined,
+  workspaceInput: string | undefined,
+  canonicalWorkspace: string
+): string {
+  const value = project?.trim()
+  if (!value) return ''
+  return workspaceInput?.trim() === value ? canonicalWorkspace : value
+}
+
 function sameWorkspace(recordWorkspace: string | undefined, workspace: string): boolean {
   if (!recordWorkspace) return false
   return recordWorkspace === workspace
+}
+
+function inScope(record: AgentRuntimeMemoryRecord, filter: MemoryScopeFilter): boolean {
+  if (!hasScopeFilter(filter)) return true
+  if (!matchesTurnContext(record, filter)) return false
+  if (record.scope === 'user') return true
+  if (record.scope === 'workspace') return Boolean(filter.workspace && sameWorkspace(record.workspace, filter.workspace))
+  return Boolean(filter.project && record.project === filter.project)
+}
+
+function hasScopeFilter(filter: MemoryScopeFilter): boolean {
+  return Boolean(filter.workspace || filter.project || filter.threadMode || filter.taskType)
+}
+
+function matchesTurnContext(record: AgentRuntimeMemoryRecord, filter: MemoryScopeFilter): boolean {
+  if (record.threadMode && record.threadMode !== filter.threadMode) return false
+  if (record.taskType && record.taskType !== filter.taskType) return false
+  return true
 }
 
 function stringValue(value: unknown): string {
@@ -189,6 +261,14 @@ function stringValue(value: unknown): string {
 
 function normalizeScope(value: unknown): AgentRuntimeMemoryScope | null {
   return value === 'user' || value === 'project' || value === 'workspace' ? value : null
+}
+
+function isMemoryThreadMode(value: unknown): value is AgentRuntimeMemoryThreadMode {
+  return value === 'agent' || value === 'plan'
+}
+
+function isMemoryTaskType(value: unknown): value is AgentRuntimeMemoryTaskType {
+  return value === 'agent' || value === 'plan' || value === 'plan_draft' || value === 'plan_refine'
 }
 
 function normalizeTags(tags: unknown): string[] {
