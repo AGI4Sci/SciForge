@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildClaudeCodeManagedGuiMcpServers,
   buildCodexManagedGuiMcpServers,
@@ -19,12 +19,19 @@ import {
   type AppSettingsV1
 } from '../shared/app-settings'
 import { GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME } from './remote-executor-mcp-config'
+import {
+  COMPUTER_USE_MCP_TOOL_NAME,
+  GUI_COMPUTER_USE_MCP_SERVER_NAME
+} from './computer-use-mcp-config'
 
 const launch = {
   appPath: '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked',
   execPath: '/Applications/SciForge.app/Contents/MacOS/SciForge',
   isPackaged: true
 }
+
+const originalCuaServiceUrl = process.env.SCIFORGE_CUA_SERVICE_URL
+const originalCuaServiceToken = process.env.SCIFORGE_CUA_SERVICE_TOKEN
 
 function createSettings(): AppSettingsV1 {
   const schedule = defaultScheduleSettings()
@@ -77,6 +84,13 @@ function createSettings(): AppSettingsV1 {
 }
 
 describe('GUI MCP runtime registry', () => {
+  afterEach(() => {
+    if (originalCuaServiceUrl === undefined) delete process.env.SCIFORGE_CUA_SERVICE_URL
+    else process.env.SCIFORGE_CUA_SERVICE_URL = originalCuaServiceUrl
+    if (originalCuaServiceToken === undefined) delete process.env.SCIFORGE_CUA_SERVICE_TOKEN
+    else process.env.SCIFORGE_CUA_SERVICE_TOKEN = originalCuaServiceToken
+  })
+
   it('exposes every managed server name that must be stripped from external local runtime mcp.json', () => {
     expect(managedGuiMcpServerNames()).toEqual(expect.arrayContaining([
       'gui_schedule',
@@ -92,6 +106,7 @@ describe('GUI MCP runtime registry', () => {
       'image_generation',
       'ppt_master',
       'sciforge_canvas',
+      'gui_owl_computer_use',
       'gui_computer_use'
     ]))
   })
@@ -160,6 +175,56 @@ describe('GUI MCP runtime registry', () => {
       workspaceRoot: '/home/alice/project'
     }])
     expect(servers.gui_computer_use).toBeUndefined()
+    expect(servers[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toBeUndefined()
+  })
+
+  it('builds the managed computer-use MCP server for every runtime from the shared registry', () => {
+    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
+    process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'test-token'
+    const settings = createSettings()
+
+    const localRuntime = buildLocalRuntimeManagedGuiMcpServers({
+      settings,
+      computerUseMcp: { settings, launch }
+    })
+    expect(localRuntime[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toMatchObject({
+      enabled: true,
+      command: expect.stringContaining('SciForge Helper'),
+      args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+        SCIFORGE_CUA_SERVICE_TOKEN: 'test-token'
+      },
+      timeoutMs: 600000
+    })
+
+    const codex = buildCodexManagedGuiMcpServers({
+      settings,
+      computerUseMcp: { settings, launch }
+    })
+    expect(codex).toEqual([
+      expect.objectContaining({
+        id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
+        args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
+        enabledTools: [COMPUTER_USE_MCP_TOOL_NAME]
+      })
+    ])
+
+    const claude = buildClaudeCodeManagedGuiMcpServers({
+      settings,
+      computerUseMcp: { settings, launch }
+    })
+    expect(claude[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toMatchObject({
+      type: 'stdio',
+      args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+        SCIFORGE_CUA_SERVICE_TOKEN: 'test-token'
+      },
+      alwaysLoad: true
+    })
   })
 
   it('builds Codex dynamic MCP server configs with contract-derived tools and local secrets', () => {
@@ -226,7 +291,7 @@ describe('GUI MCP runtime registry', () => {
     }
   })
 
-  it('does not build a Claude Code MCP config for the retired computer-use server', () => {
+  it('does not build a Claude Code MCP config without computer-use launch input', () => {
     const servers = buildClaudeCodeManagedGuiMcpServers()
 
     expect(servers).toEqual({})

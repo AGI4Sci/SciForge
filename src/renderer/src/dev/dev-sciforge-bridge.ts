@@ -315,6 +315,7 @@ function createApi(): SciForgeApi {
       listThreads: (input) => invoke('agentRuntime:listThreads', input ?? {}),
       startThread: (input) => invoke('agentRuntime:startThread', input),
       readThread: (input) => invoke('agentRuntime:readThread', input),
+      readThreadSidebarProbe: (input) => invoke('agentRuntime:readThreadSidebarProbe', input),
       startTurn: (input) => invoke('agentRuntime:startTurn', input),
       interruptTurn: (input) => invoke('agentRuntime:interruptTurn', input),
       steerTurn: (input) => invoke('agentRuntime:steerTurn', input),
@@ -346,6 +347,7 @@ function createApi(): SciForgeApi {
         mode: options?.mode
     }),
     runDesktopCommand: (command) => invoke('desktop:command', command),
+    getPerformanceSnapshot: () => invoke('performance:snapshot'),
     openExternal: (url) => invoke('shell:open-external', url),
     getComputerUsePermissions: () => invoke('computer-use:permissions'),
     requestComputerUsePermission: (kind) => invoke('computer-use:request-permission', kind),

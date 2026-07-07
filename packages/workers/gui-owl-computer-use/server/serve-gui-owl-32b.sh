@@ -2,8 +2,9 @@
 # Development-only helper for serving a user-supplied GUI agent checkpoint on vLLM.
 #
 # Commercial builds must not rely on this script or ship model weights. Runtime
-# traffic goes through SciForge Model Router; this helper is only for operators who
-# have independently verified their checkpoint license and explicitly opt in.
+# traffic should point at a configured grounding API; this helper is only for
+# operators who have independently verified their checkpoint license and
+# explicitly opt in.
 #
 set -euo pipefail
 

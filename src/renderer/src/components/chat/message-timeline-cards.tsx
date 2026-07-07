@@ -300,6 +300,7 @@ export function WorkMetaRow({
   processing,
   stepCount,
   durationMs,
+  liveStartedAtMs,
   reasoningDurationMs,
   expanded,
   onToggle
@@ -307,18 +308,33 @@ export function WorkMetaRow({
   processing: boolean
   stepCount: number
   durationMs?: number
+  liveStartedAtMs?: number
   reasoningDurationMs?: number
   expanded: boolean
   onToggle: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!processing || typeof liveStartedAtMs !== 'number') return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [liveStartedAtMs, processing])
+
+  const liveDurationMs =
+    processing && typeof liveStartedAtMs === 'number'
+      ? Math.max(0, now - liveStartedAtMs)
+      : undefined
+  const effectiveDurationMs = durationMs ?? liveDurationMs
 
   const mainLabel = processing
-    ? typeof durationMs === 'number'
-      ? `${t('processing')} ${formatDuration(durationMs)}`
+    ? typeof effectiveDurationMs === 'number'
+      ? `${t('processing')} ${formatDuration(effectiveDurationMs)}`
       : t('processing')
-    : typeof durationMs === 'number'
-      ? `${t('processed')} ${formatDuration(durationMs)}`
+    : typeof effectiveDurationMs === 'number'
+      ? `${t('processed')} ${formatDuration(effectiveDurationMs)}`
       : `${t('processed')} · ${t('processStepCount', { count: stepCount })}`
 
   const showThoughtSuffix =

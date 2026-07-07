@@ -1,10 +1,10 @@
 # SciForge 任务板
 
-更新时间：2026-07-07
+更新时间：2026-07-08
 
 ## 当前状态
 
-本阶段按既定原则完成实现收口；剩余事项均需要人类先做产品 / 安全策略决策，决策前不实现。
+本阶段进入 Workspace 预览 / 编辑能力的渐进式架构迁移。目标是在不破坏现有 PDF、DOCX、Markdown、HTML、图片、文本预览编辑能力的前提下，最终实现可扩展的新插件系统，支持人类和 agent 共同观察、交互、选择、注释和编辑数据。科学模态先聚焦生命科学领域。
 
 ---
 
@@ -23,27 +23,42 @@
 
 ## 收口规则
 
-- 不再主动发散发现新大任务；新增任务必须明确指向原则冲突、冗余链路、性能证据或人工新决策。
-- 已完成的任务在本文件中标记为 `[x]`，不要删除。
+- 新增格式能力必须先进入统一 Workspace preview plugin contract，不再继续扩张单体预览面板。
+- 旧预览 / 编辑能力先通过 legacy adapter 接入新 host，不做一次性大爆炸重写。
+- 新旧 IPC 在迁移期并行保留；新插件稳定后再逐步迁移调用方。
+- 科学模态当前阶段只排生命科学相关能力；地理、工程仿真、通用 3D 等非生命科学模态延后。
 - 需要人工决策的点只记录，不实现。
 - 性能相关改动先量化再实现；新增 guard / 边界检查必须说明 runtime cost。
 
 ---
 
-## 需要人工决策后再实现
+## 已决策约束
 
-- [ ] 【Evidence DAG 高影响 gate / Remote Executor】决定哪些远程动作必须 gate：仅 `remote_submit_job`，还是同时覆盖 `remote_run`、`remote_deploy_worker`、`remote_write`、`remote_cancel_job`、协议执行和外部提交；同时决定 audit pass 定义、stale audit 策略、override token 是否签名 / 过期、以及 `approvalBypass` 是否允许绕过该 gate。
-- [ ] 【Evidence DAG 高影响 gate / Project DAG promotion】决定候选结论推广 gate 的粒度：candidate-level 还是 thread-level；决定 missing / stale audit digest 策略、`conflicting` claim 是否可推广、override 字段 / 权限 / 过期时间、以及导出语义。
-- [ ] 【团队治理 v1】决定 decision record 数据模型、触发条件、ledger / storage 位置、移动 / IM 可见范围，以及移动 / IM 是否能直接 approve / reject 桌面审批；决策后再实现“决策记录 + 单人审批 + 移动 / IM 监督闭环”，暂不做重型多人角色系统。
+- Office 先采用轻量结构化预览 / 编辑，不实现完整 Office 编辑内核；`.pptx` / `.xlsx` / `.docx` 的完整 Office 后端作为后续可选增强。
+- 拖拽和复制粘贴按环境能力降级：Electron 桌面优先真实文件操作，Web 预览降级为下载、复制路径或复制内容。
+- agent 对预览插件拥有最高权限：可观察、选择、生成 edit operation、应用修改并保存；仍需保留 audit trail、undo / diff summary 和可追踪操作记录。
+- 科学模态先聚焦生命科学：分子结构、序列 / 基因组、组学矩阵、生物影像、质谱 / 蛋白组等优先；非生命科学模态不进入本阶段任务清单。
 
 ## 任务清单
 
-- [x] 【严格 Model Router-only 收口】text / vision / scientific / image / speech / workflow / schedule 模型调用经 Model Router；Codex / Claude / local runtime 仅作为执行 runtime，不持有上游模型旁路。
-- [x] 【运行时入口表达收口】主输入框保留执行 runtime 选择，但明确模型链路由 Model Router 管理，避免把 `codex` / `local` / `claude` 表达成三套上游模型配置。
-- [x] 【Web 预览一等支持】稳定 `localhost:5173` Web 预览和 dev bridge；能力缺失有可见状态，设置页 / 运行时切换不白屏，5173 默认预览和恢复路径有测试覆盖。
-- [x] 【科学模态风险分级】高风险科学对象执行 translate-then-reason 且 translator 未配置 / 失败时 fail closed；低风险文本化回退带显式风险标记。
-- [x] 【Evidence DAG 高影响 gate / 报告导出】报告导出接入 Evidence DAG audit risk digest；blocker 阻断，major / stale / missing 需要人工 override，minor / info advisory。
-- [x] 【Schedule 编译到 Workflow】保留轻量 Schedule UI，底层统一编译为 Workflow trigger / run mode，避免 ScheduleRuntime 与 WorkflowRuntime 形成两套自动化模型。
-- [x] 【薄 GUI 面板准入清理 / Paper Radar】Paper Radar 面板只保留 profile 配置、结果检查、筛选、复制、打开；纯执行链路下沉为 `paperRadar.review` worker/service command。
-- [x] 【薄 GUI 面板准入清理 / Figure Style】Figure Style 面板只负责编排人类选择 / 裁剪 / 查看 / 保存请求；PDF 准备 + 样式提取、StyleSpec 保存下沉为专用 IPC / worker-service 动作。
-- [x] 【Model Router 配置可发现性】设置页和运行时入口展示 Model Router 本地健康、base URL、public alias、runtime key 与配置文件入口，不新增模型旁路。
+- [ ] 【迁移基线】梳理现有 `WorkspaceFilePreviewPanel` 支持的文本、Markdown、HTML、PDF、DOCX、图片、注释、保存、visible context 行为，补齐关键回归清单，确认第一阶段不改变用户可见行为。
+- [ ] 【Shared contract】新增 `src/shared/workspace-preview` 协议层，定义 plugin manifest、capabilities、preview session、structured selection、workspace observation、edit operation、export target 和格式解析规则。
+- [ ] 【Main host / registry】新增 `src/main/services/workspace-preview` host 和 registry，负责路径安全、文件状态、读写调度、watch、IPC 边界和 worker client，不把格式细节继续写进通用文件服务。
+- [ ] 【Renderer host / registry】新增 `src/renderer/src/workspace-preview` 的 `WorkspacePreviewHost`、插件 registry、共享 toolbar / breadcrumb / inspector / annotation chrome，并让右侧 workspace 查看器只依赖 host。
+- [ ] 【Legacy adapter】把现有预览编辑能力先包装成 legacy plugin 接入新 host，保留 `readWorkspaceFile`、`readWorkspaceImage`、`writeWorkspaceFile`、`writeWorkspaceDocxText` 等旧 IPC，确保现有功能不回退。
+- [ ] 【格式插件拆分】在行为稳定后逐步拆出 renderer 插件：text、markdown、html、image、pdf、docx；每个插件声明自己的 preview / edit / inspect / annotation / export 能力。
+- [ ] 【Agent observation】为每个插件实现统一 `WorkspaceObservation` 输出，让 agent 能可靠观察当前文件、模式、可见文本、outline、selection、tables、slides、annotations 和可执行 actions。
+- [ ] 【Edit operations】实现统一 edit operation / patch apply 通道，支持文本 range edit、表格单元格 edit、DOCX 段落 edit、PDF / DOCX annotation edit，并保留人工批准策略扩展点。
+- [ ] 【Tabular worker plugin】新增 `packages/workers/workspace-tabular`，承载 `.csv` / `.tsv` / `.xlsx` / `.jsonl` / `.parquet` 等表格和数据集的解析、预览摘要、结构化选择、编辑、导入导出能力。
+- [ ] 【CSV 插件首发】用新插件系统实现 `.csv` / `.tsv` 表格预览和编辑，支持排序、筛选、单元格编辑、行列增删、保存、撤销提示和 agent 可读 selection。
+- [ ] 【Deck worker plugin】新增 `packages/workers/workspace-deck`，承载 `.pptx` / `.ppt` 的缩略图、slide outline、文本抽取、预览渲染、结构化编辑和导出；`.ppt` 先按 legacy / 转换格式处理。
+- [ ] 【PPTX 插件首发】用新插件系统实现 `.pptx` 预览和受控编辑，支持 slide 列表、当前页观察、文本框选择、备注 / 批注、导出和 agent 可读 slides。
+- [ ] 【Life science scope guard】建立生命科学格式优先级表和 plugin routing，确保当前阶段只扩展生命科学相关科学模态，非生命科学格式显示明确的延后支持状态。
+- [ ] 【Molecular worker plugin】新增 `packages/workers/workspace-molecular`，承载 `.pdb`、`.cif`、`.mmcif`、`.sdf`、`.mol`、`.mol2`、`.xyz`、`.xtc`、`.dcd`、`.trr`、`.mrc`、`.ccp4` 等结构、轨迹和密度图解析摘要。
+- [ ] 【Molecular viewer plugin】用成熟 WebGL 分子查看器实现类 PyMOL 交互：旋转、缩放、cartoon / surface / stick / ball-stick 表示、chain / residue / ligand 选择、距离 / 角度测量、pLDDT / B-factor 着色、截图和 agent 可读 selection。
+- [ ] 【Sequence / genomics plugin】支持 `.fasta`、`.fa`、`.fastq`、`.gb`、`.gbk`、`.gff`、`.gtf`、`.bed`、`.vcf` 的预览、索引、区域选择、特征注释、变异摘要和 agent 可读 sequence / feature selection。
+- [ ] 【Omics matrix plugin】支持 `.h5ad`、`.loom`、`.mtx`、`.h5`、`.hdf5`、`.zarr` 等组学 / 单细胞矩阵的摘要、分层 metadata、基因 / 细胞选择、低维 embedding 预览和安全的结构化编辑。
+- [ ] 【Bioimaging plugin】支持 `.tif`、`.tiff`、`.ome.tiff`、`.czi`、`.svs`、`.ndpi` 等显微 / 病理影像的金字塔预览、通道切换、ROI 选择、标注、截图和 agent 可读 ROI / channel observation。
+- [ ] 【Proteomics / spectra plugin】支持 `.mzML`、`.mzXML`、`.mgf`、`.fcs` 等生命科学仪器数据的摘要、峰图 / gating 预览、区域选择、注释和 agent 可读 spectrum / population selection。
+- [ ] 【拖拽与复制粘贴】在 workspace 查看器中实现拖入文件 / 文件夹、内部移动、拖到会话作为附件、复制路径 / 内容、粘贴文件 / 截图 / 文本到当前目录，并处理冲突命名策略。
+- [ ] 【迁移收口】当新插件系统覆盖现有格式并通过回归后，逐步删除旧单体分支逻辑，把 `WorkspaceFilePreviewPanel` 收敛为薄 wrapper 或完全替换为 `WorkspacePreviewHost`。

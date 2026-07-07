@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import {
   Bot,
   Clock3,
-  FileQuestion,
   LayoutGrid,
   MessageSquare,
   Plus,
@@ -48,7 +47,6 @@ type Props = {
   onRestoreThread: (id: string) => Promise<void>
   onNewChat: () => void
   onNewChatInWorkspace: (workspaceRoot: string) => void
-  onNewRequirement: () => void
   onOpenSettings: (section?: SettingsRouteSection) => void
   onOpenPlugins: () => void
   onToggleConnectPhone: () => void
@@ -75,7 +73,6 @@ export function Sidebar({
   onRestoreThread,
   onNewChat,
   onNewChatInWorkspace,
-  onNewRequirement,
   onOpenSettings,
   onOpenPlugins,
   onToggleConnectPhone,
@@ -148,14 +145,6 @@ export function Sidebar({
               icon={<Plus className="h-4 w-4" strokeWidth={2} />}
               label={t('newAgent')}
               onClick={runtimeReady ? onNewChat : undefined}
-              disabled={!runtimeReady}
-              disabledHint={t('runtimeActionNeedsConnection')}
-              variant="accent"
-            />
-            <SidebarCommandRow
-              icon={<FileQuestion className="h-4 w-4" strokeWidth={1.9} />}
-              label={t('sddNewRequirement')}
-              onClick={runtimeReady ? onNewRequirement : undefined}
               disabled={!runtimeReady}
               disabledHint={t('runtimeActionNeedsConnection')}
               variant="accent"

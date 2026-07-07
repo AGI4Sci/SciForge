@@ -9,6 +9,7 @@ import {
 
 type ThreadDetailReader = {
   getThreadDetail: (threadId: string) => Promise<{ blocks: ChatBlock[] }>
+  getThreadSidebarProbe?: (threadId: string) => Promise<{ text: string | null }>
 }
 
 type SidebarVisibilityFilterOptions = {
@@ -17,12 +18,19 @@ type SidebarVisibilityFilterOptions = {
 }
 
 export const SIDEBAR_VISIBILITY_INSPECTION_LIMIT = 20
+export const SIDEBAR_DETAIL_INSPECTION_CONCURRENCY = 2
 
 type SidebarThreadShape = Pick<NormalizedThread, 'id' | 'title'> &
   Partial<Pick<
     NormalizedThread,
     'visibility' | 'sidebarVisibility' | 'threadSource' | 'relation' | 'parentThreadId' | 'titleSource'
   >>
+
+type SidebarThreadInspectionResult = {
+  threadId: string
+  hide: boolean
+  title: string | null
+}
 
 const SIDEBAR_HIDDEN_VISIBILITY_VALUES = new Set([
   'auxiliary',
@@ -132,6 +140,13 @@ function titleFromThreadBlocks(blocks: ChatBlock[]): string | null {
   return hasPlaceholderThreadTitle(title) ? null : title
 }
 
+function titleFromUserText(text: string | null | undefined): string | null {
+  const trimmed = text?.trim() ?? ''
+  if (!trimmed) return null
+  const title = deriveThreadTitleFromPrompt(trimmed)
+  return hasPlaceholderThreadTitle(title) ? null : title
+}
+
 function needsRealDerivedTitle(
   thread: Pick<NormalizedThread, 'id' | 'title'> & Partial<Pick<NormalizedThread, 'titleSource'>>
 ): boolean {
@@ -164,6 +179,51 @@ function normalizeHiddenThreadIds(ids: Iterable<string> | undefined): Set<string
     if (threadId) normalized.add(threadId)
   }
   return normalized
+}
+
+async function inspectThreadsForSidebar(
+  threads: NormalizedThread[],
+  reader: ThreadDetailReader
+): Promise<SidebarThreadInspectionResult[]> {
+  if (threads.length === 0) return []
+
+  const results = new Array<SidebarThreadInspectionResult | null>(threads.length).fill(null)
+  const workerCount = Math.min(threads.length, SIDEBAR_DETAIL_INSPECTION_CONCURRENCY)
+  let nextIndex = 0
+
+  const inspectNext = async (): Promise<void> => {
+    while (nextIndex < threads.length) {
+      const index = nextIndex
+      nextIndex += 1
+      const thread = threads[index]
+      try {
+        if (reader.getThreadSidebarProbe) {
+          const probe = await reader.getThreadSidebarProbe(thread.id)
+          const hasUserText = Boolean(probe.text?.trim())
+          const title = titleFromUserText(probe.text)
+          results[index] = {
+            threadId: thread.id,
+            hide: !hasUserText || (needsRealDerivedTitle(thread) && !title),
+            title
+          }
+          continue
+        }
+        const detail = await reader.getThreadDetail(thread.id)
+        const title = titleFromThreadBlocks(detail.blocks)
+        results[index] = {
+          threadId: thread.id,
+          hide: shouldHideThreadFromSidebarByBlocks(detail.blocks) ||
+            (needsRealDerivedTitle(thread) && !title),
+          title
+        }
+      } catch {
+        results[index] = null
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => inspectNext()))
+  return results.filter((result): result is SidebarThreadInspectionResult => result !== null)
 }
 
 export async function filterThreadsForSidebar(
@@ -202,26 +262,14 @@ export async function filterThreadsForSidebar(
   }
 
   if (threadsToInspect.length > 0) {
-    const results = await Promise.allSettled(
-      threadsToInspect.map(async (thread) => {
-        const detail = await reader.getThreadDetail(thread.id)
-        const title = titleFromThreadBlocks(detail.blocks)
-        return {
-          threadId: thread.id,
-          hide: shouldHideThreadFromSidebarByBlocks(detail.blocks) ||
-            (needsRealDerivedTitle(thread) && !title),
-          title
-        }
-      })
-    )
+    const results = await inspectThreadsForSidebar(threadsToInspect, reader)
 
     for (const result of results) {
-      if (result.status !== 'fulfilled') continue
-      if (result.value.hide) {
-        hiddenIds.add(result.value.threadId)
+      if (result.hide) {
+        hiddenIds.add(result.threadId)
       } else {
-        hiddenIds.delete(result.value.threadId)
-        if (result.value.title) derivedTitles.set(result.value.threadId, result.value.title)
+        hiddenIds.delete(result.threadId)
+        if (result.title) derivedTitles.set(result.threadId, result.title)
       }
     }
   }

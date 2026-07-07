@@ -1,7 +1,7 @@
-"""Computer-use model driver routed through SciForge Model Router.
+"""Computer-use model driver routed through an OpenAI-compatible grounding API.
 
-The configured Model Router profile must point its public model alias at a
-vision-capable GUI agent chosen by the user/operator. Given the system prompt
+The configured endpoint must point at a vision-capable GUI agent chosen by the
+user/operator. Given the system prompt
 (which defines the `computer_use` action space), the task, previous actions, and
 the current screenshot, the routed model returns one step as:
 
@@ -13,8 +13,9 @@ the current screenshot, the routed model returns one step as:
 Coordinates are in a 1000x1000 normalized space (the system prompt tells the
 model "the screen's resolution is 1000x1000"); we map them to real screen pixels.
 
-This module only talks to Model Router and parses its output. Execution (mapping
-a parsed action to mouse/keyboard) lives in the runner via DesktopExecutor.
+This module only talks to the grounding model API and parses its output.
+Execution (mapping a parsed action to mouse/keyboard) lives in the runner via
+DesktopExecutor.
 """
 from __future__ import annotations
 
@@ -39,8 +40,9 @@ SYSTEM_PROMPT = (
     '"description": "Use a mouse and keyboard to interact with a computer, '
     "and take screenshots.\\n"
     "* This is an interface to a desktop GUI. You do not have access to a "
-    "terminal or applications menu. You must click on desktop icons to start "
-    "applications.\\n"
+    "terminal. For named local applications, prefer `open_app`; otherwise use "
+    "visible desktop controls, the dock, Launchpad, Spotlight, Start menu, or "
+    "other OS launcher UI.\\n"
     "* Some applications may take time to start or process actions, so you "
     "may need to wait and take successive screenshots to see the results of "
     "your actions. E.g. if you click on Firefox and a window doesn't open, "
@@ -54,6 +56,7 @@ SYSTEM_PROMPT = (
     "* `key`: Performs key down presses on the arguments passed in order, "
     "then performs key releases in reverse order.\\n"
     "* `type`: Type a string of text on the keyboard.\\n"
+    "* `open_app`: Open a named installed desktop application.\\n"
     "* `mouse_move`: Move the cursor to a specified (x, y) pixel coordinate "
     "on the screen.\\n"
     "* `left_click`: Click the left mouse button at a specified (x, y) pixel "
@@ -75,11 +78,14 @@ SYSTEM_PROMPT = (
     "status.\\n"
     "* `answer`: Answer a question.\\n"
     '* `interact`: Resolve the blocking window by interacting with the user.", '
-    '"enum": ["key", "type", "mouse_move", "left_click", "left_click_drag", '
+    '"enum": ["key", "type", "open_app", "mouse_move", "left_click", "left_click_drag", '
     '"right_click", "middle_click", "double_click", "triple_click", "scroll", '
     '"hscroll", "wait", "terminate", "answer", "interact"], "type": "string"}, '
     '"keys": {"description": "Required only by `action=key`.", '
     '"type": "array"}, '
+    '"app": {"description": "Required only by `action=open_app`: installed '
+    'application name, such as Safari, Microsoft PowerPoint, or Notepad.", '
+    '"type": "string"}, '
     '"text": {"description": "Required only by `action=type`, `action=answer` '
     'and `action=interact`.", "type": "string"}, '
     '"coordinate": {"description": "(x, y): The x (pixels from the left edge) '
@@ -109,13 +115,16 @@ SYSTEM_PROMPT = (
     "- Output exactly in the order: Action, <tool_call>.\n"
     "- Be brief: one for Action.\n"
     "- Do not output anything else outside those two parts.\n"
+    "- If the instruction asks to open or activate a named local application, "
+    "your next action must be `open_app` with that application name before "
+    "clicking dock, launcher, or menu icons.\n"
     "- If finishing, use action=terminate in the tool call."
 )
 
 GROUNDING_DIM = 1000  # the model's normalized coordinate space
-LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR = (
-    "CUA_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router "
-    "/v1/responses endpoint (127.0.0.1, localhost, or [::1])."
+GROUNDING_ENDPOINT_URL_ERROR = (
+    "CUA_GROUNDING_BASE_URL must be an http(s) URL without embedded credentials, "
+    "query parameters, or fragments."
 )
 
 
@@ -195,14 +204,32 @@ def build_messages(instruction: str, history: List[Dict[str, str]],
 
 
 def call_owl(base_url: str, model: str, api_key: str,
-             messages: List[Dict[str, Any]], timeout: float = 120.0,
+             messages: List[Dict[str, Any]], endpoint: str = "chat_completions",
+             extra_headers: Optional[Dict[str, str]] = None,
+             base_url_label: str = "CUA_GROUNDING_BASE_URL",
+             api_key_label: str = "CUA_GROUNDING_API_KEY",
+             timeout: float = 120.0,
              max_tokens: int = 1024) -> str:
-    """POST to Model Router /v1/responses and return output_text."""
-    url = _model_router_responses_url(base_url)
+    """POST to the configured grounding endpoint and return generated text."""
+    endpoint = _normalize_endpoint(endpoint)
+    url = _grounding_endpoint_url(base_url, endpoint, base_url_label)
     headers = {"Content-Type": "application/json"}
     if not api_key:
-        raise RuntimeError("CUA_MODEL_ROUTER_API_KEY or SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY is required.")
+        raise RuntimeError(f"{api_key_label} is required.")
+    headers.update(extra_headers or {})
     headers["Authorization"] = f"Bearer {api_key}"
+    if endpoint == "chat_completions":
+        body = {
+            "model": model,
+            "messages": _messages_to_chat_messages(messages),
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+            "stream": False,
+        }
+        r = requests.post(url, headers=headers, json=body, timeout=timeout)
+        r.raise_for_status()
+        return _chat_completions_output_text(r.json())
+
     instructions, input_items = _messages_to_responses_input(messages)
     body = {
         "model": model,
@@ -218,21 +245,87 @@ def call_owl(base_url: str, model: str, api_key: str,
     return _responses_output_text(r.json())
 
 
-def _model_router_responses_url(base_url: str) -> str:
+def _normalize_endpoint(endpoint: str) -> str:
+    value = endpoint.strip().lower().replace("-", "_").replace("/", "_")
+    if value in ("", "chat", "chat_completions", "v1_chat_completions"):
+        return "chat_completions"
+    if value in ("responses", "v1_responses"):
+        return "responses"
+    raise RuntimeError("CUA_GROUNDING_ENDPOINT must be chat_completions or responses.")
+
+
+def _grounding_endpoint_url(base_url: str, endpoint: str,
+                            base_url_label: str = "CUA_GROUNDING_BASE_URL") -> str:
     base = base_url.strip()
     if not base:
-        raise RuntimeError("CUA_MODEL_ROUTER_BASE_URL is required; configure the local SciForge Model Router.")
+        raise RuntimeError(f"{base_url_label} is required.")
     parsed = urlparse(base)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
+        raise RuntimeError(_base_url_error(base_url_label))
     if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
-        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
-    if (parsed.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
-        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
+        raise RuntimeError(_base_url_error(base_url_label))
     path = parsed.path.rstrip("/")
-    if path not in ("", "/v1", "/v1/responses"):
-        raise RuntimeError(LOCAL_MODEL_ROUTER_RESPONSES_URL_ERROR)
-    return urlunparse((parsed.scheme, parsed.netloc, "/v1/responses", "", "", ""))
+    if endpoint == "responses":
+        suffix = "/responses"
+    else:
+        suffix = "/chat/completions"
+    if path.endswith(suffix):
+        resolved = path
+    elif path.endswith("/v1"):
+        resolved = f"{path}{suffix}"
+    elif not path:
+        resolved = f"/v1{suffix}"
+    else:
+        resolved = f"{path}{suffix}"
+    return urlunparse((parsed.scheme, parsed.netloc, resolved, "", "", ""))
+
+
+def _base_url_error(base_url_label: str) -> str:
+    if base_url_label == "CUA_GROUNDING_BASE_URL":
+        return GROUNDING_ENDPOINT_URL_ERROR
+    return (
+        f"{base_url_label} must be an http(s) URL without embedded credentials, "
+        "query parameters, or fragments."
+    )
+
+
+def _messages_to_chat_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for msg in messages:
+        role = str(msg.get("role") or "user")
+        if role not in ("system", "user", "assistant"):
+            role = "user"
+        content = msg.get("content", "")
+        if role in ("system", "assistant"):
+            out.append({"role": role, "content": _content_to_text(content)})
+        else:
+            out.append({"role": role, "content": _content_to_chat_parts(content)})
+    return out or [{"role": "user", "content": ""}]
+
+
+def _content_to_chat_parts(content: Any) -> Any:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content or "")
+    parts: List[Dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            text = str(part)
+            if text:
+                parts.append({"type": "text", "text": text})
+            continue
+        if part.get("type") == "text":
+            parts.append({"type": "text", "text": str(part.get("text") or "")})
+            continue
+        if part.get("type") == "image_url":
+            image_url = part.get("image_url") if isinstance(part.get("image_url"), dict) else {}
+            url = image_url.get("url") or part.get("url")
+            if url:
+                parts.append({"type": "image_url", "image_url": {"url": str(url)}})
+            continue
+        parts.append({"type": "text", "text": json.dumps(part, ensure_ascii=False)})
+    return parts or ""
 
 
 def _messages_to_responses_input(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
@@ -310,6 +403,29 @@ def _responses_output_text(payload: Dict[str, Any]) -> str:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
                 chunks.append(part["text"])
     return "\n".join(chunks)
+
+
+def _chat_completions_output_text(payload: Dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: List[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text") or part.get("content")
+                if isinstance(text, str):
+                    chunks.append(text)
+            elif isinstance(part, str):
+                chunks.append(part)
+        return "\n".join(chunks)
+    return ""
 
 
 def extract_action(text: str) -> Optional[Dict[str, Any]]:

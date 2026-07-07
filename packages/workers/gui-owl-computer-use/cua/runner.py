@@ -95,6 +95,11 @@ def _do_action(ex, args: Dict[str, Any], w: int, h: int) -> None:
         keys = [str(k).lower() for k in keys]
         if keys:
             ex.press_key(*keys)
+    elif a == "open_app":
+        app_name = str(args.get("app") or args.get("text") or "").strip()
+        ex.open_app(app_name)
+    elif a == "wait":
+        ex.wait(float(args.get("time", 1) or 1))
     else:
         raise ValueError(f"unsupported action: {a}")
 
@@ -209,7 +214,9 @@ def _run_loop(cfg: Config, instruction: str, screenshot_provider: ScreenshotProv
                                                 progress_status=progress_status,
                                                 replan_hint=replan_hint)
             output_text = owl_agent.call_owl(
-                cfg.model_base_url, cfg.model_name, cfg.model_api_key, messages)
+                cfg.grounding_base_url, cfg.grounding_model, cfg.grounding_api_key,
+                messages, endpoint=cfg.grounding_endpoint,
+                extra_headers=cfg.grounding_extra_headers)
         except Exception as e:  # noqa: BLE001
             status = "error"
             steps.append({"step": i, "error": str(e)})

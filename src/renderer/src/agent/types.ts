@@ -543,6 +543,7 @@ export interface AgentProvider {
     todos?: ThreadTodoList | null
     guiPlan?: AgentRuntimeThreadGuiPlan | null
   }>
+  getThreadSidebarProbe?(threadId: string): Promise<{ text: string | null }>
   sendUserMessage(
     threadId: string,
     text: string,

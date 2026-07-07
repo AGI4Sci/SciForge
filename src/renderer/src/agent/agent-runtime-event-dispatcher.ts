@@ -8,6 +8,7 @@ import type {
   ReasoningSource,
   ReasoningVisibility
 } from '@shared/agent-runtime-contract'
+import { performanceMonitor } from '../lib/performance-monitor'
 import { isAgentRuntimeTerminalTurnState } from '@shared/agent-runtime-contract'
 import type {
   ApprovalRequestPayload,
@@ -516,6 +517,8 @@ function approvalStatusFromItem(item: AgentRuntimeItem): ApprovalStatus {
 
 export function dispatchAgentRuntimeEvent(event: AgentRuntimeEvent, sink: ThreadEventSink): void {
   if (!shouldDispatchAgentRuntimeEvent(event, sink)) return
+  performanceMonitor.count('runtime.event')
+  performanceMonitor.count(`runtime.event.${event.kind}`)
   if (eventAdvancesSeq(event)) sink.onSeq(event.seq)
 
   switch (event.kind) {

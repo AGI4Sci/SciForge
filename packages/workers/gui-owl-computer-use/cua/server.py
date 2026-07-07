@@ -98,7 +98,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/version":
             return self._send(200, {"ok": True, "data": {
                 "service": R.SERVICE_ID, "version": VERSION,
-                "model": CONFIG.model_name, "engine": "model-router-computer-use",
+                "model": CONFIG.grounding_model, "engine": "openai-compatible-grounding",
+                "endpoint": CONFIG.grounding_endpoint,
                 "allowExecute": CONFIG.allow_execute,
                 "authRequired": bool(CONFIG.service_token or CONFIG.allow_execute)}})
         return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
@@ -138,7 +139,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     srv = ThreadingHTTPServer(("127.0.0.1", CONFIG.port), Handler)
     print(f"computer-use plugin on http://127.0.0.1:{CONFIG.port} "
-          f"(model-router-model={CONFIG.model_name} @ {CONFIG.model_base_url}, "
+          f"(grounding-model={CONFIG.grounding_model} @ {CONFIG.grounding_base_url}, "
+          f"endpoint={CONFIG.grounding_endpoint}, "
           f"allow_execute={CONFIG.allow_execute}, "
           f"auth_required={bool(CONFIG.service_token or CONFIG.allow_execute)})")
     srv.serve_forever()

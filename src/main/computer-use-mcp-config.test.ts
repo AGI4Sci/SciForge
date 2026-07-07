@@ -7,6 +7,7 @@ import {
   COMPUTER_USE_MCP_TOOL_NAME,
   configuredComputerUseCapability,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES,
   syncComputerUseMcpConfig
 } from './computer-use-mcp-config'
 
@@ -23,6 +24,12 @@ describe('computer use MCP config', () => {
         },
         [GUI_COMPUTER_USE_MCP_SERVER_NAME]: {
           command: 'old-gui-managed'
+        },
+        [RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[0]]: {
+          command: 'retired-gui-managed'
+        },
+        [RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[1]]: {
+          command: 'retired-primitive-computer-use'
         }
       }
     })
@@ -33,13 +40,15 @@ describe('computer use MCP config', () => {
       }
     })
     expect((synced.servers as Record<string, unknown>)[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toBeUndefined()
+    expect((synced.servers as Record<string, unknown>)[RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[0]]).toBeUndefined()
+    expect((synced.servers as Record<string, unknown>)[RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[1]]).toBeUndefined()
     expect(synced.timeouts).toEqual({ connect_timeout: 1 })
   })
 
   it('exposes GUI-Owl service capability metadata', () => {
     expect(configuredComputerUseCapability()).toEqual({
       available: true,
-      server: 'service',
+      server: 'mcp',
       toolName: COMPUTER_USE_MCP_TOOL_NAME,
       backend: 'gui-owl',
       inputIsolation: 'host-approved',
@@ -66,6 +75,12 @@ describe('computer use MCP config', () => {
           },
           [GUI_COMPUTER_USE_MCP_SERVER_NAME]: {
             command: 'old-gui-managed'
+          },
+          [RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[0]]: {
+            command: 'retired-gui-managed'
+          },
+          [RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[1]]: {
+            command: 'retired-primitive-computer-use'
           }
         }
       }),
@@ -83,5 +98,7 @@ describe('computer use MCP config', () => {
       }
     })
     expect((json.servers as Record<string, unknown>)[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toBeUndefined()
+    expect((json.servers as Record<string, unknown>)[RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[0]]).toBeUndefined()
+    expect((json.servers as Record<string, unknown>)[RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES[1]]).toBeUndefined()
   })
 })

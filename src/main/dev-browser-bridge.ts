@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net'
 import type { AppBridgeSender } from './ipc/register-app-ipc-handlers'
 import { isLocalHttpBodyTooLargeError, readIncomingMessageBody } from './local-http-body'
+import { mainPerformanceMonitor } from './performance-monitor'
 
 const DEFAULT_DEV_BROWSER_BRIDGE_PORT = 5174
 const MAX_INVOKE_BODY_BYTES = 2_000_000
@@ -29,6 +30,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'agentRuntime:interruptTurn',
   'agentRuntime:listThreads',
   'agentRuntime:readThread',
+  'agentRuntime:readThreadSidebarProbe',
   'agentRuntime:renameThread',
   'agentRuntime:resolveApproval',
   'agentRuntime:resolveUserInput',
@@ -111,6 +113,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'paperRadar:sync-arxiv',
   'paperRadar:sync-biorxiv',
   'paperRadar:sync-profile',
+  'performance:snapshot',
   'pdfAnnotations:export',
   'pdfAnnotations:exportPdf',
   'pdfAnnotations:import',
@@ -216,10 +219,20 @@ class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
 
   send(channel: string, ...args: unknown[]): void {
     if (this.destroyed) return
-    const payload = args.length <= 1 ? args[0] : args
-    const data = JSON.stringify({ channel, payload })
-    for (const response of this.responses) {
-      response.write(`event: bridge-message\ndata: ${data}\n\n`)
+    const startedAt = mainPerformanceMonitor.now()
+    mainPerformanceMonitor.count('main.devBridge.send')
+    mainPerformanceMonitor.count(`main.devBridge.send.${channel}`)
+    try {
+      const payload = args.length <= 1 ? args[0] : args
+      const data = JSON.stringify({ channel, payload })
+      for (const response of this.responses) {
+        response.write(`event: bridge-message\ndata: ${data}\n\n`)
+      }
+    } finally {
+      mainPerformanceMonitor.sample('main.devBridge.send.duration', mainPerformanceMonitor.now() - startedAt, {
+        channel,
+        responses: this.responses.size
+      })
     }
   }
 
@@ -372,8 +385,13 @@ export async function startDevBrowserBridgeServer(
 
     if (request.method === 'POST' && requestUrl.pathname === '/invoke') {
       void (async () => {
+        const startedAt = mainPerformanceMonitor.now()
+        let channel = ''
         try {
           const body = parseInvokeBody(await readJsonBody(request))
+          channel = body.channel
+          mainPerformanceMonitor.count('main.devBridge.http.invoke')
+          mainPerformanceMonitor.count(`main.devBridge.http.invoke.${body.channel}`)
           if (!options.allowAllChannels && !allowedChannels.has(body.channel)) {
             writeJson(response, 403, {
               ok: false,
@@ -388,6 +406,10 @@ export async function startDevBrowserBridgeServer(
           writeJson(response, isLocalHttpBodyTooLargeError(error) ? 413 : 500, {
             ok: false,
             message: error instanceof Error ? error.message : String(error)
+          })
+        } finally {
+          mainPerformanceMonitor.sample('main.devBridge.http.invoke.duration', mainPerformanceMonitor.now() - startedAt, {
+            channel
           })
         }
       })()

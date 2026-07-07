@@ -7,9 +7,14 @@ export type WorkspacePathTarget = {
   column?: number
 }
 
+type WorkspacePathOpenOptions = {
+  editorId?: string
+}
+
 export async function openWorkspacePathInEditor(
   target: WorkspacePathTarget,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  options: WorkspacePathOpenOptions = {}
 ): Promise<EditorOpenResult> {
   if (typeof window === 'undefined' || typeof window.sciforge?.openEditorPath !== 'function') {
     return { ok: false, message: 'Editor bridge is unavailable.' }
@@ -21,7 +26,7 @@ export async function openWorkspacePathInEditor(
       line: target.line,
       column: target.column,
       workspaceRoot,
-      editorId: readPreferredEditorId()
+      editorId: options.editorId ?? readPreferredEditorId()
     })
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) }

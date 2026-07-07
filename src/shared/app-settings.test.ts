@@ -275,7 +275,7 @@ describe('local runtime defaults', () => {
     })
   })
 
-  it('defaults computer use to the isolated browser backend', () => {
+  it('defaults computer use to the GUI-Owl sidecar path', () => {
     expect(defaultComputerUseSettings()).toEqual({
       enabled: true,
       runtimeEnabled: {

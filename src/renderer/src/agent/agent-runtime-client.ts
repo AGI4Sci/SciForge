@@ -7,6 +7,7 @@ import type {
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
   AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadSidebarProbe,
   AgentRuntimeThreadStartInput,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse,
@@ -64,6 +65,10 @@ class AgentRuntimeClient {
 
   readThread(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadDetail> {
     return this.invoke('readThread', (bridge) => bridge.readThread(input))
+  }
+
+  readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
+    return this.invoke('readThreadSidebarProbe', (bridge) => bridge.readThreadSidebarProbe(input))
   }
 
   startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {

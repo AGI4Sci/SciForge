@@ -1,7 +1,13 @@
 import { useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
 import type { RemoteChannelV1 } from '@shared/app-settings'
 import type { NormalizedThread } from '../../agent/types'
+
+type TimelineActiveThread = Pick<
+  NormalizedThread,
+  'id' | 'title' | 'forkedFromThreadId' | 'forkedFromTitle' | 'forkedFromTurnCount'
+>
 
 /**
  * Snapshot of chat-store fields that `MessageTimeline` needs. Co-locates
@@ -19,7 +25,7 @@ export type TimelineStores = {
   turnDurationByUserId: Record<string, number>
   turnReasoningFirstAtByUserId: Record<string, number>
   turnReasoningLastAtByUserId: Record<string, number>
-  activeThread: NormalizedThread | null
+  activeThread: TimelineActiveThread | null
 }
 
 export function useTimelineStores(activeThreadId: string | null): TimelineStores {
@@ -33,8 +39,18 @@ export function useTimelineStores(activeThreadId: string | null): TimelineStores
   const turnDurationByUserId = useChatStore((s) => s.turnDurationByUserId)
   const turnReasoningFirstAtByUserId = useChatStore((s) => s.turnReasoningFirstAtByUserId)
   const turnReasoningLastAtByUserId = useChatStore((s) => s.turnReasoningLastAtByUserId)
-  const activeThread = useChatStore((s) =>
-    activeThreadId ? s.threads.find((thread) => thread.id === activeThreadId) ?? null : null
+  const activeThread = useChatStore(useShallow((s): TimelineActiveThread | null => {
+    if (!activeThreadId) return null
+    const thread = s.threads.find((item) => item.id === activeThreadId)
+    if (!thread) return null
+    return {
+      id: thread.id,
+      title: thread.title,
+      forkedFromThreadId: thread.forkedFromThreadId,
+      forkedFromTitle: thread.forkedFromTitle,
+      forkedFromTurnCount: thread.forkedFromTurnCount
+    }
+  })
   )
   const activeRemoteChannel = useMemo(
     () => remoteChannels.find((channel) => channel.id === activeRemoteChannelId) ?? null,

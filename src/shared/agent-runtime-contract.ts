@@ -555,6 +555,12 @@ export type AgentRuntimeThreadReadInput = {
   threadId: string
 }
 
+export type AgentRuntimeThreadSidebarProbe = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  text: string | null
+}
+
 export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
@@ -1199,7 +1205,7 @@ export type AgentRuntimeCapabilities = {
       maxResults?: number
     }
     computerUse: CapabilityState & {
-      server?: 'mcp' | 'service'
+      server?: 'mcp'
       toolName?: 'computer_use'
       backend?: 'browser-cdp' | 'gui-owl'
       inputIsolation?: 'agent-isolated' | 'host-approved'

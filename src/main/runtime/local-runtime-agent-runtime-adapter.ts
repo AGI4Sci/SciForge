@@ -1426,7 +1426,7 @@ function mapLocalRuntimeCapabilities(value: unknown, diagnosticsAvailable: boole
       research: researchCapabilityState(research),
       computerUse: computerUseCapabilityState(asRecord(manifest.computerUse) ?? {
         available: false,
-        reason: 'GUI-Owl computer-use sidecar is not configured for the local runtime.'
+        reason: 'GUI-Owl computer-use MCP server is not configured for the local runtime.'
       }),
       skills: capabilityState(skills),
       subagents: {
@@ -1484,7 +1484,7 @@ function computerUseCapabilityState(value: Record<string, unknown>): AgentRuntim
   const base = capabilityState(value)
   const available = base.available || value.active === true || value.enabled === true
   const isolated = configuredComputerUseCapability()
-  const server = value.server === 'service' || value.server === 'mcp' ? value.server : undefined
+  const server = value.server === 'mcp' ? value.server : undefined
   const toolName = value.toolName === 'computer_use' ? value.toolName : undefined
   const backend = value.backend === 'gui-owl' || value.backend === 'browser-cdp' ? value.backend : undefined
   const inputIsolation = value.inputIsolation === 'host-approved' || value.inputIsolation === 'agent-isolated'

@@ -284,6 +284,7 @@ const api = {
     listThreads: (input) => ipcRenderer.invoke('agentRuntime:listThreads', input ?? {}),
     startThread: (input) => ipcRenderer.invoke('agentRuntime:startThread', input),
     readThread: (input) => ipcRenderer.invoke('agentRuntime:readThread', input),
+    readThreadSidebarProbe: (input) => ipcRenderer.invoke('agentRuntime:readThreadSidebarProbe', input),
     startTurn: (input) => ipcRenderer.invoke('agentRuntime:startTurn', input),
     interruptTurn: (input) => ipcRenderer.invoke('agentRuntime:interruptTurn', input),
     steerTurn: (input) => ipcRenderer.invoke('agentRuntime:steerTurn', input),
@@ -345,6 +346,8 @@ const api = {
     }),
   runDesktopCommand: (command) =>
     ipcRenderer.invoke('desktop:command', command),
+  getPerformanceSnapshot: () =>
+    ipcRenderer.invoke('performance:snapshot'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   onDevPreviewNavigate: (handler) => {
     const wrapped = (_: Electron.IpcRendererEvent, payload: unknown) => {

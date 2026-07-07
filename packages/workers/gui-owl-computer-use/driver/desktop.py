@@ -13,6 +13,7 @@ to log intended actions without touching the real mouse/keyboard.
 """
 from __future__ import annotations
 import platform
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -103,7 +104,7 @@ class DesktopExecutor:
                     pass
                 pyperclip.copy(text)
                 pyautogui.hotkey("command" if self.os == "Darwin" else "ctrl", "v")
-                time.sleep(0.1)
+                time.sleep(max(0.25, self.settle_s))
                 if prev is not None:
                     try:
                         pyperclip.copy(prev)
@@ -120,6 +121,34 @@ class DesktopExecutor:
             else:
                 pyautogui.press(keys[0])
             time.sleep(self.settle_s)
+
+    def open_app(self, app_name: str):
+        app_name = app_name.strip()
+        if not app_name:
+            return
+        if self._guard(f"open_app({app_name!r})"):
+            if self.os == "Darwin":
+                subprocess.Popen(["open", "-a", app_name])
+                time.sleep(max(0.5, self.settle_s))
+                subprocess.run(
+                    ["osascript", "-e", f'tell application "{app_name}" to activate'],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            elif self.os == "Windows":
+                pyautogui.hotkey("win")
+                time.sleep(max(0.25, self.settle_s))
+                self.type_text(app_name)
+                pyautogui.press("enter")
+            else:
+                subprocess.Popen([app_name])
+            time.sleep(max(1.0, self.settle_s))
+
+    def wait(self, seconds: float):
+        seconds = max(0.0, min(float(seconds), 30.0))
+        if self._guard(f"wait({seconds:.1f}s)"):
+            time.sleep(seconds)
 
     def scroll(self, amount: int, x: Optional[float] = None, y: Optional[float] = None):
         if x is not None and y is not None:

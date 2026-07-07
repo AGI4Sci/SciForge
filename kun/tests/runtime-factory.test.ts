@@ -172,7 +172,7 @@ describe('local runtime serve startup ordering', () => {
 })
 
 describe('runtime factory computer-use capability', () => {
-  it('exposes GUI-Owl computer use when the sidecar URL is configured', async () => {
+  it('does not expose GUI-Owl computer use from sidecar env alone', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-cua-'))
     process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
     try {
@@ -182,14 +182,7 @@ describe('runtime factory computer-use capability', () => {
       })
 
       expect(runtime.info().capabilities.computerUse).toMatchObject({
-        available: true,
-        server: 'service',
-        toolName: 'computer_use',
-        backend: 'gui-owl',
-        inputIsolation: 'host-approved',
-        affectsUserInput: true,
-        requiresHostFocus: true,
-        usesHostClipboard: false
+        available: false
       })
       await runtime.shutdown?.()
     } finally {

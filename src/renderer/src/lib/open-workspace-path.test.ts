@@ -6,6 +6,22 @@ afterEach(() => {
 })
 
 describe('openWorkspacePathInEditor', () => {
+  it('passes an explicit editor id when provided', async () => {
+    const openEditorPath = vi.fn(async () => ({ ok: true as const, path: '/tmp/demo.ts', editorId: 'system' }))
+    vi.stubGlobal('window', { sciforge: { openEditorPath } })
+
+    await expect(
+      openWorkspacePathInEditor({ path: '/tmp/demo.ts' }, '/tmp', { editorId: 'system' })
+    ).resolves.toEqual({ ok: true, path: '/tmp/demo.ts', editorId: 'system' })
+    expect(openEditorPath).toHaveBeenCalledWith({
+      path: '/tmp/demo.ts',
+      line: undefined,
+      column: undefined,
+      workspaceRoot: '/tmp',
+      editorId: 'system'
+    })
+  })
+
   it('returns a failed result when the editor bridge is unavailable', async () => {
     vi.stubGlobal('window', {})
 

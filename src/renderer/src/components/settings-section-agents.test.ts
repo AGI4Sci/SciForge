@@ -200,7 +200,7 @@ const labels: Record<string, string> = {
   mcpReload: 'Reload MCP config',
   mcpOpenDir: 'Open MCP directory',
   computerUseTitle: 'Computer use',
-  computerUseHint: 'GUI-managed computer use defaults to isolated browser-cdp.',
+  computerUseHint: 'GUI-managed computer use defaults to the GUI-Owl sidecar.',
   computerUseEnable: 'Enable computer use',
   computerUseEnableDesc: 'Expose the GUI-managed computer-use MCP server.',
   computerUseRuntimeAccess: 'Runtime access',

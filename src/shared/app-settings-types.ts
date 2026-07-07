@@ -127,7 +127,7 @@ export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
 export type AgentThreadIdsV1 = Partial<Record<AgentRuntimeId, string>>
 
-export type ComputerUseBackendPreference = 'browser-cdp'
+export type ComputerUseBackendPreference = 'gui-owl'
 
 export type ComputerUseSettingsV1 = {
   enabled: boolean

@@ -8,6 +8,12 @@ describe('electron renderer dev server config', () => {
     expect(renderer?.server?.host).toBe('::')
   })
 
+  it('disables renderer HMR so strict CSP does not block React refresh preamble', () => {
+    const renderer = (config as { renderer?: { server?: { hmr?: unknown } } }).renderer
+
+    expect(renderer?.server?.hmr).toBe(false)
+  })
+
   it('keeps the same-origin browser bridge proxy wired for web parity', () => {
     const renderer = (config as {
       renderer?: {

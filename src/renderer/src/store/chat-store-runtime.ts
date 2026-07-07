@@ -47,6 +47,7 @@ import {
   resetBusyRecoveryAttempts,
   syncTurnCompletionPoll as syncTurnCompletionPollImpl
 } from './chat-store-schedulers'
+import { performanceMonitor } from '../lib/performance-monitor'
 
 const BUSY_WATCHDOG_MS = 180_000
 const MAX_BUSY_RECOVERY_ATTEMPTS = 3
@@ -843,6 +844,7 @@ export function buildThreadEventSink(
     [AGENT_RUNTIME_EVENT_REPLAY_FILTER]: shouldApplyRuntimeEvent,
     onSeq: (seq) => {
       if (!isCurrentStream()) return
+      performanceMonitor.count('runtime.seq')
       resetBusyRecoveryAttempts()
       set((s) => ({
         lastSeq: Math.max(s.lastSeq, seq),
@@ -902,6 +904,12 @@ export function buildThreadEventSink(
       }),
     onDeltas: (rawDeltas) => {
       if (!isCurrentStream()) return
+      const handlerStartedAt = performanceMonitor.now()
+      performanceMonitor.count('runtime.delta.raw', rawDeltas.length)
+      for (const delta of rawDeltas) {
+        performanceMonitor.count(`runtime.delta.raw.${delta.kind}`)
+        performanceMonitor.count('runtime.delta.rawChars', delta.text.length)
+      }
       const deltas: typeof rawDeltas = []
       for (const delta of rawDeltas) {
         if (typeof delta.seq === 'number') {
@@ -919,6 +927,11 @@ export function buildThreadEventSink(
         deltas.push(delta)
       }
       if (deltas.length === 0) return
+      performanceMonitor.count('runtime.delta.applied', deltas.length)
+      for (const delta of deltas) {
+        performanceMonitor.count(`runtime.delta.applied.${delta.kind}`)
+        performanceMonitor.count('runtime.delta.appliedChars', delta.text.length)
+      }
       set((s) => {
         if (!isCurrentStream()) return {}
         resetBusyRecoveryAttempts()
@@ -972,9 +985,15 @@ export function buildThreadEventSink(
             : {})
         }
       })
+      performanceMonitor.sample('runtime.delta.handler', performanceMonitor.now() - handlerStartedAt, {
+        count: deltas.length,
+        chars: deltas.reduce((sum, delta) => sum + delta.text.length, 0)
+      })
     },
     onTool: (ev) => {
       if (!isCurrentStream()) return
+      performanceMonitor.count('runtime.tool')
+      performanceMonitor.count(`runtime.tool.${ev.status}`)
       set((s) => {
         resetBusyRecoveryAttempts()
         const base: Partial<ChatState> = {}

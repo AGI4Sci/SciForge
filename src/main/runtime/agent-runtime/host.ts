@@ -35,6 +35,7 @@ import type {
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
   AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadSidebarProbe,
   AgentRuntimeThreadStartInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
@@ -183,6 +184,16 @@ export class AgentRuntimeHost {
   async readThread(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadDetail> {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     return this.withSharedGoalOnThread(adapter.id, await adapter.readThread(context, input))
+  }
+
+  async readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
+    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const detail = await adapter.readThread(context, input)
+    return {
+      runtimeId: adapter.id,
+      threadId: detail.id || input.threadId,
+      text: firstSidebarUserText(detail)
+    }
   }
 
   async startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {
@@ -1867,6 +1878,16 @@ function sleep(ms: number): Promise<void> {
 function threadDetailItems(detail: AgentRuntimeThreadDetail): AgentRuntimeItem[] {
   if (Array.isArray(detail.items) && detail.items.length > 0) return detail.items
   return (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
+}
+
+function firstSidebarUserText(detail: AgentRuntimeThreadDetail): string | null {
+  for (const item of threadDetailItems(detail)) {
+    if (item.kind !== 'user_message') continue
+    const displayText = typeof item.meta?.displayText === 'string' ? item.meta.displayText.trim() : ''
+    const text = displayText || item.text?.trim() || ''
+    if (text) return text
+  }
+  return null
 }
 
 function pinnedConstraintsFromItems(items: AgentRuntimeItem[]): string[] {

@@ -93,7 +93,7 @@ type FileTreeRenameDialogState = {
 const ROOT_PATH = ''
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.hg', '.svn', 'node_modules'])
 const FILE_TREE_CONTEXT_MENU_WIDTH = 206
-const FILE_TREE_CONTEXT_MENU_HEIGHT = 326
+const FILE_TREE_CONTEXT_MENU_HEIGHT = 356
 
 function normalizePath(value: string): string {
   return value.trim().replaceAll('\\', '/').replace(/\/+/g, '/').replace(/\/+$/g, '')
@@ -121,6 +121,10 @@ function parentDirectoryPath(path: string): string {
   const normalized = normalizePath(path)
   const slash = normalized.lastIndexOf('/')
   return slash > 0 ? normalized.slice(0, slash) : ''
+}
+
+export function containingFolderPath(relativePath: string, workspaceRoot: string): string {
+  return parentDirectoryPath(relativePath) || workspaceRoot.trim()
 }
 
 export function renamedRelativePath(path: string, newName: string): string {
@@ -402,6 +406,22 @@ export function ChatFileTreePanel({
     ).then((result) => {
       if (!result.ok) {
         void window.sciforge?.logError?.('editor-open', 'Failed to open workspace file tree item', {
+          message: result.message,
+          target: reference
+        })?.catch(() => undefined)
+      }
+    })
+  }
+
+  const openReferenceContainingFolder = (reference: AgentRuntimeWorkspaceReference): void => {
+    const referenceRoot = reference.workspaceRoot || root
+    void openWorkspacePathInEditor(
+      { path: containingFolderPath(reference.relativePath, referenceRoot) },
+      referenceRoot,
+      { editorId: 'system' }
+    ).then((result) => {
+      if (!result.ok) {
+        void window.sciforge?.logError?.('folder-open', 'Failed to open containing folder for workspace file tree item', {
           message: result.message,
           target: reference
         })?.catch(() => undefined)
@@ -729,6 +749,9 @@ export function ChatFileTreePanel({
           onOpenEditor={() => {
             if (contextMenu.reference) openReferenceInEditor(contextMenu.reference)
           }}
+          onOpenContainingFolder={() => {
+            if (contextMenu.reference) openReferenceContainingFolder(contextMenu.reference)
+          }}
           onCopyEntry={() => {
             if (contextMenu.reference) setFileClipboard({ action: 'copy', reference: contextMenu.reference })
           }}
@@ -773,6 +796,7 @@ function FileTreeContextMenu({
   onToggleDirectory,
   onAddReference,
   onOpenEditor,
+  onOpenContainingFolder,
   onCopyEntry,
   onCutEntry,
   onRename,
@@ -790,6 +814,7 @@ function FileTreeContextMenu({
   onToggleDirectory: () => void
   onAddReference: () => void
   onOpenEditor: () => void
+  onOpenContainingFolder: () => void
   onCopyEntry: () => void
   onCutEntry: () => void
   onRename: () => void
@@ -869,6 +894,11 @@ function FileTreeContextMenu({
             icon={<ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />}
             label={t('filePreviewOpenEditor')}
             onClick={() => run(onOpenEditor)}
+          />
+          <FileTreeContextMenuItem
+            icon={<FolderOpen className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            label={t('filePreviewOpenContainingFolder')}
+            onClick={() => run(onOpenContainingFolder)}
           />
           <FileTreeContextMenuItem
             icon={<Copy className="h-3.5 w-3.5" strokeWidth={1.8} />}

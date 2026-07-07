@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  containingFolderPath,
   composerReferenceFromWorkspaceReference,
   renamedRelativePath,
   rewriteRenamedPath,
@@ -42,6 +43,12 @@ describe('ChatFileTreePanel helpers', () => {
   it('derives renamed workspace paths without moving entries between directories', () => {
     expect(renamedRelativePath('pdfs/old.pdf', 'new.pdf')).toBe('pdfs/new.pdf')
     expect(renamedRelativePath('old.pdf', 'new.pdf')).toBe('new.pdf')
+  })
+
+  it('derives the containing folder target for file tree entries', () => {
+    expect(containingFolderPath('texts/paper.pdf', '/workspace/project')).toBe('texts')
+    expect(containingFolderPath('texts', '/workspace/project')).toBe('/workspace/project')
+    expect(containingFolderPath('paper.pdf', '/workspace/project')).toBe('/workspace/project')
   })
 
   it('rewrites descendant paths when a directory is renamed', () => {

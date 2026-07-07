@@ -21,7 +21,8 @@ export default defineConfig({
           'scientific-plotting-mcp-node-entry': resolve('src/main/scientific-plotting-mcp-node-entry.ts'),
           'image-generation-mcp-node-entry': resolve('src/main/image-generation-mcp-node-entry.ts'),
           'ppt-master-mcp-node-entry': resolve('src/main/ppt-master-mcp-node-entry.ts'),
-          'sciforge-canvas-mcp-node-entry': resolve('src/main/sciforge-canvas-mcp-node-entry.ts')
+          'sciforge-canvas-mcp-node-entry': resolve('src/main/sciforge-canvas-mcp-node-entry.ts'),
+          'computer-use-mcp-node-entry': resolve('src/main/computer-use-mcp-node-entry.ts')
         }
       }
     }
@@ -42,6 +43,10 @@ export default defineConfig({
       // Bind the web dev surface on both loopback families so browser debugging
       // works whether localhost resolves to ::1 or 127.0.0.1.
       host: '::',
+      // The renderer HTML keeps a strict script-src CSP. React Fast Refresh adds
+      // an inline module preamble in dev, which loopback browser previews reject
+      // and then lazy routes hang at the startup fallback.
+      hmr: false,
       proxy: {
         '/__sciforge-dev-bridge': {
           target: 'http://127.0.0.1:5174',

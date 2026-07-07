@@ -85,6 +85,7 @@ import {
 import { createNavigationActions } from './chat-store-navigation-actions'
 import { createThreadActions } from './chat-store-thread-actions'
 import { createMaintenanceActions } from './chat-store-maintenance-actions'
+import { trackZustandSet } from '../lib/performance-monitor'
 
 export type { AppRoute, SettingsRouteSection } from './chat-store-types'
 export { REMOTE_CHANNEL_COMPOSER_MODEL_IDS } from './chat-store-helpers'
@@ -100,7 +101,9 @@ const sseAbortRef = {
 }
 let composerModelLoadPromise: Promise<void> | null = null
 
-export const useChatStore = create<ChatState>((set, get) => ({
+export const useChatStore = create<ChatState>((set, get) => {
+  const trackedSet = trackZustandSet<ChatState>('chat', set)
+  return {
   route: 'chat',
   settingsReturnRoute: 'chat',
   pluginHostRoute: 'chat',
@@ -150,10 +153,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeRemoteChannelId: '',
   remoteGuardChannelId: null,
   remoteTargetId: null,
-  setRemoteTargetId: (targetId) => set({ remoteTargetId: targetId?.trim() || null }),
+  setRemoteTargetId: (targetId) => trackedSet({ remoteTargetId: targetId?.trim() || null }),
 
   ...createRemoteChannelActions({
-    set,
+    set: trackedSet,
     get,
     i18n,
     getProvider,
@@ -169,7 +172,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }),
 
   ...createAppActions({
-    set,
+    set: trackedSet,
     get,
     i18n,
     persistComposerModel,
@@ -187,7 +190,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }),
 
   ...createSideActions({
-    set,
+    set: trackedSet,
     get,
     getProvider,
     t: (key) => i18n.t(key),
@@ -195,12 +198,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     shouldOpenSettingsForError
   }),
 
-  ...createNavigationActions({ set, get, sseAbortRef }),
+  ...createNavigationActions({ set: trackedSet, get, sseAbortRef }),
 
-  ...createThreadActions({ set, get, sseAbortRef }),
+  ...createThreadActions({ set: trackedSet, get, sseAbortRef }),
 
-  ...createMaintenanceActions({ set, get, sseAbortRef })
-}))
+  ...createMaintenanceActions({ set: trackedSet, get, sseAbortRef })
+  }
+})
 
 if (import.meta.env.DEV && typeof document !== 'undefined') {
   const publishDevState = (): void => {

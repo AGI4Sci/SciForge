@@ -10,7 +10,19 @@ import {
   resolveScheduleMcpCommand,
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
-import { RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES } from './computer-use-mcp-config'
+import {
+  buildComputerUseLocalRuntimeMcpServerConfig,
+  buildComputerUseMcpArgs,
+  computerUseMcpEnabledTools,
+  computerUseMcpEnv,
+  COMPUTER_USE_MCP_TIMEOUT_MS,
+  GUI_COMPUTER_USE_MCP_DESCRIPTOR,
+  GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  isComputerUseMcpConfigured,
+  resolveComputerUseMcpCommand,
+  RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES,
+  type ComputerUseMcpLaunchConfig
+} from './computer-use-mcp-config'
 import {
   buildPaperRadarMcpArgs,
   buildPaperRadarLocalRuntimeMcpServerConfig,
@@ -215,6 +227,10 @@ export type GuiMcpRegistryInput = {
     settings?: AppSettingsV1
     launch: SciforgeCanvasMcpLaunchConfig
   }
+  computerUseMcp?: {
+    settings?: AppSettingsV1
+    launch: ComputerUseMcpLaunchConfig
+  }
 }
 
 type LocalRuntimeServerBuilder = () => Record<string, unknown>
@@ -232,7 +248,8 @@ export const GUI_MCP_DESCRIPTORS: readonly ManagedGuiMcpDescriptor[] = [
   GUI_SCIENTIFIC_PLOTTING_MCP_DESCRIPTOR,
   GUI_IMAGE_GENERATION_MCP_DESCRIPTOR,
   GUI_PPT_MASTER_MCP_DESCRIPTOR,
-  GUI_SCIFORGE_CANVAS_MCP_DESCRIPTOR
+  GUI_SCIFORGE_CANVAS_MCP_DESCRIPTOR,
+  GUI_COMPUTER_USE_MCP_DESCRIPTOR
 ] as const
 
 export function managedGuiMcpServerNames(): string[] {
@@ -275,7 +292,7 @@ export function buildCodexManagedGuiMcpServers(
   return [...servers.values()]
 }
 
-export function buildClaudeCodeManagedGuiMcpServers(): Record<string, {
+export function buildClaudeCodeManagedGuiMcpServers(input: GuiMcpRegistryInput = {}): Record<string, {
   type: 'stdio'
   command: string
   args: string[]
@@ -283,7 +300,18 @@ export function buildClaudeCodeManagedGuiMcpServers(): Record<string, {
   timeout: number
   alwaysLoad: true
 }> {
-  return {}
+  const settings = input.computerUseMcp?.settings ?? input.settings
+  if (!input.computerUseMcp || !settings || !isComputerUseMcpConfigured(settings, 'claude')) return {}
+  return {
+    [GUI_COMPUTER_USE_MCP_SERVER_NAME]: {
+      type: 'stdio',
+      command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),
+      args: buildComputerUseMcpArgs(input.computerUseMcp.launch),
+      env: computerUseMcpEnv(),
+      timeout: COMPUTER_USE_MCP_TIMEOUT_MS,
+      alwaysLoad: true
+    }
+  }
 }
 
 function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, LocalRuntimeServerBuilder]> {
@@ -407,6 +435,16 @@ function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, 
         input.sciforgeCanvasMcp!.launch,
         undefined,
         sciforgeCanvasSettings.workspaceRoot
+      )
+    ])
+  }
+  const computerUseSettings = input.computerUseMcp?.settings ?? settings
+  if (input.computerUseMcp && computerUseSettings) {
+    builders.push([
+      GUI_COMPUTER_USE_MCP_SERVER_NAME,
+      () => buildComputerUseLocalRuntimeMcpServerConfig(
+        computerUseSettings,
+        input.computerUseMcp!.launch
       )
     ])
   }
@@ -567,6 +605,17 @@ function codexServerConfigs(input: GuiMcpRegistryInput): GuiMcpRuntimeServerConf
       env: { ELECTRON_RUN_AS_NODE: '1' },
       timeoutMs: GUI_SCIFORGE_CANVAS_MCP_TIMEOUT_MS,
       enabledTools: sciforgeCanvasMcpEnabledTools()
+    })
+  }
+  const computerUseSettings = input.computerUseMcp?.settings ?? settings
+  if (input.computerUseMcp && computerUseSettings && isComputerUseMcpConfigured(computerUseSettings, 'codex')) {
+    servers.push({
+      id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
+      command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),
+      args: buildComputerUseMcpArgs(input.computerUseMcp.launch),
+      env: computerUseMcpEnv(),
+      timeoutMs: COMPUTER_USE_MCP_TIMEOUT_MS,
+      enabledTools: computerUseMcpEnabledTools()
     })
   }
   return servers

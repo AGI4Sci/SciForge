@@ -5,7 +5,7 @@ import type {
   ComputerUseSettingsV1
 } from './app-settings-types'
 
-export const DEFAULT_COMPUTER_USE_BACKEND = 'browser-cdp'
+export const DEFAULT_COMPUTER_USE_BACKEND = 'gui-owl'
 
 export function defaultComputerUseSettings(): ComputerUseSettingsV1 {
   return {

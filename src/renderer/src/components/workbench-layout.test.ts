@@ -10,7 +10,7 @@ describe('fitWorkbenchWidths', () => {
     })
 
     expect(widths.left).toBe(280)
-    expect(widths.right).toBe(1190)
+    expect(widths.right).toBe(1186)
   })
 
   it('allows the right panel to use the full stage when it is the only side panel', () => {
@@ -19,7 +19,7 @@ describe('fitWorkbenchWidths', () => {
       rightPanelVisible: true
     })
 
-    expect(widths.right).toBe(1275)
+    expect(widths.right).toBe(1273)
   })
 
   it('allows the right panel to collapse to zero width', () => {

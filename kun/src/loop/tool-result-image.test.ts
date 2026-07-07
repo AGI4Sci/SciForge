@@ -21,7 +21,7 @@ describe('tool-result image helpers', () => {
 
   it('extracts MCP image content from wrapped computer-use results without textifying base64', () => {
     const output = {
-      serverId: 'gui_computer_use',
+      serverId: 'gui_owl_computer_use',
       toolName: 'computer_use',
       result: {
         content: [

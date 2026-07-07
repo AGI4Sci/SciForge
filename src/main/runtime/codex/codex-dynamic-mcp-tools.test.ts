@@ -43,7 +43,7 @@ describe('Codex dynamic MCP tool bridge', () => {
   it('advertises provider-safe MCP input schemas for Codex dynamic tools', async () => {
     const bridge = createCodexDynamicMcpToolBridge({
       servers: [{
-        id: 'gui_computer_use',
+        id: 'gui_owl_computer_use',
         command: '/bin/computer-use-mcp',
         enabledTools: ['computer_use']
       }],
@@ -399,14 +399,14 @@ describe('Codex dynamic MCP tool bridge', () => {
     })
   })
 
-  it('injects Codex computer-use context into dynamic MCP calls', async () => {
+  it('passes Codex computer-use arguments through dynamic MCP calls', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'bound' }],
       structuredContent: { ok: true }
     }))
     const bridge = createCodexDynamicMcpToolBridge({
       servers: [{
-        id: 'gui_computer_use',
+        id: 'gui_owl_computer_use',
         command: '/bin/computer-use-mcp',
         enabledTools: ['computer_use']
       }],
@@ -423,12 +423,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       turnId: 'codex-turn-1',
       tool: 'computer_use',
       arguments: {
-        action: 'bind_target',
-        targetId: 'desktop:global',
-        agentId: 'model-agent',
-        threadId: 'model-thread',
-        turnId: 'model-turn',
-        computerUseSessionId: 'model-session'
+        instruction: 'open the settings window'
       }
     })).resolves.toMatchObject({
       success: true
@@ -437,12 +432,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       {
         name: 'computer_use',
         arguments: {
-          action: 'bind_target',
-          targetId: 'desktop:global',
-          agentId: 'codex:codex-thread-1',
-          threadId: 'codex-thread-1',
-          turnId: 'codex-turn-1',
-          computerUseSessionId: 'codex:codex-thread-1'
+          instruction: 'open the settings window'
         }
       },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
@@ -522,60 +512,6 @@ describe('Codex dynamic MCP tool bridge', () => {
     await expect(first).resolves.toMatchObject({ success: false })
     expect(bridge.abortRequestsForTurn('thread-1', 'turn-2')).toBe(1)
     await expect(second).resolves.toMatchObject({ success: false })
-  })
-
-  it('releases tracked Codex computer-use sessions when closing the MCP bridge', async () => {
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'ok' }],
-      structuredContent: { ok: true }
-    }))
-    const close = vi.fn(async () => undefined)
-    const bridge = createCodexDynamicMcpToolBridge({
-      servers: [{
-        id: 'gui_computer_use',
-        command: '/bin/computer-use-mcp',
-        enabledTools: ['computer_use']
-      }],
-      clientFactory: async () => fakeMcpClient({
-        tools: [{ name: 'computer_use', description: 'Shared host UI control.' }],
-        callTool,
-        close
-      })
-    })
-
-    await bridge.dynamicTools()
-    await bridge.callTool({
-      requestId: 'request-1',
-      threadId: 'codex-thread-1',
-      turnId: 'codex-turn-1',
-      tool: 'computer_use',
-      arguments: { action: 'bind_target', targetId: 'desktop:global' }
-    })
-    await bridge.close('user_stop')
-
-    expect(callTool).toHaveBeenLastCalledWith(
-      {
-        name: 'computer_use',
-        arguments: {
-          action: 'release_target',
-          computerUseSessionId: 'codex:codex-thread-1',
-          reason: 'user_stop'
-        }
-      },
-      { timeout: 5_000 }
-    )
-    expect(close).toHaveBeenCalled()
-    expect(bridge.lifecycleEvents()).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        event: 'computer_use_release_requested',
-        reason: 'user_stop',
-        sessionId: 'codex:codex-thread-1'
-      }),
-      expect.objectContaining({
-        event: 'server_closed',
-        reason: 'user_stop'
-      })
-    ]))
   })
 
   it('converts MCP error results into failed dynamic tool responses', () => {

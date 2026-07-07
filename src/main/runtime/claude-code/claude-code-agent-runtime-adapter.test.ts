@@ -4,7 +4,7 @@ import type { ClaudeCodeRuntimeService } from './claude-code-service'
 import { createClaudeCodeAgentRuntimeAdapter } from './claude-code-agent-runtime-adapter'
 
 describe('createClaudeCodeAgentRuntimeAdapter', () => {
-  it('ignores the retired shared computer-use MCP capability for Claude Code', async () => {
+  it('reports shared computer-use MCP capability for Claude Code', async () => {
     const adapter = createClaudeCodeAgentRuntimeAdapter({
       isComputerUseMcpConfigured: () => true,
       runtimeInfo: async () => ({
@@ -17,16 +17,23 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
     await expect(adapter.capabilities(ctx)).resolves.toMatchObject({
       runtimeId: 'claude',
       tools: {
-        mcp: { available: false },
+        mcp: { available: true },
         computerUse: {
-          available: false
+          available: true,
+          server: 'mcp',
+          toolName: 'computer_use'
         }
       }
     })
     await expect(adapter.auxiliary?.(ctx, {
       operation: 'getToolDiagnostics'
     })).resolves.toMatchObject({
-      mcpServers: []
+      mcpServers: [{
+        id: 'gui_owl_computer_use',
+        status: 'configured',
+        toolCount: 1,
+        tools: ['computer_use']
+      }]
     })
     await expect(adapter.auxiliary?.(ctx, {
       operation: 'getRuntimeInfo'
@@ -34,8 +41,8 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       capabilities: {
         mcp: {
           computerUse: {
-            enabled: false,
-            available: false
+            enabled: true,
+            available: true
           }
         }
       }

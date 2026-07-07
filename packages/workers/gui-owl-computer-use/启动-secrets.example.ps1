@@ -5,19 +5,25 @@
 #  Copy this file to  启动-secrets.local.ps1  and fill in real values (gitignored).
 # =============================================================================
 
-# --- Computer-Use worker model access ----------------------------------------
-# All model traffic must go through SciForge Model Router. Configure the router
-# profile with your own licensed provider or remote service, then put the local
-# router URL and runtime key here.
-$env:CUA_MODEL_ROUTER_BASE_URL = "http://127.0.0.1:3892/v1"
-$env:CUA_MODEL_ROUTER_MODEL    = "sciforge-router"
-$env:CUA_MODEL_ROUTER_API_KEY  = "replace-with-model-router-runtime-key"
+# --- Computer-Use worker grounding model access ------------------------------
+# URL/model/header defaults are built into this package. Keep real keys local.
+$env:CUA_GROUNDING_API_KEY = "replace-with-grounding-api-key"
+
+# Override only if the GUI-Owl gateway changes:
+# $env:CUA_GROUNDING_BASE_URL      = "http://10.140.158.130:8881/v1/chat/completions"
+# $env:CUA_GROUNDING_MODEL         = "gui-owl"
+# $env:CUA_GROUNDING_ENDPOINT      = "chat_completions"
+# $env:CUA_GROUNDING_EXTRA_HEADERS = '{"x-original-model":"gui-owl"}'
+
+# Optional general vision route for reflection; default is Model Router public
+# alias sciforge-router at http://127.0.0.1:3892/v1. Usually leave off.
+# $env:CUA_VISION_API_KEY = $env:SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY
 
 # --- Computer-Use 服务端口 / 行为 --------------------------------------------
 $env:CUA_PORT         = "3900"             # HTTP sidecar 端口 (GUI 通过它调用)
 $env:CUA_MAX_STEPS    = "15"
-# Reflection makes an additional routed model call. Keep it off unless the active
-# Model Router profile is intended to process the before/after screenshots.
+# Reflection makes an additional Model Router vision call. Keep it off unless
+# Model Router is running and the runtime API key is available here.
 $env:CUA_REFLECT      = "false"
 $env:CUA_SHOW_OVERLAY = "true"             # 真机执行时显示鼠标高亮 (仅 Windows)
 

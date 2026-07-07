@@ -32,6 +32,10 @@ import {
   prepareClaudeCodeSdkLaunch,
   resolveClaudeWorkspace
 } from './claude-code-config'
+import {
+  isComputerUseMcpConfigured,
+  type ComputerUseMcpLaunchConfig
+} from '../../computer-use-mcp-config'
 import { ClaudeCodeSessionStore } from './claude-code-session-store'
 import {
   ClaudeCodeEventStore,
@@ -52,6 +56,7 @@ export type ClaudeCodeRuntimeServiceOptions = {
   settings: () => Promise<AppSettingsV1>
   storageRoot: string
   managedConfigDir?: string
+  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
   claudeAgentSdk?: ClaudeAgentSdk
 }
 
@@ -132,8 +137,11 @@ export class ClaudeCodeRuntimeService {
   }
 
   isComputerUseMcpConfigured(settings?: AppSettingsV1): boolean {
-    void settings
-    return false
+    return Boolean(
+      settings &&
+      this.options.computerUseMcpLaunch &&
+      isComputerUseMcpConfigured(settings, 'claude')
+    )
   }
 
   async connect(): Promise<ClaudeCodeConnectResult> {
@@ -245,7 +253,8 @@ export class ClaudeCodeRuntimeService {
         workspace,
         sessionId: existingThread?.claudeSessionId,
         reasoningEffort: payload.reasoningEffort,
-        managedConfigDir: this.options.managedConfigDir
+        managedConfigDir: this.options.managedConfigDir,
+        computerUseMcpLaunch: this.options.computerUseMcpLaunch
       })
       const storedThread = await this.threadStore.upsert({
         guiThreadId: payload.threadId,

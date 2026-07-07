@@ -745,7 +745,7 @@ describe('cli', () => {
     expect(manifest.computerUse).toMatchObject({
       enabled: true,
       available: false,
-      reason: 'GUI-Owl computer-use sidecar is not configured'
+      reason: 'GUI-Owl computer-use MCP server is not configured'
     })
 
     const enabledButMissingProvider = buildRuntimeCapabilityManifest({
@@ -783,7 +783,7 @@ describe('cli', () => {
     })
     expect(computerUseEnabled.computerUse).toMatchObject({
       available: true,
-      server: 'service',
+      server: 'mcp',
       toolName: 'computer_use',
       backend: 'gui-owl',
       inputIsolation: 'host-approved',

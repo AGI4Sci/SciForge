@@ -1,11 +1,12 @@
 import type { ReactElement } from 'react'
-import { lazy, Suspense } from 'react'
+import { lazy, memo, Suspense, useEffect } from 'react'
+import { performanceMonitor } from '../../lib/performance-monitor'
 
 const LazyStreamdownAssistant = lazy(() =>
   import('./StreamdownAssistant').then((module) => ({ default: module.StreamdownAssistant }))
 )
 
-export function AssistantMarkdown({
+function AssistantMarkdownComponent({
   text,
   streaming,
   className
@@ -14,6 +15,14 @@ export function AssistantMarkdown({
   streaming: boolean
   className?: string
 }): ReactElement {
+  const renderStartedAt = performanceMonitor.now()
+  useEffect(() => {
+    performanceMonitor.sample('react.commit.AssistantMarkdown', performanceMonitor.now() - renderStartedAt, {
+      streaming,
+      chars: text.length
+    })
+  })
+
   return (
     <Suspense
       fallback={
@@ -26,3 +35,5 @@ export function AssistantMarkdown({
     </Suspense>
   )
 }
+
+export const AssistantMarkdown = memo(AssistantMarkdownComponent)

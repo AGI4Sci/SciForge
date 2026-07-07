@@ -701,6 +701,13 @@ export class AgentRuntimeProvider implements AgentProvider {
     }
   }
 
+  async getThreadSidebarProbe(threadId: string): Promise<{ text: string | null }> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const probe = await agentRuntimeClient.readThreadSidebarProbe({ runtimeId, threadId })
+    this.rememberThreadRuntime(probe.threadId, probe.runtimeId)
+    return { text: probe.text }
+  }
+
   async sendUserMessage(
     threadId: string,
     text: string,

@@ -63,10 +63,10 @@ import { SddAssistantPanel } from './sdd/SddAssistantPanel'
 import { SddDraftEditorView } from './sdd/SddDraftEditorView'
 import { SidebarTitlebarToggleButton } from './sidebar/SidebarPrimitives'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
-import { buildSddDraftId, createSddDraft, forgetRememberedSddDraft, useSddDraftStore } from '../sdd/sdd-draft-store'
+import { buildSddDraftId, forgetRememberedSddDraft, useSddDraftStore } from '../sdd/sdd-draft-store'
 import type { SddDraft, SddDraftSaveStatus } from '../sdd/sdd-draft-store'
 import { saveActiveSddDraftToDisk } from '../sdd/sdd-draft-actions'
-import { restoreRememberedSddDraft, restoreSddDraft } from '../sdd/sdd-draft-restore'
+import { restoreSddDraft } from '../sdd/sdd-draft-restore'
 import { composeSddAssistantPrompt } from '../sdd/sdd-assistant-prompt'
 import { collectSddDraftImages, withAttachmentIds, type SddDraftImageReference } from '../sdd/sdd-draft-images'
 import { buildSddDraftToPlanPrompt } from '../sdd/sdd-plan-prompt'
@@ -585,6 +585,7 @@ export function Workbench(): ReactElement {
     sendMessage,
     reviewActiveThread,
     queuedMessages,
+    activeThreadTodos,
     watchTurnCompletion,
     unreadThreadIds,
     removeQueuedMessage,
@@ -649,6 +650,7 @@ export function Workbench(): ReactElement {
       sendMessage: s.sendMessage,
       reviewActiveThread: s.reviewActiveThread,
       queuedMessages: s.queuedMessages,
+      activeThreadTodos: s.activeThreadTodos,
       watchTurnCompletion: s.watchTurnCompletion,
       unreadThreadIds: s.unreadThreadIds,
       removeQueuedMessage: s.removeQueuedMessage,
@@ -859,18 +861,11 @@ export function Workbench(): ReactElement {
     runtimeReady: runtimeConnection === 'ready',
     busy
   })
-  const [focusedChildAgentRequest, setFocusedChildAgentRequest] = useState<{
-    childId: string
-    requestKey: number
-  } | null>(null)
   const childAgentCount = threadChildrenState.children.length
   const childAgentRunningCount = threadChildrenState.children.reduce(
     (count, child) => count + (child.status === 'running' || child.status === 'queued' ? 1 : 0),
     0
   )
-  useEffect(() => {
-    setFocusedChildAgentRequest(null)
-  }, [activeThreadId])
   const {
     beginLeftResize,
     beginRightResize,
@@ -1116,6 +1111,37 @@ export function Workbench(): ReactElement {
     }
   }, [paperRadarEnabled, rightPanelMode, setRightPanelMode])
 
+  const activeTodoItemCount = activeThreadTodos?.items.length ?? 0
+  const activeTodoAutoOpenKey = activeThreadId && activeTodoItemCount > 0
+    ? `${activeThreadId}:${activeThreadTodos?.updatedAt ?? ''}:${activeTodoItemCount}`
+    : ''
+  const autoOpenedTodoKeyRef = useRef('')
+
+  useEffect(() => {
+    if (activeTodoItemCount === 0) {
+      autoOpenedTodoKeyRef.current = ''
+      if (rightPanelMode === 'todo') setRightPanelMode(null)
+      return
+    }
+    if (route !== 'chat') return
+    if (rightPanelMode === 'todo') {
+      autoOpenedTodoKeyRef.current = activeTodoAutoOpenKey
+      return
+    }
+    if (rightPanelMode !== null) return
+    if (autoOpenedTodoKeyRef.current === activeTodoAutoOpenKey) return
+    autoOpenedTodoKeyRef.current = activeTodoAutoOpenKey
+    setRightSidebarWidth((width) => Math.max(width, 360))
+    setRightPanelMode('todo')
+  }, [
+    activeTodoAutoOpenKey,
+    activeTodoItemCount,
+    rightPanelMode,
+    route,
+    setRightPanelMode,
+    setRightSidebarWidth
+  ])
+
   useEffect(() => {
     if (
       !activeGuiPlan ||
@@ -1262,18 +1288,6 @@ export function Workbench(): ReactElement {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
     if (mode === 'evidence') setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
     toggleRightPanelMode(mode)
-  }
-
-  const openChildAgentPanel = (childId?: string): void => {
-    const normalizedChildId = childId?.trim()
-    if (normalizedChildId) {
-      setFocusedChildAgentRequest((previous) => ({
-        childId: normalizedChildId,
-        requestKey: (previous?.requestKey ?? 0) + 1
-      }))
-    }
-    setRightSidebarWidth((width) => Math.max(width, 440))
-    setRightPanelMode('child-agents')
   }
 
   const removeComposerFileReference = (relativePath: string, referenceWorkspaceRoot?: string): void => {
@@ -1560,56 +1574,6 @@ export function Workbench(): ReactElement {
     const threadId = await ensureSddAssistantThreadForDraft(draft)
     if (!threadId) return
     setRightPanelMode('sdd-ai')
-  }
-
-  const startNewSddRequirement = async (): Promise<void> => {
-    const activeCodeWorkspace = activeThreadId
-      ? normalizeWorkspaceRoot(codeThreads.find((thread) => thread.id === activeThreadId)?.workspace ?? '')
-      : ''
-    let targetWorkspace = activeCodeWorkspace || normalizeWorkspaceRoot(workspaceRoot)
-    if (!targetWorkspace) {
-      const picked = await chooseWorkspace({ selectThreadAfter: false })
-      targetWorkspace = normalizeWorkspaceRoot(picked ?? useChatStore.getState().workspaceRoot)
-    }
-    if (!targetWorkspace) {
-      setError(t('workspaceRequiredToCreateThread'))
-      return
-    }
-    const restored = await restoreRememberedSddDraft({
-      workspaceRoot: targetWorkspace,
-      readWorkspaceFile: window.sciforge.readWorkspaceFile
-    })
-    if (restored.kind === 'restored') {
-      await openSddRequirementDraft(restored.draft, restored.content, {
-        lastSavedContent: restored.lastSavedContent,
-        saveStatus: restored.saveStatus
-      })
-      return
-    }
-
-    const draftUuid = globalThis.crypto?.randomUUID?.() ?? `draft-${Date.now()}`
-    const draft = createSddDraft({ id: draftUuid, workspaceRoot: targetWorkspace })
-    const initialContent = [
-      `# ${t('sddUntitledRequirement')}`,
-      '',
-      `## ${t('sddTemplateBackground')}`,
-      '',
-      `## ${t('sddTemplateGoal')}`,
-      '',
-      `## ${t('sddTemplateAcceptance')}`,
-      ''
-    ].join('\n')
-    const result = await window.sciforge.createWorkspaceFile({
-      workspaceRoot: targetWorkspace,
-      path: draft.relativePath,
-      content: initialContent
-    })
-    if (!result.ok) {
-      setError(result.message)
-      return
-    }
-    const activeDraft = { ...draft, absolutePath: result.path }
-    await openSddRequirementDraft(activeDraft, initialContent)
   }
 
   const sddDraftFromRegisteredThread = (threadId: string): SddDraft | null => {
@@ -2356,8 +2320,6 @@ export function Workbench(): ReactElement {
                 children={threadChildrenState.children}
                 loading={threadChildrenState.loading}
                 error={threadChildrenState.error}
-                focusChildId={focusedChildAgentRequest?.childId ?? null}
-                focusChildRequestKey={focusedChildAgentRequest?.requestKey ?? 0}
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
               />
@@ -2453,7 +2415,6 @@ export function Workbench(): ReactElement {
               onRestoreThread={(id) => archiveThread(id, false)}
               onNewChat={startNewChat}
               onNewChatInWorkspace={startNewChatInWorkspace}
-              onNewRequirement={() => void startNewSddRequirement()}
               onOpenSettings={(section) => openSettings(section)}
               onOpenPlugins={openPluginsView}
               onToggleConnectPhone={toggleConnectPhone}
@@ -2571,11 +2532,9 @@ export function Workbench(): ReactElement {
                     sideChatOpen={sidePanel.open}
                     childAgentCount={childAgentCount}
                     childAgentRunningCount={childAgentRunningCount}
-                    childAgents={threadChildrenState.children}
                     childAgentsOpen={rightPanelMode === 'child-agents'}
                     sideChatEnabled={Boolean(activeThreadId) && sideConversationsSupported}
                     onOpenChildAgents={() => toggleTopBarRightPanelMode('child-agents')}
-                    onOpenChildAgent={openChildAgentPanel}
                     onOpenSideChat={
                       activeThreadId && sideConversationsSupported ? openSideChat : undefined
                     }

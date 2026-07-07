@@ -163,7 +163,7 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
               mcp: { available: true, toolCount: 1 },
               computerUse: {
                 available: true,
-                server: 'service',
+                server: 'mcp',
                 toolName: 'computer_use',
                 backend: 'gui-owl',
                 inputIsolation: 'host-approved',
@@ -184,7 +184,7 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
         mcp: { available: true, toolCount: 1 },
         computerUse: {
           available: true,
-          server: 'service',
+          server: 'mcp',
           toolName: 'computer_use',
           backend: 'gui-owl',
           inputIsolation: 'host-approved',

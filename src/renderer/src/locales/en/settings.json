@@ -20,7 +20,7 @@
   "computerUseRuntimeAccess": "Runtime access",
   "computerUseRuntimeAccessDesc": "Choose which runtimes may use computer use when the GUI-Owl sidecar is available.",
   "computerUseBackend": "Backend status",
-  "computerUseBackendDesc": "Shows the configured primitive backend, latest runtime diagnostic, and reported safety properties.",
+  "computerUseBackendDesc": "Shows the configured GUI-Owl sidecar backend, latest runtime diagnostic, and reported safety properties.",
   "computerUseConfiguredBackend": "Configured",
   "computerUseRuntimeBackend": "Runtime",
   "computerUsePlatform": "Platform",

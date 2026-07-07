@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
+import { mainPerformanceMonitor } from '../performance-monitor'
 import {
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -46,6 +47,7 @@ import {
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeListThreadsPayloadSchema,
   agentRuntimeReadThreadPayloadSchema,
+  agentRuntimeReadThreadSidebarProbePayloadSchema,
   agentRuntimeSessionResumePayloadSchema,
   agentRuntimeStartThreadPayloadSchema,
   agentRuntimeStartTurnPayloadSchema,
@@ -233,6 +235,7 @@ import type {
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
   AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadSidebarProbe,
   AgentRuntimeThreadStartInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
@@ -364,6 +367,7 @@ type RegisterAppIpcHandlersOptions = {
     listThreads: (input?: AgentRuntimeThreadListInput) => Promise<AgentRuntimeThread[]>
     startThread: (input: AgentRuntimeThreadStartInput) => Promise<AgentRuntimeThread>
     readThread: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadDetail>
+    readThreadSidebarProbe: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadSidebarProbe>
     startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
     interruptTurn: (input: AgentRuntimeTurnTargetInput) => Promise<void>
     steerTurn: (input: AgentRuntimeTurnSteerInput) => Promise<void>
@@ -411,6 +415,7 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   terminalPtyBridge?: TerminalPtyBridge
+  getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
   getImageGenerationMcpLaunchConfig?: () => ImageGenerationMcpLaunchConfig
@@ -817,6 +822,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
+    getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
@@ -848,15 +854,33 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
     invokeHandlers.set(channel, handler)
-    ipcMain.handle(channel, async (event, payload: unknown) =>
-      handler({ sender: event.sender }, payload)
-    )
+    ipcMain.handle(channel, async (event, payload: unknown) => {
+      const startedAt = mainPerformanceMonitor.now()
+      mainPerformanceMonitor.count('main.ipc.invoke')
+      mainPerformanceMonitor.count(`main.ipc.invoke.${channel}`)
+      try {
+        return await handler({ sender: event.sender }, payload)
+      } finally {
+        mainPerformanceMonitor.sample('main.ipc.invoke.duration', mainPerformanceMonitor.now() - startedAt, {
+          channel
+        })
+      }
+    })
   }
 
   const invoke = async (channel: string, payload: unknown, sender: AppBridgeSender): Promise<unknown> => {
+    const startedAt = mainPerformanceMonitor.now()
+    mainPerformanceMonitor.count('main.devBridge.invoke')
+    mainPerformanceMonitor.count(`main.devBridge.invoke.${channel}`)
     const handler = invokeHandlers.get(channel)
-    if (!handler) throw new Error(`Unknown app bridge channel: ${channel}`)
-    return handler({ sender }, payload)
+    try {
+      if (!handler) throw new Error(`Unknown app bridge channel: ${channel}`)
+      return await handler({ sender }, payload)
+    } finally {
+      mainPerformanceMonitor.sample('main.devBridge.invoke.duration', mainPerformanceMonitor.now() - startedAt, {
+        channel
+      })
+    }
   }
 
   const defaultExtractFigureStyleReference = async (
@@ -1104,6 +1128,20 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       runtime: await readComputerUseRuntimeStatus(statusPath)
     }
   })
+  handleInvoke('performance:snapshot', async () => {
+    const mainSnapshot = getMainPerformanceSnapshot?.() ?? null
+    const win = getMainWindow()
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+      return { ok: false, message: 'Main window is not available.', mainSnapshot }
+    }
+    const snapshot = await win.webContents.executeJavaScript(
+      'window.__SCIFORGE_PERF__?.snapshot?.() ?? null',
+      true
+    ) as unknown
+    return snapshot
+      ? { ok: true, snapshot, mainSnapshot }
+      : { ok: false, message: 'Renderer performance monitor is not available.', mainSnapshot }
+  })
 
   const requirePaperRadarService = (): PaperRadarWorkerService => {
     const service = options.getPaperRadarService?.()
@@ -1278,6 +1316,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('agentRuntime:readThread', async (_, payload: unknown) =>
     requireAgentRuntime().readThread(
       parseIpcPayload('agentRuntime:readThread', agentRuntimeReadThreadPayloadSchema, payload)
+    )
+  )
+  handleInvoke('agentRuntime:readThreadSidebarProbe', async (_, payload: unknown) =>
+    requireAgentRuntime().readThreadSidebarProbe(
+      parseIpcPayload(
+        'agentRuntime:readThreadSidebarProbe',
+        agentRuntimeReadThreadSidebarProbePayloadSchema,
+        payload
+      )
     )
   )
   handleInvoke('agentRuntime:startTurn', async (_, payload: unknown) =>

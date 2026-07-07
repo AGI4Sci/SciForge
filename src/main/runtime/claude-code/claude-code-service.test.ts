@@ -32,6 +32,12 @@ type QueryCall = {
   options?: ClaudeAgentSdkOptions
 }
 
+const computerUseLaunch = {
+  appPath: '/tmp/sciforge-app',
+  execPath: '/tmp/electron',
+  isPackaged: false
+}
+
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
   modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
@@ -462,7 +468,8 @@ describe('ClaudeCodeRuntimeService', () => {
     )).toBe(false)
   })
 
-  it('does not inject the retired computer-use MCP server into Claude SDK turns', async () => {
+  it('injects the managed computer-use MCP server into Claude SDK turns when configured', async () => {
+    vi.stubEnv('SCIFORGE_CUA_SERVICE_URL', 'http://127.0.0.1:3900')
     const { sdk, calls } = fakeSdk(() => [
       init('claude-session-computer-use'),
       result('Done.', 'claude-session-computer-use')
@@ -471,6 +478,7 @@ describe('ClaudeCodeRuntimeService', () => {
       settings: async () => settings(),
       storageRoot: await serviceRoot(),
       managedConfigDir: '/tmp/sciforge-claude-config',
+      computerUseMcpLaunch: computerUseLaunch,
       claudeAgentSdk: sdk
     })
 
@@ -483,7 +491,22 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
 
-    expect(calls[0]?.options?.mcpServers).toBeUndefined()
+    expect(calls[0]?.options?.mcpServers).toMatchObject({
+      gui_owl_computer_use: {
+        type: 'stdio',
+        command: '/tmp/electron',
+        args: [
+          '/tmp/sciforge-app/out/main/computer-use-mcp-node-entry.js',
+          '--gui-owl-computer-use-mcp-server'
+        ],
+        env: {
+          ELECTRON_RUN_AS_NODE: '1',
+          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900'
+        },
+        alwaysLoad: true
+      }
+    })
+    expect(calls[0]?.options?.mcpServers).not.toHaveProperty('gui_computer_use')
   })
 
   it('maps Task and Workflow tool output and reads canonical child transcripts', async () => {

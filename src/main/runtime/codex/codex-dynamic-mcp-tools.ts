@@ -1,10 +1,7 @@
 import { createHash } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import {
-  COMPUTER_USE_MCP_TOOL_NAME,
-  GUI_COMPUTER_USE_MCP_SERVER_NAME
-} from '../../computer-use-mcp-config'
+import { mainPerformanceMonitor } from '../../performance-monitor'
 
 export type CodexDynamicMcpServerConfig = {
   id: string
@@ -80,7 +77,7 @@ export type CodexDynamicMcpReleaseReason =
 
 export type CodexDynamicMcpLifecycleEvent = {
   at: string
-  event: 'request_aborted' | 'server_closed' | 'computer_use_release_requested'
+  event: 'request_aborted' | 'server_closed'
   serverId: string
   namespace: string
   reason: CodexDynamicMcpReleaseReason
@@ -89,7 +86,6 @@ export type CodexDynamicMcpLifecycleEvent = {
   turnId?: string
   toolName?: string
   activeRequestCount?: number
-  sessionId?: string
 }
 
 type CatalogTool = McpToolDescriptor & {
@@ -114,7 +110,6 @@ type ServerState = {
   catalog?: CatalogTool[]
   catalogPromise?: Promise<CatalogTool[]>
   activeRequests: Set<ActiveMcpRequest>
-  trackedComputerUseSessionIds: Set<string>
   lifecycleEvents: CodexDynamicMcpLifecycleEvent[]
 }
 
@@ -147,7 +142,6 @@ export class CodexDynamicMcpToolBridge {
           },
           namespace,
           activeRequests: new Set<ActiveMcpRequest>(),
-          trackedComputerUseSessionIds: new Set<string>(),
           lifecycleEvents: []
         }
         this.statesByNamespace.set(namespace, state)
@@ -179,46 +173,63 @@ export class CodexDynamicMcpToolBridge {
   }
 
   async dynamicTools(): Promise<CodexAppServerDynamicToolSpec[]> {
+    const startedAt = mainPerformanceMonitor.now()
+    mainPerformanceMonitor.count('main.codex.dynamicMcp.tools')
     if (this.closedReason) return []
-    const entries = await this.availableCatalogEntries()
-    assignFlatToolNames(entries)
-    return entries.map(({ tool }) => ({
-      type: 'function',
-      name: tool.flatName ?? tool.dynamicName,
-      description: tool.description || tool.title || `MCP tool ${tool.originalName}`,
-      inputSchema: providerSafeToolInputSchema(tool.inputSchema)
-    }))
+    try {
+      const entries = await this.availableCatalogEntries()
+      assignFlatToolNames(entries)
+      return entries.map(({ tool }) => ({
+        type: 'function',
+        name: tool.flatName ?? tool.dynamicName,
+        description: tool.description || tool.title || `MCP tool ${tool.originalName}`,
+        inputSchema: providerSafeToolInputSchema(tool.inputSchema)
+      }))
+    } finally {
+      mainPerformanceMonitor.sample('main.codex.dynamicMcp.tools.duration', mainPerformanceMonitor.now() - startedAt, {
+        servers: this.states.length
+      })
+    }
   }
 
   async callTool(
     request: CodexAppServerDynamicToolCallRequest,
     options: { signal?: AbortSignal } = {}
   ): Promise<CodexAppServerDynamicToolCallResponse> {
+    const startedAt = mainPerformanceMonitor.now()
+    mainPerformanceMonitor.count('main.codex.dynamicMcp.call')
     let resolved: { state: ServerState; tool: CatalogTool } | null = null
     let retriedClosedConnection = false
-    for (;;) {
-      try {
-        if (this.closedReason) {
-          return failedDynamicToolResponse(`MCP dynamic tool bridge is closed: ${this.closedReason}.`)
+    try {
+      for (;;) {
+        try {
+          if (this.closedReason) {
+            return failedDynamicToolResponse(`MCP dynamic tool bridge is closed: ${this.closedReason}.`)
+          }
+          resolved = await this.resolveTool(request)
+          if (!resolved) {
+            const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
+            return failedDynamicToolResponse(`No configured MCP dynamic tool matched ${name}.`)
+          }
+          return await this.invokeResolvedTool(resolved, request, options)
+        } catch (error) {
+          if (!retriedClosedConnection && isClosedMcpConnectionError(error) && !options.signal?.aborted) {
+            retriedClosedConnection = true
+            await this.resetClosedConnection(resolved?.state)
+            resolved = null
+            continue
+          }
+          const name = resolved?.tool.originalName ?? (request.namespace ? `${request.namespace}.${request.tool}` : request.tool)
+          return failedDynamicToolResponse(
+            `MCP tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
+          )
         }
-        resolved = await this.resolveTool(request)
-        if (!resolved) {
-          const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
-          return failedDynamicToolResponse(`No configured MCP dynamic tool matched ${name}.`)
-        }
-        return await this.invokeResolvedTool(resolved, request, options)
-      } catch (error) {
-        if (!retriedClosedConnection && isClosedMcpConnectionError(error) && !options.signal?.aborted) {
-          retriedClosedConnection = true
-          await this.resetClosedConnection(resolved?.state)
-          resolved = null
-          continue
-        }
-        const name = resolved?.tool.originalName ?? (request.namespace ? `${request.namespace}.${request.tool}` : request.tool)
-        return failedDynamicToolResponse(
-          `MCP tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
-        )
       }
+    } finally {
+      mainPerformanceMonitor.sample('main.codex.dynamicMcp.call.duration', mainPerformanceMonitor.now() - startedAt, {
+        namespace: request.namespace,
+        tool: request.tool
+      })
     }
   }
 
@@ -229,7 +240,6 @@ export class CodexDynamicMcpToolBridge {
     }
     await Promise.all(this.states.map(async (state) => {
       const client = state.client ?? await state.clientPromise?.catch(() => undefined)
-      if (client) await this.releaseTrackedComputerUseSessions(state, client, reason)
       await client?.close().catch(() => undefined)
       this.recordLifecycleEvent(state, {
         event: 'server_closed',
@@ -285,7 +295,6 @@ export class CodexDynamicMcpToolBridge {
       mcpToolArgumentsForRequest(state, tool, request),
       tool.inputSchema
     )
-    this.noteComputerUseSession(state, tool, callArguments)
     const client = await this.clientFor(state)
     const result = await this.withTrackedRequest(
       state,
@@ -343,30 +352,39 @@ export class CodexDynamicMcpToolBridge {
   }
 
   private async loadCatalog(state: ServerState): Promise<CatalogTool[]> {
+    const startedAt = mainPerformanceMonitor.now()
+    mainPerformanceMonitor.count('main.codex.dynamicMcp.catalog.load')
     const client = await this.clientFor(state)
     const tools: McpToolDescriptor[] = []
     let cursor: string | undefined
-    do {
-      const listed = await this.withTrackedRequest(
-        state,
-        { toolName: 'tools/list' },
-        undefined,
-        (signal) => client.listTools({ cursor, signal, timeout: state.config.timeoutMs })
-      )
-      tools.push(...listed.tools)
-      cursor = listed.nextCursor
-    } while (cursor)
+    try {
+      do {
+        const listed = await this.withTrackedRequest(
+          state,
+          { toolName: 'tools/list' },
+          undefined,
+          (signal) => client.listTools({ cursor, signal, timeout: state.config.timeoutMs })
+        )
+        tools.push(...listed.tools)
+        cursor = listed.nextCursor
+      } while (cursor)
 
-    const enabled = new Set((state.config.enabledTools ?? []).filter(Boolean))
-    const usedNames = new Set<string>()
-    return tools
-      .filter((tool) => !enabled.size || enabled.has(tool.name))
-      .filter((tool) => tool.name.trim().length > 0)
-      .map((tool) => ({
-        ...tool,
-        originalName: tool.name,
-        dynamicName: uniqueDynamicName(slug(tool.name), tool.name, usedNames, 128)
-      }))
+      const enabled = new Set((state.config.enabledTools ?? []).filter(Boolean))
+      const usedNames = new Set<string>()
+      return tools
+        .filter((tool) => !enabled.size || enabled.has(tool.name))
+        .filter((tool) => tool.name.trim().length > 0)
+        .map((tool) => ({
+          ...tool,
+          originalName: tool.name,
+          dynamicName: uniqueDynamicName(slug(tool.name), tool.name, usedNames, 128)
+        }))
+    } finally {
+      mainPerformanceMonitor.sample('main.codex.dynamicMcp.catalog.load.duration', mainPerformanceMonitor.now() - startedAt, {
+        serverId: state.config.id,
+        tools: tools.length
+      })
+    }
   }
 
   private async clientFor(state: ServerState): Promise<CodexDynamicMcpClient> {
@@ -440,45 +458,6 @@ export class CodexDynamicMcpToolBridge {
     return aborted
   }
 
-  private noteComputerUseSession(state: ServerState, tool: CatalogTool, args: Record<string, unknown>): void {
-    if (state.config.id !== GUI_COMPUTER_USE_MCP_SERVER_NAME || tool.originalName !== COMPUTER_USE_MCP_TOOL_NAME) return
-    const sessionId = stringValue(args.computerUseSessionId)
-    if (!sessionId) return
-    if (args.action === 'release_target') {
-      state.trackedComputerUseSessionIds.delete(sessionId)
-      return
-    }
-    state.trackedComputerUseSessionIds.add(sessionId)
-  }
-
-  private async releaseTrackedComputerUseSessions(
-    state: ServerState,
-    client: CodexDynamicMcpClient,
-    reason: CodexDynamicMcpReleaseReason
-  ): Promise<void> {
-    if (state.config.id !== GUI_COMPUTER_USE_MCP_SERVER_NAME || state.trackedComputerUseSessionIds.size === 0) return
-    const sessionIds = [...state.trackedComputerUseSessionIds]
-    state.trackedComputerUseSessionIds.clear()
-    await Promise.all(sessionIds.map(async (sessionId) => {
-      this.recordLifecycleEvent(state, {
-        event: 'computer_use_release_requested',
-        reason,
-        sessionId,
-        toolName: COMPUTER_USE_MCP_TOOL_NAME
-      })
-      await client.callTool({
-        name: COMPUTER_USE_MCP_TOOL_NAME,
-        arguments: {
-          action: 'release_target',
-          computerUseSessionId: sessionId,
-          reason
-        }
-      }, {
-        timeout: Math.min(state.config.timeoutMs ?? DEFAULT_TIMEOUT_MS, 5_000)
-      }).catch(() => undefined)
-    }))
-  }
-
   private recordLifecycleEvent(
     state: ServerState,
     event: Omit<CodexDynamicMcpLifecycleEvent, 'at' | 'serverId' | 'namespace'>
@@ -496,6 +475,8 @@ export class CodexDynamicMcpToolBridge {
 }
 
 async function createSdkMcpClient(server: CodexDynamicMcpServerConfig): Promise<CodexDynamicMcpClient> {
+  const startedAt = mainPerformanceMonitor.now()
+  mainPerformanceMonitor.count('main.codex.dynamicMcp.client.connect')
   const client = new Client({ name: `sciforge-codex-${server.id}`, version: '0.1.0' })
   const transport = new StdioClientTransport({
     command: server.command,
@@ -518,6 +499,10 @@ async function createSdkMcpClient(server: CodexDynamicMcpServerConfig): Promise<
     await client.connect(transport, { timeout })
   } catch (error) {
     throw withStderr(error)
+  } finally {
+    mainPerformanceMonitor.sample('main.codex.dynamicMcp.client.connect.duration', mainPerformanceMonitor.now() - startedAt, {
+      serverId: server.id
+    })
   }
   return {
     listTools: (options) => {
@@ -605,20 +590,9 @@ function mcpToolArgumentsForRequest(
   tool: CatalogTool,
   request: CodexAppServerDynamicToolCallRequest
 ): Record<string, unknown> {
-  const args = recordArguments(request.arguments)
-  if (state.config.id !== GUI_COMPUTER_USE_MCP_SERVER_NAME || tool.originalName !== COMPUTER_USE_MCP_TOOL_NAME) {
-    return args
-  }
-  const threadId = request.threadId ?? `request:${String(request.requestId)}`
-  const turnId = request.turnId
-  const agentId = `codex:${threadId}`
-  return {
-    ...args,
-    agentId,
-    threadId,
-    ...(turnId ? { turnId } : {}),
-    computerUseSessionId: agentId
-  }
+  void state
+  void tool
+  return recordArguments(request.arguments)
 }
 
 function schemaSafeToolArguments(

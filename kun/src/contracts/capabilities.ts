@@ -241,7 +241,7 @@ export const RuntimeCapabilityManifest = z
       maxResults: z.number().int().positive()
     }).strict(),
     computerUse: RuntimeCapabilityState.extend({
-      server: z.literal('service').optional(),
+      server: z.literal('mcp').optional(),
       toolName: z.literal('computer_use').optional(),
       backend: z.literal('gui-owl').optional(),
       inputIsolation: z.literal('host-approved').optional(),
@@ -385,7 +385,7 @@ export function buildRuntimeCapabilityManifest(input: {
       ...computerUseState,
       ...(computerUseState.available
         ? {
-            server: 'service',
+            server: 'mcp',
             toolName: 'computer_use',
             backend: 'gui-owl',
             inputIsolation: 'host-approved',
@@ -509,7 +509,7 @@ function computerUseCapabilityState(input: {
     status: 'unavailable',
     enabled: true,
     available: false,
-    reason: input?.reason ?? 'GUI-Owl computer-use sidecar is not configured'
+    reason: input?.reason ?? 'GUI-Owl computer-use MCP server is not configured'
   }
 }
 

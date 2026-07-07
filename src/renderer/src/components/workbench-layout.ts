@@ -25,7 +25,7 @@ const RIGHT_PANEL_MIN = 0
 const RIGHT_PANEL_MAX = Number.POSITIVE_INFINITY
 const SIDEBAR_HARD_MIN = 180
 const MAIN_MIN_WIDTH = 0
-const PANEL_RESIZE_HANDLE_WIDTH = 5
+const PANEL_RESIZE_HANDLE_WIDTH = 7
 const TERMINAL_HEIGHT_DEFAULT = 360
 const TERMINAL_HEIGHT_MIN = 220
 const TERMINAL_HEIGHT_MAX = 760
@@ -64,13 +64,13 @@ export function readStoredRightPanelMode(): RightPanelMode {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, 'figure-style')
     return 'figure-style'
   }
-  return raw === 'todo' || raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'figure-style'
+  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'figure-style'
     ? raw
     : null
 }
 
 export function persistRightPanelMode(mode: RightPanelMode): void {
-  if (mode === 'todo' || mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'figure-style') {
+  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'figure-style') {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, mode)
   } else {
     removeBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
@@ -280,9 +280,17 @@ export function useWorkbenchLayout({
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return
     event.preventDefault()
+    event.stopPropagation()
     const startX = event.clientX
     const startLeft = leftSidebarWidth
     const startRight = rightSidebarWidth
+    const target = event.currentTarget
+    const pointerId = event.pointerId
+    try {
+      target.setPointerCapture(pointerId)
+    } catch {
+      // Pointer capture can fail if the pointer was already released.
+    }
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
     document.body.style.cursor = 'col-resize'
@@ -305,22 +313,37 @@ export function useWorkbenchLayout({
     }
 
     const onUp = (): void => {
+      try {
+        if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      } catch {
+        // The browser may release capture before our cleanup runs.
+      }
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevUserSelect
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   const beginRightResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0 || !rightPanelVisible) return
     event.preventDefault()
+    event.stopPropagation()
     const startX = event.clientX
     const startLeft = leftSidebarWidth
     const startRight = rightSidebarWidth
+    const target = event.currentTarget
+    const pointerId = event.pointerId
+    try {
+      target.setPointerCapture(pointerId)
+    } catch {
+      // Pointer capture can fail if the pointer was already released.
+    }
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
     document.body.style.cursor = 'col-resize'
@@ -343,21 +366,36 @@ export function useWorkbenchLayout({
     }
 
     const onUp = (): void => {
+      try {
+        if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      } catch {
+        // The browser may release capture before our cleanup runs.
+      }
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevUserSelect
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   const beginTerminalResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0 || !terminalOpen) return
     event.preventDefault()
+    event.stopPropagation()
     const startY = event.clientY
     const startHeight = terminalHeight
+    const target = event.currentTarget
+    const pointerId = event.pointerId
+    try {
+      target.setPointerCapture(pointerId)
+    } catch {
+      // Pointer capture can fail if the pointer was already released.
+    }
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
     document.body.style.cursor = 'row-resize'
@@ -371,14 +409,21 @@ export function useWorkbenchLayout({
     }
 
     const onUp = (): void => {
+      try {
+        if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      } catch {
+        // The browser may release capture before our cleanup runs.
+      }
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevUserSelect
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   const toggleTerminal = (): void => {

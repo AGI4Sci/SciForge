@@ -3,25 +3,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { EditorInfo } from '@shared/editor'
 import type { GuiUpdateState } from '@shared/gui-update'
-import type { AgentRuntimeChild, AgentRuntimeChildStatus } from '@shared/agent-runtime-contract'
 import {
   ArrowUpCircle,
   Bot,
   Check,
-  CheckCircle2,
   ChevronDown,
-  CircleAlert,
-  CircleHelp,
   Code2,
   ClipboardList,
-  Clock3,
   Download,
   ExternalLink,
   FileEdit,
   FolderOpen,
   Globe2,
-  List,
-  ListTodo,
   Loader2,
   MessageCircleMore,
   Network,
@@ -64,49 +57,10 @@ type Props = {
   onOpenSideChat?: () => void
   childAgentCount?: number
   childAgentRunningCount?: number
-  childAgents?: AgentRuntimeChild[]
   childAgentsOpen?: boolean
   onOpenChildAgents?: () => void
-  onOpenChildAgent?: (childId: string) => void
   terminalOpen?: boolean
   onToggleTerminal?: () => void
-}
-
-function childAgentMenuName(child: AgentRuntimeChild): string {
-  return child.name?.trim() || child.label?.trim() || child.id.trim() || 'child'
-}
-
-function childAgentStatusOrder(status: AgentRuntimeChildStatus): number {
-  if (status === 'running') return 0
-  if (status === 'queued') return 1
-  return 2
-}
-
-function childAgentStatusText(status: AgentRuntimeChildStatus, t: (key: string) => string): string {
-  switch (status) {
-    case 'queued':
-      return t('sidebarChildrenStatusQueued')
-    case 'running':
-      return t('sidebarChildrenStatusRunning')
-    case 'completed':
-      return t('sidebarChildrenStatusCompleted')
-    case 'failed':
-      return t('sidebarChildrenStatusFailed')
-    case 'aborted':
-      return t('sidebarChildrenStatusAborted')
-    case 'unknown':
-    default:
-      return t('sidebarChildrenStatusUnknown')
-  }
-}
-
-function ChildAgentMenuStatusIcon({ status }: { status: AgentRuntimeChildStatus }): ReactElement {
-  const className = 'h-3.5 w-3.5 shrink-0'
-  if (status === 'running') return <Loader2 className={`${className} animate-spin text-emerald-600`} strokeWidth={2} />
-  if (status === 'queued') return <Clock3 className={`${className} text-amber-600`} strokeWidth={1.8} />
-  if (status === 'completed') return <CheckCircle2 className={`${className} text-ds-faint`} strokeWidth={1.8} />
-  if (status === 'failed' || status === 'aborted') return <CircleAlert className={`${className} text-red-500`} strokeWidth={1.8} />
-  return <CircleHelp className={`${className} text-ds-faint`} strokeWidth={1.8} />
 }
 
 export function WorkbenchTopBar({
@@ -122,10 +76,8 @@ export function WorkbenchTopBar({
   onOpenSideChat,
   childAgentCount = 0,
   childAgentRunningCount = 0,
-  childAgents = [],
   childAgentsOpen = false,
   onOpenChildAgents,
-  onOpenChildAgent,
   terminalOpen = false,
   onToggleTerminal
 }: Props): ReactElement {
@@ -133,7 +85,6 @@ export function WorkbenchTopBar({
   const [editors, setEditors] = useState<EditorInfo[]>([])
   const [selectedEditorId, setSelectedEditorId] = useState(() => readPreferredEditorId() ?? '')
   const [editorMenuOpen, setEditorMenuOpen] = useState(false)
-  const [environmentMenuOpen, setEnvironmentMenuOpen] = useState(false)
   const [failedIconIds, setFailedIconIds] = useState<Set<string>>(() => new Set())
   const [guiUpdateState, setGuiUpdateState] = useState<GuiUpdateState>({ status: 'idle' })
   const [applyingGuiUpdate, setApplyingGuiUpdate] = useState(false)
@@ -141,13 +92,8 @@ export function WorkbenchTopBar({
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const editorMenuButtonRef = useRef<HTMLButtonElement>(null)
   const editorMenuPanelRef = useRef<HTMLDivElement>(null)
-  const environmentMenuRef = useRef<HTMLDivElement>(null)
-  const environmentMenuButtonRef = useRef<HTMLButtonElement>(null)
-  const environmentMenuPanelRef = useRef<HTMLDivElement>(null)
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
-  const [environmentMenuPosition, setEnvironmentMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
   const items = [
-    { mode: 'todo' as const, label: t('rightPanelTodo'), icon: ListTodo },
     ...(paperRadarEnabled ? [{ mode: 'paper' as const, label: t('rightPanelPaperRadar'), icon: Newspaper }] : []),
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
@@ -160,21 +106,6 @@ export function WorkbenchTopBar({
   const selectedEditor = useMemo(
     () => editors.find((editor) => editor.id === selectedEditorId) ?? editors[0],
     [editors, selectedEditorId]
-  )
-  const childAgentMenuItems = useMemo(
-    () =>
-      [...childAgents]
-        .sort((a, b) => {
-          const byStatus = childAgentStatusOrder(a.status) - childAgentStatusOrder(b.status)
-          if (byStatus !== 0) return byStatus
-          const parsedATime = Date.parse(a.updatedAt ?? a.startedAt ?? a.createdAt ?? '')
-          const parsedBTime = Date.parse(b.updatedAt ?? b.startedAt ?? b.createdAt ?? '')
-          const aTime = Number.isFinite(parsedATime) ? parsedATime : 0
-          const bTime = Number.isFinite(parsedBTime) ? parsedBTime : 0
-          if (aTime !== bTime) return bTime - aTime
-          return childAgentMenuName(a).localeCompare(childAgentMenuName(b))
-        }),
-    [childAgents]
   )
 
   useEffect(() => {
@@ -215,20 +146,6 @@ export function WorkbenchTopBar({
     setEditorMenuPosition({ left, top: rect.bottom + 8, width: menuWidth })
   }, [])
 
-  const updateEnvironmentMenuPosition = useCallback((): void => {
-    const anchor = environmentMenuButtonRef.current
-    if (!anchor || typeof window === 'undefined') {
-      setEnvironmentMenuPosition(null)
-      return
-    }
-
-    const rect = anchor.getBoundingClientRect()
-    const viewportWidth = window.innerWidth
-    const menuWidth = Math.min(328, Math.max(220, viewportWidth - 16))
-    const left = Math.min(Math.max(8, rect.right - menuWidth), Math.max(8, viewportWidth - menuWidth - 8))
-    setEnvironmentMenuPosition({ left, top: rect.bottom + 8, width: menuWidth })
-  }, [])
-
   useEffect(() => {
     if (!editorMenuOpen) {
       setEditorMenuPosition(null)
@@ -258,36 +175,6 @@ export function WorkbenchTopBar({
       window.removeEventListener('keydown', onEscape)
     }
   }, [editorMenuOpen, updateEditorMenuPosition])
-
-  useEffect(() => {
-    if (!environmentMenuOpen) {
-      setEnvironmentMenuPosition(null)
-      return
-    }
-
-    updateEnvironmentMenuPosition()
-
-    const onPointerDown = (event: PointerEvent): void => {
-      const target = event.target
-      if (!(target instanceof Node)) return
-      if (environmentMenuRef.current?.contains(target) || environmentMenuPanelRef.current?.contains(target)) return
-      setEnvironmentMenuOpen(false)
-    }
-    const onEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setEnvironmentMenuOpen(false)
-    }
-
-    window.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('resize', updateEnvironmentMenuPosition)
-    window.addEventListener('scroll', updateEnvironmentMenuPosition, true)
-    window.addEventListener('keydown', onEscape)
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown)
-      window.removeEventListener('resize', updateEnvironmentMenuPosition)
-      window.removeEventListener('scroll', updateEnvironmentMenuPosition, true)
-      window.removeEventListener('keydown', onEscape)
-    }
-  }, [environmentMenuOpen, updateEnvironmentMenuPosition])
 
   useEffect(() => {
     if (typeof window.sciforge?.onGuiUpdateState !== 'function') return
@@ -377,14 +264,6 @@ export function WorkbenchTopBar({
     setEditorMenuOpen((open) => {
       const nextOpen = !open
       if (nextOpen) updateEditorMenuPosition()
-      return nextOpen
-    })
-  }
-
-  const toggleEnvironmentMenu = (): void => {
-    setEnvironmentMenuOpen((open) => {
-      const nextOpen = !open
-      if (nextOpen) updateEnvironmentMenuPosition()
       return nextOpen
     })
   }
@@ -522,75 +401,6 @@ export function WorkbenchTopBar({
       </div>
     ) : null
 
-  const environmentMenu =
-    environmentMenuOpen && environmentMenuPosition ? (
-      <div
-        ref={environmentMenuPanelRef}
-        role="menu"
-        aria-label={t('environmentMenuTitle')}
-        style={{
-          left: environmentMenuPosition.left,
-          top: environmentMenuPosition.top,
-          width: environmentMenuPosition.width
-        }}
-        className="ds-card-strong fixed z-[1001] max-h-[min(32rem,calc(100vh-3rem))] overflow-y-auto rounded-[18px] border border-ds-border px-3 py-3 shadow-[0_18px_52px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:shadow-[0_22px_58px_rgba(0,0,0,0.38)]"
-      >
-        <div className="text-[13px] font-semibold text-ds-ink">{t('environmentMenuTitle')}</div>
-        <div className="mt-3 space-y-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ds-faint">
-            {t('environmentMenuSectionEnvironment')}
-          </div>
-          <div className="flex min-h-9 items-center gap-2 rounded-lg px-1.5 text-[13px] text-ds-muted">
-            <FolderOpen className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.75} />
-            <span className="min-w-0 flex-1 truncate">
-              {workspaceRoot.trim() || t('environmentMenuNoWorkspace')}
-            </span>
-          </div>
-        </div>
-        <div className="mt-3 border-t border-ds-border-muted pt-3">
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ds-faint">
-            {t('environmentMenuSectionSubagents')}
-          </div>
-          {childAgentMenuItems.length > 0 ? (
-            <div className="space-y-1">
-              {childAgentMenuItems.map((child) => {
-                const name = childAgentMenuName(child)
-                const status = childAgentStatusText(child.status, t)
-                return (
-                  <button
-                    key={child.id}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setEnvironmentMenuOpen(false)
-                      if (onOpenChildAgent) {
-                        onOpenChildAgent(child.id)
-                      } else {
-                        onOpenChildAgents?.()
-                      }
-                    }}
-                    className="flex min-h-10 w-full items-center gap-2 rounded-lg px-1.5 text-left text-[13px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                  >
-                    <Bot className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.85} />
-                    <span className="min-w-0 flex-1 truncate">{name}</span>
-                    <span className="inline-flex shrink-0 items-center gap-1 text-[11.5px] text-ds-faint">
-                      <ChildAgentMenuStatusIcon status={child.status} />
-                      <span>{status}</span>
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="flex min-h-10 items-center gap-2 rounded-lg px-1.5 text-[13px] text-ds-faint">
-              <Bot className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-              <span>{t('environmentMenuNoSubagents')}</span>
-            </div>
-          )}
-        </div>
-      </div>
-    ) : null
-
   return (
     <div className="chat-workbench-topbar ds-no-drag flex min-w-0 shrink-0 flex-nowrap items-center justify-end gap-1">
       {guiUpdateAction ? (
@@ -643,29 +453,6 @@ export function WorkbenchTopBar({
         </button>
 
         {typeof document === 'undefined' ? editorMenu : createPortal(editorMenu, document.body)}
-      </div>
-
-      <div ref={environmentMenuRef} className="relative inline-flex">
-        <button
-          ref={environmentMenuButtonRef}
-          type="button"
-          onClick={toggleEnvironmentMenu}
-          className={`relative rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
-            environmentMenuOpen
-              ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
-              : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
-          }`}
-          aria-label={t('environmentMenuTitle')}
-          aria-expanded={environmentMenuOpen}
-          aria-haspopup="menu"
-          title={t('environmentMenuTitle')}
-        >
-          <List className="h-4 w-4" strokeWidth={1.8} />
-          {childAgentRunningCount > 0 ? (
-            <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.18)]" />
-          ) : null}
-        </button>
-        {typeof document === 'undefined' ? environmentMenu : createPortal(environmentMenu, document.body)}
       </div>
 
       {onOpenChildAgents && childAgentCount > 0 ? (

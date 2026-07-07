@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "MIT",
   "private": false,
-  "description": "Model-Router-backed vision computer-use worker: turns one natural-language task into desktop actions through a user-configured routed model. Exposed as an MCP stdio server and an HTTP ServiceResult sidecar.",
+  "description": "GUI-Owl grounding computer-use worker: turns one natural-language task into desktop actions through a package-default OpenAI-compatible model profile. Exposed as an MCP stdio server and an HTTP ServiceResult sidecar.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "runtime": "python",

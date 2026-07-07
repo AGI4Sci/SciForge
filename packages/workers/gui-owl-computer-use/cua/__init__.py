@@ -1,8 +1,8 @@
 """SciForge Computer-Use plugin.
 
-The worker routes model calls through SciForge Model Router, executes approved
-desktop actions on the local Windows/Mac/Linux machine, and returns a
-ServiceResult (evidence/trace), never a final answer.
+The worker routes model calls through an OpenAI-compatible grounding API,
+executes approved desktop actions on the local Windows/Mac/Linux machine, and
+returns a ServiceResult (evidence/trace), never a final answer.
 """
 import os as _os
 import sys as _sys

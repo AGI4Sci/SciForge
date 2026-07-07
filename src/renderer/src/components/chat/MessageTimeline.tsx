@@ -27,6 +27,7 @@ import {
 } from './message-timeline-turns'
 import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
+import { performanceMonitor } from '../../lib/performance-monitor'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -59,6 +60,24 @@ type Props = {
 
 const TURN_PAGE_SIZE = 18
 const AUTO_COLLAPSE_THRESHOLD = 24
+
+function useStableOptionalCallback<Args extends unknown[]>(
+  callback: ((...args: Args) => void) | undefined
+): ((...args: Args) => void) | undefined {
+  const callbackRef = useRef(callback)
+  const hasCallback = Boolean(callback)
+
+  useEffect(() => {
+    callbackRef.current = callback
+  }, [callback])
+
+  return useMemo(() => {
+    if (!hasCallback) return undefined
+    return (...args: Args): void => {
+      callbackRef.current?.(...args)
+    }
+  }, [hasCallback])
+}
 
 function blockScrollStamp(block: ChatBlock | undefined): string {
   if (!block) return ''
@@ -104,6 +123,7 @@ export function MessageTimeline({
   turnReasoningLastAtByUserIdOverride,
   onOpenImageArtifactInCanvas
 }: Props): ReactElement {
+  const renderStartedAt = performanceMonitor.now()
   const { t } = useTranslation('common')
   const {
     workspaceRoot,
@@ -129,6 +149,9 @@ export function MessageTimeline({
   const liveReasoningMeta = useChatStore((s) =>
     activeThreadId && activeThreadId === s.activeThreadId ? s.liveReasoningMeta : null
   )
+  const stableOnBuildPlan = useStableOptionalCallback(onBuildPlan)
+  const stableOnOpenPlan = useStableOptionalCallback(onOpenPlan)
+  const stableOnOpenImageArtifactInCanvas = useStableOptionalCallback(onOpenImageArtifactInCanvas)
 
   const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
   const hasContent = blocks.length > 0 || live || liveReasoning
@@ -177,14 +200,16 @@ export function MessageTimeline({
       ? Math.max(0, activeThread.forkedFromTurnCount)
       : undefined
 
-  // Tick a clock while a turn is running so the live "Worked for Xs" updates.
-  const [tickNow, setTickNow] = useState(() => Date.now())
   useEffect(() => {
-    if (!effectiveBusy || !effectiveCurrentTurnUserId) return
-    setTickNow(Date.now())
-    const id = window.setInterval(() => setTickNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [effectiveBusy, effectiveCurrentTurnUserId])
+    performanceMonitor.sample('react.commit.MessageTimeline', performanceMonitor.now() - renderStartedAt, {
+      activeThread: activeThreadId ? 'yes' : 'no',
+      blocks: blocks.length,
+      turns: turns.length,
+      visibleTurns: visibleTurns.length,
+      liveChars: live.length,
+      reasoningChars: liveReasoning.length
+    })
+  })
 
   return (
     <div ref={containerRef} className="ds-no-drag flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
@@ -225,11 +250,8 @@ export function MessageTimeline({
           const isLive = !!(userId && effectiveCurrentTurnUserId === userId)
           const startedAt = userId ? effectiveTurnStartedAtByUserId[userId] : undefined
           const recordedDuration = userId ? effectiveTurnDurationByUserId[userId] : undefined
-          const durationMs =
-            recordedDuration ??
-            (isLive && typeof startedAt === 'number'
-              ? Math.max(0, tickNow - startedAt)
-              : undefined)
+          const durationMs = recordedDuration
+          const liveStartedAtMs = isLive && typeof startedAt === 'number' ? startedAt : undefined
           const reasoningFirst = userId ? effectiveTurnReasoningFirstAtByUserId[userId] : undefined
           const reasoningLast = userId ? effectiveTurnReasoningLastAtByUserId[userId] : undefined
           const reasoningDurationMs =
@@ -251,12 +273,13 @@ export function MessageTimeline({
                 liveReasoningMeta={isLatestTurn ? liveReasoningMeta : null}
                 live={isLatestTurn ? live : ''}
                 durationMs={durationMs}
+                liveStartedAtMs={liveStartedAtMs}
                 reasoningDurationMs={reasoningDurationMs}
                 devPreviewCard={isLatestTurn ? devPreviewCard : null}
                 planActionsBusy={planActionsBusy}
-                onBuildPlan={onBuildPlan}
-                onOpenPlan={onOpenPlan}
-                onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
+                onBuildPlan={stableOnBuildPlan}
+                onOpenPlan={stableOnOpenPlan}
+                onOpenImageArtifactInCanvas={stableOnOpenImageArtifactInCanvas}
                 viewportRef={containerRef}
               />
             </Fragment>
@@ -291,11 +314,11 @@ export function MessageTimeline({
             liveReasoningMeta={liveReasoningMeta}
             live={live}
             devPreviewCard={devPreviewCard}
-            onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
+            onOpenImageArtifactInCanvas={stableOnOpenImageArtifactInCanvas}
             viewportRef={containerRef}
-            durationMs={
+            liveStartedAtMs={
               effectiveCurrentTurnUserId && typeof effectiveTurnStartedAtByUserId[effectiveCurrentTurnUserId] === 'number'
-                ? Math.max(0, tickNow - effectiveTurnStartedAtByUserId[effectiveCurrentTurnUserId])
+                ? effectiveTurnStartedAtByUserId[effectiveCurrentTurnUserId]
                 : undefined
             }
             reasoningDurationMs={(() => {
@@ -320,6 +343,7 @@ function MessageTurn({
   liveReasoningMeta,
   live,
   durationMs,
+  liveStartedAtMs,
   reasoningDurationMs,
   devPreviewCard,
   planActionsBusy,
@@ -334,6 +358,7 @@ function MessageTurn({
   liveReasoningMeta?: RuntimeDisclosureMetadata | null
   live: string
   durationMs?: number
+  liveStartedAtMs?: number
   reasoningDurationMs?: number
   devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
@@ -417,6 +442,7 @@ function MessageTurn({
             processing={isProcessing}
             stepCount={processBlocks.length}
             durationMs={durationMs}
+            liveStartedAtMs={liveStartedAtMs}
             reasoningDurationMs={reasoningDurationMs}
             expanded={workExpanded}
             onToggle={() => setWorkExpandedOverride((value) => !(value ?? isProcessing))}
@@ -502,6 +528,7 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.liveReasoningMeta === next.liveReasoningMeta &&
   prev.live === next.live &&
   prev.durationMs === next.durationMs &&
+  prev.liveStartedAtMs === next.liveStartedAtMs &&
   prev.reasoningDurationMs === next.reasoningDurationMs &&
   prev.devPreviewCard === next.devPreviewCard &&
   prev.planActionsBusy === next.planActionsBusy &&

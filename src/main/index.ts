@@ -120,6 +120,7 @@ import {
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import type { SciforgeCanvasMcpLaunchConfig } from './sciforge-canvas-mcp-config'
+import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
 import { syncExternalManagedGuiMcpConfig } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
@@ -155,6 +156,7 @@ import {
 } from './local-runtime-process'
 import { RestartBudget, type LocalRuntimeStatus } from './local-runtime-supervisor'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
+import { mainPerformanceMonitor } from './performance-monitor'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HIDDEN_START_ARG = '--hidden'
@@ -298,6 +300,14 @@ function getSciforgeCanvasMcpLaunchConfig(): SciforgeCanvasMcpLaunchConfig {
   }
 }
 
+function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
+  return {
+    appPath: app.getAppPath(),
+    execPath: process.execPath,
+    isPackaged: app.isPackaged
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -376,26 +386,49 @@ function emitRemoteChannelActivity(payload: {
   runtimeId?: AgentRuntimeId
   previousThreadId?: string
 }): void {
+  const startedAt = mainPerformanceMonitor.now()
+  mainPerformanceMonitor.count('main.remoteChannel.activity')
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('remoteChannel:activity', payload)
   }
   devBrowserBridgeServer?.send('remoteChannel:activity', payload)
+  mainPerformanceMonitor.sample('main.remoteChannel.activity.send', mainPerformanceMonitor.now() - startedAt)
 }
 
 const codexRuntimeEventSink: CodexRuntimeEventSink = {
   send(channel, payload) {
+    const startedAt = mainPerformanceMonitor.now()
+    const eventKind = codexRuntimeEventKind(payload)
+    mainPerformanceMonitor.count('main.codex.sink')
+    mainPerformanceMonitor.count(`main.codex.sink.${channel}`)
+    if (eventKind) mainPerformanceMonitor.count(`main.codex.sink.event.${eventKind}`)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, payload)
     }
     devBrowserBridgeServer?.send(channel, payload)
+    mainPerformanceMonitor.sample('main.codex.sink.send', mainPerformanceMonitor.now() - startedAt, {
+      channel,
+      eventKind
+    })
   }
 }
 
 function emitSettingsChanged(settings: AppSettingsV1): void {
+  const startedAt = mainPerformanceMonitor.now()
+  mainPerformanceMonitor.count('main.settings.changed')
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', settings)
   }
   devBrowserBridgeServer?.send('settings:changed', settings)
+  mainPerformanceMonitor.sample('main.settings.changed.send', mainPerformanceMonitor.now() - startedAt)
+}
+
+function codexRuntimeEventKind(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const event = (payload as { event?: unknown }).event
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return undefined
+  const kind = (event as { kind?: unknown }).kind
+  return typeof kind === 'string' && kind.trim() ? kind.trim() : undefined
 }
 
 function suppressModelRouterConfigFileWatch(durationMs = 1_000): void {
@@ -471,7 +504,8 @@ function getCodexRuntime(): CodexRuntimeService {
     scientificPlottingMcpLaunch: getScientificPlottingMcpLaunchConfig(),
     imageGenerationMcpLaunch: getImageGenerationMcpLaunchConfig(),
     pptMasterMcpLaunch: getPptMasterMcpLaunchConfig(),
-    sciforgeCanvasMcpLaunch: getSciforgeCanvasMcpLaunchConfig()
+    sciforgeCanvasMcpLaunch: getSciforgeCanvasMcpLaunchConfig(),
+    computerUseMcpLaunch: getComputerUseMcpLaunchConfig()
   })
   return codexRuntime
 }
@@ -483,7 +517,8 @@ function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
     storageRoot: join(app.getPath('userData'), 'claude-code-runtime'),
     managedConfigDir: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-claude-code', 'config')
-      : join(process.cwd(), '.claude-code-runtime', 'config')
+      : join(process.cwd(), '.claude-code-runtime', 'config'),
+    computerUseMcpLaunch: getComputerUseMcpLaunchConfig()
   })
   return claudeCodeRuntime
 }
@@ -857,6 +892,9 @@ let managedLocalRuntimePortOverride: { configuredPort: number; port: number } | 
 let runtimeRestartBudgetResetTimer: NodeJS.Timeout | null = null
 
 function publishRuntimeStatus(status: Omit<LocalRuntimeStatus, 'at'>): void {
+  const startedAt = mainPerformanceMonitor.now()
+  mainPerformanceMonitor.count('main.runtime.status')
+  mainPerformanceMonitor.count(`main.runtime.status.${status.state}`)
   const full: LocalRuntimeStatus = { ...status, at: new Date().toISOString() }
   lastRuntimeStatus = full
   logWarn('runtime-status', `${full.state} (${full.source})${full.message ? `: ${full.message}` : ''}`)
@@ -864,6 +902,10 @@ function publishRuntimeStatus(status: Omit<LocalRuntimeStatus, 'at'>): void {
     if (!win.isDestroyed()) win.webContents.send('runtime:status', full)
   }
   devBrowserBridgeServer?.send('runtime:status', full)
+  mainPerformanceMonitor.sample('main.runtime.status.send', mainPerformanceMonitor.now() - startedAt, {
+    state: status.state,
+    source: status.source
+  })
 }
 
 function noteRuntimeHealthy(source: string): void {
@@ -962,7 +1004,7 @@ async function superviseLocalRuntimeCrash(info: LocalRuntimeUnexpectedExitInfo):
 function startRuntimeWatchdog(): void {
   if (runtimeWatchdogTimer) return
   const timer = setInterval(() => {
-    void runtimeWatchdogTick().catch((error: unknown) => {
+    void runRuntimeWatchdogTick().catch((error: unknown) => {
       logWarn('local-runtime-watchdog', 'Watchdog tick failed.', {
         message: error instanceof Error ? error.message : String(error)
       })
@@ -979,6 +1021,16 @@ function stopRuntimeWatchdog(): void {
   }
   runtimeWatchdogFailures = 0
   clearRuntimeRestartBudgetReset()
+}
+
+async function runRuntimeWatchdogTick(): Promise<void> {
+  const startedAt = mainPerformanceMonitor.now()
+  mainPerformanceMonitor.count('main.runtime.watchdog.tick')
+  try {
+    await runtimeWatchdogTick()
+  } finally {
+    mainPerformanceMonitor.sample('main.runtime.watchdog.tick.duration', mainPerformanceMonitor.now() - startedAt)
+  }
 }
 
 async function runtimeWatchdogTick(): Promise<void> {
@@ -1968,6 +2020,7 @@ app.whenReady().then(async () => {
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
+    getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     ensureEvidenceDagReady: async () => {
       const settings = await store.load()

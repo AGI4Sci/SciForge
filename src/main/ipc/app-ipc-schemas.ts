@@ -160,6 +160,8 @@ export const agentRuntimeReadThreadPayloadSchema = z.object({
   threadId: trimmedString(MAX_ID_LENGTH)
 }).strict()
 
+export const agentRuntimeReadThreadSidebarProbePayloadSchema = agentRuntimeReadThreadPayloadSchema
+
 export const agentRuntimeStartTurnPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),

@@ -420,7 +420,7 @@ describe('normalizeCodexEvent', () => {
           type: 'dynamicToolCall',
           id: 'mcp-1',
           tool: 'computer_use',
-          server: 'gui_computer_use',
+          server: 'gui_owl_computer_use',
           namespace: 'computer-use',
           status: 'running',
           arguments: {
@@ -439,9 +439,9 @@ describe('normalizeCodexEvent', () => {
         summary: 'computer_use',
         status: 'running',
         toolKind: 'tool_call',
-        meta: {
-          toolName: 'computer_use',
-          server: 'gui_computer_use',
+          meta: {
+            toolName: 'computer_use',
+            server: 'gui_owl_computer_use',
           namespace: 'computer-use',
           arguments: {
             action: 'click',

@@ -5,6 +5,7 @@ import {
   filterThreadsForSidebarSummary,
   filterThreadsForSidebar,
   hasThreadsRequiringSidebarVisibilityInspection,
+  SIDEBAR_DETAIL_INSPECTION_CONCURRENCY,
   SIDEBAR_VISIBILITY_INSPECTION_LIMIT,
   shouldHideThreadFromSidebarByBlocks,
   shouldHideThreadFromSidebarByLineage,
@@ -195,6 +196,21 @@ describe('thread-sidebar-visibility', () => {
     expect(getThreadDetail).toHaveBeenCalledWith('thr_gui0001')
   })
 
+  it('uses sidebar probes instead of full thread details when available', async () => {
+    const fallbackThread = thread({ id: 'thr_probe_title', title: 'New Thread' })
+    const getThreadDetail = vi.fn(async () => ({ blocks: [] }))
+    const getThreadSidebarProbe = vi.fn(async () => ({ text: 'Summarize the AI4AI benchmarks' }))
+
+    const visible = await filterThreadsForSidebar([fallbackThread], {
+      getThreadDetail,
+      getThreadSidebarProbe
+    })
+
+    expect(getThreadSidebarProbe).toHaveBeenCalledWith('thr_probe_title')
+    expect(getThreadDetail).not.toHaveBeenCalled()
+    expect(visible).toEqual([{ ...fallbackThread, title: 'Summarize the AI4AI benchmarks' }])
+  })
+
   it('limits suspicious detail reads to the newest fallback titled threads', async () => {
     const suspiciousThreads = Array.from(
       { length: SIDEBAR_VISIBILITY_INSPECTION_LIMIT + 3 },
@@ -223,6 +239,37 @@ describe('thread-sidebar-visibility', () => {
     expect(getThreadDetail).toHaveBeenCalledTimes(SIDEBAR_VISIBILITY_INSPECTION_LIMIT)
     expect(getThreadDetail.mock.calls.map(([threadId]) => threadId)).toEqual(inspectedByPriority)
     expect(visible.map((thread) => thread.id)).toEqual(visibleInspectedThreads)
+  })
+
+  it('limits concurrent suspicious detail reads', async () => {
+    const suspiciousThreads = Array.from(
+      { length: SIDEBAR_DETAIL_INSPECTION_CONCURRENCY + 4 },
+      (_, index) => {
+        const id = `thr_concurrent_${index}`
+        return thread({
+          id,
+          title: 'New Thread',
+          updatedAt: new Date(Date.UTC(2026, 4, index + 1)).toISOString()
+        })
+      }
+    )
+    let activeReads = 0
+    let maxActiveReads = 0
+    const getThreadDetail = vi.fn(async (threadId: string) => {
+      activeReads += 1
+      maxActiveReads = Math.max(maxActiveReads, activeReads)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      activeReads -= 1
+      return { blocks: [userBlock(`real content ${threadId}`)] }
+    })
+
+    const visible = await filterThreadsForSidebar(suspiciousThreads, { getThreadDetail }, {
+      maxDetailInspections: suspiciousThreads.length
+    })
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(suspiciousThreads.length)
+    expect(maxActiveReads).toBeLessThanOrEqual(SIDEBAR_DETAIL_INSPECTION_CONCURRENCY)
+    expect(visible).toHaveLength(suspiciousThreads.length)
   })
 
   it('derives display titles for fallback titled threads when detail shows real content', async () => {

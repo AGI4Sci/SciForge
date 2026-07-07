@@ -13,6 +13,7 @@ import {
   type SandboxMode
 } from '../../../shared/app-settings'
 import { buildClaudeCodeManagedGuiMcpServers } from '../../gui-mcp-registry'
+import type { ComputerUseMcpLaunchConfig } from '../../computer-use-mcp-config'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -50,6 +51,7 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   reasoningEffort?: string
   env?: NodeJS.ProcessEnv
   managedConfigDir?: string
+  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
 }): Promise<ClaudeCodeSdkLaunchConfig> {
   const runtime = getClaudeRuntimeSettings(options.settings)
   const command = runtime.command.trim()
@@ -70,7 +72,7 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   })
   const extraArgs = claudeCodeSdkExtraArgs(runtime.extraArgs)
   const pathToClaudeCodeExecutable = command === 'claude' ? undefined : command
-  const mcpServers = claudeCodeMcpServers()
+  const mcpServers = claudeCodeMcpServers(options.settings, options.computerUseMcpLaunch)
   const reasoningOptions = claudeCodeReasoningOptions(options.reasoningEffort)
   const sdkOptions: ClaudeAgentSdkOptions = {
     cwd,
@@ -96,8 +98,16 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   }
 }
 
-function claudeCodeMcpServers(): NonNullable<ClaudeAgentSdkOptions['mcpServers']> {
-  return buildClaudeCodeManagedGuiMcpServers()
+function claudeCodeMcpServers(
+  settings: AppSettingsV1,
+  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
+): NonNullable<ClaudeAgentSdkOptions['mcpServers']> {
+  return buildClaudeCodeManagedGuiMcpServers({
+    settings,
+    computerUseMcp: computerUseMcpLaunch
+      ? { settings, launch: computerUseMcpLaunch }
+      : undefined
+  })
 }
 
 function claudeCodeReasoningOptions(

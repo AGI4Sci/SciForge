@@ -1,7 +1,7 @@
 @echo off
 REM =============================================================================
 REM  One-click launcher: SciForge GUI with the Computer-Use module integrated.
-REM  Double-click to: check Model Router -> start Computer-Use service ->
+REM  Double-click to: check grounding config -> start Computer-Use service ->
 REM  launch the SciForge GUI (npm run dev). Drive your desktop from the GUI chat;
 REM  every real action is gated by an in-app approval prompt.
 REM

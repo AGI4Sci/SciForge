@@ -864,48 +864,59 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     expect(parsed.capabilities.mcp.servers.gui_computer_use).toBeUndefined()
   })
 
-  it('passes an allowed GUI-Owl sidecar URL to the local runtime child without adding the retired MCP', async () => {
+  it('adds the managed computer-use MCP server to local runtime capabilities when configured', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
-    const observedEnvPath = join(tempRoot, 'cua-allowed-child-env.json')
-    const script = writeScript(
-      'cua-env-guard-child.js',
-      [
-        "const fs = require('node:fs')",
-        `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify({`,
-        "  url: process.env.SCIFORGE_CUA_SERVICE_URL ?? null",
-        '}))',
-        "process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port: 8899 }) + '\\n')",
-        "setInterval(() => {}, 1_000)"
-      ].join('\n')
-    )
+    const configPath = join(tempRoot, 'config.json')
     const module = await import('./local-runtime-process')
     const previousSidecarUrl = process.env.SCIFORGE_CUA_SERVICE_URL
+    const previousSidecarToken = process.env.SCIFORGE_CUA_SERVICE_TOKEN
     process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
+    process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'sidecar-token'
 
     try {
-      const settings = createSettings(script)
-      settings.agents.sciforge.dataDir = tempRoot
+      const settings = createSettings('/tmp/fake-local-runtime-child.js')
+      await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings(), {
+        computerUseMcp: {
+          settings,
+          launch: {
+            appPath: '/tmp/sciforge-test-app',
+            execPath: '/tmp/electron',
+            isPackaged: false
+          }
+        }
+      })
 
-      await expect(module.startLocalRuntimeChild(settings)).resolves.toBeUndefined()
-      await module.stopLocalRuntimeChildAndWait()
-
-      const parsed = JSON.parse(readFileSync(join(tempRoot, 'config.json'), 'utf8')) as any
+      const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
       expect(parsed.capabilities.mcp.servers.gui_computer_use).toBeUndefined()
-      expect(JSON.parse(readFileSync(observedEnvPath, 'utf8'))).toEqual({
-        url: 'http://127.0.0.1:3900'
+      expect(parsed.capabilities.mcp.servers.gui_owl_computer_use).toMatchObject({
+        enabled: true,
+        transport: 'stdio',
+        command: '/tmp/electron',
+        args: [
+          '/tmp/sciforge-test-app/out/main/computer-use-mcp-node-entry.js',
+          '--gui-owl-computer-use-mcp-server'
+        ],
+        env: {
+          ELECTRON_RUN_AS_NODE: '1',
+          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+          SCIFORGE_CUA_SERVICE_TOKEN: 'sidecar-token'
+        },
+        trustScope: 'user',
+        timeoutMs: 600000
       })
     } finally {
       if (previousSidecarUrl === undefined) delete process.env.SCIFORGE_CUA_SERVICE_URL
       else process.env.SCIFORGE_CUA_SERVICE_URL = previousSidecarUrl
-      await module.stopLocalRuntimeChildAndWait()
+      if (previousSidecarToken === undefined) delete process.env.SCIFORGE_CUA_SERVICE_TOKEN
+      else process.env.SCIFORGE_CUA_SERVICE_TOKEN = previousSidecarToken
     }
   })
 
-  it('strips unsafe external computer-use service URLs without falling back to the retired MCP', async () => {
+  it('does not pass computer-use sidecar secrets to the local runtime child process', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const observedEnvPath = join(tempRoot, 'cua-child-env.json')
     const script = writeScript(
-      'cua-unsafe-env-child.js',
+      'cua-env-child.js',
       [
         "const fs = require('node:fs')",
         `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify({`,
@@ -921,9 +932,9 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     const previousSidecarUrl = process.env.SCIFORGE_CUA_SERVICE_URL
     const previousSidecarToken = process.env.SCIFORGE_CUA_SERVICE_TOKEN
     const previousLegacyToken = process.env.CUA_SERVICE_TOKEN
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://devbox.local:3900'
-    process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'unsafe-token'
-    process.env.CUA_SERVICE_TOKEN = 'legacy-unsafe-token'
+    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
+    process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'sidecar-token'
+    process.env.CUA_SERVICE_TOKEN = 'legacy-sidecar-token'
 
     try {
       const settings = createSettings(script)
@@ -934,6 +945,7 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
 
       const parsed = JSON.parse(readFileSync(join(tempRoot, 'config.json'), 'utf8')) as any
       expect(parsed.capabilities.mcp.servers.gui_computer_use).toBeUndefined()
+      expect(parsed.capabilities.mcp.servers.gui_owl_computer_use).toBeDefined()
       expect(JSON.parse(readFileSync(observedEnvPath, 'utf8'))).toEqual({
         url: null,
         token: null,
@@ -948,29 +960,6 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       else process.env.CUA_SERVICE_TOKEN = previousLegacyToken
       await module.stopLocalRuntimeChildAndWait()
     }
-  })
-
-  it('classifies external computer-use service URLs by loopback and explicit allowlist', async () => {
-    const module = await import('./local-runtime-process')
-
-    expect(module.externalComputerUseServiceUrlPolicy({
-      SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900'
-    })).toMatchObject({ configured: true, allowed: true, host: '127.0.0.1' })
-    expect(module.externalComputerUseServiceUrlPolicy({
-      SCIFORGE_CUA_SERVICE_URL: 'http://[::1]:3900'
-    })).toMatchObject({ configured: true, allowed: true, host: '::1' })
-    expect(module.externalComputerUseServiceUrlPolicy({
-      SCIFORGE_CUA_SERVICE_URL: 'http://devbox.local:3900'
-    })).toMatchObject({
-      configured: true,
-      allowed: false,
-      host: 'devbox.local',
-      reason: 'non_loopback_without_allowlist'
-    })
-    expect(module.externalComputerUseServiceUrlPolicy({
-      SCIFORGE_CUA_SERVICE_URL: 'http://devbox.local:3900',
-      SCIFORGE_CUA_ALLOWED_HOSTS: 'devbox.local'
-    })).toMatchObject({ configured: true, allowed: true, host: 'devbox.local' })
   })
 
   it('keeps the retired computer-use MCP server absent when computer use is turned off', async () => {

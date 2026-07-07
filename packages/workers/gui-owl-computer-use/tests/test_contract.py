@@ -106,8 +106,8 @@ def test_build_messages_official_multiturn_optional():
     assert any(p.get("type") == "image_url" for p in msgs[-1]["content"])
 
 
-def test_model_calls_use_model_router_responses_optional():
-    """The worker must call Model Router /v1/responses, never a raw provider chat endpoint."""
+def test_grounding_chat_completions_call_optional():
+    """The worker posts OpenAI-compatible chat/completions with configured headers."""
     try:
         from cua import owl_agent
     except Exception:  # noqa: BLE001
@@ -121,7 +121,13 @@ def test_model_calls_use_model_router_responses_optional():
             return None
 
         def json(self):
-            return {"output_text": "Action: wait\n<tool_call>{\"arguments\":{\"action\":\"wait\",\"time\":1}}</tool_call>"}
+            return {
+                "choices": [{
+                    "message": {
+                        "content": "Action: wait\n<tool_call>{\"arguments\":{\"action\":\"wait\",\"time\":1}}</tool_call>"
+                    }
+                }]
+            }
 
     def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002
         calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
@@ -130,9 +136,9 @@ def test_model_calls_use_model_router_responses_optional():
     try:
         owl_agent.requests.post = fake_post
         text = owl_agent.call_owl(
-            "http://127.0.0.1:3892/v1",
-            "sciforge-router",
-            "runtime-token",
+            "http://grounding.example/v1/chat/completions",
+            "gui-owl",
+            "grounding-token",
             [
                 {"role": "system", "content": "system prompt"},
                 {"role": "user", "content": [
@@ -140,34 +146,36 @@ def test_model_calls_use_model_router_responses_optional():
                     {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
                 ]},
             ],
+            extra_headers={"x-original-model": "gui-owl"},
         )
     finally:
         owl_agent.requests.post = original_post
 
     assert "Action: wait" in text
-    assert calls and calls[0]["url"] == "http://127.0.0.1:3892/v1/responses"
-    assert calls[0]["headers"]["Authorization"] == "Bearer runtime-token"
-    assert calls[0]["json"]["model"] == "sciforge-router"
-    assert calls[0]["json"]["instructions"] == "system prompt"
+    assert calls and calls[0]["url"] == "http://grounding.example/v1/chat/completions"
+    assert calls[0]["headers"]["Authorization"] == "Bearer grounding-token"
+    assert calls[0]["headers"]["x-original-model"] == "gui-owl"
+    assert calls[0]["json"]["model"] == "gui-owl"
+    assert calls[0]["json"]["messages"][0] == {"role": "system", "content": "system prompt"}
     serialized = str(calls[0]["json"])
-    assert "/chat/completions" not in calls[0]["url"]
-    assert "input_image" in serialized and "data:image/png;base64,AAAA" in serialized
+    assert "image_url" in serialized and "data:image/png;base64,AAAA" in serialized
 
 
-def test_model_router_responses_url_normalizes_local_base_optional():
-    """Local router base URLs may omit /v1; the worker posts to /v1/responses."""
+def test_grounding_endpoint_url_normalizes_base_optional():
+    """Grounding base URLs may be exact endpoints or /v1 bases."""
     try:
         from cua import owl_agent
     except Exception:  # noqa: BLE001
         return
 
-    assert owl_agent._model_router_responses_url("http://localhost:3892") == "http://localhost:3892/v1/responses"
-    assert owl_agent._model_router_responses_url("http://127.0.0.1:3892/v1/") == "http://127.0.0.1:3892/v1/responses"
-    assert owl_agent._model_router_responses_url("http://[::1]:3892/v1/responses") == "http://[::1]:3892/v1/responses"
+    assert owl_agent._grounding_endpoint_url("http://localhost:8881", "chat_completions") == "http://localhost:8881/v1/chat/completions"
+    assert owl_agent._grounding_endpoint_url("http://127.0.0.1:8881/v1/", "chat_completions") == "http://127.0.0.1:8881/v1/chat/completions"
+    assert owl_agent._grounding_endpoint_url("http://grounding.example/v1/chat/completions", "chat_completions") == "http://grounding.example/v1/chat/completions"
+    assert owl_agent._grounding_endpoint_url("http://[::1]:3892/v1/responses", "responses") == "http://[::1]:3892/v1/responses"
 
 
-def test_model_router_rejects_external_base_url_optional():
-    """CUA_MODEL_ROUTER_BASE_URL cannot be repointed at a raw external provider."""
+def test_grounding_url_rejects_credentials_without_leaking_secrets_optional():
+    """Grounding URL validation rejects embedded credentials without leaking them."""
     try:
         from cua import owl_agent
     except Exception:  # noqa: BLE001
@@ -184,35 +192,46 @@ def test_model_router_rejects_external_base_url_optional():
         owl_agent.requests.post = fake_post
         try:
             owl_agent.call_owl(
-                "https://api.openai.example/v1",
-                "sciforge-router",
+                "https://token-secret@api.openai.example/v1",
+                "gui-owl",
                 "runtime-token-secret",
                 [{"role": "user", "content": "inspect"}],
             )
         except RuntimeError as e:
             msg = str(e)
         else:  # pragma: no cover
-            raise AssertionError("external base URL should raise RuntimeError")
+            raise AssertionError("credentialed base URL should raise RuntimeError")
     finally:
         owl_agent.requests.post = original_post
 
     assert not calls
-    assert "local SciForge Model Router" in msg
-    assert "/v1/responses" in msg
+    assert "CUA_GROUNDING_BASE_URL" in msg
     assert "runtime-token-secret" not in msg
+    assert "token-secret" not in msg
     assert "api.openai.example" not in msg
 
 
-def test_config_normalizes_local_model_router_base_url_optional():
-    """Config stores a local Model Router base URL normalized to /v1."""
+def test_config_normalizes_grounding_base_url_and_headers_optional():
+    """Config stores generic grounding URL, endpoint, and JSON headers."""
     try:
         from cua.config import Config
     except Exception:  # noqa: BLE001
         return
 
-    old = {name: os.environ.get(name) for name in ["CUA_MODEL_ROUTER_BASE_URL"]}
+    names = [
+        "CUA_GROUNDING_BASE_URL",
+        "CUA_GROUNDING_MODEL",
+        "CUA_GROUNDING_API_KEY",
+        "CUA_GROUNDING_ENDPOINT",
+        "CUA_GROUNDING_EXTRA_HEADERS",
+    ]
+    old = {name: os.environ.get(name) for name in names}
     try:
-        os.environ["CUA_MODEL_ROUTER_BASE_URL"] = "http://[::1]:3892/v1/responses"
+        os.environ["CUA_GROUNDING_BASE_URL"] = "http://grounding.example/v1/chat/completions/"
+        os.environ["CUA_GROUNDING_MODEL"] = "gui-owl"
+        os.environ["CUA_GROUNDING_API_KEY"] = "grounding-key"
+        os.environ["CUA_GROUNDING_ENDPOINT"] = "chat/completions"
+        os.environ["CUA_GROUNDING_EXTRA_HEADERS"] = '{"x-original-model":"gui-owl"}'
         cfg = Config()
     finally:
         for name, value in old.items():
@@ -221,19 +240,136 @@ def test_config_normalizes_local_model_router_base_url_optional():
             else:
                 os.environ[name] = value
 
-    assert cfg.model_base_url == "http://[::1]:3892/v1"
+    assert cfg.grounding_base_url == "http://grounding.example/v1/chat/completions"
+    assert cfg.grounding_model == "gui-owl"
+    assert cfg.grounding_api_key == "grounding-key"
+    assert cfg.grounding_endpoint == "chat_completions"
+    assert cfg.grounding_extra_headers == {"x-original-model": "gui-owl"}
 
 
-def test_config_rejects_external_model_router_base_url_optional():
-    """Config validation rejects external provider URLs without leaking secrets."""
+def test_config_uses_package_default_grounding_profile_optional():
+    """GUI-Owl grounding URL/model/header defaults live in the worker package."""
+    try:
+        from cua.config import (
+            Config,
+            DEFAULT_GROUNDING_BASE_URL,
+            DEFAULT_GROUNDING_MODEL,
+            DEFAULT_GROUNDING_EXTRA_HEADERS,
+            DEFAULT_MODEL_ROUTER_BASE_URL,
+            DEFAULT_MODEL_ROUTER_MODEL,
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+    names = [
+        "CUA_GROUNDING_BASE_URL",
+        "CUA_GROUNDING_MODEL",
+        "CUA_GROUNDING_API_KEY",
+        "CUA_GROUNDING_ENDPOINT",
+        "CUA_GROUNDING_EXTRA_HEADERS",
+        "CUA_VISION_BASE_URL",
+        "CUA_VISION_MODEL",
+        "CUA_VISION_API_KEY",
+        "CUA_VISION_ENDPOINT",
+        "CUA_VISION_EXTRA_HEADERS",
+        "SCIFORGE_MODEL_ROUTER_BASE_URL",
+        "SCIFORGE_MODEL_ROUTER_MODEL",
+        "SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY",
+    ]
+    old = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ.pop(name, None)
+        cfg = Config()
+    finally:
+        for name, value in old.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    assert cfg.grounding_base_url == DEFAULT_GROUNDING_BASE_URL
+    assert cfg.grounding_model == DEFAULT_GROUNDING_MODEL
+    assert cfg.grounding_extra_headers == DEFAULT_GROUNDING_EXTRA_HEADERS
+    assert cfg.grounding_api_key == ""
+    assert cfg.vision_base_url == DEFAULT_MODEL_ROUTER_BASE_URL
+    assert cfg.vision_model == DEFAULT_MODEL_ROUTER_MODEL
+    assert cfg.vision_api_key == ""
+
+
+def test_reflector_uses_model_router_vision_config_optional():
+    """Optional reflection is a general vision call, not a GUI-Owl grounding call."""
+    try:
+        from PIL import Image
+        from cua import reflector
+        from cua.config import Config
+    except Exception:  # noqa: BLE001
+        return
+
+    names = [
+        "CUA_VISION_BASE_URL",
+        "CUA_VISION_MODEL",
+        "CUA_VISION_API_KEY",
+        "CUA_GROUNDING_BASE_URL",
+        "CUA_GROUNDING_MODEL",
+        "CUA_GROUNDING_API_KEY",
+    ]
+    old_env = {name: os.environ.get(name) for name in names}
+    old_call = reflector.owl_agent.call_owl
+    calls = []
+
+    def fake_call_owl(base_url, model, api_key, messages, **kwargs):
+        calls.append({
+            "base_url": base_url,
+            "model": model,
+            "api_key": api_key,
+            "kwargs": kwargs,
+            "messages": messages,
+        })
+        return (
+            "### Screenshot Difference ###\nchanged\n"
+            "### Outcome ###\nA\n"
+            "### Error Description ###\nNone\n"
+            "### Progress Status ###\ndone\n"
+        )
+
+    try:
+        os.environ["CUA_VISION_BASE_URL"] = "http://127.0.0.1:3892/v1"
+        os.environ["CUA_VISION_MODEL"] = "sciforge-router"
+        os.environ["CUA_VISION_API_KEY"] = "router-key"
+        os.environ["CUA_GROUNDING_BASE_URL"] = "http://grounding.example/v1/chat/completions"
+        os.environ["CUA_GROUNDING_MODEL"] = "gui-owl"
+        os.environ["CUA_GROUNDING_API_KEY"] = "grounding-key"
+        reflector.owl_agent.call_owl = fake_call_owl
+        cfg = Config()
+        img = Image.new("RGB", (8, 8), (1, 2, 3))
+        res = reflector.reflect(cfg, "task", "", "task", {"action": "wait"}, "wait", img, img)
+    finally:
+        reflector.owl_agent.call_owl = old_call
+        for name, value in old_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    assert res["outcome"] == "A"
+    assert calls and calls[0]["base_url"] == "http://127.0.0.1:3892/v1"
+    assert calls[0]["model"] == "sciforge-router"
+    assert calls[0]["api_key"] == "router-key"
+    assert calls[0]["kwargs"]["base_url_label"] == "CUA_VISION_BASE_URL or SCIFORGE_MODEL_ROUTER_BASE_URL"
+    assert calls[0]["kwargs"]["api_key_label"] == "CUA_VISION_API_KEY or SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY"
+
+
+def test_config_rejects_grounding_url_credentials_optional():
+    """Config validation rejects credentialed grounding URLs without leaking secrets."""
     try:
         from cua.config import Config
     except Exception:  # noqa: BLE001
         return
 
-    old = {name: os.environ.get(name) for name in ["CUA_MODEL_ROUTER_BASE_URL"]}
+    old = {name: os.environ.get(name) for name in ["CUA_GROUNDING_BASE_URL"]}
     try:
-        os.environ["CUA_MODEL_ROUTER_BASE_URL"] = "https://token-secret@api.openai.example/v1"
+        os.environ["CUA_GROUNDING_BASE_URL"] = "https://token-secret@api.openai.example/v1"
         try:
             Config()
         except ValueError as e:
@@ -247,13 +383,13 @@ def test_config_rejects_external_model_router_base_url_optional():
             else:
                 os.environ[name] = value
 
-    assert "local SciForge Model Router" in msg
+    assert "CUA_GROUNDING_BASE_URL" in msg
     assert "token-secret" not in msg
     assert "api.openai.example" not in msg
 
 
 def test_config_ignores_legacy_direct_provider_env_optional():
-    """Legacy direct provider env must not silently re-enable raw model access."""
+    """Legacy direct/model-router env must not configure grounding access."""
     try:
         from cua.config import Config
     except Exception:  # noqa: BLE001
@@ -266,12 +402,16 @@ def test_config_ignores_legacy_direct_provider_env_optional():
         "CUA_MODEL_ROUTER_MODEL",
         "CUA_MODEL_ROUTER_API_KEY",
         "SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY",
+        "CUA_GROUNDING_BASE_URL",
+        "CUA_GROUNDING_MODEL",
+        "CUA_GROUNDING_API_KEY",
+        "CUA_GROUNDING_EXTRA_HEADERS",
     ]}
     try:
         os.environ["CUA_MODEL_BASE_URL"] = "http://raw-provider.local/v1"
         os.environ["CUA_MODEL"] = "raw-model"
         os.environ["CUA_MODEL_API_KEY"] = "raw-key"
-        for name in ["CUA_MODEL_ROUTER_BASE_URL", "CUA_MODEL_ROUTER_MODEL", "CUA_MODEL_ROUTER_API_KEY", "SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY"]:
+        for name in ["CUA_MODEL_ROUTER_BASE_URL", "CUA_MODEL_ROUTER_MODEL", "CUA_MODEL_ROUTER_API_KEY", "SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY", "CUA_GROUNDING_BASE_URL", "CUA_GROUNDING_MODEL", "CUA_GROUNDING_API_KEY", "CUA_GROUNDING_EXTRA_HEADERS"]:
             os.environ.pop(name, None)
         cfg = Config()
     finally:
@@ -281,9 +421,10 @@ def test_config_ignores_legacy_direct_provider_env_optional():
             else:
                 os.environ[name] = value
 
-    assert cfg.model_base_url == ""
-    assert cfg.model_name == "sciforge-router"
-    assert cfg.model_api_key == ""
+    assert cfg.grounding_base_url == "http://10.140.158.130:8881/v1/chat/completions"
+    assert cfg.grounding_model == "gui-owl"
+    assert cfg.grounding_extra_headers == {"x-original-model": "gui-owl"}
+    assert cfg.grounding_api_key == ""
 
 
 def test_http_sidecar_bearer_auth_optional():

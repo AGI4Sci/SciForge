@@ -1,14 +1,14 @@
 ﻿<#
 .SYNOPSIS
   一键启动「集成了 Computer-Use 模块」的 SciForge GUI。
-  One-click launcher for the SciForge GUI with the Computer-Use worker wired through Model Router.
+  One-click launcher for the SciForge GUI with the Computer-Use worker wired through a grounding API.
 
 .DESCRIPTION
   流程 / What it does:
     1. 读取 启动-secrets.local.ps1 (没有则用 .example 并告警)
-    2. 校验 Model Router 连接配置
+    2. 校验 grounding model 本机密钥；URL/model/header 默认写在本包内
     3. 启动 Computer-Use 服务 (packages/workers/gui-owl-computer-use, HTTP :CUA_PORT)
-    4. 设置 SCIFORGE_CUA_SERVICE_URL, 让 GUI 里的主 agent 出现 computer_use 工具
+    4. 设置 SCIFORGE_CUA_SERVICE_URL, 让所有 runtime 通过 gui_owl_computer_use MCP 使用 computer_use
     5. 启动 SciForge GUI (npm run dev)
   在 GUI 里用自然语言下达桌面任务即可; 每次真机动作都会先弹出审批, 同意后才执行。
 
@@ -54,15 +54,17 @@ elseif (Test-Path $secretsExample) { Warn "未找到 启动-secrets.local.ps1, �
 else { Die "缺少 secrets 配置 (启动-secrets.local.ps1 / .example)" }
 
 if (-not $env:CUA_PORT) { $env:CUA_PORT = "3900" }
-if (-not $env:CUA_MODEL_ROUTER_MODEL) { $env:CUA_MODEL_ROUTER_MODEL = "sciforge-router" }
-if (-not $env:CUA_MODEL_ROUTER_BASE_URL) { Die "缺少 CUA_MODEL_ROUTER_BASE_URL; Computer-Use 模型调用必须走 Model Router" }
-if (-not $env:CUA_MODEL_ROUTER_API_KEY -and -not $env:SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY) {
-  Die "缺少 CUA_MODEL_ROUTER_API_KEY 或 SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY; Computer-Use 不能直连 provider"
+if (-not $env:CUA_GROUNDING_BASE_URL) { $env:CUA_GROUNDING_BASE_URL = "http://10.140.158.130:8881/v1/chat/completions" }
+if (-not $env:CUA_GROUNDING_MODEL) { $env:CUA_GROUNDING_MODEL = "gui-owl" }
+if (-not $env:CUA_GROUNDING_ENDPOINT) { $env:CUA_GROUNDING_ENDPOINT = "chat_completions" }
+if (-not $env:CUA_GROUNDING_EXTRA_HEADERS) { $env:CUA_GROUNDING_EXTRA_HEADERS = '{"x-original-model":"gui-owl"}' }
+if (-not $env:CUA_GROUNDING_API_KEY -or $env:CUA_GROUNDING_API_KEY -eq "replace-with-grounding-api-key") {
+  Die "缺少 CUA_GROUNDING_API_KEY; 请通过 启动-secrets.local.ps1 或环境变量提供 grounding API key"
 }
 
 # 真机执行默认开启 (每个动作仍由 GUI 审批门控); -SafeDryRun 关闭。
 $env:CUA_ALLOW_EXECUTE = if ($SafeDryRun) { "false" } else { "true" }
-# 让 GUI 里的 Kun runtime 暴露 computer_use 工具并指向本地服务。
+# 让 GUI-managed MCP wrapper 指向本地 sidecar；Codex/Claude/Kun 统一读取这一路径。
 $env:SCIFORGE_CUA_SERVICE_URL = "http://127.0.0.1:$($env:CUA_PORT)"
 # 生成本次启动专用的本地 sidecar token。Computer-Use 服务和 GUI 子进程都
 # 继承同一个值；没有这个 bearer token 的本机 HTTP 请求不能调用 run/cancel。
@@ -83,28 +85,14 @@ if ($Install) {
   Info "pip install worker requirements"; & python -m pip install -r (Join-Path $worker "requirements.txt"); if ($LASTEXITCODE -ne 0) { Die "pip install 失败" }
 }
 
-# --- 3. Model Router reachability --------------------------------------------
-$tunnel = $null
-if (-not $env:CUA_MODEL_ROUTER_API_KEY) {
-  $env:CUA_MODEL_ROUTER_API_KEY = $env:SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY
-}
-$routerModelsUrl = ($env:CUA_MODEL_ROUTER_BASE_URL.TrimEnd('/')) + "/models"
-$routerOk = $false
-try {
-  Invoke-WebRequest $routerModelsUrl -UseBasicParsing -TimeoutSec 5 -Headers @{ Authorization = "Bearer $($env:CUA_MODEL_ROUTER_API_KEY)" } | Out-Null
-  $routerOk = $true
-} catch {}
-if ($routerOk) { Info "Model Router 可达: $($env:CUA_MODEL_ROUTER_BASE_URL) (model=$($env:CUA_MODEL_ROUTER_MODEL))" }
-else {
-  Warn "Model Router 暂不可达: $($env:CUA_MODEL_ROUTER_BASE_URL)"
-  Warn "  -> 请先启动并配置 Model Router；本脚本不会建立直连模型隧道或启动未核许可证的模型权重。"
-}
+# --- 3. Grounding endpoint config --------------------------------------------
+Info "Grounding endpoint: $($env:CUA_GROUNDING_BASE_URL) (model=$($env:CUA_GROUNDING_MODEL), endpoint=$($env:CUA_GROUNDING_ENDPOINT))"
 
 # --- 4. Computer-Use service -------------------------------------------------
 $server = $null
 try {
   if (-not $SkipService) {
-    Info "启动 Computer-Use 服务 :$($env:CUA_PORT)  (真机执行=$($env:CUA_ALLOW_EXECUTE), 模型路由=$($env:CUA_MODEL_ROUTER_MODEL) @ $($env:CUA_MODEL_ROUTER_BASE_URL))"
+    Info "启动 Computer-Use 服务 :$($env:CUA_PORT)  (真机执行=$($env:CUA_ALLOW_EXECUTE), grounding=$($env:CUA_GROUNDING_MODEL) @ $($env:CUA_GROUNDING_BASE_URL))"
     $server = Start-Process python -ArgumentList @("-m","cua.cli","--http") -PassThru -WorkingDirectory $worker
     $ok = $false
     for ($i = 0; $i -lt 30; $i++) {
@@ -122,5 +110,4 @@ try {
 }
 finally {
   if ($server -and -not $server.HasExited) { Info "停止 Computer-Use 服务"; $server | Stop-Process -Force -ErrorAction SilentlyContinue }
-  if ($tunnel -and -not $tunnel.HasExited) { Info "关闭 SSH 隧道"; $tunnel | Stop-Process -Force -ErrorAction SilentlyContinue }
 }

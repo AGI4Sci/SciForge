@@ -78,6 +78,7 @@ import type {
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
   AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadSidebarProbe,
   AgentRuntimeThreadStartInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
@@ -656,6 +657,9 @@ export type LocalRuntimeStatusPayload = {
   maxAttempts?: number
   at: string
 }
+export type PerformanceSnapshotResult =
+  | { ok: true; snapshot: unknown }
+  | { ok: false; message: string }
 
 export type SciForgeApi = {
   platform: string
@@ -861,6 +865,7 @@ export type SciForgeApi = {
     listThreads: (input?: AgentRuntimeThreadListInput) => Promise<AgentRuntimeThread[]>
     startThread: (input: AgentRuntimeThreadStartInput) => Promise<AgentRuntimeThread>
     readThread: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadDetail>
+    readThreadSidebarProbe: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadSidebarProbe>
     startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
     interruptTurn: (input: AgentRuntimeTurnTargetInput) => Promise<void>
     steerTurn: (input: AgentRuntimeTurnSteerInput) => Promise<void>
@@ -896,6 +901,7 @@ export type SciForgeApi = {
     options?: { workspaceRoot?: string; modelHint?: string; mode?: 'agent' | 'plan' }
   ) => Promise<ScheduleTaskFromTextResult>
   runDesktopCommand: (command: DesktopCommand) => Promise<void>
+  getPerformanceSnapshot: () => Promise<PerformanceSnapshotResult>
   openExternal: (url: string) => Promise<void>
   onDevPreviewNavigate?: (handler: (payload: DevPreviewNavigatePayload) => void) => () => void
   getComputerUsePermissions: () => Promise<ComputerUsePermissions>

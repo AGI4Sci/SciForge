@@ -9,6 +9,7 @@ import {
   agentRuntimeAuxiliaryPayloadSchema,
   agentRuntimeListThreadsPayloadSchema,
   agentRuntimeReadThreadPayloadSchema,
+  agentRuntimeReadThreadSidebarProbePayloadSchema,
   agentRuntimeSessionResumePayloadSchema,
   agentRuntimeStartThreadPayloadSchema,
   agentRuntimeThreadCompactPayloadSchema,
@@ -346,6 +347,7 @@ describe('app-ipc-schemas', () => {
     const cases = [
       ['startThread', agentRuntimeStartThreadPayloadSchema, { title: 'New thread' }],
       ['readThread', agentRuntimeReadThreadPayloadSchema, { threadId: 'thread-1' }],
+      ['readThreadSidebarProbe', agentRuntimeReadThreadSidebarProbePayloadSchema, { threadId: 'thread-1' }],
       ['startTurn', agentRuntimeStartTurnPayloadSchema, { threadId: 'thread-1', text: 'hello' }],
       ['interruptTurn', agentRuntimeTurnTargetPayloadSchema, { threadId: 'thread-1', turnId: 'turn-1' }],
       ['steerTurn', agentRuntimeTurnSteerPayloadSchema, { threadId: 'thread-1', turnId: 'turn-1', text: 'continue' }],

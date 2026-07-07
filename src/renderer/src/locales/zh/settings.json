@@ -20,7 +20,7 @@
   "computerUseRuntimeAccess": "运行时接入",
   "computerUseRuntimeAccessDesc": "选择哪些运行时可以在 GUI-Owl sidecar 可用时使用 computer use。",
   "computerUseBackend": "Backend 状态",
-  "computerUseBackendDesc": "显示已配置 primitive backend、最近一次运行时诊断和已上报的安全属性。",
+  "computerUseBackendDesc": "显示已配置 GUI-Owl sidecar backend、最近一次运行时诊断和已上报的安全属性。",
   "computerUseConfiguredBackend": "配置",
   "computerUseRuntimeBackend": "运行时",
   "computerUsePlatform": "平台",

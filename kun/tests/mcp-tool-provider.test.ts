@@ -348,13 +348,13 @@ describe('MCP tool provider', () => {
     })
   })
 
-  it('injects local runtime computer-use context into direct gui_computer_use calls', async () => {
+  it('exposes gui_owl_computer_use as a flat computer_use MCP tool without context injection', async () => {
     const callInputs: Array<{ name: string; arguments: Record<string, unknown> }> = []
     const config = LocalRuntimeCapabilitiesConfig.parse({
       mcp: {
         enabled: true,
         servers: {
-          gui_computer_use: {
+          gui_owl_computer_use: {
             transport: 'stdio',
             command: 'node',
             trustScope: 'user'
@@ -372,8 +372,7 @@ describe('MCP tool provider', () => {
                 inputSchema: {
                   type: 'object',
                   properties: {
-                    action: { type: 'string' },
-                    targetId: { type: 'string' }
+                    instruction: { type: 'string' }
                   }
                 }
               }
@@ -393,20 +392,21 @@ describe('MCP tool provider', () => {
       })
     })
     const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    expect(built.providers.flatMap((provider) => provider.tools.map((tool) => tool.name))).toEqual(
+      expect.arrayContaining(['mcp_gui_owl_computer_use_computer_use', 'computer_use'])
+    )
 
     await host.execute({
       callId: 'call_computer_use',
-      toolName: 'mcp_gui_computer_use_computer_use',
-      arguments: { action: 'bind_target', targetId: 'desktop:global' }
+      toolName: 'computer_use',
+      arguments: { instruction: 'open the settings window' }
     }, buildContext('/tmp/project'))
 
-    expect(callInputs[0]?.arguments).toMatchObject({
-      action: 'bind_target',
-      targetId: 'desktop:global',
-      agentId: 'sciforge-runtime:thr_1',
-      threadId: 'thr_1',
-      turnId: 'turn_1',
-      computerUseSessionId: 'sciforge-runtime:thr_1'
+    expect(callInputs[0]).toEqual({
+      name: 'computer_use',
+      arguments: {
+        instruction: 'open the settings window'
+      }
     })
   })
 
@@ -524,7 +524,7 @@ describe('MCP tool provider', () => {
     }
   })
 
-  it('injects local runtime computer-use context through MCP search calls', async () => {
+  it('passes computer-use arguments through MCP search calls without context injection', async () => {
     const callInputs: Array<{ name: string; arguments: Record<string, unknown> }> = []
     const config = LocalRuntimeCapabilitiesConfig.parse({
       mcp: {
@@ -534,7 +534,7 @@ describe('MCP tool provider', () => {
           mode: 'search'
         },
         servers: {
-          gui_computer_use: {
+          gui_owl_computer_use: {
             transport: 'stdio',
             command: 'node',
             trustScope: 'user'
@@ -553,8 +553,7 @@ describe('MCP tool provider', () => {
                 inputSchema: {
                   type: 'object',
                   properties: {
-                    action: { type: 'string' },
-                    targetId: { type: 'string' }
+                    instruction: { type: 'string' }
                   }
                 }
               }
@@ -574,30 +573,26 @@ describe('MCP tool provider', () => {
       })
     })
     const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    expect(built.providers.flatMap((provider) => provider.tools.map((tool) => tool.name))).toEqual(
+      expect.arrayContaining(['computer_use', 'mcp_call'])
+    )
 
     await host.execute({
       callId: 'call_computer_use',
       toolName: 'mcp_call',
       arguments: {
-        toolId: 'gui_computer_use/computer_use',
+        toolId: 'gui_owl_computer_use/computer_use',
         arguments: {
-          action: 'bind_target',
-          targetId: 'desktop:global',
-          agentId: 'explicit-agent',
-          threadId: 'explicit-thread',
-          turnId: 'explicit-turn',
-          computerUseSessionId: 'explicit-session'
+          instruction: 'open the settings window'
         }
       }
     }, buildContext('/tmp/project'))
 
-    expect(callInputs[0]?.arguments).toMatchObject({
-      action: 'bind_target',
-      targetId: 'desktop:global',
-      agentId: 'sciforge-runtime:thr_1',
-      threadId: 'thr_1',
-      turnId: 'turn_1',
-      computerUseSessionId: 'sciforge-runtime:thr_1'
+    expect(callInputs[0]).toEqual({
+      name: 'computer_use',
+      arguments: {
+        instruction: 'open the settings window'
+      }
     })
   })
 

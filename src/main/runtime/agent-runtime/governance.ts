@@ -136,7 +136,7 @@ function isComputerUseTool(toolName: string, meta: Record<string, unknown>): boo
   const server = stringValue(meta.server).toLowerCase()
   return normalizedName === 'computer_use' ||
     normalizedName.endsWith('_computer_use') ||
-    server === 'gui_computer_use'
+    server === 'gui_owl_computer_use'
 }
 
 function behaviorFamily(

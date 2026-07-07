@@ -18,7 +18,6 @@ import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
-import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
 import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-inspector.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import {
@@ -66,6 +65,7 @@ import {
 import { createChildAgentExecutor } from '../delegation/child-agent-executor.js'
 
 const GUI_RESEARCH_MCP_SERVER_NAME = 'gui_research'
+const GUI_COMPUTER_USE_MCP_SERVER_NAME = 'gui_owl_computer_use'
 const DEFAULT_RESEARCH_SOURCES = ['arxiv', 'biorxiv', 'europe_pmc', 'semantic_scholar'] as const
 const DEFAULT_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
 
@@ -202,11 +202,10 @@ export async function createLocalRuntimeServeRuntime(
     ...webProviders.providers,
     ...buildMemoryToolProviders(memoryStore)
   ]
-  const computerUseProviders = buildComputerUseToolProviders()
-  const computerUseAvailable = computerUseProviders.some((provider) =>
-    provider.enabled &&
-    provider.available &&
-    provider.tools.some((tool) => tool.name === 'computer_use')
+  const computerUseAvailable = mcpProviders.diagnostics.some((diagnostic) =>
+    diagnostic.id === GUI_COMPUTER_USE_MCP_SERVER_NAME &&
+    diagnostic.status === 'connected' &&
+    diagnostic.toolCount > 0
   )
   const childRegistry = new CapabilityRegistry(baseToolProviders)
   const childToolHost = new LocalToolHost({ registry: childRegistry, readTracker: true })
@@ -294,10 +293,7 @@ export async function createLocalRuntimeServeRuntime(
       available: true,
       tools: buildTodoLocalTools(threadService)
     },
-    ...buildDelegationToolProviders(delegationRuntime),
-    // GUI-Owl computer-use: advertised only when SCIFORGE_CUA_SERVICE_URL is set
-    // (env-gated, fail-closed). Every call is gated by the approval policy.
-    ...computerUseProviders
+    ...buildDelegationToolProviders(delegationRuntime)
   ])
   const toolHost = new LocalToolHost({ registry, readTracker: true })
   const loop = new AgentLoop({

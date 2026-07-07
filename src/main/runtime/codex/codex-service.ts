@@ -76,6 +76,11 @@ import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plottin
 import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
 import type { SciforgeCanvasMcpLaunchConfig } from '../../sciforge-canvas-mcp-config'
+import {
+  GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  isComputerUseMcpConfigured,
+  type ComputerUseMcpLaunchConfig
+} from '../../computer-use-mcp-config'
 import { buildCodexManagedGuiMcpServers } from '../../gui-mcp-registry'
 import {
   WorkspaceIntelToolNames,
@@ -128,6 +133,7 @@ export type CodexRuntimeServiceOptions = {
   imageGenerationMcpLaunch?: ImageGenerationMcpLaunchConfig
   pptMasterMcpLaunch?: PptMasterMcpLaunchConfig
   sciforgeCanvasMcpLaunch?: SciforgeCanvasMcpLaunchConfig
+  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
   managedMcpServers?: readonly CodexDynamicMcpServerConfig[]
   mcpClientFactory?: (server: CodexDynamicMcpServerConfig) => Promise<CodexDynamicMcpClient>
   createClient?: (options: CodexAppServerJsonRpcClientOptions) => CodexAppServerJsonRpcClient
@@ -976,8 +982,10 @@ export class CodexRuntimeService {
   }
 
   isComputerUseMcpConfigured(settings?: AppSettingsV1): boolean {
-    void settings
-    return false
+    return Boolean(
+      (settings && this.options.computerUseMcpLaunch && isComputerUseMcpConfigured(settings, 'codex')) ||
+      (this.options.managedMcpServers ?? []).some((server) => server.id === GUI_COMPUTER_USE_MCP_SERVER_NAME)
+    )
   }
 
   isMcpConfigured(): boolean {
@@ -2506,6 +2514,9 @@ function codexDynamicMcpServers(
       : undefined,
     sciforgeCanvasMcp: options.sciforgeCanvasMcpLaunch && settings
       ? { settings, launch: options.sciforgeCanvasMcpLaunch }
+      : undefined,
+    computerUseMcp: options.computerUseMcpLaunch && settings
+      ? { settings, launch: options.computerUseMcpLaunch }
       : undefined
   }, options.managedMcpServers)
 }

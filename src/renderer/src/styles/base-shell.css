@@ -2166,9 +2166,10 @@ pre {
 }
 
 .ds-workbench-divider {
-  width: 5px;
-  flex: 0 0 5px;
+  width: 7px;
+  flex: 0 0 7px;
   isolation: isolate;
+  touch-action: none;
 }
 
 .ds-workbench-divider::before {

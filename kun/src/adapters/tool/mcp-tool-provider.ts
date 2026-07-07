@@ -24,7 +24,7 @@ import {
   schemaSafeMcpToolArguments
 } from './mcp-schema-repair.js'
 
-const GUI_COMPUTER_USE_MCP_SERVER_ID = 'gui_computer_use'
+const GUI_COMPUTER_USE_MCP_SERVER_ID = 'gui_owl_computer_use'
 const GUI_COMPUTER_USE_TOOL_NAME = 'computer_use'
 const GUI_WORKSPACE_INTEL_MCP_SERVER_ID = 'gui_workspace_intel'
 const GUI_WORKSPACE_TOOL_PREFIX = 'gui_workspace_'
@@ -171,6 +171,7 @@ export async function buildMcpToolProviders(
 ): Promise<McpToolProviderBuildResult> {
   const providers: CapabilityToolProvider[] = []
   const directProviders: CapabilityToolProvider[] = []
+  const alwaysAdvertisedDirectProviders: CapabilityToolProvider[] = []
   const diagnostics: McpServerDiagnostic[] = []
   const connected: McpConnectionState[] = []
   const directToolNames = new Set(options.reservedToolNames ?? [])
@@ -222,6 +223,7 @@ export async function buildMcpToolProviders(
       const listed = await refreshMcpConnectionCatalog(state)
       catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
       const tools = listed.flatMap((tool) => createMcpLocalTools(state, tool, directToolNames))
+      const alwaysAdvertisedTools = tools.filter(isAlwaysAdvertisedMcpTool)
       directProviders.push({
         id: `mcp:${serverId}`,
         kind: 'mcp',
@@ -229,6 +231,15 @@ export async function buildMcpToolProviders(
         available: true,
         tools
       })
+      if (alwaysAdvertisedTools.length > 0) {
+        alwaysAdvertisedDirectProviders.push({
+          id: `mcp:${serverId}:always`,
+          kind: 'mcp',
+          enabled: true,
+          available: true,
+          tools: alwaysAdvertisedTools
+        })
+      }
       diagnostics.push(serverDiagnostic(state, 'connected', listed.length))
     } catch (error) {
       diagnostics.push(serverDiagnostic({ serverId, server }, 'error', 0, errorMessage(error)))
@@ -241,6 +252,7 @@ export async function buildMcpToolProviders(
   catalogState.catalogFingerprint = catalogFingerprint(catalogState.records.map((record) => record.toolId))
   const searchActive = shouldUseMcpSearch(mcp.search, toolCount) && connectedServers > 0
   if (searchActive) {
+    providers.push(...alwaysAdvertisedDirectProviders)
     providers.push(createMcpSearchProvider({
       config: mcp.search,
       state: catalogState,
@@ -408,7 +420,8 @@ function createMcpLocalTools(
   const tools = [createMcpLocalTool(state, descriptor, canonicalName)]
   usedNames.add(canonicalName)
 
-  const aliasName = remoteExecutorFlatToolAliasName(state, descriptor)
+  const aliasName = remoteExecutorFlatToolAliasName(state, descriptor) ??
+    computerUseFlatToolAliasName(state, descriptor)
   if (aliasName && !usedNames.has(aliasName)) {
     tools.push(createMcpLocalTool(state, descriptor, aliasName))
     usedNames.add(aliasName)
@@ -480,6 +493,19 @@ function remoteExecutorFlatToolAliasName(
   return descriptor.name
 }
 
+function computerUseFlatToolAliasName(
+  state: McpConnectionState,
+  descriptor: McpToolDescriptor
+): string | null {
+  if (state.serverId !== GUI_COMPUTER_USE_MCP_SERVER_ID) return null
+  if (descriptor.name !== GUI_COMPUTER_USE_TOOL_NAME) return null
+  return GUI_COMPUTER_USE_TOOL_NAME
+}
+
+function isAlwaysAdvertisedMcpTool(tool: LocalTool): boolean {
+  return tool.name === GUI_COMPUTER_USE_TOOL_NAME
+}
+
 async function listAllMcpTools(client: McpClientLike, timeout: number): Promise<McpToolDescriptor[]> {
   const tools: McpToolDescriptor[] = []
   let cursor: string | undefined
@@ -528,19 +554,7 @@ function mcpToolArgumentsForContext(
   if (state.serverId === REMOTE_EXECUTOR_MCP_SERVER_ID && descriptor.name.startsWith(REMOTE_EXECUTOR_TOOL_PREFIX)) {
     return remoteExecutorArgumentsForContext(descriptor, args, context)
   }
-  if (state.serverId !== GUI_COMPUTER_USE_MCP_SERVER_ID || descriptor.name !== GUI_COMPUTER_USE_TOOL_NAME) {
-    return args
-  }
-  const threadId = context.threadId
-  const turnId = context.turnId
-  const agentId = `sciforge-runtime:${threadId}`
-  return {
-    ...args,
-    agentId,
-    threadId,
-    turnId,
-    computerUseSessionId: agentId
-  }
+  return args
 }
 
 function remoteExecutorArgumentsForContext(

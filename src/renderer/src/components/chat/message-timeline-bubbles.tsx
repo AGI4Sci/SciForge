@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
@@ -932,7 +932,7 @@ function formatMessageDateTime(input: string, locale: string): string {
   }).format(date)
 }
 
-export function MessageBubble({
+function MessageBubbleComponent({
   block,
   nested = false,
   markdownImages = [],
@@ -1193,3 +1193,10 @@ function ToolEntry({ block, nested = false }: { block: ToolBlock; nested?: boole
     </div>
   )
 }
+
+export const MessageBubble = memo(MessageBubbleComponent, (prev, next) => (
+  prev.block === next.block &&
+  prev.nested === next.nested &&
+  prev.markdownImages === next.markdownImages &&
+  prev.onOpenImageArtifactInCanvas === next.onOpenImageArtifactInCanvas
+))
