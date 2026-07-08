@@ -83,6 +83,7 @@ import { DevPreviewLaunchCard } from './DevPreviewLaunchCard'
 import { RuntimeBanner } from './RuntimeBanner'
 import { CODE_PANEL_PREFERRED, useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
+import { PROJECT_DAG_SETUP_EVENT } from './project-dag/project-dag-panel-state'
 import { prepareImageAttachmentUpload } from '../lib/image-attachment-upload'
 import { isChatAttachmentUploadEnabled } from '../lib/attachment-upload-availability'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
@@ -123,6 +124,9 @@ const DevBrowserPanel = lazy(() =>
 const EvidenceDagPanel = lazy(() =>
   import('./evidence/EvidenceDagPanel').then((module) => ({ default: module.EvidenceDagPanel }))
 )
+const ProjectDagPanel = lazy(() =>
+  import('./project-dag/ProjectDagPanel').then((module) => ({ default: module.ProjectDagPanel }))
+)
 const GitCheckpointPanel = lazy(() =>
   import('./GitCheckpointPanel').then((module) => ({ default: module.GitCheckpointPanel }))
 )
@@ -133,8 +137,8 @@ const PluginMarketplaceView = lazy(() =>
   import('./PluginMarketplaceView').then((module) => ({ default: module.PluginMarketplaceView }))
 )
 const WorkspaceFilePreviewPanel = lazy(() =>
-  import('./WorkspaceFilePreviewPanel').then((module) => ({
-    default: module.WorkspaceFilePreviewPanel
+  import('./WorkspaceFilePreviewPanelBridge').then((module) => ({
+    default: module.WorkspaceFilePreviewPanelBridge
   }))
 )
 const PlanPanel = lazy(() =>
@@ -178,6 +182,8 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'Paper radar'
     case 'evidence':
       return 'Evidence graph'
+    case 'project-dag':
+      return 'Project DAG'
     case 'checkpoints':
       return 'Git checkpoints'
     case 'figure-style':
@@ -1111,6 +1117,15 @@ export function Workbench(): ReactElement {
     }
   }, [paperRadarEnabled, rightPanelMode, setRightPanelMode])
 
+  useEffect(() => {
+    const openProjectDagPanel = (): void => {
+      setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+      setRightPanelMode('project-dag')
+    }
+    window.addEventListener(PROJECT_DAG_SETUP_EVENT, openProjectDagPanel)
+    return () => window.removeEventListener(PROJECT_DAG_SETUP_EVENT, openProjectDagPanel)
+  }, [setRightPanelMode, setRightSidebarWidth])
+
   const activeTodoItemCount = activeThreadTodos?.items.length ?? 0
   const activeTodoAutoOpenKey = activeThreadId && activeTodoItemCount > 0
     ? `${activeThreadId}:${activeThreadTodos?.updatedAt ?? ''}:${activeTodoItemCount}`
@@ -1286,7 +1301,7 @@ export function Workbench(): ReactElement {
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
-    if (mode === 'evidence') setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+    if (mode === 'evidence' || mode === 'project-dag') setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
     toggleRightPanelMode(mode)
   }
 
@@ -2338,6 +2353,12 @@ export function Workbench(): ReactElement {
               <EvidenceDagPanel
                 activeThreadId={activeThreadId}
                 runtimeId={activeThread?.runtimeId}
+                className="h-full max-h-full w-full"
+                onCollapse={closeRightPanel}
+              />
+            ) : rightPanelMode === 'project-dag' ? (
+              <ProjectDagPanel
+                workspaceRoot={activeThread?.workspace || workspaceRoot}
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
               />

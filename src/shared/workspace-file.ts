@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export type WorkspaceFileTarget = {
   path: string
   workspaceRoot?: string
@@ -52,11 +54,43 @@ export type WorkspaceEntryRenamePayload = {
   newName: string
 }
 
+export const workspaceFileConflictStrategySchema = z.enum(['ask', 'overwrite', 'rename', 'skip', 'merge'])
+export type WorkspaceFileConflictStrategy = z.infer<typeof workspaceFileConflictStrategySchema>
+
+export const workspaceFileConflictPolicySchema = z.discriminatedUnion('strategy', [
+  z.object({
+    strategy: z.literal('ask')
+  }).strict(),
+  z.object({
+    strategy: z.literal('overwrite')
+  }).strict(),
+  z.object({
+    strategy: z.literal('rename'),
+    renameTemplate: z.string().trim().min(1).max(256).optional(),
+    maxAttempts: z.number().int().min(1).max(10_000).optional()
+  }).strict(),
+  z.object({
+    strategy: z.literal('skip')
+  }).strict(),
+  z.object({
+    strategy: z.literal('merge')
+  }).strict()
+])
+export type WorkspaceFileConflictPolicy = z.infer<typeof workspaceFileConflictPolicySchema>
+
 export type WorkspaceEntryCopyPayload = {
   sourcePath: string
   sourceWorkspaceRoot: string
   targetDirectory: string
   targetWorkspaceRoot: string
+  conflictPolicy?: WorkspaceFileConflictPolicy
+}
+
+export type WorkspaceEntryImportPayload = {
+  sourcePaths: string[]
+  targetDirectory: string
+  targetWorkspaceRoot: string
+  conflictPolicy?: WorkspaceFileConflictPolicy
 }
 
 export type WorkspaceEntryMovePayload = {
@@ -64,9 +98,21 @@ export type WorkspaceEntryMovePayload = {
   sourceWorkspaceRoot: string
   targetDirectory: string
   targetWorkspaceRoot: string
+  conflictPolicy?: WorkspaceFileConflictPolicy
 }
 
 export type WorkspaceEntryDeletePayload = {
+  path: string
+  workspaceRoot: string
+}
+
+export type WorkspaceClipboardPastePayload = {
+  workspaceRoot: string
+  targetDirectory: string
+  conflictPolicy?: WorkspaceFileConflictPolicy
+}
+
+export type WorkspaceNativeFileDragPayload = {
   path: string
   workspaceRoot: string
 }
@@ -233,6 +279,23 @@ export type WorkspaceEntryCopyResult =
       path: string
       sourcePath: string
       copiedAt: string
+      skipped?: boolean
+    }
+  | { ok: false; message: string }
+
+export type WorkspaceEntryImportItemResult = {
+  sourcePath: string
+  path: string
+  name: string
+  type: 'file' | 'directory'
+  skipped?: boolean
+}
+
+export type WorkspaceEntryImportResult =
+  | {
+      ok: true
+      imported: WorkspaceEntryImportItemResult[]
+      importedAt: string
     }
   | { ok: false; message: string }
 
@@ -242,6 +305,7 @@ export type WorkspaceEntryMoveResult =
       path: string
       previousPath: string
       movedAt: string
+      skipped?: boolean
     }
   | { ok: false; message: string }
 
@@ -275,6 +339,31 @@ export type WorkspaceClipboardImageSaveResult =
       path: string
       markdownPath: string
       createdAt: string
+    }
+  | { ok: false; message: string }
+
+export type WorkspaceClipboardPasteResult =
+  | {
+      ok: true
+      kind: 'image' | 'text'
+      path: string
+      name: string
+      pastedAt: string
+      skipped?: boolean
+    }
+  | {
+      ok: true
+      kind: 'files'
+      imported: WorkspaceEntryImportItemResult[]
+      pastedAt: string
+    }
+  | { ok: false; message: string }
+
+export type WorkspaceNativeFileDragResult =
+  | {
+      ok: true
+      path: string
+      startedAt: string
     }
   | { ok: false; message: string }
 

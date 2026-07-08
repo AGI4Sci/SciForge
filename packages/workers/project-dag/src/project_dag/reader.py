@@ -73,9 +73,25 @@ class SessionReader:
         safe = _safe_session_filename(session_id)
         return os.path.join(self.session_dir, f"{safe}.prov.json")
 
+    def _legacy_path(self, session_id: str) -> Optional[str]:
+        """Read-only fallback for pre-sanitiser POSIX session files.
+
+        Evidence DAG now writes Windows-safe filenames, but existing stores may
+        still contain flat files like `codex:thread.prov.json`. Project DAG must
+        read those without reintroducing unsafe writes or path traversal.
+        """
+        if session_id == _safe_session_filename(session_id):
+            return None
+        if "/" in session_id or "\\" in session_id:
+            return None
+        return os.path.join(self.session_dir, f"{session_id}.prov.json")
+
     def load(self, session_id: str) -> tuple[ThreadGraph, str]:
         """Parse one session graph; returns (graph, content_hash)."""
-        with open(self._path(session_id), encoding="utf-8") as fh:
+        path = self._path(session_id)
+        if not os.path.exists(path):
+            path = self._legacy_path(session_id) or path
+        with open(path, encoding="utf-8") as fh:
             raw = fh.read()
         h = hashlib.sha1(raw.encode("utf-8")).hexdigest()
         return provjson.from_prov_json(json.loads(raw)), h

@@ -124,6 +124,36 @@ describe('dev sciforge browser bridge', () => {
     unsubscribe()
   })
 
+  it('routes Project DAG panel calls through the dev bridge', async () => {
+    installWindow(undefined, '?devBrowserBridgeToken=query-token-123')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, payload: { url: 'http://127.0.0.1:3898/' } })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.getProjectDagView({ view: 'graph' })
+    await window.sciforge.runProjectDagCompile({ goalTitle: 'Project alpha' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'projectDag:view',
+          payload: { view: 'graph' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'projectDag:compile',
+          payload: { goalTitle: 'Project alpha' }
+        })
+      })
+    )
+  })
+
   it('dispatches bridge SSE messages through preload-shaped event subscriptions', async () => {
     installWindow()
     Object.defineProperty(globalThis, 'fetch', {
@@ -194,6 +224,258 @@ describe('dev sciforge browser bridge', () => {
     const result = await window.sciforge.previewWorkspaceHtml({ path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' })
 
     expect(result).toMatchObject({ ok: true, url: 'http://127.0.0.1:59000/status.html' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'file:preview-workspace-html',
+          payload: { path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' }
+        })
+      })
+    )
+  })
+
+  it('forwards workspace entry import calls through the dev bridge', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { ok: true, imported: [], importedAt: '2026-07-08T00:00:00.000Z' }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+    const payload = {
+      sourcePaths: ['/tmp/source.csv'],
+      targetWorkspaceRoot: '/tmp/work',
+      targetDirectory: 'incoming',
+      conflictPolicy: { strategy: 'rename' as const }
+    }
+
+    installDevSciForgeBridge()
+    await window.sciforge.importWorkspaceEntries(payload)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'file:import-workspace-entries',
+          payload
+        })
+      })
+    )
+  })
+
+  it('forwards workspace clipboard paste calls through the dev bridge', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: {
+        ok: true,
+        kind: 'text',
+        path: '/tmp/work/notes/pasted-text.txt',
+        name: 'pasted-text.txt',
+        pastedAt: '2026-07-08T00:00:00.000Z'
+      }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+    const payload = {
+      workspaceRoot: '/tmp/work',
+      targetDirectory: 'notes',
+      conflictPolicy: { strategy: 'skip' as const }
+    }
+
+    installDevSciForgeBridge()
+    await window.sciforge.pasteWorkspaceClipboard(payload)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'clipboard:paste-workspace',
+          payload
+        })
+      })
+    )
+  })
+
+  it('forwards workspace native file drag calls through the dev bridge', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { ok: false, message: 'Native file dragging is not available in this environment.' }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+    const payload = {
+      workspaceRoot: '/tmp/work',
+      path: 'notes/paper.pdf'
+    }
+
+    installDevSciForgeBridge()
+    await window.sciforge.startWorkspaceNativeFileDrag(payload)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'file:start-workspace-native-drag',
+          payload
+        })
+      })
+    )
+  })
+
+  it('forwards workspace preview calls through the dev bridge', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) as { channel?: string } : {}
+      if (body.channel === 'workspacePreview:listPlugins') {
+        return new Response(JSON.stringify({
+          ok: true,
+          payload: [{ id: 'molecular', displayName: 'Molecular Structure Viewer' }]
+        }))
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        payload: { ok: true }
+      }))
+    })
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+    const openInput = {
+      path: '/tmp/work/protein.pdb',
+      workspaceRoot: '/tmp/work',
+      mimeType: 'chemical/x-pdb',
+      mode: 'inspect' as const
+    }
+
+    installDevSciForgeBridge()
+    await window.sciforge.workspacePreview.listPlugins()
+    await window.sciforge.workspacePreview.open(openInput)
+    await window.sciforge.workspacePreview.observe('session-1')
+    await window.sciforge.workspacePreview.describeAsset('session-1')
+    await window.sciforge.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
+    await window.sciforge.workspacePreview.applyEdit('session-1', {
+      kind: 'molecular.setSelection',
+      path: 'protein.pdb',
+      selection: { kind: 'molecular', chains: ['A'] }
+    })
+    await window.sciforge.workspacePreview.export('session-1', {
+      kind: 'workspace-file',
+      format: 'pdb',
+      path: 'exports/protein-copy.pdb'
+    })
+    await window.sciforge.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    await window.sciforge.workspacePreview.unwatch('watch-1')
+    await window.sciforge.previewWorkspaceHtml({ path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:listPlugins'
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:watch',
+          payload: { path: 'protein.pdb', workspaceRoot: '/tmp/work' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:unwatch',
+          payload: 'watch-1'
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:open',
+          payload: openInput
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:observe',
+          payload: { sessionId: 'session-1' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:describeAsset',
+          payload: { sessionId: 'session-1' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:readRange',
+          payload: { sessionId: 'session-1', range: { offset: 0, length: 4 } }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:applyEdit',
+          payload: {
+            sessionId: 'session-1',
+            operation: {
+              kind: 'molecular.setSelection',
+              path: 'protein.pdb',
+              selection: { kind: 'molecular', chains: ['A'] }
+            }
+          }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:export',
+          payload: {
+            sessionId: 'session-1',
+            target: {
+              kind: 'workspace-file',
+              format: 'pdb',
+              path: 'exports/protein-copy.pdb'
+            }
+          }
+        })
+      })
+    )
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({

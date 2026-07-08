@@ -11,11 +11,14 @@ import {
   unlink
 } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
 import type {
   WorkspaceClipboardImageSavePayload,
   WorkspaceClipboardImageSaveResult,
+  WorkspaceClipboardPastePayload,
+  WorkspaceClipboardPasteResult,
   ClipboardImageReadResult,
   WorkspaceDirectoryCreatePayload,
   WorkspaceDirectoryCreateResult,
@@ -25,6 +28,8 @@ import type {
   WorkspaceEntryDeleteResult,
   WorkspaceEntryCopyPayload,
   WorkspaceEntryCopyResult,
+  WorkspaceEntryImportPayload,
+  WorkspaceEntryImportResult,
   WorkspaceEntryMovePayload,
   WorkspaceEntryMoveResult,
   WorkspaceEntryRenamePayload,
@@ -33,6 +38,7 @@ import type {
   WorkspaceFileCreateResult,
   WorkspaceFileReadResult,
   WorkspaceFileResolveResult,
+  WorkspaceFileConflictPolicy,
   WorkspaceFileTarget,
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult,
@@ -87,18 +93,80 @@ function splitCopyName(name: string): { stem: string; ext: string } {
   return { stem: name.slice(0, dot), ext: name.slice(dot) }
 }
 
-async function availableTargetPath(workspaceRoot: string, directory: string, name: string): Promise<string> {
+const DEFAULT_WORKSPACE_FILE_CONFLICT_POLICY: WorkspaceFileConflictPolicy = { strategy: 'rename' }
+
+type WorkspaceFileConflictResolution =
+  | { action: 'write'; path: string; overwrite: boolean }
+  | { action: 'skip'; path: string }
+
+function workspaceFileConflictPolicyOrDefault(
+  policy?: WorkspaceFileConflictPolicy
+): WorkspaceFileConflictPolicy {
+  return policy ?? DEFAULT_WORKSPACE_FILE_CONFLICT_POLICY
+}
+
+function unsupportedWorkspaceFileConflictPolicy(policy: WorkspaceFileConflictPolicy): never {
+  throw new Error(`Conflict policy "${policy.strategy}" is not supported for workspace file operations.`)
+}
+
+function renderRenameConflictName(
+  originalName: string,
+  attempt: number,
+  policy: Extract<WorkspaceFileConflictPolicy, { strategy: 'rename' }>
+): string {
+  const { stem, ext } = splitCopyName(originalName)
+  const template = policy.renameTemplate?.trim()
+  if (!template) {
+    const suffix = attempt === 1 ? ' copy' : ` copy ${attempt}`
+    return `${stem}${suffix}${ext}`
+  }
+
+  const rendered = template
+    .replaceAll('{name}', stem)
+    .replaceAll('{ext}', ext)
+    .replaceAll('{n}', String(attempt))
+    .trim()
+  if (attempt > 1 && !template.includes('{n}')) {
+    const renderedParts = splitCopyName(rendered)
+    return validateEntryName(`${renderedParts.stem} ${attempt}${renderedParts.ext}`)
+  }
+  return validateEntryName(rendered)
+}
+
+async function resolveWorkspaceEntryConflict(
+  workspaceRoot: string,
+  directory: string,
+  name: string,
+  policy?: WorkspaceFileConflictPolicy
+): Promise<WorkspaceFileConflictResolution> {
+  const conflictPolicy = workspaceFileConflictPolicyOrDefault(policy)
+  if (conflictPolicy.strategy === 'ask' || conflictPolicy.strategy === 'merge') {
+    unsupportedWorkspaceFileConflictPolicy(conflictPolicy)
+  }
+
   const direct = await resolveSafeWorkspaceWriteTarget(join(directory, name), workspaceRoot, {
     createParentDirectories: false
   })
-  if (!await pathExists(direct.path)) return direct.path
-  const { stem, ext } = splitCopyName(name)
-  for (let index = 1; index < 10_000; index += 1) {
-    const suffix = index === 1 ? ' copy' : ` copy ${index}`
-    const candidate = await resolveSafeWorkspaceWriteTarget(join(directory, `${stem}${suffix}${ext}`), workspaceRoot, {
+  if (!await pathExists(direct.path)) {
+    return { action: 'write', path: direct.path, overwrite: false }
+  }
+
+  if (conflictPolicy.strategy === 'overwrite') {
+    return { action: 'write', path: direct.path, overwrite: true }
+  }
+  if (conflictPolicy.strategy === 'skip') {
+    return { action: 'skip', path: direct.path }
+  }
+
+  const maxAttempts = conflictPolicy.maxAttempts ?? 10_000
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const candidateName = renderRenameConflictName(name, attempt, conflictPolicy)
+    const candidate = await resolveSafeWorkspaceWriteTarget(join(directory, candidateName), workspaceRoot, {
       createParentDirectories: false
     })
-    if (!await pathExists(candidate.path)) return candidate.path
+    if (!await pathExists(candidate.path)) {
+      return { action: 'write', path: candidate.path, overwrite: false }
+    }
   }
   throw new Error('Could not find an available copy name.')
 }
@@ -113,6 +181,16 @@ async function ensureNotWorkspaceRoot(targetPath: string, workspaceRoot: string,
   if (targetPath === workspacePath) {
     throw new Error(`${action} the workspace root is not supported.`)
   }
+}
+
+async function removeOverwriteTarget(targetPath: string, sourcePath?: string): Promise<boolean> {
+  if (sourcePath) {
+    const sourceCanonical = await canonicalPath(sourcePath)
+    const targetCanonical = await canonicalPath(targetPath)
+    if (sourceCanonical === targetCanonical) return false
+  }
+  await rm(targetPath, { recursive: true, force: false })
+  return true
 }
 
 function workspaceFilePosition(payload: WorkspaceFileTarget): { line?: number; column?: number } {
@@ -526,6 +604,29 @@ function buildWorkspaceImageName(now = new Date()): string {
   return `pasted-image-${iso}-${randomUUID().slice(0, 8)}.png`
 }
 
+function buildWorkspaceTextName(now = new Date()): string {
+  const iso = now.toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')
+  return `pasted-text-${iso}-${randomUUID().slice(0, 8)}.txt`
+}
+
+async function availableWorkspaceWriteTarget(
+  workspaceRoot: string,
+  directory: string,
+  name: string,
+  policy?: WorkspaceFileConflictPolicy
+) {
+  const resolution = await resolveWorkspaceEntryConflict(workspaceRoot, directory, name, policy)
+  if (resolution.action === 'skip') return resolution
+  const target = await resolveSafeWorkspaceWriteTarget(resolution.path, workspaceRoot, {
+    createParentDirectories: false
+  })
+  return {
+    action: 'write' as const,
+    target,
+    overwrite: resolution.overwrite
+  }
+}
+
 export async function readClipboardImage(): Promise<ClipboardImageReadResult> {
   try {
     const image = clipboard.readImage()
@@ -554,6 +655,191 @@ export async function readClipboardImage(): Promise<ClipboardImageReadResult> {
       message: error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+export async function pasteWorkspaceClipboard(
+  payload: WorkspaceClipboardPastePayload
+): Promise<WorkspaceClipboardPasteResult> {
+  try {
+    const targetDirectory = await resolveWorkspaceDirectory({
+      workspaceRoot: payload.workspaceRoot,
+      ...(payload.targetDirectory.trim() ? { path: payload.targetDirectory } : {})
+    })
+    const clipboardFilePaths = readClipboardFilePaths()
+    if (clipboardFilePaths.length > 0) {
+      const targetWorkspaceRoot = await resolvedWorkspaceRoot(payload.workspaceRoot)
+      const imported = await importWorkspaceEntries({
+        sourcePaths: clipboardFilePaths,
+        targetWorkspaceRoot: payload.workspaceRoot,
+        targetDirectory: normalizePathSeparators(relative(targetWorkspaceRoot, targetDirectory)),
+        conflictPolicy: payload.conflictPolicy
+      })
+      if (!imported.ok) return imported
+      return {
+        ok: true,
+        kind: 'files',
+        imported: imported.imported,
+        pastedAt: imported.importedAt
+      }
+    }
+
+    const image = clipboard.readImage()
+    if (!image.isEmpty()) {
+      const buffer = image.toPNG()
+      if (!buffer.length) {
+        return { ok: false, message: 'Clipboard image could not be encoded as PNG.' }
+      }
+      const target = await availableWorkspaceWriteTarget(
+        payload.workspaceRoot,
+        targetDirectory,
+        buildWorkspaceImageName(),
+        payload.conflictPolicy
+      )
+      if (target.action === 'skip') {
+        return {
+          ok: true,
+          kind: 'image',
+          path: target.path,
+          name: basename(target.path),
+          pastedAt: new Date().toISOString(),
+          skipped: true
+        }
+      }
+      if (target.overwrite) await rm(target.target.path, { recursive: true, force: false })
+      await writeSafeWorkspaceFile(target.target, buffer, { exclusive: !target.overwrite })
+      return {
+        ok: true,
+        kind: 'image',
+        path: target.target.path,
+        name: basename(target.target.path),
+        pastedAt: new Date().toISOString()
+      }
+    }
+
+    const text = clipboard.readText()
+    if (text.length > 0) {
+      const target = await availableWorkspaceWriteTarget(
+        payload.workspaceRoot,
+        targetDirectory,
+        buildWorkspaceTextName(),
+        payload.conflictPolicy
+      )
+      if (target.action === 'skip') {
+        return {
+          ok: true,
+          kind: 'text',
+          path: target.path,
+          name: basename(target.path),
+          pastedAt: new Date().toISOString(),
+          skipped: true
+        }
+      }
+      if (target.overwrite) await rm(target.target.path, { recursive: true, force: false })
+      await writeSafeWorkspaceFile(target.target, text, { encoding: 'utf8', exclusive: !target.overwrite })
+      return {
+        ok: true,
+        kind: 'text',
+        path: target.target.path,
+        name: basename(target.target.path),
+        pastedAt: new Date().toISOString()
+      }
+    }
+
+    return { ok: false, message: 'Clipboard does not currently contain files, text, or an image.' }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+function readClipboardFilePaths(): string[] {
+  const formats = clipboardAvailableFormats()
+  const paths = [
+    ...filePathsFromUriList(readClipboardFormatText('text/uri-list', formats)),
+    ...filePathsFromGnomeCopiedFiles(readClipboardFormatText('x-special/gnome-copied-files', formats)),
+    ...filePathsFromBookmark(),
+    ...filePathsFromNullSeparatedText(readClipboardBufferText('FileNameW', 'utf16le', formats)),
+    ...filePathsFromNullSeparatedText(readClipboardBufferText('FileName', 'utf8', formats)),
+    ...filePathsFromUriList(readClipboardBufferText('public.file-url', 'utf8', formats)),
+    ...filePathsFromPropertyList(readClipboardBufferText('NSFilenamesPboardType', 'utf8', formats))
+  ]
+  return [...new Set(paths.map((path) => path.trim()).filter((path) => path && isAbsolute(path)))]
+}
+
+function clipboardAvailableFormats(): string[] {
+  try {
+    return typeof clipboard.availableFormats === 'function' ? clipboard.availableFormats() : []
+  } catch {
+    return []
+  }
+}
+
+function readClipboardFormatText(format: string, formats: readonly string[]): string {
+  if (!formats.includes(format) || typeof clipboard.read !== 'function') return ''
+  try {
+    return clipboard.read(format)
+  } catch {
+    return ''
+  }
+}
+
+function readClipboardBufferText(
+  format: string,
+  encoding: BufferEncoding,
+  formats: readonly string[]
+): string {
+  if (!formats.includes(format) || typeof clipboard.readBuffer !== 'function') return ''
+  try {
+    const buffer = clipboard.readBuffer(format)
+    return buffer.length ? buffer.toString(encoding).replace(/\0+$/u, '') : ''
+  } catch {
+    return ''
+  }
+}
+
+function filePathsFromBookmark(): string[] {
+  if (typeof clipboard.readBookmark !== 'function') return []
+  try {
+    const bookmark = clipboard.readBookmark()
+    return bookmark?.url ? filePathsFromUriList(bookmark.url) : []
+  } catch {
+    return []
+  }
+}
+
+function filePathsFromGnomeCopiedFiles(value: string): string[] {
+  const lines = value.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return filePathsFromUriList(lines.filter((line) => line !== 'copy' && line !== 'cut').join('\n'))
+}
+
+function filePathsFromUriList(value: string): string[] {
+  return value.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .flatMap((line) => {
+      if (!line.startsWith('file:')) return []
+      try {
+        return [fileURLToPath(line)]
+      } catch {
+        return []
+      }
+    })
+}
+
+function filePathsFromNullSeparatedText(value: string): string[] {
+  return value.split(/\0|\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && isAbsolute(line))
+}
+
+function filePathsFromPropertyList(value: string): string[] {
+  const quotedValues = [...value.matchAll(/<string>(.*?)<\/string>|"([^"]+)"/gu)]
+    .map((match) => (match[1] ?? match[2] ?? '').trim())
+  return quotedValues.filter((path) => path && isAbsolute(path))
 }
 
 export async function saveWorkspaceClipboardImage(
@@ -647,17 +933,124 @@ export async function copyWorkspaceEntry(
       workspaceRoot: payload.targetWorkspaceRoot,
       ...(payload.targetDirectory.trim() ? { path: payload.targetDirectory } : {})
     })
-    const targetPath = await availableTargetPath(payload.targetWorkspaceRoot, targetDirectory, basename(sourcePath))
-    await cp(sourcePath, targetPath, {
+    const target = await resolveWorkspaceEntryConflict(
+      payload.targetWorkspaceRoot,
+      targetDirectory,
+      basename(sourcePath),
+      payload.conflictPolicy
+    )
+    if (target.action === 'skip') {
+      return {
+        ok: true,
+        path: target.path,
+        sourcePath,
+        copiedAt: new Date().toISOString(),
+        skipped: true
+      }
+    }
+    const removedTarget = target.overwrite
+      ? await removeOverwriteTarget(target.path, sourcePath)
+      : false
+    if (!removedTarget && target.overwrite) {
+      return {
+        ok: true,
+        path: sourcePath,
+        sourcePath,
+        copiedAt: new Date().toISOString()
+      }
+    }
+    await cp(sourcePath, target.path, {
       recursive: true,
-      force: false,
-      errorOnExist: true
+      force: target.overwrite,
+      errorOnExist: !target.overwrite
     })
     return {
       ok: true,
-      path: targetPath,
+      path: target.path,
       sourcePath,
       copiedAt: new Date().toISOString()
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+export async function importWorkspaceEntries(
+  payload: WorkspaceEntryImportPayload
+): Promise<WorkspaceEntryImportResult> {
+  try {
+    const sourcePaths = [...new Set(payload.sourcePaths.map((path) => path.trim()).filter(Boolean))]
+    if (sourcePaths.length === 0) return { ok: false, message: 'At least one source path is required.' }
+    const targetDirectory = await resolveWorkspaceDirectory({
+      workspaceRoot: payload.targetWorkspaceRoot,
+      ...(payload.targetDirectory.trim() ? { path: payload.targetDirectory } : {})
+    })
+    const targetWorkspaceRoot = await resolvedWorkspaceRoot(payload.targetWorkspaceRoot)
+    const imported: Extract<WorkspaceEntryImportResult, { ok: true }>['imported'] = []
+
+    for (const sourcePath of sourcePaths) {
+      if (!isAbsolute(sourcePath)) {
+        return { ok: false, message: 'Only absolute local paths can be imported into the workspace.' }
+      }
+      const sourceStats = await stat(sourcePath)
+      const sourceCanonical = await canonicalPath(sourcePath)
+      if (sourceCanonical === targetWorkspaceRoot) {
+        return { ok: false, message: 'Importing the workspace root into itself is not allowed.' }
+      }
+      if (sourceStats.isDirectory()) {
+        const targetDirectoryCanonical = await canonicalPath(targetDirectory)
+        if (targetDirectoryCanonical === sourceCanonical || targetDirectoryCanonical.startsWith(`${sourceCanonical}${sep}`)) {
+          return { ok: false, message: 'Importing a directory into itself or one of its descendants is not allowed.' }
+        }
+      }
+      const target = await resolveWorkspaceEntryConflict(
+        payload.targetWorkspaceRoot,
+        targetDirectory,
+        basename(sourcePath),
+        payload.conflictPolicy
+      )
+      if (target.action === 'skip') {
+        imported.push({
+          sourcePath,
+          path: target.path,
+          name: basename(target.path),
+          type: sourceStats.isDirectory() ? 'directory' : 'file',
+          skipped: true
+        })
+        continue
+      }
+      const removedTarget = target.overwrite
+        ? await removeOverwriteTarget(target.path, sourcePath)
+        : false
+      if (!removedTarget && target.overwrite) {
+        imported.push({
+          sourcePath,
+          path: sourcePath,
+          name: basename(sourcePath),
+          type: sourceStats.isDirectory() ? 'directory' : 'file'
+        })
+        continue
+      }
+      await cp(sourcePath, target.path, {
+        recursive: sourceStats.isDirectory(),
+        force: target.overwrite,
+        errorOnExist: !target.overwrite
+      })
+      imported.push({
+        sourcePath,
+        path: target.path,
+        name: basename(target.path),
+        type: sourceStats.isDirectory() ? 'directory' : 'file'
+      })
+    }
+
+    return {
+      ok: true,
+      imported,
+      importedAt: new Date().toISOString()
     }
   } catch (error) {
     return {
@@ -694,15 +1087,40 @@ export async function moveWorkspaceEntry(
         movedAt: new Date().toISOString()
       }
     }
-    const targetPath = await availableTargetPath(payload.targetWorkspaceRoot, targetDirectory, basename(sourcePath))
+    const target = await resolveWorkspaceEntryConflict(
+      payload.targetWorkspaceRoot,
+      targetDirectory,
+      basename(sourcePath),
+      payload.conflictPolicy
+    )
+    if (target.action === 'skip') {
+      return {
+        ok: true,
+        path: sourcePath,
+        previousPath: sourcePath,
+        movedAt: new Date().toISOString(),
+        skipped: true
+      }
+    }
+    const removedTarget = target.overwrite
+      ? await removeOverwriteTarget(target.path, sourcePath)
+      : false
+    if (!removedTarget && target.overwrite) {
+      return {
+        ok: true,
+        path: sourcePath,
+        previousPath: sourcePath,
+        movedAt: new Date().toISOString()
+      }
+    }
     try {
-      await rename(sourcePath, targetPath)
+      await rename(sourcePath, target.path)
     } catch (error) {
       const code = typeof error === 'object' && error !== null && 'code' in error
         ? String((error as { code?: unknown }).code)
         : ''
       if (code !== 'EXDEV') throw error
-      await cp(sourcePath, targetPath, {
+      await cp(sourcePath, target.path, {
         recursive: true,
         force: false,
         errorOnExist: true
@@ -711,7 +1129,7 @@ export async function moveWorkspaceEntry(
     }
     return {
       ok: true,
-      path: targetPath,
+      path: target.path,
       previousPath: sourcePath,
       movedAt: new Date().toISOString()
     }

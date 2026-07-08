@@ -44,6 +44,49 @@ function withId(item: TurnItem, id: string): TurnItem {
   return { ...item, id }
 }
 
+describe('ThreadService.sidebarProbe', () => {
+  it('returns the first display user text without exposing full thread detail', async () => {
+    const { service, threadStore, nowIso } = buildService()
+    await service.create(
+      { workspace: '/tmp/p', model: 'deepseek-chat', mode: 'agent' },
+      { id: 'thr_probe', title: 'New chat' }
+    )
+    const turn = startTurn(
+      createTurnRecord({
+        id: 'turn_probe',
+        threadId: 'thr_probe',
+        prompt: 'raw prompt',
+        createdAt: nowIso()
+      }),
+      nowIso()
+    )
+    turn.items = [
+      makeAssistantTextItem({
+        id: 'item_assistant',
+        turnId: turn.id,
+        threadId: 'thr_probe',
+        text: 'ignored'
+      }),
+      makeUserItem({
+        id: 'item_user',
+        turnId: turn.id,
+        threadId: 'thr_probe',
+        text: 'raw prompt',
+        displayText: 'display prompt'
+      })
+    ]
+    const thread = await threadStore.get('thr_probe')
+    if (!thread) throw new Error('thread missing')
+    await threadStore.upsert(touchThread({ ...thread, turns: [turn] }, nowIso()))
+
+    await expect(service.sidebarProbe('thr_probe')).resolves.toEqual({
+      threadId: 'thr_probe',
+      text: 'display prompt'
+    })
+    await expect(service.sidebarProbe('missing')).resolves.toBeNull()
+  })
+})
+
 async function seedParentWithTurns(
   service: ThreadService,
   threadStore: InMemoryThreadStore,

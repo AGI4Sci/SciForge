@@ -106,6 +106,11 @@ import {
 } from './use-voice-dictation'
 import type { ComposerChangedFile } from '../../lib/composer-change-summary'
 import { SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcut-settings'
+import {
+  composerReferenceFromWorkspaceReferenceDragData,
+  hasWorkspaceReferenceDragData,
+  type WorkspaceReferenceDragDataSource
+} from '../../lib/workspace-reference-drag'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 
@@ -217,6 +222,22 @@ export type ComposerImageTransferSource = {
 
 export type ComposerClipboardImageSource = ComposerImageTransferSource & {
   getData?: (format: string) => string
+}
+
+export function composerWorkspaceReferenceDropFromTransfer(
+  source: WorkspaceReferenceDragDataSource,
+  options: {
+    fileReferenceEnabled: boolean
+    canAddFileReference: boolean
+  }
+): { reference: ComposerFileReference; mentionToken: string } | null {
+  if (!options.fileReferenceEnabled || !options.canAddFileReference) return null
+  const reference = composerReferenceFromWorkspaceReferenceDragData(source)
+  if (!reference) return null
+  return {
+    reference,
+    mentionToken: formatComposerFileMentionToken(reference.relativePath)
+  }
 }
 
 function arrayLikeValues<T>(value: ArrayLike<T> | null | undefined): T[] {
@@ -1552,7 +1573,11 @@ export function FloatingComposer({
   const handleComposerDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
     const dataTransferTypes = Array.from(event.dataTransfer.types ?? [])
     const canAcceptImages = canPickAttachment && imageTransferHasImages(event.dataTransfer)
-    if (!dataTransferTypes.includes('Files') && !canAcceptImages) return
+    const canAcceptWorkspaceReference =
+      fileReferenceEnabled &&
+      Boolean(onAddFileReference) &&
+      hasWorkspaceReferenceDragData(event.dataTransfer)
+    if (!dataTransferTypes.includes('Files') && !canAcceptImages && !canAcceptWorkspaceReference) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
   }
@@ -1644,6 +1669,18 @@ export function FloatingComposer({
   }, [getVoiceDictationLevel, voiceDictationStatus])
 
   const handleComposerDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
+    const workspaceReferenceDrop = composerWorkspaceReferenceDropFromTransfer(event.dataTransfer, {
+      fileReferenceEnabled,
+      canAddFileReference: Boolean(onAddFileReference)
+    })
+    if (workspaceReferenceDrop) {
+      event.preventDefault()
+      onAddFileReference?.(workspaceReferenceDrop.reference)
+      insertTextAtComposerCursor(workspaceReferenceDrop.mentionToken)
+      draft.focusComposer()
+      return
+    }
+
     const imageFiles = canPickAttachment ? imageAttachmentInputsFromTransfer(event.dataTransfer) : []
     const rawFiles = Array.from(event.dataTransfer.files ?? [])
     const isImageLike = (file: File): boolean =>

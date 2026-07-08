@@ -214,10 +214,16 @@ const api = {
     ipcRenderer.invoke('file:save-workspace-clipboard-image', payload),
   readClipboardImage: () =>
     ipcRenderer.invoke('clipboard:read-image'),
+  pasteWorkspaceClipboard: (payload) =>
+    ipcRenderer.invoke('clipboard:paste-workspace', payload),
+  startWorkspaceNativeFileDrag: (payload) =>
+    ipcRenderer.invoke('file:start-workspace-native-drag', payload),
   renameWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:rename-workspace-entry', payload),
   copyWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:copy-workspace-entry', payload),
+  importWorkspaceEntries: (payload) =>
+    ipcRenderer.invoke('file:import-workspace-entries', payload),
   moveWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:move-workspace-entry', payload),
   deleteWorkspaceEntry: (payload) =>
@@ -233,6 +239,30 @@ const api = {
     ) => handler(payload)
     ipcRenderer.on('file:workspace-changed', wrapped)
     return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
+  },
+  workspacePreview: {
+    listPlugins: () => ipcRenderer.invoke('workspacePreview:listPlugins'),
+    open: (input) => ipcRenderer.invoke('workspacePreview:open', input),
+    observe: (sessionId) => ipcRenderer.invoke('workspacePreview:observe', { sessionId }),
+    describeAsset: (sessionId) => ipcRenderer.invoke('workspacePreview:describeAsset', { sessionId }),
+    readRange: (sessionId, range) =>
+      ipcRenderer.invoke('workspacePreview:readRange', { sessionId, range }),
+    applyEdit: (sessionId, operation) =>
+      ipcRenderer.invoke('workspacePreview:applyEdit', { sessionId, operation }),
+    export: (sessionId, target) =>
+      ipcRenderer.invoke('workspacePreview:export', { sessionId, target }),
+    invokeAction: (sessionId, action) =>
+      ipcRenderer.invoke('workspacePreview:invokeAction', { sessionId, action }),
+    watch: (payload) => ipcRenderer.invoke('workspacePreview:watch', payload),
+    unwatch: (watchId) => ipcRenderer.invoke('workspacePreview:unwatch', watchId),
+    onChanged: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        payload: Parameters<typeof handler>[0]
+      ) => handler(payload)
+      ipcRenderer.on('workspacePreview:changed', wrapped)
+      return () => ipcRenderer.removeListener('workspacePreview:changed', wrapped)
+    }
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),
@@ -362,7 +392,8 @@ const api = {
   getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
   getEvidenceDagView: (input) => ipcRenderer.invoke('evidenceDag:view', input),
   runEvidenceDagAudit: (input) => ipcRenderer.invoke('evidenceDag:audit-run', input),
-  exportProjectDag: (input) => ipcRenderer.invoke('projectDag:export', input),
+  getProjectDagView: (input) => ipcRenderer.invoke('projectDag:view', input),
+  runProjectDagCompile: (input) => ipcRenderer.invoke('projectDag:compile', input),
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),

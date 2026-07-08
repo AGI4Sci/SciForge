@@ -21,7 +21,7 @@ const RIGHT_PANEL_DEFAULT = 360
 export const CODE_PANEL_PREFERRED = 560
 const LEFT_PANEL_MIN = 280
 const LEFT_PANEL_MAX = 480
-const RIGHT_PANEL_MIN = 0
+const RIGHT_PANEL_MIN = 300
 const RIGHT_PANEL_MAX = Number.POSITIVE_INFINITY
 const SIDEBAR_HARD_MIN = 180
 const MAIN_MIN_WIDTH = 0
@@ -64,13 +64,13 @@ export function readStoredRightPanelMode(): RightPanelMode {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, 'figure-style')
     return 'figure-style'
   }
-  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'figure-style'
+  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'project-dag' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'figure-style'
     ? raw
     : null
 }
 
 export function persistRightPanelMode(mode: RightPanelMode): void {
-  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'figure-style') {
+  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'project-dag' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'figure-style') {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, mode)
   } else {
     removeBrowserStorageItem(RIGHT_PANEL_MODE_KEY)

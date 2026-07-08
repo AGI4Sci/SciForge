@@ -215,6 +215,22 @@ class Engine:
             return None
         return os.path.join(self.storage_dir, f"{self._safe_thread_filename(thread_id)}.audit.json")
 
+    def _legacy_path(self, thread_id: str, suffix: str) -> Optional[str]:
+        """Read-only fallback for pre-sanitiser files written on POSIX.
+
+        Older builds wrote ids such as `codex:thread` directly to disk. Current
+        writes stay sanitised, but loading must still understand those stores.
+        Never accept path separators here; this is only for legacy flat
+        filenames, not arbitrary paths.
+        """
+        if not self.storage_dir:
+            return None
+        if thread_id == self._safe_thread_filename(thread_id):
+            return None
+        if "/" in thread_id or "\\" in thread_id:
+            return None
+        return os.path.join(self.storage_dir, f"{thread_id}{suffix}")
+
     def _persist(self, thread_id: str) -> None:
         path = self._path(thread_id)
         if path and thread_id in self._graphs:
@@ -236,16 +252,22 @@ class Engine:
 
     def _load_from_disk(self, thread_id: str) -> Optional[ThreadGraph]:
         path = self._path(thread_id)
-        if path and os.path.exists(path):
-            with open(path, encoding="utf-8") as fh:
+        if not path:
+            return None
+        load_path = path if os.path.exists(path) else self._legacy_path(thread_id, ".prov.json")
+        if load_path and os.path.exists(load_path):
+            with open(load_path, encoding="utf-8") as fh:
                 return provjson.loads(fh.read())
         return None
 
     def _load_audit_from_disk(self, thread_id: str) -> list[dict]:
         path = self._audit_path(thread_id)
-        if path and os.path.exists(path):
+        if not path:
+            return []
+        load_path = path if os.path.exists(path) else self._legacy_path(thread_id, ".audit.json")
+        if load_path and os.path.exists(load_path):
             try:
-                with open(path, encoding="utf-8") as fh:
+                with open(load_path, encoding="utf-8") as fh:
                     doc = json.load(fh)
                 runs = doc.get("runs") if isinstance(doc, dict) else doc
                 return runs if isinstance(runs, list) else []

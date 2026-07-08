@@ -84,17 +84,17 @@ Layout:
 ## Desktop (GUI) integration
 
 The SciForge app starts this as a **lazy managed sidecar** (on first use, from
-Model Router settings — same model the app is configured with) and exposes a
-one-click **export** in the Workbench top bar: it ensures the project goal
-exists, kicks off a compile, and opens the web UI at the weekly report. Wiring
-mirrors the Evidence-DAG panel:
+Model Router settings — same model the app is configured with) and exposes it
+inside the Workbench right sidebar. The panel can refresh the graph, store the
+project goal, and trigger a compile through IPC while keeping the bundled web UI
+embedded in the app. Wiring mirrors the Evidence-DAG panel:
 
 | Piece | Location |
 |---|---|
 | Managed sidecar (spawn / health / stop) | `desktop/sidecar.ts` |
-| Deep-link contract (`?view=`, `?autocompile=1`) | `desktop/contract.ts` |
-| IPC handler `projectDag:export` | `src/main/ipc/register-app-ipc-handlers.ts` |
-| Top-bar button + "new project" prompt | `src/renderer/src/components/chat/ProjectDagExportButton.tsx` |
+| Deep-link contract (`?view=`, `?embed=1`) | `desktop/contract.ts` |
+| IPC handlers `projectDag:view` / `projectDag:compile` | `src/main/ipc/register-app-ipc-handlers.ts` |
+| Right-sidebar panel | `src/renderer/src/components/project-dag/ProjectDagPanel.tsx` |
 
 ## Run (standalone, for diagnostics)
 

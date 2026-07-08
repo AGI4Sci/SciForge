@@ -23,11 +23,31 @@ type WorkerPackageJson = {
   }
 }
 
+type RootPackageJson = {
+  workspaces?: string[]
+  scripts?: Record<string, string>
+}
+
 const allowedSideEffects = new Set(['none', 'filesystem', 'network', 'host-ui', 'process'])
 const workerRoot = join(process.cwd(), 'packages', 'workers')
+const rootPackageJsonPath = join(process.cwd(), 'package.json')
+const releaseWorkerManifestPath = join(process.cwd(), 'scripts', 'release-worker-manifest.cjs')
+const workspacePreviewWorkerPackages = [
+  'workspace-bioimaging',
+  'workspace-deck',
+  'workspace-molecular',
+  'workspace-omics',
+  'workspace-sequence',
+  'workspace-spectra',
+  'workspace-tabular'
+] as const
 
 function readWorkerPackageJson(packageDir: string): WorkerPackageJson {
   return JSON.parse(readFileSync(join(workerRoot, packageDir, 'package.json'), 'utf8')) as WorkerPackageJson
+}
+
+function readRootPackageJson(): RootPackageJson {
+  return JSON.parse(readFileSync(rootPackageJsonPath, 'utf8')) as RootPackageJson
 }
 
 function parseSideEffects(value: string): string[] {
@@ -87,6 +107,32 @@ describe('worker package metadata', () => {
         './mcp-server': './src/mcp-server.ts',
         './service': './src/service.ts'
       }))
+    }
+  })
+
+  it('keeps workspace preview workers integrated without implicit release bundling', () => {
+    const rootPackage = readRootPackageJson()
+    const bundledWorkerManifestSource = readFileSync(releaseWorkerManifestPath, 'utf8')
+
+    for (const packageDir of workspacePreviewWorkerPackages) {
+      const metadata = readWorkerPackageJson(packageDir)
+      const workspacePath = `packages/workers/${packageDir}`
+
+      expect(rootPackage.workspaces, metadata.name).toContain(workspacePath)
+      expect(rootPackage.scripts?.[`${packageDir}:test`], metadata.name).toBe(
+        `npm --workspace ${metadata.name} run test`
+      )
+      expect(rootPackage.scripts?.[`${packageDir}:typecheck`], metadata.name).toBe(
+        `npm --workspace ${metadata.name} run typecheck`
+      )
+      expect(metadata.exports, metadata.name).toEqual(expect.objectContaining({
+        '.': './src/index.ts',
+        './contract': './src/contract.ts',
+        './engine': `./src/${packageDir}-engine.ts`,
+        './service': './src/service.ts'
+      }))
+      expect(metadata.sciforge?.distribution, metadata.name).toBeUndefined()
+      expect(bundledWorkerManifestSource, metadata.name).not.toContain(`dir: '${workspacePath}'`)
     }
   })
 

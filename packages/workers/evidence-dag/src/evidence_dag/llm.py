@@ -28,17 +28,17 @@ class ModelRouterLLM:
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        timeout_s: float = 180.0,
-        max_attempts: int = 5,
-        retry_base_s: float = 1.5,
+        timeout_s: Optional[float] = None,
+        max_attempts: Optional[int] = None,
+        retry_base_s: Optional[float] = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.base_url = (base_url or os.environ.get("EDAG_MODEL_ROUTER_BASE_URL", "")).rstrip("/")
         self.api_key = api_key or os.environ.get("EDAG_MODEL_ROUTER_API_KEY", "")
         self.model = model or os.environ.get("EDAG_MODEL_ROUTER_MODEL", "sciforge-router")
-        self.timeout_s = timeout_s
-        self.max_attempts = max_attempts
-        self.retry_base_s = retry_base_s
+        self.timeout_s = timeout_s if timeout_s is not None else _float_env("EDAG_MODEL_ROUTER_TIMEOUT_S", 180.0)
+        self.max_attempts = max_attempts if max_attempts is not None else _int_env("EDAG_MODEL_ROUTER_MAX_ATTEMPTS", 5)
+        self.retry_base_s = retry_base_s if retry_base_s is not None else _float_env("EDAG_MODEL_ROUTER_RETRY_BASE_S", 1.5)
         self._sleep = sleep
         if not self.base_url:
             raise ValueError("EDAG_MODEL_ROUTER_BASE_URL not set")
@@ -73,6 +73,22 @@ class ModelRouterLLM:
                 if attempt < self.max_attempts:
                     self._sleep(self.retry_base_s * (2 ** (attempt - 1)))
         raise RuntimeError(f"LLM call failed after {self.max_attempts} attempts: {last_err}")
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, ""))
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, ""))
+        return value if value > 0 else default
+    except ValueError:
+        return default
 
 
 class StubLLM:

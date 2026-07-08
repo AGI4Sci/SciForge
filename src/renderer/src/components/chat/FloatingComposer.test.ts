@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { WORKSPACE_PREVIEW_DRAG_SOURCE_MIME } from '@shared/workspace-preview'
 import {
   FloatingComposer,
   attachmentInputsFromPickedFiles,
+  composerWorkspaceReferenceDropFromTransfer,
   composeInsertedTextAtSelection,
   formatGoalElapsedSeconds,
   formatThreadContextStateLabel,
@@ -34,6 +36,10 @@ import {
   removeComposerFileMentionToken,
   replaceFileMentionInInput
 } from '../../lib/composer-file-references'
+import {
+  WORKSPACE_REFERENCE_DRAG_MIME,
+  writeWorkspaceReferenceDragData
+} from '../../lib/workspace-reference-drag'
 import {
   resolveSpeechToTextSettingsFromAppSettings
 } from './use-voice-dictation'
@@ -274,6 +280,79 @@ describe('FloatingComposer file references', () => {
     expect(prompt).toContain('<workspace_file path="src/App.tsx" truncated="true">')
     expect(prompt).toContain('export function App() {}')
     expect(prompt).toContain('User request:\nsummarize this')
+  })
+
+  it('converts workspace reference drag payloads into composer references', () => {
+    const data: Record<string, string> = {}
+    writeWorkspaceReferenceDragData({
+      setData: (format, value) => {
+        data[format] = value
+      }
+    }, {
+      workspaceRoot: '',
+      relativePath: 'texts/product plan.pdf',
+      name: 'product plan.pdf',
+      kind: 'pdf',
+      mimeType: 'application/pdf',
+      size: 2048
+    }, '/workspace/sciforge')
+
+    const result = composerWorkspaceReferenceDropFromTransfer({
+      types: [WORKSPACE_REFERENCE_DRAG_MIME],
+      getData: (format) => data[format] ?? ''
+    }, {
+      fileReferenceEnabled: true,
+      canAddFileReference: true
+    })
+
+    expect(result).toEqual({
+      reference: {
+        path: 'texts/product plan.pdf',
+        relativePath: 'texts/product plan.pdf',
+        name: 'product plan.pdf',
+        workspaceRoot: '/workspace/sciforge',
+        kind: 'pdf',
+        mimeType: 'application/pdf'
+      },
+      mentionToken: '@"texts/product plan.pdf"'
+    })
+    expect(composerWorkspaceReferenceDropFromTransfer({
+      types: [WORKSPACE_REFERENCE_DRAG_MIME],
+      getData: (format) => data[format] ?? ''
+    }, {
+      fileReferenceEnabled: false,
+      canAddFileReference: true
+    })).toBeNull()
+  })
+
+  it('accepts shared workspace preview drag source data as a workspace mention fallback', () => {
+    const result = composerWorkspaceReferenceDropFromTransfer({
+      types: [WORKSPACE_PREVIEW_DRAG_SOURCE_MIME],
+      getData: (format) => format === WORKSPACE_PREVIEW_DRAG_SOURCE_MIME
+        ? JSON.stringify({
+            kind: 'workspace-file',
+            path: 'data/samples.csv',
+            displayName: 'samples.csv',
+            mimeType: 'text/csv',
+            supportedActions: ['copy-path', 'attach-to-session']
+          })
+        : ''
+    }, {
+      fileReferenceEnabled: true,
+      canAddFileReference: true
+    })
+
+    expect(result).toMatchObject({
+      reference: {
+        path: 'data/samples.csv',
+        relativePath: 'data/samples.csv',
+        name: 'samples.csv',
+        workspaceRoot: '',
+        kind: 'text',
+        mimeType: 'text/csv'
+      },
+      mentionToken: '@data/samples.csv'
+    })
   })
 })
 

@@ -20,6 +20,7 @@ class Engine:
     def __init__(self, db_path: str, session_dir: str, llm: Any = None,
                  judge: Any = None) -> None:
         self.store = Store(db_path)
+        self._mark_interrupted_compile_runs()
         self.reader = SessionReader(session_dir)
         self.judge = judge if judge is not None else Judge(llm, self.store)
         self.compiler = Compiler(self.store, self.reader, self.judge)
@@ -27,6 +28,11 @@ class Engine:
     # ------------------------------------------------------------- compile
     def compile(self, trigger: str = "manual", scope: Any = "all") -> dict:
         return self.compiler.compile(trigger, scope)
+
+    def _mark_interrupted_compile_runs(self) -> None:
+        self.store.x("UPDATE compile_run SET status='interrupted', finished_at=?"
+                     " WHERE status='running'", (now_iso(),))
+        self.store.conn.commit()
 
     def compile_runs(self, limit: int = 20) -> list[dict]:
         rows = self.store.q(

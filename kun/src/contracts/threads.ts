@@ -173,6 +173,12 @@ export const ThreadSummarySchema = ThreadSchema.pick({
 })
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>
 
+export const ThreadSidebarProbeResponse = z.object({
+  threadId: z.string().min(1),
+  text: z.string().nullable()
+})
+export type ThreadSidebarProbeResponse = z.infer<typeof ThreadSidebarProbeResponse>
+
 export const CreateThreadRequest = z.object({
   title: z.string().optional(),
   workspace: z.string().min(1),

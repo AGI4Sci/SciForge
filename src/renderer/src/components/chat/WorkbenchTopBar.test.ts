@@ -40,6 +40,27 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
     expect(html).toContain('aria-pressed="true"')
   })
 
+  it('shows Project DAG as a right panel item', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'project-dag',
+      onToggleRightPanelMode: vi.fn()
+    }))
+
+    expect(html).toContain('Project DAG')
+    expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('keeps right-panel controls reachable in narrow workbench widths', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'project-dag',
+      onToggleRightPanelMode: vi.fn()
+    }))
+
+    expect(html).toContain('chat-workbench-topbar')
+    expect(html).toContain('justify-start')
+    expect(html).toContain('overflow-x-auto')
+  })
+
   it('renders separate controls for opening the workspace and choosing the default editor', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,

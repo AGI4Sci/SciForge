@@ -115,6 +115,36 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
     ])
   })
 
+  it('reads sidebar probes from the lightweight local runtime endpoint', async () => {
+    const request = vi.fn(async (
+      _settings: AppSettingsV1,
+      pathAndQuery: string,
+      _init: { method?: string }
+    ) => {
+      if (pathAndQuery === '/v1/threads/thread-1/sidebar-probe') {
+        return jsonResponse({ threadId: 'thread-1', text: ' real prompt ' })
+      }
+      throw new Error(`Unexpected request: ${pathAndQuery}`)
+    })
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({ request })
+    const context = { settings: buildSettings() }
+
+    await expect(adapter.readThreadSidebarProbe?.(context, {
+      runtimeId: 'sciforge',
+      threadId: 'thread-1'
+    })).resolves.toEqual({
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      text: 'real prompt'
+    })
+
+    expect(request).toHaveBeenCalledWith(
+      context.settings,
+      '/v1/threads/thread-1/sidebar-probe',
+      { method: 'GET' }
+    )
+  })
+
   it('maps structured local runtime thread metadata without using preview as a title fallback', async () => {
     const request = vi.fn(async () => jsonResponse({
       threads: [{

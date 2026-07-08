@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_PREVIEW_DRAG_SOURCE_MIME } from '@shared/workspace-preview'
 import {
   containingFolderPath,
   composerReferenceFromWorkspaceReference,
+  fileTreeCopyContentFromReadResult,
+  fileTreeExternalImportPayload,
+  fileTreeWorkspaceDropDecision,
+  fileTreeWorkspaceDropDecisionFromDragData,
   renamedRelativePath,
   rewriteRenamedPath,
   shouldProcessInitialDirectory
 } from './ChatFileTreePanel'
+import {
+  WORKSPACE_REFERENCE_DRAG_MIME,
+  workspaceReferenceDragPayload,
+  writeWorkspaceReferenceDragData
+} from '../../lib/workspace-reference-drag'
 
 describe('ChatFileTreePanel helpers', () => {
   it('converts shared workspace references into composer references', () => {
@@ -64,5 +74,230 @@ describe('ChatFileTreePanel helpers', () => {
     expect(shouldProcessInitialDirectory(2, request)).toBe(true)
     expect(shouldProcessInitialDirectory(3, request)).toBe(false)
     expect(shouldProcessInitialDirectory(3, null)).toBe(false)
+  })
+
+  it('serializes workspace file references into shared drag source payloads', () => {
+    const payload = workspaceReferenceDragPayload({
+      workspaceRoot: '',
+      relativePath: 'texts/paper.pdf',
+      name: 'paper.pdf',
+      kind: 'pdf',
+      mimeType: 'application/pdf',
+      size: 128
+    }, '/workspace/project')
+
+    expect(payload).toMatchObject({
+      version: 1,
+      workspaceRoot: '/workspace/project',
+      reference: {
+        workspaceRoot: '/workspace/project',
+        relativePath: 'texts/paper.pdf',
+        name: 'paper.pdf',
+        kind: 'pdf'
+      },
+      source: {
+        kind: 'workspace-file',
+        path: 'texts/paper.pdf',
+        displayName: 'paper.pdf',
+        mimeType: 'application/pdf',
+        size: 128,
+        supportedActions: ['copy-path', 'attach-to-session', 'native-file']
+      }
+    })
+  })
+
+  it('writes workspace references to custom drag MIME data and text fallback', () => {
+    const data: Record<string, string> = {}
+    const transfer = {
+      effectAllowed: '',
+      setData: (format: string, value: string) => {
+        data[format] = value
+      }
+    }
+
+    const payload = writeWorkspaceReferenceDragData(transfer, {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'results',
+      name: 'results',
+      kind: 'directory'
+    }, '/fallback')
+
+    expect(transfer.effectAllowed).toBe('copyMove')
+    expect(payload.source).toMatchObject({
+      kind: 'workspace-directory',
+      path: 'results',
+      displayName: 'results'
+    })
+    expect(JSON.parse(data[WORKSPACE_PREVIEW_DRAG_SOURCE_MIME])).toEqual(payload.source)
+    expect(JSON.parse(data[WORKSPACE_REFERENCE_DRAG_MIME])).toEqual(payload)
+    expect(data['text/plain']).toBe('results')
+  })
+
+  it('derives safe workspace tree drop decisions for move, copy, and invalid directory targets', () => {
+    const source = {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'texts/paper.pdf',
+      name: 'paper.pdf',
+      kind: 'pdf' as const
+    }
+
+    expect(fileTreeWorkspaceDropDecision({
+      source,
+      targetDirectory: 'archive',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toEqual({
+      action: 'move',
+      sourcePath: 'texts/paper.pdf',
+      sourceWorkspaceRoot: '/workspace/project',
+      targetDirectory: 'archive',
+      targetWorkspaceRoot: '/workspace/project'
+    })
+    expect(fileTreeWorkspaceDropDecision({
+      source,
+      targetDirectory: 'archive',
+      targetWorkspaceRoot: '/workspace/project',
+      copyRequested: true
+    })?.action).toBe('copy')
+    expect(fileTreeWorkspaceDropDecision({
+      source,
+      targetDirectory: 'archive',
+      targetWorkspaceRoot: '/workspace/other'
+    })?.action).toBe('copy')
+    expect(fileTreeWorkspaceDropDecision({
+      source,
+      targetDirectory: 'texts',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toBeNull()
+    expect(fileTreeWorkspaceDropDecision({
+      source: {
+        workspaceRoot: '/workspace/project',
+        relativePath: 'texts',
+        name: 'texts',
+        kind: 'directory'
+      },
+      targetDirectory: 'texts/nested',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toBeNull()
+    expect(fileTreeWorkspaceDropDecision({
+      source: {
+        workspaceRoot: '/workspace/project',
+        relativePath: 'texts',
+        name: 'texts',
+        kind: 'directory'
+      },
+      targetDirectory: 'texts',
+      targetWorkspaceRoot: '/workspace/project',
+      copyRequested: true
+    })).toBeNull()
+  })
+
+  it('derives workspace tree drop decisions from serialized drag data', () => {
+    const data: Record<string, string> = {}
+    writeWorkspaceReferenceDragData({
+      setData: (format: string, value: string) => {
+        data[format] = value
+      }
+    }, {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'results/table.csv',
+      name: 'table.csv',
+      kind: 'text',
+      mimeType: 'text/csv'
+    }, '/fallback')
+
+    expect(fileTreeWorkspaceDropDecisionFromDragData({
+      types: [WORKSPACE_REFERENCE_DRAG_MIME],
+      getData: (format) => data[format] ?? ''
+    }, {
+      targetDirectory: 'archive',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toMatchObject({
+      action: 'move',
+      sourcePath: 'results/table.csv',
+      targetDirectory: 'archive'
+    })
+  })
+
+  it('builds external file import payloads from dropped files', () => {
+    const files = {
+      length: 4,
+      0: { name: 'a.csv' } as File,
+      1: { name: 'b.csv' } as File,
+      2: { name: 'duplicate.csv' } as File,
+      3: { name: 'missing.txt' } as File
+    }
+    const paths = new Map<File, string>([
+      [files[0], '/tmp/a.csv'],
+      [files[1], '/tmp/b.csv'],
+      [files[2], '/tmp/a.csv'],
+      [files[3], '']
+    ])
+
+    expect(fileTreeExternalImportPayload({
+      files,
+      getPathForFile: (file) => paths.get(file) ?? '',
+      targetDirectory: 'incoming/',
+      targetWorkspaceRoot: ' /workspace/project '
+    })).toEqual({
+      sourcePaths: ['/tmp/a.csv', '/tmp/b.csv'],
+      targetDirectory: 'incoming',
+      targetWorkspaceRoot: '/workspace/project'
+    })
+    expect(fileTreeExternalImportPayload({
+      files: { length: 1, 0: { name: 'missing.txt' } as File },
+      getPathForFile: () => '',
+      targetDirectory: '',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toBeNull()
+  })
+
+  it('extracts copyable text content from supported workspace read results', () => {
+    expect(fileTreeCopyContentFromReadResult({
+      ok: true,
+      kind: 'text',
+      path: '/workspace/project/notes.txt',
+      content: 'hello',
+      mimeType: 'text/plain',
+      size: 5,
+      truncated: false
+    })).toEqual({ ok: true, content: 'hello' })
+    expect(fileTreeCopyContentFromReadResult({
+      ok: true,
+      kind: 'docx',
+      path: '/workspace/project/report.docx',
+      content: 'report text',
+      paragraphs: [],
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 2048,
+      truncated: false,
+      mtimeMs: 1
+    })).toEqual({ ok: true, content: 'report text' })
+  })
+
+  it('rejects unsupported or unsafe file tree copy content results', () => {
+    expect(fileTreeCopyContentFromReadResult({
+      ok: true,
+      kind: 'text',
+      path: '/workspace/project/large.log',
+      content: 'partial',
+      mimeType: 'text/plain',
+      size: 2_000_000,
+      truncated: true
+    })).toEqual({ ok: false, reason: 'truncated' })
+    expect(fileTreeCopyContentFromReadResult({
+      ok: true,
+      kind: 'pdf',
+      path: '/workspace/project/paper.pdf',
+      content: '',
+      dataBase64: '',
+      mimeType: 'application/pdf',
+      size: 1024,
+      truncated: false,
+      mtimeMs: 1
+    })).toEqual({ ok: false, reason: 'unsupported' })
+    expect(fileTreeCopyContentFromReadResult({
+      ok: false,
+      message: 'Cannot preview a directory.'
+    })).toEqual({ ok: false, reason: 'read-error', message: 'Cannot preview a directory.' })
   })
 })

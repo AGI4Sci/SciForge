@@ -32,6 +32,8 @@ import {
   isSafeOpenExternalUrl,
   pdfAnnotationSidecarImportPayloadSchema,
   pdfAnnotationSidecarLoadPayloadSchema,
+  projectDagCompilePayloadSchema,
+  projectDagViewPayloadSchema,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
@@ -41,12 +43,21 @@ import {
   speechTranscriptionPayloadSchema,
   sciforgeCanvasInsertArtifactPayloadSchema,
   skillListPayloadSchema,
+  workspaceClipboardPastePayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryCopyPayloadSchema,
   workspaceEntryDeletePayloadSchema,
+  workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
+  workspaceNativeFileDragPayloadSchema,
+  workspacePreviewApplyEditPayloadSchema,
+  workspacePreviewDescribeAssetPayloadSchema,
+  workspacePreviewExportPayloadSchema,
+  workspacePreviewObservePayloadSchema,
+  workspacePreviewOpenPayloadSchema,
+  workspacePreviewReadRangePayloadSchema,
   writeExportPayloadSchema,
   writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
@@ -131,6 +142,21 @@ describe('app-ipc-schemas', () => {
         threshold: 2
       })
     ).toThrow()
+  })
+
+  it('accepts Project DAG panel payloads', () => {
+    expect(projectDagViewPayloadSchema.parse({ view: 'graph' })).toEqual({ view: 'graph' })
+    expect(projectDagCompilePayloadSchema.parse({
+      goalTitle: ' Project alpha ',
+      goalDescription: ' Find the answer. ',
+      scope: [' session-1 ']
+    })).toEqual({
+      goalTitle: 'Project alpha',
+      goalDescription: 'Find the answer.',
+      scope: ['session-1']
+    })
+    expect(projectDagCompilePayloadSchema.parse({ scope: 'all' })).toEqual({ scope: 'all' })
+    expect(() => projectDagViewPayloadSchema.parse({ view: 'export' })).toThrow()
   })
 
   it('accepts generated and edited image artifacts for SciForge Canvas insertion', () => {
@@ -501,6 +527,106 @@ describe('app-ipc-schemas', () => {
       workspaceRoot: ' /tmp/workspace '
     })).toEqual({ workspaceRoot: '/tmp/workspace' })
     expect(skillListPayloadSchema.parse({})).toEqual({})
+  })
+
+  it('accepts workspace preview open and observe IPC payloads', () => {
+    expect(workspacePreviewOpenPayloadSchema.parse({
+      path: ' protein.PDB ',
+      workspaceRoot: ' /tmp/workspace ',
+      mimeType: ' chemical/x-pdb ',
+      mode: ' inspect '
+    })).toEqual({
+      path: 'protein.PDB',
+      workspaceRoot: '/tmp/workspace',
+      mimeType: 'chemical/x-pdb',
+      mode: 'inspect'
+    })
+    expect(workspacePreviewObservePayloadSchema.parse({
+      sessionId: ' session-1 '
+    })).toEqual({ sessionId: 'session-1' })
+    expect(workspacePreviewDescribeAssetPayloadSchema.parse({
+      sessionId: ' session-1 '
+    })).toEqual({ sessionId: 'session-1' })
+    expect(workspacePreviewReadRangePayloadSchema.parse({
+      sessionId: ' session-1 ',
+      range: { offset: 4, length: 16 }
+    })).toEqual({
+      sessionId: 'session-1',
+      range: { offset: 4, length: 16 }
+    })
+    expect(workspacePreviewApplyEditPayloadSchema.parse({
+      sessionId: ' session-1 ',
+      operation: {
+        kind: 'text.replaceRange',
+        path: 'notes.md',
+        range: {
+          start: { line: 1, column: 1 },
+          end: { line: 1, column: 5 }
+        },
+        text: 'done'
+      }
+    })).toEqual({
+      sessionId: 'session-1',
+      operation: {
+        kind: 'text.replaceRange',
+        path: 'notes.md',
+        range: {
+          start: { line: 1, column: 1 },
+          end: { line: 1, column: 5 }
+        },
+        text: 'done'
+      }
+    })
+
+    expect(workspacePreviewExportPayloadSchema.parse({
+      sessionId: ' session-1 ',
+      target: {
+        kind: 'workspace-file',
+        format: 'pdb',
+        path: ' exports/protein-copy.pdb '
+      }
+    })).toEqual({
+      sessionId: 'session-1',
+      target: {
+        kind: 'workspace-file',
+        format: 'pdb',
+        path: 'exports/protein-copy.pdb'
+      }
+    })
+
+    expect(() =>
+      workspacePreviewOpenPayloadSchema.parse({
+        path: 'protein.PDB',
+        workspaceRoot: '/tmp/workspace',
+        mode: 'review'
+      })
+    ).toThrow()
+    expect(() =>
+      workspacePreviewReadRangePayloadSchema.parse({
+        sessionId: 'session-1',
+        range: { offset: 0, length: 4 * 1024 * 1024 + 1 }
+      })
+    ).toThrow()
+    expect(() =>
+      workspacePreviewApplyEditPayloadSchema.parse({
+        sessionId: 'session-1',
+        operation: {
+          kind: 'text.replaceRange',
+          path: 'notes.md',
+          range: {
+            start: { line: 1, column: 1 },
+            end: { line: 1, column: 5 }
+          },
+          text: 'x'.repeat(2_000_001)
+        }
+      })
+    ).toThrow()
+    expect(() =>
+      workspacePreviewExportPayloadSchema.parse({
+        sessionId: 'session-1',
+        target: { kind: 'workspace-file', format: 'pdb' }
+      })
+    ).toThrow()
   })
 
   it('accepts speech transcription payloads without provider override settings', () => {
@@ -1214,17 +1340,64 @@ describe('app-ipc-schemas', () => {
       sourceWorkspaceRoot: '/tmp/source',
       sourcePath: 'draft.md',
       targetWorkspaceRoot: '/tmp/target',
-      targetDirectory: ''
+      targetDirectory: '',
+      conflictPolicy: { strategy: 'rename' }
     })
     const movePayload = workspaceEntryMovePayloadSchema.parse({
       sourceWorkspaceRoot: '/tmp/source',
       sourcePath: 'draft.md',
       targetWorkspaceRoot: '/tmp/target',
-      targetDirectory: 'notes'
+      targetDirectory: 'notes',
+      conflictPolicy: { strategy: 'overwrite' }
     })
 
     expect(copyPayload.targetDirectory).toBe('')
+    expect(copyPayload.conflictPolicy).toEqual({ strategy: 'rename' })
     expect(movePayload.targetDirectory).toBe('notes')
+    expect(movePayload.conflictPolicy).toEqual({ strategy: 'overwrite' })
+  })
+
+  it('accepts workspace import payloads with multiple source paths', () => {
+    const payload = workspaceEntryImportPayloadSchema.parse({
+      sourcePaths: ['/tmp/source/a.csv', '/tmp/source/images'],
+      targetWorkspaceRoot: '/tmp/workspace',
+      targetDirectory: '',
+      conflictPolicy: {
+        strategy: 'rename',
+        renameTemplate: '{name} ({n}){ext}',
+        maxAttempts: 5
+      }
+    })
+
+    expect(payload.sourcePaths).toEqual(['/tmp/source/a.csv', '/tmp/source/images'])
+    expect(payload.targetDirectory).toBe('')
+    expect(payload.conflictPolicy).toEqual({
+      strategy: 'rename',
+      renameTemplate: '{name} ({n}){ext}',
+      maxAttempts: 5
+    })
+  })
+
+  it('accepts workspace clipboard paste payloads', () => {
+    const payload = workspaceClipboardPastePayloadSchema.parse({
+      workspaceRoot: ' /tmp/workspace ',
+      targetDirectory: ' notes ',
+      conflictPolicy: { strategy: 'skip' }
+    })
+
+    expect(payload.workspaceRoot).toBe('/tmp/workspace')
+    expect(payload.targetDirectory).toBe('notes')
+    expect(payload.conflictPolicy).toEqual({ strategy: 'skip' })
+  })
+
+  it('accepts workspace native file drag payloads', () => {
+    const payload = workspaceNativeFileDragPayloadSchema.parse({
+      workspaceRoot: ' /tmp/workspace ',
+      path: ' notes/paper.pdf '
+    })
+
+    expect(payload.workspaceRoot).toBe('/tmp/workspace')
+    expect(payload.path).toBe('notes/paper.pdf')
   })
 
   it('accepts structured inline completion payloads', () => {

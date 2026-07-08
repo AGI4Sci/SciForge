@@ -71,6 +71,21 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('evidenceDag:audit-run', payload)
   })
 
+  it('exposes Project DAG panel IPC', async () => {
+    const api = exposedApi as {
+      getProjectDagView(payload: unknown): Promise<unknown>
+      runProjectDagCompile(payload: unknown): Promise<unknown>
+    }
+    const viewPayload = { view: 'graph' }
+    const compilePayload = { goalTitle: 'Project alpha' }
+
+    await api.getProjectDagView(viewPayload)
+    await api.runProjectDagCompile(compilePayload)
+
+    expect(invoke).toHaveBeenCalledWith('projectDag:view', viewPayload)
+    expect(invoke).toHaveBeenCalledWith('projectDag:compile', compilePayload)
+  })
+
   it('exposes real file paths from picked or dropped files', () => {
     const api = exposedApi as {
       getPathForFile(file: File): string
@@ -78,6 +93,51 @@ describe('preload agentRuntime bridge', () => {
     const file = { name: 'paper.pdf' } as File
 
     expect(api.getPathForFile(file)).toBe('/tmp/file.txt')
+  })
+
+  it('exposes workspace entry import IPC', async () => {
+    const api = exposedApi as {
+      importWorkspaceEntries(payload: unknown): Promise<unknown>
+    }
+    const payload = {
+      sourcePaths: ['/tmp/source.csv'],
+      targetWorkspaceRoot: '/tmp/workspace',
+      targetDirectory: 'incoming',
+      conflictPolicy: { strategy: 'rename' }
+    }
+
+    await api.importWorkspaceEntries(payload)
+
+    expect(invoke).toHaveBeenCalledWith('file:import-workspace-entries', payload)
+  })
+
+  it('exposes workspace clipboard paste IPC', async () => {
+    const api = exposedApi as {
+      pasteWorkspaceClipboard(payload: unknown): Promise<unknown>
+    }
+    const payload = {
+      workspaceRoot: '/tmp/workspace',
+      targetDirectory: 'notes',
+      conflictPolicy: { strategy: 'skip' }
+    }
+
+    await api.pasteWorkspaceClipboard(payload)
+
+    expect(invoke).toHaveBeenCalledWith('clipboard:paste-workspace', payload)
+  })
+
+  it('exposes workspace native file drag IPC', async () => {
+    const api = exposedApi as {
+      startWorkspaceNativeFileDrag(payload: unknown): Promise<unknown>
+    }
+    const payload = {
+      workspaceRoot: '/tmp/workspace',
+      path: 'notes/paper.pdf'
+    }
+
+    await api.startWorkspaceNativeFileDrag(payload)
+
+    expect(invoke).toHaveBeenCalledWith('file:start-workspace-native-drag', payload)
   })
 
   it('exposes filtered dev preview navigation notifications', () => {
@@ -127,6 +187,90 @@ describe('preload agentRuntime bridge', () => {
       path: 'paper.docx',
       workspaceRoot: '/tmp/workspace',
       paragraphs: [{ index: 1, text: 'edited' }]
+    })
+  })
+
+  it('exposes workspace preview IPC methods without replacing file channels', async () => {
+    const api = exposedApi as {
+      readWorkspaceFile(options: unknown): Promise<unknown>
+      workspacePreview: {
+        listPlugins(): Promise<unknown>
+        open(input: unknown): Promise<unknown>
+        observe(sessionId: string): Promise<unknown>
+        describeAsset(sessionId: string): Promise<unknown>
+        readRange(sessionId: string, range: unknown): Promise<unknown>
+        applyEdit(sessionId: string, operation: unknown): Promise<unknown>
+        export(sessionId: string, target: unknown): Promise<unknown>
+        watch(payload: unknown): Promise<unknown>
+        unwatch(watchId: string): Promise<unknown>
+        onChanged(handler: (payload: unknown) => void): () => void
+      }
+    }
+    const openInput = {
+      path: 'protein.pdb',
+      workspaceRoot: '/tmp/workspace',
+      mimeType: 'chemical/x-pdb',
+      mode: 'inspect'
+    }
+
+    await api.workspacePreview.listPlugins()
+    await api.workspacePreview.open(openInput)
+    await api.workspacePreview.observe('session-1')
+    await api.workspacePreview.describeAsset('session-1')
+    await api.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
+    await api.workspacePreview.applyEdit('session-1', {
+      kind: 'molecular.setSelection',
+      path: 'protein.pdb',
+      selection: { kind: 'molecular', chains: ['A'] }
+    })
+    await api.workspacePreview.export('session-1', {
+      kind: 'workspace-file',
+      format: 'pdb',
+      path: 'exports/protein-copy.pdb'
+    })
+    await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
+    await api.workspacePreview.unwatch('watch-1')
+    const changed = vi.fn()
+    const unsubscribe = api.workspacePreview.onChanged(changed)
+    const wrapped = on.mock.calls.find(([channel]) => channel === 'workspacePreview:changed')?.[1]
+    wrapped?.({}, { ok: true, watchId: 'watch-1' })
+    unsubscribe()
+    await api.readWorkspaceFile({ path: 'paper.pdf', workspaceRoot: '/tmp/workspace' })
+
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:listPlugins')
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:open', openInput)
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:observe', { sessionId: 'session-1' })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:describeAsset', { sessionId: 'session-1' })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:readRange', {
+      sessionId: 'session-1',
+      range: { offset: 0, length: 4 }
+    })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:applyEdit', {
+      sessionId: 'session-1',
+      operation: {
+        kind: 'molecular.setSelection',
+        path: 'protein.pdb',
+        selection: { kind: 'molecular', chains: ['A'] }
+      }
+    })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:export', {
+      sessionId: 'session-1',
+      target: {
+        kind: 'workspace-file',
+        format: 'pdb',
+        path: 'exports/protein-copy.pdb'
+      }
+    })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:watch', {
+      path: 'protein.pdb',
+      workspaceRoot: '/tmp/workspace'
+    })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
+    expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
+    expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
+    expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
+      path: 'paper.pdf',
+      workspaceRoot: '/tmp/workspace'
     })
   })
 

@@ -22,14 +22,14 @@ describe('fitWorkbenchWidths', () => {
     expect(widths.right).toBe(1273)
   })
 
-  it('allows the right panel to collapse to zero width', () => {
+  it('keeps a visible right panel usable when the stored width is tiny', () => {
     const widths = fitWorkbenchWidths(1480, 280, -200, {
       leftPanelVisible: true,
       rightPanelVisible: true
     })
 
     expect(widths.left).toBe(280)
-    expect(widths.right).toBe(0)
+    expect(widths.right).toBe(300)
   })
 })
 

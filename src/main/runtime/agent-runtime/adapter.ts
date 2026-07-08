@@ -9,6 +9,7 @@ import type {
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
   AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadSidebarProbe,
   AgentRuntimeThreadStartInput,
   AgentRuntimeTransport,
   AgentRuntimeTurnHandle,
@@ -106,6 +107,10 @@ export type AgentRuntimeAdapter = {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeThreadReadInput
   ): Promise<AgentRuntimeThreadDetail>
+  readThreadSidebarProbe?(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeThreadReadInput
+  ): Promise<AgentRuntimeThreadSidebarProbe>
   startTurn(
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput

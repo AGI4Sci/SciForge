@@ -10,6 +10,7 @@ import {
   SetThreadTodosRequest,
   ThreadGoalResponse,
   ThreadSchema,
+  ThreadSidebarProbeResponse,
   ThreadTodosResponse,
   UpdateThreadRequest,
   type ThreadRecord
@@ -101,6 +102,20 @@ export async function getThread(
     ...ThreadSchema.parse(hydratedThread),
     latestSeq
   })
+}
+
+export async function getThreadSidebarProbe(
+  service: ThreadService,
+  threadId: string
+): Promise<JsonResponse> {
+  const probe = await service.sidebarProbe(threadId)
+  if (!probe) {
+    return jsonResponse(
+      { code: 'not_found', message: `thread not found: ${threadId}` },
+      404
+    )
+  }
+  return jsonResponse(ThreadSidebarProbeResponse.parse(probe))
 }
 
 function hydrateThreadItemsFromSession(thread: ThreadRecord, items: TurnItem[]): ThreadRecord {

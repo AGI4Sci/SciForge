@@ -188,6 +188,9 @@ export class AgentRuntimeHost {
 
   async readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    if (adapter.readThreadSidebarProbe) {
+      return adapter.readThreadSidebarProbe(context, input)
+    }
     const detail = await adapter.readThread(context, input)
     return {
       runtimeId: adapter.id,

@@ -13,6 +13,7 @@ import type {
   ThreadRelation,
   ThreadSource,
   ThreadStatus,
+  ThreadSidebarProbeResponse,
   ThreadTodoItem,
   ThreadTodoList,
   ThreadTodoSource,
@@ -107,6 +108,15 @@ export class ThreadService {
 
   async get(threadId: string): Promise<ThreadRecord | null> {
     return this.threadStore.get(threadId)
+  }
+
+  async sidebarProbe(threadId: string): Promise<ThreadSidebarProbeResponse | null> {
+    const thread = await this.threadStore.get(threadId)
+    if (!thread) return null
+    return {
+      threadId: thread.id,
+      text: firstSidebarUserText(thread)
+    }
   }
 
   async create(
@@ -511,7 +521,19 @@ export class ThreadService {
   }
 }
 
+const SIDEBAR_PROBE_TEXT_MAX_CHARS = 4_000
 const DEFAULT_HIDDEN_THREAD_SOURCES = new Set<ThreadSource>(['side', 'subagent', 'workflow', 'internal'])
+
+function firstSidebarUserText(thread: ThreadRecord): string | null {
+  for (const turn of thread.turns) {
+    for (const item of turn.items ?? []) {
+      if (item.kind !== 'user_message') continue
+      const text = (item.displayText?.trim() || item.text.trim()).slice(0, SIDEBAR_PROBE_TEXT_MAX_CHARS)
+      if (text) return text
+    }
+  }
+  return null
+}
 
 function shouldIncludeThreadInList(thread: ThreadSummary, options: ListThreadsOptions): boolean {
   const source = inferThreadSource(thread)

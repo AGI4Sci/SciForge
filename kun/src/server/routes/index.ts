@@ -10,6 +10,7 @@ import {
   getThreadGoal,
   getThreadTodos,
   getThread,
+  getThreadSidebarProbe,
   listThreads,
   setThreadGoal,
   setThreadTodos,
@@ -62,6 +63,7 @@ import type { ServerRuntime } from './server-runtime.js'
  * - `GET /v1/workspace/status` (auth)
  * - `GET/POST /v1/threads` (auth)
  * - `GET/PATCH/DELETE /v1/threads/{id}` (auth)
+ * - `GET /v1/threads/{id}/sidebar-probe` (auth)
  * - `POST /v1/threads/{id}/fork` (auth)
  * - `GET/POST/DELETE /v1/threads/{id}/goal` (auth)
  * - `GET/POST/DELETE /v1/threads/{id}/todos` (auth)
@@ -147,6 +149,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return getThread(runtime.threadService, ctx.params.id, runtime.sessionStore)
+  })
+  router.add('GET', '/v1/threads/:id/sidebar-probe', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getThreadSidebarProbe(runtime.threadService, ctx.params.id)
   })
   router.add('PATCH', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

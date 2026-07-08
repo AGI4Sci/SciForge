@@ -50,6 +50,11 @@ export function localRuntimeThreadPath(threadId: string): string {
   return `/v1/threads/${encodeURIComponent(threadId)}`
 }
 
+export const LOCAL_RUNTIME_THREAD_SIDEBAR_PROBE_TEMPLATE = '/v1/threads/{id}/sidebar-probe'
+export function localRuntimeThreadSidebarProbePath(threadId: string): string {
+  return `${localRuntimeThreadPath(threadId)}/sidebar-probe`
+}
+
 export const LOCAL_RUNTIME_THREAD_FORK_TEMPLATE = '/v1/threads/{id}/fork'
 export function localRuntimeThreadForkPath(threadId: string): string {
   return `${localRuntimeThreadPath(threadId)}/fork`

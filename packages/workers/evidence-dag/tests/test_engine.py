@@ -169,6 +169,38 @@ class TestWindowsSafePersistence(unittest.TestCase):
             # and the thread is discoverable from disk
             self.assertEqual(len(eng2.list_threads()), 1)
 
+    def test_legacy_colon_filename_still_loads(self):
+        # Pre-sanitiser POSIX builds wrote `runtime:thread.prov.json` directly.
+        # The reader keeps that fallback so existing local stores do not turn
+        # into listable-but-unopenable phantom threads after upgrading.
+        if os.name == "nt":
+            self.skipTest("colon filenames are not legal on Windows")
+        import tempfile
+        tid = "local-runtime:thread-42"
+        with tempfile.TemporaryDirectory() as d:
+            legacy_graph = build_graph(json.loads(self.EXTRACT), tid)
+            with open(os.path.join(d, f"{tid}.prov.json"), "w", encoding="utf-8") as fh:
+                fh.write(provjson.dumps(legacy_graph))
+
+            eng = Engine(StubLLM(), storage_dir=d)
+            self.assertIn(tid, eng.list_threads())
+            loaded = eng.get(tid)
+            self.assertIsNotNone(loaded)
+            self.assertEqual(loaded.thread_id, tid)
+            self.assertEqual(len(loaded.nodes), 2)
+
+    def test_legacy_colon_audit_filename_still_loads(self):
+        if os.name == "nt":
+            self.skipTest("colon filenames are not legal on Windows")
+        import tempfile
+        tid = "local-runtime:thread-42"
+        run = {"id": "audit:legacy", "risk_digest": {"total_findings": 0}}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, f"{tid}.audit.json"), "w", encoding="utf-8") as fh:
+                json.dump({"thread_id": tid, "runs": [run]}, fh)
+
+            self.assertEqual(Engine(StubLLM(), storage_dir=d).audit_runs(tid), [run])
+
     def test_all_illegal_characters_sanitised(self):
         import tempfile
         tid = 'a<b>c:d"e|f?g*h/i\\j'

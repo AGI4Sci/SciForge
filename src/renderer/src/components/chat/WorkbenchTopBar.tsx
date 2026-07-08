@@ -13,6 +13,7 @@ import {
   Download,
   ExternalLink,
   FileEdit,
+  GitMerge,
   FolderOpen,
   Globe2,
   Loader2,
@@ -26,7 +27,6 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
-import { ProjectDagExportButton } from './ProjectDagExportButton'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 
@@ -35,6 +35,7 @@ export type RightPanelMode =
   | 'changes'
   | 'browser'
   | 'evidence'
+  | 'project-dag'
   | 'file'
   | 'plan'
   | 'sdd-ai'
@@ -97,6 +98,7 @@ export function WorkbenchTopBar({
     ...(paperRadarEnabled ? [{ mode: 'paper' as const, label: t('rightPanelPaperRadar'), icon: Newspaper }] : []),
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
+    { mode: 'project-dag' as const, label: t('rightPanelProjectDag'), icon: GitMerge },
     { mode: 'figure-style' as const, label: t('rightPanelFigureStyle'), icon: Palette },
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
@@ -402,7 +404,7 @@ export function WorkbenchTopBar({
     ) : null
 
   return (
-    <div className="chat-workbench-topbar ds-no-drag flex min-w-0 shrink-0 flex-nowrap items-center justify-end gap-1">
+    <div className="chat-workbench-topbar ds-no-drag -my-1 flex min-w-0 max-w-full flex-nowrap items-center justify-start gap-1 overflow-x-auto px-0.5 py-1">
       {guiUpdateAction ? (
         <button
           type="button"
@@ -542,7 +544,6 @@ export function WorkbenchTopBar({
           </Fragment>
         )
       })}
-      <ProjectDagExportButton workspaceRoot={workspaceRoot} />
     </div>
   )
 }

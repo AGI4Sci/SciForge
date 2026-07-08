@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, realpath, readdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import JSZip from 'jszip'
 
 vi.mock('electron', () => ({
@@ -9,7 +10,12 @@ vi.mock('electron', () => ({
     getFileIcon: vi.fn()
   },
   clipboard: {
-    readImage: vi.fn()
+    availableFormats: vi.fn(),
+    read: vi.fn(),
+    readBookmark: vi.fn(),
+    readBuffer: vi.fn(),
+    readImage: vi.fn(),
+    readText: vi.fn()
   },
   shell: {
     openPath: vi.fn(),
@@ -24,8 +30,10 @@ import {
   createWorkspaceDirectory,
   createWorkspaceFile,
   deleteWorkspaceEntry,
+  importWorkspaceEntries,
   listWorkspaceDirectory,
   openEditorPath,
+  pasteWorkspaceClipboard,
   readClipboardImage,
   readWorkspaceImage,
   readWorkspaceFile,
@@ -44,6 +52,19 @@ describe('workspace-service boundary checks', () => {
 
   beforeEach(async () => {
     vi.mocked(clipboard.readImage).mockReset()
+    vi.mocked(clipboard.readText).mockReset()
+    vi.mocked(clipboard.availableFormats).mockReset()
+    vi.mocked(clipboard.read).mockReset()
+    vi.mocked(clipboard.readBookmark).mockReset()
+    vi.mocked(clipboard.readBuffer).mockReset()
+    vi.mocked(clipboard.readImage).mockReturnValue({
+      isEmpty: () => true
+    } as Electron.NativeImage)
+    vi.mocked(clipboard.readText).mockReturnValue('')
+    vi.mocked(clipboard.availableFormats).mockReturnValue([])
+    vi.mocked(clipboard.read).mockReturnValue('')
+    vi.mocked(clipboard.readBookmark).mockReturnValue({ title: '', url: '' })
+    vi.mocked(clipboard.readBuffer).mockReturnValue(Buffer.alloc(0))
     vi.mocked(shell.openPath).mockReset()
     vi.mocked(shell.openPath).mockResolvedValue('')
     rootDir = await mkdtemp(join(tmpdir(), 'sciforge-workspace-'))
@@ -310,6 +331,116 @@ describe('workspace-service boundary checks', () => {
     expect(result.height).toBe(8)
   })
 
+  it('pastes clipboard text into a workspace directory', async () => {
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    vi.mocked(clipboard.readText).mockReturnValue('clipboard note')
+
+    const result = await pasteWorkspaceClipboard({
+      workspaceRoot,
+      targetDirectory: 'notes'
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.kind).toBe('text')
+    if (result.kind !== 'text') return
+    expect(result.name).toMatch(/^pasted-text-.+\.txt$/)
+    expect(await realpath(dirname(result.path))).toBe(await realpath(join(workspaceRoot, 'notes')))
+    await expect(readFile(result.path, 'utf8')).resolves.toBe('clipboard note')
+  })
+
+  it('pastes clipboard images before falling back to clipboard text', async () => {
+    vi.mocked(clipboard.readImage).mockReturnValue({
+      isEmpty: () => false,
+      toPNG: () => Buffer.from('clipboard-png-bytes')
+    } as Electron.NativeImage)
+    vi.mocked(clipboard.readText).mockReturnValue('text fallback')
+
+    const result = await pasteWorkspaceClipboard({
+      workspaceRoot,
+      targetDirectory: ''
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.kind).toBe('image')
+    if (result.kind !== 'image') return
+    expect(result.name).toMatch(/^pasted-image-.+\.png$/)
+    expect(await realpath(dirname(result.path))).toBe(await realpath(workspaceRoot))
+    await expect(readFile(result.path)).resolves.toEqual(Buffer.from('clipboard-png-bytes'))
+  })
+
+  it('pastes clipboard files into a workspace directory through the import path', async () => {
+    const sourceDir = join(rootDir, 'clipboard-source')
+    await mkdir(join(sourceDir, 'images'), { recursive: true })
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    await writeFile(join(sourceDir, 'samples.csv'), 'sample,count\ns1,1\n', 'utf8')
+    await writeFile(join(sourceDir, 'images', 'cell.txt'), 'cell', 'utf8')
+    await writeFile(join(workspaceRoot, 'notes', 'samples.csv'), 'existing', 'utf8')
+    vi.mocked(clipboard.availableFormats).mockReturnValue(['text/uri-list'])
+    vi.mocked(clipboard.read).mockImplementation((format) =>
+      format === 'text/uri-list'
+        ? [
+            pathToFileURL(join(sourceDir, 'samples.csv')).href,
+            pathToFileURL(join(sourceDir, 'images')).href
+          ].join('\n')
+        : ''
+    )
+    vi.mocked(clipboard.readText).mockReturnValue('text fallback')
+
+    const result = await pasteWorkspaceClipboard({
+      workspaceRoot,
+      targetDirectory: 'notes'
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.kind).toBe('files')
+    if (result.kind !== 'files') return
+    expect(result.imported.map((item) => item.name)).toEqual(['samples copy.csv', 'images'])
+    await expect(readFile(join(workspaceRoot, 'notes', 'samples copy.csv'), 'utf8'))
+      .resolves.toBe('sample,count\ns1,1\n')
+    await expect(readFile(join(workspaceRoot, 'notes', 'images', 'cell.txt'), 'utf8')).resolves.toBe('cell')
+    expect(clipboard.readImage).not.toHaveBeenCalled()
+    expect(clipboard.readText).not.toHaveBeenCalled()
+  })
+
+  it('pastes clipboard files with skip conflict policy through the import path', async () => {
+    const sourceDir = join(rootDir, 'clipboard-skip-source')
+    await mkdir(sourceDir, { recursive: true })
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    await writeFile(join(sourceDir, 'samples.csv'), 'sample,count\ns1,1\n', 'utf8')
+    await writeFile(join(workspaceRoot, 'notes', 'samples.csv'), 'existing', 'utf8')
+    vi.mocked(clipboard.availableFormats).mockReturnValue(['text/uri-list'])
+    vi.mocked(clipboard.read).mockImplementation((format) =>
+      format === 'text/uri-list'
+        ? pathToFileURL(join(sourceDir, 'samples.csv')).href
+        : ''
+    )
+
+    const result = await pasteWorkspaceClipboard({
+      workspaceRoot,
+      targetDirectory: 'notes',
+      conflictPolicy: { strategy: 'skip' }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.kind).toBe('files')
+    if (result.kind !== 'files') return
+    const skippedPath = await realpath(join(workspaceRoot, 'notes', 'samples.csv'))
+    expect(result.imported).toEqual([
+      expect.objectContaining({
+        name: 'samples.csv',
+        path: skippedPath,
+        skipped: true
+      })
+    ])
+    await expect(readFile(join(workspaceRoot, 'notes', 'samples.csv'), 'utf8')).resolves.toBe('existing')
+    expect(clipboard.readImage).not.toHaveBeenCalled()
+    expect(clipboard.readText).not.toHaveBeenCalled()
+  })
+
   it('saves SDD pasted clipboard images into the requirement image directory', async () => {
     const draftId = '123e4567-e89b-12d3-a456-426614174000'
     const currentFilePath = join(workspaceRoot, '.sciforge', 'sdd', 'requirements', draftId, 'requirement.md')
@@ -545,7 +676,7 @@ describe('workspace-service boundary checks', () => {
     }
   })
 
-  it('copies files and avoids name conflicts', async () => {
+  it('copies files and defaults conflict handling to rename', async () => {
     const first = await copyWorkspaceEntry({
       sourcePath: 'inside.txt',
       sourceWorkspaceRoot: workspaceRoot,
@@ -565,6 +696,69 @@ describe('workspace-service boundary checks', () => {
     expect(await readFile(join(workspaceRoot, 'inside copy 2.txt'), 'utf8')).toBe('inside')
   })
 
+  it('keeps fixed rename conflict templates progressing after the first collision', async () => {
+    await writeFile(join(workspaceRoot, 'inside copy.txt'), 'existing copy', 'utf8')
+
+    const result = await copyWorkspaceEntry({
+      sourcePath: 'inside.txt',
+      sourceWorkspaceRoot: workspaceRoot,
+      targetDirectory: '',
+      targetWorkspaceRoot: workspaceRoot,
+      conflictPolicy: {
+        strategy: 'rename',
+        renameTemplate: '{name} copy{ext}',
+        maxAttempts: 3
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(await realpath(result.path)).toBe(await realpath(join(workspaceRoot, 'inside copy 2.txt')))
+    expect(await readFile(join(workspaceRoot, 'inside copy.txt'), 'utf8')).toBe('existing copy')
+    expect(await readFile(join(workspaceRoot, 'inside copy 2.txt'), 'utf8')).toBe('inside')
+  })
+
+  it('copies files with overwrite conflict policy', async () => {
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    await writeFile(join(workspaceRoot, 'notes', 'inside.txt'), 'old target', 'utf8')
+
+    const result = await copyWorkspaceEntry({
+      sourcePath: 'inside.txt',
+      sourceWorkspaceRoot: workspaceRoot,
+      targetDirectory: 'notes',
+      targetWorkspaceRoot: workspaceRoot,
+      conflictPolicy: { strategy: 'overwrite' }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(await realpath(result.path)).toBe(await realpath(join(workspaceRoot, 'notes', 'inside.txt')))
+    expect(await readFile(join(workspaceRoot, 'notes', 'inside.txt'), 'utf8')).toBe('inside')
+    expect(await readFile(join(workspaceRoot, 'inside.txt'), 'utf8')).toBe('inside')
+  })
+
+  it('rejects unsupported interactive and merge conflict policies', async () => {
+    const askResult = await copyWorkspaceEntry({
+      sourcePath: 'inside.txt',
+      sourceWorkspaceRoot: workspaceRoot,
+      targetDirectory: '',
+      targetWorkspaceRoot: workspaceRoot,
+      conflictPolicy: { strategy: 'ask' }
+    })
+    const mergeResult = await copyWorkspaceEntry({
+      sourcePath: 'inside.txt',
+      sourceWorkspaceRoot: workspaceRoot,
+      targetDirectory: '',
+      targetWorkspaceRoot: workspaceRoot,
+      conflictPolicy: { strategy: 'merge' }
+    })
+
+    expect(askResult.ok).toBe(false)
+    expect(mergeResult.ok).toBe(false)
+    if (!askResult.ok) expect(askResult.message).toContain('not supported')
+    if (!mergeResult.ok) expect(mergeResult.message).toContain('not supported')
+  })
+
   it('copies directories recursively', async () => {
     await mkdir(join(workspaceRoot, 'notes', 'nested'), { recursive: true })
     await writeFile(join(workspaceRoot, 'notes', 'nested', 'draft.md'), '# draft', 'utf8')
@@ -580,6 +774,67 @@ describe('workspace-service boundary checks', () => {
     expect(await readFile(join(workspaceRoot, 'notes copy', 'nested', 'draft.md'), 'utf8')).toBe('# draft')
   })
 
+  it('imports external files and directories with conflict-safe names', async () => {
+    const externalDir = join(rootDir, 'external')
+    await mkdir(join(externalDir, 'images'), { recursive: true })
+    await writeFile(join(externalDir, 'samples.csv'), 'sample,count\ns1,1\n', 'utf8')
+    await writeFile(join(externalDir, 'images', 'cell.txt'), 'cell', 'utf8')
+    await writeFile(join(workspaceRoot, 'samples.csv'), 'existing', 'utf8')
+
+    const result = await importWorkspaceEntries({
+      sourcePaths: [join(externalDir, 'samples.csv'), join(externalDir, 'images')],
+      targetWorkspaceRoot: workspaceRoot,
+      targetDirectory: ''
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.imported.map((item) => item.name)).toEqual(['samples copy.csv', 'images'])
+    expect(await readFile(join(workspaceRoot, 'samples copy.csv'), 'utf8')).toBe('sample,count\ns1,1\n')
+    expect(await readFile(join(workspaceRoot, 'images', 'cell.txt'), 'utf8')).toBe('cell')
+  })
+
+  it('imports external files with skip conflict policy', async () => {
+    const externalDir = join(rootDir, 'external-skip')
+    await mkdir(externalDir, { recursive: true })
+    await writeFile(join(externalDir, 'samples.csv'), 'sample,count\ns1,1\n', 'utf8')
+    await writeFile(join(workspaceRoot, 'samples.csv'), 'existing', 'utf8')
+
+    const result = await importWorkspaceEntries({
+      sourcePaths: [join(externalDir, 'samples.csv')],
+      targetWorkspaceRoot: workspaceRoot,
+      targetDirectory: '',
+      conflictPolicy: { strategy: 'skip' }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const skippedPath = await realpath(join(workspaceRoot, 'samples.csv'))
+    expect(result.imported).toEqual([
+      expect.objectContaining({
+        name: 'samples.csv',
+        path: skippedPath,
+        skipped: true
+      })
+    ])
+    expect(await readFile(join(workspaceRoot, 'samples.csv'), 'utf8')).toBe('existing')
+  })
+
+  it('rejects importing a directory into one of its descendants', async () => {
+    const sourceDir = join(rootDir, 'source-parent')
+    await mkdir(join(sourceDir, 'workspace', 'target'), { recursive: true })
+    const result = await importWorkspaceEntries({
+      sourcePaths: [sourceDir],
+      targetWorkspaceRoot: join(sourceDir, 'workspace'),
+      targetDirectory: 'target'
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message).toContain('descendants')
+    }
+  })
+
   it('moves files into a target directory', async () => {
     await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
 
@@ -591,6 +846,25 @@ describe('workspace-service boundary checks', () => {
     })
 
     expect(result.ok).toBe(true)
+    expect(await readFile(join(workspaceRoot, 'notes', 'inside.txt'), 'utf8')).toBe('inside')
+    await expect(readFile(join(workspaceRoot, 'inside.txt'), 'utf8')).rejects.toThrow()
+  })
+
+  it('moves files with overwrite conflict policy', async () => {
+    await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
+    await writeFile(join(workspaceRoot, 'notes', 'inside.txt'), 'old target', 'utf8')
+
+    const result = await moveWorkspaceEntry({
+      sourcePath: 'inside.txt',
+      sourceWorkspaceRoot: workspaceRoot,
+      targetDirectory: 'notes',
+      targetWorkspaceRoot: workspaceRoot,
+      conflictPolicy: { strategy: 'overwrite' }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(await realpath(result.path)).toBe(await realpath(join(workspaceRoot, 'notes', 'inside.txt')))
     expect(await readFile(join(workspaceRoot, 'notes', 'inside.txt'), 'utf8')).toBe('inside')
     await expect(readFile(join(workspaceRoot, 'inside.txt'), 'utf8')).rejects.toThrow()
   })

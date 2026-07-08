@@ -59,19 +59,27 @@ describe('Project DAG sidecar launch', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.launch.env.PDAG_SCHEDULE).toBe('0')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('45')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('1')
   })
 
   it('allows an explicit PDAG_SCHEDULE override', () => {
     const result = buildProjectDagLaunch(settings(), {
       userDataDir: '/tmp/sciforge',
       appRoot: '/app/root',
-      env: { PDAG_SCHEDULE: '1' } as NodeJS.ProcessEnv,
+      env: {
+        PDAG_SCHEDULE: '1',
+        EDAG_MODEL_ROUTER_TIMEOUT_S: '90',
+        EDAG_MODEL_ROUTER_MAX_ATTEMPTS: '3'
+      } as NodeJS.ProcessEnv,
       npmCommand: 'npm'
     })
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.launch.env.PDAG_SCHEDULE).toBe('1')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('90')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('3')
   })
 
   it('accepts an existing sidecar only through bearer-authenticated /version ServiceResult', async () => {

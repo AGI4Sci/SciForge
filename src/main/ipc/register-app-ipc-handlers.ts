@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, shell, type BrowserWindow, type WebContents } from 'electron'
+import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type NativeImage, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative } from 'node:path'
@@ -27,6 +27,7 @@ import type {
   UpstreamModelsResult,
   WorkspacePickResult
 } from '../../shared/sciforge-api'
+import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
 import {
   agentRuntimeConnectPayloadSchema,
@@ -70,7 +71,8 @@ import {
   desktopCommandSchema,
   evidenceDagAuditRunPayloadSchema,
   evidenceDagViewPayloadSchema,
-  projectDagExportPayloadSchema,
+  projectDagCompilePayloadSchema,
+  projectDagViewPayloadSchema,
   defaultPathSchema,
   figureStyleEvaluatePayloadSchema,
   figureStyleExtractReferencePayloadSchema,
@@ -124,10 +126,21 @@ import {
   workspaceEntryCopyPayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
   workspaceClipboardImageSavePayloadSchema,
+  workspaceClipboardPastePayloadSchema,
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryDeletePayloadSchema,
+  workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
+  workspacePreviewApplyEditPayloadSchema,
+  workspacePreviewDescribeAssetPayloadSchema,
+  workspacePreviewExportPayloadSchema,
+  workspacePreviewInvokeActionPayloadSchema,
+  workspaceNativeFileDragPayloadSchema,
+  workspacePreviewListPluginsPayloadSchema,
+  workspacePreviewObservePayloadSchema,
+  workspacePreviewOpenPayloadSchema,
+  workspacePreviewReadRangePayloadSchema,
   workspaceDocxTextWritePayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
@@ -280,11 +293,13 @@ import {
   copyWorkspaceEntry,
   deleteWorkspaceEntry,
   expandHomePath,
+  importWorkspaceEntries,
   listEditorsResult,
   listWorkspaceDirectory,
   normalizeSkillFolderName,
   openEditorPath,
   openPathWithShell,
+  pasteWorkspaceClipboard,
   readClipboardImage,
   readWorkspaceImage,
   readWorkspaceFile,
@@ -317,6 +332,7 @@ import {
   savePdfAnnotationSidecar
 } from '../services/pdf-annotation-sidecar-service'
 import { workspaceHtmlPreviewService } from '../services/workspace-html-preview-service'
+import { WorkspacePreviewHost } from '../services/workspace-preview'
 import { feedEvidenceDag } from '../runtime/evidence-dag-feed'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
 
@@ -327,6 +343,8 @@ type WorkspaceFileWatchRecord = {
   sender: AppBridgeSender
   path: string
   workspaceRoot: string
+  kind: 'legacy-file' | 'workspace-preview'
+  changeChannel: 'file:workspace-changed' | 'workspacePreview:changed'
   timer: ReturnType<typeof setTimeout> | null
 }
 
@@ -415,6 +433,7 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   terminalPtyBridge?: TerminalPtyBridge
+  workspacePreviewHost?: Pick<WorkspacePreviewHost, 'listPlugins' | 'open' | 'observe' | 'describeAsset' | 'readRange' | 'applyEdit' | 'exportPreview' | 'invokeAction' | 'prepareWatch' | 'createWatchSnapshot'>
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
@@ -665,8 +684,95 @@ function writeExportServicePayload(input: WriteExportIpcPayload) {
 }
 
 const PROJECT_DAG_GOAL_TIMEOUT_MS = 5_000
+const PROJECT_DAG_VIEW_HEALTH_TIMEOUT_MS = 1500
 
 type ProjectDagGoalNode = { title?: unknown; children?: ProjectDagGoalNode[] }
+type ProjectDagCompileResponse = {
+  id?: unknown
+  run_id?: unknown
+  stats?: unknown
+  diff?: unknown
+  skipped?: unknown
+  reason?: unknown
+}
+
+function projectDagViewConfig(env: Record<string, string | undefined>): {
+  serviceUrl: string
+  apiKey: string
+} {
+  const serviceUrl = projectDagServiceUrlFromEnv(env) || DEFAULT_PROJECT_DAG_SERVICE_URL
+  const apiKey = projectDagApiKeyFromEnv(env)
+  if (!apiKey) {
+    throw new Error(
+      'Project DAG is not ready. The app starts it from Model Router settings; check Model Router status.'
+    )
+  }
+  return { serviceUrl, apiKey }
+}
+
+async function requestProjectDagJson(
+  serviceUrl: string,
+  apiKey: string,
+  path: string,
+  init: RequestInit = {},
+  fetchImpl: typeof fetch | undefined = globalThis.fetch
+): Promise<unknown> {
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('Project DAG fetch API is unavailable.')
+  }
+  const headers = new Headers(init.headers)
+  headers.set('authorization', `Bearer ${apiKey}`)
+  if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json')
+  const response = await fetchImpl(`${serviceUrl}${path}`, {
+    ...init,
+    headers
+  })
+  const body = await response.json().catch(() => null) as {
+    ok?: boolean
+    data?: unknown
+    error?: { message?: unknown }
+  } | null
+  if (!response.ok || body?.ok !== true) {
+    const message = typeof body?.error?.message === 'string'
+      ? body.error.message
+      : `Project DAG returned HTTP ${response.status}`
+    throw new Error(message)
+  }
+  return body.data
+}
+
+async function assertProjectDagServiceReachable(
+  serviceUrl: string,
+  apiKey: string,
+  fetchImpl: typeof fetch | undefined = globalThis.fetch
+): Promise<void> {
+  if (typeof fetchImpl !== 'function') return
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), PROJECT_DAG_VIEW_HEALTH_TIMEOUT_MS)
+  try {
+    const response = await fetchImpl(`${serviceUrl}/version`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        authorization: `Bearer ${apiKey}`
+      },
+      signal: controller.signal
+    })
+    if (!response.ok) {
+      throw new Error(`version returned HTTP ${response.status}`)
+    }
+    const body = await response.json().catch(() => null) as { data?: { service?: unknown } } | null
+    if (body?.data?.service !== 'project-dag-engine') {
+      throw new Error('unexpected Project DAG service response')
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Project DAG service is not reachable at ${serviceUrl}: ${detail}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 function projectDagGoalTitles(nodes: ProjectDagGoalNode[]): string[] {
   return nodes.flatMap((node) => [
@@ -796,6 +902,14 @@ function runDesktopCommand(
   }
 }
 
+type NativeFileDragSender = AppBridgeSender & {
+  startDrag: (item: { file: string; icon: NativeImage }) => void
+}
+
+function isNativeFileDragSender(sender: AppBridgeSender): sender is NativeFileDragSender {
+  return typeof (sender as { startDrag?: unknown }).startDrag === 'function'
+}
+
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): AppBridgeDispatcher {
   const {
     store,
@@ -822,6 +936,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
+    workspacePreviewHost = new WorkspacePreviewHost(),
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
@@ -1035,6 +1150,38 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (!record) return
     const changedAt = new Date().toISOString()
     try {
+      if (record.kind === 'workspace-preview') {
+        const result = await workspacePreviewHost.createWatchSnapshot({
+          path: record.path,
+          workspaceRoot: record.workspaceRoot
+        })
+        const latest = workspaceFileWatchers.get(watchId)
+        if (!latest || latest.sender.isDestroyed()) return
+        if (result.ok) {
+          latest.sender.send(latest.changeChannel, {
+            ok: true,
+            watchId,
+            workspaceRoot: result.workspaceRoot,
+            path: result.path,
+            content: result.content,
+            size: result.size,
+            truncated: result.truncated,
+            mtimeMs: result.mtimeMs,
+            changedAt
+          })
+          return
+        }
+        latest.sender.send(latest.changeChannel, {
+          ok: false,
+          watchId,
+          workspaceRoot: latest.workspaceRoot,
+          path: latest.path,
+          message: result.message,
+          changedAt
+        })
+        return
+      }
+
       const result = await readWorkspaceFile({
         path: record.path,
         workspaceRoot: record.workspaceRoot
@@ -1042,7 +1189,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       const latest = workspaceFileWatchers.get(watchId)
       if (!latest || latest.sender.isDestroyed()) return
       if (result.ok) {
-        latest.sender.send('file:workspace-changed', {
+        latest.sender.send(latest.changeChannel, {
           ok: true,
           watchId,
           workspaceRoot: latest.workspaceRoot,
@@ -1054,7 +1201,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         })
         return
       }
-      latest.sender.send('file:workspace-changed', {
+      latest.sender.send(latest.changeChannel, {
         ok: false,
         watchId,
         workspaceRoot: latest.workspaceRoot,
@@ -1065,7 +1212,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     } catch (error) {
       const latest = workspaceFileWatchers.get(watchId)
       if (!latest || latest.sender.isDestroyed()) return
-      latest.sender.send('file:workspace-changed', {
+      latest.sender.send(latest.changeChannel, {
         ok: false,
         watchId,
         workspaceRoot: latest.workspaceRoot,
@@ -2329,6 +2476,25 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:resolve-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  handleInvoke('file:start-workspace-native-drag', async (event, payload: unknown) => {
+    const request = parseIpcPayload(
+      'file:start-workspace-native-drag',
+      workspaceNativeFileDragPayloadSchema,
+      payload
+    )
+    const resolved = await resolveWorkspaceFile(request)
+    if (!resolved.ok) return resolved
+    if (!isNativeFileDragSender(event.sender)) {
+      return { ok: false, message: 'Native file dragging is not available in this environment.' }
+    }
+    const icon = await app.getFileIcon(resolved.path).catch(() => nativeImage.createEmpty())
+    event.sender.startDrag({ file: resolved.path, icon })
+    return {
+      ok: true,
+      path: resolved.path,
+      startedAt: new Date().toISOString()
+    }
+  })
   handleInvoke('file:list-workspace-directory', async (_, payload: unknown) =>
     listWorkspaceDirectory(
       parseIpcPayload('file:list-workspace-directory', workspaceDirectoryTargetPayloadSchema, payload)
@@ -2349,6 +2515,63 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  handleInvoke('workspacePreview:listPlugins', async (_, payload: unknown) => {
+    parseIpcPayload('workspacePreview:listPlugins', workspacePreviewListPluginsPayloadSchema, payload ?? {})
+    return workspacePreviewHost.listPlugins()
+  })
+  handleInvoke('workspacePreview:open', async (_, payload: unknown) =>
+    workspacePreviewHost.open(
+      parseIpcPayload('workspacePreview:open', workspacePreviewOpenPayloadSchema, payload)
+    )
+  )
+  handleInvoke('workspacePreview:observe', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:observe',
+      workspacePreviewObservePayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.observe(request.sessionId)
+  })
+  handleInvoke('workspacePreview:describeAsset', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:describeAsset',
+      workspacePreviewDescribeAssetPayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.describeAsset(request.sessionId)
+  })
+  handleInvoke('workspacePreview:readRange', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:readRange',
+      workspacePreviewReadRangePayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.readRange(request.sessionId, request.range)
+  })
+  handleInvoke('workspacePreview:applyEdit', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:applyEdit',
+      workspacePreviewApplyEditPayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.applyEdit(request.sessionId, request.operation)
+  })
+  handleInvoke('workspacePreview:export', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:export',
+      workspacePreviewExportPayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.exportPreview(request.sessionId, request.target)
+  })
+  handleInvoke('workspacePreview:invokeAction', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:invokeAction',
+      workspacePreviewInvokeActionPayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.invokeAction(request.sessionId, request.action)
+  })
   handleInvoke('file:write-workspace', async (_, payload: unknown) =>
     writeWorkspaceFile(
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
@@ -2379,6 +2602,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     )
   )
   handleInvoke('clipboard:read-image', async () => readClipboardImage())
+  handleInvoke('clipboard:paste-workspace', async (_, payload: unknown) =>
+    pasteWorkspaceClipboard(
+      parseIpcPayload('clipboard:paste-workspace', workspaceClipboardPastePayloadSchema, payload)
+    )
+  )
   handleInvoke('file:rename-workspace-entry', async (_, payload: unknown) =>
     renameWorkspaceEntry(
       parseIpcPayload('file:rename-workspace-entry', workspaceEntryRenamePayloadSchema, payload)
@@ -2387,6 +2615,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('file:copy-workspace-entry', async (_, payload: unknown) =>
     copyWorkspaceEntry(
       parseIpcPayload('file:copy-workspace-entry', workspaceEntryCopyPayloadSchema, payload)
+    )
+  )
+  handleInvoke('file:import-workspace-entries', async (_, payload: unknown) =>
+    importWorkspaceEntries(
+      parseIpcPayload('file:import-workspace-entries', workspaceEntryImportPayloadSchema, payload)
     )
   )
   handleInvoke('file:move-workspace-entry', async (_, payload: unknown) =>
@@ -2399,25 +2632,47 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:delete-workspace-entry', workspaceEntryDeletePayloadSchema, payload)
     )
   )
-  handleInvoke('file:watch-workspace', async (event, payload: unknown) => {
-    const request = parseIpcPayload('file:watch-workspace', workspaceFileWatchPayloadSchema, payload)
-    const initial = await readWorkspaceFile(request)
+  const startWorkspaceFileWatch = async (
+    event: AppBridgeInvokeEvent,
+    payload: unknown,
+    channel: 'file:watch-workspace' | 'workspacePreview:watch',
+    changeChannel: 'file:workspace-changed' | 'workspacePreview:changed',
+    kind: WorkspaceFileWatchRecord['kind']
+  ): Promise<WorkspaceFileWatchResult> => {
+    const request = parseIpcPayload(channel, workspaceFileWatchPayloadSchema, payload)
     let watchedPath: string
+    let watchWorkspaceRoot = request.workspaceRoot
     let initialContent: string
     let initialSize: number
     let initialTruncated: boolean
-    if (initial.ok) {
+    let initialMtimeMs: number | undefined
+    let startedAt = new Date().toISOString()
+    if (kind === 'workspace-preview') {
+      const initial = await workspacePreviewHost.prepareWatch(request, startedAt)
+      if (!initial.ok) return initial
       watchedPath = initial.path
+      watchWorkspaceRoot = initial.workspaceRoot
       initialContent = initial.content
       initialSize = initial.size
       initialTruncated = initial.truncated
+      initialMtimeMs = initial.mtimeMs
+      startedAt = initial.startedAt
     } else {
-      const initialImage = await readWorkspaceImage(request)
-      if (!initialImage.ok) return initial
-      watchedPath = initialImage.path
-      initialContent = ''
-      initialSize = initialImage.size
-      initialTruncated = false
+      const initial = await readWorkspaceFile(request)
+      if (initial.ok) {
+        watchedPath = initial.path
+        initialContent = initial.content
+        initialSize = initial.size
+        initialTruncated = initial.truncated
+        initialMtimeMs = 'mtimeMs' in initial ? initial.mtimeMs : undefined
+      } else {
+        const initialImage = await readWorkspaceImage(request)
+        if (!initialImage.ok) return initial
+        watchedPath = initialImage.path
+        initialContent = ''
+        initialSize = initialImage.size
+        initialTruncated = false
+      }
     }
 
     const watchId = randomUUID()
@@ -2429,7 +2684,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         watcher,
         sender: event.sender,
         path: watchedPath,
-        workspaceRoot: request.workspaceRoot,
+        workspaceRoot: watchWorkspaceRoot,
+        kind,
+        changeChannel,
         timer: null
       })
       event.sender.once('destroyed', () => disposeWorkspaceFileWatchesForSender(event.sender))
@@ -2440,7 +2697,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         content: initialContent,
         size: initialSize,
         truncated: initialTruncated,
-        startedAt: new Date().toISOString()
+        ...(initialMtimeMs !== undefined ? { mtimeMs: initialMtimeMs } : {}),
+        startedAt
       }
     } catch (error) {
       return {
@@ -2448,9 +2706,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         message: error instanceof Error ? error.message : String(error)
       }
     }
-  })
+  }
+  handleInvoke('file:watch-workspace', async (event, payload: unknown) =>
+    startWorkspaceFileWatch(event, payload, 'file:watch-workspace', 'file:workspace-changed', 'legacy-file')
+  )
   handleInvoke('file:unwatch-workspace', async (_, watchId: unknown) =>
     disposeWorkspaceFileWatch(parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId))
+  )
+  handleInvoke('workspacePreview:watch', async (event, payload: unknown) =>
+    startWorkspaceFileWatch(event, payload, 'workspacePreview:watch', 'workspacePreview:changed', 'workspace-preview')
+  )
+  handleInvoke('workspacePreview:unwatch', async (_, watchId: unknown) =>
+    disposeWorkspaceFileWatch(parseIpcPayload('workspacePreview:unwatch', streamIdSchema, watchId))
   )
   handleInvoke('write:export', async (_, payload: unknown) => {
     const input = parseIpcPayload('write:export', writeExportPayloadSchema, payload)
@@ -2581,27 +2848,51 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         : undefined
     }
   })
-  handleInvoke('projectDag:export', async (_, payload: unknown) => {
-    const input = parseIpcPayload('projectDag:export', projectDagExportPayloadSchema, payload)
+  handleInvoke('projectDag:view', async (_, payload: unknown) => {
+    const input = parseIpcPayload('projectDag:view', projectDagViewPayloadSchema, payload)
     await ensureProjectDagReady?.()
-    const serviceUrl = projectDagServiceUrlFromEnv(process.env) || DEFAULT_PROJECT_DAG_SERVICE_URL
-    const apiKey = projectDagApiKeyFromEnv(process.env)
-    if (!apiKey) {
-      throw new Error(
-        'Project DAG is not ready. The app starts it from Model Router settings; check Model Router status.'
-      )
+    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
+    await assertProjectDagServiceReachable(serviceUrl, apiKey)
+    return {
+      url: projectDagUiUrl({
+        serviceUrl,
+        apiKey,
+        view: input.view ?? 'graph',
+        embed: true
+      })
     }
+  })
+  handleInvoke('projectDag:compile', async (_, payload: unknown) => {
+    const input = parseIpcPayload('projectDag:compile', projectDagCompilePayloadSchema, payload)
+    await ensureProjectDagReady?.()
+    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
+    await assertProjectDagServiceReachable(serviceUrl, apiKey)
     if (input.goalTitle) {
       await ensureProjectDagGoal(serviceUrl, apiKey, input.goalTitle, input.goalDescription ?? '')
     }
+    const compile = await requestProjectDagJson(serviceUrl, apiKey, '/compile', {
+      method: 'POST',
+      body: JSON.stringify({ scope: input.scope ?? 'all' })
+    }) as ProjectDagCompileResponse
+    const runId = typeof compile.run_id === 'string'
+      ? compile.run_id
+      : typeof compile.id === 'string'
+        ? compile.id
+        : undefined
     const url = projectDagUiUrl({
       serviceUrl,
       apiKey,
-      view: input.autocompile ? 'compile' : 'home',
-      autocompile: input.autocompile
+      view: 'graph',
+      embed: true
     })
-    await shell.openExternal(url)
-    return { url }
+    return {
+      url,
+      ...(runId ? { runId } : {}),
+      ...(compile.stats ? { stats: compile.stats } : {}),
+      ...(compile.diff ? { diff: compile.diff } : {}),
+      ...(compile.skipped === true ? { skipped: true } : {}),
+      ...(typeof compile.reason === 'string' ? { reason: compile.reason } : {})
+    }
   })
   handleInvoke('notification:turn-complete', async (_, payload: unknown) =>
     showTurnCompleteNotification(

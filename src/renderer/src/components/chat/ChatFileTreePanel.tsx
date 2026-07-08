@@ -2,6 +2,7 @@ import type {
   AgentRuntimeWorkspaceReference,
   AgentRuntimeWorkspaceReferenceKind
 } from '@shared/agent-runtime-contract'
+import type { WorkspaceFileReadResult } from '@shared/workspace-file'
 import {
   Check,
   ChevronDown,
@@ -24,6 +25,7 @@ import {
 } from 'lucide-react'
 import {
   type FormEvent,
+  type DragEvent as ReactDragEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -41,6 +43,11 @@ import {
 } from '../../lib/composer-file-references'
 import { composerReferenceFromWorkspaceReference } from '../../lib/workspace-reference-composer'
 import type { WorkspaceReferenceGroup } from '../../lib/workspace-reference-groups'
+import {
+  readWorkspaceReferenceDragPayload,
+  writeWorkspaceReferenceDragData,
+  type WorkspaceReferenceDragDataSource
+} from '../../lib/workspace-reference-drag'
 
 export { composerReferenceFromWorkspaceReference } from '../../lib/workspace-reference-composer'
 
@@ -89,6 +96,26 @@ type FileTreeRenameDialogState = {
   submitting: boolean
   error: string | null
 }
+
+export type FileTreeWorkspaceDropAction = 'copy' | 'move'
+
+export type FileTreeWorkspaceDropDecision = {
+  action: FileTreeWorkspaceDropAction
+  sourcePath: string
+  sourceWorkspaceRoot: string
+  targetDirectory: string
+  targetWorkspaceRoot: string
+}
+
+export type FileTreeExternalImportPayload = {
+  sourcePaths: string[]
+  targetDirectory: string
+  targetWorkspaceRoot: string
+}
+
+export type FileTreeCopyContentResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: 'read-error' | 'truncated' | 'unsupported'; message?: string }
 
 const ROOT_PATH = ''
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.hg', '.svn', 'node_modules'])
@@ -149,6 +176,117 @@ export function shouldProcessInitialDirectory(
   return Boolean(initialDirectory && processedNonce !== initialDirectory.nonce)
 }
 
+export function fileTreeWorkspaceDropDecision(
+  input: {
+    source: AgentRuntimeWorkspaceReference
+    sourceWorkspaceRoot?: string
+    targetDirectory: string
+    targetWorkspaceRoot: string
+    copyRequested?: boolean
+  }
+): FileTreeWorkspaceDropDecision | null {
+  const sourcePath = normalizePath(input.source.relativePath)
+  const targetDirectory = normalizePath(input.targetDirectory)
+  const sourceWorkspaceRoot = (input.sourceWorkspaceRoot || input.source.workspaceRoot || '').trim()
+  const targetWorkspaceRoot = input.targetWorkspaceRoot.trim()
+  if (!sourcePath || !sourceWorkspaceRoot || !targetWorkspaceRoot) return null
+
+  const sameWorkspace = pathKey(sourceWorkspaceRoot) === pathKey(targetWorkspaceRoot)
+  if (sameWorkspace && input.source.kind === 'directory') {
+    if (pathKey(targetDirectory) === pathKey(sourcePath)) return null
+    if (pathKey(targetDirectory).startsWith(`${pathKey(sourcePath)}/`)) return null
+  }
+
+  const sourceParent = parentDirectoryPath(sourcePath)
+  const action: FileTreeWorkspaceDropAction = input.copyRequested || !sameWorkspace ? 'copy' : 'move'
+  if (action === 'move' && sameWorkspace && pathKey(sourceParent) === pathKey(targetDirectory)) return null
+
+  return {
+    action,
+    sourcePath,
+    sourceWorkspaceRoot,
+    targetDirectory,
+    targetWorkspaceRoot
+  }
+}
+
+export function fileTreeWorkspaceDropDecisionFromDragData(
+  source: WorkspaceReferenceDragDataSource,
+  input: {
+    targetDirectory: string
+    targetWorkspaceRoot: string
+    copyRequested?: boolean
+  }
+): FileTreeWorkspaceDropDecision | null {
+  const payload = readWorkspaceReferenceDragPayload(source)
+  if (!payload) return null
+  return fileTreeWorkspaceDropDecision({
+    source: payload.reference,
+    sourceWorkspaceRoot: payload.workspaceRoot,
+    targetDirectory: input.targetDirectory,
+    targetWorkspaceRoot: input.targetWorkspaceRoot,
+    copyRequested: input.copyRequested
+  })
+}
+
+export function fileTreeExternalImportPayload(
+  input: {
+    files: ArrayLike<File> | null | undefined
+    getPathForFile: (file: File) => string
+    targetDirectory: string
+    targetWorkspaceRoot: string
+  }
+): FileTreeExternalImportPayload | null {
+  const sourcePaths: string[] = []
+  const seen = new Set<string>()
+  for (let index = 0; index < (input.files?.length ?? 0); index += 1) {
+    const file = input.files?.[index]
+    if (!file) continue
+    let sourcePath = ''
+    try {
+      sourcePath = input.getPathForFile(file).trim()
+    } catch {
+      sourcePath = ''
+    }
+    if (!sourcePath || seen.has(sourcePath)) continue
+    seen.add(sourcePath)
+    sourcePaths.push(sourcePath)
+  }
+  if (sourcePaths.length === 0 || !input.targetWorkspaceRoot.trim()) return null
+  return {
+    sourcePaths,
+    targetDirectory: normalizePath(input.targetDirectory),
+    targetWorkspaceRoot: input.targetWorkspaceRoot.trim()
+  }
+}
+
+export function fileTreeCopyContentFromReadResult(
+  result: WorkspaceFileReadResult
+): FileTreeCopyContentResult {
+  if (!result.ok) {
+    return { ok: false, reason: 'read-error', message: result.message }
+  }
+  if (result.kind === 'text') {
+    if (result.truncated) return { ok: false, reason: 'truncated' }
+    return { ok: true, content: result.content }
+  }
+  if (result.kind === 'docx') {
+    return { ok: true, content: result.content }
+  }
+  return { ok: false, reason: 'unsupported' }
+}
+
+function fileTreeCopyContentErrorKey(reason: Exclude<FileTreeCopyContentResult, { ok: true }>['reason']): string {
+  switch (reason) {
+    case 'read-error':
+      return 'fileTreeCopyContentReadError'
+    case 'truncated':
+      return 'fileTreeCopyContentTruncated'
+    case 'unsupported':
+      return 'fileTreeCopyContentUnsupported'
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
@@ -189,6 +327,7 @@ export function ChatFileTreePanel({
   const [contextMenu, setContextMenu] = useState<FileTreeContextMenuState | null>(null)
   const [renameDialog, setRenameDialog] = useState<FileTreeRenameDialogState | null>(null)
   const [fileClipboard, setFileClipboard] = useState<FileTreeClipboardState | null>(null)
+  const [dragTargetDirectoryPath, setDragTargetDirectoryPath] = useState<string | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const processedInitialDirectoryNonceRef = useRef<number | null>(null)
   const selectedGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0]
@@ -217,6 +356,7 @@ export function ChatFileTreePanel({
     setExpanded(new Set([ROOT_PATH]))
     setDirectories({})
     setContextMenu(null)
+    setDragTargetDirectoryPath(null)
   }, [root])
 
   useEffect(() => {
@@ -348,6 +488,108 @@ export function ChatFileTreePanel({
     })
   }
 
+  const startReferenceDrag = (
+    event: ReactDragEvent<HTMLDivElement>,
+    reference: AgentRuntimeWorkspaceReference
+  ): void => {
+    writeWorkspaceReferenceDragData(event.dataTransfer, reference, reference.workspaceRoot || root)
+    void window.sciforge.startWorkspaceNativeFileDrag({
+      path: reference.relativePath,
+      workspaceRoot: reference.workspaceRoot || root
+    }).then((result) => {
+      if (result.ok) return
+      void window.sciforge?.logError?.('workspace-native-drag', 'Failed to start native workspace file drag', {
+        message: result.message,
+        reference
+      })?.catch(() => undefined)
+    }).catch((error) => {
+      void window.sciforge?.logError?.('workspace-native-drag', 'Failed to request native workspace file drag', {
+        message: error instanceof Error ? error.message : String(error),
+        reference
+      })?.catch(() => undefined)
+    })
+  }
+
+  const workspaceDropDecisionForEvent = (
+    event: ReactDragEvent<HTMLElement>,
+    targetDirectoryPath: string
+  ): FileTreeWorkspaceDropDecision | null => fileTreeWorkspaceDropDecisionFromDragData(event.dataTransfer, {
+    targetDirectory: targetDirectoryPath,
+    targetWorkspaceRoot: root,
+    copyRequested: event.altKey
+  })
+
+  const handleWorkspaceReferenceDragOver = (
+    event: ReactDragEvent<HTMLElement>,
+    targetDirectoryPath: string
+  ): void => {
+    const decision = workspaceDropDecisionForEvent(event, targetDirectoryPath)
+    if (!decision && !Array.from(event.dataTransfer.types ?? []).includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = decision?.action === 'move' ? 'move' : 'copy'
+    setDragTargetDirectoryPath(decision?.targetDirectory ?? normalizePath(targetDirectoryPath))
+  }
+
+  const handleWorkspaceReferenceDrop = (
+    event: ReactDragEvent<HTMLElement>,
+    targetDirectoryPath: string
+  ): void => {
+    const decision = workspaceDropDecisionForEvent(event, targetDirectoryPath)
+    const importPayload = decision ? null : fileTreeExternalImportPayload({
+      files: event.dataTransfer.files,
+      getPathForFile: (file) => window.sciforge.getPathForFile(file),
+      targetDirectory: targetDirectoryPath,
+      targetWorkspaceRoot: root
+    })
+    if (!decision && !importPayload) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDragTargetDirectoryPath(null)
+    void (async () => {
+      try {
+        if (decision) {
+          const result = decision.action === 'copy'
+            ? await window.sciforge.copyWorkspaceEntry(decision)
+            : await window.sciforge.moveWorkspaceEntry(decision)
+          if (!result.ok) {
+            window.alert(result.message)
+            return
+          }
+          reloadDirectory(decision.targetDirectory)
+          return
+        }
+        if (!importPayload) return
+        const result = await window.sciforge.importWorkspaceEntries(importPayload)
+        if (!result.ok) {
+          window.alert(result.message)
+          return
+        }
+        reloadDirectory(importPayload.targetDirectory)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : String(error))
+      }
+    })()
+  }
+
+  const clearWorkspaceReferenceDragTarget = (event: ReactDragEvent<HTMLElement>): void => {
+    const nextTarget = event.relatedTarget
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return
+    setDragTargetDirectoryPath(null)
+  }
+
+  const handleRootWorkspaceReferenceDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
+    const target = event.target as Element | null
+    if (target?.closest('[data-file-tree-path]')) return
+    handleWorkspaceReferenceDragOver(event, ROOT_PATH)
+  }
+
+  const handleRootWorkspaceReferenceDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
+    const target = event.target as Element | null
+    if (target?.closest('[data-file-tree-path]')) return
+    handleWorkspaceReferenceDrop(event, ROOT_PATH)
+  }
+
   useEffect(() => {
     if (pendingScrollPath === null) return
     const container = scrollContainerRef.current
@@ -387,6 +629,24 @@ export function ChatFileTreePanel({
   const copyReferencePath = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
     if (!navigator?.clipboard?.writeText) return
     await navigator.clipboard.writeText(reference.relativePath)
+  }
+
+  const copyReferenceContent = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
+    if (!navigator?.clipboard?.writeText) return
+    try {
+      const result = await window.sciforge.readWorkspaceFile({
+        path: reference.relativePath,
+        workspaceRoot: reference.workspaceRoot || root
+      })
+      const copyContent = fileTreeCopyContentFromReadResult(result)
+      if (!copyContent.ok) {
+        window.alert(copyContent.message ?? t(fileTreeCopyContentErrorKey(copyContent.reason)))
+        return
+      }
+      await navigator.clipboard.writeText(copyContent.content)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+    }
   }
 
   const openRenameDialog = (reference: AgentRuntimeWorkspaceReference, directory: boolean): void => {
@@ -442,11 +702,27 @@ export function ChatFileTreePanel({
   }
 
   const pasteClipboardEntry = async (targetDirectoryPath: string): Promise<void> => {
-    if (!fileClipboard) return
+    const targetDirectory = normalizePath(targetDirectoryPath)
+    if (!fileClipboard) {
+      try {
+        const result = await window.sciforge.pasteWorkspaceClipboard({
+          workspaceRoot: root,
+          targetDirectory
+        })
+        if (!result.ok) {
+          window.alert(result.message)
+          return
+        }
+        reloadDirectory(targetDirectory)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : String(error))
+      }
+      return
+    }
     const payload = {
       sourcePath: fileClipboard.reference.relativePath,
       sourceWorkspaceRoot: fileClipboard.reference.workspaceRoot || root,
-      targetDirectory: normalizePath(targetDirectoryPath),
+      targetDirectory,
       targetWorkspaceRoot: root
     }
     try {
@@ -612,16 +888,25 @@ export function ChatFileTreePanel({
           workspaceRoot: reference.workspaceRoot
         })
         const selected = selectedReferenceKeys.has(referenceKey)
+        const dragTarget = directory && pathKey(dragTargetDirectoryPath ?? '') === pathKey(reference.relativePath)
         const row = (
           <div
             key={reference.relativePath}
             data-file-tree-path={normalizePath(reference.relativePath)}
+            data-workspace-reference-draggable="true"
+            data-workspace-reference-drop-target={dragTarget ? 'true' : undefined}
+            draggable
             className={`group flex min-h-8 items-center gap-1 px-1.5 pr-2 text-[12.5px] ${
-              active || directoryFocused || contextActive ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover/70 hover:text-ds-ink'
+              active || directoryFocused || contextActive || dragTarget ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover/70 hover:text-ds-ink'
             }`}
             style={{ paddingLeft: depth * 14 + 6 }}
             title={reference.relativePath || reference.name}
             onContextMenu={(event) => openContextMenu(event, reference, directory, expandedDirectory)}
+            onDragStart={(event) => startReferenceDrag(event, reference)}
+            onDragEnd={() => setDragTargetDirectoryPath(null)}
+            onDragOver={directory ? (event) => handleWorkspaceReferenceDragOver(event, reference.relativePath) : undefined}
+            onDrop={directory ? (event) => handleWorkspaceReferenceDrop(event, reference.relativePath) : undefined}
+            onDragLeave={directory ? clearWorkspaceReferenceDragTarget : undefined}
           >
             <button
               type="button"
@@ -718,7 +1003,11 @@ export function ChatFileTreePanel({
       <div
         ref={scrollContainerRef}
         className="min-h-0 flex-1 overflow-auto py-1"
+        data-workspace-root-drop-target={dragTargetDirectoryPath === ROOT_PATH ? 'true' : undefined}
         onContextMenu={openWorkspaceContextMenu}
+        onDragOver={handleRootWorkspaceReferenceDragOver}
+        onDrop={handleRootWorkspaceReferenceDrop}
+        onDragLeave={clearWorkspaceReferenceDragTarget}
       >
         {root ? renderDirectory(ROOT_PATH, 0) : (
           <div className="px-3 py-3 text-[12px] leading-5 text-ds-muted">
@@ -735,7 +1024,7 @@ export function ChatFileTreePanel({
                 workspaceRoot: contextMenu.reference.workspaceRoot
               }))
             : false}
-          canPaste={Boolean(fileClipboard)}
+          canPaste={Boolean(fileClipboard) || Boolean(root)}
           onClose={() => setContextMenu(null)}
           onPreview={() => {
             if (contextMenu.reference) onPreviewFile(contextMenu.reference)
@@ -767,6 +1056,9 @@ export function ChatFileTreePanel({
           }}
           onCopyPath={() => {
             if (contextMenu.reference) void copyReferencePath(contextMenu.reference)
+          }}
+          onCopyContent={() => {
+            if (contextMenu.reference) void copyReferenceContent(contextMenu.reference)
           }}
           onRefresh={refresh}
           t={t}
@@ -803,6 +1095,7 @@ function FileTreeContextMenu({
   onPaste,
   onDelete,
   onCopyPath,
+  onCopyContent,
   onRefresh,
   t
 }: {
@@ -821,6 +1114,7 @@ function FileTreeContextMenu({
   onPaste: () => void
   onDelete: () => void
   onCopyPath: () => void
+  onCopyContent: () => void
   onRefresh: () => void
   t: (key: string, options?: Record<string, unknown>) => string
 }): ReactElement {
@@ -905,6 +1199,13 @@ function FileTreeContextMenu({
             label={t('filePreviewCopyPath')}
             onClick={() => run(onCopyPath)}
           />
+          {!state.directory ? (
+            <FileTreeContextMenuItem
+              icon={<FileText className="h-3.5 w-3.5" strokeWidth={1.8} />}
+              label={t('fileTreeCopyContent')}
+              onClick={() => run(onCopyContent)}
+            />
+          ) : null}
           <div className="my-1 h-px bg-ds-border-muted" />
           <FileTreeContextMenuItem
             icon={<Trash2 className="h-3.5 w-3.5" strokeWidth={1.8} />}

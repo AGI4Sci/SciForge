@@ -16,6 +16,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -116,6 +117,63 @@ class CompileTests(unittest.TestCase):
                 engine.store.close()
             other.cleanup()
 
+    def test_startup_marks_stale_running_compile_interrupted(self):
+        other = tempfile.TemporaryDirectory()
+        engine = engine2 = None
+        try:
+            sessions = os.path.join(other.name, "threads")
+            os.makedirs(sessions)
+            db_path = os.path.join(other.name, "project.db")
+            engine = Engine(db_path, sessions, judge=make_judge())
+            engine.store.x("INSERT INTO compile_run (id,trigger,scope,started_at,status)"
+                           " VALUES ('run_stale','manual','\"all\"','2026-07-08T00:00:00Z','running')")
+            engine.store.conn.commit()
+            engine.store.close()
+            engine = None
+
+            engine2 = Engine(db_path, sessions, judge=make_judge())
+            row = engine2.store.q1("SELECT status,finished_at FROM compile_run WHERE id='run_stale'")
+            self.assertEqual(row["status"], "interrupted")
+            self.assertIsNotNone(row["finished_at"])
+        finally:
+            if engine is not None:
+                engine.store.close()
+            if engine2 is not None:
+                engine2.store.close()
+            other.cleanup()
+
+    def test_busy_manual_compile_returns_skipped(self):
+        from project_dag import compiler as compiler_mod
+
+        compiler_mod._LOCK.acquire()
+        try:
+            result = self.engine.compile()
+        finally:
+            compiler_mod._LOCK.release()
+
+        self.assertEqual(result, {
+            "skipped": True,
+            "reason": "compile already running",
+        })
+        self.assertEqual(self.engine.compile_runs(), [])
+
+    def test_compile_failure_marks_running_run_failed(self):
+        write_session(self.sessions, "s1",
+                      [("pipeline v3 improves accuracy on x2", "paper A found it",
+                        "high")])
+
+        with patch("project_dag.compiler.incremental_reconcile",
+                   side_effect=RuntimeError("reconcile exploded")):
+            with self.assertRaises(RuntimeError):
+                self.engine.compile()
+
+        row = self.engine.compile_runs(1)[0]
+        self.assertEqual(row["status"], "failed")
+        self.assertIsNotNone(row["finished_at"])
+        self.assertEqual(row["stats"]["errors"], 1)
+        detail = self.engine.compile_run(row["id"])
+        self.assertIn("reconcile exploded", detail["diff"]["errors"][0]["error"])
+
     # M1: promote + watermark + idempotent
     def test_basic_promote_and_idempotent(self):
         write_session(self.sessions, "s1",
@@ -143,6 +201,26 @@ class CompileTests(unittest.TestCase):
         detail = self.engine.claim_detail(claim["id"])
         self.assertEqual(detail["origins"][0]["session_id"], "codex:thread-42")
         self.assertTrue(detail["supports"][0]["content_ref"].startswith("codex:thread-42#"))
+
+    def test_legacy_colon_session_filename_still_loads(self):
+        if os.name == "nt":
+            self.skipTest("colon filenames are not legal on Windows")
+        sid = "codex:legacy-thread"
+        g = ThreadGraph(sid)
+        s = g.add_or_get_node(NodeType.SOURCE, "paper A", credibility="high")
+        c = g.add_or_get_node(NodeType.CLAIM, "pipeline v3 improves accuracy on x2")
+        c.status = NodeStatus.SUPPORTED
+        g.add_edge(s.id, c.id, EdgeRel.SUPPORTS, nli_score=0.9)
+        with open(os.path.join(self.sessions, f"{sid}.prov.json"), "w", encoding="utf-8") as fh:
+            fh.write(provjson.dumps(g))
+
+        r = self.engine.compile()
+
+        self.assertEqual(r["stats"]["errors"], 0)
+        self.assertEqual(r["diff"]["sessions"], [sid])
+        claim = self.engine.claims(goal_id=self.goal["root_id"])[0]
+        detail = self.engine.claim_detail(claim["id"])
+        self.assertEqual(detail["origins"][0]["session_id"], sid)
 
     # cold start: no goals -> orphan pool, adopt via review
     def test_orphan_pool_and_adopt(self):

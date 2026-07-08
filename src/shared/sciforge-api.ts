@@ -27,6 +27,10 @@ import type {
   ClipboardImageReadResult,
   WorkspaceClipboardImageSavePayload,
   WorkspaceClipboardImageSaveResult,
+  WorkspaceClipboardPastePayload,
+  WorkspaceClipboardPasteResult,
+  WorkspaceNativeFileDragPayload,
+  WorkspaceNativeFileDragResult,
   WorkspaceFileReadResult,
   WorkspaceHtmlPreviewResult,
   WorkspaceImageReadResult,
@@ -38,6 +42,8 @@ import type {
   WorkspaceEntryRenameResult,
   WorkspaceEntryCopyPayload,
   WorkspaceEntryCopyResult,
+  WorkspaceEntryImportPayload,
+  WorkspaceEntryImportResult,
   WorkspaceEntryMovePayload,
   WorkspaceEntryMoveResult,
   WorkspaceEntryDeletePayload,
@@ -54,6 +60,19 @@ import type {
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult
 } from './workspace-file'
+import type {
+  WorkspaceObservation,
+  WorkspacePreviewAssetTransportDescriptor,
+  WorkspacePreviewByteRange,
+  WorkspacePreviewEditDiffSummary,
+  WorkspacePreviewEditOperation,
+  WorkspacePreviewExportTarget,
+  WorkspacePreviewFileState,
+  WorkspacePreviewPluginActionInput,
+  WorkspacePreviewPluginActionResult,
+  WorkspacePreviewPluginManifest,
+  WorkspacePreviewSession
+} from './workspace-preview'
 import type {
   WriteInlineCompletionDebugEntry,
   WriteInlineCompletionRequest,
@@ -459,13 +478,25 @@ export type EvidenceDagAuditRunResult = {
   threadId: string
   riskDigest?: unknown
 }
-export type ProjectDagExportRequest = {
+export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'compile' | 'report' | 'time'
+export type ProjectDagViewRequest = {
+  view?: ProjectDagViewName
+}
+export type ProjectDagViewResult = {
+  url: string
+}
+export type ProjectDagCompileRequest = {
   goalTitle?: string
   goalDescription?: string
-  autocompile?: boolean
+  scope?: 'all' | string[]
 }
-export type ProjectDagExportResult = {
+export type ProjectDagCompileResult = {
   url: string
+  runId?: string
+  stats?: unknown
+  diff?: unknown
+  skipped?: boolean
+  reason?: string
 }
 export type ConnectPhoneInstallQrResult =
   | { ok: true; url: string; deviceCode: string; userCode: string; interval: number; expireIn: number }
@@ -660,6 +691,73 @@ export type LocalRuntimeStatusPayload = {
 export type PerformanceSnapshotResult =
   | { ok: true; snapshot: unknown }
   | { ok: false; message: string }
+export type WorkspacePreviewOpenInput = {
+  path: string
+  workspaceRoot: string
+  mimeType?: string
+  mode?: WorkspacePreviewSession['mode']
+}
+export type WorkspacePreviewOpenResult =
+  | {
+      ok: true
+      session: WorkspacePreviewSession
+      manifest: WorkspacePreviewPluginManifest
+      route: 'matched' | 'fallback'
+      file: WorkspacePreviewFileState
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewObserveResult =
+  | { ok: true; observation: WorkspaceObservation }
+  | { ok: false; message: string }
+export type WorkspacePreviewReadRangeResult =
+  | {
+      ok: true
+      sessionId: string
+      path: string
+      offset: number
+      length: number
+      size: number
+      dataBase64: string
+      mimeType?: string
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewDescribeAssetResult =
+  | { ok: true; descriptor: WorkspacePreviewAssetTransportDescriptor }
+  | { ok: false; message: string }
+export type WorkspacePreviewApplyEditResult =
+  | {
+      ok: true
+      session: WorkspacePreviewSession
+      operationKind: WorkspacePreviewEditOperation['kind']
+      appliedAt: string
+      audit: {
+        pluginId: string
+        path: string
+        operationKind: WorkspacePreviewEditOperation['kind']
+        effect: 'file-write' | 'session-update' | 'sidecar-write'
+      }
+      diffSummary?: WorkspacePreviewEditDiffSummary
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewExportResult =
+  | {
+      ok: true
+      sessionId: string
+      path: string
+      target: WorkspacePreviewExportTarget
+      exportedAt: string
+      audit: {
+        pluginId: string
+        sourcePath: string
+        targetKind: WorkspacePreviewExportTarget['kind']
+        format: string
+        effect: 'source-copy'
+      }
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewInvokeActionResult =
+  | WorkspacePreviewPluginActionResult
+  | { ok: false; message: string }
 
 export type SciForgeApi = {
   platform: string
@@ -801,12 +899,21 @@ export type SciForgeApi = {
     payload: WorkspaceClipboardImageSavePayload
   ) => Promise<WorkspaceClipboardImageSaveResult>
   readClipboardImage: () => Promise<ClipboardImageReadResult>
+  pasteWorkspaceClipboard: (
+    payload: WorkspaceClipboardPastePayload
+  ) => Promise<WorkspaceClipboardPasteResult>
+  startWorkspaceNativeFileDrag: (
+    payload: WorkspaceNativeFileDragPayload
+  ) => Promise<WorkspaceNativeFileDragResult>
   renameWorkspaceEntry: (
     payload: WorkspaceEntryRenamePayload
   ) => Promise<WorkspaceEntryRenameResult>
   copyWorkspaceEntry: (
     payload: WorkspaceEntryCopyPayload
   ) => Promise<WorkspaceEntryCopyResult>
+  importWorkspaceEntries: (
+    payload: WorkspaceEntryImportPayload
+  ) => Promise<WorkspaceEntryImportResult>
   moveWorkspaceEntry: (
     payload: WorkspaceEntryMovePayload
   ) => Promise<WorkspaceEntryMoveResult>
@@ -816,6 +923,31 @@ export type SciForgeApi = {
   watchWorkspaceFile: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
   unwatchWorkspaceFile: (watchId: string) => Promise<boolean>
   onWorkspaceFileChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
+  workspacePreview: {
+    listPlugins: () => Promise<WorkspacePreviewPluginManifest[]>
+    open: (input: WorkspacePreviewOpenInput) => Promise<WorkspacePreviewOpenResult>
+    observe: (sessionId: string) => Promise<WorkspacePreviewObserveResult>
+    describeAsset: (sessionId: string) => Promise<WorkspacePreviewDescribeAssetResult>
+    readRange: (
+      sessionId: string,
+      range: WorkspacePreviewByteRange
+    ) => Promise<WorkspacePreviewReadRangeResult>
+    applyEdit: (
+      sessionId: string,
+      operation: WorkspacePreviewEditOperation
+    ) => Promise<WorkspacePreviewApplyEditResult>
+    export: (
+      sessionId: string,
+      target: WorkspacePreviewExportTarget
+    ) => Promise<WorkspacePreviewExportResult>
+    invokeAction: (
+      sessionId: string,
+      action: WorkspacePreviewPluginActionInput
+    ) => Promise<WorkspacePreviewInvokeActionResult>
+    watch: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
+    unwatch: (watchId: string) => Promise<boolean>
+    onChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
+  }
   requestWriteInlineCompletion: (
     payload: WriteInlineCompletionRequest
   ) => Promise<WriteInlineCompletionResult>
@@ -911,7 +1043,8 @@ export type SciForgeApi = {
   getComputerUseStatus: () => Promise<ComputerUseStatusView>
   getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
   runEvidenceDagAudit: (input: EvidenceDagAuditRunRequest) => Promise<EvidenceDagAuditRunResult>
-  exportProjectDag: (input: ProjectDagExportRequest) => Promise<ProjectDagExportResult>
+  getProjectDagView: (input: ProjectDagViewRequest) => Promise<ProjectDagViewResult>
+  runProjectDagCompile: (input: ProjectDagCompileRequest) => Promise<ProjectDagCompileResult>
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

@@ -72,10 +72,6 @@ def _load_edge_meta(edge: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
-class CompileError(RuntimeError):
-    pass
-
-
 class Compiler:
     def __init__(self, store: Store, reader: SessionReader, judge: Judge,
                  *, auto_threshold: float = AUTO_THRESHOLD,
@@ -89,13 +85,29 @@ class Compiler:
     # ------------------------------------------------------------------ entry
     def compile(self, trigger: str = "manual", scope: Any = "all") -> dict:
         if not _LOCK.acquire(blocking=False):
-            if trigger == "scheduled":
-                return {"skipped": True, "reason": "compile already running"}
-            raise CompileError("a compile is already running")
+            return {"skipped": True, "reason": "compile already running"}
         try:
             return self._compile(trigger, scope)
+        except Exception as exc:
+            self._mark_running_failed(exc)
+            raise
         finally:
             _LOCK.release()
+
+    def _mark_running_failed(self, exc: Exception) -> None:
+        stats = json.dumps({"errors": 1}, ensure_ascii=False)
+        diff = json.dumps({"errors": [{"error": str(exc)}]}, ensure_ascii=False)
+        try:
+            self.store.conn.rollback()
+            self.store.x(
+                "UPDATE compile_run SET finished_at=?, status='failed',"
+                " stats=COALESCE(stats, ?), diff=COALESCE(diff, ?)"
+                " WHERE status='running'",
+                (now_iso(), stats, diff),
+            )
+            self.store.conn.commit()
+        except Exception:
+            pass
 
     def _compile(self, trigger: str, scope: Any) -> dict:
         st = self.store

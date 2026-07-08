@@ -1,0 +1,87 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import {
+  WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  type WorkspaceObservation
+} from '@shared/workspace-preview'
+import {
+  TextWorkspaceViewer,
+  buildTextWorkspaceViewerModel,
+  createTextReplaceAllOperation
+} from './TextWorkspaceViewer'
+
+function createTextObservation(
+  overrides: Partial<WorkspaceObservation> = {}
+): WorkspaceObservation {
+  return {
+    schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+    file: {
+      path: '/workspace/lab/notes.txt',
+      workspaceRoot: '/workspace/lab',
+      mimeType: 'text/plain',
+      size: 11
+    },
+    view: {
+      pluginId: 'text',
+      modality: 'text',
+      mode: 'preview',
+      title: 'notes.txt'
+    },
+    visibleText: 'alpha\nbeta\n',
+    text: {
+      lineCount: 3,
+      characterCount: 11,
+      truncated: false
+    },
+    actions: ['observe', 'workspace.setSelection', 'text.replaceRange', 'applyEdit', 'save'],
+    ...overrides
+  }
+}
+
+describe('TextWorkspaceViewer', () => {
+  it('builds an editable model from text observation metadata', () => {
+    const observation = createTextObservation()
+    const model = buildTextWorkspaceViewerModel(observation, true)
+
+    expect(model.status.kind).toBe('ready')
+    expect(model.title).toBe('notes.txt')
+    expect(model.text).toBe('alpha\nbeta\n')
+    expect(model.lineCount).toBe(3)
+    expect(model.characterCount).toBe(11)
+    expect(model.editable).toBe(true)
+    expect(model.agentSummary).toContain('3 lines')
+    expect(createTextReplaceAllOperation({
+      observation,
+      beforeText: model.text,
+      text: 'alpha\ngamma\n'
+    })).toEqual({
+      kind: 'text.replaceRange',
+      path: '/workspace/lab/notes.txt',
+      range: {
+        start: { line: 1, column: 1 },
+        end: { line: 3, column: 1 }
+      },
+      text: 'alpha\ngamma\n'
+    })
+  })
+
+  it('renders text content and disables full-file edit for truncated observations', () => {
+    const html = renderToStaticMarkup(createElement(TextWorkspaceViewer, {
+      observation: createTextObservation({
+        text: {
+          lineCount: 1,
+          characterCount: 200_000,
+          truncated: true
+        }
+      }),
+      onApplyEdit: () => undefined
+    }))
+
+    expect(html).toContain('data-workspace-preview-text-viewer')
+    expect(html).toContain('data-truncated="true"')
+    expect(html).toContain('data-editable="false"')
+    expect(html).toContain('data-text-preview-editor')
+    expect(html).toContain('This text preview is truncated.')
+  })
+})

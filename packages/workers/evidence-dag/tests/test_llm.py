@@ -65,6 +65,25 @@ class TestModelRouterLLM(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_env)
 
+    def test_model_router_timeout_settings_can_come_from_env(self):
+        old_env = dict(os.environ)
+        try:
+            os.environ.clear()
+            os.environ["EDAG_MODEL_ROUTER_BASE_URL"] = "http://127.0.0.1:3892/v1"
+            os.environ["EDAG_MODEL_ROUTER_API_KEY"] = "router-key"
+            os.environ["EDAG_MODEL_ROUTER_TIMEOUT_S"] = "12.5"
+            os.environ["EDAG_MODEL_ROUTER_MAX_ATTEMPTS"] = "2"
+            os.environ["EDAG_MODEL_ROUTER_RETRY_BASE_S"] = "0.25"
+
+            llm = ModelRouterLLM()
+
+            self.assertEqual(llm.timeout_s, 12.5)
+            self.assertEqual(llm.max_attempts, 2)
+            self.assertEqual(llm.retry_base_s, 0.25)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
 
 if __name__ == "__main__":
     unittest.main()

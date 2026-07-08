@@ -38,6 +38,14 @@ import {
   RESEARCH_CARD_STAGES,
   RESEARCH_CARD_STATUSES
 } from '../../shared/research-cards'
+import {
+  workspacePreviewByteRangeSchema,
+  workspacePreviewEditOperationSchema,
+  workspacePreviewExportTargetSchema,
+  workspacePreviewModeSchema,
+  workspacePreviewPluginActionInputSchema
+} from '../../shared/workspace-preview'
+import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
 export {
   pdfAnnotationSidecarTargetSchema as pdfAnnotationSidecarLoadPayloadSchema,
   pdfAnnotationSidecarSavePayloadSchema,
@@ -1748,6 +1756,65 @@ export const workspaceFileTargetPayloadSchema = z
   })
   .strict()
 
+export const workspacePreviewListPluginsPayloadSchema = z.object({}).strict()
+
+export const workspacePreviewOpenPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH),
+    mode: z.string().trim().pipe(workspacePreviewModeSchema).optional()
+  })
+  .strict()
+
+export const workspacePreviewObservePayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH)
+  })
+  .strict()
+
+export const workspacePreviewDescribeAssetPayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH)
+  })
+  .strict()
+
+export const workspacePreviewReadRangePayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH),
+    range: workspacePreviewByteRangeSchema
+  })
+  .strict()
+
+export const workspacePreviewApplyEditPayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH),
+    operation: workspacePreviewEditOperationSchema
+  })
+  .strict()
+
+const workspacePreviewIpcExportTargetSchema = workspacePreviewExportTargetSchema.refine(
+  (target) => target.kind !== 'workspace-file' || Boolean(target.path?.trim()),
+  {
+    path: ['path'],
+    message: 'workspace-file export targets require a path over IPC.'
+  }
+)
+
+export const workspacePreviewExportPayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH),
+    target: workspacePreviewIpcExportTargetSchema
+  })
+  .strict()
+
+export const workspacePreviewInvokeActionPayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH),
+    action: workspacePreviewPluginActionInputSchema
+  })
+  .strict()
+
 export const workspaceDirectoryTargetPayloadSchema = z
   .object({
     path: optionalTrimmedString(MAX_PATH_LENGTH),
@@ -1804,6 +1871,21 @@ export const workspaceClipboardImageSavePayloadSchema = z
   })
   .strict()
 
+export const workspaceClipboardPastePayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
+    conflictPolicy: workspaceFileConflictPolicySchema.optional()
+  })
+  .strict()
+
+export const workspaceNativeFileDragPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
 export const workspaceEntryRenamePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
@@ -1817,7 +1899,17 @@ export const workspaceEntryCopyPayloadSchema = z
     sourcePath: trimmedString(MAX_PATH_LENGTH),
     sourceWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
     targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
-    targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    conflictPolicy: workspaceFileConflictPolicySchema.optional()
+  })
+  .strict()
+
+export const workspaceEntryImportPayloadSchema = z
+  .object({
+    sourcePaths: z.array(trimmedString(MAX_PATH_LENGTH)).min(1).max(512),
+    targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
+    targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    conflictPolicy: workspaceFileConflictPolicySchema.optional()
   })
   .strict()
 
@@ -1826,7 +1918,8 @@ export const workspaceEntryMovePayloadSchema = z
     sourcePath: trimmedString(MAX_PATH_LENGTH),
     sourceWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
     targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
-    targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    conflictPolicy: workspaceFileConflictPolicySchema.optional()
   })
   .strict()
 
@@ -2010,11 +2103,22 @@ export const evidenceDagAuditRunPayloadSchema = z
   })
   .strict()
 
-export const projectDagExportPayloadSchema = z
+const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'compile', 'report', 'time'])
+
+export const projectDagViewPayloadSchema = z
+  .object({
+    view: projectDagViewNameSchema.optional()
+  })
+  .strict()
+
+export const projectDagCompilePayloadSchema = z
   .object({
     goalTitle: optionalTrimmedString(500),
     goalDescription: optionalTrimmedString(4000),
-    autocompile: z.boolean().optional()
+    scope: z.union([
+      z.literal('all'),
+      z.array(trimmedString(MAX_ID_LENGTH)).max(500)
+    ]).optional()
   })
   .strict()
 

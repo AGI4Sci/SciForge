@@ -129,6 +129,7 @@ function createMainPerformanceMonitor() {
       : null
     eventLoopDelay?.reset()
 
+    const memory = process.memoryUsage()
     return {
       enabled,
       startedAtMs,
@@ -143,8 +144,11 @@ function createMainPerformanceMonitor() {
       process: {
         pid: process.pid,
         uptimeMs: round(process.uptime() * 1000),
-        rssMb: round(process.memoryUsage().rss / 1024 / 1024),
-        heapUsedMb: round(process.memoryUsage().heapUsed / 1024 / 1024)
+        rssMb: bytesToMb(memory.rss),
+        heapTotalMb: bytesToMb(memory.heapTotal),
+        heapUsedMb: bytesToMb(memory.heapUsed),
+        externalMb: bytesToMb(memory.external),
+        arrayBuffersMb: bytesToMb(memory.arrayBuffers)
       },
       counters: Object.fromEntries([...counters.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
@@ -207,6 +211,10 @@ function sanitizeDetail(detail: PerfDetail): PerfDetail {
 
 function nsToMs(value: number): number {
   return Number.isFinite(value) ? round(value / 1_000_000) : 0
+}
+
+function bytesToMb(value: number): number {
+  return round(value / 1024 / 1024)
 }
 
 function round(value: number): number {

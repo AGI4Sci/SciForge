@@ -4,32 +4,40 @@
 <meta charset="utf-8">
 <title>SciForge Project DAG</title>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --fg:#d7dae2; --dim:#8b93a5;
-          --ok:#4caf7d; --warn:#e0b341; --bad:#e05d5d; --acc:#5b8dee; }
+  :root { --bg:#f6f8fb; --panel:#ffffff; --line:#dbe3ee; --fg:#172033; --dim:#64748b;
+          --ok:#0f9f6e; --warn:#b7791f; --bad:#d33f49; --acc:#2563eb; --hover:#eef3f9; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:13px/1.5 "Segoe UI",system-ui,sans-serif; display:flex; height:100vh; }
   nav { width:150px; background:var(--panel); border-right:1px solid var(--line);
         padding:12px 0; flex-shrink:0; }
   nav div { padding:8px 16px; cursor:pointer; color:var(--dim); }
-  nav div.on { color:var(--fg); background:#1f2430; border-left:3px solid var(--acc); }
+  nav div:hover { background:var(--hover); color:var(--fg); }
+  nav div.on { color:var(--fg); background:var(--hover); border-left:3px solid var(--acc); }
   main { flex:1; overflow:auto; padding:16px 20px; }
   h2 { font-size:15px; margin:0 0 12px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:6px;
           padding:10px 12px; margin-bottom:8px; }
   .badge { display:inline-block; padding:0 6px; border-radius:8px; font-size:11px;
-           margin-left:6px; background:#232838; color:var(--dim); }
+           margin-left:6px; background:#edf2f7; color:var(--dim); }
   .s-supported{color:var(--ok)} .s-fragile{color:var(--warn)}
   .s-conflicted,.s-undetermined{color:var(--bad)} .s-invalidated{color:var(--dim);text-decoration:line-through}
   button { background:var(--acc); border:0; color:#fff; padding:6px 14px;
            border-radius:4px; cursor:pointer; margin-right:6px; }
-  button.ghost { background:#232838; color:var(--fg); }
-  input,select,textarea { background:#10131a; border:1px solid var(--line); color:var(--fg);
+  button.ghost { background:#eef2f7; color:var(--fg); }
+  input,select,textarea { background:#fff; border:1px solid var(--line); color:var(--fg);
           padding:5px 8px; border-radius:4px; }
   .dim { color:var(--dim); } .mono { font-family:Consolas,monospace; font-size:12px; }
-  pre { background:#10131a; padding:10px; border-radius:4px; overflow:auto; white-space:pre-wrap; }
+  pre { background:#eef2f7; padding:10px; border-radius:4px; overflow:auto; white-space:pre-wrap; }
   .goal-node { margin-left:14px; border-left:1px solid var(--line); padding-left:10px; }
   .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  html[data-embedded="1"] body { font-size:12px; }
+  html[data-embedded="1"] nav { width:112px; padding:8px 0; }
+  html[data-embedded="1"] nav div { padding:7px 10px; }
+  html[data-embedded="1"] main { padding:12px; }
+  html[data-embedded="1"] h2 { font-size:14px; margin-bottom:10px; }
+  html[data-embedded="1"] .card { padding:8px 10px; }
+  html[data-embedded="1"] button { padding:5px 10px; }
 </style>
 </head>
 <body>
@@ -37,10 +45,11 @@
 <main id="main"></main>
 <script>
 const TOKEN = (location.hash.match(/token=([^&]+)/)||[])[1] || "";
-// deep-link params (set by the desktop app): ?view=report | ?autocompile=1
+// deep-link params (set by the desktop app): ?view=graph | ?embed=1
 const PARAMS = new URLSearchParams(location.search);
 const START_VIEW = PARAMS.get("view");
-const AUTO_COMPILE = PARAMS.get("autocompile") === "1";
+const EMBEDDED = PARAMS.get("embed") === "1" || window.self !== window.top;
+document.documentElement.dataset.embedded = EMBEDDED ? "1" : "0";
 history.replaceState(null,"",location.pathname);
 const api = (p, opt={}) => fetch(p, {...opt, headers:{
   "Content-Type":"application/json", "Authorization":"Bearer "+TOKEN,
@@ -139,13 +148,13 @@ let GROUPS = [], GROUP_OF = {}, EXPANDED = new Set(), CEXP = new Set(), RENDER_E
 let PARENT_OF = {}, CHILDREN_OF = {}, EV_OF = {}, EV_SHARE = {};
 const POS_KEY = "pdag.graph.pos.v3", EXP_KEY = "pdag.graph.exp.v2", CEXP_KEY = "pdag.graph.cexp.v1";
 const DIM = {goal:{w:300,h:46}, grp:{w:310,h:54}, claim:{w:360,h:42}, ev:{w:330,h:30}};
-const STATUS_COLOR = {supported:"#4caf7d", fragile:"#e0b341",
-  conflicted:"#e05d5d", undetermined:"#e05d5d", invalidated:"#5c657a"};
+const STATUS_COLOR = {supported:"#0f9f6e", fragile:"#b7791f",
+  conflicted:"#d33f49", undetermined:"#d33f49", invalidated:"#94a3b8"};
 const EDGE_STYLE = {
-  addresses:    {stroke:"#5b8dee", dash:"", w:1.6, op:.5},
-  derived_from: {stroke:"#9d7bea", dash:"", w:1.5, op:.85},
-  contradicts:  {stroke:"#e05d5d", dash:"6 4", w:1.8, op:.95},
-  in_group:     {stroke:"#2c3446", dash:"", w:1.2, op:.9},
+  addresses:    {stroke:"#2563eb", dash:"", w:1.6, op:.5},
+  derived_from: {stroke:"#7c3aed", dash:"", w:1.5, op:.85},
+  contradicts:  {stroke:"#d33f49", dash:"6 4", w:1.8, op:.95},
+  in_group:     {stroke:"#cbd5e1", dash:"", w:1.2, op:.9},
 };
 
 const kindOf = id => id.startsWith("grp_") ? "grp"
@@ -241,7 +250,7 @@ async function graphview(){
         —— 点组卡/claim 展开下一层，拖动整理</span>
     </div>
     <div id="ginfo"></div>
-    <div id="gwrap" style="overflow:auto;border:1px solid var(--line);border-radius:10px;background:#0a0c11"></div>
+    <div id="gwrap" style="overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--bg)"></div>
     <div class="dim" style="margin-top:8px;font-size:12px">
       <span style="color:#4caf7d">●</span> supported&nbsp;
       <span style="color:#e0b341">●</span> fragile&nbsp;
@@ -401,7 +410,7 @@ function treeConnectors(){
   let out = "";
   const elbow = (px, py, cx, cy) =>
     `<path d="M ${px} ${py} L ${px} ${cy} L ${cx} ${cy}" fill="none"
-       stroke="#2c3446" stroke-width="1.3"/>`;
+       stroke="#cbd5e1" stroke-width="1.3"/>`;
   for(const grp of GROUPS){
     if(!EXPANDED.has(grp.id)) continue;
     for(const c of grp.claims){
@@ -444,22 +453,22 @@ function nodeCard(id, lit){
   let body = "", full = "";
   if(k === "goal"){
     const g = G.goals.find(x=>x.root_id===id); full = g.title;
-    body = `<rect width="${d.w}" height="${d.h}" rx="10" fill="#131a2b"
-        stroke="${sel?'#8fb3ff':'#5b8dee'}" stroke-width="${sel?2.2:1.4}"/>
-      <rect width="4" height="${d.h-12}" x="7" y="6" rx="2" fill="#5b8dee"/>
-      <text x="20" y="${d.h/2-3}" fill="#8b93a5" font-size="9" letter-spacing="1.5">GOAL</text>
-      <text x="20" y="${d.h/2+13}" fill="#e8ebf2" font-size="12.5" font-weight="600">${esc(truncFit(full, d.w-34, 12.5))}</text>`;
+    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="#ffffff"
+        stroke="${sel?'#1d4ed8':'#2563eb'}" stroke-width="${sel?2.2:1.4}"/>
+      <rect width="4" height="${d.h-12}" x="7" y="6" rx="2" fill="#2563eb"/>
+      <text x="20" y="${d.h/2-3}" fill="#64748b" font-size="9" letter-spacing="1.5">GOAL</text>
+      <text x="20" y="${d.h/2+13}" fill="#172033" font-size="12.5" font-weight="600">${esc(truncFit(full, d.w-34, 12.5))}</text>`;
   } else if(k === "grp"){
     const grp = GROUPS.find(x=>x.id===id);
     const open = EXPANDED.has(id);
     full = `${grp.label}（session: ${grp.session}）`;
     const s = grp.stats;
-    body = `<rect width="${d.w}" height="${d.h}" rx="11" fill="${open?'#151a26':'#101521'}"
-        stroke="${sel?'#cdd6e8':'#3d4966'}" stroke-width="${sel?2:1.4}"/>
-      <text x="14" y="${d.h/2-4}" fill="#aeb7c9" font-size="12.5" font-weight="600">${open?"▾":"▸"} ${esc(truncFit(grp.label, d.w-90, 12.5))}</text>
-      <text x="${d.w-12}" y="${d.h/2-4}" text-anchor="end" fill="#8b93a5" font-size="11">${grp.claims.length} 条</text>
+    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="${open?'#ffffff':'#f8fafc'}"
+        stroke="${sel?'#64748b':'#cbd5e1'}" stroke-width="${sel?2:1.4}"/>
+      <text x="14" y="${d.h/2-4}" fill="#334155" font-size="12.5" font-weight="600">${open?"▾":"▸"} ${esc(truncFit(grp.label, d.w-90, 12.5))}</text>
+      <text x="${d.w-12}" y="${d.h/2-4}" text-anchor="end" fill="#64748b" font-size="11">${grp.claims.length} 条</text>
       <text x="30" y="${d.h/2+15}" font-size="10.5"
-        ><tspan fill="#4caf7d">✓${s.sup}</tspan><tspan fill="#e0b341"> △${s.fra}</tspan><tspan fill="#e05d5d"> ⚠${s.con}</tspan></text>`;
+        ><tspan fill="#0f9f6e">✓${s.sup}</tspan><tspan fill="#b7791f"> △${s.fra}</tspan><tspan fill="#d33f49"> ⚠${s.con}</tspan></text>`;
   } else if(k === "claim"){
     const c = G.claims.find(x=>x.id===id); full = c.statement;
     const col = STATUS_COLOR[c.status] || "#5c657a";
@@ -469,25 +478,25 @@ function nodeCard(id, lit){
     const nEv = (EV_OF[id]||[]).length, nKid = (CHILDREN_OF[id]||[]).length;
     const open = CEXP.has(id);
     const arrow = (nEv + nKid) ? (open ? "▾" : "▸") : "·";
-    body = `${shaky?`<rect x="-4" y="-4" width="${d.w+8}" height="${d.h+8}" rx="13" fill="none" stroke="#e0b341" stroke-dasharray="4 4" stroke-opacity=".8"/>`:""}
-      <rect width="${d.w}" height="${d.h}" rx="10" fill="#10141d"
-        stroke="${sel?'#cdd6e8':col}" stroke-width="${sel?2.2:1.3}" stroke-opacity="${sel?1:.75}"/>
-      <text x="11" y="${d.h/2+4.5}" fill="#8b93a5" font-size="11">${arrow}</text>
+    body = `${shaky?`<rect x="-4" y="-4" width="${d.w+8}" height="${d.h+8}" rx="12" fill="none" stroke="#b7791f" stroke-dasharray="4 4" stroke-opacity=".8"/>`:""}
+      <rect width="${d.w}" height="${d.h}" rx="8" fill="#ffffff"
+        stroke="${sel?'#64748b':col}" stroke-width="${sel?2.2:1.3}" stroke-opacity="${sel?1:.75}"/>
+      <text x="11" y="${d.h/2+4.5}" fill="#64748b" font-size="11">${arrow}</text>
       <circle cx="30" cy="${d.h/2}" r="5" fill="${col}"/>
-      <text x="44" y="${d.h/2+4}" fill="#d7dae2" font-size="12">${esc(truncFit(full, d.w-60-(lb?26:0)-(multi?22:0)-(nEv&&!open?26:0), 12))}</text>
-      ${nEv&&!open?`<text x="${d.w-(lb?36:10)-(multi?22:0)}" y="${d.h/2+4}" text-anchor="end" fill="#5c657a" font-size="10.5">▤${nEv}</text>`:""}
-      ${multi?`<text x="${d.w-(lb?36:10)}" y="${d.h/2+4}" text-anchor="end" fill="#5b8dee" font-size="10.5">${multi}</text>`:""}
-      ${lb?`<text x="${d.w-10}" y="${d.h/2+4}" text-anchor="end" fill="#e0b341" font-size="11">⚡${lb.critical_count}</text>`:""}`;
+      <text x="44" y="${d.h/2+4}" fill="#172033" font-size="12">${esc(truncFit(full, d.w-60-(lb?26:0)-(multi?22:0)-(nEv&&!open?26:0), 12))}</text>
+      ${nEv&&!open?`<text x="${d.w-(lb?36:10)-(multi?22:0)}" y="${d.h/2+4}" text-anchor="end" fill="#94a3b8" font-size="10.5">▤${nEv}</text>`:""}
+      ${multi?`<text x="${d.w-(lb?36:10)}" y="${d.h/2+4}" text-anchor="end" fill="#2563eb" font-size="10.5">${multi}</text>`:""}
+      ${lb?`<text x="${d.w-10}" y="${d.h/2+4}" text-anchor="end" fill="#b7791f" font-size="11">⚡${lb.critical_count}</text>`:""}`;
   } else {
     const ev = G.evidence.find(x=>x.id===rawId); full = ev.content || rawId;
     const human = ev.evidence_type === "human_attested";
     const share = EV_SHARE[rawId] > 1 ? `×${EV_SHARE[rawId]}` : "";
     const evLb = (an.load_bearing||[]).find(x => x.id === rawId);   // 承重证据（单点支撑多条结论）
-    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="#0d1017"
-        stroke="${sel?'#cdd6e8':(evLb?'#8a6d1f':(human?'#8a6d1f':'#252d3d'))}" stroke-width="${sel?2:(evLb?1.6:1.1)}"/>
-      <text x="10" y="${d.h/2+4}" fill="#7e8798" font-size="10.5">${human?"👤 ":""}${esc(truncFit(full, d.w-20-(human?16:0)-(share?24:0)-(evLb?28:0), 10.5))}</text>
-      ${evLb?`<text x="${d.w-(share?32:8)}" y="${d.h/2+4}" text-anchor="end" fill="#e0b341" font-size="10">⚡${evLb.critical_count}</text>`:""}
-      ${share?`<text x="${d.w-8}" y="${d.h/2+4}" text-anchor="end" fill="#5b8dee" font-size="10">${share}</text>`:""}`;
+    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="#f8fafc"
+        stroke="${sel?'#64748b':(evLb?'#b7791f':(human?'#b7791f':'#cbd5e1'))}" stroke-width="${sel?2:(evLb?1.6:1.1)}"/>
+      <text x="10" y="${d.h/2+4}" fill="#64748b" font-size="10.5">${human?"👤 ":""}${esc(truncFit(full, d.w-20-(human?16:0)-(share?24:0)-(evLb?28:0), 10.5))}</text>
+      ${evLb?`<text x="${d.w-(share?32:8)}" y="${d.h/2+4}" text-anchor="end" fill="#b7791f" font-size="10">⚡${evLb.critical_count}</text>`:""}
+      ${share?`<text x="${d.w-8}" y="${d.h/2+4}" text-anchor="end" fill="#2563eb" font-size="10">${share}</text>`:""}`;
   }
   return `<g id="n_${id}" transform="translate(${p.x},${p.y - d.h/2})"
       style="cursor:grab" opacity="${dimmed?0.14:1}"
@@ -521,7 +530,7 @@ function drawGraph(){
     `<svg id="gsvg" width="${width*ZOOM}" height="${height*ZOOM}" viewBox="0 0 ${width} ${height}"
        xmlns="http://www.w3.org/2000/svg" onpointerdown="bgClick(event)">
       <defs><pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
-        <circle cx="1" cy="1" r="1" fill="#1a1f2b"/></pattern></defs>
+        <circle cx="1" cy="1" r="1" fill="#d8e2ee"/></pattern></defs>
       <rect width="${width}" height="${height}" fill="url(#dots)"/>
       <g id="glayer-t">${treeConnectors()}</g>
       <g id="glayer-e">${edges}</g><g id="glayer-n">${nodes}</g></svg>`;
@@ -691,12 +700,8 @@ async function snap(){
 }
 
 const ROUTES = {home, goals, graph:graphview, compile, report, time:timemachine};
-// deep link: ?view=... picks the pane; ?autocompile=1 kicks off a compile and
-// jumps to the weekly report when it finishes (desktop "一键导出" flow).
-if (AUTO_COMPILE) {
-  cur = "compile"; renderNav();
-  compile().then(()=>runCompile(true));
-} else if (START_VIEW && ROUTES[START_VIEW]) {
+// deep link: ?view=... picks the pane.
+if (START_VIEW && ROUTES[START_VIEW]) {
   go(START_VIEW);
 } else {
   renderNav(); home();

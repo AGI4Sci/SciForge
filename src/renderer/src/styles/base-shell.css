@@ -2286,6 +2286,14 @@ pre {
   flex: 0 0 auto;
 }
 
+.chat-workbench-topbar {
+  scrollbar-width: none;
+}
+
+.chat-workbench-topbar::-webkit-scrollbar {
+  display: none;
+}
+
 .session-header-compact-meta {
   overflow: hidden;
 }

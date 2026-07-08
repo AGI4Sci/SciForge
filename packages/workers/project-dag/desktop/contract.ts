@@ -24,20 +24,19 @@ export function projectDagApiKeyFromEnv(env: Record<string, string | undefined>)
 
 /**
  * Browser deep link into the bundled project-dag web UI.
- * `view` picks the pane (home | goals | compile | report | time);
- * `autocompile` makes the compile console kick off a run on load and jump to
- * the weekly report when it finishes — the "one-click export" flow.
+ * `view` picks the pane (home | goals | graph | compile | report | time);
+ * `embed` asks the UI to use compact chrome for an app-side panel.
  */
 export function projectDagUiUrl(input: {
   serviceUrl?: string
   apiKey?: string | null
-  view?: 'home' | 'goals' | 'compile' | 'report' | 'time'
-  autocompile?: boolean
+  view?: 'home' | 'goals' | 'graph' | 'compile' | 'report' | 'time'
+  embed?: boolean
 }): string {
   const base = normalizeProjectDagServiceUrl(input.serviceUrl) || DEFAULT_PROJECT_DAG_SERVICE_URL
   const url = new URL(`${base}/`)
   if (input.view) url.searchParams.set('view', input.view)
-  if (input.autocompile) url.searchParams.set('autocompile', '1')
+  if (input.embed) url.searchParams.set('embed', '1')
   const apiKey = input.apiKey?.trim()
   if (apiKey) {
     const hash = new URLSearchParams()

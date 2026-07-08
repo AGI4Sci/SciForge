@@ -20,11 +20,15 @@ const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<
 
 vi.mock('electron', () => ({
   app: {
+    getFileIcon: vi.fn(async () => ({ isEmpty: () => false })),
     quit: vi.fn()
   },
   dialog: {},
   shell: {
     openExternal: vi.fn(async () => undefined)
+  },
+  nativeImage: {
+    createEmpty: vi.fn(() => ({ isEmpty: () => true }))
   },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (event: unknown, payload?: unknown) => Promise<unknown>) => {
@@ -195,6 +199,45 @@ function stubEvidenceDagReady(status = 200) {
     JSON.stringify({ ok: status >= 200 && status < 300, data: { service: 'evidence-dag-engine' } }),
     { status }
   ))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function stubProjectDagReady(status = 200, compileData: Record<string, unknown> = {
+  id: 'run-1',
+  stats: {
+    claims_added: 2,
+    claims_merged: 1,
+    claims_invalidated: 0,
+    review_enqueued: 1
+  },
+  diff: { added: ['claim-1'] }
+}) {
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const href = String(input)
+    const method = init?.method ?? 'GET'
+    if (href.endsWith('/version')) {
+      return new Response(
+        JSON.stringify({ ok: status >= 200 && status < 300, data: { service: 'project-dag-engine' } }),
+        { status }
+      )
+    }
+    if (href.endsWith('/goals') && method === 'GET') {
+      return new Response(JSON.stringify({ ok: true, data: [] }), { status: 200 })
+    }
+    if (href.endsWith('/goals') && method === 'POST') {
+      return new Response(JSON.stringify({ ok: true, data: { root_id: 'goal-1' } }), { status: 200 })
+    }
+    if (href.endsWith('/compile') && method === 'POST') {
+      return new Response(JSON.stringify({
+        ok: true,
+        data: compileData
+      }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ ok: false, error: { message: `unexpected ${method} ${href}` } }), {
+      status: 404
+    })
+  })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
@@ -823,6 +866,89 @@ describe('registerAppIpcHandlers', () => {
     ).rejects.toThrow(/Evidence DAG service is not reachable/)
   })
 
+  it('returns an embedded Project DAG view URL without opening an external browser', async () => {
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    const fetchMock = stubProjectDagReady()
+    const ensureProjectDagReady = vi.fn(async () => undefined)
+    const { shell } = await import('electron')
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions({ ensureProjectDagReady }))
+
+    await expect(handlers.get('projectDag:view')?.({}, { view: 'graph' })).resolves.toEqual({
+      url: 'http://127.0.0.1:3898/?view=graph&embed=1#token=project-token'
+    })
+    expect(ensureProjectDagReady).toHaveBeenCalledTimes(1)
+    expect(shell.openExternal).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:3898/version',
+      expect.objectContaining({
+        method: 'GET',
+        headers: { authorization: 'Bearer project-token' }
+      })
+    )
+  })
+
+  it('compiles Project DAG through IPC and keeps the result in the embedded panel flow', async () => {
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    const fetchMock = stubProjectDagReady()
+    const { shell } = await import('electron')
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions())
+
+    await expect(handlers.get('projectDag:compile')?.({}, {
+      goalTitle: 'Project alpha',
+      goalDescription: 'Find the answer.'
+    })).resolves.toEqual({
+      url: 'http://127.0.0.1:3898/?view=graph&embed=1#token=project-token',
+      runId: 'run-1',
+      stats: {
+        claims_added: 2,
+        claims_merged: 1,
+        claims_invalidated: 0,
+        review_enqueued: 1
+      },
+      diff: { added: ['claim-1'] }
+    })
+    expect(shell.openExternal).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:3898/goals',
+      expect.objectContaining({ method: 'GET' })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:3898/goals',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ title: 'Project alpha', description: 'Find the answer.' })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:3898/compile',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ scope: 'all' })
+      })
+    )
+  })
+
+  it('keeps Project DAG in the embedded panel flow when compile is already running', async () => {
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    stubProjectDagReady(200, { skipped: true, reason: 'compile already running' })
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions())
+
+    await expect(handlers.get('projectDag:compile')?.({}, { scope: 'all' })).resolves.toEqual({
+      url: 'http://127.0.0.1:3898/?view=graph&embed=1#token=project-token',
+      skipped: true,
+      reason: 'compile already running'
+    })
+  })
+
   it('keeps Evidence DAG view read-only without backfilling the active thread', async () => {
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
@@ -1150,6 +1276,361 @@ describe('registerAppIpcHandlers', () => {
       expect(handlers.get('file:preview-workspace-html')).toBeTypeOf('function')
     } finally {
       await workspaceHtmlPreviewService.close()
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('returns a native file drag fallback when the sender cannot start desktop drags', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-drag-ipc-'))
+    const filePath = join(workspaceRoot, 'notes.txt')
+    writeFileSync(filePath, 'notes')
+    try {
+      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+      const dispatcher = registerAppIpcHandlers(registerOptions())
+
+      const result = await dispatcher.invoke(
+        'file:start-workspace-native-drag',
+        { path: 'notes.txt', workspaceRoot },
+        createSender(903)
+      )
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Native file dragging is not available in this environment.'
+      })
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('starts native file drags with a resolved workspace path', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-drag-ipc-'))
+    const filePath = join(workspaceRoot, 'notes.txt')
+    writeFileSync(filePath, 'notes')
+    try {
+      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+      const sender = {
+        ...createSender(904),
+        startDrag: vi.fn()
+      }
+
+      const dispatcher = registerAppIpcHandlers(registerOptions())
+      const result = await dispatcher.invoke(
+        'file:start-workspace-native-drag',
+        { path: 'notes.txt', workspaceRoot },
+        sender
+      )
+
+      expect(result).toMatchObject({
+        ok: true,
+        path: realpathSync(filePath)
+      })
+      expect(sender.startDrag).toHaveBeenCalledWith(expect.objectContaining({
+        file: realpathSync(filePath),
+        icon: expect.anything()
+      }))
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('routes workspace preview IPC calls through the injected host', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const manifest = {
+      contractVersion: 1 as const,
+      id: 'molecular',
+      displayName: 'Molecular Structure Viewer',
+      version: '0.1.0',
+      modality: 'molecular' as const,
+      lifecycle: 'hybrid' as const,
+      priority: 900,
+      extensions: ['.pdb'],
+      mimeTypes: ['chemical/x-pdb'],
+      capabilities: {
+        preview: true,
+        edit: true,
+        inspect: true,
+        structuredSelection: true,
+        agent: {
+          observe: true,
+          select: true,
+          proposeEdit: true,
+          applyEdit: true,
+          save: true
+        }
+      }
+    }
+    const workspacePreviewHost = {
+      listPlugins: vi.fn(() => [manifest]),
+      open: vi.fn(async () => ({
+        ok: true as const,
+        session: {
+          id: 'session-1',
+          pluginId: 'molecular',
+          workspaceRoot: '/tmp/workspace',
+          path: '/tmp/workspace/protein.pdb',
+          modality: 'molecular' as const,
+          mode: 'inspect' as const,
+          openedAt: '2026-07-08T00:00:00.000Z',
+          updatedAt: '2026-07-08T00:00:00.000Z'
+        },
+        manifest,
+        route: 'matched' as const,
+        file: {
+          workspaceRoot: '/tmp/workspace',
+          path: '/tmp/workspace/protein.pdb',
+          relativePath: 'protein.pdb',
+          mimeType: 'chemical/x-pdb'
+        }
+      })),
+      observe: vi.fn(() => ({
+        ok: true as const,
+        observation: {
+          schemaVersion: 1 as const,
+          file: { path: '/tmp/workspace/protein.pdb', workspaceRoot: '/tmp/workspace' },
+          view: {
+            pluginId: 'molecular',
+            modality: 'molecular' as const,
+            mode: 'inspect' as const,
+            title: 'protein.pdb'
+          },
+          actions: ['observe']
+        }
+      })),
+      readRange: vi.fn(async () => ({
+        ok: true as const,
+        sessionId: 'session-1',
+        path: '/tmp/workspace/protein.pdb',
+        offset: 0,
+        length: 4,
+        size: 10,
+        dataBase64: Buffer.from('ATOM').toString('base64'),
+        mimeType: 'chemical/x-pdb'
+      })),
+      describeAsset: vi.fn(async () => ({
+        ok: true as const,
+        descriptor: {
+          schemaVersion: 1 as const,
+          sessionId: 'session-1',
+          pluginId: 'molecular',
+          modality: 'molecular' as const,
+          file: {
+            workspaceRoot: '/tmp/workspace',
+            path: '/tmp/workspace/protein.pdb',
+            relativePath: 'protein.pdb',
+            mimeType: 'chemical/x-pdb',
+            size: 10
+          },
+          primary: 'byte-range' as const,
+          eagerRead: {
+            allowed: false,
+            reason: 'lazy scientific asset transport'
+          },
+          range: {
+            available: true,
+            maxChunkBytes: 4 * 1024 * 1024,
+            recommendedChunkBytes: 1024 * 1024,
+            size: 10
+          },
+          strategies: [
+            {
+              kind: 'byte-range' as const,
+              status: 'available' as const,
+              reason: 'bounded reads',
+              maxChunkBytes: 4 * 1024 * 1024
+            }
+          ]
+        }
+      })),
+      applyEdit: vi.fn(async () => ({
+        ok: true as const,
+        session: {
+          id: 'session-1',
+          pluginId: 'molecular',
+          workspaceRoot: '/tmp/workspace',
+          path: '/tmp/workspace/protein.pdb',
+          modality: 'molecular' as const,
+          mode: 'inspect' as const,
+          openedAt: '2026-07-08T00:00:00.000Z',
+          updatedAt: '2026-07-08T00:01:00.000Z'
+        },
+        operationKind: 'molecular.setSelection' as const,
+        appliedAt: '2026-07-08T00:01:00.000Z',
+        audit: {
+          pluginId: 'molecular',
+          path: '/tmp/workspace/protein.pdb',
+          operationKind: 'molecular.setSelection' as const,
+          effect: 'session-update' as const
+        }
+      })),
+      exportPreview: vi.fn(async () => ({
+        ok: true as const,
+        sessionId: 'session-1',
+        path: '/tmp/workspace/exports/protein-copy.pdb',
+        target: {
+          kind: 'workspace-file' as const,
+          format: 'pdb',
+          path: 'exports/protein-copy.pdb'
+        },
+        exportedAt: '2026-07-08T00:02:00.000Z',
+        audit: {
+          pluginId: 'molecular',
+          sourcePath: '/tmp/workspace/protein.pdb',
+          targetKind: 'workspace-file' as const,
+          format: 'pdb',
+          effect: 'source-copy' as const
+        }
+      }))
+    }
+
+    registerAppIpcHandlers(registerOptions({
+      workspacePreviewHost: workspacePreviewHost as never
+    }))
+
+    await expect(
+      handlers.get('workspacePreview:listPlugins')?.({}, undefined)
+    ).resolves.toEqual([manifest])
+    await expect(
+      handlers.get('workspacePreview:open')?.({}, {
+        path: ' protein.pdb ',
+        workspaceRoot: ' /tmp/workspace ',
+        mimeType: ' chemical/x-pdb ',
+        mode: ' inspect '
+      })
+    ).resolves.toMatchObject({ ok: true, session: { id: 'session-1' } })
+    await expect(
+      handlers.get('workspacePreview:observe')?.({}, { sessionId: ' session-1 ' })
+    ).resolves.toMatchObject({ ok: true, observation: { view: { pluginId: 'molecular' } } })
+    await expect(
+      handlers.get('workspacePreview:readRange')?.({}, {
+        sessionId: ' session-1 ',
+        range: { offset: 0, length: 4 }
+      })
+    ).resolves.toMatchObject({ ok: true, dataBase64: Buffer.from('ATOM').toString('base64') })
+    await expect(
+      handlers.get('workspacePreview:describeAsset')?.({}, { sessionId: ' session-1 ' })
+    ).resolves.toMatchObject({
+      ok: true,
+      descriptor: {
+        primary: 'byte-range',
+        eagerRead: { allowed: false }
+      }
+    })
+    await expect(
+      handlers.get('workspacePreview:applyEdit')?.({}, {
+        sessionId: ' session-1 ',
+        operation: {
+          kind: 'molecular.setSelection',
+          path: 'protein.pdb',
+          selection: { kind: 'molecular', chains: ['A'] }
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      operationKind: 'molecular.setSelection',
+      audit: { effect: 'session-update' }
+    })
+    await expect(
+      handlers.get('workspacePreview:export')?.({}, {
+        sessionId: ' session-1 ',
+        target: {
+          kind: 'workspace-file',
+          format: 'pdb',
+          path: ' exports/protein-copy.pdb '
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      audit: { effect: 'source-copy' }
+    })
+    await expect(
+      handlers.get('workspacePreview:open')?.({}, {
+        path: 'protein.pdb',
+        workspaceRoot: '/tmp/workspace',
+        mode: 'review'
+      })
+    ).rejects.toThrow(/Invalid payload for workspacePreview:open/)
+
+    expect(workspacePreviewHost.open).toHaveBeenCalledWith({
+      path: 'protein.pdb',
+      workspaceRoot: '/tmp/workspace',
+      mimeType: 'chemical/x-pdb',
+      mode: 'inspect'
+    })
+    expect(workspacePreviewHost.observe).toHaveBeenCalledWith('session-1')
+    expect(workspacePreviewHost.describeAsset).toHaveBeenCalledWith('session-1')
+    expect(workspacePreviewHost.readRange).toHaveBeenCalledWith('session-1', { offset: 0, length: 4 })
+    expect(workspacePreviewHost.applyEdit).toHaveBeenCalledWith('session-1', {
+      kind: 'molecular.setSelection',
+      path: 'protein.pdb',
+      selection: { kind: 'molecular', chains: ['A'] }
+    })
+    expect(workspacePreviewHost.exportPreview).toHaveBeenCalledWith('session-1', {
+      kind: 'workspace-file',
+      format: 'pdb',
+      path: 'exports/protein-copy.pdb'
+    })
+  })
+
+  it('routes workspace preview file watches through the injected host snapshot', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'workspace-preview-ipc-watch-'))
+    const filePath = join(workspaceRoot, 'protein.pdb')
+    writeFileSync(filePath, 'HEADER\n', 'utf8')
+
+    try {
+      const workspacePreviewHost = {
+        listPlugins: vi.fn(() => []),
+        open: vi.fn(),
+        observe: vi.fn(),
+        readRange: vi.fn(),
+        describeAsset: vi.fn(),
+        applyEdit: vi.fn(),
+        exportPreview: vi.fn(),
+        invokeAction: vi.fn(),
+        prepareWatch: vi.fn(async (_payload: { path: string; workspaceRoot: string }, startedAt: string) => ({
+          ok: true as const,
+          workspaceRoot,
+          path: filePath,
+          content: '',
+          size: 7,
+          truncated: false,
+          mtimeMs: 123,
+          startedAt
+        })),
+        createWatchSnapshot: vi.fn()
+      }
+      registerAppIpcHandlers(registerOptions({
+        workspacePreviewHost: workspacePreviewHost as never
+      }))
+
+      const sender = createSender(7)
+      const watchHandler = handlers.get('workspacePreview:watch')
+      expect(watchHandler).toBeTypeOf('function')
+      const result = await watchHandler?.({ sender }, {
+        path: ' protein.pdb ',
+        workspaceRoot: ` ${workspaceRoot} `
+      })
+
+      expect(result).toMatchObject({
+        ok: true,
+        path: filePath,
+        content: '',
+        size: 7,
+        truncated: false,
+        mtimeMs: 123
+      })
+      expect(workspacePreviewHost.prepareWatch).toHaveBeenCalledWith({
+        path: 'protein.pdb',
+        workspaceRoot
+      }, expect.any(String))
+      expect(sender.once).toHaveBeenCalledWith('destroyed', expect.any(Function))
+
+      const watchId = (result as { ok: true; watchId: string }).watchId
+      await expect(
+        handlers.get('workspacePreview:unwatch')?.({ sender }, watchId)
+      ).resolves.toBe(true)
+    } finally {
       rmSync(workspaceRoot, { recursive: true, force: true })
     }
   })

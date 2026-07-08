@@ -4,6 +4,11 @@ import type {
   WorkspaceHtmlPreviewResult,
   WorkspaceImageReadResult
 } from '@shared/workspace-file'
+import {
+  WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS,
+  type WorkspaceObservation,
+  type WorkspaceStructuredSelection
+} from '@shared/workspace-preview'
 import type { VisibleContextResource } from '@shared/visible-context'
 import {
   createPdfAnchor,
@@ -60,6 +65,7 @@ import {
   mergePdfAnnotationContribution,
   reopenPdfAnnotationThread,
   resolvePdfAnnotationThread,
+  summarizePdfAnnotationThread,
   updatePdfAnnotation,
   updatePdfAnnotationThread,
   type PdfAnnotationThreadSummary
@@ -85,6 +91,7 @@ import {
   type WriteDocxAnnotationOverlay
 } from './write/WriteDocxViewer'
 import { WriteMarkdownEditor } from './write/WriteMarkdownEditor'
+import { createLegacyWorkspaceObservation } from '../workspace-preview/legacy-adapter'
 
 type Props = {
   target: WorkspaceFileTarget | null
@@ -355,6 +362,55 @@ function pageRangeText(summary: PdfAnnotationThreadSummary): string {
   return summary.pageStart === summary.pageEnd
     ? `page ${summary.pageStart}`
     : `pages ${summary.pageStart}-${summary.pageEnd}`
+}
+
+function legacyObservationAnnotationsForSidecar(
+  sidecar: PdfAnnotationSidecar | null
+): WorkspaceObservation['annotations'] | undefined {
+  if (!sidecar?.threads.length) return undefined
+  return sidecar.threads
+    .slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
+    .map((thread) => {
+      const summary = summarizePdfAnnotationThread(sidecar, thread)
+      const text = [
+        summary.status,
+        pageRangeText(summary),
+        summary.title,
+        summary.preview || summary.quote
+      ].filter(Boolean).join(' | ')
+      return {
+        id: thread.id,
+        kind: summary.kind,
+        ...(text ? { summary: clipInlineText(text, 1000) } : {})
+      }
+    })
+}
+
+function legacyObservationSelectionForAnnotationThread(
+  sidecar: PdfAnnotationSidecar | null,
+  threadId: string | null
+): WorkspaceStructuredSelection | undefined {
+  if (!sidecar || !threadId) return undefined
+  const thread = sidecar.threads.find((item) => item.id === threadId)
+  if (!thread) return undefined
+  const anchorsById = new Map(sidecar.anchors.map((anchor) => [anchor.id, anchor]))
+  const anchors = thread.anchorIds.flatMap((anchorId) => {
+    const anchor = anchorsById.get(anchorId)
+    return anchor ? [anchor] : []
+  })
+  if (!anchors.length) return undefined
+
+  return {
+    kind: 'document',
+    anchors: anchors.slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS).map((anchor) => {
+      const quote = clipInlineText(anchor.quote, 1000)
+      return {
+        id: anchor.id,
+        ...(anchor.pageStart > 0 ? { page: anchor.pageStart } : {}),
+        ...(quote ? { quote } : {})
+      }
+    })
+  }
 }
 
 function buildPdfAnnotationQuestionPrompt(input: {
@@ -949,6 +1005,37 @@ export function WorkspaceFilePreviewPanel({
     if (!activePdfAnnotationId) return []
     return docxAnnotationOverlays.filter((overlay) => overlay.id === activePdfAnnotationId)
   }, [activePdfAnnotationId, docxAnnotationOverlays, pdfAnnotationDisplayMode])
+  const legacyObservationAnnotations = useMemo(
+    () => annotationTargetPath && pdfSidecar ? legacyObservationAnnotationsForSidecar(pdfSidecar) : undefined,
+    [annotationTargetPath, pdfSidecar]
+  )
+  const legacyObservationSelection = useMemo(
+    () => annotationTargetPath
+      ? legacyObservationSelectionForAnnotationThread(pdfSidecar, selectedPdfThreadId)
+      : undefined,
+    [annotationTargetPath, pdfSidecar, selectedPdfThreadId]
+  )
+  const legacyObservationResult = useMemo(() => {
+    if (showHtmlPreview && htmlPreview?.ok) return htmlPreview
+    return result?.ok ? result : null
+  }, [htmlPreview, result, showHtmlPreview])
+  const legacyObservation = useMemo(
+    () => legacyObservationResult
+      ? createLegacyWorkspaceObservation({
+          result: legacyObservationResult,
+          workspaceRoot: target?.workspaceRoot ?? workspaceRoot,
+          annotations: legacyObservationAnnotations,
+          selectionOverride: legacyObservationSelection
+        })
+      : null,
+    [
+      legacyObservationAnnotations,
+      legacyObservationResult,
+      legacyObservationSelection,
+      target?.workspaceRoot,
+      workspaceRoot
+    ]
+  )
   const visibleContextResources = useMemo<VisibleContextResource[]>(() => {
     const previewPath = result?.ok ? result.path : target?.path
     if (!previewPath) return []
@@ -1046,13 +1133,26 @@ export function WorkspaceFilePreviewPanel({
         column: result?.ok && result.kind === 'text' ? result.column ?? null : target?.column ?? null,
         pdfAnnotationThreadCount: pdfSidecar?.threads.length ?? null,
         pdfAnnotationSelectedThreadId: selectedPdfThreadId,
-        pdfAnnotationsPanelOpen: pdfAnnotationsOpen
+        pdfAnnotationsPanelOpen: pdfAnnotationsOpen,
+        markdownMode,
+        htmlMode,
+        previewScale,
+        workspaceObservation: legacyObservation,
+        workspacePreviewPluginId: legacyObservation?.view.pluginId ?? null,
+        workspacePreviewModality: legacyObservation?.view.modality ?? null,
+        workspacePreviewMode: legacyObservation?.view.mode ?? null,
+        workspacePreviewSelectionKind: legacyObservation?.selection?.kind ?? null,
+        workspacePreviewActionCount: legacyObservation?.actions.length ?? 0
       }
     })
   }, [
+    htmlMode,
+    legacyObservation,
     loading,
+    markdownMode,
     pdfAnnotationsOpen,
     pdfSidecar?.threads.length,
+    previewScale,
     result,
     selectedPdfThreadId,
     target?.column,

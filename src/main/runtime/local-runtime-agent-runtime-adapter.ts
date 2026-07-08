@@ -16,6 +16,7 @@ import type {
   AgentRuntimeThreadGoal,
   AgentRuntimeThreadGuiPlan,
   AgentRuntimeThreadDetail,
+  AgentRuntimeThreadSidebarProbe,
   AgentRuntimeThreadSidebarVisibility,
   AgentRuntimeTodoItem,
   AgentRuntimeTodoList,
@@ -56,6 +57,7 @@ import {
   localRuntimeThreadInterruptPath,
   localRuntimeThreadPath,
   localRuntimeThreadReviewPath,
+  localRuntimeThreadSidebarProbePath,
   localRuntimeThreadSteerPath,
   localRuntimeThreadTodosPath,
   localRuntimeThreadTurnsPath,
@@ -140,6 +142,16 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
     async readThread(context, input) {
       const payload = await requestJson(options, context, localRuntimeThreadPath(input.threadId), { method: 'GET' })
       return mapLocalRuntimeThreadDetail(payload)
+    },
+
+    async readThreadSidebarProbe(context, input) {
+      const payload = await requestJson(
+        options,
+        context,
+        localRuntimeThreadSidebarProbePath(input.threadId),
+        { method: 'GET' }
+      )
+      return mapLocalRuntimeThreadSidebarProbe(payload, input.threadId)
     },
 
     async startTurn(context, input) {
@@ -737,6 +749,18 @@ function mapLocalRuntimeThreadDetail(value: unknown): AgentRuntimeThreadDetail {
     turns,
     items,
     usage: mapUsage(record.usage)
+  }
+}
+
+function mapLocalRuntimeThreadSidebarProbe(value: unknown, fallbackThreadId: string): AgentRuntimeThreadSidebarProbe {
+  const record = asRecord(value) ?? {}
+  const threadId = stringValue(record.threadId) || stringValue(record.thread_id) || fallbackThreadId
+  const rawText = record.text
+  const text = typeof rawText === 'string' && rawText.trim() ? rawText.trim() : null
+  return {
+    runtimeId: 'sciforge',
+    threadId,
+    text
   }
 }
 
