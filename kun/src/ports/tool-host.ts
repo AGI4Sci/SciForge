@@ -3,6 +3,7 @@ import type { ApprovalRequest } from '../domain/approval.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { BashCommandPolicyJson, FilePathPolicyJson } from '../contracts/turns.js'
+import type { MemoryTaskType, MemoryThreadMode } from '../contracts/memory.js'
 import type {
   UserInputRequest,
   UserInputResolution
@@ -53,12 +54,17 @@ export type ToolHostContext = {
   threadId: string
   turnId: string
   workspace: string
+  /** Current project key. Defaults to the workspace root when no explicit project model exists. */
+  project?: string
   /**
    * Thread mode advertised by the GUI. SciForge Runtime restricts plan tools
-   * to `plan` threads plus `planDraft`/`planRefine` turn kinds. The
-   * field is optional for backward compatibility with older call sites.
+   * to `plan` threads plus `draft`/`refine` operations, which map to the
+   * `plan_draft`/`plan_refine` memory task types. The field is optional
+   * for backward compatibility with older call sites.
    */
-  threadMode?: 'agent' | 'plan'
+  threadMode?: MemoryThreadMode
+  /** Derived task category used to scope long-term memory recall. */
+  taskType?: MemoryTaskType
   /** Optional GUI plan context (see above). */
   guiPlan?: GuiPlanContext
   /** Optional remote execution target selected for this turn. */

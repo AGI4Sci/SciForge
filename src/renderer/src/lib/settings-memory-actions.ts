@@ -5,6 +5,8 @@ export type SettingsMemoryRecord = {
   scope: 'user' | 'workspace' | 'project'
   workspace?: string
   project?: string
+  threadMode?: 'agent' | 'plan'
+  taskType?: 'agent' | 'plan' | 'plan_draft' | 'plan_refine'
   sourceThreadId?: string
   sourceTurnId?: string
   tags?: string[]
@@ -23,6 +25,8 @@ export type SettingsMemoryProvider = {
     scope?: SettingsMemoryRecord['scope']
     workspace?: string
     project?: string
+    threadMode?: SettingsMemoryRecord['threadMode']
+    taskType?: SettingsMemoryRecord['taskType']
     tags?: string[]
     confidence?: number
     disabled?: boolean
@@ -92,7 +96,8 @@ export function createSettingsMemoryActions(deps: SettingsMemoryActionsDeps): Se
         const memory = await provider.createMemory({
           content,
           scope: state.memoryDraftScope,
-          workspace: state.workspaceRoot
+          workspace: state.workspaceRoot,
+          ...(state.memoryDraftScope === 'project' ? { project: state.workspaceRoot } : {})
         })
         deps.setMemoryRecords((records) => [memory, ...records.filter((record) => record.id !== memory.id)])
         deps.setMemoryDraftContent('')

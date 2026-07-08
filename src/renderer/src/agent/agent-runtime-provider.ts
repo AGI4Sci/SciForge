@@ -604,6 +604,8 @@ function normalizeSharedMemoryRecord(value: unknown): LocalRuntimeMemoryRecordJs
     scope: normalizeMemoryScope(record.scope),
     ...(stringValue(record.workspace) ? { workspace: stringValue(record.workspace) } : {}),
     ...(stringValue(record.project) ? { project: stringValue(record.project) } : {}),
+    ...(normalizeMemoryThreadMode(record.threadMode) ? { threadMode: normalizeMemoryThreadMode(record.threadMode) } : {}),
+    ...(normalizeMemoryTaskType(record.taskType) ? { taskType: normalizeMemoryTaskType(record.taskType) } : {}),
     tags: Array.isArray(record.tags)
       ? record.tags.filter((tag): tag is string => typeof tag === 'string')
       : [],
@@ -625,6 +627,16 @@ function normalizeSharedMemoryRecord(value: unknown): LocalRuntimeMemoryRecordJs
 
 function normalizeMemoryScope(value: unknown): LocalRuntimeMemoryRecordJson['scope'] {
   return value === 'workspace' || value === 'project' || value === 'user' ? value : 'user'
+}
+
+function normalizeMemoryThreadMode(value: unknown): LocalRuntimeMemoryRecordJson['threadMode'] | undefined {
+  return value === 'agent' || value === 'plan' ? value : undefined
+}
+
+function normalizeMemoryTaskType(value: unknown): LocalRuntimeMemoryRecordJson['taskType'] | undefined {
+  return value === 'agent' || value === 'plan' || value === 'plan_draft' || value === 'plan_refine'
+    ? value
+    : undefined
 }
 
 function detailTurnCount(_usage: AgentRuntimeUsage): number {

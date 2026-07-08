@@ -7,9 +7,14 @@ import { ERRORS } from './runtime-error.js'
 export async function listMemories(store: MemoryStore | undefined, request: Request): Promise<JsonResponse> {
   if (!store) return ERRORS.unavailable('memory store is unavailable')
   const url = new URL(request.url)
+  const workspace = url.searchParams.get('workspace') ?? undefined
+  const project = url.searchParams.get('project') ?? workspace
   return jsonResponse({
     memories: await store.list({
-      workspace: url.searchParams.get('workspace') ?? undefined,
+      workspace,
+      project,
+      threadMode: memoryThreadMode(url.searchParams.get('thread_mode') ?? url.searchParams.get('threadMode')),
+      taskType: memoryTaskType(url.searchParams.get('task_type') ?? url.searchParams.get('taskType')),
       includeDeleted: url.searchParams.get('include_deleted') === 'true'
     })
   })
@@ -53,4 +58,14 @@ export async function memoryDiagnostics(store: MemoryStore | undefined): Promise
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function memoryThreadMode(value: string | null): 'agent' | 'plan' | undefined {
+  return value === 'agent' || value === 'plan' ? value : undefined
+}
+
+function memoryTaskType(value: string | null): 'agent' | 'plan' | 'plan_draft' | 'plan_refine' | undefined {
+  return value === 'agent' || value === 'plan' || value === 'plan_draft' || value === 'plan_refine'
+    ? value
+    : undefined
 }

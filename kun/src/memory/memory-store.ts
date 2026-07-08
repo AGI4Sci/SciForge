@@ -6,15 +6,33 @@ import {
   MemoryDiagnostics,
   MemoryRecord,
   type MemoryCreateRequest,
+  type MemoryTaskType,
+  type MemoryThreadMode,
   type MemoryUpdateRequest
 } from '../contracts/memory.js'
+
+export type MemoryScopeFilter = {
+  workspace?: string
+  project?: string
+  threadMode?: MemoryThreadMode
+  taskType?: MemoryTaskType
+}
+
+export type MemoryListFilter = MemoryScopeFilter & {
+  includeDeleted?: boolean
+}
+
+export type MemoryRetrieveInput = MemoryScopeFilter & {
+  query: string
+  limit: number
+}
 
 export interface MemoryStore {
   create(input: MemoryCreateRequest): Promise<MemoryRecord>
   update(id: string, patch: MemoryUpdateRequest): Promise<MemoryRecord>
   delete(id: string): Promise<MemoryRecord>
-  list(filter?: { workspace?: string; includeDeleted?: boolean }): Promise<MemoryRecord[]>
-  retrieve(input: { query: string; workspace?: string; limit: number }): Promise<MemoryRecord[]>
+  list(filter?: MemoryListFilter): Promise<MemoryRecord[]>
+  retrieve(input: MemoryRetrieveInput): Promise<MemoryRecord[]>
   diagnostics(): Promise<MemoryDiagnostics>
   setLastInjected(ids: string[]): void
 }
@@ -39,7 +57,9 @@ export class FileMemoryStore implements MemoryStore {
       content: input.content,
       scope: input.scope ?? 'workspace',
       workspace: input.workspace,
-      project: input.project,
+      project: input.project ?? (input.scope === 'project' ? input.workspace : undefined),
+      threadMode: input.threadMode,
+      taskType: input.taskType,
       sourceThreadId: input.sourceThreadId,
       sourceTurnId: input.sourceTurnId,
       tags: input.tags ?? [],
@@ -79,17 +99,22 @@ export class FileMemoryStore implements MemoryStore {
     return next
   }
 
-  async list(filter: { workspace?: string; includeDeleted?: boolean } = {}): Promise<MemoryRecord[]> {
+  async list(filter: MemoryListFilter = {}): Promise<MemoryRecord[]> {
     const records = await this.readAll()
     return records
       .filter((record) => filter.includeDeleted || !record.deletedAt)
-      .filter((record) => inScope(record, filter.workspace))
+      .filter((record) => inScope(record, filter))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
-  async retrieve(input: { query: string; workspace?: string; limit: number }): Promise<MemoryRecord[]> {
+  async retrieve(input: MemoryRetrieveInput): Promise<MemoryRecord[]> {
     if (!this.options.config.enabled) return []
-    const active = (await this.list({ workspace: input.workspace }))
+    const active = (await this.list({
+      workspace: input.workspace,
+      ...(input.project ? { project: input.project } : {}),
+      ...(input.threadMode ? { threadMode: input.threadMode } : {}),
+      ...(input.taskType ? { taskType: input.taskType } : {})
+    }))
       .filter((record) => !record.disabledAt)
     return active
       .map((record) => ({ record, score: scoreMemory(record, input.query) }))
@@ -143,9 +168,21 @@ export class FileMemoryStore implements MemoryStore {
   }
 }
 
-function inScope(record: MemoryRecord, workspace: string | undefined): boolean {
+function inScope(record: MemoryRecord, filter: MemoryScopeFilter): boolean {
+  if (!matchesTurnContext(record, filter)) return false
   if (record.scope === 'user') return true
-  if (record.scope === 'workspace') return Boolean(workspace && record.workspace === workspace)
+  if (record.scope === 'workspace') return Boolean(filter.workspace && record.workspace === filter.workspace)
+  return Boolean(
+    filter.workspace &&
+    filter.project &&
+    record.workspace === filter.workspace &&
+    record.project === filter.project
+  )
+}
+
+function matchesTurnContext(record: MemoryRecord, filter: MemoryScopeFilter): boolean {
+  if (filter.threadMode && record.threadMode && record.threadMode !== filter.threadMode) return false
+  if (filter.taskType && record.taskType && record.taskType !== filter.taskType) return false
   return true
 }
 

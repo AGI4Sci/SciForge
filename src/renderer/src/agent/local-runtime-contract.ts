@@ -77,6 +77,8 @@ export type LocalRuntimeMemoryRecordJson = {
   scope: 'user' | 'workspace' | 'project'
   workspace?: string
   project?: string
+  threadMode?: 'agent' | 'plan'
+  taskType?: 'agent' | 'plan' | 'plan_draft' | 'plan_refine'
   sourceThreadId?: string
   sourceTurnId?: string
   tags?: string[]

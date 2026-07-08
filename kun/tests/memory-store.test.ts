@@ -52,6 +52,118 @@ describe('Memory store and recall', () => {
     expect((await store.list({ workspace: '/tmp/ws', includeDeleted: true })).find((item) => item.id === memory.id)?.deletedAt).toBeTruthy()
   })
 
+  it('strictly scopes project memories and treats missing turn dimensions as wildcards', async () => {
+    const store = createStore()
+    const user = await store.create({
+      content: 'Global pnpm preference',
+      scope: 'user'
+    })
+    const workspace = await store.create({
+      content: 'Workspace pnpm setup',
+      scope: 'workspace',
+      workspace: '/tmp/ws'
+    })
+    const projectA = await store.create({
+      content: 'Project pnpm setup',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: 'project-a'
+    })
+    const projectB = await store.create({
+      content: 'Project pnpm setup',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: 'project-b'
+    })
+    const sameProjectOtherWorkspace = await store.create({
+      content: 'Project pnpm setup',
+      scope: 'project',
+      workspace: '/tmp/other',
+      project: 'project-a'
+    })
+    const draft = await store.create({
+      content: 'Draft pnpm setup',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: 'project-a',
+      threadMode: 'plan',
+      taskType: 'plan_draft'
+    })
+    const refine = await store.create({
+      content: 'Refine pnpm setup',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: 'project-a',
+      threadMode: 'plan',
+      taskType: 'plan_refine'
+    })
+
+    const idsForProjectA = (await store.retrieve({
+      query: 'pnpm setup',
+      workspace: '/tmp/ws',
+      project: 'project-a',
+      threadMode: 'agent',
+      taskType: 'agent',
+      limit: 10
+    })).map((item) => item.id)
+    expect(idsForProjectA).toEqual(expect.arrayContaining([user.id, workspace.id, projectA.id]))
+    expect(idsForProjectA).not.toContain(projectB.id)
+    expect(idsForProjectA).not.toContain(sameProjectOtherWorkspace.id)
+    expect(idsForProjectA).not.toContain(draft.id)
+    expect(idsForProjectA).not.toContain(refine.id)
+
+    const idsForOtherWorkspaceSameProject = (await store.retrieve({
+      query: 'pnpm setup',
+      workspace: '/tmp/other',
+      project: 'project-a',
+      threadMode: 'agent',
+      taskType: 'agent',
+      limit: 10
+    })).map((item) => item.id)
+    expect(idsForOtherWorkspaceSameProject).toContain(sameProjectOtherWorkspace.id)
+    expect(idsForOtherWorkspaceSameProject).not.toContain(projectA.id)
+
+    const idsWithoutProject = (await store.retrieve({
+      query: 'pnpm setup',
+      workspace: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent',
+      limit: 10
+    })).map((item) => item.id)
+    expect(idsWithoutProject).toEqual(expect.arrayContaining([user.id, workspace.id]))
+    expect(idsWithoutProject).not.toContain(projectA.id)
+    expect(idsWithoutProject).not.toContain(projectB.id)
+
+    const draftIds = (await store.retrieve({
+      query: 'pnpm setup',
+      workspace: '/tmp/ws',
+      project: 'project-a',
+      threadMode: 'plan',
+      taskType: 'plan_draft',
+      limit: 10
+    })).map((item) => item.id)
+    expect(draftIds).toEqual(expect.arrayContaining([user.id, workspace.id, projectA.id, draft.id]))
+    expect(draftIds).not.toContain(refine.id)
+
+    const unfilteredProjectListIds = (await store.list({
+      workspace: '/tmp/ws',
+      project: 'project-a'
+    })).map((item) => item.id)
+    expect(unfilteredProjectListIds).toEqual(expect.arrayContaining([projectA.id, draft.id, refine.id]))
+    expect(unfilteredProjectListIds).not.toContain(projectB.id)
+    expect(unfilteredProjectListIds).not.toContain(sameProjectOtherWorkspace.id)
+
+    const agentProjectListIds = (await store.list({
+      workspace: '/tmp/ws',
+      project: 'project-a',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })).map((item) => item.id)
+    expect(agentProjectListIds).toContain(projectA.id)
+    expect(agentProjectListIds).not.toContain(draft.id)
+    expect(agentProjectListIds).not.toContain(refine.id)
+  })
+
   it('exposes memory API routes with diagnostics', async () => {
     const h = buildHarness()
     h.runtime.memoryStore = createStore()
@@ -104,6 +216,52 @@ describe('Memory store and recall', () => {
     expect(await readJson(diagnostics)).toMatchObject({ tombstoneCount: 1 })
   })
 
+  it('filters project-scoped memories through the memory API', async () => {
+    const h = buildHarness()
+    h.runtime.memoryStore = createStore()
+    await h.runtime.memoryStore.create({
+      content: 'Project A keeps pnpm notes',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: 'project-a'
+    })
+    await h.runtime.memoryStore.create({
+      content: 'Default project keeps pnpm notes',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: '/tmp/ws'
+    })
+    await h.runtime.memoryStore.create({
+      content: 'Project B keeps pnpm notes',
+      scope: 'project',
+      workspace: '/tmp/ws',
+      project: 'project-b'
+    })
+
+    const list = await dispatchRequest(
+      h.router,
+      new Request('http://localhost/v1/memory?workspace=/tmp/ws&project=project-a', {
+        headers: { authorization: 'Bearer tok-1' }
+      })
+    )
+
+    expect((await readJson(list)) as { memories: Array<{ project?: string }> }).toMatchObject({
+      memories: [expect.objectContaining({ project: 'project-a' })]
+    })
+
+    const workspaceOnlyList = await dispatchRequest(
+      h.router,
+      new Request('http://localhost/v1/memory?workspace=/tmp/ws', {
+        headers: { authorization: 'Bearer tok-1' }
+      })
+    )
+    const workspaceOnlyProjects = ((await readJson(workspaceOnlyList)) as { memories: Array<{ project?: string }> })
+      .memories
+      .map((memory) => memory.project)
+    expect(workspaceOnlyProjects).toContain('/tmp/ws')
+    expect(workspaceOnlyProjects).not.toContain('project-b')
+  })
+
   it('gates memory mutation tools through approval', async () => {
     const store = createStore()
     const host = new LocalToolHost({
@@ -129,6 +287,158 @@ describe('Memory store and recall', () => {
     expect(approvals).toBe(1)
     expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
     expect(await store.list({ workspace: '/tmp/ws' })).toHaveLength(1)
+  })
+
+  it('defaults project-scoped memory tool writes to the current project key', async () => {
+    const store = createStore()
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildMemoryToolProviders(store))
+    })
+    const result = await host.execute({
+      callId: 'call_1',
+      toolName: 'memory_create',
+      arguments: { content: 'Project memory', scope: 'project' }
+    }, {
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      workspace: '/tmp/ws',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent',
+      approvalPolicy: 'on-request',
+      abortSignal: new AbortController().signal,
+      awaitApproval: async () => 'allow'
+    })
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
+    expect(await store.list({
+      workspace: '/tmp/ws',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })).toEqual([
+      expect.objectContaining({
+        scope: 'project',
+        project: '/tmp/ws',
+        threadMode: 'agent',
+        taskType: 'agent'
+      })
+    ])
+  })
+
+  it('defaults project-scoped memory tool writes to an overridden workspace', async () => {
+    const store = createStore()
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildMemoryToolProviders(store))
+    })
+
+    const result = await host.execute({
+      callId: 'call_1',
+      toolName: 'memory_create',
+      arguments: { content: 'Project memory', scope: 'project', workspace: '/tmp/other' }
+    }, {
+      threadId: 'thr_1',
+      turnId: 'turn_1',
+      workspace: '/tmp/ws',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent',
+      approvalPolicy: 'on-request',
+      abortSignal: new AbortController().signal,
+      awaitApproval: async () => 'allow'
+    })
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
+    expect(await store.list({
+      workspace: '/tmp/other',
+      project: '/tmp/other',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })).toEqual([
+      expect.objectContaining({
+        scope: 'project',
+        workspace: '/tmp/other',
+        project: '/tmp/other'
+      })
+    ])
+    expect(await store.list({
+      workspace: '/tmp/other',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })).toEqual([])
+  })
+
+  it('passes project and task scope into memory retrieval from agent turns', async () => {
+    const store = createStore()
+    const seen: Parameters<typeof store.retrieve>[0][] = []
+    const originalRetrieve = store.retrieve.bind(store)
+    store.retrieve = async (input) => {
+      seen.push(input)
+      return originalRetrieve(input)
+    }
+    const model: ModelClient = {
+      provider: 'fake',
+      model: 'fake',
+      async *stream() {
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }
+    const h = makeHarness(model, { memoryStore: store })
+    await bootstrapThread(h, { workspace: '/tmp/ws', request: { prompt: 'hello' } })
+
+    await h.loop.runTurn(h.threadId, h.turnId)
+
+    expect(seen.at(-1)).toMatchObject({
+      workspace: '/tmp/ws',
+      project: '/tmp/ws',
+      threadMode: 'agent',
+      taskType: 'agent'
+    })
+  })
+
+  it('derives plan draft and refine task types for memory retrieval', async () => {
+    const runPlanTurn = async (operation: 'draft' | 'refine') => {
+      const store = createStore()
+      const seen: Parameters<typeof store.retrieve>[0][] = []
+      const originalRetrieve = store.retrieve.bind(store)
+      store.retrieve = async (input) => {
+        seen.push(input)
+        return originalRetrieve(input)
+      }
+      const model: ModelClient = {
+        provider: 'fake',
+        model: 'fake',
+        async *stream() {
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      }
+      const h = makeHarness(model, { memoryStore: store })
+      await bootstrapThread(h, {
+        workspace: '/tmp/ws',
+        request: {
+          prompt: `${operation} a plan`,
+          mode: 'plan',
+          guiPlan: {
+            operation,
+            workspaceRoot: '/tmp/ws',
+            relativePath: `.sciforge/plan/${operation}.md`,
+            planId: `plan-${operation}`
+          }
+        }
+      })
+      await h.loop.runTurn(h.threadId, h.turnId)
+      return seen.at(-1)
+    }
+
+    expect(await runPlanTurn('draft')).toMatchObject({
+      threadMode: 'plan',
+      taskType: 'plan_draft'
+    })
+    expect(await runPlanTurn('refine')).toMatchObject({
+      threadMode: 'plan',
+      taskType: 'plan_refine'
+    })
   })
 
   it('injects relevant memories into AgentLoop metadata and stops after deletion', async () => {

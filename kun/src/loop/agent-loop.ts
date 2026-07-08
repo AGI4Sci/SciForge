@@ -46,6 +46,7 @@ import { repairModelHistoryItems } from '../domain/model-history-repair.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { TurnFileAttachmentJson } from '../contracts/turns.js'
 import type { ThreadGoal, ThreadTodoList } from '../contracts/threads.js'
+import type { MemoryTaskType, MemoryThreadMode } from '../contracts/memory.js'
 import { modelCapabilitiesForModel, type ContextCompactionConfig } from './model-context-profile.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { AttachmentContent, AttachmentStore } from '../attachments/attachment-store.js'
@@ -801,9 +802,15 @@ export class AgentLoop {
       instructions: [],
       injectedBytes: 0
     }
+    const workspace = thread?.workspace ?? ''
+    const project = projectKeyForWorkspace(workspace)
+    const memoryTaskType = memoryTaskTypeForTurn(effectiveMode, activePlanContext)
     const memories = await this.retrieveMemories({
       prompt: turn?.prompt ?? '',
-      workspace: thread?.workspace ?? ''
+      workspace,
+      ...(project ? { project } : {}),
+      threadMode: effectiveMode,
+      taskType: memoryTaskType
     })
     const planTurnActive = effectiveMode === 'plan' || Boolean(activePlanContext)
     const activeGoalInstruction = planTurnActive
@@ -823,8 +830,10 @@ export class AgentLoop {
     const toolContext: ToolHostContext = {
       threadId,
       turnId,
-      workspace: thread?.workspace ?? '',
+      workspace,
+      ...(project ? { project } : {}),
       threadMode: effectiveMode,
+      taskType: memoryTaskType,
       ...(activePlanContext ? { guiPlan: activePlanContext } : {}),
       ...(turn?.remoteTargetId ? { remoteTargetId: turn.remoteTargetId } : {}),
       model: modelCapabilities,
@@ -1257,8 +1266,10 @@ export class AgentLoop {
             calls: [call],
             threadId,
             turnId,
-            workspace: thread?.workspace ?? '',
+            workspace,
+            ...(project ? { project } : {}),
             threadMode: effectiveMode,
+            taskType: memoryTaskType,
             activePlanContext,
             remoteTargetId: turn?.remoteTargetId,
             modelCapabilities,
@@ -1358,8 +1369,10 @@ export class AgentLoop {
       calls: completedToolCalls,
       threadId,
       turnId,
-      workspace: thread?.workspace ?? '',
+      workspace,
+      ...(project ? { project } : {}),
       threadMode: effectiveMode,
+      taskType: memoryTaskType,
       activePlanContext,
       remoteTargetId: turn?.remoteTargetId,
       modelCapabilities,
@@ -1388,7 +1401,9 @@ export class AgentLoop {
     threadId: string
     turnId: string
     workspace: string
-    threadMode?: 'agent' | 'plan'
+    project?: string
+    threadMode?: MemoryThreadMode
+    taskType?: MemoryTaskType
     activePlanContext?: GuiPlanContext
     remoteTargetId?: string
     modelCapabilities: ModelCapabilityMetadata
@@ -1777,7 +1792,9 @@ export class AgentLoop {
     threadId: string
     turnId: string
     workspace: string
-    threadMode?: 'agent' | 'plan'
+    project?: string
+    threadMode?: MemoryThreadMode
+    taskType?: MemoryTaskType
     activePlanContext?: GuiPlanContext
     remoteTargetId?: string
     modelCapabilities: ModelCapabilityMetadata
@@ -1795,7 +1812,9 @@ export class AgentLoop {
       threadId: input.threadId,
       turnId: input.turnId,
       workspace: input.workspace,
+      ...(input.project ? { project: input.project } : {}),
       threadMode: input.threadMode,
+      ...(input.taskType ? { taskType: input.taskType } : {}),
       ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
       ...(input.remoteTargetId ? { remoteTargetId: input.remoteTargetId } : {}),
       model: input.modelCapabilities,
@@ -2575,11 +2594,17 @@ export class AgentLoop {
   private async retrieveMemories(input: {
     prompt: string
     workspace: string
+    project?: string
+    threadMode?: MemoryThreadMode
+    taskType?: MemoryTaskType
   }) {
     if (!this.opts.memoryStore) return []
     const memories = await this.opts.memoryStore.retrieve({
       query: input.prompt,
       workspace: input.workspace,
+      ...(input.project ? { project: input.project } : {}),
+      ...(input.threadMode ? { threadMode: input.threadMode } : {}),
+      ...(input.taskType ? { taskType: input.taskType } : {}),
       limit: 8
     })
     this.opts.memoryStore.setLastInjected(memories.map((memory) => memory.id))
@@ -2593,6 +2618,20 @@ export class AgentLoop {
       pinnedConstraints: ['user: preserve recent turns', 'project: keep responses concise']
     })
   }
+}
+
+function projectKeyForWorkspace(workspace: string): string | undefined {
+  const trimmed = workspace.trim()
+  return trimmed || undefined
+}
+
+function memoryTaskTypeForTurn(
+  threadMode: MemoryThreadMode | undefined,
+  activePlanContext: GuiPlanContext | undefined
+): MemoryTaskType {
+  if (activePlanContext?.operation === 'draft') return 'plan_draft'
+  if (activePlanContext?.operation === 'refine') return 'plan_refine'
+  return threadMode === 'plan' ? 'plan' : 'agent'
 }
 
 function buildTextAttachmentFallback(
