@@ -214,7 +214,7 @@ export function MolecularWorkspaceViewer({
           <p>{resolvedModel.status.message}</p>
         </div>
       ) : (
-        <div className="grid h-full min-h-0 flex-1 overflow-hidden gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]">
+        <div className="grid h-full min-h-0 flex-1 grid-rows-[minmax(18rem,1fr)_minmax(8rem,14rem)] overflow-hidden gap-3">
           <div
             className="workspace-preview-molecular-viewer__viewport relative h-full min-h-0 overflow-hidden rounded-md border border-ds-border bg-white"
             data-webgl-viewport
@@ -492,6 +492,10 @@ function useMolecularWorkbenchRender(input: {
     let cancelled = false
     let handle: MolecularWorkbenchRendererHandle | null = null
     let resizeObserver: ResizeObserver | null = null
+    const mount = document.createElement('div')
+    mount.className = 'absolute inset-0 min-h-0 overflow-hidden'
+    mount.dataset.molecularMolstarMount = 'true'
+    container.replaceChildren(mount)
     setRenderState({
       kind: 'loading',
       title: 'Starting Mol* workbench',
@@ -519,7 +523,7 @@ function useMolecularWorkbenchRender(input: {
           message: 'Mol* is creating the molecular workbench.'
         })
         handle = await workbenchRenderer({
-          element: container,
+          element: mount,
           source: source.source,
           selection: latestSelectionRef.current
         })
@@ -554,6 +558,7 @@ function useMolecularWorkbenchRender(input: {
         rendererHandleRef.current = null
       }
       handle?.dispose()
+      mount.remove()
     }
   }, [
     asset,

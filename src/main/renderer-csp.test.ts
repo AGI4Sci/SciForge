@@ -19,6 +19,8 @@ describe('renderer content security policy', () => {
 
     expect(connectSrc.split(/\s+/)).toEqual(expect.arrayContaining([
       "'self'",
+      'data:',
+      'blob:',
       'http://127.0.0.1:5174',
       'http://localhost:5174'
     ]))
@@ -36,7 +38,7 @@ describe('renderer content security policy', () => {
     ]))
   })
 
-  it('allows Mol* WebGL workers without opening local file URLs', () => {
+  it('allows Mol* runtime evaluation and WebGL workers without opening local file URLs', () => {
     const html = readFileSync(resolve('src/renderer/index.html'), 'utf8')
     const csp = html.match(/Content-Security-Policy"[\s\S]*?content="([^"]+)"/)?.[1] ?? ''
     const workerSrc = csp.match(/worker-src\s+([^;]+)/)?.[1] ?? ''
@@ -45,6 +47,7 @@ describe('renderer content security policy', () => {
 
     expect(workerSrc.split(/\s+/)).toEqual(expect.arrayContaining(["'self'", 'blob:']))
     expect(childSrc.split(/\s+/)).toEqual(expect.arrayContaining(["'self'", 'blob:']))
+    expect(scriptSrc.split(/\s+/)).toContain("'unsafe-eval'")
     expect(scriptSrc.split(/\s+/)).toContain("'wasm-unsafe-eval'")
     expect(workerSrc.split(/\s+/)).not.toContain('file:')
   })

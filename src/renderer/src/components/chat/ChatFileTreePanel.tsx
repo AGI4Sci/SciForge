@@ -403,8 +403,7 @@ export function ChatFileTreePanel({
     }))
     void provider.listWorkspaceReferences({
         workspaceRoot: requestRoot,
-        ...(path ? { path } : {}),
-        limit: 300
+        ...(path ? { path } : {})
       })
       .then((result) => {
         if (activeRootKeyRef.current !== requestRootKey) return

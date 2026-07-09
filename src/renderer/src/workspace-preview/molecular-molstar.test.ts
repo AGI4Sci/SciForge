@@ -1,11 +1,58 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MOLECULAR_MOLSTAR_EMBEDDED_VIEWER_OPTIONS,
+  createMolecularMolstarRuntimeLoader,
   molecularMolstarFormatForPath,
   molecularSelectionToMolstarSchemaItems,
   resolveMolecularMolstarSource
 } from './molecular-molstar'
 
 describe('molecular Mol* adapter', () => {
+  it('creates Mol* as an embedded workspace preview instead of a fullscreen layout', () => {
+    expect(MOLECULAR_MOLSTAR_EMBEDDED_VIEWER_OPTIONS).toMatchObject({
+      extensions: [],
+      volumeStreamingDisabled: true,
+      layoutIsExpanded: false,
+      layoutShowSequence: false,
+      viewportShowExpand: false,
+      viewportShowToggleFullscreen: false
+    })
+  })
+
+  it('preloads the Mol* runtime through a reusable async loader', async () => {
+    let loadCount = 0
+    const loader = createMolecularMolstarRuntimeLoader(async () => {
+      loadCount += 1
+      return {
+        Viewer: {
+          create: async () => ({}) as never
+        }
+      }
+    })
+
+    await Promise.all([loader.preload(), loader.load(), loader.preload()])
+
+    expect(loadCount).toBe(1)
+  })
+
+  it('retries Mol* runtime loading after a failed prewarm', async () => {
+    let loadCount = 0
+    const loader = createMolecularMolstarRuntimeLoader(async () => {
+      loadCount += 1
+      if (loadCount === 1) throw new Error('transient preload failure')
+      return {
+        Viewer: {
+          create: async () => ({}) as never
+        }
+      }
+    })
+
+    await expect(loader.preload()).rejects.toThrow('transient preload failure')
+    await expect(loader.preload()).resolves.toBeUndefined()
+
+    expect(loadCount).toBe(2)
+  })
+
   it('maps molecular file paths to Mol* loader formats', () => {
     expect(molecularMolstarFormatForPath('/lab/9vmr.pdb')).toEqual({
       kind: 'structure',

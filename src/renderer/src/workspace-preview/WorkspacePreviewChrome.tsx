@@ -30,7 +30,10 @@ export function WorkspacePreviewChrome({
 
   return (
     <section
-      className={compactClassName('workspace-preview-chrome', className)}
+      className={compactClassName(
+        'workspace-preview-chrome flex h-full min-h-0 flex-col overflow-hidden',
+        className
+      )}
       data-workspace-preview-chrome
       data-status={resolvedModel.status.kind}
     >
@@ -46,7 +49,7 @@ export function WorkspacePreviewChrome({
         </div>
       ) : null}
 
-      <div className="workspace-preview-chrome__body">{children}</div>
+      <div className="workspace-preview-chrome__body min-h-0 flex-1 overflow-hidden">{children}</div>
 
       {showInspector && (resolvedModel.inspector.summary.length || resolvedModel.inspector.sections.length) ? (
         <aside className="workspace-preview-chrome__inspector" aria-label="Workspace preview inspector">

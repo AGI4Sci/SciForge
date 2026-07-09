@@ -21,6 +21,8 @@ import {
 import { runWorkspacePreviewToolbarAction } from './action-runner'
 import type { WorkspacePreviewToolbarAction } from './chrome-model'
 
+export const WORKSPACE_PREVIEW_SESSION_RELEASE_GRACE_MS = 10_000
+
 export type WorkspacePreviewPanelShellContext = {
   state: Readonly<WorkspacePreviewHostState>
   asset: WorkspacePreviewAssetTransportDescriptor | null
@@ -96,10 +98,20 @@ export function WorkspacePreviewPanelShell({
     let cancelled = false
     let openedSessionId: string | null = null
     let released = false
-    const releaseOpenedSession = (): void => {
+    let releaseTimer: ReturnType<typeof setTimeout> | null = null
+    const releaseOpenedSession = (delayMs = 0): void => {
       if (!openedSessionId || released) return
       released = true
-      void host.releaseSession(openedSessionId)
+      const sessionId = openedSessionId
+      const release = (): void => {
+        releaseTimer = null
+        void host.releaseSession(sessionId)
+      }
+      if (delayMs > 0) {
+        releaseTimer = setTimeout(release, delayMs)
+        return
+      }
+      release()
     }
     setState((previous) => ({
       ...previous,
@@ -155,7 +167,8 @@ export function WorkspacePreviewPanelShell({
 
     return () => {
       cancelled = true
-      releaseOpenedSession()
+      if (releaseTimer) clearTimeout(releaseTimer)
+      releaseOpenedSession(WORKSPACE_PREVIEW_SESSION_RELEASE_GRACE_MS)
     }
   }, [host, target, targetKey, workspaceRoot])
 
@@ -196,6 +209,7 @@ export function WorkspacePreviewPanelShell({
       }}
     >
       <div
+        className="h-full min-h-0 overflow-hidden"
         data-workspace-preview-panel-shell
         data-asset-status={assetStatus}
         data-asset-primary={state.asset?.primary}

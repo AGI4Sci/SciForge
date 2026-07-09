@@ -19,6 +19,28 @@ installDevSciForgeBridge()
 rendererRuntimeClient.startSettingsChangeListener()
 document.documentElement.dataset.platform = window.sciforge?.platform ?? 'unknown'
 
+function prewarmMolecularPreviewRuntime(): void {
+  const prewarm = () => {
+    void import('./workspace-preview/molecular-molstar')
+      .then((module) => module.preloadMolecularMolstarRuntime())
+      .catch((error) => {
+        console.warn('[workspace-preview] Mol* runtime prewarm failed:', error)
+      })
+  }
+
+  const requestIdleCallback = typeof window.requestIdleCallback === 'function'
+    ? window.requestIdleCallback.bind(window)
+    : null
+  if (requestIdleCallback) {
+    requestIdleCallback(prewarm, { timeout: 8_000 })
+    return
+  }
+
+  window.setTimeout(prewarm, 2_500)
+}
+
+prewarmMolecularPreviewRuntime()
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

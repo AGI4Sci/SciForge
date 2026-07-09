@@ -239,7 +239,7 @@ function WorkspacePreviewShellBody({
 
   return (
     <div
-      className="relative h-full min-h-0"
+      className="relative h-full min-h-0 overflow-hidden"
       data-workspace-file-preview-panel-bridge
       data-route={route.kind}
       data-route-reason={route.reason}

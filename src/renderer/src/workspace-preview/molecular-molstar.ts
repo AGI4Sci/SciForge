@@ -1,5 +1,6 @@
 import type { WorkspaceStructuredSelection } from '@shared/workspace-preview'
 import type { Viewer as MolstarViewer } from 'molstar/lib/apps/viewer/app'
+import type { ViewerOptions as MolstarViewerOptions } from 'molstar/lib/apps/viewer/options'
 import type { BuiltInCoordinatesFormat } from 'molstar/lib/mol-plugin-state/formats/coordinates'
 import type { BuiltInTrajectoryFormat } from 'molstar/lib/mol-plugin-state/formats/trajectory'
 import type { BuildInVolumeFormat } from 'molstar/lib/mol-plugin-state/formats/volume'
@@ -69,8 +70,70 @@ export type MolecularWorkbenchRenderer = (
 type MolstarViewerConstructor = {
   create: (
     elementOrId: string | HTMLElement,
-    options?: Record<string, unknown>
+    options?: Partial<MolstarViewerOptions>
   ) => Promise<MolstarViewer>
+}
+
+export type MolecularMolstarViewerModule = {
+  Viewer: MolstarViewerConstructor
+}
+
+export type MolecularMolstarViewerModuleLoader = () => Promise<MolecularMolstarViewerModule>
+
+export type MolecularMolstarRuntimeLoader = {
+  load: () => Promise<MolecularMolstarViewerModule>
+  preload: () => Promise<void>
+}
+
+export const MOLECULAR_MOLSTAR_EMBEDDED_VIEWER_OPTIONS: Partial<MolstarViewerOptions> = {
+  extensions: [],
+  volumeStreamingDisabled: true,
+  layoutIsExpanded: false,
+  layoutShowControls: true,
+  layoutShowRemoteState: false,
+  layoutShowSequence: false,
+  layoutShowLog: false,
+  layoutShowLeftPanel: false,
+  collapseLeftPanel: true,
+  collapseRightPanel: true,
+  viewportShowControls: true,
+  viewportShowExpand: false,
+  viewportShowToggleFullscreen: false,
+  viewportShowScreenshotControls: true,
+  viewportShowSelectionMode: true,
+  viewportShowAnimation: true,
+  viewportShowTrajectoryControls: true,
+  viewportShowSettings: true,
+  viewportBackgroundColor: 'white'
+}
+
+export function createMolecularMolstarRuntimeLoader(
+  loadModule: MolecularMolstarViewerModuleLoader
+): MolecularMolstarRuntimeLoader {
+  let modulePromise: Promise<MolecularMolstarViewerModule> | null = null
+
+  const load = () => {
+    if (!modulePromise) {
+      modulePromise = loadModule().catch((error) => {
+        modulePromise = null
+        throw error
+      })
+    }
+    return modulePromise
+  }
+
+  return {
+    load,
+    preload: () => load().then(() => undefined)
+  }
+}
+
+const molecularMolstarRuntime = createMolecularMolstarRuntimeLoader(
+  () => import('molstar/lib/apps/viewer/app') as Promise<MolecularMolstarViewerModule>
+)
+
+export function preloadMolecularMolstarRuntime(): Promise<void> {
+  return molecularMolstarRuntime.preload()
 }
 
 export function molecularMolstarFormatForPath(path: string): MolecularMolstarFormat | null {
@@ -162,34 +225,45 @@ export const renderMolecularWorkbenchWithMolstar: MolecularWorkbenchRenderer = a
   source,
   selection
 }) => {
-  const { Viewer } = await import('molstar/lib/apps/viewer/app')
-  const viewer = await (Viewer as MolstarViewerConstructor).create(element, {
-    layoutIsExpanded: true,
-    layoutShowControls: true,
-    layoutShowRemoteState: false,
-    layoutShowSequence: true,
-    layoutShowLog: false,
-    layoutShowLeftPanel: false,
-    collapseLeftPanel: true,
-    collapseRightPanel: true,
-    viewportShowControls: true,
-    viewportShowExpand: true,
-    viewportShowScreenshotControls: true,
-    viewportShowSelectionMode: true,
-    viewportShowAnimation: true,
-    viewportShowTrajectoryControls: true,
-    viewportShowSettings: true,
-    viewportBackgroundColor: 'white'
-  })
+  const { Viewer } = await molecularMolstarRuntime.load()
+  const viewer = await Viewer.create(
+    element,
+    MOLECULAR_MOLSTAR_EMBEDDED_VIEWER_OPTIONS
+  )
 
   await loadMolstarSource(viewer, source)
+  await resetMolecularMolstarViewport(viewer)
   applyMolecularMolstarSelection(viewer, selection)
+  await resetMolecularMolstarViewport(viewer)
 
   return {
-    setSelection: (nextSelection) => applyMolecularMolstarSelection(viewer, nextSelection),
+    setSelection: (nextSelection) => {
+      applyMolecularMolstarSelection(viewer, nextSelection)
+      void resetMolecularMolstarViewport(viewer)
+    },
     resize: () => viewer.handleResize(),
     dispose: () => viewer.dispose()
   }
+}
+
+async function resetMolecularMolstarViewport(viewer: MolstarViewer): Promise<void> {
+  viewer.handleResize()
+  viewer.plugin.canvas3d?.requestCameraReset({ durationMs: 0 })
+  viewer.plugin.managers.camera.reset(undefined, 0)
+  await waitForNextFrame()
+  viewer.handleResize()
+  viewer.plugin.canvas3d?.requestCameraReset({ durationMs: 0 })
+  viewer.plugin.managers.camera.reset(undefined, 0)
+}
+
+async function waitForNextFrame(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve())
+      return
+    }
+    setTimeout(resolve, 0)
+  })
 }
 
 async function loadMolstarSource(
