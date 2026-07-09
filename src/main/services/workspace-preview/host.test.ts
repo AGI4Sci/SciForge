@@ -2,19 +2,27 @@ import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { PDFDocument } from 'pdf-lib'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadPdfAnnotationSidecar } from '../pdf-annotation-sidecar-service'
+import { WorkspaceHtmlPreviewService } from '../workspace-html-preview-service'
 import { WorkspacePreviewHost } from './host'
 import type { WorkspacePreviewWorkerClient } from './worker-client'
 
 describe('WorkspacePreviewHost', () => {
   let rootDir = ''
   let workspaceRoot = ''
+  let htmlPreviewService: WorkspaceHtmlPreviewService | null = null
 
   beforeEach(async () => {
     rootDir = await mkdtemp(join(tmpdir(), 'workspace-preview-host-'))
     workspaceRoot = join(rootDir, 'workspace')
     await mkdir(workspaceRoot)
+  })
+
+  afterEach(async () => {
+    await htmlPreviewService?.close()
+    htmlPreviewService = null
   })
 
   it('opens a safe workspace file without reading its content', async () => {
@@ -89,6 +97,27 @@ describe('WorkspacePreviewHost', () => {
     })
   })
 
+  it('releases opened sessions so later asset reads cannot reuse them', async () => {
+    await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nATOM\nEND\n', 'utf8')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-release' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'protein.pdb',
+      now: '2026-07-08T00:00:00.000Z'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    expect(host.getSession(opened.session.id)?.id).toBe('session-release')
+    expect(host.releaseSession(opened.session.id)).toBe(true)
+    expect(host.getSession(opened.session.id)).toBeNull()
+    expect(host.releaseSession(opened.session.id)).toBe(false)
+    await expect(host.describeAsset(opened.session.id)).resolves.toEqual({
+      ok: false,
+      message: 'Workspace preview session was not found.'
+    })
+  })
+
   it('reads bounded byte ranges from an opened session without eager-loading the file', async () => {
     await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nATOM\nEND\n', 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-range' })
@@ -105,10 +134,12 @@ describe('WorkspacePreviewHost', () => {
     expect(result).toMatchObject({
       ok: true,
       sessionId: 'session-range',
+      assetId: 'asset:session-range',
       offset: 7,
       length: 4
     })
     if (result.ok) {
+      expect(result).not.toHaveProperty('path')
       expect(Buffer.from(result.dataBase64, 'base64').toString('utf8')).toBe('ATOM')
     }
   })
@@ -130,8 +161,15 @@ describe('WorkspacePreviewHost', () => {
       ok: true,
       descriptor: {
         sessionId: 'session-asset',
+        assetId: 'asset:session-asset',
         pluginId: 'bioimaging',
         modality: 'bioimaging',
+        file: {
+          name: 'cells.ome.tiff',
+          relativePath: 'cells.ome.tiff',
+          mimeType: 'image/tiff',
+          size: 8 * 1024 * 1024
+        },
         primary: 'byte-range',
         eagerRead: {
           allowed: false
@@ -151,6 +189,561 @@ describe('WorkspacePreviewHost', () => {
         ])
       }
     })
+    if (result.ok) {
+      expect(result.descriptor.file).not.toHaveProperty('workspaceRoot')
+      expect(result.descriptor.file).not.toHaveProperty('path')
+    }
+  })
+
+  it('prepares session-scoped observation cache artifacts and invalidates stale reads', async () => {
+    const filePath = join(workspaceRoot, 'cells.ome.tiff')
+    await writeFile(filePath, Buffer.from('II*\0metadata'), 'binary')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-artifact' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'cells.ome.tiff',
+      mimeType: 'image/tiff'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const prepared = await host.prepareArtifact(opened.session.id, {
+      kind: 'cache-artifact',
+      source: 'observation'
+    }, '2026-07-08T00:05:00.000Z')
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      sessionId: 'session-artifact',
+      artifact: {
+        sessionId: 'session-artifact',
+        assetId: 'asset:session-artifact',
+        kind: 'cache-artifact',
+        pluginId: 'bioimaging',
+        mimeType: 'application/json',
+        cache: {
+          scope: 'session',
+          source: 'observation',
+          invalidation: 'source-size-mtime'
+        }
+      }
+    })
+    if (!prepared.ok) return
+    expect(prepared.artifact).not.toHaveProperty('path')
+    expect(prepared.artifact).not.toHaveProperty('workspaceRoot')
+    expect(prepared.artifact).not.toHaveProperty('url')
+
+    const described = await host.describeAsset(opened.session.id)
+    expect(described).toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [expect.objectContaining({ artifactId: prepared.artifact.artifactId })],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'cache-artifact', status: 'available' })
+        ])
+      }
+    })
+
+    const artifactBytes = await host.readArtifactRange(opened.session.id, {
+      artifactId: prepared.artifact.artifactId,
+      range: { offset: 0, length: prepared.artifact.byteLength }
+    })
+    expect(artifactBytes).toMatchObject({
+      ok: true,
+      sessionId: 'session-artifact',
+      assetId: 'asset:session-artifact',
+      artifactId: prepared.artifact.artifactId,
+      mimeType: 'application/json'
+    })
+    if (!artifactBytes.ok) return
+    const payloadText = Buffer.from(artifactBytes.dataBase64, 'base64').toString('utf8')
+    const payload = JSON.parse(payloadText) as {
+      kind: string
+      asset: Record<string, unknown>
+      observation: Record<string, unknown>
+    }
+    expect(payload.kind).toBe('workspace-preview.observation-cache')
+    expect(payload.asset).toMatchObject({
+      name: 'cells.ome.tiff',
+      relativePath: 'cells.ome.tiff',
+      mimeType: 'image/tiff'
+    })
+    expect(payload.asset).not.toHaveProperty('path')
+    expect(payload.asset).not.toHaveProperty('workspaceRoot')
+    expect(payload.observation).not.toHaveProperty('file')
+    expect(payloadText).not.toContain('file://')
+    expect(payloadText).not.toContain(workspaceRoot)
+
+    await writeFile(filePath, Buffer.from('II*\0metadata-updated'), 'binary')
+    await expect(host.readArtifactRange(opened.session.id, {
+      artifactId: prepared.artifact.artifactId,
+      range: { offset: 0, length: 8 }
+    })).resolves.toEqual({
+      ok: false,
+      message: 'Workspace preview artifact is stale because the source file changed.'
+    })
+  })
+
+  it('prepares metadata-only plugin cache artifacts for bioimaging previews', async () => {
+    const rawBytes = Buffer.from('II*\0<OME><Image raw-secret="do-not-cache"><Pixels /></Image></OME>')
+    await writeFile(join(workspaceRoot, 'cells.ome.tiff'), rawBytes)
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-bioimaging-metadata-artifact' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'cells.ome.tiff',
+      mimeType: 'image/tiff'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const prepared = await host.prepareArtifact(opened.session.id, {
+      kind: 'cache-artifact',
+      source: 'plugin-metadata',
+      metadataKind: 'bioimaging'
+    }, '2026-07-08T00:07:00.000Z')
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      sessionId: 'session-bioimaging-metadata-artifact',
+      artifact: {
+        sessionId: 'session-bioimaging-metadata-artifact',
+        assetId: 'asset:session-bioimaging-metadata-artifact',
+        kind: 'cache-artifact',
+        pluginId: 'bioimaging',
+        mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json',
+        cache: {
+          scope: 'session',
+          source: 'plugin-metadata',
+          metadataKind: 'bioimaging',
+          invalidation: 'source-size-mtime'
+        }
+      }
+    })
+    if (!prepared.ok) return
+
+    const described = await host.describeAsset(opened.session.id)
+    expect(described).toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [expect.objectContaining({ artifactId: prepared.artifact.artifactId })],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'cache-artifact', status: 'available' })
+        ])
+      }
+    })
+
+    const artifactBytes = await host.readArtifactRange(opened.session.id, {
+      artifactId: prepared.artifact.artifactId,
+      range: { offset: 0, length: prepared.artifact.byteLength }
+    })
+    expect(artifactBytes).toMatchObject({
+      ok: true,
+      sessionId: 'session-bioimaging-metadata-artifact',
+      assetId: 'asset:session-bioimaging-metadata-artifact',
+      artifactId: prepared.artifact.artifactId,
+      mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json'
+    })
+    if (!artifactBytes.ok) return
+
+    const payloadText = Buffer.from(artifactBytes.dataBase64, 'base64').toString('utf8')
+    const payload = JSON.parse(payloadText) as {
+      kind: string
+      source: string
+      metadataKind: string
+      asset: Record<string, unknown>
+      artifact: Record<string, unknown>
+      metadata: Record<string, unknown>
+    }
+    expect(payload).toMatchObject({
+      kind: 'workspace-preview.plugin-metadata-cache',
+      source: 'plugin-metadata',
+      metadataKind: 'bioimaging',
+      asset: {
+        name: 'cells.ome.tiff',
+        relativePath: 'cells.ome.tiff',
+        mimeType: 'image/tiff'
+      },
+      artifact: {
+        metadataOnly: true,
+        containsPixels: false
+      },
+      metadata: {
+        byteLength: rawBytes.length
+      }
+    })
+    expect(payload).not.toHaveProperty('bioimaging')
+    expect(payload.asset).not.toHaveProperty('path')
+    expect(payload.asset).not.toHaveProperty('workspaceRoot')
+    expect(payloadText).not.toContain('raw-secret')
+    expect(payloadText).not.toContain('<OME>')
+    expect(payloadText).not.toContain('file://')
+    expect(payloadText).not.toContain(workspaceRoot)
+  })
+
+  it('prepares session-scoped bioimaging tile artifacts through worker decoders', async () => {
+    const bytes = createUncompressedRgbTiffBytes(4, 3, new Uint8Array([
+      255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+      10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+      120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10
+    ]))
+    await writeFile(join(workspaceRoot, 'rgb-field.tif'), bytes)
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-bioimaging-tile' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'rgb-field.tif',
+      mimeType: 'image/tiff'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const prepared = await host.prepareArtifact(opened.session.id, {
+      kind: 'tile',
+      level: 0,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2
+    }, '2026-07-08T00:09:00.000Z')
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      sessionId: 'session-bioimaging-tile',
+      artifact: {
+        sessionId: 'session-bioimaging-tile',
+        assetId: 'asset:session-bioimaging-tile',
+        kind: 'tile',
+        pluginId: 'bioimaging',
+        mimeType: 'image/png',
+        cache: {
+          scope: 'session',
+          source: 'worker-decoder',
+          invalidation: 'source-size-mtime'
+        },
+        tile: {
+          level: 0,
+          x: 0,
+          y: 0,
+          width: 2,
+          height: 2
+        }
+      }
+    })
+    if (!prepared.ok) return
+    expect(prepared.artifact).not.toHaveProperty('path')
+    expect(prepared.artifact).not.toHaveProperty('workspaceRoot')
+    expect(prepared.artifact).not.toHaveProperty('url')
+
+    const described = await host.describeAsset(opened.session.id)
+    expect(described).toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [expect.objectContaining({ artifactId: prepared.artifact.artifactId, kind: 'tile' })],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'tile', status: 'available' })
+        ])
+      }
+    })
+
+    const artifactBytes = await host.readArtifactRange(opened.session.id, {
+      artifactId: prepared.artifact.artifactId,
+      range: { offset: 0, length: prepared.artifact.byteLength }
+    })
+    expect(artifactBytes).toMatchObject({
+      ok: true,
+      sessionId: 'session-bioimaging-tile',
+      assetId: 'asset:session-bioimaging-tile',
+      artifactId: prepared.artifact.artifactId,
+      mimeType: 'image/png'
+    })
+    if (!artifactBytes.ok) return
+    expect([...Buffer.from(artifactBytes.dataBase64, 'base64').subarray(0, 8)]).toEqual([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a
+    ])
+    expect(JSON.stringify(described)).not.toContain(workspaceRoot)
+    expect(JSON.stringify(described)).not.toContain('file://')
+  })
+
+  it('prepares session-scoped bioimaging thumbnail artifacts through worker decoders', async () => {
+    const bytes = createUncompressedRgbTiffBytes(4, 2, new Uint8Array([
+      255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+      10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120
+    ]))
+    await writeFile(join(workspaceRoot, 'rgb-thumbnail.tif'), bytes)
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-bioimaging-thumbnail' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'rgb-thumbnail.tif',
+      mimeType: 'image/tiff'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const prepared = await host.prepareArtifact(opened.session.id, {
+      kind: 'thumbnail',
+      width: 2,
+      height: 2
+    }, '2026-07-08T00:10:00.000Z')
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      sessionId: 'session-bioimaging-thumbnail',
+      artifact: {
+        sessionId: 'session-bioimaging-thumbnail',
+        assetId: 'asset:session-bioimaging-thumbnail',
+        kind: 'thumbnail',
+        pluginId: 'bioimaging',
+        mimeType: 'image/png',
+        cache: {
+          scope: 'session',
+          source: 'worker-decoder',
+          invalidation: 'source-size-mtime'
+        },
+        thumbnail: {
+          width: 2,
+          height: 1
+        }
+      }
+    })
+    if (!prepared.ok) return
+
+    const described = await host.describeAsset(opened.session.id)
+    expect(described).toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [expect.objectContaining({ artifactId: prepared.artifact.artifactId, kind: 'thumbnail' })],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'thumbnail', status: 'available' })
+        ])
+      }
+    })
+
+    const artifactBytes = await host.readArtifactRange(opened.session.id, {
+      artifactId: prepared.artifact.artifactId,
+      range: { offset: 0, length: prepared.artifact.byteLength }
+    })
+    expect(artifactBytes).toMatchObject({
+      ok: true,
+      sessionId: 'session-bioimaging-thumbnail',
+      assetId: 'asset:session-bioimaging-thumbnail',
+      artifactId: prepared.artifact.artifactId,
+      mimeType: 'image/png'
+    })
+    if (!artifactBytes.ok) return
+    expect([...Buffer.from(artifactBytes.dataBase64, 'base64').subarray(0, 8)]).toEqual([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a
+    ])
+    expect(JSON.stringify(described)).not.toContain(workspaceRoot)
+    expect(JSON.stringify(described)).not.toContain('file://')
+  })
+
+  it('does not commit thumbnail artifacts when worker decoding fails', async () => {
+    await writeFile(join(workspaceRoot, 'compressed.tif'), createCompressedTiffBytes(8, 8))
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-bioimaging-thumbnail-fail' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'compressed.tif',
+      mimeType: 'image/tiff'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const prepared = await host.prepareArtifact(opened.session.id, {
+      kind: 'thumbnail',
+      width: 4,
+      height: 4
+    })
+
+    expect(prepared).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('Only uncompressed TIFF tiles are currently decoded')
+    })
+    await expect(host.describeAsset(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'thumbnail', status: 'requires-plugin' })
+        ])
+      }
+    })
+  })
+
+  it('rejects plugin metadata cache artifacts when a plugin has no metadata payload', async () => {
+    await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-no-plugin-metadata' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'protein.pdb'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await expect(host.prepareArtifact(opened.session.id, {
+      kind: 'cache-artifact',
+      source: 'plugin-metadata'
+    }, '2026-07-08T00:08:00.000Z')).resolves.toEqual({
+      ok: false,
+      message: 'Workspace preview plugin "molecular" does not provide plugin-metadata cache artifacts.'
+    })
+
+    await expect(host.describeAsset(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'cache-artifact', status: 'deferred' })
+        ])
+      }
+    })
+  })
+
+  it('rejects unsafe plugin metadata cache payloads without committing artifacts', async () => {
+    await writeFile(join(workspaceRoot, 'cells.ome.tiff'), Buffer.from('II*\0metadata'), 'binary')
+    const workerClient = {
+      observe: vi.fn(async () => ({
+        ok: true as const,
+        bytesRead: 12,
+        truncated: false,
+        observation: {
+          schemaVersion: 1 as const,
+          file: {
+            path: join(workspaceRoot, 'cells.ome.tiff'),
+            workspaceRoot,
+            mimeType: 'image/tiff',
+            size: 12
+          },
+          view: {
+            pluginId: 'bioimaging',
+            modality: 'bioimaging' as const,
+            mode: 'preview' as const,
+            title: 'cells.ome.tiff'
+          },
+          bioimaging: {
+            format: 'ome-tiff'
+          },
+          pluginMetadata: [{
+            source: 'plugin-metadata' as const,
+            metadataKind: 'bioimaging',
+            metadataOnly: true as const,
+            containsPixels: false as const,
+            data: {
+              fileUrl: `file://${workspaceRoot}/cells.ome.tiff`
+            }
+          }],
+          actions: ['observe']
+        }
+      })),
+      invokeAction: vi.fn()
+    } as unknown as WorkspacePreviewWorkerClient
+    const host = new WorkspacePreviewHost({
+      createSessionId: () => 'session-unsafe-plugin-metadata',
+      workerClient
+    })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'cells.ome.tiff',
+      mimeType: 'image/tiff'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await expect(host.prepareArtifact(opened.session.id, {
+      kind: 'cache-artifact',
+      source: 'plugin-metadata',
+      metadataKind: 'bioimaging'
+    }, '2026-07-08T00:09:00.000Z')).resolves.toEqual({
+      ok: false,
+      message: 'Workspace preview plugin metadata contains unsafe key "fileUrl".'
+    })
+
+    await expect(host.describeAsset(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      descriptor: {
+        artifacts: [],
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'cache-artifact', status: 'deferred' })
+        ])
+      }
+    })
+  })
+
+  it('does not commit preview artifacts when artifact preparation exceeds the size guard', async () => {
+    await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
+    const oversizedParagraphText = 'x'.repeat(200_000)
+    const workerClient = {
+      observe: vi.fn(async () => ({
+        ok: true as const,
+        observation: {
+          schemaVersion: 1 as const,
+          file: {
+            path: join(workspaceRoot, 'protein.pdb'),
+            workspaceRoot,
+            size: 12
+          },
+          view: {
+            pluginId: 'molecular',
+            modality: 'molecular' as const,
+            mode: 'preview' as const,
+            title: 'protein.pdb'
+          },
+          document: {
+            paragraphs: Array.from({ length: 7 }, (_, index) => ({
+              id: `p-${index}`,
+              index: index + 1,
+              text: oversizedParagraphText
+            }))
+          },
+          actions: ['observe']
+        }
+      })),
+      invokeAction: vi.fn()
+    } as unknown as WorkspacePreviewWorkerClient
+    const host = new WorkspacePreviewHost({
+      createSessionId: () => 'session-artifact-rollback',
+      workerClient
+    })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'protein.pdb'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const prepared = await host.prepareArtifact(opened.session.id, {
+      kind: 'cache-artifact',
+      source: 'observation'
+    }, '2026-07-08T00:06:00.000Z')
+
+    expect(prepared).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('artifact limit')
+    })
+    const described = await host.describeAsset(opened.session.id)
+    expect(described).toMatchObject({
+      ok: true,
+      descriptor: {
+        strategies: expect.arrayContaining([
+          expect.objectContaining({ kind: 'cache-artifact', status: 'deferred' })
+        ])
+      }
+    })
+    if (described.ok) {
+      expect(described.descriptor.artifacts ?? []).toEqual([])
+    }
   })
 
   it('keeps generic fallback observations aligned with read-only life-science capabilities', async () => {
@@ -245,7 +838,7 @@ describe('WorkspacePreviewHost', () => {
       ok: true,
       operationKind: 'text.replaceRange',
       audit: {
-        pluginId: 'legacy-markdown',
+        pluginId: 'markdown',
         effect: 'file-write'
       },
       diffSummary: {
@@ -309,6 +902,221 @@ describe('WorkspacePreviewHost', () => {
     })
   })
 
+  it('serves Markdown relative images through the unified host action without exposing file paths', async () => {
+    await mkdir(join(workspaceRoot, 'docs'))
+    await mkdir(join(workspaceRoot, 'docs', 'figures'))
+    await writeFile(join(workspaceRoot, 'docs', 'notes.md'), '![Cell](figures/cell.png)\n', 'utf8')
+    await writeFile(join(workspaceRoot, 'docs', 'figures', 'cell.png'), Buffer.from([
+      0x89, 0x50, 0x4e, 0x47,
+      0x0d, 0x0a, 0x1a, 0x0a
+    ]))
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-markdown-image' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'docs/notes.md',
+      mimeType: 'text/markdown'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const observed = await host.observe(opened.session.id)
+    expect(observed).toMatchObject({
+      ok: true,
+      observation: {
+        view: { pluginId: 'markdown', modality: 'document' },
+        actions: expect.arrayContaining(['markdown.readImage', 'text.replaceRange'])
+      }
+    })
+
+    const actionResult = await host.invokeAction(
+      opened.session.id,
+      { actionId: 'markdown.readImage', input: { path: join(workspaceRoot, 'docs', 'figures', 'cell.png') } },
+      '2026-07-08T00:00:00.000Z'
+    )
+    expect(actionResult).toMatchObject({
+      ok: true,
+      sessionId: 'session-markdown-image',
+      pluginId: 'markdown',
+      actionId: 'markdown.readImage',
+      audit: {
+        effect: 'host-action'
+      }
+    })
+    if (!actionResult.ok) return
+    expect(actionResult.result).toMatchObject({
+      dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+      mimeType: 'image/png',
+      size: 8
+    })
+    expect(actionResult.result).not.toHaveProperty('path')
+    expect(JSON.stringify(actionResult.result)).not.toContain(workspaceRoot)
+  })
+
+  it('serves HTML preview URLs through the unified host action without exposing file paths in the action result', async () => {
+    await mkdir(join(workspaceRoot, 'site'))
+    await writeFile(
+      join(workspaceRoot, 'site', 'report.html'),
+      '<link rel="stylesheet" href="style.css"><h1>Ready</h1>',
+      'utf8'
+    )
+    await writeFile(join(workspaceRoot, 'site', 'style.css'), 'body { color: rgb(1, 2, 3); }', 'utf8')
+    htmlPreviewService = new WorkspaceHtmlPreviewService()
+    const host = new WorkspacePreviewHost({
+      createSessionId: () => 'session-html',
+      htmlPreviewService
+    })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'site/report.html',
+      mimeType: 'text/html'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const observed = await host.observe(opened.session.id)
+    expect(observed).toMatchObject({
+      ok: true,
+      observation: {
+        view: { pluginId: 'html', modality: 'document' },
+        actions: expect.arrayContaining(['html.previewUrl', 'text.replaceRange'])
+      }
+    })
+
+    const actionResult = await host.invokeAction(
+      opened.session.id,
+      { actionId: 'html.previewUrl', input: {} },
+      '2026-07-08T00:00:00.000Z'
+    )
+    expect(actionResult).toMatchObject({
+      ok: true,
+      sessionId: 'session-html',
+      pluginId: 'html',
+      actionId: 'html.previewUrl',
+      audit: {
+        effect: 'host-action'
+      }
+    })
+    if (!actionResult.ok) return
+    expect(actionResult.result).toEqual({
+      url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{32}\/report\.html\?sciforge_preview=\d+$/),
+      size: expect.any(Number),
+      mtimeMs: expect.any(Number)
+    })
+    expect(actionResult.result).not.toHaveProperty('path')
+    expect(actionResult.result).not.toHaveProperty('workspaceRoot')
+
+    const previewUrl = (actionResult.result as { url: string }).url
+    await expect(fetch(previewUrl).then(async (response) => ({
+      status: response.status,
+      text: await response.text()
+    }))).resolves.toMatchObject({
+      status: 200,
+      text: expect.stringContaining('<h1>Ready</h1>')
+    })
+    await expect(fetch(new URL('style.css', previewUrl)).then(async (response) => ({
+      status: response.status,
+      text: await response.text()
+    }))).resolves.toMatchObject({
+      status: 200,
+      text: expect.stringContaining('rgb(1, 2, 3)')
+    })
+
+    const saved = await host.applyEdit(opened.session.id, {
+      kind: 'text.replaceRange',
+      path: 'site/report.html',
+      range: {
+        start: { line: 1, column: 1 },
+        end: { line: 1, column: 55 }
+      },
+      text: '<link rel="stylesheet" href="style.css"><h1>Updated</h1>'
+    }, '2026-07-08T00:01:00.000Z')
+    expect(saved).toMatchObject({
+      ok: true,
+      operationKind: 'text.replaceRange',
+      audit: {
+        pluginId: 'html',
+        effect: 'file-write'
+      }
+    })
+
+    const observedAfterSave = await host.observe(opened.session.id)
+    expect(observedAfterSave).toMatchObject({
+      ok: true,
+      observation: {
+        visibleText: expect.stringContaining('<h1>Updated</h1>'),
+        actions: expect.arrayContaining(['html.previewUrl', 'text.replaceRange'])
+      }
+    })
+    const refreshedPreview = await host.invokeAction(
+      opened.session.id,
+      { actionId: 'html.previewUrl', input: {} },
+      '2026-07-08T00:01:30.000Z'
+    )
+    expect(refreshedPreview).toMatchObject({ ok: true })
+    if (!refreshedPreview.ok) return
+    await expect(fetch((refreshedPreview.result as { url: string }).url).then(async (response) => ({
+      status: response.status,
+      text: await response.text()
+    }))).resolves.toMatchObject({
+      status: 200,
+      text: expect.stringContaining('<h1>Updated</h1>')
+    })
+  })
+
+  it('observes DOCX paragraphs through the unified workspace preview contract', async () => {
+    await writeFile(join(workspaceRoot, 'report.docx'), await createMinimalDocxBytes())
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-docx-observe' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'report.docx',
+      now: '2026-07-08T00:00:00.000Z'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    const observed = await host.observe(opened.session.id)
+
+    expect(observed).toMatchObject({
+      ok: true,
+      observation: {
+        view: {
+          pluginId: 'docx',
+          modality: 'document'
+        },
+        visibleText: expect.stringContaining('Study note'),
+        outline: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'docx-p-1',
+            title: 'Study note',
+            level: 1
+          })
+        ]),
+        document: {
+          paragraphs: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'docx-p-1',
+              index: 1,
+              text: 'Study note',
+              style: 'Heading1'
+            }),
+            expect.objectContaining({
+              id: 'docx-p-2',
+              index: 2,
+              text: 'First paragraph with tab'
+            })
+          ]),
+          truncatedParagraphs: false
+        },
+        actions: expect.arrayContaining([
+          'document.updateParagraph',
+          'annotation.upsert',
+          'applyEdit',
+          'save'
+        ])
+      }
+    })
+  })
+
   it('applies DOCX paragraph edits through the document edit operation', async () => {
     await writeFile(join(workspaceRoot, 'report.docx'), await createMinimalDocxBytes())
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-docx-edit' })
@@ -333,7 +1141,7 @@ describe('WorkspacePreviewHost', () => {
       ok: true,
       operationKind: 'document.updateParagraph',
       audit: {
-        pluginId: 'legacy-docx',
+        pluginId: 'docx',
         effect: 'file-write'
       },
       diffSummary: {
@@ -409,7 +1217,7 @@ describe('WorkspacePreviewHost', () => {
       ok: true,
       operationKind: 'annotation.upsert',
       audit: {
-        pluginId: 'legacy-pdf',
+        pluginId: 'pdf',
         effect: 'sidecar-write'
       },
       diffSummary: {
@@ -468,6 +1276,25 @@ describe('WorkspacePreviewHost', () => {
       annotationIds: ['ann-1'],
       title: 'Assay result'
     })
+    const exported = await host.exportPreview(opened.session.id, {
+      kind: 'workspace-file',
+      format: 'sidecar'
+    }, '2026-07-08T00:04:30.000Z')
+    expect(exported).toMatchObject({
+      ok: true,
+      sessionId: 'session-pdf-annotation',
+      audit: {
+        pluginId: 'pdf',
+        format: 'sidecar',
+        effect: 'sidecar-package'
+      }
+    })
+    if (exported.ok) {
+      const zip = await JSZip.loadAsync(await readFile(exported.path))
+      const annotationsJson = await zip.file('annotations.json')?.async('string')
+      expect(annotationsJson).toContain('"id": "ann-1"')
+      expect(annotationsJson).toContain('"body": "Updated assay note."')
+    }
     expect(observed).toMatchObject({
       ok: true,
       observation: {
@@ -476,7 +1303,13 @@ describe('WorkspacePreviewHost', () => {
           kind: 'comment',
           summary: 'open | page 1 | Assay result | Updated assay note.'
         }],
-        actions: expect.arrayContaining(['annotation.upsert'])
+        actions: expect.arrayContaining([
+          'annotation.sidecar.read',
+          'annotation.sidecar.import',
+          'annotation.upsert',
+          'annotation.thread.update',
+          'annotation.thread.delete'
+        ])
       }
     })
     if (observed.ok) {
@@ -485,6 +1318,351 @@ describe('WorkspacePreviewHost', () => {
       expect(annotationPayload).not.toContain('sha256')
       expect(annotationPayload).not.toContain('sourceMessageId')
     }
+
+    const sidecarAction = await host.invokeAction(opened.session.id, {
+      actionId: 'annotation.sidecar.read',
+      input: {}
+    }, '2026-07-08T00:04:45.000Z')
+    expect(sidecarAction).toMatchObject({
+      ok: true,
+      sessionId: 'session-pdf-annotation',
+      pluginId: 'pdf',
+      actionId: 'annotation.sidecar.read',
+      audit: {
+        effect: 'host-action'
+      }
+    })
+    if (sidecarAction.ok) {
+      expect(sidecarAction.result).toMatchObject({
+        sidecar: {
+          threads: [expect.objectContaining({ id: 'thread-1' })],
+          annotations: [expect.objectContaining({ id: 'ann-1' })],
+          anchors: [expect.objectContaining({
+            id: 'anchor-1',
+            rects: [{ page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 }]
+          })]
+        },
+        source: 'default'
+      })
+      expect(JSON.stringify(sidecarAction.result)).not.toContain(workspaceRoot)
+      expect(JSON.stringify(sidecarAction.result)).not.toContain('sourcePdfPath')
+    }
+
+    if (!exported.ok) return
+    const deleted = await host.applyEdit(opened.session.id, {
+      kind: 'annotation.thread.delete',
+      path: 'paper.pdf',
+      threadId: 'thread-1',
+      pruneOrphanAnchors: true
+    }, '2026-07-08T00:05:00.000Z')
+    expect(deleted).toMatchObject({
+      ok: true,
+      operationKind: 'annotation.thread.delete',
+      audit: {
+        effect: 'sidecar-write'
+      }
+    })
+
+    const imported = await host.invokeAction(opened.session.id, {
+      actionId: 'annotation.sidecar.import',
+      input: {
+        packagePath: exported.path
+      }
+    }, '2026-07-08T00:06:00.000Z')
+    expect(imported).toMatchObject({
+      ok: true,
+      sessionId: 'session-pdf-annotation',
+      pluginId: 'pdf',
+      actionId: 'annotation.sidecar.import',
+      result: {
+        fingerprintMatched: true,
+        counts: {
+          threads: 1,
+          annotations: 1,
+          anchors: 1
+        },
+        effect: 'sidecar-write'
+      },
+      audit: {
+        effect: 'host-action'
+      }
+    })
+    if (imported.ok) {
+      expect(imported.result).toMatchObject({
+        sidecar: {
+          threads: [expect.objectContaining({ id: 'thread-1' })],
+          annotations: [expect.objectContaining({ id: 'ann-1', body: 'Updated assay note.' })]
+        }
+      })
+      expect(JSON.stringify(imported.result)).not.toContain(workspaceRoot)
+      expect(JSON.stringify(imported.result)).not.toContain('sourcePdfPath')
+    }
+
+    const observedAfterImport = await host.observe(opened.session.id)
+    expect(observedAfterImport).toMatchObject({
+      ok: true,
+      observation: {
+        annotations: [{
+          id: 'thread-1',
+          kind: 'comment',
+          summary: 'open | page 1 | Assay result | Updated assay note.'
+        }]
+      }
+    })
+  })
+
+  it('updates and deletes annotation threads through generic sidecar edit operations', async () => {
+    await writeFile(join(workspaceRoot, 'paper.pdf'), '%PDF-1.4\n%%EOF\n', 'utf8')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-pdf-thread' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'paper.pdf',
+      now: '2026-07-08T00:00:00.000Z'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await expect(host.applyEdit(opened.session.id, {
+      kind: 'annotation.upsert',
+      path: 'paper.pdf',
+      annotationId: 'ann-thread',
+      annotationKind: 'comment',
+      body: 'Thread body',
+      target: {
+        documentKind: 'pdf',
+        threadId: 'thread-edit',
+        anchor: {
+          id: 'anchor-edit',
+          kind: 'text',
+          quote: 'target',
+          rects: [{ page: 1, x: 0.2, y: 0.2, width: 0.2, height: 0.04 }]
+        },
+        thread: {
+          status: 'open',
+          title: 'Target'
+        }
+      }
+    }, '2026-07-08T00:01:00.000Z')).resolves.toMatchObject({
+      ok: true,
+      operationKind: 'annotation.upsert'
+    })
+
+    const updated = await host.applyEdit(opened.session.id, {
+      kind: 'annotation.thread.update',
+      path: 'paper.pdf',
+      threadId: 'thread-edit',
+      patch: {
+        status: 'resolved',
+        title: 'Resolved target'
+      }
+    }, '2026-07-08T00:02:00.000Z')
+    expect(updated).toMatchObject({
+      ok: true,
+      operationKind: 'annotation.thread.update',
+      audit: {
+        effect: 'sidecar-write'
+      },
+      diffSummary: {
+        summary: 'Updated annotation thread thread-edit.',
+        previews: [{
+          before: 'open | Target',
+          after: 'resolved | Resolved target'
+        }]
+      }
+    })
+
+    let loaded = await loadPdfAnnotationSidecar({
+      pdfPath: 'paper.pdf',
+      workspaceRoot
+    })
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+    expect(loaded.sidecar.threads[0]).toMatchObject({
+      id: 'thread-edit',
+      status: 'resolved',
+      title: 'Resolved target'
+    })
+
+    const deleted = await host.applyEdit(opened.session.id, {
+      kind: 'annotation.thread.delete',
+      path: 'paper.pdf',
+      threadId: 'thread-edit',
+      pruneOrphanAnchors: true
+    }, '2026-07-08T00:03:00.000Z')
+    expect(deleted).toMatchObject({
+      ok: true,
+      operationKind: 'annotation.thread.delete',
+      audit: {
+        effect: 'sidecar-write'
+      },
+      diffSummary: {
+        summary: 'Deleted annotation thread thread-edit.'
+      }
+    })
+
+    loaded = await loadPdfAnnotationSidecar({
+      pdfPath: 'paper.pdf',
+      workspaceRoot
+    })
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+    expect(loaded.sidecar.threads).toHaveLength(0)
+    expect(loaded.sidecar.annotations).toHaveLength(0)
+    expect(loaded.sidecar.anchors).toHaveLength(0)
+
+    const observed = await host.observe(opened.session.id)
+    expect(observed).toMatchObject({
+      ok: true,
+      observation: {
+        actions: expect.arrayContaining([
+          'annotation.sidecar.read',
+          'annotation.thread.update',
+          'annotation.thread.delete'
+        ])
+      }
+    })
+    if (observed.ok) expect(observed.observation.annotations).toBeUndefined()
+  })
+
+  it('updates annotation thread kind and side conversation linkage through annotation upsert', async () => {
+    await writeFile(join(workspaceRoot, 'paper.pdf'), '%PDF-1.4\n%%EOF\n', 'utf8')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-pdf-question-link' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'paper.pdf',
+      now: '2026-07-08T00:00:00.000Z'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await host.applyEdit(opened.session.id, {
+      kind: 'annotation.upsert',
+      path: 'paper.pdf',
+      annotationId: 'ann-question',
+      annotationKind: 'comment',
+      body: 'Initial note.',
+      target: {
+        documentKind: 'pdf',
+        threadId: 'thread-question',
+        anchor: {
+          id: 'anchor-question',
+          kind: 'text',
+          quote: 'result',
+          rects: [{ page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 }]
+        },
+        thread: {
+          status: 'open',
+          title: 'Initial note'
+        }
+      }
+    }, '2026-07-08T00:00:30.000Z')
+
+    const linked = await host.applyEdit(opened.session.id, {
+      kind: 'annotation.upsert',
+      path: 'paper.pdf',
+      annotationId: 'ann-question',
+      annotationKind: 'question',
+      body: 'Why does this result change?',
+      target: {
+        documentKind: 'pdf',
+        threadId: 'thread-question',
+        thread: {
+          kind: 'question',
+          status: 'open',
+          title: 'Why does this result change?',
+          sourceMessageId: 'side-thread-1'
+        },
+        annotation: {
+          sourceText: 'result',
+          sourceMessageId: 'side-thread-1:user-1'
+        }
+      }
+    }, '2026-07-08T00:01:00.000Z')
+    expect(linked).toMatchObject({
+      ok: true,
+      operationKind: 'annotation.upsert',
+      audit: {
+        effect: 'sidecar-write'
+      }
+    })
+
+    const loaded = await loadPdfAnnotationSidecar({
+      pdfPath: 'paper.pdf',
+      workspaceRoot
+    })
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+    expect(loaded.sidecar.threads[0]).toMatchObject({
+      id: 'thread-question',
+      kind: 'question',
+      sourceMessageId: 'side-thread-1',
+      title: 'Why does this result change?'
+    })
+    expect(loaded.sidecar.annotations[0]).toMatchObject({
+      id: 'ann-question',
+      kind: 'question',
+      body: 'Why does this result change?',
+      sourceMessageId: 'side-thread-1:user-1'
+    })
+  })
+
+  it('exports PDF annotations as an annotated PDF through workspace preview export', async () => {
+    await writeFile(join(workspaceRoot, 'paper.pdf'), await createBlankPdfBytes())
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-pdf-annotated-export' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'paper.pdf',
+      now: '2026-07-08T00:00:00.000Z'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await expect(host.applyEdit(opened.session.id, {
+      kind: 'annotation.upsert',
+      path: 'paper.pdf',
+      annotationId: 'ann-export',
+      annotationKind: 'comment',
+      body: 'Export this PDF note.',
+      target: {
+        documentKind: 'pdf',
+        threadId: 'thread-export',
+        anchor: {
+          id: 'anchor-export',
+          kind: 'text',
+          quote: 'export',
+          rects: [{ page: 1, x: 0.2, y: 0.2, width: 0.2, height: 0.04 }]
+        },
+        thread: {
+          status: 'open',
+          title: 'Export note'
+        }
+      }
+    }, '2026-07-08T00:01:00.000Z')).resolves.toMatchObject({
+      ok: true,
+      operationKind: 'annotation.upsert'
+    })
+
+    const exported = await host.exportPreview(opened.session.id, {
+      kind: 'workspace-file',
+      format: 'annotated-pdf'
+    }, '2026-07-08T00:02:00.000Z')
+
+    expect(exported).toMatchObject({
+      ok: true,
+      sessionId: 'session-pdf-annotated-export',
+      target: {
+        format: 'annotated-pdf'
+      },
+      audit: {
+        pluginId: 'pdf',
+        format: 'annotated-pdf',
+        effect: 'annotated-pdf'
+      }
+    })
+    if (!exported.ok) return
+    expect(exported.path.endsWith('paper.annotated.pdf')).toBe(true)
+    const content = await readFile(exported.path, 'latin1')
+    expect(content).toContain('/Subtype /Text')
   })
 
   it('upserts DOCX annotations with text anchors and no PDF rects', async () => {
@@ -529,7 +1707,7 @@ describe('WorkspacePreviewHost', () => {
       ok: true,
       operationKind: 'annotation.upsert',
       audit: {
-        pluginId: 'legacy-docx',
+        pluginId: 'docx',
         effect: 'sidecar-write'
       }
     })
@@ -1348,6 +2526,86 @@ async function createMinimalDocxBytes(): Promise<Buffer> {
     '</w:document>'
   ].join(''))
   return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+async function createBlankPdfBytes(): Promise<Buffer> {
+  const pdf = await PDFDocument.create()
+  pdf.addPage([600, 800])
+  return Buffer.from(await pdf.save({ useObjectStreams: false }))
+}
+
+function createUncompressedRgbTiffBytes(
+  width: number,
+  height: number,
+  pixels: Uint8Array
+): Uint8Array {
+  const samplesPerPixel = 3
+  expect(pixels.byteLength).toBe(width * height * samplesPerPixel)
+  const entryCount = 9
+  const ifdOffset = 8
+  const ifdByteLength = 2 + entryCount * 12 + 4
+  const bitsOffset = ifdOffset + ifdByteLength
+  const pixelOffset = bitsOffset + 6
+  const bytes = Buffer.alloc(pixelOffset + pixels.byteLength)
+
+  bytes.write('II', 0, 'ascii')
+  bytes.writeUInt16LE(42, 2)
+  bytes.writeUInt32LE(ifdOffset, 4)
+  bytes.writeUInt16LE(entryCount, ifdOffset)
+  writeTiffEntry(bytes, ifdOffset, 0, 256, 4, 1, width)
+  writeTiffEntry(bytes, ifdOffset, 1, 257, 4, 1, height)
+  writeTiffEntry(bytes, ifdOffset, 2, 258, 3, 3, bitsOffset)
+  writeTiffEntry(bytes, ifdOffset, 3, 259, 3, 1, 1)
+  writeTiffEntry(bytes, ifdOffset, 4, 262, 3, 1, 2)
+  writeTiffEntry(bytes, ifdOffset, 5, 273, 4, 1, pixelOffset)
+  writeTiffEntry(bytes, ifdOffset, 6, 277, 3, 1, samplesPerPixel)
+  writeTiffEntry(bytes, ifdOffset, 7, 278, 4, 1, height)
+  writeTiffEntry(bytes, ifdOffset, 8, 279, 4, 1, pixels.byteLength)
+  bytes.writeUInt32LE(0, ifdOffset + 2 + entryCount * 12)
+  bytes.writeUInt16LE(8, bitsOffset)
+  bytes.writeUInt16LE(8, bitsOffset + 2)
+  bytes.writeUInt16LE(8, bitsOffset + 4)
+  pixels.forEach((byte, index) => {
+    bytes[pixelOffset + index] = byte
+  })
+  return new Uint8Array(bytes)
+}
+
+function createCompressedTiffBytes(width: number, height: number): Uint8Array {
+  const entryCount = 6
+  const ifdOffset = 8
+  const ifdByteLength = 2 + entryCount * 12 + 4
+  const pixelOffset = ifdOffset + ifdByteLength
+  const bytes = Buffer.alloc(pixelOffset)
+
+  bytes.write('II', 0, 'ascii')
+  bytes.writeUInt16LE(42, 2)
+  bytes.writeUInt32LE(ifdOffset, 4)
+  bytes.writeUInt16LE(entryCount, ifdOffset)
+  writeTiffEntry(bytes, ifdOffset, 0, 256, 4, 1, width)
+  writeTiffEntry(bytes, ifdOffset, 1, 257, 4, 1, height)
+  writeTiffEntry(bytes, ifdOffset, 2, 258, 3, 1, 8)
+  writeTiffEntry(bytes, ifdOffset, 3, 259, 3, 1, 7)
+  writeTiffEntry(bytes, ifdOffset, 4, 262, 3, 1, 1)
+  writeTiffEntry(bytes, ifdOffset, 5, 273, 4, 1, pixelOffset)
+  bytes.writeUInt32LE(0, ifdOffset + 2 + entryCount * 12)
+  return new Uint8Array(bytes)
+}
+
+function writeTiffEntry(
+  bytes: Buffer,
+  ifdOffset: number,
+  index: number,
+  tag: number,
+  type: number,
+  count: number,
+  value: number
+): void {
+  const offset = ifdOffset + 2 + index * 12
+  bytes.writeUInt16LE(tag, offset)
+  bytes.writeUInt16LE(type, offset + 2)
+  bytes.writeUInt32LE(count, offset + 4)
+  bytes.writeUInt32LE(value, offset + 8)
 }
 
 async function createMinimalPptxBytes(): Promise<Uint8Array<ArrayBuffer>> {

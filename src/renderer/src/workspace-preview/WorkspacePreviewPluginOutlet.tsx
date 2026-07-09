@@ -4,12 +4,35 @@ import type {
   WorkspacePreviewEditOperation,
   WorkspacePreviewModality
 } from '@shared/workspace-preview'
+import { openSafeExternalUrl } from '../lib/open-external'
 import {
   BioimagingWorkspaceViewer
 } from './BioimagingWorkspaceViewer'
 import {
   DeckWorkspaceViewer
 } from './DeckWorkspaceViewer'
+import {
+  DocumentAnnotationPanelController
+} from './DocumentAnnotationPanelController'
+import type {
+  DocumentAnnotationQuestionBridge
+} from './DocumentAnnotationPanelController'
+import {
+  DocxWorkspaceViewer
+} from './DocxWorkspaceViewer'
+import {
+  HtmlWorkspaceViewer,
+  htmlPreviewUrlStateFromActionResult
+} from './HtmlWorkspaceViewer'
+import {
+  ImageWorkspaceViewer
+} from './ImageWorkspaceViewer'
+import {
+  MarkdownWorkspaceViewer
+} from './MarkdownWorkspaceViewer'
+import {
+  PdfWorkspaceViewer
+} from './PdfWorkspaceViewer'
 import {
   MolecularWorkspaceViewer
 } from './MolecularWorkspaceViewer'
@@ -33,16 +56,16 @@ import type {
 } from './WorkspacePreviewPanelShell'
 
 export type WorkspacePreviewPluginOutletRouteReason =
-  | 'life-science'
   | 'deferred-non-life-science'
-  | 'text-first-party'
-  | 'tabular-first-party'
-  | 'deck-first-party'
+  | 'empty'
+  | 'registered-plugin'
+  | 'unregistered-format'
 
 export type WorkspacePreviewPluginOutletProps = {
   context: WorkspacePreviewPanelShellContext
   routeReason: WorkspacePreviewPluginOutletRouteReason
   renderers?: readonly WorkspacePreviewPluginRendererContribution[]
+  annotationQuestionBridge?: DocumentAnnotationQuestionBridge
 }
 
 export type WorkspacePreviewPluginRendererInput = {
@@ -54,6 +77,7 @@ export type WorkspacePreviewPluginRendererInput = {
   pluginId?: string
   modality?: WorkspacePreviewModality
   applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
+  annotationQuestionBridge?: DocumentAnnotationQuestionBridge
 }
 
 export type WorkspacePreviewPluginRendererContribution = {
@@ -69,7 +93,9 @@ export async function applyWorkspacePreviewOutletEdit(
   const result = await context.host.applyEdit(operation)
   if (result.ok) {
     await context.host.observe(result.session.id)
+    return
   }
+  throw new Error(result.message)
 }
 
 export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePreviewPluginRendererContribution[] = [
@@ -89,14 +115,156 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
   },
   {
     id: 'text',
-    matches: ({ pluginId, modality, routeReason }) =>
-      routeReason === 'text-first-party' &&
-      (pluginId === 'text' || modality === 'text'),
+    matches: ({ pluginId, modality }) =>
+      pluginId === 'text' ||
+      modality === 'text',
     render: ({ observation, applyEdit }) => (
       <TextWorkspaceViewer
         observation={observation}
         className="h-full min-h-0"
         onApplyEdit={applyEdit}
+      />
+    )
+  },
+  {
+    id: 'markdown',
+    matches: ({ pluginId, observation }) =>
+      pluginId === 'markdown' ||
+      Boolean(observation && (
+        observation.view.pluginId === 'markdown' ||
+        /\.(?:md|mdx|markdown)$/i.test(observation.file.path) ||
+        observation.file.mimeType === 'text/markdown' ||
+        observation.file.mimeType === 'text/x-markdown'
+      )),
+    render: ({ context, observation, applyEdit }) => (
+      <MarkdownWorkspaceViewer
+        observation={observation}
+        className="h-full min-h-0"
+        onApplyEdit={applyEdit}
+        loadWorkspaceImage={async ({ path }) => {
+          const sessionId = context.state.session?.id
+          if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
+          const result = await context.host.invokeAction(sessionId, {
+            actionId: 'markdown.readImage',
+            input: { path }
+          })
+          if (!result.ok) return result
+          const payload = result.result
+          if (!isRecord(payload) || typeof payload.dataUrl !== 'string') {
+            return { ok: false, message: 'Markdown image action did not return a data URL.' }
+          }
+          return {
+            ok: true,
+            dataUrl: payload.dataUrl
+          }
+        }}
+      />
+    )
+  },
+  {
+    id: 'html',
+    matches: ({ pluginId, observation }) =>
+      pluginId === 'html' ||
+      Boolean(observation && (
+        observation.view.pluginId === 'html' ||
+        /\.(?:html|htm)$/i.test(observation.file.path) ||
+        observation.file.mimeType === 'text/html'
+      )),
+    render: ({ context, observation, applyEdit }) => (
+      <HtmlWorkspaceViewer
+        observation={observation}
+        className="h-full min-h-0"
+        onApplyEdit={applyEdit}
+        loadPreviewUrl={async () => {
+          const sessionId = context.state.session?.id
+          if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
+          return htmlPreviewUrlStateFromActionResult(await context.host.invokeAction(sessionId, {
+            actionId: 'html.previewUrl',
+            input: {}
+          }))
+        }}
+        onOpenPreviewExternal={async (url) => {
+          await openSafeExternalUrl(url)
+        }}
+      />
+    )
+  },
+  {
+    id: 'image',
+    matches: ({ pluginId, modality, observation }) =>
+      pluginId === 'image' ||
+      modality === 'image' ||
+      Boolean(observation?.file.mimeType?.startsWith('image/')),
+    render: ({ observation, asset, transport }) => (
+      <ImageWorkspaceViewer
+        observation={observation}
+        asset={asset}
+        transport={transport}
+        className="h-full min-h-0"
+      />
+    )
+  },
+  {
+    id: 'pdf',
+    matches: ({ pluginId, observation }) =>
+      pluginId === 'pdf' ||
+      Boolean(observation && (
+        observation.view.pluginId === 'pdf' ||
+        /\.pdf$/i.test(observation.file.path) ||
+        observation.file.mimeType === 'application/pdf' ||
+        observation.file.mimeType === 'application/x-pdf'
+      )),
+    render: ({ context, observation, asset, transport, applyEdit, annotationQuestionBridge }) => (
+      <DocumentAnnotationPanelController
+        context={context}
+        observation={observation}
+        documentKind="pdf"
+        questionBridge={annotationQuestionBridge}
+        className="h-full min-h-0"
+        renderDocument={({ pdf }) => (
+          <PdfWorkspaceViewer
+            observation={observation}
+            asset={asset}
+            transport={transport}
+            className="h-full min-h-0"
+            onApplyEdit={applyEdit}
+            annotationOverlays={pdf.annotationOverlays}
+            activeAnnotationId={pdf.activeAnnotationId}
+            jumpToRect={pdf.jumpToRect}
+            onAnnotationSelect={pdf.onAnnotationSelect}
+            onOpenAnnotations={pdf.onOpenAnnotations}
+          />
+        )}
+      />
+    )
+  },
+  {
+    id: 'docx',
+    matches: ({ pluginId, observation }) =>
+      pluginId === 'docx' ||
+      Boolean(observation && (
+        observation.view.pluginId === 'docx' ||
+        /\.docx$/i.test(observation.file.path) ||
+        observation.file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      )),
+    render: ({ context, observation, applyEdit, annotationQuestionBridge }) => (
+      <DocumentAnnotationPanelController
+        context={context}
+        observation={observation}
+        documentKind="docx"
+        questionBridge={annotationQuestionBridge}
+        className="h-full min-h-0"
+        renderDocument={({ docx }) => (
+          <DocxWorkspaceViewer
+            observation={observation}
+            className="h-full min-h-0"
+            onApplyEdit={applyEdit}
+            annotationOverlays={docx.annotationOverlays}
+            activeAnnotationId={docx.activeAnnotationId}
+            onAnnotationSelect={docx.onAnnotationSelect}
+            onOpenAnnotations={docx.onOpenAnnotations}
+          />
+        )}
       />
     )
   },
@@ -165,9 +333,10 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
       pluginId === 'bioimaging' ||
       modality === 'bioimaging' ||
       Boolean(observation?.bioimaging),
-    render: ({ observation }) => (
+    render: ({ observation, transport }) => (
       <BioimagingWorkspaceViewer
         observation={observation}
+        transport={transport}
         className="h-full min-h-0 pr-20"
       />
     )
@@ -215,7 +384,8 @@ export function resolveWorkspacePreviewPluginRendererContribution(
 export function WorkspacePreviewPluginOutlet({
   context,
   routeReason,
-  renderers = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS
+  renderers = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
+  annotationQuestionBridge
 }: WorkspacePreviewPluginOutletProps): ReactElement {
   const observation = context.state.observation
   const pluginId = observation?.view.pluginId ??
@@ -237,7 +407,8 @@ export function WorkspacePreviewPluginOutlet({
       transport: context.transport,
       pluginId,
       modality,
-      applyEdit
+      applyEdit,
+      annotationQuestionBridge
     })
   }
 
@@ -304,4 +475,8 @@ function formatLabel(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }

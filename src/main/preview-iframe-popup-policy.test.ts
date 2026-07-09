@@ -11,7 +11,7 @@ describe('preview iframe popup policy', () => {
   it('does not grant popup permission to dev or workspace preview iframes', () => {
     const sandboxes = [
       ...readSandboxTokens('src/renderer/src/components/DevBrowserPanel.tsx'),
-      ...readSandboxTokens('src/renderer/src/components/WorkspaceFilePreviewPanel.tsx')
+      ...readSandboxTokens('src/renderer/src/workspace-preview/HtmlWorkspaceViewer.tsx')
     ]
 
     expect(sandboxes.length).toBeGreaterThan(0)
@@ -23,7 +23,7 @@ describe('preview iframe popup policy', () => {
   it('does not grant same-origin permission to dev or workspace preview iframes', () => {
     const sandboxes = [
       ...readSandboxTokens('src/renderer/src/components/DevBrowserPanel.tsx'),
-      ...readSandboxTokens('src/renderer/src/components/WorkspaceFilePreviewPanel.tsx')
+      ...readSandboxTokens('src/renderer/src/workspace-preview/HtmlWorkspaceViewer.tsx')
     ]
 
     expect(sandboxes.length).toBeGreaterThan(0)

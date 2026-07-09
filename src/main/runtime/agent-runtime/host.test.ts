@@ -526,7 +526,7 @@ describe('AgentRuntimeHost', () => {
         components: [{
           id: 'right-sidebar.file-preview',
           region: 'right-sidebar',
-          component: 'file-preview',
+          component: 'workspace-preview',
           title: 'paper.pdf',
           visible: true,
           updatedAt: '2026-07-04T00:00:00.000Z',

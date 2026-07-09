@@ -10,7 +10,7 @@ import {
   type WorkspacePreviewPluginManifest,
   type WorkspacePreviewSession
 } from '../../../shared/workspace-preview'
-import { PLANNED_WORKSPACE_PREVIEW_MANIFESTS } from './registry'
+import { FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS } from './registry'
 import { WorkspacePreviewWorkerClient } from './worker-client'
 
 describe('WorkspacePreviewWorkerClient', () => {
@@ -233,6 +233,107 @@ describe('WorkspacePreviewWorkerClient', () => {
         }
       }
     })
+  })
+
+  it('prepares bioimaging tile artifacts through the first-party worker decoder', async () => {
+    const filePath = join(workspaceRoot, 'rgb-field.tif')
+    const bytes = createUncompressedRgbTiffBytes(4, 3, new Uint8Array([
+      255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+      10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+      120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10
+    ]))
+    await writeFile(filePath, bytes)
+    const manifest = manifestById('bioimaging')
+    const file: WorkspacePreviewFileState = {
+      workspaceRoot,
+      path: filePath,
+      relativePath: 'rgb-field.tif',
+      mimeType: 'image/tiff',
+      size: bytes.byteLength,
+      mtimeMs: 1
+    }
+    const client = new WorkspacePreviewWorkerClient()
+
+    const result = await client.prepareArtifact({
+      manifest,
+      file,
+      session: createSession(manifest, file),
+      request: {
+        kind: 'tile',
+        level: 0,
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 2
+      }
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      kind: 'tile',
+      mimeType: 'image/png',
+      tile: {
+        level: 0,
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 2
+      },
+      bytesRead: bytes.byteLength,
+      truncated: false,
+      pixelDecoding: true,
+      tileRendererImplemented: true
+    })
+    if (result.ok) {
+      expect([...result.bytes.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    }
+  })
+
+  it('prepares bioimaging thumbnail artifacts through the first-party worker decoder', async () => {
+    const filePath = join(workspaceRoot, 'rgb-thumbnail.tif')
+    const bytes = createUncompressedRgbTiffBytes(4, 2, new Uint8Array([
+      255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+      10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120
+    ]))
+    await writeFile(filePath, bytes)
+    const manifest = manifestById('bioimaging')
+    const file: WorkspacePreviewFileState = {
+      workspaceRoot,
+      path: filePath,
+      relativePath: 'rgb-thumbnail.tif',
+      mimeType: 'image/tiff',
+      size: bytes.byteLength,
+      mtimeMs: 1
+    }
+    const client = new WorkspacePreviewWorkerClient()
+
+    const result = await client.prepareArtifact({
+      manifest,
+      file,
+      session: createSession(manifest, file),
+      request: {
+        kind: 'thumbnail',
+        width: 2,
+        height: 2
+      }
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      kind: 'thumbnail',
+      mimeType: 'image/png',
+      thumbnail: {
+        width: 2,
+        height: 1
+      },
+      bytesRead: bytes.byteLength,
+      truncated: false,
+      pixelDecoding: true,
+      thumbnailRendererImplemented: true
+    })
+    if (result.ok) {
+      expect([...result.bytes.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    }
   })
 
   it('maps spectra worker-private scan details onto shared spectra fields', async () => {
@@ -1358,6 +1459,59 @@ function writeTiffLongTag(bytes: Buffer, offset: number, tag: number, value: num
   bytes.writeUInt32LE(value, offset + 8)
 }
 
+function createUncompressedRgbTiffBytes(
+  width: number,
+  height: number,
+  pixels: Uint8Array
+): Uint8Array {
+  const samplesPerPixel = 3
+  expect(pixels.byteLength).toBe(width * height * samplesPerPixel)
+  const entryCount = 9
+  const ifdOffset = 8
+  const ifdByteLength = 2 + entryCount * 12 + 4
+  const bitsOffset = ifdOffset + ifdByteLength
+  const pixelOffset = bitsOffset + 6
+  const bytes = Buffer.alloc(pixelOffset + pixels.byteLength)
+
+  bytes.write('II', 0, 'ascii')
+  bytes.writeUInt16LE(42, 2)
+  bytes.writeUInt32LE(ifdOffset, 4)
+  bytes.writeUInt16LE(entryCount, ifdOffset)
+  writeTiffEntry(bytes, ifdOffset, 0, 256, 4, 1, width)
+  writeTiffEntry(bytes, ifdOffset, 1, 257, 4, 1, height)
+  writeTiffEntry(bytes, ifdOffset, 2, 258, 3, 3, bitsOffset)
+  writeTiffEntry(bytes, ifdOffset, 3, 259, 3, 1, 1)
+  writeTiffEntry(bytes, ifdOffset, 4, 262, 3, 1, 2)
+  writeTiffEntry(bytes, ifdOffset, 5, 273, 4, 1, pixelOffset)
+  writeTiffEntry(bytes, ifdOffset, 6, 277, 3, 1, samplesPerPixel)
+  writeTiffEntry(bytes, ifdOffset, 7, 278, 4, 1, height)
+  writeTiffEntry(bytes, ifdOffset, 8, 279, 4, 1, pixels.byteLength)
+  bytes.writeUInt32LE(0, ifdOffset + 2 + entryCount * 12)
+  bytes.writeUInt16LE(8, bitsOffset)
+  bytes.writeUInt16LE(8, bitsOffset + 2)
+  bytes.writeUInt16LE(8, bitsOffset + 4)
+  pixels.forEach((byte, index) => {
+    bytes[pixelOffset + index] = byte
+  })
+  return new Uint8Array(bytes)
+}
+
+function writeTiffEntry(
+  bytes: Buffer,
+  ifdOffset: number,
+  index: number,
+  tag: number,
+  type: number,
+  count: number,
+  value: number
+): void {
+  const offset = ifdOffset + 2 + index * 12
+  bytes.writeUInt16LE(tag, offset)
+  bytes.writeUInt16LE(type, offset + 2)
+  bytes.writeUInt32LE(count, offset + 4)
+  bytes.writeUInt32LE(value, offset + 8)
+}
+
 async function observeFile(input: {
   manifest: WorkspacePreviewPluginManifest
   file: WorkspacePreviewFileState
@@ -1389,7 +1543,7 @@ function createSession(
 
 function manifestById(id: string): WorkspacePreviewPluginManifest {
   const manifest = [
-    ...PLANNED_WORKSPACE_PREVIEW_MANIFESTS,
+    ...FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS,
     ...LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS
   ].find((candidate) => candidate.id === id)
   if (!manifest) throw new Error(`Missing manifest ${id}`)

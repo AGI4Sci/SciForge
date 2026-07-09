@@ -32,7 +32,6 @@ import type {
   WorkspaceNativeFileDragPayload,
   WorkspaceNativeFileDragResult,
   WorkspaceFileReadResult,
-  WorkspaceHtmlPreviewResult,
   WorkspaceImageReadResult,
   WorkspaceDirectoryCreatePayload,
   WorkspaceDirectoryCreateResult,
@@ -51,8 +50,6 @@ import type {
   WorkspaceFileChangePayload,
   WorkspaceFileCreatePayload,
   WorkspaceFileCreateResult,
-  WorkspaceDocxTextWritePayload,
-  WorkspaceDocxTextWriteResult,
   WorkspaceFileResolveResult,
   WorkspaceFileTarget,
   WorkspaceFileWatchPayload,
@@ -62,6 +59,7 @@ import type {
 } from './workspace-file'
 import type {
   WorkspaceObservation,
+  WorkspacePreviewArtifactDescriptor,
   WorkspacePreviewAssetTransportDescriptor,
   WorkspacePreviewByteRange,
   WorkspacePreviewEditDiffSummary,
@@ -71,6 +69,8 @@ import type {
   WorkspacePreviewPluginActionInput,
   WorkspacePreviewPluginActionResult,
   WorkspacePreviewPluginManifest,
+  WorkspacePreviewPrepareArtifactRequest,
+  WorkspacePreviewReadArtifactRangeRequest,
   WorkspacePreviewSession
 } from './workspace-preview'
 import type {
@@ -138,18 +138,6 @@ import type {
   PaperRadarStatus,
   PaperRadarSyncResult
 } from './paper-radar'
-import type {
-  PdfAnnotationPdfExportPayload,
-  PdfAnnotationPdfExportResult,
-  PdfAnnotationSidecarExportPayload,
-  PdfAnnotationSidecarExportResult,
-  PdfAnnotationSidecarImportPayload,
-  PdfAnnotationSidecarImportResult,
-  PdfAnnotationSidecarLoadResult,
-  PdfAnnotationSidecarSavePayload,
-  PdfAnnotationSidecarSaveResult,
-  PdfAnnotationSidecarTarget
-} from './pdf-annotations'
 import type { VisibleContextSnapshot } from './visible-context'
 import type {
   FigureStyleExtractRequest,
@@ -713,12 +701,32 @@ export type WorkspacePreviewReadRangeResult =
   | {
       ok: true
       sessionId: string
-      path: string
+      assetId: string
       offset: number
       length: number
       size: number
       dataBase64: string
       mimeType?: string
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewPrepareArtifactResult =
+  | {
+      ok: true
+      sessionId: string
+      artifact: WorkspacePreviewArtifactDescriptor
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewReadArtifactRangeResult =
+  | {
+      ok: true
+      sessionId: string
+      assetId: string
+      artifactId: string
+      offset: number
+      length: number
+      size: number
+      mimeType: string
+      dataBase64: string
     }
   | { ok: false; message: string }
 export type WorkspacePreviewDescribeAssetResult =
@@ -751,7 +759,7 @@ export type WorkspacePreviewExportResult =
         sourcePath: string
         targetKind: WorkspacePreviewExportTarget['kind']
         format: string
-        effect: 'source-copy'
+        effect: 'source-copy' | 'sidecar-package' | 'annotated-pdf'
       }
     }
   | { ok: false; message: string }
@@ -887,10 +895,8 @@ export type SciForgeApi = {
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>
   resolveWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileResolveResult>
   readWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
-  previewWorkspaceHtml: (options: WorkspaceFileTarget) => Promise<WorkspaceHtmlPreviewResult>
   readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>
   writeWorkspaceFile: (payload: WorkspaceFileWritePayload) => Promise<WorkspaceFileWriteResult>
-  writeWorkspaceDocxText: (payload: WorkspaceDocxTextWritePayload) => Promise<WorkspaceDocxTextWriteResult>
   createWorkspaceFile: (payload: WorkspaceFileCreatePayload) => Promise<WorkspaceFileCreateResult>
   createWorkspaceDirectory: (
     payload: WorkspaceDirectoryCreatePayload
@@ -932,6 +938,14 @@ export type SciForgeApi = {
       sessionId: string,
       range: WorkspacePreviewByteRange
     ) => Promise<WorkspacePreviewReadRangeResult>
+    prepareArtifact: (
+      sessionId: string,
+      request: WorkspacePreviewPrepareArtifactRequest
+    ) => Promise<WorkspacePreviewPrepareArtifactResult>
+    readArtifactRange: (
+      sessionId: string,
+      request: WorkspacePreviewReadArtifactRangeRequest
+    ) => Promise<WorkspacePreviewReadArtifactRangeResult>
     applyEdit: (
       sessionId: string,
       operation: WorkspacePreviewEditOperation
@@ -944,6 +958,7 @@ export type SciForgeApi = {
       sessionId: string,
       action: WorkspacePreviewPluginActionInput
     ) => Promise<WorkspacePreviewInvokeActionResult>
+    releaseSession: (sessionId: string) => Promise<boolean>
     watch: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
     unwatch: (watchId: string) => Promise<boolean>
     onChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
@@ -978,13 +993,6 @@ export type SciForgeApi = {
     create: (input: ResearchCardCreateInput) => Promise<ResearchCard>
     update: (input: ResearchCardUpdateInput) => Promise<ResearchCard>
     archive: (input: ResearchCardArchiveInput) => Promise<ResearchCard>
-  }
-  pdfAnnotations?: {
-    load: (payload: PdfAnnotationSidecarTarget) => Promise<PdfAnnotationSidecarLoadResult>
-    save: (payload: PdfAnnotationSidecarSavePayload) => Promise<PdfAnnotationSidecarSaveResult>
-    export: (payload: PdfAnnotationSidecarExportPayload) => Promise<PdfAnnotationSidecarExportResult>
-    exportPdf: (payload: PdfAnnotationPdfExportPayload) => Promise<PdfAnnotationPdfExportResult>
-    import: (payload: PdfAnnotationSidecarImportPayload) => Promise<PdfAnnotationSidecarImportResult>
   }
   visibleContext: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>

@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib'
 import { TextDecoder } from 'node:util'
 
 import {
@@ -7,6 +8,7 @@ import {
   WORKSPACE_BIOIMAGING_MAX_CHANNELS,
   WORKSPACE_BIOIMAGING_MAX_IMAGES,
   WORKSPACE_BIOIMAGING_MAX_PYRAMID_LEVELS,
+  WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS,
   WORKSPACE_BIOIMAGING_MAX_TIFF_TAGS,
   WORKSPACE_BIOIMAGING_MAX_VISIBLE_TEXT_CHARS,
   WORKSPACE_BIOIMAGING_MAX_WARNINGS,
@@ -21,11 +23,17 @@ import {
   workspaceBioimagingRegionAnnotationResultSchema,
   workspaceBioimagingRoiSetExportInputSchema,
   workspaceBioimagingRoiSetExportResultSchema,
+  workspaceBioimagingThumbnailDecodeInputSchema,
+  workspaceBioimagingThumbnailDecodeResultSchema,
+  workspaceBioimagingTileDecodeInputSchema,
+  workspaceBioimagingTileDecodeResultSchema,
   type NormalizedWorkspaceBioimagingChannelSelectionInput,
   type NormalizedWorkspaceBioimagingPreviewInput,
   type NormalizedWorkspaceBioimagingRegionAnnotationInput,
   type NormalizedWorkspaceBioimagingRegionSelectionInput,
   type NormalizedWorkspaceBioimagingRoiSetExportInput,
+  type NormalizedWorkspaceBioimagingThumbnailDecodeInput,
+  type NormalizedWorkspaceBioimagingTileDecodeInput,
   type WorkspaceBioimagingChannel,
   type WorkspaceBioimagingChannelSelectionInput,
   type WorkspaceBioimagingChannelSelectionResult,
@@ -45,6 +53,10 @@ import {
   type WorkspaceBioimagingRoiSetExportResult,
   type WorkspaceBioimagingSelection,
   type WorkspaceBioimagingSelectionRegion,
+  type WorkspaceBioimagingThumbnailDecodeInput,
+  type WorkspaceBioimagingThumbnailDecodeResult,
+  type WorkspaceBioimagingTileDecodeInput,
+  type WorkspaceBioimagingTileDecodeResult,
   type WorkspaceBioimagingTilePlan,
   type WorkspaceBioimagingTiffSummary
 } from './contract.js'
@@ -195,7 +207,15 @@ export function createWorkspaceBioimagingPreview(
   const dimensions = dimensionsFromOme(ome) ?? dimensionsFromTiff(tiff?.summary)
   const channels = channelsFromOme(ome, dimensions)
   const placeholder = placeholderForFormat(resolved.format)
-  const tilePlan = buildTilePlan(resolved.format, dimensions, channels)
+  const tilePlan = buildTilePlan({
+    format: resolved.format,
+    dimensions,
+    channels,
+    tiff: tiff?.summary,
+    placeholder,
+    bytesAvailable: input.bytes.byteLength,
+    sourceSize: input.size
+  })
 
   if (placeholder) {
     warnings.push(placeholder.reason)
@@ -244,6 +264,22 @@ export function createWorkspaceBioimagingPreview(
   return workspaceBioimagingPreviewResultSchema.parse(result)
 }
 
+export function decodeWorkspaceBioimagingTile(
+  input: WorkspaceBioimagingTileDecodeInput
+): WorkspaceBioimagingTileDecodeResult {
+  const normalized = workspaceBioimagingTileDecodeInputSchema.parse(input)
+  const decoded = decodeBaselineTiffTile(normalized)
+  return workspaceBioimagingTileDecodeResultSchema.parse(decoded)
+}
+
+export function decodeWorkspaceBioimagingThumbnail(
+  input: WorkspaceBioimagingThumbnailDecodeInput
+): WorkspaceBioimagingThumbnailDecodeResult {
+  const normalized = workspaceBioimagingThumbnailDecodeInputSchema.parse(input)
+  const decoded = decodeBaselineTiffThumbnail(normalized)
+  return workspaceBioimagingThumbnailDecodeResultSchema.parse(decoded)
+}
+
 export function selectWorkspaceBioimagingRegion(
   input: WorkspaceBioimagingRegionSelectionInput
 ): WorkspaceBioimagingRegionSelectionResult {
@@ -272,13 +308,19 @@ export function exportWorkspaceBioimagingRoiSet(
   return workspaceBioimagingRoiSetExportResultSchema.parse(buildRoiSetExport(normalized))
 }
 
-function buildTilePlan(
-  format: WorkspaceBioimagingResolvedFormat,
-  dimensions: WorkspaceBioimagingDimensions | undefined,
+function buildTilePlan(input: {
+  format: WorkspaceBioimagingResolvedFormat
+  dimensions: WorkspaceBioimagingDimensions | undefined
   channels: string[]
-): WorkspaceBioimagingTilePlan | undefined {
+  tiff?: WorkspaceBioimagingTiffSummary
+  placeholder?: WorkspaceBioimagingPlaceholder
+  bytesAvailable: number
+  sourceSize?: number
+}): WorkspaceBioimagingTilePlan | undefined {
+  const { format, dimensions, channels } = input
   if (format !== 'tiff' && format !== 'ome-tiff') return undefined
   if (!dimensions?.width || !dimensions.height) return undefined
+  const pixelDecoding = canDecodeBaselineTiffArtifacts(input)
 
   const levels: WorkspaceBioimagingTilePlan['levels'] = []
   let width = dimensions.width
@@ -312,8 +354,10 @@ function buildTilePlan(
 
   const lastLevel = levels.at(-1)
   const notes = [
-    'Generated from TIFF/OME-TIFF metadata only; pixel bytes were not decoded.',
-    'Pyramid levels describe a safe virtual tile access plan for a future renderer.'
+    'Generated from TIFF/OME-TIFF metadata only; observation pixels were not decoded.',
+    pixelDecoding
+      ? 'Bounded tile and thumbnail artifact decoding is available through the workspace preview transport.'
+      : 'Pyramid levels describe a safe virtual tile access plan; pixel artifact decoding is not available for this source.'
   ]
   if (
     lastLevel &&
@@ -327,8 +371,8 @@ function buildTilePlan(
     status: 'metadata-only',
     kind: 'metadata-derived-pyramid',
     source: format === 'ome-tiff' ? 'ome-tiff-metadata' : 'tiff-metadata',
-    tileRendererImplemented: false,
-    pixelDecoding: false,
+    tileRendererImplemented: pixelDecoding,
+    pixelDecoding,
     baseDimensions: dimensions,
     recommendedTileSize: {
       width: WORKSPACE_BIOIMAGING_DEFAULT_TILE_SIZE,
@@ -338,6 +382,468 @@ function buildTilePlan(
     levels,
     notes
   }
+}
+
+function canDecodeBaselineTiffArtifacts(input: {
+  format: WorkspaceBioimagingResolvedFormat
+  tiff?: WorkspaceBioimagingTiffSummary
+  placeholder?: WorkspaceBioimagingPlaceholder
+  bytesAvailable: number
+  sourceSize?: number
+}): boolean {
+  if (input.placeholder) return false
+  if (input.format !== 'tiff' && input.format !== 'ome-tiff') return false
+  if (input.sourceSize !== undefined && input.sourceSize > input.bytesAvailable) return false
+  const tiff = input.tiff
+  if (!tiff?.imageWidth || !tiff.imageHeight) return false
+  if (tiff.compression && tiff.compression !== 'none') return false
+  if (tiff.bitsPerSample?.length && !tiff.bitsPerSample.every((bits) => bits === 8)) return false
+  if (tiff.samplesPerPixel !== undefined && (tiff.samplesPerPixel < 1 || tiff.samplesPerPixel > 4)) return false
+  if (
+    tiff.photometricInterpretation &&
+    !['white-is-zero', 'black-is-zero', 'rgb'].includes(tiff.photometricInterpretation)
+  ) {
+    return false
+  }
+
+  const tagNumbers = new Set(tiff.tags.map((tag) => tag.tag))
+  return tagNumbers.has(273) || tagNumbers.has(324)
+}
+
+type BaselineTiffRawEntry = {
+  tag: number
+  typeCode: number
+  count: number
+  dataOffset: number
+  typeByteLength: number
+}
+
+type BaselineTiffDirectory = {
+  little: boolean
+  bytes: Uint8Array
+  entries: Map<number, BaselineTiffRawEntry>
+}
+
+type BaselineTiffInfo = {
+  format: WorkspaceBioimagingResolvedFormat
+  little: boolean
+  width: number
+  height: number
+  bitsPerSample: number[]
+  samplesPerPixel: number
+  compression: number
+  photometric: number
+  planarConfiguration: number
+  rowsPerStrip?: number
+  stripOffsets: number[]
+  stripByteCounts: number[]
+  tileWidth?: number
+  tileHeight?: number
+  tileOffsets: number[]
+  tileByteCounts: number[]
+}
+
+function decodeBaselineTiffTile(
+  input: NormalizedWorkspaceBioimagingTileDecodeInput
+): WorkspaceBioimagingTileDecodeResult {
+  if (input.level !== 0) {
+    throw new Error('Baseline TIFF tile decoding currently supports level 0 only.')
+  }
+  if (input.z !== undefined || input.t !== undefined) {
+    throw new Error('Baseline TIFF tile decoding currently supports a single 2D plane only.')
+  }
+
+  const info = readBaselineTiffInfo(input.bytes, input)
+  validateBaselineTiffForTileDecoding(info, input.channelIndex)
+
+  const originX = input.x * input.width
+  const originY = input.y * input.height
+  if (originX >= info.width || originY >= info.height) {
+    throw new Error(`Requested tile ${input.x},${input.y} is outside the ${info.width} x ${info.height} image bounds.`)
+  }
+
+  const outputWidth = Math.min(input.width, info.width - originX)
+  const outputHeight = Math.min(input.height, info.height - originY)
+  if (outputWidth * outputHeight > WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS) {
+    throw new Error(`Rendered tile area ${outputWidth * outputHeight} exceeds the ${WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS} pixel limit.`)
+  }
+
+  const rgba = new Uint8Array(outputWidth * outputHeight * 4)
+  for (let y = 0; y < outputHeight; y += 1) {
+    for (let x = 0; x < outputWidth; x += 1) {
+      const samples = readBaselineTiffPixel(input.bytes, info, originX + x, originY + y)
+      writePixelAsRgba(rgba, (y * outputWidth + x) * 4, samples, info, input.channelIndex)
+    }
+  }
+
+  const warnings = boundedWarnings([
+    ...(info.tileOffsets.length > 0
+      ? ['Decoded from uncompressed TIFF tile payload bytes.']
+      : ['Decoded from uncompressed TIFF strip payload bytes.']),
+    ...(input.channelIndex !== undefined
+      ? [`Rendered channel index ${input.channelIndex} as grayscale.`]
+      : [])
+  ])
+  return {
+    ok: true,
+    contractVersion: WORKSPACE_BIOIMAGING_CONTRACT_VERSION,
+    format: info.format,
+    mimeType: 'image/png',
+    bytes: encodePngRgba(outputWidth, outputHeight, rgba),
+    tile: {
+      level: input.level,
+      x: input.x,
+      y: input.y,
+      width: outputWidth,
+      height: outputHeight
+    },
+    pixelDecoding: true,
+    tileRendererImplemented: true,
+    visibleText: truncateText(
+      `Decoded TIFF tile ${input.x},${input.y} at level ${input.level}: ${outputWidth} x ${outputHeight} PNG, pixelDecoding=true.`,
+      WORKSPACE_BIOIMAGING_MAX_VISIBLE_TEXT_CHARS
+    ),
+    warnings
+  }
+}
+
+function decodeBaselineTiffThumbnail(
+  input: NormalizedWorkspaceBioimagingThumbnailDecodeInput
+): WorkspaceBioimagingThumbnailDecodeResult {
+  if (input.z !== undefined || input.t !== undefined) {
+    throw new Error('Baseline TIFF thumbnail decoding currently supports a single 2D plane only.')
+  }
+
+  const info = readBaselineTiffInfo(input.bytes, input)
+  validateBaselineTiffForTileDecoding(info, input.channelIndex)
+  const thumbnailSize = fitWithinDimensions(info.width, info.height, input.width, input.height)
+  const rgba = new Uint8Array(thumbnailSize.width * thumbnailSize.height * 4)
+
+  for (let y = 0; y < thumbnailSize.height; y += 1) {
+    const sourceY = Math.min(info.height - 1, Math.floor(y * info.height / thumbnailSize.height))
+    for (let x = 0; x < thumbnailSize.width; x += 1) {
+      const sourceX = Math.min(info.width - 1, Math.floor(x * info.width / thumbnailSize.width))
+      const samples = readBaselineTiffPixel(input.bytes, info, sourceX, sourceY)
+      writePixelAsRgba(rgba, (y * thumbnailSize.width + x) * 4, samples, info, input.channelIndex)
+    }
+  }
+
+  const warnings = boundedWarnings([
+    'Decoded thumbnail from uncompressed baseline TIFF payload bytes using bounded nearest-neighbor sampling.',
+    ...(input.channelIndex !== undefined
+      ? [`Rendered channel index ${input.channelIndex} as grayscale.`]
+      : [])
+  ])
+  return {
+    ok: true,
+    contractVersion: WORKSPACE_BIOIMAGING_CONTRACT_VERSION,
+    format: info.format,
+    mimeType: 'image/png',
+    bytes: encodePngRgba(thumbnailSize.width, thumbnailSize.height, rgba),
+    thumbnail: thumbnailSize,
+    pixelDecoding: true,
+    thumbnailRendererImplemented: true,
+    visibleText: truncateText(
+      `Decoded TIFF thumbnail: ${thumbnailSize.width} x ${thumbnailSize.height} PNG from ${info.width} x ${info.height}, pixelDecoding=true.`,
+      WORKSPACE_BIOIMAGING_MAX_VISIBLE_TEXT_CHARS
+    ),
+    warnings
+  }
+}
+
+function readBaselineTiffInfo(
+  bytes: Uint8Array,
+  input: Pick<NormalizedWorkspaceBioimagingTileDecodeInput, 'format' | 'path'>
+): BaselineTiffInfo {
+  const directory = readBaselineTiffEntries(bytes)
+  const width = positiveTiffNumber(directory, 256)
+  const height = positiveTiffNumber(directory, 257)
+  if (!width || !height) throw new Error('TIFF image dimensions were not found in the first IFD.')
+
+  const bitsPerSample = tiffNumberArray(directory, 258).filter((value) => value > 0)
+  const samplesPerPixel = positiveTiffNumber(directory, 277) ?? (bitsPerSample.length || 1)
+  const resolvedBits = bitsPerSample.length > 0 ? bitsPerSample : [8]
+  const compression = positiveTiffNumber(directory, 259) ?? 1
+  const photometric = tiffNumber(directory, 262) ?? (samplesPerPixel >= 3 ? 2 : 1)
+  const planarConfiguration = positiveTiffNumber(directory, 284) ?? 1
+  const rowsPerStrip = positiveTiffNumber(directory, 278)
+  const tileWidth = positiveTiffNumber(directory, 322)
+  const tileHeight = positiveTiffNumber(directory, 323)
+  const format = resolveFormat({
+    requestedFormat: input.format,
+    pathFormat: formatFromPath(input.path),
+    signatureFormat: signatureFormat(bytes),
+    tiff: sniffTiff(bytes),
+    ome: undefined,
+    imageDescription: undefined
+  }).format
+
+  return {
+    format: format === 'unknown' ? 'tiff' : format,
+    little: directory.little,
+    width,
+    height,
+    bitsPerSample: resolvedBits,
+    samplesPerPixel,
+    compression,
+    photometric,
+    planarConfiguration,
+    ...(rowsPerStrip ? { rowsPerStrip } : {}),
+    stripOffsets: tiffNumberArray(directory, 273),
+    stripByteCounts: tiffNumberArray(directory, 279),
+    ...(tileWidth ? { tileWidth } : {}),
+    ...(tileHeight ? { tileHeight } : {}),
+    tileOffsets: tiffNumberArray(directory, 324),
+    tileByteCounts: tiffNumberArray(directory, 325)
+  }
+}
+
+function fitWithinDimensions(
+  sourceWidth: number,
+  sourceHeight: number,
+  maxWidth: number,
+  maxHeight: number
+): { width: number; height: number } {
+  const scale = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight)
+  return {
+    width: Math.max(1, Math.floor(sourceWidth * scale)),
+    height: Math.max(1, Math.floor(sourceHeight * scale))
+  }
+}
+
+function readBaselineTiffEntries(bytes: Uint8Array): BaselineTiffDirectory {
+  if (bytes.byteLength < 8) throw new Error('TIFF header is truncated.')
+  const marker = String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0)
+  const little = marker === 'II'
+  if (!little && marker !== 'MM') throw new Error('TIFF byte order marker was not found.')
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const magic = view.getUint16(2, little)
+  const flavor = magic === 43 ? 'bigtiff' : magic === 42 ? 'classic-tiff' : null
+  if (!flavor) throw new Error(`Unsupported TIFF magic ${magic}.`)
+
+  const firstIfdOffset = flavor === 'bigtiff'
+    ? readUint64AsNumber(view, 8, little)
+    : view.getUint32(4, little)
+  if (firstIfdOffset === undefined) throw new Error('BigTIFF first IFD offset is larger than JavaScript can safely represent.')
+  if (!canRead(bytes, firstIfdOffset, flavor === 'bigtiff' ? 8 : 2)) {
+    throw new Error('TIFF first IFD offset is outside the supplied byte range.')
+  }
+
+  const entryCount = flavor === 'bigtiff'
+    ? readUint64AsNumber(view, firstIfdOffset, little)
+    : view.getUint16(firstIfdOffset, little)
+  if (entryCount === undefined) throw new Error('TIFF IFD entry count is larger than JavaScript can safely represent.')
+  if (entryCount > WORKSPACE_BIOIMAGING_MAX_TIFF_TAGS) {
+    throw new Error(`TIFF IFD has ${entryCount} entries; tile decoding is bounded to ${WORKSPACE_BIOIMAGING_MAX_TIFF_TAGS} metadata tags.`)
+  }
+
+  const entries = new Map<number, BaselineTiffRawEntry>()
+  const countByteLength = flavor === 'bigtiff' ? 8 : 2
+  const entrySize = flavor === 'bigtiff' ? 20 : 12
+  const valueFieldByteLength = flavor === 'bigtiff' ? 8 : 4
+  for (let index = 0; index < entryCount; index += 1) {
+    const entryOffset = firstIfdOffset + countByteLength + index * entrySize
+    if (!canRead(bytes, entryOffset, entrySize)) throw new Error(`TIFF IFD entry ${index} is truncated.`)
+    const tag = view.getUint16(entryOffset, little)
+    const typeCode = view.getUint16(entryOffset + 2, little)
+    const typeByteLength = TIFF_TYPE_BYTES.get(typeCode)
+    if (!typeByteLength) continue
+    const count = flavor === 'bigtiff'
+      ? readUint64AsNumber(view, entryOffset + 4, little)
+      : view.getUint32(entryOffset + 4, little)
+    const valueOffset = flavor === 'bigtiff'
+      ? readUint64AsNumber(view, entryOffset + 12, little)
+      : view.getUint32(entryOffset + 8, little)
+    if (count === undefined || valueOffset === undefined) continue
+    const totalByteLength = safeMultiply(count, typeByteLength)
+    if (totalByteLength === undefined) continue
+    entries.set(tag, {
+      tag,
+      typeCode,
+      count,
+      dataOffset: totalByteLength <= valueFieldByteLength ? entryOffset + (flavor === 'bigtiff' ? 12 : 8) : valueOffset,
+      typeByteLength
+    })
+  }
+  return { little, bytes, entries }
+}
+
+function validateBaselineTiffForTileDecoding(info: BaselineTiffInfo, channelIndex: number | undefined): void {
+  if (info.compression !== 1) {
+    throw new Error(`Only uncompressed TIFF tiles are currently decoded; found compression code ${info.compression}.`)
+  }
+  if (!info.bitsPerSample.every((bits) => bits === 8)) {
+    throw new Error(`Only 8-bit TIFF samples are currently decoded; found ${info.bitsPerSample.join(', ')} bits per sample.`)
+  }
+  if (info.samplesPerPixel < 1 || info.samplesPerPixel > 4) {
+    throw new Error(`Only 1 to 4 samples per pixel are currently decoded; found ${info.samplesPerPixel}.`)
+  }
+  if (channelIndex !== undefined && channelIndex >= info.samplesPerPixel) {
+    throw new Error(`Requested channel index ${channelIndex} is outside the ${info.samplesPerPixel} sample pixel layout.`)
+  }
+  if (info.planarConfiguration !== 1) {
+    throw new Error('Only chunky TIFF planar configuration is currently decoded.')
+  }
+  if (![0, 1, 2].includes(info.photometric)) {
+    throw new Error(`Only grayscale and RGB TIFF photometric interpretations are currently decoded; found code ${info.photometric}.`)
+  }
+  if (info.tileOffsets.length === 0 && info.stripOffsets.length === 0) {
+    throw new Error('TIFF pixel offsets were not found in the first IFD.')
+  }
+  if (info.tileOffsets.length > 0 && (!info.tileWidth || !info.tileHeight)) {
+    throw new Error('TIFF tile offsets are present, but TileWidth or TileLength is missing.')
+  }
+}
+
+function readBaselineTiffPixel(bytes: Uint8Array, info: BaselineTiffInfo, x: number, y: number): number[] {
+  const offset = info.tileOffsets.length > 0
+    ? pixelOffsetFromTiledTiff(bytes, info, x, y)
+    : pixelOffsetFromStrippedTiff(bytes, info, x, y)
+  const samples: number[] = []
+  for (let sample = 0; sample < info.samplesPerPixel; sample += 1) {
+    samples.push(bytes[offset + sample] ?? 0)
+  }
+  return samples
+}
+
+function pixelOffsetFromStrippedTiff(bytes: Uint8Array, info: BaselineTiffInfo, x: number, y: number): number {
+  const rowsPerStrip = info.rowsPerStrip ?? info.height
+  const stripIndex = Math.floor(y / rowsPerStrip)
+  const stripOffset = info.stripOffsets[stripIndex]
+  const stripByteCount = info.stripByteCounts[stripIndex]
+  if (stripOffset === undefined) throw new Error(`TIFF strip ${stripIndex} offset is missing.`)
+  const rowByteLength = info.width * info.samplesPerPixel
+  const rowInStrip = y - stripIndex * rowsPerStrip
+  const offset = stripOffset + rowInStrip * rowByteLength + x * info.samplesPerPixel
+  const stripEnd = stripOffset + (stripByteCount ?? rowByteLength * rowsPerStrip)
+  if (!canRead(bytes, offset, info.samplesPerPixel) || offset + info.samplesPerPixel > stripEnd) {
+    throw new Error(`TIFF pixel at ${x},${y} is outside the available strip payload.`)
+  }
+  return offset
+}
+
+function pixelOffsetFromTiledTiff(bytes: Uint8Array, info: BaselineTiffInfo, x: number, y: number): number {
+  const tileWidth = info.tileWidth ?? WORKSPACE_BIOIMAGING_DEFAULT_TILE_SIZE
+  const tileHeight = info.tileHeight ?? WORKSPACE_BIOIMAGING_DEFAULT_TILE_SIZE
+  const columns = Math.max(1, Math.ceil(info.width / tileWidth))
+  const tileColumn = Math.floor(x / tileWidth)
+  const tileRow = Math.floor(y / tileHeight)
+  const tileIndex = tileRow * columns + tileColumn
+  const tileOffset = info.tileOffsets[tileIndex]
+  const tileByteCount = info.tileByteCounts[tileIndex]
+  if (tileOffset === undefined) throw new Error(`TIFF tile ${tileColumn},${tileRow} offset is missing.`)
+  const xInTile = x - tileColumn * tileWidth
+  const yInTile = y - tileRow * tileHeight
+  const offset = tileOffset + (yInTile * tileWidth + xInTile) * info.samplesPerPixel
+  const tileEnd = tileOffset + (tileByteCount ?? tileWidth * tileHeight * info.samplesPerPixel)
+  if (!canRead(bytes, offset, info.samplesPerPixel) || offset + info.samplesPerPixel > tileEnd) {
+    throw new Error(`TIFF pixel at ${x},${y} is outside the available tile payload.`)
+  }
+  return offset
+}
+
+function writePixelAsRgba(
+  rgba: Uint8Array,
+  offset: number,
+  samples: number[],
+  info: BaselineTiffInfo,
+  channelIndex: number | undefined
+): void {
+  if (channelIndex !== undefined) {
+    const value = samples[channelIndex] ?? 0
+    rgba[offset] = value
+    rgba[offset + 1] = value
+    rgba[offset + 2] = value
+    rgba[offset + 3] = 255
+    return
+  }
+  if (info.samplesPerPixel >= 3 && info.photometric === 2) {
+    rgba[offset] = samples[0] ?? 0
+    rgba[offset + 1] = samples[1] ?? 0
+    rgba[offset + 2] = samples[2] ?? 0
+    rgba[offset + 3] = 255
+    return
+  }
+  const raw = samples[0] ?? 0
+  const value = info.photometric === 0 ? 255 - raw : raw
+  rgba[offset] = value
+  rgba[offset + 1] = value
+  rgba[offset + 2] = value
+  rgba[offset + 3] = 255
+}
+
+function positiveTiffNumber(directory: BaselineTiffDirectory, tag: number): number | undefined {
+  const value = tiffNumber(directory, tag)
+  return value !== undefined && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+function tiffNumber(directory: BaselineTiffDirectory, tag: number): number | undefined {
+  return tiffNumberArray(directory, tag, 1)[0]
+}
+
+function tiffNumberArray(directory: BaselineTiffDirectory, tag: number, maxCount = 100_000): number[] {
+  const entry = directory.entries.get(tag)
+  if (!entry) return []
+  if (entry.count > maxCount) {
+    throw new Error(`TIFF tag ${tag} has ${entry.count} values; tile decoding is bounded to ${maxCount}.`)
+  }
+  const requiredByteLength = safeMultiply(entry.count, entry.typeByteLength)
+  if (requiredByteLength === undefined || !canRead(directory.bytes, entry.dataOffset, requiredByteLength)) {
+    throw new Error(`TIFF tag ${tag} value bytes are outside the supplied byte range.`)
+  }
+  const view = new DataView(directory.bytes.buffer, directory.bytes.byteOffset, directory.bytes.byteLength)
+  return readNumericTiffValues(view, entry.dataOffset, entry.typeCode, entry.count, directory.little)
+}
+
+function encodePngRgba(width: number, height: number, rgba: Uint8Array): Uint8Array<ArrayBuffer> {
+  const stride = width * 4
+  const raw = Buffer.alloc((stride + 1) * height)
+  for (let y = 0; y < height; y += 1) {
+    const rowOffset = y * (stride + 1)
+    raw[rowOffset] = 0
+    raw.set(rgba.subarray(y * stride, y * stride + stride), rowOffset + 1)
+  }
+
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  ihdr[10] = 0
+  ihdr[11] = 0
+  ihdr[12] = 0
+
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0))
+  ])
+  const copy = new Uint8Array(png.byteLength)
+  copy.set(png)
+  return copy
+}
+
+function pngChunk(type: string, data: Uint8Array): Buffer {
+  const typeBytes = Buffer.from(type, 'ascii')
+  const chunk = Buffer.alloc(8 + data.byteLength + 4)
+  chunk.writeUInt32BE(data.byteLength, 0)
+  typeBytes.copy(chunk, 4)
+  Buffer.from(data).copy(chunk, 8)
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, Buffer.from(data)])), 8 + data.byteLength)
+  return chunk
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
 }
 
 function buildRegionSelection(
@@ -1202,7 +1708,10 @@ function buildVisibleText(input: ObservationBuildInput): string {
   if (input.tilePlan) {
     const firstLevel = input.tilePlan.levels[0]
     const lastLevel = input.tilePlan.levels.at(-1)
-    lines.push(`Tile plan: metadata-only ${input.tilePlan.levels.length} pyramid level(s), ${input.tilePlan.recommendedTileSize.width} x ${input.tilePlan.recommendedTileSize.height} nominal tiles, no pixel decoding.`)
+    const decodingText = input.tilePlan.pixelDecoding
+      ? 'bounded tile artifact decoding available'
+      : 'no pixel artifact decoding'
+    lines.push(`Tile plan: metadata-only ${input.tilePlan.levels.length} pyramid level(s), ${input.tilePlan.recommendedTileSize.width} x ${input.tilePlan.recommendedTileSize.height} nominal tiles, ${decodingText}.`)
     if (firstLevel) {
       lines.push(`Tile level 0: ${firstLevel.columns} x ${firstLevel.rows} tiles covering ${firstLevel.width} x ${firstLevel.height}.`)
     }

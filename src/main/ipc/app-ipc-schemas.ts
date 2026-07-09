@@ -43,16 +43,11 @@ import {
   workspacePreviewEditOperationSchema,
   workspacePreviewExportTargetSchema,
   workspacePreviewModeSchema,
-  workspacePreviewPluginActionInputSchema
+  workspacePreviewPrepareArtifactRequestSchema,
+  workspacePreviewPluginActionInputSchema,
+  workspacePreviewReadArtifactRangeRequestSchema
 } from '../../shared/workspace-preview'
 import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
-export {
-  pdfAnnotationSidecarTargetSchema as pdfAnnotationSidecarLoadPayloadSchema,
-  pdfAnnotationSidecarSavePayloadSchema,
-  pdfAnnotationSidecarExportPayloadSchema,
-  pdfAnnotationPdfExportPayloadSchema,
-  pdfAnnotationSidecarImportPayloadSchema
-} from '../../shared/pdf-annotations'
 export {
   visibleContextSnapshotSchema as visibleContextPublishPayloadSchema
 } from '../../shared/visible-context'
@@ -1773,6 +1768,12 @@ export const workspacePreviewObservePayloadSchema = z
   })
   .strict()
 
+export const workspacePreviewReleaseSessionPayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH)
+  })
+  .strict()
+
 export const workspacePreviewDescribeAssetPayloadSchema = z
   .object({
     sessionId: trimmedString(MAX_ID_LENGTH)
@@ -1783,6 +1784,20 @@ export const workspacePreviewReadRangePayloadSchema = z
   .object({
     sessionId: trimmedString(MAX_ID_LENGTH),
     range: workspacePreviewByteRangeSchema
+  })
+  .strict()
+
+export const workspacePreviewPrepareArtifactPayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH),
+    request: workspacePreviewPrepareArtifactRequestSchema
+  })
+  .strict()
+
+export const workspacePreviewReadArtifactRangePayloadSchema = z
+  .object({
+    sessionId: trimmedString(MAX_ID_LENGTH),
+    request: workspacePreviewReadArtifactRangeRequestSchema
   })
   .strict()
 
@@ -1831,20 +1846,6 @@ export const workspaceFileWritePayloadSchema = z
   })
   .refine((payload) => payload.content !== undefined || payload.contentBase64 !== undefined, {
     message: 'Either content or contentBase64 is required.'
-  })
-  .strict()
-
-export const workspaceDocxTextWritePayloadSchema = z
-  .object({
-    path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    paragraphs: z.array(z.object({
-      index: z.number().int().positive().max(1_000_000),
-      text: z.string().max(MAX_BODY_BYTES)
-    }).strict()).max(20_000)
-  })
-  .refine((payload) => payload.paragraphs.reduce((sum, paragraph) => sum + paragraph.text.length, 0) <= MAX_BODY_BYTES, {
-    message: 'DOCX edited text is too large.'
   })
   .strict()
 

@@ -37,65 +37,6 @@ vi.mock('electron', () => ({
   }
 }))
 
-const { pdfAnnotationSidecarFixture } = vi.hoisted(() => ({
-  pdfAnnotationSidecarFixture: {
-    schemaVersion: 1,
-    version: 0,
-    manifest: {
-      app: 'sciforge.pdf-annotations',
-      schemaVersion: 1,
-      privacy: { explicitOnly: true, chatTranscriptEmbedded: false },
-      contribution: { reviewableJson: true, mergeKey: 'threadId', conflictResolution: 'updatedAt' },
-      createdAt: '2026-06-22T00:00:00.000Z',
-      updatedAt: '2026-06-22T00:00:00.000Z'
-    },
-    pdfFingerprint: { sha256: 'sha256', size: 1 },
-    anchors: [],
-    annotations: [],
-    threads: [],
-    authors: [],
-    updatedAt: '2026-06-22T00:00:00.000Z'
-  }
-}))
-
-vi.mock('../services/pdf-annotation-sidecar-service', () => ({
-  loadPdfAnnotationSidecar: vi.fn(async () => ({
-    ok: true,
-    sidecar: pdfAnnotationSidecarFixture,
-    path: '/tmp/workspace/.sciforge/pdf-annotations/sha256.json',
-    source: 'empty',
-    pdfFingerprint: { sha256: 'sha256', size: 1 },
-    warnings: []
-  })),
-  savePdfAnnotationSidecar: vi.fn(async () => ({
-    ok: true,
-    sidecar: { ...pdfAnnotationSidecarFixture, version: 1 },
-    path: '/tmp/workspace/.sciforge/pdf-annotations/sha256.json',
-    savedAt: '2026-06-22T00:01:00.000Z'
-  })),
-  exportPdfAnnotationSidecarPackage: vi.fn(async () => ({
-    ok: true,
-    path: '/tmp/workspace/paper.dsgui-pdf.zip',
-    manifest: pdfAnnotationSidecarFixture.manifest,
-    exportedAt: '2026-06-22T00:02:00.000Z'
-  })),
-  exportPdfAnnotationAdobePdf: vi.fn(async () => ({
-    ok: true,
-    path: '/tmp/workspace/paper.annotated.pdf',
-    annotationCount: 3,
-    exportedAt: '2026-06-22T00:02:30.000Z'
-  })),
-  importPdfAnnotationSidecarPackage: vi.fn(async () => ({
-    ok: true,
-    sidecar: pdfAnnotationSidecarFixture,
-    path: '/tmp/workspace/.sciforge/pdf-annotations/sha256.json',
-    importedAt: '2026-06-22T00:03:00.000Z',
-    pdfFingerprint: { sha256: 'sha256', size: 1 },
-    fingerprintMatched: true,
-    warnings: []
-  }))
-}))
-
 const { writeExportServiceMock } = vi.hoisted(() => ({
   writeExportServiceMock: {
     exportWriteDocument: vi.fn(async (payload: { format?: string }) => ({
@@ -164,13 +105,27 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
 }
 
 function createSender(id: number) {
-  return {
+  const destroyedListeners = new Set<() => void>()
+  const sender = {
     id,
     isDestroyed: vi.fn(() => false),
     send: vi.fn(),
-    once: vi.fn(),
-    removeListener: vi.fn()
+    once: vi.fn((event: 'destroyed', listener: () => void) => {
+      if (event === 'destroyed') destroyedListeners.add(listener)
+      return sender
+    }),
+    removeListener: vi.fn((event: 'destroyed', listener: () => void) => {
+      if (event === 'destroyed') destroyedListeners.delete(listener)
+      return sender
+    }),
+    destroy: vi.fn(() => {
+      sender.isDestroyed.mockReturnValue(true)
+      const listeners = [...destroyedListeners]
+      destroyedListeners.clear()
+      for (const listener of listeners) listener()
+    })
   }
+  return sender
 }
 
 function waitForAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
@@ -712,99 +667,16 @@ describe('registerAppIpcHandlers', () => {
     expect(researchCards.create).not.toHaveBeenCalled()
   })
 
-  it('routes PDF annotation sidecar IPC calls through the service', async () => {
-    const pdfAnnotations = await import('../services/pdf-annotation-sidecar-service')
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const target = {
-      pdfPath: ' /tmp/workspace/paper.pdf ',
-      workspaceRoot: ' /tmp/workspace ',
-      pageCount: 12
-    }
-
-    registerAppIpcHandlers(registerOptions())
-
-    await expect(handlers.get('pdfAnnotations:load')?.({}, target)).resolves.toMatchObject({
-      ok: true,
-      source: 'empty'
-    })
-    await expect(handlers.get('pdfAnnotations:save')?.({}, {
-      ...target,
-      sidecar: pdfAnnotationSidecarFixture
-    })).resolves.toMatchObject({
-      ok: true,
-      savedAt: '2026-06-22T00:01:00.000Z'
-    })
-    await expect(handlers.get('pdfAnnotations:export')?.({}, {
-      ...target,
-      sidecar: pdfAnnotationSidecarFixture,
-      anonymizeAuthors: true
-    })).resolves.toMatchObject({
-      ok: true,
-      path: '/tmp/workspace/paper.dsgui-pdf.zip'
-    })
-    await expect(handlers.get('pdfAnnotations:exportPdf')?.({}, {
-      ...target,
-      sidecar: pdfAnnotationSidecarFixture
-    })).resolves.toMatchObject({
-      ok: true,
-      path: '/tmp/workspace/paper.annotated.pdf',
-      annotationCount: 3
-    })
-    await expect(handlers.get('pdfAnnotations:import')?.({}, {
-      ...target,
-      packageBase64: 'ZmFrZS16aXA=',
-      attemptRelocation: true
-    })).resolves.toMatchObject({
-      ok: true,
-      fingerprintMatched: true
-    })
-
-    expect(pdfAnnotations.loadPdfAnnotationSidecar).toHaveBeenCalledWith({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      pageCount: 12
-    })
-    expect(pdfAnnotations.savePdfAnnotationSidecar).toHaveBeenCalledWith({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      pageCount: 12,
-      sidecar: pdfAnnotationSidecarFixture
-    })
-    expect(pdfAnnotations.exportPdfAnnotationSidecarPackage).toHaveBeenCalledWith({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      pageCount: 12,
-      sidecar: pdfAnnotationSidecarFixture,
-      anonymizeAuthors: true
-    })
-    expect(pdfAnnotations.exportPdfAnnotationAdobePdf).toHaveBeenCalledWith({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      pageCount: 12,
-      sidecar: pdfAnnotationSidecarFixture
-    })
-    expect(pdfAnnotations.importPdfAnnotationSidecarPackage).toHaveBeenCalledWith({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      pageCount: 12,
-      packageBase64: 'ZmFrZS16aXA=',
-      attemptRelocation: true
-    })
-  })
-
-  it('rejects invalid PDF annotation import IPC before calling the service', async () => {
-    const pdfAnnotations = await import('../services/pdf-annotation-sidecar-service')
+  it('does not register legacy PDF annotation sidecar IPC handlers', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
 
     registerAppIpcHandlers(registerOptions())
 
-    await expect(
-      handlers.get('pdfAnnotations:import')?.({}, {
-        pdfPath: '/tmp/workspace/paper.pdf',
-        workspaceRoot: '/tmp/workspace'
-      })
-    ).rejects.toThrow(/Invalid payload for pdfAnnotations:import/)
-    expect(pdfAnnotations.importPdfAnnotationSidecarPackage).not.toHaveBeenCalled()
+    expect(handlers.has('pdfAnnotations:load')).toBe(false)
+    expect(handlers.has('pdfAnnotations:save')).toBe(false)
+    expect(handlers.has('pdfAnnotations:export')).toBe(false)
+    expect(handlers.has('pdfAnnotations:exportPdf')).toBe(false)
+    expect(handlers.has('pdfAnnotations:import')).toBe(false)
   })
 
   it('returns an Evidence DAG view URL with a runtime-scoped thread id', async () => {
@@ -1249,37 +1121,6 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('settings:set')).toBeTypeOf('function')
   })
 
-  it('routes HTML preview requests through the dev browser dispatcher', async () => {
-    const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-html-ipc-'))
-    const htmlPath = join(workspaceRoot, 'status.html')
-    writeFileSync(htmlPath, '<!doctype html><title>Status</title>')
-    const { workspaceHtmlPreviewService } = await import('../services/workspace-html-preview-service')
-    try {
-      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-      const sender = createSender(902)
-
-      const dispatcher = registerAppIpcHandlers(registerOptions())
-      const result = await dispatcher.invoke(
-        'file:preview-workspace-html',
-        { path: htmlPath, workspaceRoot },
-        sender
-      )
-
-      expect(result).toMatchObject({
-        ok: true,
-        path: realpathSync(htmlPath),
-        workspaceRoot: realpathSync(workspaceRoot)
-      })
-      expect((result as { url?: string }).url).toMatch(
-        /^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{32}\/status\.html/
-      )
-      expect(handlers.get('file:preview-workspace-html')).toBeTypeOf('function')
-    } finally {
-      await workspaceHtmlPreviewService.close()
-      rmSync(workspaceRoot, { recursive: true, force: true })
-    }
-  })
-
   it('returns a native file drag fallback when the sender cannot start desktop drags', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-drag-ipc-'))
     const filePath = join(workspaceRoot, 'notes.txt')
@@ -1400,23 +1241,65 @@ describe('registerAppIpcHandlers', () => {
       readRange: vi.fn(async () => ({
         ok: true as const,
         sessionId: 'session-1',
-        path: '/tmp/workspace/protein.pdb',
+        assetId: 'asset:session-1',
         offset: 0,
         length: 4,
         size: 10,
         dataBase64: Buffer.from('ATOM').toString('base64'),
         mimeType: 'chemical/x-pdb'
       })),
+      prepareArtifact: vi.fn(async () => ({
+        ok: true as const,
+        sessionId: 'session-1',
+        artifact: {
+          schemaVersion: 1 as const,
+          sessionId: 'session-1',
+          assetId: 'asset:session-1',
+          artifactId: 'artifact-1',
+          kind: 'cache-artifact' as const,
+          pluginId: 'molecular',
+          mimeType: 'application/json',
+          byteLength: 24,
+          range: {
+            available: true as const,
+            size: 24,
+            maxChunkBytes: 4 * 1024 * 1024,
+            recommendedChunkBytes: 24
+          },
+          source: {
+            assetId: 'asset:session-1',
+            size: 10,
+            mtimeMs: 42
+          },
+          cache: {
+            scope: 'session' as const,
+            source: 'observation' as const,
+            createdAt: '2026-07-08T00:03:00.000Z',
+            invalidation: 'source-size-mtime' as const
+          }
+        }
+      })),
+      readArtifactRange: vi.fn(async () => ({
+        ok: true as const,
+        sessionId: 'session-1',
+        assetId: 'asset:session-1',
+        artifactId: 'artifact-1',
+        offset: 0,
+        length: 4,
+        size: 24,
+        mimeType: 'application/json',
+        dataBase64: Buffer.from('{"ok').toString('base64')
+      })),
       describeAsset: vi.fn(async () => ({
         ok: true as const,
         descriptor: {
           schemaVersion: 1 as const,
           sessionId: 'session-1',
+          assetId: 'asset:session-1',
           pluginId: 'molecular',
           modality: 'molecular' as const,
           file: {
-            workspaceRoot: '/tmp/workspace',
-            path: '/tmp/workspace/protein.pdb',
+            name: 'protein.pdb',
             relativePath: 'protein.pdb',
             mimeType: 'chemical/x-pdb',
             size: 10
@@ -1480,24 +1363,27 @@ describe('registerAppIpcHandlers', () => {
           format: 'pdb',
           effect: 'source-copy' as const
         }
-      }))
+      })),
+      releaseSession: vi.fn(() => true)
     }
 
-    registerAppIpcHandlers(registerOptions({
-      workspacePreviewHost: workspacePreviewHost as never
-    }))
+	    registerAppIpcHandlers(registerOptions({
+	      workspacePreviewHost: workspacePreviewHost as never
+	    }))
+	    const sender = createSender(6)
 
-    await expect(
-      handlers.get('workspacePreview:listPlugins')?.({}, undefined)
-    ).resolves.toEqual([manifest])
-    await expect(
-      handlers.get('workspacePreview:open')?.({}, {
-        path: ' protein.pdb ',
-        workspaceRoot: ' /tmp/workspace ',
-        mimeType: ' chemical/x-pdb ',
-        mode: ' inspect '
-      })
-    ).resolves.toMatchObject({ ok: true, session: { id: 'session-1' } })
+	    await expect(
+	      handlers.get('workspacePreview:listPlugins')?.({}, undefined)
+	    ).resolves.toEqual([manifest])
+	    await expect(
+	      handlers.get('workspacePreview:open')?.({ sender }, {
+	        path: ' protein.pdb ',
+	        workspaceRoot: ' /tmp/workspace ',
+	        mimeType: ' chemical/x-pdb ',
+	        mode: ' inspect '
+	      })
+	    ).resolves.toMatchObject({ ok: true, session: { id: 'session-1' } })
+	    expect(sender.once).toHaveBeenCalledWith('destroyed', expect.any(Function))
     await expect(
       handlers.get('workspacePreview:observe')?.({}, { sessionId: ' session-1 ' })
     ).resolves.toMatchObject({ ok: true, observation: { view: { pluginId: 'molecular' } } })
@@ -1515,6 +1401,34 @@ describe('registerAppIpcHandlers', () => {
         primary: 'byte-range',
         eagerRead: { allowed: false }
       }
+    })
+    await expect(
+      handlers.get('workspacePreview:prepareArtifact')?.({}, {
+        sessionId: ' session-1 ',
+        request: {
+          kind: 'cache-artifact',
+          source: 'observation'
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      artifact: {
+        artifactId: 'artifact-1',
+        kind: 'cache-artifact'
+      }
+    })
+    await expect(
+      handlers.get('workspacePreview:readArtifactRange')?.({}, {
+        sessionId: ' session-1 ',
+        request: {
+          artifactId: ' artifact-1 ',
+          range: { offset: 0, length: 4 }
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      artifactId: 'artifact-1',
+      dataBase64: Buffer.from('{"ok').toString('base64')
     })
     await expect(
       handlers.get('workspacePreview:applyEdit')?.({}, {
@@ -1543,6 +1457,10 @@ describe('registerAppIpcHandlers', () => {
       ok: true,
       audit: { effect: 'source-copy' }
     })
+	    await expect(
+	      handlers.get('workspacePreview:releaseSession')?.({ sender }, { sessionId: ' session-1 ' })
+	    ).resolves.toBe(true)
+	    expect(sender.removeListener).toHaveBeenCalledWith('destroyed', sender.once.mock.calls[0]?.[1])
     await expect(
       handlers.get('workspacePreview:open')?.({}, {
         path: 'protein.pdb',
@@ -1560,6 +1478,14 @@ describe('registerAppIpcHandlers', () => {
     expect(workspacePreviewHost.observe).toHaveBeenCalledWith('session-1')
     expect(workspacePreviewHost.describeAsset).toHaveBeenCalledWith('session-1')
     expect(workspacePreviewHost.readRange).toHaveBeenCalledWith('session-1', { offset: 0, length: 4 })
+    expect(workspacePreviewHost.prepareArtifact).toHaveBeenCalledWith('session-1', {
+      kind: 'cache-artifact',
+      source: 'observation'
+    })
+    expect(workspacePreviewHost.readArtifactRange).toHaveBeenCalledWith('session-1', {
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 4 }
+    })
     expect(workspacePreviewHost.applyEdit).toHaveBeenCalledWith('session-1', {
       kind: 'molecular.setSelection',
       path: 'protein.pdb',
@@ -1570,6 +1496,175 @@ describe('registerAppIpcHandlers', () => {
       format: 'pdb',
       path: 'exports/protein-copy.pdb'
     })
+	  expect(workspacePreviewHost.releaseSession).toHaveBeenCalledWith('session-1')
+	})
+
+  it('releases workspace preview sessions owned by a sender when the sender is destroyed', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const sender = createSender(17)
+    const manifest = {
+      contractVersion: 1 as const,
+      id: 'text',
+      displayName: 'Text Preview',
+      version: '0.1.0',
+      modality: 'text' as const,
+      lifecycle: 'main' as const,
+      priority: 100,
+      extensions: ['.txt'],
+      mimeTypes: ['text/plain'],
+      capabilities: {
+        preview: true,
+        inspect: true,
+        agent: {
+          observe: true,
+          select: true,
+          proposeEdit: true,
+          applyEdit: true,
+          save: true
+        }
+      }
+    }
+    let openCount = 0
+    const workspacePreviewHost = {
+      listPlugins: vi.fn(() => [manifest]),
+      open: vi.fn(async () => {
+        openCount += 1
+        const sessionId = `session-${openCount}`
+        return {
+          ok: true as const,
+          session: {
+            id: sessionId,
+            pluginId: 'text',
+            workspaceRoot: '/tmp/workspace',
+            path: `/tmp/workspace/file-${openCount}.txt`,
+            modality: 'text' as const,
+            mode: 'preview' as const,
+            openedAt: '2026-07-08T00:00:00.000Z',
+            updatedAt: '2026-07-08T00:00:00.000Z'
+          },
+          manifest,
+          route: 'matched' as const,
+          file: {
+            workspaceRoot: '/tmp/workspace',
+            path: `/tmp/workspace/file-${openCount}.txt`,
+            relativePath: `file-${openCount}.txt`
+          }
+        }
+      }),
+      observe: vi.fn(),
+      describeAsset: vi.fn(),
+      readRange: vi.fn(),
+      prepareArtifact: vi.fn(),
+      readArtifactRange: vi.fn(),
+      applyEdit: vi.fn(),
+      exportPreview: vi.fn(),
+      invokeAction: vi.fn(),
+      releaseSession: vi.fn(() => true),
+      prepareWatch: vi.fn(),
+      createWatchSnapshot: vi.fn()
+    }
+
+    registerAppIpcHandlers(registerOptions({
+      workspacePreviewHost: workspacePreviewHost as never
+    }))
+
+    await handlers.get('workspacePreview:open')?.({ sender }, {
+      path: 'file-1.txt',
+      workspaceRoot: '/tmp/workspace'
+    })
+    await handlers.get('workspacePreview:open')?.({ sender }, {
+      path: 'file-2.txt',
+      workspaceRoot: '/tmp/workspace'
+    })
+    expect(sender.once).toHaveBeenCalledTimes(1)
+
+    const onDestroyed = sender.once.mock.calls[0]?.[1]
+    expect(typeof onDestroyed).toBe('function')
+    sender.destroy()
+
+    expect(workspacePreviewHost.releaseSession).toHaveBeenCalledWith('session-1')
+    expect(workspacePreviewHost.releaseSession).toHaveBeenCalledWith('session-2')
+    expect(workspacePreviewHost.releaseSession).toHaveBeenCalledTimes(2)
+    expect(sender.removeListener).toHaveBeenCalledWith('destroyed', onDestroyed)
+    sender.destroy()
+    expect(workspacePreviewHost.releaseSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('immediately releases workspace preview sessions opened by an already destroyed sender', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const sender = createSender(18)
+    sender.isDestroyed.mockReturnValue(true)
+    const manifest = {
+      contractVersion: 1 as const,
+      id: 'text',
+      displayName: 'Text Preview',
+      version: '0.1.0',
+      modality: 'text' as const,
+      lifecycle: 'main' as const,
+      priority: 100,
+      extensions: ['.txt'],
+      mimeTypes: ['text/plain'],
+      capabilities: {
+        preview: true,
+        inspect: true,
+        agent: {
+          observe: true,
+          select: true,
+          proposeEdit: true,
+          applyEdit: true,
+          save: true
+        }
+      }
+    }
+    const workspacePreviewHost = {
+      listPlugins: vi.fn(() => [manifest]),
+      open: vi.fn(async () => ({
+        ok: true as const,
+        session: {
+          id: 'session-dead-sender',
+          pluginId: 'text',
+          workspaceRoot: '/tmp/workspace',
+          path: '/tmp/workspace/file.txt',
+          modality: 'text' as const,
+          mode: 'preview' as const,
+          openedAt: '2026-07-08T00:00:00.000Z',
+          updatedAt: '2026-07-08T00:00:00.000Z'
+        },
+        manifest,
+        route: 'matched' as const,
+        file: {
+          workspaceRoot: '/tmp/workspace',
+          path: '/tmp/workspace/file.txt',
+          relativePath: 'file.txt'
+        }
+      })),
+      observe: vi.fn(),
+      describeAsset: vi.fn(),
+      readRange: vi.fn(),
+      prepareArtifact: vi.fn(),
+      readArtifactRange: vi.fn(),
+      applyEdit: vi.fn(),
+      exportPreview: vi.fn(),
+      invokeAction: vi.fn(),
+      releaseSession: vi.fn(() => true),
+      prepareWatch: vi.fn(),
+      createWatchSnapshot: vi.fn()
+    }
+
+    registerAppIpcHandlers(registerOptions({
+      workspacePreviewHost: workspacePreviewHost as never
+    }))
+
+    await expect(handlers.get('workspacePreview:open')?.({ sender }, {
+      path: 'file.txt',
+      workspaceRoot: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      ok: true,
+      session: { id: 'session-dead-sender' }
+    })
+
+    expect(sender.once).not.toHaveBeenCalled()
+    expect(workspacePreviewHost.releaseSession).toHaveBeenCalledWith('session-dead-sender')
   })
 
   it('routes workspace preview file watches through the injected host snapshot', async () => {

@@ -161,7 +161,7 @@ const workspacePreviewMock = vi.hoisted(() => {
       readRange: vi.fn(async () => ({
         ok: true as const,
         sessionId: 'session-molecular',
-        path: '/workspace/lab/protein.pdb',
+        assetId: 'asset:session-molecular',
         offset: 0,
         length: 4,
         size: 4,
@@ -173,6 +173,7 @@ const workspacePreviewMock = vi.hoisted(() => {
 })
 
 vi.mock('../workspace-preview', async () => {
+  const registry = await vi.importActual<typeof import('../workspace-preview/registry')>('../workspace-preview/registry')
   const { createElement: h } = await vi.importActual<typeof import('react')>('react')
   const contextForTarget = (target: { path: string } | null) => {
     const isText = Boolean(target?.path.match(/\.(?:txt|text|log)$/i))
@@ -369,8 +370,7 @@ vi.mock('../workspace-preview', async () => {
             pluginId: 'molecular',
             modality: 'molecular' as const,
             file: {
-              workspaceRoot: '/workspace/lab',
-              path: '/workspace/lab/protein.pdb',
+              name: 'protein.pdb',
               relativePath: 'protein.pdb',
               size: 4
             },
@@ -399,101 +399,90 @@ vi.mock('../workspace-preview', async () => {
     }
   }
 
-	  return {
-	    WorkspacePreviewPanelShell: (props: {
-	      target: { path: string } | null
-	      children?: ReactNode | ((nextContext: ReturnType<typeof contextForTarget>) => ReactNode)
-	    }) => h(
+  return {
+    rendererWorkspacePreviewRegistry: registry.rendererWorkspacePreviewRegistry,
+    WorkspacePreviewPanelShell: (props: {
+      target: { path: string } | null
+      children?: ReactNode | ((nextContext: ReturnType<typeof contextForTarget>) => ReactNode)
+    }) => h(
       'section',
       {
         'data-mock-workspace-preview-shell': 'true',
         'data-target-path': props.target?.path ?? ''
       },
-	      typeof props.children === 'function'
-	        ? props.children(contextForTarget(props.target))
-	        : props.children
-	    ),
-	    WorkspacePreviewPluginOutlet: (props: {
-	      context: ReturnType<typeof contextForTarget>
-	      routeReason: string
-	    }) => {
-	      const observation = props.context.state.observation as WorkspaceObservation | null
-	      const modality = observation?.view.modality ?? props.context.state.session?.modality
-	      const host = props.context.host as {
-	        applyEdit: (operation: unknown) => Promise<{ ok: boolean; session?: { id: string } }>
-	        observe: (sessionId: string) => Promise<unknown>
-	        readRange: (range: unknown) => Promise<unknown>
-	      }
-	      const onApplyEdit = async (operation: unknown) => {
-	        const result = await host.applyEdit(operation)
-	        if (result.ok && result.session) {
-	          await host.observe(result.session.id)
-	        }
-	      }
+      typeof props.children === 'function'
+        ? props.children(contextForTarget(props.target))
+        : props.children
+    ),
+    WorkspacePreviewPluginOutlet: (props: {
+      context: ReturnType<typeof contextForTarget>
+      routeReason: string
+    }) => {
+      const observation = props.context.state.observation as WorkspaceObservation | null
+      const modality = observation?.view.modality ?? props.context.state.session?.modality
+      const host = props.context.host as {
+        applyEdit: (operation: unknown) => Promise<{ ok: boolean; session?: { id: string } }>
+        observe: (sessionId: string) => Promise<unknown>
+        readRange: (range: unknown) => Promise<unknown>
+      }
+      const onApplyEdit = async (operation: unknown) => {
+        const result = await host.applyEdit(operation)
+        if (result.ok && result.session) {
+          await host.observe(result.session.id)
+        }
+      }
 
-	      if (modality === 'tabular' || observation?.tables?.length) {
-	        workspacePreviewMock.latestTabularProps = { onApplyEdit }
-	        return h('div', {
-	          'data-mock-tabular-viewer': 'true',
-	          'data-has-apply-edit': 'true'
-	        })
-	      }
-	      if (modality === 'text' && props.routeReason === 'text-first-party') {
-	        workspacePreviewMock.latestTextProps = { onApplyEdit }
-	        return h('div', {
-	          'data-mock-text-viewer': 'true',
-	          'data-has-apply-edit': 'true'
-	        })
-	      }
-	      if (modality === 'deck' || observation?.slides?.length) {
-	        workspacePreviewMock.latestDeckProps = { onApplyEdit }
-	        return h('div', {
-	          'data-mock-deck-viewer': 'true',
-	          'data-has-apply-edit': 'true'
-	        })
-	      }
-	      if (modality === 'molecular' || observation?.molecular) {
-	        workspacePreviewMock.latestMolecularProps = {
-	          asset: props.context.asset,
-	          assetStatus: props.context.assetStatus,
-	          assetError: props.context.assetError,
-	          readRange: (range: unknown) => host.readRange(range),
-	          onApplyEdit
-	        }
-	        return h('div', {
-	          'data-mock-molecular-viewer': 'true',
-	          'data-asset-status': props.context.assetStatus,
-	          'data-has-apply-edit': 'true'
-	        })
-	      }
-	      if (modality === 'sequence' || observation?.sequence) {
-	        workspacePreviewMock.latestSequenceProps = { onSetSelection: onApplyEdit }
-	        return h('div', {
-	          'data-mock-sequence-viewer': 'true',
-	          'data-has-set-selection': 'true'
-	        })
-	      }
-	      if (modality === 'omics' || observation?.omics) return h('div', { 'data-mock-omics-viewer': 'true' })
-	      if (modality === 'bioimaging' || observation?.bioimaging) return h('div', { 'data-mock-bioimaging-viewer': 'true' })
-	      if (modality === 'spectra' || observation?.spectra) return h('div', { 'data-mock-spectra-viewer': 'true' })
+      if (modality === 'tabular' || observation?.tables?.length) {
+        workspacePreviewMock.latestTabularProps = { onApplyEdit }
+        return h('div', {
+          'data-mock-tabular-viewer': 'true',
+          'data-has-apply-edit': 'true'
+        })
+      }
+      if (modality === 'text') {
+        workspacePreviewMock.latestTextProps = { onApplyEdit }
+        return h('div', {
+          'data-mock-text-viewer': 'true',
+          'data-has-apply-edit': 'true'
+        })
+      }
+      if (modality === 'deck' || observation?.slides?.length) {
+        workspacePreviewMock.latestDeckProps = { onApplyEdit }
+        return h('div', {
+          'data-mock-deck-viewer': 'true',
+          'data-has-apply-edit': 'true'
+        })
+      }
+      if (modality === 'molecular' || observation?.molecular) {
+        workspacePreviewMock.latestMolecularProps = {
+          asset: props.context.asset,
+          assetStatus: props.context.assetStatus,
+          assetError: props.context.assetError,
+          readRange: (range: unknown) => host.readRange(range),
+          onApplyEdit
+        }
+        return h('div', {
+          'data-mock-molecular-viewer': 'true',
+          'data-asset-status': props.context.assetStatus,
+          'data-has-apply-edit': 'true'
+        })
+      }
+      if (modality === 'sequence' || observation?.sequence) {
+        workspacePreviewMock.latestSequenceProps = { onSetSelection: onApplyEdit }
+        return h('div', {
+          'data-mock-sequence-viewer': 'true',
+          'data-has-set-selection': 'true'
+        })
+      }
+      if (modality === 'omics' || observation?.omics) return h('div', { 'data-mock-omics-viewer': 'true' })
+      if (modality === 'bioimaging' || observation?.bioimaging) return h('div', { 'data-mock-bioimaging-viewer': 'true' })
+      if (modality === 'spectra' || observation?.spectra) return h('div', { 'data-mock-spectra-viewer': 'true' })
 
-	      return h('div', {
-	        'data-mock-plugin-summary': 'true',
-	        'data-route-reason': props.routeReason
-	      })
-	    }
-	  }
-	})
-
-vi.mock('./WorkspaceFilePreviewPanel', async () => {
-  const { createElement: h } = await vi.importActual<typeof import('react')>('react')
-  return {
-    WorkspaceFilePreviewPanel: (props: {
-      target: { path: string } | null
-    }) => h('div', {
-      'data-mock-legacy-preview-panel': 'true',
-      'data-target-path': props.target?.path ?? ''
-    })
+      return h('div', {
+        'data-mock-plugin-summary': 'true',
+        'data-route-reason': props.routeReason
+      })
+    }
   }
 })
 
@@ -508,10 +497,25 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     vi.clearAllMocks()
   })
 
-  it('keeps established preview formats on the legacy panel route', () => {
-    for (const path of ['notes.md', 'paper.pdf', 'report.docx', 'figure.png']) {
+  it('routes registered preview plugins through the workspace preview shell', () => {
+    expect(resolveWorkspaceFilePreviewPanelBridgeRoute(null)).toEqual({
+      kind: 'workspace-preview-shell',
+      reason: 'empty'
+    })
+
+    const cases = [
+      ['notes.md', 'markdown', 'document'],
+      ['paper.pdf', 'pdf', 'document'],
+      ['report.docx', 'docx', 'document'],
+      ['figure.png', 'image', 'image']
+    ] as const
+
+    for (const [path, pluginId, modality] of cases) {
       expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path })).toEqual({
-        kind: 'legacy-panel'
+        kind: 'workspace-preview-shell',
+        reason: 'registered-plugin',
+        pluginId,
+        modality
       })
     }
   })
@@ -519,11 +523,15 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
   it('routes first-party TXT previews through the workspace preview shell', () => {
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'notes.txt' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'text-first-party'
+      reason: 'registered-plugin',
+      pluginId: 'text',
+      modality: 'text'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'debug.LOG' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'text-first-party'
+      reason: 'registered-plugin',
+      pluginId: 'text',
+      modality: 'text'
     })
   })
 
@@ -531,36 +539,48 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     for (const path of ['table.csv', 'samples.tsv', 'records.jsonl', 'records.ndjson', 'workbook.xlsx']) {
       expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path })).toEqual({
         kind: 'workspace-preview-shell',
-        reason: 'tabular-first-party'
+        reason: 'registered-plugin',
+        pluginId: 'tabular',
+        modality: 'tabular'
       })
     }
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'legacy.xls' })).toEqual({
-      kind: 'legacy-panel'
+      kind: 'workspace-preview-shell',
+      reason: 'unregistered-format'
     })
   })
 
   it('routes first-party PPTX previews through the workspace preview shell', () => {
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'slides.pptx' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'deck-first-party'
+      reason: 'registered-plugin',
+      pluginId: 'deck',
+      modality: 'deck'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'legacy.ppt' })).toEqual({
-      kind: 'legacy-panel'
+      kind: 'workspace-preview-shell',
+      reason: 'unregistered-format'
     })
   })
 
   it('routes life-science and deferred science formats through the workspace preview shell', () => {
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'protein.pdb' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'life-science'
+      reason: 'registered-plugin',
+      pluginId: 'molecular',
+      modality: 'molecular'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'reads.fasta' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'life-science'
+      reason: 'registered-plugin',
+      pluginId: 'sequence-genomics',
+      modality: 'sequence'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'cells.ome.tiff' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'life-science'
+      reason: 'registered-plugin',
+      pluginId: 'bioimaging',
+      modality: 'bioimaging'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'mesh.vtk' })).toEqual({
       kind: 'workspace-preview-shell',
@@ -568,8 +588,13 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     })
   })
 
-  it('renders the legacy component or new shell according to the resolved route', () => {
-    const legacyHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
+  it('renders every resolved route through the workspace preview shell', () => {
+    const unregisteredHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
+      target: { path: 'legacy.xls', workspaceRoot: '/workspace/lab' },
+      workspaceRoot: '/workspace/lab',
+      onClose: vi.fn()
+    }))
+    const markdownHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'notes.md', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
       onClose: vi.fn()
@@ -610,10 +635,13 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       onClose: vi.fn()
     }))
 
-    expect(legacyHtml).toContain('data-mock-legacy-preview-panel="true"')
-    expect(legacyHtml).toContain('data-target-path="notes.md"')
+    expect(unregisteredHtml).toContain('data-mock-workspace-preview-shell="true"')
+    expect(unregisteredHtml).toContain('data-route-reason="unregistered-format"')
+    expect(unregisteredHtml).not.toContain('data-mock-legacy-preview-panel="true"')
+    expect(markdownHtml).toContain('data-mock-workspace-preview-shell="true"')
+    expect(markdownHtml).toContain('data-route-reason="registered-plugin"')
     expect(molecularHtml).toContain('data-mock-workspace-preview-shell="true"')
-    expect(molecularHtml).toContain('data-route-reason="life-science"')
+    expect(molecularHtml).toContain('data-route-reason="registered-plugin"')
     expect(molecularHtml).toContain('data-mock-molecular-viewer="true"')
     expect(molecularHtml).toContain('data-asset-status="ready"')
     expect(molecularHtml).toContain('data-has-apply-edit="true"')
@@ -627,18 +655,18 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       }
     })
     expect(typeof workspacePreviewMock.latestMolecularProps?.readRange).toBe('function')
-    expect(tabularHtml).toContain('data-route-reason="tabular-first-party"')
+    expect(tabularHtml).toContain('data-route-reason="registered-plugin"')
     expect(tabularHtml).toContain('data-mock-tabular-viewer="true"')
     expect(tabularHtml).toContain('data-has-apply-edit="true"')
-    expect(workbookHtml).toContain('data-route-reason="tabular-first-party"')
+    expect(workbookHtml).toContain('data-route-reason="registered-plugin"')
     expect(workbookHtml).toContain('data-mock-tabular-viewer="true"')
-    expect(textHtml).toContain('data-route-reason="text-first-party"')
+    expect(textHtml).toContain('data-route-reason="registered-plugin"')
     expect(textHtml).toContain('data-mock-text-viewer="true"')
     expect(textHtml).toContain('data-has-apply-edit="true"')
-    expect(deckHtml).toContain('data-route-reason="deck-first-party"')
+    expect(deckHtml).toContain('data-route-reason="registered-plugin"')
     expect(deckHtml).toContain('data-mock-deck-viewer="true"')
     expect(deckHtml).toContain('data-has-apply-edit="true"')
-    expect(sequenceHtml).toContain('data-route-reason="life-science"')
+    expect(sequenceHtml).toContain('data-route-reason="registered-plugin"')
     expect(sequenceHtml).toContain('data-mock-sequence-viewer="true"')
     expect(sequenceHtml).toContain('data-has-set-selection="true"')
     expect(deferredHtml).toContain('data-route-reason="deferred-non-life-science"')
@@ -750,10 +778,10 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             mode: 'preview',
             openedAt: '2026-07-08T00:00:00.000Z',
             updatedAt: '2026-07-08T00:00:00.000Z'
-	          },
-	          descriptor: null,
-	          asset: null,
-	          file: {
+          },
+          descriptor: null,
+          asset: null,
+          file: {
             workspaceRoot: '/workspace/lab',
             path: '/workspace/lab/protein.pdb',
             relativePath: 'protein.pdb',
@@ -790,11 +818,11 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         asset: {
           schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
           sessionId: 'session-1',
+          assetId: 'asset:session-1',
           pluginId: 'molecular',
           modality: 'molecular',
           file: {
-            workspaceRoot: '/workspace/lab',
-            path: '/workspace/lab/protein.pdb',
+            name: 'protein.pdb',
             relativePath: 'protein.pdb'
           },
           primary: 'byte-range',
@@ -808,19 +836,19 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             recommendedChunkBytes: 1024,
             size: 42
           },
-	          strategies: [
-	            {
-	              kind: 'byte-range',
-	              status: 'available',
-	              reason: 'bounded reads',
-	              maxChunkBytes: 4096
-	            },
-	            {
-	              kind: 'tile',
-	              status: 'requires-plugin',
-	              reason: 'format-specific decoder'
-	            }
-	          ]
+          strategies: [
+            {
+              kind: 'byte-range',
+              status: 'available',
+              reason: 'bounded reads',
+              maxChunkBytes: 4096
+            },
+            {
+              kind: 'tile',
+              status: 'requires-plugin',
+              reason: 'format-specific decoder'
+            }
+          ]
         },
         assetStatus: 'ready',
         assetError: null
@@ -828,7 +856,9 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       target: { path: 'protein.pdb', workspaceRoot: '/workspace/lab' },
       route: {
         kind: 'workspace-preview-shell',
-        reason: 'life-science'
+        reason: 'registered-plugin',
+        pluginId: 'molecular',
+        modality: 'molecular'
       },
       workspaceRoot: '/workspace/lab',
       updatedAt: '2026-07-08T00:00:01.000Z'
@@ -843,19 +873,19 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         pluginId: 'molecular',
         modality: 'molecular',
         selectionKind: 'molecular',
-	        actionCount: 2,
-	        assetPrimary: 'byte-range',
-	        assetStrategies: [
-	          {
-	            kind: 'byte-range',
-	            status: 'available'
-	          },
-	          {
-	            kind: 'tile',
-	            status: 'requires-plugin'
-	          }
-	        ],
-	        workspaceObservation: {
+        actionCount: 2,
+        assetPrimary: 'byte-range',
+        assetStrategies: [
+          {
+            kind: 'byte-range',
+            status: 'available'
+          },
+          {
+            kind: 'tile',
+            status: 'requires-plugin'
+          }
+        ],
+        workspaceObservation: {
           view: {
             pluginId: 'molecular',
             modality: 'molecular'
@@ -875,20 +905,20 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           role: 'preview-target',
           relativePath: 'protein.pdb',
           resourceUri: 'workspace://file/protein.pdb',
-	          metadata: {
-	            routeReason: 'life-science',
-	            assetStrategies: [
-	              {
-	                kind: 'byte-range',
-	                status: 'available'
-	              },
-	              {
-	                kind: 'tile',
-	                status: 'requires-plugin'
-	              }
-	            ],
-	            actionCount: 2
-	          }
+          metadata: {
+            routeReason: 'registered-plugin',
+            assetStrategies: [
+              {
+                kind: 'byte-range',
+                status: 'available'
+              },
+              {
+                kind: 'tile',
+                status: 'requires-plugin'
+              }
+            ],
+            actionCount: 2
+          }
         }
       ]
     })

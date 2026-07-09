@@ -17,7 +17,9 @@ import {
   workspaceObservationSchema,
   type WorkspaceObservation,
   type WorkspacePreviewFileState,
+  type WorkspacePreviewJsonValue,
   type WorkspacePreviewModality,
+  type WorkspacePreviewPrepareArtifactRequest,
   type WorkspacePreviewPluginActionInput,
   type WorkspacePreviewPluginManifest,
   type WorkspacePreviewSession
@@ -62,6 +64,48 @@ export type WorkspacePreviewWorkerActionResult =
       reason: 'unsupported-plugin' | 'unsupported-action' | 'unsupported-format' | 'too-large' | 'worker-error'
     }
 
+export type WorkspacePreviewWorkerArtifactInput = WorkspacePreviewWorkerObservationInput & {
+  request: WorkspacePreviewPrepareArtifactRequest
+}
+
+export type WorkspacePreviewWorkerArtifactResult =
+  | {
+      ok: true
+      kind: 'tile'
+      mimeType: string
+      bytes: Uint8Array
+      tile: {
+        level: number
+        x: number
+        y: number
+        width: number
+        height: number
+      }
+      bytesRead: number
+      truncated: boolean
+      pixelDecoding?: true
+      tileRendererImplemented?: true
+    }
+  | {
+      ok: true
+      kind: 'thumbnail'
+      mimeType: string
+      bytes: Uint8Array
+      thumbnail: {
+        width: number
+        height: number
+      }
+      bytesRead: number
+      truncated: boolean
+      pixelDecoding?: true
+      thumbnailRendererImplemented?: true
+    }
+  | {
+      ok: false
+      message: string
+      reason: 'unsupported-plugin' | 'unsupported-artifact' | 'unsupported-format' | 'too-large' | 'worker-error'
+    }
+
 export type WorkspacePreviewWorkerClientOptions = {
   maxTextBytes?: number
   maxBinaryBytes?: number
@@ -80,6 +124,7 @@ type ObservationBuildInput = WorkspacePreviewWorkerObservationInput & {
   bioimaging?: WorkspaceObservation['bioimaging']
   spectra?: WorkspaceObservation['spectra']
   annotations?: WorkspaceObservation['annotations']
+  pluginMetadata?: WorkspaceObservation['pluginMetadata']
   deck?: WorkspaceObservation['deck']
   actions?: string[]
   readOnly?: boolean
@@ -151,6 +196,35 @@ export class WorkspacePreviewWorkerClient {
             ok: false,
             reason: 'unsupported-plugin',
             message: `Workspace preview plugin ${input.manifest.id} does not expose first-party worker actions.`
+          }
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'worker-error',
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  async prepareArtifact(input: WorkspacePreviewWorkerArtifactInput): Promise<WorkspacePreviewWorkerArtifactResult> {
+    try {
+      if (input.request.kind !== 'tile' && input.request.kind !== 'thumbnail') {
+        return {
+          ok: false,
+          reason: 'unsupported-artifact',
+          message: `Workspace preview worker artifacts are not implemented for ${input.request.kind}.`
+        }
+      }
+
+      switch (input.manifest.id) {
+        case 'bioimaging':
+          return await this.prepareBioimagingArtifact(input)
+        default:
+          return {
+            ok: false,
+            reason: 'unsupported-plugin',
+            message: `Workspace preview plugin ${input.manifest.id} does not expose first-party worker artifacts.`
           }
       }
     } catch (error) {
@@ -400,6 +474,34 @@ export class WorkspacePreviewWorkerClient {
       mtimeMs: input.file.mtimeMs
     })
     const workerObservation = result.observation
+    const bioimaging: NonNullable<WorkspaceObservation['bioimaging']> = {
+      ...(result.format ? { format: result.format } : {}),
+      ...(result.detectedBy ? { detectedBy: result.detectedBy } : {}),
+      ...(result.byteLength !== undefined ? { byteLength: result.byteLength } : {}),
+      ...(result.channels?.length ? { channels: result.channels } : {}),
+      ...(result.dimensions?.width && result.dimensions.height
+        ? {
+            dimensions: {
+              width: result.dimensions.width,
+              height: result.dimensions.height,
+              ...(result.dimensions.z ? { z: result.dimensions.z } : {}),
+              ...(result.dimensions.t ? { t: result.dimensions.t } : {})
+            }
+          }
+        : {}),
+      ...(result.tilePlan
+        ? {
+            tilePlan: {
+              ...(result.tilePlan.status ? { status: result.tilePlan.status } : {}),
+              ...(result.tilePlan.source ? { source: result.tilePlan.source } : {}),
+              levelCount: result.tilePlan.levels.length,
+              tileSize: result.tilePlan.recommendedTileSize,
+              pixelDecoding: result.tilePlan.pixelDecoding,
+              tileRendererImplemented: result.tilePlan.tileRendererImplemented
+            }
+          }
+        : {})
+    }
     return {
       ok: true,
       bytesRead: bytes.bytesRead,
@@ -408,35 +510,27 @@ export class WorkspacePreviewWorkerClient {
         ...input,
         visibleText: workerObservation?.visibleText,
         selection: workerObservation?.selection,
-        bioimaging: {
-          format: result.format,
-          detectedBy: result.detectedBy,
-          byteLength: result.byteLength,
-          channels: result.channels,
-          ...(result.dimensions?.width && result.dimensions.height
-            ? {
-                dimensions: {
-                  width: result.dimensions.width,
-                  height: result.dimensions.height,
-                  ...(result.dimensions.z ? { z: result.dimensions.z } : {}),
-                  ...(result.dimensions.t ? { t: result.dimensions.t } : {})
-                }
-              }
+        bioimaging,
+        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
+        pluginMetadata: [{
+          source: 'plugin-metadata',
+          metadataKind: 'bioimaging',
+          mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json',
+          metadataOnly: true,
+          containsPixels: false,
+          pixelDecoding: false,
+          data: bioimaging as WorkspacePreviewJsonValue,
+          ...(workerObservation?.selection?.kind === 'bioimaging'
+            ? { selection: workerObservation.selection }
             : {}),
-          ...(result.tilePlan
+          ...(workerObservation?.actions?.length
             ? {
-                tilePlan: {
-                  status: result.tilePlan.status,
-                  source: result.tilePlan.source,
-                  levelCount: result.tilePlan.levels.length,
-                  tileSize: result.tilePlan.recommendedTileSize,
-                  pixelDecoding: result.tilePlan.pixelDecoding,
-                  tileRendererImplemented: result.tilePlan.tileRendererImplemented
-                }
+                actions: workerObservation.actions
+                  .filter((action) => action.startsWith('bioimaging.'))
+                  .slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
               }
             : {})
-        },
-        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
+        }],
         actions: workerObservation?.actions
       })
     }
@@ -512,6 +606,83 @@ export class WorkspacePreviewWorkerClient {
       return actionOk(service.measureDistance(withActionPreview(input.action, preview) as Parameters<typeof service.measureDistance>[0]), text)
     }
     return unsupportedAction(input)
+  }
+
+  private async prepareBioimagingArtifact(input: WorkspacePreviewWorkerArtifactInput): Promise<WorkspacePreviewWorkerArtifactResult> {
+    if (input.request.kind !== 'tile' && input.request.kind !== 'thumbnail') {
+      return unsupportedArtifact(input, 'bioimaging artifacts')
+    }
+
+    const extension = extensionFromPreviewPath(input.file.path, input.manifest.extensions)
+    if (!['.tif', '.tiff', '.ome.tif', '.ome.tiff'].includes(extension)) {
+      return {
+        ok: false,
+        reason: 'unsupported-format',
+        message: `Bioimaging tile artifacts are only implemented for TIFF and OME-TIFF files; received ${extension || 'unknown format'}.`
+      }
+    }
+
+    const bytes = await this.readBinaryIfWithinLimit(input.file)
+    if (!bytes.ok) return artifactReadFailure(bytes)
+
+    const service = createWorkspaceBioimagingService()
+    if (input.request.kind === 'thumbnail') {
+      const decoded = service.decodeThumbnail({
+        bytes: bytes.bytes,
+        format: 'auto',
+        path: input.file.relativePath ?? input.file.path,
+        workspaceRoot: input.file.workspaceRoot,
+        mimeType: input.file.mimeType,
+        size: input.file.size,
+        mtimeMs: input.file.mtimeMs,
+        width: input.request.width,
+        height: input.request.height,
+        ...(input.request.channelIndex !== undefined ? { channelIndex: input.request.channelIndex } : {}),
+        ...(input.request.z !== undefined ? { z: input.request.z } : {}),
+        ...(input.request.t !== undefined ? { t: input.request.t } : {})
+      })
+      return {
+        ok: true,
+        kind: 'thumbnail',
+        mimeType: decoded.mimeType,
+        bytes: decoded.bytes,
+        thumbnail: decoded.thumbnail,
+        bytesRead: bytes.bytesRead,
+        truncated: false,
+        pixelDecoding: decoded.pixelDecoding,
+        thumbnailRendererImplemented: decoded.thumbnailRendererImplemented
+      }
+    }
+
+    const decoded = service.decodeTile({
+      bytes: bytes.bytes,
+      format: 'auto',
+      path: input.file.relativePath ?? input.file.path,
+      workspaceRoot: input.file.workspaceRoot,
+      mimeType: input.file.mimeType,
+      size: input.file.size,
+      mtimeMs: input.file.mtimeMs,
+      level: input.request.level,
+      x: input.request.x,
+      y: input.request.y,
+      width: input.request.width,
+      height: input.request.height,
+      ...(input.request.channelIndex !== undefined ? { channelIndex: input.request.channelIndex } : {}),
+      ...(input.request.z !== undefined ? { z: input.request.z } : {}),
+      ...(input.request.t !== undefined ? { t: input.request.t } : {})
+    })
+
+    return {
+      ok: true,
+      kind: 'tile',
+      mimeType: decoded.mimeType,
+      bytes: decoded.bytes,
+      tile: decoded.tile,
+      bytesRead: bytes.bytesRead,
+      truncated: false,
+      pixelDecoding: decoded.pixelDecoding,
+      tileRendererImplemented: decoded.tileRendererImplemented
+    }
   }
 
   private async invokeTabularAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
@@ -1023,6 +1194,29 @@ function unsupportedAction(
   }
 }
 
+function unsupportedArtifact(
+  input: WorkspacePreviewWorkerArtifactInput,
+  artifactName: string
+): Extract<WorkspacePreviewWorkerArtifactResult, { ok: false }> {
+  return {
+    ok: false,
+    reason: 'unsupported-artifact',
+    message: `Workspace preview ${artifactName} are not implemented for plugin ${input.manifest.id}.`
+  }
+}
+
+function artifactReadFailure(
+  result: Extract<WorkspacePreviewWorkerObservationResult, { ok: false }>
+): Extract<WorkspacePreviewWorkerArtifactResult, { ok: false }> {
+  return {
+    ok: false,
+    reason: result.reason === 'unsupported-plugin' || result.reason === 'unsupported-format' || result.reason === 'too-large'
+      ? result.reason
+      : 'worker-error',
+    message: result.message
+  }
+}
+
 function buildObservation(input: ObservationBuildInput): WorkspaceObservation {
   return workspaceObservationSchema.parse({
     schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
@@ -1052,6 +1246,7 @@ function buildObservation(input: ObservationBuildInput): WorkspaceObservation {
     ...(input.bioimaging ? { bioimaging: sanitizeBioimagingObservation(input.bioimaging) } : {}),
     ...(input.spectra ? { spectra: input.spectra } : {}),
     ...(input.annotations?.length ? { annotations: input.annotations } : {}),
+    ...(input.pluginMetadata?.length ? { pluginMetadata: input.pluginMetadata } : {}),
     actions: mergeActions(input.manifest, input.actions, input.readOnly)
   })
 }

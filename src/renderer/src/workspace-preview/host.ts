@@ -7,6 +7,8 @@ import type {
   WorkspacePreviewObserveResult,
   WorkspacePreviewOpenInput,
   WorkspacePreviewOpenResult,
+  WorkspacePreviewPrepareArtifactResult,
+  WorkspacePreviewReadArtifactRangeResult,
   WorkspacePreviewReadRangeResult
 } from '@shared/sciforge-api'
 import type {
@@ -15,6 +17,7 @@ import type {
   WorkspaceFileWatchResult
 } from '@shared/workspace-file'
 import type {
+  WorkspacePreviewArtifactDescriptor,
   WorkspacePreviewAssetTransportDescriptor,
   WorkspacePreviewAssetTransportKind,
   WorkspaceObservation,
@@ -25,6 +28,8 @@ import type {
   WorkspacePreviewFileState,
   WorkspacePreviewPluginActionInput,
   WorkspacePreviewPluginManifest,
+  WorkspacePreviewPrepareArtifactRequest,
+  WorkspacePreviewReadArtifactRangeRequest,
   WorkspacePreviewSession,
   WorkspaceStructuredSelection
 } from '@shared/workspace-preview'
@@ -46,6 +51,13 @@ export type WorkspacePreviewAssetTransportClient = {
   strategyStatus: (kind: WorkspacePreviewAssetTransportKind) =>
     WorkspacePreviewAssetTransportDescriptor['strategies'][number] | null
   readRange: (range: WorkspacePreviewByteRange) => Promise<WorkspacePreviewReadRangeResult>
+  prepareArtifact: (request: WorkspacePreviewPrepareArtifactRequest) => Promise<WorkspacePreviewPrepareArtifactResult>
+  readArtifactRange: (request: WorkspacePreviewReadArtifactRangeRequest) => Promise<WorkspacePreviewReadArtifactRangeResult>
+  artifact: (artifactId: string) => WorkspacePreviewArtifactDescriptor | null
+  readBytesIfWithin: (maxBytes: number) => Promise<
+    | { ok: true; bytes: Uint8Array; bytesRead: number; truncated: false }
+    | { ok: false; message: string }
+  >
   readTextIfWithin: (maxBytes: number) => Promise<
     | { ok: true; text: string; bytesRead: number; truncated: false }
     | { ok: false; message: string }
@@ -212,6 +224,27 @@ export class WorkspacePreviewHost {
     }
   }
 
+  async releaseSession(sessionId?: string): Promise<boolean> {
+    const resolvedSessionId = this.resolveSessionId(sessionId)
+    if (!resolvedSessionId) return false
+
+    const bridge = this.bridgeOrError()
+    if (!bridge) return false
+
+    try {
+      const released = await bridge.releaseSession(resolvedSessionId)
+      if (released && this.state.session?.id === resolvedSessionId) {
+        this.patchState(createWorkspacePreviewHostState())
+      } else if (released) {
+        this.patchState({ error: null })
+      }
+      return released
+    } catch (error) {
+      this.patchState({ error: messageFromError(error) })
+      return false
+    }
+  }
+
   async describeAsset(sessionId?: string): Promise<WorkspacePreviewDescribeAssetResult> {
     const resolvedSessionId = this.resolveSessionId(sessionId)
     if (!resolvedSessionId) return this.failDescribeAsset(missingSessionMessage())
@@ -250,6 +283,46 @@ export class WorkspacePreviewHost {
       return result
     } catch (error) {
       return this.failReadRange(messageFromError(error))
+    }
+  }
+
+  async prepareArtifact(
+    request: WorkspacePreviewPrepareArtifactRequest,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewPrepareArtifactResult> {
+    if (!sessionId) return this.failPrepareArtifact(missingSessionMessage())
+
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failPrepareArtifact(missingBridgeMessage())
+
+    try {
+      const result = await bridge.prepareArtifact(sessionId, request)
+      if (result.ok) {
+        await this.describeAsset(sessionId)
+      } else {
+        this.patchState({ error: result.message })
+      }
+      return result
+    } catch (error) {
+      return this.failPrepareArtifact(messageFromError(error))
+    }
+  }
+
+  async readArtifactRange(
+    request: WorkspacePreviewReadArtifactRangeRequest,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewReadArtifactRangeResult> {
+    if (!sessionId) return this.failReadArtifactRange(missingSessionMessage())
+
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failReadArtifactRange(missingBridgeMessage())
+
+    try {
+      const result = await bridge.readArtifactRange(sessionId, request)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      return this.failReadArtifactRange(messageFromError(error))
     }
   }
 
@@ -423,6 +496,16 @@ export class WorkspacePreviewHost {
     return { ok: false, message }
   }
 
+  private failPrepareArtifact(message: string): WorkspacePreviewPrepareArtifactResult {
+    this.patchState({ error: message })
+    return { ok: false, message }
+  }
+
+  private failReadArtifactRange(message: string): WorkspacePreviewReadArtifactRangeResult {
+    this.patchState({ error: message })
+    return { ok: false, message }
+  }
+
   private failApplyEdit(message: string): WorkspacePreviewApplyEditResult {
     this.patchState({ error: message })
     return { ok: false, message }
@@ -451,7 +534,48 @@ export function createWorkspacePreviewHost(options: WorkspacePreviewHostOptions 
 export function createWorkspacePreviewAssetTransportClient(input: {
   descriptor: WorkspacePreviewAssetTransportDescriptor | null
   readRange: (range: WorkspacePreviewByteRange) => Promise<WorkspacePreviewReadRangeResult>
+  prepareArtifact?: (request: WorkspacePreviewPrepareArtifactRequest) => Promise<WorkspacePreviewPrepareArtifactResult>
+  readArtifactRange?: (request: WorkspacePreviewReadArtifactRangeRequest) => Promise<WorkspacePreviewReadArtifactRangeResult>
 }): WorkspacePreviewAssetTransportClient {
+  const readBytesIfWithin: WorkspacePreviewAssetTransportClient['readBytesIfWithin'] = async (maxBytes) => {
+    const descriptor = input.descriptor
+    if (!descriptor) return { ok: false, message: 'No workspace preview asset descriptor is available.' }
+    if (!descriptor.range.available) return { ok: false, message: 'Byte-range transport is not available for this asset.' }
+    if (descriptor.range.size > maxBytes) {
+      return {
+        ok: false,
+        message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${maxBytes} byte text read limit.`
+      }
+    }
+    if (descriptor.range.size > descriptor.range.maxChunkBytes) {
+      return {
+        ok: false,
+        message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${descriptor.range.maxChunkBytes} byte range chunk limit.`
+      }
+    }
+    if (descriptor.range.size === 0) {
+      return {
+        ok: true,
+        bytes: new Uint8Array(),
+        bytesRead: 0,
+        truncated: false
+      }
+    }
+
+    const result = await input.readRange({
+      offset: 0,
+      length: descriptor.range.size
+    })
+    if (!result.ok) return result
+
+    return {
+      ok: true,
+      bytes: decodeBase64Bytes(result.dataBase64),
+      bytesRead: result.length,
+      truncated: false
+    }
+  }
+
   return {
     descriptor: input.descriptor,
     strategyStatus(kind) {
@@ -460,41 +584,25 @@ export function createWorkspacePreviewAssetTransportClient(input: {
     readRange(range) {
       return input.readRange(range)
     },
+    async prepareArtifact(request) {
+      if (!input.prepareArtifact) return { ok: false, message: 'Workspace preview artifact preparation is unavailable.' }
+      return input.prepareArtifact(request)
+    },
+    async readArtifactRange(request) {
+      if (!input.readArtifactRange) return { ok: false, message: 'Workspace preview artifact range transport is unavailable.' }
+      return input.readArtifactRange(request)
+    },
+    artifact(artifactId) {
+      return input.descriptor?.artifacts?.find((artifact) => artifact.artifactId === artifactId) ?? null
+    },
+    readBytesIfWithin,
     async readTextIfWithin(maxBytes) {
-      const descriptor = input.descriptor
-      if (!descriptor) return { ok: false, message: 'No workspace preview asset descriptor is available.' }
-      if (!descriptor.range.available) return { ok: false, message: 'Byte-range transport is not available for this asset.' }
-      if (descriptor.range.size > maxBytes) {
-        return {
-          ok: false,
-          message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${maxBytes} byte text read limit.`
-        }
-      }
-      if (descriptor.range.size > descriptor.range.maxChunkBytes) {
-        return {
-          ok: false,
-          message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${descriptor.range.maxChunkBytes} byte range chunk limit.`
-        }
-      }
-      if (descriptor.range.size === 0) {
-        return {
-          ok: true,
-          text: '',
-          bytesRead: 0,
-          truncated: false
-        }
-      }
-
-      const result = await input.readRange({
-        offset: 0,
-        length: descriptor.range.size
-      })
+      const result = await readBytesIfWithin(maxBytes)
       if (!result.ok) return result
-
       return {
         ok: true,
-        text: decodeBase64Utf8(result.dataBase64),
-        bytesRead: result.length,
+        text: new TextDecoder().decode(result.bytes),
+        bytesRead: result.bytesRead,
         truncated: false
       }
     }
@@ -522,11 +630,11 @@ function observationWithSessionSelection(
   }
 }
 
-function decodeBase64Utf8(value: string): string {
+function decodeBase64Bytes(value: string): Uint8Array {
   const binary = atob(value)
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index)
   }
-  return new TextDecoder().decode(bytes)
+  return bytes
 }

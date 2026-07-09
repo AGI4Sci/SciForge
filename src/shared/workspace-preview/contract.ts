@@ -10,13 +10,50 @@ export const WORKSPACE_PREVIEW_MAX_SELECTION_ITEMS = 10_000
 export const WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS = 1_000
 export const WORKSPACE_PREVIEW_MAX_RANGE_BYTES = 4 * 1024 * 1024
 export const WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES = 1024 * 1024
+export const WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES = 1024 * 1024
+export const WORKSPACE_PREVIEW_MAX_IMPORT_PACKAGE_BASE64_CHARS = 160_000_000
 export const WORKSPACE_PREVIEW_MAX_DIFF_SUMMARY_PREVIEW_ITEMS = 20
 export const WORKSPACE_PREVIEW_MAX_DIFF_SUMMARY_PREVIEW_CHARS = 4_000
 export const WORKSPACE_PREVIEW_MAX_TRANSFER_ITEMS = 512
 export const WORKSPACE_PREVIEW_MAX_ANNOTATION_TEXT_CHARS = 80_000
 export const WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS = 2_000
 export const WORKSPACE_PREVIEW_MAX_ANNOTATION_RECTS = 800
+export const WORKSPACE_PREVIEW_MAX_PLUGIN_METADATA_STRING_CHARS = 32_000
 export const WORKSPACE_PREVIEW_DRAG_SOURCE_MIME = 'application/vnd.sciforge.workspace-preview.drag-source+json'
+export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS = [
+  '.txt',
+  '.text',
+  '.log',
+  '.json',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.ini',
+  '.env',
+  '.sh',
+  '.py',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.css',
+  '.scss',
+  '.sql',
+  '.tex',
+  '.bib'
+] as const
+export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES = [
+  'text/plain',
+  'application/json',
+  'application/xml',
+  'text/xml',
+  'application/yaml',
+  'text/yaml'
+] as const
+export const WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES = ['text/markdown', 'text/x-markdown'] as const
+export const WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES = ['application/pdf', 'application/x-pdf'] as const
+export const WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS = ['png', 'jpg', 'jpeg', 'webp'] as const
 export const WORKSPACE_PREVIEW_FIRST_PARTY_TABULAR_SHELL_EXTENSIONS = ['.csv', '.tsv', '.jsonl', '.ndjson', '.xlsx'] as const
 export const WORKSPACE_PREVIEW_DELIMITED_TABULAR_EDIT_EXTENSIONS = ['.csv', '.tsv'] as const
 export const WORKSPACE_PREVIEW_DECK_TEXT_ELEMENT_KINDS = [
@@ -38,6 +75,14 @@ export const WORKSPACE_PREVIEW_ANNOTATION_KINDS = [
 export const WORKSPACE_PREVIEW_ANNOTATION_DOCUMENT_KINDS = ['pdf', 'docx'] as const
 export const WORKSPACE_PREVIEW_ANNOTATION_ANCHOR_KINDS = ['text', 'image', 'visual'] as const
 export const WORKSPACE_PREVIEW_ANNOTATION_THREAD_STATUSES = ['open', 'resolved'] as const
+export const TEXT_WORKSPACE_PREVIEW_PLUGIN_ID = 'text'
+export const MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID = 'markdown'
+export const HTML_WORKSPACE_PREVIEW_PLUGIN_ID = 'html'
+export const IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID = 'image'
+export const PDF_WORKSPACE_PREVIEW_PLUGIN_ID = 'pdf'
+export const DOCX_WORKSPACE_PREVIEW_PLUGIN_ID = 'docx'
+export const TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID = 'tabular'
+export const DECK_WORKSPACE_PREVIEW_PLUGIN_ID = 'deck'
 
 export const WORKSPACE_PREVIEW_AGENT_ACCESS = {
   observe: true,
@@ -242,6 +287,26 @@ export type WorkspaceSequenceObservationIndexedRange = {
   strand?: '+' | '-'
 }
 
+export type WorkspacePreviewJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | WorkspacePreviewJsonValue[]
+  | { [key: string]: WorkspacePreviewJsonValue }
+
+export type WorkspacePreviewPluginMetadataItem = {
+  source: 'plugin-metadata'
+  metadataKind: string
+  mimeType?: string
+  metadataOnly: true
+  containsPixels: false
+  pixelDecoding?: false
+  data: WorkspacePreviewJsonValue
+  selection?: WorkspaceStructuredSelection
+  actions?: string[]
+}
+
 export type WorkspaceObservation = {
   schemaVersion: typeof WORKSPACE_PREVIEW_CONTRACT_VERSION
   file: {
@@ -260,6 +325,10 @@ export type WorkspaceObservation = {
   selection?: WorkspaceStructuredSelection
   visibleText?: string
   outline?: Array<{ id: string; title: string; level?: number; page?: number }>
+  document?: {
+    paragraphs?: Array<{ id: string; index: number; text: string; style?: string }>
+    truncatedParagraphs?: boolean
+  }
   tables?: Array<{ id: string; name?: string; rowCount?: number; columnCount?: number }>
   tabular?: {
     header?: string[]
@@ -333,6 +402,7 @@ export type WorkspaceObservation = {
     scanMarkers?: Array<{ index: number; id?: string; scanNumber?: string; msLevel?: string; peakCount?: number; mzRange?: { min: number; max: number }; intensityRange?: { min: number; max: number } }>
   }
   annotations?: Array<{ id: string; kind: string; summary?: string }>
+  pluginMetadata?: WorkspacePreviewPluginMetadataItem[]
   actions: string[]
 }
 
@@ -379,6 +449,7 @@ export const workspacePreviewAnnotationUpsertTargetSchema = z.object({
     { message: 'Annotation anchor pageEnd must be greater than or equal to pageStart.' }
   ).optional(),
   thread: z.object({
+    kind: workspacePreviewAnnotationKindSchema.optional(),
     status: workspacePreviewAnnotationThreadStatusSchema.optional(),
     title: z.string().trim().max(512).optional(),
     authorId: idSchema.optional(),
@@ -606,6 +677,27 @@ export const workspacePreviewSessionSchema = z.object({
   selection: workspaceStructuredSelectionSchema.optional()
 }).strict()
 
+export const workspacePreviewJsonValueSchema: z.ZodType<WorkspacePreviewJsonValue> = z.lazy(() => z.union([
+  z.null(),
+  z.boolean(),
+  z.number().finite(),
+  z.string().max(WORKSPACE_PREVIEW_MAX_PLUGIN_METADATA_STRING_CHARS),
+  z.array(workspacePreviewJsonValueSchema).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS),
+  z.record(z.string().trim().min(1).max(128), workspacePreviewJsonValueSchema)
+]))
+
+export const workspacePreviewPluginMetadataItemSchema = z.object({
+  source: z.literal('plugin-metadata'),
+  metadataKind: z.string().trim().min(1).max(128),
+  mimeType: z.string().trim().min(1).max(128).optional(),
+  metadataOnly: z.literal(true),
+  containsPixels: z.literal(false),
+  pixelDecoding: z.literal(false).optional(),
+  data: workspacePreviewJsonValueSchema,
+  selection: workspaceStructuredSelectionSchema.optional(),
+  actions: z.array(z.string().trim().min(1).max(128)).max(256).optional()
+}).strict()
+
 export const workspaceObservationSchema = z.object({
   schemaVersion: z.literal(WORKSPACE_PREVIEW_CONTRACT_VERSION),
   file: z.object({
@@ -648,6 +740,15 @@ export const workspaceObservationSchema = z.object({
     lineCount: z.number().int().nonnegative().optional(),
     characterCount: z.number().int().nonnegative().optional(),
     truncated: z.boolean().optional()
+  }).strict().optional(),
+  document: z.object({
+    paragraphs: z.array(z.object({
+      id: idSchema,
+      index: z.number().int().min(1),
+      text: boundedString(WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS),
+      style: optionalShortStringSchema
+    }).strict()).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS).optional(),
+    truncatedParagraphs: z.boolean().optional()
   }).strict().optional(),
   slides: z.array(z.object({
     id: idSchema,
@@ -752,6 +853,9 @@ export const workspaceObservationSchema = z.object({
     kind: z.string().trim().min(1).max(128),
     summary: z.string().trim().max(1000).optional()
   }).strict()).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS).optional(),
+  pluginMetadata: z.array(workspacePreviewPluginMetadataItemSchema)
+    .max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
+    .optional(),
   actions: z.array(z.string().trim().min(1).max(128)).max(256)
 }).strict()
 
@@ -830,6 +934,23 @@ export const workspacePreviewEditOperationSchema = z.discriminatedUnion('kind', 
     target: workspacePreviewAnnotationUpsertTargetSchema.optional()
   }).strict(),
   z.object({
+    kind: z.literal('annotation.thread.update'),
+    path: pathSchema,
+    threadId: idSchema,
+    patch: z.object({
+      status: z.enum(['open', 'resolved']).optional(),
+      title: boundedString(512).optional()
+    }).strict().refine((patch) => patch.status !== undefined || patch.title !== undefined, {
+      message: 'annotation.thread.update requires at least one patch field.'
+    })
+  }).strict(),
+  z.object({
+    kind: z.literal('annotation.thread.delete'),
+    path: pathSchema,
+    threadId: idSchema,
+    pruneOrphanAnchors: z.boolean().default(true)
+  }).strict(),
+  z.object({
     kind: z.literal('molecular.setSelection'),
     path: pathSchema,
     selection: workspaceStructuredSelectionSchema
@@ -905,6 +1026,44 @@ export const workspacePreviewPluginActionInputSchema = z.object({
 
 export type WorkspacePreviewPluginActionInput = z.infer<typeof workspacePreviewPluginActionInputSchema>
 
+export const workspacePreviewAnnotationSidecarImportActionInputSchema = z.object({
+  packagePath: z.string().trim().min(1).max(4096).optional(),
+  packageBase64: z.string().trim().min(1).max(WORKSPACE_PREVIEW_MAX_IMPORT_PACKAGE_BASE64_CHARS).optional(),
+  attemptRelocation: z.boolean().optional()
+}).strict().refine((input) => {
+  const hasPath = Boolean(input.packagePath?.trim())
+  const hasBase64 = Boolean(input.packageBase64?.trim())
+  return hasPath !== hasBase64
+}, {
+  message: 'Exactly one PDF annotation package path or base64 content is required.'
+})
+
+export type WorkspacePreviewAnnotationSidecarImportActionInput =
+  z.infer<typeof workspacePreviewAnnotationSidecarImportActionInputSchema>
+
+export const workspacePreviewAnnotationSidecarImportActionResultSchema = z.object({
+  sidecar: z.unknown(),
+  importedAt: z.string().trim().min(1).max(128),
+  pdfFingerprint: z.object({
+    sha256: z.string().trim().min(1).max(128),
+    size: z.number().int().nonnegative(),
+    mtimeMs: z.number().finite().nonnegative().optional(),
+    pageCount: z.number().int().positive().max(1_000_000).optional(),
+    fileName: z.string().trim().max(512).optional()
+  }).strict(),
+  fingerprintMatched: z.boolean(),
+  warnings: z.array(z.string().trim().max(1000)).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS),
+  counts: z.object({
+    threads: z.number().int().nonnegative(),
+    annotations: z.number().int().nonnegative(),
+    anchors: z.number().int().nonnegative()
+  }).strict(),
+  effect: z.literal('sidecar-write')
+}).strict()
+
+export type WorkspacePreviewAnnotationSidecarImportActionResult =
+  z.infer<typeof workspacePreviewAnnotationSidecarImportActionResultSchema>
+
 export const workspacePreviewPluginActionResultSchema = z.object({
   ok: z.literal(true),
   sessionId: idSchema,
@@ -916,7 +1075,7 @@ export const workspacePreviewPluginActionResultSchema = z.object({
     pluginId: z.string().trim().min(1).max(128),
     path: pathSchema,
     actionId: z.string().trim().min(1).max(128),
-    effect: z.literal('worker-action')
+    effect: z.enum(['worker-action', 'host-action'])
   }).strict()
 }).strict()
 
@@ -1235,12 +1394,132 @@ export const workspacePreviewAssetTransportStatusSchema = z.enum([
 
 export type WorkspacePreviewAssetTransportStatus = z.infer<typeof workspacePreviewAssetTransportStatusSchema>
 
+export const workspacePreviewArtifactKindSchema = z.enum([
+  'thumbnail',
+  'cache-artifact',
+  'tile'
+])
+
+export type WorkspacePreviewArtifactKind = z.infer<typeof workspacePreviewArtifactKindSchema>
+
+export const workspacePreviewCacheArtifactSourceSchema = z.enum([
+  'observation',
+  'plugin-metadata'
+])
+
+export type WorkspacePreviewCacheArtifactSource =
+  z.infer<typeof workspacePreviewCacheArtifactSourceSchema>
+
+export const workspacePreviewArtifactCacheSourceSchema = z.enum([
+  'observation',
+  'plugin-metadata',
+  'worker-decoder'
+])
+
+export type WorkspacePreviewArtifactCacheSource =
+  z.infer<typeof workspacePreviewArtifactCacheSourceSchema>
+
+export const workspacePreviewArtifactDescriptorSchema = z.object({
+  schemaVersion: z.literal(WORKSPACE_PREVIEW_CONTRACT_VERSION),
+  sessionId: idSchema,
+  assetId: idSchema,
+  artifactId: idSchema,
+  kind: workspacePreviewArtifactKindSchema,
+  pluginId: z.string().trim().min(1).max(128),
+  mimeType: z.string().trim().min(1).max(128),
+  byteLength: z.number().int().nonnegative().max(WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES),
+  range: z.object({
+    available: z.literal(true),
+    size: z.number().int().nonnegative().max(WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES),
+    maxChunkBytes: z.number().int().positive().max(WORKSPACE_PREVIEW_MAX_RANGE_BYTES),
+    recommendedChunkBytes: z.number().int().positive().max(WORKSPACE_PREVIEW_MAX_RANGE_BYTES)
+  }).strict(),
+  source: z.object({
+    assetId: idSchema,
+    size: z.number().finite().nonnegative().optional(),
+    mtimeMs: z.number().finite().nonnegative().optional(),
+    sha256: z.string().trim().regex(/^[a-f0-9]{64}$/).optional()
+  }).strict(),
+  cache: z.object({
+    scope: z.literal('session'),
+    source: workspacePreviewArtifactCacheSourceSchema,
+    metadataKind: z.string().trim().min(1).max(128).optional(),
+    createdAt: z.string().trim().min(1).max(128),
+    invalidation: z.enum(['source-size-mtime', 'source-sha256'])
+  }).strict(),
+  thumbnail: z.object({
+    width: z.number().int().positive().max(100_000),
+    height: z.number().int().positive().max(100_000)
+  }).strict().optional(),
+  tile: z.object({
+    level: z.number().int().nonnegative().max(1_000_000),
+    x: z.number().int().nonnegative().max(1_000_000),
+    y: z.number().int().nonnegative().max(1_000_000),
+    width: z.number().int().positive().max(100_000),
+    height: z.number().int().positive().max(100_000)
+  }).strict().optional()
+}).strict()
+
+export type WorkspacePreviewArtifactDescriptor =
+  z.infer<typeof workspacePreviewArtifactDescriptorSchema>
+
+export const workspacePreviewPrepareArtifactRequestSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('cache-artifact'),
+    source: workspacePreviewCacheArtifactSourceSchema,
+    metadataKind: z.string().trim().min(1).max(128).optional()
+  }).strict(),
+  z.object({
+    kind: z.literal('tile'),
+    level: z.number().int().nonnegative().max(1_000_000),
+    x: z.number().int().nonnegative().max(1_000_000),
+    y: z.number().int().nonnegative().max(1_000_000),
+    width: z.number().int().positive().max(100_000),
+    height: z.number().int().positive().max(100_000),
+    channelIndex: z.number().int().nonnegative().max(1_000_000).optional(),
+    z: z.number().int().nonnegative().max(1_000_000).optional(),
+    t: z.number().int().nonnegative().max(1_000_000).optional()
+  }).strict(),
+  z.object({
+    kind: z.literal('thumbnail'),
+    width: z.number().int().positive().max(4096),
+    height: z.number().int().positive().max(4096),
+    channelIndex: z.number().int().nonnegative().max(1_000_000).optional(),
+    z: z.number().int().nonnegative().max(1_000_000).optional(),
+    t: z.number().int().nonnegative().max(1_000_000).optional()
+  }).strict()
+])
+
+export type WorkspacePreviewPrepareArtifactRequest =
+  z.infer<typeof workspacePreviewPrepareArtifactRequestSchema>
+
+export const workspacePreviewReadArtifactRangeRequestSchema = z.object({
+  artifactId: idSchema,
+  range: workspacePreviewByteRangeSchema
+}).strict()
+
+export type WorkspacePreviewReadArtifactRangeRequest =
+  z.infer<typeof workspacePreviewReadArtifactRangeRequestSchema>
+
+export const workspacePreviewAssetFileDescriptorSchema = z.object({
+  name: z.string().trim().min(1).max(512),
+  relativePath: z.string().trim().min(1).max(4096).optional(),
+  mimeType: z.string().trim().max(128).optional(),
+  size: z.number().finite().nonnegative().optional(),
+  mtimeMs: z.number().finite().nonnegative().optional(),
+  sha256: z.string().trim().regex(/^[a-f0-9]{64}$/).optional()
+}).strict()
+
+export type WorkspacePreviewAssetFileDescriptor =
+  z.infer<typeof workspacePreviewAssetFileDescriptorSchema>
+
 export const workspacePreviewAssetTransportDescriptorSchema = z.object({
   schemaVersion: z.literal(WORKSPACE_PREVIEW_CONTRACT_VERSION),
   sessionId: idSchema,
+  assetId: idSchema,
   pluginId: z.string().trim().min(1).max(128),
   modality: workspacePreviewModalitySchema,
-  file: workspacePreviewFileStateSchema,
+  file: workspacePreviewAssetFileDescriptorSchema,
   primary: workspacePreviewAssetTransportKindSchema,
   eagerRead: z.object({
     allowed: z.boolean(),
@@ -1258,6 +1537,7 @@ export const workspacePreviewAssetTransportDescriptorSchema = z.object({
     reason: z.string().trim().min(1).max(512),
     maxChunkBytes: z.number().int().positive().max(WORKSPACE_PREVIEW_MAX_RANGE_BYTES).optional()
   }).strict()).min(1).max(16),
+  artifacts: z.array(workspacePreviewArtifactDescriptorSchema).max(64).optional(),
   warnings: z.array(z.string().trim().min(1).max(1000)).max(32).optional()
 }).strict()
 

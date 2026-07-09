@@ -30,8 +30,6 @@ import {
   figureStyleExtractReferencePayloadSchema,
   figureStyleSaveSpecPayloadSchema,
   isSafeOpenExternalUrl,
-  pdfAnnotationSidecarImportPayloadSchema,
-  pdfAnnotationSidecarLoadPayloadSchema,
   projectDagCompilePayloadSchema,
   projectDagViewPayloadSchema,
   remoteChannelActiveThreadContextPayloadSchema,
@@ -57,6 +55,8 @@ import {
   workspacePreviewExportPayloadSchema,
   workspacePreviewObservePayloadSchema,
   workspacePreviewOpenPayloadSchema,
+  workspacePreviewPrepareArtifactPayloadSchema,
+  workspacePreviewReadArtifactRangePayloadSchema,
   workspacePreviewReadRangePayloadSchema,
   writeExportPayloadSchema,
   writeRichClipboardPayloadSchema,
@@ -554,6 +554,47 @@ describe('app-ipc-schemas', () => {
       sessionId: 'session-1',
       range: { offset: 4, length: 16 }
     })
+    expect(workspacePreviewPrepareArtifactPayloadSchema.parse({
+      sessionId: ' session-1 ',
+      request: {
+        kind: 'cache-artifact',
+        source: 'observation'
+      }
+    })).toEqual({
+      sessionId: 'session-1',
+      request: {
+        kind: 'cache-artifact',
+        source: 'observation'
+      }
+    })
+    expect(workspacePreviewPrepareArtifactPayloadSchema.parse({
+      sessionId: ' session-1 ',
+      request: {
+        kind: 'cache-artifact',
+        source: 'plugin-metadata',
+        metadataKind: 'bioimaging'
+      }
+    })).toEqual({
+      sessionId: 'session-1',
+      request: {
+        kind: 'cache-artifact',
+        source: 'plugin-metadata',
+        metadataKind: 'bioimaging'
+      }
+    })
+    expect(workspacePreviewReadArtifactRangePayloadSchema.parse({
+      sessionId: ' session-1 ',
+      request: {
+        artifactId: ' artifact-1 ',
+        range: { offset: 0, length: 32 }
+      }
+    })).toEqual({
+      sessionId: 'session-1',
+      request: {
+        artifactId: 'artifact-1',
+        range: { offset: 0, length: 32 }
+      }
+    })
     expect(workspacePreviewApplyEditPayloadSchema.parse({
       sessionId: ' session-1 ',
       operation: {
@@ -650,47 +691,6 @@ describe('app-ipc-schemas', () => {
         mimeType: 'image/png'
       })
     ).toThrow(/audio MIME type/)
-  })
-
-  it('accepts PDF annotation sidecar target and import payloads', () => {
-    expect(pdfAnnotationSidecarLoadPayloadSchema.parse({
-      pdfPath: ' /tmp/workspace/paper.pdf ',
-      workspaceRoot: ' /tmp/workspace ',
-      pageCount: 12
-    })).toEqual({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      pageCount: 12
-    })
-
-    expect(pdfAnnotationSidecarImportPayloadSchema.parse({
-      pdfPath: ' /tmp/workspace/paper.pdf ',
-      workspaceRoot: ' /tmp/workspace ',
-      packagePath: ' /tmp/workspace/paper.dsgui-pdf.zip ',
-      attemptRelocation: true
-    })).toEqual({
-      pdfPath: '/tmp/workspace/paper.pdf',
-      workspaceRoot: '/tmp/workspace',
-      packagePath: '/tmp/workspace/paper.dsgui-pdf.zip',
-      attemptRelocation: true
-    })
-  })
-
-  it('rejects PDF annotation import payloads without an import source', () => {
-    expect(() =>
-      pdfAnnotationSidecarImportPayloadSchema.parse({
-        pdfPath: '/tmp/workspace/paper.pdf',
-        workspaceRoot: '/tmp/workspace'
-      })
-    ).toThrow(/package path or base64/)
-
-    expect(() =>
-      pdfAnnotationSidecarImportPayloadSchema.parse({
-        pdfPath: '/tmp/workspace/paper.pdf',
-        packageBase64: 'ZmFrZS16aXA=',
-        transcript: 'not allowed'
-      })
-    ).toThrow(/Unrecognized key/)
   })
 
   it('accepts a valid settings patch for local runtime and write settings', () => {

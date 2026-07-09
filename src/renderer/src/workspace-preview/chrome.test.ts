@@ -65,11 +65,11 @@ function createAssetTransportDescriptor(
   return {
     schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
     sessionId: 'session-1',
+    assetId: 'asset:session-1',
     pluginId: 'molecular',
     modality: 'molecular',
     file: {
-      workspaceRoot: '/workspace/lab',
-      path: '/workspace/lab/data/protein.pdb',
+      name: 'protein.pdb',
       relativePath: 'data/protein.pdb',
       mimeType: 'chemical/x-pdb',
       size: 8192
@@ -346,6 +346,85 @@ describe('workspace preview shared chrome', () => {
     })
     expect(actionsById.has('workspace.export:pdf')).toBe(false)
     expect(actionsById.has('workspace.export:png')).toBe(false)
+  })
+
+  it('enables sidecar export for PDF and DOCX document previews', () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const pdfDescriptor = requireDescriptor(registry, 'paper.pdf')
+    const docxDescriptor = requireDescriptor(registry, 'report.docx')
+    const pdfModel = buildWorkspacePreviewChromeModel({
+      registry,
+      state: createWorkspacePreviewHostState({
+        session: createSession(pdfDescriptor, {
+          path: '/workspace/lab/paper.pdf',
+          modality: 'document'
+        }),
+        descriptor: pdfDescriptor,
+        observation: {
+          schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+          file: {
+            path: '/workspace/lab/paper.pdf',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'application/pdf'
+          },
+          view: {
+            pluginId: 'pdf',
+            modality: 'document',
+            mode: 'preview',
+            title: 'paper.pdf'
+          },
+          actions: ['annotation.upsert']
+        },
+        file: createFileState({
+          path: '/workspace/lab/paper.pdf',
+          relativePath: 'paper.pdf',
+          mimeType: 'application/pdf'
+        })
+      })
+    })
+    const docxModel = buildWorkspacePreviewChromeModel({
+      registry,
+      state: createWorkspacePreviewHostState({
+        session: createSession(docxDescriptor, {
+          path: '/workspace/lab/report.docx',
+          modality: 'document'
+        }),
+        descriptor: docxDescriptor,
+        observation: {
+          schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+          file: {
+            path: '/workspace/lab/report.docx',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          },
+          view: {
+            pluginId: 'docx',
+            modality: 'document',
+            mode: 'preview',
+            title: 'report.docx'
+          },
+          actions: ['annotation.upsert']
+        },
+        file: createFileState({
+          path: '/workspace/lab/report.docx',
+          relativePath: 'report.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        })
+      })
+    })
+    const pdfActions = new Map(pdfModel.toolbar.actions.map((action) => [action.id, action]))
+    const docxActions = new Map(docxModel.toolbar.actions.map((action) => [action.id, action]))
+
+    expect(pdfActions.get('workspace.export:sidecar')).toMatchObject({
+      label: 'Export SIDECAR',
+      enabled: true,
+      format: 'sidecar'
+    })
+    expect(docxActions.get('workspace.export:sidecar')).toMatchObject({
+      label: 'Export SIDECAR',
+      enabled: true,
+      format: 'sidecar'
+    })
   })
 
   it('reports deferred and unsupported paths without falling through to legacy chrome', () => {

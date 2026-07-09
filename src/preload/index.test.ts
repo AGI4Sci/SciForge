@@ -160,34 +160,21 @@ describe('preload agentRuntime bridge', () => {
     expect(removeListener).toHaveBeenCalledWith('dev-preview:navigate', wrapped)
   })
 
-  it('keeps PDF preview on the generic workspace file IPC channel', async () => {
+  it('keeps preview-specific HTML and DOCX writes off the renderer-facing file IPC surface', async () => {
     const api = exposedApi as {
       readWorkspaceFile(options: unknown): Promise<unknown>
-      previewWorkspaceHtml(options: unknown): Promise<unknown>
-      writeWorkspaceDocxText(options: unknown): Promise<unknown>
+      previewWorkspaceHtml?: unknown
+      writeWorkspaceDocxText?: unknown
     }
 
     await api.readWorkspaceFile({ path: 'paper.pdf', workspaceRoot: '/tmp/workspace' })
-    await api.previewWorkspaceHtml({ path: 'status.html', workspaceRoot: '/tmp/workspace' })
-    await api.writeWorkspaceDocxText({
-      path: 'paper.docx',
-      workspaceRoot: '/tmp/workspace',
-      paragraphs: [{ index: 1, text: 'edited' }]
-    })
 
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
       path: 'paper.pdf',
       workspaceRoot: '/tmp/workspace'
     })
-    expect(invoke).toHaveBeenCalledWith('file:preview-workspace-html', {
-      path: 'status.html',
-      workspaceRoot: '/tmp/workspace'
-    })
-    expect(invoke).toHaveBeenCalledWith('file:write-docx-text', {
-      path: 'paper.docx',
-      workspaceRoot: '/tmp/workspace',
-      paragraphs: [{ index: 1, text: 'edited' }]
-    })
+    expect(api.previewWorkspaceHtml).toBeUndefined()
+    expect(api.writeWorkspaceDocxText).toBeUndefined()
   })
 
   it('exposes workspace preview IPC methods without replacing file channels', async () => {
@@ -199,8 +186,11 @@ describe('preload agentRuntime bridge', () => {
         observe(sessionId: string): Promise<unknown>
         describeAsset(sessionId: string): Promise<unknown>
         readRange(sessionId: string, range: unknown): Promise<unknown>
+        prepareArtifact(sessionId: string, request: unknown): Promise<unknown>
+        readArtifactRange(sessionId: string, request: unknown): Promise<unknown>
         applyEdit(sessionId: string, operation: unknown): Promise<unknown>
         export(sessionId: string, target: unknown): Promise<unknown>
+        releaseSession(sessionId: string): Promise<boolean>
         watch(payload: unknown): Promise<unknown>
         unwatch(watchId: string): Promise<unknown>
         onChanged(handler: (payload: unknown) => void): () => void
@@ -218,6 +208,14 @@ describe('preload agentRuntime bridge', () => {
     await api.workspacePreview.observe('session-1')
     await api.workspacePreview.describeAsset('session-1')
     await api.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
+    await api.workspacePreview.prepareArtifact('session-1', {
+      kind: 'cache-artifact',
+      source: 'observation'
+    })
+    await api.workspacePreview.readArtifactRange('session-1', {
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 4 }
+    })
     await api.workspacePreview.applyEdit('session-1', {
       kind: 'molecular.setSelection',
       path: 'protein.pdb',
@@ -228,6 +226,7 @@ describe('preload agentRuntime bridge', () => {
       format: 'pdb',
       path: 'exports/protein-copy.pdb'
     })
+    await api.workspacePreview.releaseSession('session-1')
     await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
     await api.workspacePreview.unwatch('watch-1')
     const changed = vi.fn()
@@ -245,6 +244,20 @@ describe('preload agentRuntime bridge', () => {
       sessionId: 'session-1',
       range: { offset: 0, length: 4 }
     })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:prepareArtifact', {
+      sessionId: 'session-1',
+      request: {
+        kind: 'cache-artifact',
+        source: 'observation'
+      }
+    })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:readArtifactRange', {
+      sessionId: 'session-1',
+      request: {
+        artifactId: 'artifact-1',
+        range: { offset: 0, length: 4 }
+      }
+    })
     expect(invoke).toHaveBeenCalledWith('workspacePreview:applyEdit', {
       sessionId: 'session-1',
       operation: {
@@ -260,6 +273,9 @@ describe('preload agentRuntime bridge', () => {
         format: 'pdb',
         path: 'exports/protein-copy.pdb'
       }
+    })
+    expect(invoke).toHaveBeenCalledWith('workspacePreview:releaseSession', {
+      sessionId: 'session-1'
     })
     expect(invoke).toHaveBeenCalledWith('workspacePreview:watch', {
       path: 'protein.pdb',
@@ -405,47 +421,12 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('researchCards:archive', { cardId: 'rc-1' })
   })
 
-  it('exposes PDF annotation sidecar IPC methods through the preload bridge', async () => {
+  it('does not expose legacy PDF annotation IPC methods through the preload bridge', () => {
     const api = exposedApi as {
-      pdfAnnotations: {
-        load(payload: unknown): Promise<unknown>
-        save(payload: unknown): Promise<unknown>
-        export(payload: unknown): Promise<unknown>
-        exportPdf(payload: unknown): Promise<unknown>
-        import(payload: unknown): Promise<unknown>
-      }
-    }
-    const target = { pdfPath: '/tmp/workspace/paper.pdf', workspaceRoot: '/tmp/workspace' }
-    const sidecar = {
-      schemaVersion: 1,
-      version: 0,
-      manifest: {
-        app: 'sciforge.pdf-annotations',
-        schemaVersion: 1,
-        privacy: { explicitOnly: true, chatTranscriptEmbedded: false },
-        contribution: { reviewableJson: true, mergeKey: 'threadId', conflictResolution: 'updatedAt' },
-        createdAt: '2026-06-22T00:00:00.000Z',
-        updatedAt: '2026-06-22T00:00:00.000Z'
-      },
-      pdfFingerprint: { sha256: 'sha256', size: 1 },
-      anchors: [],
-      annotations: [],
-      threads: [],
-      authors: [],
-      updatedAt: '2026-06-22T00:00:00.000Z'
+      pdfAnnotations?: unknown
     }
 
-    await api.pdfAnnotations.load(target)
-    await api.pdfAnnotations.save({ ...target, sidecar })
-    await api.pdfAnnotations.export({ ...target, sidecar, anonymizeAuthors: true })
-    await api.pdfAnnotations.exportPdf({ ...target, sidecar })
-    await api.pdfAnnotations.import({ ...target, packageBase64: 'ZmFrZS16aXA=' })
-
-    expect(invoke).toHaveBeenCalledWith('pdfAnnotations:load', target)
-    expect(invoke).toHaveBeenCalledWith('pdfAnnotations:save', { ...target, sidecar })
-    expect(invoke).toHaveBeenCalledWith('pdfAnnotations:export', { ...target, sidecar, anonymizeAuthors: true })
-    expect(invoke).toHaveBeenCalledWith('pdfAnnotations:exportPdf', { ...target, sidecar })
-    expect(invoke).toHaveBeenCalledWith('pdfAnnotations:import', { ...target, packageBase64: 'ZmFrZS16aXA=' })
+    expect(api.pdfAnnotations).toBeUndefined()
   })
 
   it('exposes visible context IPC methods through the preload bridge', async () => {
@@ -462,7 +443,7 @@ describe('preload agentRuntime bridge', () => {
       components: [{
         id: 'right-sidebar',
         region: 'right-sidebar',
-        component: 'file-preview',
+        component: 'workspace-preview',
         visible: true,
         updatedAt: '2026-07-04T00:00:00.000Z',
         summary: 'Previewing a file.'

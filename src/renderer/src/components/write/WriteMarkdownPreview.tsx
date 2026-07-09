@@ -52,7 +52,19 @@ type Props = {
   filePath?: string | null
   workspaceRoot?: string | null
   previewErrorMessage?: string
+  loadWorkspaceImage?: WriteMarkdownWorkspaceImageLoader
 }
+
+export type WriteMarkdownWorkspaceImageLoader = (input: {
+  path: string
+  workspaceRoot: string
+}) => Promise<{
+  ok: true
+  dataUrl: string
+} | {
+  ok: false
+  message?: string
+}>
 
 type CodeProps = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
   node?: { tagName?: string }
@@ -276,6 +288,7 @@ type ResolvedMarkdownImageProps = {
   alt?: string | null
   filePath?: string | null
   workspaceRoot?: string | null
+  loadWorkspaceImage?: WriteMarkdownWorkspaceImageLoader
 } & Omit<ComponentPropsWithoutRef<'img'>, 'src' | 'alt'>
 
 function ResolvedMarkdownImage({
@@ -283,6 +296,7 @@ function ResolvedMarkdownImage({
   alt,
   filePath,
   workspaceRoot,
+  loadWorkspaceImage,
   ...props
 }: ResolvedMarkdownImageProps): ReactElement {
   const [resolvedSrc, setResolvedSrc] = useState(() => resolveWriteMarkdownResource(src, filePath))
@@ -297,12 +311,12 @@ function ResolvedMarkdownImage({
 
     if (!localPath) return
     const root = workspaceRoot?.trim()
-    if (!root || typeof window.sciforge?.readWorkspaceImage !== 'function') {
+    if (!root || !loadWorkspaceImage) {
       setLoadFailed(true)
       return
     }
 
-    void window.sciforge.readWorkspaceImage({ path: localPath, workspaceRoot: root })
+    void loadWorkspaceImage({ path: localPath, workspaceRoot: root })
       .then((result) => {
         if (cancelled) return
         const safeDataUrl = result.ok ? normalizeSafeEmbeddedMediaUrl(result.dataUrl) : null
@@ -319,7 +333,7 @@ function ResolvedMarkdownImage({
     return () => {
       cancelled = true
     }
-  }, [src, filePath, workspaceRoot])
+  }, [src, filePath, workspaceRoot, loadWorkspaceImage])
 
   if (loadFailed) {
     return (
@@ -378,7 +392,7 @@ class PreviewErrorBoundary extends Component<PreviewBoundaryProps, PreviewBounda
   }
 }
 
-function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceRoot }: Props): ReactElement {
+function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceRoot, loadWorkspaceImage }: Props): ReactElement {
   if (!isMarkdown) return plainTextFallback(content)
   const markdownContent = normalizeMarkdownMathDelimiters(content)
 
@@ -409,6 +423,7 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceR
               alt={alt}
               filePath={filePath}
               workspaceRoot={workspaceRoot}
+              loadWorkspaceImage={loadWorkspaceImage}
             />
           ),
           code: ({ className, children, node, ...props }): ReactNode => (

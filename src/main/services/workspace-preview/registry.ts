@@ -1,7 +1,21 @@
 import {
+  DECK_WORKSPACE_PREVIEW_PLUGIN_ID,
+  DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
+  HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
+  IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
   LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
+  MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
+  PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
+  TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
+  TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
   WORKSPACE_PREVIEW_AGENT_ACCESS,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TABULAR_SHELL_EXTENSIONS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES,
   isDeferredNonLifeScienceExtension,
   normalizePreviewManifest,
   resolveLifeSciencePreviewRoute,
@@ -9,32 +23,32 @@ import {
   type WorkspacePreviewPluginManifest
 } from '../../../shared/workspace-preview'
 
-export const LEGACY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPluginManifest[] = [
+export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPluginManifest[] = [
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'legacy-markdown',
+    id: MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'Markdown Preview',
     version: '0.1.0',
-    modality: 'text',
+    modality: 'document',
     lifecycle: 'renderer',
     priority: 500,
     extensions: ['.md', '.mdx', '.markdown'],
-    mimeTypes: ['text/markdown'],
+    mimeTypes: [...WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES],
     capabilities: {
       preview: true,
       edit: true,
       inspect: true,
       structuredSelection: true,
-      export: ['markdown', 'html'],
+      export: ['markdown'],
       agent: WORKSPACE_PREVIEW_AGENT_ACCESS
     }
   },
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'legacy-html',
+    id: HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'HTML Preview',
     version: '0.1.0',
-    modality: 'text',
+    modality: 'document',
     lifecycle: 'hybrid',
     priority: 480,
     extensions: ['.html', '.htm'],
@@ -50,27 +64,27 @@ export const LEGACY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPlugin
   },
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'legacy-pdf',
+    id: PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'PDF Preview',
     version: '0.1.0',
     modality: 'document',
     lifecycle: 'renderer',
     priority: 520,
     extensions: ['.pdf'],
-    mimeTypes: ['application/pdf'],
+    mimeTypes: [...WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES],
     capabilities: {
       preview: true,
       edit: true,
       inspect: true,
       structuredSelection: true,
       annotations: true,
-      export: ['pdf', 'sidecar'],
+      export: ['pdf', 'sidecar', 'annotated-pdf'],
       agent: WORKSPACE_PREVIEW_AGENT_ACCESS
     }
   },
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'legacy-docx',
+    id: DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'DOCX Preview',
     version: '0.1.0',
     modality: 'document',
@@ -90,7 +104,7 @@ export const LEGACY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPlugin
   },
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'legacy-image',
+    id: IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'Image Preview',
     version: '0.1.0',
     modality: 'image',
@@ -100,67 +114,26 @@ export const LEGACY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPlugin
     mimeTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/avif', 'image/x-icon'],
     capabilities: {
       preview: true,
-      edit: true,
+      edit: false,
       inspect: true,
-      structuredSelection: true,
-      export: ['png', 'jpeg', 'webp'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
-    }
-  },
-  {
-    contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'legacy-text',
-    displayName: 'Text Preview',
-    version: '0.1.0',
-    modality: 'text',
-    lifecycle: 'renderer',
-    priority: 100,
-    extensions: ['.txt', '.log', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.xml', '.tex', '.bib', '.py', '.js', '.ts', '.tsx'],
-    mimeTypes: ['text/plain', 'application/json', 'application/x-yaml'],
-    capabilities: {
-      preview: true,
-      edit: true,
-      inspect: true,
-      structuredSelection: true,
-      export: ['text'],
+      structuredSelection: false,
+      export: [...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS],
       agent: WORKSPACE_PREVIEW_AGENT_ACCESS
     }
   }
 ] as const
 
-export const PLANNED_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPluginManifest[] = [
+export const FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPluginManifest[] = [
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'text',
+    id: TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'Text Preview',
     version: '0.1.0',
     modality: 'text',
     lifecycle: 'main',
     priority: 150,
-    extensions: [
-      '.txt',
-      '.text',
-      '.log',
-      '.json',
-      '.xml',
-      '.yaml',
-      '.yml',
-      '.toml',
-      '.ini',
-      '.env',
-      '.sh',
-      '.py',
-      '.js',
-      '.jsx',
-      '.ts',
-      '.tsx',
-      '.css',
-      '.scss',
-      '.sql',
-      '.tex',
-      '.bib'
-    ],
-    mimeTypes: ['text/plain', 'application/json', 'application/xml', 'text/xml', 'application/yaml', 'text/yaml'],
+    extensions: [...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS],
+    mimeTypes: [...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES],
     capabilities: {
       preview: true,
       edit: true,
@@ -172,13 +145,13 @@ export const PLANNED_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPlugi
   },
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'tabular',
+    id: TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'Tabular Data Preview',
     version: '0.1.0',
     modality: 'tabular',
     lifecycle: 'worker',
     priority: 620,
-    extensions: ['.csv', '.tsv', '.xlsx', '.xls', '.jsonl', '.ndjson', '.parquet', '.feather', '.arrow'],
+    extensions: [...WORKSPACE_PREVIEW_FIRST_PARTY_TABULAR_SHELL_EXTENSIONS],
     mimeTypes: [
       'text/csv',
       'text/tab-separated-values',
@@ -197,7 +170,7 @@ export const PLANNED_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewPlugi
   },
   {
     contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    id: 'deck',
+    id: DECK_WORKSPACE_PREVIEW_PLUGIN_ID,
     displayName: 'Deck Preview',
     version: '0.1.0',
     modality: 'deck',
@@ -283,7 +256,7 @@ export class WorkspacePreviewRegistry {
     if (matched) return { status: 'matched', manifest: matched }
 
     if (input.fallbackToText ?? true) {
-      const text = this.get('legacy-text')
+      const text = this.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
       if (text) {
         return {
           status: 'fallback',
@@ -303,8 +276,8 @@ export class WorkspacePreviewRegistry {
 
 export function defaultWorkspacePreviewManifests(): WorkspacePreviewPluginManifest[] {
   return [
-    ...LEGACY_WORKSPACE_PREVIEW_MANIFESTS,
-    ...PLANNED_WORKSPACE_PREVIEW_MANIFESTS,
+    ...FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS,
+    ...FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS,
     ...LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS
   ].map(normalizePreviewManifest)
 }

@@ -1,11 +1,39 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspaceObservation,
   type WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
+
+vi.mock('../components/write/WritePdfViewer', () => ({
+  WritePdfViewer: () => createElement('div', { 'data-write-pdf-viewer': 'true' })
+}))
+
+vi.mock('../components/write/WriteDocxViewer', () => ({
+  WriteDocxViewer: () => createElement('div', { 'data-write-docx-viewer': 'true' })
+}))
+
+const pluginOutletMocks = vi.hoisted(() => ({
+  latestMarkdownProps: null as null | {
+    loadWorkspaceImage?: (input: { path: string; workspaceRoot: string }) => Promise<{
+      ok: true
+      dataUrl: string
+    } | {
+      ok: false
+      message?: string
+    }>
+  }
+}))
+
+vi.mock('./MarkdownWorkspaceViewer', () => ({
+  MarkdownWorkspaceViewer: (props: NonNullable<typeof pluginOutletMocks.latestMarkdownProps>) => {
+    pluginOutletMocks.latestMarkdownProps = props
+    return createElement('div', { 'data-workspace-preview-markdown-viewer': 'true' })
+  }
+}))
+
 import {
   createWorkspacePreviewAssetTransportClient,
   createWorkspacePreviewHostState,
@@ -82,10 +110,13 @@ function createContext(
 }
 
 describe('WorkspacePreviewPluginOutlet', () => {
+  beforeEach(() => {
+    pluginOutletMocks.latestMarkdownProps = null
+  })
+
   it('routes shell observations to the matching renderer plugin viewer', () => {
     const cases: Array<{
       observation: WorkspaceObservation
-      routeReason: 'life-science' | 'text-first-party' | 'tabular-first-party' | 'deck-first-party'
       marker: string
     }> = [
       {
@@ -94,8 +125,97 @@ describe('WorkspacePreviewPluginOutlet', () => {
           text: { lineCount: 1, characterCount: 5, truncated: false },
           actions: ['text.replaceRange']
         }),
-        routeReason: 'text-first-party',
         marker: 'data-workspace-preview-text-viewer'
+      },
+      {
+        observation: createObservation('document', {
+          file: {
+            path: '/workspace/lab/notes.md',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'text/markdown'
+          },
+          view: {
+            pluginId: 'markdown',
+            modality: 'document',
+            mode: 'preview',
+            title: 'notes.md'
+          },
+          visibleText: '# Alpha\n',
+          text: { lineCount: 1, characterCount: 8, truncated: false },
+          actions: ['text.replaceRange']
+        }),
+        marker: 'data-workspace-preview-markdown-viewer'
+      },
+      {
+        observation: createObservation('document', {
+          file: {
+            path: '/workspace/lab/report.html',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'text/html'
+          },
+          view: {
+            pluginId: 'html',
+            modality: 'document',
+            mode: 'preview',
+            title: 'report.html'
+          },
+          visibleText: '<h1>Alpha</h1>',
+          text: { lineCount: 1, characterCount: 14, truncated: false },
+          actions: ['text.replaceRange']
+        }),
+        marker: 'data-workspace-preview-html-viewer'
+      },
+      {
+        observation: createObservation('image', {
+          file: {
+            path: '/workspace/lab/cell.png',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'image/png'
+          },
+          view: {
+            pluginId: 'image',
+            modality: 'image',
+            mode: 'preview',
+            title: 'cell.png'
+          }
+        }),
+        marker: 'data-workspace-preview-image-viewer'
+      },
+      {
+        observation: createObservation('document', {
+          file: {
+            path: '/workspace/lab/paper.pdf',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'application/pdf'
+          },
+          view: {
+            pluginId: 'pdf',
+            modality: 'document',
+            mode: 'preview',
+            title: 'paper.pdf'
+          }
+        }),
+        marker: 'data-workspace-preview-pdf-viewer'
+      },
+      {
+        observation: createObservation('document', {
+          file: {
+            path: '/workspace/lab/report.docx',
+            workspaceRoot: '/workspace/lab',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          },
+          view: {
+            pluginId: 'docx',
+            modality: 'document',
+            mode: 'preview',
+            title: 'report.docx'
+          },
+          document: {
+            paragraphs: [{ id: 'docx-p-1', index: 1, text: 'Body paragraph' }],
+            truncatedParagraphs: false
+          }
+        }),
+        marker: 'data-workspace-preview-docx-viewer'
       },
       {
         observation: createObservation('tabular', {
@@ -103,7 +223,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           tabular: { header: ['sample'], rows: [{ index: 0, values: ['s1'] }] },
           actions: ['tabular.updateCell']
         }),
-        routeReason: 'tabular-first-party',
         marker: 'data-workspace-preview-tabular-viewer'
       },
       {
@@ -111,7 +230,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           slides: [{ id: 'slide-1', index: 0, title: 'Intro' }],
           actions: ['deck.updateTextElement']
         }),
-        routeReason: 'deck-first-party',
         marker: 'data-workspace-preview-deck-viewer'
       },
       {
@@ -119,7 +237,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           molecular: { modelCount: 1, chains: ['A'] },
           actions: ['molecular.select']
         }),
-        routeReason: 'life-science',
         marker: 'data-workspace-preview-molecular-viewer'
       },
       {
@@ -127,7 +244,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           sequence: { sequenceCount: 1, totalLength: 8, alphabet: 'dna' },
           actions: ['workspace.setSelection']
         }),
-        routeReason: 'life-science',
         marker: 'data-workspace-preview-sequence-viewer'
       },
       {
@@ -135,7 +251,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           omics: { matrixShape: [10, 4], matrixIds: ['X'] },
           actions: ['omics.preview']
         }),
-        routeReason: 'life-science',
         marker: 'data-workspace-preview-omics-viewer'
       },
       {
@@ -143,7 +258,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           bioimaging: { dimensions: { width: 128, height: 64 } },
           actions: ['bioimaging.inspectHeader']
         }),
-        routeReason: 'life-science',
         marker: 'data-workspace-preview-bioimaging-viewer'
       },
       {
@@ -151,7 +265,6 @@ describe('WorkspacePreviewPluginOutlet', () => {
           spectra: { spectrumCount: 1, sampledPeaks: [{ mz: 100, intensity: 42 }] },
           actions: ['spectra.preview']
         }),
-        routeReason: 'life-science',
         marker: 'data-workspace-preview-spectra-viewer'
       }
     ]
@@ -159,11 +272,61 @@ describe('WorkspacePreviewPluginOutlet', () => {
     for (const testCase of cases) {
       const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
         context: createContext(testCase.observation),
-        routeReason: testCase.routeReason
+        routeReason: 'registered-plugin'
       }))
 
       expect(html).toContain(testCase.marker)
     }
+  })
+
+  it('loads Markdown relative images through the workspace preview host action', async () => {
+    const observation = createObservation('document', {
+      file: {
+        path: '/workspace/lab/docs/notes.md',
+        workspaceRoot: '/workspace/lab',
+        mimeType: 'text/markdown'
+      },
+      view: {
+        pluginId: 'markdown',
+        modality: 'document',
+        mode: 'preview',
+        title: 'notes.md'
+      },
+      visibleText: '![Cell](figures/cell.png)',
+      text: { lineCount: 1, characterCount: 25, truncated: false },
+      actions: ['markdown.readImage', 'text.replaceRange']
+    })
+    const invokeAction = vi.fn(async (_sessionId: string, action: { actionId: string }) => ({
+      ok: true as const,
+      sessionId: 'session-1',
+      pluginId: 'markdown',
+      actionId: action.actionId,
+      invokedAt: '2026-07-08T00:00:00.000Z',
+      result: { dataUrl: 'data:image/png;base64,aW1n' },
+      audit: {
+        pluginId: 'markdown',
+        path: '/workspace/lab/docs/notes.md',
+        actionId: action.actionId,
+        effect: 'host-action' as const
+      }
+    }))
+
+    renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(observation, { invokeAction }),
+      routeReason: 'registered-plugin'
+    }))
+
+    await expect(pluginOutletMocks.latestMarkdownProps?.loadWorkspaceImage?.({
+      path: '/workspace/lab/docs/figures/cell.png',
+      workspaceRoot: '/workspace/lab'
+    })).resolves.toEqual({
+      ok: true,
+      dataUrl: 'data:image/png;base64,aW1n'
+    })
+    expect(invokeAction).toHaveBeenCalledWith('session-1', {
+      actionId: 'markdown.readImage',
+      input: { path: '/workspace/lab/docs/figures/cell.png' }
+    })
   })
 
   it('renders a generic plugin summary for deferred shell routes without a dedicated viewer', () => {
@@ -204,12 +367,12 @@ describe('WorkspacePreviewPluginOutlet', () => {
     }]
     const resolved = resolveWorkspacePreviewPluginRendererContribution(
       context,
-      'life-science',
+      'registered-plugin',
       renderers
     )
     const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
       context,
-      routeReason: 'life-science',
+      routeReason: 'registered-plugin',
       renderers
     }))
 

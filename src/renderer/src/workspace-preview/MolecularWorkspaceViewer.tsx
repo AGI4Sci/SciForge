@@ -340,7 +340,7 @@ export function MolecularWorkspaceViewer({
                 ))}
               </ul>
             ) : (
-              <p>No select, measure, or snapshot actions are available.</p>
+              <p>No select or measure actions are available.</p>
             )}
           </section>
         </>
@@ -698,7 +698,7 @@ export function resolveMolecularRenderableAsset(input: {
     }
   }
 
-  const path = input.observation?.file.path || input.asset.file.relativePath || input.asset.file.path
+  const path = input.asset.file.relativePath || input.asset.file.name || input.observation?.file.path || ''
   const format = molecular3DmolFormatForPath(path)
   if (!format) {
     return {

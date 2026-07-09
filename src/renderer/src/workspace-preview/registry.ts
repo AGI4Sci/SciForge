@@ -1,7 +1,21 @@
 import {
+  DECK_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_DECK_WORKSPACE_PREVIEW_PLUGIN_ID,
+  DOCX_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
+  HTML_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
+  IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
   LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
+  MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
+  PDF_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
+  TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
+  TEXT_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
   WORKSPACE_PREVIEW_AGENT_ACCESS,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TABULAR_SHELL_EXTENSIONS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES,
   isDeferredNonLifeScienceExtension,
   normalizePreviewManifest,
   resolveWorkspacePreviewPlugin,
@@ -11,7 +25,6 @@ import {
 } from '@shared/workspace-preview'
 
 export type RendererWorkspacePreviewPluginKind =
-  | 'legacy'
   | 'text'
   | 'markdown'
   | 'html'
@@ -25,10 +38,6 @@ export type RendererWorkspacePreviewPluginKind =
 export type RendererWorkspacePreviewPluginSource = 'renderer-core' | 'shared-life-science'
 
 export type RendererWorkspacePreviewEntrypoint =
-  | {
-      kind: 'legacy-panel'
-      panelId: 'WorkspaceFilePreviewPanel'
-    }
   | {
       kind: 'renderer-module'
       moduleId: string
@@ -60,15 +69,14 @@ export type RendererWorkspacePreviewRegistry = {
   resolve: (input: RendererWorkspacePreviewResolveInput) => RendererWorkspacePreviewPluginDescriptor | null
 }
 
-export const LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID = 'legacy'
-export const TEXT_WORKSPACE_PREVIEW_PLUGIN_ID = 'text'
-export const MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID = 'markdown'
-export const HTML_WORKSPACE_PREVIEW_PLUGIN_ID = 'html'
-export const IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID = 'image'
-export const PDF_WORKSPACE_PREVIEW_PLUGIN_ID = 'pdf'
-export const DOCX_WORKSPACE_PREVIEW_PLUGIN_ID = 'docx'
-export const TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID = 'tabular'
-export const DECK_WORKSPACE_PREVIEW_PLUGIN_ID = 'deck'
+export const TEXT_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
+export const MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID
+export const HTML_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_HTML_WORKSPACE_PREVIEW_PLUGIN_ID
+export const IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID
+export const PDF_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_PDF_WORKSPACE_PREVIEW_PLUGIN_ID
+export const DOCX_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_DOCX_WORKSPACE_PREVIEW_PLUGIN_ID
+export const TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID
+export const DECK_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_DECK_WORKSPACE_PREVIEW_PLUGIN_ID
 
 const CORE_PREVIEW_VERSION = '0.1.0'
 
@@ -123,69 +131,20 @@ function sortDescriptors(
 
 const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspacePreviewPluginDescriptor[] = [
   {
-    kind: 'legacy',
-    source: 'renderer-core',
-    renderer: {
-      kind: 'legacy-panel',
-      panelId: 'WorkspaceFilePreviewPanel'
-    },
-    fallback: true,
-    manifest: manifest({
-      id: LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID,
-      displayName: 'Legacy Workspace File Preview',
-      modality: 'unknown',
-      priority: 0,
-      extensions: [],
-      mimeTypes: [],
-      capabilities: capabilities({ inspect: false }),
-      notes: 'Compatibility descriptor for the existing WorkspaceFilePreviewPanel while the renderer registry is introduced.'
-    })
-  },
-  {
     kind: 'text',
     source: 'renderer-core',
     renderer: {
       kind: 'renderer-module',
       moduleId: 'workspace-preview/text'
     },
+    fallback: true,
     manifest: manifest({
       id: TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
       displayName: 'Text Preview',
       modality: 'text',
       priority: 100,
-      extensions: [
-        '.txt',
-        '.text',
-        '.log',
-        '.json',
-        '.jsonl',
-        '.xml',
-        '.yaml',
-        '.yml',
-        '.toml',
-        '.ini',
-        '.env',
-        '.sh',
-        '.py',
-        '.js',
-        '.jsx',
-        '.ts',
-        '.tsx',
-        '.css',
-        '.scss',
-        '.sql'
-      ],
-      mimeTypes: [
-        'text/plain',
-        'application/json',
-        'application/x-ndjson',
-        'text/csv',
-        'text/tab-separated-values',
-        'application/xml',
-        'text/xml',
-        'application/yaml',
-        'text/yaml'
-      ],
+      extensions: [...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS],
+      mimeTypes: [...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES],
       capabilities: capabilities({
         edit: true,
         structuredSelection: true,
@@ -206,11 +165,11 @@ const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspac
       modality: 'document',
       priority: 300,
       extensions: ['.md', '.mdx', '.markdown'],
-      mimeTypes: ['text/markdown', 'text/x-markdown'],
+      mimeTypes: [...WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES],
       capabilities: capabilities({
         edit: true,
         structuredSelection: true,
-        export: ['markdown', 'html']
+        export: ['markdown']
       })
     })
   },
@@ -258,7 +217,7 @@ const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspac
         'image/x-icon'
       ],
       capabilities: capabilities({
-        export: ['png']
+        export: [...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS]
       })
     })
   },
@@ -275,11 +234,11 @@ const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspac
       modality: 'document',
       priority: 500,
       extensions: ['.pdf'],
-      mimeTypes: ['application/pdf'],
+      mimeTypes: [...WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES],
       capabilities: capabilities({
         structuredSelection: true,
         annotations: true,
-        export: ['pdf', 'annotations']
+        export: ['pdf', 'sidecar', 'annotated-pdf']
       })
     })
   },
@@ -300,7 +259,7 @@ const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspac
       capabilities: capabilities({
         structuredSelection: true,
         annotations: true,
-        export: ['docx', 'annotations']
+        export: ['docx', 'sidecar']
       })
     })
   },
@@ -316,7 +275,7 @@ const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspac
       displayName: 'Tabular Data Preview',
       modality: 'tabular',
       priority: 620,
-      extensions: ['.csv', '.tsv', '.xlsx', '.xls', '.jsonl', '.ndjson', '.parquet', '.feather', '.arrow'],
+      extensions: [...WORKSPACE_PREVIEW_FIRST_PARTY_TABULAR_SHELL_EXTENSIONS],
       mimeTypes: [
         'text/csv',
         'text/tab-separated-values',

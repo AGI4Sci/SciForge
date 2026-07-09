@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
   WORKSPACE_PREVIEW_AGENT_ACCESS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES,
   workspacePreviewPluginManifestSchema
 } from '@shared/workspace-preview'
 import {
@@ -11,7 +16,6 @@ import {
   DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
   HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
   IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
-  LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID,
   MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
   PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
   TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
@@ -24,7 +28,6 @@ describe('renderer workspace preview registry', () => {
     const ids = CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS.map((descriptor) => descriptor.manifest.id)
 
     expect(ids).toEqual(expect.arrayContaining([
-      LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID,
       TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
       MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
       HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
@@ -34,6 +37,7 @@ describe('renderer workspace preview registry', () => {
       TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
       DECK_WORKSPACE_PREVIEW_PLUGIN_ID
     ]))
+    expect(ids).not.toContain('legacy')
 
     for (const descriptor of DEFAULT_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS) {
       const manifest = workspacePreviewPluginManifestSchema.parse(descriptor.manifest)
@@ -44,8 +48,27 @@ describe('renderer workspace preview registry', () => {
   it('keeps renderer manifest exports aligned with source-copy support', () => {
     const registry = createRendererWorkspacePreviewRegistry()
 
+    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual(['markdown'])
+    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).not.toContain('html')
+    expect(registry.get(PDF_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual([
+      'pdf',
+      'sidecar',
+      'annotated-pdf'
+    ])
     expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual(['csv', 'tsv'])
     expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).not.toContain('xlsx')
+    expect(registry.get(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.edit).toBe(false)
+    expect(registry.get(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.structuredSelection).toBe(false)
+    expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).toEqual([
+      '.csv',
+      '.tsv',
+      '.jsonl',
+      '.ndjson',
+      '.xlsx'
+    ])
+    expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).not.toEqual(
+      expect.arrayContaining(['.xls', '.parquet', '.feather', '.arrow'])
+    )
     expect(registry.get('molecular')?.manifest.capabilities.export).not.toEqual(expect.arrayContaining(['png', 'session']))
     expect(registry.get('omics-matrix')?.manifest.capabilities.export).not.toContain('csv')
     expect(registry.get('bioimaging')?.manifest.capabilities.export).not.toEqual(expect.arrayContaining(['png', 'roi']))
@@ -54,6 +77,27 @@ describe('renderer workspace preview registry', () => {
     expect(registry.get('sequence-genomics')?.manifest.capabilities.annotations).toBeUndefined()
     expect(registry.get('bioimaging')?.manifest.capabilities.annotations).toBeUndefined()
     expect(registry.get('proteomics-spectra')?.manifest.capabilities.annotations).toBeUndefined()
+  })
+
+  it('keeps renderer core manifest surfaces aligned with shared constants', () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+
+    expect(registry.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).toEqual([
+      ...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS
+    ])
+    expect(registry.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.mimeTypes).toEqual([
+      ...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES
+    ])
+    expect(registry.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).not.toContain('.jsonl')
+    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.mimeTypes).toEqual([
+      ...WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES
+    ])
+    expect(registry.get(PDF_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.mimeTypes).toEqual([
+      ...WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES
+    ])
+    expect(registry.get(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual([
+      ...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS
+    ])
   })
 
   it('wraps shared life-science manifests without changing their ids', () => {
@@ -69,10 +113,12 @@ describe('renderer workspace preview registry', () => {
     }
   })
 
-  it('resolves renderer-core and life-science formats before falling back to legacy', () => {
+  it('resolves renderer-core and life-science formats before falling back to text', () => {
     const registry = createRendererWorkspacePreviewRegistry()
 
     expect(registry.resolve({ path: 'notes.TXT' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
+    expect(registry.resolve({ path: 'paper.tex' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
+    expect(registry.resolve({ path: 'refs.bib' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
     expect(registry.resolve({ path: 'README.md' })?.manifest.id).toBe(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)
     expect(registry.resolve({ path: 'report.html' })?.manifest.id).toBe(HTML_WORKSPACE_PREVIEW_PLUGIN_ID)
     expect(registry.resolve({ path: 'figure.PNG' })?.manifest.id).toBe(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)
@@ -86,11 +132,11 @@ describe('renderer workspace preview registry', () => {
 
     expect(registry.resolve({ path: 'opaque.unknown' })).toBeNull()
     expect(registry.resolve({ path: 'opaque.unknown', includeFallback: true })?.manifest.id).toBe(
-      LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID
+      TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
     )
   })
 
-  it('does not fallback deferred non-life-science scientific formats to legacy', () => {
+  it('does not fallback deferred non-life-science scientific formats to text', () => {
     const registry = createRendererWorkspacePreviewRegistry()
 
     expect(registry.resolve({ path: 'mesh.vtk', includeFallback: true })).toBeNull()

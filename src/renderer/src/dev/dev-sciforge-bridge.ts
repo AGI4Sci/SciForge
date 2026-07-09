@@ -255,10 +255,8 @@ function createApi(): SciForgeApi {
     listWorkspaceDirectory: (options) => invoke('file:list-workspace-directory', options),
     resolveWorkspaceFile: (options) => invoke('file:resolve-workspace', options),
     readWorkspaceFile: (options) => invoke('file:read-workspace', options),
-    previewWorkspaceHtml: (options) => invoke('file:preview-workspace-html', options),
     readWorkspaceImage: (options) => invoke('file:read-workspace-image', options),
     writeWorkspaceFile: (payload) => invoke('file:write-workspace', payload),
-    writeWorkspaceDocxText: (payload) => invoke('file:write-docx-text', payload),
     createWorkspaceFile: (payload) => invoke('file:create-workspace', payload),
     createWorkspaceDirectory: (payload) => invoke('file:create-workspace-directory', payload),
     saveWorkspaceClipboardImage: (payload) => invoke('file:save-workspace-clipboard-image', payload),
@@ -279,11 +277,17 @@ function createApi(): SciForgeApi {
       observe: (sessionId) => invoke('workspacePreview:observe', { sessionId }),
       describeAsset: (sessionId) => invoke('workspacePreview:describeAsset', { sessionId }),
       readRange: (sessionId, range) => invoke('workspacePreview:readRange', { sessionId, range }),
+      prepareArtifact: (sessionId, request) =>
+        invoke('workspacePreview:prepareArtifact', { sessionId, request }),
+      readArtifactRange: (sessionId, request) =>
+        invoke('workspacePreview:readArtifactRange', { sessionId, request }),
       applyEdit: (sessionId, operation) =>
         invoke('workspacePreview:applyEdit', { sessionId, operation }),
       export: (sessionId, target) => invoke('workspacePreview:export', { sessionId, target }),
       invokeAction: (sessionId, action) =>
         invoke('workspacePreview:invokeAction', { sessionId, action }),
+      releaseSession: (sessionId) =>
+        invoke('workspacePreview:releaseSession', { sessionId }),
       watch: (payload) => invoke('workspacePreview:watch', payload),
       unwatch: (watchId) => invoke('workspacePreview:unwatch', watchId),
       onChanged: (handler) => onChannel('workspacePreview:changed', handler)
@@ -294,13 +298,6 @@ function createApi(): SciForgeApi {
     clearWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:clear'),
     exportWriteDocument: (payload) => invoke('write:export', payload),
     copyWriteDocumentAsRichText: (payload) => invoke('write:copy-rich-text', payload),
-    pdfAnnotations: {
-      load: (payload) => invoke('pdfAnnotations:load', payload),
-      save: (payload) => invoke('pdfAnnotations:save', payload),
-      export: (payload) => invoke('pdfAnnotations:export', payload),
-      exportPdf: (payload) => invoke('pdfAnnotations:exportPdf', payload),
-      import: (payload) => invoke('pdfAnnotations:import', payload)
-    },
     visibleContext: {
       publish: (snapshot) => invoke('visibleContext:publish', snapshot),
       get: () => invoke('visibleContext:get')

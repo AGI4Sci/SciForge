@@ -187,53 +187,24 @@ describe('dev sciforge browser bridge', () => {
     })
   })
 
-  it('forwards PDF annotation sidecar calls through the dev bridge', async () => {
+  it('does not expose legacy PDF annotation sidecar calls through the dev bridge', async () => {
     installWindow()
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      payload: { ok: true, source: 'empty', warnings: [] }
-    })))
+    const fetchMock = vi.fn()
     Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
 
     installDevSciForgeBridge()
-    await window.sciforge.pdfAnnotations?.load({ pdfPath: '/tmp/paper.pdf', workspaceRoot: '/tmp' })
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'pdfAnnotations:load',
-          payload: { pdfPath: '/tmp/paper.pdf', workspaceRoot: '/tmp' }
-        })
-      })
-    )
+    expect('pdfAnnotations' in window.sciforge).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('forwards workspace HTML preview calls through the dev bridge', async () => {
+  it('does not expose legacy workspace HTML preview calls through the dev bridge', async () => {
     installWindow()
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      payload: { ok: true, path: '/tmp/work/status.html', workspaceRoot: '/tmp/work', url: 'http://127.0.0.1:59000/status.html' }
-    })))
-    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
 
     installDevSciForgeBridge()
-    const result = await window.sciforge.previewWorkspaceHtml({ path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' })
-
-    expect(result).toMatchObject({ ok: true, url: 'http://127.0.0.1:59000/status.html' })
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'file:preview-workspace-html',
-          payload: { path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' }
-        })
-      })
-    )
+    expect('previewWorkspaceHtml' in window.sciforge).toBe(false)
   })
 
   it('forwards workspace entry import calls through the dev bridge', async () => {
@@ -359,6 +330,14 @@ describe('dev sciforge browser bridge', () => {
     await window.sciforge.workspacePreview.observe('session-1')
     await window.sciforge.workspacePreview.describeAsset('session-1')
     await window.sciforge.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
+    await window.sciforge.workspacePreview.prepareArtifact('session-1', {
+      kind: 'cache-artifact',
+      source: 'observation'
+    })
+    await window.sciforge.workspacePreview.readArtifactRange('session-1', {
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 4 }
+    })
     await window.sciforge.workspacePreview.applyEdit('session-1', {
       kind: 'molecular.setSelection',
       path: 'protein.pdb',
@@ -369,9 +348,9 @@ describe('dev sciforge browser bridge', () => {
       format: 'pdb',
       path: 'exports/protein-copy.pdb'
     })
+    await window.sciforge.workspacePreview.releaseSession('session-1')
     await window.sciforge.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
     await window.sciforge.workspacePreview.unwatch('watch-1')
-    await window.sciforge.previewWorkspaceHtml({ path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' })
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:5173/__sciforge-dev-bridge/invoke',
@@ -379,6 +358,38 @@ describe('dev sciforge browser bridge', () => {
         method: 'POST',
         body: JSON.stringify({
           channel: 'workspacePreview:listPlugins'
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:prepareArtifact',
+          payload: {
+            sessionId: 'session-1',
+            request: {
+              kind: 'cache-artifact',
+              source: 'observation'
+            }
+          }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'workspacePreview:readArtifactRange',
+          payload: {
+            sessionId: 'session-1',
+            request: {
+              artifactId: 'artifact-1',
+              range: { offset: 0, length: 4 }
+            }
+          }
         })
       })
     )
@@ -481,8 +492,8 @@ describe('dev sciforge browser bridge', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          channel: 'file:preview-workspace-html',
-          payload: { path: '/tmp/work/status.html', workspaceRoot: '/tmp/work' }
+          channel: 'workspacePreview:releaseSession',
+          payload: { sessionId: 'session-1' }
         })
       })
     )

@@ -84,6 +84,8 @@ export function WorkspacePreviewPanelShell({
 
   useEffect(() => {
     if (!target) {
+      const sessionId = host.getState().session?.id
+      if (sessionId) void host.releaseSession(sessionId)
       setState(createWorkspacePreviewHostState())
       setAssetStatus('idle')
       setAssetError(null)
@@ -91,6 +93,13 @@ export function WorkspacePreviewPanelShell({
     }
 
     let cancelled = false
+    let openedSessionId: string | null = null
+    let released = false
+    const releaseOpenedSession = (): void => {
+      if (!openedSessionId || released) return
+      released = true
+      void host.releaseSession(openedSessionId)
+    }
     setState((previous) => ({
       ...previous,
       asset: null
@@ -100,7 +109,9 @@ export function WorkspacePreviewPanelShell({
 
     void host.open(workspacePreviewOpenInputForPanelTarget(target, workspaceRoot))
       .then(async (opened) => {
+        if (opened.ok) openedSessionId = opened.session.id
         if (cancelled || !opened.ok) {
+          if (opened.ok) releaseOpenedSession()
           if (!opened.ok) {
             setAssetStatus('error')
             setAssetError(opened.message)
@@ -112,7 +123,10 @@ export function WorkspacePreviewPanelShell({
           host.observe(opened.session.id),
           host.describeAsset(opened.session.id)
         ])
-        if (cancelled) return
+        if (cancelled) {
+          releaseOpenedSession()
+          return
+        }
         if (!observed.ok) {
           setAssetStatus('error')
           setAssetError(observed.message)
@@ -135,6 +149,7 @@ export function WorkspacePreviewPanelShell({
 
     return () => {
       cancelled = true
+      releaseOpenedSession()
     }
   }, [host, target, targetKey, workspaceRoot])
 
@@ -145,7 +160,9 @@ export function WorkspacePreviewPanelShell({
     assetError,
     transport: createWorkspacePreviewAssetTransportClient({
       descriptor: state.asset,
-      readRange: (range) => host.readRange(range)
+      readRange: (range) => host.readRange(range),
+      prepareArtifact: (request) => host.prepareArtifact(request),
+      readArtifactRange: (request) => host.readArtifactRange(request)
     }),
     host
   }), [assetError, assetStatus, host, state])

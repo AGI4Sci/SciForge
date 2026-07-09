@@ -198,14 +198,10 @@ const api = {
     ipcRenderer.invoke('file:resolve-workspace', options),
   readWorkspaceFile: (options) =>
     ipcRenderer.invoke('file:read-workspace', options),
-  previewWorkspaceHtml: (options) =>
-    ipcRenderer.invoke('file:preview-workspace-html', options),
   readWorkspaceImage: (options) =>
     ipcRenderer.invoke('file:read-workspace-image', options),
   writeWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:write-workspace', payload),
-  writeWorkspaceDocxText: (payload) =>
-    ipcRenderer.invoke('file:write-docx-text', payload),
   createWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:create-workspace', payload),
   createWorkspaceDirectory: (payload) =>
@@ -247,12 +243,18 @@ const api = {
     describeAsset: (sessionId) => ipcRenderer.invoke('workspacePreview:describeAsset', { sessionId }),
     readRange: (sessionId, range) =>
       ipcRenderer.invoke('workspacePreview:readRange', { sessionId, range }),
+    prepareArtifact: (sessionId, request) =>
+      ipcRenderer.invoke('workspacePreview:prepareArtifact', { sessionId, request }),
+    readArtifactRange: (sessionId, request) =>
+      ipcRenderer.invoke('workspacePreview:readArtifactRange', { sessionId, request }),
     applyEdit: (sessionId, operation) =>
       ipcRenderer.invoke('workspacePreview:applyEdit', { sessionId, operation }),
     export: (sessionId, target) =>
       ipcRenderer.invoke('workspacePreview:export', { sessionId, target }),
     invokeAction: (sessionId, action) =>
       ipcRenderer.invoke('workspacePreview:invokeAction', { sessionId, action }),
+    releaseSession: (sessionId) =>
+      ipcRenderer.invoke('workspacePreview:releaseSession', { sessionId }),
     watch: (payload) => ipcRenderer.invoke('workspacePreview:watch', payload),
     unwatch: (watchId) => ipcRenderer.invoke('workspacePreview:unwatch', watchId),
     onChanged: (handler) => {
@@ -296,13 +298,6 @@ const api = {
     create: (input) => ipcRenderer.invoke('researchCards:create', input),
     update: (input) => ipcRenderer.invoke('researchCards:update', input),
     archive: (input) => ipcRenderer.invoke('researchCards:archive', input)
-  },
-  pdfAnnotations: {
-    load: (payload) => ipcRenderer.invoke('pdfAnnotations:load', payload),
-    save: (payload) => ipcRenderer.invoke('pdfAnnotations:save', payload),
-    export: (payload) => ipcRenderer.invoke('pdfAnnotations:export', payload),
-    exportPdf: (payload) => ipcRenderer.invoke('pdfAnnotations:exportPdf', payload),
-    import: (payload) => ipcRenderer.invoke('pdfAnnotations:import', payload)
   },
   visibleContext: {
     publish: (snapshot) => ipcRenderer.invoke('visibleContext:publish', snapshot),

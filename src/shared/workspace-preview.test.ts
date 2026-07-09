@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
   WORKSPACE_PREVIEW_AGENT_ACCESS,
+  WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES,
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
   extensionFromPreviewPath,
@@ -15,6 +16,9 @@ import {
   resolveWorkspacePreviewTransferCapabilities,
   workspacePreviewEditOperationSchema,
   workspaceObservationSchema,
+  workspacePreviewArtifactDescriptorSchema,
+  workspacePreviewAnnotationSidecarImportActionInputSchema,
+  workspacePreviewAnnotationSidecarImportActionResultSchema,
   workspacePreviewAssetTransportDescriptorSchema,
   workspacePreviewByteRangeSchema,
   workspacePreviewConflictPolicySchema,
@@ -26,8 +30,10 @@ import {
   workspacePreviewEditDiffSummarySchema,
   workspacePreviewExportTargetSchema,
   workspacePreviewPastePayloadSchema,
+  workspacePreviewPrepareArtifactRequestSchema,
   workspacePreviewPluginActionInputSchema,
   workspacePreviewPluginActionResultSchema,
+  workspacePreviewReadArtifactRangeRequestSchema,
   workspacePreviewSessionSchema,
   workspacePreviewPluginManifestSchema,
   type WorkspaceObservation
@@ -198,12 +204,15 @@ describe('workspace preview contract', () => {
           rects: [{ page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 }]
         },
         thread: {
+          kind: 'question',
           status: 'open',
-          title: 'Result check'
+          title: 'Result check',
+          sourceMessageId: 'side-thread-1'
         },
         annotation: {
           color: '#facc15',
-          sourceText: 'result'
+          sourceText: 'result',
+          sourceMessageId: 'side-thread-1:user-1'
         }
       }
     }).kind).toBe('annotation.upsert')
@@ -230,6 +239,29 @@ describe('workspace preview contract', () => {
         documentKind: 'docx'
       }
     })
+    expect(workspacePreviewEditOperationSchema.parse({
+      kind: 'annotation.thread.update',
+      path: 'paper.pdf',
+      threadId: 'thread-a',
+      patch: {
+        status: 'resolved',
+        title: 'Resolved result check'
+      }
+    }).kind).toBe('annotation.thread.update')
+    expect(workspacePreviewEditOperationSchema.parse({
+      kind: 'annotation.thread.delete',
+      path: 'paper.pdf',
+      threadId: 'thread-a'
+    })).toMatchObject({
+      kind: 'annotation.thread.delete',
+      pruneOrphanAnchors: true
+    })
+    expect(() => workspacePreviewEditOperationSchema.parse({
+      kind: 'annotation.thread.update',
+      path: 'paper.pdf',
+      threadId: 'thread-a',
+      patch: {}
+    })).toThrow()
     expect(() => workspacePreviewEditOperationSchema.parse({
       kind: 'annotation.upsert',
       path: 'paper.pdf',
@@ -319,6 +351,63 @@ describe('workspace preview contract', () => {
     expect(observation.actions).toContain('molecular.measureDistance')
   })
 
+  it('validates plugin metadata seeds on observations', () => {
+    const observation = workspaceObservationSchema.parse({
+      schemaVersion: 1,
+      file: { path: 'cells.ome.tiff' },
+      view: {
+        pluginId: 'bioimaging',
+        modality: 'bioimaging',
+        mode: 'preview',
+        title: 'cells.ome.tiff'
+      },
+      bioimaging: {
+        format: 'ome-tiff',
+        dimensions: { width: 1024, height: 768 },
+        tilePlan: {
+          status: 'metadata-only',
+          pixelDecoding: false,
+          tileRendererImplemented: false
+        }
+      },
+      pluginMetadata: [{
+        source: 'plugin-metadata',
+        metadataKind: 'bioimaging',
+        mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json',
+        metadataOnly: true,
+        containsPixels: false,
+        pixelDecoding: false,
+        data: {
+          format: 'ome-tiff',
+          dimensions: { width: 1024, height: 768 },
+          tilePlan: {
+            status: 'metadata-only',
+            pixelDecoding: false,
+            tileRendererImplemented: false
+          }
+        },
+        actions: ['bioimaging.describeTilePlan']
+      }],
+      actions: ['observe', 'bioimaging.describeTilePlan']
+    })
+
+    expect(observation.pluginMetadata?.[0]).toMatchObject({
+      metadataKind: 'bioimaging',
+      metadataOnly: true,
+      containsPixels: false,
+      data: {
+        dimensions: { width: 1024, height: 768 }
+      }
+    })
+    expect(() => workspaceObservationSchema.parse({
+      ...observation,
+      pluginMetadata: [{
+        ...observation.pluginMetadata?.[0],
+        data: Number.NaN
+      }]
+    })).toThrow()
+  })
+
   it('validates bounded deck text elements on observations', () => {
     const observation: WorkspaceObservation = {
       schemaVersion: 1,
@@ -387,6 +476,64 @@ describe('workspace preview contract', () => {
 
     expect(action.input.query).toBe('BRCA1')
     expect(result.audit.effect).toBe('worker-action')
+    expect(workspacePreviewPluginActionResultSchema.parse({
+      ...result,
+      pluginId: 'html',
+      actionId: 'html.previewUrl',
+      result: {
+        url: 'http://127.0.0.1:5179/token/report.html?sciforge_preview=1'
+      },
+      audit: {
+        ...result.audit,
+        pluginId: 'html',
+        actionId: 'html.previewUrl',
+        effect: 'host-action'
+      }
+    }).audit.effect).toBe('host-action')
+  })
+
+  it('validates PDF annotation sidecar import action payloads without target bypasses', () => {
+    expect(workspacePreviewAnnotationSidecarImportActionInputSchema.parse({
+      packagePath: ' annotations.dsgui-pdf.zip ',
+      attemptRelocation: true
+    })).toEqual({
+      packagePath: 'annotations.dsgui-pdf.zip',
+      attemptRelocation: true
+    })
+
+    expect(workspacePreviewAnnotationSidecarImportActionInputSchema.parse({
+      packageBase64: ' ZmFrZS16aXA= '
+    })).toEqual({
+      packageBase64: 'ZmFrZS16aXA='
+    })
+
+    expect(() => workspacePreviewAnnotationSidecarImportActionInputSchema.parse({})).toThrow(/Exactly one/)
+    expect(() => workspacePreviewAnnotationSidecarImportActionInputSchema.parse({
+      packagePath: 'annotations.dsgui-pdf.zip',
+      packageBase64: 'ZmFrZS16aXA='
+    })).toThrow(/Exactly one/)
+    expect(() => workspacePreviewAnnotationSidecarImportActionInputSchema.parse({
+      packagePath: 'annotations.dsgui-pdf.zip',
+      pdfPath: 'paper.pdf'
+    })).toThrow(/Unrecognized key/)
+
+    expect(workspacePreviewAnnotationSidecarImportActionResultSchema.parse({
+      sidecar: { schemaVersion: 1 },
+      importedAt: '2026-07-08T00:05:00.000Z',
+      pdfFingerprint: {
+        sha256: 'sha256',
+        size: 1024,
+        fileName: 'paper.pdf'
+      },
+      fingerprintMatched: true,
+      warnings: [],
+      counts: {
+        threads: 1,
+        annotations: 2,
+        anchors: 1
+      },
+      effect: 'sidecar-write'
+    }).counts.annotations).toBe(2)
   })
 
   it('bounds cross-boundary edit and observation payloads', () => {
@@ -403,7 +550,7 @@ describe('workspace preview contract', () => {
       schemaVersion: 1,
       file: { path: 'notes.md' },
       view: {
-        pluginId: 'legacy-text',
+        pluginId: 'text',
         modality: 'text',
         mode: 'preview',
         title: 'notes.md'
@@ -425,14 +572,41 @@ describe('workspace preview contract', () => {
   })
 
   it('describes large preview asset transport without embedding asset bytes', () => {
+    const artifact = workspacePreviewArtifactDescriptorSchema.parse({
+      schemaVersion: 1,
+      sessionId: 'session-asset',
+      assetId: 'asset:session-asset',
+      artifactId: 'artifact-1',
+      kind: 'cache-artifact',
+      pluginId: 'bioimaging',
+      mimeType: 'application/json',
+      byteLength: 256,
+      range: {
+        available: true,
+        size: 256,
+        maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+        recommendedChunkBytes: 256
+      },
+      source: {
+        assetId: 'asset:session-asset',
+        size: 8_000_000_000,
+        mtimeMs: 1783468800000
+      },
+      cache: {
+        scope: 'session',
+        source: 'observation',
+        createdAt: '2026-07-08T00:00:00.000Z',
+        invalidation: 'source-size-mtime'
+      }
+    })
     const descriptor = workspacePreviewAssetTransportDescriptorSchema.parse({
       schemaVersion: 1,
       sessionId: 'session-asset',
+      assetId: 'asset:session-asset',
       pluginId: 'bioimaging',
       modality: 'bioimaging',
       file: {
-        workspaceRoot: '/workspace',
-        path: '/workspace/cells.ome.tiff',
+        name: 'cells.ome.tiff',
         relativePath: 'cells.ome.tiff',
         mimeType: 'image/tiff',
         size: 8_000_000_000,
@@ -466,15 +640,152 @@ describe('workspace preview contract', () => {
           status: 'deferred',
           reason: 'worker-generated derivatives need invalidation rules'
         }
-      ]
+      ],
+      artifacts: [artifact]
     })
 
     expect(descriptor.eagerRead.allowed).toBe(false)
+    expect(descriptor.assetId).toBe('asset:session-asset')
+    expect(descriptor.artifacts?.[0]).toEqual(artifact)
+    expect(descriptor.file).not.toHaveProperty('workspaceRoot')
+    expect(descriptor.file).not.toHaveProperty('path')
+    expect(descriptor.artifacts?.[0]).not.toHaveProperty('path')
+    expect(descriptor.artifacts?.[0]).not.toHaveProperty('workspaceRoot')
+    expect(descriptor.artifacts?.[0]).not.toHaveProperty('url')
     expect(descriptor.strategies.map((strategy) => strategy.kind)).toEqual([
       'byte-range',
       'tile',
       'cache-artifact'
     ])
+    expect(() => workspacePreviewAssetTransportDescriptorSchema.parse({
+      ...descriptor,
+      file: {
+        ...descriptor.file,
+        path: 'file:///workspace/cells.ome.tiff'
+      }
+    })).toThrow()
+    expect(() => workspacePreviewArtifactDescriptorSchema.parse({
+      ...artifact,
+      byteLength: WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES + 1
+    })).toThrow()
+    expect(workspacePreviewPrepareArtifactRequestSchema.parse({
+      kind: 'cache-artifact',
+      source: 'observation'
+    })).toEqual({
+      kind: 'cache-artifact',
+      source: 'observation'
+    })
+    expect(workspacePreviewPrepareArtifactRequestSchema.parse({
+      kind: 'cache-artifact',
+      source: 'plugin-metadata',
+      metadataKind: 'bioimaging'
+    })).toEqual({
+      kind: 'cache-artifact',
+      source: 'plugin-metadata',
+      metadataKind: 'bioimaging'
+    })
+    expect(workspacePreviewPrepareArtifactRequestSchema.parse({
+      kind: 'tile',
+      level: 0,
+      x: 1,
+      y: 2,
+      width: 256,
+      height: 128,
+      channelIndex: 0
+    })).toEqual({
+      kind: 'tile',
+      level: 0,
+      x: 1,
+      y: 2,
+      width: 256,
+      height: 128,
+      channelIndex: 0
+    })
+    expect(workspacePreviewPrepareArtifactRequestSchema.parse({
+      kind: 'thumbnail',
+      width: 320,
+      height: 180,
+      channelIndex: 1
+    })).toEqual({
+      kind: 'thumbnail',
+      width: 320,
+      height: 180,
+      channelIndex: 1
+    })
+    expect(() => workspacePreviewPrepareArtifactRequestSchema.parse({
+      kind: 'thumbnail',
+      width: 4097,
+      height: 180
+    })).toThrow()
+    expect(() => workspacePreviewPrepareArtifactRequestSchema.parse({
+      kind: 'tile',
+      level: 0,
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 128
+    })).toThrow()
+    expect(workspacePreviewArtifactDescriptorSchema.parse({
+      ...artifact,
+      artifactId: 'tile-artifact-1',
+      kind: 'tile',
+      mimeType: 'image/png',
+      cache: {
+        ...artifact.cache,
+        source: 'worker-decoder'
+      },
+      tile: {
+        level: 0,
+        x: 1,
+        y: 2,
+        width: 256,
+        height: 128
+      }
+    })).toMatchObject({
+      kind: 'tile',
+      mimeType: 'image/png',
+      cache: {
+        source: 'worker-decoder'
+      },
+      tile: {
+        level: 0,
+        x: 1,
+        y: 2,
+        width: 256,
+        height: 128
+      }
+    })
+    expect(workspacePreviewArtifactDescriptorSchema.parse({
+      ...artifact,
+      artifactId: 'thumbnail-artifact-1',
+      kind: 'thumbnail',
+      mimeType: 'image/png',
+      cache: {
+        ...artifact.cache,
+        source: 'worker-decoder'
+      },
+      thumbnail: {
+        width: 320,
+        height: 180
+      }
+    })).toMatchObject({
+      kind: 'thumbnail',
+      mimeType: 'image/png',
+      cache: {
+        source: 'worker-decoder'
+      },
+      thumbnail: {
+        width: 320,
+        height: 180
+      }
+    })
+    expect(workspacePreviewReadArtifactRangeRequestSchema.parse({
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 128 }
+    })).toEqual({
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 128 }
+    })
   })
 
   it('resolves desktop transfer capabilities and web preview fallbacks', () => {

@@ -43,6 +43,16 @@ type RootPackageJson = {
   scripts: Record<string, string>
 }
 
+const workspacePreviewWorkerPackageDirs = [
+  'packages/workers/workspace-bioimaging',
+  'packages/workers/workspace-deck',
+  'packages/workers/workspace-molecular',
+  'packages/workers/workspace-omics',
+  'packages/workers/workspace-sequence',
+  'packages/workers/workspace-spectra',
+  'packages/workers/workspace-tabular'
+]
+
 const require = createRequire(import.meta.url)
 const builderConfig = require('../../electron-builder.config.cjs')
 const afterPack = require('../../scripts/after-pack.cjs')
@@ -441,13 +451,18 @@ describe('electron-builder local runtime packaging', () => {
 
 describe('root package workspace contracts', () => {
   it('keeps package.json workspaces aligned with the release worker manifest', () => {
-    expect(rootPackage.workspaces).toEqual(releaseWorkerManifest.workspacePackageDirs)
+    expect(rootPackage.workspaces).toEqual(expect.arrayContaining(releaseWorkerManifest.workspacePackageDirs))
     expect(rootPackage.workspaces).toEqual(expect.arrayContaining([
       'packages/workers/model-router',
       'packages/workers/sci-modality-router',
       'packages/workers/evidence-dag',
-      'packages/workers/paper-radar'
+      'packages/workers/paper-radar',
+      ...workspacePreviewWorkerPackageDirs
     ]))
+    for (const workspacePreviewWorkerPackageDir of workspacePreviewWorkerPackageDirs) {
+      expect(releaseWorkerManifest.workspacePackageDirs).not.toContain(workspacePreviewWorkerPackageDir)
+      expect(releaseWorkerManifest.bundledPackageDirs).not.toContain(workspacePreviewWorkerPackageDir)
+    }
     expect(rootPackage.workspaces.some((workspace) => workspace.startsWith('plugins/'))).toBe(false)
     expect(rootPackage.workspaces).not.toContain('kun')
     expect(rootPackage.workspaces).not.toContain('packages/workers/gui-owl-computer-use')

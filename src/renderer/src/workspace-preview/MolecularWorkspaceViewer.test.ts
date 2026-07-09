@@ -70,11 +70,11 @@ function createMolecularAssetDescriptor(
   return {
     schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
     sessionId: 'session-molecular',
+    assetId: 'asset:session-molecular',
     pluginId: 'molecular',
     modality: 'molecular',
     file: {
-      workspaceRoot: '/workspace/lab',
-      path: '/workspace/lab/protein.pdb',
+      name: 'protein.pdb',
       relativePath: 'protein.pdb',
       mimeType: 'chemical/x-pdb',
       size: 67
@@ -258,13 +258,15 @@ describe('MolecularWorkspaceViewer', () => {
       reason: expect.stringContaining('interactive rendering is limited')
     })
     expect(resolveMolecularRenderableAsset({
-      asset,
-      observation: createMolecularObservation({
+      asset: createMolecularAssetDescriptor({
         file: {
-          path: '/workspace/lab/trajectory.dcd',
-          workspaceRoot: '/workspace/lab'
+          name: 'trajectory.dcd',
+          relativePath: 'trajectory.dcd',
+          mimeType: 'application/octet-stream',
+          size: 67
         }
-      })
+      }),
+      observation
     })).toMatchObject({
       ok: false,
       reason: expect.stringContaining('not available')
@@ -277,7 +279,7 @@ describe('MolecularWorkspaceViewer', () => {
     const readRange = async () => ({
       ok: true as const,
       sessionId: 'session-molecular',
-      path: '/workspace/lab/protein.pdb',
+      assetId: 'asset:session-molecular',
       offset: 0,
       length: source.length,
       size: source.length,

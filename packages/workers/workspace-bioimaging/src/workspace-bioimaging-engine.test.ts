@@ -80,6 +80,103 @@ test('generates a safe TIFF tile plan without decoding pixels', () => {
   assert.equal(workspaceObservationSchema.parse(preview.observation).view.pluginId, 'bioimaging')
 })
 
+test('decodes a bounded uncompressed TIFF tile into PNG bytes', () => {
+  const service = new WorkspaceBioimagingService()
+  const bytes = makeUncompressedRgbStripTiff(4, 3, new Uint8Array([
+    255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+    10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+    120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10
+  ]))
+
+  const tile = service.decodeTile({
+    bytes,
+    path: 'rgb-field.tif',
+    mimeType: 'image/tiff',
+    level: 0,
+    x: 0,
+    y: 0,
+    width: 2,
+    height: 2
+  })
+
+  assert.equal(tile.ok, true)
+  assert.equal(tile.format, 'tiff')
+  assert.equal(tile.mimeType, 'image/png')
+  assert.deepEqual(tile.tile, { level: 0, x: 0, y: 0, width: 2, height: 2 })
+  assert.equal(tile.pixelDecoding, true)
+  assert.equal(tile.tileRendererImplemented, true)
+  assert.deepEqual([...tile.bytes.slice(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  assert.match(tile.visibleText ?? '', /Decoded TIFF tile 0,0/)
+})
+
+test('marks baseline TIFF tile plans as artifact-decodable when the bounded layout is supported', () => {
+  const service = new WorkspaceBioimagingService()
+  const bytes = makeUncompressedRgbStripTiff(4, 3, new Uint8Array([
+    255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+    10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+    120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10
+  ]))
+  const preview = service.preview({
+    bytes,
+    path: 'rgb-field.tif',
+    mimeType: 'image/tiff',
+    size: bytes.byteLength
+  })
+
+  assert.equal(preview.tilePlan?.pixelDecoding, true)
+  assert.equal(preview.tilePlan?.tileRendererImplemented, true)
+  assert.match(preview.observation?.visibleText ?? '', /bounded tile artifact decoding available/)
+})
+
+test('decodes a bounded uncompressed TIFF thumbnail into PNG bytes', () => {
+  const service = new WorkspaceBioimagingService()
+  const bytes = makeUncompressedRgbStripTiff(4, 2, new Uint8Array([
+    255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0,
+    10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120
+  ]))
+
+  const thumbnail = service.decodeThumbnail({
+    bytes,
+    path: 'rgb-field.tif',
+    mimeType: 'image/tiff',
+    width: 2,
+    height: 2
+  })
+
+  assert.equal(thumbnail.ok, true)
+  assert.equal(thumbnail.format, 'tiff')
+  assert.equal(thumbnail.mimeType, 'image/png')
+  assert.deepEqual(thumbnail.thumbnail, { width: 2, height: 1 })
+  assert.equal(thumbnail.pixelDecoding, true)
+  assert.equal(thumbnail.thumbnailRendererImplemented, true)
+  assert.deepEqual([...thumbnail.bytes.slice(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  assert.match(thumbnail.visibleText ?? '', /Decoded TIFF thumbnail/)
+})
+
+test('rejects unsupported TIFF pixel layouts without returning fake tiles', () => {
+  const service = new WorkspaceBioimagingService()
+  const bytes = makeClassicLittleEndianTiff([
+    inlineLongTag(256, 8),
+    inlineLongTag(257, 8),
+    inlineShortTag(258, 8),
+    inlineShortTag(259, 7),
+    inlineShortTag(262, 1),
+    inlineShortTag(277, 1)
+  ])
+
+  assert.throws(() => {
+    service.decodeTile({
+      bytes,
+      path: 'compressed.svs',
+      level: 0,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2
+    })
+  }, /Only uncompressed TIFF tiles are currently decoded/)
+})
+
 test('returns a metadata-only placeholder for proprietary CZI input', () => {
   const service = new WorkspaceBioimagingService()
   const bytes = new Uint8Array(64)
@@ -359,6 +456,61 @@ function makeClassicLittleEndianTiff(tags: TiffTagFixture[]): Uint8Array<ArrayBu
   }
 
   return bytes
+}
+
+function makeUncompressedRgbStripTiff(
+  width: number,
+  height: number,
+  pixels: Uint8Array<ArrayBuffer>
+): Uint8Array<ArrayBuffer> {
+  const samplesPerPixel = 3
+  assert.equal(pixels.byteLength, width * height * samplesPerPixel)
+  const entryCount = 9
+  const ifdOffset = 8
+  const ifdByteLength = 2 + entryCount * 12 + 4
+  const bitsOffset = ifdOffset + ifdByteLength
+  const pixelOffset = bitsOffset + 6
+  const bytes = new Uint8Array(pixelOffset + pixels.byteLength)
+  const view = new DataView(bytes.buffer)
+
+  bytes[0] = 'I'.charCodeAt(0)
+  bytes[1] = 'I'.charCodeAt(0)
+  view.setUint16(2, 42, true)
+  view.setUint32(4, ifdOffset, true)
+  view.setUint16(ifdOffset, entryCount, true)
+
+  writeTiffEntry(view, ifdOffset, 0, 256, 4, 1, width)
+  writeTiffEntry(view, ifdOffset, 1, 257, 4, 1, height)
+  writeTiffEntry(view, ifdOffset, 2, 258, 3, 3, bitsOffset)
+  writeTiffEntry(view, ifdOffset, 3, 259, 3, 1, 1)
+  writeTiffEntry(view, ifdOffset, 4, 262, 3, 1, 2)
+  writeTiffEntry(view, ifdOffset, 5, 273, 4, 1, pixelOffset)
+  writeTiffEntry(view, ifdOffset, 6, 277, 3, 1, samplesPerPixel)
+  writeTiffEntry(view, ifdOffset, 7, 278, 4, 1, height)
+  writeTiffEntry(view, ifdOffset, 8, 279, 4, 1, pixels.byteLength)
+  view.setUint32(ifdOffset + 2 + entryCount * 12, 0, true)
+
+  view.setUint16(bitsOffset, 8, true)
+  view.setUint16(bitsOffset + 2, 8, true)
+  view.setUint16(bitsOffset + 4, 8, true)
+  bytes.set(pixels, pixelOffset)
+  return bytes
+}
+
+function writeTiffEntry(
+  view: DataView,
+  ifdOffset: number,
+  index: number,
+  tag: number,
+  type: number,
+  count: number,
+  value: number
+): void {
+  const entryOffset = ifdOffset + 2 + index * 12
+  view.setUint16(entryOffset, tag, true)
+  view.setUint16(entryOffset + 2, type, true)
+  view.setUint32(entryOffset + 4, count, true)
+  view.setUint32(entryOffset + 8, value, true)
 }
 
 function inlineLongTag(tag: number, value: number): TiffTagFixture {

@@ -1,24 +1,31 @@
 import { describe, expect, it } from 'vitest'
 import {
+  WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS,
+  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES
+} from '../../../shared/workspace-preview'
+import {
   createWorkspacePreviewRegistry,
   defaultWorkspacePreviewManifests
 } from './registry'
 
 describe('WorkspacePreviewRegistry', () => {
-  it('routes legacy preview formats without touching the old preview panel', () => {
+  it('routes mature document and image formats through final plugin identities', () => {
     const registry = createWorkspacePreviewRegistry()
 
     expect(registry.resolve({ path: 'notes.md' })).toMatchObject({
       status: 'matched',
-      manifest: { id: 'legacy-markdown' }
+      manifest: { id: 'markdown', modality: 'document' }
     })
     expect(registry.resolve({ path: 'paper.pdf' })).toMatchObject({
       status: 'matched',
-      manifest: { id: 'legacy-pdf' }
+      manifest: { id: 'pdf', modality: 'document' }
     })
     expect(registry.resolve({ path: 'figure.png' })).toMatchObject({
       status: 'matched',
-      manifest: { id: 'legacy-image' }
+      manifest: { id: 'image', modality: 'image' }
     })
   })
 
@@ -26,6 +33,14 @@ describe('WorkspacePreviewRegistry', () => {
     const registry = createWorkspacePreviewRegistry()
 
     expect(registry.resolve({ path: 'notes.txt' })).toMatchObject({
+      status: 'matched',
+      manifest: { id: 'text', modality: 'text' }
+    })
+    expect(registry.resolve({ path: 'paper.tex' })).toMatchObject({
+      status: 'matched',
+      manifest: { id: 'text', modality: 'text' }
+    })
+    expect(registry.resolve({ path: 'refs.bib' })).toMatchObject({
       status: 'matched',
       manifest: { id: 'text', modality: 'text' }
     })
@@ -60,12 +75,12 @@ describe('WorkspacePreviewRegistry', () => {
     })
   })
 
-  it('falls back to legacy text only when requested', () => {
+  it('falls back to the text plugin only when requested', () => {
     const registry = createWorkspacePreviewRegistry()
 
     expect(registry.resolve({ path: 'unknown.custom' })).toMatchObject({
       status: 'fallback',
-      manifest: { id: 'legacy-text' }
+      manifest: { id: 'text' }
     })
     expect(registry.resolve({ path: 'unknown.custom', fallbackToText: false })).toMatchObject({
       status: 'unsupported',
@@ -87,16 +102,28 @@ describe('WorkspacePreviewRegistry', () => {
 
     expect(ids).toEqual([...new Set(ids)])
     expect(ids).toContain('text')
-    expect(ids).toContain('legacy-text')
     expect(ids).toContain('tabular')
     expect(ids).toContain('molecular')
+    expect(ids.some((id) => id.startsWith('legacy-'))).toBe(false)
   })
 
   it('does not declare conversion exports that the generic host cannot fulfill', () => {
     const manifests = new Map(defaultWorkspacePreviewManifests().map((manifest) => [manifest.id, manifest]))
 
+    expect(manifests.get('markdown')?.capabilities.export).toEqual(['markdown'])
+    expect(manifests.get('markdown')?.capabilities.export).not.toContain('html')
+    expect(manifests.get('pdf')?.capabilities.export).toEqual(['pdf', 'sidecar', 'annotated-pdf'])
     expect(manifests.get('tabular')?.capabilities.export).toEqual(['csv', 'tsv'])
     expect(manifests.get('tabular')?.capabilities.export).not.toContain('xlsx')
+    expect(manifests.get('image')?.capabilities.edit).toBe(false)
+    expect(manifests.get('image')?.capabilities.structuredSelection).toBe(false)
+    expect(manifests.get('tabular')?.extensions).toEqual(['.csv', '.tsv', '.jsonl', '.ndjson', '.xlsx'])
+    expect(manifests.get('tabular')?.extensions).not.toEqual(expect.arrayContaining([
+      '.xls',
+      '.parquet',
+      '.feather',
+      '.arrow'
+    ]))
     expect(manifests.get('molecular')?.capabilities.export).not.toEqual(expect.arrayContaining(['png', 'session']))
     expect(manifests.get('omics-matrix')?.capabilities.export).not.toContain('csv')
     expect(manifests.get('bioimaging')?.capabilities.export).not.toEqual(expect.arrayContaining(['png', 'roi']))
@@ -105,5 +132,16 @@ describe('WorkspacePreviewRegistry', () => {
     expect(manifests.get('sequence-genomics')?.capabilities.annotations).toBeUndefined()
     expect(manifests.get('bioimaging')?.capabilities.annotations).toBeUndefined()
     expect(manifests.get('proteomics-spectra')?.capabilities.annotations).toBeUndefined()
+  })
+
+  it('keeps first-party core manifest surfaces aligned with shared constants', () => {
+    const manifests = new Map(defaultWorkspacePreviewManifests().map((manifest) => [manifest.id, manifest]))
+
+    expect(manifests.get('text')?.extensions).toEqual([...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS])
+    expect(manifests.get('text')?.mimeTypes).toEqual([...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES])
+    expect(manifests.get('text')?.extensions).not.toContain('.jsonl')
+    expect(manifests.get('markdown')?.mimeTypes).toEqual([...WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES])
+    expect(manifests.get('pdf')?.mimeTypes).toEqual([...WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES])
+    expect(manifests.get('image')?.capabilities.export).toEqual([...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS])
   })
 })

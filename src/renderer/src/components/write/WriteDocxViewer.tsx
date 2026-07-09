@@ -26,7 +26,11 @@ import {
   Search
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { WorkspaceDocxParagraph } from '@shared/workspace-file'
+import type {
+  WorkspaceDocxParagraph,
+  WorkspaceDocxTextParagraphWrite,
+  WorkspaceDocxTextWriteResult
+} from '@shared/workspace-file'
 import type {
   WritePdfAnnotationAction,
   WritePdfAnnotationOverlayKind,
@@ -52,6 +56,7 @@ type Props = {
   onAnnotationAction?: (action: WritePdfAnnotationAction, selection: WritePdfSelection) => void
   onAnnotationSelect?: (threadId: string) => void
   onOpenAnnotations?: () => void
+  onSaveParagraphs?: (paragraphs: WorkspaceDocxTextParagraphWrite[]) => Promise<WorkspaceDocxTextWriteResult>
   className?: string
 }
 
@@ -250,6 +255,7 @@ export function WriteDocxViewer({
   onAnnotationAction,
   onAnnotationSelect,
   onOpenAnnotations,
+  onSaveParagraphs,
   className
 }: Props): ReactElement {
   const { t } = useTranslation('common')
@@ -436,7 +442,7 @@ export function WriteDocxViewer({
       paragraph.text !== (originalTextByIndex.get(paragraph.index) ?? '')
     ))
     if (!currentDirty || saveState === 'saving') return
-    if (typeof window.sciforge?.writeWorkspaceDocxText !== 'function') {
+    if (!onSaveParagraphs) {
       setSaveState('error')
       setSaveError(t('writeDocxEditUnavailable'))
       return
@@ -451,11 +457,7 @@ export function WriteDocxViewer({
     setSaveState('saving')
     setSaveError(null)
     try {
-      const result = await window.sciforge.writeWorkspaceDocxText({
-        path: filePath,
-        workspaceRoot,
-        paragraphs: changed
-      })
+      const result = await onSaveParagraphs(changed)
       if (!result.ok) {
         setSaveState('error')
         setSaveError(t('writeDocxSaveFailed', { message: result.message }))
@@ -473,7 +475,7 @@ export function WriteDocxViewer({
     setDraftParagraphs(nextCommitted)
     setEditMode(false)
     setSaveState('saved')
-  }, [filePath, originalTextByIndex, saveState, syncDraftParagraphsFromDom, t, workspaceRoot])
+  }, [onSaveParagraphs, originalTextByIndex, saveState, syncDraftParagraphsFromDom, t])
 
   const handleHighlightKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,

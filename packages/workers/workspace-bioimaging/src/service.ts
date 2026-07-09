@@ -4,6 +4,8 @@ import {
   workspaceBioimagingRegionAnnotationInputSchema,
   workspaceBioimagingRegionSelectionInputSchema,
   workspaceBioimagingRoiSetExportInputSchema,
+  workspaceBioimagingThumbnailDecodeInputSchema,
+  workspaceBioimagingTileDecodeInputSchema,
   type WorkspaceBioimagingChannelSelectionInput,
   type WorkspaceBioimagingChannelSelectionResult,
   type WorkspaceBioimagingPreviewInput,
@@ -13,11 +15,17 @@ import {
   type WorkspaceBioimagingRegionSelectionInput,
   type WorkspaceBioimagingRegionSelectionResult,
   type WorkspaceBioimagingRoiSetExportInput,
-  type WorkspaceBioimagingRoiSetExportResult
+  type WorkspaceBioimagingRoiSetExportResult,
+  type WorkspaceBioimagingThumbnailDecodeInput,
+  type WorkspaceBioimagingThumbnailDecodeResult,
+  type WorkspaceBioimagingTileDecodeInput,
+  type WorkspaceBioimagingTileDecodeResult
 } from './contract.js'
 import {
   annotateWorkspaceBioimagingRegion,
   createWorkspaceBioimagingPreview,
+  decodeWorkspaceBioimagingThumbnail,
+  decodeWorkspaceBioimagingTile,
   exportWorkspaceBioimagingRoiSet,
   selectWorkspaceBioimagingChannels,
   selectWorkspaceBioimagingRegion
@@ -26,6 +34,14 @@ import {
 export class WorkspaceBioimagingService {
   preview(input: WorkspaceBioimagingPreviewInput): WorkspaceBioimagingPreviewResult {
     return createWorkspaceBioimagingPreview(workspaceBioimagingPreviewInputSchema.parse(input))
+  }
+
+  decodeTile(input: WorkspaceBioimagingTileDecodeInput): WorkspaceBioimagingTileDecodeResult {
+    return decodeWorkspaceBioimagingTile(workspaceBioimagingTileDecodeInputSchema.parse(input))
+  }
+
+  decodeThumbnail(input: WorkspaceBioimagingThumbnailDecodeInput): WorkspaceBioimagingThumbnailDecodeResult {
+    return decodeWorkspaceBioimagingThumbnail(workspaceBioimagingThumbnailDecodeInputSchema.parse(input))
   }
 
   selectRegion(input: WorkspaceBioimagingRegionSelectionInput): WorkspaceBioimagingRegionSelectionResult {

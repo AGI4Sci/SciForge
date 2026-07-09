@@ -14,6 +14,8 @@ export const WORKSPACE_BIOIMAGING_MAX_VISIBLE_TEXT_CHARS = 200_000
 export const WORKSPACE_BIOIMAGING_DEFAULT_TILE_SIZE = 512
 export const WORKSPACE_BIOIMAGING_MAX_PYRAMID_LEVELS = 16
 export const WORKSPACE_BIOIMAGING_MAX_SELECTION_ITEMS = 10_000
+export const WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS = 512 * 512
+export const WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_BYTES = 4 * 1024 * 1024
 
 export const WORKSPACE_BIOIMAGING_ACTIONS = [
   'bioimaging.observeMetadata',
@@ -141,8 +143,8 @@ export const workspaceBioimagingTilePlanSchema = z.object({
   status: z.literal('metadata-only'),
   kind: z.literal('metadata-derived-pyramid'),
   source: z.enum(['tiff-metadata', 'ome-tiff-metadata']),
-  tileRendererImplemented: z.literal(false),
-  pixelDecoding: z.literal(false),
+  tileRendererImplemented: z.boolean(),
+  pixelDecoding: z.boolean(),
   baseDimensions: workspaceBioimagingDimensionsSchema,
   recommendedTileSize: workspaceBioimagingTileSizeSchema,
   channelCount: z.number().int().nonnegative().optional(),
@@ -205,6 +207,11 @@ const bytesSchema = z.instanceof(Uint8Array)
     message: `bytes must be at most ${WORKSPACE_BIOIMAGING_MAX_BYTES} bytes`
   })
 
+const renderedTileBytesSchema = z.instanceof(Uint8Array)
+  .refine((bytes) => bytes.byteLength <= WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_BYTES, {
+    message: `tile bytes must be at most ${WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_BYTES} bytes`
+  })
+
 export const workspaceBioimagingPreviewInputSchema = z.object({
   bytes: bytesSchema,
   format: workspaceBioimagingFormatSchema.default('auto'),
@@ -230,6 +237,88 @@ export const workspaceBioimagingPreviewResultSchema = z.object({
   tilePlan: workspaceBioimagingTilePlanSchema.optional(),
   warnings: z.array(boundedStringSchema).max(WORKSPACE_BIOIMAGING_MAX_WARNINGS),
   observation: workspaceBioimagingObservationSchema.optional()
+}).strict()
+
+export const workspaceBioimagingTileDecodeInputSchema = z.object({
+  bytes: bytesSchema,
+  format: workspaceBioimagingFormatSchema.default('auto'),
+  path: optionalPathSchema,
+  workspaceRoot: optionalPathSchema,
+  mimeType: mimeTypeSchema.optional(),
+  size: z.number().finite().nonnegative().optional(),
+  mtimeMs: z.number().finite().nonnegative().optional(),
+  level: z.number().int().nonnegative().default(0),
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  channelIndex: z.number().int().nonnegative().optional(),
+  z: z.number().int().nonnegative().optional(),
+  t: z.number().int().nonnegative().optional()
+}).strict().superRefine((input, context) => {
+  if (input.width * input.height > WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS) {
+    context.addIssue({
+      code: 'custom',
+      message: `rendered tile area must be at most ${WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS} pixels`
+    })
+  }
+})
+
+export const workspaceBioimagingTileDecodeResultSchema = z.object({
+  ok: z.literal(true),
+  contractVersion: z.literal(WORKSPACE_BIOIMAGING_CONTRACT_VERSION),
+  format: workspaceBioimagingResolvedFormatSchema,
+  mimeType: z.literal('image/png'),
+  bytes: renderedTileBytesSchema,
+  tile: z.object({
+    level: z.number().int().nonnegative(),
+    x: z.number().int().nonnegative(),
+    y: z.number().int().nonnegative(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive()
+  }).strict(),
+  pixelDecoding: z.literal(true),
+  tileRendererImplemented: z.literal(true),
+  visibleText: z.string().max(WORKSPACE_BIOIMAGING_MAX_VISIBLE_TEXT_CHARS).optional(),
+  warnings: z.array(boundedStringSchema).max(WORKSPACE_BIOIMAGING_MAX_WARNINGS)
+}).strict()
+
+export const workspaceBioimagingThumbnailDecodeInputSchema = z.object({
+  bytes: bytesSchema,
+  format: workspaceBioimagingFormatSchema.default('auto'),
+  path: optionalPathSchema,
+  workspaceRoot: optionalPathSchema,
+  mimeType: mimeTypeSchema.optional(),
+  size: z.number().finite().nonnegative().optional(),
+  mtimeMs: z.number().finite().nonnegative().optional(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  channelIndex: z.number().int().nonnegative().optional(),
+  z: z.number().int().nonnegative().optional(),
+  t: z.number().int().nonnegative().optional()
+}).strict().superRefine((input, context) => {
+  if (input.width * input.height > WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS) {
+    context.addIssue({
+      code: 'custom',
+      message: `rendered thumbnail area must be at most ${WORKSPACE_BIOIMAGING_MAX_RENDERED_TILE_PIXELS} pixels`
+    })
+  }
+})
+
+export const workspaceBioimagingThumbnailDecodeResultSchema = z.object({
+  ok: z.literal(true),
+  contractVersion: z.literal(WORKSPACE_BIOIMAGING_CONTRACT_VERSION),
+  format: workspaceBioimagingResolvedFormatSchema,
+  mimeType: z.literal('image/png'),
+  bytes: renderedTileBytesSchema,
+  thumbnail: z.object({
+    width: z.number().int().positive(),
+    height: z.number().int().positive()
+  }).strict(),
+  pixelDecoding: z.literal(true),
+  thumbnailRendererImplemented: z.literal(true),
+  visibleText: z.string().max(WORKSPACE_BIOIMAGING_MAX_VISIBLE_TEXT_CHARS).optional(),
+  warnings: z.array(boundedStringSchema).max(WORKSPACE_BIOIMAGING_MAX_WARNINGS)
 }).strict()
 
 export const workspaceBioimagingRegionSelectionInputSchema = z.object({
@@ -379,6 +468,12 @@ export type WorkspaceBioimagingObservation = z.infer<typeof workspaceBioimagingO
 export type WorkspaceBioimagingPreviewInput = z.input<typeof workspaceBioimagingPreviewInputSchema>
 export type NormalizedWorkspaceBioimagingPreviewInput = z.output<typeof workspaceBioimagingPreviewInputSchema>
 export type WorkspaceBioimagingPreviewResult = z.infer<typeof workspaceBioimagingPreviewResultSchema>
+export type WorkspaceBioimagingTileDecodeInput = z.input<typeof workspaceBioimagingTileDecodeInputSchema>
+export type NormalizedWorkspaceBioimagingTileDecodeInput = z.output<typeof workspaceBioimagingTileDecodeInputSchema>
+export type WorkspaceBioimagingTileDecodeResult = z.infer<typeof workspaceBioimagingTileDecodeResultSchema>
+export type WorkspaceBioimagingThumbnailDecodeInput = z.input<typeof workspaceBioimagingThumbnailDecodeInputSchema>
+export type NormalizedWorkspaceBioimagingThumbnailDecodeInput = z.output<typeof workspaceBioimagingThumbnailDecodeInputSchema>
+export type WorkspaceBioimagingThumbnailDecodeResult = z.infer<typeof workspaceBioimagingThumbnailDecodeResultSchema>
 export type WorkspaceBioimagingRegionSelectionInput = z.input<typeof workspaceBioimagingRegionSelectionInputSchema>
 export type NormalizedWorkspaceBioimagingRegionSelectionInput = z.output<typeof workspaceBioimagingRegionSelectionInputSchema>
 export type WorkspaceBioimagingRegionSelectionResult = z.infer<typeof workspaceBioimagingRegionSelectionResultSchema>

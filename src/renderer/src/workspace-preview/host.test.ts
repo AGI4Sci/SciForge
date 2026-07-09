@@ -10,14 +10,15 @@ import {
 } from '@shared/workspace-preview'
 import {
   createRendererWorkspacePreviewRegistry,
-  LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID,
   MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
+  TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
   type RendererWorkspacePreviewPluginDescriptor,
   type RendererWorkspacePreviewRegistry
 } from './registry'
 import {
   createWorkspacePreviewAssetTransportClient,
   createWorkspacePreviewHost,
+  type WorkspacePreviewAssetTransportClient,
   type WorkspacePreviewBridgeAdapter,
   type WorkspacePreviewLastEditSummary
 } from './host'
@@ -41,6 +42,14 @@ function createMockBridge(overrides: Partial<WorkspacePreviewBridgeAdapter> = {}
       ok: false,
       message: 'readRange not mocked'
     })),
+    prepareArtifact: vi.fn<WorkspacePreviewBridgeAdapter['prepareArtifact']>(async () => ({
+      ok: false,
+      message: 'prepareArtifact not mocked'
+    })),
+    readArtifactRange: vi.fn<WorkspacePreviewBridgeAdapter['readArtifactRange']>(async () => ({
+      ok: false,
+      message: 'readArtifactRange not mocked'
+    })),
     applyEdit: vi.fn<WorkspacePreviewBridgeAdapter['applyEdit']>(async () => ({
       ok: false,
       message: 'applyEdit not mocked'
@@ -53,6 +62,7 @@ function createMockBridge(overrides: Partial<WorkspacePreviewBridgeAdapter> = {}
       ok: false,
       message: 'invokeAction not mocked'
     })),
+    releaseSession: vi.fn<WorkspacePreviewBridgeAdapter['releaseSession']>(async () => false),
     watch: vi.fn<WorkspacePreviewBridgeAdapter['watch']>(async () => ({
       ok: false,
       message: 'watch not mocked'
@@ -109,14 +119,14 @@ describe('WorkspacePreviewHost', () => {
     expect(host.listDescriptors().map((descriptor) => descriptor.manifest.id)).toEqual(
       expect.arrayContaining([
         MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
-        LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID,
+        TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
         'molecular'
       ])
     )
     expect(host.resolvePath({ path: 'README.md' })?.manifest.id).toBe(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)
     expect(host.resolvePath({ path: 'protein.pdb' })?.manifest.id).toBe('molecular')
     expect(host.resolvePath({ path: 'opaque.unknown', includeFallback: true })?.manifest.id).toBe(
-      LEGACY_WORKSPACE_PREVIEW_PLUGIN_ID
+      TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
     )
   })
 
@@ -289,12 +299,54 @@ describe('WorkspacePreviewHost', () => {
       readRange: vi.fn<WorkspacePreviewBridgeAdapter['readRange']>(async (sessionId, range) => ({
         ok: true,
         sessionId,
-        path: 'protein.pdb',
+        assetId: `asset:${sessionId}`,
         offset: range.offset,
         length: range.length,
         size: 42,
         dataBase64: 'QUJDRA==',
         mimeType: 'chemical/x-pdb'
+      })),
+      prepareArtifact: vi.fn<WorkspacePreviewBridgeAdapter['prepareArtifact']>(async (sessionId) => ({
+        ok: true,
+        sessionId,
+        artifact: {
+          schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+          sessionId,
+          assetId: `asset:${sessionId}`,
+          artifactId: 'artifact-1',
+          kind: 'cache-artifact',
+          pluginId: 'molecular',
+          mimeType: 'application/json',
+          byteLength: 16,
+          range: {
+            available: true,
+            size: 16,
+            maxChunkBytes: 4 * 1024 * 1024,
+            recommendedChunkBytes: 16
+          },
+          source: {
+            assetId: `asset:${sessionId}`,
+            size: 42,
+            mtimeMs: 100
+          },
+          cache: {
+            scope: 'session',
+            source: 'observation',
+            createdAt: '2026-07-08T00:00:04.000Z',
+            invalidation: 'source-size-mtime'
+          }
+        }
+      })),
+      readArtifactRange: vi.fn<WorkspacePreviewBridgeAdapter['readArtifactRange']>(async (sessionId, request) => ({
+        ok: true,
+        sessionId,
+        assetId: `asset:${sessionId}`,
+        artifactId: request.artifactId,
+        offset: request.range.offset,
+        length: 4,
+        size: 16,
+        mimeType: 'application/json',
+        dataBase64: 'eyJ9'
       })),
       invokeAction: vi.fn<WorkspacePreviewBridgeAdapter['invokeAction']>(async (sessionId, action) => ({
         ok: true,
@@ -317,11 +369,11 @@ describe('WorkspacePreviewHost', () => {
         descriptor: {
           schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
           sessionId,
+          assetId: `asset:${sessionId}`,
           pluginId: 'molecular',
           modality: 'molecular',
           file: {
-            workspaceRoot: '/tmp/work',
-            path: '/tmp/work/protein.pdb',
+            name: 'protein.pdb',
             relativePath: 'protein.pdb',
             mimeType: 'chemical/x-pdb',
             size: 42
@@ -343,8 +395,40 @@ describe('WorkspacePreviewHost', () => {
               status: 'available',
               reason: 'bounded reads',
               maxChunkBytes: 4 * 1024 * 1024
+            },
+            {
+              kind: 'cache-artifact',
+              status: 'available',
+              reason: 'metadata cache artifact available'
             }
-          ]
+          ],
+          artifacts: [{
+            schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+            sessionId,
+            assetId: `asset:${sessionId}`,
+            artifactId: 'artifact-1',
+            kind: 'cache-artifact',
+            pluginId: 'molecular',
+            mimeType: 'application/json',
+            byteLength: 16,
+            range: {
+              available: true,
+              size: 16,
+              maxChunkBytes: 4 * 1024 * 1024,
+              recommendedChunkBytes: 16
+            },
+            source: {
+              assetId: `asset:${sessionId}`,
+              size: 42,
+              mtimeMs: 100
+            },
+            cache: {
+              scope: 'session',
+              source: 'observation',
+              createdAt: '2026-07-08T00:00:04.000Z',
+              invalidation: 'source-size-mtime'
+            }
+          }]
         }
       })),
       watch: vi.fn<WorkspacePreviewBridgeAdapter['watch']>(async (payload) => ({
@@ -357,7 +441,8 @@ describe('WorkspacePreviewHost', () => {
         truncated: false,
         startedAt: '2026-07-08T00:00:03.000Z'
       })),
-      unwatch: vi.fn<WorkspacePreviewBridgeAdapter['unwatch']>(async () => true)
+      unwatch: vi.fn<WorkspacePreviewBridgeAdapter['unwatch']>(async () => true),
+      releaseSession: vi.fn<WorkspacePreviewBridgeAdapter['releaseSession']>(async () => true)
     })
     const host = createWorkspacePreviewHost({ registry, bridge })
     await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
@@ -392,6 +477,30 @@ describe('WorkspacePreviewHost', () => {
     await host.readRange({ offset: 0, length: 4 })
     expect(bridge.readRange).toHaveBeenCalledWith('session-1', { offset: 0, length: 4 })
 
+    await expect(host.prepareArtifact({
+      kind: 'cache-artifact',
+      source: 'observation'
+    })).resolves.toMatchObject({
+      ok: true,
+      artifact: { artifactId: 'artifact-1' }
+    })
+    expect(bridge.prepareArtifact).toHaveBeenCalledWith('session-1', {
+      kind: 'cache-artifact',
+      source: 'observation'
+    })
+    await expect(host.readArtifactRange({
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 4 }
+    })).resolves.toMatchObject({
+      ok: true,
+      artifactId: 'artifact-1',
+      dataBase64: 'eyJ9'
+    })
+    expect(bridge.readArtifactRange).toHaveBeenCalledWith('session-1', {
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 4 }
+    })
+
     await host.invokeAction({
       actionId: 'molecular.select',
       input: { chains: ['A'] }
@@ -414,6 +523,33 @@ describe('WorkspacePreviewHost', () => {
         size: 42
       }
     })
+    expect(host.getState().asset?.strategies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'cache-artifact', status: 'available' })
+    ]))
+    expect(host.getState().asset?.artifacts?.[0]).toMatchObject({
+      artifactId: 'artifact-1',
+      kind: 'cache-artifact',
+      cache: {
+        source: 'observation'
+      }
+    })
+    const asset = host.getState().asset
+    if (!asset) throw new Error('Expected asset descriptor in renderer host state.')
+    const transport = createWorkspacePreviewAssetTransportClient({
+      descriptor: asset,
+      readRange: host.readRange.bind(host),
+      prepareArtifact: host.prepareArtifact.bind(host),
+      readArtifactRange: host.readArtifactRange.bind(host)
+    })
+    expect(transport.strategyStatus('cache-artifact')).toMatchObject({
+      status: 'available'
+    })
+    expect(transport.artifact('artifact-1')).toMatchObject({
+      artifactId: 'artifact-1',
+      cache: {
+        source: 'observation'
+      }
+    })
 
     vi.mocked(bridge.describeAsset).mockResolvedValueOnce({
       ok: false,
@@ -430,6 +566,14 @@ describe('WorkspacePreviewHost', () => {
     expect(bridge.unwatch).toHaveBeenCalledWith('watch-1')
     expect(host.getState().error).toBeNull()
 
+    await host.releaseSession()
+    expect(bridge.releaseSession).toHaveBeenCalledWith('session-1')
+    expect(host.getState().session).toBeNull()
+    expect(host.getState().asset).toBeNull()
+    expect(host.getState().observation).toBeNull()
+    expect(host.getState().file).toBeNull()
+    expect(host.getState().lastEditSummary).toBeNull()
+
     await host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
     expect(host.getState().session?.id).toBe('session-2')
     expect(host.getState().asset).toBeNull()
@@ -440,22 +584,70 @@ describe('WorkspacePreviewHost', () => {
     const readRange = vi.fn(async () => ({
       ok: true as const,
       sessionId: 'session-asset',
-      path: '/tmp/work/protein.pdb',
+      assetId: 'asset:session-asset',
       offset: 0,
       length: 4,
       size: 4,
       dataBase64: 'QUJDRA==',
       mimeType: 'chemical/x-pdb'
     }))
+    const prepareArtifact = vi.fn<WorkspacePreviewAssetTransportClient['prepareArtifact']>(async () => ({
+      ok: true as const,
+      sessionId: 'session-asset',
+      artifact: {
+        schemaVersion: 1 as const,
+        sessionId: 'session-asset',
+        assetId: 'asset:session-asset',
+        artifactId: 'artifact-1',
+        kind: 'cache-artifact' as const,
+        pluginId: 'molecular',
+        mimeType: 'application/json',
+        byteLength: 16,
+        range: {
+          available: true as const,
+          size: 16,
+          maxChunkBytes: 4 * 1024 * 1024,
+          recommendedChunkBytes: 16
+        },
+        source: {
+          assetId: 'asset:session-asset',
+          size: 4,
+          mtimeMs: 42
+        },
+        cache: {
+          scope: 'session' as const,
+          source: 'observation' as const,
+          createdAt: '2026-07-08T00:00:00.000Z',
+          invalidation: 'source-size-mtime' as const
+        }
+      }
+    }))
+    const readArtifactRange = vi.fn<WorkspacePreviewAssetTransportClient['readArtifactRange']>(async () => ({
+      ok: true as const,
+      sessionId: 'session-asset',
+      assetId: 'asset:session-asset',
+      artifactId: 'artifact-1',
+      offset: 0,
+      length: 4,
+      size: 16,
+      mimeType: 'application/json',
+      dataBase64: 'eyJ9'
+    }))
+    const preparedArtifact = await prepareArtifact({
+      kind: 'cache-artifact',
+      source: 'observation'
+    })
+    if (!preparedArtifact.ok) throw new Error('Expected artifact preparation mock to succeed.')
+    const artifact = preparedArtifact.artifact
     const client = createWorkspacePreviewAssetTransportClient({
       descriptor: {
         schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
         sessionId: 'session-asset',
+        assetId: 'asset:session-asset',
         pluginId: 'molecular',
         modality: 'molecular',
         file: {
-          workspaceRoot: '/tmp/work',
-          path: '/tmp/work/protein.pdb',
+          name: 'protein.pdb',
           relativePath: 'protein.pdb',
           mimeType: 'chemical/x-pdb',
           size: 4
@@ -483,9 +675,12 @@ describe('WorkspacePreviewHost', () => {
             status: 'requires-plugin',
             reason: 'format-specific decoder'
           }
-        ]
+        ],
+        artifacts: [artifact]
       },
-      readRange
+      readRange,
+      prepareArtifact,
+      readArtifactRange
     })
 
     expect(client.strategyStatus('byte-range')).toMatchObject({
@@ -495,6 +690,22 @@ describe('WorkspacePreviewHost', () => {
       status: 'requires-plugin'
     })
     expect(client.strategyStatus('cache-artifact')).toBeNull()
+    expect(client.artifact('artifact-1')).toEqual(artifact)
+    await expect(client.prepareArtifact({
+      kind: 'cache-artifact',
+      source: 'observation'
+    })).resolves.toMatchObject({
+      ok: true,
+      artifact: { artifactId: 'artifact-1' }
+    })
+    await expect(client.readArtifactRange({
+      artifactId: 'artifact-1',
+      range: { offset: 0, length: 4 }
+    })).resolves.toMatchObject({
+      ok: true,
+      artifactId: 'artifact-1',
+      dataBase64: 'eyJ9'
+    })
 
     await expect(client.readTextIfWithin(8)).resolves.toEqual({
       ok: true,

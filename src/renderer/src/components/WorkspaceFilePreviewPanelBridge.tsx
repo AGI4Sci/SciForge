@@ -5,8 +5,6 @@ import type {
 } from '@shared/visible-context'
 import {
   isDeferredNonLifeScienceExtension,
-  isFirstPartyTabularShellPreviewPath,
-  isLifeSciencePreviewExtension,
   type WorkspaceObservation
 } from '@shared/workspace-preview'
 import { FolderOpen, PanelRightClose } from 'lucide-react'
@@ -18,26 +16,27 @@ import {
 import {
   WorkspacePreviewPanelShell,
   WorkspacePreviewPluginOutlet,
+  type DocumentAnnotationQuestionBridge,
   type WorkspacePreviewLastEditSummary,
   type WorkspacePreviewPanelShellContext,
-  type WorkspacePreviewPluginOutletRouteReason
+  type WorkspacePreviewPluginOutletRouteReason,
+  rendererWorkspacePreviewRegistry,
+  type RendererWorkspacePreviewPluginDescriptor
 } from '../workspace-preview'
 import { registerVisibleContextComponent } from '../lib/visible-context'
-import { WorkspaceFilePreviewPanel } from './WorkspaceFilePreviewPanel'
 
-export type WorkspaceFilePreviewPanelBridgeRoute =
-  | {
-      kind: 'legacy-panel'
-    }
-  | {
-      kind: 'workspace-preview-shell'
-      reason: WorkspacePreviewPluginOutletRouteReason
-    }
+export type WorkspaceFilePreviewPanelBridgeRoute = {
+  kind: 'workspace-preview-shell'
+  reason: WorkspacePreviewPluginOutletRouteReason
+  pluginId?: string
+  modality?: RendererWorkspacePreviewPluginDescriptor['manifest']['modality']
+}
 
 export type WorkspaceFilePreviewPanelBridgeProps = {
   target: WorkspaceFileTarget | null
   workspaceRoot: string
   className?: string
+  annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }
@@ -45,29 +44,22 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
 export function resolveWorkspaceFilePreviewPanelBridgeRoute(
   target: WorkspaceFileTarget | null
 ): WorkspaceFilePreviewPanelBridgeRoute {
-  if (!target) return { kind: 'legacy-panel' }
-  if (isFirstPartyTextPreviewExtension(target.path)) {
+  if (!target) {
     return {
       kind: 'workspace-preview-shell',
-      reason: 'text-first-party'
+      reason: 'empty'
     }
   }
-  if (isFirstPartyTabularPreviewExtension(target.path)) {
+  const descriptor = rendererWorkspacePreviewRegistry.resolve({
+    path: target.path,
+    includeFallback: false
+  })
+  if (descriptor) {
     return {
       kind: 'workspace-preview-shell',
-      reason: 'tabular-first-party'
-    }
-  }
-  if (isFirstPartyDeckPreviewExtension(target.path)) {
-    return {
-      kind: 'workspace-preview-shell',
-      reason: 'deck-first-party'
-    }
-  }
-  if (isLifeSciencePreviewExtension(target.path)) {
-    return {
-      kind: 'workspace-preview-shell',
-      reason: 'life-science'
+      reason: 'registered-plugin',
+      pluginId: descriptor.manifest.id,
+      modality: descriptor.manifest.modality
     }
   }
   if (isDeferredNonLifeScienceExtension(target.path)) {
@@ -76,41 +68,21 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
       reason: 'deferred-non-life-science'
     }
   }
-  return { kind: 'legacy-panel' }
-}
-
-function isFirstPartyTextPreviewExtension(path: string): boolean {
-  return /\.(?:txt|text|log)$/i.test(path.trim())
-}
-
-function isFirstPartyTabularPreviewExtension(path: string): boolean {
-  return isFirstPartyTabularShellPreviewPath(path.trim())
-}
-
-function isFirstPartyDeckPreviewExtension(path: string): boolean {
-  return /\.pptx$/i.test(path.trim())
+  return {
+    kind: 'workspace-preview-shell',
+    reason: 'unregistered-format'
+  }
 }
 
 export function WorkspaceFilePreviewPanelBridge({
   target,
   workspaceRoot,
   className,
+  annotationQuestionBridge,
   onClose,
   onOpenDirectory
 }: WorkspaceFilePreviewPanelBridgeProps): ReactElement {
   const route = resolveWorkspaceFilePreviewPanelBridgeRoute(target)
-
-  if (route.kind === 'legacy-panel') {
-    return (
-      <WorkspaceFilePreviewPanel
-        target={target}
-        workspaceRoot={workspaceRoot}
-        className={className}
-        onClose={onClose}
-        onOpenDirectory={onOpenDirectory}
-      />
-    )
-  }
 
   return (
     <WorkspacePreviewPanelShell
@@ -124,6 +96,7 @@ export function WorkspaceFilePreviewPanelBridge({
           target={target}
           route={route}
           workspaceRoot={workspaceRoot}
+          annotationQuestionBridge={annotationQuestionBridge}
           onClose={onClose}
           onOpenDirectory={onOpenDirectory}
         />
@@ -135,7 +108,7 @@ export function WorkspaceFilePreviewPanelBridge({
 export function buildWorkspacePreviewVisibleContextComponent(input: {
   context: Pick<WorkspacePreviewPanelShellContext, 'state' | 'asset' | 'assetStatus' | 'assetError'>
   target: WorkspaceFileTarget | null
-  route: Extract<WorkspaceFilePreviewPanelBridgeRoute, { kind: 'workspace-preview-shell' }>
+  route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
   updatedAt: string
 }): VisibleContextComponentSnapshot | null {
@@ -152,8 +125,13 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     input.workspaceRoot
   const relativePath = relativePathForVisibleContext(path, resolvedWorkspaceRoot)
   const observation = input.context.state.observation
-  const modality = observation?.view.modality ?? input.context.state.session?.modality ?? 'unknown'
-  const pluginId = observation?.view.pluginId ?? input.context.state.session?.pluginId
+  const modality = observation?.view.modality ??
+    input.context.state.session?.modality ??
+    input.route.modality ??
+    'unknown'
+  const pluginId = observation?.view.pluginId ??
+    input.context.state.session?.pluginId ??
+    input.route.pluginId
   const mode = observation?.view.mode ?? input.context.state.session?.mode
   const selectionKind = observation?.selection?.kind ?? input.context.state.session?.selection?.kind
   const actionCount = observation?.actions.length ?? 0
@@ -229,13 +207,15 @@ function WorkspacePreviewShellBody({
   target,
   route,
   workspaceRoot,
+  annotationQuestionBridge,
   onClose,
   onOpenDirectory
 }: {
   context: WorkspacePreviewPanelShellContext
   target: WorkspaceFileTarget | null
-  route: Extract<WorkspaceFilePreviewPanelBridgeRoute, { kind: 'workspace-preview-shell' }>
+  route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
+  annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }): ReactElement {
@@ -298,13 +278,14 @@ function WorkspacePreviewShellBody({
         <WorkspacePreviewEditSummaryStatus summary={lastEditSummary} />
       ) : null}
 
-	      <WorkspacePreviewPluginOutlet
-	        context={context}
-	        routeReason={route.reason}
-	      />
-	    </div>
-	  )
-	}
+      <WorkspacePreviewPluginOutlet
+        context={context}
+        routeReason={route.reason}
+        annotationQuestionBridge={annotationQuestionBridge}
+      />
+    </div>
+  )
+}
 
 function WorkspacePreviewEditSummaryStatus({
   summary

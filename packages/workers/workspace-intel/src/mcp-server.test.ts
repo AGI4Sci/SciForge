@@ -33,7 +33,7 @@ test('serves structured workspace tool results and resource reads over MCP', asy
     components: [{
       id: 'right-sidebar.file-preview',
       region: 'right-sidebar',
-      component: 'file-preview',
+      component: 'workspace-preview',
       title: 'notes.txt',
       visible: true,
       updatedAt: '2026-07-04T00:00:00.000Z',
@@ -102,7 +102,7 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   const structuredVisibleContext = asRecord(visibleContext.structuredContent)
   assert.equal(structuredVisibleContext.ok, true)
   assert.equal(structuredVisibleContext.componentCount, 1)
-  assert.equal(asRecord((structuredVisibleContext.components as unknown[])[0]).component, 'file-preview')
+  assert.equal(asRecord((structuredVisibleContext.components as unknown[])[0]).component, 'workspace-preview')
 
   const read = await client.callTool({
     name: 'gui_workspace_read',

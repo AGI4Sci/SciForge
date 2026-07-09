@@ -136,7 +136,7 @@ const ChatFileTreePanel = lazy(() =>
 const PluginMarketplaceView = lazy(() =>
   import('./PluginMarketplaceView').then((module) => ({ default: module.PluginMarketplaceView }))
 )
-const WorkspaceFilePreviewPanel = lazy(() =>
+const WorkspaceFilePreviewPanelBridge = lazy(() =>
   import('./WorkspaceFilePreviewPanelBridge').then((module) => ({
     default: module.WorkspaceFilePreviewPanelBridge
   }))
@@ -609,6 +609,7 @@ export function Workbench(): ReactElement {
     archiveThread,
     deleteThread,
     spawnSideConversation,
+    sendSideMessage,
     openSideConversationDraft,
     selectSideConversation,
     setSidePanelOpen,
@@ -674,6 +675,7 @@ export function Workbench(): ReactElement {
       archiveThread: s.archiveThread,
       deleteThread: s.deleteThread,
       spawnSideConversation: s.spawnSideConversation,
+      sendSideMessage: s.sendSideMessage,
       openSideConversationDraft: s.openSideConversationDraft,
       selectSideConversation: s.selectSideConversation,
       setSidePanelOpen: s.setSidePanelOpen,
@@ -696,6 +698,11 @@ export function Workbench(): ReactElement {
   const [attachmentUploadBusy, setAttachmentUploadBusy] = useState(false)
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null)
   const [runtimeLogPath, setRuntimeLogPath] = useState('')
+  const annotationQuestionBridge = useMemo(() => ({
+    sideConversations,
+    spawnSideConversation,
+    sendSideMessage
+  }), [sendSideMessage, sideConversations, spawnSideConversation])
   const assistantModel = useWriteWorkspaceStore((s) => s.assistantModel)
   const setAssistantModel = useWriteWorkspaceStore((s) => s.setAssistantModel)
   const activeSddDraft = useSddDraftStore((s) => s.activeDraft)
@@ -2264,10 +2271,11 @@ export function Workbench(): ReactElement {
         <div className="h-full min-h-0 shrink-0" style={{ width: rightSidebarWidth }}>
           <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
             {rightPanelMode === 'file' && filePreviewTarget ? (
-              <WorkspaceFilePreviewPanel
+              <WorkspaceFilePreviewPanelBridge
                 target={filePreviewTarget}
                 workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
                 className="h-full max-h-full w-full"
+                annotationQuestionBridge={annotationQuestionBridge}
                 onClose={() => setFilePreviewTarget(null)}
                 onOpenDirectory={openFileTreeDirectory}
               />

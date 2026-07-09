@@ -109,11 +109,6 @@ import {
   researchCardCreatePayloadSchema,
   researchCardListPayloadSchema,
   researchCardUpdatePayloadSchema,
-  pdfAnnotationPdfExportPayloadSchema,
-  pdfAnnotationSidecarExportPayloadSchema,
-  pdfAnnotationSidecarImportPayloadSchema,
-  pdfAnnotationSidecarLoadPayloadSchema,
-  pdfAnnotationSidecarSavePayloadSchema,
   visibleContextPublishPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
@@ -137,11 +132,13 @@ import {
   workspacePreviewExportPayloadSchema,
   workspacePreviewInvokeActionPayloadSchema,
   workspaceNativeFileDragPayloadSchema,
+  workspacePreviewPrepareArtifactPayloadSchema,
   workspacePreviewListPluginsPayloadSchema,
   workspacePreviewObservePayloadSchema,
   workspacePreviewOpenPayloadSchema,
+  workspacePreviewReadArtifactRangePayloadSchema,
   workspacePreviewReadRangePayloadSchema,
-  workspaceDocxTextWritePayloadSchema,
+  workspacePreviewReleaseSessionPayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
@@ -307,7 +304,6 @@ import {
   renameWorkspaceEntry,
   resolveWorkspaceFile,
   saveWorkspaceClipboardImage,
-  writeWorkspaceDocxText,
   writeWorkspaceFile
 } from '../services/workspace-service'
 import {
@@ -324,14 +320,6 @@ import {
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
-import {
-  exportPdfAnnotationAdobePdf,
-  exportPdfAnnotationSidecarPackage,
-  importPdfAnnotationSidecarPackage,
-  loadPdfAnnotationSidecar,
-  savePdfAnnotationSidecar
-} from '../services/pdf-annotation-sidecar-service'
-import { workspaceHtmlPreviewService } from '../services/workspace-html-preview-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
 import { feedEvidenceDag } from '../runtime/evidence-dag-feed'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
@@ -351,6 +339,12 @@ type WorkspaceFileWatchRecord = {
 type AgentRuntimeEventStreamRecord = {
   controller: AbortController
   sender: AppBridgeSender
+  onSenderDestroyed: () => void
+}
+
+type WorkspacePreviewSenderSessionRecord = {
+  sender: AppBridgeSender
+  sessionIds: Set<string>
   onSenderDestroyed: () => void
 }
 
@@ -433,7 +427,21 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   terminalPtyBridge?: TerminalPtyBridge
-  workspacePreviewHost?: Pick<WorkspacePreviewHost, 'listPlugins' | 'open' | 'observe' | 'describeAsset' | 'readRange' | 'applyEdit' | 'exportPreview' | 'invokeAction' | 'prepareWatch' | 'createWatchSnapshot'>
+  workspacePreviewHost?: Pick<WorkspacePreviewHost,
+    | 'listPlugins'
+    | 'open'
+    | 'observe'
+    | 'describeAsset'
+    | 'readRange'
+    | 'prepareArtifact'
+    | 'readArtifactRange'
+    | 'applyEdit'
+    | 'exportPreview'
+    | 'invokeAction'
+    | 'releaseSession'
+    | 'prepareWatch'
+    | 'createWatchSnapshot'
+  >
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
@@ -965,6 +973,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   } = options
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const agentRuntimeEventStreams = new Map<string, AgentRuntimeEventStreamRecord>()
+  const workspacePreviewSenderSessions = new Map<number, WorkspacePreviewSenderSessionRecord>()
+  const workspacePreviewSessionOwnerIds = new Map<string, number>()
   const invokeHandlers = new Map<string, AppBridgeInvokeHandler>()
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
@@ -1143,6 +1153,65 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         disposeWorkspaceFileWatch(watchId)
       }
     }
+  }
+
+  const cleanupWorkspacePreviewSenderSessionRecord = (
+    senderId: number,
+    record: WorkspacePreviewSenderSessionRecord
+  ): void => {
+    if (workspacePreviewSenderSessions.get(senderId) !== record) return
+    record.sender.removeListener('destroyed', record.onSenderDestroyed)
+    workspacePreviewSenderSessions.delete(senderId)
+  }
+
+  const cleanupWorkspacePreviewSessionOwnership = (sessionId: string): void => {
+    const senderId = workspacePreviewSessionOwnerIds.get(sessionId)
+    if (senderId === undefined) return
+    workspacePreviewSessionOwnerIds.delete(sessionId)
+    const record = workspacePreviewSenderSessions.get(senderId)
+    if (!record) return
+    record.sessionIds.delete(sessionId)
+    if (record.sessionIds.size === 0) {
+      cleanupWorkspacePreviewSenderSessionRecord(senderId, record)
+    }
+  }
+
+  const releaseWorkspacePreviewSession = (sessionId: string): boolean => {
+    const released = workspacePreviewHost.releaseSession(sessionId)
+    if (released) cleanupWorkspacePreviewSessionOwnership(sessionId)
+    return released
+  }
+
+  const disposeWorkspacePreviewSessionsForSender = (sender: AppBridgeSender): void => {
+    const record = workspacePreviewSenderSessions.get(sender.id)
+    if (!record) return
+    for (const sessionId of [...record.sessionIds]) {
+      workspacePreviewHost.releaseSession(sessionId)
+      workspacePreviewSessionOwnerIds.delete(sessionId)
+    }
+    record.sessionIds.clear()
+    cleanupWorkspacePreviewSenderSessionRecord(sender.id, record)
+  }
+
+  const trackWorkspacePreviewSessionForSender = (sender: AppBridgeSender, sessionId: string): void => {
+    cleanupWorkspacePreviewSessionOwnership(sessionId)
+    if (sender.isDestroyed()) {
+      workspacePreviewHost.releaseSession(sessionId)
+      return
+    }
+    let record = workspacePreviewSenderSessions.get(sender.id)
+    if (!record) {
+      const onSenderDestroyed = () => disposeWorkspacePreviewSessionsForSender(sender)
+      record = {
+        sender,
+        sessionIds: new Set<string>(),
+        onSenderDestroyed
+      }
+      workspacePreviewSenderSessions.set(sender.id, record)
+      sender.once('destroyed', onSenderDestroyed)
+    }
+    record.sessionIds.add(sessionId)
+    workspacePreviewSessionOwnerIds.set(sessionId, sender.id)
   }
 
   const emitWorkspaceFileChange = async (watchId: string): Promise<void> => {
@@ -1376,32 +1445,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const input = parseIpcPayload('paperRadar:digest', paperRadarDigestPayloadSchema, payload ?? {})
     return paperRadarRequest(() => requirePaperRadarService().digest(input))
   })
-
-  handleInvoke('pdfAnnotations:load', async (_, payload: unknown) =>
-    loadPdfAnnotationSidecar(
-      parseIpcPayload('pdfAnnotations:load', pdfAnnotationSidecarLoadPayloadSchema, payload)
-    )
-  )
-  handleInvoke('pdfAnnotations:save', async (_, payload: unknown) =>
-    savePdfAnnotationSidecar(
-      parseIpcPayload('pdfAnnotations:save', pdfAnnotationSidecarSavePayloadSchema, payload)
-    )
-  )
-  handleInvoke('pdfAnnotations:export', async (_, payload: unknown) =>
-    exportPdfAnnotationSidecarPackage(
-      parseIpcPayload('pdfAnnotations:export', pdfAnnotationSidecarExportPayloadSchema, payload)
-    )
-  )
-  handleInvoke('pdfAnnotations:exportPdf', async (_, payload: unknown) =>
-    exportPdfAnnotationAdobePdf(
-      parseIpcPayload('pdfAnnotations:exportPdf', pdfAnnotationPdfExportPayloadSchema, payload)
-    )
-  )
-  handleInvoke('pdfAnnotations:import', async (_, payload: unknown) =>
-    importPdfAnnotationSidecarPackage(
-      parseIpcPayload('pdfAnnotations:import', pdfAnnotationSidecarImportPayloadSchema, payload)
-    )
-  )
 
   handleInvoke('visibleContext:publish', async (_, payload: unknown) => {
     const snapshot = parseIpcPayload('visibleContext:publish', visibleContextPublishPayloadSchema, payload)
@@ -2505,11 +2548,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
-  handleInvoke('file:preview-workspace-html', async (_, payload: unknown) =>
-    workspaceHtmlPreviewService.preview(
-      parseIpcPayload('file:preview-workspace-html', workspaceFileTargetPayloadSchema, payload)
-    )
-  )
   handleInvoke('file:read-workspace-image', async (_, payload: unknown) =>
     readWorkspaceImage(
       parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
@@ -2519,11 +2557,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     parseIpcPayload('workspacePreview:listPlugins', workspacePreviewListPluginsPayloadSchema, payload ?? {})
     return workspacePreviewHost.listPlugins()
   })
-  handleInvoke('workspacePreview:open', async (_, payload: unknown) =>
-    workspacePreviewHost.open(
+  handleInvoke('workspacePreview:open', async (event, payload: unknown) => {
+    const result = await workspacePreviewHost.open(
       parseIpcPayload('workspacePreview:open', workspacePreviewOpenPayloadSchema, payload)
     )
-  )
+    if (result.ok) trackWorkspacePreviewSessionForSender(event.sender, result.session.id)
+    return result
+  })
   handleInvoke('workspacePreview:observe', async (_, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:observe',
@@ -2531,6 +2571,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       payload
     )
     return workspacePreviewHost.observe(request.sessionId)
+  })
+  handleInvoke('workspacePreview:releaseSession', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:releaseSession',
+      workspacePreviewReleaseSessionPayloadSchema,
+      payload
+    )
+    return releaseWorkspacePreviewSession(request.sessionId)
   })
   handleInvoke('workspacePreview:describeAsset', async (_, payload: unknown) => {
     const request = parseIpcPayload(
@@ -2547,6 +2595,22 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       payload
     )
     return workspacePreviewHost.readRange(request.sessionId, request.range)
+  })
+  handleInvoke('workspacePreview:prepareArtifact', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:prepareArtifact',
+      workspacePreviewPrepareArtifactPayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.prepareArtifact(request.sessionId, request.request)
+  })
+  handleInvoke('workspacePreview:readArtifactRange', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'workspacePreview:readArtifactRange',
+      workspacePreviewReadArtifactRangePayloadSchema,
+      payload
+    )
+    return workspacePreviewHost.readArtifactRange(request.sessionId, request.request)
   })
   handleInvoke('workspacePreview:applyEdit', async (_, payload: unknown) => {
     const request = parseIpcPayload(
@@ -2575,11 +2639,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('file:write-workspace', async (_, payload: unknown) =>
     writeWorkspaceFile(
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
-    )
-  )
-  handleInvoke('file:write-docx-text', async (_, payload: unknown) =>
-    writeWorkspaceDocxText(
-      parseIpcPayload('file:write-docx-text', workspaceDocxTextWritePayloadSchema, payload)
     )
   )
   handleInvoke('file:create-workspace', async (_, payload: unknown) =>

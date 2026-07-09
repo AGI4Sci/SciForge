@@ -21,7 +21,7 @@ npm view ngl version license main module types dist.unpackedSize dependencies --
 | Package | Version | License | Unpacked size | Shape | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `molstar` | `5.10.1` | MIT | ~78 MB | large app/toolkit package | Best scientific depth, but brings server/UI-oriented dependencies such as `express`, `compression`, `swagger-ui-dist`, `rxjs`, and video encoder dependencies. Needs careful bundle and release audit before shipping in the renderer. |
-| `3dmol` | `2.5.5` | BSD-3-Clause | ~21 MB | browser viewer bundle with types | Smaller and closer to an embeddable viewer. Good first target for PDB/CIF/SDF/MOL/XYZ viewing, selection, styles, screenshots, and simple measurements. |
+| `3dmol` | `2.5.5` | BSD-3-Clause | ~21 MB | browser viewer bundle with types | Smaller and closer to an embeddable viewer. Good first target for bounded PDB/CIF/SDF/MOL/XYZ viewing, selection, style switching, and simple structure manipulation. |
 | `ngl` | `2.4.0` | MIT | ~23 MB | UMD/ESM viewer package | Depends on `molstar` and `three`; useful fallback, but less attractive as a first dependency because it pulls another molecular stack underneath. |
 
 ## Renderer / Electron Constraints
@@ -39,7 +39,7 @@ Reasons:
 
 - It is the smallest viable embeddable option among the checked packages.
 - It does not require introducing Mol*'s larger app/server-shaped dependency tree in the first renderer migration.
-- It covers the first milestone interactions: rotate, zoom, style switching, chain/residue/ligand selection, distance measurement, coloring, and PNG export.
+- It covers the first milestone interactions: rotate, zoom, style switching, chain/residue/ligand selection, and bounded structure manipulation. Interactive measurement, advanced coloring, screenshots, and PNG export remain V2 capabilities that need explicit viewer-state and audit decisions.
 - It lets the worker package stay responsible for bounded structure summaries while the renderer plugin handles manipulation and visual state.
 
 Keep `molstar` as the second-stage candidate for advanced mmCIF, assemblies, trajectories, density maps, and richer scientific representations after the large-asset transport layer supports tiles/cache artifacts/object URLs. Treat `ngl` as fallback only if `3dmol` fails Electron/CSP testing, because its package currently depends on `molstar`.

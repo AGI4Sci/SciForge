@@ -719,6 +719,7 @@ function isSourceCopyExportFormat(format: string, path: string | undefined): boo
   if (!path) return false
   const normalizedFormat = format.replace(/^\./u, '').trim().toLowerCase()
   if (!normalizedFormat) return false
+  if (normalizedFormat === 'sidecar') return /\.(?:pdf|docx)$/iu.test(path.trim())
   return path.trim().toLowerCase().endsWith(`.${normalizedFormat}`)
 }
 

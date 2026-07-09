@@ -1,8 +1,12 @@
-import type { ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
+  WorkspacePreviewArtifactDescriptor,
+  WorkspacePreviewAssetTransportDescriptor,
+  WorkspacePreviewPrepareArtifactRequest,
   WorkspaceObservation,
   WorkspaceStructuredSelection
 } from '@shared/workspace-preview'
+import type { WorkspacePreviewAssetTransportClient } from './host'
 
 type BioimagingStructuredSelection = Extract<WorkspaceStructuredSelection, { kind: 'bioimaging' }>
 
@@ -113,9 +117,32 @@ export type BioimagingWorkspaceViewerModel = {
   actions: BioimagingWorkspaceViewerAction[]
 }
 
+export type BioimagingRenderedTileState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | {
+      kind: 'ready'
+      dataUrl: string
+      artifactId: string
+      width: number
+      height: number
+      mimeType: string
+    }
+  | {
+      kind: 'fallback'
+      message: string
+    }
+
+type BioimagingTileArtifactRequest = Extract<WorkspacePreviewPrepareArtifactRequest, { kind: 'tile' }>
+type BioimagingArtifactLoadFailure = { ok: false; message: string }
+
+const bioimagingArtifactResourceCache = new Map<string, Promise<BioimagingRenderedTileState>>()
+
 export type BioimagingWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
   model?: BioimagingWorkspaceViewerModel
+  transport?: WorkspacePreviewAssetTransportClient | null
+  renderedTile?: BioimagingRenderedTileState
   className?: string
 }
 
@@ -190,9 +217,13 @@ export function buildBioimagingWorkspaceViewerModel(
 export function BioimagingWorkspaceViewer({
   observation,
   model,
+  transport,
+  renderedTile,
   className
 }: BioimagingWorkspaceViewerProps): ReactNode {
   const resolvedModel = model ?? buildBioimagingWorkspaceViewerModel(observation)
+  const transportTile = useBioimagingRenderedTile(resolvedModel.viewport, transport, !renderedTile)
+  const resolvedRenderedTile = renderedTile ?? transportTile
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
 
   return (
@@ -220,7 +251,7 @@ export function BioimagingWorkspaceViewer({
       ) : (
         <>
           {resolvedModel.viewport.kind === 'overview'
-            ? renderTileOverview(resolvedModel.viewport)
+            ? renderTileOverview(resolvedModel.viewport, resolvedRenderedTile)
             : (
                 <div
                   className="workspace-preview-bioimaging-viewer__viewport"
@@ -325,6 +356,140 @@ export function BioimagingWorkspaceViewer({
       )}
     </section>
   )
+}
+
+export function buildBioimagingTileArtifactRequest(
+  viewport: BioimagingWorkspaceViewerTileOverview
+): BioimagingTileArtifactRequest | null {
+  if (viewport.kind !== 'overview') return null
+  return {
+    kind: 'tile',
+    level: 0,
+    x: 0,
+    y: 0,
+    width: Math.max(1, Math.min(viewport.tileWidth, viewport.imageWidth)),
+    height: Math.max(1, Math.min(viewport.tileHeight, viewport.imageHeight))
+  }
+}
+
+function useBioimagingRenderedTile(
+  viewport: BioimagingWorkspaceViewerTileOverview,
+  transport?: WorkspacePreviewAssetTransportClient | null,
+  enabled = true
+): BioimagingRenderedTileState {
+  const requestKey = viewport.kind === 'overview'
+    ? `overview:${viewport.imageWidth}:${viewport.imageHeight}:${viewport.tileWidth}:${viewport.tileHeight}`
+    : viewport.kind
+  const request = useMemo(
+    () => buildBioimagingTileArtifactRequest(viewport),
+    [requestKey]
+  )
+  const [state, setState] = useState<BioimagingRenderedTileState>({ kind: 'idle' })
+
+  useEffect(() => {
+    let cancelled = false
+    if (!enabled || !request || !transport) {
+      setState({ kind: 'idle' })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    setState({ kind: 'loading' })
+    void (async () => {
+      try {
+        const state = await loadBioimagingArtifactDataUrl(transport, request)
+        if (cancelled) return
+        setState(state)
+      } catch (error) {
+        if (!cancelled) {
+          setState({
+            kind: 'fallback',
+            message: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [enabled, request, transport])
+
+  return state
+}
+
+export async function loadBioimagingArtifactDataUrl(
+  transport: WorkspacePreviewAssetTransportClient,
+  request: BioimagingTileArtifactRequest
+): Promise<BioimagingRenderedTileState> {
+  const cacheKey = buildBioimagingArtifactResourceCacheKey(transport.descriptor, request)
+  const cached = bioimagingArtifactResourceCache.get(cacheKey)
+  if (cached) return cached
+
+  const promise = (async (): Promise<BioimagingRenderedTileState> => {
+    const existingArtifact = findMatchingBioimagingTileArtifact(transport.descriptor, request)
+    const artifactOrFailure = existingArtifact ?? await (async (): Promise<
+      WorkspacePreviewArtifactDescriptor | BioimagingArtifactLoadFailure
+    > => {
+      const prepared = await transport.prepareArtifact(request)
+      if (!prepared.ok) return prepared
+      return prepared.artifact
+    })()
+    if (isBioimagingArtifactLoadFailure(artifactOrFailure)) {
+      return { kind: 'fallback', message: artifactOrFailure.message }
+    }
+    const artifact = artifactOrFailure
+
+    const bytes = await transport.readArtifactRange({
+      artifactId: artifact.artifactId,
+      range: { offset: 0, length: artifact.byteLength }
+    })
+    if (!bytes.ok) return { kind: 'fallback', message: bytes.message }
+    return {
+      kind: 'ready',
+      dataUrl: `data:${bytes.mimeType};base64,${bytes.dataBase64}`,
+      artifactId: artifact.artifactId,
+      width: artifact.tile?.width ?? request.width,
+      height: artifact.tile?.height ?? request.height,
+      mimeType: bytes.mimeType
+    }
+  })()
+  bioimagingArtifactResourceCache.set(cacheKey, promise)
+  return promise
+}
+
+function isBioimagingArtifactLoadFailure(
+  value: WorkspacePreviewArtifactDescriptor | BioimagingArtifactLoadFailure
+): value is BioimagingArtifactLoadFailure {
+  return 'ok' in value && value.ok === false
+}
+
+function buildBioimagingArtifactResourceCacheKey(
+  descriptor: WorkspacePreviewAssetTransportDescriptor | null,
+  request: BioimagingTileArtifactRequest
+): string {
+  return JSON.stringify({
+    sessionId: descriptor?.sessionId ?? null,
+    assetId: descriptor?.assetId ?? null,
+    size: descriptor?.file.size ?? null,
+    mtimeMs: descriptor?.file.mtimeMs ?? null,
+    request
+  })
+}
+
+function findMatchingBioimagingTileArtifact(
+  descriptor: WorkspacePreviewAssetTransportDescriptor | null,
+  request: BioimagingTileArtifactRequest
+): NonNullable<WorkspacePreviewAssetTransportDescriptor['artifacts']>[number] | null {
+  return descriptor?.artifacts?.find((artifact) => (
+    artifact.kind === 'tile' &&
+    artifact.tile?.level === request.level &&
+    artifact.tile.x === request.x &&
+    artifact.tile.y === request.y &&
+    artifact.tile.width === request.width &&
+    artifact.tile.height === request.height
+  )) ?? null
 }
 
 function createInactiveModel(
@@ -567,11 +732,15 @@ function buildAgentSummary(input: {
   return parts.join('; ')
 }
 
-function renderTileOverview(viewport: Extract<BioimagingWorkspaceViewerTileOverview, { kind: 'overview' }>): ReactNode {
+function renderTileOverview(
+  viewport: Extract<BioimagingWorkspaceViewerTileOverview, { kind: 'overview' }>,
+  renderedTile: BioimagingRenderedTileState
+): ReactNode {
   return (
     <figure
       className="workspace-preview-bioimaging-viewer__viewport workspace-preview-bioimaging-viewer__tile-overview"
       data-bioimaging-metadata-tile-overview="true"
+      data-bioimaging-rendered-tile-state={renderedTile.kind}
       data-pixel-decoding={String(viewport.pixelDecoding)}
       data-tile-renderer-implemented={String(viewport.tileRendererImplemented)}
       data-tile-source={viewport.source}
@@ -590,6 +759,19 @@ function renderTileOverview(viewport: Extract<BioimagingWorkspaceViewerTileOverv
         preserveAspectRatio="xMidYMid meet"
         aria-hidden="true"
       >
+        {renderedTile.kind === 'ready' ? (
+          <image
+            href={renderedTile.dataUrl}
+            x="0"
+            y="0"
+            width={renderedTile.width}
+            height={renderedTile.height}
+            preserveAspectRatio="none"
+            data-bioimaging-rendered-tile="true"
+            data-artifact-id={renderedTile.artifactId}
+            data-mime-type={renderedTile.mimeType}
+          />
+        ) : null}
         <rect
           x="0"
           y="0"
@@ -632,6 +814,21 @@ function renderTileOverview(viewport: Extract<BioimagingWorkspaceViewerTileOverv
       <figcaption>
         <strong>{viewport.title}</strong>
         <p>{viewport.message}</p>
+        {renderedTile.kind === 'ready' ? (
+          <small data-bioimaging-rendered-tile-caption>
+            Rendered tile artifact {renderedTile.artifactId}
+          </small>
+        ) : null}
+        {renderedTile.kind === 'loading' ? (
+          <small data-bioimaging-rendered-tile-loading>
+            Preparing bounded tile artifact...
+          </small>
+        ) : null}
+        {renderedTile.kind === 'fallback' ? (
+          <small data-bioimaging-rendered-tile-fallback>
+            Tile artifact fallback: {renderedTile.message}
+          </small>
+        ) : null}
       </figcaption>
     </figure>
   )
