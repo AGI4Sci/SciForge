@@ -188,10 +188,378 @@ export const SCIENTIFIC_PLOTTING_TEMPLATES = [
   'box-violin',
   'histogram-density',
   'multi-panel',
+  'flowchart',
   'schematic-grid'
 ] as const
 
 export type ScientificPlottingTemplate = typeof SCIENTIFIC_PLOTTING_TEMPLATES[number]
+
+export const SCIENTIFIC_FIGURE_NEEDS = [
+  'quantitative_chart',
+  'statistical_comparison',
+  'heatmap_matrix',
+  'multi_panel_figure',
+  'method_flow',
+  'mechanism_schematic',
+  'model_architecture',
+  'pathway_network',
+  'image_panel',
+  'summary_figure'
+] as const
+
+export type ScientificFigureNeed = typeof SCIENTIFIC_FIGURE_NEEDS[number]
+
+export type ScientificFigureRoute =
+  | 'controlled_plotting_renderer'
+  | 'diagram_spec_or_image_generation'
+  | 'panel_layout_then_renderer'
+  | 'needs_clarification'
+
+export type ScientificExternalSkillSourceKind = 'kdense' | 'cns' | 'domain' | 'general' | 'compat'
+
+export type ScientificExternalSkillCatalogItem = {
+  skillId: string
+  label: string
+  sourceKind: ScientificExternalSkillSourceKind
+  source: string
+  repository?: string
+  skillPath?: string
+  status: 'installed' | 'remote-reference' | 'built-in-profile' | 'compatible-standard'
+  priority: number
+  appliesTo: ScientificFigureNeed[]
+  roles: string[]
+  readOnly: boolean
+  executionPolicy: 'read-only-planning'
+  notes: string[]
+}
+
+export type ScientificPlottingResearchPaper = {
+  title: string
+  venue?: string
+  year?: number
+  source?: string
+  url?: string
+  doi?: string
+  figureHints?: string[]
+  notes?: string
+}
+
+export type ScientificPlottingImagePolishDeltaPlan = {
+  mode: 'delta_only'
+  targetPanels: Array<{
+    assetId: string
+    reason: string
+    allowedOperations: Array<
+      | 'panel_stitching'
+      | 'callout_overlay'
+      | 'zoom_inset'
+      | 'visual_unification'
+      | 'typography_cleanup'
+      | 'mechanism_visual_draft'
+    >
+  }>
+  allowedOperations: Array<
+    | 'panel_stitching'
+    | 'callout_overlay'
+    | 'zoom_inset'
+    | 'visual_unification'
+    | 'typography_cleanup'
+    | 'mechanism_visual_draft'
+  >
+  lockedFacts: string[]
+  handoffPrompt: string
+}
+
+export type ScientificPaperFigureCompositionPlan = {
+  sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1'
+  stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration']
+  controlledSubfigures: Array<{
+    assetId: string
+    title: string
+    claim: string
+    recommendedTemplate:
+      | ScientificPlottingTemplate
+      | 'kaplan-meier'
+      | 'cox-forest'
+      | 'roc'
+      | 'image_generation_composition'
+    firstPassTool: 'scientific_plotting_render' | 'scientific_plotting_map_data' | 'image_generation_plan'
+    requiredArtifact: 'png_manifest'
+    factLocks: string[]
+    polishAllowedOperations: Array<
+      | 'crop'
+      | 'resize'
+      | 'align'
+      | 'panel_stitching'
+      | 'callout_overlay'
+      | 'zoom_inset'
+      | 'visual_unification'
+      | 'typography_cleanup'
+    >
+  }>
+  image2Composition: {
+    preferredModel: 'gpt-image-2'
+    fallbackModel: 'configured_model_router_image_model'
+    nextControlledTool: 'image_generation_plan'
+    inputArtifacts: string[]
+    allowedOperations: Array<
+      | 'panel_stitching'
+      | 'callout_overlay'
+      | 'zoom_inset'
+      | 'visual_unification'
+      | 'typography_cleanup'
+    >
+    forbiddenOperations: string[]
+    handoffPrompt: string
+    outputContract: string[]
+  }
+  imagePolishDeltaPlan: ScientificPlottingImagePolishDeltaPlan
+  canvasReview: {
+    openInCanvas: true
+    preserveOriginalArtifacts: true
+    reviewPacketRequired: true
+    revisionPolicy: 'new_version_next_to_original'
+  }
+}
+
+export type ScientificPaperFigureProductionPlan = {
+  scope: 'paper_level'
+  sourceWorkflow: 'paper_figures_data_first_v1'
+  requiredInputs: string[]
+  proposedAssets: Array<{
+    id: string
+    kind: 'figure' | 'table'
+    title: string
+    claim: string
+    recommendedTemplate:
+      | ScientificPlottingTemplate
+      | 'kaplan-meier'
+      | 'cox-forest'
+      | 'roc'
+      | 'three-line-table'
+      | 'image_generation_composition'
+    dataRequirements: string[]
+    statistics: string[]
+    firstPassTool: 'scientific_plotting_render' | 'scientific_plotting_map_data' | 'image_generation_plan' | 'table_generator'
+    polishTool?: 'image_generation_plan'
+    canvasReview: boolean
+    notes: string[]
+  }>
+  handoff: {
+    firstPass: string[]
+    imagePolish: string[]
+    reviewLoop: string[]
+  }
+  compositionPlan?: ScientificPaperFigureCompositionPlan
+  missingCapabilities: string[]
+}
+
+export type ScientificPlottingSelectedSkillProfile = {
+  profileId:
+    | 'controlled-data-plot-v1'
+    | 'paper-figure-cns-life-science-v1'
+    | 'paper-figure-cns-domain-v1'
+    | 'mechanism-diagram-image-delta-v1'
+    | 'general-paper-figure-v1'
+  selectedSkillIds: string[]
+  selectionReason: string
+  skillPriority: ['kdense', 'cns', 'domain', 'image-delta']
+  readOnlyExternalSkills: true
+}
+
+export type ScientificPlottingImagePolishRecommendation = {
+  recommended: boolean
+  reason: string
+  model: 'gpt-image-2'
+  fallbackModel: 'configured_model_router_image_model'
+  nextControlledTool: 'image_generation_plan'
+  followUpTools: ['image_generation_plan', 'image_generation_render']
+  useWhen: string[]
+  preserve: string[]
+  guardrails: string[]
+}
+
+export type ScientificFigureNeedClassification = {
+  primaryNeed: ScientificFigureNeed
+  secondaryNeeds: ScientificFigureNeed[]
+  confidence: number
+  route: ScientificFigureRoute
+  routeReason: string
+  domain: 'life-science' | 'chemistry' | 'materials' | 'ai-ml' | 'geo-climate' | 'general'
+  recommendedNextTool:
+    | 'scientific_plotting_map_data'
+    | 'scientific_plotting_research_brief'
+    | 'image_generation_plan'
+  requiredInputs: string[]
+  avoidTemplates: ScientificPlottingTemplate[]
+  warnings: string[]
+}
+
+export type ScientificPlottingResearchBriefRequest = {
+  workspaceRoot?: string
+  task: string
+  domain?: string
+  targetVenue?: string
+  dataSummary?: string
+  referenceFigureNotes?: string
+  candidatePapers?: ScientificPlottingResearchPaper[]
+  maxPapers?: number
+}
+
+export type ScientificPlottingResearchBriefResult =
+  | {
+      ok: true
+      task: string
+      domain: ScientificFigureNeedClassification['domain']
+      targetVenue?: string
+      figureNeed: ScientificFigureNeedClassification
+      selectedSkillProfile: ScientificPlottingSelectedSkillProfile
+      skillCatalog: ScientificExternalSkillCatalogItem[]
+      recommendedSkillLayers: Array<{
+        sourceKind: ScientificExternalSkillSourceKind
+        skillIds: string[]
+        reason: string
+      }>
+      literatureStrategy: {
+        suggestedQueries: string[]
+        preferredSources: string[]
+        nextControlledTool: 'research_search' | 'scientific_plotting_research_brief'
+        notes: string[]
+      }
+      candidatePapers: ScientificPlottingResearchPaper[]
+      figureContract: {
+        figureConclusion: string
+        evidenceLogic: string[]
+        archetype: ScientificFigureNeed
+        journalExportContract: string[]
+        reviewRisks: string[]
+      }
+      paperFigureProductionPlan?: ScientificPaperFigureProductionPlan
+      promptSpecDraft: {
+        task: string
+        figureNeed: ScientificFigureNeed
+        referencePapers: ScientificPlottingResearchPaper[]
+        visualPlan: string[]
+        dataRequirements: string[]
+        styleGuidance: string[]
+        fullPrompt: string
+        codeGenerationPlan: {
+          target: 'scientific_plotting_render_request' | 'image_generation_recipe' | 'panel_layout_spec'
+          nextControlledTool: string
+          notes: string[]
+        }
+        imagePolishRecommendation?: ScientificPlottingImagePolishRecommendation
+        nextControlledTool: string
+      }
+      confirmationCard: {
+        title: string
+        proposedRoute: ScientificFigureRoute
+        analysisAngle: string
+        questions: string[]
+        requiredInputs: string[]
+        availableSkillIds: string[]
+      }
+      guardrails: string[]
+      warnings: string[]
+    }
+  | { ok: false; message: string; warnings: string[] }
+
+export type ScientificPlottingTemplateGuide = {
+  template: ScientificPlottingTemplate
+  useWhen: readonly string[]
+  avoidWhen: readonly string[]
+  expectedData: readonly string[]
+  modelSelectionHint: string
+}
+
+export const SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES = [
+  {
+    template: 'line',
+    useWhen: ['trends over an ordered x-axis', 'time series or dose-response curves', 'multiple comparable series'],
+    avoidWhen: ['categorical summaries without ordering', 'directed workflow diagrams'],
+    expectedData: ['series[] with x/y points or rows containing x and one or more y columns'],
+    modelSelectionHint: 'Choose line when the main relation is change along an ordered axis.'
+  },
+  {
+    template: 'scatter',
+    useWhen: ['point clouds', 'correlation or embedding plots', 'x/y observations with optional groups'],
+    avoidWhen: ['aggregated category bars', 'matrix heatmaps'],
+    expectedData: ['points[] with x/y values or tabular numeric x and y columns'],
+    modelSelectionHint: 'Choose scatter when individual observations matter more than connected trends.'
+  },
+  {
+    template: 'bar',
+    useWhen: ['categorical comparisons', 'ranked or grouped summary values', 'counts or totals by class'],
+    avoidWhen: ['distribution shape is important', 'uncertainty is central'],
+    expectedData: ['categories with numeric values or grouped tabular summaries'],
+    modelSelectionHint: 'Choose bar for simple category-level summaries.'
+  },
+  {
+    template: 'errorbar-bar',
+    useWhen: ['categorical summaries with uncertainty', 'mean plus standard error or confidence interval'],
+    avoidWhen: ['raw distribution display', 'no uncertainty values are available'],
+    expectedData: ['categories with value and error/ci fields'],
+    modelSelectionHint: 'Choose errorbar-bar instead of bar when uncertainty is part of the claim.'
+  },
+  {
+    template: 'heatmap',
+    useWhen: ['generic numeric matrices', 'feature-by-sample tables', 'correlation or intensity grids'],
+    avoidWhen: ['token attention maps', 'freeform diagrams'],
+    expectedData: ['matrix as number[][] with optional rowLabels and colLabels'],
+    modelSelectionHint: 'Choose heatmap for a numeric matrix where color encodes value.'
+  },
+  {
+    template: 'attention-map',
+    useWhen: ['token attention or alignment matrices', 'model-head or sequence-to-sequence attention panels'],
+    avoidWhen: ['generic heatmaps without token/model semantics'],
+    expectedData: ['matrix with source/target labels or attention-specific row/column labels'],
+    modelSelectionHint: 'Choose attention-map only when the matrix represents attention, alignment, or token interactions.'
+  },
+  {
+    template: 'box-violin',
+    useWhen: ['distribution comparison by category', 'raw sample values should remain visible', 'box, violin, or swarm-like statistical panels'],
+    avoidWhen: ['only summary values are available', 'ordered time trends'],
+    expectedData: ['groups[] with values[] or tabular category plus numeric value columns'],
+    modelSelectionHint: 'Choose box-violin when spread, outliers, or sample distributions matter.'
+  },
+  {
+    template: 'histogram-density',
+    useWhen: ['single or grouped distribution shape', 'residuals or score distributions', 'histogram/KDE style panels'],
+    avoidWhen: ['category means', 'node-link workflows'],
+    expectedData: ['values[] or groups[] with values[]'],
+    modelSelectionHint: 'Choose histogram-density when the question is the shape of a numeric distribution.'
+  },
+  {
+    template: 'multi-panel',
+    useWhen: ['a figure composed of several coordinated panels', 'mixed chart types in one publication figure'],
+    avoidWhen: ['a single standalone chart is enough', 'a directed process should be one flowchart'],
+    expectedData: ['panels[] where each panel has a controlled template and data'],
+    modelSelectionHint: 'Choose multi-panel to combine several controlled plots into one figure.'
+  },
+  {
+    template: 'flowchart',
+    useWhen: ['compact directed workflows with explicit nodes/edges', 'process steps connected by arrows', 'decision trees, pathways, or cause-effect chains with already-structured steps'],
+    avoidWhen: ['unordered concept maps', 'module layouts without direction', 'ordinary categorical data', 'long prose or paper excerpts that need semantic visual design'],
+    expectedData: ['nodes[] with id and label', 'optional edges[] with from/to; if omitted, compact steps are connected sequentially'],
+    modelSelectionHint: 'Choose flowchart only for controlled compact node-edge diagrams; choose image_generation for prose-to-visual flowcharts, infographics, or illustrative diagrams.'
+  },
+  {
+    template: 'schematic-grid',
+    useWhen: ['conceptual schematics', 'module or mechanism diagrams', 'labeled blocks without a strict direction'],
+    avoidWhen: ['the user asks for a flowchart/workflow/pipeline', 'data needs axes or measured values'],
+    expectedData: ['nodes[] with labels and optional groups; edges are not emphasized'],
+    modelSelectionHint: 'Choose schematic-grid for conceptual layouts; choose flowchart instead when arrows or sequence are required.'
+  }
+] as const satisfies readonly ScientificPlottingTemplateGuide[]
+
+export type ScientificPlottingTemplateSelection = {
+  selectedTemplate: ScientificPlottingTemplate
+  selectedBy: 'templateHint' | 'referenceProfile' | 'taskIntent'
+  useWhen: string[]
+  avoidWhen: string[]
+  expectedData: string[]
+  modelSelectionHint: string
+}
 
 export type ScientificPlottingReferenceProfile = {
   kind: 'chart' | 'matrix' | 'schematic' | 'mixed' | 'unknown'
@@ -409,9 +777,28 @@ export type ScientificPlottingRenderRequest = {
   autoRepair?: ScientificPlottingAutoRepairOptions
 }
 
+export type ScientificPlottingDraftHandoff = {
+  kind: 'diagram_draft_handoff'
+  draftRole: 'structure_only'
+  sourceTemplate: ScientificPlottingTemplate
+  recommendedNextTools: ['image_generation_plan', 'image_generation_render']
+  imageGenerationTask: string
+  promptGuidance: string[]
+  draftSpec: {
+    template: ScientificPlottingTemplate
+    title?: string
+    nodes?: Array<{ id?: string; label: string; group?: string }>
+    edges?: Array<{ from: string; to: string; label?: string }>
+    panels?: Array<{ template?: string; title?: string; nodeCount?: number }>
+  }
+  guardrails: string[]
+}
+
 export type ScientificPlottingPlanRequest = {
   workspaceRoot?: string
   task: string
+  domain?: string
+  targetVenue?: string
   templateHint?: ScientificPlottingTemplate
   styleSpec?: FigureStyleSpec
   styleSpecPath?: string
@@ -493,6 +880,27 @@ export type ScientificPlottingPlanResult =
       styleProfileId?: string
       styleProfile?: ScientificPlottingStyleProfileSummary
       styleProfileMatches?: ScientificPlottingStyleProfileMatch[]
+      templateSelection: ScientificPlottingTemplateSelection
+      templateGuides: ScientificPlottingTemplateGuide[]
+      figureNeed?: ScientificFigureNeedClassification
+      toolRoutingRecommendation?: {
+        preferredTool: 'image_generation_plan'
+        reason: string
+        useWhen: string[]
+      }
+      researchBriefRecommendation?: {
+        recommended: boolean
+        reason: string
+        nextControlledTool: 'scientific_plotting_research_brief'
+        useWhen: string[]
+        requiresUserConfirmation: true
+      }
+      imagePolishRecommendation?: ScientificPlottingImagePolishRecommendation
+      externalSkillCatalog?: {
+        recommendedSkillIds: string[]
+        primarySources: ScientificExternalSkillSourceKind[]
+        excludedSources: string[]
+      }
       templateAlternatives: Array<{
         template: ScientificPlottingTemplate
         reason: string
@@ -541,6 +949,7 @@ export type ScientificPlottingStatusResult =
         defaultProfileIds: string[]
       }
       supportedTemplates: ScientificPlottingTemplate[]
+      templateGuides: ScientificPlottingTemplateGuide[]
       outputPolicy: {
         defaultRelativeDir: string
         writesOnlyInsideWorkspace: true
@@ -639,6 +1048,9 @@ export type ScientificPlottingAttempt = {
   review?: ScientificPlottingReviewResult
   rcParamsPatch?: Record<string, string | number | boolean>
   rendererDiagnostics?: {
+    fontFallback?: {
+      cjk: string | null
+    }
     legendPlacement?: 'inside' | 'outside-right' | 'none'
     barOrientation?: 'vertical' | 'horizontal'
     barColorMode?: 'series' | 'per-bar'
@@ -714,10 +1126,12 @@ export type ScientificPlottingRenderResult =
       status:
         | 'invalid_request'
         | 'invalid_workspace'
+        | 'diagram_requires_image_generation'
         | 'renderer_unavailable'
         | 'render_failed'
         | 'review_failed'
       message: string
+      draftHandoff?: ScientificPlottingDraftHandoff
       stdoutTail?: string
       stderrTail?: string
       warnings?: string[]

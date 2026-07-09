@@ -213,6 +213,52 @@ function normalizeCanvasArtifactPath(value: string | undefined): string | null {
   return normalized ? normalized.replace(/\\/g, '/').replace(/\/+$/g, '') : null
 }
 
+function decodeDrawioMeta(value: string | undefined): Record<string, unknown> | null {
+  if (!value?.trim()) return null
+  try {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0))
+    return asRecord(JSON.parse(new TextDecoder().decode(bytes)))
+  } catch {
+    return null
+  }
+}
+
+function drawioSnapshotContainsCanvasArtifact(
+  snapshot: Record<string, unknown>,
+  candidates: Set<string>,
+  options?: { requireDisplayPreview?: boolean }
+): boolean {
+  const diagramXml = typeof snapshot.diagramXml === 'string' ? snapshot.diagramXml : ''
+  if (!diagramXml) return false
+  const pattern = /<mxCell\b[^>]*\bsciforgeMeta="([^"]+)"/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(diagramXml))) {
+    const meta = decodeDrawioMeta(match[1])
+    const artifact = asRecord(meta?.sciforgeArtifact)
+    if (!artifact) continue
+    for (const key of ['outputPath', 'sourcePath', 'previewPath', 'renderedPagePath', 'manifestPath', 'svgPath', 'pptxPath']) {
+      const normalized = normalizeCanvasArtifactPath(artifact[key] as string | undefined)
+      if (!normalized || !candidates.has(normalized)) continue
+      if (!options?.requireDisplayPreview) return true
+      const previewCandidates = [
+        artifact.previewPath as string | undefined,
+        artifact.renderedPagePath as string | undefined,
+        artifact.svgPath as string | undefined,
+        artifact.outputPath as string | undefined,
+        artifact.sourcePath as string | undefined
+      ]
+      const hasDisplayPreview = previewCandidates.some((path) => {
+        if (!normalizeCanvasArtifactPath(path)) return false
+        return artifact.artifactKind === 'ppt_export' ? isCanvasDisplayImagePath(path) : true
+      })
+      if (hasDisplayPreview && meta?.sciforgeCanvasPlaceholder !== true) return true
+    }
+  }
+  return false
+}
+
 function snapshotContainsCanvasArtifact(
   snapshot: unknown,
   candidates: string[],
@@ -220,6 +266,10 @@ function snapshotContainsCanvasArtifact(
 ): boolean {
   const wanted = new Set(candidates.map(normalizeCanvasArtifactPath).filter((value): value is string => Boolean(value)))
   if (wanted.size === 0 || !snapshot || typeof snapshot !== 'object') return false
+  const snapshotRecord = snapshot as Record<string, unknown>
+  if (snapshotRecord.engine === 'drawio') {
+    return drawioSnapshotContainsCanvasArtifact(snapshotRecord, wanted, options)
+  }
   const store = (snapshot as { store?: unknown }).store
   if (!store || typeof store !== 'object') return false
   for (const record of Object.values(store as Record<string, unknown>)) {
@@ -248,6 +298,70 @@ function snapshotContainsCanvasArtifact(
     }
   }
   return false
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string | undefined {
+  const value = record?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function parseJsonRecord(text: string | undefined): Record<string, unknown> | null {
+  if (!text?.trim()) return null
+  try {
+    return asRecord(JSON.parse(text))
+  } catch {
+    return null
+  }
+}
+
+function findNestedRecordWithCanvasInsert(value: unknown, depth = 0): Record<string, unknown> | null {
+  if (depth > 5) return null
+  const record = asRecord(value)
+  if (!record) return null
+  if (stringField(record, 'canvasId') || stringField(record, 'canvas_id')) return record
+  for (const nested of Object.values(record)) {
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        const found = findNestedRecordWithCanvasInsert(item, depth + 1)
+        if (found) return found
+      }
+      continue
+    }
+    const found = findNestedRecordWithCanvasInsert(nested, depth + 1)
+    if (found) return found
+  }
+  return null
+}
+
+function latestCanvasInsertRequestFromBlocks(blocks: ChatBlock[]): {
+  key: string
+  canvasId: string
+  workspaceRoot?: string
+  focusShapeId?: string
+} | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    if (block.kind !== 'tool' || block.status !== 'success') continue
+    const toolName = stringField(block.meta ?? null, 'toolName') || block.summary
+    if (!toolName.replace(/[\s-]+/g, '_').includes('sciforge_canvas_insert_artifact')) continue
+    const detailRecord = parseJsonRecord(block.detail)
+    const result = findNestedRecordWithCanvasInsert(block.meta) || findNestedRecordWithCanvasInsert(detailRecord)
+    const canvasId = stringField(result, 'canvasId') || stringField(result, 'canvas_id')
+    if (!canvasId) continue
+    const workspaceRoot = stringField(result, 'workspaceRoot') || stringField(result, 'workspace_root')
+    const focusShapeId = stringField(result, 'shapeId') || stringField(result, 'shape_id')
+    return {
+      key: `${block.id}:${canvasId}:${focusShapeId ?? ''}`,
+      canvasId,
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(focusShapeId ? { focusShapeId } : {})
+    }
+  }
+  return null
 }
 
 type PendingSddPlanTarget = {
@@ -941,6 +1055,24 @@ export function Workbench(): ReactElement {
     }
   })
   const activeSciforgeCanvasId = activeThreadId ? `thread-${activeThreadId}` : undefined
+  const lastCanvasInsertRefreshRef = useRef('')
+
+  useEffect(() => {
+    const request = latestCanvasInsertRequestFromBlocks(timelineBlocks)
+    if (!request) return
+    const key = `${activeThreadId ?? ''}:${request.key}`
+    if (lastCanvasInsertRefreshRef.current === key) return
+    lastCanvasInsertRefreshRef.current = key
+    setFigureStylePanelRequest({
+      page: 'canvas',
+      refreshKey: Date.now(),
+      canvasId: request.canvasId,
+      workspaceRoot: request.workspaceRoot || activeThread?.workspace || workspaceRoot,
+      focusShapeId: request.focusShapeId
+    })
+    setRightSidebarWidth((width) => Math.max(width, 560))
+    setRightPanelMode('figure-style')
+  }, [activeThread?.workspace, activeThreadId, setRightPanelMode, setRightSidebarWidth, timelineBlocks, workspaceRoot])
 
   useEffect(() => {
     setVisibleContextShell({
@@ -2086,19 +2218,20 @@ export function Workbench(): ReactElement {
   const sendCanvasReviewRequest = async (text: string): Promise<void> => {
     const trimmed = text.trim()
     if (!trimmed) return
+    const displayText = '请根据我在画布上的标注生成修改版。'
     setRoute('chat')
     setMode('agent')
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
     const sent = await sendMessage(trimmed, 'agent', {
-      displayText: trimmed,
+      displayText,
       ...(reasoningEffort ? { reasoningEffort } : {})
     })
-    if (!sent) setInput(trimmed)
+    if (!sent) setInput(displayText)
   }
 
   const openImageArtifactInCanvas = async (artifact: TimelineImageCanvasArtifact): Promise<void> => {
     const root = artifact.workspaceRoot || activeThread?.workspace || workspaceRoot
-    const canvasId = activeSciforgeCanvasId || artifact.canvasId
+    const canvasId = artifact.canvasId || activeSciforgeCanvasId
     const sourcePath = artifact.outputPath || artifact.sourcePath || artifact.previewPath || artifact.renderedPagePath || artifact.svgPath || artifact.pptxPath
     if (!root?.trim() || !canvasId || !sourcePath?.trim()) {
       setError(t('canvasArtifactReviewUnavailable'))
@@ -2146,6 +2279,15 @@ export function Workbench(): ReactElement {
           ...(artifact.previewPath ? { previewPath: artifact.previewPath } : {}),
           ...(artifact.renderedPagePath ? { renderedPagePath: artifact.renderedPagePath } : {}),
           ...(artifact.artifactManifestPath || artifact.manifestPath ? { manifestPath: artifact.artifactManifestPath || artifact.manifestPath } : {}),
+          ...(artifact.diagramSpecPath ? { diagramSpecPath: artifact.diagramSpecPath } : {}),
+          ...(artifact.frameworkDesignPlanPath ? { frameworkDesignPlanPath: artifact.frameworkDesignPlanPath } : {}),
+          ...(artifact.diagramLayerManifestPath ? { diagramLayerManifestPath: artifact.diagramLayerManifestPath } : {}),
+          ...(artifact.fastSamSegmentationPath ? { fastSamSegmentationPath: artifact.fastSamSegmentationPath } : {}),
+          ...(artifact.fastSamBoxlibPath ? { fastSamBoxlibPath: artifact.fastSamBoxlibPath } : {}),
+          ...(artifact.fastSamPreviewPath ? { fastSamPreviewPath: artifact.fastSamPreviewPath } : {}),
+          ...(artifact.frameworkComponentManifestPath ? { frameworkComponentManifestPath: artifact.frameworkComponentManifestPath } : {}),
+          ...(artifact.componentBasePath ? { componentBasePath: artifact.componentBasePath } : {}),
+          ...(artifact.componentAssetPaths?.length ? { componentAssetPaths: artifact.componentAssetPaths } : {}),
           ...(artifact.projectPath ? { projectPath: artifact.projectPath } : {}),
           ...(artifact.svgPath ? { svgPath: artifact.svgPath } : {}),
           ...(pptxPath ? { pptxPath } : {}),

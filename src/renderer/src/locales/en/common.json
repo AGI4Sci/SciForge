@@ -1415,6 +1415,7 @@
   "imageOpenCanvasReview": "Open canvas review",
   "imageCanvasReviewUnavailable": "This image cannot be opened in canvas review. Check the workspace and image path.",
   "artifactOpenCanvasReview": "Open canvas review",
+  "artifactCopyFilePath": "Copy file path",
   "canvasArtifactReviewUnavailable": "This artifact cannot be opened in canvas review. Check the workspace and artifact path.",
   "imageOpenOriginal": "Open original",
   "generatedFilesTitle": "Images",

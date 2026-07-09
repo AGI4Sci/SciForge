@@ -513,6 +513,13 @@ const modelRouterPatchSchema = z.object({
   }).strict().optional()
 }).strict()
 
+const imageGenerationPatchSchema = z.object({
+  componentSegmentationRunnerPath: defaultPathSchema,
+  componentSegmentationModelPath: defaultPathSchema,
+  fastSamRunnerPath: defaultPathSchema,
+  fastSamModelPath: defaultPathSchema
+}).strict()
+
 const localRuntimePatchSchema = z.object({
   binaryPath: defaultPathSchema,
   port: z.number().int().min(1).max(65_535).optional(),
@@ -1442,6 +1449,7 @@ const settingsPatchObjectSchema = z.object({
   modelRouter: modelRouterPatchSchema.optional(),
   runtimeGuards: runtimeGuardPatchSchema.optional(),
   agentCapabilities: agentCapabilityPatchSchema.optional(),
+  imageGeneration: imageGenerationPatchSchema.optional(),
   computerUse: computerUsePatchSchema.optional(),
   activeAgentRuntime: agentRuntimeIdSchema.optional(),
   agents: z.object({
@@ -1578,6 +1586,15 @@ export const sciforgeCanvasInsertArtifactPayloadSchema = z
     renderedSlideIndex: z.number().int().nonnegative().optional(),
     manifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
     styleSpecPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    diagramSpecPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    frameworkDesignPlanPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    diagramLayerManifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    fastSamSegmentationPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    fastSamBoxlibPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    fastSamPreviewPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    frameworkComponentManifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    componentBasePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    componentAssetPaths: z.array(z.string().trim().max(MAX_PATH_LENGTH)).max(1000).optional(),
     referencePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
     projectPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
     svgPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
@@ -1611,6 +1628,18 @@ export const sciforgeCanvasImportRecentArtifactsPayloadSchema = z
     maxAgeMs: z.number().finite().min(0).max(30 * 24 * 60 * 60 * 1000).optional(),
     limit: z.number().int().positive().max(20).optional(),
     includeExisting: z.boolean().optional(),
+    dryRun: z.boolean().optional()
+  })
+  .strict()
+
+export const sciforgeCanvasSplitArtifactComponentsPayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    canvasId: z.string().trim().max(120).optional(),
+    frameworkComponentManifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+    sourceShapeId: z.string().trim().max(200).optional(),
+    displayWidth: z.number().finite().positive().max(5000).optional(),
+    margin: z.number().finite().min(0).max(500).optional(),
     dryRun: z.boolean().optional()
   })
   .strict()

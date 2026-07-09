@@ -7,7 +7,9 @@ import type {
   SandboxMode
 } from '@shared/app-settings'
 import {
-  getModelRouterSettings
+  getImageGenerationSettings,
+  getModelRouterSettings,
+  type ImageGenerationSettingsPatchV1
 } from '@shared/app-settings'
 import type { GuiUpdateChannel } from '@shared/gui-update'
 import type { SkillRootId } from '../lib/skill-root-preference'
@@ -142,6 +144,10 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const desktopBehavior = form.appBehavior
   const modelRouterSettings = getModelRouterSettings(form)
   const defaultModelRouterProfile = modelRouterSettings.profiles.default
+  const imageGenerationSettings = getImageGenerationSettings(form)
+  const updateImageGenerationSettings = (patch: ImageGenerationSettingsPatchV1): void => {
+    update({ imageGeneration: patch })
+  }
   const updateTextReasoner = (patch: ModelRouterMemberProviderSettingsPatchV1): void => {
     update({ modelRouter: { profiles: { default: { textReasoner: patch } } } })
   }
@@ -291,6 +297,34 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                 />
               </SettingsCard>
               <SettingsCard title={t('sectionGeneral')}>
+                <SettingRow
+                  title={t('imageGenerationComponentSegmentationRunner')}
+                  description={t('imageGenerationComponentSegmentationRunnerDesc')}
+                  control={
+                    <input
+                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                      placeholder={t('imageGenerationComponentSegmentationRunnerPlaceholder')}
+                      value={imageGenerationSettings.componentSegmentationRunnerPath}
+                      onChange={(e) =>
+                        updateImageGenerationSettings({ componentSegmentationRunnerPath: e.target.value })
+                      }
+                    />
+                  }
+                />
+                <SettingRow
+                  title={t('imageGenerationComponentSegmentationModel')}
+                  description={t('imageGenerationComponentSegmentationModelDesc')}
+                  control={
+                    <input
+                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                      placeholder={t('imageGenerationComponentSegmentationModelPlaceholder')}
+                      value={imageGenerationSettings.componentSegmentationModelPath}
+                      onChange={(e) =>
+                        updateImageGenerationSettings({ componentSegmentationModelPath: e.target.value })
+                      }
+                    />
+                  }
+                />
                 <SettingRow
                   title={t('language')}
                   description={t('languageDesc')}

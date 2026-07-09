@@ -7,6 +7,7 @@ import {
   defaultRuntimeGuardSettings,
   defaultAgentCapabilitySettings,
   defaultComputerUseSettings,
+  defaultImageGenerationSettings,
   applyCodexRuntimePatch,
   applyLocalRuntimePatch,
   getCodexRuntimeSettings,
@@ -28,6 +29,7 @@ import {
   mergeWorkflowSettings,
   mergeRemoteExecutorSettings,
   mergeWriteSettings,
+  mergeImageGenerationSettings,
   normalizeAppBehaviorSettings,
   normalizeAgentRuntimeId,
   normalizeConnectPhoneSettings,
@@ -43,6 +45,7 @@ import {
   normalizeWorkflowSettings,
   normalizeRemoteExecutorSettings,
   normalizeWriteSettings,
+  normalizeImageGenerationSettings,
   type AppSettingsPatch,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -78,6 +81,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     agentCapabilities: agentCapabilitiesPatch,
     computerUse: computerUsePatch,
     runtimeGuards: runtimeGuardsPatch,
+    imageGeneration: imageGenerationPatch,
     connectPhone: connectPhonePatch,
     remoteExecutor: remoteExecutorPatch,
     ...restPatch
@@ -104,6 +108,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     agentCapabilities: mergeAgentCapabilitySettings(safeCurrent.agentCapabilities, agentCapabilitiesPatch),
     computerUse: mergeComputerUseSettings(safeCurrent.computerUse, computerUsePatch),
     runtimeGuards: mergeRuntimeGuardSettings(safeCurrent.runtimeGuards, runtimeGuardsPatch),
+    imageGeneration: mergeImageGenerationSettings(safeCurrent.imageGeneration, imageGenerationPatch),
     log: {
       ...safeCurrent.log,
       ...(patch.log ?? {})
@@ -160,6 +165,10 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     ),
     computerUse: mergeComputerUseSettings(defaultComputerUseSettings(), normalizeComputerUseSettings(raw.computerUse)),
     runtimeGuards: mergeRuntimeGuardSettings(defaultRuntimeGuardSettings(), raw.runtimeGuards),
+    imageGeneration: mergeImageGenerationSettings(
+      defaultImageGenerationSettings(),
+      normalizeImageGenerationSettings(raw.imageGeneration)
+    ),
     activeAgentRuntime: normalizeAgentRuntimeId(raw.activeAgentRuntime),
     agents: {
       ...agentRuntimeSettingsEnvelope(mergeLocalRuntimeSettings(defaultLocalRuntimeSettings(), getLocalRuntimeSettings(settings))),

@@ -5,6 +5,8 @@ import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { describe, expect, it } from 'vitest'
 import type { FigureStyleSpec } from './types'
 import {
+  buildScientificFigureNeedClassification,
+  createScientificPlottingResearchBrief,
   createScientificPlottingReviewPacket,
   getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
@@ -124,13 +126,34 @@ function referenceStyleSpec(figureId: string): FigureStyleSpec {
 describe('scientific plotting engine', () => {
   it('plans a controlled attention map without executable commands', async () => {
     await expect(planScientificPlotting({
-      task: 'Draw an attention heatmap in the style of a NeurIPS paper.'
+      task: 'Draw an attention heatmap from a token-by-token attention matrix.'
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'attention-map',
       controlledTool: 'scientific_plotting_render',
       templateAlternatives: expect.any(Array),
       planningWarnings: expect.any(Array)
+    })
+  })
+
+  it('routes paper-style figure requests through the research brief first', async () => {
+    await expect(planScientificPlotting({
+      task: 'Draw an attention heatmap in the style of a NeurIPS paper.'
+    })).resolves.toMatchObject({
+      ok: true,
+      recommendedTemplate: 'attention-map',
+      controlledTool: 'scientific_plotting_research_brief',
+      figureNeed: expect.objectContaining({
+        recommendedNextTool: 'scientific_plotting_research_brief'
+      }),
+      researchBriefRecommendation: expect.objectContaining({
+        recommended: true,
+        nextControlledTool: 'scientific_plotting_research_brief'
+      }),
+      imagePolishRecommendation: expect.objectContaining({
+        model: 'gpt-image-2',
+        nextControlledTool: 'image_generation_plan'
+      })
     })
   })
 
@@ -152,11 +175,383 @@ describe('scientific plotting engine', () => {
     })
 
     await expect(planScientificPlotting({
+      task: 'Compare tensile strength distributions for three alloy recipes.'
+    })).resolves.toMatchObject({
+      ok: true,
+      recommendedTemplate: 'box-violin',
+      controlledTool: 'scientific_plotting_render'
+    })
+
+    await expect(planScientificPlotting({
       task: 'Make a multi-panel figure with a line panel and a heatmap panel.'
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'multi-panel',
       controlledTool: 'scientific_plotting_render'
+    })
+
+    const flowchartPlan = await planScientificPlotting({
+      task: 'Draw a flowchart explaining the reinforcement learning workflow.'
+    })
+    expect(flowchartPlan).toMatchObject({
+      ok: true,
+      recommendedTemplate: 'flowchart',
+      controlledTool: 'scientific_plotting_research_brief',
+      toolRoutingRecommendation: expect.objectContaining({
+        preferredTool: 'image_generation_plan',
+        reason: expect.stringContaining('semantic diagram')
+      }),
+      researchBriefRecommendation: expect.objectContaining({
+        recommended: true,
+        nextControlledTool: 'scientific_plotting_research_brief'
+      }),
+      templateSelection: expect.objectContaining({
+        selectedTemplate: 'flowchart',
+        selectedBy: 'taskIntent',
+        modelSelectionHint: expect.stringContaining('compact node-edge')
+      }),
+      templateGuides: expect.arrayContaining([
+        expect.objectContaining({
+          template: 'flowchart',
+          modelSelectionHint: expect.stringContaining('image_generation')
+        }),
+        expect.objectContaining({
+          template: 'schematic-grid',
+          avoidWhen: expect.arrayContaining([expect.stringContaining('flowchart')])
+        })
+      ])
+    })
+
+    const transformerPlan = await planScientificPlotting({
+      task: '新建一张流程图，介绍 Transformer 架构和 Attention 数据流。',
+      domain: 'AI/ML',
+      targetVenue: 'NeurIPS'
+    })
+    expect(transformerPlan).toMatchObject({
+      ok: true,
+      recommendedTemplate: 'flowchart',
+      controlledTool: 'scientific_plotting_research_brief',
+      figureNeed: expect.objectContaining({
+        primaryNeed: 'model_architecture',
+        route: 'diagram_spec_or_image_generation'
+      })
+    })
+
+    const cellLineStatsPlan = await planScientificPlotting({
+      task: 'Compare drug response distributions for four cell-line groups with significance.',
+      domain: 'life science'
+    })
+    expect(cellLineStatsPlan).toMatchObject({
+      ok: true,
+      recommendedTemplate: 'box-violin',
+      controlledTool: 'scientific_plotting_render',
+      figureNeed: expect.objectContaining({
+        primaryNeed: 'statistical_comparison',
+        route: 'controlled_plotting_renderer'
+      })
+    })
+    if (cellLineStatsPlan.ok) {
+      expect(cellLineStatsPlan.researchBriefRecommendation?.recommended).not.toBe(true)
+    }
+
+    const plainBarPlan = await planScientificPlotting({
+      task: '把季度收入数据画成柱状图。'
+    })
+    expect(plainBarPlan).toMatchObject({
+      ok: true,
+      recommendedTemplate: 'bar',
+      controlledTool: 'scientific_plotting_render'
+    })
+    if (plainBarPlan.ok) {
+      expect(plainBarPlan.externalSkillCatalog?.recommendedSkillIds).not.toContain('nature-figure')
+      expect(plainBarPlan.externalSkillCatalog?.primarySources).not.toContain('cns')
+      expect(plainBarPlan.imagePolishRecommendation).toBeUndefined()
+    }
+
+    const annotatedBarPlan = await planScientificPlotting({
+      task: '把季度收入数据画成柱状图，并放大最高点加说明。'
+    })
+    expect(annotatedBarPlan).toMatchObject({
+      ok: true,
+      recommendedTemplate: 'bar',
+      controlledTool: 'scientific_plotting_render',
+      imagePolishRecommendation: expect.objectContaining({
+        model: 'gpt-image-2',
+        nextControlledTool: 'image_generation_plan',
+        preserve: expect.arrayContaining([expect.stringContaining('Do not change numeric values')])
+      })
+    })
+    if (annotatedBarPlan.ok) {
+      expect(annotatedBarPlan.researchBriefRecommendation).toBeUndefined()
+    }
+
+    const proseFlowchartPlan = await planScientificPlotting({
+      task: '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator use. In this paper, we argue that researchers need to distinguish simulator use cases and discuss several misleading conclusions from long prose.'
+    })
+    expect(proseFlowchartPlan).toMatchObject({
+      ok: true,
+      recommendedTemplate: 'flowchart',
+      controlledTool: 'scientific_plotting_research_brief',
+      toolRoutingRecommendation: expect.objectContaining({
+        preferredTool: 'image_generation_plan',
+        reason: expect.stringContaining('semantic diagram')
+      }),
+      researchBriefRecommendation: expect.objectContaining({
+        recommended: true
+      })
+    })
+  })
+
+  it('classifies paper-figure needs before choosing a renderer', async () => {
+    const proseNeed = buildScientificFigureNeedClassification(
+      '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator use. In this paper, we argue that researchers need to distinguish simulator use cases and discuss several misleading conclusions from long prose about learning, deployment, benchmarking, evaluation metrics, and simulator access.',
+      { domain: 'AI/ML' }
+    )
+
+    expect(proseNeed).toMatchObject({
+      domain: 'ai-ml',
+      route: 'diagram_spec_or_image_generation',
+      recommendedNextTool: 'scientific_plotting_research_brief',
+      avoidTemplates: ['flowchart']
+    })
+    expect(['method_flow', 'model_architecture']).toContain(proseNeed.primaryNeed)
+    expect(proseNeed.warnings.join(' ')).toContain('Long prose')
+
+    const cnsPlan = await planScientificPlotting({
+      task: '根据一篇 Nature paper 设计肿瘤免疫机制图，突出 figure conclusion 和 evidence logic。',
+      domain: 'life science',
+      targetVenue: 'Nature'
+    })
+
+    expect(cnsPlan).toMatchObject({
+      ok: true,
+      controlledTool: 'scientific_plotting_research_brief',
+      figureNeed: expect.objectContaining({
+        primaryNeed: 'mechanism_schematic',
+        route: 'diagram_spec_or_image_generation',
+        recommendedNextTool: 'scientific_plotting_research_brief'
+      }),
+      researchBriefRecommendation: expect.objectContaining({
+        nextControlledTool: 'scientific_plotting_research_brief',
+        requiresUserConfirmation: true
+      })
+    })
+    if (cnsPlan.ok) {
+      expect(cnsPlan.externalSkillCatalog?.recommendedSkillIds).toContain('nature-figure')
+      expect(cnsPlan.externalSkillCatalog?.recommendedSkillIds.slice(0, 6)).toContain('nature-figure')
+      expect(cnsPlan.externalSkillCatalog?.recommendedSkillIds).toContain('pathway-enrichment')
+      expect(cnsPlan.externalSkillCatalog?.excludedSources.join(' ')).toContain('SciVisAgentSkills')
+    }
+  })
+
+  it('builds a CNS/domain research brief without executing external skills', async () => {
+    const brief = await createScientificPlottingResearchBrief({
+      task: '参考 Nature 论文风格，画一个肿瘤免疫逃逸机制图，包含 T cell exhaustion、PD-1/PD-L1 和 cytokine signaling。',
+      domain: 'life science',
+      targetVenue: 'Nature',
+      dataSummary: '用户有基因表达差异表和 pathway enrichment 结果。',
+      candidatePapers: [
+        {
+          title: 'Cancer immunotherapy and immune escape mechanisms',
+          venue: 'Nature',
+          year: 2024,
+          figureHints: ['mechanism schematic', 'multi-panel immune pathway figure']
+        }
+      ]
+    })
+
+    expect(brief).toMatchObject({
+      ok: true,
+      domain: 'life-science',
+      targetVenue: 'Nature',
+      figureNeed: expect.objectContaining({
+        primaryNeed: 'mechanism_schematic',
+        recommendedNextTool: 'scientific_plotting_research_brief'
+      }),
+      figureContract: expect.objectContaining({
+        archetype: 'mechanism_schematic',
+        journalExportContract: expect.arrayContaining([expect.stringContaining('Nature')])
+      }),
+      selectedSkillProfile: expect.objectContaining({
+        profileId: 'paper-figure-cns-life-science-v1',
+        selectedSkillIds: expect.arrayContaining(['nature-figure', 'nature-reader', 'nature-data']),
+        skillPriority: ['kdense', 'cns', 'domain', 'image-delta'],
+        readOnlyExternalSkills: true
+      }),
+      promptSpecDraft: expect.objectContaining({
+        nextControlledTool: expect.stringContaining('image_generation'),
+        fullPrompt: expect.stringContaining('Reference papers and figure evidence'),
+        imagePolishRecommendation: expect.objectContaining({
+          model: 'gpt-image-2',
+          fallbackModel: 'configured_model_router_image_model',
+          nextControlledTool: 'image_generation_plan'
+        }),
+        codeGenerationPlan: expect.objectContaining({
+          target: 'image_generation_recipe',
+          notes: expect.arrayContaining([expect.stringContaining('referencePapers')])
+        }),
+        referencePapers: expect.arrayContaining([
+          expect.objectContaining({ title: 'Cancer immunotherapy and immune escape mechanisms' })
+        ])
+      })
+    })
+    if (brief.ok) {
+      const skillIds = brief.skillCatalog.map((item) => item.skillId)
+      expect(skillIds).toContain('nature-figure')
+      expect(skillIds).toContain('nature-reader')
+      expect(skillIds).toContain('pathway-enrichment')
+      expect(skillIds).toContain('claude-code-skills')
+      expect(brief.recommendedSkillLayers[0]).toMatchObject({
+        sourceKind: 'kdense'
+      })
+      expect(brief.recommendedSkillLayers.some((layer) => layer.sourceKind === 'cns')).toBe(true)
+      expect(brief.paperFigureProductionPlan).toMatchObject({
+        scope: 'paper_level',
+        sourceWorkflow: 'paper_figures_data_first_v1',
+        handoff: expect.objectContaining({
+          imagePolish: expect.arrayContaining([expect.stringContaining('gpt-image-2')])
+        }),
+        compositionPlan: expect.objectContaining({
+          sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1',
+          stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration'],
+          image2Composition: expect.objectContaining({
+            preferredModel: 'gpt-image-2',
+            fallbackModel: 'configured_model_router_image_model',
+            nextControlledTool: 'image_generation_plan',
+            allowedOperations: expect.arrayContaining([
+              'panel_stitching',
+              'callout_overlay',
+              'zoom_inset',
+              'visual_unification'
+            ]),
+            forbiddenOperations: expect.arrayContaining([
+              expect.stringContaining('Do not change numeric values')
+            ])
+          }),
+          imagePolishDeltaPlan: expect.objectContaining({
+            mode: 'delta_only',
+            allowedOperations: expect.arrayContaining([
+              'panel_stitching',
+              'callout_overlay',
+              'zoom_inset',
+              'visual_unification',
+              'typography_cleanup',
+              'mechanism_visual_draft'
+            ]),
+            lockedFacts: expect.arrayContaining([
+              'numeric values',
+              'axes labels and scales',
+              'paper claims and figure conclusions'
+            ]),
+            handoffPrompt: expect.stringContaining('Do not redraw, replace, or reinterpret scientific data panels')
+          }),
+          canvasReview: expect.objectContaining({
+            preserveOriginalArtifacts: true,
+            revisionPolicy: 'new_version_next_to_original'
+          })
+        })
+      })
+      expect(brief.guardrails.join(' ')).toContain('read-only planning')
+      expect(JSON.stringify(brief.skillCatalog)).not.toMatch(/SciVisAgentBench|ChartMimic|paraview_mcp/)
+      expect(brief.warnings.join(' ')).toContain('Excluded from this workflow')
+    }
+  })
+
+  it('builds a data-first paper figure production plan from raw data context', async () => {
+    const brief = await createScientificPlottingResearchBrief({
+      task: 'Plan figures for a heart-failure survival paper from raw clinical CSV data. Include key predictor comparisons, correlation heatmap, Kaplan-Meier survival, Cox forest, and ROC evaluation.',
+      domain: 'clinical medicine',
+      targetVenue: 'Nature-family journal',
+      dataSummary: 'CSV has 299 patients with columns age, ejection_fraction, serum_creatinine, time, DEATH_EVENT, and other clinical variables.',
+      candidatePapers: [
+        {
+          title: 'Machine learning can predict survival of patients with heart failure from serum creatinine and ejection fraction alone',
+          year: 2020,
+          figureHints: ['survival analysis', 'ROC evaluation', 'key predictor comparison']
+        }
+      ]
+    })
+
+    expect(brief).toMatchObject({
+      ok: true,
+      selectedSkillProfile: expect.objectContaining({
+        profileId: 'paper-figure-cns-life-science-v1',
+        selectedSkillIds: expect.arrayContaining(['nature-figure', 'nature-reader', 'nature-data', 'image-delta-polish'])
+      }),
+      paperFigureProductionPlan: expect.objectContaining({
+        scope: 'paper_level',
+        sourceWorkflow: 'paper_figures_data_first_v1',
+        proposedAssets: expect.arrayContaining([
+          expect.objectContaining({ id: 'fig-key-predictors', recommendedTemplate: 'box-violin' }),
+          expect.objectContaining({ id: 'fig-correlation-heatmap', recommendedTemplate: 'heatmap' }),
+          expect.objectContaining({ id: 'fig-survival-km', recommendedTemplate: 'kaplan-meier' }),
+          expect.objectContaining({ id: 'fig-effect-size-forest', recommendedTemplate: 'cox-forest' }),
+          expect.objectContaining({ id: 'fig-model-roc', recommendedTemplate: 'roc' })
+        ]),
+        compositionPlan: expect.objectContaining({
+          controlledSubfigures: expect.arrayContaining([
+            expect.objectContaining({ assetId: 'fig-key-predictors', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-correlation-heatmap', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-survival-km', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-effect-size-forest', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-model-roc', requiredArtifact: 'png_manifest' })
+          ]),
+          image2Composition: expect.objectContaining({
+            inputArtifacts: expect.arrayContaining([
+              'fig-key-predictors.manifest.json',
+              'fig-model-roc.manifest.json'
+            ])
+          }),
+          imagePolishDeltaPlan: expect.objectContaining({
+            mode: 'delta_only',
+            targetPanels: expect.arrayContaining([
+              expect.objectContaining({ assetId: 'fig-key-predictors' }),
+              expect.objectContaining({ assetId: 'fig-model-roc' })
+            ]),
+            lockedFacts: expect.arrayContaining(['sample sizes', 'statistical tests and p-values'])
+          })
+        }),
+        missingCapabilities: expect.arrayContaining([
+          expect.stringContaining('Kaplan-Meier'),
+          expect.stringContaining('forest'),
+          expect.stringContaining('ROC')
+        ])
+      })
+    })
+    expect(brief.ok && brief.skillCatalog.some((item) => item.skillId === 'paper-figures')).toBe(true)
+  })
+
+  it('requires paper search before rendering ungrounded scientific semantic figures', async () => {
+    const brief = await createScientificPlottingResearchBrief({
+      task: '新建一张流程图，介绍 Transformer 框架和 Attention 数据流。',
+      domain: 'AI/ML',
+      targetVenue: 'NeurIPS'
+    })
+
+    expect(brief).toMatchObject({
+      ok: true,
+      selectedSkillProfile: expect.objectContaining({
+        profileId: 'mechanism-diagram-image-delta-v1',
+        selectedSkillIds: expect.arrayContaining(['image-delta-polish'])
+      }),
+      figureNeed: expect.objectContaining({
+        route: 'diagram_spec_or_image_generation',
+        recommendedNextTool: 'scientific_plotting_research_brief'
+      }),
+      literatureStrategy: expect.objectContaining({
+        nextControlledTool: 'research_search',
+        suggestedQueries: expect.arrayContaining([expect.stringContaining('Transformer')])
+      }),
+      promptSpecDraft: expect.objectContaining({
+        referencePapers: [],
+        nextControlledTool: 'research_search',
+        fullPrompt: expect.stringContaining('No reference papers confirmed yet'),
+        codeGenerationPlan: expect.objectContaining({
+          target: 'image_generation_recipe',
+          nextControlledTool: expect.stringContaining('image_generation'),
+          notes: expect.arrayContaining([expect.stringContaining('Do not render yet')])
+        })
+      })
     })
   })
 
@@ -653,6 +1048,70 @@ describe('scientific plotting engine', () => {
       expect(attention).toMatchObject({ ok: true, status: 'rendered' })
       if (!attention.ok) return
       expect((await stat(attention.outputPath)).size).toBeGreaterThan(1000)
+
+      const flowchart = await renderScientificPlot({
+        workspaceRoot: workspace,
+        template: 'flowchart',
+        figureId: 'flowchart-smoke',
+        labels: {
+          title: 'Controlled workflow'
+        },
+        data: {
+          nodes: [
+            { id: 'goal', label: 'Research goal' },
+            { id: 'data', label: 'Collect data' },
+            { id: 'train', label: 'Train model' },
+            { id: 'eval', label: 'Evaluate result' }
+          ],
+          edges: [
+            { from: 'goal', to: 'data' },
+            { from: 'data', to: 'train' },
+            { from: 'train', to: 'eval' }
+          ]
+        }
+      })
+      expect(flowchart).toMatchObject({
+        ok: false,
+        status: 'diagram_requires_image_generation',
+        draftHandoff: expect.objectContaining({
+          kind: 'diagram_draft_handoff',
+          recommendedNextTools: ['image_generation_plan', 'image_generation_render'],
+          draftSpec: expect.objectContaining({
+            template: 'flowchart',
+            nodes: expect.arrayContaining([
+              expect.objectContaining({ label: 'Research goal' })
+            ])
+          })
+        })
+      })
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('rejects dense prose-derived flowcharts that should use image generation', async () => {
+    const status = await getScientificPlottingStatus()
+    if (!status.ok || !status.renderer.available) {
+      expect(status.ok && status.degraded).toBe(true)
+      return
+    }
+    const workspace = await tempWorkspace()
+    try {
+      const result = await renderScientificPlot({
+        workspaceRoot: workspace,
+        template: 'flowchart',
+        figureId: 'dense-flowchart',
+        data: {
+          nodes: Array.from({ length: 13 }, (_, index) => ({
+            id: `n${index}`,
+            label: `Long prose-derived concept ${index}`
+          }))
+        }
+      })
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected dense flowchart to fail')
+      expect(result.message).toContain('image_generation')
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
@@ -666,8 +1125,19 @@ describe('scientific plotting engine', () => {
     }
     expect(status.ok && status.supportedTemplates).toEqual(expect.arrayContaining([
       'box-violin',
+      'flowchart',
       'histogram-density',
       'multi-panel'
+    ]))
+    expect(status.ok && status.templateGuides).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        template: 'flowchart',
+        useWhen: expect.arrayContaining([expect.stringContaining('workflows')])
+      }),
+      expect.objectContaining({
+        template: 'schematic-grid',
+        modelSelectionHint: expect.stringContaining('flowchart instead')
+      })
     ]))
 
     const workspace = await tempWorkspace()
@@ -687,12 +1157,20 @@ describe('scientific plotting engine', () => {
             { name: 'Low dose', values: [1.2, 1.35, 1.42, 1.3, 1.25, 1.48] },
             { name: 'High dose', values: [1.55, 1.7, 1.62, 1.8, 1.74, 1.68] }
           ],
-          showPoints: true
+          showPoints: true,
+          comparisons: [
+            { from: 'Control', to: 'High dose', label: '***' }
+          ]
         }
       })
       expect(boxViolin).toMatchObject({ ok: true, status: 'rendered' })
       if (!boxViolin.ok) return
       expect((await stat(boxViolin.outputPath)).size).toBeGreaterThan(1000)
+      expect(boxViolin.attempts[0]?.rendererDiagnostics).toMatchObject({
+        layoutNotes: expect.arrayContaining([
+          'Rendered compact group-comparison brackets for distribution panels.'
+        ])
+      })
 
       const histogram = await renderScientificPlot({
         workspaceRoot: workspace,
@@ -795,12 +1273,12 @@ describe('scientific plotting engine', () => {
             {
               template: 'line',
               labels: { title: 'Trend', x: 'Time', y: 'Score' },
-              data: { series: [{ name: 'A', y: [0.2, 0.4, 0.65, 0.8] }] }
+              data: { x: [10, 20, 30, 40], series: [{ name: 'A', y: [0.2, 0.4, 0.65, 0.8] }] }
             },
             {
               template: 'heatmap',
               labels: { title: 'Matrix' },
-              data: { matrix: [[0.1, 0.4], [0.7, 0.2]], colorbar: false }
+              data: { matrix: [[0.1, 0.4], [0.7, 0.2]], x: ['gene_a', 'gene_b'], y: ['cell_1', 'cell_2'], colorbar: false }
             },
             {
               template: 'box-violin',
@@ -809,6 +1287,9 @@ describe('scientific plotting engine', () => {
                 groups: [
                   { name: 'A', values: [1, 1.2, 1.1] },
                   { name: 'B', values: [1.4, 1.6, 1.5] }
+                ],
+                comparisons: [
+                  { from: 'A', to: 'B', label: '*' }
                 ]
               }
             }
@@ -821,9 +1302,136 @@ describe('scientific plotting engine', () => {
       expect(multiPanel.attempts[0]?.rendererDiagnostics).toMatchObject({
         multiPanelCount: 3,
         layoutNotes: expect.arrayContaining([
+          'Rendered compact group-comparison brackets for distribution panels.',
           'Rendered 3 controlled subpanels in a 2x2 layout.'
         ])
       })
+
+      const scatterWithErrors = await renderScientificPlot({
+        workspaceRoot: workspace,
+        template: 'scatter',
+        figureId: 'scatter-errorbar-smoke',
+        labels: {
+          title: 'Isotope summary',
+          x: 'delta 13C',
+          y: 'delta 15N',
+          legend: true
+        },
+        data: {
+          xlim: [-26.5, -24.5],
+          ylim: [8.2, 9.25],
+          series: [
+            { name: 'Male', x: [-25.8], y: [8.72], xerr: [0.18], yerr: [0.08] },
+            { name: 'Female', x: [-25.35], y: [8.86], xerr: [0.16], yerr: [0.07] }
+          ]
+        }
+      })
+      expect(scatterWithErrors).toMatchObject({ ok: true, status: 'rendered' })
+      if (!scatterWithErrors.ok) return
+      expect((await stat(scatterWithErrors.outputPath)).size).toBeGreaterThan(1000)
+
+      const multiPanelScatterWithErrors = await renderScientificPlot({
+        workspaceRoot: workspace,
+        template: 'multi-panel',
+        figureId: 'multi-panel-scatter-errorbar-smoke',
+        styleSpec: {
+          ...referenceStyleSpec('multi-panel-scatter-errorbar'),
+          layout: {
+            ...referenceStyleSpec('multi-panel-scatter-errorbar').layout,
+            panelGrid: '1x2',
+            panelLabels: 'none'
+          }
+        },
+        labels: {
+          title: 'Summary scatter with uncertainty'
+        },
+        data: {
+          columns: 2,
+          panels: [
+            {
+              template: 'scatter',
+              labels: { title: '2007', x: 'delta 13C', y: 'delta 15N' },
+              data: {
+                xlim: [-26.5, -24.5],
+                ylim: [8.2, 9.25],
+                series: [
+                  { name: 'Male', x: [-25.8], y: [8.72], xerr: [0.18], yerr: [0.08] },
+                  { name: 'Female', x: [-25.35], y: [8.86], xerr: [0.16], yerr: [0.07] }
+                ]
+              }
+            },
+            {
+              template: 'scatter',
+              labels: { title: '2008', x: 'delta 13C', y: 'delta 15N' },
+              data: {
+                xlim: [-26.5, -24.5],
+                ylim: [8.2, 9.25],
+                series: [
+                  { name: 'Male', x: [-25.75], y: [8.62], xerr: [0.12], yerr: [0.06] },
+                  { name: 'Female', x: [-25.42], y: [8.78], xerr: [0.15], yerr: [0.07] }
+                ]
+              }
+            }
+          ]
+        }
+      })
+      expect(multiPanelScatterWithErrors).toMatchObject({ ok: true, status: 'rendered' })
+      if (!multiPanelScatterWithErrors.ok) return
+      expect((await stat(multiPanelScatterWithErrors.outputPath)).size).toBeGreaterThan(1000)
+      expect(multiPanelScatterWithErrors.attempts[0]?.rendererDiagnostics).toMatchObject({
+        multiPanelCount: 2
+      })
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('renders CJK labels with a font fallback instead of tofu boxes', async () => {
+    const status = await getScientificPlottingStatus()
+    if (!status.ok || !status.renderer.available) {
+      expect(status.ok && status.degraded).toBe(true)
+      return
+    }
+
+    const workspace = await tempWorkspace()
+    try {
+      const result = await renderScientificPlot({
+        workspaceRoot: workspace,
+        template: 'line',
+        figureId: 'cjk-label-smoke',
+        labels: {
+          title: '气候异常趋势',
+          x: '月份',
+          y: '温度异常值',
+          legend: true
+        },
+        data: {
+          series: [
+            { name: '二氧化碳异常', x: ['一月', '二月', '三月', '四月'], y: [0.2, 0.35, 0.31, 0.48] },
+            { name: '海温异常', x: ['一月', '二月', '三月', '四月'], y: [0.12, 0.18, 0.22, 0.27] }
+          ]
+        }
+      })
+
+      expect(result).toMatchObject({ ok: true, status: 'rendered' })
+      if (!result.ok) return
+      expect((await stat(result.outputPath)).size).toBeGreaterThan(1000)
+      const fontFallback = result.attempts[0]?.rendererDiagnostics?.fontFallback
+      expect(fontFallback).toHaveProperty('cjk')
+      if (process.platform === 'darwin') {
+        expect(fontFallback?.cjk).toEqual(expect.any(String))
+      }
+      const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as {
+        attempts: Array<{
+          rendererDiagnostics?: {
+            fontFallback?: { cjk?: string | null }
+          }
+        }>
+      }
+      expect(manifest.attempts[0]?.rendererDiagnostics?.fontFallback).toHaveProperty('cjk')
+      if (process.platform === 'darwin') {
+        expect(manifest.attempts[0]?.rendererDiagnostics?.fontFallback?.cjk).toEqual(expect.any(String))
+      }
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }

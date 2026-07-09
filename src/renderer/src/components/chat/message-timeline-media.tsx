@@ -33,6 +33,15 @@ export type TimelineImageReference = {
   sourcePath?: string
   manifestPath?: string
   artifactManifestPath?: string
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   artifactKind?: string
   sourceTool?: string
   canvasId?: string
@@ -50,6 +59,15 @@ export type TimelineImageCanvasArtifact = {
   renderedPagePath?: string
   manifestPath?: string
   artifactManifestPath?: string
+  diagramSpecPath?: string
+  frameworkDesignPlanPath?: string
+  diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   projectPath?: string
   svgPath?: string
   pptxPath?: string
@@ -107,6 +125,17 @@ function readString(raw: Record<string, unknown>, ...keys: string[]): string | u
   return undefined
 }
 
+function readStringArray(raw: Record<string, unknown>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = raw[key]
+    if (!Array.isArray(value)) continue
+    return value
+      .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+      .map((item) => item.trim())
+  }
+  return []
+}
+
 function readNumber(raw: Record<string, unknown>, key: string): number | undefined {
   const value = raw[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
@@ -121,7 +150,7 @@ function inferWorkspaceRootFromSciforgePath(value: string | undefined): string |
   const normalized = normalizeWorkspaceCandidate(value)
   if (!normalized) return undefined
   const marker = '/.sciforge/'
-  const index = normalized.indexOf(marker)
+  const index = normalized.lastIndexOf(marker)
   return index > 0 ? normalized.slice(0, index) : undefined
 }
 
@@ -261,6 +290,15 @@ function normalizeGeneratedFileReference(entry: unknown): TimelineImageReference
   const absolutePath = readString(raw, 'absolutePath', 'absolute_path')
   const manifestPath = readString(raw, 'manifestPath', 'manifest_path')
   const artifactManifestPath = readString(raw, 'artifactManifestPath', 'artifact_manifest_path')
+  const diagramSpecPath = readString(raw, 'diagramSpecPath', 'diagram_spec_path')
+  const frameworkDesignPlanPath = readString(raw, 'frameworkDesignPlanPath', 'framework_design_plan_path')
+  const diagramLayerManifestPath = readString(raw, 'diagramLayerManifestPath', 'diagram_layer_manifest_path')
+  const fastSamSegmentationPath = readString(raw, 'fastSamSegmentationPath', 'fast_sam_segmentation_path')
+  const fastSamBoxlibPath = readString(raw, 'fastSamBoxlibPath', 'fast_sam_boxlib_path')
+  const fastSamPreviewPath = readString(raw, 'fastSamPreviewPath', 'fast_sam_preview_path')
+  const frameworkComponentManifestPath = readString(raw, 'frameworkComponentManifestPath', 'framework_component_manifest_path')
+  const componentBasePath = readString(raw, 'componentBasePath', 'component_base_path')
+  const componentAssetPaths = readStringArray(raw, 'componentAssetPaths', 'component_asset_paths')
   const artifactKind = readImageArtifactKind(raw)
   const sourceTool = readString(raw, 'sourceTool', 'source_tool')
   const canvasId = readString(raw, 'canvasId', 'canvas_id')
@@ -289,6 +327,15 @@ function normalizeGeneratedFileReference(entry: unknown): TimelineImageReference
     ...(sourcePath ? { sourcePath } : {}),
     ...(manifestPath ? { manifestPath } : {}),
     ...(artifactManifestPath ? { artifactManifestPath } : {}),
+    ...(diagramSpecPath ? { diagramSpecPath } : {}),
+    ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
+    ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+    ...(fastSamSegmentationPath ? { fastSamSegmentationPath } : {}),
+    ...(fastSamBoxlibPath ? { fastSamBoxlibPath } : {}),
+    ...(fastSamPreviewPath ? { fastSamPreviewPath } : {}),
+    ...(frameworkComponentManifestPath ? { frameworkComponentManifestPath } : {}),
+    ...(componentBasePath ? { componentBasePath } : {}),
+    ...(componentAssetPaths.length ? { componentAssetPaths } : {}),
     ...(artifactKind ? { artifactKind } : {}),
     ...(sourceTool ? { sourceTool } : {}),
     ...(canvasId ? { canvasId } : {}),
@@ -422,6 +469,23 @@ function artifactImageFromRecord(record: Record<string, unknown>, fallback: Part
   const path = readString(record, 'path', 'file') ?? outputPath ?? sourcePath ?? fallback.path
   const manifestPath = readString(record, 'manifestPath', 'manifest_path') ?? fallback.manifestPath
   const artifactManifestPath = readString(record, 'artifactManifestPath', 'artifact_manifest_path') ?? fallback.artifactManifestPath
+  const diagramSpecPath = readString(record, 'diagramSpecPath', 'diagram_spec_path') ?? fallback.diagramSpecPath
+  const frameworkDesignPlanPath =
+    readString(record, 'frameworkDesignPlanPath', 'framework_design_plan_path') ?? fallback.frameworkDesignPlanPath
+  const diagramLayerManifestPath =
+    readString(record, 'diagramLayerManifestPath', 'diagram_layer_manifest_path') ?? fallback.diagramLayerManifestPath
+  const fastSamSegmentationPath =
+    readString(record, 'fastSamSegmentationPath', 'fast_sam_segmentation_path') ?? fallback.fastSamSegmentationPath
+  const fastSamBoxlibPath =
+    readString(record, 'fastSamBoxlibPath', 'fast_sam_boxlib_path') ?? fallback.fastSamBoxlibPath
+  const fastSamPreviewPath =
+    readString(record, 'fastSamPreviewPath', 'fast_sam_preview_path') ?? fallback.fastSamPreviewPath
+  const frameworkComponentManifestPath =
+    readString(record, 'frameworkComponentManifestPath', 'framework_component_manifest_path') ?? fallback.frameworkComponentManifestPath
+  const componentBasePath =
+    readString(record, 'componentBasePath', 'component_base_path') ?? fallback.componentBasePath
+  const componentAssetPaths = readStringArray(record, 'componentAssetPaths', 'component_asset_paths')
+  const nextComponentAssetPaths = componentAssetPaths.length ? componentAssetPaths : fallback.componentAssetPaths
   const workspaceRoot = inferWorkspaceRootFromRecord(record, fallback)
   const id = readString(record, 'id') ?? fallback.id
   const name = readString(record, 'title', 'name', 'fileName', 'filename') ?? fallback.name
@@ -453,6 +517,15 @@ function artifactImageFromRecord(record: Record<string, unknown>, fallback: Part
     ...(normalizedPath ? { path: normalizedPath } : {}),
     ...(manifestPath ? { manifestPath } : {}),
     ...(artifactManifestPath ? { artifactManifestPath } : {}),
+    ...(diagramSpecPath ? { diagramSpecPath } : {}),
+    ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
+    ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+    ...(fastSamSegmentationPath ? { fastSamSegmentationPath } : {}),
+    ...(fastSamBoxlibPath ? { fastSamBoxlibPath } : {}),
+    ...(fastSamPreviewPath ? { fastSamPreviewPath } : {}),
+    ...(frameworkComponentManifestPath ? { frameworkComponentManifestPath } : {}),
+    ...(componentBasePath ? { componentBasePath } : {}),
+    ...(nextComponentAssetPaths?.length ? { componentAssetPaths: nextComponentAssetPaths } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
     sourceTool,
     ...(caption ? { caption } : {}),
@@ -559,6 +632,11 @@ function canvasArtifactFromRecord(
   const renderedPagePath = readString(record, 'renderedPagePath', 'rendered_page_path') ?? fallback.renderedPagePath
   const artifactManifestPath = readString(record, 'artifactManifestPath', 'artifact_manifest_path') ?? fallback.artifactManifestPath
   const manifestPath = readString(record, 'manifestPath', 'manifest_path') ?? fallback.manifestPath
+  const diagramSpecPath = readString(record, 'diagramSpecPath', 'diagram_spec_path') ?? fallback.diagramSpecPath
+  const frameworkDesignPlanPath =
+    readString(record, 'frameworkDesignPlanPath', 'framework_design_plan_path') ?? fallback.frameworkDesignPlanPath
+  const diagramLayerManifestPath =
+    readString(record, 'diagramLayerManifestPath', 'diagram_layer_manifest_path') ?? fallback.diagramLayerManifestPath
   const projectPath = readString(record, 'projectPath', 'project_path') ?? fallback.projectPath
   const workspaceRoot = inferWorkspaceRootFromRecord(record, fallback)
   const path = readString(record, 'path', 'file') ?? fallback.path ?? outputPath ?? sourcePath ?? previewPath ?? renderedPagePath ?? svgPath ?? pptxPath
@@ -596,6 +674,9 @@ function canvasArtifactFromRecord(
     ...(renderedPagePath ? { renderedPagePath } : {}),
     ...(manifestPath ? { manifestPath } : {}),
     ...(artifactManifestPath ? { artifactManifestPath } : {}),
+    ...(diagramSpecPath ? { diagramSpecPath } : {}),
+    ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
+    ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
     ...(projectPath ? { projectPath } : {}),
     ...(svgPath ? { svgPath } : {}),
     ...(pptxPath ? { pptxPath } : {}),
@@ -808,6 +889,9 @@ function imageKey(image: TimelineImageReference): string {
 function canvasArtifactKey(artifact: TimelineCanvasArtifactReference | TimelineImageCanvasArtifact): string {
   return (
     artifact.artifactManifestPath ||
+    artifact.diagramLayerManifestPath ||
+    artifact.diagramSpecPath ||
+    artifact.frameworkDesignPlanPath ||
     artifact.manifestPath ||
     artifact.previewPath ||
     artifact.renderedPagePath ||
@@ -830,7 +914,10 @@ function canvasArtifactTitle(artifact: TimelineImageCanvasArtifact): string {
     artifact.previewPath,
     artifact.renderedPagePath,
     artifact.manifestPath,
-    artifact.artifactManifestPath
+    artifact.artifactManifestPath,
+    artifact.diagramLayerManifestPath,
+    artifact.diagramSpecPath,
+    artifact.frameworkDesignPlanPath
   ].find(Boolean)?.split(/[\\/]/).filter(Boolean).at(-1)
   return artifact.title || fromPath || (artifact.artifactKind === 'ppt_export' ? 'PPT export' : 'artifact')
 }
@@ -864,18 +951,22 @@ function imageCanvasArtifact(image: TimelineImageReference, resolvedPath?: strin
       : null
   const source = resolvedPath || image.outputPath || image.sourcePath || imagePath(image)
   if (!artifactKind || !source) return null
+  const workspaceRoot = workspaceRootForPath(source, image.workspaceRoot)
   return {
     artifactKind,
     outputPath: image.outputPath || source,
     sourcePath: image.sourcePath,
     manifestPath: image.manifestPath,
     artifactManifestPath: image.artifactManifestPath,
+    diagramSpecPath: image.diagramSpecPath,
+    frameworkDesignPlanPath: image.frameworkDesignPlanPath,
+    diagramLayerManifestPath: image.diagramLayerManifestPath,
     title: imageTitle(image),
     caption: image.caption,
     sourceTool: image.sourceTool,
     canvasId: image.canvasId,
     threadId: image.threadId,
-    workspaceRoot: image.workspaceRoot
+    workspaceRoot
   }
 }
 
@@ -915,15 +1006,28 @@ function formatByteSize(byteSize: number | undefined): string {
   return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
 }
 
-function downloadDataUrl(dataUrl: string, fileName: string): void {
-  if (typeof document === 'undefined') return
+async function downloadMediaUrl(url: string, fileName: string): Promise<void> {
+  if (typeof document === 'undefined') throw new Error('Document is unavailable.')
+  let href = url
+  let revokeObjectUrl: (() => void) | undefined
+  if (url.startsWith('data:') && typeof fetch === 'function' && typeof URL !== 'undefined') {
+    try {
+      const response = await fetch(url)
+      const blob = await response.blob()
+      href = URL.createObjectURL(blob)
+      revokeObjectUrl = () => URL.revokeObjectURL(href)
+    } catch {
+      href = url
+    }
+  }
   const link = document.createElement('a')
-  link.href = dataUrl
+  link.href = href
   link.download = fileName
   link.rel = 'noreferrer'
   document.body.appendChild(link)
   link.click()
   link.remove()
+  window.setTimeout(() => revokeObjectUrl?.(), 1000)
 }
 
 function usePreviewState(images: TimelineImageReference[]): PreviewState {
@@ -1085,13 +1189,14 @@ function TimelineImageTile({
     return () => window.clearTimeout(timer)
   }, [copyState, downloadState, openState])
 
-  const handleDownload = (): void => {
+  const handleDownload = async (): Promise<void> => {
     if (!src) {
       setDownloadState('error')
       return
     }
+    setDownloadState('busy')
     try {
-      downloadDataUrl(src, title)
+      await downloadMediaUrl(src, title)
       setDownloadState('done')
     } catch {
       setDownloadState('error')
@@ -1164,7 +1269,7 @@ function TimelineImageTile({
             type="button"
             onClick={(event) => {
               event.stopPropagation()
-              handleDownload()
+              void handleDownload()
             }}
             disabled={!canDownload}
             title={t('generatedFileDownload')}
@@ -1193,8 +1298,8 @@ function TimelineImageTile({
               void handleCopy()
             }}
             disabled={!canCopy}
-            title={copyState === 'done' ? t('copySuccess') : t('filePreviewCopyPath')}
-            aria-label={copyState === 'done' ? t('copySuccess') : t('filePreviewCopyPath')}
+            title={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
+            aria-label={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
             className={iconButtonClass}
           >
             {actionIcon(copyState, <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />)}
@@ -1245,7 +1350,7 @@ function TimelineImageTile({
           className="mt-3 inline-flex h-7 w-fit items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-card/90 px-2 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
         >
           {actionIcon(copyState, <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />)}
-          {copyState === 'done' ? t('copySuccess') : t('filePreviewCopyPath')}
+          {copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
         </button>
       ) : null}
     </div>
@@ -1358,8 +1463,8 @@ function TimelineCanvasArtifactTile({
             void handleCopy()
           }}
           disabled={!copyValue}
-          title={copyState === 'done' ? t('copySuccess') : t('filePreviewCopyPath')}
-          aria-label={copyState === 'done' ? t('copySuccess') : t('filePreviewCopyPath')}
+          title={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
+          aria-label={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
           className={iconButtonClass}
         >
           {actionIcon(copyState, <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />)}

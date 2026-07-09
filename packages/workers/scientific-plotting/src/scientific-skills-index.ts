@@ -3,6 +3,11 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, join, resolve } from 'node:path'
+import type {
+  ScientificExternalSkillCatalogItem,
+  ScientificExternalSkillSourceKind,
+  ScientificFigureNeed
+} from './types'
 
 export const SCIENTIFIC_SKILLS_ENV_ROOT = 'SCIFORGE_KDENSE_SKILLS_ROOT'
 export const DEFAULT_SEARCH_TOP_K = 8
@@ -18,6 +23,16 @@ export const SCIENTIFIC_PLOTTING_SKILL_IDS = [
   'plotly',
   'scientific-schematics',
   'markdown-mermaid-writing'
+] as const
+
+export const EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES = [
+  'KuangshiAi/SciVisAgentSkills',
+  'TouKaienn/Paraview-Skills',
+  'llnl/paraview_mcp',
+  'ChartMimic',
+  'SciVisAgentBench',
+  'SciFig',
+  'SciFigDetect'
 ] as const
 
 type JsonRecord = Record<string, unknown>
@@ -176,6 +191,12 @@ export type ScientificSkillsDiscoveryOptions = {
   homeDir?: string
 }
 
+export type ScientificExternalSkillCatalogOptions = {
+  installedSkillIds?: Iterable<string>
+  figureNeeds?: ScientificFigureNeed[]
+  domain?: string
+}
+
 type CandidateRoot = {
   path: string
   source: ScientificSkillsRootStatus['source']
@@ -184,6 +205,309 @@ type CandidateRoot = {
 type ParsedFrontmatter = {
   frontmatter: ScientificSkillFrontmatter
   errors: string[]
+}
+
+const EXTERNAL_SKILL_CATALOG_BASE: ScientificExternalSkillCatalogItem[] = [
+  skillCatalogItem({
+    skillId: 'scientific-visualization',
+    label: 'K-Dense Scientific Visualization',
+    sourceKind: 'kdense',
+    source: 'K-Dense-AI/scientific-agent-skills',
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix', 'multi_panel_figure', 'summary_figure'],
+    roles: ['publication figure planning', 'visual encoding guidance', 'style and caption planning']
+  }),
+  skillCatalogItem({
+    skillId: 'matplotlib',
+    label: 'K-Dense Matplotlib',
+    sourceKind: 'kdense',
+    source: 'K-Dense-AI/scientific-agent-skills',
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix', 'multi_panel_figure'],
+    roles: ['controlled 2D rendering', 'journal export settings', 'axes and typography guidance']
+  }),
+  skillCatalogItem({
+    skillId: 'seaborn',
+    label: 'K-Dense Seaborn',
+    sourceKind: 'kdense',
+    source: 'K-Dense-AI/scientific-agent-skills',
+    appliesTo: ['statistical_comparison', 'heatmap_matrix', 'multi_panel_figure'],
+    roles: ['statistical chart design', 'distribution plots', 'matrix styling']
+  }),
+  skillCatalogItem({
+    skillId: 'plotly',
+    label: 'K-Dense Plotly',
+    sourceKind: 'kdense',
+    source: 'K-Dense-AI/scientific-agent-skills',
+    appliesTo: ['quantitative_chart', 'multi_panel_figure'],
+    roles: ['interactive exploratory views', 'hover inspection before static export']
+  }),
+  skillCatalogItem({
+    skillId: 'scientific-schematics',
+    label: 'K-Dense Scientific Schematics',
+    sourceKind: 'kdense',
+    source: 'K-Dense-AI/scientific-agent-skills',
+    appliesTo: ['method_flow', 'mechanism_schematic', 'model_architecture', 'pathway_network', 'summary_figure'],
+    roles: ['mechanism diagrams', 'model schematics', 'graphical abstracts']
+  }),
+  skillCatalogItem({
+    skillId: 'markdown-mermaid-writing',
+    label: 'K-Dense Mermaid Writing',
+    sourceKind: 'kdense',
+    source: 'K-Dense-AI/scientific-agent-skills',
+    appliesTo: ['method_flow', 'model_architecture', 'pathway_network'],
+    roles: ['compact diagram specification', 'node-edge drafts', 'workflow sketches']
+  }),
+  skillCatalogItem({
+    skillId: 'nature-figure',
+    label: 'Nature Figure Workflow',
+    sourceKind: 'cns',
+    source: 'Yuan1z0825/nature-skills',
+    repository: 'https://github.com/Yuan1z0825/nature-skills',
+    skillPath: 'skills/nature-figure',
+    status: 'remote-reference',
+    priority: 30,
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix', 'multi_panel_figure', 'method_flow', 'mechanism_schematic', 'model_architecture', 'pathway_network', 'image_panel', 'summary_figure'],
+    roles: ['figure conclusion definition', 'evidence hierarchy', 'archetype selection', 'journal export contract'],
+    notes: ['Closest public CNS-style figure workflow source found so far; use as read-only planning guidance.']
+  }),
+  skillCatalogItem({
+    skillId: 'nature-academic-search',
+    label: 'Nature Academic Search',
+    sourceKind: 'cns',
+    source: 'Yuan1z0825/nature-skills',
+    repository: 'https://github.com/Yuan1z0825/nature-skills',
+    skillPath: 'skills/nature-academic-search',
+    status: 'remote-reference',
+    priority: 31,
+    appliesTo: ['multi_panel_figure', 'method_flow', 'mechanism_schematic', 'model_architecture', 'pathway_network', 'image_panel', 'summary_figure'],
+    roles: ['paper discovery', 'venue-aware reference selection', 'source provenance planning']
+  }),
+  skillCatalogItem({
+    skillId: 'nature-reader',
+    label: 'Nature Reader',
+    sourceKind: 'cns',
+    source: 'Yuan1z0825/nature-skills',
+    repository: 'https://github.com/Yuan1z0825/nature-skills',
+    skillPath: 'skills/nature-reader',
+    status: 'remote-reference',
+    priority: 32,
+    appliesTo: ['multi_panel_figure', 'method_flow', 'mechanism_schematic', 'model_architecture', 'pathway_network', 'image_panel', 'summary_figure'],
+    roles: ['figure-aware paper reading', 'evidence extraction', 'caption and panel structure analysis']
+  }),
+  skillCatalogItem({
+    skillId: 'nature-data',
+    label: 'Nature Data',
+    sourceKind: 'cns',
+    source: 'Yuan1z0825/nature-skills',
+    repository: 'https://github.com/Yuan1z0825/nature-skills',
+    skillPath: 'skills/nature-data',
+    status: 'remote-reference',
+    priority: 33,
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix', 'multi_panel_figure', 'image_panel'],
+    roles: ['data availability checks', 'repository/data requirement planning', 'FAIR evidence tracking']
+  }),
+  skillCatalogItem({
+    skillId: 'nature-citation',
+    label: 'Nature Citation',
+    sourceKind: 'cns',
+    source: 'Yuan1z0825/nature-skills',
+    repository: 'https://github.com/Yuan1z0825/nature-skills',
+    skillPath: 'skills/nature-citation',
+    status: 'remote-reference',
+    priority: 34,
+    appliesTo: ['multi_panel_figure', 'summary_figure'],
+    roles: ['reference provenance', 'citation formatting', 'source traceability']
+  }),
+  skillCatalogItem({
+    skillId: 'nature-literature-pipeline',
+    label: 'Nature Literature Pipeline',
+    sourceKind: 'cns',
+    source: 'Yuan1z0825/nature-skills',
+    repository: 'https://github.com/Yuan1z0825/nature-skills',
+    skillPath: 'skills/nature-literature-pipeline',
+    status: 'remote-reference',
+    priority: 35,
+    appliesTo: ['multi_panel_figure', 'method_flow', 'mechanism_schematic', 'model_architecture', 'pathway_network', 'image_panel', 'summary_figure'],
+    roles: ['search-read-synthesize workflow', 'paper set curation', 'evidence chain planning']
+  }),
+  skillCatalogItem({
+    skillId: 'paper-figures',
+    label: 'Paper Figures Data-First Workflow',
+    sourceKind: 'domain',
+    source: 'DRZ-hang/paper-figures',
+    repository: 'https://github.com/DRZ-hang/paper-figures',
+    skillPath: 'paper-figures/SKILL.md',
+    status: 'remote-reference',
+    priority: 42,
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix', 'multi_panel_figure'],
+    roles: ['paper-level figure plan', 'raw-data-to-chart mapping', 'statistical chart selection', 'figure report handoff'],
+    notes: [
+      'Read-only workflow reference for data-first paper figures; do not execute third-party scripts.',
+      'Useful for deciding which manuscript results need charts/tables before SciForge renders controlled artifacts.'
+    ]
+  }),
+  skillCatalogItem({
+    skillId: 'scanpy',
+    label: 'Single-cell Analysis Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['quantitative_chart', 'heatmap_matrix', 'multi_panel_figure', 'image_panel'],
+    roles: ['single-cell UMAP/heatmap panels', 'cluster marker summaries', 'omics figure planning']
+  }),
+  skillCatalogItem({
+    skillId: 'pathway-enrichment',
+    label: 'Pathway Enrichment Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['pathway_network', 'mechanism_schematic', 'multi_panel_figure'],
+    roles: ['pathway diagrams', 'gene-set evidence hierarchy', 'mechanism annotation']
+  }),
+  skillCatalogItem({
+    skillId: 'biopython',
+    label: 'Biopython Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['quantitative_chart', 'method_flow', 'pathway_network', 'image_panel'],
+    roles: ['sequence-derived evidence', 'bioinformatics workflow context', 'biological labels']
+  }),
+  skillCatalogItem({
+    skillId: 'rdkit',
+    label: 'RDKit Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['mechanism_schematic', 'image_panel', 'summary_figure'],
+    roles: ['chemical structure panels', 'compound evidence labels', 'SAR visual planning']
+  }),
+  skillCatalogItem({
+    skillId: 'pymatgen',
+    label: 'Pymatgen Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['quantitative_chart', 'heatmap_matrix', 'mechanism_schematic', 'image_panel'],
+    roles: ['materials structure-property figures', 'phase/descriptor plots', 'crystal structure context']
+  }),
+  skillCatalogItem({
+    skillId: 'networkx',
+    label: 'NetworkX Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['pathway_network', 'model_architecture', 'method_flow'],
+    roles: ['graph topology planning', 'node-edge validation', 'network layout choices']
+  }),
+  skillCatalogItem({
+    skillId: 'shap',
+    label: 'SHAP Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'multi_panel_figure'],
+    roles: ['model explanation figures', 'feature importance panels', 'AI/ML evidence summaries']
+  }),
+  skillCatalogItem({
+    skillId: 'geopandas',
+    label: 'GeoPandas Skill',
+    sourceKind: 'domain',
+    source: 'local scientific skills',
+    appliesTo: ['quantitative_chart', 'multi_panel_figure', 'summary_figure'],
+    roles: ['map-linked analysis figures', 'spatial data preparation', 'geographic overlays']
+  }),
+  skillCatalogItem({
+    skillId: 'infographics',
+    label: 'Infographics Skill',
+    sourceKind: 'general',
+    source: 'local scientific skills',
+    appliesTo: ['summary_figure', 'method_flow'],
+    roles: ['summary figure framing', 'visual hierarchy', 'narrative layout']
+  }),
+  skillCatalogItem({
+    skillId: 'claude-code-skills',
+    label: 'Claude Code Skills Standard',
+    sourceKind: 'compat',
+    source: 'Anthropic Claude Code documentation',
+    repository: 'https://code.claude.com/docs/en/skills',
+    status: 'compatible-standard',
+    priority: 90,
+    appliesTo: ['summary_figure'],
+    roles: ['SKILL.md loading semantics', 'supporting file convention', 'read-only compatibility boundary'],
+    notes: ['Compatibility reference only; not treated as a CNS/domain plotting skill.']
+  }),
+  skillCatalogItem({
+    skillId: 'openai-codex-skills',
+    label: 'OpenAI/Codex Skills Compatibility',
+    sourceKind: 'compat',
+    source: 'OpenAI/Codex local skill format',
+    status: 'compatible-standard',
+    priority: 91,
+    appliesTo: ['summary_figure'],
+    roles: ['local SKILL.md parsing compatibility', 'safe read-only indexing boundary'],
+    notes: ['Compatibility reference only; not treated as a domain knowledge source.']
+  })
+]
+
+type SkillCatalogItemInput =
+  & Omit<ScientificExternalSkillCatalogItem, 'readOnly' | 'executionPolicy' | 'notes' | 'status' | 'priority'>
+  & Partial<Pick<ScientificExternalSkillCatalogItem, 'notes' | 'status' | 'priority'>>
+
+function skillCatalogItem(input: SkillCatalogItemInput): ScientificExternalSkillCatalogItem {
+  const defaultPriorityBySource: Record<ScientificExternalSkillSourceKind, number> = {
+    kdense: 10,
+    cns: 30,
+    domain: 50,
+    general: 70,
+    compat: 90
+  }
+  const defaultStatus: ScientificExternalSkillCatalogItem['status'] =
+    input.sourceKind === 'cns' ? 'remote-reference'
+      : input.sourceKind === 'compat' ? 'compatible-standard'
+        : 'built-in-profile'
+  return {
+    ...input,
+    status: input.status ?? defaultStatus,
+    priority: input.priority ?? defaultPriorityBySource[input.sourceKind],
+    readOnly: true,
+    executionPolicy: 'read-only-planning',
+    notes: input.notes ?? ['Used as planning guidance only; third-party scripts and allowed-tools are not executed.']
+  }
+}
+
+export function buildScientificExternalSkillCatalog(
+  options: ScientificExternalSkillCatalogOptions = {}
+): ScientificExternalSkillCatalogItem[] {
+  const installedSkillIds = new Set(options.installedSkillIds ?? [])
+  const requestedNeeds = new Set(options.figureNeeds ?? [])
+  const domain = options.domain?.trim().toLowerCase()
+  const domainSkillHints = domain ? domainSkillIdsForCatalog(domain) : new Set<string>()
+  const shouldFilterByNeed = requestedNeeds.size > 0
+
+  return EXTERNAL_SKILL_CATALOG_BASE
+    .map((item) => ({
+      ...item,
+      status: installedSkillIds.has(item.skillId) ? 'installed' as const : item.status
+    }))
+    .filter((item) => {
+      if (item.sourceKind === 'compat') return true
+      const matchesNeed = !shouldFilterByNeed || item.appliesTo.some((need) => requestedNeeds.has(need))
+      const matchesDomain = !domain || item.sourceKind !== 'domain' || domainSkillHints.size === 0 || domainSkillHints.has(item.skillId)
+      return matchesNeed && matchesDomain
+    })
+    .sort((a, b) => a.priority - b.priority || a.skillId.localeCompare(b.skillId))
+}
+
+function domainSkillIdsForCatalog(domain: string): Set<string> {
+  if (/life|bio|cell|gene|protein|omics|生命|生物|基因|蛋白|单细胞/i.test(domain)) {
+    return new Set(['scanpy', 'pathway-enrichment', 'biopython'])
+  }
+  if (/chem|drug|molecule|compound|reaction|化学|药物|分子|反应/i.test(domain)) {
+    return new Set(['rdkit', 'networkx'])
+  }
+  if (/material|battery|catalyst|crystal|材料|电池|催化|晶体/i.test(domain)) {
+    return new Set(['pymatgen'])
+  }
+  if (/ai|ml|model|learning|neural|transformer|rl|reinforcement|机器学习|模型|神经|强化学习/i.test(domain)) {
+    return new Set(['networkx', 'shap'])
+  }
+  if (/geo|climate|map|earth|spatial|地理|气候|地图|空间/i.test(domain)) {
+    return new Set(['geopandas'])
+  }
+  return new Set()
 }
 
 export function scientificSkillsInstallHint(): string {

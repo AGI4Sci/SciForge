@@ -11,11 +11,20 @@ import type {
 } from './types'
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
+  SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES,
+  type ScientificExternalSkillCatalogItem,
+  type ScientificExternalSkillSourceKind,
+  type ScientificFigureNeed,
+  type ScientificFigureNeedClassification,
+  type ScientificPaperFigureCompositionPlan,
+  type ScientificPaperFigureProductionPlan,
   type ScientificPlottingAttempt,
   type ScientificPlottingAutoRepairOptions,
   type ScientificPlottingCropBox,
   type ScientificPlottingDataMappingRequest,
   type ScientificPlottingDataMappingResult,
+  type ScientificPlottingDraftHandoff,
+  type ScientificPlottingImagePolishRecommendation,
   type ScientificPlottingLabels,
   type ScientificPlottingManifest,
   type ScientificPlottingPlanRequest,
@@ -26,12 +35,16 @@ import {
   type ScientificPlottingReferenceProfile,
   type ScientificPlottingRenderRequest,
   type ScientificPlottingRenderResult,
+  type ScientificPlottingResearchBriefRequest,
+  type ScientificPlottingResearchBriefResult,
+  type ScientificPlottingResearchPaper,
   type ScientificPlottingReviewPacket,
   type ScientificPlottingReviewPacketItem,
   type ScientificPlottingReviewPacketRequest,
   type ScientificPlottingReviewPacketResult,
   type ScientificPlottingReviewRequest,
   type ScientificPlottingReviewResult,
+  type ScientificPlottingSelectedSkillProfile,
   type ScientificPlottingStatusResult,
   type ScientificPlottingStyleProfile,
   type ScientificPlottingStyleProfileMatch,
@@ -41,9 +54,15 @@ import {
   type ScientificPlottingStyleTransferManifest,
   type ScientificPlottingStyleTransferRequest,
   type ScientificPlottingStyleTransferResult,
+  type ScientificPlottingTemplate,
   type ScientificPlottingTemplateAdvice,
-  type ScientificPlottingTemplate
+  type ScientificPlottingTemplateGuide,
+  type ScientificPlottingTemplateSelection
 } from './types'
+import {
+  EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES,
+  buildScientificExternalSkillCatalog
+} from './scientific-skills-index'
 import {
   buildFigureStyleApplyPlan,
   extractFigureStyle,
@@ -125,6 +144,8 @@ const MAX_SERIES = 12
 const MAX_POINTS = 5000
 const MAX_HEATMAP_CELLS = 40_000
 const MAX_SCHEMATIC_NODES = 50
+const MAX_FLOWCHART_NODES = 12
+const MAX_FLOWCHART_LABEL_CHARS = 720
 const MAX_DISTRIBUTION_GROUPS = 24
 const MAX_DISTRIBUTION_POINTS = 6000
 const MAX_MULTI_PANELS = 6
@@ -169,6 +190,7 @@ export async function getScientificPlottingStatus(): Promise<ScientificPlottingS
       defaultProfileIds: styleProfiles.map((profile) => profile.id)
     },
     supportedTemplates: [...SCIENTIFIC_PLOTTING_TEMPLATES],
+    templateGuides: scientificPlottingTemplateGuides(),
     outputPolicy: {
       defaultRelativeDir: DEFAULT_OUTPUT_RELATIVE_DIR,
       writesOnlyInsideWorkspace: true,
@@ -297,6 +319,163 @@ export async function listScientificPlottingStyleProfiles(
   }
 }
 
+export function buildScientificFigureNeedClassification(
+  task: string,
+  options: {
+    domain?: string
+    targetVenue?: string
+    templateHint?: ScientificPlottingTemplate
+  } = {}
+): ScientificFigureNeedClassification {
+  const normalizedTask = task.trim()
+  const text = `${normalizedTask} ${options.domain ?? ''} ${options.targetVenue ?? ''}`
+  const scores = new Map<ScientificFigureNeed, number>()
+  const add = (need: ScientificFigureNeed, pattern: RegExp, score: number): void => {
+    if (!pattern.test(text)) return
+    scores.set(need, Math.max(scores.get(need) ?? 0, score))
+  }
+
+  add('multi_panel_figure', /multi[-\s]?panel|多\s*panel|subplot|facet|panel figure|figure panel|supplementary|组合图|复合图|拼接图|拼图|多面板|多子图/i, 0.86)
+  add('statistical_comparison', /violin|box\s*plot|boxplot|error\s*bar|confidence interval|p[-\s]?value|anova|t[-\s]?test|significance|significant|distribution comparison|distributions?\s+(?:for|across|by|between)|response distributions?|统计|显著性|箱线图|小提琴图|误差棒/i, 0.84)
+  add('heatmap_matrix', /heatmap|matrix|correlation|attention|alignment|expression|omics|cluster|热图|矩阵|相关性|表达矩阵|聚类/i, 0.83)
+  add('method_flow', /flow\s*chart|flowchart|workflow|pipeline|protocol|process flow|method|prisma|consort|流程图|流程|工作流|管线|方法|实验流程/i, 0.82)
+  add('mechanism_schematic', /mechanism|signaling|cascade|interaction|regulation|pathogenesis|schematic|机制|信号通路|级联|调控|示意图/i, 0.84)
+  add('model_architecture', /architecture|model structure|neural network|transformer|cnn|gnn|reinforcement learning|rl|attention model|模型结构|网络结构|神经网络|强化学习/i, 0.84)
+  add('pathway_network', /pathway|network|graph|gene set|ontology|reactome|kegg|路径|通路|网络|图结构/i, 0.8)
+  add('image_panel', /microscopy|western blot|gel|histology|image panel|fluorescence|ct|mri|显微|成像|免疫印迹|凝胶|病理|图像面板/i, 0.82)
+  add('summary_figure', /summary figure|graphical abstract|overview|teaser|toc|infographic|cover|poster|宣传图|信息图|封面|总览图|图形摘要/i, 0.86)
+  add('statistical_comparison', /histogram|density|kde|residual distribution|value distribution|distribution plot|分布图|直方图|密度图/i, 0.86)
+  add('quantitative_chart', /line|curve|scatter|bar|chart|plot|time series|dose|benchmark|柱状|折线|散点|曲线|图表|时间序列/i, 0.72)
+
+  const templateNeed = needForTemplate(options.templateHint)
+  if (templateNeed) scores.set(templateNeed, Math.max(scores.get(templateNeed) ?? 0, 0.68))
+
+  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1])
+  const primaryNeed = ranked[0]?.[0] ?? 'quantitative_chart'
+  const secondaryNeeds = ranked
+    .slice(1, 4)
+    .map(([need]) => need)
+    .filter((need) => need !== primaryNeed)
+  const confidence = Number(Math.min(0.96, ranked[0]?.[1] ?? 0.52).toFixed(2))
+  const domain = inferRequestedScientificFigureDomain(options.domain) ?? inferScientificFigureDomain(text)
+  const hasExplicitNodeEdges = /\bnodes?\b|\bedges?\b|from\s*[:=]|to\s*[:=]|json|节点|边|连接|步骤\s*[:：]|^\s*\d+[.)、]/im.test(normalizedTask)
+  const looksLikeLongProse = normalizedTask.length > 520 || /according to the following|based on the following|one goal in|in this paper|we argue|we discuss|paper excerpt|根据以下内容|根据.*论文|文献内容|论文段落|这篇文章/i.test(normalizedTask)
+  const needsResearchBrief = shouldRecommendResearchBrief(normalizedTask, primaryNeed, options.targetVenue)
+  const route = routeForFigureNeed(primaryNeed, {
+    hasExplicitNodeEdges,
+    looksLikeLongProse,
+    needsResearchBrief
+  })
+  const recommendedNextTool = needsResearchBrief
+    ? 'scientific_plotting_research_brief'
+    : route === 'controlled_plotting_renderer' || route === 'panel_layout_then_renderer'
+      ? 'scientific_plotting_map_data'
+      : 'image_generation_plan'
+  const avoidTemplates: ScientificPlottingTemplate[] = route === 'diagram_spec_or_image_generation' && !hasExplicitNodeEdges
+    ? ['flowchart']
+    : []
+  const warnings = [
+    ...(looksLikeLongProse && !hasExplicitNodeEdges
+      ? ['Long prose should be converted into a figure brief or image/diagram prompt before rendering; avoid forcing it into compact flowchart nodes.']
+      : []),
+    ...(needsResearchBrief
+      ? ['Paper-figure tasks should confirm figure conclusion, evidence logic, archetype, and export contract before rendering.']
+      : [])
+  ]
+
+  return {
+    primaryNeed,
+    secondaryNeeds,
+    confidence,
+    route,
+    routeReason: routeReasonForFigureNeed(primaryNeed, route, { hasExplicitNodeEdges, looksLikeLongProse, needsResearchBrief }),
+    domain,
+    recommendedNextTool,
+    requiredInputs: requiredInputsForFigureNeed(primaryNeed, route),
+    avoidTemplates,
+    warnings
+  }
+}
+
+export async function createScientificPlottingResearchBrief(
+  request: ScientificPlottingResearchBriefRequest
+): Promise<ScientificPlottingResearchBriefResult> {
+  const task = request.task.trim()
+  if (!task) return { ok: false, message: 'Task is required.', warnings: [] }
+  const figureNeed = buildScientificFigureNeedClassification(task, {
+    domain: request.domain,
+    targetVenue: request.targetVenue
+  })
+  const maxPapers = Math.max(0, Math.min(8, Math.floor(request.maxPapers ?? 4)))
+  const candidatePapers = (request.candidatePapers ?? [])
+    .filter((paper) => paper.title?.trim())
+    .slice(0, maxPapers)
+    .map((paper) => ({
+      ...paper,
+      title: paper.title.trim(),
+      ...(paper.figureHints ? { figureHints: paper.figureHints.slice(0, 8) } : {})
+    }))
+  const skillCatalog = buildScientificExternalSkillCatalog({
+    figureNeeds: [figureNeed.primaryNeed, ...figureNeed.secondaryNeeds],
+    domain: request.domain ?? figureNeed.domain
+  })
+  const recommendedSkillLayers = buildRecommendedSkillLayers(skillCatalog, figureNeed)
+  const selectedSkillProfile = buildSelectedSkillProfile({
+    task,
+    figureNeed,
+    request,
+    candidatePapers,
+    skillCatalog,
+    recommendedSkillLayers
+  })
+  const literatureStrategy = buildResearchBriefLiteratureStrategy(task, figureNeed, request)
+  const figureContract = buildResearchBriefFigureContract(task, figureNeed, request)
+  const paperFigureProductionPlan = buildPaperFigureProductionPlan(task, figureNeed, request)
+  const promptSpecDraft = buildResearchBriefPromptSpec(task, figureNeed, candidatePapers, request)
+  const availableSkillIds = uniqueStrings(skillCatalog
+    .filter((item) => item.sourceKind !== 'compat')
+    .slice(0, 10)
+    .map((item) => item.skillId))
+  const confirmationCard = {
+    title: `Confirm ${labelForFigureNeed(figureNeed.primaryNeed)} before rendering`,
+    proposedRoute: figureNeed.route,
+    analysisAngle: inferAnalysisAngle(task, request),
+    questions: confirmationQuestionsForFigureNeed(figureNeed),
+    requiredInputs: figureNeed.requiredInputs,
+    availableSkillIds
+  }
+  return {
+    ok: true,
+    task,
+    domain: figureNeed.domain,
+    ...(request.targetVenue?.trim() ? { targetVenue: request.targetVenue.trim() } : {}),
+    figureNeed,
+    selectedSkillProfile,
+    skillCatalog,
+    recommendedSkillLayers,
+    literatureStrategy,
+    candidatePapers,
+    figureContract,
+    ...(paperFigureProductionPlan ? { paperFigureProductionPlan } : {}),
+    promptSpecDraft,
+    confirmationCard,
+    guardrails: [
+      'External skills are read-only planning sources; do not execute third-party scripts or allowed-tools.',
+      'Use K-Dense/SciForge controlled plotting as the base layer, then add CNS/domain guidance where relevant.',
+      'Do not copy copyrighted figure composition, labels, or data from reference papers; use them for style and archetype guidance only.',
+      'Confirm the figure conclusion, analysis angle, and data availability before rendering.',
+      'After rendering, create an artifact card and use Canvas annotations/review packets for revision.'
+    ],
+    warnings: [
+      ...figureNeed.warnings,
+      ...(candidatePapers.length === 0
+        ? ['No candidate papers were supplied; use the suggested literature queries before treating the brief as evidence-grounded.']
+        : []),
+      `Excluded from this workflow: ${EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES.join(', ')}.`
+    ]
+  }
+}
+
 export async function planScientificPlotting(
   request: ScientificPlottingPlanRequest
 ): Promise<ScientificPlottingPlanResult> {
@@ -329,9 +508,32 @@ export async function planScientificPlotting(
     ? shapeStyleProfileForResult(styleProfile, false)
     : styleProfileMatches?.[0]?.profile
   const taskTemplate = inferTemplateFromTask(task)
-  const template = request.templateHint ?? referenceProfile?.recommendedTemplate ?? taskTemplate
+  const initialTemplate = request.templateHint ?? referenceProfile?.recommendedTemplate ?? taskTemplate
+  const figureNeed = buildScientificFigureNeedClassification(task, {
+    domain: request.domain,
+    targetVenue: request.targetVenue,
+    templateHint: initialTemplate
+  })
+  const template = request.templateHint ?? templateForFigureNeed(figureNeed.primaryNeed, referenceProfile?.recommendedTemplate ?? taskTemplate)
   const isStyleTransfer = /style|paper|figure|nature|science|cell|neurips|iclr|论文|文献|风格|顶刊|顶会/i.test(task)
   const templateAdvice = buildTemplateAdvice(template, referenceProfile, undefined)
+  const toolRoutingRecommendation = buildScientificPlottingToolRoutingRecommendation(task, template)
+  const researchBriefRecommendation = buildResearchBriefRecommendation(task, figureNeed, request.targetVenue)
+  const imagePolishRecommendation = buildImagePolishRecommendation(task, figureNeed, {
+    targetVenue: request.targetVenue,
+    researchBriefRecommended: researchBriefRecommendation?.recommended === true,
+    template
+  })
+  const planSkillCatalog = buildScientificExternalSkillCatalog({
+    figureNeeds: [figureNeed.primaryNeed, ...figureNeed.secondaryNeeds],
+    domain: request.domain ?? figureNeed.domain
+  })
+  const recommendedSkillIds = recommendedSkillIdsForPlan(planSkillCatalog, figureNeed, {
+    includeCns: researchBriefRecommendation?.recommended === true
+  })
+  const controlledTool = researchBriefRecommendation?.recommended
+    ? 'scientific_plotting_research_brief'
+    : toolRoutingRecommendation?.preferredTool ?? 'scientific_plotting_render'
   return {
     ok: true,
     recommendedTemplate: template,
@@ -345,26 +547,50 @@ export async function planScientificPlotting(
       styleProfile: recommendedProfile
     } : {}),
     ...(styleProfileMatches ? { styleProfileMatches } : {}),
+    templateSelection: buildTemplateSelection(template, request, referenceProfile),
+    templateGuides: scientificPlottingTemplateGuides(),
+    figureNeed,
+    ...(toolRoutingRecommendation ? { toolRoutingRecommendation } : {}),
+    ...(researchBriefRecommendation ? { researchBriefRecommendation } : {}),
+    ...(imagePolishRecommendation ? { imagePolishRecommendation } : {}),
+    externalSkillCatalog: {
+      recommendedSkillIds,
+      primarySources: uniqueStrings(planSkillCatalog
+        .filter((item) => recommendedSkillIds.includes(item.skillId))
+        .map((item) => item.sourceKind)) as ScientificExternalSkillSourceKind[],
+      excludedSources: [...EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES]
+    },
     templateAlternatives: buildTemplateAlternatives(template, taskTemplate, referenceProfile),
     requiredInputs: requiredInputsForTemplate(template),
     styleInputs: isStyleTransfer
       ? ['Optional styleProfileId, FigureStyleSpec, or reference image path for post-render review.']
       : ['Optional styleProfileId or FigureStyleSpec for publication styling.'],
-    controlledTool: 'scientific_plotting_render',
-    planningWarnings: [...warnings, ...(templateAdvice?.messages ?? [])],
+    controlledTool,
+    planningWarnings: [
+      ...warnings,
+      ...figureNeed.warnings,
+      ...(templateAdvice?.messages ?? []),
+      ...(toolRoutingRecommendation ? [toolRoutingRecommendation.reason] : []),
+      ...(researchBriefRecommendation ? [researchBriefRecommendation.reason] : []),
+      ...(imagePolishRecommendation ? [imagePolishRecommendation.reason] : [])
+    ],
     guardrails: [
       'Do not emit executable shell or Python commands.',
       'Use K-Dense skills only as read-only plotting guidance.',
+      'Use CNS/domain skills only as read-only planning guidance; do not execute third-party scripts.',
+      'For paper figures, confirm figure conclusion, evidence logic, archetype, and export contract before rendering.',
+      'Use the image model only as a final visual polish layer for insets, callouts, panel stitching, or explanatory annotations; prefer gpt-image-2 and fall back to the configured Model Router image model if needed.',
       'Render with SciForge controlled templates and review the output before presenting it.',
       'Do not alter data values during style repair.'
     ],
     skillHints: {
-      recommendedSkills: [
+      recommendedSkills: uniqueStrings([
         'scientific-visualization',
         'matplotlib',
-        template === 'schematic-grid' ? 'scientific-schematics' : 'seaborn'
-      ],
-      recommendedLibraries: template === 'schematic-grid'
+        template === 'schematic-grid' || template === 'flowchart' ? 'scientific-schematics' : 'seaborn',
+        ...recommendedSkillIds.slice(0, 5)
+      ]),
+      recommendedLibraries: template === 'schematic-grid' || template === 'flowchart'
         ? ['Matplotlib', 'Scientific schematics']
         : template === 'multi-panel'
           ? ['Matplotlib', 'Seaborn', 'GridSpec']
@@ -1039,6 +1265,20 @@ export async function renderScientificPlot(
     validateRenderRequestShape(request)
     const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
     validateTemplateData(request.template, request.data)
+    const draftHandoff = buildDiagramDraftHandoffForRender(request)
+    if (draftHandoff) {
+      return {
+        ok: false,
+        status: 'diagram_requires_image_generation',
+        message: 'This diagram request should not be finalized by scientific_plotting_render. Treat the structured output as a draft and use image_generation_plan/image_generation_render for the polished figure.',
+        draftHandoff,
+        warnings: [
+          ...warnings,
+          'scientific_plotting_render is blocked for semantic diagrams so Matplotlib draft boxes are not presented as final artwork.',
+          'Use the draftHandoff as the structure/spec for image_generation.'
+        ]
+      }
+    }
     if (request.styleProfileId?.trim() && (request.styleSpec || request.styleSpecPath?.trim())) {
       warnings.push('styleProfileId was ignored because explicit styleSpec/styleSpecPath was provided.')
     }
@@ -1306,11 +1546,15 @@ function parseRendererDiagnostics(stdout: string): { rendererDiagnostics?: Rende
     const typography = isRecord(diagnostics.typography)
       ? parseRendererTypographyDiagnostics(diagnostics.typography)
       : undefined
+    const fontFallback = isRecord(diagnostics.fontFallback)
+      ? { cjk: typeof diagnostics.fontFallback.cjk === 'string' ? diagnostics.fontFallback.cjk : null }
+      : undefined
     const layoutQuality = isRecord(diagnostics.layoutQuality)
       ? parseRendererLayoutQualityDiagnostics(diagnostics.layoutQuality)
       : undefined
     return {
       rendererDiagnostics: {
+        ...(fontFallback ? { fontFallback } : {}),
         ...(legendPlacement ? { legendPlacement } : {}),
         ...(barOrientation ? { barOrientation } : {}),
         ...(barColorMode ? { barColorMode } : {}),
@@ -2302,6 +2546,960 @@ function referenceTraitsFromStyle(
   }
 }
 
+function scientificPlottingTemplateGuides(): ScientificPlottingTemplateGuide[] {
+  return SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES.map((guide) => ({
+    template: guide.template,
+    useWhen: [...guide.useWhen],
+    avoidWhen: [...guide.avoidWhen],
+    expectedData: [...guide.expectedData],
+    modelSelectionHint: guide.modelSelectionHint
+  }))
+}
+
+function templateGuideFor(template: ScientificPlottingTemplate): ScientificPlottingTemplateGuide {
+  return scientificPlottingTemplateGuides().find((guide) => guide.template === template) ?? scientificPlottingTemplateGuides()[0]
+}
+
+function needForTemplate(template: ScientificPlottingTemplate | undefined): ScientificFigureNeed | undefined {
+  if (!template) return undefined
+  if (template === 'heatmap' || template === 'attention-map') return 'heatmap_matrix'
+  if (template === 'box-violin' || template === 'histogram-density' || template === 'errorbar-bar') return 'statistical_comparison'
+  if (template === 'multi-panel') return 'multi_panel_figure'
+  if (template === 'flowchart') return 'method_flow'
+  if (template === 'schematic-grid') return 'mechanism_schematic'
+  return 'quantitative_chart'
+}
+
+function templateForFigureNeed(
+  need: ScientificFigureNeed,
+  fallback: ScientificPlottingTemplate
+): ScientificPlottingTemplate {
+  if (need === 'multi_panel_figure' || need === 'image_panel' || need === 'summary_figure') return 'multi-panel'
+  if (need === 'method_flow' || need === 'model_architecture') return 'flowchart'
+  if (need === 'mechanism_schematic') return 'schematic-grid'
+  if (need === 'heatmap_matrix') {
+    return fallback === 'attention-map' ? 'attention-map' : 'heatmap'
+  }
+  if (need === 'statistical_comparison') {
+    return ['box-violin', 'histogram-density', 'errorbar-bar', 'bar', 'multi-panel'].includes(fallback)
+      ? fallback
+      : 'box-violin'
+  }
+  return fallback
+}
+
+function inferRequestedScientificFigureDomain(rawDomain: string | undefined): ScientificFigureNeedClassification['domain'] | undefined {
+  const domain = rawDomain?.trim()
+  if (!domain) return undefined
+  if (/life|bio|cell|gene|protein|omics|生命|生物|基因|蛋白|细胞|通路/i.test(domain)) return 'life-science'
+  if (/chem|drug|molecule|compound|reaction|化学|药物|分子|化合物|反应/i.test(domain)) return 'chemistry'
+  if (/material|crystal|battery|catalyst|alloy|polymer|材料|晶体|电池|催化|合金/i.test(domain)) return 'materials'
+  if (/ai|ml|machine learning|deep learning|model|neural|transformer|rl|reinforcement|机器学习|模型|神经|强化学习/i.test(domain)) return 'ai-ml'
+  if (/geo|climate|map|earth|spatial|地理|气候|地图|空间/i.test(domain)) return 'geo-climate'
+  if (/general|通用/i.test(domain)) return 'general'
+  return undefined
+}
+
+function inferScientificFigureDomain(text: string): ScientificFigureNeedClassification['domain'] {
+  if (/single[-\s]?cell|omics|gene|protein|pathway|cell|biology|biomedical|rna|dna|生命|生物|基因|蛋白|细胞|通路/i.test(text)) {
+    return 'life-science'
+  }
+  if (/chem|compound|molecule|reaction|drug|ligand|smiles|化学|药物|分子|化合物|反应/i.test(text)) {
+    return 'chemistry'
+  }
+  if (/material|crystal|battery|catalyst|alloy|polymer|perovskite|材料|晶体|电池|催化|合金/i.test(text)) {
+    return 'materials'
+  }
+  if (/machine learning|deep learning|neural|transformer|reinforcement|rl|benchmark|模型|神经网络|机器学习|深度学习|强化学习/i.test(text)) {
+    return 'ai-ml'
+  }
+  if (/climate|geo|spatial|earth|map|remote sensing|气候|地理|空间|地图|遥感/i.test(text)) {
+    return 'geo-climate'
+  }
+  return 'general'
+}
+
+function shouldRecommendResearchBrief(
+  task: string,
+  primaryNeed: ScientificFigureNeed,
+  targetVenue?: string
+): boolean {
+  const text = `${task} ${targetVenue ?? ''}`
+  const mentionsPaperWorkflow = /paper|figure|journal|cns|neurips|iclr|icml|cvpr|论文|文献|顶刊|顶会|期刊|参考图/i.test(text) ||
+    hasCnsVenueSignal(text)
+  const hasVenueOrCnsSignal = /cns|journal|neurips|iclr|icml|cvpr|顶刊|顶会|期刊|参考图|文献风格|论文图/i.test(text) ||
+    hasCnsVenueSignal(text)
+  const needsPaperDesign = primaryNeed === 'mechanism_schematic' ||
+    primaryNeed === 'method_flow' ||
+    primaryNeed === 'model_architecture' ||
+    primaryNeed === 'pathway_network' ||
+    primaryNeed === 'image_panel' ||
+    primaryNeed === 'summary_figure'
+  const looksLikeScientificDrawing = /figure|plot|diagram|flowchart|workflow|architecture|model|mechanism|paper|scientific|research|实验|科研|论文|文献|图|流程|机制|模型|结构|架构/i.test(task)
+  if (hasVenueOrCnsSignal && (mentionsPaperWorkflow || needsPaperDesign)) return true
+  if (needsPaperDesign && looksLikeScientificDrawing) return true
+  return needsPaperDesign && /paper|figure|论文|文献|图|机制|summary|graphical abstract|panel/i.test(task)
+}
+
+function hasCnsVenueSignal(text: string): boolean {
+  return /\b(?:Nature|Science)\b/i.test(text) ||
+    /\bCell\s+(?:journal|paper|figure|style|article)\b/i.test(text) ||
+    /(?:Nature|Science|Cell)\s*(?:期刊|论文|文章|风格|图|figure|journal|paper|style)/i.test(text)
+}
+
+function routeForFigureNeed(
+  primaryNeed: ScientificFigureNeed,
+  options: {
+    hasExplicitNodeEdges: boolean
+    looksLikeLongProse: boolean
+    needsResearchBrief: boolean
+  }
+): ScientificFigureNeedClassification['route'] {
+  if (primaryNeed === 'quantitative_chart' || primaryNeed === 'statistical_comparison' || primaryNeed === 'heatmap_matrix') {
+    return 'controlled_plotting_renderer'
+  }
+  if (primaryNeed === 'multi_panel_figure' || primaryNeed === 'image_panel') return 'panel_layout_then_renderer'
+  return 'diagram_spec_or_image_generation'
+}
+
+function routeReasonForFigureNeed(
+  primaryNeed: ScientificFigureNeed,
+  route: ScientificFigureNeedClassification['route'],
+  options: {
+    hasExplicitNodeEdges: boolean
+    looksLikeLongProse: boolean
+    needsResearchBrief: boolean
+  }
+): string {
+  if (route === 'controlled_plotting_renderer') {
+    return 'The request is primarily structured numeric, matrix, or statistical plotting that fits SciForge controlled templates.'
+  }
+  if (route === 'panel_layout_then_renderer') {
+    return 'The request is a paper-style panel figure, so SciForge should plan the panel contract before rendering individual panels.'
+  }
+  if (options.looksLikeLongProse && !options.hasExplicitNodeEdges) {
+    return 'The request contains long prose; first convert it into a figure brief or diagram prompt instead of forcing dense text into boxes.'
+  }
+  if (options.needsResearchBrief) {
+    return 'The request needs paper-figure reasoning: conclusion, evidence hierarchy, archetype, and export contract should be confirmed first.'
+  }
+  return 'The request is a schematic/diagram-style figure where visual grouping and composition matter more than numeric axes.'
+}
+
+function requiredInputsForFigureNeed(
+  primaryNeed: ScientificFigureNeed,
+  route: ScientificFigureNeedClassification['route']
+): string[] {
+  if (primaryNeed === 'quantitative_chart') return ['structured data or tabular rows', 'x/y labels', 'main comparison or trend']
+  if (primaryNeed === 'statistical_comparison') return ['raw values or summary plus uncertainty', 'groups/conditions', 'statistical claim to show']
+  if (primaryNeed === 'heatmap_matrix') return ['numeric matrix', 'row/column labels', 'normalization or color scale meaning']
+  if (primaryNeed === 'multi_panel_figure') return ['panel list', 'per-panel evidence/data', 'shared conclusion and panel order']
+  if (primaryNeed === 'image_panel') return ['image paths or panel descriptions', 'annotation targets', 'scale/crop requirements']
+  if (route === 'diagram_spec_or_image_generation') {
+    return ['figure conclusion', 'key entities/nodes', 'causal or temporal relationships', 'preferred paper/venue style']
+  }
+  return ['compact nodes[]', 'optional edges[]', 'labels for each step']
+}
+
+function buildResearchBriefRecommendation(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  targetVenue?: string
+): NonNullable<Extract<ScientificPlottingPlanResult, { ok: true }>['researchBriefRecommendation']> | undefined {
+  const recommended = shouldRecommendResearchBrief(task, figureNeed.primaryNeed, targetVenue)
+  if (!recommended) return undefined
+  return {
+    recommended: true,
+    reason: 'This is a paper-figure task; build a CNS/domain-aware research brief before rendering.',
+    nextControlledTool: 'scientific_plotting_research_brief',
+    useWhen: [
+      'The user asks for a figure based on a paper, top journal/conference style, or literature evidence.',
+      'The requested output is a mechanism, model architecture, pathway, image panel, summary figure, or multi-panel figure.',
+      'The analysis angle or data requirements are not yet explicit enough for rendering.'
+    ],
+    requiresUserConfirmation: true
+  }
+}
+
+function buildImagePolishRecommendation(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  options: {
+    targetVenue?: string
+    researchBriefRecommended?: boolean
+    template?: ScientificPlottingTemplate
+  } = {}
+): ScientificPlottingImagePolishRecommendation | undefined {
+  const text = `${task} ${options.targetVenue ?? ''}`
+  const wantsPaperQuality = options.researchBriefRecommended === true
+    || hasCnsVenueSignal(text)
+    || /cns|paper|journal|publication|nature|science|cell|论文|文献|顶刊|期刊|顶会/i.test(text)
+  const wantsVisualEdit = /放大|局部|zoom|inset|callout|标注|annotation|说明|highlight|emphasis|美化|polish|refine|排版|拼接|multi[-\s]?panel|多\s*panel|多面板|子图|panel|summary figure|graphical abstract|图形摘要|解释|介绍/i.test(text)
+  const needsCompositionLayer = figureNeed.route !== 'controlled_plotting_renderer'
+    || figureNeed.primaryNeed === 'multi_panel_figure'
+    || figureNeed.primaryNeed === 'image_panel'
+    || figureNeed.primaryNeed === 'summary_figure'
+    || options.template === 'multi-panel'
+  if (!wantsPaperQuality && !wantsVisualEdit && !needsCompositionLayer) return undefined
+
+  return {
+    recommended: true,
+    reason: wantsVisualEdit
+      ? 'The figure needs visual emphasis or explanatory edits after controlled data rendering.'
+      : wantsPaperQuality
+        ? 'CNS/paper-level figures often need a final image-composition layer after exact data/chart rendering.'
+        : 'This figure type needs visual composition beyond a single controlled data plot.',
+    model: 'gpt-image-2',
+    fallbackModel: 'configured_model_router_image_model',
+    nextControlledTool: 'image_generation_plan',
+    followUpTools: ['image_generation_plan', 'image_generation_render'],
+    useWhen: [
+      'After scientific_plotting_render has produced exact data/chart panels.',
+      'When the figure needs zoomed points, inset views, callouts, explanatory labels, panel stitching, graphical abstracts, or CNS-style visual polish.',
+      'After Canvas review annotations request a visual edit that does not change data semantics.'
+    ],
+    preserve: [
+      'Do not change numeric values, axes, labels, legends, sample sizes, or statistical claims.',
+      'Use the controlled plot PNG/manifest as the visual and data source of truth.',
+      'Only modify composition, emphasis, callouts, annotations, local magnification, or final panel arrangement.'
+    ],
+    guardrails: [
+      'Use gpt-image-2 only as a final visual polishing layer, not as the source of data truth.',
+      'For pure data correction, rerun scientific_plotting_render instead of image_generation.',
+      'Keep original and polished artifacts as before/after versions on Canvas.'
+    ]
+  }
+}
+
+function recommendedSkillIdsForPlan(
+  catalog: ScientificExternalSkillCatalogItem[],
+  figureNeed: ScientificFigureNeedClassification,
+  options: {
+    includeCns: boolean
+  } = { includeCns: false }
+): string[] {
+  const preferredSourceOrder: ScientificExternalSkillSourceKind[] = options.includeCns
+    ? ['kdense', 'cns', 'domain', 'general']
+    : ['kdense', 'domain', 'general']
+  const selected: string[] = []
+  const sourceQuota: Partial<Record<ScientificExternalSkillSourceKind, number>> = options.includeCns
+    ? { kdense: 4, cns: 4, domain: 3, general: 2 }
+    : { kdense: 6, domain: 3, general: 2 }
+  const appliesToNeed = (item: ScientificExternalSkillCatalogItem): boolean =>
+    item.appliesTo.includes(figureNeed.primaryNeed) || item.appliesTo.some((need) => figureNeed.secondaryNeeds.includes(need))
+  const pushFromSource = (sourceKind: ScientificExternalSkillSourceKind, limit: number): void => {
+    let added = 0
+    for (const item of catalog) {
+      if (item.sourceKind !== sourceKind) continue
+      if (!appliesToNeed(item)) continue
+      if (selected.includes(item.skillId)) continue
+      selected.push(item.skillId)
+      added += 1
+      if (selected.length >= 10 || added >= limit) return
+    }
+  }
+  for (const sourceKind of preferredSourceOrder) {
+    pushFromSource(sourceKind, sourceQuota[sourceKind] ?? 2)
+    if (selected.length >= 10) return uniqueStrings(selected)
+  }
+  for (const sourceKind of preferredSourceOrder) {
+    pushFromSource(sourceKind, 10)
+    if (selected.length >= 10) return uniqueStrings(selected)
+  }
+  return uniqueStrings(selected)
+}
+
+function buildRecommendedSkillLayers(
+  catalog: ScientificExternalSkillCatalogItem[],
+  figureNeed: ScientificFigureNeedClassification
+): Array<{
+  sourceKind: ScientificExternalSkillSourceKind
+  skillIds: string[]
+  reason: string
+}> {
+  const layers: Array<{
+    sourceKind: ScientificExternalSkillSourceKind
+    skillIds: string[]
+    reason: string
+  }> = []
+  const layerDefinitions: Array<[ScientificExternalSkillSourceKind, string]> = [
+    ['kdense', 'Base plotting and style guidance remains the first layer.'],
+    ['cns', 'CNS/paper workflow skills add literature, figure-conclusion, and evidence-chain planning.'],
+    ['domain', `Domain skills add ${figureNeed.domain} semantics, labels, and evidence constraints.`],
+    ['general', 'General diagram/infographic skills help shape non-data and summary figures.'],
+    ['compat', 'Compatibility standards inform SKILL.md parsing and safe read-only boundaries only.']
+  ]
+  for (const [sourceKind, reason] of layerDefinitions) {
+    const skillIds = catalog
+      .filter((item) => item.sourceKind === sourceKind)
+      .slice(0, sourceKind === 'compat' ? 2 : 6)
+      .map((item) => item.skillId)
+    if (skillIds.length) layers.push({ sourceKind, skillIds, reason })
+  }
+  return layers
+}
+
+function buildSelectedSkillProfile(input: {
+  task: string
+  figureNeed: ScientificFigureNeedClassification
+  request: ScientificPlottingResearchBriefRequest
+  candidatePapers: ScientificPlottingResearchPaper[]
+  skillCatalog: ScientificExternalSkillCatalogItem[]
+  recommendedSkillLayers: Array<{
+    sourceKind: ScientificExternalSkillSourceKind
+    skillIds: string[]
+    reason: string
+  }>
+}): ScientificPlottingSelectedSkillProfile {
+  const context = [
+    input.task,
+    input.request.targetVenue,
+    input.request.domain,
+    input.request.dataSummary,
+    input.request.referenceFigureNotes,
+    ...input.candidatePapers.flatMap((paper) => [paper.title, paper.venue, paper.notes, ...(paper.figureHints ?? [])])
+  ].filter(Boolean).join('\n')
+  const cnsRelevant = hasCnsVenueSignal(context) ||
+    /cns|nature|science|cell|paper[-\s]?level|multi[-\s]?panel|summary figure|graphical abstract|顶刊|论文图|多面板|图形摘要/i.test(context) ||
+    input.figureNeed.primaryNeed === 'multi_panel_figure' ||
+    input.figureNeed.primaryNeed === 'summary_figure'
+  const imageDeltaRelevant = input.figureNeed.route !== 'controlled_plotting_renderer' ||
+    (cnsRelevant && Boolean(input.request.dataSummary?.trim())) ||
+    input.figureNeed.primaryNeed === 'mechanism_schematic' ||
+    input.figureNeed.primaryNeed === 'model_architecture' ||
+    input.figureNeed.primaryNeed === 'method_flow' ||
+    input.figureNeed.primaryNeed === 'image_panel' ||
+    input.figureNeed.primaryNeed === 'summary_figure' ||
+    /放大|局部|zoom|inset|callout|标注|说明|highlight|美化|polish|拼接|panel|多面板|视觉统一|颜色|换色/i.test(context)
+  const domainRelevant = input.figureNeed.domain !== 'general' ||
+    /life|bio|protein|cell|gene|pathway|clinical|materials|chemistry|climate|生命|蛋白|细胞|基因|通路|材料|化学|气候/i.test(context)
+
+  const profileId: ScientificPlottingSelectedSkillProfile['profileId'] = cnsRelevant && input.figureNeed.domain === 'life-science'
+    ? 'paper-figure-cns-life-science-v1'
+    : cnsRelevant
+      ? 'paper-figure-cns-domain-v1'
+      : imageDeltaRelevant
+        ? 'mechanism-diagram-image-delta-v1'
+        : input.figureNeed.route === 'controlled_plotting_renderer'
+          ? 'controlled-data-plot-v1'
+          : 'general-paper-figure-v1'
+
+  const layerIds = (sourceKind: ScientificExternalSkillSourceKind): string[] =>
+    input.recommendedSkillLayers.find((layer) => layer.sourceKind === sourceKind)?.skillIds ?? []
+  const selectedSkillIds = uniqueStrings([
+    ...layerIds('kdense').slice(0, 4),
+    ...(cnsRelevant
+      ? [
+          'nature-figure',
+          'nature-reader',
+          'nature-data',
+          ...layerIds('cns').slice(0, 4)
+        ]
+      : []),
+    ...(domainRelevant ? layerIds('domain').slice(0, 4) : []),
+    ...(imageDeltaRelevant ? ['image-delta-polish'] : [])
+  ]).slice(0, 14)
+
+  const reasonBits = [
+    `primary need is ${input.figureNeed.primaryNeed}`,
+    `route is ${input.figureNeed.route}`,
+    cnsRelevant ? 'CNS/paper workflow guidance is relevant' : 'CNS workflow is not required',
+    domainRelevant ? `${input.figureNeed.domain} domain skills add semantic constraints` : 'no specialized domain layer detected',
+    imageDeltaRelevant ? 'image delta polish may be needed for composition/callouts/visual unification' : 'image model is not needed before controlled rendering'
+  ]
+
+  return {
+    profileId,
+    selectedSkillIds,
+    selectionReason: compactWhitespace(reasonBits.join('; ')),
+    skillPriority: ['kdense', 'cns', 'domain', 'image-delta'],
+    readOnlyExternalSkills: true
+  }
+}
+
+function buildResearchBriefLiteratureStrategy(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  request: ScientificPlottingResearchBriefRequest
+): Extract<ScientificPlottingResearchBriefResult, { ok: true }>['literatureStrategy'] {
+  const domain = request.domain?.trim() || figureNeed.domain
+  const venue = request.targetVenue?.trim() || venueHintFromTask(task)
+  const baseQuery = compactWhitespace([
+    domain !== 'general' ? domain : undefined,
+    task.replace(/\s+/g, ' ').slice(0, 180),
+    labelForFigureNeed(figureNeed.primaryNeed),
+    venue
+  ].filter(Boolean).join(' '))
+  const suggestedQueries = uniqueStrings([
+    baseQuery,
+    `${labelForFigureNeed(figureNeed.primaryNeed)} ${domain} Nature Science Cell figure`,
+    `${task.slice(0, 120)} figure conclusion evidence`,
+    `${domain} ${labelForFigureNeed(figureNeed.primaryNeed)} top journal paper`
+  ].map(compactWhitespace)).slice(0, 4)
+  return {
+    suggestedQueries,
+    preferredSources: [
+      'Nature / Science / Cell article pages and source data links',
+      'PubMed / CrossRef / Semantic Scholar for paper discovery',
+      'journal supplementary information and data availability sections'
+    ],
+    nextControlledTool: 'research_search',
+    notes: [
+      'Use nature-academic-search/nature-reader concepts as read-only workflow guidance when available.',
+      'Prefer papers with accessible figures, captions, source data, and method details.',
+      'Extract archetype and evidence logic; do not copy exact figure content.'
+    ]
+  }
+}
+
+function buildResearchBriefFigureContract(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  request: ScientificPlottingResearchBriefRequest
+): Extract<ScientificPlottingResearchBriefResult, { ok: true }>['figureContract'] {
+  const dataClause = request.dataSummary?.trim()
+    ? `Available data/context: ${request.dataSummary.trim()}`
+    : 'Data/source evidence still needs confirmation before rendering.'
+  const figureNotes = request.referenceFigureNotes?.trim()
+    ? [`Reference figure notes: ${request.referenceFigureNotes.trim()}`]
+    : []
+  return {
+    figureConclusion: `Show the clearest evidence-backed conclusion for: ${compactWhitespace(task).slice(0, 240)}`,
+    evidenceLogic: [
+      ...evidenceLogicForFigureNeed(figureNeed.primaryNeed),
+      dataClause,
+      ...figureNotes
+    ],
+    archetype: figureNeed.primaryNeed,
+    journalExportContract: [
+      `Target venue/style: ${request.targetVenue?.trim() || 'publication-ready CNS/domain style'}.`,
+      'Use readable panel labels, conservative typography, explicit legends, and traceable captions.',
+      'Keep raw data/statistical meaning unchanged across style repair.',
+      'Export artifact plus manifest so Canvas review can produce before/after revisions.'
+    ],
+    reviewRisks: reviewRisksForFigureNeed(figureNeed.primaryNeed)
+  }
+}
+
+function buildPaperFigureProductionPlan(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  request: ScientificPlottingResearchBriefRequest
+): ScientificPaperFigureProductionPlan | undefined {
+  const context = `${task}\n${request.dataSummary ?? ''}\n${request.referenceFigureNotes ?? ''}\n${(request.candidatePapers ?? []).flatMap((paper) => [paper.title, paper.notes, ...(paper.figureHints ?? [])]).join('\n')}`
+  const wantsPaperLevelPlan = Boolean(request.dataSummary?.trim())
+    || (request.candidatePapers?.length ?? 0) > 0
+    || /paper|manuscript|results?|source data|raw data|figure plan|论文|文献|稿件|原始数据|结果部分|整篇/i.test(context)
+  if (!wantsPaperLevelPlan) return undefined
+
+  const assets: ScientificPaperFigureProductionPlan['proposedAssets'] = []
+  const pushAsset = (asset: ScientificPaperFigureProductionPlan['proposedAssets'][number]): void => {
+    if (assets.some((item) => item.id === asset.id)) return
+    assets.push(asset)
+  }
+  const hasOutcome = /outcome|death_event|death|survival|mortality|event|status|response|group|condition|phenotype|结局|死亡|生存|响应|分组/i.test(context)
+  const hasTimeToEvent = /time|follow[-\s]?up|survival|kaplan|meier|event|censor|cox|随访|生存|事件|删失/i.test(context)
+  const hasMultipleContinuous = /columns?|continuous|numeric|clinical variables|matrix|correlation|spearman|pearson|变量|相关|矩阵|连续/i.test(context)
+  const hasPredictiveModel = /roc|auc|classifier|classification|prediction|logistic|model|cross[-\s]?validated|预测|分类|模型/i.test(context)
+  const hasRegression = /cox|hazard|ratio|regression|effect size|confidence interval|forest|hr|or|回归|风险比|效应量|森林图/i.test(context)
+
+  pushAsset({
+    id: 'table-baseline',
+    kind: 'table',
+    title: 'Baseline characteristics',
+    claim: 'Summarize sample size, groups, units, and missingness before interpreting figures.',
+    recommendedTemplate: 'three-line-table',
+    dataRequirements: ['raw cohort table', 'group/outcome column if comparisons are needed', 'units and categorical coding'],
+    statistics: ['n (%) for categorical variables', 'mean ± SD or median [IQR] for continuous variables', 'clearly defined tests if compared by group'],
+    firstPassTool: 'table_generator',
+    canvasReview: false,
+    notes: ['SciForge currently records this in the plan; a dedicated three-line table worker/template would improve parity with paper-figures.']
+  })
+
+  if (hasOutcome || figureNeed.primaryNeed === 'statistical_comparison') {
+    pushAsset({
+      id: 'fig-key-predictors',
+      kind: 'figure',
+      title: 'Key predictors by outcome or condition',
+      claim: 'Show which measured variables visibly differ between the main groups.',
+      recommendedTemplate: 'box-violin',
+      dataRequirements: ['raw numeric values', 'group/outcome labels', 'unit of analysis', 'sample size per group'],
+      statistics: ['box/violin/points', 'appropriate two-group or multi-group test', 'corrected significance labels when needed'],
+      firstPassTool: 'scientific_plotting_map_data',
+      polishTool: 'image_generation_plan',
+      canvasReview: true,
+      notes: ['Prefer box + jittered points for small/medium n; avoid bar-of-means as the only view.']
+    })
+  }
+
+  if (hasMultipleContinuous || figureNeed.primaryNeed === 'heatmap_matrix') {
+    pushAsset({
+      id: 'fig-correlation-heatmap',
+      kind: 'figure',
+      title: 'Correlation or feature co-variation heatmap',
+      claim: 'Reveal correlation structure and possible collinearity across measured variables.',
+      recommendedTemplate: 'heatmap',
+      dataRequirements: ['numeric matrix or raw numeric columns', 'row/column labels', 'normalization/correlation method'],
+      statistics: ['Spearman or Pearson correlation', 'diverging color scale centered at zero for correlations'],
+      firstPassTool: 'scientific_plotting_map_data',
+      polishTool: 'image_generation_plan',
+      canvasReview: true,
+      notes: ['Keep numeric labels and colorbar deterministic; image2 may only improve spacing/callouts.']
+    })
+  }
+
+  if (hasTimeToEvent) {
+    pushAsset({
+      id: 'fig-survival-km',
+      kind: 'figure',
+      title: 'Kaplan-Meier survival by clinically meaningful group',
+      claim: 'Show whether event timing differs between groups over follow-up.',
+      recommendedTemplate: 'kaplan-meier',
+      dataRequirements: ['time-to-event column', 'event/censor indicator', 'grouping variable', 'risk-table time points'],
+      statistics: ['Kaplan-Meier curve', 'numbers-at-risk table', 'log-rank p-value', 'hazard ratio if modeled'],
+      firstPassTool: 'scientific_plotting_map_data',
+      polishTool: 'image_generation_plan',
+      canvasReview: true,
+      notes: ['Current SciForge can approximate with line plots, but needs a dedicated Kaplan-Meier template for publication parity.']
+    })
+  }
+
+  if (hasRegression) {
+    pushAsset({
+      id: 'fig-effect-size-forest',
+      kind: 'figure',
+      title: 'Adjusted effect-size / forest summary',
+      claim: 'Show independent effects with confidence intervals after adjustment.',
+      recommendedTemplate: 'cox-forest',
+      dataRequirements: ['model coefficient table', 'effect estimates', 'confidence intervals', 'reference categories'],
+      statistics: ['Cox/logistic/linear model effect estimate', '95% CI', 'null reference line'],
+      firstPassTool: 'scientific_plotting_map_data',
+      polishTool: 'image_generation_plan',
+      canvasReview: true,
+      notes: ['Needs first-class forest/effect-size template; avoid using generic bar charts for adjusted effects.']
+    })
+  }
+
+  if (hasPredictiveModel) {
+    pushAsset({
+      id: 'fig-model-roc',
+      kind: 'figure',
+      title: 'Predictive model ROC or performance curve',
+      claim: 'Quantify model discrimination and compare simple versus full predictor sets.',
+      recommendedTemplate: 'roc',
+      dataRequirements: ['true labels', 'predicted scores/probabilities', 'cross-validation splits if available'],
+      statistics: ['ROC curve', 'AUC with uncertainty', 'cross-validation protocol'],
+      firstPassTool: 'scientific_plotting_map_data',
+      polishTool: 'image_generation_plan',
+      canvasReview: true,
+      notes: ['Current SciForge can draw a line curve if points are provided, but should add a dedicated ROC template with AUC metadata.']
+    })
+  }
+
+  if (figureNeed.primaryNeed === 'multi_panel_figure' || /nature|science|cell|cns|multi[-\s]?panel|多面板|子图|拼接/i.test(context)) {
+    pushAsset({
+      id: 'fig-paper-summary-panel',
+      kind: 'figure',
+      title: 'Paper-level multi-panel summary',
+      claim: 'Combine the most important controlled data panels into one publication figure.',
+      recommendedTemplate: 'multi-panel',
+      dataRequirements: ['approved component figure manifests', 'panel order', 'shared conclusion', 'caption/panel labels'],
+      statistics: ['inherit statistics from component panels'],
+      firstPassTool: 'scientific_plotting_render',
+      polishTool: 'image_generation_plan',
+      canvasReview: true,
+      notes: ['Render exact component panels first; use image2 only for panel stitching, callouts, and visual hierarchy.']
+    })
+  }
+
+  const missingCapabilities = uniqueStrings([
+    ...(assets.some((asset) => asset.recommendedTemplate === 'kaplan-meier') ? ['dedicated Kaplan-Meier template with at-risk table and censor ticks'] : []),
+    ...(assets.some((asset) => asset.recommendedTemplate === 'cox-forest') ? ['dedicated forest/effect-size template with CI and null line'] : []),
+    ...(assets.some((asset) => asset.recommendedTemplate === 'roc') ? ['dedicated ROC/AUC template with cross-validation metadata'] : []),
+    ...(assets.some((asset) => asset.recommendedTemplate === 'three-line-table') ? ['three-line table generator/manifest handoff'] : []),
+    'paper-level figure report artifact that ties each figure to claim, caption, data source, and manuscript citation location'
+  ])
+  const compositionPlan = buildPaperFigureCompositionPlan(assets, context, figureNeed)
+
+  return {
+    scope: 'paper_level',
+    sourceWorkflow: 'paper_figures_data_first_v1',
+    requiredInputs: [
+      'manuscript/result summary or paper title/abstract',
+      'raw data files with column meanings and units',
+      'target venue/style',
+      'user-approved analysis angle and figure scope'
+    ],
+    proposedAssets: assets,
+    ...(compositionPlan ? { compositionPlan } : {}),
+    handoff: {
+      firstPass: [
+        'Map raw data into controlled scientific_plotting render requests.',
+        'Run exact statistics and deterministic data plotting first.',
+        'Export each panel with artifact manifest and review score.'
+      ],
+      imagePolish: [
+        'Use image_generation_plan/render after exact panels exist; prefer gpt-image-2 and fall back to the configured Model Router image model if needed.',
+        'Preserve numbers, axes, labels, legends, sample sizes, and statistical claims.',
+        'Use image2 for panel stitching, callouts, zoomed insets, explanation labels, and composition polish.'
+      ],
+      reviewLoop: [
+        'Insert first render and polished version into Canvas.',
+        'Collect arrow/range annotations as review packets.',
+        'Regenerate a new version without overwriting original artifacts.'
+      ]
+    },
+    missingCapabilities
+  }
+}
+
+function buildPaperFigureCompositionPlan(
+  assets: ScientificPaperFigureProductionPlan['proposedAssets'],
+  context: string,
+  figureNeed: ScientificFigureNeedClassification
+): ScientificPaperFigureCompositionPlan | undefined {
+  const figureAssets = assets.filter((asset) => asset.kind === 'figure' && asset.canvasReview)
+  const needsPaperComposition = figureAssets.length >= 2
+    || figureNeed.primaryNeed === 'multi_panel_figure'
+    || figureNeed.primaryNeed === 'summary_figure'
+    || /nature|science|cell|cns|multi[-\s]?panel|多面板|子图|拼接|综合图|summary figure|graphical abstract/i.test(context)
+  if (!needsPaperComposition) return undefined
+
+  const polishAllowedOperations: ScientificPaperFigureCompositionPlan['controlledSubfigures'][number]['polishAllowedOperations'] = [
+    'crop',
+    'resize',
+    'align',
+    'panel_stitching',
+    'callout_overlay',
+    'zoom_inset',
+    'visual_unification',
+    'typography_cleanup'
+  ]
+  const compositionAllowedOperations: ScientificPaperFigureCompositionPlan['image2Composition']['allowedOperations'] = [
+    'panel_stitching',
+    'callout_overlay',
+    'zoom_inset',
+    'visual_unification',
+    'typography_cleanup'
+  ]
+  const deltaAllowedOperations: ScientificPaperFigureCompositionPlan['imagePolishDeltaPlan']['allowedOperations'] = [
+    ...compositionAllowedOperations,
+    'mechanism_visual_draft'
+  ]
+  const lockedFacts = [
+    'numeric values',
+    'axes labels and scales',
+    'legends',
+    'sample sizes',
+    'statistical tests and p-values',
+    'effect directions',
+    'paper claims and figure conclusions'
+  ]
+  const controlledSubfigures = figureAssets.map((asset) => ({
+    assetId: asset.id,
+    title: asset.title,
+    claim: asset.claim,
+    recommendedTemplate: asset.recommendedTemplate === 'three-line-table'
+      ? 'multi-panel' as const
+      : asset.recommendedTemplate,
+    firstPassTool: asset.firstPassTool === 'table_generator'
+      ? 'scientific_plotting_render' as const
+      : asset.firstPassTool,
+    requiredArtifact: 'png_manifest' as const,
+    factLocks: [...lockedFacts],
+    polishAllowedOperations: [...polishAllowedOperations]
+  }))
+
+  const inputArtifacts = controlledSubfigures.map((panel) => `${panel.assetId}.manifest.json`)
+  const deltaHandoffPrompt = [
+    'Use image generation only as a delta-only visual polish layer over controlled subfigure PNG/manifest artifacts.',
+    'Do not redraw, replace, or reinterpret scientific data panels.',
+    'Only perform panel stitching, callout overlay, zoom inset, visual unification, typography cleanup, or mechanism visual drafting when explicitly needed.',
+    `Locked facts: ${lockedFacts.join('; ')}.`,
+    'Return a visual composition base manifest; deterministic overlays remain the source of truth for labels, axes, legends, numeric values, and statistics.'
+  ].join(' ')
+  return {
+    sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1',
+    stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration'],
+    controlledSubfigures,
+    image2Composition: {
+      preferredModel: 'gpt-image-2',
+      fallbackModel: 'configured_model_router_image_model',
+      nextControlledTool: 'image_generation_plan',
+      inputArtifacts,
+      allowedOperations: [...compositionAllowedOperations],
+      forbiddenOperations: [
+        'Do not invent, remove, or reorder data points.',
+        'Do not change numeric values, axes, labels, legends, sample sizes, p-values, effect sizes, confidence intervals, or statistical conclusions.',
+        'Do not replace controlled chart panels with unrelated generative imagery.',
+        'Do not copy the exact layout of a copyrighted reference figure.'
+      ],
+      handoffPrompt: [
+        'Compose only a delta visual polish layer for a paper-level multi-panel figure from the controlled subfigure PNG/manifest artifacts.',
+        'Prefer gpt-image-2; if unavailable, use the currently configured Model Router image model for panel stitching, callouts, zoomed insets, typography cleanup, and visual unification.',
+        'Keep every controlled subfigure as the data source of truth and preserve all numeric/statistical semantics; do not generate replacement scientific data panels.',
+        'Return a new composite artifact manifest and keep the original subfigures unchanged.'
+      ].join(' '),
+      outputContract: [
+        'Composite PNG artifact plus manifest.',
+        'Panel labels and caption-ready claim summary.',
+        'List of source subfigure manifests used.',
+        'Canvas before/after insertion metadata for review.'
+      ]
+    },
+    imagePolishDeltaPlan: {
+      mode: 'delta_only',
+      targetPanels: controlledSubfigures.map((panel) => ({
+        assetId: panel.assetId,
+        reason: 'Use image model only if this panel needs callouts, local zoom, alignment, stitching, typography cleanup, or visual unification after controlled rendering.',
+        allowedOperations: [...deltaAllowedOperations]
+      })),
+      allowedOperations: [...deltaAllowedOperations],
+      lockedFacts: [...lockedFacts],
+      handoffPrompt: deltaHandoffPrompt
+    },
+    canvasReview: {
+      openInCanvas: true,
+      preserveOriginalArtifacts: true,
+      reviewPacketRequired: true,
+      revisionPolicy: 'new_version_next_to_original'
+    }
+  }
+}
+
+function buildResearchBriefPromptSpec(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  candidatePapers: ScientificPlottingResearchPaper[],
+  request: ScientificPlottingResearchBriefRequest
+): Extract<ScientificPlottingResearchBriefResult, { ok: true }>['promptSpecDraft'] {
+  const literatureReady = candidatePapers.length > 0
+  const renderTool = figureNeed.route === 'controlled_plotting_renderer'
+    ? 'scientific_plotting_map_data'
+    : figureNeed.route === 'panel_layout_then_renderer'
+      ? 'scientific_plotting_map_data or image_generation_plan after panel contract confirmation'
+      : 'image_generation_plan or a Mermaid/diagram spec after confirmation'
+  const nextControlledTool = literatureReady ? renderTool : 'research_search'
+  const imagePolishRecommendation = buildImagePolishRecommendation(task, figureNeed, {
+    targetVenue: request.targetVenue,
+    researchBriefRecommended: true
+  })
+  const fullPrompt = buildResearchBriefFullPrompt(task, figureNeed, candidatePapers, request, renderTool)
+  return {
+    task,
+    figureNeed: figureNeed.primaryNeed,
+    referencePapers: candidatePapers,
+    visualPlan: visualPlanForFigureNeed(figureNeed.primaryNeed),
+    dataRequirements: requiredInputsForFigureNeed(figureNeed.primaryNeed, figureNeed.route),
+    styleGuidance: [
+      `Prioritize ${request.targetVenue?.trim() || 'CNS/domain paper'} clarity over decorative layout.`,
+      'Use reference papers for archetype and style signals, not as copied artwork.',
+      'Keep labels short enough for figure-panel readability.'
+    ],
+    fullPrompt,
+    codeGenerationPlan: {
+      target: figureNeed.route === 'controlled_plotting_renderer'
+        ? 'scientific_plotting_render_request'
+        : figureNeed.route === 'panel_layout_then_renderer'
+          ? 'panel_layout_spec'
+          : 'image_generation_recipe',
+      nextControlledTool: renderTool,
+      notes: literatureReady
+        ? [
+            'Use the listed referencePapers as evidence and style anchors.',
+            'Generate only a controlled render request/recipe, not arbitrary shell or Python.',
+            'If visual polish is needed, render exact data panels first, then call image_generation_plan/image_generation_render with gpt-image-2 or the configured Model Router image model and the controlled plot artifacts as references.',
+            'After rendering, insert the artifact into Canvas for annotation and revision.'
+          ]
+        : [
+            'Do not render yet. First call research_search or another paper discovery tool with literatureStrategy.suggestedQueries.',
+            'Read figure captions/abstracts/source-data notes from the selected papers.',
+            'Call scientific_plotting_research_brief again with candidatePapers and the user analysis angle before rendering.'
+          ]
+    },
+    ...(imagePolishRecommendation ? { imagePolishRecommendation } : {}),
+    nextControlledTool
+  }
+}
+
+function buildResearchBriefFullPrompt(
+  task: string,
+  figureNeed: ScientificFigureNeedClassification,
+  candidatePapers: ScientificPlottingResearchPaper[],
+  request: ScientificPlottingResearchBriefRequest,
+  renderTool: string
+): string {
+  const papers = candidatePapers.length
+    ? candidatePapers.map((paper, index) => {
+        const venue = [paper.venue, paper.year].filter(Boolean).join(' ')
+        const hints = paper.figureHints?.length ? ` Figure/style hints: ${paper.figureHints.join('; ')}.` : ''
+        return `${index + 1}. ${paper.title}${venue ? ` (${venue})` : ''}.${paper.doi ? ` DOI: ${paper.doi}.` : ''}${paper.url ? ` URL: ${paper.url}.` : ''}${hints}`
+      }).join('\n')
+    : 'No reference papers confirmed yet. Search related CNS/top-conference/domain papers before rendering.'
+  return [
+    `Task: ${compactWhitespace(task)}`,
+    `Figure need: ${labelForFigureNeed(figureNeed.primaryNeed)} (${figureNeed.route}).`,
+    `Analysis angle: ${inferAnalysisAngle(task, request)}.`,
+    `Target venue/style: ${request.targetVenue?.trim() || 'CNS/domain publication style'}.`,
+    `Reference papers and figure evidence:\n${papers}`,
+    `Visual plan:\n${visualPlanForFigureNeed(figureNeed.primaryNeed).map((item) => `- ${item}`).join('\n')}`,
+    `Data/content requirements:\n${requiredInputsForFigureNeed(figureNeed.primaryNeed, figureNeed.route).map((item) => `- ${item}`).join('\n')}`,
+    `Style requirements:\n- infer figure archetype, layout density, label style, palette, annotation conventions, and panel logic from the reference papers\n- do not copy exact copyrighted figure composition or data\n- keep labels concise and publication-readable`,
+    `Final image polish layer:\n- when callouts, zoomed insets, panel stitching, explanatory labels, or CNS-style composition are needed, use image_generation_plan after controlled data rendering; prefer gpt-image-2 and fall back to the configured Model Router image model if needed\n- preserve numeric data, axes, labels, legends, sample sizes, and statistical claims\n- keep the controlled plot artifacts as the source of truth and create before/after versions on Canvas`,
+    `Next controlled tool: ${candidatePapers.length ? renderTool : 'research_search first, then scientific_plotting_research_brief again'}.`
+  ].join('\n\n')
+}
+
+function labelForFigureNeed(need: ScientificFigureNeed): string {
+  const labels: Record<ScientificFigureNeed, string> = {
+    quantitative_chart: 'quantitative chart',
+    statistical_comparison: 'statistical comparison figure',
+    heatmap_matrix: 'heatmap or matrix figure',
+    multi_panel_figure: 'multi-panel paper figure',
+    method_flow: 'method or experimental flow figure',
+    mechanism_schematic: 'mechanism schematic',
+    model_architecture: 'model architecture figure',
+    pathway_network: 'pathway or network figure',
+    image_panel: 'image panel figure',
+    summary_figure: 'summary or graphical abstract figure'
+  }
+  return labels[need]
+}
+
+function inferAnalysisAngle(
+  task: string,
+  request: ScientificPlottingResearchBriefRequest
+): string {
+  if (request.referenceFigureNotes?.trim()) return request.referenceFigureNotes.trim()
+  if (/compare|comparison|versus|差异|对比|比较/i.test(task)) return 'comparison and contrast'
+  if (/mechanism|cause|why|机制|原因|调控/i.test(task)) return 'mechanism and causal evidence'
+  if (/workflow|pipeline|method|流程|方法|步骤/i.test(task)) return 'method sequence and decision points'
+  if (/model|architecture|network|模型|结构|网络/i.test(task)) return 'model components and information flow'
+  return 'main scientific conclusion and supporting evidence'
+}
+
+function confirmationQuestionsForFigureNeed(
+  figureNeed: ScientificFigureNeedClassification
+): string[] {
+  const common = [
+    'What is the single figure conclusion the reader should remember?',
+    'Which reference papers or figures should guide the archetype and visual style?'
+  ]
+  if (figureNeed.route === 'controlled_plotting_renderer') {
+    return [
+      ...common,
+      'What structured data, grouping, matrix, or uncertainty values should be rendered?',
+      'What statistical or normalization choices must be shown in the caption or legend?'
+    ]
+  }
+  if (figureNeed.primaryNeed === 'multi_panel_figure' || figureNeed.primaryNeed === 'image_panel') {
+    return [
+      ...common,
+      'What panels should be included and what evidence does each panel support?',
+      'Which panels are data charts, image panels, or schematics?',
+      'What crop, scale, or annotation constraints matter?'
+    ]
+  }
+  return [
+    ...common,
+    'What entities, steps, mechanisms, or model components must be included?',
+    'Which relationships are causal, temporal, hierarchical, or optional?',
+    'Should the output be a compact Mermaid/diagram spec or an illustrative image prompt?'
+  ]
+}
+
+function evidenceLogicForFigureNeed(need: ScientificFigureNeed): string[] {
+  if (need === 'quantitative_chart') return ['Identify x/y variables, grouping, units, and the comparison implied by the chart.']
+  if (need === 'statistical_comparison') return ['Define groups, sample sizes, uncertainty/statistical test, and the exact claim being compared.']
+  if (need === 'heatmap_matrix') return ['Define matrix rows/columns, normalization, clustering, and color scale meaning.']
+  if (need === 'multi_panel_figure') return ['Define panel-by-panel evidence hierarchy from overview to detailed validation.']
+  if (need === 'image_panel') return ['Define image provenance, crop/scale bars, annotations, and quantitative support panels.']
+  if (need === 'method_flow') return ['Define ordered steps, decision points, inputs/outputs, and where evidence enters the workflow.']
+  if (need === 'model_architecture') return ['Define model components, information flow, inputs/outputs, and training/inference distinction.']
+  if (need === 'pathway_network') return ['Define nodes, edges, pathway evidence, directionality, and highlighted modules.']
+  if (need === 'mechanism_schematic') return ['Define entities, causal links, perturbations, and evidence supporting each mechanism edge.']
+  return ['Define the narrative claim, supporting evidence blocks, and visual hierarchy.']
+}
+
+function reviewRisksForFigureNeed(need: ScientificFigureNeed): string[] {
+  const common = ['Over-compressing text labels', 'Copying reference-paper composition too closely', 'Rendering before data/provenance is clear']
+  if (need === 'method_flow' || need === 'model_architecture') {
+    return [...common, 'Ambiguous arrows or directionality', 'Too many nodes for a readable paper figure']
+  }
+  if (need === 'mechanism_schematic' || need === 'pathway_network') {
+    return [...common, 'Unsupported causal edges', 'Mixing pathway evidence with hypothesis without visual distinction']
+  }
+  if (need === 'image_panel') {
+    return [...common, 'Missing scale bars/crop provenance', 'Annotations not tied to image evidence']
+  }
+  if (need === 'multi_panel_figure') {
+    return [...common, 'Panels lack a shared conclusion', 'Panel order does not match the evidence hierarchy']
+  }
+  return common
+}
+
+function visualPlanForFigureNeed(need: ScientificFigureNeed): string[] {
+  if (need === 'quantitative_chart') return ['Choose chart type from data shape', 'Apply publication style', 'Review axes/grid/palette similarity']
+  if (need === 'statistical_comparison') return ['Show distributions or uncertainty', 'Encode groups consistently', 'Reserve annotations for confirmed statistics']
+  if (need === 'heatmap_matrix') return ['Prepare matrix and labels', 'Choose color scale and clustering policy', 'Add compact side labels or panel notes']
+  if (need === 'multi_panel_figure') return ['Define panel grid', 'Map each panel to data/schematic/image renderer', 'Balance shared legend and captions']
+  if (need === 'image_panel') return ['Create panel layout', 'Place source images with scale/crops', 'Add bounded annotations and provenance']
+  if (need === 'method_flow') return ['Extract ordered steps', 'Group stages', 'Use arrows only for confirmed sequence or dependency']
+  if (need === 'model_architecture') return ['Identify modules', 'Show information flow', 'Separate training, inference, and evaluation paths']
+  if (need === 'pathway_network') return ['Extract nodes/edges', 'Mark evidence strength', 'Highlight modules or perturbations']
+  if (need === 'mechanism_schematic') return ['Extract entities and causal links', 'Show perturbations/outcomes', 'Keep unsupported links visually tentative']
+  return ['Define narrative blocks', 'Select paper-style visual hierarchy', 'Prepare concise labels and callouts']
+}
+
+function venueHintFromTask(task: string): string | undefined {
+  const match = task.match(/\b(Nature|Science|Cell|NeurIPS|ICLR|ICML|CVPR|PNAS|JAMA|Lancet)\b/i)
+  if (match?.[1]) return match[1]
+  if (/顶刊|CNS|论文/i.test(task)) return 'CNS/top journal'
+  return undefined
+}
+
+function compactWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function buildTemplateSelection(
+  selectedTemplate: ScientificPlottingTemplate,
+  request: ScientificPlottingPlanRequest,
+  referenceProfile: ScientificPlottingReferenceProfile | undefined
+): ScientificPlottingTemplateSelection {
+  const guide = templateGuideFor(selectedTemplate)
+  return {
+    selectedTemplate,
+    selectedBy: request.templateHint === selectedTemplate
+      ? 'templateHint'
+      : referenceProfile?.recommendedTemplate === selectedTemplate
+        ? 'referenceProfile'
+        : 'taskIntent',
+    useWhen: [...guide.useWhen],
+    avoidWhen: [...guide.avoidWhen],
+    expectedData: [...guide.expectedData],
+    modelSelectionHint: guide.modelSelectionHint
+  }
+}
+
+function buildScientificPlottingToolRoutingRecommendation(
+  task: string,
+  template: ScientificPlottingTemplate
+): { preferredTool: 'image_generation_plan'; reason: string; useWhen: string[] } | undefined {
+  if (template !== 'flowchart' && template !== 'schematic-grid') return undefined
+  const looksLikeVisualDiagram = /flow\s*chart|flowchart|workflow|pipeline|diagram|infographic|poster|cover|illustrat|流程图|流程|工作流|管线|示意图|信息图|宣传图|封面图|海报/i.test(task)
+  if (!looksLikeVisualDiagram) return undefined
+  return {
+    preferredTool: 'image_generation_plan',
+    reason: 'This is a semantic diagram request. Use scientific_plotting only to draft the structure; use image_generation_plan/image_generation_render for the final polished visual.',
+    useWhen: [
+      'Flowcharts, model architectures, workflows, mechanisms, and schematics need composition beyond Matplotlib boxes.',
+      'Use scientific_plotting output as a draft/spec, not as the final user-facing diagram.',
+      'The image model should choose layout, icons, visual grouping, typography, and polished composition.'
+    ]
+  }
+}
+
 function buildTemplateAdvice(
   selectedTemplate: ScientificPlottingTemplate | undefined,
   referenceProfile: ScientificPlottingReferenceProfile | undefined,
@@ -2325,8 +3523,8 @@ function buildTemplateAdvice(
     messages.push('Foreground mark density differs; this often requires a better template or semantic renderer, not another style-only repair.')
     nextActions.push('Keep the data unchanged and review whether the selected controlled template matches the reference figure type.')
   }
-  if (score && selectedTemplate === 'schematic-grid' && (score.axes < 0.62 || score.grid < 0.62)) {
-    messages.push('Schematic panels may score low on axes/grid because reference diagrams contain structural gray marks.')
+  if (score && (selectedTemplate === 'schematic-grid' || selectedTemplate === 'flowchart') && (score.axes < 0.62 || score.grid < 0.62)) {
+    messages.push('Schematic and flowchart panels may score low on axes/grid because reference diagrams contain structural marks rather than measured axes.')
     nextActions.push('Treat axes/grid warnings as diagnostic context for schematic templates.')
   }
   if (score && (selectedTemplate === 'heatmap' || selectedTemplate === 'attention-map') && score.palette < 0.68) {
@@ -2358,7 +3556,11 @@ function buildTemplateAlternatives(
     add(referenceProfile.recommendedTemplate, 'Reference-profile fallback.')
   }
   add(taskTemplate, 'Task-text fallback.')
-  if (selectedTemplate === 'schematic-grid') add('bar', 'Use when the schematic is actually categorical data.')
+  if (selectedTemplate === 'flowchart') add('schematic-grid', 'Use when the diagram is a conceptual layout rather than a directed process.')
+  if (selectedTemplate === 'schematic-grid') {
+    add('flowchart', 'Use when the schematic is actually a directed workflow or process.')
+    add('bar', 'Use when the schematic is actually categorical data.')
+  }
   if (selectedTemplate === 'bar') add('errorbar-bar', 'Use when categorical comparisons need visible uncertainty.')
   if (selectedTemplate === 'errorbar-bar') add('bar', 'Use when uncertainty is not present.')
   if (selectedTemplate === 'bar' || selectedTemplate === 'errorbar-bar') {
@@ -2489,7 +3691,7 @@ function templateReadyCandidates(
           ? 'multi-panel'
           : template === 'heatmap' || template === 'attention-map'
             ? 'matrix'
-            : template === 'schematic-grid'
+            : template === 'schematic-grid' || template === 'flowchart'
               ? 'network'
               : 'template-ready',
         dataSignals: [template],
@@ -2749,7 +3951,7 @@ function summarizeTemplateReadyData(template: ScientificPlottingTemplate, data: 
       seriesCount: data.series.length
     }
   }
-  if (isRecord(data) && template === 'schematic-grid' && Array.isArray(data.nodes)) {
+  if (isRecord(data) && (template === 'schematic-grid' || template === 'flowchart') && Array.isArray(data.nodes)) {
     return { inputShape: 'network', groupCount: data.nodes.length }
   }
   return { inputShape: 'template-ready' }
@@ -3124,14 +4326,133 @@ function validateTemplateData(template: ScientificPlottingTemplate, data: unknow
     }
     return
   }
-  const nodes = data.nodes
-  if (!Array.isArray(nodes) || nodes.length === 0 || nodes.length > MAX_SCHEMATIC_NODES) {
-    throw new Error(`schematic-grid data.nodes must include 1-${MAX_SCHEMATIC_NODES} nodes.`)
-  }
-  for (const node of nodes) {
-    if (!isRecord(node) || typeof node.label !== 'string' || !node.label.trim()) {
-      throw new Error('schematic-grid nodes must include labels.')
+  if (template === 'schematic-grid' || template === 'flowchart') {
+    const nodes = data.nodes
+    const maxNodes = template === 'flowchart' ? MAX_FLOWCHART_NODES : MAX_SCHEMATIC_NODES
+    if (!Array.isArray(nodes) || nodes.length === 0 || nodes.length > maxNodes) {
+      throw new Error(template === 'flowchart'
+        ? `flowchart data.nodes must include 1-${MAX_FLOWCHART_NODES} compact nodes. For dense prose-to-visual diagrams, use image_generation_plan/image_generation_render.`
+        : `${template} data.nodes must include 1-${MAX_SCHEMATIC_NODES} nodes.`)
     }
+    const labels: string[] = []
+    for (const node of nodes) {
+      if (!isRecord(node) || typeof node.label !== 'string' || !node.label.trim()) {
+        throw new Error(`${template} nodes must include labels.`)
+      }
+      labels.push(node.label.trim())
+    }
+    if (template === 'flowchart' && labels.join(' ').length > MAX_FLOWCHART_LABEL_CHARS) {
+      throw new Error(`flowchart node labels must be compact and total at most ${MAX_FLOWCHART_LABEL_CHARS} characters. For long prose-to-visual diagrams, use image_generation_plan/image_generation_render.`)
+    }
+    if (template === 'flowchart' && data.edges !== undefined) {
+      if (!Array.isArray(data.edges)) throw new Error('flowchart data.edges must be an array when provided.')
+      for (const edge of data.edges) {
+        if (!isRecord(edge) || edge.from === undefined || edge.to === undefined) {
+          throw new Error('flowchart edges must include from and to.')
+        }
+      }
+    }
+  }
+}
+
+function buildDiagramDraftHandoffForRender(
+  request: ScientificPlottingRenderRequest
+): ScientificPlottingDraftHandoff | undefined {
+  if (!requiresImageGenerationFinalRender(request.template, request.data)) return undefined
+  const title = request.labels?.title?.trim()
+  const draftSpec = {
+    template: request.template,
+    ...(title ? { title } : {}),
+    ...draftSpecFromDiagramData(request.template, request.data)
+  }
+  const figureLabel = title || templateReason(request.template)
+  return {
+    kind: 'diagram_draft_handoff',
+    draftRole: 'structure_only',
+    sourceTemplate: request.template,
+    recommendedNextTools: ['image_generation_plan', 'image_generation_render'],
+    imageGenerationTask: [
+      `Create a polished publication-style ${figureLabel}.`,
+      'Use the provided draft structure as content guidance, but redesign the layout visually.',
+      'Avoid plain Matplotlib blocks; use clear hierarchy, readable labels, arrows, grouping, whitespace, and domain-appropriate visual metaphors.'
+    ].join(' '),
+    promptGuidance: [
+      'Preserve the scientific meaning, node order, and key relationships from draftSpec.',
+      'Improve composition, typography, spacing, arrow routing, and grouping for a final user-facing figure.',
+      'Use image_generation_render for the final PNG artifact, then insert that artifact into Canvas for review.',
+      'Do not call scientific_plotting_render again for this diagram unless the user explicitly asks for a structural draft.'
+    ],
+    draftSpec,
+    guardrails: [
+      'scientific_plotting is the structure/data draft layer for semantic diagrams.',
+      'image_generation is the final visual rendering layer for flowcharts, mechanisms, and model architecture diagrams.',
+      'Do not present Matplotlib draft boxes as the final diagram.',
+      'Do not change scientific semantics while beautifying the visual design.'
+    ]
+  }
+}
+
+function requiresImageGenerationFinalRender(template: ScientificPlottingTemplate, data: unknown): boolean {
+  if (template === 'flowchart') return true
+  if (template === 'schematic-grid') return !hasExplicitSchematicLayout(data)
+  if (template !== 'multi-panel' || !isRecord(data) || !Array.isArray(data.panels)) return false
+  return data.panels.some((panel) => {
+    if (!isRecord(panel) || typeof panel.template !== 'string') return false
+    if (panel.template === 'flowchart') return true
+    if (panel.template === 'schematic-grid') return !hasExplicitSchematicLayout(panel.data)
+    return false
+  })
+}
+
+function hasExplicitSchematicLayout(data: unknown): boolean {
+  if (!isRecord(data) || !Array.isArray(data.nodes) || data.nodes.length === 0) return false
+  return data.nodes.every((node) => {
+    if (!isRecord(node)) return false
+    const x = Number(node.x)
+    const y = Number(node.y)
+    return Number.isFinite(x) && Number.isFinite(y)
+  })
+}
+
+function draftSpecFromDiagramData(
+  template: ScientificPlottingTemplate,
+  data: unknown
+): Omit<ScientificPlottingDraftHandoff['draftSpec'], 'template' | 'title'> {
+  if (!isRecord(data)) return {}
+  if (template === 'multi-panel' && Array.isArray(data.panels)) {
+    return {
+      panels: data.panels.slice(0, MAX_MULTI_PANELS).map((panel) => {
+        if (!isRecord(panel)) return {}
+        const panelData = isRecord(panel.data) ? panel.data : undefined
+        return {
+          ...(typeof panel.template === 'string' ? { template: panel.template } : {}),
+          ...(typeof panel.title === 'string' && panel.title.trim() ? { title: panel.title.trim() } : {}),
+          ...(panelData && Array.isArray(panelData.nodes) ? { nodeCount: panelData.nodes.length } : {})
+        }
+      })
+    }
+  }
+  return {
+    nodes: Array.isArray(data.nodes)
+      ? data.nodes.slice(0, MAX_SCHEMATIC_NODES).flatMap((node) => {
+          if (!isRecord(node) || typeof node.label !== 'string' || !node.label.trim()) return []
+          return [{
+            ...(typeof node.id === 'string' && node.id.trim() ? { id: node.id.trim() } : {}),
+            label: node.label.trim(),
+            ...(typeof node.group === 'string' && node.group.trim() ? { group: node.group.trim() } : {})
+          }]
+        })
+      : undefined,
+    edges: Array.isArray(data.edges)
+      ? data.edges.slice(0, 80).flatMap((edge) => {
+          if (!isRecord(edge) || typeof edge.from !== 'string' || typeof edge.to !== 'string') return []
+          return [{
+            from: edge.from,
+            to: edge.to,
+            ...(typeof edge.label === 'string' && edge.label.trim() ? { label: edge.label.trim() } : {})
+          }]
+        })
+      : undefined
   }
 }
 
@@ -3159,15 +4480,16 @@ function inferTemplateSignalsFromText(text: string): ScientificPlottingTemplate[
     if (!pattern.test(text)) return
     if (!signals.includes(template)) signals.push(template)
   }
-  add('multi-panel', /multi[-\s]?panel|subplot|facet|figure panel|panel figure|组合图|多面板|多子图/i)
-  add('box-violin', /violin|box\s*plot|boxplot|strip\s*plot|swarm|distribution comparison|distribution by (condition|group|category)|grouped distribution|箱线图|小提琴图|组间分布/i)
+  add('multi-panel', /multi[-\s]?panel|多\s*panel|subplot|facet|figure panel|panel figure|组合图|复合图|拼接图|拼图|多面板|多子图/i)
+  add('box-violin', /violin|box\s*plot|boxplot|strip\s*plot|swarm|distribution comparison|compare .*distributions?|distributions? (for|across|by) (conditions?|groups?|categories?|recipes?|arms?)|distribution by (condition|group|category)|grouped distribution|箱线图|小提琴图|组间分布/i)
   add('histogram-density', /histogram|density|kde|residual distribution|value distribution|分布图|直方图|密度图/i)
-  add('attention-map', /attention|token alignment|注意力/i)
+  add('flowchart', /flow\s*chart|flowchart|workflow|pipeline|process flow|decision tree|pathway|流程图|流程|工作流|管线|步骤|路径/i)
+  add('schematic-grid', /schematic|diagram|mechanism|architecture|model structure|network structure|array programming|numpy|示意|机制|架构|模型结构|网络结构/i)
+  add('attention-map', /attention\s*(?:map|matrix|heatmap|weights?)|token alignment|注意力(?:图|矩阵|热图|权重)/i)
   add('heatmap', /heatmap|matrix|correlation|表达矩阵|热图|矩阵/i)
   add('scatter', /scatter|embedding|umap|tsne|point cloud|散点|降维/i)
   add('errorbar-bar', /error\s*bar|confidence interval|ci\b|uncertainty|误差棒|置信区间|不确定性/i)
   add('bar', /bar|category|comparison|benchmark|柱状|条形|分类|基准/i)
-  add('schematic-grid', /schematic|diagram|workflow|mechanism|array programming|numpy|示意|机制|流程/i)
   add('line', /line|curve|trend|time series|trajectory|折线|曲线|趋势|时间序列/i)
   return signals
 }
@@ -3178,7 +4500,7 @@ function kindForTemplate(
 ): ScientificPlottingReferenceProfile['kind'] {
   if (score < 0.28) return 'unknown'
   if (template === 'heatmap' || template === 'attention-map') return 'matrix'
-  if (template === 'schematic-grid') return 'schematic'
+  if (template === 'schematic-grid' || template === 'flowchart') return 'schematic'
   if (template === 'multi-panel') return 'mixed'
   return 'chart'
 }
@@ -3193,6 +4515,7 @@ function templateReason(template: ScientificPlottingTemplate): string {
   if (template === 'box-violin') return 'grouped distributions with optional individual observations'
   if (template === 'histogram-density') return 'distribution shape or density comparisons'
   if (template === 'multi-panel') return 'a compact multi-panel scientific figure'
+  if (template === 'flowchart') return 'a directed process or workflow diagram'
   return 'a simple scientific schematic'
 }
 
@@ -3204,6 +4527,7 @@ function requiredInputsForTemplate(template: ScientificPlottingTemplate): string
   if (template === 'box-violin') return ['groups[].name', 'groups[].values', 'optional showPoints/mode']
   if (template === 'histogram-density') return ['series[].values', 'optional bins/density']
   if (template === 'multi-panel') return ['panels[].template', 'panels[].data', 'optional columns and labels']
+  if (template === 'flowchart') return ['nodes[].id', 'nodes[].label', 'optional edges[].from/to']
   if (template === 'schematic-grid') return ['nodes[].label', 'optional edges', 'optional labels']
   return ['series[].y', 'optional series[].x', 'optional labels']
 }
@@ -3270,7 +4594,7 @@ function builtInStyleProfiles(): ScientificPlottingStyleProfile[] {
       venue: 'Nature',
       sourceLabel: 'NumPy paper schematic smoke reference',
       description: 'Clean explanatory schematic style with white background, minimal axes, muted blues/yellows, and compact labels.',
-      recommendedTemplates: ['schematic-grid', 'multi-panel', 'bar'],
+      recommendedTemplates: ['schematic-grid', 'flowchart', 'multi-panel', 'bar'],
       tags: ['nature', 'numpy', 'schematic', 'software', 'light', 'minimal'],
       styleSpec: profileStyleSpec({
         id: 'nature-2020-numpy-fig1',
@@ -4094,6 +5418,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from matplotlib.colors import LinearSegmentedColormap, to_rgb
 from matplotlib.patches import Rectangle, FancyArrowPatch
 
@@ -4115,6 +5440,7 @@ def rc_value(value):
     return value
 
 style = payload.get("styleSpec") or {}
+layout_style = style.get("layout") or {}
 plan_rc = {}
 palette = []
 try:
@@ -4192,6 +5518,50 @@ if isinstance(palette_override, list) and palette_override:
     palette = palette_override
 if not palette:
     palette = ["#0072b2", "#d55e00", "#009e73", "#cc79a7", "#000000"]
+def payload_contains_cjk(value):
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except Exception:
+        text = str(value)
+    for char in text:
+        code = ord(char)
+        if (0x3400 <= code <= 0x4DBF) or (0x4E00 <= code <= 0x9FFF) or (0xF900 <= code <= 0xFAFF) or (0x3040 <= code <= 0x30FF) or (0xAC00 <= code <= 0xD7AF):
+            return True
+    return False
+
+def configure_cjk_font_if_needed():
+    mpl.rcParams["axes.unicode_minus"] = False
+    if not payload_contains_cjk(payload):
+        return None
+    candidates = [
+        "PingFang SC",
+        "Hiragino Sans GB",
+        "Heiti SC",
+        "STHeiti",
+        "Songti SC",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "Microsoft YaHei",
+        "SimHei",
+        "Arial Unicode MS",
+        "WenQuanYi Zen Hei",
+    ]
+    available = {font.name for font in font_manager.fontManager.ttflist}
+    selected = next((name for name in candidates if name in available), None)
+    if selected is None:
+        return None
+    existing = mpl.rcParams.get("font.sans-serif", [])
+    if isinstance(existing, str):
+        existing = [existing]
+    requested = mpl.rcParams.get("font.family", [])
+    if isinstance(requested, str):
+        requested = [requested]
+    mpl.rcParams["font.family"] = "sans-serif"
+    mpl.rcParams["font.sans-serif"] = [selected] + [name for name in requested + list(existing) if name and name != selected]
+    return selected
+
+selected_cjk_font = configure_cjk_font_if_needed()
+
 try:
     from cycler import cycler
     mpl.rcParams["axes.prop_cycle"] = cycler(color=palette)
@@ -4235,6 +5605,9 @@ publication_clamp_applied = any([
 ]) or bool(plan_rc.get("__sciforge.typographyClampApplied", False))
 renderer_diagnostics = {
     "layoutNotes": [],
+    "fontFallback": {
+        "cjk": selected_cjk_font,
+    },
     "typography": {
         "titleSize": round(title_size, 2),
         "labelSize": round(label_size, 2),
@@ -4292,7 +5665,7 @@ def maybe_legend(axis):
             should_place_outside = (
                 force_outside or
                 template in ("bar", "errorbar-bar", "histogram-density") or
-                len(handles) > 3 or
+                len(handles) >= 3 or
                 longest_label > 14
             )
             if should_place_outside:
@@ -4337,6 +5710,28 @@ def x_values(series):
     y = series.get("y") or []
     return series.get("x") or list(range(1, len(y) + 1))
 
+def optional_error_values(series, key):
+    values = series.get(key)
+    if isinstance(values, list):
+        return [abs(as_float(value, 0)) for value in values]
+    value = as_float(values, None)
+    return value if value is not None else None
+
+def apply_axis_limits(axis, data_source):
+    data_source = data_source or {}
+    xlim = data_source.get("xlim") or data_source.get("xLim") or data_source.get("xRange")
+    ylim = data_source.get("ylim") or data_source.get("yLim") or data_source.get("yRange")
+    if isinstance(xlim, list) and len(xlim) == 2:
+        left = as_float(xlim[0], None)
+        right = as_float(xlim[1], None)
+        if left is not None and right is not None and left != right:
+            axis.set_xlim(left, right)
+    if isinstance(ylim, list) and len(ylim) == 2:
+        bottom = as_float(ylim[0], None)
+        top = as_float(ylim[1], None)
+        if bottom is not None and top is not None and bottom != top:
+            axis.set_ylim(bottom, top)
+
 def finite_list(values):
     result = []
     for value in values or []:
@@ -4344,6 +5739,80 @@ def finite_list(values):
         if number is not None and math.isfinite(number):
             result.append(number)
     return result
+
+def resolve_group_position(reference, names, positions):
+    if reference is None:
+        return None
+    if isinstance(reference, bool):
+        return None
+    if isinstance(reference, (int, float)) and math.isfinite(reference):
+        number = int(reference)
+        if abs(float(reference) - number) > 1e-9:
+            return None
+        if 0 <= number < len(positions):
+            return positions[number]
+        if number in positions:
+            return number
+        return None
+    text = str(reference).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    for index, name in enumerate(names):
+        if lowered == str(name).strip().lower():
+            return positions[index]
+    try:
+        return resolve_group_position(int(text), names, positions)
+    except Exception:
+        return None
+
+def draw_group_comparisons(axis, comparisons, names, positions, grouped_values, font_scale=1.0):
+    if not isinstance(comparisons, list) or not comparisons:
+        return 0
+    resolved = []
+    for comparison in comparisons[:8]:
+        if not isinstance(comparison, dict):
+            continue
+        start = resolve_group_position(
+            comparison.get("from", comparison.get("a", comparison.get("left", comparison.get("groupA")))),
+            names,
+            positions,
+        )
+        end = resolve_group_position(
+            comparison.get("to", comparison.get("b", comparison.get("right", comparison.get("groupB")))),
+            names,
+            positions,
+        )
+        if start is None or end is None or start == end:
+            continue
+        label = str(comparison.get("label", comparison.get("text", comparison.get("p", "")))).strip()
+        resolved.append((min(start, end), max(start, end), label))
+    if not resolved:
+        return 0
+    all_values = [value for values_for_group in grouped_values for value in values_for_group]
+    if not all_values:
+        return 0
+    y_min, y_max = axis.get_ylim()
+    data_min = min(all_values)
+    data_max = max(all_values)
+    y_min = min(y_min, data_min)
+    y_max = max(y_max, data_max)
+    y_range = y_max - y_min
+    if not math.isfinite(y_range) or y_range <= 0:
+        y_range = 1.0
+    base = y_max + y_range * 0.06
+    step = y_range * 0.085
+    height = y_range * 0.025
+    top = base + step * max(0, len(resolved) - 1) + y_range * 0.08
+    axis.set_ylim(y_min - y_range * 0.04, top)
+    color = mpl.rcParams.get("text.color", "#222222")
+    for index, (start, end, label) in enumerate(resolved):
+        y = base + index * step
+        axis.plot([start, start, end, end], [y, y + height, y + height, y], color=color, linewidth=0.72, clip_on=False)
+        if label:
+            axis.text((start + end) / 2, y + height + y_range * 0.01, label, ha="center", va="bottom", fontsize=max(5.2, tick_size * font_scale), color=color, clip_on=False)
+    add_layout_note("Rendered compact group-comparison brackets for distribution panels.")
+    return len(resolved)
 
 def set_labels_from(axis, label_source):
     label_source = label_source or {}
@@ -4387,7 +5856,25 @@ elif template == "scatter":
         name = series.get("name") or f"Series {index + 1}"
         y = series.get("y") or []
         x = x_values(series)
-        ax.scatter(x, y, label=name, s=max(10, mpl.rcParams.get("lines.markersize", 3) ** 2), alpha=0.86, linewidths=0.3)
+        xerr = optional_error_values(series, "xerr")
+        yerr = optional_error_values(series, "yerr")
+        if xerr is not None or yerr is not None:
+            ax.errorbar(
+                x,
+                y,
+                xerr=xerr,
+                yerr=yerr,
+                fmt="o",
+                label=name,
+                markersize=max(2.2, mpl.rcParams.get("lines.markersize", 3)),
+                capsize=2,
+                elinewidth=max(0.45, mpl.rcParams.get("lines.linewidth", 1) * 0.7),
+                capthick=max(0.45, mpl.rcParams.get("lines.linewidth", 1) * 0.7),
+                alpha=0.9,
+            )
+        else:
+            ax.scatter(x, y, label=name, s=max(10, mpl.rcParams.get("lines.markersize", 3) ** 2), alpha=0.86, linewidths=0.3)
+    apply_axis_limits(ax, data)
     set_common_labels(ax)
     maybe_legend(ax)
 elif template == "bar" or template == "errorbar-bar":
@@ -4517,8 +6004,8 @@ elif template == "heatmap":
     else:
         cmap = data.get("cmap") or "cividis"
     im = ax.imshow(matrix, aspect="auto", cmap=cmap)
-    x_labels = data.get("xLabels") or data.get("colLabels") or data.get("columnLabels") or data.get("columns")
-    y_labels = data.get("yLabels") or data.get("rowLabels") or data.get("row_labels") or data.get("targets")
+    x_labels = data.get("xLabels") or data.get("colLabels") or data.get("columnLabels") or data.get("columns") or data.get("x")
+    y_labels = data.get("yLabels") or data.get("rowLabels") or data.get("row_labels") or data.get("targets") or data.get("y")
     if x_labels:
         x_labels = [str(value) for value in x_labels]
         rotation = 36 if max([len(value) for value in x_labels] or [0]) > 6 or len(x_labels) > 4 else 0
@@ -4538,8 +6025,8 @@ elif template == "attention-map":
     else:
         cmap = data.get("cmap") or "magma"
     im = ax.imshow(matrix, aspect="auto", cmap=cmap, interpolation="nearest")
-    x_labels = data.get("xLabels") or data.get("colLabels") or data.get("columnLabels") or data.get("columns")
-    y_labels = data.get("yLabels") or data.get("rowLabels") or data.get("row_labels") or data.get("targets")
+    x_labels = data.get("xLabels") or data.get("colLabels") or data.get("columnLabels") or data.get("columns") or data.get("x")
+    y_labels = data.get("yLabels") or data.get("rowLabels") or data.get("row_labels") or data.get("targets") or data.get("y")
     if x_labels:
         x_labels = [str(value) for value in x_labels]
         rotation = 36 if max([len(value) for value in x_labels] or [0]) > 6 or len(x_labels) > 4 else 0
@@ -4596,6 +6083,9 @@ elif template == "box-violin":
     ax.set_xticks(positions, names, rotation=rotation, ha="right" if rotation else "center")
     renderer_diagnostics["categoryLabelRotation"] = rotation
     ax.margins(x=0.04)
+    comparison_count = draw_group_comparisons(ax, data.get("comparisons"), names, positions, values)
+    if comparison_count:
+        renderer_diagnostics["distributionComparisonCount"] = comparison_count
     set_common_labels(ax)
 elif template == "histogram-density":
     series = data.get("series") or []
@@ -4634,6 +6124,7 @@ elif template == "multi-panel":
     fig.set_size_inches(clamp(3.15 * columns, 3.2, 7.2), clamp(2.35 * rows, 2.4, 6.8), forward=True)
     axes_grid = fig.subplots(rows, columns, squeeze=False)
     panel_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    default_panel_labels = str(layout_style.get("panelLabels") or "unknown")
     def draw_small_panel(axis, panel, panel_index):
         panel_template = panel.get("template")
         panel_data = panel.get("data") or {}
@@ -4642,14 +6133,32 @@ elif template == "multi-panel":
             for series_index, series in enumerate(panel_data.get("series") or []):
                 name = series.get("name") or f"Series {series_index + 1}"
                 y = series.get("y") or []
-                x = series.get("x") or list(range(1, len(y) + 1))
+                x = series.get("x") or panel_data.get("x") or list(range(1, len(y) + 1))
                 axis.plot(x, y, marker="o" if len(y) <= 24 else None, linewidth=mpl.rcParams.get("lines.linewidth", 1.0), markersize=2.4, label=name)
         elif panel_template == "scatter":
             for series_index, series in enumerate(panel_data.get("series") or []):
                 name = series.get("name") or f"Series {series_index + 1}"
                 y = series.get("y") or []
                 x = series.get("x") or list(range(1, len(y) + 1))
-                axis.scatter(x, y, s=10, alpha=0.82, linewidths=0.25, label=name)
+                xerr = optional_error_values(series, "xerr")
+                yerr = optional_error_values(series, "yerr")
+                if xerr is not None or yerr is not None:
+                    axis.errorbar(
+                        x,
+                        y,
+                        xerr=xerr,
+                        yerr=yerr,
+                        fmt="o",
+                        label=name,
+                        markersize=2.8,
+                        capsize=2,
+                        elinewidth=0.62,
+                        capthick=0.62,
+                        alpha=0.9,
+                    )
+                else:
+                    axis.scatter(x, y, s=10, alpha=0.82, linewidths=0.25, label=name)
+            apply_axis_limits(axis, panel_data)
         elif panel_template == "bar" or panel_template == "errorbar-bar":
             categories = panel_data.get("categories") or []
             series = panel_data.get("series") or []
@@ -4665,8 +6174,8 @@ elif template == "multi-panel":
             image = axis.imshow(panel_data.get("matrix") or [], aspect="auto", cmap=cmap, interpolation="nearest")
             if panel_template == "heatmap" and panel_data.get("colorbar", False):
                 fig.colorbar(image, ax=axis, fraction=0.046, pad=0.035)
-            panel_x_labels = panel_data.get("xLabels") or panel_data.get("colLabels") or panel_data.get("columnLabels") or panel_data.get("columns")
-            panel_y_labels = panel_data.get("yLabels") or panel_data.get("rowLabels") or panel_data.get("row_labels") or panel_data.get("targets")
+            panel_x_labels = panel_data.get("xLabels") or panel_data.get("colLabels") or panel_data.get("columnLabels") or panel_data.get("columns") or panel_data.get("x")
+            panel_y_labels = panel_data.get("yLabels") or panel_data.get("rowLabels") or panel_data.get("row_labels") or panel_data.get("targets") or panel_data.get("y")
             if panel_x_labels:
                 panel_x_labels = [str(value) for value in panel_x_labels]
                 rotation = 36 if max([len(value) for value in panel_x_labels] or [0]) > 6 or len(panel_x_labels) > 4 else 0
@@ -4687,23 +6196,60 @@ elif template == "multi-panel":
             group_values = [finite_list(group.get("values") or []) for group in groups]
             names = [str(group.get("name") or f"G{index + 1}") for index, group in enumerate(groups)]
             positions = list(range(1, len(group_values) + 1))
-            axis.violinplot(group_values, positions=positions, widths=0.65, showmeans=False, showmedians=True, showextrema=False)
+            mode = str(panel_data.get("mode") or "box+violin").lower()
+            if "violin" in mode:
+                violins = axis.violinplot(group_values, positions=positions, widths=0.65, showmeans=False, showmedians=False, showextrema=False)
+                for group_index, body in enumerate(violins.get("bodies", [])):
+                    body.set_facecolor(palette[group_index % len(palette)])
+                    body.set_edgecolor(mpl.rcParams.get("axes.edgecolor", "#222222"))
+                    body.set_alpha(0.18)
+                    body.set_linewidth(0.55)
+            if "box" in mode:
+                box = axis.boxplot(
+                    group_values,
+                    positions=positions,
+                    widths=0.24,
+                    patch_artist=True,
+                    showfliers=False,
+                    medianprops={"color": mpl.rcParams.get("text.color", "#222222"), "linewidth": 0.72},
+                    whiskerprops={"color": mpl.rcParams.get("axes.edgecolor", "#222222"), "linewidth": 0.58},
+                    capprops={"color": mpl.rcParams.get("axes.edgecolor", "#222222"), "linewidth": 0.58},
+                )
+                for group_index, patch in enumerate(box.get("boxes", [])):
+                    patch.set_facecolor(palette[group_index % len(palette)])
+                    patch.set_alpha(0.3)
+                    patch.set_edgecolor(mpl.rcParams.get("axes.edgecolor", "#222222"))
+                    patch.set_linewidth(0.58)
+            if panel_data.get("showPoints", True):
+                for group_index, values_for_group in enumerate(group_values):
+                    color = palette[group_index % len(palette)]
+                    jittered = [positions[group_index] + math.sin((point_index + 1) * 12.9898) * 0.052 for point_index in range(len(values_for_group))]
+                    axis.scatter(jittered, values_for_group, s=5.5, color=color, alpha=0.48, linewidths=0, zorder=3)
+            comparison_count = draw_group_comparisons(axis, panel_data.get("comparisons"), names, positions, group_values, font_scale=0.9)
+            if comparison_count:
+                renderer_diagnostics["distributionComparisonCount"] = renderer_diagnostics.get("distributionComparisonCount", 0) + comparison_count
             axis.set_xticks(positions, names, rotation=24 if len(names) > 3 else 0, ha="right" if len(names) > 3 else "center")
         elif panel_template == "histogram-density":
             for series_index, item in enumerate(panel_data.get("series") or []):
                 values = finite_list(item.get("values") or [])
                 axis.hist(values, bins=int(panel_data.get("bins") or 18), density=bool(panel_data.get("density", True)), alpha=0.25, label=item.get("name") or f"Series {series_index + 1}")
-        elif panel_template == "schematic-grid":
+        elif panel_template == "schematic-grid" or panel_template == "flowchart":
             axis.axis("off")
             nodes = panel_data.get("nodes") or []
             for node_index, node in enumerate(nodes[:4]):
                 axis.text(0.5, 0.84 - node_index * 0.22, str(node.get("label") or ""), ha="center", va="center", fontsize=min(label_size, 7.5), bbox={"boxstyle": "round,pad=0.18", "facecolor": palette[node_index % len(palette)], "alpha": 0.12, "edgecolor": mpl.rcParams.get("axes.edgecolor", "#222222")})
+                if panel_template == "flowchart" and node_index < min(len(nodes), 4) - 1:
+                    axis.annotate("", xy=(0.5, 0.76 - node_index * 0.22), xytext=(0.5, 0.70 - node_index * 0.22), arrowprops={"arrowstyle": "-|>", "lw": 0.55, "color": mpl.rcParams.get("axes.edgecolor", "#222222"), "alpha": 0.65})
         set_labels_from(axis, panel_labels)
         if panel_labels.get("legend", False):
             handles, legend_labels = axis.get_legend_handles_labels()
             if handles:
                 axis.legend(loc="best", fontsize=6.2, frameon=False)
-        axis.text(-0.16, 1.08, panel.get("panel") or panel_letters[panel_index], transform=axis.transAxes, fontweight="bold", va="top", fontsize=9.2, clip_on=False)
+        panel_label = panel.get("panel")
+        if panel_label is None and default_panel_labels != "none":
+            panel_label = panel_letters[panel_index]
+        if panel_label:
+            axis.text(-0.16, 1.08, panel_label, transform=axis.transAxes, fontweight="bold", va="top", fontsize=9.2, clip_on=False)
     for panel_index, panel in enumerate(panels):
         row = panel_index // columns
         col = panel_index % columns
@@ -4713,9 +6259,139 @@ elif template == "multi-panel":
         col = empty_index % columns
         axes_grid[row][col].axis("off")
     if labels.get("title"):
-        fig.suptitle(labels.get("title"), fontsize=title_size, y=1.02)
+        fig.suptitle(labels.get("title"), fontsize=title_size)
+        add_layout_note("Reserved constrained-layout space for the multi-panel title.")
     renderer_diagnostics["multiPanelCount"] = len(panels)
     add_layout_note(f"Rendered {len(panels)} controlled subpanels in a {rows}x{columns} layout.")
+elif template == "flowchart":
+    nodes = data.get("nodes") or []
+    raw_edges = data.get("edges") or []
+    node_ids = []
+    for index, node in enumerate(nodes):
+        node_ids.append(str(node.get("id") or node.get("key") or index))
+    node_id_set = set(node_ids)
+    auto_edges = False
+    if not raw_edges and len(node_ids) > 1:
+        auto_edges = True
+        raw_edges = [{"from": node_ids[index], "to": node_ids[index + 1]} for index in range(len(node_ids) - 1)]
+    edges = []
+    for edge in raw_edges:
+        start_id = str(edge.get("from"))
+        end_id = str(edge.get("to"))
+        if start_id in node_id_set and end_id in node_id_set:
+            edges.append({"from": start_id, "to": end_id, "label": edge.get("label")})
+    positions = {}
+    box_width = 1.18
+    box_height = 0.42
+    if auto_edges and len(nodes) > 6:
+        columns = int(math.ceil(math.sqrt(len(nodes) * 1.6)))
+        rows = int(math.ceil(len(nodes) / max(1, columns)))
+        for index, node_id in enumerate(node_ids):
+            row_index = index // columns
+            col_index = index % columns
+            col = col_index if row_index % 2 == 0 else columns - 1 - col_index
+            row = rows - 1 - row_index
+            positions[node_id] = (col * 1.65 + 0.85, row * 0.92 + 0.62)
+        ax.set_xlim(0, columns * 1.65)
+        ax.set_ylim(0, rows * 0.92 + 0.45)
+    else:
+        levels = {node_id: 0 for node_id in node_ids}
+        for _ in range(max(1, len(node_ids))):
+            changed = False
+            for edge in edges:
+                start_level = levels.get(edge["from"], 0)
+                next_level = min(len(node_ids) - 1, start_level + 1)
+                if levels.get(edge["to"], 0) < next_level:
+                    levels[edge["to"]] = next_level
+                    changed = True
+            if not changed:
+                break
+        grouped = {}
+        for node_id in node_ids:
+            grouped.setdefault(levels.get(node_id, 0), []).append(node_id)
+        columns = max(grouped.keys(), default=0) + 1
+        rows = max([len(items) for items in grouped.values()] or [1])
+        for level, items in grouped.items():
+            for item_index, node_id in enumerate(items):
+                y_offset = (rows - len(items)) * 0.5
+                positions[node_id] = (level * 1.75 + 0.85, (rows - 1 - item_index - y_offset) * 0.92 + 0.62)
+        ax.set_xlim(0, max(1, columns) * 1.75)
+        ax.set_ylim(0, max(1, rows) * 0.92 + 0.45)
+    ax.axis("off")
+    def wrap_flow_label(value):
+        text = str(value or "")
+        if len(text) <= 13 or " " not in text:
+            return text
+        words = text.split()
+        lines = []
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if len(candidate) <= 12:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return "\n".join(lines[:3])
+    def flow_font_size(label):
+        base = as_float(mpl.rcParams.get("font.size", 8), 8)
+        longest = max([len(part) for part in str(label).split("\n")] or [0])
+        if longest > 15:
+            return min(base, 6.4)
+        if longest > 11:
+            return min(base, 7.0)
+        return min(base, 8.0)
+    def boundary_points(start, end):
+        sx, sy = start
+        ex, ey = end
+        dx = ex - sx
+        dy = ey - sy
+        if abs(dx) >= abs(dy):
+            start_offset = (box_width / 2 + 0.04 if dx >= 0 else -box_width / 2 - 0.04, 0)
+            end_offset = (-box_width / 2 - 0.04 if dx >= 0 else box_width / 2 + 0.04, 0)
+        else:
+            start_offset = (0, box_height / 2 + 0.04 if dy >= 0 else -box_height / 2 - 0.04)
+            end_offset = (0, -box_height / 2 - 0.04 if dy >= 0 else box_height / 2 + 0.04)
+        return (sx + start_offset[0], sy + start_offset[1]), (ex + end_offset[0], ey + end_offset[1])
+    for edge in edges:
+        start = positions.get(edge["from"])
+        end = positions.get(edge["to"])
+        if not start or not end:
+            continue
+        start_edge, end_edge = boundary_points(start, end)
+        arrow = FancyArrowPatch(
+            start_edge,
+            end_edge,
+            arrowstyle="-|>",
+            mutation_scale=11,
+            linewidth=0.85,
+            color=mpl.rcParams.get("axes.edgecolor", "#222222"),
+            alpha=0.76,
+            connectionstyle="arc3,rad=0.04",
+            zorder=1,
+        )
+        ax.add_patch(arrow)
+        if edge.get("label"):
+            ax.text((start_edge[0] + end_edge[0]) / 2, (start_edge[1] + end_edge[1]) / 2 + 0.08, str(edge.get("label")), ha="center", va="center", fontsize=min(label_size, 6.4), color=mpl.rcParams.get("text.color", "#222222"), zorder=4)
+    for index, node in enumerate(nodes):
+        node_id = node_ids[index]
+        x, y = positions.get(node_id, (0, 0))
+        color = node.get("color") or palette[index % len(palette)]
+        rect = Rectangle((x - box_width / 2, y - box_height / 2), box_width, box_height, facecolor=color, edgecolor=mpl.rcParams.get("axes.edgecolor", "#222222"), linewidth=0.85, alpha=0.16, zorder=2)
+        ax.add_patch(rect)
+        label = wrap_flow_label(node.get("label", ""))
+        ax.text(x, y, label, ha="center", va="center", fontsize=flow_font_size(label), color=mpl.rcParams.get("text.color", "#222222"), wrap=True, linespacing=0.94, zorder=3)
+    renderer_diagnostics["flowchartNodeCount"] = len(nodes)
+    renderer_diagnostics["flowchartEdgeCount"] = len(edges)
+    if auto_edges:
+        add_layout_note("Rendered directed flowchart with inferred sequential arrows because no edges were provided.")
+    else:
+        add_layout_note("Rendered directed flowchart with explicit arrows.")
+    if labels.get("title"):
+        ax.set_title(labels.get("title"), pad=4, fontsize=title_size)
 elif template == "schematic-grid":
     nodes = data.get("nodes") or []
     edges = data.get("edges") or []
@@ -4910,7 +6586,7 @@ for figure_axis in fig.axes:
     except Exception:
         pass
 
-if template not in ("schematic-grid", "heatmap", "attention-map", "multi-panel"):
+if template not in ("schematic-grid", "flowchart", "heatmap", "attention-map", "multi-panel"):
     if mpl.rcParams.get("axes.grid"):
         ax.grid(True)
     for spine in ("top", "right"):

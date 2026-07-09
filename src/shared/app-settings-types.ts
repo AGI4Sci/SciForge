@@ -125,6 +125,17 @@ export type ModelRouterSettingsPatchV1 = Partial<
 
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
+export type ImageGenerationSettingsV1 = {
+  componentSegmentationRunnerPath: string
+  componentSegmentationModelPath: string
+  /** @deprecated Use componentSegmentationRunnerPath. */
+  fastSamRunnerPath?: string
+  /** @deprecated Use componentSegmentationModelPath. */
+  fastSamModelPath?: string
+}
+
+export type ImageGenerationSettingsPatchV1 = Partial<ImageGenerationSettingsV1>
+
 export type AgentThreadIdsV1 = Partial<Record<AgentRuntimeId, string>>
 
 export type ComputerUseBackendPreference = 'gui-owl'
@@ -1425,6 +1436,7 @@ export type AppSettingsV1 = {
   modelRouter?: ModelRouterSettingsV1
   runtimeGuards?: RuntimeGuardSettingsV1
   agentCapabilities?: AgentCapabilitySettingsV1
+  imageGeneration?: ImageGenerationSettingsV1
   computerUse?: ComputerUseSettingsV1
   activeAgentRuntime?: AgentRuntimeId
   agents: AgentRuntimeSettingsEnvelopeV1
@@ -1445,12 +1457,13 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities'>
+  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
   provider?: ModelProviderSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
   runtimeGuards?: RuntimeGuardSettingsPatchV1
   agentCapabilities?: AgentCapabilitySettingsPatchV1
+  imageGeneration?: ImageGenerationSettingsPatchV1
   computerUse?: ComputerUseSettingsPatchV1
   agents?: AgentRuntimeSettingsEnvelopePatchV1
   log?: Partial<LogConfigV1>

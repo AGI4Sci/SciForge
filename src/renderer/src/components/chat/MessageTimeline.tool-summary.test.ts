@@ -406,6 +406,33 @@ describe('MessageTimeline local runtime metadata smoke', () => {
     ])
   })
 
+  it('keeps the runtime default workspace for artifacts inside nested .sciforge image output dirs', () => {
+    const block = toolBlock({
+      summary: 'image_generation_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            outputPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.png',
+            manifestPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.manifest.json',
+            artifactManifestPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/artifacts/generated-image.generated-image.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'mcp_image_generation_image_generation_render' }
+    })
+
+    expect(timelineImagesFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'generated_image',
+        outputPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.png',
+        workspaceRoot: '/Users/yhh/.sciforge/default_workspace',
+        sourceTool: 'image_generation'
+      })
+    ])
+  })
+
   it('extracts scientific plotting render artifacts from structured tool detail', () => {
     const block = toolBlock({
       summary: 'scientific_plotting_render: rendered',
@@ -494,7 +521,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
 
     expect(html).toContain('PPTX export')
     expect(html).toContain('Open canvas review')
-    expect(html).toContain('Copy path')
+    expect(html).toContain('Copy file path')
     expect(html).not.toContain('Open original')
   })
 

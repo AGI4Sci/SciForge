@@ -147,6 +147,8 @@ const api = {
     ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
   getSciforgeCanvasStatus: (workspaceRoot) =>
     ipcRenderer.invoke('sciforge-canvas:status', { workspaceRoot }),
+  getLocalDrawioUrl: () =>
+    ipcRenderer.invoke('drawio:local-url'),
   openSciforgeCanvas: (request) =>
     ipcRenderer.invoke('sciforge-canvas:open', request),
   saveSciforgeCanvas: (request) =>
@@ -157,6 +159,8 @@ const api = {
     ipcRenderer.invoke('sciforge-canvas:insert-artifact', request),
   importRecentSciforgeCanvasArtifacts: (request) =>
     ipcRenderer.invoke('sciforge-canvas:import-recent-artifacts', request),
+  splitSciforgeCanvasArtifactComponents: (request) =>
+    ipcRenderer.invoke('sciforge-canvas:split-artifact-components', request),
   exportSciforgeCanvasReviewPacket: (request) =>
     ipcRenderer.invoke('sciforge-canvas:export-review-packet', request),
   extractFigureStyle: (request) =>

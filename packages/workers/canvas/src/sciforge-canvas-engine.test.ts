@@ -1,12 +1,13 @@
 import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   exportSciforgeCanvasReviewPacket,
   importRecentSciforgeCanvasArtifacts,
   insertSciforgeCanvasArtifact,
   openOrCreateSciforgeCanvas,
+  splitSciforgeCanvasArtifactComponents,
   saveSciforgeCanvasSelection
 } from './sciforge-canvas-engine'
 
@@ -15,11 +16,129 @@ const PNG_1X1 = Buffer.from(
   'base64'
 )
 
+const PNG_FRAMEWORK_BLOCKS = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAFAAAAA8CAYAAADxJz2MAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAADqSURBVHic7dqxTQNBEEBRDlGDIwqhDLdA4AZMQA0EuAEHtEAZFELkJta5oxNfi23pvXg1Wn1NdLfLGGM88GeP177AvRMwEjASMBIwEjASMBIwEjB6Wntw+/U79SLfr89T589iA6PVG3hL3n4OU+d/vuxXn7WBkYCRgJGAkYCRgJGAkYCRgJGAkYCRgJGA0eqvMff6vW42Gxgt3sY0NjASMBIwEjASMBIwEjASMBIw+veXCaf33dT5m4/j1PmXbGAkYCRgJGAkYCRgJGAkYCRgJGAkYOSvXGQDIwEjASMBIwEjASMBIwEjAaMz98gWn0UO9PwAAAAASUVORK5CYII=',
+  'base64'
+)
+
 async function makeWorkspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sciforge-canvas-test-'))
 }
 
 describe('SciForge Canvas engine', () => {
+  beforeEach(() => {
+    process.env.SCIFORGE_CANVAS_ENGINE = 'tldraw'
+  })
+
+  afterEach(() => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+  })
+
+  it('uses draw.io XML as the default canvas engine and exports review packets', async () => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+    const workspaceRoot = await makeWorkspace()
+    const plotPath = join(workspaceRoot, 'plot.png')
+    await writeFile(plotPath, PNG_1X1)
+
+    const opened = await openOrCreateSciforgeCanvas({ workspaceRoot, canvasId: 'drawio-review' })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(opened.engine).toBe('drawio')
+    expect(opened.drawioPath).toMatch(/canvas\.drawio\.xml$/)
+    expect(JSON.stringify(opened.snapshot)).toContain('"engine":"drawio"')
+
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      canvasId: 'drawio-review',
+      artifactKind: 'scientific_plot',
+      outputPath: plotPath,
+      title: 'Drawio plot'
+    })
+    expect(inserted.ok).toBe(true)
+    if (!inserted.ok) return
+    const xml = await readFile(join(inserted.canvasDir, 'canvas.drawio.xml'), 'utf8')
+    expect(xml).toContain('mxfile')
+    expect(xml).toContain('sciforgeMeta')
+    expect(xml).toContain('Drawio plot')
+    expect(xml).toContain('shape=image')
+    expect(xml).toContain('image=data:image/png,')
+    expect(xml).not.toContain('data%3Aimage')
+    expect(xml).not.toContain('sciforgeCanvasPlaceholder&quot;:true')
+
+    const packet = await exportSciforgeCanvasReviewPacket({
+      workspaceRoot,
+      canvasId: 'drawio-review',
+      title: 'Drawio review'
+    })
+    expect(packet.ok).toBe(true)
+    if (!packet.ok) return
+    expect(packet.packet.artifacts).toHaveLength(1)
+    expect(packet.packet.artifacts[0].artifactKind).toBe('scientific_plot')
+  })
+
+  it('inlines medium generated images in draw.io instead of inserting oversized placeholders', async () => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+    const workspaceRoot = await makeWorkspace()
+    const imagePath = join(workspaceRoot, 'generated.png')
+    await writeFile(imagePath, Buffer.concat([PNG_1X1, Buffer.alloc(1_600_000)]))
+
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      canvasId: 'drawio-medium-image',
+      artifactKind: 'generated_image',
+      outputPath: imagePath,
+      title: 'Generated image'
+    })
+    expect(inserted.ok).toBe(true)
+    if (!inserted.ok) return
+    const xml = await readFile(join(inserted.canvasDir, 'canvas.drawio.xml'), 'utf8')
+    expect(xml).toContain('shape=image')
+    expect(xml).toContain('image=data:image/png,')
+    expect(xml).not.toContain('data%3Aimage')
+    expect(xml).not.toContain('Generated image&lt;/b&gt;&lt;br&gt;')
+  })
+
+  it('hydrates legacy draw.io image placeholders when reopening a canvas', async () => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+    const workspaceRoot = await makeWorkspace()
+    const imagePath = join(workspaceRoot, 'legacy-generated.png')
+    await writeFile(imagePath, PNG_1X1)
+    const canvasDir = join(workspaceRoot, '.sciforge', 'canvases', 'legacy-drawio')
+    await mkdir(canvasDir, { recursive: true })
+    const meta = Buffer.from(JSON.stringify({
+      sciforgeCanvasArtifact: true,
+      sciforgeCanvasPlaceholder: true,
+      artifactKind: 'generated_image',
+      sciforgeArtifact: {
+        artifactKind: 'generated_image',
+        sourcePath: imagePath,
+        title: 'Legacy generated'
+      }
+    }), 'utf8').toString('base64url')
+    await writeFile(join(canvasDir, 'canvas.drawio.xml'), `<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="SciForge">
+  <diagram id="sciforge-canvas" name="legacy-drawio">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="shape:legacy" value="&lt;b&gt;Legacy generated&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;dashed=1;" vertex="1" parent="1" sciforgeMeta="${meta}">
+          <mxGeometry x="80" y="80" width="640" height="360" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>`)
+
+    const opened = await openOrCreateSciforgeCanvas({ workspaceRoot, canvasId: 'legacy-drawio' })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const xml = await readFile(join(canvasDir, 'canvas.drawio.xml'), 'utf8')
+    expect(xml).toContain('shape=image')
+    expect(xml).toContain('image=data:image/png,')
+    expect(xml).not.toContain('dashed=1')
+  })
+
   it('creates a workspace canvas and inserts a scientific plot artifact with Cowart-compatible metadata', async () => {
     const workspaceRoot = await makeWorkspace()
     const plotPath = join(workspaceRoot, 'plot.png')
@@ -137,6 +256,58 @@ describe('SciForge Canvas engine', () => {
       nextControlledTool: 'scientific_plotting_render',
       status: 'draft'
     })
+  })
+
+  it('routes visual redraw requests for scientific plots to image generation edits', async () => {
+    const workspaceRoot = await makeWorkspace()
+    const plotPath = join(workspaceRoot, 'transformer-flowchart.png')
+    await writeFile(plotPath, PNG_1X1)
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      artifactKind: 'scientific_plot',
+      outputPath: plotPath,
+      title: 'Transformer flowchart draft'
+    })
+    expect(inserted.ok).toBe(true)
+    if (!inserted.ok) return
+
+    const snapshot = JSON.parse(await readFile(inserted.canvasPath, 'utf8'))
+    snapshot.store['shape:visual-redraw-annotation'] = {
+      id: 'shape:visual-redraw-annotation',
+      typeName: 'shape',
+      type: 'arrow',
+      parentId: 'page:sciforge-canvas',
+      index: 'b1',
+      x: 12,
+      y: 20,
+      rotation: 0,
+      isLocked: false,
+      opacity: 1,
+      meta: {
+        cowartAnnotationArrow: true,
+        cowartAnnotationSourceShapeId: inserted.shapeId
+      },
+      props: {
+        start: { x: 0, y: 0 },
+        end: { x: 80, y: 20 },
+        color: 'red',
+        richText: { type: 'doc', content: [{ type: 'text', text: '这个图画得太简单了，重新画成论文级流程图' }] }
+      }
+    }
+    await writeFile(inserted.canvasPath, `${JSON.stringify(snapshot, null, 2)}\n`)
+
+    const packet = await exportSciforgeCanvasReviewPacket({ workspaceRoot, title: 'Review' })
+    expect(packet.ok).toBe(true)
+    if (!packet.ok) return
+    expect(packet.packet.modificationSuggestions[0]).toMatchObject({
+      annotationShapeId: 'shape:visual-redraw-annotation',
+      targetShapeId: inserted.shapeId,
+      artifactKind: 'scientific_plot',
+      instruction: '这个图画得太简单了，重新画成论文级流程图',
+      nextControlledTool: 'image_generation_edit_from_canvas_packet',
+      status: 'draft'
+    })
+    expect(packet.packet.modificationSuggestions[0]?.safety).toContain('visually enhanced')
   })
 
   it('exports box annotations as review packet area targets', async () => {
@@ -699,6 +870,149 @@ fs.writeFileSync(prefix + '-1.png', Buffer.from(png, 'base64'))
       restoreEnv('SCIFORGE_CANVAS_DISABLE_PPT_RENDER', previousDisable)
     }
   })
+
+  it('splits framework component manifests into selectable draw.io hitboxes and review metadata', async () => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+    const workspaceRoot = await makeWorkspace()
+    const imageDir = join(workspaceRoot, 'framework')
+    await mkdir(imageDir, { recursive: true })
+    const sourcePath = join(imageDir, 'source.png')
+    const basePath = join(imageDir, 'component-base.png')
+    const componentPath = join(imageDir, 'component-001.transparent.png')
+    await writeFile(sourcePath, PNG_1X1)
+    await writeFile(basePath, PNG_1X1)
+    await writeFile(componentPath, PNG_1X1)
+    const manifestPath = join(imageDir, 'framework-components.json')
+    await writeFile(manifestPath, JSON.stringify({
+      version: 1,
+      kind: 'sciforge_framework_components',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      sourceImagePath: sourcePath,
+      componentBasePath: basePath,
+      componentDir: imageDir,
+      canvasSize: { width: 100, height: 80 },
+      components: [{
+        componentId: 'component-001',
+        layerId: 'layer-component-001',
+        type: 'text_label',
+        title: 'Component 001',
+        bbox: { x: 10, y: 12, w: 30, h: 16 },
+        pixelBbox: { x: 10, y: 12, w: 30, h: 16 },
+        assetPath: componentPath,
+        transparentAssetPath: componentPath,
+        role: 'primary',
+        qualityScore: 0.9,
+        semanticLayer: 'text',
+        detectionMethod: 'local_connected_components',
+        confidence: 0.9
+      }],
+      blocks: [{
+        blockId: 'block-input',
+        title: 'Input block',
+        blockType: 'input',
+        bbox: { x: 8, y: 10, w: 36, h: 22 },
+        pixelBbox: { x: 8, y: 10, w: 36, h: 22 },
+        componentIds: ['component-001'],
+        semanticLayers: ['text'],
+        confidence: 0.92
+      }],
+      warnings: []
+    }, null, 2))
+
+    const split = await splitSciforgeCanvasArtifactComponents({
+      workspaceRoot,
+      canvasId: 'component-split',
+      frameworkComponentManifestPath: manifestPath,
+      displayWidth: 500
+    })
+    expect(split.ok).toBe(true)
+    if (!split.ok) return
+    expect(split.componentCount).toBe(1)
+    const xml = await readFile(join(split.canvasDir, 'canvas.drawio.xml'), 'utf8')
+    expect(xml).toContain('block-input')
+    expect(xml).toContain('pointerEvents=1')
+    expect(xml).toContain('value=""')
+    expect(xml).toContain('fillOpacity=3')
+    expect(xml).toContain('sciforgeMeta')
+
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      canvasId: 'component-auto-split',
+      artifactKind: 'generated_image',
+      outputPath: sourcePath,
+      frameworkComponentManifestPath: manifestPath,
+      componentBasePath: basePath,
+      title: 'Auto split framework'
+    })
+    expect(inserted.ok).toBe(true)
+    const autoSplit = await splitSciforgeCanvasArtifactComponents({
+      workspaceRoot,
+      canvasId: 'component-auto-split',
+      displayWidth: 500
+    })
+    expect(autoSplit.ok).toBe(true)
+    if (!autoSplit.ok) return
+    expect(autoSplit.componentCount).toBe(1)
+
+    await saveSciforgeCanvasSelection({
+      workspaceRoot,
+      canvasId: 'component-split',
+      selection: {
+        selectedShapes: [{ id: split.componentShapeIds[0]!, type: 'vertex' }],
+        updatedAt: '2026-07-07T00:00:00.000Z'
+      }
+    })
+    const packet = await exportSciforgeCanvasReviewPacket({ workspaceRoot, canvasId: 'component-split' })
+    expect(packet.ok).toBe(true)
+    if (!packet.ok) return
+    expect(packet.packet.selectedComponents?.[0]).toMatchObject({
+      blockId: 'block-input',
+      parentBlockId: 'block-input',
+      parentBlockTitle: 'Input block',
+      parentBlockType: 'input',
+      childComponentIds: ['component-001']
+    })
+    expect(packet.packet.selectedComponents?.[0]?.frameworkComponentManifestPath).toMatch(/framework-components\.json$/)
+  })
+
+  it('generates a component manifest from a plain draw.io image before splitting', async () => {
+    delete process.env.SCIFORGE_CANVAS_ENGINE
+    const workspaceRoot = await makeWorkspace()
+    const imageDir = join(workspaceRoot, 'plain-framework')
+    await mkdir(imageDir, { recursive: true })
+    const sourcePath = join(imageDir, 'framework.png')
+    await writeFile(sourcePath, PNG_FRAMEWORK_BLOCKS)
+
+    const inserted = await insertSciforgeCanvasArtifact({
+      workspaceRoot,
+      canvasId: 'plain-image-component-split',
+      artifactKind: 'generated_image',
+      outputPath: sourcePath,
+      title: 'Plain framework image'
+    })
+    expect(inserted.ok).toBe(true)
+
+    const split = await splitSciforgeCanvasArtifactComponents({
+      workspaceRoot,
+      canvasId: 'plain-image-component-split',
+      displayWidth: 500
+    })
+    expect(split.ok).toBe(true)
+    if (!split.ok) return
+    expect(split.componentCount).toBeGreaterThan(0)
+    expect(split.frameworkComponentManifestPath).toMatch(/framework-components\.json$/)
+    expect(split.warnings.join('\n')).toContain('No framework component manifest was found')
+    const manifest = JSON.parse(await readFile(split.frameworkComponentManifestPath, 'utf8')) as { kind?: string; components?: unknown[] }
+    expect(manifest.kind).toBe('sciforge_framework_components')
+    expect(manifest.components?.length ?? 0).toBeGreaterThan(0)
+    const xml = await readFile(join(split.canvasDir, 'canvas.drawio.xml'), 'utf8')
+    expect(xml).toContain('pointerEvents=1')
+    expect(xml).toContain('value=""')
+    expect(xml).toContain('fillOpacity=3')
+    expect(xml).toContain('shape:plain-framework-image')
+    expect(xml).not.toContain('framework-component-base')
+  })
+
 })
 
 function restoreEnv(name: string, value: string | undefined): void {

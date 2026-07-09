@@ -13,6 +13,7 @@ import {
   IMAGE_GENERATION_TOOL_SIDE_EFFECTS
 } from '../../packages/workers/image-generation/src/contract'
 import {
+  getImageGenerationSettings,
   getModelRouterSettings,
   type AppSettingsV1,
 } from '../shared/app-settings'
@@ -20,6 +21,10 @@ import { resolveRuntimeModelRouterSettings } from '../shared/app-settings-model-
 
 export const GUI_IMAGE_GENERATION_MCP_SERVER_NAME = 'image_generation'
 const GUI_IMAGE_GENERATION_MCP_NODE_ENTRY = 'out/main/image-generation-mcp-node-entry.js'
+const COMPONENT_SEGMENTATION_RUNNER_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_RUNNER'
+const COMPONENT_SEGMENTATION_MODEL_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH'
+const FASTSAM_RUNNER_ENV = 'SCIFORGE_FASTSAM_RUNNER'
+const FASTSAM_MODEL_ENV = 'SCIFORGE_FASTSAM_MODEL_PATH'
 export const GUI_IMAGE_GENERATION_MCP_TIMEOUT_MS = 120_000
 export const GUI_IMAGE_GENERATION_MCP_LAUNCH_FLAG = IMAGE_GENERATION_MCP_FLAG
 
@@ -125,6 +130,21 @@ export function imageGenerationMcpEnabledTools(): string[] {
 }
 
 export function imageGenerationMcpSettingsChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
+  const prevSegmentation = getImageGenerationSettings(prev)
+  const nextSegmentation = getImageGenerationSettings(next)
+  if (
+    prevSegmentation.componentSegmentationRunnerPath.trim() !==
+    nextSegmentation.componentSegmentationRunnerPath.trim()
+  ) {
+    return true
+  }
+  if (
+    prevSegmentation.componentSegmentationModelPath.trim() !==
+    nextSegmentation.componentSegmentationModelPath.trim()
+  ) {
+    return true
+  }
+
   const a = getModelRouterSettings(prev).profiles.default.imageGenerator
   const b = getModelRouterSettings(next).profiles.default.imageGenerator
   const aConfigured = Boolean(a.apiKey.trim() && a.baseUrl.trim() && a.model.trim())
@@ -148,6 +168,15 @@ export function imageGenerationMcpEnv(
   void launch
   const env: Record<string, string> = { ...ELECTRON_RUN_AS_NODE_ENV }
   if (!settings) return env
+  const imageGeneration = getImageGenerationSettings(settings)
+  if (imageGeneration.componentSegmentationRunnerPath.trim()) {
+    env[COMPONENT_SEGMENTATION_RUNNER_ENV] = imageGeneration.componentSegmentationRunnerPath.trim()
+    env[FASTSAM_RUNNER_ENV] = imageGeneration.componentSegmentationRunnerPath.trim()
+  }
+  if (imageGeneration.componentSegmentationModelPath.trim()) {
+    env[COMPONENT_SEGMENTATION_MODEL_ENV] = imageGeneration.componentSegmentationModelPath.trim()
+    env[FASTSAM_MODEL_ENV] = imageGeneration.componentSegmentationModelPath.trim()
+  }
   const imageGenerator = getModelRouterSettings(settings).profiles.default.imageGenerator
   if (!imageGenerator.apiKey.trim() || !imageGenerator.baseUrl.trim() || !imageGenerator.model.trim()) return env
   const router = resolveRuntimeModelRouterSettings(settings)

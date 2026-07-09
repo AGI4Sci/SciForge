@@ -22,3 +22,19 @@ New image or multimodal capabilities must not bypass the router layer. The image
 request includes `canvasId` / `threadId`, the worker records those fields in the
 image manifest and artifact manifest so the GUI or Canvas MCP can import the
 artifact through the normal Canvas insertion path.
+
+## Diagram planning behavior
+
+`image_generation_plan` classifies drawing requests into three intents:
+
+- `general_image`: ordinary image planning.
+- `flowchart`: a lightweight flowchart brief with step order, labels, and arrows.
+- `framework_diagram`: a structured paper/framework diagram spec plus a design plan.
+
+For framework-style model architecture, method overview, workflow, or mechanism diagrams, `image_generation_render` writes sidecar files next to the PNG:
+
+- `.diagram-spec.json`: the normalized framework diagram structure.
+- `.framework-design-plan.json`: confirmation-oriented design intent and region plan.
+- `.diagram-layers.json`: editable `DiagramLayerManifest v1` used by SciForge Canvas.
+
+The render manifest and artifact manifest record these sidecar paths as `diagramSpecPath`, `frameworkDesignPlanPath`, and `diagramLayerManifestPath`. When the artifact is opened in the draw.io Canvas, the Canvas worker can turn the layer manifest into native draw.io nodes, labels, containers, and edges instead of inserting only a flat image.

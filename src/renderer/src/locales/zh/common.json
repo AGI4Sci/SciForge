@@ -1415,6 +1415,7 @@
   "imageOpenCanvasReview": "打开画布审改",
   "imageCanvasReviewUnavailable": "当前图片无法进入画布审改，请确认工作区和图片路径可用。",
   "artifactOpenCanvasReview": "打开画布审改",
+  "artifactCopyFilePath": "复制文件路径",
   "canvasArtifactReviewUnavailable": "当前产物无法进入画布审改，请确认工作区和产物路径可用。",
   "imageOpenOriginal": "打开原图",
   "generatedFilesTitle": "图片",

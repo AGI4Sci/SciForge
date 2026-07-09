@@ -95,6 +95,7 @@ import {
   type PaperRadarWorkerService
 } from './services/paper-radar-worker-service'
 import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
+import { startLocalDrawioServer, stopLocalDrawioServer } from './drawio-local-server'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
@@ -305,6 +306,14 @@ function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
     appPath: app.getAppPath(),
     execPath: process.execPath,
     isPackaged: app.isPackaged
+  }
+}
+
+function getLocalDrawioServerLaunchConfig() {
+  return {
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    env: process.env
   }
 }
 
@@ -1602,6 +1611,15 @@ app.whenReady().then(async () => {
     return initial
   })
   traceStartup('settings load:done')
+  void startLocalDrawioServer(getLocalDrawioServerLaunchConfig()).then((result) => {
+    if (result.ok) {
+      console.info(`[sciforge draw.io] local editor listening at ${result.url}`)
+    } else {
+      console.warn('[sciforge draw.io] local editor assets unavailable:', result.checkedPaths.join(', '))
+    }
+  }).catch((error) => {
+    console.warn('[sciforge draw.io] failed to start local editor:', error)
+  })
   setLocalRuntimeUnexpectedExitHandler(handleUnexpectedLocalRuntimeExit)
   appBehavior = initial.appBehavior
   syncLoginItemSettings(initial)
@@ -2008,6 +2026,7 @@ app.whenReady().then(async () => {
     pollWeixinInstall,
     resolveRuntimeConfigPath: resolveLocalRuntimeMcpJsonPath,
     openModelRouterConfigFile,
+    getLocalDrawioUrl: () => startLocalDrawioServer(getLocalDrawioServerLaunchConfig()),
     getPaperRadarService: () => getPaperRadarWorkerService(),
     researchCards: researchCardService,
     onRuntimeMcpConfigWritten: async () => {
@@ -2115,6 +2134,9 @@ app.on('will-quit', () => {
   })
   void workspaceHtmlPreviewService.close().catch((error) => {
     console.warn('[sciforge] failed to stop HTML preview server:', error)
+  })
+  void stopLocalDrawioServer().catch((error) => {
+    console.warn('[sciforge draw.io] failed to stop local editor:', error)
   })
 })
 

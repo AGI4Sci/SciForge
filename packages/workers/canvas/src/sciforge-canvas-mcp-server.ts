@@ -5,14 +5,16 @@ import {
   SCIFORGE_CANVAS_ARTIFACT_KINDS,
   type SciforgeCanvasImportRecentArtifactsRequest,
   type SciforgeCanvasInsertArtifactRequest,
-  type SciforgeCanvasReviewPacketRequest
+  type SciforgeCanvasReviewPacketRequest,
+  type SciforgeCanvasSplitArtifactComponentsRequest
 } from './types'
 import {
   exportSciforgeCanvasReviewPacket,
   getSciforgeCanvasStatus,
   importRecentSciforgeCanvasArtifacts,
   insertSciforgeCanvasArtifact,
-  openOrCreateSciforgeCanvas
+  openOrCreateSciforgeCanvas,
+  splitSciforgeCanvasArtifactComponents
 } from './sciforge-canvas-engine'
 import { SCIFORGE_CANVAS_MCP_FLAG } from './contract'
 
@@ -74,6 +76,7 @@ function workspaceRootFor(inputWorkspaceRoot: string | undefined, options: McpLa
 
 const artifactKindSchema = z.enum(SCIFORGE_CANVAS_ARTIFACT_KINDS)
 const placementSchema = z.enum(['right', 'left', 'below'])
+const insertionModeSchema = z.enum(['visual_image', 'editable_layers'])
 const scoreSchema = z.object({
   overall: z.number(),
   palette: z.number(),
@@ -113,7 +116,7 @@ export async function runSciforgeCanvasMcpServerFromArgv(argv: string[]): Promis
 
   server.registerTool('sciforge_canvas_open_or_create', {
     title: 'Open Or Create SciForge Canvas',
-    description: 'Create or read a workspace-local SciForge Canvas tldraw snapshot and selection state.',
+    description: 'Create or read a workspace-local SciForge Canvas draw.io XML document, with legacy tldraw snapshot compatibility.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       canvasId: z.string().trim().max(120).optional()
@@ -146,6 +149,15 @@ export async function runSciforgeCanvasMcpServerFromArgv(argv: string[]): Promis
       renderedSlideIndex: z.number().int().nonnegative().optional(),
       manifestPath: z.string().trim().max(4096).optional(),
       styleSpecPath: z.string().trim().max(4096).optional(),
+      diagramSpecPath: z.string().trim().max(4096).optional(),
+      frameworkDesignPlanPath: z.string().trim().max(4096).optional(),
+      diagramLayerManifestPath: z.string().trim().max(4096).optional(),
+      fastSamSegmentationPath: z.string().trim().max(4096).optional(),
+      fastSamBoxlibPath: z.string().trim().max(4096).optional(),
+      fastSamPreviewPath: z.string().trim().max(4096).optional(),
+      frameworkComponentManifestPath: z.string().trim().max(4096).optional(),
+      componentBasePath: z.string().trim().max(4096).optional(),
+      componentAssetPaths: z.array(z.string().trim().max(4096)).max(1000).optional(),
       referencePath: z.string().trim().max(4096).optional(),
       projectPath: z.string().trim().max(4096).optional(),
       svgPath: z.string().trim().max(4096).optional(),
@@ -156,6 +168,7 @@ export async function runSciforgeCanvasMcpServerFromArgv(argv: string[]): Promis
       sourceTool: z.string().trim().max(120).optional(),
       reviewScore: scoreSchema.optional(),
       reviewPacketPath: z.string().trim().max(4096).optional(),
+      insertionMode: insertionModeSchema.optional(),
       anchorShapeId: z.string().trim().max(200).optional(),
       placement: placementSchema.optional(),
       margin: z.number().min(0).max(500).optional(),
@@ -180,6 +193,37 @@ export async function runSciforgeCanvasMcpServerFromArgv(argv: string[]): Promis
       return textResult(jsonSummary(`SciForge canvas artifact ${result.ok ? result.status : 'failed'}.`, result), { result })
     } catch (error) {
       return errorResult(`Failed to insert SciForge Canvas artifact: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  server.registerTool('sciforge_canvas_split_artifact_components', {
+    title: 'Split Framework Artifact Components',
+    description: 'Expand a framework component manifest into draw.io image cells: locked component-base plus editable component assets carrying componentId metadata.',
+    inputSchema: {
+      workspaceRoot: z.string().trim().min(1).optional(),
+      canvasId: z.string().trim().max(120).optional(),
+      frameworkComponentManifestPath: z.string().trim().min(1).max(4096).optional(),
+      sourceShapeId: z.string().trim().max(200).optional(),
+      displayWidth: z.number().positive().max(5000).optional(),
+      margin: z.number().min(0).max(500).optional(),
+      dryRun: z.boolean().optional()
+    },
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (input) => {
+    try {
+      const request: SciforgeCanvasSplitArtifactComponentsRequest = {
+        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        ...(input.frameworkComponentManifestPath ? { frameworkComponentManifestPath: input.frameworkComponentManifestPath } : {}),
+        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+        ...(input.sourceShapeId ? { sourceShapeId: input.sourceShapeId } : {}),
+        ...(input.displayWidth !== undefined ? { displayWidth: input.displayWidth } : {}),
+        ...(input.margin !== undefined ? { margin: input.margin } : {}),
+        ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {})
+      }
+      const result = await splitSciforgeCanvasArtifactComponents(request)
+      return textResult(jsonSummary(`SciForge canvas component split ${result.ok ? result.status : 'failed'}.`, result), { result })
+    } catch (error) {
+      return errorResult(`Failed to split framework components on Canvas: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 

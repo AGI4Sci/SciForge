@@ -124,6 +124,27 @@ describe('dev sciforge browser bridge', () => {
     unsubscribe()
   })
 
+  it('forwards local draw.io URL requests through the dev bridge', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit
+    ): Promise<Response> => new Response(JSON.stringify({
+        ok: true,
+        payload: { ok: true, url: 'http://127.0.0.1:3000/?embed=1&proto=json' }
+      })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.getLocalDrawioUrl()
+
+    const invokeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/invoke'))
+    expect(JSON.parse(String((invokeCall?.[1] as RequestInit | undefined)?.body))).toMatchObject({
+      channel: 'drawio:local-url'
+    })
+  })
+
   it('routes Project DAG panel calls through the dev bridge', async () => {
     installWindow(undefined, '?devBrowserBridgeToken=query-token-123')
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, payload: { url: 'http://127.0.0.1:3898/' } })))
