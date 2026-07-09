@@ -214,16 +214,16 @@ export function MolecularWorkspaceViewer({
           <p>{resolvedModel.status.message}</p>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]">
+        <div className="grid h-full min-h-0 flex-1 overflow-hidden gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]">
           <div
-            className="workspace-preview-molecular-viewer__viewport relative min-h-[26rem] overflow-hidden rounded-md border border-ds-border bg-white"
+            className="workspace-preview-molecular-viewer__viewport relative h-full min-h-0 overflow-hidden rounded-md border border-ds-border bg-white"
             data-webgl-viewport
             role="img"
             aria-label="Mol* molecular structure workbench"
           >
             <div
               ref={renderContainerRef}
-              className="absolute inset-0"
+              className="absolute inset-0 min-h-0 overflow-hidden"
               data-molecular-render-container
             />
             {renderState.kind !== 'ready' ? (
