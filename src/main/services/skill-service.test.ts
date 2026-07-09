@@ -51,6 +51,52 @@ describe('skill-service', () => {
     }))
   })
 
+  it('discovers project extension skills from workspace extensions', async () => {
+    const workspaceRoot = join(tempRoot, 'workspace-extension-skill')
+    const extensionRoot = join(workspaceRoot, 'extensions', 'research-memory')
+    const skillRoot = join(extensionRoot, 'skill')
+    await mkdir(skillRoot, { recursive: true })
+    await writeFile(join(extensionRoot, 'extension.json'), JSON.stringify({
+      id: 'research-memory',
+      name: 'Research Memory',
+      kind: 'project-extension',
+      activation: ['project-open', 'agent-runtime'],
+      storage: '.sciforge/research-memory/research-memory.sqlite',
+      headless: true,
+      runtimeModule: 'dist/index.js',
+      contributes: {
+        agentTools: ['research_memory_resolve_context'],
+        skills: ['research-memory']
+      }
+    }), 'utf8')
+    await writeFile(join(skillRoot, 'skill.json'), JSON.stringify({
+      id: 'research-memory',
+      name: 'Research Memory',
+      description: 'Protocol for project research cognition.',
+      entry: 'SKILL.md',
+      triggers: {
+        promptPatterns: ['next training plan']
+      }
+    }), 'utf8')
+    await writeFile(join(skillRoot, 'SKILL.md'), '# Research Memory\n\nResolve context before planning.', 'utf8')
+
+    const roots = await guiSkillRootsForRuntime(createSettings(workspaceRoot), workspaceRoot)
+    const result = await listGuiSkills(createSettings(workspaceRoot), workspaceRoot)
+
+    expect(roots).toContainEqual({ path: skillRoot, scope: 'project' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.skills).toContainEqual(expect.objectContaining({
+      id: 'research-memory',
+      name: 'Research Memory',
+      description: 'Protocol for project research cognition.',
+      root: skillRoot,
+      entryPath: join(skillRoot, 'SKILL.md'),
+      scope: 'project',
+      legacy: false
+    }))
+  })
+
   it('keeps legacy SKILL.md entries with Chinese frontmatter names distinct', async () => {
     const workspaceRoot = join(tempRoot, 'workspace-cn')
     const skillRoot = join(workspaceRoot, '.agents', 'skills')

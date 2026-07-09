@@ -112,6 +112,7 @@ describe('HTTP server', () => {
         }
       ],
       webProviders: [],
+      extensions: [],
       skills: {
         enabled: false,
         roots: [],
@@ -145,6 +146,7 @@ describe('HTTP server', () => {
       providers: Array<{ id: string; reason?: string }>
       mcpServers: Array<{ id: string; lastError?: string }>
       webProviders: unknown[]
+      extensions: unknown[]
       skills: unknown
       attachments: unknown
       memory: unknown

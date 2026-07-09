@@ -7,6 +7,7 @@ import {
   type WorkspaceSkillSummary
 } from '../../../packages/workers/workspace-intel/src/index.js'
 import type { AppSettingsV1 } from '../../shared/app-settings'
+import { projectExtensionSkillRootsForRuntime } from './project-extension-service'
 import { expandHomePath } from './workspace-service'
 
 export type GuiSkillScope = 'project' | 'global'
@@ -57,9 +58,13 @@ export async function guiSkillRootsForRuntime(
     ...(settings?.remoteChannel.skills.extraDirs ?? []),
     ...(settings?.schedule.skills.extraDirs ?? [])
   ].map(normalizeSkillRootPath)
+  const extensionSkillRoots = await projectExtensionSkillRootsForRuntime(settings, workspaceRootOverride)
 
   return uniqueSkillRoots([
     ...projectRoots
+      .filter((root) => existsSync(root))
+      .map((path) => ({ path, scope: 'project' as const })),
+    ...extensionSkillRoots
       .filter((root) => existsSync(root))
       .map((path) => ({ path, scope: 'project' as const })),
     ...globalRoots

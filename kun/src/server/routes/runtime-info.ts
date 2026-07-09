@@ -12,6 +12,7 @@ export async function runtimeToolDiagnosticsJsonResponse(runtime: ServerRuntime)
     providers: [],
     mcpServers: [],
     webProviders: [],
+    extensions: [],
     skills: {
       enabled: false,
       roots: [],

@@ -12,6 +12,7 @@ export default defineConfig({
     environment: 'node',
     include: [
       'src/**/*.test.ts',
+      'extensions/research-memory/tests/**/*.test.ts',
       'packages/workers/evidence-dag/desktop/**/*.test.ts',
       'packages/workers/project-dag/desktop/**/*.test.ts'
     ]

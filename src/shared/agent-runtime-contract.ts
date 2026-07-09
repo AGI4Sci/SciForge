@@ -1223,6 +1223,11 @@ export type AgentRuntimeCapabilities = {
       readonly?: boolean
     }
     skills: CapabilityState
+    extensions?: CapabilityState & {
+      configuredExtensions?: number
+      loadedExtensions?: number
+      toolCount?: number
+    }
     subagents: CapabilityState & { maxParallel?: number; maxChildren?: number }
     diagnostics: CapabilityState
   }

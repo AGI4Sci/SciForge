@@ -1424,6 +1424,7 @@ function mapLocalRuntimeCapabilities(value: unknown, diagnosticsAvailable: boole
   const web = asRecord(manifest.web) ?? {}
   const research = asRecord(manifest.research) ?? {}
   const skills = asRecord(manifest.skills) ?? {}
+  const extensions = asRecord(manifest.extensions) ?? {}
   const subagents = asRecord(manifest.subagents) ?? {}
   const attachments = asRecord(manifest.attachments) ?? {}
   const memory = asRecord(manifest.memory) ?? {}
@@ -1456,6 +1457,12 @@ function mapLocalRuntimeCapabilities(value: unknown, diagnosticsAvailable: boole
         reason: 'GUI-Owl computer-use MCP server is not configured for the local runtime.'
       }),
       skills: capabilityState(skills),
+      extensions: {
+        ...capabilityState(extensions),
+        configuredExtensions: numberValue(extensions.configuredExtensions),
+        loadedExtensions: numberValue(extensions.loadedExtensions),
+        toolCount: numberValue(extensions.toolCount)
+      },
       subagents: {
         ...capabilityState(subagents),
         maxParallel: numberValue(subagents.maxParallel),

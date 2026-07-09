@@ -17,6 +17,9 @@ const LOCAL_RUNTIME_REQUIRED_PATHS = [
   'kun/dist/cli/serve-entry.js',
   'kun/package.json',
   'kun/package-lock.json',
+  'extensions/research-memory/extension.json',
+  'extensions/research-memory/dist/index.js',
+  'extensions/research-memory/skill/SKILL.md',
   'packages/workers/multi-agent/dist/index.js',
   'kun/node_modules/@sciforge/multi-agent/package.json',
   'kun/node_modules/zod/package.json',
@@ -78,6 +81,11 @@ function removeProjectLocalRuntimeSqlite(projectRoot = PROJECT_ROOT) {
 }
 
 function ensureProjectLocalRuntimeInstall(projectRoot = PROJECT_ROOT) {
+  runNpm(['--prefix', 'extensions/research-memory', 'run', 'build'], {
+    cwd: projectRoot,
+    label: 'npm --prefix extensions/research-memory run build'
+  })
+
   runNpm(['--workspace', '@sciforge/multi-agent', 'run', 'build'], {
     cwd: projectRoot,
     label: 'npm --workspace @sciforge/multi-agent run build'

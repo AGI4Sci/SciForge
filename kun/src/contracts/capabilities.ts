@@ -189,6 +189,11 @@ export const MemoryCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MemoryCapabilityConfig = z.infer<typeof MemoryCapabilityConfig>
 
+export const ProjectExtensionCapabilityConfig = CapabilityToggleConfig.extend({
+  manifests: z.array(z.string().min(1)).default([])
+}).strict()
+export type ProjectExtensionCapabilityConfig = z.infer<typeof ProjectExtensionCapabilityConfig>
+
 export const LocalRuntimeCapabilitiesConfig = z
   .object({
     mcp: McpCapabilityConfig.default(() => McpCapabilityConfig.parse({})),
@@ -196,7 +201,8 @@ export const LocalRuntimeCapabilitiesConfig = z
     skills: SkillsCapabilityConfig.default(() => SkillsCapabilityConfig.parse({})),
     subagents: SubagentsCapabilityConfig.default(() => SubagentsCapabilityConfig.parse({})),
     attachments: AttachmentsCapabilityConfig.default(() => AttachmentsCapabilityConfig.parse({})),
-    memory: MemoryCapabilityConfig.default(() => MemoryCapabilityConfig.parse({}))
+    memory: MemoryCapabilityConfig.default(() => MemoryCapabilityConfig.parse({})),
+    extensions: ProjectExtensionCapabilityConfig.default(() => ProjectExtensionCapabilityConfig.parse({}))
   })
   .strict()
 export type LocalRuntimeCapabilitiesConfig = z.infer<typeof LocalRuntimeCapabilitiesConfig>
@@ -268,6 +274,11 @@ export const RuntimeCapabilityManifest = z
     memory: RuntimeCapabilityState.extend({
       scopes: z.array(z.enum(['user', 'workspace', 'project'])),
       maxInjectedRecords: z.number().int().positive()
+    }).strict(),
+    extensions: RuntimeCapabilityState.extend({
+      configuredExtensions: z.number().int().nonnegative(),
+      loadedExtensions: z.number().int().nonnegative(),
+      toolCount: z.number().int().nonnegative()
     }).strict()
   })
   .strict()
@@ -318,6 +329,11 @@ export function buildRuntimeCapabilityManifest(input: {
     available?: boolean
     reason?: string
   }
+  extensions?: {
+    loadedExtensions?: number
+    toolCount?: number
+    reason?: string
+  }
   subagents?: {
     available?: boolean
     reason?: string
@@ -346,6 +362,9 @@ export function buildRuntimeCapabilityManifest(input: {
   const configuredSkillRoots = input.skills?.configuredRoots ?? config.skills.roots.length
   const discoveredSkills = input.skills?.discoveredSkills ?? 0
   const skillsState = skillsCapabilityState(config.skills.enabled, discoveredSkills, input.skills?.reason)
+  const configuredExtensions = config.extensions.manifests.length
+  const loadedExtensions = input.extensions?.loadedExtensions ?? 0
+  const extensionToolCount = input.extensions?.toolCount ?? 0
   return RuntimeCapabilityManifest.parse({
     contractVersion: RUNTIME_CAPABILITY_CONTRACT_VERSION,
     model: input.model,
@@ -433,6 +452,17 @@ export function buildRuntimeCapabilityManifest(input: {
       ),
       scopes: config.memory.scopes,
       maxInjectedRecords: config.memory.maxInjectedRecords
+    },
+    extensions: {
+      ...providerCapabilityState(
+        config.extensions.enabled,
+        'project extensions are disabled by config',
+        loadedExtensions > 0,
+        input.extensions?.reason ?? 'no project extensions loaded'
+      ),
+      configuredExtensions,
+      loadedExtensions,
+      toolCount: extensionToolCount
     }
   })
 }

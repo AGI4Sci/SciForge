@@ -1,0 +1,21 @@
+{
+  "name": "@sciforge/research-memory-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Project-scoped headless Research Memory extension for SciForge.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.2"
+  }
+}

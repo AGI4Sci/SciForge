@@ -1014,6 +1014,140 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     ]))
   })
 
+  it('adds project extension manifests and extension skill roots without adding an MCP server', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./local-runtime-process')
+    const workspaceRoot = join(tempRoot, 'workspace-with-extension')
+    const extensionRoot = join(workspaceRoot, 'extensions', 'research-memory')
+    mkdirSync(join(extensionRoot, 'skill'), { recursive: true })
+    writeFileSync(join(extensionRoot, 'extension.json'), JSON.stringify({
+      id: 'research-memory',
+      name: 'Research Memory',
+      kind: 'project-extension',
+      activation: ['project-open', 'agent-runtime'],
+      storage: '.sciforge/research-memory/research-memory.sqlite',
+      headless: true,
+      runtimeModule: 'dist/index.js',
+      contributes: {
+        agentTools: ['research_memory_record_experiment'],
+        skills: ['research-memory']
+      }
+    }), 'utf8')
+    writeFileSync(join(extensionRoot, 'skill', 'SKILL.md'), [
+      '---',
+      'name: research-memory',
+      'description: Research memory protocol.',
+      '---',
+      '',
+      '# Research Memory'
+    ].join('\n'), 'utf8')
+
+    const settings = createSettings('/tmp/fake-local-runtime-child.js')
+    settings.workspaceRoot = workspaceRoot
+
+    await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings(), {
+      workspaceIntelMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/sciforge-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.extensions).toMatchObject({
+      enabled: true,
+      manifests: [join(extensionRoot, 'extension.json')]
+    })
+    expect(parsed.capabilities.skills.roots).toContain(join(extensionRoot, 'skill'))
+    expect(parsed.capabilities.mcp.servers.research_memory).toBeUndefined()
+  })
+
+  it('limits project extension manifests to the active workspace and drops stale entries', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./local-runtime-process')
+    const workspaceRoot = join(tempRoot, 'active-workspace')
+    const otherWorkspaceRoot = join(tempRoot, 'other-workspace')
+    const activeExtensionRoot = join(workspaceRoot, 'extensions', 'research-memory')
+    const otherExtensionRoot = join(otherWorkspaceRoot, 'extensions', 'research-memory')
+    const staleManifest = join(tempRoot, 'stale-extension', 'extension.json')
+    mkdirSync(join(activeExtensionRoot, 'skill'), { recursive: true })
+    mkdirSync(join(otherExtensionRoot, 'skill'), { recursive: true })
+    writeFileSync(join(activeExtensionRoot, 'extension.json'), JSON.stringify({
+      id: 'research-memory',
+      name: 'Research Memory',
+      kind: 'project-extension',
+      activation: ['project-open', 'agent-runtime'],
+      storage: '.sciforge/research-memory/research-memory.sqlite',
+      headless: true,
+      runtimeModule: 'dist/index.js',
+      contributes: {
+        agentTools: ['research_memory_record_experiment'],
+        skills: ['research-memory']
+      }
+    }), 'utf8')
+    writeFileSync(join(activeExtensionRoot, 'skill', 'SKILL.md'), '# Research Memory\n', 'utf8')
+    writeFileSync(join(otherExtensionRoot, 'extension.json'), JSON.stringify({
+      id: 'other-research-memory',
+      name: 'Other Research Memory',
+      kind: 'project-extension',
+      activation: ['project-open', 'agent-runtime'],
+      storage: '.sciforge/research-memory/research-memory.sqlite',
+      headless: true,
+      runtimeModule: 'dist/index.js',
+      contributes: {
+        agentTools: ['other_research_memory_record_experiment'],
+        skills: ['other-research-memory']
+      }
+    }), 'utf8')
+    writeFileSync(configPath, JSON.stringify({
+      capabilities: {
+        skills: {
+          enabled: true,
+          roots: [
+            join(otherExtensionRoot, 'skill'),
+            join(tempRoot, 'manual-skills')
+          ]
+        },
+        extensions: {
+          enabled: false,
+          manifests: [staleManifest]
+        }
+      }
+    }), 'utf8')
+
+    const settings = createSettings('/tmp/fake-local-runtime-child.js')
+    settings.workspaceRoot = workspaceRoot
+    settings.remoteChannel.im.workspaceRoot = otherWorkspaceRoot
+    settings.schedule.defaultWorkspaceRoot = otherWorkspaceRoot
+
+    await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings(), {
+      workspaceIntelMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/sciforge-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.extensions).toMatchObject({
+      enabled: true,
+      manifests: [join(activeExtensionRoot, 'extension.json')]
+    })
+    expect(parsed.capabilities.extensions.manifests).not.toContain(staleManifest)
+    expect(parsed.capabilities.extensions.manifests).not.toContain(join(otherExtensionRoot, 'extension.json'))
+    expect(parsed.capabilities.skills.roots).toContain(join(tempRoot, 'manual-skills'))
+    expect(parsed.capabilities.skills.roots).toContain(join(activeExtensionRoot, 'skill'))
+    expect(parsed.capabilities.skills.roots).not.toContain(join(otherExtensionRoot, 'skill'))
+  })
+
   it('writes GUI-managed MCP search settings without removing existing servers', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')

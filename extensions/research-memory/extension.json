@@ -1,0 +1,21 @@
+{
+  "id": "research-memory",
+  "name": "Research Memory",
+  "kind": "project-extension",
+  "activation": ["project-open", "agent-runtime"],
+  "storage": ".sciforge/research-memory/research-memory.sqlite",
+  "headless": true,
+  "runtimeModule": "dist/index.js",
+  "contributes": {
+    "agentTools": [
+      "research_memory_record_experiment",
+      "research_memory_propose_insight",
+      "research_memory_reflect_experiments",
+      "research_memory_reflect_thread",
+      "research_memory_resolve_context",
+      "research_memory_review_item",
+      "research_memory_snapshot"
+    ],
+    "skills": ["research-memory"]
+  }
+}

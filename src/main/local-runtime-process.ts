@@ -34,6 +34,7 @@ import {
   McpCapabilityConfig,
   McpServerConfig,
   MemoryCapabilityConfig,
+  ProjectExtensionCapabilityConfig,
   SkillsCapabilityConfig,
   SubagentsCapabilityConfig,
   WebCapabilityConfig
@@ -74,6 +75,7 @@ import { defaultLocalRuntimeDataDir } from './runtime/local-runtime-adapter'
 import { isLocalRuntimeHealthResponseBody } from './local-runtime-health'
 import { appendManagedLogLine } from './logger'
 import { guiSkillRootsForRuntime, normalizeSkillRootPath } from './services/skill-service'
+import { projectExtensionManifestsForRuntime } from './services/project-extension-service'
 import { APP_MODEL_ROUTER_RUNTIME_API_KEY_ENV } from '../shared/app-brand'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
@@ -612,11 +614,19 @@ export async function syncGuiManagedLocalRuntimeConfig(
   const attachments = objectValue(capabilities.attachments)
   const web = objectValue(capabilities.web)
   const skills = objectValue(capabilities.skills)
+  const extensions = objectValue(capabilities.extensions)
   const subagents = objectValue(capabilities.subagents)
   const agentCapabilities = normalizeAgentCapabilitySettings(options?.agentCapabilities)
   const storage = storageConfigForRuntime(runtime.storage)
   const mcpSearch = runtime.mcpSearch
-  const skillCapability = await skillCapabilityConfigForRuntime(skills, options?.scheduleMcp?.settings)
+  const runtimeSettings = settingsForRuntimeCapabilities(options)
+  const runtimeWorkspaceRoot = runtimeSettings?.workspaceRoot
+  const skillCapability = await skillCapabilityConfigForRuntime(skills, runtimeSettings, runtimeWorkspaceRoot)
+  const extensionCapability = await extensionCapabilityConfigForRuntime(
+    extensions,
+    runtimeSettings,
+    runtimeWorkspaceRoot
+  )
   const managedMcpServers = buildLocalRuntimeManagedGuiMcpServers({
     scheduleMcp: options?.scheduleMcp,
     researchMcp: options?.researchMcp,
@@ -655,6 +665,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
         fetchEnabled: web.fetchEnabled === false ? false : true
       },
       skills: skillCapability,
+      extensions: extensionCapability,
       subagents: {
         ...subagents,
         enabled: agentCapabilities.subagents.enabled,
@@ -722,14 +733,34 @@ function stripLocalRuntimeServeProviderFields(serve: Record<string, unknown>): R
   return next
 }
 
+function settingsForRuntimeCapabilities(
+  options: Parameters<typeof syncGuiManagedLocalRuntimeConfig>[2]
+): AppSettingsV1 | undefined {
+  return options?.scheduleMcp?.settings ??
+    options?.workflowMcp?.settings ??
+    options?.workspaceIntelMcp?.settings ??
+    options?.remoteExecutorMcp?.settings ??
+    options?.writeAssistMcp?.settings ??
+    options?.runtimeInspectorMcp?.settings ??
+    options?.scientificSkillsMcp?.settings ??
+    options?.scientificPlottingMcp?.settings ??
+    options?.imageGenerationMcp?.settings ??
+    options?.pptMasterMcp?.settings ??
+    options?.sciforgeCanvasMcp?.settings ??
+    options?.computerUseMcp?.settings
+}
+
 async function skillCapabilityConfigForRuntime(
   existing: Record<string, unknown>,
-  settings?: AppSettingsV1
+  settings?: AppSettingsV1,
+  workspaceRootOverride?: string
 ): Promise<Record<string, unknown>> {
   const { legacySkillMd: _legacySkillMd, ...existingWithoutLegacy } = existing
   const roots = uniqueStrings([
-    ...stringArrayValue(existing.roots).map(normalizeSkillRootPath),
-    ...(await guiSkillRootsForRuntime(settings)).map((root) => root.path)
+    ...stringArrayValue(existing.roots)
+      .map(normalizeSkillRootPath)
+      .filter((root) => !isProjectExtensionSkillRoot(root)),
+    ...(await guiSkillRootsForRuntime(settings, workspaceRootOverride)).map((root) => root.path)
   ])
   return {
     ...existingWithoutLegacy,
@@ -738,10 +769,32 @@ async function skillCapabilityConfigForRuntime(
   }
 }
 
+async function extensionCapabilityConfigForRuntime(
+  existing: Record<string, unknown>,
+  settings?: AppSettingsV1,
+  workspaceRootOverride?: string
+): Promise<Record<string, unknown>> {
+  const discoveredManifests = (await projectExtensionManifestsForRuntime(settings, workspaceRootOverride))
+    .map(normalizeSkillRootPath)
+  const manifests = settings
+    ? uniqueStrings(discoveredManifests)
+    : uniqueStrings(stringArrayValue(existing.manifests).map(normalizeSkillRootPath))
+  return {
+    ...existing,
+    enabled: manifests.length > 0 || (!settings && existing.enabled === true),
+    manifests
+  }
+}
+
 function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : []
+}
+
+function isProjectExtensionSkillRoot(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/u, '')
+  return /\/extensions\/[^/]+\/skill$/u.test(normalized)
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -1015,6 +1068,9 @@ function sanitizeLocalRuntimeCapabilitiesConfig(value: unknown): Record<string, 
     next.attachments = parseLocalRuntimeConfigSection(AttachmentsCapabilityConfig, raw.attachments)
   }
   if ('memory' in raw) next.memory = parseLocalRuntimeConfigSection(MemoryCapabilityConfig, raw.memory)
+  if ('extensions' in raw) {
+    next.extensions = parseLocalRuntimeConfigSection(ProjectExtensionCapabilityConfig, raw.extensions)
+  }
   return next
 }
 

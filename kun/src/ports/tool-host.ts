@@ -13,6 +13,7 @@ export type ToolProviderKind =
   | 'built-in'
   | 'mcp'
   | 'web'
+  | 'extension'
   | 'skill'
   | 'memory'
   | 'gui'

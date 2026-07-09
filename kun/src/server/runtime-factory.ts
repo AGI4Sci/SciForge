@@ -16,6 +16,7 @@ import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
 import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
+import { buildProjectExtensionToolProviders } from '../adapters/tool/project-extension-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-inspector.js'
@@ -175,6 +176,7 @@ export async function createLocalRuntimeServeRuntime(
   const capabilityConfig = options.capabilities ?? DEFAULT_LOCAL_RUNTIME_CAPABILITIES_CONFIG
   const mcpProviders = await buildMcpToolProviders(capabilityConfig.mcp)
   const webProviders = buildWebToolProviders(capabilityConfig.web)
+  const extensionProviders = await buildProjectExtensionToolProviders(capabilityConfig.extensions)
   const skillRuntime = await SkillRuntime.create(capabilityConfig.skills)
   const attachmentStore = capabilityConfig.attachments.enabled
     ? new FileAttachmentStore({
@@ -200,6 +202,7 @@ export async function createLocalRuntimeServeRuntime(
     },
     ...mcpProviders.providers,
     ...webProviders.providers,
+    ...extensionProviders.providers,
     ...buildMemoryToolProviders(memoryStore)
   ]
   const computerUseAvailable = mcpProviders.diagnostics.some((diagnostic) =>
@@ -272,6 +275,11 @@ export async function createLocalRuntimeServeRuntime(
     },
     memory: {
       available: Boolean(memoryStore)
+    },
+    extensions: {
+      loadedExtensions: extensionProviders.loadedExtensions,
+      toolCount: extensionProviders.toolCount,
+      reason: extensionProviders.reason
     },
     subagents: {
       available: Boolean(delegationRuntime)
@@ -379,6 +387,7 @@ export async function createLocalRuntimeServeRuntime(
       mcpServers: mcpProviders.diagnostics,
       mcpSearch: mcpProviders.search,
       webProviders: webProviders.diagnostics,
+      extensions: extensionProviders.diagnostics,
       skills: skillRuntime.diagnostics(),
       attachments: attachmentStore
         ? await attachmentStore.diagnostics()

@@ -1,0 +1,7 @@
+{
+  "artifacts": [
+    "artifacts/runs/v1/metrics.json",
+    "artifacts/runs/v1/run.log",
+    "artifacts/runs/v1/validation_curve.png"
+  ]
+}

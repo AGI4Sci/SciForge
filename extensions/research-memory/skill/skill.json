@@ -1,0 +1,12 @@
+{
+  "id": "research-memory",
+  "name": "Research Memory",
+  "description": "Protocol for recording and reusing project-scoped research cognition with evidence boundaries.",
+  "entry": "SKILL.md",
+  "triggers": {
+    "promptPatterns": [
+      "(experiment|training|evaluation|metrics|ablation|debug|failure analysis|negative result|remember this|next run|next training plan)",
+      "(实验|训练|评测|指标|消融|失败归因|记住|下一轮|下次训练)"
+    ]
+  }
+}

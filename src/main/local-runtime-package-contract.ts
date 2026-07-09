@@ -10,6 +10,7 @@ export {
   McpCapabilityConfig,
   McpServerConfig,
   MemoryCapabilityConfig,
+  ProjectExtensionCapabilityConfig,
   SkillsCapabilityConfig,
   SubagentsCapabilityConfig,
   WebCapabilityConfig

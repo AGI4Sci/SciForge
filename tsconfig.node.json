@@ -13,6 +13,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
+    "extensions/research-memory/src/**/*",
     "packages/workers/evidence-dag/desktop/**/*",
     "packages/workers/project-dag/desktop/**/*"
   ]
