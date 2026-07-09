@@ -13,7 +13,11 @@ import {
   type PdfAnnotationThread
 } from '../../shared/pdf-annotations'
 import type { AppSettingsV1 } from '../../shared/app-settings'
-import { resolveRuntimeModelRouterSettings } from '../../shared/app-settings-model-router'
+import {
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
+  resolveRuntimeModelRouterSettings
+} from '../../shared/app-settings-model-router'
 import { buildModelRouterResponsesUrl } from '../../shared/model-router-url'
 import { redactSecretText } from '../../shared/secret-redaction'
 import type {
@@ -84,11 +88,21 @@ type ExtractedPdf = {
   text: string
 }
 
-type ReviewModelConfig = {
-  url: string
-  apiKey: string
-  model: string
-}
+type ReviewModelConfig =
+  | {
+      kind: 'model-router'
+      url: string
+      apiKey: string
+      model: string
+      label: string
+    }
+  | {
+      kind: 'openai-compatible'
+      url: string
+      apiKey: string
+      model: string
+      label: string
+    }
 
 export type PdfReviewServiceOptions = {
   fetchImpl?: typeof fetch
@@ -424,18 +438,78 @@ function anchorGeneratedComments(
   })
 }
 
-function resolveReviewModelConfig(settings?: AppSettingsV1): ReviewModelConfig {
-  if (!settings) throw new Error('SciForge Model Router settings are unavailable for PDF review.')
-  const router = resolveRuntimeModelRouterSettings(settings)
-  const url = buildModelRouterResponsesUrl(router.baseUrl)
-  if (!router.apiKey || !router.model || !url) {
-    throw new Error('Configure SciForge Model Router before generating PDF review annotations.')
-  }
+function buildOpenAiChatCompletionsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/u, '')
+  if (!trimmed) return ''
+  if (trimmed.toLowerCase().endsWith('/chat/completions')) return trimmed
+  return trimmed.toLowerCase().endsWith('/v1') ? `${trimmed}/chat/completions` : `${trimmed}/v1/chat/completions`
+}
+
+function envReviewModelConfig(): ReviewModelConfig | null {
+  const apiKey = process.env.OPENAI_API_KEY?.trim() ?? ''
+  const baseUrl = process.env.OPENAI_BASE_URL?.trim() ?? ''
+  const model = process.env.OPENAI_MODEL_NAME?.trim() || process.env.OPENAI_MODEL?.trim() || ''
+  const url = buildOpenAiChatCompletionsUrl(baseUrl)
+  if (!apiKey || !url || !model) return null
   return {
+    kind: 'openai-compatible',
     url,
-    apiKey: router.apiKey,
-    model: router.model
+    apiKey,
+    model,
+    label: 'OPENAI_BASE_URL'
   }
+}
+
+function settingsTextReasonerReviewModelConfig(settings?: AppSettingsV1): ReviewModelConfig | null {
+  if (!settings) return null
+  const router = getModelRouterSettings(settings)
+  if (!isModelRouterTextReasonerConfigured(router)) return null
+  const textReasoner = router.profiles.default.textReasoner
+  const url = buildOpenAiChatCompletionsUrl(textReasoner.baseUrl)
+  if (!url) return null
+  return {
+    kind: 'openai-compatible',
+    url,
+    apiKey: textReasoner.apiKey.trim(),
+    model: textReasoner.model.trim(),
+    label: 'Model Router textReasoner'
+  }
+}
+
+function pushReviewModelConfig(configs: ReviewModelConfig[], config: ReviewModelConfig | null): void {
+  if (!config) return
+  if (configs.some((item) => item.kind === config.kind && item.url === config.url && item.model === config.model)) {
+    return
+  }
+  configs.push(config)
+}
+
+function resolveReviewModelConfigs(settings?: AppSettingsV1): ReviewModelConfig[] {
+  const configs: ReviewModelConfig[] = []
+  if (settings) {
+    try {
+      const router = resolveRuntimeModelRouterSettings(settings)
+      const url = buildModelRouterResponsesUrl(router.baseUrl)
+      if (router.apiKey && router.model && url) {
+        pushReviewModelConfig(configs, {
+          kind: 'model-router',
+          url,
+          apiKey: router.apiKey,
+          model: router.model,
+          label: 'SciForge Model Router'
+        })
+      }
+    } catch {
+      /* Fall through to OpenAI-compatible environment variables. */
+    }
+  }
+
+  pushReviewModelConfig(configs, settingsTextReasonerReviewModelConfig(settings))
+  pushReviewModelConfig(configs, envReviewModelConfig())
+  if (configs.length > 0) return configs
+  throw new Error(
+    'Missing model configuration. Configure SciForge Model Router, or start SciForge with OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL_NAME.'
+  )
 }
 
 function flattenModelContent(value: unknown): string {
@@ -473,13 +547,42 @@ function modelTextFromResponse(responseText: string): string {
   return flattenModelContent(firstChoice?.message?.content)
 }
 
-async function callReviewModel(
-  prompt: string,
-  settings?: AppSettingsV1,
-  options: PdfReviewServiceOptions = {}
-): Promise<string> {
-  const config = resolveReviewModelConfig(settings)
-  const fetchImpl = options.fetchImpl ?? fetch
+function isFetchConnectivityError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|network/i.test(message)
+}
+
+function modelRequestFailureMessage(config: ReviewModelConfig, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (config.kind === 'model-router' && isFetchConnectivityError(error)) {
+    return `${config.label} is not reachable at ${config.url}. The sidecar may have stopped; restart SciForge or check Model Router settings.`
+  }
+  return `${config.label} request to ${config.url} failed: ${message}`
+}
+
+async function requestReviewModelWithConfig(config: ReviewModelConfig, prompt: string, fetchImpl: typeof fetch): Promise<string> {
+  const body = config.kind === 'model-router'
+    ? {
+        model: config.model,
+        input: prompt,
+        max_tokens: 4096
+      }
+    : {
+        model: config.model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are SciForge Reviewer. Return only valid JSON and write all visible text in English.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.2,
+        max_tokens: 4096
+      }
+
   const response = await fetchImpl(config.url, {
     method: 'POST',
     headers: {
@@ -487,13 +590,7 @@ async function callReviewModel(
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model: config.model,
-      instructions: 'You are SciForge Reviewer. Return only valid JSON and write all visible text in English.',
-      input: prompt,
-      max_output_tokens: 4096,
-      text: { format: { type: 'json_object' } }
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(MODEL_REQUEST_TIMEOUT_MS)
   })
   const responseText = await response.text()
@@ -503,6 +600,25 @@ async function callReviewModel(
   const text = modelTextFromResponse(responseText).trim()
   if (!text) throw new Error('SciForge review model returned empty text.')
   return text
+}
+
+async function callReviewModel(
+  prompt: string,
+  settings?: AppSettingsV1,
+  options: PdfReviewServiceOptions = {}
+): Promise<string> {
+  const configs = resolveReviewModelConfigs(settings)
+  const failures: string[] = []
+  const fetchImpl = options.fetchImpl ?? fetch
+  for (const config of configs) {
+    try {
+      return await requestReviewModelWithConfig(config, prompt, fetchImpl)
+    } catch (error) {
+      failures.push(modelRequestFailureMessage(config, error))
+      if (config.kind !== 'model-router' || !isFetchConnectivityError(error)) break
+    }
+  }
+  throw new Error(failures.join(' Fallback: '))
 }
 
 function extractJsonText(text: string): string {

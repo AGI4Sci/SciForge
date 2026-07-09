@@ -2,6 +2,18 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
 import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
 
+const DEV_BROWSER_BRIDGE_ASSET_BASE_URL = 'http://127.0.0.1:5174/workspace-preview/assets'
+const DEV_BROWSER_BRIDGE_CLIENT_ID = `electron-preload-${Math.random().toString(36).slice(2)}`
+
+function workspacePreviewAssetSourceUrl(sessionId: string): string | null {
+  if (!import.meta.env.DEV) return null
+  const trimmed = sessionId.trim()
+  if (!trimmed) return null
+  const url = new URL(`${DEV_BROWSER_BRIDGE_ASSET_BASE_URL}/${encodeURIComponent(trimmed)}`)
+  url.searchParams.set('clientId', DEV_BROWSER_BRIDGE_CLIENT_ID)
+  return url.toString()
+}
+
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
 
@@ -261,6 +273,7 @@ const api = {
       ipcRenderer.invoke('workspacePreview:releaseSession', { sessionId }),
     watch: (payload) => ipcRenderer.invoke('workspacePreview:watch', payload),
     unwatch: (watchId) => ipcRenderer.invoke('workspacePreview:unwatch', watchId),
+    getAssetSourceUrl: workspacePreviewAssetSourceUrl,
     onChanged: (handler) => {
       const wrapped = (
         _: Electron.IpcRendererEvent,

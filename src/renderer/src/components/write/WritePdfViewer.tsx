@@ -92,6 +92,7 @@ type TextLayerToken = {
   start: number
   end: number
   rect: DOMRect
+  spanRect: DOMRect
   page: number
   order: number
   wordLike: boolean
@@ -939,6 +940,69 @@ function unionDomRects(rects: DOMRect[]): DOMRect | null {
   return domRectFromBounds(left, top, right, bottom)
 }
 
+let textMeasureCanvas: HTMLCanvasElement | null = null
+
+function textMeasureContext(doc: Document): CanvasRenderingContext2D | null {
+  try {
+    textMeasureCanvas ??= doc.createElement('canvas')
+    return textMeasureCanvas.getContext('2d')
+  } catch {
+    return null
+  }
+}
+
+function measuredPdfTextRangeRect(node: Text, start: number, end: number, fallbackRect: DOMRect): DOMRect | null {
+  const span = node.parentElement?.closest<HTMLElement>('.write-pdf-text-layer span')
+  if (!span) return null
+  const text = node.data
+  if (end <= start || start < 0 || end > text.length) return null
+
+  const style = span.ownerDocument.defaultView?.getComputedStyle(span)
+  const context = textMeasureContext(span.ownerDocument)
+  const letterSpacing = style?.letterSpacing && style.letterSpacing !== 'normal'
+    ? Number.parseFloat(style.letterSpacing)
+    : 0
+  const extraSpacing = (value: string): number => {
+    return Number.isFinite(letterSpacing) && value.length > 1 ? letterSpacing * (value.length - 1) : 0
+  }
+  const measure = (value: string): number => {
+    if (!context) return value.length
+    if (style?.font) context.font = style.font
+    return context.measureText(value).width + extraSpacing(value)
+  }
+
+  const prefix = text.slice(0, start)
+  const selected = text.slice(start, end)
+  const fullWidth = measure(text)
+  const selectedWidth = measure(selected)
+  if (!Number.isFinite(fullWidth) || fullWidth <= 0 || !Number.isFinite(selectedWidth) || selectedWidth <= 0) {
+    return null
+  }
+
+  const scaleX = fallbackRect.width / fullWidth
+  const startX = measure(prefix) * scaleX
+  const width = selectedWidth * scaleX
+  const direction = style?.direction === 'rtl' ? 'rtl' : 'ltr'
+  const left = direction === 'rtl'
+    ? fallbackRect.right - startX - width
+    : fallbackRect.left + startX
+
+  const range = node.ownerDocument.createRange()
+  let verticalRect: DOMRect | null = null
+  try {
+    range.setStart(node, start)
+    range.setEnd(node, end)
+    const rect = range.getBoundingClientRect()
+    verticalRect = rect.width > 0 && rect.height > 0 ? rect : null
+  } catch {
+    verticalRect = null
+  } finally {
+    range.detach?.()
+  }
+
+  return domRectFromBounds(left, verticalRect?.top ?? fallbackRect.top, left + width, verticalRect?.bottom ?? fallbackRect.bottom)
+}
+
 function inflateViewportRect(rect: DOMRect, padX: number, padY: number): ViewportRect {
   return {
     left: rect.left - padX,
@@ -974,6 +1038,9 @@ function firstTextNodeForElement(element: HTMLElement): Text | null {
 
 function rectFromTextRange(node: Text, start: number, end: number, fallbackRect: DOMRect): DOMRect | null {
   if (end <= start || start < 0 || end > node.data.length) return null
+  const measuredPdfRect = measuredPdfTextRangeRect(node, start, end, fallbackRect)
+  if (measuredPdfRect) return measuredPdfRect
+
   const doc = node.ownerDocument
   const range = doc.createRange()
   try {
@@ -1030,6 +1097,7 @@ function collectTextLayerTokens(root: HTMLElement, scopes: Element | Element[] =
           start: part.start,
           end: part.end,
           rect,
+          spanRect,
           page,
           order,
           wordLike: /[A-Za-z0-9]/.test(part.text)
@@ -1143,12 +1211,14 @@ function searchHighlightsFromTextLayer(
       const localStart = Math.max(0, matchStart - part.start)
       const localEnd = Math.min(part.token.text.length, matchEnd - part.start)
       if (localEnd <= localStart) continue
-      const rect = rectFromTextRange(
-        part.token.node,
-        part.token.start + localStart,
-        part.token.start + localEnd,
-        part.token.rect
-      )
+      const rect = localStart === 0 && localEnd === part.token.text.length
+        ? part.token.rect
+        : rectFromTextRange(
+            part.token.node,
+            part.token.start + localStart,
+            part.token.start + localEnd,
+            part.token.spanRect
+          )
       if (rect) rects.push(rect)
     }
 
@@ -2230,19 +2300,22 @@ export function WritePdfViewer({
       if (distance >= 4) {
         const root = rootRef.current
         if (root) {
-          const next = selectionFromPdf(root, selectionContext, {
-            start: textDrag.start,
-            end: textDrag.last
-          })
+          const nativeSelection = selectionFromPdf(root, selectionContext)
+          const next = nativeSelection.text.trim()
+            ? nativeSelection
+            : selectionFromPdf(root, selectionContext, {
+              start: textDrag.start,
+              end: textDrag.last
+            })
           if (next.text.trim()) {
             window.getSelection()?.removeAllRanges()
             emitSelection(next)
-              setCommittedSelection(next)
-              setCommittedSelectionRects(next.rects ?? [])
-              setLiveSelection(false)
-              skipMouseUpSelectionSyncRef.current = true
-              return
-            }
+            setCommittedSelection(next)
+            setCommittedSelectionRects(next.rects ?? [])
+            setLiveSelection(false)
+            skipMouseUpSelectionSyncRef.current = true
+            return
+          }
         }
       }
     }
