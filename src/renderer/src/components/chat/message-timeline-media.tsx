@@ -36,6 +36,12 @@ export type TimelineImageReference = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   artifactKind?: string
   sourceTool?: string
   canvasId?: string
@@ -56,6 +62,12 @@ export type TimelineImageCanvasArtifact = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   projectPath?: string
   svgPath?: string
   pptxPath?: string
@@ -111,6 +123,17 @@ function readString(raw: Record<string, unknown>, ...keys: string[]): string | u
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
   return undefined
+}
+
+function readStringArray(raw: Record<string, unknown>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = raw[key]
+    if (!Array.isArray(value)) continue
+    return value
+      .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+      .map((item) => item.trim())
+  }
+  return []
 }
 
 function readNumber(raw: Record<string, unknown>, key: string): number | undefined {
@@ -270,6 +293,12 @@ function normalizeGeneratedFileReference(entry: unknown): TimelineImageReference
   const diagramSpecPath = readString(raw, 'diagramSpecPath', 'diagram_spec_path')
   const frameworkDesignPlanPath = readString(raw, 'frameworkDesignPlanPath', 'framework_design_plan_path')
   const diagramLayerManifestPath = readString(raw, 'diagramLayerManifestPath', 'diagram_layer_manifest_path')
+  const fastSamSegmentationPath = readString(raw, 'fastSamSegmentationPath', 'fast_sam_segmentation_path')
+  const fastSamBoxlibPath = readString(raw, 'fastSamBoxlibPath', 'fast_sam_boxlib_path')
+  const fastSamPreviewPath = readString(raw, 'fastSamPreviewPath', 'fast_sam_preview_path')
+  const frameworkComponentManifestPath = readString(raw, 'frameworkComponentManifestPath', 'framework_component_manifest_path')
+  const componentBasePath = readString(raw, 'componentBasePath', 'component_base_path')
+  const componentAssetPaths = readStringArray(raw, 'componentAssetPaths', 'component_asset_paths')
   const artifactKind = readImageArtifactKind(raw)
   const sourceTool = readString(raw, 'sourceTool', 'source_tool')
   const canvasId = readString(raw, 'canvasId', 'canvas_id')
@@ -301,6 +330,12 @@ function normalizeGeneratedFileReference(entry: unknown): TimelineImageReference
     ...(diagramSpecPath ? { diagramSpecPath } : {}),
     ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
     ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+    ...(fastSamSegmentationPath ? { fastSamSegmentationPath } : {}),
+    ...(fastSamBoxlibPath ? { fastSamBoxlibPath } : {}),
+    ...(fastSamPreviewPath ? { fastSamPreviewPath } : {}),
+    ...(frameworkComponentManifestPath ? { frameworkComponentManifestPath } : {}),
+    ...(componentBasePath ? { componentBasePath } : {}),
+    ...(componentAssetPaths.length ? { componentAssetPaths } : {}),
     ...(artifactKind ? { artifactKind } : {}),
     ...(sourceTool ? { sourceTool } : {}),
     ...(canvasId ? { canvasId } : {}),
@@ -439,6 +474,18 @@ function artifactImageFromRecord(record: Record<string, unknown>, fallback: Part
     readString(record, 'frameworkDesignPlanPath', 'framework_design_plan_path') ?? fallback.frameworkDesignPlanPath
   const diagramLayerManifestPath =
     readString(record, 'diagramLayerManifestPath', 'diagram_layer_manifest_path') ?? fallback.diagramLayerManifestPath
+  const fastSamSegmentationPath =
+    readString(record, 'fastSamSegmentationPath', 'fast_sam_segmentation_path') ?? fallback.fastSamSegmentationPath
+  const fastSamBoxlibPath =
+    readString(record, 'fastSamBoxlibPath', 'fast_sam_boxlib_path') ?? fallback.fastSamBoxlibPath
+  const fastSamPreviewPath =
+    readString(record, 'fastSamPreviewPath', 'fast_sam_preview_path') ?? fallback.fastSamPreviewPath
+  const frameworkComponentManifestPath =
+    readString(record, 'frameworkComponentManifestPath', 'framework_component_manifest_path') ?? fallback.frameworkComponentManifestPath
+  const componentBasePath =
+    readString(record, 'componentBasePath', 'component_base_path') ?? fallback.componentBasePath
+  const componentAssetPaths = readStringArray(record, 'componentAssetPaths', 'component_asset_paths')
+  const nextComponentAssetPaths = componentAssetPaths.length ? componentAssetPaths : fallback.componentAssetPaths
   const workspaceRoot = inferWorkspaceRootFromRecord(record, fallback)
   const id = readString(record, 'id') ?? fallback.id
   const name = readString(record, 'title', 'name', 'fileName', 'filename') ?? fallback.name
@@ -473,6 +520,12 @@ function artifactImageFromRecord(record: Record<string, unknown>, fallback: Part
     ...(diagramSpecPath ? { diagramSpecPath } : {}),
     ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
     ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+    ...(fastSamSegmentationPath ? { fastSamSegmentationPath } : {}),
+    ...(fastSamBoxlibPath ? { fastSamBoxlibPath } : {}),
+    ...(fastSamPreviewPath ? { fastSamPreviewPath } : {}),
+    ...(frameworkComponentManifestPath ? { frameworkComponentManifestPath } : {}),
+    ...(componentBasePath ? { componentBasePath } : {}),
+    ...(nextComponentAssetPaths?.length ? { componentAssetPaths: nextComponentAssetPaths } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
     sourceTool,
     ...(caption ? { caption } : {}),

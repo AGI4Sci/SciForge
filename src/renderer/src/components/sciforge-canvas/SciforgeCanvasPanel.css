@@ -84,12 +84,82 @@
   white-space: nowrap;
 }
 
+.sciforge-canvas-toolbar .sciforge-canvas-split-button {
+  font-weight: 500;
+}
+
+.sciforge-canvas-toolbar .sciforge-canvas-split-button:hover {
+  background: var(--ds-bg-muted, rgba(148, 163, 184, 0.12));
+}
+
+.sciforge-canvas-toolbar .sciforge-canvas-split-button.is-splitting {
+  border-color: color-mix(in srgb, var(--ds-accent, #2563eb) 36%, transparent);
+  background: color-mix(in srgb, var(--ds-accent, #2563eb) 10%, var(--ds-bg, #fff));
+  color: color-mix(in srgb, var(--ds-accent, #2563eb) 84%, var(--ds-text, #111827));
+  font-weight: 600;
+}
+
+.sciforge-canvas-toolbar .sciforge-canvas-split-button.is-splitting:hover {
+  background: color-mix(in srgb, var(--ds-accent, #2563eb) 16%, var(--ds-bg, #fff));
+}
+
 .sciforge-canvas-message {
   border-bottom: 1px solid var(--ds-border-muted, rgba(148, 163, 184, 0.18));
   color: var(--ds-text-muted, #64748b);
   font-size: 12px;
   line-height: 1.45;
   padding: 8px 12px;
+}
+
+.sciforge-canvas-annotation-editor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--ds-border-muted, rgba(148, 163, 184, 0.18));
+  background: color-mix(in srgb, var(--ds-bg, #fff) 94%, var(--ds-accent, #2563eb) 6%);
+  color: var(--ds-text-muted, #64748b);
+  padding: 8px 10px;
+}
+
+.sciforge-canvas-annotation-editor input {
+  min-width: 0;
+  flex: 1;
+  height: 30px;
+  border: 1px solid var(--ds-border-muted, rgba(148, 163, 184, 0.28));
+  border-radius: 7px;
+  background: var(--ds-bg, #fff);
+  color: var(--ds-text, #111827);
+  font-size: 12px;
+  line-height: 1;
+  outline: none;
+  padding: 0 10px;
+}
+
+.sciforge-canvas-annotation-editor input:focus {
+  border-color: color-mix(in srgb, var(--ds-accent, #2563eb) 62%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-accent, #2563eb) 18%, transparent);
+}
+
+.sciforge-canvas-annotation-editor button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--ds-accent, #2563eb) 36%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ds-accent, #2563eb) 12%, var(--ds-bg, #fff));
+  color: color-mix(in srgb, var(--ds-accent, #2563eb) 84%, var(--ds-text, #111827));
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.sciforge-canvas-annotation-editor button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .sciforge-canvas-drawio-shell {

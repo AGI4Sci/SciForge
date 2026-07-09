@@ -1,4 +1,5 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -8,9 +9,21 @@ import type {
   DiagramLayerBounds,
   DiagramLayerManifest,
   DrawingBrief,
+  FrameworkComponentBlock,
+  FrameworkComponentBlockType,
+  FrameworkComponentLayer,
+  FrameworkComponentManifest,
+  FrameworkComponentRole,
+  FrameworkComponentType,
   FrameworkDesignPlan,
   FrameworkDiagramSpec,
+  FrameworkFastSamSegmentation,
+  FrameworkFastSamSegmentationComponent,
+  FrameworkLocalizedEditRequest,
+  FrameworkLocalizedEditResult,
+  FrameworkLocalizedEditTarget,
   FrameworkRegion,
+  FrameworkSemanticLayer,
   ImageEditIntent,
   ImageDrawingIntent,
   ImageGenerationEditFromCanvasPacketRequest,
@@ -22,6 +35,8 @@ import type {
   ImageGenerationRecipe,
   ImageGenerationRenderRequest,
   ImageGenerationRenderResult,
+  ImageGenerationSegmentComponentsRequest,
+  ImageGenerationSegmentComponentsResult,
   ImageGenerationReviewPacketRequest,
   ImageGenerationReviewPacketResult,
   ImageGenerationReviewRequest,
@@ -34,6 +49,13 @@ import type {
 
 const RENDERER_VERSION = '0.1.0'
 const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
+const COMPONENT_SEGMENTATION_RUNNER_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_RUNNER'
+const COMPONENT_SEGMENTATION_MODEL_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH'
+const FASTSAM_RUNNER_ENV = 'SCIFORGE_FASTSAM_RUNNER'
+const FASTSAM_MODEL_ENV = 'SCIFORGE_FASTSAM_MODEL_PATH'
+const COMPONENT_SEGMENTATION_PROTOCOL_ARG = '--sciforge-component-json'
+const FASTSAM_SEGMENTATION_PROTOCOL_ARG = '--sciforge-fastsam-json'
+const COMPONENT_SEGMENTATION_RUNNER_TIMEOUT_MS = 60_000
 const DEFAULT_SIZE: ImageSize = { width: 1024, height: 1024 }
 const MAX_IMAGE_SIZE = 4096
 const MIN_IMAGE_SIZE = 128
@@ -46,6 +68,8 @@ const SCIENTIFIC_BASE_IMAGE_WARNING =
   'Scientific figure image generation is for visual composition/base layers only. Overlay labels, axes, numeric data, citations, molecular annotations, and other scientific claims with deterministic scripts such as scientific_plotting.'
 const SCIENTIFIC_BASE_IMAGE_PROVIDER_INSTRUCTION =
   'For scientific-figure use, render an unlabeled visual composition or background only. Leave clear space for scripted overlays. Do not include readable labels, axes, numeric values, data traces, citations, equations, tables, legends, scale bars, gene/protein names, or molecular identity claims in the raster image.'
+const SCIENTIFIC_DELTA_IMAGE_PROVIDER_INSTRUCTION =
+  'Scientific delta-only polish mode: use image generation only for visual increments over existing controlled subfigure artifacts. Do not redraw, replace, reinterpret, or invent scientific data panels. Preserve all locked facts exactly. If source artifacts are unavailable in the provider context, create only a neutral visual composition scaffold and leave deterministic overlays to SciForge.'
 const SCIENTIFIC_BASE_IMAGE_USAGE_POLICY: ImageGenerationUsagePolicy = {
   role: 'visual_composition_base',
   deterministicOverlayRequired: true,
@@ -61,6 +85,8 @@ type ProviderRenderInput = {
   recipe?: ImageGenerationRecipe
   editIntent?: ImageEditIntent
 }
+
+type JsonRecord = Record<string, unknown>
 
 type ProviderRenderResult = {
   provider: ImageGenerationProvider
@@ -88,6 +114,7 @@ export async function getImageGenerationStatus(workspaceRoot?: string): Promise<
   const root = normalizeWorkspaceRoot(workspaceRoot)
   const warnings: string[] = []
   const provider = providerKindForReadOnly(warnings)
+  const segmentation = componentSegmentationRunnerConfig()
   return {
     ok: true,
     provider,
@@ -97,6 +124,15 @@ export async function getImageGenerationStatus(workspaceRoot?: string): Promise<
     supportedEditModes: ['inpaint', 'replace', 'erase', 'outpaint', 'upscale', 'style_transfer'],
     outputDir: root ? join(root, IMAGE_DIR) : IMAGE_DIR,
     artifactDir: root ? join(root, ARTIFACT_DIR) : ARTIFACT_DIR,
+    componentSegmentation: {
+      provider: segmentation.runner && segmentation.model ? 'external-runner' : 'local-fallback',
+      runnerConfigured: Boolean(segmentation.runner),
+      modelConfigured: Boolean(segmentation.model),
+      runnerEnv: COMPONENT_SEGMENTATION_RUNNER_ENV,
+      modelEnv: COMPONENT_SEGMENTATION_MODEL_ENV,
+      legacyRunnerEnv: FASTSAM_RUNNER_ENV,
+      legacyModelEnv: FASTSAM_MODEL_ENV
+    },
     visualRouting: imageGenerationVisualRouting(),
     warnings: [
       ...(provider === 'placeholder'
@@ -190,7 +226,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     const usagePolicy = scientificUsagePolicyForRecipe(recipe)
     pushUsagePolicyWarning(warnings, usagePolicy)
     const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(recipe.prompt)
-    if (upstreamResearchWorkflow?.recommended && !hasResearchEvidenceInPrompt(recipe.prompt, recipe.referencePath)) {
+    if (upstreamResearchWorkflow?.recommended && !hasResearchEvidenceForRecipe(recipe)) {
       return {
         ok: false,
         status: 'research_required',
@@ -200,6 +236,14 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
           ...warnings,
           'Rendering was blocked to avoid producing an ungrounded scientific figure.'
         ]
+      }
+    }
+    if (recipe.intent === 'framework_diagram' && recipe.confirmation?.status !== 'confirmed') {
+      return {
+        ok: false,
+        status: 'invalid_request',
+        message: "Framework diagram rendering requires confirmation.status === 'confirmed'.",
+        warnings
       }
     }
     const imageId = slugForId(request.imageId ?? 'generated-image-' + new Date().toISOString())
@@ -239,6 +283,15 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
         outputPath
       })
     }
+    const componentArtifacts = await writeFrameworkComponentArtifactsIfNeeded({
+      workspaceRoot,
+      outputDir,
+      imageId,
+      outputPath,
+      recipe,
+      frameworkDesignPlanPath,
+      warnings
+    })
     const diagramLayerManifestPath = await writeDiagramLayerManifestIfNeeded({
       workspaceRoot,
       outputDir,
@@ -246,7 +299,8 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       outputPath,
       recipe,
       diagramSpecPath,
-      frameworkDesignPlanPath
+      frameworkDesignPlanPath,
+      componentManifest: componentArtifacts?.componentManifest
     })
     const manifest: ImageGenerationManifest = {
       version: 1,
@@ -264,7 +318,19 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(diagramSpecPath ? { diagramSpecPath } : {}),
       ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
       ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+      ...(componentArtifacts?.componentSegmentationPath ? { componentSegmentationPath: componentArtifacts.componentSegmentationPath } : {}),
+      ...(componentArtifacts?.fastSamSegmentationPath ? { fastSamSegmentationPath: componentArtifacts.fastSamSegmentationPath } : {}),
+      ...(componentArtifacts?.fastSamBoxlibPath ? { fastSamBoxlibPath: componentArtifacts.fastSamBoxlibPath } : {}),
+      ...(componentArtifacts?.componentSegmentationPreviewPath ? { componentSegmentationPreviewPath: componentArtifacts.componentSegmentationPreviewPath } : {}),
+      ...(componentArtifacts?.fastSamPreviewPath ? { fastSamPreviewPath: componentArtifacts.fastSamPreviewPath } : {}),
+      ...(componentArtifacts?.frameworkComponentManifestPath ? { frameworkComponentManifestPath: componentArtifacts.frameworkComponentManifestPath } : {}),
+      ...(componentArtifacts?.componentBasePath ? { componentBasePath: componentArtifacts.componentBasePath } : {}),
+      ...(componentArtifacts?.componentAssetPaths.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
       ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
+      ...(recipe.scientificPolishDeltaPlan ? { scientificPolishDeltaPlan: recipe.scientificPolishDeltaPlan } : {}),
+      ...(recipe.controlledSubfigureManifests?.length ? { controlledSubfigureManifests: recipe.controlledSubfigureManifests } : {}),
+      ...(usagePolicy?.lockedFacts?.length ? { lockedFacts: usagePolicy.lockedFacts } : {}),
+      ...(usagePolicy?.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: usagePolicy.sourceControlledArtifacts } : {}),
       provider: providerResult.provider,
       review,
       ...(usagePolicy ? { usagePolicy } : {}),
@@ -284,10 +350,20 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       diagramSpecPath,
       frameworkDesignPlanPath,
       diagramLayerManifestPath,
+      componentSegmentationPath: componentArtifacts?.componentSegmentationPath,
+      fastSamSegmentationPath: componentArtifacts?.fastSamSegmentationPath,
+      fastSamBoxlibPath: componentArtifacts?.fastSamBoxlibPath,
+      componentSegmentationPreviewPath: componentArtifacts?.componentSegmentationPreviewPath,
+      fastSamPreviewPath: componentArtifacts?.fastSamPreviewPath,
+      frameworkComponentManifestPath: componentArtifacts?.frameworkComponentManifestPath,
+      componentBasePath: componentArtifacts?.componentBasePath,
+      componentAssetPaths: componentArtifacts?.componentAssetPaths,
       promptProfile: recipe.promptProfile,
       ...(request.canvasId ? { canvasId: request.canvasId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(usagePolicy ? { usagePolicy } : {}),
+      ...(usagePolicy?.lockedFacts?.length ? { lockedFacts: usagePolicy.lockedFacts } : {}),
+      ...(usagePolicy?.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: usagePolicy.sourceControlledArtifacts } : {}),
       review
     })
     return {
@@ -300,6 +376,14 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(diagramSpecPath ? { diagramSpecPath } : {}),
       ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
       ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+      ...(componentArtifacts?.componentSegmentationPath ? { componentSegmentationPath: componentArtifacts.componentSegmentationPath } : {}),
+      ...(componentArtifacts?.fastSamSegmentationPath ? { fastSamSegmentationPath: componentArtifacts.fastSamSegmentationPath } : {}),
+      ...(componentArtifacts?.fastSamBoxlibPath ? { fastSamBoxlibPath: componentArtifacts.fastSamBoxlibPath } : {}),
+      ...(componentArtifacts?.componentSegmentationPreviewPath ? { componentSegmentationPreviewPath: componentArtifacts.componentSegmentationPreviewPath } : {}),
+      ...(componentArtifacts?.fastSamPreviewPath ? { fastSamPreviewPath: componentArtifacts.fastSamPreviewPath } : {}),
+      ...(componentArtifacts?.frameworkComponentManifestPath ? { frameworkComponentManifestPath: componentArtifacts.frameworkComponentManifestPath } : {}),
+      ...(componentArtifacts?.componentBasePath ? { componentBasePath: componentArtifacts.componentBasePath } : {}),
+      ...(componentArtifacts?.componentAssetPaths.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
       provider: providerResult.provider,
       review,
       ...(usagePolicy ? { usagePolicy } : {}),
@@ -360,6 +444,12 @@ function enhanceImageGenerationPrompt(prompt: string, stylePreset?: string): str
     ...(style ? [`- Style preset: ${style}.`] : []),
     '- Output: one self-contained high-resolution PNG-style figure suitable for review on SciForge Canvas.'
   ].join('\n')
+}
+
+function hasResearchEvidenceForRecipe(recipe: ImageGenerationRecipe): boolean {
+  if (recipe.scientificPolishDeltaPlan?.mode === 'delta_only') return true
+  if (recipe.controlledSubfigureManifests?.some((item) => item.trim())) return true
+  return hasResearchEvidenceInPrompt(recipe.prompt, recipe.referencePath)
 }
 
 function hasResearchEvidenceInPrompt(prompt: string, referencePath?: string): boolean {
@@ -520,6 +610,7 @@ async function writeDiagramLayerManifestIfNeeded(input: {
   recipe: ImageGenerationRecipe
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
+  componentManifest?: FrameworkComponentManifest
 }): Promise<string | undefined> {
   if (!input.recipe.intent || input.recipe.intent === 'general_image') return undefined
   const size = input.recipe.size
@@ -538,7 +629,13 @@ async function writeDiagramLayerManifestIfNeeded(input: {
       ...(input.recipe.promptProfile ? { promptProfile: input.recipe.promptProfile } : {}),
       ...(input.diagramSpecPath ? { diagramSpecPath: input.diagramSpecPath } : {}),
       ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
-      previewPath: input.outputPath
+      previewPath: input.outputPath,
+      ...(input.componentManifest?.fastSamSegmentationPath ? { fastSamSegmentationPath: input.componentManifest.fastSamSegmentationPath } : {}),
+      ...(input.componentManifest?.fastSamBoxlibPath ? { fastSamBoxlibPath: input.componentManifest.fastSamBoxlibPath } : {}),
+      ...(input.componentManifest?.fastSamPreviewPath ? { fastSamPreviewPath: input.componentManifest.fastSamPreviewPath } : {}),
+      ...(input.componentManifest ? { frameworkComponentManifestPath: join(input.outputDir, input.imageId + '.framework-components.json') } : {}),
+      ...(input.componentManifest?.componentBasePath ? { componentBasePath: input.componentManifest.componentBasePath } : {}),
+      ...(input.componentManifest?.components.length ? { componentAssetPaths: editableFrameworkComponents(input.componentManifest).map((component) => component.transparentAssetPath) } : {})
     },
     canvas: {
       width: size.width,
@@ -555,9 +652,10 @@ async function writeDiagramLayerManifestIfNeeded(input: {
         zIndex: 0,
         assetPath: input.outputPath,
         editable: false,
-        origin: 'draft_background',
+        origin: input.componentManifest ? 'framework_component_base' : 'draft_background',
         confidence: 1
       },
+      ...componentLayersForDiagramManifest(input.componentManifest),
       ...layers
     ]
   }
@@ -766,6 +864,1404 @@ function layoutFrameworkPanels(spec: FrameworkDiagramSpec): Array<{ panel: Frame
   }))
 }
 
+
+type FrameworkComponentArtifacts = {
+  componentManifest: FrameworkComponentManifest
+  componentSegmentationPath: string
+  fastSamSegmentationPath: string
+  fastSamBoxlibPath?: string
+  componentSegmentationPreviewPath: string
+  fastSamPreviewPath: string
+  frameworkComponentManifestPath: string
+  componentBasePath: string
+  componentAssetPaths: string[]
+}
+
+type LocalComponentCandidate = {
+  id: string
+  title: string
+  semanticLayer: Exclude<FrameworkSemanticLayer, 'mixed'>
+  type: FrameworkComponentType
+  role: FrameworkComponentRole
+  pixelBbox: DiagramLayerBounds
+  pixels: number[]
+  confidence: number
+  detectionMethod?: string
+}
+
+type FastSamExtractionResult = {
+  candidates: LocalComponentCandidate[]
+  warnings: string[]
+}
+
+export async function segmentImageGenerationComponents(
+  request: ImageGenerationSegmentComponentsRequest
+): Promise<ImageGenerationSegmentComponentsResult> {
+  const warnings: string[] = []
+  try {
+    const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
+    const sourceImagePath = await resolveWorkspacePath(workspaceRoot, request.sourceImagePath)
+    const imageId = slugForId(request.imageId ?? basename(sourceImagePath, extnameForPath(sourceImagePath)) + '-components')
+    const outputDir = await resolveOutputDir(workspaceRoot, request.outputDir)
+    await mkdir(outputDir, { recursive: true })
+    const designPlan = request.frameworkDesignPlanPath
+      ? parseFrameworkDesignPlan(JSON.parse(await readFile(await resolveWorkspacePath(workspaceRoot, request.frameworkDesignPlanPath), 'utf8')) as unknown)
+      : undefined
+    const artifacts = await writeFrameworkComponentArtifacts({
+      workspaceRoot,
+      outputDir,
+      imageId,
+      sourceImagePath,
+      designPlan,
+      warnings
+    })
+    return {
+      ok: true,
+      status: 'segmented',
+      workspaceRoot,
+      sourceImagePath,
+      componentSegmentationPath: artifacts.componentSegmentationPath,
+      fastSamSegmentationPath: artifacts.fastSamSegmentationPath,
+      componentSegmentationPreviewPath: artifacts.componentSegmentationPreviewPath,
+      fastSamPreviewPath: artifacts.fastSamPreviewPath,
+      frameworkComponentManifestPath: artifacts.frameworkComponentManifestPath,
+      componentBasePath: artifacts.componentBasePath,
+      componentAssetPaths: artifacts.componentAssetPaths,
+      componentCount: artifacts.componentManifest.components.length,
+      warnings
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      status: error instanceof WorkspaceError ? 'invalid_workspace' : 'write_failed',
+      message: error instanceof Error ? error.message : String(error),
+      warnings
+    }
+  }
+}
+
+export async function editFrameworkComponentsWithImage2(
+  request: FrameworkLocalizedEditRequest
+): Promise<FrameworkLocalizedEditResult> {
+  const warnings: string[] = []
+  try {
+    const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
+    const componentManifestPath = await resolveWorkspacePath(workspaceRoot, request.componentManifestPath)
+    const manifest = parseFrameworkComponentManifest(JSON.parse(await readFile(componentManifestPath, 'utf8')) as unknown)
+    const sourceImagePath = await resolveWorkspacePath(workspaceRoot, manifest.sourceImagePath)
+    const selected = selectFrameworkComponents(manifest, request.componentIds, request.blockIds)
+    if (selected.length === 0) throw new Error('No matching framework components were selected.')
+    const source = await loadImage(sourceImagePath)
+    const imageSize = { width: source.width, height: source.height }
+    const target = frameworkEditTargetFromComponents(selected)
+    const paddedTarget = padBounds(target.bbox, Math.max(0, request.padding ?? 18), imageSize)
+    const outputDir = await resolveOutputDir(workspaceRoot, request.outputDir)
+    await mkdir(outputDir, { recursive: true })
+    const imageId = slugForId(request.imageId ?? 'framework-component-edit-' + new Date().toISOString())
+    const targetCropPath = join(outputDir, imageId + '.target-crop.png')
+    const editInputPath = join(outputDir, imageId + '.edit-input.png')
+    const editOutputPath = join(outputDir, imageId + '.edit-output.png')
+    const editedRegionPath = join(outputDir, imageId + '.edited-region.png')
+    const outputPath = join(outputDir, imageId + '.png')
+    const contactSheetPath = join(outputDir, imageId + '.contact-sheet.png')
+
+    await writeImageCrop(sourceImagePath, targetCropPath, paddedTarget)
+    await writeImageCrop(sourceImagePath, editInputPath, paddedTarget)
+    const editSize = normalizeSize({
+      width: request.editCanvasSize ?? Math.max(256, Math.min(1024, Math.round(paddedTarget.w))),
+      height: request.editCanvasSize ?? Math.max(256, Math.min(1024, Math.round(paddedTarget.h)))
+    }, warnings)
+    const editPrompt = [
+      'Redraw the selected component(s) of a scientific framework figure as a clean replacement patch.',
+      'Keep the same visual role, approximate layout, and scientific/technical meaning.',
+      'Do not redraw unrelated surrounding modules.',
+      '',
+      'Selected components:',
+      ...selected.map((component) => `- ${component.componentId}: ${component.title} [${component.semanticLayer ?? 'mixed'}]`),
+      '',
+      'User instruction:',
+      request.instruction.trim()
+    ].join('\n')
+    const providerResult = await renderWithProvider({
+      workspaceRoot,
+      outputPath: editOutputPath,
+      recipe: {
+        mode: 'text_to_image',
+        model: imageModel(),
+        prompt: editPrompt,
+        size: editSize,
+        outputFormat: 'png',
+        intent: 'framework_diagram',
+        promptProfile: 'framework-layered-draft-v1'
+      }
+    })
+    warnings.push(...providerResult.warnings)
+    await recomposeEditedRegion({
+      sourceImagePath,
+      editOutputPath,
+      outputPath,
+      editedRegionPath,
+      target: paddedTarget
+    })
+    await writeFrameworkEditContactSheet({
+      sourceImagePath,
+      targetCropPath,
+      editOutputPath,
+      outputPath,
+      contactSheetPath
+    })
+    const manifestPath = join(outputDir, imageId + '.manifest.json')
+    const manifestRecord: ImageGenerationManifest = {
+      version: 1,
+      renderer: 'sciforge-image-generation-mcp',
+      rendererVersion: RENDERER_VERSION,
+      tool: 'image_generation_edit_components',
+      createdAt: new Date().toISOString(),
+      requestHash: hashValue({ request, target }),
+      workspaceRoot,
+      outputPath,
+      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.threadId ? { threadId: request.threadId } : {}),
+      editIntent: {
+        mode: 'replace',
+        sourcePath: sourceImagePath,
+        instruction: request.instruction,
+        preserve: ['layout', 'composition']
+      },
+      frameworkComponentManifestPath: componentManifestPath,
+      componentBasePath: manifest.componentBasePath,
+      componentAssetPaths: selected.map((component) => component.transparentAssetPath),
+      provider: providerResult.provider,
+      warnings
+    }
+    await writeJson(manifestPath, manifestRecord)
+    const artifactManifestPath = await writeImageArtifactManifest({
+      workspaceRoot,
+      artifactId: imageId,
+      artifactKind: 'edited_image',
+      sourceTool: 'image_generation',
+      outputPath,
+      manifestPath,
+      sourcePath: sourceImagePath,
+      frameworkComponentManifestPath: componentManifestPath,
+      componentBasePath: manifest.componentBasePath,
+      componentAssetPaths: selected.map((component) => component.transparentAssetPath),
+      title: request.instruction.slice(0, 90) || imageId,
+      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.threadId ? { threadId: request.threadId } : {})
+    })
+    return {
+      ok: true,
+      status: providerResult.placeholder ? 'edited_placeholder' : 'edited',
+      workspaceRoot,
+      outputPath,
+      manifestPath,
+      artifactManifestPath,
+      componentManifestPath,
+      sourceImagePath,
+      target,
+      paddedTarget,
+      targetCropPath,
+      editInputPath,
+      editOutputPath,
+      editedRegionPath,
+      contactSheetPath,
+      provider: providerResult.provider,
+      model: imageModel(),
+      warnings
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      status: error instanceof WorkspaceError ? 'invalid_workspace' : error instanceof ProviderNotConfiguredError ? 'provider_not_configured' : error instanceof ProviderError ? 'provider_failed' : 'write_failed',
+      message: error instanceof Error ? error.message : String(error),
+      warnings
+    }
+  }
+}
+
+async function writeFrameworkComponentArtifactsIfNeeded(input: {
+  workspaceRoot: string
+  outputDir: string
+  imageId: string
+  outputPath: string
+  recipe: ImageGenerationRecipe
+  frameworkDesignPlanPath?: string
+  warnings: string[]
+}): Promise<FrameworkComponentArtifacts | undefined> {
+  if (input.recipe.intent !== 'framework_diagram') return undefined
+  return writeFrameworkComponentArtifacts({
+    workspaceRoot: input.workspaceRoot,
+    outputDir: input.outputDir,
+    imageId: input.imageId,
+    sourceImagePath: input.outputPath,
+    designPlan: input.recipe.frameworkDesignPlan,
+    warnings: input.warnings
+  })
+}
+
+async function writeFrameworkComponentArtifacts(input: {
+  workspaceRoot: string
+  outputDir: string
+  imageId: string
+  sourceImagePath: string
+  designPlan?: FrameworkDesignPlan
+  warnings: string[]
+}): Promise<FrameworkComponentArtifacts> {
+  const source = await loadImage(input.sourceImagePath)
+  const imageSize = { width: source.width, height: source.height }
+  const basePath = join(input.outputDir, input.imageId)
+  const componentDir = basePath + '.components'
+  await mkdir(componentDir, { recursive: true })
+  const componentSegmentationPath = basePath + '.component-segmentation.json'
+  const componentSegmentationPreviewPath = basePath + '.component-segmentation-preview.png'
+  const frameworkComponentManifestPath = basePath + '.framework-components.json'
+  const componentBasePath = basePath + '.component-base.png'
+  const semanticLayerDir = basePath + '.semantic-layers'
+  const createdAt = new Date().toISOString()
+  const segmentation = await extractComponentSegmentationComponents({
+    sourceImagePath: input.sourceImagePath,
+    imageSize,
+    outputDir: componentDir
+  })
+  const usedExternalSegmentation = segmentation.candidates.length > 0
+  const candidates = usedExternalSegmentation
+    ? segmentation.candidates
+    : await extractLocalSemanticComponents(input.sourceImagePath, imageSize, input.warnings)
+  const components = await writeComponentAssets({
+    sourceImagePath: input.sourceImagePath,
+    componentDir,
+    componentBasePath,
+    imageSize,
+    candidates
+  })
+  const blocks = buildFrameworkComponentBlocks({
+    components,
+    designPlan: input.designPlan,
+    canvasSize: input.designPlan?.canvas.size ?? imageSize,
+    imageSize
+  })
+  applyFrameworkComponentBlocks(components, blocks)
+  const semanticLayerImages = await writeFrameworkSemanticLayerImages({
+    sourceImagePath: input.sourceImagePath,
+    semanticLayerDir,
+    imageSize,
+    components
+  })
+  const segmentationManifest: FrameworkFastSamSegmentation = {
+    version: 1,
+    kind: 'sciforge_framework_component_segmentation',
+    createdAt,
+    sourceImagePath: input.sourceImagePath,
+    outputDir: componentDir,
+    canvasSize: imageSize,
+    imageSize,
+    prompts: usedExternalSegmentation
+      ? ['component-only', 'external-component-segmentation-runner']
+      : ['component-only', 'semantic-layer-first', 'local-fallback'],
+    components: components.map((component): FrameworkFastSamSegmentationComponent => ({
+      componentId: component.componentId,
+      title: component.title,
+      semanticLayer: component.semanticLayer === 'mixed' || !component.semanticLayer ? 'shape' : component.semanticLayer,
+      type: component.type,
+      bbox: component.bbox,
+      pixelBbox: component.pixelBbox,
+      role: component.role,
+      confidence: component.confidence
+    })),
+    ...(blocks.length
+      ? {
+          blocks: blocks.map((block) => ({
+            blockId: block.blockId,
+            title: block.title,
+            blockType: block.blockType,
+            bbox: block.bbox,
+            pixelBbox: block.pixelBbox,
+            childSegmentIds: block.childComponentIds,
+            semanticLayers: block.semanticLayers,
+            ...(block.sourceRegionId ? { sourceRegionId: block.sourceRegionId } : {}),
+            ...(block.sourceSpecRef ? { sourceSpecRef: block.sourceSpecRef } : {}),
+            ...(block.placeholderId ? { placeholderId: block.placeholderId } : {}),
+            confidence: block.confidence
+          }))
+        }
+      : {}),
+    warnings: [
+      ...segmentation.warnings,
+      ...input.warnings
+    ]
+  }
+  await writeJson(componentSegmentationPath, segmentationManifest)
+  await writeFastSamPreview({
+    sourceImagePath: input.sourceImagePath,
+    outputPath: componentSegmentationPreviewPath,
+    components
+  })
+  const manifest: FrameworkComponentManifest = {
+    version: 1,
+    kind: 'sciforge_framework_components',
+    createdAt,
+    sourceImagePath: input.sourceImagePath,
+    componentBasePath,
+    componentDir,
+    componentSegmentationPath,
+    fastSamSegmentationPath: componentSegmentationPath,
+    componentSegmentationPreviewPath,
+    fastSamPreviewPath: componentSegmentationPreviewPath,
+    semanticLayerDir,
+    semanticLayerImages,
+    canvasSize: imageSize,
+    ...(blocks.length ? { blocks } : {}),
+    components,
+    warnings: segmentationManifest.warnings
+  }
+  await writeJson(frameworkComponentManifestPath, manifest)
+  return {
+    componentManifest: manifest,
+    componentSegmentationPath,
+    fastSamSegmentationPath: componentSegmentationPath,
+    componentSegmentationPreviewPath,
+    fastSamPreviewPath: componentSegmentationPreviewPath,
+    frameworkComponentManifestPath,
+    componentBasePath,
+    componentAssetPaths: editableFrameworkComponents(manifest).map((component) => component.transparentAssetPath)
+  }
+}
+
+async function extractComponentSegmentationComponents(input: {
+  sourceImagePath: string
+  imageSize: ImageSize
+  outputDir: string
+}): Promise<FastSamExtractionResult> {
+  const { runner, model, protocolArg } = componentSegmentationRunnerConfig()
+  if (!runner || !model) {
+    return {
+      candidates: [],
+      warnings: [`External component segmentation runner is not configured (${COMPONENT_SEGMENTATION_RUNNER_ENV}/${COMPONENT_SEGMENTATION_MODEL_ENV}); coarse local hitbox fallback was used.`]
+    }
+  }
+
+  const request = {
+    version: 1,
+    kind: 'sciforge_component_segmentation_request',
+    imagePath: input.sourceImagePath,
+    modelPath: model,
+    outputDir: input.outputDir,
+    maxComponents: 200,
+    returnFormat: 'sciforge-framework-components-v1'
+  }
+
+  try {
+    const response = await runComponentSegmentationRunner(runner, protocolArg, request)
+    const candidates = parseComponentSegmentationRunnerCandidates(response, input.imageSize)
+      .filter((candidate) => isUsefulLocalComponent(candidate, input.imageSize))
+      .slice(0, 220)
+    return {
+      candidates,
+      warnings: candidates.length > 0
+        ? []
+        : ['Component segmentation runner returned no usable components; coarse local hitbox fallback was used.']
+    }
+  } catch (error) {
+    return {
+      candidates: [],
+      warnings: [`Component segmentation runner failed (${error instanceof Error ? error.message : String(error)}); coarse local hitbox fallback was used.`]
+    }
+  }
+}
+
+function componentSegmentationRunnerConfig(): { runner: string; model: string; protocolArg: string } {
+  const genericRunner = process.env[COMPONENT_SEGMENTATION_RUNNER_ENV]?.trim() ?? ''
+  const legacyRunner = process.env[FASTSAM_RUNNER_ENV]?.trim() ?? ''
+  const genericModel = process.env[COMPONENT_SEGMENTATION_MODEL_ENV]?.trim() ?? ''
+  const legacyModel = process.env[FASTSAM_MODEL_ENV]?.trim() ?? ''
+  return {
+    runner: genericRunner || legacyRunner,
+    model: genericModel || legacyModel,
+    protocolArg: genericRunner ? COMPONENT_SEGMENTATION_PROTOCOL_ARG : FASTSAM_SEGMENTATION_PROTOCOL_ARG
+  }
+}
+
+function runComponentSegmentationRunner(runner: string, protocolArg: string, request: JsonRecord): Promise<JsonRecord> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(runner, [protocolArg], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`timed out after ${COMPONENT_SEGMENTATION_RUNNER_TIMEOUT_MS}ms`))
+    }, COMPONENT_SEGMENTATION_RUNNER_TIMEOUT_MS)
+
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0) {
+        reject(new Error(`exit ${code ?? 'unknown'}${stderr.trim() ? `: ${stderr.trim().slice(-600)}` : ''}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim())
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          reject(new Error('runner returned non-object JSON'))
+          return
+        }
+        resolvePromise(parsed as JsonRecord)
+      } catch (error) {
+        reject(new Error(`runner returned invalid JSON${stderr.trim() ? `; stderr: ${stderr.trim().slice(-600)}` : ''}`))
+      }
+    })
+    child.stdin.end(JSON.stringify(request))
+  })
+}
+
+function parseComponentSegmentationRunnerCandidates(response: JsonRecord, imageSize: ImageSize): LocalComponentCandidate[] {
+  const rawComponents = Array.isArray(response.components)
+    ? response.components
+    : Array.isArray(response.segments)
+      ? response.segments
+      : []
+  const candidates: LocalComponentCandidate[] = []
+  for (const [index, raw] of rawComponents.entries()) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const record = raw as JsonRecord
+    const box = readFastSamBbox(record, imageSize)
+    if (!box) continue
+    const semanticLayer = normalizeFastSamSemanticLayer(record.semanticLayer ?? record.layer)
+    const type = normalizeFastSamComponentType(record.type)
+    candidates.push({
+      id: typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : typeof record.componentId === 'string' && record.componentId.trim()
+          ? record.componentId.trim()
+          : `component-${String(index + 1).padStart(3, '0')}`,
+      title: typeof record.title === 'string' && record.title.trim()
+        ? record.title.trim()
+        : `Component ${index + 1}`,
+      semanticLayer,
+      type,
+      role: normalizeFastSamRole(record.role) ?? componentRoleForBounds(box, imageSize),
+      pixelBbox: box,
+      pixels: pixelsForBox(box, imageSize),
+      confidence: normalizeConfidence(record.confidence),
+      detectionMethod: 'component_segmentation_external_runner'
+    })
+  }
+  return candidates
+}
+
+function readFastSamBbox(record: JsonRecord, imageSize: ImageSize): DiagramLayerBounds | null {
+  const source = (record.pixelBbox ?? record.bbox) as unknown
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null
+  const bbox = source as JsonRecord
+  const x = numericValue(bbox.x)
+  const y = numericValue(bbox.y)
+  const w = numericValue(bbox.w ?? bbox.width)
+  const h = numericValue(bbox.h ?? bbox.height)
+  if (![x, y, w, h].every((value) => Number.isFinite(value))) return null
+  return clampBounds({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }, imageSize)
+}
+
+function normalizeFastSamSemanticLayer(value: unknown): Exclude<FrameworkSemanticLayer, 'mixed'> {
+  if (value === 'text' || value === 'color' || value === 'shape' || value === 'formula') return value
+  if (value === 'connector' || value === 'arrow') return 'arrow'
+  if (value === 'icon' || value === 'material') return 'material'
+  return 'shape'
+}
+
+function normalizeFastSamComponentType(value: unknown): FrameworkComponentType {
+  if (value === 'text_label' || value === 'module' || value === 'legend') return value
+  if (value === 'flow_node') return 'shape_component'
+  if (value === 'connector') return 'connector_arrow'
+  if (value === 'callout') return 'visual_component'
+  if (value === 'formula') return 'formula_symbol'
+  if (value === 'icon') return 'material_image'
+  if (value === 'background') return 'panel'
+  return 'module'
+}
+
+function normalizeFastSamRole(value: unknown): FrameworkComponentRole | null {
+  if (value === 'primary' || value === 'secondary' || value === 'debug') return value
+  if (value === 'supporting' || value === 'annotation' || value === 'background') return 'secondary'
+  return null
+}
+
+function normalizeConfidence(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? clamp01(value) : 0.86
+}
+
+function numericValue(value: unknown): number {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string' && value.trim()) return Number(value)
+  return Number.NaN
+}
+
+function pixelsForBox(box: DiagramLayerBounds, imageSize: ImageSize): number[] {
+  const clamped = clampBounds(box, imageSize)
+  const pixels: number[] = []
+  for (let y = clamped.y; y < clamped.y + clamped.h; y += 1) {
+    for (let x = clamped.x; x < clamped.x + clamped.w; x += 1) {
+      pixels.push(y * imageSize.width + x)
+    }
+  }
+  return pixels
+}
+
+async function extractLocalSemanticComponents(
+  sourceImagePath: string,
+  imageSize: ImageSize,
+  warnings: string[]
+): Promise<LocalComponentCandidate[]> {
+  const source = await loadImage(sourceImagePath)
+  const canvas = createCanvas(source.width, source.height)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(source, 0, 0)
+  const imageData = ctx.getImageData(0, 0, source.width, source.height)
+  const codeMap = new Uint8Array(source.width * source.height)
+  for (let y = 0; y < source.height; y += 1) {
+    for (let x = 0; x < source.width; x += 1) {
+      const offset = (y * source.width + x) * 4
+      codeMap[y * source.width + x] = classifyFrameworkPixel(
+        imageData.data[offset],
+        imageData.data[offset + 1],
+        imageData.data[offset + 2],
+        imageData.data[offset + 3]
+      )
+    }
+  }
+  const raw: LocalComponentCandidate[] = []
+  for (const code of [1, 2, 3]) {
+    raw.push(...connectedComponentsForCode(codeMap, source.width, source.height, code, imageSize))
+  }
+  const merged = mergeLocalTextCandidates(raw, imageSize)
+    .filter((candidate) => isUsefulLocalComponent(candidate, imageSize))
+    .sort((a, b) => {
+      const areaA = a.pixelBbox.w * a.pixelBbox.h
+      const areaB = b.pixelBbox.w * b.pixelBbox.h
+      if (Math.abs(a.pixelBbox.y - b.pixelBbox.y) > 8) return a.pixelBbox.y - b.pixelBbox.y
+      if (Math.abs(areaA - areaB) > imageSize.width * imageSize.height * 0.012) return areaB - areaA
+      return a.pixelBbox.x - b.pixelBbox.x
+    })
+  if (merged.length === 0) warnings.push('Local component fallback found no useful components.')
+  return merged.map((candidate, index) => ({
+    ...candidate,
+    id: `component-${String(index + 1).padStart(3, '0')}`,
+    title: `${semanticLayerLabel(candidate.semanticLayer)} ${index + 1}`
+  }))
+}
+
+function classifyFrameworkPixel(r: number, g: number, b: number, alpha: number): number {
+  if (alpha < 24) return 0
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const delta = max - min
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  if (luminance > 246 && delta < 18) return 0
+  if (luminance > 238 && delta < 10) return 0
+  if (luminance < 105) return 1
+  if (delta > 30 && luminance < 245) return 2
+  if (luminance < 180 && delta < 22) return 1
+  if (delta > 18 && luminance < 235) return 2
+  return 0
+}
+
+function connectedComponentsForCode(
+  codeMap: Uint8Array,
+  width: number,
+  height: number,
+  code: number,
+  imageSize: ImageSize
+): LocalComponentCandidate[] {
+  const visited = new Uint8Array(width * height)
+  const components: LocalComponentCandidate[] = []
+  const stack: number[] = []
+  for (let start = 0; start < codeMap.length; start += 1) {
+    if (visited[start] || codeMap[start] !== code) continue
+    visited[start] = 1
+    stack.push(start)
+    const pixels: number[] = []
+    let minX = width
+    let minY = height
+    let maxX = -1
+    let maxY = -1
+    while (stack.length) {
+      const index = stack.pop() as number
+      pixels.push(index)
+      const x = index % width
+      const y = Math.floor(index / width)
+      if (x < minX) minX = x
+      if (y < minY) minY = y
+      if (x > maxX) maxX = x
+      if (y > maxY) maxY = y
+      const neighbors = [
+        x > 0 ? index - 1 : -1,
+        x < width - 1 ? index + 1 : -1,
+        y > 0 ? index - width : -1,
+        y < height - 1 ? index + width : -1
+      ]
+      for (const next of neighbors) {
+        if (next < 0 || visited[next] || codeMap[next] !== code) continue
+        visited[next] = 1
+        stack.push(next)
+      }
+    }
+    const pixelBbox = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
+    if (pixels.length < 8 || pixelBbox.w < 2 || pixelBbox.h < 2) continue
+    const semanticLayer = semanticLayerForLocalComponent(code, pixelBbox, pixels.length, imageSize)
+    const type = componentTypeForLocalComponent(semanticLayer, pixelBbox, pixels.length, imageSize)
+    components.push({
+      id: '',
+      title: '',
+      semanticLayer,
+      type,
+      role: componentRoleForBounds(pixelBbox, imageSize),
+      pixelBbox,
+      pixels,
+      confidence: confidenceForLocalComponent(pixelBbox, pixels.length, imageSize)
+    })
+  }
+  return components
+}
+
+function semanticLayerForLocalComponent(
+  code: number,
+  box: DiagramLayerBounds,
+  pixelCount: number,
+  imageSize: ImageSize
+): Exclude<FrameworkSemanticLayer, 'mixed'> {
+  const aspect = box.w / Math.max(1, box.h)
+  const areaRatio = box.w * box.h / Math.max(1, imageSize.width * imageSize.height)
+  if (code === 2) {
+    if (areaRatio > 0.012 && pixelCount / Math.max(1, box.w * box.h) < 0.55) return 'material'
+    return 'color'
+  }
+  if (aspect > 6 || aspect < 0.16) return 'arrow'
+  if (areaRatio < 0.00018 && Math.max(box.w, box.h) < Math.min(imageSize.width, imageSize.height) * 0.04) return 'formula'
+  return 'text'
+}
+
+function componentTypeForLocalComponent(
+  semanticLayer: Exclude<FrameworkSemanticLayer, 'mixed'>,
+  box: DiagramLayerBounds,
+  pixelCount: number,
+  imageSize: ImageSize
+): FrameworkComponentType {
+  const aspect = box.w / Math.max(1, box.h)
+  const areaRatio = box.w * box.h / Math.max(1, imageSize.width * imageSize.height)
+  if (semanticLayer === 'arrow') return 'connector_arrow'
+  if (semanticLayer === 'text') return 'text_label'
+  if (semanticLayer === 'formula') return 'formula_symbol'
+  if (semanticLayer === 'material') return 'material_image'
+  if (semanticLayer === 'color') {
+    if (areaRatio > 0.035) return 'panel'
+    if (aspect > 2.5 && box.h < imageSize.height * 0.1) return 'connector_arrow'
+    return pixelCount / Math.max(1, box.w * box.h) > 0.72 ? 'color_block' : 'visual_component'
+  }
+  return 'shape_component'
+}
+
+function componentRoleForBounds(box: DiagramLayerBounds, imageSize: ImageSize): FrameworkComponentRole {
+  const areaRatio = box.w * box.h / Math.max(1, imageSize.width * imageSize.height)
+  if (areaRatio > 0.006) return 'primary'
+  if (areaRatio > 0.0004) return 'secondary'
+  return 'debug'
+}
+
+function confidenceForLocalComponent(box: DiagramLayerBounds, pixelCount: number, imageSize: ImageSize): number {
+  const density = pixelCount / Math.max(1, box.w * box.h)
+  const areaRatio = box.w * box.h / Math.max(1, imageSize.width * imageSize.height)
+  return clamp01(0.42 + Math.min(0.28, density * 0.22) + Math.min(0.24, areaRatio * 3.5))
+}
+
+function mergeLocalTextCandidates(candidates: LocalComponentCandidate[], imageSize: ImageSize): LocalComponentCandidate[] {
+  const textCandidates = candidates
+    .filter((candidate) => candidate.semanticLayer === 'text' && candidate.pixelBbox.h < imageSize.height * 0.08)
+    .sort((a, b) => a.pixelBbox.y - b.pixelBbox.y || a.pixelBbox.x - b.pixelBbox.x)
+  const used = new Set<LocalComponentCandidate>()
+  const merged: LocalComponentCandidate[] = []
+  for (const candidate of textCandidates) {
+    if (used.has(candidate)) continue
+    used.add(candidate)
+    const group = [candidate]
+    let groupBox = { ...candidate.pixelBbox }
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const other of textCandidates) {
+        if (used.has(other)) continue
+        const yClose = Math.abs(centerY(other.pixelBbox) - centerY(groupBox)) <= Math.max(8, Math.max(other.pixelBbox.h, groupBox.h) * 0.75)
+        const gap = horizontalGap(groupBox, other.pixelBbox)
+        if (yClose && gap <= Math.max(14, Math.max(other.pixelBbox.h, groupBox.h) * 2.8)) {
+          used.add(other)
+          group.push(other)
+          groupBox = unionBounds([groupBox, other.pixelBbox])
+          changed = true
+        }
+      }
+    }
+    if (group.length === 1) {
+      merged.push(candidate)
+    } else {
+      merged.push({
+        ...candidate,
+        pixelBbox: groupBox,
+        pixels: group.flatMap((item) => item.pixels),
+        confidence: clamp01(Math.max(...group.map((item) => item.confidence)) + 0.08)
+      })
+    }
+  }
+  return [
+    ...candidates.filter((candidate) => !(candidate.semanticLayer === 'text' && candidate.pixelBbox.h < imageSize.height * 0.08)),
+    ...merged
+  ]
+}
+
+function isUsefulLocalComponent(candidate: LocalComponentCandidate, imageSize: ImageSize): boolean {
+  const box = candidate.pixelBbox
+  const imageArea = imageSize.width * imageSize.height
+  const areaRatio = box.w * box.h / Math.max(1, imageArea)
+  if (box.w < 3 || box.h < 3) return false
+  if (candidate.pixels.length < 10) return false
+  if (areaRatio > 0.62) return false
+  if (areaRatio < 0.000018 && candidate.semanticLayer !== 'formula') return false
+  return true
+}
+
+async function writeComponentAssets(input: {
+  sourceImagePath: string
+  componentDir: string
+  componentBasePath: string
+  imageSize: ImageSize
+  candidates: LocalComponentCandidate[]
+}): Promise<FrameworkComponentLayer[]> {
+  const source = await loadImage(input.sourceImagePath)
+  const baseCanvas = createCanvas(source.width, source.height)
+  const baseCtx = baseCanvas.getContext('2d')
+  baseCtx.drawImage(source, 0, 0)
+  const baseData = baseCtx.getImageData(0, 0, source.width, source.height)
+  const components: FrameworkComponentLayer[] = []
+  for (const [index, candidate] of input.candidates.entries()) {
+    const id = candidate.id || `component-${String(index + 1).padStart(3, '0')}`
+    const safeId = slugForId(id)
+    const assetPath = join(input.componentDir, safeId + '.crop.png')
+    const transparentAssetPath = join(input.componentDir, safeId + '.transparent.png')
+    const box = clampBounds(candidate.pixelBbox, input.imageSize)
+    await writeImageCrop(input.sourceImagePath, assetPath, box)
+    await writeTransparentComponentAsset({
+      sourceImagePath: input.sourceImagePath,
+      outputPath: transparentAssetPath,
+      bbox: box,
+      pixels: candidate.pixels,
+      imageSize: input.imageSize
+    })
+    for (const pixel of candidate.pixels) {
+      const offset = pixel * 4
+      baseData.data[offset] = 255
+      baseData.data[offset + 1] = 255
+      baseData.data[offset + 2] = 255
+      baseData.data[offset + 3] = 255
+    }
+    components.push({
+      componentId: safeId,
+      layerId: `layer-${safeId}`,
+      type: candidate.type,
+      title: candidate.title || `${semanticLayerLabel(candidate.semanticLayer)} ${index + 1}`,
+      bbox: { ...box },
+      pixelBbox: { ...box },
+      assetPath,
+      transparentAssetPath,
+      role: candidate.role,
+      qualityScore: candidate.confidence,
+      semanticLayer: candidate.semanticLayer,
+      detectionMethod: candidate.detectionMethod === 'component_segmentation_external_runner' || candidate.detectionMethod === 'fastsam_external_runner'
+        ? 'component_segmentation'
+        : 'local_connected_components',
+      confidence: candidate.confidence
+    })
+  }
+  baseCtx.putImageData(baseData, 0, 0)
+  await writeFile(input.componentBasePath, baseCanvas.toBuffer('image/png'))
+  return components
+}
+
+async function writeTransparentComponentAsset(input: {
+  sourceImagePath: string
+  outputPath: string
+  bbox: DiagramLayerBounds
+  pixels: number[]
+  imageSize: ImageSize
+}): Promise<void> {
+  const source = await loadImage(input.sourceImagePath)
+  const canvas = createCanvas(input.bbox.w, input.bbox.h)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(source, input.bbox.x, input.bbox.y, input.bbox.w, input.bbox.h, 0, 0, input.bbox.w, input.bbox.h)
+  const data = ctx.getImageData(0, 0, input.bbox.w, input.bbox.h)
+  const mask = new Uint8Array(input.bbox.w * input.bbox.h)
+  for (const pixel of input.pixels) {
+    const x = pixel % input.imageSize.width
+    const y = Math.floor(pixel / input.imageSize.width)
+    if (x < input.bbox.x || y < input.bbox.y || x >= input.bbox.x + input.bbox.w || y >= input.bbox.y + input.bbox.h) continue
+    mask[(y - input.bbox.y) * input.bbox.w + (x - input.bbox.x)] = 1
+  }
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index]) continue
+    data.data[index * 4 + 3] = 0
+  }
+  ctx.putImageData(data, 0, 0)
+  await writeFile(input.outputPath, canvas.toBuffer('image/png'))
+}
+
+async function writeImageCrop(sourceImagePath: string, outputPath: string, bounds: DiagramLayerBounds): Promise<void> {
+  const source = await loadImage(sourceImagePath)
+  const box = clampBounds(bounds, { width: source.width, height: source.height })
+  const canvas = createCanvas(box.w, box.h)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, box.w, box.h)
+  ctx.drawImage(source, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h)
+  await writeFile(outputPath, canvas.toBuffer('image/png'))
+}
+
+async function writeFastSamPreview(input: {
+  sourceImagePath: string
+  outputPath: string
+  components: FrameworkComponentLayer[]
+}): Promise<void> {
+  const source = await loadImage(input.sourceImagePath)
+  const canvas = createCanvas(source.width, source.height)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(source, 0, 0)
+  const palette = ['#2563eb', '#dc2626', '#16a34a', '#f97316', '#7c3aed', '#0891b2', '#db2777']
+  for (const [index, component] of input.components.entries()) {
+    const color = palette[index % palette.length] ?? '#2563eb'
+    ctx.strokeStyle = color
+    ctx.lineWidth = Math.max(1, Math.round(Math.min(source.width, source.height) * 0.0015))
+    ctx.strokeRect(component.pixelBbox.x + 0.5, component.pixelBbox.y + 0.5, Math.max(1, component.pixelBbox.w - 1), Math.max(1, component.pixelBbox.h - 1))
+    if (component.pixelBbox.w > 28 && component.pixelBbox.h > 12) {
+      ctx.font = '11px sans-serif'
+      ctx.fillStyle = 'rgba(255,255,255,0.86)'
+      ctx.fillRect(component.pixelBbox.x, component.pixelBbox.y, Math.min(component.pixelBbox.w, 92), 15)
+      ctx.fillStyle = color
+      ctx.fillText(component.componentId.replace('component-', 'c'), component.pixelBbox.x + 3, component.pixelBbox.y + 11)
+    }
+  }
+  await writeFile(input.outputPath, canvas.toBuffer('image/png'))
+}
+
+async function writeFrameworkSemanticLayerImages(input: {
+  sourceImagePath: string
+  semanticLayerDir: string
+  imageSize: ImageSize
+  components: FrameworkComponentLayer[]
+}): Promise<NonNullable<FrameworkComponentManifest['semanticLayerImages']>> {
+  await mkdir(input.semanticLayerDir, { recursive: true })
+  const layers = ['text', 'color', 'arrow', 'material', 'formula', 'shape'] as const
+  const results: NonNullable<FrameworkComponentManifest['semanticLayerImages']> = []
+  for (const layer of layers) {
+    const components = input.components.filter((component) => component.semanticLayer === layer && component.role !== 'debug')
+    if (!components.length) continue
+    const canvas = createCanvas(input.imageSize.width, input.imageSize.height)
+    const ctx = canvas.getContext('2d')
+    let pixelCount = 0
+    for (const component of components) {
+      const assetPath = component.transparentAssetPath || component.assetPath
+      if (!assetPath) continue
+      const asset = await loadImage(assetPath)
+      ctx.drawImage(asset, component.pixelBbox.x, component.pixelBbox.y, component.pixelBbox.w, component.pixelBbox.h)
+      pixelCount += component.pixelBbox.w * component.pixelBbox.h
+    }
+    const assetPath = join(input.semanticLayerDir, `${layer}.png`)
+    await writeFile(assetPath, canvas.toBuffer('image/png'))
+
+    const previewCanvas = createCanvas(input.imageSize.width, input.imageSize.height)
+    const previewCtx = previewCanvas.getContext('2d')
+    previewCtx.fillStyle = '#ffffff'
+    previewCtx.fillRect(0, 0, input.imageSize.width, input.imageSize.height)
+    previewCtx.drawImage(canvas, 0, 0)
+    previewCtx.strokeStyle = '#2563eb'
+    previewCtx.lineWidth = Math.max(1, Math.round(Math.min(input.imageSize.width, input.imageSize.height) * 0.0015))
+    for (const component of components) {
+      previewCtx.strokeRect(
+        component.pixelBbox.x + 0.5,
+        component.pixelBbox.y + 0.5,
+        Math.max(1, component.pixelBbox.w - 1),
+        Math.max(1, component.pixelBbox.h - 1)
+      )
+    }
+    const previewPath = join(input.semanticLayerDir, `${layer}.preview.png`)
+    await writeFile(previewPath, previewCanvas.toBuffer('image/png'))
+    results.push({
+      semanticLayer: layer,
+      assetPath,
+      previewPath,
+      pixelCount,
+      coverage: clamp01(pixelCount / Math.max(1, input.imageSize.width * input.imageSize.height)),
+      detectionMethod: 'layer_first_component_mask'
+    })
+  }
+  return results
+}
+
+function buildFrameworkComponentBlocks(input: {
+  components: FrameworkComponentLayer[]
+  designPlan?: FrameworkDesignPlan
+  canvasSize: ImageSize
+  imageSize: ImageSize
+}): FrameworkComponentBlock[] {
+  const blocks: FrameworkComponentBlock[] = []
+  for (const region of input.designPlan?.regions ?? []) {
+    if (!region.editable || !isFrameworkBlockRegionKind(region.kind)) continue
+    const pixelBbox = clampBounds(canvasBoxToPixelBox(region.bbox, input.canvasSize, input.imageSize), input.imageSize)
+    const childComponentIds = input.components
+      .filter((component) => componentBelongsToBlock(component.pixelBbox, pixelBbox))
+      .map((component) => component.componentId)
+    if (!childComponentIds.length && region.kind !== 'panel') continue
+    blocks.push({
+      blockId: `block-region-${slugForId(region.id)}`,
+      title: cleanFrameworkLabel(region.title, 90),
+      blockType: blockTypeForFrameworkRegion(region.kind),
+      bbox: canvasBoxToPixelBox(pixelBbox, input.imageSize, input.canvasSize),
+      pixelBbox,
+      role: region.kind === 'panel' || region.kind === 'module' ? 'primary' : 'secondary',
+      sourceRegionId: region.id,
+      ...(region.sourceSpecRef ? { sourceSpecRef: region.sourceSpecRef } : {}),
+      ...(region.placeholderId ? { placeholderId: region.placeholderId } : {}),
+      childComponentIds,
+      semanticLayers: semanticLayersForComponentIds(input.components, childComponentIds),
+      detectionMethods: detectionMethodsForComponentIds(input.components, childComponentIds),
+      reusableTemplateId: reusableTemplateIdForComponent(componentTypeForFrameworkRegion(region.kind), region.title),
+      confidence: 0.78
+    })
+  }
+
+  const sourceComponents = input.components
+    .filter((component) => isFrameworkBlockSourceComponent(component, input.imageSize))
+    .sort((a, b) => b.pixelBbox.w * b.pixelBbox.h - a.pixelBbox.w * a.pixelBbox.h)
+    .slice(0, 36)
+  for (const component of sourceComponents) {
+    const childComponentIds = input.components
+      .filter((child) => componentBelongsToBlock(child.pixelBbox, component.pixelBbox))
+      .map((child) => child.componentId)
+    const distinctChildren = childComponentIds.filter((id) => id !== component.componentId)
+    if (!distinctChildren.length && component.semanticLayer !== 'material') continue
+    const block: FrameworkComponentBlock = {
+      blockId: `block-component-${slugForId(component.componentId)}`,
+      title: cleanFrameworkLabel(component.title, 90),
+      blockType: blockTypeForFrameworkComponent(component),
+      bbox: component.bbox,
+      pixelBbox: component.pixelBbox,
+      role: component.role,
+      sourceComponentId: component.componentId,
+      ...(component.sourceRegionId ? { sourceRegionId: component.sourceRegionId } : {}),
+      ...(component.sourceSpecRef ? { sourceSpecRef: component.sourceSpecRef } : {}),
+      ...(component.placeholderId ? { placeholderId: component.placeholderId } : {}),
+      childComponentIds,
+      semanticLayers: semanticLayersForComponentIds(input.components, childComponentIds),
+      detectionMethods: detectionMethodsForComponentIds(input.components, childComponentIds),
+      reusableTemplateId: component.reusableTemplateId,
+      confidence: component.confidence
+    }
+    if (blocks.some((candidate) => frameworkBlocksOverlap(candidate, block))) continue
+    blocks.push(block)
+  }
+
+  return blocks
+    .filter((block) => block.childComponentIds.length > 0)
+    .sort((a, b) => {
+      const priority = frameworkComponentBlockTypePriority(b.blockType) - frameworkComponentBlockTypePriority(a.blockType)
+      if (priority !== 0) return priority
+      return a.pixelBbox.y - b.pixelBbox.y || a.pixelBbox.x - b.pixelBbox.x
+    })
+    .slice(0, 64)
+}
+
+function applyFrameworkComponentBlocks(components: FrameworkComponentLayer[], blocks: FrameworkComponentBlock[]): void {
+  const componentById = new Map(components.map((component) => [component.componentId, component]))
+  const sortedBlocks = [...blocks].sort((a, b) => a.pixelBbox.w * a.pixelBbox.h - b.pixelBbox.w * b.pixelBbox.h)
+  for (const component of components) {
+    const parentBlock = sortedBlocks.find((block) => block.childComponentIds.includes(component.componentId))
+    if (parentBlock) component.parentBlockId = parentBlock.blockId
+  }
+  for (const block of blocks) {
+    if (!block.sourceComponentId) continue
+    const parentComponent = componentById.get(block.sourceComponentId)
+    if (!parentComponent) continue
+    const childIds = block.childComponentIds.filter((id) => id !== block.sourceComponentId)
+    if (childIds.length) parentComponent.children = Array.from(new Set([...(parentComponent.children ?? []), ...childIds]))
+  }
+}
+
+function canvasBoxToPixelBox(box: DiagramLayerBounds, canvasSize: ImageSize, imageSize: ImageSize): DiagramLayerBounds {
+  return {
+    x: Math.round(box.x * imageSize.width / Math.max(1, canvasSize.width)),
+    y: Math.round(box.y * imageSize.height / Math.max(1, canvasSize.height)),
+    w: Math.round(box.w * imageSize.width / Math.max(1, canvasSize.width)),
+    h: Math.round(box.h * imageSize.height / Math.max(1, canvasSize.height))
+  }
+}
+
+function isFrameworkBlockRegionKind(kind: FrameworkDesignPlan['regions'][number]['kind']): boolean {
+  return kind === 'panel' || kind === 'module' || kind === 'legend' || kind === 'real_example' || kind === 'code_example' || kind === 'callout'
+}
+
+function blockTypeForFrameworkRegion(kind: FrameworkDesignPlan['regions'][number]['kind']): FrameworkComponentBlockType {
+  if (kind === 'panel') return 'panel'
+  if (kind === 'module') return 'module'
+  if (kind === 'legend' || kind === 'callout') return 'legend'
+  if (kind === 'real_example' || kind === 'code_example') return 'material_group'
+  return 'component_group'
+}
+
+function componentTypeForFrameworkRegion(kind: FrameworkDesignPlan['regions'][number]['kind']): FrameworkComponentType {
+  if (kind === 'panel') return 'panel'
+  if (kind === 'module') return 'module'
+  if (kind === 'legend') return 'legend'
+  if (kind === 'real_example') return 'material_image'
+  if (kind === 'code_example') return 'code'
+  if (kind === 'callout') return 'text_label'
+  return 'visual_component'
+}
+
+function blockTypeForFrameworkComponent(component: FrameworkComponentLayer): FrameworkComponentBlockType {
+  if (component.type === 'panel') return 'panel'
+  if (component.type === 'module' || component.type === 'shape_component') return 'module'
+  if (component.type === 'legend') return 'legend'
+  if (component.type === 'thumbnail' || component.type === 'material_image' || component.type === 'table' || component.type === 'code' || component.type === 'chart') return 'material_group'
+  return 'component_group'
+}
+
+function isFrameworkBlockSourceComponent(component: FrameworkComponentLayer, imageSize: ImageSize): boolean {
+  if (component.role === 'debug') return false
+  const areaRatio = component.pixelBbox.w * component.pixelBbox.h / Math.max(1, imageSize.width * imageSize.height)
+  if (areaRatio < 0.0018 || areaRatio > 0.36) return false
+  if (component.type === 'panel' || component.type === 'module' || component.type === 'thumbnail' || component.type === 'table' || component.type === 'code' || component.type === 'chart') return true
+  if (component.type === 'shape_component' && areaRatio >= 0.003) return true
+  if (component.type === 'material_image' && areaRatio >= 0.0025) return true
+  return false
+}
+
+function componentBelongsToBlock(componentBox: DiagramLayerBounds, blockBox: DiagramLayerBounds): boolean {
+  if (containmentRatioForBounds(componentBox, blockBox) >= 0.55) return true
+  const centerX = componentBox.x + componentBox.w / 2
+  const centerY = componentBox.y + componentBox.h / 2
+  return centerX >= blockBox.x &&
+    centerX <= blockBox.x + blockBox.w &&
+    centerY >= blockBox.y &&
+    centerY <= blockBox.y + blockBox.h &&
+    componentBox.w * componentBox.h <= blockBox.w * blockBox.h * 0.92
+}
+
+function containmentRatioForBounds(inner: DiagramLayerBounds, outer: DiagramLayerBounds): number {
+  const x1 = Math.max(inner.x, outer.x)
+  const y1 = Math.max(inner.y, outer.y)
+  const x2 = Math.min(inner.x + inner.w, outer.x + outer.w)
+  const y2 = Math.min(inner.y + inner.h, outer.y + outer.h)
+  const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1)
+  return overlap / Math.max(1, inner.w * inner.h)
+}
+
+function componentBoxOverlap(a: DiagramLayerBounds, b: DiagramLayerBounds): number {
+  const x1 = Math.max(a.x, b.x)
+  const y1 = Math.max(a.y, b.y)
+  const x2 = Math.min(a.x + a.w, b.x + b.w)
+  const y2 = Math.min(a.y + a.h, b.y + b.h)
+  const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1)
+  return overlap / Math.max(1, Math.min(a.w * a.h, b.w * b.h))
+}
+
+function frameworkBlocksOverlap(a: FrameworkComponentBlock, b: FrameworkComponentBlock): boolean {
+  if (a.sourceRegionId && b.sourceRegionId && a.sourceRegionId === b.sourceRegionId) return true
+  return componentBoxOverlap(a.pixelBbox, b.pixelBbox) > 0.82
+}
+
+function semanticLayersForComponentIds(components: FrameworkComponentLayer[], ids: string[]): Exclude<FrameworkSemanticLayer, 'mixed'>[] {
+  const idSet = new Set(ids)
+  const layers = components
+    .filter((component) => idSet.has(component.componentId))
+    .map((component) => component.semanticLayer)
+    .filter((layer): layer is Exclude<FrameworkSemanticLayer, 'mixed'> => Boolean(layer && layer !== 'mixed'))
+  return Array.from(new Set(layers)).sort()
+}
+
+function detectionMethodsForComponentIds(components: FrameworkComponentLayer[], ids: string[]): FrameworkComponentLayer['detectionMethod'][] {
+  const idSet = new Set(ids)
+  return Array.from(new Set(components
+    .filter((component) => idSet.has(component.componentId))
+    .map((component) => component.detectionMethod)))
+}
+
+function frameworkComponentBlockTypePriority(type: FrameworkComponentBlockType): number {
+  if (type === 'panel') return 6
+  if (type === 'module') return 5
+  if (type === 'workflow_group') return 4
+  if (type === 'material_group') return 3
+  if (type === 'legend') return 2
+  return 1
+}
+
+function reusableTemplateIdForComponent(type: FrameworkComponentType, title: string): string {
+  return `${type}-${slugForId(title).slice(0, 48)}`
+}
+
+function cleanFrameworkLabel(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…` : normalized
+}
+
+function componentLayersForDiagramManifest(componentManifest: FrameworkComponentManifest | undefined): DiagramLayer[] {
+  if (!componentManifest) return []
+  return editableFrameworkComponents(componentManifest).map((component, index): DiagramLayer => ({
+    id: component.layerId,
+    type: 'image',
+    label: component.title,
+    bbox: component.pixelBbox,
+    zIndex: 20 + index,
+    componentId: component.componentId,
+    componentType: component.type,
+    componentRole: component.role,
+    componentQualityScore: component.qualityScore,
+    semanticLayer: component.semanticLayer,
+    parentComponentId: component.parentComponentId,
+    parentBlockId: component.parentBlockId,
+    reusableTemplateId: component.reusableTemplateId,
+    assetPath: component.transparentAssetPath,
+    editable: true,
+    origin: 'framework_component_asset',
+    confidence: component.confidence
+  }))
+}
+
+function editableFrameworkComponents(componentManifest: FrameworkComponentManifest | undefined): FrameworkComponentLayer[] {
+  if (!componentManifest) return []
+  return componentManifest.components.filter((component) => component.role !== 'debug' && component.transparentAssetPath)
+}
+
+function parseFrameworkComponentManifest(value: unknown): FrameworkComponentManifest {
+  const record = asRecord(value)
+  if (record.kind !== 'sciforge_framework_components' || record.version !== 1) throw new Error('Invalid framework component manifest.')
+  if (typeof record.sourceImagePath !== 'string' || typeof record.componentBasePath !== 'string') throw new Error('Framework component manifest is missing paths.')
+  if (!Array.isArray(record.components)) throw new Error('Framework component manifest is missing components.')
+  return record as FrameworkComponentManifest
+}
+
+function parseFrameworkDesignPlan(value: unknown): FrameworkDesignPlan | undefined {
+  const record = asRecord(value)
+  if (record.kind !== 'sciforge_framework_design_plan' || record.version !== 1) return undefined
+  return record as FrameworkDesignPlan
+}
+
+function selectFrameworkComponents(
+  manifest: FrameworkComponentManifest,
+  componentIds: string[] | undefined,
+  blockIds?: string[]
+): FrameworkComponentLayer[] {
+  const ids = new Set((componentIds ?? []).map((id) => id.trim()).filter(Boolean))
+  const selectedBlockIds = new Set((blockIds ?? []).map((id) => id.trim()).filter(Boolean))
+  for (const block of manifest.blocks ?? []) {
+    if (!selectedBlockIds.has(block.blockId)) continue
+    for (const id of block.childComponentIds) ids.add(id)
+  }
+  if (ids.size === 0 && selectedBlockIds.size === 0) return manifest.components.filter((component) => component.role !== 'debug')
+  return manifest.components.filter((component) => ids.has(component.componentId) || ids.has(component.layerId))
+}
+
+function frameworkEditTargetFromComponents(components: FrameworkComponentLayer[]): FrameworkLocalizedEditTarget {
+  const bbox = unionBounds(components.map((component) => component.pixelBbox))
+  const blockIds = [...new Set(components.map((component) => component.parentBlockId).filter((id): id is string => Boolean(id)))]
+  const singleBlock = blockIds.length === 1 && components.length > 1
+  return {
+    kind: singleBlock ? 'block' : components.length === 1 ? 'component' : 'selection',
+    id: singleBlock ? blockIds[0] : components.map((component) => component.componentId).join('+'),
+    title: components.map((component) => component.title).join(' + ').slice(0, 180),
+    bbox,
+    componentIds: components.map((component) => component.componentId),
+    ...(blockIds.length ? { blockIds } : {}),
+    semanticLayers: [...new Set(components.map((component) => component.semanticLayer ?? 'mixed'))]
+  }
+}
+
+function unionBounds(bounds: DiagramLayerBounds[]): DiagramLayerBounds {
+  const minX = Math.min(...bounds.map((box) => box.x))
+  const minY = Math.min(...bounds.map((box) => box.y))
+  const maxX = Math.max(...bounds.map((box) => box.x + box.w))
+  const maxY = Math.max(...bounds.map((box) => box.y + box.h))
+  return {
+    x: Math.floor(minX),
+    y: Math.floor(minY),
+    w: Math.ceil(maxX - minX),
+    h: Math.ceil(maxY - minY)
+  }
+}
+
+function padBounds(bounds: DiagramLayerBounds, padding: number, imageSize: ImageSize): DiagramLayerBounds {
+  return clampBounds({
+    x: bounds.x - padding,
+    y: bounds.y - padding,
+    w: bounds.w + padding * 2,
+    h: bounds.h + padding * 2
+  }, imageSize)
+}
+
+function clampBounds(bounds: DiagramLayerBounds, imageSize: ImageSize): DiagramLayerBounds {
+  const x = clampInteger(bounds.x, 0, Math.max(0, imageSize.width - 1))
+  const y = clampInteger(bounds.y, 0, Math.max(0, imageSize.height - 1))
+  const maxW = Math.max(1, imageSize.width - x)
+  const maxH = Math.max(1, imageSize.height - y)
+  return {
+    x,
+    y,
+    w: clampInteger(bounds.w, 1, maxW),
+    h: clampInteger(bounds.h, 1, maxH)
+  }
+}
+
+function centerY(bounds: DiagramLayerBounds): number {
+  return bounds.y + bounds.h / 2
+}
+
+function horizontalGap(a: DiagramLayerBounds, b: DiagramLayerBounds): number {
+  if (a.x <= b.x + b.w && b.x <= a.x + a.w) return 0
+  return a.x < b.x ? b.x - (a.x + a.w) : a.x - (b.x + b.w)
+}
+
+function semanticLayerLabel(layer: FrameworkSemanticLayer): string {
+  if (layer === 'text') return 'Text'
+  if (layer === 'color') return 'Color block'
+  if (layer === 'arrow') return 'Arrow'
+  if (layer === 'material') return 'Material'
+  if (layer === 'formula') return 'Formula'
+  if (layer === 'shape') return 'Shape'
+  return 'Component'
+}
+
+async function recomposeEditedRegion(input: {
+  sourceImagePath: string
+  editOutputPath: string
+  outputPath: string
+  editedRegionPath: string
+  target: DiagramLayerBounds
+}): Promise<void> {
+  const source = await loadImage(input.sourceImagePath)
+  const edited = await loadImage(input.editOutputPath)
+  const canvas = createCanvas(source.width, source.height)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(source, 0, 0)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(input.target.x, input.target.y, input.target.w, input.target.h)
+  ctx.drawImage(edited, input.target.x, input.target.y, input.target.w, input.target.h)
+  await writeFile(input.outputPath, canvas.toBuffer('image/png'))
+  await writeImageCrop(input.outputPath, input.editedRegionPath, input.target)
+}
+
+async function writeFrameworkEditContactSheet(input: {
+  sourceImagePath: string
+  targetCropPath: string
+  editOutputPath: string
+  outputPath: string
+  contactSheetPath: string
+}): Promise<void> {
+  const images = await Promise.all([
+    loadImage(input.sourceImagePath),
+    loadImage(input.targetCropPath),
+    loadImage(input.editOutputPath),
+    loadImage(input.outputPath)
+  ])
+  const thumbW = 360
+  const thumbH = 240
+  const padding = 28
+  const labelH = 28
+  const canvas = createCanvas(padding * 5 + thumbW * 4, padding * 2 + labelH + thumbH)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#f8fafc'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  const labels = ['Source', 'Selected crop', 'Image2 redraw', 'Recomposed']
+  for (const [index, image] of images.entries()) {
+    const x = padding + index * (thumbW + padding)
+    const y = padding + labelH
+    ctx.fillStyle = '#334155'
+    ctx.font = '16px sans-serif'
+    ctx.fillText(labels[index] ?? 'Image', x, padding + 18)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(x, y, thumbW, thumbH)
+    const scale = Math.min(thumbW / image.width, thumbH / image.height)
+    const w = image.width * scale
+    const h = image.height * scale
+    ctx.drawImage(image, x + (thumbW - w) / 2, y + (thumbH - h) / 2, w, h)
+    ctx.strokeStyle = '#cbd5e1'
+    ctx.strokeRect(x + 0.5, y + 0.5, thumbW - 1, thumbH - 1)
+  }
+  await writeFile(input.contactSheetPath, canvas.toBuffer('image/png'))
+}
+
+function extnameForPath(path: string): string {
+  const index = path.lastIndexOf('.')
+  return index >= 0 ? path.slice(index) : ''
+}
+
+function extractComponentEditRequestFromPacket(
+  packet: unknown,
+  workspaceRoot: string,
+  request: ImageGenerationEditFromCanvasPacketRequest,
+  warnings: string[]
+): FrameworkLocalizedEditRequest | undefined {
+  type SelectedFrameworkComponentRef = {
+    componentId?: string
+    blockId?: string
+    manifestPath?: string
+  }
+  const record = asRecord(packet)
+  const selectedShapes = Array.isArray(record.selectedShapes) ? record.selectedShapes.map(asRecord) : []
+  const packetSelectedComponents: SelectedFrameworkComponentRef[] = Array.isArray(record.selectedComponents)
+    ? record.selectedComponents.map(asRecord).filter(Boolean).map((component) => ({
+        componentId: stringValue(component.componentId),
+        blockId: stringValue(component.parentBlockId),
+        manifestPath: stringValue(component.frameworkComponentManifestPath)
+      }))
+    : []
+  const selectedComponents = selectedShapes
+    .map((shape) => asRecord(shape.meta))
+    .filter(Boolean)
+    .map((meta): SelectedFrameworkComponentRef => ({
+      componentId: stringValue(meta.componentId) ?? stringValue(meta.sciforgeFrameworkComponentId),
+      blockId: stringValue(meta.parentBlockId),
+      manifestPath: stringValue(meta.frameworkComponentManifestPath) ?? stringValue(meta.sciforgeFrameworkComponentManifestPath)
+    }))
+    .concat(packetSelectedComponents)
+    .filter((item) => Boolean((item.componentId || item.blockId) && item.manifestPath))
+  if (!selectedComponents.length) return undefined
+  const manifestPath = selectedComponents[0]?.manifestPath
+  if (!manifestPath) return undefined
+  const suggestions = Array.isArray(record.modificationSuggestions) ? record.modificationSuggestions.map(asRecord) : []
+  const instruction = suggestions.map((suggestion) => stringValue(suggestion.instruction)).find(Boolean) ??
+    'Redraw the selected framework component(s) while keeping the rest of the figure unchanged.'
+  try {
+    ensureInsideWorkspace(workspaceRoot, isAbsolute(manifestPath) ? resolve(manifestPath) : resolve(workspaceRoot, manifestPath))
+  } catch (error) {
+    warnings.push('Skipped framework component edit outside workspace: ' + (error instanceof Error ? error.message : String(error)))
+    return undefined
+  }
+  return {
+    workspaceRoot,
+    componentManifestPath: manifestPath,
+    componentIds: [...new Set(selectedComponents.map((item) => item.componentId).filter((id): id is string => Boolean(id)))],
+    blockIds: [...new Set(selectedComponents.map((item) => item.blockId).filter((id): id is string => Boolean(id)))],
+    instruction,
+    ...(request.outputDir ? { outputDir: request.outputDir } : {}),
+    ...(request.imageId ? { imageId: request.imageId } : {}),
+    ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+    ...(request.threadId ? { threadId: request.threadId } : {})
+  }
+}
+
+
 export async function editImageFromCanvasPacket(
   request: ImageGenerationEditFromCanvasPacketRequest
 ): Promise<ImageGenerationEditFromCanvasPacketResult> {
@@ -773,6 +2269,31 @@ export async function editImageFromCanvasPacket(
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const packet = await loadReviewPacket(request, workspaceRoot)
+    const componentEditRequest = extractComponentEditRequestFromPacket(packet, workspaceRoot, request, warnings)
+    if (componentEditRequest) {
+      const componentEdit = await editFrameworkComponentsWithImage2(componentEditRequest)
+      if (componentEdit.ok) {
+        return {
+          ok: true,
+          status: componentEdit.status,
+          intents: [{
+            mode: 'replace',
+            sourcePath: componentEdit.sourceImagePath,
+            instruction: componentEditRequest.instruction,
+            preserve: ['layout', 'composition']
+          }],
+          outputs: [{
+            workspaceRoot,
+            outputPath: componentEdit.outputPath,
+            manifestPath: componentEdit.manifestPath,
+            artifactManifestPath: componentEdit.artifactManifestPath,
+            provider: componentEdit.provider
+          }],
+          warnings: [...warnings, ...componentEdit.warnings]
+        }
+      }
+      warnings.push(componentEdit.message)
+    }
     const packetRecord = asRecord(packet)
     const packetCanvasId = stringValue(packetRecord.canvasId)
     const packetThreadId = stringValue(packetRecord.threadId)
@@ -1107,7 +2628,7 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
     try {
       await renderWithImageEndpoint(candidateBaseUrl, {
         apiKey: endpoint.apiKey,
-        model: endpoint.model,
+        model: input.recipe?.model?.trim() || endpoint.model,
         prompt,
         size,
         outputPath: input.outputPath
@@ -1365,6 +2886,28 @@ function drawWrappedText(
   if (line) ctx.fillText(line, x, cursorY)
 }
 
+function normalizeScientificPolishDeltaPlan(
+  value: NonNullable<ImageGenerationRecipe['scientificPolishDeltaPlan']>
+): NonNullable<ImageGenerationRecipe['scientificPolishDeltaPlan']> {
+  const targetPanels = value.targetPanels
+    ?.map((panel) => ({
+      assetId: String(panel.assetId ?? '').trim().slice(0, 160),
+      ...(panel.reason ? { reason: panel.reason.trim().slice(0, 800) } : {}),
+      ...(panel.allowedOperations?.length
+        ? { allowedOperations: panel.allowedOperations.map((item) => String(item).trim()).filter(Boolean).slice(0, 12) }
+        : {})
+    }))
+    .filter((panel) => panel.assetId)
+    .slice(0, 24)
+  return {
+    mode: 'delta_only',
+    ...(targetPanels?.length ? { targetPanels } : {}),
+    allowedOperations: value.allowedOperations.map((item) => String(item).trim()).filter(Boolean).slice(0, 16),
+    lockedFacts: value.lockedFacts.map((item) => String(item).trim()).filter(Boolean).slice(0, 32),
+    handoffPrompt: value.handoffPrompt.trim().slice(0, 4000)
+  }
+}
+
 function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): ImageGenerationRecipe {
   if (!recipe || typeof recipe !== 'object') throw new Error('recipe is required.')
   const prompt = enhanceImageGenerationPrompt(recipe.prompt?.trim() ?? '', recipe.stylePreset)
@@ -1382,13 +2925,25 @@ function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): Ima
     ...(recipe.drawingBrief ? { drawingBrief: recipe.drawingBrief } : {}),
     ...(recipe.diagramSpec ? { diagramSpec: recipe.diagramSpec } : {}),
     ...(recipe.frameworkDesignPlan ? { frameworkDesignPlan: recipe.frameworkDesignPlan } : {}),
+    ...(recipe.frameworkRegionAssetMode ? { frameworkRegionAssetMode: recipe.frameworkRegionAssetMode } : {}),
     ...(recipe.confirmation ? { confirmation: recipe.confirmation } : {}),
-    ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {})
+    ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
+    ...(recipe.scientificPolishDeltaPlan ? { scientificPolishDeltaPlan: normalizeScientificPolishDeltaPlan(recipe.scientificPolishDeltaPlan) } : {}),
+    ...(recipe.controlledSubfigureManifests?.length
+      ? { controlledSubfigureManifests: recipe.controlledSubfigureManifests.map((item) => item.trim()).filter(Boolean).slice(0, 24) }
+      : {})
   }
 }
 
 function scientificUsagePolicyForRecipe(recipe: ImageGenerationRecipe | undefined): ImageGenerationUsagePolicy | undefined {
   if (!recipe) return undefined
+  if (recipe.scientificPolishDeltaPlan?.mode === 'delta_only') {
+    return {
+      ...SCIENTIFIC_BASE_IMAGE_USAGE_POLICY,
+      lockedFacts: recipe.scientificPolishDeltaPlan.lockedFacts,
+      sourceControlledArtifacts: recipe.controlledSubfigureManifests ?? []
+    }
+  }
   return isScientificImageRequest([recipe.prompt, recipe.stylePreset]) ? SCIENTIFIC_BASE_IMAGE_USAGE_POLICY : undefined
 }
 
@@ -1408,6 +2963,21 @@ function pushUsagePolicyWarning(warnings: string[], usagePolicy: ImageGeneration
 
 function providerPromptForRecipe(recipe: ImageGenerationRecipe): string {
   const prompt = recipe.prompt.trim()
+  if (recipe.scientificPolishDeltaPlan?.mode === 'delta_only') {
+    const plan = recipe.scientificPolishDeltaPlan
+    return [
+      prompt,
+      '',
+      SCIENTIFIC_DELTA_IMAGE_PROVIDER_INSTRUCTION,
+      '',
+      `Allowed delta operations: ${plan.allowedOperations.join(', ') || 'visual polish only'}.`,
+      `Locked scientific facts: ${plan.lockedFacts.join('; ') || 'all numeric/statistical content and paper conclusions'}.`,
+      recipe.controlledSubfigureManifests?.length
+        ? `Source controlled artifacts: ${recipe.controlledSubfigureManifests.join('; ')}.`
+        : 'Source controlled artifacts must be supplied by SciForge before final deterministic overlay.',
+      `Handoff contract: ${plan.handoffPrompt}`
+    ].join('\n')
+  }
   return scientificUsagePolicyForRecipe(recipe)
     ? prompt + '\n\n' + SCIENTIFIC_BASE_IMAGE_PROVIDER_INSTRUCTION
     : prompt
@@ -1488,7 +3058,17 @@ async function writeImageArtifactManifest(input: {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  componentSegmentationPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  componentSegmentationPreviewPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   promptProfile?: ImageGenerationRecipe['promptProfile']
+  lockedFacts?: string[]
+  sourceControlledArtifacts?: string[]
   review?: ImageGenerationReviewResult
 }): Promise<string> {
   const artifactsDir = join(input.workspaceRoot, ARTIFACT_DIR)
@@ -1512,7 +3092,17 @@ async function writeImageArtifactManifest(input: {
     ...(input.diagramSpecPath ? { diagramSpecPath: input.diagramSpecPath } : {}),
     ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
     ...(input.diagramLayerManifestPath ? { diagramLayerManifestPath: input.diagramLayerManifestPath } : {}),
+    ...(input.componentSegmentationPath ? { componentSegmentationPath: input.componentSegmentationPath } : {}),
+    ...(input.fastSamSegmentationPath ? { fastSamSegmentationPath: input.fastSamSegmentationPath } : {}),
+    ...(input.fastSamBoxlibPath ? { fastSamBoxlibPath: input.fastSamBoxlibPath } : {}),
+    ...(input.componentSegmentationPreviewPath ? { componentSegmentationPreviewPath: input.componentSegmentationPreviewPath } : {}),
+    ...(input.fastSamPreviewPath ? { fastSamPreviewPath: input.fastSamPreviewPath } : {}),
+    ...(input.frameworkComponentManifestPath ? { frameworkComponentManifestPath: input.frameworkComponentManifestPath } : {}),
+    ...(input.componentBasePath ? { componentBasePath: input.componentBasePath } : {}),
+    ...(input.componentAssetPaths?.length ? { componentAssetPaths: input.componentAssetPaths } : {}),
     ...(input.promptProfile ? { promptProfile: input.promptProfile } : {}),
+    ...(input.lockedFacts?.length ? { lockedFacts: input.lockedFacts } : {}),
+    ...(input.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: input.sourceControlledArtifacts } : {}),
     title: input.title,
     ...(input.usagePolicy ? { usagePolicy: input.usagePolicy } : {}),
     ...(input.review?.ok ? { reviewScore: input.review.score } : {})

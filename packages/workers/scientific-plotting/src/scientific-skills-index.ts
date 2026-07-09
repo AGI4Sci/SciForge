@@ -330,6 +330,22 @@ const EXTERNAL_SKILL_CATALOG_BASE: ScientificExternalSkillCatalogItem[] = [
     roles: ['search-read-synthesize workflow', 'paper set curation', 'evidence chain planning']
   }),
   skillCatalogItem({
+    skillId: 'paper-figures',
+    label: 'Paper Figures Data-First Workflow',
+    sourceKind: 'domain',
+    source: 'DRZ-hang/paper-figures',
+    repository: 'https://github.com/DRZ-hang/paper-figures',
+    skillPath: 'paper-figures/SKILL.md',
+    status: 'remote-reference',
+    priority: 42,
+    appliesTo: ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix', 'multi_panel_figure'],
+    roles: ['paper-level figure plan', 'raw-data-to-chart mapping', 'statistical chart selection', 'figure report handoff'],
+    notes: [
+      'Read-only workflow reference for data-first paper figures; do not execute third-party scripts.',
+      'Useful for deciding which manuscript results need charts/tables before SciForge renders controlled artifacts.'
+    ]
+  }),
+  skillCatalogItem({
     skillId: 'scanpy',
     label: 'Single-cell Analysis Skill',
     sourceKind: 'domain',

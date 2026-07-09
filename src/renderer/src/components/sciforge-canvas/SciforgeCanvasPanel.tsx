@@ -5,9 +5,9 @@ import type {
   SciforgeCanvasReviewPacketResult
 } from '@shared/sciforge-canvas'
 import {
-  Download,
   ExternalLink,
   FileInput,
+  Layers,
   Loader2,
   MessageSquarePlus,
   RefreshCw,
@@ -107,17 +107,24 @@ function shortPath(path: string | null): string {
 function buildReviewRequestText(input: {
   packetPath: string
   canvasId: string
+  workspaceRoot: string
   suggestions: SciforgeCanvasReviewPacketModificationSuggestion[]
+  userInstruction?: string
 }): string {
+  const typedInstruction = input.userInstruction?.trim()
   const firstInstruction = input.suggestions
     .map((item) => item.instruction?.trim())
     .find(Boolean)
+  const annotationText = typedInstruction || firstInstruction || '请根据我在画布上的标注生成修改版。'
   return [
-    firstInstruction || '请根据当前画布审改包生成修改版。',
-    '',
-    `Canvas: ${input.canvasId}`,
-    `Review packet: ${input.packetPath}`,
-    '请使用匹配 artifact 类型的 MCP 工具生成新版本并插入回当前画布；不要覆盖原始产物。'
+    '请根据当前画布审改包修改生成结果。',
+    `用户批注：${annotationText}`,
+    `工作区：${input.workspaceRoot}`,
+    `画布 ID：${input.canvasId}`,
+    `审改包：${input.packetPath}`,
+    '请优先调用 image_generation_edit_from_canvas_packet，使用上述 workspaceRoot、canvasId 和 reviewPacketPath。',
+    '不要用 bash/read 手动读取审改包；不要凭空重画不相关图片。',
+    '若审改包包含 selectedComponents，请只做局部重绘；否则基于标注做非破坏式 delta 修改，并把新版本插入回当前画布。'
   ].join('\n')
 }
 
@@ -135,29 +142,59 @@ export function SciforgeCanvasPanel({
   const lastSavedXmlRef = useRef<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [ready, setReady] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [exporting, setExporting] = useState(false)
+  const [splitting, setSplitting] = useState(false)
   const [sending, setSending] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [annotationEditorOpen, setAnnotationEditorOpen] = useState(false)
+  const [annotationDraft, setAnnotationDraft] = useState('')
   const [packetPath, setPacketPath] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<SciforgeCanvasReviewPacketModificationSuggestion[]>([])
   const [canvasSnapshot, setCanvasSnapshot] = useState<SciforgeCanvasDrawioSnapshot | null>(null)
   const [useOnlineDrawio, setUseOnlineDrawio] = useState(false)
+  const [localDrawioUrl, setLocalDrawioUrl] = useState<string | null>(null)
+  const [localDrawioMessage, setLocalDrawioMessage] = useState<string | null>(null)
 
   const embedded = variant === 'embedded'
   const configuredIframeSrc = useMemo(configuredDrawioUrl, [])
-  const iframeSrc = configuredIframeSrc ?? (useOnlineDrawio ? ONLINE_DRAWIO_EMBED_URL : null)
+  const iframeSrc = configuredIframeSrc ?? localDrawioUrl ?? (useOnlineDrawio ? ONLINE_DRAWIO_EMBED_URL : null)
   const iframeOrigin = useMemo(() => drawioTargetOrigin(iframeSrc), [iframeSrc])
 
   const postToDrawio = useCallback((payload: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(JSON.stringify(payload), iframeOrigin)
   }, [iframeOrigin])
 
+  useEffect(() => {
+    if (configuredIframeSrc) return
+    let cancelled = false
+    async function loadLocalDrawioUrl() {
+      try {
+        const result = await window.sciforge.getLocalDrawioUrl()
+        if (cancelled) return
+        if (result.ok) {
+          setLocalDrawioUrl(result.url)
+          setLocalDrawioMessage(null)
+        } else {
+          setLocalDrawioUrl(null)
+          setLocalDrawioMessage(result.checkedPaths.length > 0
+            ? `${result.message} Checked: ${result.checkedPaths.map(shortPath).join(', ')}`
+            : result.message)
+        }
+      } catch (error) {
+        if (cancelled) return
+        setLocalDrawioUrl(null)
+        setLocalDrawioMessage(error instanceof Error ? error.message : String(error))
+      }
+    }
+    void loadLocalDrawioUrl()
+    return () => {
+      cancelled = true
+    }
+  }, [configuredIframeSrc])
+
   const saveXml = useCallback(async (xml: string): Promise<boolean> => {
     if (!workspaceRoot.trim()) return false
     if (xml === lastSavedXmlRef.current) return true
-    setSaving(true)
     try {
       const result = await window.sciforge.saveSciforgeCanvas({
         workspaceRoot,
@@ -172,13 +209,10 @@ export function SciforgeCanvasPanel({
         return false
       }
       lastSavedXmlRef.current = xml
-      setMessage('画布已保存。')
       return true
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
       return false
-    } finally {
-      setSaving(false)
     }
   }, [canvasId, workspaceRoot])
 
@@ -300,7 +334,6 @@ export function SciforgeCanvasPanel({
 
   const exportReviewPacket = useCallback(async (): Promise<Extract<SciforgeCanvasReviewPacketResult, { ok: true }> | null> => {
     if (!workspaceRoot.trim()) return null
-    setExporting(true)
     setMessage(null)
     try {
       if (iframeSrc) requestDrawioSave()
@@ -315,18 +348,52 @@ export function SciforgeCanvasPanel({
       }
       setPacketPath(result.packetPath)
       setSuggestions(result.packet.modificationSuggestions ?? [])
-      setMessage(`审改包已导出：${shortPath(result.packetPath)}`)
       return result
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
       return null
-    } finally {
-      setExporting(false)
     }
   }, [canvasId, iframeSrc, requestDrawioSave, workspaceRoot])
 
-  const sendReviewRequest = useCallback(async () => {
+  const splitArtifactComponents = useCallback(async () => {
+    if (!workspaceRoot.trim()) return
+    setSplitting(true)
+    setMessage(null)
+    try {
+      if (iframeSrc) requestDrawioSave()
+      const result = await window.sciforge.splitSciforgeCanvasArtifactComponents({
+        workspaceRoot,
+        canvasId,
+        margin: 56
+      })
+      if (!result.ok) {
+        setMessage(result.message)
+        return
+      }
+      await loadCanvas()
+      const usedFallback = result.warnings.some((warning) => /segmentation runner|coarse local|local fallback|local segmentation/i.test(warning))
+      setMessage(`已展开 ${result.componentCount} 个可选区域。画面不会重复显示切片；选中区域并添加批注后，可发送修改进行局部重绘。${usedFallback ? ' 当前未配置组件切分 runner/model（SCIFORGE_COMPONENT_SEGMENTATION_RUNNER / SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH），已使用本地粗粒度区域 fallback。' : ''}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSplitting(false)
+    }
+  }, [canvasId, iframeSrc, loadCanvas, requestDrawioSave, workspaceRoot])
+
+  const showAnnotationHelp = useCallback(() => {
+    setAnnotationEditorOpen((open) => !open)
+    setMessage(null)
+    iframeRef.current?.focus()
+  }, [])
+
+  const sendReviewRequest = useCallback(async (instructionOverride?: string) => {
     if (!onSendReviewRequest) return
+    const typedInstruction = instructionOverride?.trim() || annotationDraft.trim()
+    if (!typedInstruction && suggestions.length === 0 && !packetPath) {
+      setAnnotationEditorOpen(true)
+      setMessage('请先输入批注内容，或在画布中添加标注后再发送修改。')
+      return
+    }
     setSending(true)
     try {
       const result = packetPath
@@ -338,13 +405,17 @@ export function SciforgeCanvasPanel({
       onSendReviewRequest(buildReviewRequestText({
         packetPath: nextPacketPath,
         canvasId,
-        suggestions: nextSuggestions
+        workspaceRoot,
+        suggestions: nextSuggestions,
+        userInstruction: typedInstruction
       }))
-      setMessage('已把简洁审改请求写入对话框。')
+      setAnnotationDraft('')
+      setAnnotationEditorOpen(false)
+      setMessage('已发送画布批注修改请求。')
     } finally {
       setSending(false)
     }
-  }, [canvasId, exportReviewPacket, onSendReviewRequest, packetPath, suggestions])
+  }, [annotationDraft, canvasId, exportReviewPacket, onSendReviewRequest, packetPath, suggestions, workspaceRoot])
 
   return (
     <aside className={`sciforge-canvas-panel ${embedded ? 'embedded' : 'standalone'} ${className}`}>
@@ -363,9 +434,9 @@ export function SciforgeCanvasPanel({
       )}
 
       <div className="sciforge-canvas-toolbar">
-        <button type="button" onClick={requestDrawioSave} disabled={!iframeSrc || !ready || saving} title="保存 draw.io 画布">
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          <span>{saving ? '保存中' : '保存'}</span>
+        <button type="button" onClick={showAnnotationHelp} disabled={!iframeSrc || !ready} title="打开批注输入栏">
+          <MessageSquarePlus className="h-4 w-4" />
+          <span>批注</span>
         </button>
         <button type="button" onClick={() => void loadCanvas()} disabled={loading} title="重新读取画布">
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -375,17 +446,45 @@ export function SciforgeCanvasPanel({
           {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileInput className="h-4 w-4" />}
           <span>{importing ? '导入中' : '导入产物'}</span>
         </button>
-        <button type="button" onClick={() => void exportReviewPacket()} disabled={exporting} title="导出当前 draw.io 标注为审改包">
-          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquarePlus className="h-4 w-4" />}
-          <span>审改包</span>
+        <button
+          type="button"
+          className={`sciforge-canvas-split-button ${splitting ? 'is-splitting' : ''}`}
+          onClick={() => void splitArtifactComponents()}
+          disabled={splitting || !workspaceRoot.trim()}
+          title="把带组件 manifest 的 framework 图片展开成可单独选择、删除、移动和局部重绘的 draw.io 对象"
+        >
+          {splitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Layers className="h-4 w-4" />}
+          <span>{splitting ? '展开中' : '展开组件'}</span>
         </button>
         {onSendReviewRequest ? (
-          <button type="button" onClick={() => void sendReviewRequest()} disabled={sending || !workspaceRoot.trim()} title="把审改请求写入对话框">
+          <button type="button" onClick={() => void sendReviewRequest()} disabled={sending || !workspaceRoot.trim()} title="发送画布审改请求">
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             <span>{sending ? '发送中' : '发送修改'}</span>
           </button>
         ) : null}
       </div>
+
+      {annotationEditorOpen ? (
+        <form
+          className="sciforge-canvas-annotation-editor"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void sendReviewRequest(annotationDraft)
+          }}
+        >
+          <MessageSquarePlus className="h-4 w-4" aria-hidden="true" />
+          <input
+            value={annotationDraft}
+            onChange={(event) => setAnnotationDraft(event.target.value)}
+            placeholder="输入批注内容，例如：把这里换成绿色、放大这个模块、重画这个区域"
+            aria-label="批注内容"
+          />
+          <button type="submit" disabled={sending || !annotationDraft.trim()}>
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            <span>{sending ? '发送中' : '发送修改'}</span>
+          </button>
+        </form>
+      ) : null}
 
       {message ? <div className="sciforge-canvas-message">{message}</div> : null}
 
@@ -406,10 +505,11 @@ export function SciforgeCanvasPanel({
           />
         ) : (
           <div className="sciforge-canvas-drawio-placeholder">
-            <h3>需要配置本地 draw.io</h3>
-            <p>为避免外发 workspace 数据，SciForge 不默认连接在线 diagrams.net。请设置本地或 self-host 地址：</p>
+            <h3>本地 draw.io 还没有就绪</h3>
+            <p>请先安装 SciForge 内置 draw.io webapp，或设置本地/self-host 地址：</p>
             <code>VITE_SCIFORGE_DRAWIO_EMBED_URL=http://localhost:PORT/?embed=1&amp;proto=json</code>
-            <p>当前 Canvas worker 已使用 draw.io XML 存储，artifact 和审改包仍可导出。</p>
+            {localDrawioMessage ? <p>{localDrawioMessage}</p> : null}
+            <p>Canvas worker 已使用 draw.io XML 存储，artifact 仍可导出。</p>
             <div className="sciforge-canvas-drawio-remote">
               <ShieldAlert className="h-4 w-4" aria-hidden="true" />
               <span>本地测试时可临时使用在线 draw.io；画布 XML 会加载到 diagrams.net iframe 中。</span>

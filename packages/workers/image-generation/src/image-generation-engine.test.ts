@@ -1,13 +1,15 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  editFrameworkComponentsWithImage2,
   editImageFromCanvasPacket,
   getImageGenerationStatus,
   planImageGeneration,
-  renderImageGeneration
+  renderImageGeneration,
+  segmentImageGenerationComponents
 } from './image-generation-engine'
 
 let workspaceRoot = ''
@@ -15,6 +17,10 @@ let previousAllowPlaceholder: string | undefined
 let previousRouterApiKey: string | undefined
 let previousRouterBaseUrl: string | undefined
 let previousRouterImageModel: string | undefined
+let previousComponentSegmentationRunner: string | undefined
+let previousComponentSegmentationModel: string | undefined
+let previousFastSamRunner: string | undefined
+let previousFastSamModel: string | undefined
 let previousFetch: typeof fetch | undefined
 
 beforeEach(() => {
@@ -23,10 +29,18 @@ beforeEach(() => {
   previousRouterApiKey = process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY
   previousRouterBaseUrl = process.env.SCIFORGE_MODEL_ROUTER_BASE_URL
   previousRouterImageModel = process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL
+  previousComponentSegmentationRunner = process.env.SCIFORGE_COMPONENT_SEGMENTATION_RUNNER
+  previousComponentSegmentationModel = process.env.SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH
+  previousFastSamRunner = process.env.SCIFORGE_FASTSAM_RUNNER
+  previousFastSamModel = process.env.SCIFORGE_FASTSAM_MODEL_PATH
   previousFetch = globalThis.fetch
   delete process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY
   delete process.env.SCIFORGE_MODEL_ROUTER_BASE_URL
   delete process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL
+  delete process.env.SCIFORGE_COMPONENT_SEGMENTATION_RUNNER
+  delete process.env.SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH
+  delete process.env.SCIFORGE_FASTSAM_RUNNER
+  delete process.env.SCIFORGE_FASTSAM_MODEL_PATH
 })
 
 afterEach(() => {
@@ -40,6 +54,14 @@ afterEach(() => {
   else process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = previousRouterBaseUrl
   if (previousRouterImageModel === undefined) delete process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL
   else process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = previousRouterImageModel
+  if (previousComponentSegmentationRunner === undefined) delete process.env.SCIFORGE_COMPONENT_SEGMENTATION_RUNNER
+  else process.env.SCIFORGE_COMPONENT_SEGMENTATION_RUNNER = previousComponentSegmentationRunner
+  if (previousComponentSegmentationModel === undefined) delete process.env.SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH
+  else process.env.SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH = previousComponentSegmentationModel
+  if (previousFastSamRunner === undefined) delete process.env.SCIFORGE_FASTSAM_RUNNER
+  else process.env.SCIFORGE_FASTSAM_RUNNER = previousFastSamRunner
+  if (previousFastSamModel === undefined) delete process.env.SCIFORGE_FASTSAM_MODEL_PATH
+  else process.env.SCIFORGE_FASTSAM_MODEL_PATH = previousFastSamModel
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true })
   workspaceRoot = ''
 })
@@ -189,6 +211,72 @@ describe('image generation engine', () => {
         role: 'visual_composition_base',
         deterministicOverlayRequired: true
       }
+    })
+  })
+
+  it('allows grounded scientific delta polish and records locked facts in manifests', async () => {
+    const pngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('http://127.0.0.1:3892/v1/images/generations')
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      expect(body.prompt).toContain('Scientific delta-only polish mode')
+      expect(body.prompt).toContain('Locked scientific facts: numeric values; axes labels; p-values')
+      expect(body.prompt).toContain('Source controlled artifacts: .sciforge/figures/benchmark.manifest.json')
+      return new Response(JSON.stringify({
+        data: [{ b64_json: pngBase64 }]
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await renderImageGeneration({
+      workspaceRoot,
+      imageId: 'delta-polish',
+      recipe: {
+        mode: 'text_to_image',
+        prompt: 'Polish this scientific paper figure with callouts and panel stitching.',
+        size: { width: 512, height: 512 },
+        outputFormat: 'png',
+        controlledSubfigureManifests: ['.sciforge/figures/benchmark.manifest.json'],
+        scientificPolishDeltaPlan: {
+          mode: 'delta_only',
+          allowedOperations: ['panel_stitching', 'callout_overlay', 'visual_unification'],
+          lockedFacts: ['numeric values', 'axes labels', 'p-values'],
+          handoffPrompt: 'Use visual delta polish only; do not replace scientific panels.'
+        }
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    expect(result.usagePolicy).toMatchObject({
+      role: 'visual_composition_base',
+      lockedFacts: ['numeric values', 'axes labels', 'p-values'],
+      sourceControlledArtifacts: ['.sciforge/figures/benchmark.manifest.json']
+    })
+    expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toMatchObject({
+      scientificPolishDeltaPlan: {
+        mode: 'delta_only',
+        lockedFacts: ['numeric values', 'axes labels', 'p-values']
+      },
+      controlledSubfigureManifests: ['.sciforge/figures/benchmark.manifest.json'],
+      lockedFacts: ['numeric values', 'axes labels', 'p-values'],
+      sourceControlledArtifacts: ['.sciforge/figures/benchmark.manifest.json'],
+      usagePolicy: {
+        role: 'visual_composition_base',
+        deterministicOverlayRequired: true,
+        lockedFacts: ['numeric values', 'axes labels', 'p-values']
+      }
+    })
+    expect(JSON.parse(readFileSync(result.artifactManifestPath, 'utf8'))).toMatchObject({
+      lockedFacts: ['numeric values', 'axes labels', 'p-values'],
+      sourceControlledArtifacts: ['.sciforge/figures/benchmark.manifest.json']
     })
   })
 
@@ -543,4 +631,156 @@ describe('image generation engine', () => {
     expect(output.width).toBe(240)
     expect(output.height).toBe(160)
   })
+
+  it('segments generated framework images into component assets and edits selected component IDs', async () => {
+    process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER = '1'
+    const sourcePath = join(workspaceRoot, 'framework-source.png')
+    const canvas = createCanvas(360, 220)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 360, 220)
+    ctx.fillStyle = '#bfdbfe'
+    ctx.fillRect(28, 42, 112, 62)
+    ctx.fillStyle = '#bbf7d0'
+    ctx.fillRect(216, 42, 112, 62)
+    ctx.strokeStyle = '#111827'
+    ctx.lineWidth = 4
+    ctx.beginPath()
+    ctx.moveTo(142, 73)
+    ctx.lineTo(214, 73)
+    ctx.stroke()
+    ctx.fillStyle = '#111827'
+    ctx.font = '18px sans-serif'
+    ctx.fillText('Input', 58, 79)
+    ctx.fillText('Model', 246, 79)
+    writeFileSync(sourcePath, canvas.toBuffer('image/png'))
+    const designPlanPath = join(workspaceRoot, 'framework-design-plan.json')
+    writeFileSync(designPlanPath, JSON.stringify({
+      version: 1,
+      kind: 'sciforge_framework_design_plan',
+      canvas: { width: 360, height: 220, background: '#ffffff', layout: 'test' },
+      layoutSummary: 'Two module framework test',
+      panels: [],
+      regions: [{
+        id: 'input-module',
+        title: 'Input module',
+        kind: 'module',
+        purpose: 'Input processing',
+        bbox: { x: 20, y: 34, w: 132, h: 82 },
+        placeholderId: 'placeholder-input',
+        assetPolicy: 'none',
+        prompt: 'Input module',
+        editable: true,
+        sourceSpecRef: 'module.input'
+      }],
+      arrowStrategy: 'local',
+      textStrategy: 'local',
+      styleStrategy: 'local',
+      confirmationSummary: 'test',
+      checklist: []
+    }, null, 2))
+
+    const segmented = await segmentImageGenerationComponents({
+      workspaceRoot,
+      sourceImagePath: sourcePath,
+      frameworkDesignPlanPath: designPlanPath,
+      imageId: 'framework-source'
+    })
+
+    expect(segmented.ok).toBe(true)
+    if (!segmented.ok) throw new Error(segmented.message)
+    expect(existsSync(segmented.frameworkComponentManifestPath)).toBe(true)
+    expect(existsSync(segmented.componentBasePath)).toBe(true)
+    expect(segmented.componentAssetPaths.length).toBeGreaterThan(0)
+    const componentManifest = JSON.parse(readFileSync(segmented.frameworkComponentManifestPath, 'utf8'))
+    expect(componentManifest.components.length).toBeGreaterThan(0)
+    const inputBlock = componentManifest.blocks?.find((block: { blockId?: string }) => block.blockId === 'block-region-input-module')
+    expect(inputBlock).toMatchObject({
+      blockId: 'block-region-input-module',
+      blockType: 'module',
+      sourceSpecRef: 'module.input'
+    })
+    expect(componentManifest.semanticLayerImages?.length).toBeGreaterThan(0)
+
+    const edited = await editFrameworkComponentsWithImage2({
+      workspaceRoot,
+      componentManifestPath: segmented.frameworkComponentManifestPath,
+      componentIds: [componentManifest.components[0].componentId],
+      instruction: 'redraw this module as a darker blue method block',
+      imageId: 'framework-source-edit'
+    })
+
+    expect(edited.ok).toBe(true)
+    if (!edited.ok) throw new Error(edited.message)
+    expect(existsSync(edited.outputPath)).toBe(true)
+    expect(existsSync(edited.contactSheetPath)).toBe(true)
+    expect(edited.target.componentIds).toContain(componentManifest.components[0].componentId)
+  })
+
+  it('uses the generic component segmentation runner protocol when configured', async () => {
+    const sourcePath = join(workspaceRoot, 'generic-segmentation-source.png')
+    const canvas = createCanvas(240, 160)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 240, 160)
+    ctx.fillStyle = '#bfdbfe'
+    ctx.fillRect(32, 36, 96, 64)
+    ctx.fillStyle = '#111827'
+    ctx.fillText('Block', 58, 72)
+    writeFileSync(sourcePath, canvas.toBuffer('image/png'))
+
+    const runnerPath = join(workspaceRoot, 'component-runner.cjs')
+    writeFileSync(runnerPath, `#!/usr/bin/env node
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => { input += chunk })
+process.stdin.on('end', () => {
+  if (process.argv[2] !== '--sciforge-component-json') {
+    console.error('unexpected protocol arg ' + process.argv[2])
+    process.exit(2)
+  }
+  const request = JSON.parse(input)
+  if (request.kind !== 'sciforge_component_segmentation_request') {
+    console.error('unexpected request kind ' + request.kind)
+    process.exit(3)
+  }
+  process.stdout.write(JSON.stringify({
+    components: [{
+      id: 'runner-module',
+      title: 'Runner module',
+      semanticLayer: 'shape',
+      type: 'module',
+      role: 'primary',
+      bbox: { x: 32, y: 36, w: 96, h: 64 },
+      confidence: 0.97
+    }]
+  }))
+})
+`, 'utf8')
+    chmodSync(runnerPath, 0o755)
+    process.env.SCIFORGE_COMPONENT_SEGMENTATION_RUNNER = runnerPath
+    process.env.SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH = join(workspaceRoot, 'mock-component-model.pt')
+
+    const segmented = await segmentImageGenerationComponents({
+      workspaceRoot,
+      sourceImagePath: sourcePath,
+      imageId: 'generic-segmentation-source'
+    })
+
+    expect(segmented.ok).toBe(true)
+    if (!segmented.ok) throw new Error(segmented.message)
+    expect(existsSync(segmented.componentSegmentationPath)).toBe(true)
+    expect(existsSync(segmented.componentSegmentationPreviewPath)).toBe(true)
+    expect(segmented.fastSamSegmentationPath).toBe(segmented.componentSegmentationPath)
+    const segmentation = JSON.parse(readFileSync(segmented.componentSegmentationPath, 'utf8'))
+    expect(segmentation.kind).toBe('sciforge_framework_component_segmentation')
+    expect(segmentation.prompts).toContain('external-component-segmentation-runner')
+    const componentManifest = JSON.parse(readFileSync(segmented.frameworkComponentManifestPath, 'utf8'))
+    expect(componentManifest).toMatchObject({
+      componentSegmentationPath: segmented.componentSegmentationPath,
+      fastSamSegmentationPath: segmented.componentSegmentationPath
+    })
+    expect(componentManifest.components.some((component: { detectionMethod?: string }) => component.detectionMethod === 'component_segmentation')).toBe(true)
+  })
+
 })

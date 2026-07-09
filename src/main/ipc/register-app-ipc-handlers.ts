@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { mainPerformanceMonitor } from '../performance-monitor'
 import {
+  getImageGenerationSettings,
   type AppSettingsPatch,
   type AppSettingsV1,
   type ScheduleRunResult,
@@ -21,6 +22,7 @@ import type {
   ConnectPhoneInstallQrResult,
   ConnectPhoneRuntimeStatus,
   DesktopCommand,
+  LocalDrawioUrlResult,
   ModelRouterConfigOpenResult,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
@@ -87,6 +89,7 @@ import {
   sciforgeCanvasReviewPacketPayloadSchema,
   sciforgeCanvasSavePayloadSchema,
   sciforgeCanvasSelectionSavePayloadSchema,
+  sciforgeCanvasSplitArtifactComponentsPayloadSchema,
   scientificPlottingPrepareReferencePayloadSchema,
   scientificPlottingMcpConfigPayloadSchema,
   scientificPlottingStatusPayloadSchema,
@@ -185,7 +188,8 @@ import {
   insertSciforgeCanvasArtifact,
   openOrCreateSciforgeCanvas,
   saveSciforgeCanvasSelection,
-  saveSciforgeCanvasSnapshot
+  saveSciforgeCanvasSnapshot,
+  splitSciforgeCanvasArtifactComponents
 } from '../../../packages/workers/canvas/src/sciforge-canvas-engine'
 import {
   buildScientificSkillsIndex,
@@ -448,6 +452,7 @@ type RegisterAppIpcHandlersOptions = {
   getImageGenerationMcpLaunchConfig?: () => ImageGenerationMcpLaunchConfig
   getSciforgeCanvasMcpLaunchConfig?: () => SciforgeCanvasMcpLaunchConfig
   getPptMasterMcpLaunchConfig?: () => PptMasterMcpLaunchConfig
+  getLocalDrawioUrl?: () => Promise<LocalDrawioUrlResult> | LocalDrawioUrlResult
   installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
   getScientificPlottingStatus?: () => Promise<ScientificPlottingStatusResult>
   prepareScientificPlottingReference?: (
@@ -459,6 +464,7 @@ type RegisterAppIpcHandlersOptions = {
   saveSciforgeCanvasSelection?: typeof saveSciforgeCanvasSelection
   insertSciforgeCanvasArtifact?: typeof insertSciforgeCanvasArtifact
   importRecentSciforgeCanvasArtifacts?: typeof importRecentSciforgeCanvasArtifacts
+  splitSciforgeCanvasArtifactComponents?: typeof splitSciforgeCanvasArtifactComponents
   exportSciforgeCanvasReviewPacket?: typeof exportSciforgeCanvasReviewPacket
   extractFigureStyle?: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
   evaluateFigureStyle?: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
@@ -918,6 +924,26 @@ function isNativeFileDragSender(sender: AppBridgeSender): sender is NativeFileDr
   return typeof (sender as { startDrag?: unknown }).startDrag === 'function'
 }
 
+const COMPONENT_SEGMENTATION_RUNNER_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_RUNNER'
+const COMPONENT_SEGMENTATION_MODEL_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH'
+const FASTSAM_RUNNER_ENV = 'SCIFORGE_FASTSAM_RUNNER'
+const FASTSAM_MODEL_ENV = 'SCIFORGE_FASTSAM_MODEL_PATH'
+
+function syncComponentSegmentationEnvFromSettings(settings: AppSettingsV1): void {
+  const imageGeneration = getImageGenerationSettings(settings)
+  const runner = imageGeneration.componentSegmentationRunnerPath.trim()
+  const model = imageGeneration.componentSegmentationModelPath.trim()
+  setOptionalProcessEnv(COMPONENT_SEGMENTATION_RUNNER_ENV, runner)
+  setOptionalProcessEnv(COMPONENT_SEGMENTATION_MODEL_ENV, model)
+  setOptionalProcessEnv(FASTSAM_RUNNER_ENV, runner)
+  setOptionalProcessEnv(FASTSAM_MODEL_ENV, model)
+}
+
+function setOptionalProcessEnv(name: string, value: string): void {
+  if (value) process.env[name] = value
+  else delete process.env[name]
+}
+
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): AppBridgeDispatcher {
   const {
     store,
@@ -951,6 +977,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getImageGenerationMcpLaunchConfig,
     getSciforgeCanvasMcpLaunchConfig,
     getPptMasterMcpLaunchConfig,
+    getLocalDrawioUrl,
     installScientificSkills: installScientificSkillsHandler = installScientificSkills,
     getScientificPlottingStatus: getScientificPlottingStatusHandler = getScientificPlottingStatus,
     prepareScientificPlottingReference: prepareScientificPlottingReferenceHandler = prepareScientificPlottingReference,
@@ -960,6 +987,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     saveSciforgeCanvasSelection: saveSciforgeCanvasSelectionHandler = saveSciforgeCanvasSelection,
     insertSciforgeCanvasArtifact: insertSciforgeCanvasArtifactHandler = insertSciforgeCanvasArtifact,
     importRecentSciforgeCanvasArtifacts: importRecentSciforgeCanvasArtifactsHandler = importRecentSciforgeCanvasArtifacts,
+    splitSciforgeCanvasArtifactComponents: splitSciforgeCanvasArtifactComponentsHandler = splitSciforgeCanvasArtifactComponents,
     exportSciforgeCanvasReviewPacket: exportSciforgeCanvasReviewPacketHandler = exportSciforgeCanvasReviewPacket,
     extractFigureStyle: extractFigureStyleHandler = extractFigureStyle,
     evaluateFigureStyle: evaluateFigureStyleHandler = evaluateFigureStyleSimilarity,
@@ -2122,12 +2150,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   handleInvoke('mcp:sciforge-canvas-config', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'mcp:sciforge-canvas-config',
-      sciforgeCanvasMcpConfigPayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'mcp:sciforge-canvas-config',
+        sciforgeCanvasMcpConfigPayloadSchema,
+        payload
+      )
       const launch = getSciforgeCanvasMcpLaunchConfig?.() ?? {
         appPath: app.getAppPath(),
         execPath: process.execPath,
@@ -2146,12 +2174,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   handleInvoke('sciforge-canvas:status', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:status',
-      sciforgeCanvasMcpConfigPayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:status',
+        sciforgeCanvasMcpConfigPayloadSchema,
+        payload
+      )
       return getSciforgeCanvasStatusHandler(request.workspaceRoot)
     } catch (error) {
       return {
@@ -2161,13 +2189,24 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
+  handleInvoke('drawio:local-url', async () => {
+    if (!getLocalDrawioUrl) {
+      return {
+        ok: false,
+        message: 'Local draw.io server is not available.',
+        checkedPaths: []
+      } satisfies LocalDrawioUrlResult
+    }
+    return getLocalDrawioUrl()
+  })
+
   handleInvoke('sciforge-canvas:open', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:open',
-      sciforgeCanvasOpenPayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:open',
+        sciforgeCanvasOpenPayloadSchema,
+        payload
+      )
       return openOrCreateSciforgeCanvasHandler(request)
     } catch (error) {
       return {
@@ -2179,12 +2218,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   handleInvoke('sciforge-canvas:save', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:save',
-      sciforgeCanvasSavePayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:save',
+        sciforgeCanvasSavePayloadSchema,
+        payload
+      )
       return saveSciforgeCanvasSnapshotHandler(request)
     } catch (error) {
       return {
@@ -2196,12 +2235,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   handleInvoke('sciforge-canvas:save-selection', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:save-selection',
-      sciforgeCanvasSelectionSavePayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:save-selection',
+        sciforgeCanvasSelectionSavePayloadSchema,
+        payload
+      )
       return saveSciforgeCanvasSelectionHandler(request)
     } catch (error) {
       return {
@@ -2213,12 +2252,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   handleInvoke('sciforge-canvas:insert-artifact', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:insert-artifact',
-      sciforgeCanvasInsertArtifactPayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:insert-artifact',
+        sciforgeCanvasInsertArtifactPayloadSchema,
+        payload
+      )
       return insertSciforgeCanvasArtifactHandler(request)
     } catch (error) {
       return {
@@ -2230,12 +2269,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   handleInvoke('sciforge-canvas:import-recent-artifacts', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:import-recent-artifacts',
-      sciforgeCanvasImportRecentArtifactsPayloadSchema,
-      payload
-    )
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:import-recent-artifacts',
+        sciforgeCanvasImportRecentArtifactsPayloadSchema,
+        payload
+      )
       return importRecentSciforgeCanvasArtifactsHandler(request)
     } catch (error) {
       return {
@@ -2246,13 +2285,31 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:export-review-packet', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'sciforge-canvas:export-review-packet',
-      sciforgeCanvasReviewPacketPayloadSchema,
-      payload
-    )
+  handleInvoke('sciforge-canvas:split-artifact-components', async (_, payload: unknown) => {
     try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:split-artifact-components',
+        sciforgeCanvasSplitArtifactComponentsPayloadSchema,
+        payload
+      )
+      syncComponentSegmentationEnvFromSettings(await store.load())
+      return splitSciforgeCanvasArtifactComponentsHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        status: 'invalid_request' as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('sciforge-canvas:export-review-packet', async (_, payload: unknown) => {
+    try {
+      const request = parseIpcPayload(
+        'sciforge-canvas:export-review-packet',
+        sciforgeCanvasReviewPacketPayloadSchema,
+        payload
+      )
       return exportSciforgeCanvasReviewPacketHandler(request)
     } catch (error) {
       return {

@@ -146,6 +146,178 @@ export type FrameworkRegion = {
   sourceSpecRef?: string
 }
 
+export type FrameworkRegionAssetPolicy = 'none' | 'generate' | 'crop'
+
+export type FrameworkRegionAsset = {
+  regionId: string
+  placeholderId: string
+  assetPath: string
+  prompt: string
+  bbox: DiagramLayerBounds
+  provider: ImageGenerationRuntimeProvider | 'local'
+}
+
+export type FrameworkComponentType =
+  | 'panel'
+  | 'module'
+  | 'text'
+  | 'arrow'
+  | 'legend'
+  | 'thumbnail'
+  | 'token_stack'
+  | 'table'
+  | 'code'
+  | 'chart'
+  | 'group'
+  | 'text_label'
+  | 'color_block'
+  | 'material_image'
+  | 'connector_arrow'
+  | 'formula_symbol'
+  | 'shape_component'
+  | 'visual_component'
+
+export type FrameworkComponentRole = 'primary' | 'secondary' | 'debug'
+
+export type FrameworkComponentBlockType =
+  | 'panel'
+  | 'module'
+  | 'legend'
+  | 'material_group'
+  | 'workflow_group'
+  | 'component_group'
+
+export type FrameworkSemanticLayer =
+  | 'text'
+  | 'color'
+  | 'arrow'
+  | 'material'
+  | 'formula'
+  | 'shape'
+  | 'mixed'
+
+export type FrameworkComponentLayer = {
+  componentId: string
+  layerId: string
+  type: FrameworkComponentType
+  title: string
+  bbox: DiagramLayerBounds
+  pixelBbox: DiagramLayerBounds
+  assetPath: string
+  transparentAssetPath: string
+  role: FrameworkComponentRole
+  qualityScore: number
+  semanticLayer?: FrameworkSemanticLayer
+  parentComponentId?: string
+  parentBlockId?: string
+  children?: string[]
+  anchors?: Array<{ id: string; x: number; y: number }>
+  sourceRegionId?: string
+  sourceSpecRef?: string
+  placeholderId?: string
+  sourcePrompt?: string
+  reusableTemplateId?: string
+  detectionMethod:
+    | 'image2_model_layer_segmentation'
+    | 'component_segmentation'
+    | 'fastsam_boxlib_segmentation'
+    | 'layer_first_segmentation'
+    | 'local_connected_components'
+    | 'local_visual_subcomponent'
+    | 'semantic_layer_detection'
+    | 'spec_region_fallback'
+  confidence: number
+}
+
+export type FrameworkComponentBlock = {
+  blockId: string
+  title: string
+  blockType: FrameworkComponentBlockType
+  bbox: DiagramLayerBounds
+  pixelBbox: DiagramLayerBounds
+  role: FrameworkComponentRole
+  sourceRegionId?: string
+  sourceComponentId?: string
+  sourceSpecRef?: string
+  placeholderId?: string
+  childComponentIds: string[]
+  semanticLayers: Exclude<FrameworkSemanticLayer, 'mixed'>[]
+  detectionMethods: FrameworkComponentLayer['detectionMethod'][]
+  reusableTemplateId?: string
+  confidence: number
+}
+
+export type FrameworkSemanticLayerImage = {
+  semanticLayer: Exclude<FrameworkSemanticLayer, 'mixed'>
+  assetPath: string
+  previewPath: string
+  pixelCount: number
+  coverage: number
+  detectionMethod: 'image2_model_component_mask' | 'fastsam_component_mask' | 'layer_first_component_mask' | 'layer_first_pixel_mask'
+}
+
+export type FrameworkFastSamSegmentationComponent = {
+  componentId: string
+  title: string
+  semanticLayer: Exclude<FrameworkSemanticLayer, 'mixed'>
+  type: FrameworkComponentType
+  bbox: DiagramLayerBounds
+  pixelBbox: DiagramLayerBounds
+  role: FrameworkComponentRole
+  confidence: number
+  label?: string
+  prompt?: string
+}
+
+export type FrameworkFastSamSegmentation = {
+  version: 1
+  kind: 'sciforge_framework_component_segmentation' | 'sciforge_framework_fastsam_segmentation'
+  createdAt: string
+  sourceImagePath: string
+  outputDir: string
+  boxlibPath?: string
+  samedPath?: string
+  canvasSize: ImageSize
+  imageSize: ImageSize
+  prompts: string[]
+  components: FrameworkFastSamSegmentationComponent[]
+  blocks?: Array<{
+    blockId: string
+    title: string
+    blockType: FrameworkComponentBlockType
+    bbox: DiagramLayerBounds
+    pixelBbox: DiagramLayerBounds
+    childSegmentIds: string[]
+    semanticLayers: Exclude<FrameworkSemanticLayer, 'mixed'>[]
+    sourceRegionId?: string
+    sourceSpecRef?: string
+    placeholderId?: string
+    confidence: number
+  }>
+  warnings: string[]
+}
+
+export type FrameworkComponentManifest = {
+  version: 1
+  kind: 'sciforge_framework_components'
+  createdAt: string
+  sourceImagePath: string
+  componentBasePath: string
+  componentDir: string
+  modelLayerSegmentationPath?: string
+  componentSegmentationPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  componentSegmentationPreviewPath?: string
+  fastSamPreviewPath?: string
+  semanticLayerDir?: string
+  semanticLayerImages?: FrameworkSemanticLayerImage[]
+  canvasSize: ImageSize
+  blocks?: FrameworkComponentBlock[]
+  components: FrameworkComponentLayer[]
+  warnings: string[]
+}
+
 export type FrameworkDesignPlan = {
   version: 1
   kind: 'sciforge_framework_design_plan'
@@ -180,10 +352,30 @@ export type DiagramLayer = {
   sourceSpecRef?: string
   regionId?: string
   sourcePrompt?: string
+  sourceCaption?: string
+  componentId?: string
+  componentType?: FrameworkComponentType
+  componentRole?: FrameworkComponentRole
+  componentQualityScore?: number
+  semanticLayer?: FrameworkSemanticLayer
+  parentComponentId?: string
+  parentBlockId?: string
+  reusableTemplateId?: string
   placeholderId?: string
   assetPath?: string | null
+  cropPath?: string | null
+  boxlibRef?: string
   editable: boolean
-  origin: 'generated_from_spec' | 'draft_background' | 'framework_component_asset'
+  origin:
+    | 'generated_from_spec'
+    | 'recovered_from_png'
+    | 'draft_background'
+    | 'generated_region_asset'
+    | 'local_region_analysis'
+    | 'full_draft_base'
+    | 'full_draft_crop'
+    | 'framework_component_base'
+    | 'framework_component_asset'
   confidence?: number
   from?: string
   to?: string
@@ -199,6 +391,14 @@ export type DiagramLayerManifest = {
     diagramSpecPath?: string
     frameworkDesignPlanPath?: string
     previewPath: string
+    componentSegmentationPath?: string | null
+    fastSamSegmentationPath?: string | null
+    fastSamBoxlibPath?: string | null
+    componentSegmentationPreviewPath?: string | null
+    fastSamPreviewPath?: string | null
+    frameworkComponentManifestPath?: string | null
+    componentBasePath?: string | null
+    componentAssetPaths?: string[]
   }
   canvas: {
     width: number
@@ -211,6 +411,18 @@ export type DiagramLayerManifest = {
 
 export type ImageGenerationProvider = 'image-endpoint' | 'placeholder' | 'controlled-edit'
 export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
+
+export type ScientificImagePolishDeltaPlan = {
+  mode: 'delta_only'
+  targetPanels?: Array<{
+    assetId: string
+    reason?: string
+    allowedOperations?: string[]
+  }>
+  allowedOperations: string[]
+  lockedFacts: string[]
+  handoffPrompt: string
+}
 
 export type ImageGenerationRecipe = {
   mode: ImageGenerationMode
@@ -225,8 +437,11 @@ export type ImageGenerationRecipe = {
   drawingBrief?: DrawingBrief
   diagramSpec?: FrameworkDiagramSpec
   frameworkDesignPlan?: FrameworkDesignPlan
+  frameworkRegionAssetMode?: 'disabled' | 'generate'
   confirmation?: DrawingConfirmation
   promptProfile?: 'default' | 'flowchart-light-v1' | 'framework-spec-v1' | 'framework-layered-draft-v1'
+  scientificPolishDeltaPlan?: ScientificImagePolishDeltaPlan
+  controlledSubfigureManifests?: string[]
 }
 
 export type ImageGenerationUsagePolicy = {
@@ -234,6 +449,8 @@ export type ImageGenerationUsagePolicy = {
   deterministicOverlayRequired: boolean
   overlayToolchain: 'script_or_scientific_plotting'
   warning: string
+  lockedFacts?: string[]
+  sourceControlledArtifacts?: string[]
 }
 
 export type ImageEditIntent = {
@@ -256,6 +473,15 @@ export type ImageGenerationStatus = {
   supportedEditModes: ImageEditMode[]
   outputDir: string
   artifactDir: string
+  componentSegmentation: {
+    provider: 'external-runner' | 'local-fallback'
+    runnerConfigured: boolean
+    modelConfigured: boolean
+    runnerEnv: string
+    modelEnv: string
+    legacyRunnerEnv?: string
+    legacyModelEnv?: string
+  }
   visualRouting: ImageGenerationVisualRouting
   warnings: string[]
 }
@@ -316,6 +542,12 @@ export type ImageGenerationRenderResult =
       diagramSpecPath?: string
       frameworkDesignPlanPath?: string
       diagramLayerManifestPath?: string
+      fastSamSegmentationPath?: string
+      fastSamBoxlibPath?: string
+      fastSamPreviewPath?: string
+      frameworkComponentManifestPath?: string
+      componentBasePath?: string
+      componentAssetPaths?: string[]
       provider: ImageGenerationProvider
       review?: ImageGenerationReviewResult
       usagePolicy?: ImageGenerationUsagePolicy
@@ -390,6 +622,92 @@ export type ImageGenerationEditFromCanvasPacketResult =
       warnings?: string[]
     }
 
+export type ImageGenerationSegmentComponentsRequest = {
+  workspaceRoot: string
+  sourceImagePath: string
+  frameworkDesignPlanPath?: string
+  outputDir?: string
+  imageId?: string
+}
+
+export type ImageGenerationSegmentComponentsResult =
+  | {
+      ok: true
+      status: 'segmented'
+      workspaceRoot: string
+      sourceImagePath: string
+      componentSegmentationPath: string
+      fastSamSegmentationPath: string
+      componentSegmentationPreviewPath: string
+      fastSamPreviewPath: string
+      frameworkComponentManifestPath: string
+      componentBasePath: string
+      componentAssetPaths: string[]
+      componentCount: number
+      warnings: string[]
+    }
+  | {
+      ok: false
+      status: 'invalid_workspace' | 'invalid_request' | 'image_unreadable' | 'write_failed'
+      message: string
+      warnings?: string[]
+    }
+
+export type FrameworkLocalizedEditTargetKind = 'component' | 'block' | 'selection'
+
+export type FrameworkLocalizedEditTarget = {
+  kind: FrameworkLocalizedEditTargetKind
+  id: string
+  title: string
+  bbox: DiagramLayerBounds
+  componentIds: string[]
+  blockIds?: string[]
+  semanticLayers: FrameworkSemanticLayer[]
+}
+
+export type FrameworkLocalizedEditRequest = {
+  workspaceRoot: string
+  componentManifestPath: string
+  instruction: string
+  componentIds?: string[]
+  blockIds?: string[]
+  outputDir?: string
+  imageId?: string
+  canvasId?: string
+  threadId?: string
+  padding?: number
+  editCanvasSize?: number
+  insertToCanvas?: boolean
+}
+
+export type FrameworkLocalizedEditResult =
+  | {
+      ok: true
+      status: 'edited' | 'edited_placeholder'
+      workspaceRoot: string
+      outputPath: string
+      manifestPath: string
+      artifactManifestPath: string
+      componentManifestPath: string
+      sourceImagePath: string
+      target: FrameworkLocalizedEditTarget
+      paddedTarget: DiagramLayerBounds
+      targetCropPath: string
+      editInputPath: string
+      editOutputPath: string
+      editedRegionPath: string
+      contactSheetPath: string
+      provider: ImageGenerationProvider
+      model?: string
+      warnings: string[]
+    }
+  | {
+      ok: false
+      status: 'invalid_workspace' | 'invalid_request' | 'provider_not_configured' | 'provider_failed' | 'write_failed'
+      message: string
+      warnings?: string[]
+    }
+
 export type ImageGenerationReviewPacketRequest = {
   workspaceRoot: string
   manifestPaths: string[]
@@ -417,7 +735,7 @@ export type ImageGenerationManifest = {
   version: 1
   renderer: 'sciforge-image-generation-mcp'
   rendererVersion: string
-  tool: 'image_generation_render' | 'image_generation_edit_from_canvas_packet'
+  tool: 'image_generation_render' | 'image_generation_edit_from_canvas_packet' | 'image_generation_segment_components' | 'image_generation_edit_components'
   createdAt: string
   requestHash: string
   workspaceRoot: string
@@ -430,7 +748,17 @@ export type ImageGenerationManifest = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   promptProfile?: ImageGenerationRecipe['promptProfile']
+  scientificPolishDeltaPlan?: ScientificImagePolishDeltaPlan
+  controlledSubfigureManifests?: string[]
+  lockedFacts?: string[]
+  sourceControlledArtifacts?: string[]
   provider: ImageGenerationProvider
   review?: ImageGenerationReviewResult
   usagePolicy?: ImageGenerationUsagePolicy

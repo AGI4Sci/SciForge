@@ -372,11 +372,18 @@ describe('scientific plotting engine', () => {
         archetype: 'mechanism_schematic',
         journalExportContract: expect.arrayContaining([expect.stringContaining('Nature')])
       }),
+      selectedSkillProfile: expect.objectContaining({
+        profileId: 'paper-figure-cns-life-science-v1',
+        selectedSkillIds: expect.arrayContaining(['nature-figure', 'nature-reader', 'nature-data']),
+        skillPriority: ['kdense', 'cns', 'domain', 'image-delta'],
+        readOnlyExternalSkills: true
+      }),
       promptSpecDraft: expect.objectContaining({
         nextControlledTool: expect.stringContaining('image_generation'),
         fullPrompt: expect.stringContaining('Reference papers and figure evidence'),
         imagePolishRecommendation: expect.objectContaining({
           model: 'gpt-image-2',
+          fallbackModel: 'configured_model_router_image_model',
           nextControlledTool: 'image_generation_plan'
         }),
         codeGenerationPlan: expect.objectContaining({
@@ -398,10 +405,120 @@ describe('scientific plotting engine', () => {
         sourceKind: 'kdense'
       })
       expect(brief.recommendedSkillLayers.some((layer) => layer.sourceKind === 'cns')).toBe(true)
+      expect(brief.paperFigureProductionPlan).toMatchObject({
+        scope: 'paper_level',
+        sourceWorkflow: 'paper_figures_data_first_v1',
+        handoff: expect.objectContaining({
+          imagePolish: expect.arrayContaining([expect.stringContaining('gpt-image-2')])
+        }),
+        compositionPlan: expect.objectContaining({
+          sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1',
+          stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration'],
+          image2Composition: expect.objectContaining({
+            preferredModel: 'gpt-image-2',
+            fallbackModel: 'configured_model_router_image_model',
+            nextControlledTool: 'image_generation_plan',
+            allowedOperations: expect.arrayContaining([
+              'panel_stitching',
+              'callout_overlay',
+              'zoom_inset',
+              'visual_unification'
+            ]),
+            forbiddenOperations: expect.arrayContaining([
+              expect.stringContaining('Do not change numeric values')
+            ])
+          }),
+          imagePolishDeltaPlan: expect.objectContaining({
+            mode: 'delta_only',
+            allowedOperations: expect.arrayContaining([
+              'panel_stitching',
+              'callout_overlay',
+              'zoom_inset',
+              'visual_unification',
+              'typography_cleanup',
+              'mechanism_visual_draft'
+            ]),
+            lockedFacts: expect.arrayContaining([
+              'numeric values',
+              'axes labels and scales',
+              'paper claims and figure conclusions'
+            ]),
+            handoffPrompt: expect.stringContaining('Do not redraw, replace, or reinterpret scientific data panels')
+          }),
+          canvasReview: expect.objectContaining({
+            preserveOriginalArtifacts: true,
+            revisionPolicy: 'new_version_next_to_original'
+          })
+        })
+      })
       expect(brief.guardrails.join(' ')).toContain('read-only planning')
       expect(JSON.stringify(brief.skillCatalog)).not.toMatch(/SciVisAgentBench|ChartMimic|paraview_mcp/)
       expect(brief.warnings.join(' ')).toContain('Excluded from this workflow')
     }
+  })
+
+  it('builds a data-first paper figure production plan from raw data context', async () => {
+    const brief = await createScientificPlottingResearchBrief({
+      task: 'Plan figures for a heart-failure survival paper from raw clinical CSV data. Include key predictor comparisons, correlation heatmap, Kaplan-Meier survival, Cox forest, and ROC evaluation.',
+      domain: 'clinical medicine',
+      targetVenue: 'Nature-family journal',
+      dataSummary: 'CSV has 299 patients with columns age, ejection_fraction, serum_creatinine, time, DEATH_EVENT, and other clinical variables.',
+      candidatePapers: [
+        {
+          title: 'Machine learning can predict survival of patients with heart failure from serum creatinine and ejection fraction alone',
+          year: 2020,
+          figureHints: ['survival analysis', 'ROC evaluation', 'key predictor comparison']
+        }
+      ]
+    })
+
+    expect(brief).toMatchObject({
+      ok: true,
+      selectedSkillProfile: expect.objectContaining({
+        profileId: 'paper-figure-cns-life-science-v1',
+        selectedSkillIds: expect.arrayContaining(['nature-figure', 'nature-reader', 'nature-data', 'image-delta-polish'])
+      }),
+      paperFigureProductionPlan: expect.objectContaining({
+        scope: 'paper_level',
+        sourceWorkflow: 'paper_figures_data_first_v1',
+        proposedAssets: expect.arrayContaining([
+          expect.objectContaining({ id: 'fig-key-predictors', recommendedTemplate: 'box-violin' }),
+          expect.objectContaining({ id: 'fig-correlation-heatmap', recommendedTemplate: 'heatmap' }),
+          expect.objectContaining({ id: 'fig-survival-km', recommendedTemplate: 'kaplan-meier' }),
+          expect.objectContaining({ id: 'fig-effect-size-forest', recommendedTemplate: 'cox-forest' }),
+          expect.objectContaining({ id: 'fig-model-roc', recommendedTemplate: 'roc' })
+        ]),
+        compositionPlan: expect.objectContaining({
+          controlledSubfigures: expect.arrayContaining([
+            expect.objectContaining({ assetId: 'fig-key-predictors', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-correlation-heatmap', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-survival-km', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-effect-size-forest', requiredArtifact: 'png_manifest' }),
+            expect.objectContaining({ assetId: 'fig-model-roc', requiredArtifact: 'png_manifest' })
+          ]),
+          image2Composition: expect.objectContaining({
+            inputArtifacts: expect.arrayContaining([
+              'fig-key-predictors.manifest.json',
+              'fig-model-roc.manifest.json'
+            ])
+          }),
+          imagePolishDeltaPlan: expect.objectContaining({
+            mode: 'delta_only',
+            targetPanels: expect.arrayContaining([
+              expect.objectContaining({ assetId: 'fig-key-predictors' }),
+              expect.objectContaining({ assetId: 'fig-model-roc' })
+            ]),
+            lockedFacts: expect.arrayContaining(['sample sizes', 'statistical tests and p-values'])
+          })
+        }),
+        missingCapabilities: expect.arrayContaining([
+          expect.stringContaining('Kaplan-Meier'),
+          expect.stringContaining('forest'),
+          expect.stringContaining('ROC')
+        ])
+      })
+    })
+    expect(brief.ok && brief.skillCatalog.some((item) => item.skillId === 'paper-figures')).toBe(true)
   })
 
   it('requires paper search before rendering ungrounded scientific semantic figures', async () => {
@@ -413,6 +530,10 @@ describe('scientific plotting engine', () => {
 
     expect(brief).toMatchObject({
       ok: true,
+      selectedSkillProfile: expect.objectContaining({
+        profileId: 'mechanism-diagram-image-delta-v1',
+        selectedSkillIds: expect.arrayContaining(['image-delta-polish'])
+      }),
       figureNeed: expect.objectContaining({
         route: 'diagram_spec_or_image_generation',
         recommendedNextTool: 'scientific_plotting_research_brief'
@@ -1036,12 +1157,20 @@ describe('scientific plotting engine', () => {
             { name: 'Low dose', values: [1.2, 1.35, 1.42, 1.3, 1.25, 1.48] },
             { name: 'High dose', values: [1.55, 1.7, 1.62, 1.8, 1.74, 1.68] }
           ],
-          showPoints: true
+          showPoints: true,
+          comparisons: [
+            { from: 'Control', to: 'High dose', label: '***' }
+          ]
         }
       })
       expect(boxViolin).toMatchObject({ ok: true, status: 'rendered' })
       if (!boxViolin.ok) return
       expect((await stat(boxViolin.outputPath)).size).toBeGreaterThan(1000)
+      expect(boxViolin.attempts[0]?.rendererDiagnostics).toMatchObject({
+        layoutNotes: expect.arrayContaining([
+          'Rendered compact group-comparison brackets for distribution panels.'
+        ])
+      })
 
       const histogram = await renderScientificPlot({
         workspaceRoot: workspace,
@@ -1144,12 +1273,12 @@ describe('scientific plotting engine', () => {
             {
               template: 'line',
               labels: { title: 'Trend', x: 'Time', y: 'Score' },
-              data: { series: [{ name: 'A', y: [0.2, 0.4, 0.65, 0.8] }] }
+              data: { x: [10, 20, 30, 40], series: [{ name: 'A', y: [0.2, 0.4, 0.65, 0.8] }] }
             },
             {
               template: 'heatmap',
               labels: { title: 'Matrix' },
-              data: { matrix: [[0.1, 0.4], [0.7, 0.2]], colorbar: false }
+              data: { matrix: [[0.1, 0.4], [0.7, 0.2]], x: ['gene_a', 'gene_b'], y: ['cell_1', 'cell_2'], colorbar: false }
             },
             {
               template: 'box-violin',
@@ -1158,6 +1287,9 @@ describe('scientific plotting engine', () => {
                 groups: [
                   { name: 'A', values: [1, 1.2, 1.1] },
                   { name: 'B', values: [1.4, 1.6, 1.5] }
+                ],
+                comparisons: [
+                  { from: 'A', to: 'B', label: '*' }
                 ]
               }
             }
@@ -1170,6 +1302,7 @@ describe('scientific plotting engine', () => {
       expect(multiPanel.attempts[0]?.rendererDiagnostics).toMatchObject({
         multiPanelCount: 3,
         layoutNotes: expect.arrayContaining([
+          'Rendered compact group-comparison brackets for distribution panels.',
           'Rendered 3 controlled subpanels in a 2x2 layout.'
         ])
       })

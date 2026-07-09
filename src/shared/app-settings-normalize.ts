@@ -9,6 +9,7 @@ import {
   type RemoteChannelSettingsPatchV1,
   type RemoteExecutorSettingsPatchV1,
   type GuiUpdateConfigV1,
+  type ImageGenerationSettingsPatchV1,
   type NotificationConfigV1,
   type ScheduleSettingsPatchV1,
   type SpeechToTextSettingsPatchV1,
@@ -45,6 +46,7 @@ import { normalizeWriteSettings } from './app-settings-write'
 import { normalizeSpeechToTextSettings } from './speech-to-text'
 import { normalizeComputerUseSettings } from './app-settings-computer-use'
 import { normalizeAgentCapabilitySettings } from './app-settings-agent-capabilities'
+import { normalizeImageGenerationSettings } from './app-settings-image-generation'
 
 export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   const maybeSettings = settings as AppSettingsV1 & {
@@ -63,6 +65,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     guiUpdate?: Partial<GuiUpdateConfigV1>
     runtimeGuards?: Parameters<typeof normalizeRuntimeGuardSettings>[0]
     agentCapabilities?: AgentCapabilitySettingsPatchV1
+    imageGeneration?: ImageGenerationSettingsPatchV1
     computerUse?: ComputerUseSettingsPatchV1
   }
   const runtime = getLocalRuntimeSettings(maybeSettings)
@@ -86,6 +89,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     modelRouter: normalizeModelRouterSettings(maybeSettings.modelRouter),
     runtimeGuards: normalizeRuntimeGuardSettings(maybeSettings.runtimeGuards),
     agentCapabilities: normalizeAgentCapabilitySettings(maybeSettings.agentCapabilities),
+    imageGeneration: normalizeImageGenerationSettings(maybeSettings.imageGeneration),
     computerUse: normalizeComputerUseSettings(maybeSettings.computerUse),
     activeAgentRuntime: normalizeAgentRuntimeId(maybeSettings.activeAgentRuntime),
     agents: {

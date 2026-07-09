@@ -12,6 +12,7 @@ export const SCIFORGE_CANVAS_ARTIFACT_KINDS = [
 export type SciforgeCanvasArtifactKind = typeof SCIFORGE_CANVAS_ARTIFACT_KINDS[number]
 
 export type SciforgeCanvasPlacement = 'right' | 'left' | 'below'
+export type SciforgeCanvasInsertMode = 'visual_image' | 'editable_layers'
 
 export type SciforgeCanvasEngine = 'drawio' | 'tldraw'
 
@@ -74,6 +75,12 @@ export type SciforgeCanvasArtifactMetadata = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   reviewScore?: FigureStyleSimilarityScore
   referencePath?: string
   projectPath?: string
@@ -157,6 +164,12 @@ export type SciforgeCanvasInsertArtifactRequest = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   referencePath?: string
   projectPath?: string
   svgPath?: string
@@ -167,6 +180,7 @@ export type SciforgeCanvasInsertArtifactRequest = {
   sourceTool?: string
   reviewScore?: FigureStyleSimilarityScore
   reviewPacketPath?: string
+  insertionMode?: SciforgeCanvasInsertMode
   anchorShapeId?: string
   placement?: SciforgeCanvasPlacement
   margin?: number
@@ -205,6 +219,44 @@ export type SciforgeCanvasInsertArtifactResult =
         | 'invalid_request'
         | 'artifact_not_found'
         | 'unsupported_artifact'
+        | 'canvas_write_failed'
+      message: string
+      warnings?: string[]
+    }
+
+export type SciforgeCanvasSplitArtifactComponentsRequest = {
+  workspaceRoot: string
+  canvasId?: string
+  frameworkComponentManifestPath?: string
+  sourceShapeId?: string
+  displayWidth?: number
+  margin?: number
+  dryRun?: boolean
+}
+
+export type SciforgeCanvasSplitArtifactComponentsResult =
+  | {
+      ok: true
+      status: 'planned' | 'split'
+      canvasId: string
+      canvasDir: string
+      canvasPath: string
+      frameworkComponentManifestPath: string
+      baseShapeId: string
+      componentShapeIds: string[]
+      componentCount: number
+      bounds: SciforgeCanvasBounds
+      warnings: string[]
+      dryRun: boolean
+    }
+  | {
+      ok: false
+      status:
+        | 'invalid_workspace'
+        | 'invalid_request'
+        | 'manifest_not_found'
+        | 'component_manifest_not_found'
+        | 'already_split'
         | 'canvas_write_failed'
       message: string
       warnings?: string[]
@@ -282,6 +334,19 @@ export type SciforgeCanvasReviewPacket = {
   artifacts: SciforgeCanvasReviewPacketArtifact[]
   annotations: SciforgeCanvasReviewPacketAnnotation[]
   selectedShapes: SciforgeCanvasSelectedShape[]
+  selectedComponents?: Array<{
+    shapeId: string
+    componentId?: string
+    frameworkComponentManifestPath: string
+    semanticLayer?: string
+    blockId?: string
+    parentBlockId?: string
+    parentBlockTitle?: string
+    parentBlockType?: string
+    childComponentIds?: string[]
+    detectionMethod?: string
+    reusableTemplateId?: string
+  }>
   modificationSuggestions: SciforgeCanvasReviewPacketModificationSuggestion[]
   adjustmentRequests: Array<{
     artifactKind: SciforgeCanvasArtifactKind
@@ -324,6 +389,12 @@ export type SciforgeCanvasRecentArtifact = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   referencePath?: string
   projectPath?: string
   svgPath?: string
@@ -387,6 +458,12 @@ export type SciforgeArtifactManifest = {
   diagramSpecPath?: string
   frameworkDesignPlanPath?: string
   diagramLayerManifestPath?: string
+  fastSamSegmentationPath?: string
+  fastSamBoxlibPath?: string
+  fastSamPreviewPath?: string
+  frameworkComponentManifestPath?: string
+  componentBasePath?: string
+  componentAssetPaths?: string[]
   referencePath?: string
   projectPath?: string
   svgPath?: string

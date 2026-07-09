@@ -223,6 +223,7 @@ function createApi(): SciForgeApi {
       invoke('scientific-plotting:prepare-reference', request),
     getSciforgeCanvasStatus: (workspaceRoot) =>
       invoke('sciforge-canvas:status', { workspaceRoot }),
+    getLocalDrawioUrl: () => invoke('drawio:local-url'),
     openSciforgeCanvas: (request) =>
       invoke('sciforge-canvas:open', request),
     saveSciforgeCanvas: (request) =>
@@ -233,6 +234,8 @@ function createApi(): SciForgeApi {
       invoke('sciforge-canvas:insert-artifact', request),
     importRecentSciforgeCanvasArtifacts: (request) =>
       invoke('sciforge-canvas:import-recent-artifacts', request),
+    splitSciforgeCanvasArtifactComponents: (request) =>
+      invoke('sciforge-canvas:split-artifact-components', request),
     exportSciforgeCanvasReviewPacket: (request) =>
       invoke('sciforge-canvas:export-review-packet', request),
     extractFigureStyle: (request) =>

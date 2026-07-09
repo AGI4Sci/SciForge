@@ -1121,6 +1121,22 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('settings:set')).toBeTypeOf('function')
   })
 
+  it('returns canvas IPC validation errors instead of rejecting through Electron', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const openOrCreateSciforgeCanvas = vi.fn()
+    const sender = createSender(910)
+
+    const dispatcher = registerAppIpcHandlers(registerOptions({ openOrCreateSciforgeCanvas }))
+
+    await expect(
+      dispatcher.invoke('sciforge-canvas:open', { workspaceRoot: '' }, sender)
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 'invalid_request'
+    })
+    expect(openOrCreateSciforgeCanvas).not.toHaveBeenCalled()
+  })
+
   it('returns a native file drag fallback when the sender cannot start desktop drags', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-drag-ipc-'))
     const filePath = join(workspaceRoot, 'notes.txt')

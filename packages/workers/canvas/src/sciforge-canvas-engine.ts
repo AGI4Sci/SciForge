@@ -4,6 +4,7 @@ import { constants as fsConstants, type Dirent } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, extname, join, relative as pathRelative, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { segmentImageGenerationComponents } from '@sciforge/image-generation/engine'
 import { generateKeyBetween } from 'fractional-indexing'
 import type {
   SciforgeCanvasArtifactKind,
@@ -24,6 +25,8 @@ import type {
   SciforgeCanvasReviewPacketRequest,
   SciforgeCanvasReviewPacketResult,
   SciforgeCanvasSaveRequest,
+  SciforgeCanvasSplitArtifactComponentsRequest,
+  SciforgeCanvasSplitArtifactComponentsResult,
   SciforgeCanvasSaveResult,
   SciforgeCanvasSelectionSaveRequest,
   SciforgeCanvasSelectionState,
@@ -98,6 +101,63 @@ type DiagramLayer = {
   to?: string
 }
 
+type FrameworkComponentManifest = {
+  version: 1
+  kind: 'sciforge_framework_components'
+  sourceImagePath: string
+  componentBasePath: string
+  componentDir: string
+  canvasSize: ImageDimensions
+  blocks?: FrameworkComponentBlock[]
+  components: FrameworkComponentLayer[]
+  semanticLayerImages?: Array<{
+    semanticLayer: string
+    assetPath: string
+    previewPath: string
+    pixelCount: number
+    coverage: number
+    detectionMethod?: string
+  }>
+  warnings?: string[]
+}
+
+type FrameworkComponentBlock = {
+  blockId: string
+  title?: string
+  blockType?: string
+  pixelBbox: DiagramLayerBounds
+  childComponentIds: string[]
+  semanticLayers?: string[]
+  detectionMethods?: string[]
+  confidence?: number
+}
+
+type FrameworkComponentLayer = {
+  componentId: string
+  layerId?: string
+  type: string
+  title?: string
+  pixelBbox: DiagramLayerBounds
+  assetPath?: string
+  transparentAssetPath?: string
+  semanticLayer?: string
+  parentComponentId?: string
+  parentBlockId?: string
+  children?: string[]
+  detectionMethod?: string
+  reusableTemplateId?: string
+  placeholderId?: string
+  sourcePrompt?: string
+  confidence?: number
+}
+
+type FrameworkSplitTarget = {
+  id: string
+  title: string
+  pixelBbox: DiagramLayerBounds
+  meta: JsonRecord
+}
+
 type DiagramLayerManifest = {
   version: 1
   kind: 'sciforge_diagram_layers'
@@ -121,7 +181,9 @@ const DEFAULT_IMAGE_WIDTH = 640
 const PLACEHOLDER_WIDTH = 460
 const PLACEHOLDER_HEIGHT = 260
 const MAX_IMAGE_BYTES = 40 * 1024 * 1024
-const DRAWIO_INLINE_IMAGE_MAX_BYTES = 1_500_000
+const DRAWIO_INLINE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+const MAX_FRAMEWORK_BLOCK_HITBOXES = 36
+const MAX_FINE_COMPONENT_HITBOXES = 80
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg'])
 const RECENT_ARTIFACT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg', '.pptx'])
 const RECENT_ARTIFACT_DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -235,8 +297,7 @@ export async function openOrCreateSciforgeCanvas(
       }
     }
     const existed = await fileExists(paths.drawioPath)
-    const diagramXml = existed ? await readFile(paths.drawioPath, 'utf8') : createInitialDrawioXml(paths.canvasId)
-    if (!existed) await writeFile(paths.drawioPath, diagramXml, 'utf8')
+    const diagramXml = await ensureDrawioXml(paths)
     const selection = await readSelectionState(paths)
     const snapshot: SciforgeCanvasDrawioSnapshot = {
       engine: 'drawio',
@@ -422,6 +483,261 @@ export async function insertSciforgeCanvasArtifact(
   }
 }
 
+
+export async function splitSciforgeCanvasArtifactComponents(
+  request: SciforgeCanvasSplitArtifactComponentsRequest
+): Promise<SciforgeCanvasSplitArtifactComponentsResult> {
+  const warnings: string[] = []
+  try {
+    const paths = await resolveCanvasPaths(request.workspaceRoot, request.canvasId)
+    await mkdir(paths.assetsDir, { recursive: true })
+    let xml = await ensureDrawioXml(paths)
+    const rawManifestPath = request.frameworkComponentManifestPath?.trim() ||
+      findFrameworkComponentManifestPathInDrawioXml(xml)
+    const generatedManifestPath = rawManifestPath
+      ? undefined
+      : await generateFrameworkComponentManifestFromCanvasImage({
+          xml,
+          paths,
+          sourceShapeId: request.sourceShapeId,
+          warnings
+        })
+    const manifestCandidatePath = rawManifestPath || generatedManifestPath
+    if (!manifestCandidatePath) {
+      return {
+        ok: false,
+        status: 'component_manifest_not_found',
+        message: '当前画布没有可拆分的图片。请先把 framework/论文图 artifact 导入画布，然后再展开组件。',
+        warnings
+      }
+    }
+    const manifestPath = await resolveOpenTargetPath(manifestCandidatePath, paths.workspaceRoot, { allowBasenameFallback: false })
+    if (!request.dryRun) {
+      const cleaned = removeFrameworkComponentSplitCellsForManifest(xml, manifestPath)
+      if (cleaned.removed > 0) {
+        xml = cleaned.xml
+        warnings.push(`Removed ${cleaned.removed} existing framework component cells before rebuilding selectable hitboxes.`)
+      }
+    }
+    const manifest = parseFrameworkComponentManifest(JSON.parse(await readFile(manifestPath, 'utf8')) as unknown)
+    const canvasWidth = Math.max(1, manifest.canvasSize.width)
+    const canvasHeight = Math.max(1, manifest.canvasSize.height)
+    const sourceArtifact = findCanvasArtifactForComponentSegmentation(xml, request.sourceShapeId)
+    const sourceBounds = sourceArtifact?.bounds && sourceArtifact.bounds.w > 0 && sourceArtifact.bounds.h > 0
+      ? sourceArtifact.bounds
+      : null
+    const width = finiteNumber(request.displayWidth, sourceBounds?.w ?? Math.min(canvasWidth, DEFAULT_IMAGE_WIDTH))
+    const height = sourceBounds?.h ?? Math.round(width * canvasHeight / canvasWidth)
+    const bounds = sourceBounds ?? chooseDrawioPlacement(xml, width, height, Math.max(0, finiteNumber(request.margin, 64)))
+    const scaleX = bounds.w / canvasWidth
+    const scaleY = bounds.h / canvasHeight
+    const usedXmlParts: string[] = []
+    const baseShapeId = sourceArtifact?.shapeId ?? uniqueDrawioCellId(xml, 'framework-component-base')
+    const baseMeta: JsonRecord = {
+      sciforgeFrameworkComponentBase: true,
+      sciforgeCanvasLocked: true,
+      frameworkComponentManifestPath: manifestPath,
+      sciforgeFrameworkComponentManifestPath: manifestPath,
+      sourceImagePath: manifest.sourceImagePath,
+      componentBasePath: manifest.componentBasePath,
+      componentCount: manifest.components.length,
+      blockCount: manifest.blocks?.length ?? 0,
+      semanticLayerCount: manifest.semanticLayerImages?.length ?? 0
+    }
+    if (sourceArtifact) {
+      warnings.push('Using the existing canvas image as the component base; inserted selectable hitboxes only.')
+    } else {
+      let baseCell = await createDrawioImageCellFromFile({
+        id: baseShapeId,
+        title: 'Framework image base',
+        path: await resolveComponentAssetPath(manifest.sourceImagePath || manifest.componentBasePath, paths.workspaceRoot),
+        bounds,
+        meta: baseMeta,
+        warnings
+      })
+      baseCell = baseCell.replace(';html=1"', ';html=1;locked=1"')
+      usedXmlParts.push(baseCell)
+    }
+
+    const componentShapeIds: string[] = []
+    const splitTargets = frameworkSplitTargets({
+      manifest,
+      manifestPath,
+      canvasWidth,
+      canvasHeight,
+      warnings
+    })
+    for (const target of splitTargets) {
+      const cellId = uniqueDrawioCellId(xml + usedXmlParts.join('\n'), target.id || 'framework-component')
+      const componentBounds = {
+        x: bounds.x + target.pixelBbox.x * scaleX,
+        y: bounds.y + target.pixelBbox.y * scaleY,
+        w: Math.max(4, target.pixelBbox.w * scaleX),
+        h: Math.max(4, target.pixelBbox.h * scaleY)
+      }
+      usedXmlParts.push(createDrawioFrameworkComponentHitboxCell({
+        id: cellId,
+        title: target.title,
+        bounds: componentBounds,
+        meta: target.meta
+      }))
+      componentShapeIds.push(cellId)
+    }
+    if (!request.dryRun) {
+      await writeFile(paths.drawioPath, insertDrawioCellXml(xml, usedXmlParts.join('\n')), 'utf8')
+    }
+    return {
+      ok: true,
+      status: request.dryRun ? 'planned' : 'split',
+      canvasId: paths.canvasId,
+      canvasDir: paths.canvasDir,
+      canvasPath: paths.canvasPath,
+      frameworkComponentManifestPath: manifestPath,
+      baseShapeId,
+      componentShapeIds,
+      componentCount: componentShapeIds.length,
+      bounds,
+      warnings,
+      dryRun: Boolean(request.dryRun)
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      status: message.includes('workspace') ? 'invalid_workspace' : message.includes('manifest') ? 'manifest_not_found' : message.includes('write') ? 'canvas_write_failed' : 'invalid_request',
+      message,
+      warnings
+    }
+  }
+}
+
+function frameworkSplitTargets(input: {
+  manifest: FrameworkComponentManifest
+  manifestPath: string
+  canvasWidth: number
+  canvasHeight: number
+  warnings: string[]
+}): FrameworkSplitTarget[] {
+  const blocks = (input.manifest.blocks ?? [])
+    .filter((block) => validSplitBounds(block.pixelBbox, input.canvasWidth, input.canvasHeight))
+    .sort((a, b) => {
+      const areaA = a.pixelBbox.w * a.pixelBbox.h
+      const areaB = b.pixelBbox.w * b.pixelBbox.h
+      if (Math.abs(areaA - areaB) > input.canvasWidth * input.canvasHeight * 0.01) return areaB - areaA
+      if (Math.abs(a.pixelBbox.y - b.pixelBbox.y) > 6) return a.pixelBbox.y - b.pixelBbox.y
+      return a.pixelBbox.x - b.pixelBbox.x
+    })
+  if (blocks.length > 0) {
+    if (input.manifest.components.length > blocks.length) {
+      input.warnings.push(`Inserted ${blocks.length} block-level selectable hitboxes instead of ${input.manifest.components.length} fine local components, so text fragments stay hidden on the canvas.`)
+    }
+    if (blocks.length > MAX_FRAMEWORK_BLOCK_HITBOXES) {
+      input.warnings.push(`Framework segmentation produced ${blocks.length} block-level hitboxes; inserted the largest ${MAX_FRAMEWORK_BLOCK_HITBOXES} only to keep the canvas usable.`)
+    }
+    return blocks.slice(0, MAX_FRAMEWORK_BLOCK_HITBOXES).map((block): FrameworkSplitTarget => ({
+      id: block.blockId,
+      title: block.title || block.blockId,
+      pixelBbox: block.pixelBbox,
+      meta: {
+        sciforgeFrameworkComponent: true,
+        sciforgeFrameworkBlock: true,
+        blockId: block.blockId,
+        parentBlockId: block.blockId,
+        parentBlockTitle: block.title,
+        parentBlockType: block.blockType,
+        parentBlockChildComponentIds: block.childComponentIds,
+        childComponentIds: block.childComponentIds,
+        parentBlockSemanticLayers: block.semanticLayers,
+        detectionMethod: (block.detectionMethods ?? []).join(',') || 'framework_block',
+        frameworkComponentManifestPath: input.manifestPath,
+        sciforgeFrameworkComponentManifestPath: input.manifestPath,
+        confidence: block.confidence
+      }
+    }))
+  }
+
+  const blockById = new Map((input.manifest.blocks ?? []).map((block) => [block.blockId, block]))
+  const fineComponents = [...input.manifest.components]
+    .filter((component) => validSplitBounds(component.pixelBbox, input.canvasWidth, input.canvasHeight))
+    .sort((a, b) => {
+      const areaA = a.pixelBbox.w * a.pixelBbox.h
+      const areaB = b.pixelBbox.w * b.pixelBbox.h
+      if (Math.abs(areaA - areaB) > input.canvasWidth * input.canvasHeight * 0.006) return areaB - areaA
+      if (Math.abs(a.pixelBbox.y - b.pixelBbox.y) > 6) return a.pixelBbox.y - b.pixelBbox.y
+      return a.pixelBbox.x - b.pixelBbox.x
+    })
+  if (fineComponents.length > MAX_FINE_COMPONENT_HITBOXES) {
+    input.warnings.push(`Local segmentation produced ${fineComponents.length} fine components; inserted the largest ${MAX_FINE_COMPONENT_HITBOXES} selectable hitboxes only. Configure a component segmentation runner for finer scientific component masks.`)
+  }
+  return fineComponents.slice(0, MAX_FINE_COMPONENT_HITBOXES).map((component): FrameworkSplitTarget => {
+    const parentBlock = component.parentBlockId ? blockById.get(component.parentBlockId) : undefined
+    return {
+      id: component.componentId || component.layerId || 'framework-component',
+      title: component.title || component.componentId,
+      pixelBbox: component.pixelBbox,
+      meta: {
+        sciforgeFrameworkComponent: true,
+        componentId: component.componentId,
+        sciforgeFrameworkComponentId: component.componentId,
+        layerId: component.layerId,
+        componentType: component.type,
+        semanticLayer: component.semanticLayer,
+        parentComponentId: component.parentComponentId,
+        parentBlockId: component.parentBlockId,
+        childComponentIds: component.children,
+        detectionMethod: component.detectionMethod,
+        reusableTemplateId: component.reusableTemplateId,
+        parentBlockTitle: parentBlock?.title,
+        parentBlockType: parentBlock?.blockType,
+        parentBlockChildComponentIds: parentBlock?.childComponentIds,
+        parentBlockSemanticLayers: parentBlock?.semanticLayers,
+        placeholderId: component.placeholderId,
+        sourcePrompt: component.sourcePrompt,
+        frameworkComponentManifestPath: input.manifestPath,
+        sciforgeFrameworkComponentManifestPath: input.manifestPath,
+        confidence: component.confidence
+      }
+    }
+  })
+}
+
+function validSplitBounds(bounds: DiagramLayerBounds, canvasWidth: number, canvasHeight: number): boolean {
+  if (bounds.w <= 0 || bounds.h <= 0) return false
+  const areaRatio = (bounds.w * bounds.h) / Math.max(1, canvasWidth * canvasHeight)
+  return areaRatio > 0.0003 && areaRatio < 0.98
+}
+
+async function generateFrameworkComponentManifestFromCanvasImage(input: {
+  xml: string
+  paths: CanvasPaths
+  sourceShapeId?: string
+  warnings: string[]
+}): Promise<string | undefined> {
+  const target = findCanvasArtifactForComponentSegmentation(input.xml, input.sourceShapeId)
+  if (!target) return undefined
+  const rawImagePath = displayPathForArtifact(target)
+  if (!rawImagePath?.trim()) return undefined
+  const sourceImagePath = await resolveOpenTargetPath(rawImagePath, input.paths.workspaceRoot, { allowBasenameFallback: false })
+  const ext = extensionFromName(sourceImagePath)
+  if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+    throw new Error(`当前 artifact 不是可拆分的 raster 图片：${relativePath(input.paths.workspaceRoot, sourceImagePath)}`)
+  }
+  input.warnings.push('No framework component manifest was found on the selected canvas image; generated one from the current image with the image-generation component segmentation pipeline.')
+  const result = await segmentImageGenerationComponents({
+    workspaceRoot: input.paths.workspaceRoot,
+    sourceImagePath,
+    outputDir: join(input.paths.canvasDir, 'components'),
+    imageId: sanitizeId(`${target.shapeId}-components`, 'canvas-components'),
+    ...(target.frameworkDesignPlanPath ? { frameworkDesignPlanPath: target.frameworkDesignPlanPath } : {})
+  })
+  if (!result.ok) {
+    throw new Error(result.message)
+  }
+  if (result.warnings?.length) input.warnings.push(...result.warnings)
+  return result.frameworkComponentManifestPath
+}
+
+
 export async function importRecentSciforgeCanvasArtifacts(
   request: SciforgeCanvasImportRecentArtifactsRequest
 ): Promise<SciforgeCanvasImportRecentArtifactsResult> {
@@ -469,6 +785,12 @@ export async function importRecentSciforgeCanvasArtifacts(
         ...(artifact.diagramSpecPath ? { diagramSpecPath: artifact.diagramSpecPath } : {}),
         ...(artifact.frameworkDesignPlanPath ? { frameworkDesignPlanPath: artifact.frameworkDesignPlanPath } : {}),
         ...(artifact.diagramLayerManifestPath ? { diagramLayerManifestPath: artifact.diagramLayerManifestPath } : {}),
+        ...(artifact.fastSamSegmentationPath ? { fastSamSegmentationPath: artifact.fastSamSegmentationPath } : {}),
+        ...(artifact.fastSamBoxlibPath ? { fastSamBoxlibPath: artifact.fastSamBoxlibPath } : {}),
+        ...(artifact.fastSamPreviewPath ? { fastSamPreviewPath: artifact.fastSamPreviewPath } : {}),
+        ...(artifact.frameworkComponentManifestPath ? { frameworkComponentManifestPath: artifact.frameworkComponentManifestPath } : {}),
+        ...(artifact.componentBasePath ? { componentBasePath: artifact.componentBasePath } : {}),
+        ...(artifact.componentAssetPaths?.length ? { componentAssetPaths: artifact.componentAssetPaths } : {}),
         ...(artifact.referencePath ? { referencePath: artifact.referencePath } : {}),
         ...(artifact.projectPath ? { projectPath: artifact.projectPath } : {}),
         ...(artifact.caption ? { caption: artifact.caption } : {}),
@@ -735,11 +1057,91 @@ async function shouldUseDrawioCanvas(paths: CanvasPaths): Promise<boolean> {
 }
 
 async function ensureDrawioXml(paths: CanvasPaths): Promise<string> {
-  if (await fileExists(paths.drawioPath)) return normalizeDrawioXml(await readFile(paths.drawioPath, 'utf8'))
+  if (await fileExists(paths.drawioPath)) {
+    const xml = normalizeDrawioXml(await readFile(paths.drawioPath, 'utf8'))
+    const hydrated = await hydrateDrawioImagePlaceholders(xml, paths.workspaceRoot)
+    if (hydrated !== xml) {
+      await writeFile(paths.drawioPath, hydrated, 'utf8')
+    }
+    return hydrated
+  }
   const xml = createInitialDrawioXml(paths.canvasId)
   await mkdir(paths.canvasDir, { recursive: true })
   await writeFile(paths.drawioPath, xml, 'utf8')
   return xml
+}
+
+async function hydrateDrawioImagePlaceholders(xml: string, workspaceRoot: string): Promise<string> {
+  const cellPattern = /<mxCell\b[^>]*\bsciforgeMeta="([^"]+)"[^>]*>[\s\S]*?<\/mxCell>/g
+  let changed = false
+  const replacements: Array<{ from: string; to: string }> = []
+  let match: RegExpExecArray | null
+
+  while ((match = cellPattern.exec(xml))) {
+    const cellXml = match[0]
+    const meta = decodeJsonAttribute(match[1])
+    if (!meta?.sciforgeCanvasPlaceholder) continue
+    const artifact = asRecord(meta.sciforgeArtifact)
+    if (!artifact || !isImageArtifactKind(artifact.artifactKind)) continue
+    const imagePath = await resolveHydratableDrawioImagePath(artifact, workspaceRoot)
+    if (!imagePath) continue
+    const imageDataUri = await readDrawioImageDataUri(imagePath)
+    if (!imageDataUri) continue
+
+    const hydratedMeta = {
+      ...meta,
+      sciforgeCanvasPlaceholder: false,
+      sciforgeCanvasDrawioImageHydrated: true
+    }
+    let nextCellXml = replaceXmlAttribute(cellXml, 'style', drawioImageStyle(imageDataUri))
+    nextCellXml = replaceXmlAttribute(nextCellXml, 'sciforgeMeta', encodeJsonAttribute(hydratedMeta))
+    replacements.push({ from: cellXml, to: nextCellXml })
+    changed = true
+  }
+
+  if (!changed) return xml
+  let next = xml
+  for (const replacement of replacements) {
+    next = next.replace(replacement.from, replacement.to)
+  }
+  return next
+}
+
+function isImageArtifactKind(value: unknown): boolean {
+  return value === 'generated_image'
+    || value === 'edited_image'
+    || value === 'scientific_plot'
+    || value === 'ppt_slide'
+}
+
+async function resolveHydratableDrawioImagePath(artifact: JsonRecord, workspaceRoot: string): Promise<string | null> {
+  const candidates = [
+    artifact.previewPath,
+    artifact.outputPath,
+    artifact.sourcePath,
+    artifact.renderedPagePath,
+    artifact.svgPath
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+
+  for (const candidate of candidates) {
+    try {
+      const resolved = await resolveTargetPathWithinWorkspace(candidate, workspaceRoot)
+      const info = await stat(resolved)
+      if (info.isFile()) return resolved
+    } catch {
+      // Try the next recorded artifact path.
+    }
+  }
+  return null
+}
+
+async function readDrawioImageDataUri(filePath: string): Promise<string | null> {
+  const info = await stat(filePath)
+  if (!info.isFile() || info.size > DRAWIO_INLINE_IMAGE_MAX_BYTES) return null
+  const mimeType = mimeTypeForExtension(extensionFromName(filePath))
+  if (!mimeType) return null
+  const bytes = await readFile(filePath)
+  return drawioImageDataUri(mimeType, bytes)
 }
 
 function ensurePageRecord(snapshot: TldrawSnapshot, pageId: string): void {
@@ -797,6 +1199,12 @@ async function buildArtifactMetadata(
   const diagramSpecPath = await resolveOptionalPath(request.diagramSpecPath, workspaceRoot)
   const frameworkDesignPlanPath = await resolveOptionalPath(request.frameworkDesignPlanPath, workspaceRoot)
   const diagramLayerManifestPath = await resolveOptionalPath(request.diagramLayerManifestPath, workspaceRoot)
+  const fastSamSegmentationPath = await resolveOptionalPath(request.fastSamSegmentationPath, workspaceRoot)
+  const fastSamBoxlibPath = await resolveOptionalPath(request.fastSamBoxlibPath, workspaceRoot)
+  const fastSamPreviewPath = await resolveOptionalPath(request.fastSamPreviewPath, workspaceRoot)
+  const frameworkComponentManifestPath = await resolveOptionalPath(request.frameworkComponentManifestPath, workspaceRoot)
+  const componentBasePath = await resolveOptionalPath(request.componentBasePath, workspaceRoot)
+  const componentAssetPaths = await resolveOptionalPaths(request.componentAssetPaths, workspaceRoot)
   const referencePath = await resolveOptionalPath(request.referencePath, workspaceRoot)
   const projectPath = await resolveOptionalExistingDirectory(request.projectPath, workspaceRoot)
   const svgPath = await resolveOptionalPath(request.svgPath, workspaceRoot)
@@ -817,6 +1225,12 @@ async function buildArtifactMetadata(
     ...(diagramSpecPath ? { diagramSpecPath } : {}),
     ...(frameworkDesignPlanPath ? { frameworkDesignPlanPath } : {}),
     ...(diagramLayerManifestPath ? { diagramLayerManifestPath } : {}),
+    ...(fastSamSegmentationPath ? { fastSamSegmentationPath } : {}),
+    ...(fastSamBoxlibPath ? { fastSamBoxlibPath } : {}),
+    ...(fastSamPreviewPath ? { fastSamPreviewPath } : {}),
+    ...(frameworkComponentManifestPath ? { frameworkComponentManifestPath } : {}),
+    ...(componentBasePath ? { componentBasePath } : {}),
+    ...(componentAssetPaths.length ? { componentAssetPaths } : {}),
     ...(referencePath ? { referencePath } : {}),
     ...(projectPath ? { projectPath } : {}),
     ...(svgPath ? { svgPath } : {}),
@@ -853,6 +1267,16 @@ async function buildArtifactMetadata(
 async function resolveOptionalPath(raw: string | undefined, workspaceRoot: string): Promise<string | undefined> {
   if (!raw?.trim()) return undefined
   return resolveOpenTargetPath(raw, workspaceRoot, { allowBasenameFallback: false })
+}
+
+async function resolveOptionalPaths(raw: string[] | undefined, workspaceRoot: string): Promise<string[]> {
+  if (!raw?.length) return []
+  const resolved: string[] = []
+  for (const item of raw) {
+    const path = await resolveOptionalPath(item, workspaceRoot)
+    if (path) resolved.push(path)
+  }
+  return resolved
 }
 
 async function resolveOptionalExistingDirectory(raw: string | undefined, workspaceRoot: string): Promise<string | undefined> {
@@ -1066,11 +1490,14 @@ async function insertDrawioArtifact(input: {
   warnings: string[]
 }): Promise<Extract<SciforgeCanvasInsertArtifactResult, { ok: true }>> {
   const xml = await ensureDrawioXml(input.paths)
-  if (input.artifact.diagramLayerManifestPath) {
+  if (input.artifact.diagramLayerManifestPath && input.request.insertionMode === 'editable_layers') {
     return insertDrawioDiagramLayers({
       ...input,
       xml
     })
+  }
+  if (input.artifact.diagramLayerManifestPath && input.request.insertionMode !== 'editable_layers') {
+    input.warnings.push('Framework/diagram sidecar metadata was preserved; inserted as a single visual image. Use sciforge_canvas_split_artifact_components to expand component cells.')
   }
   const sourcePath = displayPathForArtifact(input.artifact)
   const isPlaceholder = input.artifact.pptxPath && input.request.artifactKind === 'ppt_export' && !sourcePath
@@ -1094,7 +1521,7 @@ async function insertDrawioArtifact(input: {
     const bytes = await readFile(sourcePath)
     imageSize = readImageDimensions(sourcePath, bytes)
     if (sourceStat.size <= DRAWIO_INLINE_IMAGE_MAX_BYTES) {
-      imageDataUri = `data:${mimeType};base64,${bytes.toString('base64')}`
+      imageDataUri = drawioImageDataUri(mimeType, bytes)
     } else {
       input.warnings.push('Artifact is too large to inline in draw.io XML; inserted as a metadata placeholder.')
     }
@@ -1444,23 +1871,211 @@ function createDrawioImageCell(input: {
   bounds: SciforgeCanvasBounds
   meta: JsonRecord
 }): string {
-  const style = [
-    'shape=image',
-    `image=${encodeURIComponent(input.imageDataUri)}`,
-    'imageAspect=0',
-    'aspect=fixed',
-    'verticalLabelPosition=bottom',
-    'verticalAlign=top',
-    'html=1'
-  ].join(';')
   return createDrawioVertexCell({
     id: input.id,
     value: input.title,
-    style,
+    style: drawioImageStyle(input.imageDataUri),
     bounds: input.bounds,
     meta: input.meta
   })
 }
+
+function drawioImageDataUri(mimeType: string, bytes: Buffer): string {
+  return `data:${mimeType},${bytes.toString('base64')}`
+}
+
+function drawioImageStyle(imageDataUri: string): string {
+  return [
+    'shape=image',
+    `image=${imageDataUri}`,
+    'imageAspect=1',
+    'aspect=fixed',
+    'verticalLabelPosition=bottom',
+    'verticalAlign=top',
+    'fillColor=none',
+    'strokeColor=none',
+    'html=1'
+  ].join(';')
+}
+
+
+function parseFrameworkComponentManifest(value: unknown): FrameworkComponentManifest {
+  const record = asRecord(value)
+  if (!record || record.kind !== 'sciforge_framework_components' || record.version !== 1) {
+    throw new Error('Invalid framework component manifest.')
+  }
+  const canvasSize = asRecord(record.canvasSize)
+  if (!canvasSize) throw new Error('Framework component manifest is missing canvasSize.')
+  const width = finiteNumber(canvasSize.width, 0)
+  const height = finiteNumber(canvasSize.height, 0)
+  const components = Array.isArray(record.components) ? record.components.map(parseFrameworkComponentLayer).filter((item): item is FrameworkComponentLayer => item !== null) : []
+  const blocks = Array.isArray(record.blocks) ? record.blocks.map(parseFrameworkComponentBlock).filter((item): item is FrameworkComponentBlock => item !== null) : []
+  const componentById = new Map(components.map((component) => [component.componentId, component]))
+  for (const block of blocks) {
+    for (const componentId of block.childComponentIds) {
+      const component = componentById.get(componentId)
+      if (component && !component.parentBlockId) component.parentBlockId = block.blockId
+    }
+  }
+  const semanticLayerImages = Array.isArray(record.semanticLayerImages)
+    ? record.semanticLayerImages.map(parseFrameworkSemanticLayerImage).filter((item): item is NonNullable<FrameworkComponentManifest['semanticLayerImages']>[number] => item !== null)
+    : []
+  if (!width || !height || typeof record.componentBasePath !== 'string') throw new Error('Framework component manifest is missing canvasSize or componentBasePath.')
+  return {
+    version: 1,
+    kind: 'sciforge_framework_components',
+    sourceImagePath: typeof record.sourceImagePath === 'string' ? record.sourceImagePath : '',
+    componentBasePath: record.componentBasePath,
+    componentDir: typeof record.componentDir === 'string' ? record.componentDir : dirname(record.componentBasePath),
+    canvasSize: { width, height },
+    ...(blocks.length ? { blocks } : {}),
+    components,
+    ...(semanticLayerImages.length ? { semanticLayerImages } : {}),
+    warnings: Array.isArray(record.warnings) ? record.warnings.map(String) : []
+  }
+}
+
+function parseFrameworkComponentBlock(value: unknown): FrameworkComponentBlock | null {
+  const record = asRecord(value)
+  if (!record) return null
+  const blockId = typeof record.blockId === 'string' && record.blockId.trim() ? record.blockId.trim() : undefined
+  const bboxRecord = asRecord(record.pixelBbox)
+  const rawChildComponentIds = Array.isArray(record.childComponentIds)
+    ? record.childComponentIds
+    : Array.isArray(record.componentIds)
+      ? record.componentIds
+      : []
+  const childComponentIds = rawChildComponentIds.map(String).filter(Boolean)
+  if (!blockId || !bboxRecord || !childComponentIds.length) return null
+  const pixelBbox = {
+    x: finiteNumber(bboxRecord.x, 0),
+    y: finiteNumber(bboxRecord.y, 0),
+    w: finiteNumber(bboxRecord.w, 0),
+    h: finiteNumber(bboxRecord.h, 0)
+  }
+  if (pixelBbox.w <= 0 || pixelBbox.h <= 0) return null
+  return {
+    blockId,
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
+    ...(typeof record.blockType === 'string' ? { blockType: record.blockType } : {}),
+    pixelBbox,
+    childComponentIds,
+    ...(Array.isArray(record.semanticLayers) ? { semanticLayers: record.semanticLayers.map(String).filter(Boolean) } : {}),
+    ...(Array.isArray(record.detectionMethods) ? { detectionMethods: record.detectionMethods.map(String).filter(Boolean) } : {}),
+    ...(Number.isFinite(Number(record.confidence)) ? { confidence: Number(record.confidence) } : {})
+  }
+}
+
+function parseFrameworkSemanticLayerImage(value: unknown): NonNullable<FrameworkComponentManifest['semanticLayerImages']>[number] | null {
+  const record = asRecord(value)
+  if (!record || typeof record.semanticLayer !== 'string' || typeof record.assetPath !== 'string' || typeof record.previewPath !== 'string') return null
+  return {
+    semanticLayer: record.semanticLayer,
+    assetPath: record.assetPath,
+    previewPath: record.previewPath,
+    pixelCount: finiteNumber(record.pixelCount, 0),
+    coverage: finiteNumber(record.coverage, 0),
+    ...(typeof record.detectionMethod === 'string' ? { detectionMethod: record.detectionMethod } : {})
+  }
+}
+
+function parseFrameworkComponentLayer(value: unknown): FrameworkComponentLayer | null {
+  const record = asRecord(value)
+  if (!record) return null
+  const componentId = typeof record.componentId === 'string' && record.componentId.trim() ? record.componentId.trim() : undefined
+  const bboxRecord = asRecord(record.pixelBbox)
+  if (!componentId || !bboxRecord) return null
+  const pixelBbox = {
+    x: finiteNumber(bboxRecord.x, 0),
+    y: finiteNumber(bboxRecord.y, 0),
+    w: finiteNumber(bboxRecord.w, 0),
+    h: finiteNumber(bboxRecord.h, 0)
+  }
+  if (pixelBbox.w <= 0 || pixelBbox.h <= 0) return null
+  return {
+    componentId,
+    ...(typeof record.layerId === 'string' ? { layerId: record.layerId } : {}),
+    type: typeof record.type === 'string' ? record.type : 'visual_component',
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
+    pixelBbox,
+    ...(typeof record.assetPath === 'string' ? { assetPath: record.assetPath } : {}),
+    ...(typeof record.transparentAssetPath === 'string' ? { transparentAssetPath: record.transparentAssetPath } : {}),
+    ...(typeof record.semanticLayer === 'string' ? { semanticLayer: record.semanticLayer } : {}),
+    ...(typeof record.parentComponentId === 'string' ? { parentComponentId: record.parentComponentId } : {}),
+    ...(typeof record.parentBlockId === 'string' ? { parentBlockId: record.parentBlockId } : {}),
+    ...(Array.isArray(record.children) ? { children: record.children.map(String).filter(Boolean) } : {}),
+    ...(typeof record.detectionMethod === 'string' ? { detectionMethod: record.detectionMethod } : {}),
+    ...(typeof record.reusableTemplateId === 'string' ? { reusableTemplateId: record.reusableTemplateId } : {}),
+    ...(typeof record.placeholderId === 'string' ? { placeholderId: record.placeholderId } : {}),
+    ...(typeof record.sourcePrompt === 'string' ? { sourcePrompt: record.sourcePrompt } : {}),
+    ...(Number.isFinite(Number(record.confidence)) ? { confidence: Number(record.confidence) } : {})
+  }
+}
+
+async function resolveComponentAssetPath(rawPath: string, workspaceRoot: string): Promise<string> {
+  if (!rawPath.trim()) throw new Error('Component asset path is missing.')
+  return resolveOpenTargetPath(rawPath, workspaceRoot, { allowBasenameFallback: false })
+}
+
+function enrichDrawioSelectionShapes(cells: DrawioCellRecord[], selectedShapes: SciforgeCanvasSelectionState['selectedShapes']): SciforgeCanvasSelectionState['selectedShapes'] {
+  const byId = new Map(cells.map((cell) => [cell.id, cell]))
+  return selectedShapes.map((shape) => {
+    const cell = byId.get(shape.id)
+    if (!cell) return shape
+    return {
+      ...shape,
+      type: shape.type ?? (cell.edge ? 'edge' : cell.vertex ? 'vertex' : undefined),
+      meta: {
+        ...(cell.meta ?? {}),
+        ...(shape.meta ?? {})
+      },
+      bounds: shape.bounds ?? cell.bounds ?? null
+    }
+  })
+}
+
+function selectedFrameworkComponentsFromShapes(selectedShapes: SciforgeCanvasSelectionState['selectedShapes']): NonNullable<SciforgeCanvasReviewPacket['selectedComponents']> {
+  const selected: NonNullable<SciforgeCanvasReviewPacket['selectedComponents']> = []
+  for (const shape of selectedShapes) {
+    const meta = asRecord(shape.meta)
+    if (!meta) continue
+    const componentId = typeof meta.componentId === 'string'
+      ? meta.componentId
+      : typeof meta.sciforgeFrameworkComponentId === 'string'
+        ? meta.sciforgeFrameworkComponentId
+        : undefined
+    const blockId = typeof meta.blockId === 'string'
+      ? meta.blockId
+      : typeof meta.parentBlockId === 'string'
+        ? meta.parentBlockId
+        : undefined
+    const manifestPath = typeof meta.frameworkComponentManifestPath === 'string'
+      ? meta.frameworkComponentManifestPath
+      : typeof meta.sciforgeFrameworkComponentManifestPath === 'string'
+        ? meta.sciforgeFrameworkComponentManifestPath
+        : undefined
+    if ((!componentId && !blockId) || !manifestPath) continue
+    selected.push({
+      shapeId: shape.id,
+      ...(componentId ? { componentId } : {}),
+      frameworkComponentManifestPath: manifestPath,
+      ...(blockId ? { blockId } : {}),
+      ...(typeof meta.semanticLayer === 'string' ? { semanticLayer: meta.semanticLayer } : {}),
+      ...(typeof meta.parentBlockId === 'string' ? { parentBlockId: meta.parentBlockId } : blockId ? { parentBlockId: blockId } : {}),
+      ...(typeof meta.parentBlockTitle === 'string' ? { parentBlockTitle: meta.parentBlockTitle } : {}),
+      ...(typeof meta.parentBlockType === 'string' ? { parentBlockType: meta.parentBlockType } : {}),
+      ...(Array.isArray(meta.childComponentIds)
+        ? { childComponentIds: meta.childComponentIds.map(String).filter(Boolean) }
+        : Array.isArray(meta.parentBlockChildComponentIds)
+          ? { childComponentIds: meta.parentBlockChildComponentIds.map(String).filter(Boolean) }
+          : {}),
+      ...(typeof meta.detectionMethod === 'string' ? { detectionMethod: meta.detectionMethod } : {}),
+      ...(typeof meta.reusableTemplateId === 'string' ? { reusableTemplateId: meta.reusableTemplateId } : {})
+    })
+  }
+  return selected
+}
+
 
 function parseDiagramLayerManifest(value: unknown): DiagramLayerManifest {
   const record = asRecord(value)
@@ -1580,13 +2195,45 @@ async function createDrawioImageCellFromFile(input: {
       meta: input.meta
     })
   }
-  const imageDataUri = `data:${mimeType};base64,${(await readFile(input.path)).toString('base64')}`
+  const imageDataUri = drawioImageDataUri(mimeType, await readFile(input.path))
   return createDrawioImageCell({
     id: input.id,
     title: input.title,
     imageDataUri,
     bounds: input.bounds,
     meta: input.meta
+  })
+}
+
+function createDrawioFrameworkComponentHitboxCell(input: {
+  id: string
+  title: string
+  bounds: SciforgeCanvasBounds
+  meta: JsonRecord
+}): string {
+  return createDrawioVertexCell({
+    id: input.id,
+    value: '',
+    style: [
+      'rounded=1',
+      'whiteSpace=wrap',
+      'html=1',
+      'fillColor=#60a5fa',
+      'fillOpacity=3',
+      'strokeColor=#2563eb',
+      'strokeOpacity=0',
+      'fontColor=none',
+      'spacing=0',
+      'pointerEvents=1',
+      'resizable=1',
+      'rotatable=0'
+    ].join(';') + ';',
+    bounds: input.bounds,
+    meta: {
+      ...input.meta,
+      sciforgeFrameworkComponentHitbox: true,
+      title: input.title
+    }
   })
 }
 
@@ -1790,6 +2437,13 @@ function decodeJsonAttribute(value: string | undefined): JsonRecord | null {
   }
 }
 
+function replaceXmlAttribute(xml: string, name: string, value: string): string {
+  const escaped = escapeXmlAttribute(value)
+  const pattern = new RegExp(`\\b${name}="[^"]*"`)
+  if (pattern.test(xml)) return xml.replace(pattern, `${name}="${escaped}"`)
+  return xml.replace(/<mxCell\b/, `<mxCell ${name}="${escaped}"`)
+}
+
 function escapeXmlAttribute(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -1943,6 +2597,12 @@ async function artifactFromManifest(
     diagramSpecPath: manifest.diagramSpecPath,
     frameworkDesignPlanPath: manifest.frameworkDesignPlanPath,
     diagramLayerManifestPath: manifest.diagramLayerManifestPath,
+    fastSamSegmentationPath: manifest.fastSamSegmentationPath,
+    fastSamBoxlibPath: manifest.fastSamBoxlibPath,
+    fastSamPreviewPath: manifest.fastSamPreviewPath,
+    frameworkComponentManifestPath: manifest.frameworkComponentManifestPath,
+    componentBasePath: manifest.componentBasePath,
+    componentAssetPaths: manifest.componentAssetPaths,
     referencePath: manifest.referencePath,
     projectPath: manifest.projectPath,
     svgPath: manifest.svgPath,
@@ -2089,6 +2749,12 @@ function artifactPathsInSnapshot(snapshot: TldrawSnapshot): Set<string> {
       'diagramSpecPath',
       'frameworkDesignPlanPath',
       'diagramLayerManifestPath',
+      'fastSamSegmentationPath',
+      'fastSamBoxlibPath',
+      'fastSamPreviewPath',
+      'frameworkComponentManifestPath',
+      'componentBasePath',
+      'componentAssetPaths',
       'referencePath',
       'svgPath',
       'pptxPath'
@@ -2120,6 +2786,12 @@ function artifactPathsInDrawioXml(xml: string): Set<string> {
       'diagramSpecPath',
       'frameworkDesignPlanPath',
       'diagramLayerManifestPath',
+      'fastSamSegmentationPath',
+      'fastSamBoxlibPath',
+      'fastSamPreviewPath',
+      'frameworkComponentManifestPath',
+      'componentBasePath',
+      'componentAssetPaths',
       'referencePath',
       'svgPath',
       'pptxPath'
@@ -2206,6 +2878,90 @@ function artifactsInDrawioXml(xml: string): Array<SciforgeCanvasArtifactMetadata
     })
 }
 
+function findCanvasArtifactForComponentSegmentation(
+  xml: string,
+  sourceShapeId: string | undefined
+): (SciforgeCanvasArtifactMetadata & { shapeId: string; bounds?: SciforgeCanvasBounds | null }) | undefined {
+  const artifacts = artifactsInDrawioXml(xml)
+    .filter((artifact) => {
+      const displayPath = displayPathForArtifact(artifact)
+      if (!displayPath) return false
+      const ext = extensionFromName(displayPath)
+      return ['.png', '.jpg', '.jpeg', '.webp'].includes(ext)
+    })
+  if (sourceShapeId?.trim()) {
+    const exact = artifacts.find((artifact) => artifact.shapeId === sourceShapeId.trim())
+    if (exact) return exact
+  }
+  const withManifest = artifacts.find((artifact) => artifact.frameworkComponentManifestPath)
+  if (withManifest) return withManifest
+  return [...artifacts].sort((left, right) => {
+    const leftArea = (left.bounds?.w ?? 0) * (left.bounds?.h ?? 0)
+    const rightArea = (right.bounds?.w ?? 0) * (right.bounds?.h ?? 0)
+    return rightArea - leftArea
+  })[0]
+}
+
+function findFrameworkComponentManifestPathInDrawioXml(xml: string): string | undefined {
+  for (const cell of parseDrawioCells(xml)) {
+    const meta = asRecord(cell.meta)
+    if (!meta) continue
+    const direct = typeof meta.frameworkComponentManifestPath === 'string'
+      ? meta.frameworkComponentManifestPath
+      : typeof meta.sciforgeFrameworkComponentManifestPath === 'string'
+        ? meta.sciforgeFrameworkComponentManifestPath
+        : undefined
+    if (direct?.trim()) return direct
+    const artifact = asRecord(meta.sciforgeArtifact)
+    const artifactManifest = typeof artifact?.frameworkComponentManifestPath === 'string'
+      ? artifact.frameworkComponentManifestPath
+      : typeof artifact?.sciforgeFrameworkComponentManifestPath === 'string'
+        ? artifact.sciforgeFrameworkComponentManifestPath
+        : undefined
+    if (artifactManifest?.trim()) return artifactManifest
+  }
+  return undefined
+}
+
+function removeFrameworkComponentSplitCellsForManifest(xml: string, manifestPath: string): { xml: string; removed: number } {
+  const normalizedManifestPath = resolve(manifestPath)
+  const removeIds: string[] = []
+  for (const cell of parseDrawioCells(xml)) {
+    const meta = asRecord(cell.meta)
+    if (!meta?.sciforgeFrameworkComponentBase && !meta?.sciforgeFrameworkComponent) continue
+    const rawPath = typeof meta.frameworkComponentManifestPath === 'string'
+      ? meta.frameworkComponentManifestPath
+      : typeof meta.sciforgeFrameworkComponentManifestPath === 'string'
+        ? meta.sciforgeFrameworkComponentManifestPath
+        : undefined
+    if (!rawPath) continue
+    try {
+      if (resolve(rawPath) === normalizedManifestPath) removeIds.push(cell.id)
+    } catch {
+      if (rawPath === manifestPath) removeIds.push(cell.id)
+    }
+  }
+  if (removeIds.length === 0) return { xml, removed: 0 }
+  return {
+    xml: removeDrawioCellsById(xml, removeIds),
+    removed: removeIds.length
+  }
+}
+
+function removeDrawioCellsById(xml: string, ids: string[]): string {
+  let nextXml = xml
+  for (const id of ids) {
+    const escapedId = escapeRegExp(escapeXmlAttribute(id))
+    nextXml = nextXml.replace(new RegExp(`\\n?\\s*<mxCell\\b(?=[^>]*\\bid="${escapedId}")[\\s\\S]*?<\\/mxCell>`, 'g'), '')
+    nextXml = nextXml.replace(new RegExp(`\\n?\\s*<mxCell\\b(?=[^>]*\\bid="${escapedId}")[^>]*/>`, 'g'), '')
+  }
+  return nextXml
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function buildDrawioReviewPacket(input: {
   canvasId: string
   title: string
@@ -2213,6 +2969,8 @@ function buildDrawioReviewPacket(input: {
   selection: SciforgeCanvasSelectionState
 }): SciforgeCanvasReviewPacket {
   const cells = parseDrawioCells(input.xml)
+  const enrichedSelectedShapes = enrichDrawioSelectionShapes(cells, input.selection.selectedShapes)
+  const selectedComponents = selectedFrameworkComponentsFromShapes(enrichedSelectedShapes)
   const artifacts = artifactsInDrawioXml(input.xml)
   const annotationsFromXml = cells
     .filter((cell) => !cell.meta?.sciforgeCanvasArtifact && isDrawioAnnotationCell(cell))
@@ -2244,7 +3002,8 @@ function buildDrawioReviewPacket(input: {
     title: input.title,
     artifacts,
     annotations,
-    selectedShapes: input.selection.selectedShapes,
+    selectedShapes: enrichedSelectedShapes,
+    ...(selectedComponents.length ? { selectedComponents } : {}),
     modificationSuggestions,
     adjustmentRequests: artifacts.map((artifact) => ({
       artifactKind: artifact.artifactKind,

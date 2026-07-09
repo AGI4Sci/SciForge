@@ -168,6 +168,8 @@ import type {
   SciforgeCanvasSaveRequest,
   SciforgeCanvasSaveResult,
   SciforgeCanvasSelectionSaveRequest,
+  SciforgeCanvasSplitArtifactComponentsRequest,
+  SciforgeCanvasSplitArtifactComponentsResult,
   SciforgeCanvasStatusResult
 } from './sciforge-canvas'
 import type {
@@ -291,6 +293,19 @@ export type ImageGenerationMcpConfigResult =
 export type SciforgeCanvasMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
+export type LocalDrawioUrlResult =
+  | {
+      ok: true
+      url: string
+      assetRoot: string
+      source: 'env' | 'project' | 'resources'
+      port: number
+    }
+  | {
+      ok: false
+      message: string
+      checkedPaths: string[]
+    }
 export type PptMasterMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
@@ -859,6 +874,7 @@ export type SciForgeApi = {
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
   getSciforgeCanvasStatus: (workspaceRoot?: string) => Promise<SciforgeCanvasStatusResult>
+  getLocalDrawioUrl: () => Promise<LocalDrawioUrlResult>
   openSciforgeCanvas: (request: SciforgeCanvasOpenRequest) => Promise<SciforgeCanvasOpenResult>
   saveSciforgeCanvas: (request: SciforgeCanvasSaveRequest) => Promise<SciforgeCanvasSaveResult>
   saveSciforgeCanvasSelection: (
@@ -870,6 +886,9 @@ export type SciForgeApi = {
   importRecentSciforgeCanvasArtifacts: (
     request: SciforgeCanvasImportRecentArtifactsRequest
   ) => Promise<SciforgeCanvasImportRecentArtifactsResult>
+  splitSciforgeCanvasArtifactComponents: (
+    request: SciforgeCanvasSplitArtifactComponentsRequest
+  ) => Promise<SciforgeCanvasSplitArtifactComponentsResult>
   exportSciforgeCanvasReviewPacket: (
     request: SciforgeCanvasReviewPacketRequest
   ) => Promise<SciforgeCanvasReviewPacketResult>

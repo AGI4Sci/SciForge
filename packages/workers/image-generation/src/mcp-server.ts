@@ -3,20 +3,24 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { IMAGE_DRAWING_INTENTS, IMAGE_EDIT_MODES, IMAGE_GENERATION_MCP_FLAG, IMAGE_GENERATION_MODES, IMAGE_OUTPUT_FORMATS } from './contract'
 import type {
+  FrameworkLocalizedEditRequest,
   ImageGenerationEditFromCanvasPacketRequest,
   ImageGenerationPlanRequest,
   ImageGenerationRecipe,
   ImageGenerationRenderRequest,
   ImageGenerationReviewPacketRequest,
+  ImageGenerationSegmentComponentsRequest,
   ImageGenerationReviewRequest
 } from './types'
 import {
   createImageGenerationReviewPacket,
+  editFrameworkComponentsWithImage2,
   editImageFromCanvasPacket,
   getImageGenerationStatus,
   planImageGeneration,
   renderImageGeneration,
-  reviewImageGenerationOutput
+  reviewImageGenerationOutput,
+  segmentImageGenerationComponents
 } from './image-generation-engine'
 
 type McpLaunchOptions = {
@@ -82,6 +86,18 @@ const sizeSchema = z.object({
 
 const IMAGE_GENERATION_ROUTING_DESCRIPTION = 'Use image_generation for semantic/creative visual generation: flowcharts or diagrams from long prose, infographics, covers, posters, and illustrative scientific visuals. Use scientific_plotting only for structured numeric charts or explicit compact node-edge diagrams.'
 
+const scientificPolishDeltaPlanSchema = z.object({
+  mode: z.literal('delta_only'),
+  targetPanels: z.array(z.object({
+    assetId: z.string().trim().min(1).max(160),
+    reason: z.string().trim().max(800).optional(),
+    allowedOperations: z.array(z.string().trim().min(1).max(80)).max(12).optional()
+  }).strict()).max(24).optional(),
+  allowedOperations: z.array(z.string().trim().min(1).max(80)).max(16),
+  lockedFacts: z.array(z.string().trim().min(1).max(240)).max(32),
+  handoffPrompt: z.string().trim().min(1).max(4000)
+}).strict()
+
 const recipeSchema = z.object({
   mode: z.enum(IMAGE_GENERATION_MODES),
   prompt: z.string().trim().min(1).max(16000).describe(IMAGE_GENERATION_ROUTING_DESCRIPTION),
@@ -95,10 +111,13 @@ const recipeSchema = z.object({
   drawingBrief: z.unknown().optional(),
   diagramSpec: z.unknown().optional(),
   frameworkDesignPlan: z.unknown().optional(),
+  frameworkRegionAssetMode: z.enum(['disabled', 'generate']).optional(),
   confirmation: z.object({
     status: z.enum(['required', 'confirmed'])
   }).strict().optional(),
-  promptProfile: z.enum(['default', 'flowchart-light-v1', 'framework-spec-v1', 'framework-layered-draft-v1']).optional()
+  promptProfile: z.enum(['default', 'flowchart-light-v1', 'framework-spec-v1', 'framework-layered-draft-v1']).optional(),
+  scientificPolishDeltaPlan: scientificPolishDeltaPlanSchema.optional(),
+  controlledSubfigureManifests: z.array(z.string().trim().min(1).max(4096)).max(24).optional()
 }).strict()
 
 export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promise<boolean> {
@@ -201,6 +220,84 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       )
     } catch (error) {
       return errorResult('Failed to render image: ' + (error instanceof Error ? error.message : String(error)))
+    }
+  })
+
+  server.registerTool('image_generation_segment_components', {
+    title: 'Segment Framework Image Components',
+    description: 'Split an existing generated framework PNG into a component JSON manifest, component-base image, segmentation preview, and transparent component assets. Supports SciForge-compatible local segmentation runners such as FastSAM, SAM-style, or custom adapters.',
+    inputSchema: {
+      workspaceRoot: z.string().trim().min(1).optional(),
+      sourceImagePath: z.string().trim().min(1).max(4096),
+      frameworkDesignPlanPath: z.string().trim().max(4096).optional(),
+      outputDir: z.string().trim().max(4096).optional(),
+      imageId: z.string().trim().max(120).optional()
+    },
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (input) => {
+    try {
+      const request: ImageGenerationSegmentComponentsRequest = {
+        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        sourceImagePath: input.sourceImagePath,
+        ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
+        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
+        ...(input.imageId ? { imageId: input.imageId } : {})
+      }
+      const result = await segmentImageGenerationComponents(request)
+      return textResult(
+        result.ok
+          ? jsonSummary('Segmented framework image components.', result)
+          : jsonSummary('Framework component segmentation failed: ' + result.status + '.', result),
+        { result }
+      )
+    } catch (error) {
+      return errorResult('Failed to segment framework components: ' + (error instanceof Error ? error.message : String(error)))
+    }
+  })
+
+  server.registerTool('image_generation_edit_components', {
+    title: 'Edit Framework Components With Image2',
+    description: 'Redraw selected framework component IDs from a component manifest, then recompose the edited patch into the original image without relying on manual bounding boxes.',
+    inputSchema: {
+      workspaceRoot: z.string().trim().min(1).optional(),
+      componentManifestPath: z.string().trim().min(1).max(4096),
+      componentIds: z.array(z.string().trim().min(1).max(180)).max(500).optional(),
+      blockIds: z.array(z.string().trim().min(1).max(180)).max(200).optional(),
+      instruction: z.string().trim().min(1).max(4000),
+      outputDir: z.string().trim().max(4096).optional(),
+      imageId: z.string().trim().max(120).optional(),
+      canvasId: z.string().trim().max(120).optional(),
+      threadId: z.string().trim().max(120).optional(),
+      padding: z.number().min(0).max(256).optional(),
+      editCanvasSize: z.number().int().min(128).max(2048).optional(),
+      insertToCanvas: z.boolean().optional()
+    },
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (input) => {
+    try {
+      const request: FrameworkLocalizedEditRequest = {
+        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        componentManifestPath: input.componentManifestPath,
+        instruction: input.instruction,
+        ...(input.componentIds?.length ? { componentIds: input.componentIds } : {}),
+        ...(input.blockIds?.length ? { blockIds: input.blockIds } : {}),
+        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
+        ...(input.imageId ? { imageId: input.imageId } : {}),
+        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.padding !== undefined ? { padding: input.padding } : {}),
+        ...(input.editCanvasSize !== undefined ? { editCanvasSize: input.editCanvasSize } : {}),
+        ...(input.insertToCanvas !== undefined ? { insertToCanvas: input.insertToCanvas } : {})
+      }
+      const result = await editFrameworkComponentsWithImage2(request)
+      return textResult(
+        result.ok
+          ? jsonSummary('Edited framework component artifact: ' + result.status + '.', result)
+          : jsonSummary('Framework component edit failed: ' + result.status + '.', result),
+        { result }
+      )
+    } catch (error) {
+      return errorResult('Failed to edit framework components: ' + (error instanceof Error ? error.message : String(error)))
     }
   })
 

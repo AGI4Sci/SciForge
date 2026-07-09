@@ -14,7 +14,7 @@ import { isLocalHttpBodyTooLargeError, readIncomingMessageBody } from './local-h
 import { mainPerformanceMonitor } from './performance-monitor'
 
 const DEFAULT_DEV_BROWSER_BRIDGE_PORT = 5174
-const MAX_INVOKE_BODY_BYTES = 2_000_000
+const DEFAULT_MAX_INVOKE_BODY_BYTES = 24 * 1024 * 1024
 const CLIENT_DESTROY_DELAY_MS = 1_000
 const WORKSPACE_PREVIEW_ASSET_PATH_PREFIX = '/workspace-preview/assets/'
 const DEV_BROWSER_BRIDGE_ALLOWED_HEADERS = [
@@ -148,7 +148,9 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'sciforge-canvas:open',
   'sciforge-canvas:save',
   'sciforge-canvas:save-selection',
+  'sciforge-canvas:split-artifact-components',
   'sciforge-canvas:status',
+  'drawio:local-url',
   'settings:get',
   'settings:set',
   'shell:open-external',
@@ -215,6 +217,7 @@ type StartDevBrowserBridgeServerOptions = {
   dispatcher: DevBrowserBridgeDispatcher
   host?: string
   port?: number
+  maxInvokeBodyBytes?: number
   allowedChannels?: readonly string[]
   allowAllChannels?: boolean
 }
@@ -294,7 +297,7 @@ function isAllowedOrigin(origin: string | undefined): boolean {
   try {
     const url = new URL(origin)
     return url.protocol === 'http:' &&
-      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1')
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1' || url.hostname === '[::1]')
   } catch {
     return false
   }
@@ -335,8 +338,8 @@ function createAllowedChannelSet(channels: readonly string[] | undefined): Reado
     .filter(Boolean))
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const text = await readIncomingMessageBody(request, MAX_INVOKE_BODY_BYTES)
+async function readJsonBody(request: IncomingMessage, maxBytes: number): Promise<unknown> {
+  const text = await readIncomingMessageBody(request, maxBytes)
   if (!text.trim()) return null
   return JSON.parse(text) as unknown
 }
@@ -490,6 +493,7 @@ export async function startDevBrowserBridgeServer(
 ): Promise<DevBrowserBridgeServer> {
   const host = options.host ?? '127.0.0.1'
   const port = options.port ?? DEFAULT_DEV_BROWSER_BRIDGE_PORT
+  const maxInvokeBodyBytes = options.maxInvokeBodyBytes ?? DEFAULT_MAX_INVOKE_BODY_BYTES
   const allowedChannels = createAllowedChannelSet(options.allowedChannels)
   const clients = new Map<string, DevBrowserBridgeClient>()
   let nextClientNumericId = 1
@@ -555,7 +559,7 @@ export async function startDevBrowserBridgeServer(
         const startedAt = mainPerformanceMonitor.now()
         let channel = ''
         try {
-          const body = parseInvokeBody(await readJsonBody(request))
+          const body = parseInvokeBody(await readJsonBody(request, maxInvokeBodyBytes))
           channel = body.channel
           mainPerformanceMonitor.count('main.devBridge.http.invoke')
           mainPerformanceMonitor.count(`main.devBridge.http.invoke.${body.channel}`)

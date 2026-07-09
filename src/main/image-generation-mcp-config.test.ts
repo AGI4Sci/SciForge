@@ -15,10 +15,14 @@ import {
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1,
+  type ImageGenerationSettingsPatchV1,
   type ModelRouterMemberProviderSettingsPatchV1
 } from '../shared/app-settings'
 
-function createSettings(imageGenerator: ModelRouterMemberProviderSettingsPatchV1 = {}): AppSettingsV1 {
+function createSettings(
+  imageGenerator: ModelRouterMemberProviderSettingsPatchV1 = {},
+  imageGeneration: ImageGenerationSettingsPatchV1 = {}
+): AppSettingsV1 {
   const remoteChannel = defaultRemoteChannelSettings()
   const modelRouter = defaultModelRouterSettings()
   return {
@@ -56,6 +60,11 @@ function createSettings(imageGenerator: ModelRouterMemberProviderSettingsPatchV1
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
+    imageGeneration: {
+      componentSegmentationRunnerPath: '',
+      componentSegmentationModelPath: '',
+      ...imageGeneration
+    },
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: {
@@ -89,6 +98,9 @@ describe('image generation MCP config', () => {
       apiKey: 'image-key',
       baseUrl: 'http://image-provider.example/v1',
       model: 'qwen-image-2.0-pro'
+    }, {
+      componentSegmentationRunnerPath: '/tmp/sciforge-component-runner',
+      componentSegmentationModelPath: '/tmp/component-model.pt'
     }))
 
     expect(server).toMatchObject({
@@ -98,7 +110,11 @@ describe('image generation MCP config', () => {
         ELECTRON_RUN_AS_NODE: '1',
         SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
         SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-key',
-        SCIFORGE_MODEL_ROUTER_IMAGE_MODEL: 'sciforge-router'
+        SCIFORGE_MODEL_ROUTER_IMAGE_MODEL: 'sciforge-router',
+        SCIFORGE_COMPONENT_SEGMENTATION_RUNNER: '/tmp/sciforge-component-runner',
+        SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH: '/tmp/component-model.pt',
+        SCIFORGE_FASTSAM_RUNNER: '/tmp/sciforge-component-runner',
+        SCIFORGE_FASTSAM_MODEL_PATH: '/tmp/component-model.pt'
       },
       trustedWorkspaceRoots: ['/tmp/workspace'],
       trustScope: 'user'
@@ -117,6 +133,9 @@ describe('image generation MCP config', () => {
 
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings())).toBe(false)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({ model: 'gpt-image-2' }))).toBe(false)
+    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { componentSegmentationRunnerPath: '/tmp/runner' }))).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { componentSegmentationModelPath: '/tmp/component-model.pt' }))).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { fastSamRunnerPath: '/tmp/legacy-runner' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), configured)).toBe(true)
     expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'new-key', baseUrl: 'http://127.0.0.1:3888/v1', model: 'qwen-image-2.0-pro' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'old-key', baseUrl: 'http://127.0.0.1:3999/v1', model: 'qwen-image-2.0-pro' }))).toBe(true)

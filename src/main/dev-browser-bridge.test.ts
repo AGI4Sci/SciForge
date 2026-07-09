@@ -469,12 +469,13 @@ describe('dev browser bridge server', () => {
 
     server = await startDevBrowserBridgeServer({
       dispatcher,
-      port: 0
+      port: 0,
+      maxInvokeBodyBytes: 128
     })
 
     const response = await postJson('/invoke', {
       channel: 'settings:get',
-      payload: 'x'.repeat(2_000_000)
+      payload: 'x'.repeat(256)
     })
 
     expect(response.status).toBe(413)

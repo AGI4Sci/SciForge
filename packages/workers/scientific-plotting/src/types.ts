@@ -244,10 +244,134 @@ export type ScientificPlottingResearchPaper = {
   notes?: string
 }
 
+export type ScientificPlottingImagePolishDeltaPlan = {
+  mode: 'delta_only'
+  targetPanels: Array<{
+    assetId: string
+    reason: string
+    allowedOperations: Array<
+      | 'panel_stitching'
+      | 'callout_overlay'
+      | 'zoom_inset'
+      | 'visual_unification'
+      | 'typography_cleanup'
+      | 'mechanism_visual_draft'
+    >
+  }>
+  allowedOperations: Array<
+    | 'panel_stitching'
+    | 'callout_overlay'
+    | 'zoom_inset'
+    | 'visual_unification'
+    | 'typography_cleanup'
+    | 'mechanism_visual_draft'
+  >
+  lockedFacts: string[]
+  handoffPrompt: string
+}
+
+export type ScientificPaperFigureCompositionPlan = {
+  sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1'
+  stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration']
+  controlledSubfigures: Array<{
+    assetId: string
+    title: string
+    claim: string
+    recommendedTemplate:
+      | ScientificPlottingTemplate
+      | 'kaplan-meier'
+      | 'cox-forest'
+      | 'roc'
+      | 'image_generation_composition'
+    firstPassTool: 'scientific_plotting_render' | 'scientific_plotting_map_data' | 'image_generation_plan'
+    requiredArtifact: 'png_manifest'
+    factLocks: string[]
+    polishAllowedOperations: Array<
+      | 'crop'
+      | 'resize'
+      | 'align'
+      | 'panel_stitching'
+      | 'callout_overlay'
+      | 'zoom_inset'
+      | 'visual_unification'
+      | 'typography_cleanup'
+    >
+  }>
+  image2Composition: {
+    preferredModel: 'gpt-image-2'
+    fallbackModel: 'configured_model_router_image_model'
+    nextControlledTool: 'image_generation_plan'
+    inputArtifacts: string[]
+    allowedOperations: Array<
+      | 'panel_stitching'
+      | 'callout_overlay'
+      | 'zoom_inset'
+      | 'visual_unification'
+      | 'typography_cleanup'
+    >
+    forbiddenOperations: string[]
+    handoffPrompt: string
+    outputContract: string[]
+  }
+  imagePolishDeltaPlan: ScientificPlottingImagePolishDeltaPlan
+  canvasReview: {
+    openInCanvas: true
+    preserveOriginalArtifacts: true
+    reviewPacketRequired: true
+    revisionPolicy: 'new_version_next_to_original'
+  }
+}
+
+export type ScientificPaperFigureProductionPlan = {
+  scope: 'paper_level'
+  sourceWorkflow: 'paper_figures_data_first_v1'
+  requiredInputs: string[]
+  proposedAssets: Array<{
+    id: string
+    kind: 'figure' | 'table'
+    title: string
+    claim: string
+    recommendedTemplate:
+      | ScientificPlottingTemplate
+      | 'kaplan-meier'
+      | 'cox-forest'
+      | 'roc'
+      | 'three-line-table'
+      | 'image_generation_composition'
+    dataRequirements: string[]
+    statistics: string[]
+    firstPassTool: 'scientific_plotting_render' | 'scientific_plotting_map_data' | 'image_generation_plan' | 'table_generator'
+    polishTool?: 'image_generation_plan'
+    canvasReview: boolean
+    notes: string[]
+  }>
+  handoff: {
+    firstPass: string[]
+    imagePolish: string[]
+    reviewLoop: string[]
+  }
+  compositionPlan?: ScientificPaperFigureCompositionPlan
+  missingCapabilities: string[]
+}
+
+export type ScientificPlottingSelectedSkillProfile = {
+  profileId:
+    | 'controlled-data-plot-v1'
+    | 'paper-figure-cns-life-science-v1'
+    | 'paper-figure-cns-domain-v1'
+    | 'mechanism-diagram-image-delta-v1'
+    | 'general-paper-figure-v1'
+  selectedSkillIds: string[]
+  selectionReason: string
+  skillPriority: ['kdense', 'cns', 'domain', 'image-delta']
+  readOnlyExternalSkills: true
+}
+
 export type ScientificPlottingImagePolishRecommendation = {
   recommended: boolean
   reason: string
   model: 'gpt-image-2'
+  fallbackModel: 'configured_model_router_image_model'
   nextControlledTool: 'image_generation_plan'
   followUpTools: ['image_generation_plan', 'image_generation_render']
   useWhen: string[]
@@ -289,6 +413,7 @@ export type ScientificPlottingResearchBriefResult =
       domain: ScientificFigureNeedClassification['domain']
       targetVenue?: string
       figureNeed: ScientificFigureNeedClassification
+      selectedSkillProfile: ScientificPlottingSelectedSkillProfile
       skillCatalog: ScientificExternalSkillCatalogItem[]
       recommendedSkillLayers: Array<{
         sourceKind: ScientificExternalSkillSourceKind
@@ -309,6 +434,7 @@ export type ScientificPlottingResearchBriefResult =
         journalExportContract: string[]
         reviewRisks: string[]
       }
+      paperFigureProductionPlan?: ScientificPaperFigureProductionPlan
       promptSpecDraft: {
         task: string
         figureNeed: ScientificFigureNeed

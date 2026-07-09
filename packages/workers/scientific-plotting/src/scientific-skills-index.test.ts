@@ -61,6 +61,24 @@ describe('scientific skills index', () => {
     expect(EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES).toContain('KuangshiAi/SciVisAgentSkills')
   })
 
+  it('includes paper-figures as a read-only data-first plotting workflow source', () => {
+    const catalog = buildScientificExternalSkillCatalog({
+      figureNeeds: ['statistical_comparison', 'heatmap_matrix', 'multi_panel_figure'],
+      domain: 'clinical medicine'
+    })
+    const paperFigures = catalog.find((item) => item.skillId === 'paper-figures')
+
+    expect(paperFigures).toMatchObject({
+      sourceKind: 'domain',
+      source: 'DRZ-hang/paper-figures',
+      repository: 'https://github.com/DRZ-hang/paper-figures',
+      status: 'remote-reference',
+      readOnly: true,
+      executionPolicy: 'read-only-planning',
+      roles: expect.arrayContaining(['paper-level figure plan', 'raw-data-to-chart mapping'])
+    })
+  })
+
   it('discovers repo roots, parses K-Dense-style frontmatter, and searches Chinese/English terms', async () => {
     const root = await tempDir()
     await writeSkill(root, 'matplotlib', [

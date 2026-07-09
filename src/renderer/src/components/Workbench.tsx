@@ -213,6 +213,52 @@ function normalizeCanvasArtifactPath(value: string | undefined): string | null {
   return normalized ? normalized.replace(/\\/g, '/').replace(/\/+$/g, '') : null
 }
 
+function decodeDrawioMeta(value: string | undefined): Record<string, unknown> | null {
+  if (!value?.trim()) return null
+  try {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0))
+    return asRecord(JSON.parse(new TextDecoder().decode(bytes)))
+  } catch {
+    return null
+  }
+}
+
+function drawioSnapshotContainsCanvasArtifact(
+  snapshot: Record<string, unknown>,
+  candidates: Set<string>,
+  options?: { requireDisplayPreview?: boolean }
+): boolean {
+  const diagramXml = typeof snapshot.diagramXml === 'string' ? snapshot.diagramXml : ''
+  if (!diagramXml) return false
+  const pattern = /<mxCell\b[^>]*\bsciforgeMeta="([^"]+)"/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(diagramXml))) {
+    const meta = decodeDrawioMeta(match[1])
+    const artifact = asRecord(meta?.sciforgeArtifact)
+    if (!artifact) continue
+    for (const key of ['outputPath', 'sourcePath', 'previewPath', 'renderedPagePath', 'manifestPath', 'svgPath', 'pptxPath']) {
+      const normalized = normalizeCanvasArtifactPath(artifact[key] as string | undefined)
+      if (!normalized || !candidates.has(normalized)) continue
+      if (!options?.requireDisplayPreview) return true
+      const previewCandidates = [
+        artifact.previewPath as string | undefined,
+        artifact.renderedPagePath as string | undefined,
+        artifact.svgPath as string | undefined,
+        artifact.outputPath as string | undefined,
+        artifact.sourcePath as string | undefined
+      ]
+      const hasDisplayPreview = previewCandidates.some((path) => {
+        if (!normalizeCanvasArtifactPath(path)) return false
+        return artifact.artifactKind === 'ppt_export' ? isCanvasDisplayImagePath(path) : true
+      })
+      if (hasDisplayPreview && meta?.sciforgeCanvasPlaceholder !== true) return true
+    }
+  }
+  return false
+}
+
 function snapshotContainsCanvasArtifact(
   snapshot: unknown,
   candidates: string[],
@@ -220,6 +266,10 @@ function snapshotContainsCanvasArtifact(
 ): boolean {
   const wanted = new Set(candidates.map(normalizeCanvasArtifactPath).filter((value): value is string => Boolean(value)))
   if (wanted.size === 0 || !snapshot || typeof snapshot !== 'object') return false
+  const snapshotRecord = snapshot as Record<string, unknown>
+  if (snapshotRecord.engine === 'drawio') {
+    return drawioSnapshotContainsCanvasArtifact(snapshotRecord, wanted, options)
+  }
   const store = (snapshot as { store?: unknown }).store
   if (!store || typeof store !== 'object') return false
   for (const record of Object.values(store as Record<string, unknown>)) {
@@ -2232,6 +2282,12 @@ export function Workbench(): ReactElement {
           ...(artifact.diagramSpecPath ? { diagramSpecPath: artifact.diagramSpecPath } : {}),
           ...(artifact.frameworkDesignPlanPath ? { frameworkDesignPlanPath: artifact.frameworkDesignPlanPath } : {}),
           ...(artifact.diagramLayerManifestPath ? { diagramLayerManifestPath: artifact.diagramLayerManifestPath } : {}),
+          ...(artifact.fastSamSegmentationPath ? { fastSamSegmentationPath: artifact.fastSamSegmentationPath } : {}),
+          ...(artifact.fastSamBoxlibPath ? { fastSamBoxlibPath: artifact.fastSamBoxlibPath } : {}),
+          ...(artifact.fastSamPreviewPath ? { fastSamPreviewPath: artifact.fastSamPreviewPath } : {}),
+          ...(artifact.frameworkComponentManifestPath ? { frameworkComponentManifestPath: artifact.frameworkComponentManifestPath } : {}),
+          ...(artifact.componentBasePath ? { componentBasePath: artifact.componentBasePath } : {}),
+          ...(artifact.componentAssetPaths?.length ? { componentAssetPaths: artifact.componentAssetPaths } : {}),
           ...(artifact.projectPath ? { projectPath: artifact.projectPath } : {}),
           ...(artifact.svgPath ? { svgPath: artifact.svgPath } : {}),
           ...(pptxPath ? { pptxPath } : {}),

@@ -86,6 +86,16 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('projectDag:compile', compilePayload)
   })
 
+  it('exposes the local draw.io URL IPC', async () => {
+    const api = exposedApi as {
+      getLocalDrawioUrl(): Promise<unknown>
+    }
+
+    await api.getLocalDrawioUrl()
+
+    expect(invoke).toHaveBeenCalledWith('drawio:local-url')
+  })
+
   it('exposes real file paths from picked or dropped files', () => {
     const api = exposedApi as {
       getPathForFile(file: File): string
