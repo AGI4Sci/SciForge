@@ -347,7 +347,10 @@ describe('WorkspacePreviewPluginOutlet', () => {
 
     expect(html).toContain('data-workspace-preview-plugin-summary')
     expect(html).toContain('data-route-reason="deferred-non-life-science"')
-    expect(html).toContain('Preview support is deferred.')
+    expect(html).toContain('inline viewer has not been enabled')
+    expect(html).toContain('Use Inspect for plugin details')
+    expect(html).not.toContain('Preview support is deferred.')
+    expect(html).not.toContain('workspace.export:source')
   })
 
   it('supports renderer contributions without changing the outlet body', () => {

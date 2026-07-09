@@ -78,6 +78,7 @@ export function WorkspacePreviewPanelShell({
   )
   const [assetStatus, setAssetStatus] = useState<WorkspacePreviewPanelShellContext['assetStatus']>('idle')
   const [assetError, setAssetError] = useState<string | null>(null)
+  const [showInspector, setShowInspector] = useState(false)
   const targetKey = workspacePreviewPanelTargetKey(target, workspaceRoot)
 
   useEffect(() => host.subscribe((nextState) => setState({ ...nextState })), [host])
@@ -160,6 +161,7 @@ export function WorkspacePreviewPanelShell({
     assetError,
     transport: createWorkspacePreviewAssetTransportClient({
       descriptor: state.asset,
+      sourceUrl: state.asset ? host.assetSourceUrl(state.asset.sessionId) : null,
       readRange: (range) => host.readRange(range),
       prepareArtifact: (request) => host.prepareArtifact(request),
       readArtifactRange: (request) => host.readArtifactRange(request)
@@ -174,7 +176,12 @@ export function WorkspacePreviewPanelShell({
         requestedPath: target?.path
       }}
       className={className}
+      showInspector={showInspector}
       onAction={(action) => {
+        if (action.id === 'workspace.inspect') {
+          setShowInspector((current) => !current)
+          return
+        }
         if (onAction) {
           onAction(action, context)
           return
@@ -187,6 +194,7 @@ export function WorkspacePreviewPanelShell({
         data-workspace-preview-panel-shell
         data-asset-status={assetStatus}
         data-asset-primary={state.asset?.primary}
+        data-inspector-open={showInspector ? 'true' : 'false'}
       >
         {typeof children === 'function' ? children(context) : children}
       </div>

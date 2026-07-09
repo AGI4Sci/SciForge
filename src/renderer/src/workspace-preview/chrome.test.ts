@@ -631,7 +631,7 @@ describe('workspace preview shared chrome', () => {
     })
   })
 
-  it('renders the TSX chrome skeleton with actions, state, body, and inspector slots', () => {
+  it('renders the TSX chrome skeleton with actions and body while hiding inspector by default', () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const descriptor = requireDescriptor(registry, 'data/samples.csv')
     const model = buildWorkspacePreviewChromeModel({
@@ -655,6 +655,28 @@ describe('workspace preview shared chrome', () => {
     expect(html).toContain('role="toolbar"')
     expect(html).toContain('data-action-id="workspace.export:csv"')
     expect(html).toContain('data-preview-slot="content"')
+    expect(html).not.toContain('Workspace preview inspector')
+  })
+
+  it('renders the inspector only when explicitly requested', () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const descriptor = requireDescriptor(registry, 'data/samples.csv')
+    const model = buildWorkspacePreviewChromeModel({
+      registry,
+      state: createWorkspacePreviewHostState({
+        session: createSession(descriptor),
+        descriptor,
+        file: createFileState()
+      })
+    })
+    const html = renderToStaticMarkup(
+      createElement(
+        WorkspacePreviewChrome,
+        { model, showInspector: true },
+        createElement('div', { 'data-preview-slot': 'content' }, 'Preview body')
+      )
+    )
+
     expect(html).toContain('Workspace preview inspector')
   })
 

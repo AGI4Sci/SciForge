@@ -48,6 +48,7 @@ export type WorkspacePreviewLastEditSummary = WorkspacePreviewEditDiffSummary
 
 export type WorkspacePreviewAssetTransportClient = {
   descriptor: WorkspacePreviewAssetTransportDescriptor | null
+  sourceUrl?: string | null
   strategyStatus: (kind: WorkspacePreviewAssetTransportKind) =>
     WorkspacePreviewAssetTransportDescriptor['strategies'][number] | null
   readRange: (range: WorkspacePreviewByteRange) => Promise<WorkspacePreviewReadRangeResult>
@@ -458,6 +459,12 @@ export class WorkspacePreviewHost {
     return bridge.onChanged(handler)
   }
 
+  assetSourceUrl(sessionId?: string): string | null {
+    const resolvedSessionId = this.resolveSessionId(sessionId)
+    if (!resolvedSessionId) return null
+    return this.getBridge()?.getAssetSourceUrl?.(resolvedSessionId) ?? null
+  }
+
   private bridgeOrError(): WorkspacePreviewBridgeAdapter | null {
     const bridge = this.getBridge()
     if (!bridge) this.patchState({ error: missingBridgeMessage() })
@@ -533,6 +540,7 @@ export function createWorkspacePreviewHost(options: WorkspacePreviewHostOptions 
 
 export function createWorkspacePreviewAssetTransportClient(input: {
   descriptor: WorkspacePreviewAssetTransportDescriptor | null
+  sourceUrl?: string | null
   readRange: (range: WorkspacePreviewByteRange) => Promise<WorkspacePreviewReadRangeResult>
   prepareArtifact?: (request: WorkspacePreviewPrepareArtifactRequest) => Promise<WorkspacePreviewPrepareArtifactResult>
   readArtifactRange?: (request: WorkspacePreviewReadArtifactRangeRequest) => Promise<WorkspacePreviewReadArtifactRangeResult>
@@ -544,13 +552,7 @@ export function createWorkspacePreviewAssetTransportClient(input: {
     if (descriptor.range.size > maxBytes) {
       return {
         ok: false,
-        message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${maxBytes} byte text read limit.`
-      }
-    }
-    if (descriptor.range.size > descriptor.range.maxChunkBytes) {
-      return {
-        ok: false,
-        message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${descriptor.range.maxChunkBytes} byte range chunk limit.`
+        message: `Asset is ${descriptor.range.size} bytes, which exceeds the ${maxBytes} byte read limit.`
       }
     }
     if (descriptor.range.size === 0) {
@@ -562,22 +564,50 @@ export function createWorkspacePreviewAssetTransportClient(input: {
       }
     }
 
-    const result = await input.readRange({
-      offset: 0,
-      length: descriptor.range.size
-    })
-    if (!result.ok) return result
+    const bytes = new Uint8Array(descriptor.range.size)
+    const preferredChunkBytes = Math.min(
+      descriptor.range.recommendedChunkBytes,
+      descriptor.range.maxChunkBytes
+    )
+    const chunkLength = Math.max(1, Math.min(preferredChunkBytes, descriptor.range.size))
+    let bytesRead = 0
+    const ranges: WorkspacePreviewByteRange[] = []
+    for (let offset = 0; offset < descriptor.range.size; offset += chunkLength) {
+      const length = Math.min(chunkLength, descriptor.range.size - offset)
+      ranges.push({ offset, length })
+    }
+
+    let nextRangeIndex = 0
+    let readFailure: { ok: false; message: string } | null = null
+    const parallelReads = Math.min(2, ranges.length)
+    await Promise.all(Array.from({ length: parallelReads }, async () => {
+      while (!readFailure) {
+        const range = ranges[nextRangeIndex]
+        nextRangeIndex += 1
+        if (!range) return
+        const result = await input.readRange(range)
+        if (!result.ok) {
+          readFailure = result
+          return
+        }
+        const chunk = decodeBase64Bytes(result.dataBase64)
+        bytes.set(chunk, range.offset)
+        bytesRead += chunk.length
+      }
+    }))
+    if (readFailure) return readFailure
 
     return {
       ok: true,
-      bytes: decodeBase64Bytes(result.dataBase64),
-      bytesRead: result.length,
+      bytes,
+      bytesRead,
       truncated: false
     }
   }
 
   return {
     descriptor: input.descriptor,
+    sourceUrl: input.sourceUrl ?? null,
     strategyStatus(kind) {
       return input.descriptor?.strategies.find((strategy) => strategy.kind === kind) ?? null
     },

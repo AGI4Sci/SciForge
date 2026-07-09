@@ -6,6 +6,10 @@ import { PDFDocument } from 'pdf-lib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadPdfAnnotationSidecar } from '../pdf-annotation-sidecar-service'
 import { WorkspaceHtmlPreviewService } from '../workspace-html-preview-service'
+import {
+  WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+  WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES
+} from '../../../shared/workspace-preview'
 import { WorkspacePreviewHost } from './host'
 import type { WorkspacePreviewWorkerClient } from './worker-client'
 
@@ -176,8 +180,8 @@ describe('WorkspacePreviewHost', () => {
         },
         range: {
           available: true,
-          maxChunkBytes: 4 * 1024 * 1024,
-          recommendedChunkBytes: 1024 * 1024,
+          maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+          recommendedChunkBytes: WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
           size: 8 * 1024 * 1024
         },
         strategies: expect.arrayContaining([
@@ -794,7 +798,7 @@ describe('WorkspacePreviewHost', () => {
 
     const result = await host.readRange(opened.session.id, {
       offset: 0,
-      length: 4 * 1024 * 1024 + 1
+      length: WORKSPACE_PREVIEW_MAX_RANGE_BYTES + 1
     })
 
     expect(result.ok).toBe(false)

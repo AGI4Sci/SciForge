@@ -1,4 +1,5 @@
 import type { WorkspaceStructuredSelection } from '@shared/workspace-preview'
+import threeDmolScriptUrl from '3dmol/build/3Dmol-min.js?url'
 
 export type Molecular3DmolFormat = 'pdb' | 'cif' | 'sdf' | 'mol2' | 'xyz'
 export type MolecularRepresentationMode = 'cartoon-stick' | 'cartoon' | 'stick' | 'ball-stick'
@@ -38,6 +39,13 @@ type ThreeDmolModule = {
   createViewer?: (element: HTMLElement, options?: Record<string, unknown>) => Molecular3DmolViewer
   default?: ThreeDmolModule
   $3Dmol?: ThreeDmolModule
+  '3Dmol'?: ThreeDmolModule
+}
+
+type ThreeDmolCandidate = Required<Pick<ThreeDmolModule, 'createViewer'>>
+type ThreeDmolGlobal = typeof globalThis & {
+  $3Dmol?: ThreeDmolModule
+  '3Dmol'?: ThreeDmolModule
 }
 
 export type Molecular3DmolViewer = {
@@ -104,20 +112,104 @@ export const renderMolecularStructureWith3Dmol: MolecularStructureRenderer = asy
   }
 }
 
-async function load3Dmol(): Promise<Required<Pick<ThreeDmolModule, 'createViewer'>>> {
-  const imported = await import('3dmol') as ThreeDmolModule
-  const candidate = imported.createViewer
-    ? imported
-    : imported.default?.createViewer
-      ? imported.default
-      : imported.$3Dmol?.createViewer
-        ? imported.$3Dmol
-        : undefined
+const THREE_DMOL_IMPORT_TIMEOUT_MS = 2500
+let threeDmolScriptLoadPromise: Promise<void> | null = null
 
-  if (!candidate?.createViewer) {
-    throw new Error('3Dmol viewer API is unavailable.')
+async function load3Dmol(): Promise<ThreeDmolCandidate> {
+  const globalCandidate = resolveBrowser3DmolGlobal()
+  if (globalCandidate) return globalCandidate
+
+  const imported = await promiseWithTimeout(
+    import('3dmol') as Promise<ThreeDmolModule>,
+    THREE_DMOL_IMPORT_TIMEOUT_MS,
+    'Timed out loading the 3Dmol module bundle.'
+  ).catch(() => null)
+  const importedCandidate = resolve3DmolCandidate(imported)
+  if (importedCandidate) return importedCandidate
+
+  const globalAfterImport = resolveBrowser3DmolGlobal()
+  if (globalAfterImport) return globalAfterImport
+
+  await load3DmolBrowserScript()
+  const globalAfterScript = resolveBrowser3DmolGlobal()
+  if (globalAfterScript) return globalAfterScript
+
+  throw new Error('3Dmol viewer API is unavailable.')
+}
+
+function resolve3DmolCandidate(module: ThreeDmolModule | null | undefined): ThreeDmolCandidate | null {
+  const candidate = module?.createViewer
+    ? module
+    : module?.default?.createViewer
+      ? module.default
+      : module?.$3Dmol?.createViewer
+        ? module.$3Dmol
+        : module?.['3Dmol']?.createViewer
+          ? module['3Dmol']
+          : undefined
+
+  return candidate?.createViewer ? candidate as ThreeDmolCandidate : null
+}
+
+function resolveBrowser3DmolGlobal(): ThreeDmolCandidate | null {
+  const browserGlobal = globalThis as ThreeDmolGlobal
+  return resolve3DmolCandidate(browserGlobal.$3Dmol) ?? resolve3DmolCandidate(browserGlobal['3Dmol'])
+}
+
+function load3DmolBrowserScript(): Promise<void> {
+  if (typeof document === 'undefined') {
+    return Promise.reject(new Error('3Dmol browser bundle cannot be loaded without a document.'))
   }
-  return candidate as Required<Pick<ThreeDmolModule, 'createViewer'>>
+
+  const selector = 'script[data-sciforge-3dmol-loader="true"]'
+  const existingScript = document.querySelector<HTMLScriptElement>(selector)
+  if (existingScript?.getAttribute('data-loaded') === 'true') return Promise.resolve()
+  if (threeDmolScriptLoadPromise) return threeDmolScriptLoadPromise
+
+  threeDmolScriptLoadPromise = new Promise<void>((resolve, reject) => {
+    const script = existingScript ?? document.createElement('script')
+    const previousOnLoad = script.onload
+    const previousOnError = script.onerror
+
+    script.setAttribute('data-sciforge-3dmol-loader', 'true')
+    script.async = true
+    if (!script.src) script.src = threeDmolScriptUrl
+
+    script.onload = (event) => {
+      script.setAttribute('data-loaded', 'true')
+      if (typeof previousOnLoad === 'function') previousOnLoad.call(script, event)
+      resolve()
+    }
+    script.onerror = (event, source, lineno, colno, error) => {
+      threeDmolScriptLoadPromise = null
+      if (typeof previousOnError === 'function') previousOnError.call(script, event, source, lineno, colno, error)
+      reject(new Error('Failed to load the 3Dmol browser bundle.'))
+    }
+
+    if (!existingScript) document.head.appendChild(script)
+  })
+
+  return threeDmolScriptLoadPromise
+}
+
+function promiseWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise.then(
+      (value) => {
+        clearTimeout(timeout)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timeout)
+        reject(error)
+      }
+    )
+  })
 }
 
 export function molecularRepresentationStyle(

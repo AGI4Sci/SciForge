@@ -34,7 +34,7 @@ export type MolecularWorkspaceViewerApplyEditHandler = (
   operation: MolecularWorkspaceViewerApplyEditOperation
 ) => Promise<void> | void
 
-export const MOLECULAR_VIEWER_MAX_SOURCE_BYTES = Math.min(WORKSPACE_PREVIEW_MAX_RANGE_BYTES, 2_000_000)
+export const MOLECULAR_VIEWER_MAX_SOURCE_BYTES = WORKSPACE_PREVIEW_MAX_RANGE_BYTES
 
 export type MolecularWorkspaceViewerStatus =
   | {
@@ -112,6 +112,7 @@ export type MolecularWorkspaceViewerProps = {
   asset?: WorkspacePreviewAssetTransportDescriptor | null
   assetStatus?: 'idle' | 'loading' | 'ready' | 'error'
   assetError?: string | null
+  sourceUrl?: string | null
   readRange?: MolecularWorkspaceViewerReadRange
   structureRenderer?: MolecularStructureRenderer
   onApplyEdit?: MolecularWorkspaceViewerApplyEditHandler
@@ -127,6 +128,17 @@ export type MolecularRenderableAsset =
   | {
       ok: false
       reason: string
+    }
+
+export type MolecularRenderableSource =
+  | {
+      ok: true
+      text: string
+    }
+  | {
+      ok: false
+      reason: string
+      kind?: 'fallback' | 'error'
     }
 
 const MOLECULAR_ACTION_LABELS: Record<string, string> = {
@@ -194,6 +206,7 @@ export function MolecularWorkspaceViewer({
   asset,
   assetStatus = 'idle',
   assetError,
+  sourceUrl,
   readRange,
   structureRenderer = renderMolecularStructureWith3Dmol,
   onApplyEdit,
@@ -216,6 +229,7 @@ export function MolecularWorkspaceViewer({
     asset,
     assetStatus,
     assetError,
+    sourceUrl,
     readRange,
     structureRenderer,
     representation,
@@ -528,6 +542,7 @@ function useMolecularStructureRender(input: {
   asset?: WorkspacePreviewAssetTransportDescriptor | null
   assetStatus: MolecularWorkspaceViewerProps['assetStatus']
   assetError?: string | null
+  sourceUrl?: string | null
   readRange?: MolecularWorkspaceViewerReadRange
   structureRenderer: MolecularStructureRenderer
   representation: MolecularRepresentationMode
@@ -583,11 +598,11 @@ function useMolecularStructureRender(input: {
       return undefined
     }
 
-    if (!input.asset || !input.readRange) {
+    if (!input.asset || (!input.sourceUrl && !input.readRange)) {
       setRenderState({
         kind: 'fallback',
         title: 'Molecular summary only',
-        message: 'The structure summary is available, but byte-range rendering is not connected.'
+        message: 'The structure summary is available, but source transport for 3D rendering is not connected.'
       })
       return undefined
     }
@@ -625,19 +640,26 @@ function useMolecularStructureRender(input: {
 
     void readMolecularRenderableAssetText({
       renderable,
+      sourceUrl: input.sourceUrl,
       readRange: input.readRange
     })
       .then(async (source) => {
         if (cancelled) return
         if (!source.ok) {
+          const fallback = source.kind === 'fallback'
           setRenderState({
-            kind: 'error',
-            title: 'Molecular render failed',
+            kind: fallback ? 'fallback' : 'error',
+            title: fallback ? 'Molecular coordinates unavailable' : 'Molecular render failed',
             message: source.reason
           })
           return
         }
 
+        setRenderState({
+          kind: 'loading',
+          title: 'Initializing 3D molecular viewer',
+          message: `Loaded ${renderable.byteLength} bytes; starting the 3Dmol WebGL renderer.`
+        })
         handle = await input.structureRenderer({
           element: container,
           source: source.text,
@@ -679,6 +701,7 @@ function useMolecularStructureRender(input: {
     input.containerRef,
     input.enabled,
     input.observation?.file.path,
+    input.sourceUrl,
     input.readRange,
     input.structureRenderer
   ])
@@ -732,8 +755,25 @@ export function resolveMolecularRenderableAsset(input: {
 
 export async function readMolecularRenderableAssetText(input: {
   renderable: Extract<MolecularRenderableAsset, { ok: true }>
-  readRange: MolecularWorkspaceViewerReadRange
-}): Promise<{ ok: true; text: string } | { ok: false; reason: string }> {
+  sourceUrl?: string | null
+  readRange?: MolecularWorkspaceViewerReadRange
+}): Promise<MolecularRenderableSource> {
+  if (input.sourceUrl) {
+    const source = await readMolecularRenderableAssetTextFromUrl({
+      renderable: input.renderable,
+      sourceUrl: input.sourceUrl
+    })
+    if (source.ok || source.kind === 'fallback' || !input.readRange) return source
+  }
+
+  if (!input.readRange) {
+    return {
+      ok: false,
+      kind: 'error',
+      reason: 'No molecular source transport is available.'
+    }
+  }
+
   const result = await input.readRange({
     offset: 0,
     length: input.renderable.byteLength
@@ -750,10 +790,110 @@ export async function readMolecularRenderableAssetText(input: {
       reason: `Only ${result.length} of ${input.renderable.byteLength} bytes were read; refusing to render a truncated molecular model.`
     }
   }
+  const text = decodeWorkspacePreviewBase64Text(result.dataBase64)
+  const validation = validateMolecularSourceText(input.renderable.format, text)
+  if (!validation.ok) {
+    return {
+      ok: false,
+      kind: 'fallback',
+      reason: validation.reason
+    }
+  }
   return {
     ok: true,
-    text: decodeWorkspacePreviewBase64Text(result.dataBase64)
+    text
   }
+}
+
+async function readMolecularRenderableAssetTextFromUrl(input: {
+  renderable: Extract<MolecularRenderableAsset, { ok: true }>
+  sourceUrl: string
+}): Promise<MolecularRenderableSource> {
+  let response: Response
+  try {
+    response = await fetch(input.sourceUrl, {
+      headers: {
+        Range: `bytes=0-${input.renderable.byteLength - 1}`
+      }
+    })
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'error',
+      reason: error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  if (!response.ok && response.status !== 206) {
+    return {
+      ok: false,
+      kind: 'error',
+      reason: `Molecular source URL returned HTTP ${response.status}.`
+    }
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength < input.renderable.byteLength) {
+    return {
+      ok: false,
+      kind: 'error',
+      reason: `Only ${bytes.byteLength} of ${input.renderable.byteLength} bytes were read; refusing to render a truncated molecular model.`
+    }
+  }
+
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  const validation = validateMolecularSourceText(input.renderable.format, text)
+  if (!validation.ok) {
+    return {
+      ok: false,
+      kind: 'fallback',
+      reason: validation.reason
+    }
+  }
+  return {
+    ok: true,
+    text
+  }
+}
+
+export function validateMolecularSourceText(
+  format: Molecular3DmolFormat,
+  text: string
+): { ok: true } | { ok: false; reason: string } {
+  const trimmed = text.trim()
+  if (!trimmed) {
+    return {
+      ok: false,
+      reason: 'The molecular asset is empty after decoding.'
+    }
+  }
+
+  if (format === 'pdb') {
+    if (/^(?:ATOM\s{2}|HETATM|MODEL\s+)/m.test(text)) return { ok: true }
+    return {
+      ok: false,
+      reason: 'This PDB file does not contain ATOM, HETATM, or MODEL coordinate records needed for 3D rendering.'
+    }
+  }
+
+  if (format === 'cif') {
+    if (!/(?:^|\n)\s*_atom_site\./i.test(text)) {
+      return {
+        ok: false,
+        reason: 'This CIF does not contain an _atom_site coordinate loop; it appears to contain crystallographic reflection data rather than a renderable coordinate model.'
+      }
+    }
+    const hasX = /(?:^|\n)\s*_atom_site\.(?:Cartn_x|fract_x)\b/i.test(text)
+    const hasY = /(?:^|\n)\s*_atom_site\.(?:Cartn_y|fract_y)\b/i.test(text)
+    const hasZ = /(?:^|\n)\s*_atom_site\.(?:Cartn_z|fract_z)\b/i.test(text)
+    if (hasX && hasY && hasZ) return { ok: true }
+    return {
+      ok: false,
+      reason: 'This CIF has _atom_site metadata but no complete x/y/z coordinate columns for 3D rendering.'
+    }
+  }
+
+  return { ok: true }
 }
 
 export function decodeWorkspacePreviewBase64Text(dataBase64: string): string {

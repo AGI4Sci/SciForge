@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   applyMolecularRepresentationStyle,
   applyMolecularSelectionStyle,
@@ -15,6 +15,10 @@ const threeDmolMock = vi.hoisted(() => ({
 
 vi.mock('3dmol', () => ({
   createViewer: threeDmolMock.createViewer
+}))
+
+vi.mock('3dmol/build/3Dmol-min.js?url', () => ({
+  default: '/assets/3Dmol-min.js'
 }))
 
 type MockMolecular3DmolViewer = {
@@ -35,6 +39,11 @@ function createMockViewer(): MockMolecular3DmolViewer {
 describe('molecular 3Dmol adapter', () => {
   beforeEach(() => {
     threeDmolMock.createViewer.mockReset()
+  })
+
+  afterEach(() => {
+    delete (globalThis as typeof globalThis & { '3Dmol'?: unknown })['3Dmol']
+    delete (globalThis as typeof globalThis & { $3Dmol?: unknown }).$3Dmol
   })
 
   it('normalizes representation modes and computes base styles', () => {
@@ -173,5 +182,32 @@ describe('molecular 3Dmol adapter', () => {
     expect(viewer.removeAllModels).toHaveBeenCalled()
     expect(viewer.clear).toHaveBeenCalled()
     expect(element.replaceChildren).toHaveBeenCalled()
+  })
+
+  it('uses the browser global 3Dmol bundle when it is already available', async () => {
+    const viewer = createMockViewer()
+    const element = {
+      replaceChildren: vi.fn()
+    } as unknown as HTMLElement
+    const browserGlobalCreateViewer = vi.fn().mockReturnValue(viewer)
+    ;(globalThis as typeof globalThis & {
+      '3Dmol'?: { createViewer: typeof browserGlobalCreateViewer }
+    })['3Dmol'] = {
+      createViewer: browserGlobalCreateViewer
+    }
+
+    await renderMolecularStructureWith3Dmol({
+      element,
+      source: 'ATOM 1\nEND\n',
+      format: 'pdb',
+      representation: 'stick'
+    })
+
+    expect(browserGlobalCreateViewer).toHaveBeenCalledWith(element, {
+      backgroundColor: 'white'
+    })
+    expect(threeDmolMock.createViewer).not.toHaveBeenCalled()
+    expect(viewer.addModel).toHaveBeenCalledWith('ATOM 1\nEND\n', 'pdb')
+    expect(viewer.render).toHaveBeenCalledTimes(1)
   })
 })

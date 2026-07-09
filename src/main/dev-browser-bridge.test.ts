@@ -26,11 +26,11 @@ async function closeServer(): Promise<void> {
 
 function readFromResponse(
   path: string,
-  options: { origin?: string | null } = {}
+  options: { origin?: string | null; headers?: Record<string, string> } = {}
 ): Promise<{ status: number; body: string; headers: Record<string, string | string[] | undefined> }> {
   return new Promise((resolve, reject) => {
     const url = new URL(path, server?.url)
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = { ...(options.headers ?? {}) }
     const origin = 'origin' in options ? options.origin : 'http://localhost:5173'
     if (origin) headers.Origin = origin
     const req = request(url, {
@@ -158,6 +158,88 @@ describe('dev browser bridge server', () => {
     expect(invoke).toHaveBeenCalledWith(
       'settings:get',
       { scope: 'all' },
+      expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
+    )
+  })
+
+  it('serves workspace preview assets through session-scoped byte range transport', async () => {
+    const bytes = Buffer.from('%PDF')
+    const invoke = vi.fn(async (channel, payload) => {
+      if (channel === 'workspacePreview:describeAsset') {
+        return {
+          ok: true,
+          descriptor: {
+            schemaVersion: 1,
+            sessionId: 'session-pdf',
+            assetId: 'asset:session-pdf',
+            pluginId: 'pdf',
+            modality: 'document',
+            file: {
+              name: 'paper.pdf',
+              relativePath: 'paper.pdf',
+              mimeType: 'application/pdf',
+              size: bytes.length
+            },
+            primary: 'byte-range',
+            eagerRead: {
+              allowed: false,
+              reason: 'lazy asset transport'
+            },
+            range: {
+              available: true,
+              maxChunkBytes: 4,
+              recommendedChunkBytes: 4,
+              size: bytes.length
+            },
+            strategies: [{
+              kind: 'byte-range',
+              status: 'available',
+              reason: 'bounded reads',
+              maxChunkBytes: 4
+            }]
+          }
+        }
+      }
+      if (channel === 'workspacePreview:readRange') {
+        const request = payload as { range: { offset: number; length: number } }
+        const chunk = bytes.subarray(request.range.offset, request.range.offset + request.range.length)
+        return {
+          ok: true,
+          sessionId: 'session-pdf',
+          assetId: 'asset:session-pdf',
+          offset: request.range.offset,
+          length: chunk.length,
+          size: bytes.length,
+          dataBase64: chunk.toString('base64'),
+          mimeType: 'application/pdf'
+        }
+      }
+      return { ok: false, message: `Unexpected channel ${channel}` }
+    })
+    const dispatcher: DevBrowserBridgeDispatcher = { invoke }
+
+    server = await startDevBrowserBridgeServer({ dispatcher, port: 0 })
+
+    const response = await readFromResponse('/workspace-preview/assets/session-pdf?clientId=browser-1', {
+      headers: { Range: 'bytes=1-3' }
+    })
+
+    expect(response.status).toBe(206)
+    expect(response.headers['content-type']).toBe('application/pdf')
+    expect(response.headers['accept-ranges']).toBe('bytes')
+    expect(response.headers['content-range']).toBe(`bytes 1-3/${bytes.length}`)
+    expect(response.body).toBe('PDF')
+    expect(invoke).toHaveBeenCalledWith(
+      'workspacePreview:describeAsset',
+      { sessionId: 'session-pdf' },
+      expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
+    )
+    expect(invoke).toHaveBeenCalledWith(
+      'workspacePreview:readRange',
+      {
+        sessionId: 'session-pdf',
+        range: { offset: 1, length: 3 }
+      },
       expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
     )
   })

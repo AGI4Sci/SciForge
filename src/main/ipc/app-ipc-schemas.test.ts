@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_PREVIEW_MAX_RANGE_BYTES } from '../../shared/workspace-preview'
 import {
   AGENT_RUNTIME_AUXILIARY_OPERATIONS,
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
@@ -645,7 +646,7 @@ describe('app-ipc-schemas', () => {
     expect(() =>
       workspacePreviewReadRangePayloadSchema.parse({
         sessionId: 'session-1',
-        range: { offset: 0, length: 4 * 1024 * 1024 + 1 }
+        range: { offset: 0, length: WORKSPACE_PREVIEW_MAX_RANGE_BYTES + 1 }
       })
     ).toThrow()
     expect(() =>

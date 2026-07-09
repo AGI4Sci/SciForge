@@ -25,6 +25,14 @@ function defaultBridgeUrl(): string {
   return origin ? `${origin}${DEV_BRIDGE_PROXY_PATH}` : 'http://127.0.0.1:5174'
 }
 
+function workspacePreviewAssetSourceUrl(sessionId: string): string | null {
+  const trimmed = sessionId.trim()
+  if (!trimmed || !bridgeUrl || !clientId) return null
+  const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/workspace-preview/assets/${encodeURIComponent(trimmed)}`)
+  url.searchParams.set('clientId', clientId)
+  return url.toString()
+}
+
 function detectPlatform(): string {
   const platform = globalThis.navigator?.platform?.toLowerCase?.() ?? ''
   if (platform.includes('mac')) return 'darwin'
@@ -290,7 +298,8 @@ function createApi(): SciForgeApi {
         invoke('workspacePreview:releaseSession', { sessionId }),
       watch: (payload) => invoke('workspacePreview:watch', payload),
       unwatch: (watchId) => invoke('workspacePreview:unwatch', watchId),
-      onChanged: (handler) => onChannel('workspacePreview:changed', handler)
+      onChanged: (handler) => onChannel('workspacePreview:changed', handler),
+      getAssetSourceUrl: workspacePreviewAssetSourceUrl
     },
     requestWriteInlineCompletion: (payload) => invoke('write:inline-completion', payload),
     retrieveWriteContext: (payload) => invoke('write:retrieve-context', payload),

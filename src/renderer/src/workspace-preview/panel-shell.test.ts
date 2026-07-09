@@ -80,7 +80,7 @@ describe('WorkspacePreviewPanelShell', () => {
     expect(html).toContain('data-legacy-preview-body="true"')
   })
 
-  it('wraps preview body slots with shared toolbar and inspector chrome from host state', () => {
+  it('wraps preview body slots with shared toolbar while keeping inspector hidden by default', () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const descriptor = requireDescriptor(registry, 'data/samples.csv')
     const file: WorkspacePreviewFileState = {
@@ -124,8 +124,9 @@ describe('WorkspacePreviewPanelShell', () => {
     expect(html).toContain('data-status="ready"')
     expect(html).toContain('data-action-id="workspace.setSelection"')
     expect(html).toContain('data-action-id="tabular.updateCell"')
-    expect(html).toContain('Workspace preview inspector')
-    expect(html).toContain('3 rows x 2 columns')
+    expect(html).toContain('data-inspector-open="false"')
+    expect(html).not.toContain('Workspace preview inspector')
+    expect(html).not.toContain('3 rows x 2 columns')
     expect(html).toContain('data-shell-status="idle"')
   })
 })

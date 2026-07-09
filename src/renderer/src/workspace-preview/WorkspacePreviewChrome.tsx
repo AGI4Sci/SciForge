@@ -12,6 +12,7 @@ export type WorkspacePreviewChromeProps = {
   input?: WorkspacePreviewChromeInput
   children?: ReactNode
   className?: string
+  showInspector?: boolean
   onAction?: (action: WorkspacePreviewToolbarAction) => void
 }
 
@@ -20,6 +21,7 @@ export function WorkspacePreviewChrome({
   input,
   children,
   className,
+  showInspector = false,
   onAction
 }: WorkspacePreviewChromeProps): ReactNode {
   const resolvedModel = model ?? buildWorkspacePreviewChromeModel(input ?? {
@@ -83,7 +85,7 @@ export function WorkspacePreviewChrome({
 
       <div className="workspace-preview-chrome__body">{children}</div>
 
-      {resolvedModel.inspector.summary.length || resolvedModel.inspector.sections.length ? (
+      {showInspector && (resolvedModel.inspector.summary.length || resolvedModel.inspector.sections.length) ? (
         <aside className="workspace-preview-chrome__inspector" aria-label="Workspace preview inspector">
           {resolvedModel.inspector.summary.length ? (
             <dl className="workspace-preview-chrome__inspector-summary">

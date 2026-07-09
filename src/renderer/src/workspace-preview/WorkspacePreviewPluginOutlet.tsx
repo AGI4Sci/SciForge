@@ -294,6 +294,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         asset={asset}
         assetStatus={context.assetStatus}
         assetError={context.assetError}
+        sourceUrl={transport.sourceUrl}
         readRange={(range) => transport.readRange(range)}
         onApplyEdit={applyEdit}
         className="h-full min-h-0 pr-20"
@@ -433,14 +434,7 @@ function WorkspacePreviewPluginSummaryBody({
   const session = context.state.session
   const title = observation?.view.title ?? session?.path ?? 'Workspace preview'
   const modality = observation?.view.modality ?? session?.modality ?? 'unknown'
-  const actions = observation?.actions ?? []
-  const rows = [
-    ['Modality', formatLabel(modality)],
-    ['Mode', observation?.view.mode ?? session?.mode ?? 'preview'],
-    ['Asset', context.asset?.primary ?? context.assetStatus],
-    ['Selection', observation?.selection ? formatLabel(observation.selection.kind) : 'None'],
-    ['Actions', actions.length ? actions.join(', ') : 'None']
-  ]
+  const message = fallbackMessageForRoute(routeReason, modality, context.assetError)
 
   return (
     <section
@@ -450,23 +444,28 @@ function WorkspacePreviewPluginSummaryBody({
     >
       <header>
         <h3 className="text-sm font-semibold">{title}</h3>
-        {context.assetError ? <p className="mt-1 text-xs text-ds-danger">{context.assetError}</p> : null}
+        <p className="mt-1 text-xs text-ds-muted">{message}</p>
       </header>
-      <dl className="grid gap-2">
-        {rows.map(([label, value]) => (
-          <div key={label} className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-            <dt className="text-ds-muted">{label}</dt>
-            <dd className="min-w-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      {observation?.visibleText ? (
-        <pre className="min-h-0 overflow-auto whitespace-pre-wrap rounded-md bg-ds-panel p-3 text-xs">
-          {observation.visibleText}
-        </pre>
-      ) : null}
+      <p className="max-w-xl text-xs text-ds-muted">
+        Use Inspect for plugin details, asset transport state, and agent-readable observation metadata.
+      </p>
     </section>
   )
+}
+
+function fallbackMessageForRoute(
+  routeReason: WorkspacePreviewPluginOutletRouteReason,
+  modality: string,
+  assetError: string | null
+): string {
+  if (assetError) return assetError
+  if (routeReason === 'deferred-non-life-science') {
+    return 'This scientific format is recognized, but an inline viewer has not been enabled for this workspace yet.'
+  }
+  if (routeReason === 'unregistered-format') {
+    return 'No inline workspace preview plugin is registered for this file type.'
+  }
+  return `${formatLabel(modality)} preview is not available in the main viewer yet.`
 }
 
 function formatLabel(value: string): string {

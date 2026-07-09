@@ -513,9 +513,9 @@ function bytesFromBase64(base64: string): Uint8Array {
   return bytes
 }
 
-function clonePdfData(data: Uint8Array | ArrayBuffer): Uint8Array {
-  if (data instanceof Uint8Array) return new Uint8Array(data)
-  return new Uint8Array(data.slice(0))
+function pdfDataFromSource(data: Uint8Array | ArrayBuffer): Uint8Array {
+  if (data instanceof Uint8Array) return data
+  return new Uint8Array(data)
 }
 
 function documentSourceFromProps({
@@ -525,7 +525,7 @@ function documentSourceFromProps({
 }: Pick<WritePdfViewerProps, 'data' | 'dataBase64' | 'sourceUrl'>): unknown {
   if (data) {
     return {
-      data: clonePdfData(data),
+      data: pdfDataFromSource(data),
       isEvalSupported: false,
       useSystemFonts: true
     }

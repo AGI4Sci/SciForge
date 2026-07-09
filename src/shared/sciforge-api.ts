@@ -962,6 +962,7 @@ export type SciForgeApi = {
     watch: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
     unwatch: (watchId: string) => Promise<boolean>
     onChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
+    getAssetSourceUrl?: (sessionId: string) => string | null
   }
   requestWriteInlineCompletion: (
     payload: WriteInlineCompletionRequest

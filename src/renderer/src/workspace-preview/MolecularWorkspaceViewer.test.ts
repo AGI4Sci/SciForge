@@ -1,6 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspaceObservation,
@@ -15,7 +15,8 @@ import {
   defaultMolecularRepresentationMode,
   MolecularWorkspaceViewer,
   readMolecularRenderableAssetText,
-  resolveMolecularRenderableAsset
+  resolveMolecularRenderableAsset,
+  validateMolecularSourceText
 } from './MolecularWorkspaceViewer'
 
 function createMolecularObservation(
@@ -101,6 +102,10 @@ function createMolecularAssetDescriptor(
 }
 
 describe('MolecularWorkspaceViewer', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('builds an agent-readable molecular view model from observation summary, selection, and actions', () => {
     const model = buildMolecularWorkspaceViewerModel(createMolecularObservation())
     const rowsById = new Map(model.structureRows.map((row) => [row.id, row]))
@@ -249,7 +254,7 @@ describe('MolecularWorkspaceViewer', () => {
           available: true,
           maxChunkBytes: 4 * 1024 * 1024,
           recommendedChunkBytes: 1024 * 1024,
-          size: 3_000_000
+          size: 60_000_000
         }
       }),
       observation
@@ -309,5 +314,100 @@ describe('MolecularWorkspaceViewer', () => {
       ok: false,
       reason: expect.stringContaining('refusing to render a truncated molecular model')
     })
+  })
+
+  it('prefers workspace preview source URLs over JSON byte-range transport', async () => {
+    const source = 'ATOM      1  N   MET A   1      11.104  13.207   9.447\nEND\n'
+    const encoded = new TextEncoder().encode(source)
+    const fetchMock = vi.fn(async () => new Response(encoded, { status: 206 }))
+    const readRange = vi.fn(async () => ({
+      ok: false as const,
+      message: 'readRange should not be used when sourceUrl is available.'
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readMolecularRenderableAssetText({
+      renderable: {
+        ok: true,
+        format: 'pdb',
+        byteLength: encoded.byteLength
+      },
+      sourceUrl: 'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-molecular',
+      readRange
+    })).resolves.toEqual({
+      ok: true,
+      text: source
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-molecular',
+      {
+        headers: {
+          Range: `bytes=0-${encoded.byteLength - 1}`
+        }
+      }
+    )
+    expect(readRange).not.toHaveBeenCalled()
+  })
+
+  it('rejects decoded molecular sources that do not contain renderable coordinates', async () => {
+    const structureFactorCif = [
+      'data_r9vmrsf',
+      'loop_',
+      '_refln.index_h',
+      '_refln.index_k',
+      '_refln.index_l',
+      '1 2 3'
+    ].join('\n')
+    const dataBase64 = btoa(structureFactorCif)
+
+    expect(validateMolecularSourceText('pdb', 'HEADER    NO COORDINATES\n')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('coordinate records')
+    })
+    expect(validateMolecularSourceText('cif', structureFactorCif)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('_atom_site')
+    })
+    await expect(readMolecularRenderableAssetText({
+      renderable: {
+        ok: true,
+        format: 'cif',
+        byteLength: structureFactorCif.length
+      },
+      readRange: async () => ({
+        ok: true as const,
+        sessionId: 'session-molecular',
+        assetId: 'asset:session-molecular',
+        offset: 0,
+        length: structureFactorCif.length,
+        size: structureFactorCif.length,
+        dataBase64
+      })
+    })).resolves.toMatchObject({
+      ok: false,
+      kind: 'fallback',
+      reason: expect.stringContaining('reflection data')
+    })
+
+    const fetchMock = vi.fn(async () => new Response(structureFactorCif, { status: 206 }))
+    const readRange = vi.fn(async () => ({
+      ok: false as const,
+      message: 'readRange should not be used for sourceUrl coordinate validation.'
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(readMolecularRenderableAssetText({
+      renderable: {
+        ok: true,
+        format: 'cif',
+        byteLength: structureFactorCif.length
+      },
+      sourceUrl: 'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-cif',
+      readRange
+    })).resolves.toMatchObject({
+      ok: false,
+      kind: 'fallback',
+      reason: expect.stringContaining('reflection data')
+    })
+    expect(readRange).not.toHaveBeenCalled()
   })
 })

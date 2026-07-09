@@ -567,7 +567,7 @@ describe('workspace preview contract', () => {
     })
     expect(() => workspacePreviewByteRangeSchema.parse({
       offset: 0,
-      length: 4 * 1024 * 1024 + 1
+      length: WORKSPACE_PREVIEW_MAX_RANGE_BYTES + 1
     })).toThrow()
   })
 

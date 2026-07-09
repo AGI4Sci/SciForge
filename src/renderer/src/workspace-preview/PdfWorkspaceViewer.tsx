@@ -66,9 +66,10 @@ export type PdfWorkspaceViewerPreviewState =
       kind: 'ready'
       title: string
       message: string
-      dataBase64: string
+      data?: Uint8Array
+      sourceUrl?: string
       mimeType: string
-      bytesRead: number
+      bytesRead?: number
     }
   | {
       kind: 'fallback' | 'error'
@@ -193,6 +194,16 @@ export async function loadPdfWorkspacePreviewData(input: {
     }
   }
 
+  if (input.transport.sourceUrl) {
+    return {
+      kind: 'ready',
+      title: 'PDF stream ready',
+      message: `${formatBytes(descriptor.range.size)} available through workspace preview URL transport.`,
+      sourceUrl: input.transport.sourceUrl,
+      mimeType: model.mimeType ?? 'application/pdf'
+    }
+  }
+
   const maxBytes = input.maxBytes ?? PDF_WORKSPACE_VIEWER_MAX_BYTES
   const result = await input.transport.readBytesIfWithin(maxBytes)
   if (!result.ok) {
@@ -219,7 +230,7 @@ export async function loadPdfWorkspacePreviewData(input: {
     kind: 'ready',
     title: 'PDF bytes ready',
     message: `${formatBytes(result.bytesRead)} loaded through workspace preview transport.`,
-    dataBase64: bytesToBase64(result.bytes),
+    data: result.bytes,
     mimeType: model.mimeType ?? 'application/pdf',
     bytesRead: result.bytesRead
   }
@@ -358,7 +369,8 @@ export function PdfWorkspaceViewer({
             <WritePdfViewer
               filePath={resolvePdfFilePath(observation, resolvedAsset)}
               workspaceRoot={observation?.file.workspaceRoot}
-              dataBase64={activePreviewState.dataBase64}
+              data={activePreviewState.data}
+              sourceUrl={activePreviewState.sourceUrl}
               mimeType={activePreviewState.mimeType}
               size={resolvePdfFileSize(observation, resolvedAsset)}
               mtimeMs={observation?.file.mtimeMs}
@@ -510,15 +522,6 @@ function normalizePdfMimeType(mimeType: string | null | undefined): string | nul
 
 function hasPdfExtension(path: string | null | undefined): boolean {
   return Boolean(path && /\.pdf$/iu.test(path.trim()))
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  const chunkSize = 0x8000
-  let binary = ''
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
-  }
-  return btoa(binary)
 }
 
 function compactStrings(values: Array<string | null | undefined | false>): string[] {

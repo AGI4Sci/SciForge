@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+  WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
   type WorkspaceObservation,
   type WorkspacePreviewAssetTransportDescriptor
 } from '@shared/workspace-preview'
@@ -12,6 +14,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
   WritePdfViewer: (props: {
     filePath: string
     dataBase64?: string
+    data?: Uint8Array | ArrayBuffer
     sourceUrl?: string
     mimeType?: string
     size?: number
@@ -26,6 +29,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     'data-write-pdf-viewer': 'true',
     'data-file-path': props.filePath,
     'data-pdf-data-base64': props.dataBase64,
+    'data-pdf-data-length': props.data instanceof Uint8Array ? props.data.length : props.data?.byteLength,
     'data-pdf-mime-type': props.mimeType,
     'data-pdf-size': props.size,
     'data-workspace-root': props.workspaceRoot,
@@ -91,15 +95,15 @@ function createPdfAssetDescriptor(
     },
     range: {
       available: true,
-      maxChunkBytes: PDF_WORKSPACE_VIEWER_MAX_BYTES,
-      recommendedChunkBytes: 1024 * 1024,
+      maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+      recommendedChunkBytes: WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
       size: 4
     },
     strategies: [{
       kind: 'byte-range',
       status: 'available',
       reason: 'Byte-range transport is available.',
-      maxChunkBytes: PDF_WORKSPACE_VIEWER_MAX_BYTES
+      maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES
     }],
     ...overrides
   }
@@ -107,6 +111,7 @@ function createPdfAssetDescriptor(
 
 function createPdfTransportClient(input: {
   asset: WorkspacePreviewAssetTransportDescriptor
+  sourceUrl?: string | null
   bytes?: Uint8Array
   readResult?: Awaited<ReturnType<WorkspacePreviewAssetTransportClient['readBytesIfWithin']>>
 }): WorkspacePreviewAssetTransportClient {
@@ -123,6 +128,7 @@ function createPdfTransportClient(input: {
 
   return {
     descriptor: input.asset,
+    sourceUrl: input.sourceUrl ?? null,
     strategyStatus(kind) {
       return input.asset.strategies.find((strategy) => strategy.kind === kind) ?? null
     },
@@ -171,14 +177,15 @@ describe('PdfWorkspaceViewer', () => {
 
     expect(result).toMatchObject({
       kind: 'ready',
-      dataBase64: 'JVBERg==',
       mimeType: 'application/pdf',
       bytesRead: 4
     })
+    if (result.kind !== 'ready') throw new Error('Expected PDF data to be ready.')
+    expect(result.data).toBeDefined()
+    expect(Array.from(result.data ?? [])).toEqual(Array.from(bytes))
     expect(transport.readBytesIfWithin).toHaveBeenCalledWith(PDF_WORKSPACE_VIEWER_MAX_BYTES)
     expect(resolvePdfMimeType({ observation, asset })).toBe('application/pdf')
 
-    if (result.kind !== 'ready') throw new Error('Expected PDF data to be ready.')
     const html = renderToStaticMarkup(createElement(PdfWorkspaceViewer, {
       observation,
       asset,
@@ -189,9 +196,52 @@ describe('PdfWorkspaceViewer', () => {
     expect(html).toContain('data-workspace-preview-pdf-viewer')
     expect(html).toContain('data-pdf-ready-shell')
     expect(html).toContain('data-write-pdf-viewer="true"')
-    expect(html).toContain('data-pdf-data-base64="JVBERg=="')
+    expect(html).toContain('data-pdf-data-length="4"')
+    expect(html).not.toContain('data-pdf-data-base64')
     expect(html).toContain('data-file-path="/workspace/lab/paper.pdf"')
     expect(html).not.toContain('data-source-url')
+    expect(html).not.toContain('file://')
+  })
+
+  it('prefers workspace preview URL transport for browser-native PDF loading', async () => {
+    const observation = createPdfObservation()
+    const asset = createPdfAssetDescriptor({
+      range: {
+        available: true,
+        maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+        recommendedChunkBytes: WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+        size: 29 * 1024 * 1024
+      }
+    })
+    const transport = createPdfTransportClient({
+      asset,
+      sourceUrl: 'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-pdf?clientId=client-1'
+    })
+    const result = await loadPdfWorkspacePreviewData({
+      observation,
+      asset,
+      transport
+    })
+
+    expect(result).toMatchObject({
+      kind: 'ready',
+      sourceUrl: 'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-pdf?clientId=client-1',
+      mimeType: 'application/pdf'
+    })
+    expect(transport.readBytesIfWithin).not.toHaveBeenCalled()
+
+    if (result.kind !== 'ready') throw new Error('Expected PDF URL transport to be ready.')
+    const html = renderToStaticMarkup(createElement(PdfWorkspaceViewer, {
+      observation,
+      asset,
+      transport,
+      previewState: result
+    }))
+
+    expect(html).toContain('data-workspace-preview-pdf-viewer')
+    expect(html).toContain('data-write-pdf-viewer="true"')
+    expect(html).toContain('data-source-url="http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-pdf?clientId=client-1"')
+    expect(html).not.toContain('data-pdf-data-length')
     expect(html).not.toContain('file://')
   })
 
@@ -238,8 +288,8 @@ describe('PdfWorkspaceViewer', () => {
     const asset = createPdfAssetDescriptor({
       range: {
         available: true,
-        maxChunkBytes: PDF_WORKSPACE_VIEWER_MAX_BYTES,
-        recommendedChunkBytes: 1024 * 1024,
+        maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+        recommendedChunkBytes: WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
         size: 16
       }
     })

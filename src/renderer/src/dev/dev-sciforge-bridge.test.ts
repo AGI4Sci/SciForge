@@ -351,6 +351,9 @@ describe('dev sciforge browser bridge', () => {
     await window.sciforge.workspacePreview.releaseSession('session-1')
     await window.sciforge.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
     await window.sciforge.workspacePreview.unwatch('watch-1')
+    expect(window.sciforge.workspacePreview.getAssetSourceUrl?.('session-1')).toBe(
+      'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-1?clientId=client-1'
+    )
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:5173/__sciforge-dev-bridge/invoke',

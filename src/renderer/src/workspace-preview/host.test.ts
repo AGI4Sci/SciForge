@@ -716,8 +716,69 @@ describe('WorkspacePreviewHost', () => {
     expect(readRange).toHaveBeenCalledWith({ offset: 0, length: 4 })
     await expect(client.readTextIfWithin(2)).resolves.toMatchObject({
       ok: false,
-      message: expect.stringContaining('exceeds the 2 byte text read limit')
+      message: expect.stringContaining('exceeds the 2 byte read limit')
     })
+  })
+
+  it('reads large asset bytes in bounded chunks through the transport client', async () => {
+    const payload = Uint8Array.from([65, 66, 67, 68, 69, 70, 71, 72, 73, 74])
+    const readRange = vi.fn(async (range: { offset: number; length: number }) => {
+      const chunk = payload.subarray(range.offset, range.offset + range.length)
+      return {
+        ok: true as const,
+        sessionId: 'session-chunked',
+        assetId: 'asset:session-chunked',
+        offset: range.offset,
+        length: chunk.length,
+        size: payload.byteLength,
+        dataBase64: bytesToTestBase64(chunk),
+        mimeType: 'application/pdf'
+      }
+    })
+    const client = createWorkspacePreviewAssetTransportClient({
+      descriptor: {
+        schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+        sessionId: 'session-chunked',
+        assetId: 'asset:session-chunked',
+        pluginId: 'pdf',
+        modality: 'document',
+        file: {
+          name: 'paper.pdf',
+          relativePath: 'paper.pdf',
+          mimeType: 'application/pdf',
+          size: payload.byteLength
+        },
+        primary: 'byte-range',
+        eagerRead: {
+          allowed: false,
+          reason: 'large document asset'
+        },
+        range: {
+          available: true,
+          maxChunkBytes: 4,
+          recommendedChunkBytes: 4,
+          size: payload.byteLength
+        },
+        strategies: [{
+          kind: 'byte-range',
+          status: 'available',
+          reason: 'bounded reads',
+          maxChunkBytes: 4
+        }]
+      },
+      readRange
+    })
+
+    const result = await client.readBytesIfWithin(16)
+    expect(result).toMatchObject({
+      ok: true,
+      bytesRead: payload.byteLength,
+      truncated: false
+    })
+    expect(result.ok ? Array.from(result.bytes) : []).toEqual(Array.from(payload))
+    expect(readRange).toHaveBeenCalledWith({ offset: 0, length: 4 })
+    expect(readRange).toHaveBeenCalledWith({ offset: 4, length: 4 })
+    expect(readRange).toHaveBeenCalledWith({ offset: 8, length: 2 })
   })
 
   it('does not fall back or call the bridge for deferred non-life-science formats', async () => {
@@ -736,3 +797,9 @@ describe('WorkspacePreviewHost', () => {
     expect(host.getState().error).toContain('mesh.vtk')
   })
 })
+
+function bytesToTestBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
