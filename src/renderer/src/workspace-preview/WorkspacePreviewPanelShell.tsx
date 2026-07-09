@@ -138,7 +138,12 @@ export function WorkspacePreviewPanelShell({
           setAssetError(described.message)
           return
         }
+        const currentState = host.getState()
+        if (currentState.session?.id !== opened.session.id) {
+          return
+        }
 
+        setState({ ...currentState })
         setAssetStatus('ready')
         setAssetError(null)
       })

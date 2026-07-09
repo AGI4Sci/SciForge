@@ -281,6 +281,8 @@ function WorkspacePreviewShellBody({
       <WorkspacePreviewPluginOutlet
         context={context}
         routeReason={route.reason}
+        routePluginId={route.pluginId}
+        routeModality={route.modality}
         annotationQuestionBridge={annotationQuestionBridge}
       />
     </div>

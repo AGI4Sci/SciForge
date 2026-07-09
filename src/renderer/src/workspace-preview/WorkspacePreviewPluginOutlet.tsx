@@ -64,6 +64,8 @@ export type WorkspacePreviewPluginOutletRouteReason =
 export type WorkspacePreviewPluginOutletProps = {
   context: WorkspacePreviewPanelShellContext
   routeReason: WorkspacePreviewPluginOutletRouteReason
+  routePluginId?: string
+  routeModality?: WorkspacePreviewModality
   renderers?: readonly WorkspacePreviewPluginRendererContribution[]
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
 }
@@ -360,15 +362,19 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
 export function resolveWorkspacePreviewPluginRendererContribution(
   context: WorkspacePreviewPanelShellContext,
   routeReason: WorkspacePreviewPluginOutletRouteReason,
-  renderers: readonly WorkspacePreviewPluginRendererContribution[] = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS
+  renderers: readonly WorkspacePreviewPluginRendererContribution[] = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
+  routePluginId?: string,
+  routeModality?: WorkspacePreviewModality
 ): WorkspacePreviewPluginRendererContribution | null {
   const observation = context.state.observation
   const pluginId = observation?.view.pluginId ??
     context.state.descriptor?.manifest.id ??
-    context.state.session?.pluginId
+    context.state.session?.pluginId ??
+    routePluginId
   const modality = observation?.view.modality ??
     context.state.descriptor?.manifest.modality ??
-    context.state.session?.modality
+    context.state.session?.modality ??
+    routeModality
   const input = {
     context,
     routeReason,
@@ -385,19 +391,29 @@ export function resolveWorkspacePreviewPluginRendererContribution(
 export function WorkspacePreviewPluginOutlet({
   context,
   routeReason,
+  routePluginId,
+  routeModality,
   renderers = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
   annotationQuestionBridge
 }: WorkspacePreviewPluginOutletProps): ReactElement {
   const observation = context.state.observation
   const pluginId = observation?.view.pluginId ??
     context.state.descriptor?.manifest.id ??
-    context.state.session?.pluginId
+    context.state.session?.pluginId ??
+    routePluginId
   const modality = observation?.view.modality ??
     context.state.descriptor?.manifest.modality ??
-    context.state.session?.modality
+    context.state.session?.modality ??
+    routeModality
   const applyEdit = (operation: WorkspacePreviewEditOperation): Promise<void> =>
     applyWorkspacePreviewOutletEdit(context, operation)
-  const renderer = resolveWorkspacePreviewPluginRendererContribution(context, routeReason, renderers)
+  const renderer = resolveWorkspacePreviewPluginRendererContribution(
+    context,
+    routeReason,
+    renderers,
+    routePluginId,
+    routeModality
+  )
 
   if (renderer) {
     return renderer.render({

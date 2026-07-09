@@ -353,6 +353,26 @@ describe('WorkspacePreviewPluginOutlet', () => {
     expect(html).not.toContain('workspace.export:source')
   })
 
+  it('routes registered plugin targets from bridge route metadata while observation is still empty', () => {
+    const molecularHtml = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(null),
+      routeReason: 'registered-plugin',
+      routePluginId: 'molecular',
+      routeModality: 'molecular'
+    }))
+    const pdfHtml = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(null),
+      routeReason: 'registered-plugin',
+      routePluginId: 'pdf',
+      routeModality: 'document'
+    }))
+
+    expect(molecularHtml).toContain('data-workspace-preview-molecular-viewer')
+    expect(molecularHtml).not.toContain('data-workspace-preview-plugin-summary')
+    expect(pdfHtml).toContain('data-workspace-preview-pdf-viewer')
+    expect(pdfHtml).not.toContain('data-workspace-preview-plugin-summary')
+  })
+
   it('supports renderer contributions without changing the outlet body', () => {
     const observation = createObservation('unknown', {
       view: {
