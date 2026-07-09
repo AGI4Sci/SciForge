@@ -81,6 +81,7 @@ describe('TextWorkspaceViewer', () => {
     expect(html).toContain('data-workspace-preview-text-viewer')
     expect(html).toContain('data-truncated="true"')
     expect(html).toContain('data-editable="false"')
+    expect(html).not.toContain('data-text-agent-summary')
     expect(html).toContain('data-text-preview-editor')
     expect(html).toContain('This text preview is truncated.')
   })

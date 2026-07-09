@@ -196,6 +196,8 @@ describe('PdfWorkspaceViewer', () => {
     expect(html).toContain('data-workspace-preview-pdf-viewer')
     expect(html).toContain('data-pdf-ready-shell')
     expect(html).toContain('data-write-pdf-viewer="true"')
+    expect(html).not.toContain('data-pdf-agent-summary')
+    expect(html).not.toContain('data-pdf-load-summary')
     expect(html).toContain('data-pdf-data-length="4"')
     expect(html).not.toContain('data-pdf-data-base64')
     expect(html).toContain('data-file-path="/workspace/lab/paper.pdf"')
@@ -240,6 +242,8 @@ describe('PdfWorkspaceViewer', () => {
 
     expect(html).toContain('data-workspace-preview-pdf-viewer')
     expect(html).toContain('data-write-pdf-viewer="true"')
+    expect(html).not.toContain('data-pdf-agent-summary')
+    expect(html).not.toContain('data-pdf-load-summary')
     expect(html).toContain('data-source-url="http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-pdf?clientId=client-1"')
     expect(html).not.toContain('data-pdf-data-length')
     expect(html).not.toContain('file://')

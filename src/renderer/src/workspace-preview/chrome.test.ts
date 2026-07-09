@@ -138,7 +138,7 @@ describe('workspace preview shared chrome', () => {
         'tabular.deleteRows',
         'tabular.deleteColumns',
         'annotation.upsert',
-        'molecular.measureDistance',
+        'molecular.workbench',
         'sequence.selectRegion',
         'omics.selectDataset',
         'bioimaging.selectChannels',
@@ -211,8 +211,8 @@ describe('workspace preview shared chrome', () => {
       label: 'Annotate',
       source: 'observation'
     })
-    expect(actionsById.get('molecular.measureDistance')).toMatchObject({
-      label: 'Measure Distance',
+    expect(actionsById.get('molecular.workbench')).toMatchObject({
+      label: 'Molecular Workbench',
       source: 'observation'
     })
     expect(actionsById.get('sequence.selectRegion')).toMatchObject({
@@ -631,7 +631,7 @@ describe('workspace preview shared chrome', () => {
     })
   })
 
-  it('renders the TSX chrome skeleton with actions and body while hiding inspector by default', () => {
+  it('renders the TSX chrome shell with body while hiding top metadata and inspector by default', () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const descriptor = requireDescriptor(registry, 'data/samples.csv')
     const model = buildWorkspacePreviewChromeModel({
@@ -652,10 +652,11 @@ describe('workspace preview shared chrome', () => {
     )
 
     expect(html).toContain('data-workspace-preview-chrome')
-    expect(html).toContain('role="toolbar"')
-    expect(html).toContain('data-workspace-preview-action-menu')
-    expect(html).toContain('aria-label="More workspace preview actions"')
-    expect(html).toContain('data-action-id="workspace.export:csv"')
+    expect(html).not.toContain('workspace-preview-chrome__header')
+    expect(html).not.toContain('Workspace preview breadcrumb')
+    expect(html).not.toContain('role="toolbar"')
+    expect(html).not.toContain('data-workspace-preview-action-menu')
+    expect(html).not.toContain('data-action-id="workspace.export:csv"')
     expect(html).toContain('data-preview-slot="content"')
     expect(html).not.toContain('Workspace preview inspector')
   })

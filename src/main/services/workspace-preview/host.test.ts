@@ -2089,7 +2089,7 @@ describe('WorkspacePreviewHost', () => {
           molecular: {
             chains: ['B']
           },
-          actions: ['molecular.select']
+          actions: ['molecular.workbench']
         },
         bytesRead: 0,
         truncated: false
@@ -2147,9 +2147,11 @@ describe('WorkspacePreviewHost', () => {
     if (!opened.ok) return
 
     const result = await host.invokeAction(opened.session.id, {
-      actionId: 'molecular.select',
+      actionId: 'molecular.workbench',
       input: {
-        chains: ['A']
+        selection: {
+          chains: ['A']
+        }
       }
     }, '2026-07-08T00:02:00.000Z')
 
@@ -2157,52 +2159,62 @@ describe('WorkspacePreviewHost', () => {
       ok: true,
       sessionId: 'session-action',
       pluginId: 'molecular',
-      actionId: 'molecular.select',
+      actionId: 'molecular.workbench',
       invokedAt: '2026-07-08T00:02:00.000Z',
       result: {
         ok: true,
         atomCount: 2,
-        selection: {
-          kind: 'molecular',
-          chains: ['A']
+        state: {
+          selection: {
+            kind: 'molecular',
+            chains: ['A']
+          }
         }
       },
       audit: {
         pluginId: 'molecular',
-        actionId: 'molecular.select',
+        actionId: 'molecular.workbench',
         effect: 'worker-action'
       }
     })
 
-    const distanceResult = await host.invokeAction(opened.session.id, {
-      actionId: 'molecular.measureDistance',
+    const measurementResult = await host.invokeAction(opened.session.id, {
+      actionId: 'molecular.workbench',
       input: {
-        atoms: [{ id: '1' }, { index: 2 }]
+        measurement: {
+          kind: 'distance',
+          atoms: [{ id: '1' }, { index: 2 }]
+        }
       }
     }, '2026-07-08T00:03:00.000Z')
 
-    expect(distanceResult).toMatchObject({
+    expect(measurementResult).toMatchObject({
       ok: true,
       sessionId: 'session-action',
       pluginId: 'molecular',
-      actionId: 'molecular.measureDistance',
+      actionId: 'molecular.workbench',
       invokedAt: '2026-07-08T00:03:00.000Z',
       result: {
         ok: true,
-        coordinateAvailable: true,
-        unit: 'angstrom',
-        selection: {
-          kind: 'molecular',
-          atoms: [{ id: '1', index: 1 }, { id: '2', index: 2 }]
+        state: {
+          measurement: {
+            kind: 'distance',
+            coordinateAvailable: true,
+            unit: 'angstrom',
+            selection: {
+              kind: 'molecular',
+              atoms: [{ id: '1', index: 1 }, { id: '2', index: 2 }]
+            }
+          }
         }
       },
       audit: {
         pluginId: 'molecular',
-        actionId: 'molecular.measureDistance',
+        actionId: 'molecular.workbench',
         effect: 'worker-action'
       }
     })
-    expect((distanceResult as { result?: { distance?: number } }).result?.distance)
+    expect((measurementResult as { result?: { state?: { measurement?: { value?: number } } } }).result?.state?.measurement?.value)
       .toBeCloseTo(1.4689, 3)
   })
 

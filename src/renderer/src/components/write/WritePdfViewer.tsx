@@ -16,7 +16,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clipboard,
-  FileText,
   HelpCircle,
   Highlighter,
   Loader2,
@@ -1822,8 +1821,6 @@ export function WritePdfViewer({
   const rootRef = viewerRef ?? localViewerRef
   const pageCount = pdfDocument?.numPages ?? 0
   const sourceTitle = useMemo(() => relativeToWorkspace(workspaceRoot, filePath), [filePath, workspaceRoot])
-  const fileName = useMemo(() => basenameFromPath(filePath), [filePath])
-  const fileSizeLabel = formatBytes(size)
   const selectionContext = useMemo<PdfSelectionContext>(() => ({
     filePath,
     sourceTitle,
@@ -2357,20 +2354,6 @@ export function WritePdfViewer({
       <style>{PDF_VIEWER_CSS}</style>
       <div className="shrink-0 border-b border-ds-border-muted bg-white/88 px-3 py-2 backdrop-blur-xl dark:bg-ds-card/95">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="flex min-w-[180px] flex-1 items-center gap-2 overflow-hidden">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-700 dark:text-red-300">
-              <FileText className="h-4 w-4" strokeWidth={1.85} />
-            </span>
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold text-ds-ink" title={filePath}>
-                {fileName}
-              </div>
-              <div className="truncate text-[11.5px] text-ds-faint" title={sourceTitle}>
-                {[fileSizeLabel, sourceTitle].filter(Boolean).join(' · ')}
-              </div>
-            </div>
-          </div>
-
           <div className="flex items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle p-1 dark:bg-white/6">
             <button
               type="button"

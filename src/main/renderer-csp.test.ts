@@ -35,4 +35,17 @@ describe('renderer content security policy', () => {
       'http://localhost:*'
     ]))
   })
+
+  it('allows Mol* WebGL workers without opening local file URLs', () => {
+    const html = readFileSync(resolve('src/renderer/index.html'), 'utf8')
+    const csp = html.match(/Content-Security-Policy"[\s\S]*?content="([^"]+)"/)?.[1] ?? ''
+    const workerSrc = csp.match(/worker-src\s+([^;]+)/)?.[1] ?? ''
+    const childSrc = csp.match(/child-src\s+([^;]+)/)?.[1] ?? ''
+    const scriptSrc = csp.match(/script-src\s+([^;]+)/)?.[1] ?? ''
+
+    expect(workerSrc.split(/\s+/)).toEqual(expect.arrayContaining(["'self'", 'blob:']))
+    expect(childSrc.split(/\s+/)).toEqual(expect.arrayContaining(["'self'", 'blob:']))
+    expect(scriptSrc.split(/\s+/)).toContain("'wasm-unsafe-eval'")
+    expect(workerSrc.split(/\s+/)).not.toContain('file:')
+  })
 })

@@ -1,8 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   type WorkspaceObservation,
   type WorkspacePreviewAssetTransportDescriptor
 } from '@shared/workspace-preview'
@@ -12,11 +13,9 @@ import {
   createMolecularClearSelectionOperation,
   createMolecularLigandSelectionOperation,
   decodeWorkspacePreviewBase64Text,
-  defaultMolecularRepresentationMode,
   MolecularWorkspaceViewer,
   readMolecularRenderableAssetText,
-  resolveMolecularRenderableAsset,
-  validateMolecularSourceText
+  resolveMolecularRenderableAsset
 } from './MolecularWorkspaceViewer'
 
 function createMolecularObservation(
@@ -56,8 +55,7 @@ function createMolecularObservation(
       ligands: ['ATP']
     },
     actions: [
-      'molecular.select',
-      'molecular.measureDistance',
+      'molecular.workbench',
       'workspace.setSelection',
       'sequence.search'
     ],
@@ -101,17 +99,28 @@ function createMolecularAssetDescriptor(
   }
 }
 
-describe('MolecularWorkspaceViewer', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
+const pdbFormat = {
+  kind: 'structure',
+  format: 'pdb',
+  isBinary: false
+} as const
 
-  it('builds an agent-readable molecular view model from observation summary, selection, and actions', () => {
+describe('MolecularWorkspaceViewer', () => {
+  it('builds an agent-readable Mol* workbench model from observation summary and selection', () => {
     const model = buildMolecularWorkspaceViewerModel(createMolecularObservation())
     const rowsById = new Map(model.structureRows.map((row) => [row.id, row]))
 
     expect(model.status.kind).toBe('ready')
+    expect(model.status.title).toBe('Mol* workbench ready')
     expect(model.title).toBe('Protein structure')
+    expect(model.capabilities).toEqual({
+      structure: true,
+      density: false,
+      trajectory: false,
+      selection: true,
+      measurements: true,
+      screenshot: true
+    })
     expect(rowsById.get('chains')).toMatchObject({
       label: 'Chains',
       value: 'A, B',
@@ -132,13 +141,8 @@ describe('MolecularWorkspaceViewer', () => {
       value: 'C, Zn'
     })
     expect(model.selection.summary).toBe('Selected 1 chain, 2 residues, 2 atoms, 1 ligand, 2 elements.')
-    expect(model.actions.map((action) => [action.id, action.kind])).toEqual([
-      ['molecular.select', 'select'],
-      ['molecular.measureDistance', 'measure'],
-      ['workspace.setSelection', 'select']
-    ])
     expect(model.agentSummary).toContain('1 model')
-    expect(model.agentSummary).toContain('actions: Select Structure, Measure Distance, Select')
+    expect(model.agentSummary).toContain('Mol* capabilities: structure, selection, measurements, screenshot')
   })
 
   it('reports empty and unsupported states without trying to render a molecular viewport', () => {
@@ -170,30 +174,35 @@ describe('MolecularWorkspaceViewer', () => {
       title: 'Unsupported observation'
     })
     expect(emptyHtml).toContain('data-status="empty"')
-    expect(emptyHtml).not.toContain('data-webgl-placeholder')
+    expect(emptyHtml).not.toContain('data-webgl-viewport')
     expect(unsupportedHtml).toContain('data-status="unsupported"')
     expect(unsupportedHtml).toContain('Tabular observations cannot be rendered')
   })
 
-  it('renders the WebGL mount placeholder and selected atom, residue, and ligand details', () => {
+  it('renders the Mol* mount point and selected atom, residue, and ligand details', () => {
     const html = renderToStaticMarkup(createElement(MolecularWorkspaceViewer, {
       observation: createMolecularObservation()
     }))
 
     expect(html).toContain('data-workspace-preview-molecular-viewer')
+    expect(html).toContain('data-molecular-workbench')
+    expect(html).not.toContain('workspace-preview-molecular-viewer__header')
     expect(html).toContain('data-webgl-viewport')
+    expect(html).toContain('data-molecular-render-container')
     expect(html).toContain('data-molecular-render-state="idle"')
-    expect(html).toContain('Waiting for a molecular structure asset.')
+    expect(html).toContain('data-molecular-capability-structure="true"')
+    expect(html).toContain('data-molecular-capability-summary')
+    expect(html).toContain('data-molecular-capability="measurements"')
+    expect(html).toContain('Waiting for a molecular workspace asset.')
     expect(html).toContain('Selected residues')
     expect(html).toContain('GLY A:42')
     expect(html).toContain('Selected atoms')
     expect(html).toContain('C #4')
     expect(html).toContain('Selected ligands')
     expect(html).toContain('ATP')
-    expect(html).toContain('data-action-kind="measure"')
   })
 
-  it('renders representation and selection controls backed by molecular edit operations', () => {
+  it('renders unified session selection controls backed by molecular edit operations', () => {
     const observation = createMolecularObservation({
       molecular: {
         modelCount: 1,
@@ -207,10 +216,7 @@ describe('MolecularWorkspaceViewer', () => {
       onApplyEdit: async () => undefined
     }))
 
-    expect(defaultMolecularRepresentationMode(observation)).toBe('cartoon-stick')
-    expect(html).toContain('data-molecular-representation-controls')
-    expect(html).toContain('data-molecular-representation-option="cartoon-stick"')
-    expect(html).toContain('data-selected="true"')
+    expect(html).toContain('data-molecular-selection-controls')
     expect(html).toContain('data-molecular-select-chain="A"')
     expect(html).toContain('data-molecular-select-ligand="ATP"')
     expect(html).toContain('data-molecular-clear-selection')
@@ -239,42 +245,96 @@ describe('MolecularWorkspaceViewer', () => {
     })
   })
 
-  it('resolves bounded renderable assets and rejects unsafe full-asset reads', () => {
+  it('resolves bounded Mol* renderable assets', () => {
     const observation = createMolecularObservation()
     const asset = createMolecularAssetDescriptor()
 
     expect(resolveMolecularRenderableAsset({ asset, observation })).toEqual({
       ok: true,
-      format: 'pdb',
-      byteLength: 67
+      byteLength: 67,
+      source: {
+        kind: 'data',
+        text: '',
+        format: pdbFormat,
+        label: 'protein.pdb'
+      }
+    })
+  })
+
+  it('keeps direct data loading bounded while allowing Mol* URL loading for large and binary assets', () => {
+    const observation = createMolecularObservation()
+    const largeAsset = createMolecularAssetDescriptor({
+      range: {
+        available: true,
+        maxChunkBytes: 4 * 1024 * 1024,
+        recommendedChunkBytes: 1024 * 1024,
+        size: WORKSPACE_PREVIEW_MAX_RANGE_BYTES + 1
+      }
+    })
+    const densityAsset = createMolecularAssetDescriptor({
+      file: {
+        name: 'density.mrc',
+        relativePath: 'density.mrc',
+        mimeType: 'application/octet-stream',
+        size: 256
+      },
+      range: {
+        available: true,
+        maxChunkBytes: 4 * 1024 * 1024,
+        recommendedChunkBytes: 1024 * 1024,
+        size: 256
+      }
+    })
+    const trajectoryAsset = createMolecularAssetDescriptor({
+      file: {
+        name: 'trajectory.dcd',
+        relativePath: 'trajectory.dcd',
+        mimeType: 'application/octet-stream',
+        size: 67
+      }
+    })
+
+    expect(resolveMolecularRenderableAsset({ asset: largeAsset, observation })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('direct data loading is limited')
     })
     expect(resolveMolecularRenderableAsset({
-      asset: createMolecularAssetDescriptor({
-        range: {
-          available: true,
-          maxChunkBytes: 4 * 1024 * 1024,
-          recommendedChunkBytes: 1024 * 1024,
-          size: 60_000_000
-        }
-      }),
-      observation
+      asset: largeAsset,
+      observation,
+      sourceUrl: 'http://localhost:5173/assets/large-protein'
     })).toMatchObject({
+      ok: true,
+      source: {
+        kind: 'url',
+        format: {
+          kind: 'structure',
+          format: 'pdb'
+        }
+      }
+    })
+    expect(resolveMolecularRenderableAsset({ asset: densityAsset, observation })).toMatchObject({
       ok: false,
-      reason: expect.stringContaining('interactive rendering is limited')
+      kind: 'fallback',
+      reason: expect.stringContaining('requires a workspace asset URL')
     })
     expect(resolveMolecularRenderableAsset({
-      asset: createMolecularAssetDescriptor({
-        file: {
-          name: 'trajectory.dcd',
-          relativePath: 'trajectory.dcd',
-          mimeType: 'application/octet-stream',
-          size: 67
-        }
-      }),
-      observation
+      asset: densityAsset,
+      observation,
+      sourceUrl: 'http://localhost:5173/assets/density'
     })).toMatchObject({
+      ok: true,
+      source: {
+        kind: 'url',
+        format: {
+          kind: 'volume',
+          format: 'ccp4'
+        }
+      }
+    })
+    expect(resolveMolecularRenderableAsset({ asset: trajectoryAsset, observation })).toMatchObject({
       ok: false,
-      reason: expect.stringContaining('not available')
+      kind: 'fallback',
+      reason: expect.stringContaining('paired topology')
     })
   })
 
@@ -292,11 +352,7 @@ describe('MolecularWorkspaceViewer', () => {
     })
 
     await expect(readMolecularRenderableAssetText({
-      renderable: {
-        ok: true,
-        format: 'pdb',
-        byteLength: source.length
-      },
+      byteLength: source.length,
       readRange
     })).resolves.toEqual({
       ok: true,
@@ -304,110 +360,11 @@ describe('MolecularWorkspaceViewer', () => {
     })
     expect(decodeWorkspacePreviewBase64Text(dataBase64)).toBe(source)
     await expect(readMolecularRenderableAssetText({
-      renderable: {
-        ok: true,
-        format: 'pdb',
-        byteLength: source.length + 1
-      },
+      byteLength: source.length + 1,
       readRange
     })).resolves.toMatchObject({
       ok: false,
-      reason: expect.stringContaining('refusing to render a truncated molecular model')
+      reason: expect.stringContaining('refusing to load a truncated molecular model')
     })
-  })
-
-  it('prefers workspace preview source URLs over JSON byte-range transport', async () => {
-    const source = 'ATOM      1  N   MET A   1      11.104  13.207   9.447\nEND\n'
-    const encoded = new TextEncoder().encode(source)
-    const fetchMock = vi.fn(async () => new Response(encoded, { status: 206 }))
-    const readRange = vi.fn(async () => ({
-      ok: false as const,
-      message: 'readRange should not be used when sourceUrl is available.'
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(readMolecularRenderableAssetText({
-      renderable: {
-        ok: true,
-        format: 'pdb',
-        byteLength: encoded.byteLength
-      },
-      sourceUrl: 'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-molecular',
-      readRange
-    })).resolves.toEqual({
-      ok: true,
-      text: source
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-molecular',
-      {
-        headers: {
-          Range: `bytes=0-${encoded.byteLength - 1}`
-        }
-      }
-    )
-    expect(readRange).not.toHaveBeenCalled()
-  })
-
-  it('rejects decoded molecular sources that do not contain renderable coordinates', async () => {
-    const structureFactorCif = [
-      'data_r9vmrsf',
-      'loop_',
-      '_refln.index_h',
-      '_refln.index_k',
-      '_refln.index_l',
-      '1 2 3'
-    ].join('\n')
-    const dataBase64 = btoa(structureFactorCif)
-
-    expect(validateMolecularSourceText('pdb', 'HEADER    NO COORDINATES\n')).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('coordinate records')
-    })
-    expect(validateMolecularSourceText('cif', structureFactorCif)).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('_atom_site')
-    })
-    await expect(readMolecularRenderableAssetText({
-      renderable: {
-        ok: true,
-        format: 'cif',
-        byteLength: structureFactorCif.length
-      },
-      readRange: async () => ({
-        ok: true as const,
-        sessionId: 'session-molecular',
-        assetId: 'asset:session-molecular',
-        offset: 0,
-        length: structureFactorCif.length,
-        size: structureFactorCif.length,
-        dataBase64
-      })
-    })).resolves.toMatchObject({
-      ok: false,
-      kind: 'fallback',
-      reason: expect.stringContaining('reflection data')
-    })
-
-    const fetchMock = vi.fn(async () => new Response(structureFactorCif, { status: 206 }))
-    const readRange = vi.fn(async () => ({
-      ok: false as const,
-      message: 'readRange should not be used for sourceUrl coordinate validation.'
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    await expect(readMolecularRenderableAssetText({
-      renderable: {
-        ok: true,
-        format: 'cif',
-        byteLength: structureFactorCif.length
-      },
-      sourceUrl: 'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-cif',
-      readRange
-    })).resolves.toMatchObject({
-      ok: false,
-      kind: 'fallback',
-      reason: expect.stringContaining('reflection data')
-    })
-    expect(readRange).not.toHaveBeenCalled()
   })
 })

@@ -14,8 +14,8 @@ This package currently focuses on dependency-light text summaries for common str
 
 The worker also exposes pure in-memory foundations for PyMOL-like agent/renderer interactions:
 
-- `select`: filters an existing preview by chain, residue, ligand, or atom id/index/element and returns bounded atom/residue/chain/ligand summaries plus structured selection text.
-- `measureDistance`: resolves two bounded preview atoms by id or index. It computes a distance only when both atom summaries include coordinates; otherwise it returns `coordinateAvailable: false` with an unsupported warning instead of inventing a value.
+- `workbench`: applies a single molecular workbench state update against an existing bounded preview. The state can include selection by chain, residue, ligand, or atom id/index/element, plus one measurement request.
+- Measurements use one unified shape: `distance` resolves two atoms and returns angstroms; `angle` resolves three atoms and returns degrees; `dihedral` resolves four atoms and returns degrees. The worker computes a value only when all referenced bounded atom summaries include usable coordinates; otherwise it returns `coordinateAvailable: false` with warnings instead of inventing geometry.
 
 It intentionally does not parse binary trajectory/density formats (`.xtc`, `.dcd`, `.trr`, `.mrc`, `.ccp4`), start an MCP server, or bundle a WebGL viewer yet.
 

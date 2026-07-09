@@ -164,6 +164,8 @@ describe('ImageWorkspaceViewer', () => {
 
     expect(html).toContain('data-workspace-preview-image-viewer')
     expect(html).toContain('data-image-preview-img')
+    expect(html).not.toContain('data-image-agent-summary')
+    expect(html).not.toContain('data-image-load-summary')
     expect(html).toContain('src="data:image/png;base64,iVBORw=="')
     expect(html).toContain('data-fit-mode="fit"')
     expect(html).toContain('object-fit:contain')

@@ -72,6 +72,7 @@ describe('MarkdownWorkspaceViewer', () => {
 
     expect(html).toContain('data-workspace-preview-markdown-viewer')
     expect(html).toContain('data-editable="true"')
+    expect(html).not.toContain('data-markdown-agent-summary')
     expect(html).toContain('data-text-preview-editor')
     expect(html).toContain('data-markdown-preview-pane')
     expect(html).toContain('<h1>Alpha</h1>')

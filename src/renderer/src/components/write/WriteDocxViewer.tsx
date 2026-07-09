@@ -14,7 +14,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clipboard,
-  FileText,
   HelpCircle,
   Highlighter,
   Languages,
@@ -271,11 +270,6 @@ export function WriteDocxViewer({
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const sourceTitle = fileNameFromPath(filePath)
-  const fileSizeLabel = size < 1024
-    ? `${Math.round(size)} B`
-    : size < 1024 * 1024
-      ? `${(size / 1024).toFixed(1)} KB`
-      : `${(size / (1024 * 1024)).toFixed(1)} MB`
   const documentIdentity = `${filePath}\u0000${mtimeMs}\u0000${size}`
   const visibleOverlays = useMemo(
     () => annotationOverlays.filter((overlay) => overlay.quote.trim()),
@@ -538,22 +532,8 @@ export function WriteDocxViewer({
         onPointerUp={(event) => event.stopPropagation()}
       >
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="flex min-w-[170px] flex-1 items-center gap-2 overflow-hidden">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300">
-              <FileText className="h-4 w-4" strokeWidth={1.85} />
-            </span>
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold text-ds-ink" title={filePath}>
-                {sourceTitle}
-              </div>
-              <div className="truncate text-[11.5px] text-ds-faint">
-                {fileSizeLabel} · DOCX
-              </div>
-            </div>
-          </div>
-
           {!editMode ? (
-            <div className="flex min-w-[190px] flex-1 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1 dark:bg-white/6 sm:max-w-[280px]">
+            <div className="flex min-w-[190px] flex-1 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1 dark:bg-white/6 sm:max-w-[360px]">
               <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.9} />
               <input
                 className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ds-ink outline-none placeholder:text-ds-faint"

@@ -332,7 +332,7 @@ describe('workspace preview contract', () => {
         ligands: ['ATP'],
         representations: ['cartoon', 'surface']
       },
-      actions: ['molecular.select', 'molecular.measureDistance']
+      actions: ['molecular.workbench']
     }
 
     expect(workspacePreviewSessionSchema.parse({
@@ -348,7 +348,7 @@ describe('workspace preview contract', () => {
     }).selection?.kind).toBe('molecular')
     expect(workspaceObservationSchema.parse(observation).selection?.kind).toBe('molecular')
     expect(observation.selection?.kind).toBe('molecular')
-    expect(observation.actions).toContain('molecular.measureDistance')
+    expect(observation.actions).toContain('molecular.workbench')
   })
 
   it('validates plugin metadata seeds on observations', () => {

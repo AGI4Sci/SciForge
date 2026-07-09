@@ -1,18 +1,14 @@
 import {
-  workspaceMolecularDistanceMeasurementInputSchema,
   workspaceMolecularPreviewInputSchema,
-  workspaceMolecularSelectionInputSchema,
-  type WorkspaceMolecularDistanceMeasurementInput,
-  type WorkspaceMolecularDistanceMeasurementResult,
+  workspaceMolecularWorkbenchInputSchema,
   type WorkspaceMolecularPreviewInput,
   type WorkspaceMolecularPreviewResult,
-  type WorkspaceMolecularSelectionInput,
-  type WorkspaceMolecularSelectionResult
+  type WorkspaceMolecularWorkbenchInput,
+  type WorkspaceMolecularWorkbenchResult
 } from './contract.js'
 import {
   createWorkspaceMolecularPreview,
-  measureWorkspaceMolecularDistance,
-  selectWorkspaceMolecular
+  updateWorkspaceMolecularWorkbench
 } from './workspace-molecular-engine.js'
 
 export class WorkspaceMolecularService {
@@ -21,12 +17,8 @@ export class WorkspaceMolecularService {
     return createWorkspaceMolecularPreview(normalizedInput)
   }
 
-  select(input: WorkspaceMolecularSelectionInput): WorkspaceMolecularSelectionResult {
-    return selectWorkspaceMolecular(workspaceMolecularSelectionInputSchema.parse(input))
-  }
-
-  measureDistance(input: WorkspaceMolecularDistanceMeasurementInput): WorkspaceMolecularDistanceMeasurementResult {
-    return measureWorkspaceMolecularDistance(workspaceMolecularDistanceMeasurementInputSchema.parse(input))
+  workbench(input: WorkspaceMolecularWorkbenchInput): WorkspaceMolecularWorkbenchResult {
+    return updateWorkspaceMolecularWorkbench(workspaceMolecularWorkbenchInputSchema.parse(input))
   }
 }
 

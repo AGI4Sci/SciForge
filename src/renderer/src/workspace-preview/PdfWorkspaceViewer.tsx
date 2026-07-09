@@ -336,16 +336,6 @@ export function PdfWorkspaceViewer({
       data-status={resolvedModel.status.kind}
       data-pdf-preview-state={activePreviewState.kind}
     >
-      <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ds-text">{resolvedModel.title}</h3>
-          {resolvedModel.subtitle ? <p className="mt-1 text-xs text-ds-muted">{resolvedModel.subtitle}</p> : null}
-        </div>
-        <p className="shrink-0 text-xs text-ds-muted" data-pdf-agent-summary>
-          {resolvedModel.agentSummary}
-        </p>
-      </header>
-
       {resolvedModel.status.kind !== 'ready' ? (
         <PdfFallbackSummary
           title={resolvedModel.status.title}
@@ -360,11 +350,6 @@ export function PdfWorkspaceViewer({
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col" data-pdf-ready-shell>
-          <div className="flex items-center justify-between gap-3 border-b border-ds-border px-4 py-2 pr-20">
-            <p className="min-w-0 truncate text-xs text-ds-muted" data-pdf-load-summary>
-              {activePreviewState.message}
-            </p>
-          </div>
           <div className="min-h-0 flex-1 pr-20" data-pdf-preview-viewport>
             <WritePdfViewer
               filePath={resolvePdfFilePath(observation, resolvedAsset)}

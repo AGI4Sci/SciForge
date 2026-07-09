@@ -327,16 +327,6 @@ export function ImageWorkspaceViewer({
       data-fit-mode={zoomMode}
       data-zoom-factor={zoom.toFixed(2)}
     >
-      <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ds-text">{resolvedModel.title}</h3>
-          {resolvedModel.subtitle ? <p className="mt-1 text-xs text-ds-muted">{resolvedModel.subtitle}</p> : null}
-        </div>
-        <p className="shrink-0 text-xs text-ds-muted" data-image-agent-summary>
-          {resolvedModel.agentSummary}
-        </p>
-      </header>
-
       {resolvedModel.status.kind !== 'ready' ? (
         <ImageFallbackSummary
           title={resolvedModel.status.title}
@@ -351,10 +341,7 @@ export function ImageWorkspaceViewer({
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center justify-between gap-3 border-b border-ds-border px-4 py-2 pr-20">
-            <p className="min-w-0 truncate text-xs text-ds-muted" data-image-load-summary>
-              {activePreviewState.message}
-            </p>
+          <div className="flex items-center justify-end gap-3 border-b border-ds-border px-4 py-2 pr-20">
             <div className="flex shrink-0 items-center gap-1" data-image-zoom-controls>
               <button
                 type="button"

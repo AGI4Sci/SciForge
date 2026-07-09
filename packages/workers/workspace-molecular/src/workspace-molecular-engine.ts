@@ -5,32 +5,30 @@ import {
   WORKSPACE_MOLECULAR_MAX_WARNINGS,
   WORKSPACE_MOLECULAR_PLUGIN_ID,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
-  workspaceMolecularDistanceMeasurementInputSchema,
-  workspaceMolecularDistanceMeasurementResultSchema,
   workspaceMolecularPreviewResultSchema,
-  workspaceMolecularSelectionInputSchema,
-  workspaceMolecularSelectionResultSchema,
+  workspaceMolecularWorkbenchInputSchema,
+  workspaceMolecularWorkbenchResultSchema,
   type NormalizedWorkspaceMolecularAtomSelector,
   type NormalizedWorkspaceMolecularAtomReference,
-  type NormalizedWorkspaceMolecularDistanceMeasurementInput,
+  type NormalizedWorkspaceMolecularMeasurementRequest,
   type NormalizedWorkspaceMolecularPreviewInput,
   type NormalizedWorkspaceMolecularResidueSelector,
-  type NormalizedWorkspaceMolecularSelectionInput,
+  type NormalizedWorkspaceMolecularSelectionRequest,
+  type NormalizedWorkspaceMolecularWorkbenchInput,
   type WorkspaceMolecularAtomSummary,
   type WorkspaceMolecularChainSummary,
   type WorkspaceMolecularCoordinate,
-  type WorkspaceMolecularDistanceMeasurementInput,
-  type WorkspaceMolecularDistanceMeasurementResult,
   type WorkspaceMolecularElementCount,
   type WorkspaceMolecularLigandSummary,
+  type WorkspaceMolecularMeasurementState,
   type WorkspaceMolecularMoleculeSummary,
   type WorkspaceMolecularObservation,
   type WorkspaceMolecularPreviewResult,
   type WorkspaceMolecularResolvedFormat,
   type WorkspaceMolecularResidueSummary,
   type WorkspaceMolecularSelection,
-  type WorkspaceMolecularSelectionInput,
-  type WorkspaceMolecularSelectionResult
+  type WorkspaceMolecularWorkbenchInput,
+  type WorkspaceMolecularWorkbenchResult
 } from './contract.js'
 
 type MutableResidueSummary = WorkspaceMolecularResidueSummary
@@ -286,16 +284,9 @@ export function createWorkspaceMolecularPreview(
   })
 }
 
-export function selectWorkspaceMolecular(input: WorkspaceMolecularSelectionInput): WorkspaceMolecularSelectionResult {
-  const normalized = workspaceMolecularSelectionInputSchema.parse(input)
-  return workspaceMolecularSelectionResultSchema.parse(buildMolecularSelectionResult(normalized))
-}
-
-export function measureWorkspaceMolecularDistance(
-  input: WorkspaceMolecularDistanceMeasurementInput
-): WorkspaceMolecularDistanceMeasurementResult {
-  const normalized = workspaceMolecularDistanceMeasurementInputSchema.parse(input)
-  return workspaceMolecularDistanceMeasurementResultSchema.parse(buildDistanceMeasurementResult(normalized))
+export function updateWorkspaceMolecularWorkbench(input: WorkspaceMolecularWorkbenchInput): WorkspaceMolecularWorkbenchResult {
+  const normalized = workspaceMolecularWorkbenchInputSchema.parse(input)
+  return workspaceMolecularWorkbenchResultSchema.parse(buildMolecularWorkbenchResult(normalized))
 }
 
 type MolecularSelectionEntities = {
@@ -305,71 +296,83 @@ type MolecularSelectionEntities = {
   ligands: WorkspaceMolecularLigandSummary[]
 }
 
-function buildMolecularSelectionResult(
-  input: NormalizedWorkspaceMolecularSelectionInput
-): WorkspaceMolecularSelectionResult {
-  const selectedAtoms = selectAtomsFromPreview(input)
-  const selectedResidues = selectResiduesFromPreview(input, selectedAtoms)
-  const selectedChains = selectChainsFromPreview(input, selectedAtoms, selectedResidues)
-  const selectedLigands = selectLigandsFromPreview(input, selectedAtoms, selectedResidues)
+function buildMolecularWorkbenchResult(
+  input: NormalizedWorkspaceMolecularWorkbenchInput
+): WorkspaceMolecularWorkbenchResult {
+  const selectionEntities = input.selection
+    ? resolveSelectionEntities(input.preview, input.selection)
+    : emptyMolecularEntities()
+  const selection = input.selection
+    ? buildStructuredSelection(selectionEntities)
+    : undefined
+  const measurement = input.measurement
+    ? buildMeasurementState(input.preview, input.measurement)
+    : undefined
+  const measurementEntities = measurement
+    ? entitiesForAtoms(input.preview, measurement.atoms)
+    : emptyMolecularEntities()
+  const activeEntities = mergeMolecularEntities(selectionEntities, measurementEntities)
   const warnings = boundedWarnings([
     ...boundedPreviewSearchWarnings(input.preview),
-    ...unmatchedSelectionWarnings(input),
-    ...(selectedAtoms.length === 0 && selectedResidues.length === 0 && selectedChains.length === 0 && selectedLigands.length === 0
-      ? ['No molecular entities matched the selection input.']
-      : [])
+    ...(input.selection
+      ? [
+          ...unmatchedSelectionWarnings(input.preview, input.selection),
+          ...(selectionEntities.atoms.length === 0 &&
+            selectionEntities.residues.length === 0 &&
+            selectionEntities.chains.length === 0 &&
+            selectionEntities.ligands.length === 0
+            ? ['No molecular entities matched the selection input.']
+            : [])
+        ]
+      : []),
+    ...(measurement?.warnings ?? [])
   ])
-  const selection = buildStructuredSelection({
-    atoms: selectedAtoms,
-    residues: selectedResidues,
-    chains: selectedChains,
-    ligands: selectedLigands
-  })
 
   return {
     ok: true,
     contractVersion: WORKSPACE_MOLECULAR_CONTRACT_VERSION,
-    atomCount: selectedAtoms.length,
-    residueCount: selectedResidues.length,
-    chainCount: selectedChains.length,
-    ligandCount: selectedLigands.length,
-    atoms: boundedItems(selectedAtoms),
-    residues: boundedItems(selectedResidues),
-    chains: boundedItems(selectedChains),
-    ligands: boundedItems(selectedLigands),
-    selection,
-    visibleText: buildSelectionVisibleText(input.preview.format, {
-      atoms: selectedAtoms,
-      residues: selectedResidues,
-      chains: selectedChains,
-      ligands: selectedLigands
-    }, warnings),
+    atomCount: activeEntities.atoms.length,
+    residueCount: activeEntities.residues.length,
+    chainCount: activeEntities.chains.length,
+    ligandCount: activeEntities.ligands.length,
+    atoms: boundedItems(activeEntities.atoms),
+    residues: boundedItems(activeEntities.residues),
+    chains: boundedItems(activeEntities.chains),
+    ligands: boundedItems(activeEntities.ligands),
+    state: {
+      ...(selection ? { selection } : {}),
+      ...(measurement ? { measurement } : {})
+    },
+    visibleText: buildWorkbenchVisibleText(input.preview.format, selectionEntities, input.selection !== undefined, measurement, warnings),
     warnings
   }
 }
 
-function buildDistanceMeasurementResult(
-  input: NormalizedWorkspaceMolecularDistanceMeasurementInput
-): WorkspaceMolecularDistanceMeasurementResult {
-  const [leftReference, rightReference] = input.atoms
-  const left = resolveAtomReference(input.preview.atoms, leftReference)
-  const right = resolveAtomReference(input.preview.atoms, rightReference)
-  const referencedAtoms = [left.atom, right.atom].filter((atom): atom is WorkspaceMolecularAtomSummary => Boolean(atom))
+function buildMeasurementState(
+  preview: WorkspaceMolecularPreviewResult,
+  request: NormalizedWorkspaceMolecularMeasurementRequest
+): WorkspaceMolecularMeasurementState {
+  const resolutions = request.atoms.map((reference) => resolveAtomReference(preview.atoms, reference))
+  const referencedAtoms = resolutions
+    .map((resolution) => resolution.atom)
+    .filter((atom): atom is WorkspaceMolecularAtomSummary => Boolean(atom))
   const uniqueReferencedAtoms = uniqueAtoms(referencedAtoms)
-  const residues = residuesForAtoms(input.preview.residues, uniqueReferencedAtoms)
-  const chains = chainsForSelection(input.preview.chains, uniqueReferencedAtoms, residues)
-  const ligands = ligandsForSelection(input.preview.ligandSummaries, uniqueReferencedAtoms, residues)
-  const coordinateAvailable = Boolean(left.atom?.coordinates && right.atom?.coordinates)
-  const distance = coordinateAvailable && left.atom?.coordinates && right.atom?.coordinates
-    ? distanceBetweenCoordinates(left.atom.coordinates, right.atom.coordinates)
-    : undefined
+  const residues = residuesForAtoms(preview.residues, uniqueReferencedAtoms)
+  const chains = chainsForSelection(preview.chains, uniqueReferencedAtoms, residues)
+  const ligands = ligandsForSelection(preview.ligandSummaries, uniqueReferencedAtoms, residues)
+  const coordinates = resolutions
+    .map((resolution) => resolution.atom?.coordinates)
+    .filter((coordinate): coordinate is WorkspaceMolecularCoordinate => Boolean(coordinate))
+  const coordinateAvailable = coordinates.length === request.atoms.length
+  const computation = coordinateAvailable
+    ? computeMeasurementValue(request.kind, coordinates)
+    : {}
   const warnings = boundedWarnings([
-    ...boundedPreviewSearchWarnings(input.preview),
-    ...atomReferenceWarnings('first atom', left),
-    ...atomReferenceWarnings('second atom', right),
-    ...(left.atom && right.atom && !coordinateAvailable
-      ? ['Distance measurement is unsupported because one or both selected atom summaries do not include coordinates.']
-      : [])
+    ...resolutions.flatMap((resolution, index) => atomReferenceWarnings(`atom ${index + 1}`, resolution)),
+    ...(referencedAtoms.length === request.atoms.length && !coordinateAvailable
+      ? [`${measurementLabel(request.kind)} measurement is unsupported because one or more selected atom summaries do not include coordinates.`]
+      : []),
+    ...(computation.warning ? [computation.warning] : [])
   ])
   const selection = buildStructuredSelection({
     atoms: uniqueReferencedAtoms,
@@ -379,74 +382,92 @@ function buildDistanceMeasurementResult(
   })
 
   return {
-    ok: true,
-    contractVersion: WORKSPACE_MOLECULAR_CONTRACT_VERSION,
+    kind: request.kind,
     coordinateAvailable,
-    atoms: referencedAtoms.slice(0, 2),
+    atoms: referencedAtoms.slice(0, 4),
     selection,
-    ...(distance !== undefined ? { distance } : {}),
-    unit: 'angstrom',
-    visibleText: buildDistanceVisibleText(left.atom, right.atom, distance, coordinateAvailable, warnings),
-    warnings
+    ...(computation.value !== undefined ? { value: computation.value } : {}),
+    unit: request.kind === 'distance' ? 'angstrom' : 'degree',
+    ...(warnings.length > 0 ? { warnings } : {})
   }
 }
 
-function selectAtomsFromPreview(input: NormalizedWorkspaceMolecularSelectionInput): WorkspaceMolecularAtomSummary[] {
-  const residueMatches = input.preview.residues
-    .filter((residue) => input.residues.some((selector) => residueMatchesSelector(residue, selector)))
+function resolveSelectionEntities(
+  preview: WorkspaceMolecularPreviewResult,
+  selection: NormalizedWorkspaceMolecularSelectionRequest
+): MolecularSelectionEntities {
+  const atoms = selectAtomsFromPreview(preview, selection)
+  const residues = selectResiduesFromPreview(preview, selection, atoms)
+  const chains = selectChainsFromPreview(preview, selection, atoms, residues)
+  const ligands = selectLigandsFromPreview(preview, selection, atoms, residues)
+  return { atoms, residues, chains, ligands }
+}
 
-  return input.preview.atoms.filter((atom) => {
-    if (input.chains.some((chain) => atom.chain === chain)) return true
-    if (input.ligands.some((ligand) => atomMatchesLigandName(atom, ligand))) return true
-    if (input.atoms.some((selector) => atomMatchesAtomSelector(atom, selector))) return true
+function selectAtomsFromPreview(
+  preview: WorkspaceMolecularPreviewResult,
+  selection: NormalizedWorkspaceMolecularSelectionRequest
+): WorkspaceMolecularAtomSummary[] {
+  const residueMatches = preview.residues
+    .filter((residue) => selection.residues.some((selector) => residueMatchesSelector(residue, selector)))
+
+  return preview.atoms.filter((atom) => {
+    if (selection.chains.some((chain) => atom.chain === chain)) return true
+    if (selection.ligands.some((ligand) => atomMatchesLigandName(atom, ligand))) return true
+    if (selection.atoms.some((selector) => atomMatchesAtomSelector(atom, selector))) return true
     return residueMatches.some((residue) => atomMatchesResidueSummary(atom, residue))
   })
 }
 
 function selectResiduesFromPreview(
-  input: NormalizedWorkspaceMolecularSelectionInput,
+  preview: WorkspaceMolecularPreviewResult,
+  selection: NormalizedWorkspaceMolecularSelectionRequest,
   selectedAtoms: WorkspaceMolecularAtomSummary[]
 ): WorkspaceMolecularResidueSummary[] {
-  return input.preview.residues.filter((residue) => {
-    if (input.chains.some((chain) => residue.chain === chain)) return true
-    if (input.ligands.some((ligand) => residueMatchesLigandName(residue, ligand))) return true
-    if (input.residues.some((selector) => residueMatchesSelector(residue, selector))) return true
+  return preview.residues.filter((residue) => {
+    if (selection.chains.some((chain) => residue.chain === chain)) return true
+    if (selection.ligands.some((ligand) => residueMatchesLigandName(residue, ligand))) return true
+    if (selection.residues.some((selector) => residueMatchesSelector(residue, selector))) return true
     return selectedAtoms.some((atom) => atomMatchesResidueSummary(atom, residue))
   })
 }
 
 function selectChainsFromPreview(
-  input: NormalizedWorkspaceMolecularSelectionInput,
+  preview: WorkspaceMolecularPreviewResult,
+  selection: NormalizedWorkspaceMolecularSelectionRequest,
   selectedAtoms: WorkspaceMolecularAtomSummary[],
   selectedResidues: WorkspaceMolecularResidueSummary[]
 ): WorkspaceMolecularChainSummary[] {
-  return input.preview.chains.filter((chain) => {
-    if (input.chains.includes(chain.id)) return true
+  return preview.chains.filter((chain) => {
+    if (selection.chains.includes(chain.id)) return true
     if (selectedAtoms.some((atom) => atom.chain === chain.id)) return true
     return selectedResidues.some((residue) => residue.chain === chain.id)
   })
 }
 
 function selectLigandsFromPreview(
-  input: NormalizedWorkspaceMolecularSelectionInput,
+  preview: WorkspaceMolecularPreviewResult,
+  selection: NormalizedWorkspaceMolecularSelectionRequest,
   selectedAtoms: WorkspaceMolecularAtomSummary[],
   selectedResidues: WorkspaceMolecularResidueSummary[]
 ): WorkspaceMolecularLigandSummary[] {
-  return input.preview.ligandSummaries.filter((ligand) => {
-    if (input.ligands.some((name) => ligandNameMatches(ligand.name, name))) return true
+  return preview.ligandSummaries.filter((ligand) => {
+    if (selection.ligands.some((name) => ligandNameMatches(ligand.name, name))) return true
     if (selectedAtoms.some((atom) => atomMatchesLigandSummary(atom, ligand))) return true
     return selectedResidues.some((residue) => residueMatchesLigandSummary(residue, ligand))
   })
 }
 
-function unmatchedSelectionWarnings(input: NormalizedWorkspaceMolecularSelectionInput): string[] {
+function unmatchedSelectionWarnings(
+  preview: WorkspaceMolecularPreviewResult,
+  selection: NormalizedWorkspaceMolecularSelectionRequest
+): string[] {
   const warnings: string[] = []
-  const unmatchedChains = input.chains.filter((chain) => !input.preview.chains.some((summary) => summary.id === chain))
-  const unmatchedLigands = input.ligands.filter((ligand) => !input.preview.ligandSummaries.some((summary) => ligandNameMatches(summary.name, ligand)))
-  const unmatchedResidues = input.residues
-    .filter((selector) => !input.preview.residues.some((residue) => residueMatchesSelector(residue, selector)))
-  const unmatchedAtoms = input.atoms
-    .filter((selector) => !input.preview.atoms.some((atom) => atomMatchesAtomSelector(atom, selector)))
+  const unmatchedChains = selection.chains.filter((chain) => !preview.chains.some((summary) => summary.id === chain))
+  const unmatchedLigands = selection.ligands.filter((ligand) => !preview.ligandSummaries.some((summary) => ligandNameMatches(summary.name, ligand)))
+  const unmatchedResidues = selection.residues
+    .filter((selector) => !preview.residues.some((residue) => residueMatchesSelector(residue, selector)))
+  const unmatchedAtoms = selection.atoms
+    .filter((selector) => !preview.atoms.some((atom) => atomMatchesAtomSelector(atom, selector)))
 
   if (unmatchedChains.length > 0) warnings.push(`${unmatchedChains.length} requested chain selector(s) were not present in the bounded preview.`)
   if (unmatchedLigands.length > 0) warnings.push(`${unmatchedLigands.length} requested ligand selector(s) were not present in the bounded preview.`)
@@ -606,16 +627,73 @@ function atomKey(atom: WorkspaceMolecularAtomSummary): string {
   return [atom.moleculeIndex ?? '', atom.chain ?? '', atom.residueIndex ?? '', atom.id ?? '', atom.index, atom.name ?? ''].join(':')
 }
 
+function emptyMolecularEntities(): MolecularSelectionEntities {
+  return {
+    atoms: [],
+    residues: [],
+    chains: [],
+    ligands: []
+  }
+}
+
+function entitiesForAtoms(
+  preview: WorkspaceMolecularPreviewResult,
+  atoms: WorkspaceMolecularAtomSummary[]
+): MolecularSelectionEntities {
+  const uniqueReferencedAtoms = uniqueAtoms(atoms)
+  const residues = residuesForAtoms(preview.residues, uniqueReferencedAtoms)
+  const chains = chainsForSelection(preview.chains, uniqueReferencedAtoms, residues)
+  const ligands = ligandsForSelection(preview.ligandSummaries, uniqueReferencedAtoms, residues)
+  return {
+    atoms: uniqueReferencedAtoms,
+    residues,
+    chains,
+    ligands
+  }
+}
+
+function mergeMolecularEntities(
+  left: MolecularSelectionEntities,
+  right: MolecularSelectionEntities
+): MolecularSelectionEntities {
+  return {
+    atoms: uniqueAtoms([...left.atoms, ...right.atoms]),
+    residues: uniqueBy([...left.residues, ...right.residues], residueKey),
+    chains: uniqueBy([...left.chains, ...right.chains], (chain) => chain.id),
+    ligands: uniqueBy([...left.ligands, ...right.ligands], ligandKey)
+  }
+}
+
+function residueKey(residue: WorkspaceMolecularResidueSummary): string {
+  return [residue.moleculeIndex ?? '', residue.chain, residue.index, residue.insertionCode ?? '', residue.name].join(':')
+}
+
+function ligandKey(ligand: WorkspaceMolecularLigandSummary): string {
+  return [ligand.moleculeIndex ?? '', ligand.chain ?? '', ligand.name].join(':')
+}
+
+function uniqueBy<T>(items: T[], keyForItem: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  const unique: T[] = []
+  for (const item of items) {
+    const key = keyForItem(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(item)
+  }
+  return unique
+}
+
 function boundedPreviewSearchWarnings(preview: WorkspaceMolecularPreviewResult): string[] {
   return [
     ...(preview.atomCount > preview.atoms.length
-      ? [`Selection searched ${preview.atoms.length} bounded atom summaries from ${preview.atomCount} parsed atoms.`]
+      ? [`Workbench searched ${preview.atoms.length} bounded atom summaries from ${preview.atomCount} parsed atoms.`]
       : []),
     ...(preview.residueCount > preview.residues.length
-      ? [`Selection searched ${preview.residues.length} bounded residue summaries from ${preview.residueCount} parsed residues.`]
+      ? [`Workbench searched ${preview.residues.length} bounded residue summaries from ${preview.residueCount} parsed residues.`]
       : []),
     ...(preview.chainCount > preview.chains.length
-      ? [`Selection searched ${preview.chains.length} bounded chain summaries from ${preview.chainCount} parsed chains.`]
+      ? [`Workbench searched ${preview.chains.length} bounded chain summaries from ${preview.chainCount} parsed chains.`]
       : [])
   ]
 }
@@ -639,25 +717,27 @@ function buildSelectionVisibleText(
   ].join('\n')
 }
 
-function buildDistanceVisibleText(
-  left: WorkspaceMolecularAtomSummary | undefined,
-  right: WorkspaceMolecularAtomSummary | undefined,
-  distance: number | undefined,
-  coordinateAvailable: boolean,
+function buildWorkbenchVisibleText(
+  format: WorkspaceMolecularResolvedFormat,
+  selectionEntities: MolecularSelectionEntities,
+  hasSelection: boolean,
+  measurement: WorkspaceMolecularMeasurementState | undefined,
   warnings: string[]
 ): string {
-  if (distance !== undefined && left && right) {
-    return `Molecular distance: ${distance.toFixed(4)} angstrom between ${formatAtomLabel(left)} and ${formatAtomLabel(right)}.`
-  }
-
-  const labels = [left, right].filter((atom): atom is WorkspaceMolecularAtomSummary => Boolean(atom)).map(formatAtomLabel)
   return [
-    `Molecular distance: unavailable${labels.length > 0 ? ` for ${labels.join(' and ')}` : ''}.`,
-    ...(!coordinateAvailable && left && right
-      ? ['Selected atom summaries do not include coordinates.']
-      : []),
+    `${format.toUpperCase()} molecular workbench state.`,
+    ...(hasSelection ? [buildSelectionVisibleText(format, selectionEntities, [])] : []),
+    ...(measurement ? [buildMeasurementVisibleText(measurement)] : []),
     ...(warnings.length > 0 ? [`Warnings: ${warnings.join(' ')}`] : [])
   ].join('\n')
+}
+
+function buildMeasurementVisibleText(measurement: WorkspaceMolecularMeasurementState): string {
+  const labels = measurement.atoms.map(formatAtomLabel)
+  if (measurement.value !== undefined) {
+    return `Molecular ${measurement.kind}: ${measurement.value.toFixed(4)} ${measurement.unit} across ${labels.join(', ')}.`
+  }
+  return `Molecular ${measurement.kind}: unavailable${labels.length > 0 ? ` across ${labels.join(', ')}` : ''}.`
 }
 
 function formatAtomLabel(atom: WorkspaceMolecularAtomSummary): string {
@@ -676,6 +756,136 @@ function distanceBetweenCoordinates(left: WorkspaceMolecularCoordinate, right: W
   const dy = left.y - right.y
   const dz = left.z - right.z
   return Math.sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+type MeasurementComputation = {
+  value?: number
+  warning?: string
+}
+
+type Vector3 = {
+  x: number
+  y: number
+  z: number
+}
+
+function computeMeasurementValue(
+  kind: NormalizedWorkspaceMolecularMeasurementRequest['kind'],
+  coordinates: WorkspaceMolecularCoordinate[]
+): MeasurementComputation {
+  if (kind === 'distance') {
+    const [left, right] = coordinates
+    return left && right
+      ? { value: distanceBetweenCoordinates(left, right) }
+      : {}
+  }
+  if (kind === 'angle') {
+    const [left, vertex, right] = coordinates
+    if (!left || !vertex || !right) return {}
+    const value = angleBetweenCoordinates(left, vertex, right)
+    return value === undefined
+      ? { warning: 'Angle measurement is undefined because selected atoms create a zero-length vector.' }
+      : { value }
+  }
+
+  const [first, second, third, fourth] = coordinates
+  if (!first || !second || !third || !fourth) return {}
+  const value = dihedralBetweenCoordinates(first, second, third, fourth)
+  return value === undefined
+    ? { warning: 'Dihedral measurement is undefined because selected atoms create a degenerate plane.' }
+    : { value }
+}
+
+function measurementLabel(kind: NormalizedWorkspaceMolecularMeasurementRequest['kind']): string {
+  return kind[0]?.toUpperCase() + kind.slice(1)
+}
+
+function angleBetweenCoordinates(
+  left: WorkspaceMolecularCoordinate,
+  vertex: WorkspaceMolecularCoordinate,
+  right: WorkspaceMolecularCoordinate
+): number | undefined {
+  const leftVector = subtractCoordinates(left, vertex)
+  const rightVector = subtractCoordinates(right, vertex)
+  const denominator = vectorLength(leftVector) * vectorLength(rightVector)
+  if (denominator === 0) return undefined
+  const cosine = clamp(dotProduct(leftVector, rightVector) / denominator, -1, 1)
+  return radiansToDegrees(Math.acos(cosine))
+}
+
+function dihedralBetweenCoordinates(
+  first: WorkspaceMolecularCoordinate,
+  second: WorkspaceMolecularCoordinate,
+  third: WorkspaceMolecularCoordinate,
+  fourth: WorkspaceMolecularCoordinate
+): number | undefined {
+  const b0 = subtractCoordinates(first, second)
+  const b1 = subtractCoordinates(third, second)
+  const b2 = subtractCoordinates(fourth, third)
+  const b1Unit = normalizeVector(b1)
+  if (!b1Unit) return undefined
+
+  const v = subtractVectors(b0, scaleVector(b1Unit, dotProduct(b0, b1Unit)))
+  const w = subtractVectors(b2, scaleVector(b1Unit, dotProduct(b2, b1Unit)))
+  if (vectorLength(v) === 0 || vectorLength(w) === 0) return undefined
+
+  const x = dotProduct(v, w)
+  const y = dotProduct(crossProduct(b1Unit, v), w)
+  return radiansToDegrees(Math.atan2(y, x))
+}
+
+function subtractCoordinates(left: WorkspaceMolecularCoordinate, right: WorkspaceMolecularCoordinate): Vector3 {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z
+  }
+}
+
+function subtractVectors(left: Vector3, right: Vector3): Vector3 {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z
+  }
+}
+
+function scaleVector(vector: Vector3, scalar: number): Vector3 {
+  return {
+    x: vector.x * scalar,
+    y: vector.y * scalar,
+    z: vector.z * scalar
+  }
+}
+
+function dotProduct(left: Vector3, right: Vector3): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z
+}
+
+function crossProduct(left: Vector3, right: Vector3): Vector3 {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x
+  }
+}
+
+function vectorLength(vector: Vector3): number {
+  return Math.sqrt(dotProduct(vector, vector))
+}
+
+function normalizeVector(vector: Vector3): Vector3 | undefined {
+  const length = vectorLength(vector)
+  if (length === 0) return undefined
+  return scaleVector(vector, 1 / length)
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function radiansToDegrees(value: number): number {
+  return value * 180 / Math.PI
 }
 
 function elementCountsForAtoms(atoms: WorkspaceMolecularAtomSummary[]): WorkspaceMolecularElementCount[] {
@@ -1962,10 +2172,7 @@ function actionsForSummary(
 ): string[] {
   const actions = ['molecular.preview']
   if (summary.atomCount > 0 || summary.residueCount > 0 || summary.chainCount > 0 || summary.ligandCount > 0) {
-    actions.push('molecular.select')
-  }
-  if (summary.atoms.filter((atom) => atom.coordinates).length >= 2) {
-    actions.push('molecular.measureDistance')
+    actions.push('molecular.workbench')
   }
   return actions
 }

@@ -111,6 +111,15 @@ const xyz = [
   'H 0.7400 0.0000 0.0000'
 ].join('\n')
 
+const geometryXyz = [
+  '4',
+  'geometry',
+  'C 1.0000 0.0000 0.0000',
+  'N 0.0000 0.0000 0.0000',
+  'O 0.0000 1.0000 0.0000',
+  'H 0.0000 1.0000 1.0000'
+].join('\n')
+
 describe('workspace molecular engine', () => {
   it('summarizes PDB chains, residues, atoms, and ligands', () => {
     const preview = createWorkspaceMolecularPreview(workspaceMolecularPreviewInputSchema.parse({
@@ -138,6 +147,7 @@ describe('workspace molecular engine', () => {
     assert.equal(workspaceObservationSchema.parse(observation).view.pluginId, 'molecular')
     assert.equal(observation.selection?.kind, 'molecular')
     assert.equal(observation.selection?.atoms?.length, 4)
+    assert.deepEqual(observation.actions, ['molecular.preview', 'molecular.workbench'])
   })
 
   it('summarizes mmCIF/CIF atom_site loops', () => {
@@ -331,27 +341,33 @@ describe('workspace molecular engine', () => {
       path: 'protein.pdb'
     })
 
-    const chainSelection = service.select({
+    const chainSelection = service.workbench({
       preview,
-      chains: ['B']
+      selection: {
+        chains: ['B']
+      }
     })
     assert.equal(chainSelection.atomCount, 2)
     assert.equal(chainSelection.residueCount, 2)
-    assert.deepEqual(chainSelection.selection.chains, ['B'])
+    assert.deepEqual(chainSelection.state.selection?.chains, ['B'])
     assert.deepEqual(chainSelection.ligands.map((ligand) => ligand.name), ['ATP'])
 
-    const ligandSelection = service.select({
+    const ligandSelection = service.workbench({
       preview,
-      ligands: ['ATP']
+      selection: {
+        ligands: ['ATP']
+      }
     })
     assert.equal(ligandSelection.atomCount, 1)
     assert.equal(ligandSelection.residues[0]?.name, 'ATP')
     assert.equal(ligandSelection.chains[0]?.id, 'B')
-    assert.deepEqual(ligandSelection.selection.ligands, ['ATP'])
+    assert.deepEqual(ligandSelection.state.selection?.ligands, ['ATP'])
 
-    const elementSelection = service.select({
+    const elementSelection = service.workbench({
       preview,
-      atoms: [{ element: 'n' }]
+      selection: {
+        atoms: [{ element: 'n' }]
+      }
     })
     assert.equal(elementSelection.atomCount, 2)
     assert.deepEqual(elementSelection.atoms.map((atom) => atom.id), ['1', '3'])
@@ -365,18 +381,22 @@ describe('workspace molecular engine', () => {
       path: 'mixed.mol2'
     })
 
-    const ligandSelection = service.select({
+    const ligandSelection = service.workbench({
       preview,
-      ligands: ['lig1']
+      selection: {
+        ligands: ['lig1']
+      }
     })
     assert.equal(ligandSelection.atomCount, 5)
     assert.equal(ligandSelection.chainCount, 1)
-    assert.deepEqual(ligandSelection.selection.chains, ['A'])
-    assert.deepEqual(ligandSelection.selection.ligands, ['LIG1'])
+    assert.deepEqual(ligandSelection.state.selection?.chains, ['A'])
+    assert.deepEqual(ligandSelection.state.selection?.ligands, ['LIG1'])
 
-    const chlorideSelection = service.select({
+    const chlorideSelection = service.workbench({
       preview,
-      atoms: [{ element: 'cl' }]
+      selection: {
+        atoms: [{ element: 'cl' }]
+      }
     })
     assert.equal(chlorideSelection.atomCount, 1)
     assert.equal(chlorideSelection.atoms[0]?.name, 'CL1')
@@ -395,36 +415,67 @@ describe('workspace molecular engine', () => {
       atoms: preview.atoms.map(({ coordinates: _coordinates, ...atom }) => atom)
     }
 
-    const measurement = service.measureDistance({
+    const measurement = service.workbench({
       preview: noCoordinatePreview,
-      atoms: [{ id: '1' }, { index: 2 }]
+      measurement: {
+        kind: 'distance',
+        atoms: [{ id: '1' }, { index: 2 }]
+      }
     })
 
-    assert.equal(measurement.coordinateAvailable, false)
-    assert.equal(measurement.distance, undefined)
-    assert.deepEqual(measurement.selection.atoms?.map((atom) => atom.index), [1, 2])
+    assert.equal(measurement.state.measurement?.coordinateAvailable, false)
+    assert.equal(measurement.state.measurement?.value, undefined)
+    assert.equal(measurement.state.measurement?.unit, 'angstrom')
+    assert.deepEqual(measurement.state.measurement?.selection.atoms?.map((atom) => atom.index), [1, 2])
     assert.match(measurement.visibleText ?? '', /unavailable/)
     assert.match(measurement.warnings.join('\n'), /coordinates/)
   })
 
-  it('measures distances when selected atom summaries carry coordinates', () => {
+  it('measures distance, angle, and dihedral through unified workbench state', () => {
     const service = new WorkspaceMolecularService()
     const preview = service.preview({
-      text: pdb,
-      path: 'protein.pdb'
+      text: geometryXyz,
+      path: 'geometry.xyz'
     })
 
-    const measurement = service.measureDistance({
+    const distance = service.workbench({
       preview,
-      atoms: [{ id: '1' }, { index: 2 }]
+      measurement: {
+        kind: 'distance',
+        atoms: [{ id: '1:1' }, { id: '1:2' }]
+      }
+    })
+    const angle = service.workbench({
+      preview,
+      measurement: {
+        kind: 'angle',
+        atoms: [{ id: '1:1' }, { id: '1:2' }, { id: '1:3' }]
+      }
+    })
+    const dihedral = service.workbench({
+      preview,
+      measurement: {
+        kind: 'dihedral',
+        atoms: [{ id: '1:1' }, { id: '1:2' }, { id: '1:3' }, { id: '1:4' }]
+      }
     })
 
-    assert.equal(measurement.coordinateAvailable, true)
-    assert.equal(measurement.unit, 'angstrom')
-    assert.ok(measurement.distance !== undefined)
-    assert.ok(Math.abs(measurement.distance - 1.4689) < 0.001)
-    assert.deepEqual(measurement.selection.atoms?.map((atom) => atom.index), [1, 2])
-    assert.match(measurement.visibleText ?? '', /Molecular distance/)
+    assert.equal(distance.state.measurement?.kind, 'distance')
+    assert.equal(distance.state.measurement?.coordinateAvailable, true)
+    assert.equal(distance.state.measurement?.unit, 'angstrom')
+    assert.equal(distance.state.measurement?.value, 1)
+    assert.deepEqual(distance.state.measurement?.selection.atoms?.map((atom) => atom.id), ['1:1', '1:2'])
+    assert.match(distance.visibleText ?? '', /Molecular distance/)
+
+    assert.equal(angle.state.measurement?.kind, 'angle')
+    assert.equal(angle.state.measurement?.unit, 'degree')
+    assert.ok(angle.state.measurement?.value !== undefined)
+    assert.ok(Math.abs(angle.state.measurement.value - 90) < 0.001)
+
+    assert.equal(dihedral.state.measurement?.kind, 'dihedral')
+    assert.equal(dihedral.state.measurement?.unit, 'degree')
+    assert.ok(dihedral.state.measurement?.value !== undefined)
+    assert.ok(Math.abs(Math.abs(dihedral.state.measurement.value) - 90) < 0.001)
   })
 
   it('can omit observations for callers that only need structured counts', () => {

@@ -419,6 +419,9 @@ describe('WorkspacePreviewWorkerClient', () => {
         }
       }
     })
+    if (result.ok) {
+      expect(result.observation.actions).toContain('molecular.workbench')
+    }
   })
 
   it('routes molecular trajectory files to safe placeholder observations', async () => {
@@ -456,7 +459,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       }
     })
     if (result.ok) {
-      expect(result.observation.actions).not.toContain('molecular.measureDistance')
+      expect(result.observation.actions).not.toContain('molecular.workbench')
     }
   })
 
@@ -1243,19 +1246,19 @@ describe('WorkspacePreviewWorkerClient', () => {
     })
   })
 
-  it('returns a molecular distance fallback when preview atoms have no coordinates', async () => {
-    const filePath = join(workspaceRoot, 'no-coordinates.pdb')
+  it('routes molecular workbench selection and measurement actions through bounded previews', async () => {
+    const filePath = join(workspaceRoot, 'protein.pdb')
     const text = [
-      'ATOM      1  N   GLY A   1                                                  N',
-      'ATOM      2  CA  GLY A   1                                                  C',
-      ''
+      'ATOM      1  N   MET A   1      11.104  13.207   9.447  1.00 20.00           N',
+      'ATOM      2  CA  MET A   1      12.560  13.401   9.447  1.00 20.00           C',
+      'END'
     ].join('\n')
     await writeFile(filePath, text, 'utf8')
     const manifest = manifestById('molecular')
     const file: WorkspacePreviewFileState = {
       workspaceRoot,
       path: filePath,
-      relativePath: 'no-coordinates.pdb',
+      relativePath: 'protein.pdb',
       mimeType: 'chemical/x-pdb',
       size: Buffer.byteLength(text),
       mtimeMs: 1
@@ -1267,9 +1270,15 @@ describe('WorkspacePreviewWorkerClient', () => {
       file,
       session: createSession(manifest, file),
       action: {
-        actionId: 'molecular.measureDistance',
+        actionId: 'molecular.workbench',
         input: {
-          atoms: [{ id: '1' }, { id: '2' }]
+          selection: {
+            chains: ['A']
+          },
+          measurement: {
+            kind: 'distance',
+            atoms: [{ id: '1' }, { index: 2 }]
+          }
         }
       }
     })
@@ -1277,18 +1286,27 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       result: {
-        coordinateAvailable: false,
-        unit: 'angstrom',
-        selection: {
-          kind: 'molecular',
-          atoms: [{ index: 1 }, { index: 2 }]
-        },
-        warnings: [expect.stringContaining('coordinates')]
+        ok: true,
+        atomCount: 2,
+        state: {
+          selection: {
+            kind: 'molecular',
+            chains: ['A']
+          },
+          measurement: {
+            kind: 'distance',
+            coordinateAvailable: true,
+            unit: 'angstrom',
+            selection: {
+              kind: 'molecular',
+              atoms: [{ id: '1', index: 1 }, { id: '2', index: 2 }]
+            }
+          }
+        }
       }
     })
-    if (result.ok && typeof result.result === 'object' && result.result !== null) {
-      expect(result.result).not.toHaveProperty('distance')
-    }
+    expect((result as { result?: { state?: { measurement?: { value?: number } } } }).result?.state?.measurement?.value)
+      .toBeCloseTo(1.4689, 3)
   })
 
   it('maps bioimaging placeholder observations without eager pixel decoding', async () => {

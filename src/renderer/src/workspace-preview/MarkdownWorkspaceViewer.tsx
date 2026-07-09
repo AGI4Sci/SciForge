@@ -105,16 +105,6 @@ export function MarkdownWorkspaceViewer({
       data-editable={model.editable ? 'true' : 'false'}
       data-truncated={model.truncated ? 'true' : 'false'}
     >
-      <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ds-text">{model.title}</h3>
-          {model.subtitle ? <p className="mt-1 text-xs text-ds-muted">{model.subtitle}</p> : null}
-        </div>
-        <p className="shrink-0 text-xs text-ds-muted" data-markdown-agent-summary>
-          {model.summary}
-        </p>
-      </header>
-
       {model.status !== 'ready' ? (
         <div
           className="p-4 text-sm text-ds-text"

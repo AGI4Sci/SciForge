@@ -65,8 +65,8 @@ function observation(overrides: Partial<WorkspaceObservation> = {}): WorkspaceOb
 
 describe('workspace preview action runner', () => {
   it('derives safe default plugin inputs from life-science observations', () => {
-    const molecularSelect = buildWorkspacePreviewPluginActionInput(
-      'molecular.select',
+    const molecularWorkbench = buildWorkspacePreviewPluginActionInput(
+      'molecular.workbench',
       observation({
         molecular: {
           chains: ['A', 'B'],
@@ -94,11 +94,13 @@ describe('workspace preview action runner', () => {
     )
     const search = buildWorkspacePreviewPluginActionInput('sequence.search', observation())
 
-    expect(molecularSelect).toMatchObject({
+    expect(molecularWorkbench).toMatchObject({
       ok: true,
       action: {
-        actionId: 'molecular.select',
-        input: { chains: ['A'] }
+        actionId: 'molecular.workbench',
+        input: {
+          selection: { chains: ['A'] }
+        }
       }
     })
     expect(sequenceRegion).toMatchObject({
@@ -128,7 +130,7 @@ describe('workspace preview action runner', () => {
     })
   })
 
-  it('maps molecular selections into select and distance worker inputs', () => {
+  it('maps molecular selections into unified workbench inputs', () => {
     const molecularSelection: WorkspaceStructuredSelection = {
       kind: 'molecular',
       chains: ['A'],
@@ -136,16 +138,12 @@ describe('workspace preview action runner', () => {
       ligands: ['ATP'],
       atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
     }
-    const molecularSelect = buildWorkspacePreviewPluginActionInput(
-      'molecular.select',
+    const molecularWorkbench = buildWorkspacePreviewPluginActionInput(
+      'molecular.workbench',
       observation({ selection: molecularSelection })
     )
-    const molecularDistance = buildWorkspacePreviewPluginActionInput(
-      'molecular.measureDistance',
-      observation({ selection: molecularSelection })
-    )
-    const missingDistance = buildWorkspacePreviewPluginActionInput(
-      'molecular.measureDistance',
+    const missingMeasurement = buildWorkspacePreviewPluginActionInput(
+      'molecular.workbench',
       observation({
         selection: {
           kind: 'molecular',
@@ -154,30 +152,34 @@ describe('workspace preview action runner', () => {
       })
     )
 
-    expect(molecularSelect).toMatchObject({
+    expect(molecularWorkbench).toMatchObject({
       ok: true,
       action: {
-        actionId: 'molecular.select',
+        actionId: 'molecular.workbench',
         input: {
-          chains: ['A'],
-          residues: [{ chain: 'A', index: 42, name: 'GLY' }],
-          ligands: ['ATP'],
-          atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
+          selection: {
+            chains: ['A'],
+            residues: [{ chain: 'A', index: 42, name: 'GLY' }],
+            ligands: ['ATP'],
+            atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
+          },
+          measurement: {
+            kind: 'distance',
+            atoms: [{ id: 'atom-1' }, { index: 2 }]
+          }
         }
       }
     })
-    expect(molecularDistance).toMatchObject({
+    expect(missingMeasurement).toMatchObject({
       ok: true,
       action: {
-        actionId: 'molecular.measureDistance',
+        actionId: 'molecular.workbench',
         input: {
-          atoms: [{ id: 'atom-1' }, { index: 2 }]
+          selection: {
+            atoms: [{ element: 'N' }]
+          }
         }
       }
-    })
-    expect(missingDistance).toMatchObject({
-      ok: false,
-      reason: 'missing-selection'
     })
   })
 
@@ -453,16 +455,18 @@ describe('workspace preview action runner', () => {
       ok: true,
       sessionId: activeSession.id,
       pluginId: activeSession.pluginId,
-      actionId: 'molecular.select',
+      actionId: 'molecular.workbench',
       invokedAt: NOW,
       result: {
         ok: true,
-        selection: selected
+        state: {
+          selection: selected
+        }
       },
       audit: {
         pluginId: activeSession.pluginId,
         path: activeSession.path,
-        actionId: 'molecular.select',
+        actionId: 'molecular.workbench',
         effect: 'worker-action'
       }
     }
@@ -487,7 +491,7 @@ describe('workspace preview action runner', () => {
       setSelection: vi.fn(async () => applyResult)
     } as unknown as WorkspacePreviewHost
 
-    const result = await runWorkspacePreviewToolbarAction(action('molecular.select'), {
+    const result = await runWorkspacePreviewToolbarAction(action('molecular.workbench'), {
       host,
       state: createWorkspacePreviewHostState({
         session: activeSession,
@@ -502,11 +506,13 @@ describe('workspace preview action runner', () => {
     expect(result).toMatchObject({
       ok: true,
       kind: 'invoke-action',
-      actionId: 'molecular.select'
+      actionId: 'molecular.workbench'
     })
     expect(host.invokeAction).toHaveBeenCalledWith(activeSession.id, {
-      actionId: 'molecular.select',
-      input: { chains: ['A'] }
+      actionId: 'molecular.workbench',
+      input: {
+        selection: { chains: ['A'] }
+      }
     })
     expect(host.setSelection).toHaveBeenCalledWith(selected, {
       sessionId: activeSession.id,
@@ -514,7 +520,7 @@ describe('workspace preview action runner', () => {
     })
   })
 
-  it('invokes molecular distance actions and applies the returned measured selection', async () => {
+  it('invokes molecular workbench measurement requests and applies the returned measured selection', async () => {
     const measuredSelection: WorkspaceStructuredSelection = {
       kind: 'molecular',
       atoms: [{ id: 'atom-1' }, { index: 2 }]
@@ -524,19 +530,24 @@ describe('workspace preview action runner', () => {
       ok: true,
       sessionId: activeSession.id,
       pluginId: activeSession.pluginId,
-      actionId: 'molecular.measureDistance',
+      actionId: 'molecular.workbench',
       invokedAt: NOW,
       result: {
         ok: true,
-        coordinateAvailable: true,
-        distance: 1.46,
-        unit: 'angstrom',
-        selection: measuredSelection
+        state: {
+          measurement: {
+            kind: 'distance',
+            coordinateAvailable: true,
+            value: 1.46,
+            unit: 'angstrom',
+            selection: measuredSelection
+          }
+        }
       },
       audit: {
         pluginId: activeSession.pluginId,
         path: activeSession.path,
-        actionId: 'molecular.measureDistance',
+        actionId: 'molecular.workbench',
         effect: 'worker-action'
       }
     }
@@ -561,7 +572,7 @@ describe('workspace preview action runner', () => {
       setSelection: vi.fn(async () => applyResult)
     } as unknown as WorkspacePreviewHost
 
-    const result = await runWorkspacePreviewToolbarAction(action('molecular.measureDistance'), {
+    const result = await runWorkspacePreviewToolbarAction(action('molecular.workbench'), {
       host,
       state: createWorkspacePreviewHostState({
         session: activeSession,
@@ -577,12 +588,18 @@ describe('workspace preview action runner', () => {
     expect(result).toMatchObject({
       ok: true,
       kind: 'invoke-action',
-      actionId: 'molecular.measureDistance'
+      actionId: 'molecular.workbench'
     })
     expect(host.invokeAction).toHaveBeenCalledWith(activeSession.id, {
-      actionId: 'molecular.measureDistance',
+      actionId: 'molecular.workbench',
       input: {
-        atoms: [{ id: 'atom-1' }, { index: 2 }]
+        selection: {
+          atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
+        },
+        measurement: {
+          kind: 'distance',
+          atoms: [{ id: 'atom-1' }, { index: 2 }]
+        }
       }
     })
     expect(host.setSelection).toHaveBeenCalledWith(measuredSelection, {
@@ -674,7 +691,7 @@ describe('workspace preview action runner', () => {
         ok: true,
         sessionId: activeSession.id,
         pluginId: activeSession.pluginId,
-        actionId: 'molecular.select',
+        actionId: 'molecular.workbench',
         invokedAt: NOW,
         result: {
           ok: true,
@@ -683,7 +700,7 @@ describe('workspace preview action runner', () => {
         audit: {
           pluginId: activeSession.pluginId,
           path: activeSession.path,
-          actionId: 'molecular.select',
+          actionId: 'molecular.workbench',
           effect: 'worker-action'
         }
       })),
@@ -693,7 +710,7 @@ describe('workspace preview action runner', () => {
       }))
     } as unknown as WorkspacePreviewHost
 
-    const result = await runWorkspacePreviewToolbarAction(action('molecular.select'), {
+    const result = await runWorkspacePreviewToolbarAction(action('molecular.workbench'), {
       host,
       state: createWorkspacePreviewHostState({
         session: activeSession,
@@ -707,7 +724,7 @@ describe('workspace preview action runner', () => {
 
     expect(result).toEqual({
       ok: false,
-      actionId: 'molecular.select',
+      actionId: 'molecular.workbench',
       reason: 'bridge',
       message: 'selection writeback failed'
     })

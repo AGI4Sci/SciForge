@@ -502,12 +502,16 @@ describe('WorkspacePreviewHost', () => {
     })
 
     await host.invokeAction({
-      actionId: 'molecular.select',
-      input: { chains: ['A'] }
+      actionId: 'molecular.workbench',
+      input: {
+        selection: { chains: ['A'] }
+      }
     })
     expect(bridge.invokeAction).toHaveBeenCalledWith('session-1', {
-      actionId: 'molecular.select',
-      input: { chains: ['A'] }
+      actionId: 'molecular.workbench',
+      input: {
+        selection: { chains: ['A'] }
+      }
     })
 
     await host.describeAsset()

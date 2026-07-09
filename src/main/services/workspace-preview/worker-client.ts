@@ -599,11 +599,8 @@ export class WorkspacePreviewWorkerClient {
       mtimeMs: input.file.mtimeMs
     })
 
-    if (input.action.actionId === 'molecular.select') {
-      return actionOk(service.select(withActionPreview(input.action, preview) as Parameters<typeof service.select>[0]), text)
-    }
-    if (input.action.actionId === 'molecular.measureDistance') {
-      return actionOk(service.measureDistance(withActionPreview(input.action, preview) as Parameters<typeof service.measureDistance>[0]), text)
+    if (input.action.actionId === 'molecular.workbench') {
+      return actionOk(service.workbench(withActionPreview(input.action, preview) as Parameters<typeof service.workbench>[0]), text)
     }
     return unsupportedAction(input)
   }

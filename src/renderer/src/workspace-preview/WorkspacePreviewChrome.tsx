@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import { MoreHorizontal } from 'lucide-react'
 import { createWorkspacePreviewHostState } from './host'
 import {
   buildWorkspacePreviewChromeModel,
@@ -22,8 +21,7 @@ export function WorkspacePreviewChrome({
   input,
   children,
   className,
-  showInspector = false,
-  onAction
+  showInspector = false
 }: WorkspacePreviewChromeProps): ReactNode {
   const resolvedModel = model ?? buildWorkspacePreviewChromeModel(input ?? {
     state: createWorkspacePreviewHostState()
@@ -36,61 +34,6 @@ export function WorkspacePreviewChrome({
       data-workspace-preview-chrome
       data-status={resolvedModel.status.kind}
     >
-      <header className="workspace-preview-chrome__header">
-        {resolvedModel.breadcrumb.length ? (
-          <nav className="workspace-preview-chrome__breadcrumb" aria-label="Workspace preview breadcrumb">
-            {resolvedModel.breadcrumb.map((item, index) => (
-              <span key={item.path} className="workspace-preview-chrome__breadcrumb-item">
-                {index > 0 ? <span aria-hidden="true">/</span> : null}
-                <span aria-current={item.current ? 'page' : undefined}>{item.label}</span>
-              </span>
-            ))}
-          </nav>
-        ) : null}
-
-        <div className="workspace-preview-chrome__title">
-          <h2>{resolvedModel.title.text}</h2>
-          {resolvedModel.title.subtitle ? <p>{resolvedModel.title.subtitle}</p> : null}
-        </div>
-
-        {resolvedModel.toolbar.actions.length ? (
-          <div
-            className="workspace-preview-chrome__toolbar ml-auto flex shrink-0 items-center"
-            role="toolbar"
-            aria-label="Workspace preview actions"
-          >
-            <details className="group relative" data-workspace-preview-action-menu>
-              <summary
-                className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-text [&::-webkit-details-marker]:hidden"
-                aria-label="More workspace preview actions"
-              >
-                <MoreHorizontal className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
-              </summary>
-              <div className="absolute right-0 top-full z-30 mt-1 flex min-w-52 flex-col gap-0.5 rounded-md border border-ds-border bg-ds-panel p-1 text-[12px] shadow-lg">
-                {resolvedModel.toolbar.actions.map((action) => (
-                  <button
-                    key={action.id}
-                    type="button"
-                    data-action-id={action.id}
-                    data-action-source={action.source}
-                    disabled={!action.enabled}
-                    title={action.reason ?? action.label}
-                    className="flex min-h-7 w-full items-center rounded px-2 text-left text-ds-text transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:text-ds-faint"
-                    onClick={(event) => {
-                      const details = event.currentTarget.closest('details')
-                      if (details) details.open = false
-                      onAction?.(action)
-                    }}
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </details>
-          </div>
-        ) : null}
-      </header>
-
       {resolvedModel.status.kind !== 'ready' ? (
         <div
           className="workspace-preview-chrome__state"

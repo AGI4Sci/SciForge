@@ -327,7 +327,7 @@ vi.mock('../workspace-preview', async () => {
                   modelCount: 1,
                   chains: ['A']
                 },
-                actions: ['molecular.select', 'molecular.measureDistance']
+                actions: ['molecular.workbench']
               }
           : isSequence
             ? {
@@ -810,7 +810,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             molecular: {
               chains: ['A']
             },
-            actions: ['molecular.select', 'molecular.measureDistance']
+            actions: ['molecular.workbench']
           },
           error: null,
           lastEditSummary: null
@@ -868,12 +868,12 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       id: 'right-sidebar.file-preview',
       component: 'workspace-preview',
       title: 'protein.pdb',
-      summary: 'Workspace preview observation for Molecular file protein.pdb with 2 actions.',
+      summary: 'Workspace preview observation for Molecular file protein.pdb with 1 actions.',
       state: {
         pluginId: 'molecular',
         modality: 'molecular',
         selectionKind: 'molecular',
-        actionCount: 2,
+        actionCount: 1,
         assetPrimary: 'byte-range',
         assetStrategies: [
           {
@@ -897,7 +897,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           molecular: {
             chains: ['A']
           },
-          actions: ['molecular.select', 'molecular.measureDistance']
+          actions: ['molecular.workbench']
         }
       },
       resources: [
@@ -917,7 +917,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
                 status: 'requires-plugin'
               }
             ],
-            actionCount: 2
+            actionCount: 1
           }
         }
       ]

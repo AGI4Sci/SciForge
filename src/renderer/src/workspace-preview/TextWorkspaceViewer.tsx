@@ -141,29 +141,19 @@ export function TextWorkspaceViewer({
 
   return (
     <section
-      className={compactClassName('workspace-preview-text-viewer', className)}
+      className={compactClassName('workspace-preview-text-viewer flex h-full min-h-0 flex-col', className)}
       data-workspace-preview-text-viewer
       data-status={resolvedModel.status.kind}
       data-truncated={resolvedModel.truncated ? 'true' : 'false'}
       data-editable={resolvedModel.editable ? 'true' : 'false'}
     >
-      <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ds-text">{resolvedModel.title}</h3>
-          {resolvedModel.subtitle ? <p className="mt-1 text-xs text-ds-muted">{resolvedModel.subtitle}</p> : null}
-        </div>
-        <p className="shrink-0 text-xs text-ds-muted" data-text-agent-summary>
-          {resolvedModel.agentSummary}
-        </p>
-      </header>
-
       {resolvedModel.status.kind !== 'ready' ? (
         <div className="p-4 text-sm text-ds-text" role={statusRole}>
           <strong>{resolvedModel.status.title}</strong>
           <p className="mt-1 text-ds-muted">{resolvedModel.status.message}</p>
         </div>
       ) : (
-        <div className="flex h-full min-h-0 flex-col gap-3 p-4 pr-20">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 pr-20">
           <textarea
             className="min-h-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-xs leading-5 text-ds-text outline-none focus:border-ds-accent"
             data-text-preview-editor

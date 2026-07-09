@@ -93,10 +93,8 @@ export function buildWorkspacePreviewPluginActionInput(
       return buildAction(actionId, buildDeckSlideInput(observation))
     case 'deck.selectText':
       return buildAction(actionId, buildDeckTextInput(observation))
-    case 'molecular.select':
-      return buildAction(actionId, buildMolecularSelectInput(observation))
-    case 'molecular.measureDistance':
-      return buildAction(actionId, buildMolecularDistanceInput(observation))
+    case 'molecular.workbench':
+      return buildAction(actionId, buildMolecularWorkbenchInput(observation))
     case 'sequence.selectRegion':
       return buildAction(actionId, buildSequenceRegionInput(observation))
     case 'omics.selectDataset':
@@ -231,7 +229,19 @@ function buildAction(
   }
 }
 
-function buildMolecularSelectInput(observation: WorkspaceObservation): MutableActionInput | null {
+function buildMolecularWorkbenchInput(observation: WorkspaceObservation): MutableActionInput | null {
+  const selection = buildMolecularSelectionRequest(observation)
+  const measurement = buildMolecularMeasurementRequest(observation)
+
+  if (!selection && !measurement) return null
+
+  return {
+    ...(selection ? { selection } : {}),
+    ...(measurement ? { measurement } : {})
+  }
+}
+
+function buildMolecularSelectionRequest(observation: WorkspaceObservation): MutableActionInput | null {
   const selection = observation.selection?.kind === 'molecular' ? observation.selection : null
   const input: MutableActionInput = {}
 
@@ -342,7 +352,7 @@ function boundedDeckTextQuery(text: string): string | undefined {
   return query || undefined
 }
 
-function buildMolecularDistanceInput(observation: WorkspaceObservation): MutableActionInput | null {
+function buildMolecularMeasurementRequest(observation: WorkspaceObservation): MutableActionInput | null {
   const selection = observation.selection?.kind === 'molecular' ? observation.selection : null
   const atoms = selection?.atoms
     ?.map((atom) => ({
@@ -352,7 +362,7 @@ function buildMolecularDistanceInput(observation: WorkspaceObservation): Mutable
     .filter((atom) => atom.id || atom.index !== undefined)
     .slice(0, 2)
 
-  return atoms && atoms.length === 2 ? { atoms } : null
+  return atoms && atoms.length === 2 ? { kind: 'distance', atoms } : null
 }
 
 function buildSequenceRegionInput(observation: WorkspaceObservation): MutableActionInput | null {
@@ -461,8 +471,16 @@ function firstSpectraRange(observation: WorkspaceObservation): MutableActionInpu
 
 function extractStructuredSelection(result: unknown): WorkspaceStructuredSelection | null {
   if (!isRecord(result)) return null
-  const parsed = workspaceStructuredSelectionSchema.safeParse(result.selection)
-  return parsed.success ? parsed.data : null
+  const direct = workspaceStructuredSelectionSchema.safeParse(result.selection)
+  if (direct.success) return direct.data
+
+  const state = isRecord(result.state) ? result.state : null
+  const stateSelection = workspaceStructuredSelectionSchema.safeParse(state?.selection)
+  if (stateSelection.success) return stateSelection.data
+
+  const measurement = isRecord(state?.measurement) ? state.measurement : null
+  const measurementSelection = workspaceStructuredSelectionSchema.safeParse(measurement?.selection)
+  return measurementSelection.success ? measurementSelection.data : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -235,7 +235,7 @@ describe('WorkspacePreviewPluginOutlet', () => {
       {
         observation: createObservation('molecular', {
           molecular: { modelCount: 1, chains: ['A'] },
-          actions: ['molecular.select']
+          actions: ['molecular.workbench']
         }),
         marker: 'data-workspace-preview-molecular-viewer'
       },

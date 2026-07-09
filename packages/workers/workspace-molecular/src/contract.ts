@@ -10,8 +10,7 @@ export const WORKSPACE_MOLECULAR_MAX_WARNINGS = 20
 
 export const WORKSPACE_MOLECULAR_ACTIONS = [
   'molecular.preview',
-  'molecular.select',
-  'molecular.measureDistance'
+  'molecular.workbench'
 ] as const
 
 const pathSchema = z.string().trim().min(1).max(4096)
@@ -222,8 +221,7 @@ export const workspaceMolecularPreviewResultSchema = z.object({
   observation: workspaceMolecularObservationSchema.optional()
 }).strict()
 
-export const workspaceMolecularSelectionInputSchema = z.object({
-  preview: workspaceMolecularPreviewResultSchema,
+export const workspaceMolecularSelectionRequestSchema = z.object({
   chains: z.array(boundedChainIdSchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS).default([]),
   residues: z.array(workspaceMolecularResidueSelectorSchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS).default([]),
   ligands: z.array(boundedLigandNameSchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS).default([]),
@@ -237,22 +235,6 @@ export const workspaceMolecularSelectionInputSchema = z.object({
   }
 })
 
-export const workspaceMolecularSelectionResultSchema = z.object({
-  ok: z.literal(true),
-  contractVersion: z.literal(WORKSPACE_MOLECULAR_CONTRACT_VERSION),
-  atomCount: z.number().int().nonnegative(),
-  residueCount: z.number().int().nonnegative(),
-  chainCount: z.number().int().nonnegative(),
-  ligandCount: z.number().int().nonnegative(),
-  atoms: z.array(workspaceMolecularAtomSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
-  residues: z.array(workspaceMolecularResidueSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
-  chains: z.array(workspaceMolecularChainSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
-  ligands: z.array(workspaceMolecularLigandSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
-  selection: workspaceMolecularSelectionSchema,
-  visibleText: z.string().max(WORKSPACE_MOLECULAR_MAX_VISIBLE_TEXT_CHARS).optional(),
-  warnings: z.array(boundedWarningSchema).max(WORKSPACE_MOLECULAR_MAX_WARNINGS)
-}).strict()
-
 export const workspaceMolecularAtomReferenceSchema = z.object({
   id: boundedAtomIdSchema.optional(),
   index: z.number().int().min(0).optional()
@@ -265,19 +247,72 @@ export const workspaceMolecularAtomReferenceSchema = z.object({
   }
 })
 
-export const workspaceMolecularDistanceMeasurementInputSchema = z.object({
-  preview: workspaceMolecularPreviewResultSchema,
-  atoms: z.tuple([workspaceMolecularAtomReferenceSchema, workspaceMolecularAtomReferenceSchema])
+export const workspaceMolecularMeasurementKindSchema = z.enum(['distance', 'angle', 'dihedral'])
+
+export const workspaceMolecularMeasurementRequestSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('distance'),
+    atoms: z.tuple([workspaceMolecularAtomReferenceSchema, workspaceMolecularAtomReferenceSchema])
+  }).strict(),
+  z.object({
+    kind: z.literal('angle'),
+    atoms: z.tuple([
+      workspaceMolecularAtomReferenceSchema,
+      workspaceMolecularAtomReferenceSchema,
+      workspaceMolecularAtomReferenceSchema
+    ])
+  }).strict(),
+  z.object({
+    kind: z.literal('dihedral'),
+    atoms: z.tuple([
+      workspaceMolecularAtomReferenceSchema,
+      workspaceMolecularAtomReferenceSchema,
+      workspaceMolecularAtomReferenceSchema,
+      workspaceMolecularAtomReferenceSchema
+    ])
+  }).strict()
+])
+
+export const workspaceMolecularMeasurementStateSchema = z.object({
+  kind: workspaceMolecularMeasurementKindSchema,
+  coordinateAvailable: z.boolean(),
+  atoms: z.array(workspaceMolecularAtomSummarySchema).max(4),
+  selection: workspaceMolecularSelectionSchema,
+  value: z.number().finite().optional(),
+  unit: z.enum(['angstrom', 'degree']),
+  warnings: z.array(boundedWarningSchema).max(WORKSPACE_MOLECULAR_MAX_WARNINGS).optional()
 }).strict()
 
-export const workspaceMolecularDistanceMeasurementResultSchema = z.object({
+export const workspaceMolecularWorkbenchStateSchema = z.object({
+  selection: workspaceMolecularSelectionSchema.optional(),
+  measurement: workspaceMolecularMeasurementStateSchema.optional()
+}).strict()
+
+export const workspaceMolecularWorkbenchInputSchema = z.object({
+  preview: workspaceMolecularPreviewResultSchema,
+  selection: workspaceMolecularSelectionRequestSchema.optional(),
+  measurement: workspaceMolecularMeasurementRequestSchema.optional()
+}).strict().superRefine((input, context) => {
+  if (!input.selection && !input.measurement) {
+    context.addIssue({
+      code: 'custom',
+      message: 'workbench input must include selection or measurement'
+    })
+  }
+})
+
+export const workspaceMolecularWorkbenchResultSchema = z.object({
   ok: z.literal(true),
   contractVersion: z.literal(WORKSPACE_MOLECULAR_CONTRACT_VERSION),
-  coordinateAvailable: z.boolean(),
-  atoms: z.array(workspaceMolecularAtomSummarySchema).max(2),
-  selection: workspaceMolecularSelectionSchema,
-  distance: z.number().finite().nonnegative().optional(),
-  unit: z.literal('angstrom'),
+  atomCount: z.number().int().nonnegative(),
+  residueCount: z.number().int().nonnegative(),
+  chainCount: z.number().int().nonnegative(),
+  ligandCount: z.number().int().nonnegative(),
+  atoms: z.array(workspaceMolecularAtomSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
+  residues: z.array(workspaceMolecularResidueSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
+  chains: z.array(workspaceMolecularChainSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
+  ligands: z.array(workspaceMolecularLigandSummarySchema).max(WORKSPACE_MOLECULAR_MAX_ITEMS),
+  state: workspaceMolecularWorkbenchStateSchema,
   visibleText: z.string().max(WORKSPACE_MOLECULAR_MAX_VISIBLE_TEXT_CHARS).optional(),
   warnings: z.array(boundedWarningSchema).max(WORKSPACE_MOLECULAR_MAX_WARNINGS)
 }).strict()
@@ -300,11 +335,15 @@ export type NormalizedWorkspaceMolecularResidueSelector = z.output<typeof worksp
 export type WorkspaceMolecularSelection = z.infer<typeof workspaceMolecularSelectionSchema>
 export type WorkspaceMolecularObservation = z.infer<typeof workspaceMolecularObservationSchema>
 export type WorkspaceMolecularPreviewResult = z.infer<typeof workspaceMolecularPreviewResultSchema>
-export type WorkspaceMolecularSelectionInput = z.input<typeof workspaceMolecularSelectionInputSchema>
-export type NormalizedWorkspaceMolecularSelectionInput = z.output<typeof workspaceMolecularSelectionInputSchema>
-export type WorkspaceMolecularSelectionResult = z.infer<typeof workspaceMolecularSelectionResultSchema>
+export type WorkspaceMolecularSelectionRequest = z.input<typeof workspaceMolecularSelectionRequestSchema>
+export type NormalizedWorkspaceMolecularSelectionRequest = z.output<typeof workspaceMolecularSelectionRequestSchema>
 export type WorkspaceMolecularAtomReference = z.input<typeof workspaceMolecularAtomReferenceSchema>
 export type NormalizedWorkspaceMolecularAtomReference = z.output<typeof workspaceMolecularAtomReferenceSchema>
-export type WorkspaceMolecularDistanceMeasurementInput = z.input<typeof workspaceMolecularDistanceMeasurementInputSchema>
-export type NormalizedWorkspaceMolecularDistanceMeasurementInput = z.output<typeof workspaceMolecularDistanceMeasurementInputSchema>
-export type WorkspaceMolecularDistanceMeasurementResult = z.infer<typeof workspaceMolecularDistanceMeasurementResultSchema>
+export type WorkspaceMolecularMeasurementKind = z.infer<typeof workspaceMolecularMeasurementKindSchema>
+export type WorkspaceMolecularMeasurementRequest = z.input<typeof workspaceMolecularMeasurementRequestSchema>
+export type NormalizedWorkspaceMolecularMeasurementRequest = z.output<typeof workspaceMolecularMeasurementRequestSchema>
+export type WorkspaceMolecularMeasurementState = z.infer<typeof workspaceMolecularMeasurementStateSchema>
+export type WorkspaceMolecularWorkbenchState = z.infer<typeof workspaceMolecularWorkbenchStateSchema>
+export type WorkspaceMolecularWorkbenchInput = z.input<typeof workspaceMolecularWorkbenchInputSchema>
+export type NormalizedWorkspaceMolecularWorkbenchInput = z.output<typeof workspaceMolecularWorkbenchInputSchema>
+export type WorkspaceMolecularWorkbenchResult = z.infer<typeof workspaceMolecularWorkbenchResultSchema>
