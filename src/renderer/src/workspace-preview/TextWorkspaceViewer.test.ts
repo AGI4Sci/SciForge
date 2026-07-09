@@ -79,9 +79,22 @@ describe('TextWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-workspace-preview-text-viewer')
+    expect(html).toContain('overflow-hidden')
     expect(html).toContain('data-truncated="true"')
     expect(html).toContain('data-editable="false"')
     expect(html).toContain('data-text-preview-editor')
     expect(html).toContain('This text preview is truncated.')
+  })
+
+  it('can render without its header when embedded in another preview', () => {
+    const html = renderToStaticMarkup(createElement(TextWorkspaceViewer, {
+      observation: createTextObservation(),
+      showHeader: false
+    }))
+
+    expect(html).toContain('data-workspace-preview-text-viewer')
+    expect(html).toContain('data-text-preview-editor')
+    expect(html).not.toContain('data-text-agent-summary')
+    expect(html).not.toContain('<h3')
   })
 })

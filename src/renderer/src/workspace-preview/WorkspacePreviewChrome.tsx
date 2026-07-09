@@ -12,6 +12,8 @@ export type WorkspacePreviewChromeProps = {
   input?: WorkspacePreviewChromeInput
   children?: ReactNode
   className?: string
+  showHeader?: boolean
+  showInspector?: boolean
   onAction?: (action: WorkspacePreviewToolbarAction) => void
 }
 
@@ -20,6 +22,8 @@ export function WorkspacePreviewChrome({
   input,
   children,
   className,
+  showHeader = true,
+  showInspector = true,
   onAction
 }: WorkspacePreviewChromeProps): ReactNode {
   const resolvedModel = model ?? buildWorkspacePreviewChromeModel(input ?? {
@@ -29,45 +33,47 @@ export function WorkspacePreviewChrome({
 
   return (
     <section
-      className={compactClassName('workspace-preview-chrome', className)}
+      className={compactClassName('workspace-preview-chrome flex h-full min-h-0 flex-col overflow-hidden', className)}
       data-workspace-preview-chrome
       data-status={resolvedModel.status.kind}
     >
-      <header className="workspace-preview-chrome__header">
-        {resolvedModel.breadcrumb.length ? (
-          <nav className="workspace-preview-chrome__breadcrumb" aria-label="Workspace preview breadcrumb">
-            {resolvedModel.breadcrumb.map((item, index) => (
-              <span key={item.path} className="workspace-preview-chrome__breadcrumb-item">
-                {index > 0 ? <span aria-hidden="true">/</span> : null}
-                <span aria-current={item.current ? 'page' : undefined}>{item.label}</span>
-              </span>
-            ))}
-          </nav>
-        ) : null}
+      {showHeader ? (
+        <header className="workspace-preview-chrome__header shrink-0">
+          {resolvedModel.breadcrumb.length ? (
+            <nav className="workspace-preview-chrome__breadcrumb" aria-label="Workspace preview breadcrumb">
+              {resolvedModel.breadcrumb.map((item, index) => (
+                <span key={item.path} className="workspace-preview-chrome__breadcrumb-item">
+                  {index > 0 ? <span aria-hidden="true">/</span> : null}
+                  <span aria-current={item.current ? 'page' : undefined}>{item.label}</span>
+                </span>
+              ))}
+            </nav>
+          ) : null}
 
-        <div className="workspace-preview-chrome__title">
-          <h2>{resolvedModel.title.text}</h2>
-          {resolvedModel.title.subtitle ? <p>{resolvedModel.title.subtitle}</p> : null}
-        </div>
-
-        {resolvedModel.toolbar.actions.length ? (
-          <div className="workspace-preview-chrome__toolbar" role="toolbar" aria-label="Workspace preview actions">
-            {resolvedModel.toolbar.actions.map((action) => (
-              <button
-                key={action.id}
-                type="button"
-                data-action-id={action.id}
-                data-action-source={action.source}
-                disabled={!action.enabled}
-                title={action.reason ?? action.label}
-                onClick={() => onAction?.(action)}
-              >
-                {action.label}
-              </button>
-            ))}
+          <div className="workspace-preview-chrome__title">
+            <h2>{resolvedModel.title.text}</h2>
+            {resolvedModel.title.subtitle ? <p>{resolvedModel.title.subtitle}</p> : null}
           </div>
-        ) : null}
-      </header>
+
+          {resolvedModel.toolbar.actions.length ? (
+            <div className="workspace-preview-chrome__toolbar" role="toolbar" aria-label="Workspace preview actions">
+              {resolvedModel.toolbar.actions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  data-action-id={action.id}
+                  data-action-source={action.source}
+                  disabled={!action.enabled}
+                  title={action.reason ?? action.label}
+                  onClick={() => onAction?.(action)}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </header>
+      ) : null}
 
       {resolvedModel.status.kind !== 'ready' ? (
         <div
@@ -81,9 +87,9 @@ export function WorkspacePreviewChrome({
         </div>
       ) : null}
 
-      <div className="workspace-preview-chrome__body">{children}</div>
+      <div className="workspace-preview-chrome__body min-h-0 flex-1 overflow-hidden">{children}</div>
 
-      {resolvedModel.inspector.summary.length || resolvedModel.inspector.sections.length ? (
+      {showInspector && (resolvedModel.inspector.summary.length || resolvedModel.inspector.sections.length) ? (
         <aside className="workspace-preview-chrome__inspector" aria-label="Workspace preview inspector">
           {resolvedModel.inspector.summary.length ? (
             <dl className="workspace-preview-chrome__inspector-summary">

@@ -403,12 +403,18 @@ vi.mock('../workspace-preview', async () => {
     rendererWorkspacePreviewRegistry: registry.rendererWorkspacePreviewRegistry,
     WorkspacePreviewPanelShell: (props: {
       target: { path: string } | null
+      className?: string
+      showHeader?: boolean
+      showInspector?: boolean
       children?: ReactNode | ((nextContext: ReturnType<typeof contextForTarget>) => ReactNode)
     }) => h(
       'section',
       {
         'data-mock-workspace-preview-shell': 'true',
-        'data-target-path': props.target?.path ?? ''
+        'data-target-path': props.target?.path ?? '',
+        'data-shell-class-name': props.className ?? '',
+        'data-show-header': props.showHeader === false ? 'false' : 'true',
+        'data-show-inspector': props.showInspector === false ? 'false' : 'true'
       },
       typeof props.children === 'function'
         ? props.children(contextForTarget(props.target))
@@ -640,6 +646,10 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(unregisteredHtml).not.toContain('data-mock-legacy-preview-panel="true"')
     expect(markdownHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(markdownHtml).toContain('data-route-reason="registered-plugin"')
+    expect(markdownHtml).toContain('data-shell-class-name="ds-no-drag"')
+    expect(markdownHtml).toContain('class="ds-no-drag relative h-full min-h-0 overflow-hidden"')
+    expect(markdownHtml).toContain('data-show-header="false"')
+    expect(markdownHtml).toContain('data-show-inspector="false"')
     expect(molecularHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(molecularHtml).toContain('data-route-reason="registered-plugin"')
     expect(molecularHtml).toContain('data-mock-molecular-viewer="true"')

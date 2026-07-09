@@ -88,7 +88,9 @@ export function WorkspaceFilePreviewPanelBridge({
     <WorkspacePreviewPanelShell
       target={target}
       workspaceRoot={workspaceRoot}
-      className={className}
+      className={compactClassName('ds-no-drag', className)}
+      showHeader={false}
+      showInspector={false}
     >
       {(context) => (
         <WorkspacePreviewShellBody
@@ -239,7 +241,7 @@ function WorkspacePreviewShellBody({
 
   return (
     <div
-      className="relative h-full min-h-0"
+      className="ds-no-drag relative h-full min-h-0 overflow-hidden"
       data-workspace-file-preview-panel-bridge
       data-route={route.kind}
       data-route-reason={route.reason}
@@ -336,4 +338,8 @@ function formatLabel(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function compactClassName(...parts: Array<string | undefined | null | false>): string {
+  return parts.filter(Boolean).join(' ')
 }

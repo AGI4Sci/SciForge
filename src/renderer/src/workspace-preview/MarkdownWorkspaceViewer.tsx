@@ -1,4 +1,8 @@
-import type { ReactElement } from 'react'
+import {
+  useEffect,
+  useRef,
+  type ReactElement
+} from 'react'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
@@ -93,9 +97,23 @@ export function MarkdownWorkspaceViewer({
   loadWorkspaceImage
 }: MarkdownWorkspaceViewerProps): ReactElement {
   const model = buildMarkdownWorkspaceViewerModel(observation, Boolean(onApplyEdit))
+  const previewPaneRef = useRef<HTMLDivElement | null>(null)
   const applyTextEdit: TextWorkspaceViewerApplyEditHandler = async (operation) => {
     await onApplyEdit?.(operation)
   }
+
+  useEffect(() => {
+    const pane = previewPaneRef.current
+    if (!pane) return undefined
+    const wheelListenerOptions: AddEventListenerOptions = { capture: true, passive: false }
+    const onWheel = (event: WheelEvent): void => {
+      if (!scrollMarkdownPreviewPane(pane, normalizeMarkdownPreviewWheelDeltaY(pane, event))) return
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    pane.addEventListener('wheel', onWheel, wheelListenerOptions)
+    return () => pane.removeEventListener('wheel', onWheel, wheelListenerOptions)
+  }, [model.status])
 
   return (
     <section
@@ -105,7 +123,7 @@ export function MarkdownWorkspaceViewer({
       data-editable={model.editable ? 'true' : 'false'}
       data-truncated={model.truncated ? 'true' : 'false'}
     >
-      <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-ds-text">{model.title}</h3>
           {model.subtitle ? <p className="mt-1 text-xs text-ds-muted">{model.subtitle}</p> : null}
@@ -124,15 +142,20 @@ export function MarkdownWorkspaceViewer({
           <p className="mt-1 text-ds-muted">{model.summary}</p>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-          <div className="min-h-0 border-b border-ds-border lg:border-b-0 lg:border-r">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-2">
+          <div className="min-h-0 overflow-hidden border-b border-ds-border lg:border-b-0 lg:border-r">
             <TextWorkspaceViewer
               observation={observation}
               className="h-full min-h-0"
+              showHeader={false}
               onApplyEdit={onApplyEdit ? applyTextEdit : undefined}
             />
           </div>
-          <div className="min-h-0 overflow-auto bg-ds-bg px-5 py-4 pr-20" data-markdown-preview-pane>
+          <div
+            ref={previewPaneRef}
+            className="h-full min-h-0 overflow-auto bg-ds-bg px-5 py-4 pr-20"
+            data-markdown-preview-pane
+          >
             <WriteMarkdownPreview
               content={model.markdown}
               isMarkdown
@@ -145,6 +168,54 @@ export function MarkdownWorkspaceViewer({
       )}
     </section>
   )
+}
+
+function scrollMarkdownPreviewPane(pane: HTMLElement, deltaY: number): boolean {
+  if (deltaY === 0) return false
+  const maxScrollTop = pane.scrollHeight - pane.clientHeight
+  if (maxScrollTop <= 0) return false
+
+  const nextScrollTop = Math.min(
+    maxScrollTop,
+    Math.max(0, pane.scrollTop + deltaY)
+  )
+  const previousScrollTop = pane.scrollTop
+  if (nextScrollTop === previousScrollTop) return false
+
+  if (applyMarkdownPreviewScroll(pane, nextScrollTop, previousScrollTop)) return true
+
+  try {
+    pane.scrollTop = nextScrollTop
+  } catch {
+    return false
+  }
+  return pane.scrollTop !== previousScrollTop
+}
+
+function applyMarkdownPreviewScroll(
+  pane: HTMLElement,
+  nextScrollTop: number,
+  previousScrollTop: number
+): boolean {
+  try {
+    pane.scrollTo({ top: nextScrollTop, behavior: 'auto' })
+    if (pane.scrollTop !== previousScrollTop) return true
+  } catch {
+    // Older wrappers may not expose scrollTo with object options.
+  }
+
+  try {
+    pane.scrollBy({ top: nextScrollTop - previousScrollTop, behavior: 'auto' })
+  } catch {
+    return false
+  }
+  return pane.scrollTop !== previousScrollTop
+}
+
+function normalizeMarkdownPreviewWheelDeltaY(pane: HTMLElement, event: WheelEvent): number {
+  if (event.deltaMode === 1) return event.deltaY * 16
+  if (event.deltaMode === 2) return event.deltaY * pane.clientHeight
+  return event.deltaY
 }
 
 export function createMarkdownReplaceAllOperation(input: {

@@ -71,9 +71,13 @@ describe('MarkdownWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-workspace-preview-markdown-viewer')
+    expect(html).toContain('overflow-hidden')
     expect(html).toContain('data-editable="true"')
     expect(html).toContain('data-text-preview-editor')
+    expect(html).not.toContain('data-text-agent-summary')
     expect(html).toContain('data-markdown-preview-pane')
+    expect(html).toContain('overflow-auto')
+    expect(html.split('notes.md').length - 1).toBe(1)
     expect(html).toContain('<h1>Alpha</h1>')
     expect(html).toContain('<li>beta</li>')
   })

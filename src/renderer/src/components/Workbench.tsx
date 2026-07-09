@@ -2268,7 +2268,10 @@ export function Workbench(): ReactElement {
           className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
           onPointerDown={beginRightResize}
         />
-        <div className="h-full min-h-0 shrink-0" style={{ width: rightSidebarWidth }}>
+        <div
+          className={`h-full min-h-0 shrink-0 ${rightPanelMode === 'file' && filePreviewTarget ? 'pt-14' : ''}`}
+          style={{ width: rightSidebarWidth }}
+        >
           <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
             {rightPanelMode === 'file' && filePreviewTarget ? (
               <WorkspaceFilePreviewPanelBridge

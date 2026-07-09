@@ -36,6 +36,8 @@ export type WorkspacePreviewPanelShellProps = {
   host?: WorkspacePreviewHost
   initialState?: WorkspacePreviewHostState
   className?: string
+  showHeader?: boolean
+  showInspector?: boolean
   children?: ReactNode | ((context: WorkspacePreviewPanelShellContext) => ReactNode)
   onAction?: (action: WorkspacePreviewToolbarAction, context: WorkspacePreviewPanelShellContext) => void
 }
@@ -69,6 +71,8 @@ export function WorkspacePreviewPanelShell({
   host: providedHost,
   initialState,
   className,
+  showHeader,
+  showInspector,
   children,
   onAction
 }: WorkspacePreviewPanelShellProps): ReactElement {
@@ -174,6 +178,8 @@ export function WorkspacePreviewPanelShell({
         requestedPath: target?.path
       }}
       className={className}
+      showHeader={showHeader}
+      showInspector={showInspector}
       onAction={(action) => {
         if (onAction) {
           onAction(action, context)
@@ -184,6 +190,7 @@ export function WorkspacePreviewPanelShell({
       }}
     >
       <div
+        className="h-full min-h-0 overflow-hidden"
         data-workspace-preview-panel-shell
         data-asset-status={assetStatus}
         data-asset-primary={state.asset?.primary}

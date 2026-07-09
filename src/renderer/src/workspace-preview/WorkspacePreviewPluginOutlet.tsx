@@ -1,4 +1,9 @@
-import type { ReactElement } from 'react'
+import {
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode
+} from 'react'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation,
@@ -33,8 +38,8 @@ import {
 import {
   PdfWorkspaceViewer
 } from './PdfWorkspaceViewer'
-import {
-  MolecularWorkspaceViewer
+import type {
+  MolecularWorkspaceViewerProps
 } from './MolecularWorkspaceViewer'
 import {
   OmicsWorkspaceViewer
@@ -84,6 +89,26 @@ export type WorkspacePreviewPluginRendererContribution = {
   id: string
   matches: (input: Omit<WorkspacePreviewPluginRendererInput, 'applyEdit'>) => boolean
   render: (input: WorkspacePreviewPluginRendererInput) => ReactElement
+}
+
+type MolecularWorkspaceViewerComponent = (props: MolecularWorkspaceViewerProps) => ReactNode
+type MolecularWorkspaceViewerLoaderState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; Component: MolecularWorkspaceViewerComponent }
+  | { kind: 'error'; message: string }
+
+let molecularWorkspaceViewerLoader: Promise<MolecularWorkspaceViewerComponent> | null = null
+
+function loadMolecularWorkspaceViewer(): Promise<MolecularWorkspaceViewerComponent> {
+  if (!molecularWorkspaceViewerLoader) {
+    molecularWorkspaceViewerLoader = import('./MolecularWorkspaceViewer')
+      .then((module) => module.MolecularWorkspaceViewer)
+      .catch((error: unknown) => {
+        molecularWorkspaceViewerLoader = null
+        throw error
+      })
+  }
+  return molecularWorkspaceViewerLoader
 }
 
 export async function applyWorkspacePreviewOutletEdit(
@@ -289,7 +314,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
       modality === 'molecular' ||
       Boolean(observation?.molecular),
     render: ({ context, observation, asset, transport, applyEdit }) => (
-      <MolecularWorkspaceViewer
+      <LazyMolecularWorkspaceViewerRoute
         observation={observation}
         asset={asset}
         assetStatus={context.assetStatus}
@@ -355,6 +380,74 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
     )
   }
 ]
+
+function LazyMolecularWorkspaceViewerRoute(props: MolecularWorkspaceViewerProps): ReactElement {
+  const [state, setState] = useState<MolecularWorkspaceViewerLoaderState>({ kind: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    loadMolecularWorkspaceViewer().then(
+      (Component) => {
+        if (!cancelled) setState({ kind: 'ready', Component })
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setState({
+            kind: 'error',
+            message: formatErrorMessage(error)
+          })
+        }
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (state.kind === 'ready') {
+    const Component = state.Component
+    return <Component {...props} />
+  }
+
+  return (
+    <WorkspacePreviewPluginLoadState
+      className={props.className}
+      stateKind={state.kind}
+      title={state.kind === 'error' ? 'Molecular preview unavailable' : 'Loading molecular preview'}
+      message={state.kind === 'error'
+        ? state.message
+        : 'Preparing the molecular structure renderer.'}
+    />
+  )
+}
+
+function WorkspacePreviewPluginLoadState({
+  className,
+  stateKind,
+  title,
+  message
+}: {
+  className?: string
+  stateKind: 'loading' | 'error'
+  title: string
+  message: string
+}): ReactElement {
+  return (
+    <section
+      className={compactClassName(
+        'workspace-preview-plugin-loader flex h-full min-h-0 flex-col gap-2 overflow-auto p-4 text-sm text-ds-text',
+        className
+      )}
+      data-workspace-preview-molecular-viewer-loader
+      data-state-kind={stateKind}
+      role={stateKind === 'error' ? 'alert' : 'status'}
+    >
+      <strong>{title}</strong>
+      <p className="text-xs text-ds-muted">{message}</p>
+    </section>
+  )
+}
 
 export function resolveWorkspacePreviewPluginRendererContribution(
   context: WorkspacePreviewPanelShellContext,
@@ -477,6 +570,16 @@ function formatLabel(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'Unknown error'
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function compactClassName(...parts: Array<string | undefined | null | false>): string {
+  return parts.filter(Boolean).join(' ')
 }

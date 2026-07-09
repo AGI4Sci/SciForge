@@ -652,6 +652,7 @@ describe('workspace preview shared chrome', () => {
     )
 
     expect(html).toContain('data-workspace-preview-chrome')
+    expect(html).toContain('overflow-hidden')
     expect(html).toContain('role="toolbar"')
     expect(html).toContain('data-action-id="workspace.export:csv"')
     expect(html).toContain('data-preview-slot="content"')
