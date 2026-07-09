@@ -3,6 +3,7 @@ import type {
   ChatBlock,
   CompactionBlock,
   NormalizedThread,
+  ThreadCreateInput,
   ThreadEventSink,
   ToolBlock,
   ToolEventPayload
@@ -58,6 +59,35 @@ function defaultStandaloneSideModel(state: ChatState): string {
 
 function sideConversationIsRegular(side: SideConversation): boolean {
   return (side.source ?? 'side') === 'side'
+}
+
+function sideThreadCreateMetadata(source: SideConversation['source']): Pick<
+  ThreadCreateInput,
+  'relation' | 'threadSource' | 'sidebarVisibility'
+> {
+  if (source === 'pdf_annotation') {
+    return {
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
+    }
+  }
+  return { relation: 'side' }
+}
+
+function removeThreadFromMainLists(threadId: string, state: ChatState): Partial<ChatState> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return {}
+  const nextThreads = state.threads.filter((thread) => thread.id !== normalizedThreadId)
+  const nextWatch = { ...state.watchTurnCompletion }
+  const nextUnread = { ...state.unreadThreadIds }
+  delete nextWatch[normalizedThreadId]
+  delete nextUnread[normalizedThreadId]
+  return {
+    ...(nextThreads.length !== state.threads.length ? { threads: nextThreads } : {}),
+    ...(normalizedThreadId in state.watchTurnCompletion ? { watchTurnCompletion: nextWatch } : {}),
+    ...(normalizedThreadId in state.unreadThreadIds ? { unreadThreadIds: nextUnread } : {})
+  }
 }
 
 function rememberSideThreadRuntime(
@@ -531,6 +561,7 @@ export function createSideActions(ctx: SideContext): Pick<
       const title = options?.title?.trim() || defaultSideTitle(parentThread?.title ?? '', connectedParentId ?? 'standalone')
       const source = options?.source ?? 'side'
       const openPanel = options?.openPanel ?? true
+      const createMetadata = sideThreadCreateMetadata(source)
       let sideThread: NormalizedThread
       try {
         if (canForkSide && connectedParentId) {
@@ -540,7 +571,8 @@ export function createSideActions(ctx: SideContext): Pick<
           sideThread = await provider.createThread({
             title,
             mode: parentThread?.mode,
-            workspace: parentThread?.workspace ?? connectedState.workspaceRoot
+            workspace: parentThread?.workspace ?? connectedState.workspaceRoot,
+            ...createMetadata
           })
           if (typeof provider.updateThreadRelation === 'function') {
             try {
@@ -586,6 +618,7 @@ export function createSideActions(ctx: SideContext): Pick<
       }
       ctx.set((s) => ({
         sideConversations: { ...s.sideConversations, [sideThread.id]: side },
+        ...removeThreadFromMainLists(sideThread.id, s),
         ...(openPanel
           ? { sidePanel: setSidePanel(s.sidePanel, { open: true, activeSideId: sideThread.id }) }
           : {})

@@ -68,7 +68,12 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         threadId: input.threadId,
         workspace: input.workspace,
         title: input.title,
-        model: input.model
+        model: input.model,
+        relation: input.relation,
+        parentThreadId: input.parentThreadId,
+        parentTurnId: input.parentTurnId,
+        threadSource: input.threadSource,
+        sidebarVisibility: input.sidebarVisibility
       })
       if (!result.ok) throw codexFailure(result)
       return mapCodexThread(result.thread)

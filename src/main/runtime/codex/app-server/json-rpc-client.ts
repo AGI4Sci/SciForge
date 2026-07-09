@@ -246,7 +246,10 @@ export class CodexAppServerJsonRpcClient {
     params: CodexAppServerThreadRenameParams,
     abortSignal?: AbortSignal
   ): Promise<unknown> {
-    return this.request('thread/rename', params, abortSignal)
+    return this.request('thread/name/set', {
+      threadId: params.threadId,
+      name: params.title
+    }, abortSignal)
   }
 
   deleteThread(

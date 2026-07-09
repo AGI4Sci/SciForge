@@ -36,6 +36,22 @@ describe('WorkspacePreviewRegistry', () => {
       status: 'matched',
       manifest: { id: 'text', modality: 'text' }
     })
+    expect(registry.resolve({ path: '.env' })).toMatchObject({
+      status: 'matched',
+      manifest: { id: 'text', modality: 'text' }
+    })
+    expect(registry.resolve({ path: '.env.local' })).toMatchObject({
+      status: 'matched',
+      manifest: { id: 'text', modality: 'text' }
+    })
+    expect(registry.resolve({ path: 'script.py' })).toMatchObject({
+      status: 'matched',
+      manifest: { id: 'text', modality: 'text' }
+    })
+    expect(registry.resolve({ path: 'script', mimeType: 'text/x-python; charset=utf-8' })).toMatchObject({
+      status: 'matched',
+      manifest: { id: 'text', modality: 'text' }
+    })
     expect(registry.resolve({ path: 'paper.tex' })).toMatchObject({
       status: 'matched',
       manifest: { id: 'text', modality: 'text' }

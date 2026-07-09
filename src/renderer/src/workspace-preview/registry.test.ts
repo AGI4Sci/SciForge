@@ -117,6 +117,12 @@ describe('renderer workspace preview registry', () => {
     const registry = createRendererWorkspacePreviewRegistry()
 
     expect(registry.resolve({ path: 'notes.TXT' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
+    expect(registry.resolve({ path: '.env' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
+    expect(registry.resolve({ path: '.env.local' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
+    expect(registry.resolve({ path: 'script.py' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
+    expect(registry.resolve({ path: 'script', mimeType: 'text/x-python; charset=utf-8' })?.manifest.id).toBe(
+      TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
+    )
     expect(registry.resolve({ path: 'paper.tex' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
     expect(registry.resolve({ path: 'refs.bib' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
     expect(registry.resolve({ path: 'README.md' })?.manifest.id).toBe(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)

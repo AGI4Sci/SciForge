@@ -216,7 +216,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         observation.file.mimeType === 'application/pdf' ||
         observation.file.mimeType === 'application/x-pdf'
       )),
-    render: ({ context, observation, asset, transport, applyEdit, annotationQuestionBridge }) => (
+    render: ({ context, observation, asset, transport, annotationQuestionBridge }) => (
       <DocumentAnnotationPanelController
         context={context}
         observation={observation}
@@ -229,10 +229,11 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
             asset={asset}
             transport={transport}
             className="h-full min-h-0"
-            onApplyEdit={applyEdit}
+            onApplyEdit={pdf.onApplyEdit}
             annotationOverlays={pdf.annotationOverlays}
             activeAnnotationId={pdf.activeAnnotationId}
             jumpToRect={pdf.jumpToRect}
+            onSelectionChange={pdf.onSelectionChange}
             onAnnotationSelect={pdf.onAnnotationSelect}
             onOpenAnnotations={pdf.onOpenAnnotations}
           />
@@ -249,7 +250,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         /\.docx$/i.test(observation.file.path) ||
         observation.file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
       )),
-    render: ({ context, observation, applyEdit, annotationQuestionBridge }) => (
+    render: ({ context, observation, annotationQuestionBridge }) => (
       <DocumentAnnotationPanelController
         context={context}
         observation={observation}
@@ -260,7 +261,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
           <DocxWorkspaceViewer
             observation={observation}
             className="h-full min-h-0"
-            onApplyEdit={applyEdit}
+            onApplyEdit={docx.onApplyEdit}
             annotationOverlays={docx.annotationOverlays}
             activeAnnotationId={docx.activeAnnotationId}
             onAnnotationSelect={docx.onAnnotationSelect}

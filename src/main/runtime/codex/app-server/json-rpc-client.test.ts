@@ -244,7 +244,7 @@ describe('createCodexAppServerClient', () => {
     expect(fake.writtenMessages()).toEqual([
       { id: 1, method: 'thread/list', params: { limit: 25 } },
       { id: 2, method: 'thread/read', params: { threadId: 'thread-1' } },
-      { id: 3, method: 'thread/rename', params: { threadId: 'thread-1', title: 'Next title' } },
+      { id: 3, method: 'thread/name/set', params: { threadId: 'thread-1', name: 'Next title' } },
       { id: 4, method: 'thread/delete', params: { threadId: 'thread-1' } }
     ])
   })

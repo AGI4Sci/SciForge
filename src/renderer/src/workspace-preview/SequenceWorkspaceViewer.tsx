@@ -1,4 +1,13 @@
 import type { ReactNode } from 'react'
+import {
+  Activity,
+  Crosshair,
+  Download,
+  MousePointer2,
+  Search,
+  Tags,
+  type LucideIcon
+} from 'lucide-react'
 import type {
   WorkspacePreviewEditOperation,
   WorkspaceObservation,
@@ -185,108 +194,274 @@ export function SequenceWorkspaceViewer({
 
   return (
     <section
-      className={compactClassName('workspace-preview-sequence-viewer', className)}
+      className={compactClassName(
+        'workspace-preview-sequence-viewer flex h-full min-h-0 flex-col overflow-hidden bg-ds-canvas text-ds-ink',
+        className
+      )}
       data-workspace-preview-sequence-viewer
       data-status={resolvedModel.status.kind}
     >
-      <header className="workspace-preview-sequence-viewer__header">
-        <div>
-          <h3>{resolvedModel.title}</h3>
-          {resolvedModel.subtitle ? <p>{resolvedModel.subtitle}</p> : null}
+      <header className="workspace-preview-sequence-viewer__header shrink-0 border-b border-ds-border bg-ds-card/95 px-4 py-3 backdrop-blur">
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.14)]" aria-hidden="true" />
+              <h3 className="min-w-0 truncate text-sm font-semibold leading-5 text-ds-ink">{resolvedModel.title}</h3>
+            </div>
+            {resolvedModel.subtitle ? (
+              <p className="mt-1 truncate text-xs leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
+            ) : null}
+          </div>
+          <span className="shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium leading-4 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200">
+            {resolvedModel.status.kind === 'ready' ? 'Ready' : titleCase(resolvedModel.status.kind)}
+          </span>
         </div>
       </header>
 
       {resolvedModel.status.kind !== 'ready' ? (
-        <div
-          className="workspace-preview-sequence-viewer__state"
-          role={statusRole}
-          data-state-kind={resolvedModel.status.kind}
-        >
-          <strong>{resolvedModel.status.title}</strong>
-          <p>{resolvedModel.status.message}</p>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div
+            className="workspace-preview-sequence-viewer__state rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
+            role={statusRole}
+            data-state-kind={resolvedModel.status.kind}
+          >
+            <strong className="block text-sm font-semibold text-ds-ink">{resolvedModel.status.title}</strong>
+            <p className="mt-2 text-sm leading-6 text-ds-muted">{resolvedModel.status.message}</p>
+          </div>
         </div>
       ) : (
-        <>
-          <div
-            className="workspace-preview-sequence-viewer__viewport"
-            data-sequence-browser-viewport
-            role="img"
-            aria-label="Bounded sequence map"
-          >
-            <SequenceBrowserViewport
-              browser={resolvedModel.browser}
-              fallback={resolvedModel.viewport}
-              observation={observation}
-              onSetSelection={onSetSelection}
-            />
-          </div>
-
-          <p className="workspace-preview-sequence-viewer__agent-summary">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-5 pt-3 sm:px-4">
+          <p className="workspace-preview-sequence-viewer__agent-summary sr-only">
             {resolvedModel.agentSummary}
           </p>
 
-          <section
-            className="workspace-preview-sequence-viewer__section"
-            aria-label="Sequence summary"
-          >
-            <h4>Sequence</h4>
-            <dl>
-              {resolvedModel.sequenceRows.map((row) => (
-                <div key={row.id}>
-                  <dt>{row.label}</dt>
-                  <dd>
-                    {row.value}
-                    {row.description ? <small>{row.description}</small> : null}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
+          <div className="grid min-h-full gap-4 min-[1600px]:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="min-w-0 space-y-4">
+              <div
+                className="workspace-preview-sequence-viewer__viewport"
+                data-sequence-browser-viewport
+                role="img"
+                aria-label="Bounded sequence map"
+              >
+                <SequenceBrowserViewport
+                  browser={resolvedModel.browser}
+                  fallback={resolvedModel.viewport}
+                />
+              </div>
 
-          <section
-            className="workspace-preview-sequence-viewer__section"
-            aria-label="Sequence selection"
-            data-selection-kind={resolvedModel.selection.kind}
-          >
-            <h4>Selection</h4>
-            <p>{resolvedModel.selection.summary}</p>
-            {resolvedModel.selection.groups.length ? (
-              <dl>
-                {resolvedModel.selection.groups.map((group) => (
-                  <div key={group.id}>
-                    <dt>{group.title}</dt>
-                    <dd>
-                      {group.items.join(', ')}
-                      <small>{group.summary}</small>
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-          </section>
+              <SequenceSummaryPanel rows={resolvedModel.sequenceRows} />
+            </div>
 
-          <section
-            className="workspace-preview-sequence-viewer__section"
-            aria-label="Sequence actions"
+            <aside className="min-w-0 space-y-4" aria-label="Sequence inspection panels">
+              <SequenceAnnotationPanel
+                browser={resolvedModel.browser}
+                observation={observation}
+                onSetSelection={onSetSelection}
+              />
+              <SequenceSelectionPanel selection={resolvedModel.selection} />
+              <SequenceActionPanel actions={resolvedModel.actions} />
+            </aside>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function SequenceSummaryPanel({
+  rows
+}: {
+  rows: SequenceWorkspaceViewerRow[]
+}): ReactNode {
+  return (
+    <section
+      className="workspace-preview-sequence-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
+      aria-label="Sequence summary"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Sequence</h4>
+        <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium leading-4 text-slate-600 dark:bg-white/10 dark:text-slate-200">
+          {formatCount(rows.length, 'metric')}
+        </span>
+      </div>
+      <dl className="grid gap-2 sm:grid-cols-3">
+        {rows.map((row) => (
+          <div
+            key={row.id}
+            className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
           >
-            <h4>Actions</h4>
-            {resolvedModel.actions.length ? (
-              <ul>
-                {resolvedModel.actions.map((action) => (
-                  <li
-                    key={action.id}
-                    data-action-id={action.id}
-                    data-action-kind={action.kind}
-                  >
-                    {action.label}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No select, search, export, or inspect actions are available.</p>
-            )}
-          </section>
-        </>
+            <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{row.label}</dt>
+            <dd className="mt-1 min-w-0 text-sm font-semibold leading-5 text-ds-ink">
+              <span className="block truncate">{row.value}</span>
+              {row.description ? (
+                <small className="mt-1 block overflow-hidden text-ellipsis whitespace-nowrap text-xs font-normal leading-4 text-ds-muted">
+                  {row.description}
+                </small>
+              ) : null}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+function SequenceSelectionPanel({
+  selection
+}: {
+  selection: SequenceWorkspaceViewerSelectionModel
+}): ReactNode {
+  return (
+    <section
+      className="workspace-preview-sequence-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
+      aria-label="Sequence selection"
+      data-selection-kind={selection.kind}
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <Crosshair aria-hidden="true" className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-300" strokeWidth={1.9} />
+        <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
+      </div>
+      <p className="text-sm leading-6 text-ds-ink">{selection.summary}</p>
+      {selection.groups.length ? (
+        <dl className="mt-3 space-y-2">
+          {selection.groups.map((group) => (
+            <div
+              key={group.id}
+              className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
+            >
+              <dt className="flex items-center justify-between gap-3 text-xs font-medium leading-4 text-ds-muted">
+                <span>{group.title}</span>
+                <span>{group.summary}</span>
+              </dt>
+              <dd className="mt-1 truncate text-sm font-medium leading-5 text-ds-ink">
+                {group.items.join(', ')}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </section>
+  )
+}
+
+function SequenceActionPanel({
+  actions
+}: {
+  actions: SequenceWorkspaceViewerAction[]
+}): ReactNode {
+  return (
+    <section
+      className="workspace-preview-sequence-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
+      aria-label="Sequence actions"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Actions</h4>
+        <span className="text-xs leading-4 text-ds-faint">{formatCount(actions.length, 'tool')}</span>
+      </div>
+      {actions.length ? (
+        <ul className="grid gap-2">
+          {actions.map((action) => {
+            const Icon = sequenceActionIcon(action.kind)
+            return (
+              <li
+                key={action.id}
+                className={compactClassName(
+                  'flex min-h-9 min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium leading-5',
+                  sequenceActionTone(action.kind)
+                )}
+                data-action-id={action.id}
+                data-action-kind={action.kind}
+                title={action.id}
+              >
+                <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="min-w-0 truncate">{action.label}</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="text-sm leading-6 text-ds-muted">No select, search, export, or inspect actions are available.</p>
+      )}
+    </section>
+  )
+}
+
+function SequenceAnnotationPanel({
+  browser,
+  observation,
+  onSetSelection
+}: {
+  browser: SequenceWorkspaceViewerBrowserModel
+  observation?: WorkspaceObservation | null
+  onSetSelection?: SequenceWorkspaceViewerSelectHandler
+}): ReactNode {
+  const markers = browser.kind === 'map'
+    ? [...browser.selectedRanges, ...browser.features, ...browser.indexedRanges]
+    : []
+
+  return (
+    <section
+      className="workspace-preview-sequence-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
+      aria-label="Sequence annotations"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Tags aria-hidden="true" className="h-3.5 w-3.5 text-sky-600 dark:text-sky-300" strokeWidth={1.9} />
+          <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Annotations</h4>
+        </div>
+        <span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium leading-4 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
+          {formatCount(markers.length, 'marker')}
+        </span>
+      </div>
+      {browser.kind === 'map' && markers.length ? (
+        <ol className="workspace-preview-sequence-viewer__markers space-y-2" data-sequence-marker-list>
+          {markers.map((marker) => {
+            const selected = isMarkerSelected(marker, browser.selectedRanges)
+            return (
+              <li key={`${marker.id}:${marker.start}:${marker.end}`}>
+                <button
+                  type="button"
+                  disabled={!observation || !onSetSelection}
+                  className={compactClassName(
+                    'group grid min-h-12 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-3 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-emerald-500/40 disabled:cursor-default disabled:opacity-90',
+                    selected
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-400/40 dark:bg-emerald-400/10 dark:text-emerald-100'
+                      : 'border-ds-border-muted bg-ds-subtle text-ds-ink hover:border-emerald-300 hover:bg-emerald-50/60 dark:hover:bg-emerald-400/10'
+                  )}
+                  data-sequence-marker
+                  data-sequence-marker-kind={marker.kind ?? ''}
+                  data-sequence-marker-reference={browser.reference}
+                  data-sequence-marker-start={marker.start}
+                  data-sequence-marker-end={marker.end}
+                  data-sequence-marker-id={marker.id}
+                  data-sequence-marker-type={marker.kind ?? ''}
+                  data-sequence-marker-strand={marker.strand ?? ''}
+                  data-selected={selected ? 'true' : 'false'}
+                  onClick={() => {
+                    if (!observation) return
+                    void onSetSelection?.(createSequenceMarkerSelectionOperation(observation, browser.reference, marker))
+                  }}
+                >
+                  <span className={compactClassName('h-2.5 w-2.5 rounded-full', sequenceMarkerSwatch(marker))} aria-hidden="true" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold leading-5">{marker.label}</span>
+                    <span className="mt-0.5 block truncate text-xs leading-4 text-ds-muted">
+                      {markerCoordinateLabel(marker)}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1 rounded bg-white/70 px-1.5 py-1 text-xs font-medium leading-4 text-ds-muted shadow-sm dark:bg-white/10">
+                    {selected ? <MousePointer2 aria-hidden="true" className="h-3 w-3" strokeWidth={2} /> : null}
+                    {markerKindLabel(marker)}
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ol>
+      ) : (
+        <p className="text-sm leading-6 text-ds-muted">
+          {browser.kind === 'map' ? 'No coordinate annotations are reported.' : browser.message}
+        </p>
       )}
     </section>
   )
@@ -514,75 +689,119 @@ export function buildSequenceBrowserModel(
 
 function SequenceBrowserViewport({
   browser,
-  fallback,
-  observation,
-  onSetSelection
+  fallback
 }: {
   browser: SequenceWorkspaceViewerBrowserModel
   fallback: SequenceWorkspaceViewerModel['viewport']
-  observation?: WorkspaceObservation | null
-  onSetSelection?: SequenceWorkspaceViewerSelectHandler
 }): ReactNode {
   if (browser.kind !== 'map') {
     return (
       <div
-        className="workspace-preview-sequence-viewer__browser-empty"
+        className="workspace-preview-sequence-viewer__browser-empty rounded-lg border border-dashed border-ds-border bg-ds-card p-6 text-center shadow-sm"
         data-sequence-browser-empty
       >
-        <strong>{browser.title || fallback.title}</strong>
-        <p>{browser.message || fallback.message}</p>
+        <strong className="block text-sm font-semibold text-ds-ink">{browser.title || fallback.title}</strong>
+        <p className="mt-2 text-sm leading-6 text-ds-muted">{browser.message || fallback.message}</p>
       </div>
     )
   }
 
+  const ticks = buildSequenceTicks(browser.end)
+
   return (
     <figure
-      className="workspace-preview-sequence-viewer__browser"
+      className="workspace-preview-sequence-viewer__browser overflow-hidden rounded-lg border border-ds-border bg-ds-card shadow-sm"
       data-sequence-browser-map
       data-sequence-reference={browser.reference}
       data-sequence-start={browser.start}
       data-sequence-end={browser.end}
     >
-      <svg viewBox="0 0 1000 150" role="presentation" aria-hidden="true">
-        <line x1="24" y1="38" x2="976" y2="38" stroke="currentColor" strokeWidth="3" opacity="0.35" />
-        <text x="24" y="20">{browser.reference}</text>
-        <text x="976" y="20" textAnchor="end">{formatInteger(browser.end)}</text>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ds-border px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase leading-4 text-ds-muted">Reference map</p>
+          <h4 className="mt-1 truncate text-sm font-semibold leading-5 text-ds-ink">{browser.reference}</h4>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium leading-4 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200">
+            {formatCount(browser.selectedRanges.length, 'selection')}
+          </span>
+          <span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium leading-4 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
+            {formatCount(browser.features.length, 'feature')}
+          </span>
+          <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-medium leading-4 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
+            {formatCount(browser.indexedRanges.length, 'range')}
+          </span>
+        </div>
+      </div>
+      <div className="overflow-x-auto px-4 py-4">
+        <svg
+          className="block h-auto min-w-[560px] text-ds-muted"
+          viewBox="0 0 1000 304"
+          role="presentation"
+          aria-hidden="true"
+        >
+        <rect x="24" y="24" width="952" height="250" rx="8" fill="currentColor" opacity="0.055" />
+        {ticks.map((tick) => (
+          <g key={tick.ratio}>
+            <line x1={tick.x} y1="32" x2={tick.x} y2="274" stroke="currentColor" strokeWidth="1" opacity="0.16" />
+            <text x={tick.x} y="294" textAnchor={tick.anchor} fill="currentColor" fontSize="22">
+              {formatInteger(tick.value)}
+            </text>
+          </g>
+        ))}
+        <text x="24" y="18" fill="currentColor" fontSize="22" fontWeight="600">{browser.reference}</text>
+        <text x="976" y="18" textAnchor="end" fill="currentColor" fontSize="22">{formatInteger(browser.end)} bp/aa</text>
+        <text x="24" y="55" fill="currentColor" fontSize="20">Reference</text>
+        <rect x="24" y="66" width="952" height="14" rx="7" fill="#1f2937" opacity="0.86" />
+        <text x="24" y="110" fill="currentColor" fontSize="20">Indexed ranges</text>
         {browser.indexedRanges.map((range) => (
           <rect
             key={range.id}
             x={range.x}
-            y="30"
+            y="122"
             width={range.width}
-            height="16"
-            rx="3"
+            height="18"
+            rx="4"
+            fill={sequenceIndexedRangeFill(range)}
+            stroke={sequenceIndexedRangeStroke(range)}
+            strokeWidth="1.4"
             data-sequence-indexed-range={range.id}
             data-range-kind={range.kind ?? ''}
           >
             <title>{range.label}: {formatInteger(range.start)}-{formatInteger(range.end)}</title>
           </rect>
         ))}
+        <text x="24" y="168" fill="currentColor" fontSize="20">Selection</text>
         {browser.selectedRanges.map((range) => (
           <rect
             key={range.id}
             x={range.x}
-            y="62"
+            y="180"
             width={range.width}
-            height="22"
+            height="28"
             rx="4"
+            fill="#0f766e"
+            fillOpacity="0.92"
+            stroke="#134e4a"
+            strokeWidth="1.5"
             data-sequence-selected-range={range.id}
             data-strand={range.strand ?? ''}
           >
             <title>{range.label}</title>
           </rect>
         ))}
+        <text x="24" y="236" fill="currentColor" fontSize="20">Features</text>
         {browser.features.map((feature) => (
           <rect
             key={feature.id}
             x={feature.x}
-            y="100"
+            y="248"
             width={feature.width}
             height="18"
-            rx="3"
+            rx="4"
+            fill={sequenceFeatureFill(feature)}
+            stroke={sequenceFeatureStroke(feature)}
+            strokeWidth="1.4"
             data-sequence-feature={feature.id}
             data-feature-type={feature.kind ?? ''}
             data-strand={feature.strand ?? ''}
@@ -591,39 +810,120 @@ function SequenceBrowserViewport({
           </rect>
         ))}
       </svg>
-      <figcaption>
-        {browser.summary}
-        {browser.truncated ? <small>Bounded preview; omitted sequence records may not be shown.</small> : null}
+      </div>
+      <figcaption className="flex flex-wrap items-center justify-between gap-2 border-t border-ds-border px-4 py-3 text-xs leading-5 text-ds-muted">
+        <span>{browser.summary}</span>
+        {browser.truncated ? (
+          <small className="font-medium text-amber-700 dark:text-amber-200">Bounded preview; omitted sequence records may not be shown.</small>
+        ) : null}
       </figcaption>
-      {browser.indexedRanges.length || browser.features.length || browser.selectedRanges.length ? (
-        <ol className="workspace-preview-sequence-viewer__markers" data-sequence-marker-list>
-          {[...browser.selectedRanges, ...browser.features, ...browser.indexedRanges].map((marker) => (
-            <li key={`${marker.id}:${marker.start}:${marker.end}`}>
-              <button
-                type="button"
-                disabled={!observation || !onSetSelection}
-                data-sequence-marker
-                data-sequence-marker-kind={marker.kind ?? ''}
-                data-sequence-marker-reference={browser.reference}
-                data-sequence-marker-start={marker.start}
-                data-sequence-marker-end={marker.end}
-                data-sequence-marker-id={marker.id}
-                data-sequence-marker-type={marker.kind ?? ''}
-                data-sequence-marker-strand={marker.strand ?? ''}
-                data-selected={isMarkerSelected(marker, browser.selectedRanges) ? 'true' : 'false'}
-                onClick={() => {
-                  if (!observation) return
-                  void onSetSelection?.(createSequenceMarkerSelectionOperation(observation, browser.reference, marker))
-                }}
-              >
-                {marker.label}
-              </button>
-            </li>
-          ))}
-        </ol>
-      ) : null}
     </figure>
   )
+}
+
+function sequenceActionIcon(kind: SequenceWorkspaceViewerActionKind): LucideIcon {
+  switch (kind) {
+    case 'select':
+      return Crosshair
+    case 'search':
+      return Search
+    case 'export':
+      return Download
+    case 'inspect':
+      return Tags
+    case 'other':
+      return Activity
+  }
+}
+
+function sequenceActionTone(kind: SequenceWorkspaceViewerActionKind): string {
+  switch (kind) {
+    case 'select':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200'
+    case 'search':
+      return 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-400/30 dark:bg-sky-400/10 dark:text-sky-200'
+    case 'export':
+      return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200'
+    case 'inspect':
+      return 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200'
+    case 'other':
+      return 'border-ds-border-muted bg-ds-subtle text-ds-muted'
+  }
+}
+
+function sequenceMarkerSwatch(marker: Pick<SequenceWorkspaceViewerBrowserItem, 'kind'>): string {
+  const kind = marker.kind?.toLowerCase() ?? ''
+  if (kind === 'selection') return 'bg-emerald-500'
+  if (kind === 'gene' || kind.includes('gene')) return 'bg-sky-500'
+  if (kind === 'exon' || kind.includes('exon')) return 'bg-amber-500'
+  if (kind === 'variant' || kind.includes('variant')) return 'bg-rose-500'
+  if (kind === 'reference' || kind === 'sequence') return 'bg-slate-500'
+  return 'bg-teal-500'
+}
+
+function markerCoordinateLabel(marker: Pick<SequenceWorkspaceViewerBrowserItem, 'start' | 'end' | 'strand'>): string {
+  const strand = marker.strand ? ` (${marker.strand})` : ''
+  return `${formatInteger(marker.start)}-${formatInteger(marker.end)}${strand}`
+}
+
+function markerKindLabel(marker: Pick<SequenceWorkspaceViewerBrowserItem, 'kind'>): string {
+  const kind = marker.kind?.toLowerCase() ?? ''
+  if (kind === 'selection') return 'Selected'
+  if (kind === 'reference') return 'Reference'
+  if (kind === 'sequence') return 'Sequence'
+  if (kind === 'read') return 'Read'
+  if (kind) return titleCase(kind)
+  return 'Range'
+}
+
+function buildSequenceTicks(end: number): Array<{
+  ratio: number
+  value: number
+  x: number
+  anchor: 'start' | 'middle' | 'end'
+}> {
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    ratio,
+    value: Math.round(end * ratio),
+    x: 24 + ratio * 952,
+    anchor: ratio === 0 ? 'start' : ratio === 1 ? 'end' : 'middle'
+  }))
+}
+
+function sequenceIndexedRangeFill(range: Pick<SequenceWorkspaceViewerBrowserItem, 'kind'>): string {
+  const kind = range.kind?.toLowerCase() ?? ''
+  if (kind === 'reference' || kind === 'sequence') return '#64748b'
+  if (kind === 'feature') return '#38bdf8'
+  if (kind === 'read') return '#14b8a6'
+  if (kind.includes('variant')) return '#fb7185'
+  return '#f59e0b'
+}
+
+function sequenceIndexedRangeStroke(range: Pick<SequenceWorkspaceViewerBrowserItem, 'kind'>): string {
+  const kind = range.kind?.toLowerCase() ?? ''
+  if (kind === 'reference' || kind === 'sequence') return '#334155'
+  if (kind === 'feature') return '#0369a1'
+  if (kind === 'read') return '#0f766e'
+  if (kind.includes('variant')) return '#be123c'
+  return '#b45309'
+}
+
+function sequenceFeatureFill(feature: Pick<SequenceWorkspaceViewerBrowserItem, 'kind'>): string {
+  const kind = feature.kind?.toLowerCase() ?? ''
+  if (kind === 'gene' || kind.includes('gene')) return '#0ea5e9'
+  if (kind === 'exon' || kind.includes('exon')) return '#f59e0b'
+  if (kind === 'cds') return '#14b8a6'
+  if (kind.includes('variant')) return '#f43f5e'
+  return '#84cc16'
+}
+
+function sequenceFeatureStroke(feature: Pick<SequenceWorkspaceViewerBrowserItem, 'kind'>): string {
+  const kind = feature.kind?.toLowerCase() ?? ''
+  if (kind === 'gene' || kind.includes('gene')) return '#0369a1'
+  if (kind === 'exon' || kind.includes('exon')) return '#b45309'
+  if (kind === 'cds') return '#0f766e'
+  if (kind.includes('variant')) return '#be123c'
+  return '#4d7c0f'
 }
 
 export function createSequenceMarkerSelectionOperation(

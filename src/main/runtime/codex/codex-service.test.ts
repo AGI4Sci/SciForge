@@ -80,6 +80,7 @@ function failingClient(): CodexAppServerJsonRpcClient {
     readThread: vi.fn(async () => { throw new Error('app-server offline') }),
     startThread: vi.fn(async () => { throw new Error('app-server offline') }),
     startTurn: vi.fn(async () => { throw new Error('app-server offline') }),
+    renameThread: vi.fn(async () => { throw new Error('app-server offline') }),
     interruptTurn: vi.fn(async () => { throw new Error('app-server offline') }),
     steerTurn: vi.fn(async () => { throw new Error('app-server offline') }),
     request: vi.fn(async () => { throw new Error('app-server offline') }),
@@ -99,6 +100,7 @@ function controllableClient(): CodexAppServerJsonRpcClient {
     readThread: vi.fn(async () => ({ thread: { id: 'thread-1', turns: [] } })),
     startThread: vi.fn(async () => ({ thread: { id: 'thread-1' } })),
     startTurn: vi.fn(async () => ({ turn: { id: 'turn-1' } })),
+    renameThread: vi.fn(async () => ({})),
     interruptTurn: vi.fn(async () => ({})),
     steerTurn: vi.fn(async () => ({})),
     request: vi.fn(async () => ({})),
@@ -508,6 +510,49 @@ describe('CodexRuntimeService storage fallback', () => {
     })
     await expect(new CodexThreadStore({ rootDir: storageRoot }).get('codex-live-thread')).resolves.toMatchObject({
       title: 'Codex thread'
+    })
+  })
+
+  it('keeps user-renamed stored titles when app-server only reports a fallback title', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(threadStore, {
+      guiThreadId: 'gui-thread-1',
+      codexThreadId: 'codex-thread-1',
+      workspace: '/tmp/workspace',
+      title: '靶点发现',
+      titleSource: 'user'
+    })
+    const client = controllableClient()
+    vi.mocked(client.listThreads).mockResolvedValue({
+      threads: [{
+        id: 'codex-thread-1',
+        name: 'New chat',
+        preview: '针对非小细胞肺癌等 EGFR 相关疾病，能否从文献证据中确定一个可成药、结构可用的靶点？',
+        updatedAt: 1780272000,
+        cwd: '/tmp/workspace'
+      }]
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => client
+    })
+
+    await expect(service.listThreads()).resolves.toMatchObject({
+      ok: true,
+      threads: [expect.objectContaining({
+        id: 'gui-thread-1',
+        codexThreadId: 'codex-thread-1',
+        title: '靶点发现',
+        preview: '针对非小细胞肺癌等 EGFR 相关疾病，能否从文献证据中确定一个可成药、结构可用的靶点？',
+        titleSource: 'user'
+      })]
+    })
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get('gui-thread-1')).resolves.toMatchObject({
+      title: '靶点发现',
+      titleSource: 'user'
     })
   })
 
@@ -1675,6 +1720,39 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(client.request).toHaveBeenCalledWith('thread/archive', { threadId: 'codex-thread-missing' })
   })
 
+  it('renames materialized Codex threads through the app-server rename method', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await threadStore.upsert({
+      guiThreadId: 'gui-thread-1',
+      codexThreadId: 'codex-thread-1',
+      workspace: '/tmp/workspace',
+      title: 'Old title'
+    })
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => client
+    })
+
+    await expect(service.renameThread('gui-thread-1', '靶点发现')).resolves.toEqual({ ok: true })
+
+    expect(client.renameThread).toHaveBeenCalledWith({
+      threadId: 'codex-thread-1',
+      title: '靶点发现'
+    })
+    expect(client.request).not.toHaveBeenCalledWith(
+      'thread/name/set',
+      expect.objectContaining({ threadId: 'codex-thread-1' })
+    )
+    await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
+      title: '靶点发现',
+      titleSource: 'user'
+    })
+  })
+
   it('keeps locally archived live Codex threads out of the active list', async () => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })
@@ -1747,6 +1825,43 @@ describe('CodexRuntimeService compatibility operations', () => {
         workspace: '/tmp/workspace'
       }
     })
+  })
+
+  it('persists side-thread visibility metadata after starting a Codex thread', async () => {
+    const storageRoot = await mkdtemp(join(tmpdir(), 'codex-runtime-service-'))
+    const client = controllableClient()
+    vi.mocked(client.startThread).mockResolvedValue({ thread: { id: 'codex-thread-new' } })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => client
+    })
+
+    await expect(service.startThread({
+      title: 'PDF: selected text',
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
+    })).resolves.toMatchObject({
+      ok: true,
+      thread: {
+        id: 'codex-thread-new',
+        relation: 'side',
+        threadSource: 'pdf_annotation',
+        sidebarVisibility: 'hidden'
+      }
+    })
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden',
+      source: expect.objectContaining({
+        type: 'pdf_annotation',
+        relation: 'side',
+        sidebarVisibility: 'hidden'
+      })
+    }))
   })
 
   it('advertises managed MCP tools as Codex dynamic tools and routes their calls', async () => {

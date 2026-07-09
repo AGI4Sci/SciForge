@@ -8,7 +8,8 @@ import {
 import {
   TextWorkspaceViewer,
   buildTextWorkspaceViewerModel,
-  createTextReplaceAllOperation
+  createTextReplaceAllOperation,
+  textWorkspaceViewerDraftSourceKey
 } from './TextWorkspaceViewer'
 
 function createTextObservation(
@@ -84,5 +85,35 @@ describe('TextWorkspaceViewer', () => {
     expect(html).not.toContain('data-text-agent-summary')
     expect(html).toContain('data-text-preview-editor')
     expect(html).toContain('This text preview is truncated.')
+  })
+
+  it('changes the draft source key when async observations arrive or switch files', () => {
+    const emptyModel = buildTextWorkspaceViewerModel(null, true)
+    const notesObservation = createTextObservation()
+    const notesModel = buildTextWorkspaceViewerModel(notesObservation, true)
+    const envObservation = createTextObservation({
+      file: {
+        path: '/workspace/lab/.env',
+        workspaceRoot: '/workspace/lab',
+        mimeType: 'text/plain',
+        size: 11,
+        mtimeMs: 42
+      },
+      view: {
+        pluginId: 'text',
+        modality: 'text',
+        mode: 'preview',
+        title: '.env'
+      },
+      visibleText: notesModel.text
+    })
+    const envModel = buildTextWorkspaceViewerModel(envObservation, true)
+
+    expect(textWorkspaceViewerDraftSourceKey(null, emptyModel)).not.toBe(
+      textWorkspaceViewerDraftSourceKey(notesObservation, notesModel)
+    )
+    expect(textWorkspaceViewerDraftSourceKey(notesObservation, notesModel)).not.toBe(
+      textWorkspaceViewerDraftSourceKey(envObservation, envModel)
+    )
   })
 })

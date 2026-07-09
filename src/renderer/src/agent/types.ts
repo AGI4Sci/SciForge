@@ -23,6 +23,8 @@ import type {
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeResult,
   AgentRuntimeThreadGuiPlan,
+  AgentRuntimeThreadRelation,
+  AgentRuntimeThreadSidebarVisibility,
   AgentRuntimeTurnStatus,
   AgentRuntimeWorkspaceReference,
   AgentRuntimeWorkspaceReferencePreview,
@@ -212,6 +214,17 @@ export type ThreadListOptions = {
   archivedOnly?: boolean
   includeSide?: boolean
   summary?: boolean
+}
+
+export type ThreadCreateInput = {
+  workspace?: string
+  title?: string
+  mode?: string
+  relation?: AgentRuntimeThreadRelation
+  parentThreadId?: string
+  parentTurnId?: string
+  threadSource?: string
+  sidebarVisibility?: AgentRuntimeThreadSidebarVisibility
 }
 
 export type ToolBlock = {
@@ -529,7 +542,7 @@ export interface AgentProvider {
   rememberThreadRuntime?(threadId: string, runtimeId?: AgentRuntimeId): void
   connect(): Promise<void>
   listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
-  createThread(input: { workspace?: string; title?: string; mode?: string }): Promise<NormalizedThread>
+  createThread(input: ThreadCreateInput): Promise<NormalizedThread>
   getThreadDetail(threadId: string): Promise<{
     runtimeId?: AgentRuntimeId
     blocks: ChatBlock[]

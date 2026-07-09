@@ -1,0 +1,200 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  type WorkspaceObservation,
+  type WorkspacePreviewEditOperation
+} from '@shared/workspace-preview'
+import type {
+  PdfAnnotationSidecar
+} from '@shared/pdf-annotations'
+import {
+  createWorkspacePreviewAssetTransportClient,
+  createWorkspacePreviewHostState,
+  type WorkspacePreviewHost
+} from './host'
+import type {
+  WorkspacePreviewPanelShellContext
+} from './WorkspacePreviewPanelShell'
+import {
+  DocumentAnnotationPanelController,
+  type DocumentAnnotationPanelRenderInput
+} from './DocumentAnnotationPanelController'
+
+function createObservation(): WorkspaceObservation {
+  return {
+    schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+    file: {
+      path: '/workspace/lab/paper.pdf',
+      workspaceRoot: '/workspace/lab',
+      mimeType: 'application/pdf',
+      size: 1024
+    },
+    view: {
+      pluginId: 'pdf',
+      modality: 'document',
+      mode: 'preview',
+      title: 'paper.pdf'
+    },
+    actions: ['annotation.sidecar.read', 'annotation.upsert']
+  }
+}
+
+function createSidecar(): PdfAnnotationSidecar {
+  return {
+    schemaVersion: 1,
+    version: 1,
+    manifest: {
+      app: 'sciforge.pdf-annotations',
+      schemaVersion: 1,
+      sourcePdfName: 'paper.pdf',
+      privacy: {
+        explicitOnly: true,
+        chatTranscriptEmbedded: false
+      },
+      contribution: {
+        reviewableJson: true,
+        mergeKey: 'threadId',
+        conflictResolution: 'updatedAt'
+      },
+      createdAt: '2026-07-08T00:00:00.000Z',
+      updatedAt: '2026-07-08T00:00:00.000Z'
+    },
+    pdfFingerprint: {
+      sha256: 'sha256',
+      size: 1024,
+      fileName: 'paper.pdf'
+    },
+    anchors: [],
+    annotations: [],
+    threads: [],
+    authors: [],
+    updatedAt: '2026-07-08T00:00:00.000Z'
+  }
+}
+
+function createContext(observation: WorkspaceObservation): WorkspacePreviewPanelShellContext {
+  const host = {
+    applyEdit: vi.fn(async (_operation: WorkspacePreviewEditOperation) => ({
+      ok: true as const,
+      session: {
+        id: 'session-pdf',
+        pluginId: 'pdf',
+        workspaceRoot: '/workspace/lab',
+        path: '/workspace/lab/paper.pdf',
+        modality: 'document' as const,
+        mode: 'preview' as const,
+        openedAt: '2026-07-08T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:01:00.000Z'
+      },
+      operationKind: 'annotation.upsert',
+      appliedAt: '2026-07-08T00:01:00.000Z',
+      audit: {
+        pluginId: 'pdf',
+        path: '/workspace/lab/paper.pdf',
+        operationKind: 'annotation.upsert',
+        effect: 'sidecar-write' as const
+      }
+    })),
+    observe: vi.fn(async () => ({
+      ok: true as const,
+      observation
+    })),
+    invokeAction: vi.fn(async () => ({
+      ok: true as const,
+      sessionId: 'session-pdf',
+      pluginId: 'pdf',
+      actionId: 'annotation.sidecar.read',
+      invokedAt: '2026-07-08T00:01:00.000Z',
+      result: {
+        sidecar: createSidecar()
+      },
+      audit: {
+        pluginId: 'pdf',
+        path: '/workspace/lab/paper.pdf',
+        actionId: 'annotation.sidecar.read',
+        effect: 'host-action' as const
+      }
+    })),
+    readRange: vi.fn()
+  } as unknown as WorkspacePreviewHost
+
+  return {
+    state: createWorkspacePreviewHostState({
+      observation,
+      session: {
+        id: 'session-pdf',
+        pluginId: 'pdf',
+        workspaceRoot: '/workspace/lab',
+        path: '/workspace/lab/paper.pdf',
+        modality: 'document',
+        mode: 'preview',
+        openedAt: '2026-07-08T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:00:00.000Z'
+      }
+    }),
+    asset: null,
+    assetStatus: 'idle',
+    assetError: null,
+    transport: createWorkspacePreviewAssetTransportClient({
+      descriptor: null,
+      readRange: (range) => host.readRange(range)
+    }),
+    host
+  }
+}
+
+describe('DocumentAnnotationPanelController', () => {
+  it('routes document annotation edits through the controller-owned sidecar flow', async () => {
+    const observation = createObservation()
+    const context = createContext(observation)
+    let renderInput: DocumentAnnotationPanelRenderInput | null = null
+    const operation: WorkspacePreviewEditOperation = {
+      kind: 'annotation.upsert',
+      path: '/workspace/lab/paper.pdf',
+      annotationId: 'pdf-ann-1',
+      annotationKind: 'comment',
+      body: '',
+      target: {
+        documentKind: 'pdf',
+        threadId: 'pdf-thread-1',
+        anchor: {
+          id: 'pdf-anchor-1',
+          kind: 'text',
+          quote: 'Kinase activity',
+          pageStart: 1,
+          pageEnd: 1,
+          rects: [{ page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.04 }]
+        },
+        thread: {
+          status: 'open'
+        },
+        annotation: {
+          sourceText: 'Kinase activity'
+        }
+      }
+    }
+
+    renderToStaticMarkup(createElement(DocumentAnnotationPanelController, {
+      context,
+      observation,
+      documentKind: 'pdf',
+      renderDocument: (input) => {
+        renderInput = input
+        return createElement('div', { 'data-test-document': 'true' })
+      }
+    }))
+
+    const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
+    if (!capturedInput) throw new Error('Document render input was not captured.')
+    await capturedInput.pdf.onApplyEdit(operation)
+
+    expect(context.host.applyEdit).toHaveBeenCalledWith(operation)
+    expect(context.host.observe).toHaveBeenCalledWith('session-pdf')
+    expect(context.host.invokeAction).toHaveBeenCalledWith('session-pdf', {
+      actionId: 'annotation.sidecar.read',
+      input: {}
+    })
+  })
+})

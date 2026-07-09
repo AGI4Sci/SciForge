@@ -48,6 +48,7 @@ const SIDEBAR_VISIBLE_VISIBILITY_VALUES = new Set([
 ])
 const SIDEBAR_HIDDEN_THREAD_SOURCES = new Set([
   'local_workflow',
+  'pdf_annotation',
   'subagent',
   'workflow'
 ])

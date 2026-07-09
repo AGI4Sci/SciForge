@@ -62,14 +62,20 @@ describe('thread-sidebar-visibility', () => {
       title: 'Worker B',
       threadSource: 'subagent'
     })
+    const pdfAnnotationThread = thread({
+      id: 'pdf-annotation-thread',
+      title: 'PDF: selected text',
+      threadSource: 'pdf_annotation'
+    })
     const mainThread = thread({ id: 'main-thread', title: 'Main research task' })
     const getThreadDetail = vi.fn(async () => ({ blocks: [userBlock()] }))
 
     expect(shouldHideThreadFromSidebarByThreadSource(subagentThread)).toBe(true)
+    expect(shouldHideThreadFromSidebarByThreadSource(pdfAnnotationThread)).toBe(true)
     expect(shouldHideThreadFromSidebarByLineage(visibleSideThread)).toBe(true)
     await expect(
       filterThreadsForSidebar(
-        [hiddenByVisibility, visibleSideThread, subagentThread, mainThread],
+        [hiddenByVisibility, visibleSideThread, subagentThread, pdfAnnotationThread, mainThread],
         { getThreadDetail }
       )
     ).resolves.toEqual([visibleSideThread, mainThread])

@@ -552,6 +552,11 @@ export type AgentRuntimeThreadStartInput = {
   title?: string
   mode?: string
   model?: string
+  relation?: AgentRuntimeThreadRelation
+  parentThreadId?: string
+  parentTurnId?: string
+  threadSource?: string
+  sidebarVisibility?: AgentRuntimeThreadSidebarVisibility
 }
 
 export type AgentRuntimeThreadReadInput = {

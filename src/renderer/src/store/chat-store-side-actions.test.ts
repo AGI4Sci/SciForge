@@ -338,6 +338,19 @@ describe('chat-store-side-actions', () => {
       fork: false,
       sideConversations: false
     }
+    state.threads = [
+      ...state.threads,
+      {
+        id: 'standalone-side-thread',
+        title: 'PDF: selected text',
+        updatedAt: '2026-06-02T00:00:00.000Z',
+        model: 'deepseek-chat',
+        mode: 'agent',
+        status: 'running'
+      }
+    ]
+    state.watchTurnCompletion = { 'standalone-side-thread': true }
+    state.unreadThreadIds = { 'standalone-side-thread': true }
 
     const id = await actions.spawnSideConversation('Answer this selected PDF text.', {
       source: 'pdf_annotation',
@@ -357,11 +370,17 @@ describe('chat-store-side-actions', () => {
         busy: true
       })
     )
+    expect(state.threads.map((thread) => thread.id)).toEqual(['thr_main'])
+    expect(state.watchTurnCompletion).toEqual({})
+    expect(state.unreadThreadIds).toEqual({})
     expect(provider.forkMock).not.toHaveBeenCalled()
     expect(provider.createMock).toHaveBeenCalledWith({
       title: 'PDF: selected text',
       mode: 'agent',
-      workspace: '/tmp'
+      workspace: '/tmp',
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
     })
     expect(provider.updateRelationMock).toHaveBeenCalledWith('standalone-side-thread', 'side')
     expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer this selected PDF text.', {
@@ -396,7 +415,10 @@ describe('chat-store-side-actions', () => {
     expect(provider.createMock).toHaveBeenCalledWith({
       title: 'PDF: standalone',
       mode: undefined,
-      workspace: '/tmp'
+      workspace: '/tmp',
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
     })
     expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer without a main thread.', {
       model: 'deepseek-chat',
@@ -425,7 +447,10 @@ describe('chat-store-side-actions', () => {
     expect(provider.createMock).toHaveBeenCalledWith({
       title: 'PDF: reconnect',
       mode: undefined,
-      workspace: '/tmp'
+      workspace: '/tmp',
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
     })
     expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer after connecting.', {
       model: 'deepseek-chat',

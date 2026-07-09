@@ -150,6 +150,11 @@ export type CodexThreadStartPayload = {
   title?: string
   model?: string
   modelProvider?: string
+  relation?: AgentRuntimeThreadRelation
+  parentThreadId?: string
+  parentTurnId?: string
+  threadSource?: string
+  sidebarVisibility?: AgentRuntimeThreadSidebarVisibility
 }
 
 export type CodexThreadStartResult =

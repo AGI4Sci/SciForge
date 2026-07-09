@@ -9,6 +9,9 @@ import {
   isDeferredNonLifeScienceExtension,
   isDelimitedTabularEditPreviewPath,
   isFirstPartyTabularShellPreviewPath,
+  isFirstPartyTextPreviewPath,
+  isTextLikePreviewMimeType,
+  normalizePreviewMimeType,
   isLifeSciencePreviewExtension,
   normalizePreviewExtension,
   resolveLifeSciencePreviewRoute,
@@ -55,6 +58,19 @@ describe('workspace preview contract', () => {
     expect(isDelimitedTabularEditPreviewPath('workbook.xlsx')).toBe(false)
   })
 
+  it('normalizes text preview paths and MIME types through shared helpers', () => {
+    expect(isFirstPartyTextPreviewPath('notes.txt')).toBe(true)
+    expect(isFirstPartyTextPreviewPath('script.py')).toBe(true)
+    expect(isFirstPartyTextPreviewPath('.env')).toBe(true)
+    expect(isFirstPartyTextPreviewPath('.env.local')).toBe(true)
+    expect(isFirstPartyTextPreviewPath('Dockerfile')).toBe(true)
+    expect(isFirstPartyTextPreviewPath('archive.local')).toBe(false)
+    expect(normalizePreviewMimeType('Text/Plain; charset=utf-8')).toBe('text/plain')
+    expect(isTextLikePreviewMimeType('text/x-python')).toBe(true)
+    expect(isTextLikePreviewMimeType('application/json; charset=utf-8')).toBe(true)
+    expect(isTextLikePreviewMimeType('application/octet-stream')).toBe(false)
+  })
+
   it('validates plugin manifests with full agent permissions', () => {
     const manifest = workspacePreviewPluginManifestSchema.parse(LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS[0])
 
@@ -99,6 +115,42 @@ describe('workspace preview contract', () => {
 
     expect(plugin?.id).toBe('molecular')
     expect(mimePlugin?.id).toBe('molecular')
+  })
+
+  it('routes text-like MIME parameters and text file names through the text plugin', () => {
+    const textManifest = {
+      contractVersion: 1 as const,
+      id: 'text',
+      displayName: 'Text Preview',
+      version: '0.1.0',
+      modality: 'text' as const,
+      lifecycle: 'main' as const,
+      priority: 100,
+      extensions: ['.txt'],
+      mimeTypes: ['text/plain'],
+      capabilities: {
+        preview: true,
+        edit: true,
+        inspect: true,
+        structuredSelection: true,
+        agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      }
+    }
+
+    expect(resolveWorkspacePreviewPlugin({
+      path: '/workspace/unknown.bin',
+      mimeType: 'text/plain; charset=utf-8',
+      manifests: [textManifest]
+    })?.id).toBe('text')
+    expect(resolveWorkspacePreviewPlugin({
+      path: '/workspace/script',
+      mimeType: 'text/x-python',
+      manifests: [textManifest]
+    })?.id).toBe('text')
+    expect(resolveWorkspacePreviewPlugin({
+      path: '/workspace/.env.local',
+      manifests: [textManifest]
+    })?.id).toBe('text')
   })
 
   it('accepts representative edit operations for selections, text, tables, decks, documents, annotations, and molecular selections', () => {

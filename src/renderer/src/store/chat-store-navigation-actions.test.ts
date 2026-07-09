@@ -301,6 +301,33 @@ describe('chat-store-navigation-actions refreshThreads', () => {
     expect(state.activeThreadId).toBe('parent-thread')
   })
 
+  it('clears an active PDF annotation side thread from the main conversation surface', async () => {
+    const pdfSideThread = {
+      ...thread('pdf-side-thread', 'codex'),
+      title: 'PDF: selected text',
+      relation: 'side' as const,
+      sidebarVisibility: 'hidden' as const
+    }
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread: pdfSideThread,
+      listedThreads: [pdfSideThread],
+      blocks: [{ kind: 'assistant', id: 'assistant-1', text: 'temporary answer' }],
+      sideConversations: {
+        'pdf-side-thread': {
+          ...sideConversation('pdf-side-thread', 'pdf-side-thread'),
+          source: 'pdf_annotation'
+        }
+      }
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([])
+    expect(state.activeThreadId).toBeNull()
+    expect(state.blocks).toEqual([])
+  })
+
   it('ignores an older refresh result when a newer refresh has already applied', async () => {
     const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
     const oldThread = { ...thread('old-thread', 'codex'), title: 'Old thread' }

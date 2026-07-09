@@ -132,6 +132,11 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
           title: input.title,
           model: runtime.model,
           mode: normalizeThreadMode(input.mode),
+          relation: input.relation,
+          parentThreadId: input.parentThreadId,
+          parentTurnId: input.parentTurnId,
+          threadSource: input.threadSource,
+          sidebarVisibility: input.sidebarVisibility,
           approvalPolicy: runtime.approvalPolicy,
           sandboxMode: runtime.sandboxMode
         })

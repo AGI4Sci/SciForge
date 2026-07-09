@@ -706,8 +706,13 @@ export function createNavigationActions(
           )
         const shouldClearSelection =
           activeThreadId != null &&
-          !activeThreadHasLocalConversation &&
-          !displayThreads.some((thread) => thread.id === activeThreadId)
+          (
+            activeThreadIsAuxiliary ||
+            (
+              !activeThreadHasLocalConversation &&
+              !displayThreads.some((thread) => thread.id === activeThreadId)
+            )
+          )
         const locallyActiveThread =
           activeThreadHasLocalConversation && activeId && !activeThreadIsAuxiliary
             ? preserveLocalActiveThreadForSidebar(

@@ -521,18 +521,14 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
   })
 
   it('routes first-party TXT previews through the workspace preview shell', () => {
-    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'notes.txt' })).toEqual({
-      kind: 'workspace-preview-shell',
-      reason: 'registered-plugin',
-      pluginId: 'text',
-      modality: 'text'
-    })
-    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'debug.LOG' })).toEqual({
-      kind: 'workspace-preview-shell',
-      reason: 'registered-plugin',
-      pluginId: 'text',
-      modality: 'text'
-    })
+    for (const path of ['notes.txt', 'debug.LOG', 'script.py', '.env', '.env.local']) {
+      expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path })).toEqual({
+        kind: 'workspace-preview-shell',
+        reason: 'registered-plugin',
+        pluginId: 'text',
+        modality: 'text'
+      })
+    }
   })
 
   it('routes first-party tabular previews through the workspace preview shell', () => {

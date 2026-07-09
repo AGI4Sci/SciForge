@@ -360,13 +360,34 @@ export class CodexRuntimeService {
         }),
         ...codexModelRouterThreadParams(settings),
         serviceName: 'SciForge',
-        ephemeral: false
+        ephemeral: false,
+        ...(payload.relation ? { relation: payload.relation } : {}),
+        ...(payload.parentThreadId ? { parentThreadId: payload.parentThreadId } : {}),
+        ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {}),
+        ...(payload.threadSource ? { threadSource: payload.threadSource } : {}),
+        ...(payload.sidebarVisibility ? { sidebarVisibility: payload.sidebarVisibility } : {}),
+        ...(payload.threadSource || payload.relation || payload.sidebarVisibility || payload.parentThreadId || payload.parentTurnId
+          ? {
+              source: {
+                ...(payload.threadSource ? { type: payload.threadSource } : {}),
+                ...(payload.relation ? { relation: payload.relation } : {}),
+                ...(payload.sidebarVisibility ? { sidebarVisibility: payload.sidebarVisibility } : {}),
+                ...(payload.parentThreadId ? { parentThreadId: payload.parentThreadId } : {}),
+                ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {})
+              }
+            }
+          : {})
       })
       const thread = normalizeThread(readThread(response))
       const storedThread = await this.persistThread({
         ...thread,
         workspace: thread.workspace || workspace,
-        title: payload.title || thread.title
+        title: payload.title || thread.title,
+        relation: thread.relation ?? payload.relation,
+        parentThreadId: thread.parentThreadId || payload.parentThreadId,
+        parentTurnId: thread.parentTurnId || payload.parentTurnId,
+        threadSource: thread.threadSource || payload.threadSource,
+        sidebarVisibility: thread.sidebarVisibility || payload.sidebarVisibility
       }, {
         ...(payload.threadId ? { guiThreadId: payload.threadId } : {})
       })
@@ -383,7 +404,12 @@ export class CodexRuntimeService {
           : {
               ...thread,
               workspace: thread.workspace || workspace,
-              title: payload.title || thread.title
+              title: payload.title || thread.title,
+              relation: thread.relation ?? payload.relation,
+              parentThreadId: thread.parentThreadId || payload.parentThreadId,
+              parentTurnId: thread.parentTurnId || payload.parentTurnId,
+              threadSource: thread.threadSource || payload.threadSource,
+              sidebarVisibility: thread.sidebarVisibility || payload.sidebarVisibility
             }
       }
     } catch (error) {
@@ -514,12 +540,13 @@ export class CodexRuntimeService {
     try {
       const stored = await this.findStoredThread(threadId)
       const { client } = await this.ensureConnectedClient()
-      await client.request('thread/name/set', { threadId: stored?.codexThreadId ?? threadId, name: title })
+      await client.renameThread({ threadId: stored?.codexThreadId ?? threadId, title })
       if (stored) {
         await this.threadStore?.upsert({
           guiThreadId: stored.guiThreadId,
           codexThreadId: stored.codexThreadId,
-          title
+          title,
+          titleSource: 'user'
         })
       }
       return { ok: true }
@@ -1456,7 +1483,7 @@ export class CodexRuntimeService {
         parentTurnId: thread.parentTurnId,
         threadSource: thread.threadSource,
         sidebarVisibility: thread.sidebarVisibility,
-        titleSource: thread.titleSource,
+        ...(thread.titleSource && thread.titleSource !== 'fallback' ? { titleSource: thread.titleSource } : {}),
         agentNickname: thread.agentNickname,
         agentRole: thread.agentRole
       })
@@ -2095,13 +2122,27 @@ function mergeThreads(
   for (const thread of storedThreads) byId.set(thread.id, thread)
   for (const thread of liveThreads) {
     const stored = byId.get(thread.id)
+    const storedTitle = shouldPreferStoredThreadTitle(stored, thread)
+      ? { title: stored.title, titleSource: stored.titleSource }
+      : {}
     byId.set(thread.id, {
       ...stored,
       ...thread,
-      ...(stored ? { archived: stored.archived } : {})
+      ...(stored ? { archived: stored.archived } : {}),
+      ...storedTitle
     })
   }
   return [...byId.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+}
+
+function shouldPreferStoredThreadTitle(
+  stored: CodexNormalizedThread | undefined,
+  live: CodexNormalizedThread
+): stored is CodexNormalizedThread {
+  if (!stored) return false
+  const storedTitle = normalizeThreadTitleCandidate(stored.title)
+  if (!storedTitle) return false
+  return live.titleSource === 'fallback' || !normalizeThreadTitleCandidate(live.title)
 }
 
 function isKnownStoredThread(

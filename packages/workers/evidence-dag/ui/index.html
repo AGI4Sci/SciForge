@@ -3,13 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Evidence DAG — SciForge</title>
-<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
-<!-- dagre = Sugiyama layered layout: clear direction + crossing minimisation -->
-<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
-<!-- node-html-label: render real HTML "cards" inside nodes (text in a container) -->
-<script src="https://unpkg.com/cytoscape-node-html-label@1.2.2/dist/cytoscape-node-html-label.min.js"></script>
+<title>Evidence DAG - SciForge</title>
 <script>
   try {
     const embedded = new URLSearchParams(location.search).get('embed') === '1' || window.self !== window.top;
@@ -21,1023 +15,1355 @@
 <style>
   :root {
     color-scheme: light;
-    --bg:#f6f8fb; --panel:#ffffff; --panel2:#f8fafc; --line:#d9e2ee; --line-strong:#bfccd9;
-    --fg:#172033; --muted:#64748b; --faint:#94a3b8; --accent:#2563eb; --accent-soft:#e8f1ff;
-    --supported:#16a34a; --unverified:#94a3b8; --source:#2563eb; --reasoning:#7c3aed; --claim:#b77912;
-    --contradict:#dc2626; --shadow:0 1px 2px rgba(15,23,42,.06), 0 12px 28px rgba(15,23,42,.08);
+    --bg: #f6f8fb;
+    --panel: #ffffff;
+    --panel-soft: #f8fafc;
+    --ink: #172033;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --line: #d9e2ee;
+    --line-strong: #bdcad9;
+    --accent: #2563eb;
+    --accent-soft: #e8f1ff;
+    --source: #0d9488;
+    --source-soft: #ecfdf5;
+    --reasoning: #7c3aed;
+    --reasoning-soft: #f4efff;
+    --claim: #b77912;
+    --claim-soft: #fff8e8;
+    --support: #16a34a;
+    --contra: #dc2626;
+    --warn: #d97706;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 12px 28px rgba(15, 23, 42, .08);
   }
-  * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
-    font:13px/1.5 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
-  #app { display:flex; flex-direction:column; height:100vh; }
-  header { display:flex; gap:8px; align-items:center; padding:8px 10px; background:rgba(255,255,255,.94);
-    border-bottom:1px solid var(--line); flex-wrap:wrap; box-shadow:0 1px 0 rgba(15,23,42,.03); }
-  html[data-embedded="1"] header h1 { display:none; }
-  header h1 { font-size:13px; margin:0 6px 0 0; font-weight:650; letter-spacing:0; color:#111827; }
-  header .sp { flex:1; }
-  select,input,button { height:29px; background:var(--panel); color:var(--fg); border:1px solid var(--line);
-    border-radius:8px; padding:5px 9px; font-size:12px; outline:none; box-shadow:0 1px 0 rgba(15,23,42,.02); }
-  select { max-width:min(310px, 100%); color:#334155; }
-  button { cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap; }
-  button:hover { border-color:#9db6e8; background:#f3f7ff; color:#174ea6; }
-  button.primary { background:var(--accent-soft); border-color:#b8ccf8; color:#174ea6; }
-  button:active { transform:translateY(1px); }
-  label.chk { height:29px; display:flex; align-items:center; gap:5px; color:var(--muted); cursor:pointer;
-    border:1px solid var(--line); border-radius:8px; padding:0 8px; background:var(--panel); }
-  label.chk input { accent-color:var(--accent); }
-  .toolbar-sep { width:1px; height:20px; background:var(--line); margin:0 1px; }
-  #main { flex:1; display:flex; min-height:0; }
-  #cy { flex:1; background:
-      radial-gradient(circle at 1px 1px, #dfe7f1 1px, transparent 0) 0 0/22px 22px var(--bg); min-width:260px; }
-  aside { width:clamp(238px, 34vw, 330px); background:rgba(255,255,255,.96); border-left:1px solid var(--line);
-    display:flex; flex-direction:column; overflow:hidden; }
-  .audit { display:grid; grid-template-columns:1fr 1fr; gap:8px; background:var(--panel);
-    border-bottom:1px solid var(--line); padding:10px; }
-  .metric { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:9px 10px; }
-  .metric .v { font-size:18px; font-weight:700; letter-spacing:0; color:#0f172a; }
-  .metric .k { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.35px; }
-  .sec { padding:11px 12px; border-bottom:1px solid var(--line); overflow:auto; }
-  .sec h2 { font-size:10.5px; color:#526174; text-transform:uppercase; letter-spacing:.45px; margin:0 0 8px; }
-  #inspector { flex:1; overflow:auto; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:650; }
-  .row { display:flex; gap:8px; margin:5px 0; font-size:12px; }
-  .row .lab { color:var(--muted); min-width:78px; }
-  .row .val { flex:1; word-break:break-word; }
-  .content { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:9px;
-    margin-top:6px; white-space:pre-wrap; max-height:200px; overflow:auto; }
-  .legend > summary { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;
-    cursor:pointer; list-style:none; user-select:none; }
-  .legend > summary::-webkit-details-marker { display:none; }
-  .legend > summary::before { content:'▸ '; }
-  .legend[open] > summary { margin-bottom:8px; }
-  .legend[open] > summary::before { content:'▾ '; }
-  .legend .lg-row { display:flex; flex-wrap:wrap; gap:4px 14px; margin-bottom:7px; }
-  .legend span { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:11px; }
-  .legend .vok { color:var(--supported); font-weight:800; }
-  .sw { width:14px; height:14px; display:inline-block; border:1px solid #0008; }
-  .sw.sq{border-radius:3px;} .sw.di{transform:rotate(45deg);} .sw.ci{border-radius:50%;}
-  .bar-sw { width:5px; height:14px; border-radius:2px; display:inline-block; }
-  .edge-sw { width:22px; height:0; border-top:3px solid var(--supported); display:inline-block; }
-  .edge-sw.contra { border-top:2px dashed var(--contradict); }
-  .dash-sw { width:13px; height:13px; border:1.5px dashed #ca8a04; border-radius:3px; display:inline-block; background:transparent; }
-  #status { font-size:11px; color:var(--muted); }
-  a.jump { color:var(--accent); text-decoration:none; }
-  .empty { color:var(--muted); padding:24px; text-align:center; }
-  #plus { position:fixed; display:none; align-items:center; justify-content:center;
-    min-width:24px; height:24px; padding:0 6px; border-radius:999px; z-index:50; cursor:pointer;
-    background:var(--accent); color:#fff; font-size:13px; font-weight:700; border:2px solid #fff;
-    box-shadow:0 8px 18px rgba(37,99,235,.28); user-select:none; }
-  #plus:hover { background:#1d4ed8; }
-  /* node-html-label draws real DOM over the canvas; these cards bridge back to Cytoscape. */
-  [class*="cy-node-html"] { pointer-events:none; }
-  [class*="cy-node-html"] .card { pointer-events:auto; }
-  #cy canvas ~ div { pointer-events:none; }
-  #cy canvas ~ div .card { pointer-events:auto; }
-  .card { position:relative; width:210px; box-sizing:border-box; pointer-events:auto; cursor:pointer; user-select:none;
-    background:#fff; border:1px solid #ccd6e3; border-radius:8px; padding:6px 9px 6px 15px;
-    box-shadow:var(--shadow); overflow:hidden;
-    font:12px/1.35 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
-  .card * { pointer-events:none; }
-  .card:focus-visible { outline:2px solid rgba(37,99,235,.55); outline-offset:3px; }
-  .card .bar { position:absolute; left:0; top:0; bottom:0; width:6px; border-radius:8px 0 0 8px; }
-  .card-source   { background:linear-gradient(180deg,#ffffff,#eef6ff); } .card-source   .bar { background:var(--source); }
-  .card-reasoning{ background:linear-gradient(180deg,#ffffff,#f4efff); } .card-reasoning .bar { background:var(--reasoning); }
-  .card-claim    { background:linear-gradient(180deg,#ffffff,#fff8e8); } .card-claim    .bar { background:var(--claim); }
-  .card-head { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
-  .card-head .ic { font-size:12px; line-height:1; }
-  .card-head .tname { font-size:10px; font-weight:750; letter-spacing:.35px; color:#526174; }
-  .card-head .sp { margin-left:auto; }
-  .card-head .vok { font-size:12px; font-weight:800; color:var(--supported); line-height:1; }
-  .card-head .pn { font-size:9px; font-weight:700; color:#fff; background:var(--accent); border-radius:999px; padding:1px 6px; }
-  .card-body { font-size:11.5px; color:#172033; display:-webkit-box; -webkit-line-clamp:2;
-    -webkit-box-orient:vertical; overflow:hidden; }
-  .card-focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(37,99,235,.18), var(--shadow); }
-  .card-selected { border-color:var(--accent); box-shadow:0 0 0 2px rgba(37,99,235,.28), 0 14px 32px rgba(37,99,235,.16); }
-  .card-ungrounded { border-color:#ca8a04; border-style:dashed; }
-  .card .warn { font-size:9px; color:#5f3b02; background:#fef3c7; border:1px solid #fde68a; border-radius:5px; padding:0 4px; margin-left:4px; }
-  .card .warn-frag { background:#ffedd5; border-color:#fed7aa; color:#9a3412; }
-  .card .lb { font-size:9px; font-weight:750; color:#66420d; background:#fef3c7; border:1px solid #fde68a; border-radius:999px; padding:1px 6px; }
-  .card-fragile { border-color:#fb923c; }
-  .card-reason { font-size:9.5px; color:#9a3412; line-height:1.25; margin-top:3px; }
-  .card-more { font-size:9px; color:#64748b; margin-top:2px; }
-  /* 承重/脆弱 analysis panel */
-  #analysis { max-height:212px; overflow:auto; }
-  .an-grp { font-size:11px; color:var(--muted); margin:7px 0 4px; }
-  .an-grp b { color:var(--fg); }
-  .an-hint { font-size:9.5px; color:var(--faint); }
-  .an-item { font-size:11px; padding:4px 7px; border-radius:6px; cursor:pointer; margin-bottom:3px;
-    background:var(--panel2); border:1px solid var(--line); line-height:1.35; }
-  .an-item:hover { border-color:#9db6e8; background:#f3f7ff; }
-  .an-cnt { display:inline-block; min-width:15px; text-align:center; font-weight:700; color:#66420d;
-    background:#fef3c7; border:1px solid #fde68a; border-radius:999px; padding:0 5px; font-size:10px; margin-right:3px; }
-  .an-ty { font-size:9px; font-weight:700; letter-spacing:.3px; margin-right:3px; }
-  .ty-source{color:var(--source)} .ty-reasoning{color:var(--reasoning)} .ty-claim{color:var(--claim)}
-  .an-rsn { color:#9a3412; font-size:10px; margin-top:2px; }
-  #auditFindings { max-height:230px; overflow:auto; }
-  .riskbar { display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-bottom:7px; }
-  .risk-pill { display:inline-flex; align-items:center; gap:3px; border-radius:999px; border:1px solid var(--line);
-    padding:1px 7px; font-size:10px; font-weight:700; }
-  .risk-blocker { color:#991b1b; background:#fee2e2; border-color:#fecaca; }
-  .risk-major { color:#9a3412; background:#ffedd5; border-color:#fed7aa; }
-  .risk-minor { color:#854d0e; background:#fef3c7; border-color:#fde68a; }
-  .risk-info { color:#1d4ed8; background:#dbeafe; border-color:#bfdbfe; }
-  .finding { font-size:11px; padding:6px 7px; border:1px solid var(--line); border-radius:7px;
-    background:var(--panel2); margin-bottom:5px; cursor:pointer; line-height:1.35; }
-  .finding:hover { border-color:#9db6e8; background:#f3f7ff; }
-  .finding .ft { font-weight:750; color:var(--fg); }
-  .finding .fx { color:var(--muted); margin-top:2px; }
-  @media (max-width: 560px) {
-    #main { flex-direction:column; }
-    #cy { min-height:48vh; min-width:0; }
-    aside { width:100%; max-height:44vh; border-left:0; border-top:1px solid var(--line); }
-    .audit { padding:8px; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, .95);
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .03);
+    flex-wrap: wrap;
+  }
+  html[data-embedded="1"] .brand-title { display: none; }
+  .brand {
+    display: flex;
+    flex-direction: column;
+    min-width: 118px;
+    margin-right: 2px;
+  }
+  .brand-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 720;
+    letter-spacing: 0;
+    color: #0f172a;
+  }
+  .brand-subtitle {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+  select, button, label.chk {
+    height: 29px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 12px;
+    outline: none;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .02);
+  }
+  select { max-width: min(320px, 100%); padding: 5px 8px; color: #334155; }
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 5px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { border-color: #9db6e8; background: #f3f7ff; color: #174ea6; }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--accent-soft); border-color: #b8ccf8; color: #174ea6; }
+  button.icon { width: 29px; padding: 0; }
+  label.chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 8px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  label.chk input { accent-color: var(--accent); }
+  .topbar-spacer { flex: 1; min-width: 8px; }
+  #status {
+    min-width: 110px;
+    text-align: right;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  #main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(300px, 1fr) clamp(238px, 32vw, 320px);
+  }
+  .graph-pane { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .graph-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(248, 250, 252, .86);
+    min-height: 42px;
+    overflow: hidden;
+  }
+  .strip-stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 5px 8px;
+    color: var(--muted);
+    font-size: 10.5px;
+  }
+  .strip-stat b { color: #0f172a; font-size: 13px; }
+  .strip-hint {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--faint);
+    font-size: 11px;
+  }
+  #stageScroll {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    background-color: #f7f9fc;
+    background-image:
+      linear-gradient(rgba(37, 99, 235, .055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(37, 99, 235, .055) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  #stage {
+    position: relative;
+    min-width: 720px;
+    min-height: 420px;
+  }
+  #laneLayer, #nodeLayer, #edgeLayer {
+    position: absolute;
+    inset: 0;
+  }
+  #edgeLayer { overflow: visible; pointer-events: none; }
+  .lane {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid rgba(148, 163, 184, .28);
+    border-right: 1px solid rgba(148, 163, 184, .14);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .50), rgba(255, 255, 255, .20));
+  }
+  .lane:nth-child(even) { background: linear-gradient(180deg, rgba(232, 241, 255, .32), rgba(255, 255, 255, .14)); }
+  .lane-label {
+    position: sticky;
+    top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 12px 0 0 14px;
+    padding: 4px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .92);
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .28px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, .05);
+  }
+  .node-card {
+    position: absolute;
+    width: 232px;
+    min-height: 78px;
+    border: 1px solid #cdd8e6;
+    border-radius: 8px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    padding: 8px 10px 8px 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  }
+  .node-card:focus-visible { outline: 2px solid rgba(37, 99, 235, .55); outline-offset: 3px; }
+  .node-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    border-radius: 8px 0 0 8px;
+    background: var(--accent);
+  }
+  .node-card.source { background: linear-gradient(180deg, #fff, var(--source-soft)); }
+  .node-card.source::before { background: var(--source); }
+  .node-card.reasoning { background: linear-gradient(180deg, #fff, var(--reasoning-soft)); }
+  .node-card.reasoning::before { background: var(--reasoning); }
+  .node-card.claim { background: linear-gradient(180deg, #fff, var(--claim-soft)); }
+  .node-card.claim::before { background: var(--claim); }
+  .node-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, .22), 0 16px 32px rgba(37, 99, 235, .16);
+    transform: translateY(-1px);
+  }
+  .node-card.in-path { border-color: #73a3f7; }
+  .node-card.faded { opacity: .22; }
+  .node-card.blast-source { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, .28), var(--shadow); }
+  .node-card.blast-inval { border-color: var(--contra); box-shadow: 0 0 0 2px rgba(220, 38, 38, .24), var(--shadow); }
+  .node-card.blast-weak { border-color: #fb923c; box-shadow: 0 0 0 2px rgba(251, 146, 60, .24), var(--shadow); }
+  .node-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin-bottom: 4px;
+  }
+  .node-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #526174;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .32px;
+  }
+  .node-head-spacer { flex: 1; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+    color: var(--muted);
+    padding: 1px 6px;
+    font-size: 9.5px;
+    font-weight: 720;
+    white-space: nowrap;
+  }
+  .badge.ok { background: #dcfce7; border-color: #bbf7d0; color: #15803d; }
+  .badge.warn { background: #ffedd5; border-color: #fed7aa; color: #9a3412; }
+  .badge.info { background: #dbeafe; border-color: #bfdbfe; color: #1d4ed8; }
+  .badge.danger { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
+  .node-text {
+    color: #172033;
+    font-size: 11.5px;
+    line-height: 1.36;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .node-foot {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    min-height: 16px;
+    color: var(--faint);
+    font-size: 9.5px;
+  }
+  .edge-path {
+    fill: none;
+    stroke: #94a3b8;
+    stroke-width: 2;
+    pointer-events: none;
+    opacity: .82;
+  }
+  .edge-path.supports { stroke: var(--support); }
+  .edge-path.contradicts { stroke: var(--contra); stroke-dasharray: 6 4; }
+  .edge-path.refines { stroke: var(--accent); stroke-dasharray: 2 4; }
+  .edge-path.prerequisite { stroke: var(--warn); stroke-dasharray: 7 4; }
+  .edge-path.faded { opacity: .12; }
+  .edge-path.in-path { opacity: 1; stroke-width: 3.2; }
+  .edge-label text { font-size: 10px; font-weight: 760; fill: #334155; }
+  .edge-label rect { fill: rgba(255, 255, 255, .94); stroke: var(--line); rx: 5; }
+  .edge-label.faded { opacity: .14; }
+  .edge-label.in-path { opacity: 1; }
+  .side-panel {
+    min-width: 0;
+    border-left: 1px solid var(--line);
+    background: rgba(255, 255, 255, .96);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel-section {
+    border-bottom: 1px solid var(--line);
+    padding: 11px 12px;
+  }
+  .panel-section.scroll {
+    overflow: auto;
+  }
+  #nodeInspector {
+    flex: 1;
+    min-height: 180px;
+  }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .metric {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-soft);
+    padding: 8px 9px;
+  }
+  .metric .v { color: #0f172a; font-size: 17px; font-weight: 780; line-height: 1.1; }
+  .metric .k { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: .34px; margin-top: 2px; }
+  h2 {
+    margin: 0 0 8px;
+    color: #526174;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .45px;
+  }
+  .empty {
+    display: flex;
+    min-height: 112px;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--muted);
+    padding: 20px;
+    line-height: 1.55;
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .row .lab { width: 72px; flex-shrink: 0; color: var(--muted); }
+  .row .val { flex: 1; min-width: 0; word-break: break-word; }
+  .content {
+    margin-top: 8px;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-soft);
+    padding: 9px;
+    color: #263247;
+    font-size: 12px;
+  }
+  .detail-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .detail-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 14px;
+  }
+  .detail-heading {
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 760;
+  }
+  .detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .mini-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 8px;
+  }
+  .mini-item {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--panel-soft);
+    padding: 6px 7px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .mini-item:hover { border-color: #9db6e8; background: #f3f7ff; color: #334155; }
+  #auditFindings, #analysis { max-height: 210px; overflow: auto; }
+  .riskbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 7px;
+  }
+  .legend {
+    flex-shrink: 0;
+    padding: 10px 12px;
+    border-bottom: 0;
+  }
+  .legend > summary {
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 760;
+    letter-spacing: .45px;
+    list-style: none;
+    text-transform: uppercase;
+    user-select: none;
+  }
+  .legend > summary::-webkit-details-marker { display: none; }
+  .legend > summary::before { content: "> "; }
+  .legend[open] > summary { margin-bottom: 8px; }
+  .legend-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 12px;
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .sw {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    border: 1px solid #0002;
+    vertical-align: -2px;
+    margin-right: 4px;
+  }
+  @media (max-width: 500px) {
+    #main { grid-template-columns: 1fr; grid-template-rows: minmax(360px, 1fr) minmax(240px, 44vh); }
+    .side-panel { border-left: 0; border-top: 1px solid var(--line); }
+    #nodeInspector { min-height: 150px; }
   }
 </style>
 </head>
 <body>
 <div id="app">
-  <header>
-    <h1>🔬 Evidence DAG</h1>
+  <header class="topbar">
+    <div class="brand">
+      <h1 class="brand-title">Evidence DAG</h1>
+      <div class="brand-subtitle" id="subtitle">Structured evidence graph</div>
+    </div>
     <select id="thread" title="thread"></select>
-    <button id="refresh" title="Refresh">↻ Refresh</button>
-    <label class="chk" title="Watch for new data and flag Refresh — never redraws while you're reading"><input type="checkbox" id="auto" checked /> watch</label>
-    <button id="verify" title="Re-run NLI verification">✓ Verify</button>
-    <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit now</button>
-    <span class="toolbar-sep"></span>
-    <button id="collapseAll" title="Back to the Top-3 claim focus">⤡ Reset Top-3</button>
-    <button id="expandAll" title="Show every claim (evidence still expands on demand)">⤢ All claims</button>
-    <span class="sp"></span>
-    <span id="status">—</span>
+    <button id="refresh" title="Refresh">Refresh</button>
+    <label class="chk" title="Watch for new graph data"><input type="checkbox" id="auto" checked /> watch</label>
+    <button id="verify" title="Re-run NLI verification">Verify</button>
+    <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit</button>
+    <button id="fit" class="icon" title="Fit graph">⌖</button>
+    <span class="topbar-spacer"></span>
+    <span id="status">-</span>
   </header>
-  <div id="main">
-    <div id="cy"></div>
-    <div id="plus" title="Expand next layer">＋</div>
-    <aside>
-      <div class="audit" id="audit">
-        <div class="metric"><div class="v" id="m-cov">–</div><div class="k" title="% of conclusions that trace back to a source">Coverage</div></div>
-        <div class="metric"><div class="v" id="m-snd">–</div><div class="k" title="mean ν of the load-bearing support edges">Soundness</div></div>
+
+  <main id="main">
+    <section class="graph-pane" aria-label="Evidence DAG canvas">
+      <div class="graph-strip" id="graphSummary">
+        <span class="strip-stat"><b id="sumNodes">0</b> nodes</span>
+        <span class="strip-stat"><b id="sumEdges">0</b> edges</span>
+        <span class="strip-stat"><b id="sumClaims">0</b> claims</span>
+        <span class="strip-hint" id="sumHint">Select a node to inspect its evidence path.</span>
       </div>
-      <div class="sec" id="auditFindings"><h2>Evidence Audit</h2><div class="empty" style="padding:6px">No audit run loaded.</div></div>
-      <div class="sec" id="analysis"><h2>Load-bearing / Fragility</h2><div class="empty" style="padding:6px">—</div></div>
-      <div class="sec" id="inspector"><div class="empty"><b>Click a node</b> to isolate its evidence path (everything else fades; click empty space to clear).<br/>Hover a node marked <b>＋N</b> and click the <b>＋</b> to reveal its next layer.</div></div>
-      <details class="sec legend">
+      <div id="stageScroll">
+        <div id="stage">
+          <div id="laneLayer"></div>
+          <svg id="edgeLayer" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <marker id="arrow-default" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8"></path>
+              </marker>
+              <marker id="arrow-support" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#16a34a"></path>
+              </marker>
+              <marker id="arrow-contra" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#dc2626"></path>
+              </marker>
+              <marker id="arrow-accent" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#2563eb"></path>
+              </marker>
+              <marker id="arrow-warn" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#d97706"></path>
+              </marker>
+            </defs>
+          </svg>
+          <div id="nodeLayer"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <div class="panel-section">
+        <div class="metric-grid">
+          <div class="metric"><div class="v" id="m-cov">-</div><div class="k">Coverage</div></div>
+          <div class="metric"><div class="v" id="m-snd">-</div><div class="k">Soundness</div></div>
+        </div>
+      </div>
+      <div class="panel-section scroll" id="nodeInspector">
+        <h2>Node Detail</h2>
+        <div class="empty">Click a node in the structured DAG to inspect content, support, provenance, and connected evidence.</div>
+      </div>
+      <div class="panel-section scroll" id="auditFindings">
+        <h2>Evidence Audit</h2>
+        <div class="empty" style="min-height:70px;padding:8px">No audit run loaded.</div>
+      </div>
+      <div class="panel-section scroll" id="analysis">
+        <h2>Load-Bearing / Shared Source</h2>
+        <div class="empty" style="min-height:70px;padding:8px">-</div>
+      </div>
+      <details class="panel-section legend">
         <summary>Legend</summary>
-        <div class="lg-row">
-          <span><i class="bar-sw" style="background:var(--source)"></i>📄 Source</span>
-          <span><i class="bar-sw" style="background:var(--reasoning)"></i>🧠 Reasoning</span>
-          <span><i class="bar-sw" style="background:var(--claim)"></i>🏁 Claim</span>
+        <div class="legend-row">
+          <span><i class="sw" style="background:var(--source-soft);border-color:var(--source)"></i>Source</span>
+          <span><i class="sw" style="background:var(--reasoning-soft);border-color:var(--reasoning)"></i>Reasoning</span>
+          <span><i class="sw" style="background:var(--claim-soft);border-color:var(--claim)"></i>Claim</span>
         </div>
-        <div class="lg-row">
-          <span><i class="edge-sw"></i>Support ν (0–1, thicker=stronger)</span>
-          <span><i class="edge-sw contra"></i>Contradiction ν</span>
-          <span><i class="dash-sw"></i>Ungrounded</span>
-        </div>
-        <div class="lg-row">
-          <span><span class="vok">✓</span> Verified / source=evidence</span>
-          <span>⚠ Contested</span>
-          <span>🔑 Load-bearing</span>
-          <span>⚠ Fragile</span>
-          <span>🕸 Shared source</span>
-          <span>＋N Expand</span>
-        </div>
-        <div class="lg-row">
-          <span>⚡ If removed: <i class="bar-sw" style="background:var(--contradict)"></i>collapses · <i class="bar-sw" style="background:#fb923c"></i>weakened</span>
+        <div class="legend-row">
+          <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px solid var(--support);border-radius:0"></i>Support</span>
+          <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px dashed var(--contra);border-radius:0"></i>Contradicts</span>
+          <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px dashed var(--warn);border-radius:0"></i>Prerequisite</span>
         </div>
       </details>
     </aside>
-  </div>
+  </main>
 </div>
+
 <script>
-const API = location.origin; // same-origin (engine serves this page)
+const API = location.origin;
 const $ = (id) => document.getElementById(id);
-// ?thread=<id> focuses a specific thread (the GUI "Evidence DAG" button passes
-// the active thread id, so the view follows the conversation you're in).
 const Q_THREAD = new URLSearchParams(location.search).get('thread');
-function readAuthToken(){
+
+function readAuthToken() {
   const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
   const token = (hash.get('token') || '').trim();
-  if(token){
+  if (token) {
     hash.delete('token');
     const nextHash = hash.toString();
     history.replaceState(null, '', location.pathname + location.search + (nextHash ? '#' + nextHash : ''));
   }
   return token;
 }
+
 const AUTH_TOKEN = readAuthToken();
-let cy, currentThread = Q_THREAD || null, lastGraph = null;
-// load-bearing / fragility analysis, keyed by node id (filled per thread)
-let analysisData = null, lbMap = {}, fragMap = {}, prMap = {};
-function buildAnalysisMaps(a){
-  lbMap = {}; fragMap = {}; prMap = {};
-  (a.load_bearing||[]).forEach(x => lbMap[x.id] = x);
-  (a.fragile||[]).forEach(x => fragMap[x.id] = x);
-  (a.pseudo_robust||[]).forEach(x => prMap[x.id] = x);  // 假鲁棒:看似多支持实为同源
+const TYPE_META = {
+  source: { label: 'SOURCE', icon: 'DOC', floor: 0 },
+  reasoning: { label: 'REASONING', icon: 'THINK', floor: 1 },
+  claim: { label: 'CLAIM', icon: 'CLAIM', floor: 2 }
+};
+const NODE_W = 232;
+const NODE_H = 78;
+const COL_GAP = 94;
+const ROW_GAP = 28;
+const PAD_X = 34;
+const PAD_Y = 72;
+
+let currentThread = Q_THREAD || null;
+let lastGraph = null;
+let stageModel = null;
+let renderedSig = null;
+let selectedNodeId = null;
+let timer = null;
+let verifyTriedFor = null;
+let lbMap = {};
+let fragMap = {};
+let prMap = {};
+let weakMap = {};
+let blastState = null;
+
+function esc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
-function setStatus(t){ $("status").textContent = t; }
-
-const CARD_W = 210, CARD_H = 66;
-const cyStyle = [
-  // nodes are invisible boxes sized to the HTML card drawn on top (node-html-label).
-  { selector:'node', style:{ 'width':CARD_W, 'height':CARD_H, 'shape':'round-rectangle',
-      'background-opacity':0, 'border-width':0, 'label':'' } },
-  // selection / highlight draw a frame around the card
-  { selector:'node:selected', style:{ 'border-width':2, 'border-color':'#2563eb', 'border-opacity':1 } },
-  { selector:'edge', style:{
-      'width':2,'line-color':'#94a3b8','target-arrow-color':'#94a3b8','target-arrow-shape':'triangle',
-      'curve-style':'bezier','font-size':'11px','font-weight':'bold','color':'#334155',
-      'text-background-color':'#ffffff','text-background-opacity':0.95,'text-background-padding':3,
-      'text-background-shape':'round-rectangle','arrow-scale':1.05 } },
-  // supports edge = the confidence channel: ν (0–1) printed ON the line; both
-  // colour and thickness scale with ν so strength reads at a glance, number confirms.
-  { selector:'edge[rel="supports"]', style:{
-      'line-color':'mapData(weight, 0, 1, #b7c8be, #16a34a)',
-      'target-arrow-color':'mapData(weight, 0, 1, #b7c8be, #16a34a)',
-      'label':'data(nu)', 'width':'mapData(weight, 0, 1, 1.5, 7)',
-      'text-border-width':1, 'text-border-opacity':0.7,
-      'text-border-color':'mapData(weight, 0, 1, #b7c8be, #16a34a)' } },
-  // contradicts: deliberately the loudest edge so it isn't lost among green
-  { selector:'edge[rel="contradicts"]', style:{ 'line-color':'#dc2626','target-arrow-color':'#dc2626',
-      'line-style':'dashed','width':'mapData(weight, 0, 1, 2, 7)','color':'#b91c1c',
-      'label':(ele)=>{ const v=ele.data('nu'); return v ? ('✗ '+v) : '✗ contradicts'; },
-      'text-border-width':1,'text-border-opacity':0.7,'text-border-color':'#dc2626' } },
-  { selector:'edge[rel="refines"]', style:{ 'line-color':'#2563eb','line-style':'dotted' } },
-  { selector:'edge[rel="prerequisite"]', style:{ 'line-color':'#ca8a04','line-style':'dashed' } },
-  { selector:'.faded', style:{ 'opacity':0.16 } },
-  { selector:'.hl', style:{ 'opacity':1 } },
-  { selector:'edge.hl', style:{ 'width':4 } },
-  // what-if reconcile blast radius: red = collapses, orange = weakened, blue = the removed node
-  { selector:'node.blast-inval',  style:{ 'border-width':3,'border-color':'#dc2626','border-opacity':1 } },
-  { selector:'node.blast-weak',   style:{ 'border-width':3,'border-color':'#fb923c','border-opacity':1 } },
-  { selector:'node.blast-source', style:{ 'border-width':3,'border-color':'#2563eb','border-opacity':1 } },
-];
-
-// --- progressive disclosure (van Ham & Perer: focus + expand-on-demand) ------
-// Default = the top-K claims (main conclusions). A visible node with hidden
-// direct predecessors shows "＋N"; hovering it surfaces a clickable ＋ that
-// reveals ONE hop (its direct evidence), which may itself be expandable.
-// Never dumps the whole graph at once.
-const TOP_K = 3;
-let anchors = [];            // claim ids shown as the starting focus
-let revealed = new Set();    // node ids whose direct predecessors are revealed
-let renderedThread = null;   // last thread rendered (to reset focus on thread switch)
-
-function buildIncoming(graph){
-  const inc = {};
-  graph.edges.forEach(e => { (inc[e.dst] = inc[e.dst] || []).push(e.src); });
-  return inc;
-}
-function ancestorsOf(startId, inc){
-  const seen = new Set(), stack = [startId];
-  while (stack.length){ const c = stack.pop();
-    for (const s of (inc[c] || [])){ if (!seen.has(s)){ seen.add(s); stack.push(s); } } }
-  seen.delete(startId);
-  return seen;
-}
-// importance of a claim ≈ evidence behind it (ancestor count), tie-break in-degree
-function rankClaims(graph){
-  const inc = buildIncoming(graph);
-  const inDeg = {}; graph.edges.forEach(e => { inDeg[e.dst] = (inDeg[e.dst]||0)+1; });
-  return graph.nodes.filter(n => n.type === 'claim')
-    .map(n => ({ id:n.id, s: ancestorsOf(n.id, inc).size*10 + (inDeg[n.id]||0) }))
-    .sort((a,b) => b.s - a.s).map(x => x.id);
-}
-function ensureAnchors(graph){
-  const ids = new Set(graph.nodes.map(n => n.id));
-  anchors = anchors.filter(id => ids.has(id));
-  if (anchors.length === 0){
-    const claims = rankClaims(graph);
-    anchors = (claims.length ? claims : graph.nodes.map(n=>n.id)).slice(0, TOP_K);
-  }
-}
-function computeView(graph){
-  const inc = buildIncoming(graph);
-  const visible = new Set(anchors);
-  let changed = true;
-  while (changed){ changed = false;
-    for (const nid of Array.from(visible)){
-      if (revealed.has(nid)) for (const p of (inc[nid]||[])){
-        if (!visible.has(p)){ visible.add(p); changed = true; } } }
-  }
-  const plus = {};   // visible node -> count of still-hidden direct predecessors
-  for (const nid of visible){
-    const hidden = (inc[nid]||[]).filter(p => !visible.has(p)).length;
-    if (hidden) plus[nid] = hidden;
-  }
-  const visEdges = new Set(graph.edges.filter(e => visible.has(e.src) && visible.has(e.dst)).map(e => e.id));
-  return { visible, visEdges, plus };
+function escAttr(value) {
+  return esc(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// normalised origin key for a source's ref — sources sharing it come from the
-// same paper/outlet (doi > arxiv > url > citation). Empty = no identifiable ref.
-function refKey(ref){
-  if(!ref || typeof ref!=='object') return '';
-  const v = ref.doi || ref.arxiv || ref.url || ref.citation || '';
-  return String(v).trim().toLowerCase().replace(/\s+/g,' ');
-}
-function toElements(graph){
-  ensureAnchors(graph);
-  const view = computeView(graph);
-  const hasIncoming = new Set(graph.edges.map(e => e.dst));
-  const hasOutgoing = new Set(graph.edges.map(e => e.src));
-  // same-origin sources (display-only): group ALL sources by ref key; a source
-  // sharing its ref with ≥1 other is flagged 'shared' — we do NOT merge the nodes,
-  // just hint that they come from one origin.
-  const srcGroups = {};
-  graph.nodes.forEach(n => {
-    if(n.type!=='source') return;
-    const k = refKey(n.ref); if(!k) return;
-    (srcGroups[k] || (srcGroups[k]=[])).push(n.id);
-  });
-  const nodes = graph.nodes.filter(n => view.visible.has(n.id)).map(n => {
-    const ungrounded = (n.type==='reasoning'||n.type==='claim') && !hasIncoming.has(n.id) ? 1 : 0;
-    const focus = (n.type==='claim' && !hasOutgoing.has(n.id)) ? 1 : 0;  // terminal conclusion
-    const lb = lbMap[n.id] ? lbMap[n.id].critical_count : 0;   // 承重: # conclusions that collapse without it
-    const fr = fragMap[n.id];                                   // 脆弱(含原因)
-    const fragReason = fr ? (fr.reasons||[]).join(' · ') : '';
-    const grp = (n.type==='source') ? srcGroups[refKey(n.ref)] : null;  // 同源 source 组
-    const shared = (grp && grp.length>=2) ? 1 : 0;
-    const sharedHint = shared
-      ? `same origin as ${grp.length-1} other source(s): ${esc(refKey(n.ref).slice(0,46))}`
-      : '';
-    return { data:{ id:n.id, type:n.type, status:n.status,
-      content:(n.content || '').slice(0, 220),
-      plus: view.plus[n.id] || 0, ungrounded, focus, lb,
-      fragile: fr?1:0, shared, fragReason, sharedHint, full:n } };
-  });
-  const edges = graph.edges.filter(e => view.visEdges.has(e.id)).map(e => ({ data:{
-    id:e.id, source:e.src, target:e.dst, rel:e.rel,
-    weight:(e.nli_score!=null ? e.nli_score : 0),
-    nu:(e.nli_score!=null)?(Number(e.nli_score).toFixed(2)):'' } }));
-  return [...nodes, ...edges];
+function compact(value, max = 120) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-// Node positions persist across re-renders so reading-time actions (⚡ what-if,
-// expand, verify, auto-refresh, fragility marking) never throw away a layout you
-// arranged by hand. Only an explicit reset / "show all" / thread switch relays
-// out and refits.
-let savedPositions = {};   // nodeId -> {x,y}, survives remove()/add() cycles
-let hasFitted = false;     // fit the viewport once; afterwards leave pan/zoom alone
-
-function runLayout(){
-  const useDagre = cy.nodes().length > 0 && window.dagre;
-  // dagre layered layout: rankDir LR => evidence (no incoming) leftmost, flow
-  // rightward to claims; crossing-minimised so support lines don't tangle.
-  cy.layout(useDagre
-    ? { name:'dagre', rankDir:'LR', nodeSep:34, rankSep:80, edgeSep:16, ranker:'network-simplex', padding:30 }
-    : { name:'breadthfirst', directed:true, spacingFactor:1.1, padding:24 }
-  ).run();
+function setStatus(text) {
+  $('status').textContent = text;
 }
 
-// Drop a freshly-revealed node next to its already-placed neighbours (so an
-// expand / what-if appears locally) instead of relaying the whole graph out.
-function placeNewNode(n){
-  const placed = n.neighborhood('node').filter(x => savedPositions[x.id()]);
-  if (placed.length){
-    let sx=0, sy=0; placed.forEach(x=>{ sx+=savedPositions[x.id()].x; sy+=savedPositions[x.id()].y; });
-    const k = (Object.keys(savedPositions).length % 5) - 2;   // fan out a little
-    n.position({ x: sx/placed.length + 70, y: sy/placed.length + k*46 });
-  } else {
-    const e = cy.extent(); n.position({ x:(e.x1+e.x2)/2, y:(e.y1+e.y2)/2 });
-  }
+function setSubtitle(text) {
+  $('subtitle').textContent = text || 'Structured evidence graph';
 }
 
-function render(graph, opts){
-  opts = opts || {};
-  lastGraph = graph;
-  hidePlus();
-  // 1) remember where everything currently sits (incl. nodes you dragged)
-  cy.nodes().forEach(n => { savedPositions[n.id()] = { x:n.position('x'), y:n.position('y') }; });
-  if (opts.relayout) savedPositions = {};   // explicit reset: forget the arrangement
-  cy.elements().remove();
-  cy.add(toElements(graph));
-  // 2) lay out only when there is nothing to restore (first paint / reset / thread
-  //    switch); otherwise keep known nodes put and just place any new ones.
-  if (!Object.keys(savedPositions).length){
-    runLayout();
-  } else {
-    cy.nodes().forEach(n => { const p = savedPositions[n.id()]; if (p) n.position(p); });
-    cy.nodes().filter(n => !savedPositions[n.id()]).forEach(placeNewNode);
-  }
-  // 3) record the resulting arrangement (so new nodes stick next time too)
-  cy.nodes().forEach(n => { savedPositions[n.id()] = { x:n.position('x'), y:n.position('y') }; });
-  // 4) frame the graph once; after that leave the viewport where you put it
-  if (opts.fit || !hasFitted){ cy.fit(undefined, 40); hasFitted = true; }
-  setStatus(`${cy.nodes().length}/${graph.nodes.length} nodes shown · ${anchors.length} claim(s) in focus · hover a node and click ＋ to expand`);
-  requestAnimationFrame(()=>markCardActive(activeNodeId));
-}
-
-function expandOneHop(id){ if (id && lastGraph){ revealed.add(id); render(lastGraph); } }
-function resetView(){ revealed = new Set(); anchors = []; if (lastGraph) render(lastGraph, {relayout:true, fit:true}); }
-function showAllClaims(){
-  if (!lastGraph) return;
-  anchors = lastGraph.nodes.filter(n => n.type === 'claim').map(n => n.id);
-  render(lastGraph, {relayout:true, fit:true});
-}
-
-// floating "＋" expand button (hover affordance)
-let plusHideTimer = null;
-let activeNodeId = null;
-let cardPress = null;
-let lastCardActivation = { id:'', at:0 };
-let cardObserver = null;
-let lastHoverNodeId = null;
-function hidePlus(){ const el = $("plus"); if (el) el.style.display = 'none'; }
-function showPlusFor(node){
-  const el = $("plus"); if (!el) return;
-  const cnt = node.data('plus'); if (!cnt){ hidePlus(); return; }
-  const p = node.renderedPosition(); const r = $("cy").getBoundingClientRect();
-  el.textContent = '＋' + cnt;
-  el.dataset.target = node.id();
-  el.style.left = (r.left + p.x + 14) + 'px';
-  el.style.top  = (r.top  + p.y - 30) + 'px';
-  el.style.display = 'flex';
-}
-
-function nodeForId(id){
-  if(!cy || !id) return null;
-  const node = cy.getElementById(id);
-  return node && node.length ? node : null;
-}
-function markCardActive(id){
-  document.querySelectorAll('.card[data-node-id]').forEach(el => {
-    el.classList.toggle('card-selected', Boolean(id && el.dataset.nodeId === id));
-  });
-}
-function selectNodeForInspection(node){
-  if(!node || !node.length) return false;
-  cy.nodes().unselect();
-  node.select();
-  activeNodeId = node.id();
-  inspect(node);
-  markCardActive(activeNodeId);
-  requestAnimationFrame(()=>markCardActive(activeNodeId));
-  return true;
-}
-function activateNode(nodeId, dir){
-  const first = nodeForId(nodeId);
-  if(!first) return false;
-  const focusDir = dir || (first.data('type') === 'source' ? 'down' : 'up');
-  focusChain(first.id(), focusDir);
-  return selectNodeForInspection(nodeForId(first.id()) || first);
-}
-function cardFromEvent(event){
-  const t = event.target;
-  if(!(t instanceof Element)) return null;
-  return t.closest('.card[data-node-id]');
-}
-function consumeCardEvent(event){
-  event.preventDefault();
-  event.stopPropagation();
-  if(event.stopImmediatePropagation) event.stopImmediatePropagation();
-}
-function showPlusForCard(card){
-  const node = nodeForId(card.dataset.nodeId || '');
-  if(!node || !node.data('plus')) return false;
-  if(plusHideTimer){ clearTimeout(plusHideTimer); plusHideTimer = null; }
-  lastHoverNodeId = node.id();
-  showPlusFor(node);
-  return true;
-}
-function activateCardElement(card, event){
-  const id = card.dataset.nodeId || '';
-  const now = Date.now();
-  consumeCardEvent(event);
-  if(lastCardActivation.id === id && now - lastCardActivation.at < 250) return true;
-  lastCardActivation = { id, at:now };
-  hidePlus();
-  try { card.focus({ preventScroll:true }); } catch(_) { card.focus(); }
-  return activateNode(id);
-}
-function installCardSelectionObserver(){
-  if(cardObserver) return;
-  cardObserver = new MutationObserver(()=>markCardActive(activeNodeId));
-  cardObserver.observe($("cy"), { childList:true, subtree:true });
-}
-function installHtmlCardBridge(){
-  document.addEventListener('pointerdown', event => {
-    if(event.button !== 0) return;
-    const card = cardFromEvent(event);
-    cardPress = card ? { id:card.dataset.nodeId || '', x:event.clientX, y:event.clientY } : null;
-  }, true);
-  document.addEventListener('pointerup', event => {
-    if(event.button !== 0 || !cardPress) return;
-    const card = cardFromEvent(event);
-    if(!card || card.dataset.nodeId !== cardPress.id){ cardPress = null; return; }
-    const dx = event.clientX - cardPress.x, dy = event.clientY - cardPress.y;
-    cardPress = null;
-    if(Math.hypot(dx, dy) > 6) return;
-    activateCardElement(card, event);
-  }, true);
-  document.addEventListener('pointercancel', ()=>{ cardPress = null; }, true);
-  document.addEventListener('click', event => {
-    const card = cardFromEvent(event);
-    if(!card) return;
-    if(event.button && event.button !== 0) return;
-    activateCardElement(card, event);
-  }, true);
-  document.addEventListener('keydown', event => {
-    const card = cardFromEvent(event);
-    if(!card || (event.key !== 'Enter' && event.key !== ' ')) return;
-    activateCardElement(card, event);
-  }, true);
-  document.addEventListener('pointerover', event => {
-    const card = cardFromEvent(event);
-    if(!card) return;
-    showPlusForCard(card);
-  }, true);
-  document.addEventListener('mousemove', event => {
-    const target = event.target;
-    const plus = $("plus");
-    if(target instanceof Node && plus && plus.contains(target)) return;
-    const card = cardFromEvent(event);
-    if(card){ showPlusForCard(card); return; }
-    if(lastHoverNodeId){
-      lastHoverNodeId = null;
-      plusHideTimer = setTimeout(hidePlus, 120);
-    }
-  }, true);
-  document.addEventListener('pointerout', event => {
-    const card = cardFromEvent(event);
-    if(!card) return;
-    if(event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) return;
-    lastHoverNodeId = null;
-    plusHideTimer = setTimeout(hidePlus, 220);
-  }, true);
-  document.addEventListener('contextmenu', event => {
-    const card = cardFromEvent(event);
-    if(!card) return;
-    const node = nodeForId(card.dataset.nodeId || '');
-    if(!node || !node.data('plus')) return;
-    consumeCardEvent(event);
-    expandOneHop(node.id());
-  }, true);
-}
-
-async function api(path, opts){
-  const init = opts ? {...opts} : {};
+async function api(path, opts) {
+  const init = opts ? { ...opts } : {};
   const headers = new Headers(init.headers || {});
-  if(AUTH_TOKEN && !headers.has('authorization')) headers.set('authorization', `Bearer ${AUTH_TOKEN}`);
+  if (AUTH_TOKEN && !headers.has('authorization')) headers.set('authorization', `Bearer ${AUTH_TOKEN}`);
   init.headers = headers;
-  const r = await fetch(API+path, init);
-  return r.json();
+  const response = await fetch(API + path, init);
+  return response.json();
 }
 
-async function loadThreads(){
-  const res = await api('/threads');
-  const threads = (res.data && res.data.threads) || [];  // newest-first from engine
-  // If a ?thread was requested but isn't known yet (no completed turn fed), still
-  // show it so the user sees they're focused on it.
-  const opts = [...threads];
-  if (currentThread && !opts.includes(currentThread)) opts.unshift(currentThread);
-  const sel = $("thread");
-  sel.innerHTML = opts.length ? opts.map(t=>`<option>${t}</option>`).join('')
-    : '<option value="">(no threads)</option>';
-  if (opts.length && !currentThread) currentThread = opts[0];  // default = newest
-  if (currentThread) sel.value = currentThread;
+function buildAnalysisMaps(data) {
+  lbMap = {};
+  fragMap = {};
+  prMap = {};
+  weakMap = {};
+  (data?.load_bearing || []).forEach((item) => { lbMap[item.id] = item; });
+  (data?.fragile || []).forEach((item) => { fragMap[item.id] = item; });
+  (data?.pseudo_robust || []).forEach((item) => { prMap[item.id] = item; });
+  (data?.weakly_supported || []).forEach((item) => { weakMap[item.id] = item; });
 }
 
-let extractRetry = null, extractTries = 0, verifyTriedFor = null, renderedSig = null;
-async function loadGraph(){
-  if (extractRetry) { clearTimeout(extractRetry); extractRetry = null; }
-  if (!currentThread) { return; }
-  try {
-    const g = await api(`/threads/${encodeURIComponent(currentThread)}/graph`);
-    if (!g.ok) {
-      if (cy) cy.elements().remove();
-      ['m-cov','m-snd'].forEach(id=>$(id).textContent='–');
-      showAuditRun(null);
-      // A just-finished turn feeds the whole thread; extraction (one LLM call over
-      // the full conversation) can take tens of seconds for long threads. Auto-retry
-      // so the DAG shows up on its own instead of looking broken.
-      if (extractTries < 20) {
-        extractTries++;
-        $("inspector").innerHTML = '<div class="empty">Extracting the DAG — a long conversation can take tens of seconds.<br/>Auto-refreshing (attempt ' + extractTries + ')…</div>';
-        setStatus(`${currentThread}: extracting… auto-retry ${extractTries}/20`);
-        extractRetry = setTimeout(loadGraph, 4000);
-      } else {
-        $("inspector").innerHTML = '<div class="empty">No DAG yet for this thread.<br/>The graph appears after the thread has at least one completed agent turn and extraction succeeds.<br/>Click Refresh to retry.</div>';
-        setStatus(`${currentThread}: ${g.error&&g.error.code||'no graph'} (auto-retry stopped)`);
+function graphCounts(graph) {
+  const nodes = graph?.nodes || [];
+  const edges = graph?.edges || [];
+  return {
+    nodes: nodes.length,
+    edges: edges.length,
+    sources: nodes.filter((n) => n.type === 'source').length,
+    reasoning: nodes.filter((n) => n.type === 'reasoning').length,
+    claims: nodes.filter((n) => n.type === 'claim').length
+  };
+}
+
+function updateSummary(graph) {
+  const counts = graphCounts(graph);
+  $('sumNodes').textContent = counts.nodes;
+  $('sumEdges').textContent = counts.edges;
+  $('sumClaims').textContent = counts.claims;
+  $('sumHint').textContent = `${counts.sources} sources · ${counts.reasoning} reasoning · ${counts.claims} claims`;
+}
+
+function buildGraphModel(graph) {
+  const nodes = [...(graph.nodes || [])];
+  const nodeById = Object.fromEntries(nodes.map((node) => [node.id, node]));
+  const edges = (graph.edges || []).filter((edge) => nodeById[edge.src] && nodeById[edge.dst]);
+  const incoming = {};
+  const outgoing = {};
+  nodes.forEach((node) => {
+    incoming[node.id] = [];
+    outgoing[node.id] = [];
+  });
+  edges.forEach((edge) => {
+    incoming[edge.dst].push(edge);
+    outgoing[edge.src].push(edge);
+  });
+
+  const indegree = Object.fromEntries(nodes.map((node) => [node.id, incoming[node.id].length]));
+  const typeFloor = (node) => TYPE_META[node.type]?.floor ?? 1;
+  const rank = Object.fromEntries(nodes.map((node) => [node.id, typeFloor(node)]));
+  const queue = nodes
+    .filter((node) => indegree[node.id] === 0)
+    .sort(compareNodes);
+  const order = [];
+  while (queue.length) {
+    const node = queue.shift();
+    order.push(node.id);
+    outgoing[node.id].forEach((edge) => {
+      const dst = nodeById[edge.dst];
+      rank[edge.dst] = Math.max(rank[edge.dst], rank[node.id] + 1, typeFloor(dst));
+      indegree[edge.dst] -= 1;
+      if (indegree[edge.dst] === 0) {
+        queue.push(dst);
+        queue.sort(compareNodes);
       }
-      return;
-    }
-    extractTries = 0;
-    // reset focus to Top-3 only when the thread actually changed; auto-refresh
-    // (same thread) must preserve the expert's expansions.
-    const threadChanged = currentThread !== renderedThread;
-    if (threadChanged){ anchors = []; revealed = new Set(); renderedThread = currentThread; }
-    // same thread re-poll keeps your arrangement; a different thread lays out fresh.
-    render(g.data.graph, threadChanged ? {relayout:true, fit:true} : {});
-    renderedSig = sigOf(g.data);   // remember what's on screen; the watcher diffs against this
-    markUpdated(false);            // clear any "updated" flag now that we're current
-    // If the graph has supports edges but none are scored, verification never ran
-    // (e.g. imported graph, or ingest auto-verify was off) — run it once so the
-    // confidence (ν) shows up instead of an all-blank graph.
-    const eds = g.data.graph.edges;
-    const needsVerify = eds.some(e=>e.rel==='supports') && !eds.some(e=>e.rel==='supports' && e.nli_score!=null);
-    if (needsVerify && verifyTriedFor !== currentThread){
-      verifyTriedFor = currentThread;
-      setStatus(`${currentThread}: auto-verifying (NLI)…`);
-      try { await api(`/threads/${encodeURIComponent(currentThread)}/verify`,
-        {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({threshold:0.7})}); } catch(_){}
-      return loadGraph();
-    }
-    const m = await api(`/threads/${encodeURIComponent(currentThread)}/metrics`);
-    if (m.ok) showMetrics(m.data);
-    // load-bearing / fragility — populate maps, mark cards, fill the panel
-    const a = await api(`/threads/${encodeURIComponent(currentThread)}/analysis`);
-    if (a.ok){
-      analysisData = a.data; buildAnalysisMaps(a.data); showAnalysis(a.data);
-      if ((a.data.load_bearing||[]).length || (a.data.fragile||[]).length) render(lastGraph);
-    }
-    await loadAuditRuns();
-  } catch(e){ setStatus('error: '+e.message); }
-}
-
-function showMetrics(m){
-  $("m-cov").textContent = (m.provenance_coverage*100).toFixed(0)+'%';
-  $("m-snd").textContent = Number(m.provenance_soundness).toFixed(2);
-}
-
-function noisyOr(scores){ let p=1; for(const s of scores) p*=(1-Math.max(0,Math.min(1,s))); return 1-p; }
-// support strength of a node = noisy-OR over its incoming scored supports edges
-// (same aggregation the engine uses for status). null = no scored support edge.
-function supportStrength(nodeId){
-  if(!lastGraph) return null;
-  const ins = lastGraph.edges.filter(e=>e.dst===nodeId && e.rel==='supports' && e.nli_score!=null);
-  if(!ins.length) return null;
-  return { nu: noisyOr(ins.map(e=>e.nli_score)), n: ins.length };
-}
-function confRowHtml(d){
-  if(d.type==='source') return '';   // a source is input evidence; type row already says so
-  const ss = supportStrength(d.id);
-  if(ss==null)
-    return `<div class="row"><span class="lab">support</span><span class="val"><span class="pill" style="background:#3a3f4833;color:#aeb7c2">no scored support edge</span></span></div>`;
-  const col = ss.nu>=0.7?'var(--supported)':(ss.nu>=0.4?'#d2a922':'#d2691e');
-  return `<div class="row"><span class="lab">support</span><span class="val">`
-    + `<span class="pill" style="background:${col}33;color:${col}">ν=${ss.nu.toFixed(2)}${ss.nu>=0.7?' ✓':''}</span> `
-    + `<span style="color:var(--muted)">${ss.n} edge(s) · noisy-OR</span></span></div>`;
-}
-function showAnalysis(a){
-  const lb = a.load_bearing||[], pr = a.pseudo_robust||[];
-  // Fragility is shown PER-NODE on the cards now (each fragile node states its own
-  // reason), so this panel only summarises load-bearing + shared-source structure.
-  if(!lb.length && !pr.length){
-    $("analysis").innerHTML = '<h2>Load-bearing / Shared source</h2><div class="empty" style="padding:6px;font-size:11px">No single-point dependencies or hidden shared sources.</div>';
-    return;
-  }
-  let h = '<h2>Load-bearing / Shared source</h2>';
-  if(lb.length){
-    h += `<div class="an-grp">🔑 <b>Load-bearing</b> <span class="an-hint">remove it → claims collapse</span></div>`;
-    lb.slice(0,5).forEach(x => {
-      h += `<div class="an-item" data-id="${x.id}" data-kind="lb"><span class="an-cnt">${x.critical_count}</span>`
-        + `<span class="an-ty ty-${x.type}">${TNAME[x.type]||x.type}</span>${esc(x.content.slice(0,54))}</div>`;
     });
   }
-  if(pr.length){
-    // 假鲁棒揭示:点开 → 高亮该结论的多条路径 + 把同源 source 标蓝
-    h += `<div class="an-grp">🕸 <b>Single-source funnel</b> <span class="an-hint">claim looks multi-supported but funnels through one source</span></div>`;
-    pr.slice(0,5).forEach(x => {
-      h += `<div class="an-item" data-id="${x.id}" data-kind="pr">`
-        + `<span class="an-cnt" title="apparent support paths → real sources">${x.n_support_edges}→1</span>`
-        + `${esc(x.content.slice(0,48))}`
-        + `<div class="an-rsn">all paths → ${esc((x.shared_source_brief[0]||'').slice(0,42))}</div></div>`;
+  nodes.forEach((node) => {
+    if (!order.includes(node.id)) order.push(node.id);
+  });
+
+  const rawLayers = new Map();
+  nodes.forEach((node) => {
+    const r = rank[node.id];
+    if (!rawLayers.has(r)) rawLayers.set(r, []);
+    rawLayers.get(r).push(node.id);
+  });
+  const rawRanks = [...rawLayers.keys()].sort((a, b) => a - b);
+  const rankIndex = Object.fromEntries(rawRanks.map((r, index) => [r, index]));
+  const layers = rawRanks.map((r) => rawLayers.get(r).sort((a, b) => compareNodes(nodeById[a], nodeById[b])));
+
+  refineLayerOrder(layers, nodeById, incoming, outgoing);
+
+  const positions = {};
+  const layerWidth = NODE_W + COL_GAP;
+  let maxRows = 1;
+  layers.forEach((layer, layerIdx) => {
+    maxRows = Math.max(maxRows, layer.length);
+    layer.forEach((id, rowIdx) => {
+      positions[id] = {
+        x: PAD_X + layerIdx * layerWidth,
+        y: PAD_Y + rowIdx * (NODE_H + ROW_GAP)
+      };
     });
-  }
-  $("analysis").innerHTML = h;
-  $("analysis").querySelectorAll('.an-item').forEach(el =>
-    el.onclick = () => focusAnalysis(el.dataset.id, el.dataset.kind));
+  });
+  const width = Math.max(720, PAD_X * 2 + layers.length * NODE_W + Math.max(0, layers.length - 1) * COL_GAP);
+  const height = Math.max(420, PAD_Y * 2 + maxRows * NODE_H + Math.max(0, maxRows - 1) * ROW_GAP);
+  return { graph, nodes, nodeById, edges, incoming, outgoing, layers, rawRanks, rankIndex, positions, width, height };
 }
 
-function showAuditRun(run){
-  if(!run){
-    $("auditFindings").innerHTML = '<h2>Evidence Audit</h2><div class="empty" style="padding:6px;font-size:11px">No audit run yet. Click Audit now after the graph loads.</div>';
-    return;
+function compareNodes(a, b) {
+  const ta = TYPE_META[a.type]?.floor ?? 1;
+  const tb = TYPE_META[b.type]?.floor ?? 1;
+  if (ta !== tb) return ta - tb;
+  return String(a.content || a.id).localeCompare(String(b.content || b.id));
+}
+
+function refineLayerOrder(layers, nodeById, incoming, outgoing) {
+  const indexByLayer = () => {
+    const result = {};
+    layers.forEach((layer) => layer.forEach((id, index) => { result[id] = index; }));
+    return result;
+  };
+  for (let pass = 0; pass < 4; pass += 1) {
+    let index = indexByLayer();
+    for (let i = 1; i < layers.length; i += 1) {
+      layers[i].sort((a, b) => bary(a, incoming, index, true) - bary(b, incoming, index, true) || compareNodes(nodeById[a], nodeById[b]));
+    }
+    index = indexByLayer();
+    for (let i = layers.length - 2; i >= 0; i -= 1) {
+      layers[i].sort((a, b) => bary(a, outgoing, index, false) - bary(b, outgoing, index, false) || compareNodes(nodeById[a], nodeById[b]));
+    }
   }
-  const d = run.risk_digest || {};
-  const counts = d.counts_by_severity || {};
-  let h = '<h2>Evidence Audit</h2>';
-  h += `<div class="riskbar" title="Latest audit: ${esc(run.trigger||'manual')}">`
-    + `<span class="risk-pill risk-blocker">${counts.blocker||0} blocker</span>`
-    + `<span class="risk-pill risk-major">${counts.major||0} major</span>`
-    + `<span class="risk-pill risk-minor">${counts.minor||0} minor</span>`
-    + `<span class="risk-pill risk-info">${counts.info||0} info</span>`
-    + `</div>`;
-  const findings = run.findings || [];
-  if(!findings.length){
-    h += '<div class="empty" style="padding:6px;font-size:11px">No audit risks found for the current graph.</div>';
+}
+
+function bary(id, edgeMap, index, incomingMode) {
+  const edges = edgeMap[id] || [];
+  if (!edges.length) return 9999;
+  const values = edges
+    .map((edge) => index[incomingMode ? edge.src : edge.dst])
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return 9999;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function layerLabel(model, layer, index) {
+  const types = new Set(layer.map((id) => model.nodeById[id]?.type));
+  if (types.size === 1) {
+    const type = [...types][0];
+    if (type === 'source') return 'Evidence Sources';
+    if (type === 'reasoning') return `Reasoning ${index + 1}`;
+    if (type === 'claim') return 'Claims';
+  }
+  return `Layer ${index + 1}`;
+}
+
+function renderGraph(graph) {
+  lastGraph = graph;
+  stageModel = buildGraphModel(graph);
+  updateSummary(graph);
+  const stage = $('stage');
+  const edgeLayer = $('edgeLayer');
+  stage.style.width = `${stageModel.width}px`;
+  stage.style.height = `${stageModel.height}px`;
+  edgeLayer.setAttribute('width', String(stageModel.width));
+  edgeLayer.setAttribute('height', String(stageModel.height));
+  renderLanes(stageModel);
+  renderEdges(stageModel);
+  renderNodes(stageModel);
+  if (selectedNodeId && !stageModel.nodeById[selectedNodeId]) selectedNodeId = null;
+  applyGraphState();
+  if (selectedNodeId) showNodeDetail(selectedNodeId);
+  setStatus(`${stageModel.nodes.length} nodes · ${stageModel.layers.length} layers`);
+}
+
+function renderLanes(model) {
+  const layerWidth = NODE_W + COL_GAP;
+  $('laneLayer').innerHTML = model.layers.map((layer, index) => {
+    const left = Math.max(0, PAD_X - 18 + index * layerWidth);
+    const width = NODE_W + 36;
+    return `<div class="lane" style="left:${left}px;width:${width}px"><span class="lane-label">${esc(layerLabel(model, layer, index))}</span></div>`;
+  }).join('');
+}
+
+function renderNodes(model) {
+  $('nodeLayer').innerHTML = model.nodes.map((node) => nodeHtml(node, model.positions[node.id])).join('');
+  $('nodeLayer').querySelectorAll('.node-card').forEach((card) => {
+    card.addEventListener('click', (event) => {
+      event.stopPropagation();
+      selectNode(card.dataset.nodeId);
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectNode(card.dataset.nodeId);
+      }
+    });
+  });
+}
+
+function nodeHtml(node, pos) {
+  const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
+  const badges = nodeBadges(node);
+  const ref = sourceRefLabel(node);
+  const foot = [
+    node.trace_ref ? `trace ${compact(node.trace_ref, 28)}` : '',
+    ref ? compact(ref, 38) : ''
+  ].filter(Boolean).join(' · ');
+  return `
+    <div class="node-card ${escAttr(node.type)}" data-node-id="${escAttr(node.id)}" role="button" tabindex="0"
+      aria-label="${escAttr(`${meta.label}: ${node.content || node.id}`)}"
+      style="left:${pos.x}px;top:${pos.y}px">
+      <div class="node-head">
+        <span class="node-type"><span>${esc(meta.icon)}</span><span>${esc(meta.label)}</span></span>
+        <span class="node-head-spacer"></span>
+        ${badges}
+      </div>
+      <div class="node-text">${esc(node.content || node.id)}</div>
+      <div class="node-foot">${esc(foot || node.status || '')}</div>
+    </div>`;
+}
+
+function nodeBadges(node) {
+  if (prMap[node.id]) return `<span class="badge info" title="Looks multi-supported but funnels through one source">shared</span>`;
+  if (fragMap[node.id]) return `<span class="badge warn" title="${escAttr((fragMap[node.id].reasons || []).join(' · '))}">fragile</span>`;
+  if (weakMap[node.id]) return `<span class="badge warn">weak</span>`;
+  if (lbMap[node.id]) return `<span class="badge warn" title="Load-bearing node">${esc(lbMap[node.id].critical_count)}x</span>`;
+  if (node.type === 'source' || node.status === 'supported') return `<span class="badge ok">ok</span>`;
+  if (node.status === 'conflicting') return `<span class="badge danger">conflict</span>`;
+  return '';
+}
+
+function sourceRefLabel(node) {
+  if (!node.ref || typeof node.ref !== 'object') return '';
+  return node.ref.doi || node.ref.arxiv || node.ref.url || node.ref.citation || '';
+}
+
+function renderEdges(model) {
+  const defs = $('edgeLayer').querySelector('defs').outerHTML;
+  const edgeGroups = model.edges.map((edge, index) => edgeHtml(edge, model, index)).join('');
+  $('edgeLayer').innerHTML = defs + edgeGroups;
+}
+
+function edgeHtml(edge, model, index) {
+  const src = model.positions[edge.src];
+  const dst = model.positions[edge.dst];
+  if (!src || !dst) return '';
+  const sx = src.x + NODE_W;
+  const sy = src.y + NODE_H / 2;
+  const tx = dst.x;
+  const ty = dst.y + NODE_H / 2;
+  const dy = ty - sy;
+  const dx = tx - sx;
+  const sameLayer = Math.abs(dx) < 12;
+  const spread = ((index % 5) - 2) * 9;
+  let path;
+  let lx;
+  let ly;
+  if (sameLayer || dx < 0) {
+    const arc = 44 + Math.abs(dy) * .18 + Math.abs(spread);
+    path = `M ${sx} ${sy} C ${sx + arc} ${sy - arc + spread}, ${tx - arc} ${ty - arc + spread}, ${tx} ${ty}`;
+    lx = (sx + tx) / 2;
+    ly = Math.min(sy, ty) - arc + spread;
   } else {
-    findings.slice(0,8).forEach(f => {
-      const sev = f.severity || 'info';
-      const target = (f.target && f.target.content) || f.target_id || '';
-      h += `<div class="finding" data-id="${escAttr(f.target_id)}">`
-        + `<div><span class="risk-pill risk-${sev}">${esc(sev)}</span> <span class="ft">${esc(f.title||f.finding_type)}</span></div>`
-        + `<div class="fx">${esc(target.slice(0,82))}</div>`
-        + `</div>`;
+    const bend = Math.max(44, dx * .48);
+    path = `M ${sx} ${sy} C ${sx + bend} ${sy + spread}, ${tx - bend} ${ty + spread}, ${tx} ${ty}`;
+    lx = (sx + tx) / 2;
+    ly = (sy + ty) / 2 + spread;
+  }
+  const rel = edge.rel || 'supports';
+  const label = edgeLabel(edge);
+  const marker = markerForRel(rel);
+  return `
+    <path class="edge-path ${escAttr(rel)}" data-edge-id="${escAttr(edge.id)}" data-src="${escAttr(edge.src)}" data-dst="${escAttr(edge.dst)}"
+      d="${path}" marker-end="url(#${marker})"></path>
+    ${label ? edgeLabelHtml(edge.id, label, lx, ly) : ''}`;
+}
+
+function edgeLabel(edge) {
+  if (edge.rel === 'supports' && edge.nli_score != null) return `ν ${Number(edge.nli_score).toFixed(2)}`;
+  if (edge.rel === 'contradicts') return edge.nli_score != null ? `× ${Number(edge.nli_score).toFixed(2)}` : 'contradicts';
+  if (edge.rel && edge.rel !== 'supports') return edge.rel;
+  return '';
+}
+
+function edgeLabelHtml(id, label, x, y) {
+  const width = Math.max(42, label.length * 6 + 12);
+  return `<g class="edge-label" data-edge-id="${escAttr(id)}" transform="translate(${x - width / 2} ${y - 10})">
+    <rect width="${width}" height="20"></rect>
+    <text x="${width / 2}" y="14" text-anchor="middle">${esc(label)}</text>
+  </g>`;
+}
+
+function markerForRel(rel) {
+  if (rel === 'supports') return 'arrow-support';
+  if (rel === 'contradicts') return 'arrow-contra';
+  if (rel === 'refines') return 'arrow-accent';
+  if (rel === 'prerequisite') return 'arrow-warn';
+  return 'arrow-default';
+}
+
+function selectNode(id) {
+  if (!id || !stageModel?.nodeById[id]) return;
+  selectedNodeId = id;
+  blastState = null;
+  applyGraphState();
+  showNodeDetail(id);
+  centerNode(id);
+}
+
+function clearSelection() {
+  selectedNodeId = null;
+  blastState = null;
+  applyGraphState();
+  $('nodeInspector').innerHTML = '<h2>Node Detail</h2><div class="empty">Click a node in the structured DAG to inspect content, support, provenance, and connected evidence.</div>';
+}
+
+function contextForNode(id) {
+  const nodes = new Set([id]);
+  const edges = new Set();
+  const up = [id];
+  const down = [id];
+  while (up.length) {
+    const current = up.pop();
+    (stageModel.incoming[current] || []).forEach((edge) => {
+      edges.add(edge.id);
+      if (!nodes.has(edge.src)) {
+        nodes.add(edge.src);
+        up.push(edge.src);
+      }
     });
-    if(findings.length > 8) h += `<div class="an-hint">${findings.length - 8} more finding(s) hidden in this compact view.</div>`;
   }
-  $("auditFindings").innerHTML = h;
-  $("auditFindings").querySelectorAll('.finding').forEach(el =>
-    el.onclick = () => {
-      if(el.dataset.id) activateNode(el.dataset.id, 'up');
+  while (down.length) {
+    const current = down.pop();
+    (stageModel.outgoing[current] || []).forEach((edge) => {
+      edges.add(edge.id);
+      if (!nodes.has(edge.dst)) {
+        nodes.add(edge.dst);
+        down.push(edge.dst);
+      }
     });
-}
-
-async function loadAuditRuns(){
-  if(!currentThread) return;
-  try{
-    const r = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`);
-    if(r.ok) showAuditRun(r.data.latest);
-  }catch(_){}
-}
-
-async function runAuditNow(){
-  if(!currentThread) return;
-  setStatus(`${currentThread}: auditing…`);
-  try{
-    const r = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`, {
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({trigger:'manual',threshold:0.7})
-    });
-    if(!r.ok){ setStatus('audit failed'); return; }
-    showAuditRun(r.data);
-    setStatus(`audit: ${r.data.risk_digest.total_findings} finding(s), highest ${r.data.risk_digest.highest_severity}`);
-  }catch(e){
-    setStatus('audit error: '+e.message);
   }
-}
-
-// click a 承重/脆弱 entry => reveal + highlight its "blast radius": for a
-// load-bearing node, the conclusions that collapse without it; for a fragile
-// conclusion, its single point(s) of failure.
-function focusAnalysis(id, kind){
-  if(!lastGraph) return;
-  // 假鲁棒揭示(Shared-source Reveal):画出该结论的整条证据子树,把那个被所有路径
-  // 共享的 source 标成蓝色 —— 一眼戳破「看着 N 路支持,其实 1 个来源」。
-  if(kind==='pr' && prMap[id]){
-    const { nodes, edges } = chainOf(id, 'up');     // full evidence prefix of the claim
-    if(!anchors.includes(id)) anchors = [id, ...anchors];
-    nodes.forEach(n=>revealed.add(n));
-    render(lastGraph);
-    cy.elements().addClass('faded').removeClass('hl blast-source blast-inval blast-weak');
-    cy.nodes().filter(n=>nodes.has(n.id())).removeClass('faded').addClass('hl');
-    cy.edges().filter(e=>edges.has(e.id())).removeClass('faded').addClass('hl');
-    (prMap[id].shared_source||[]).forEach(s=>cy.getElementById(s).addClass('blast-source'));
-    selectNodeForInspection(nodeForId(id));
-    setStatus(`🕸 Hidden shared source: ${prMap[id].n_support_edges} support path(s) all funnel through 1 source (blue)`);
-    return;
-  }
-  const set = new Set([id]);
-  if(kind==='lb' && lbMap[id]) (lbMap[id].critical_for||[]).forEach(c=>set.add(c));
-  if(kind==='frag' && fragMap[id]) (fragMap[id].spof||[]).forEach(s=>set.add(s));
-  if(!anchors.includes(id)) anchors = [id, ...anchors];
-  set.forEach(n=>revealed.add(n));
-  render(lastGraph);
-  cy.elements().addClass('faded').removeClass('hl');
-  cy.nodes().filter(n=>set.has(n.id())).removeClass('faded').addClass('hl');
-  cy.edges().filter(e=>set.has(e.source().id())&&set.has(e.target().id())).removeClass('faded').addClass('hl');
-  selectNodeForInspection(nodeForId(id));
-  setStatus(kind==='lb'
-    ? `🔑 Load-bearing: removing this collapses ${(lbMap[id].critical_for||[]).length} claim(s) (highlighted)`
-    : `⚠ Fragile: ${(fragMap[id].reasons||[]).join(' · ')}`);
-}
-
-function analysisRowsHtml(d){
-  let h = '';
-  const lb = lbMap[d.id];
-  if(lb) h += `<div class="row"><span class="lab">load-bearing</span><span class="val">`
-    + `<span class="pill" style="background:#fef3c7;color:#854d0e;border:1px solid #fde68a" title="removing this collapses these claims">🔑 ${lb.critical_count} claim(s) depend on it</span></span></div>`;
-  const fr = fragMap[d.id];
-  if(fr) h += `<div class="row"><span class="lab">fragile</span><span class="val">`
-    + `<span class="pill" style="background:#ffedd5;color:#9a3412;border:1px solid #fed7aa">⚠ ${esc(fr.reasons.join(' · '))}</span></span></div>`;
-  const pr = prMap[d.id];
-  if(pr) h += `<div class="row"><span class="lab">shared src</span><span class="val">`
-    + `<span class="pill" style="background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe" title="all ${pr.n_support_edges} support paths funnel through one source">🕸 ${pr.n_support_edges} paths → 1 source</span></span></div>`;
-  return h;
-}
-function inspect(n){
-  const d = n.data('full');
-  const ref = d.ref ? Object.entries(d.ref).map(([k,v])=>`${k}: ${v}`).join('<br/>') : '—';
-  $("inspector").innerHTML = `
-    <h2>Inspector</h2>
-    <div class="row"><span class="lab">type</span><span class="val">${d.type}${d.reasoning_type?` · ${d.reasoning_type}`:''}</span></div>
-    ${confRowHtml(d)}
-    ${analysisRowsHtml(d)}
-    <div class="row"><span class="lab">trace_ref</span><span class="val"><a class="jump" title="trace step id this node maps back to">${d.trace_ref||'—'}</a></span></div>
-    ${d.type==='source'?`<div class="row"><span class="lab">ref</span><span class="val">${ref}</span></div>`:''}
-    ${d.type==='source'?`<div class="row"><span class="lab">source</span><span class="val">${d.source_type?esc(d.source_type):'—'}${d.credibility?` · <b style="color:${CRED_COL[d.credibility]||'#64748b'}">${esc(d.credibility)}</b> credibility`:''}</span></div>`:''}
-    <div class="content">${(d.content||'').replace(/</g,'&lt;')}</div>
-    ${n.data('plus')?`<button id="fold" style="margin-top:10px">＋ Expand (${n.data('plus')})</button>`:''}
-    <button id="whatif" class="primary" style="margin-top:10px" title="Simulate removing this — which conclusions collapse, which only weaken?">⚡ What if removed?</button>
-    <button id="clr" style="margin-top:10px">clear highlight</button>
-  `;
-  const fb = $("fold"); if (fb) fb.onclick = ()=>expandOneHop(d.id);
-  $("whatif").onclick = ()=>whatIf(d.id);
-  $("clr").onclick = clearHl;
-}
-
-function clearHl(){
-  activeNodeId = null;
-  if(cy){
-    cy.elements().removeClass('faded hl blast-inval blast-weak blast-source');
-    cy.nodes().unselect();
-  }
-  markCardActive(null);
-}
-
-// --- What-if reconcile (阶段二扰动): simulate removing a node, show the diff ---
-// "If this source were retracted, which conclusions collapse?" Read-only — never
-// mutates the stored graph. Reveals + colours the blast radius and explains why.
-async function whatIf(nodeId){
-  if(!currentThread || !lastGraph) return;
-  setStatus('⚡ Simulating removal (reconcile)…');
-  let r;
-  try {
-    r = await api(`/threads/${encodeURIComponent(currentThread)}/reconcile`,
-      {method:'POST',headers:{'content-type':'application/json'},
-       body:JSON.stringify({remove_nodes:[nodeId],threshold:0.7})});
-  } catch(e){ setStatus('reconcile error: '+e.message); return; }
-  if(!r.ok){ setStatus('reconcile failed: '+(r.error&&r.error.message||'')); return; }
-  const d = r.data;
-  const affected = [...d.invalidated, ...d.weakened, ...d.now_conflicting].map(x=>x.id);
-  if(!anchors.includes(nodeId)) anchors = [nodeId, ...anchors];
-  [nodeId, ...affected].forEach(n=>revealed.add(n));
-  render(lastGraph);
-  cy.elements().removeClass('faded hl blast-inval blast-weak blast-source');
-  cy.getElementById(nodeId).addClass('blast-source');
-  d.invalidated.forEach(x=>cy.getElementById(x.id).addClass('blast-inval'));
-  d.weakened.forEach(x=>cy.getElementById(x.id).addClass('blast-weak'));
-  d.now_conflicting.forEach(x=>cy.getElementById(x.id).addClass('blast-weak'));
-  showReconcile(nodeId, d);
-  const s = d.summary;
-  setStatus(`⚡ Remove this → ${s.n_invalidated} collapse · ${s.n_weakened} weakened (${s.affected_subgraph_size}-node subgraph)`);
-}
-function showReconcile(nodeId, d){
-  const removing = (lastGraph.nodes.find(n=>n.id===nodeId)||{}).content || nodeId;
-  const item = (x)=>`<div class="an-item" data-id="${x.id}">${esc((x.content||'').slice(0,56))}`
-    + `<div class="an-rsn">${esc(x.why||'')}</div></div>`;
-  let h = `<h2>What-if: remove this</h2>`
-    + `<div class="row"><span class="lab">removing</span><span class="val">${esc(removing.slice(0,90))}</span></div>`
-    + `<div class="an-grp"><b style="color:#ff7b72">${d.summary.n_invalidated}</b> collapse · `
-    + `<b style="color:#c2410c">${d.summary.n_weakened}</b> weakened · subgraph ${d.summary.affected_subgraph_size}</div>`;
-  if(d.invalidated.length){ h += `<div class="an-grp">💥 <b>Collapses</b> <span class="an-hint">loses all evidence</span></div>`; d.invalidated.forEach(x=>h+=item(x)); }
-  if(d.weakened.length){ h += `<div class="an-grp">▽ <b>Weakened</b> <span class="an-hint">still reaches a source</span></div>`; d.weakened.forEach(x=>h+=item(x)); }
-  if(d.now_conflicting.length){ h += `<div class="an-grp">⚔ <b>Now conflicting</b></div>`; d.now_conflicting.forEach(x=>h+=item(x)); }
-  if(!d.invalidated.length && !d.weakened.length && !d.now_conflicting.length)
-    h += `<div class="empty" style="padding:6px;font-size:11px">Nothing downstream depends on this — safe to remove.</div>`;
-  h += `<button id="clr" style="margin-top:10px">clear</button>`;
-  $("inspector").innerHTML = h;
-  $("inspector").querySelectorAll('.an-item').forEach(el => el.onclick = ()=>{
-    activateNode(el.dataset.id, 'up');
-  });
-  $("clr").onclick = clearHl;
-}
-
-// Reasoning prefix / path: the supports-chain leading to (dir 'up') or out of
-// (dir 'down') a node. Computed client-side from lastGraph — instant, no network.
-function chainOf(nodeId, dir){
-  const nodes = new Set([nodeId]), edges = new Set();
-  if(!lastGraph) return { nodes, edges };
-  const adj = {};
-  lastGraph.edges.forEach(e => {
-    if(e.rel !== 'supports') return;          // evidence chain = supports edges
-    const k = dir==='up' ? e.dst : e.src, v = dir==='up' ? e.src : e.dst;
-    (adj[k] = adj[k] || []).push({ v, id:e.id });
-  });
-  const stack = [nodeId];
-  while(stack.length){ const c = stack.pop();
-    for(const {v, id} of (adj[c]||[])){ edges.add(id); if(!nodes.has(v)){ nodes.add(v); stack.push(v); } } }
   return { nodes, edges };
 }
-// Click a claim/reasoning => isolate its reasoning path (fade everything else).
-// This is the main way to read a dense graph: one click, one chain.
-function focusChain(nodeId, dir){
-  if(!lastGraph) return;
-  const { nodes, edges } = chainOf(nodeId, dir);
-  const visible = new Set(cy.nodes().map(n=>n.id()));
-  const needRender = [...nodes].some(n => !visible.has(n));   // reveal collapsed parts only if needed
-  if(needRender){
-    if(!anchors.includes(nodeId)) anchors = [nodeId, ...anchors];
-    nodes.forEach(n => revealed.add(n));
-    render(lastGraph);
+
+function applyGraphState() {
+  if (!stageModel) return;
+  const context = selectedNodeId ? contextForNode(selectedNodeId) : { nodes: new Set(), edges: new Set() };
+  document.querySelectorAll('.node-card').forEach((card) => {
+    const id = card.dataset.nodeId;
+    card.classList.toggle('selected', id === selectedNodeId);
+    card.classList.toggle('in-path', Boolean(selectedNodeId && context.nodes.has(id)));
+    card.classList.toggle('faded', Boolean(selectedNodeId && !context.nodes.has(id)));
+    card.classList.toggle('blast-source', Boolean(blastState?.source === id));
+    card.classList.toggle('blast-inval', Boolean(blastState?.invalidated?.has(id)));
+    card.classList.toggle('blast-weak', Boolean(blastState?.weakened?.has(id)));
+  });
+  document.querySelectorAll('.edge-path,.edge-label').forEach((el) => {
+    const id = el.dataset.edgeId;
+    el.classList.toggle('in-path', Boolean(selectedNodeId && context.edges.has(id)));
+    el.classList.toggle('faded', Boolean(selectedNodeId && !context.edges.has(id)));
+  });
+}
+
+function centerNode(id) {
+  const card = document.querySelector(`.node-card[data-node-id="${CSS.escape(id)}"]`);
+  if (!card) return;
+  card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+}
+
+function noisyOr(scores) {
+  let p = 1;
+  scores.forEach((score) => { p *= (1 - Math.max(0, Math.min(1, Number(score) || 0))); });
+  return 1 - p;
+}
+
+function supportStrength(id) {
+  const scores = (stageModel?.incoming[id] || [])
+    .filter((edge) => edge.rel === 'supports' && edge.nli_score != null)
+    .map((edge) => edge.nli_score);
+  if (!scores.length) return null;
+  return { value: noisyOr(scores), count: scores.length };
+}
+
+function showNodeDetail(id) {
+  const node = stageModel.nodeById[id];
+  const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
+  const support = supportStrength(id);
+  const refRows = node.type === 'source' ? refHtml(node) : '';
+  const incoming = (stageModel.incoming[id] || []).slice(0, 6);
+  const outgoing = (stageModel.outgoing[id] || []).slice(0, 6);
+  $('nodeInspector').innerHTML = `
+    <h2>Node Detail</h2>
+    <div class="detail-title">
+      <span class="detail-icon">${esc(meta.icon)}</span>
+      <div>
+        <div class="detail-heading">${esc(meta.label)}</div>
+        <div style="font-size:10.5px;color:var(--faint)">${esc(node.id)}</div>
+      </div>
+    </div>
+    <div class="row"><span class="lab">status</span><span class="val">${nodeBadges(node) || esc(node.status || '-')}</span></div>
+    ${support ? `<div class="row"><span class="lab">support</span><span class="val"><span class="badge ${support.value >= .7 ? 'ok' : 'warn'}">ν ${support.value.toFixed(2)}</span> ${support.count} edge(s)</span></div>` : ''}
+    ${analysisRowsHtml(node)}
+    <div class="row"><span class="lab">trace</span><span class="val">${esc(node.trace_ref || '-')}</span></div>
+    ${refRows}
+    <div class="content">${esc(node.content || '')}</div>
+    <div class="detail-actions">
+      <button id="detailClear">Clear</button>
+      <button id="detailWhatIf" class="primary">What if removed?</button>
+    </div>
+    ${connectedHtml('Incoming', incoming, true)}
+    ${connectedHtml('Outgoing', outgoing, false)}
+  `;
+  $('detailClear').onclick = clearSelection;
+  $('detailWhatIf').onclick = () => whatIf(id);
+  $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+function refHtml(node) {
+  const rows = [];
+  if (node.source_type) rows.push(`<div class="row"><span class="lab">source</span><span class="val">${esc(node.source_type)}${node.credibility ? ` · ${esc(node.credibility)} credibility` : ''}</span></div>`);
+  if (node.ref && typeof node.ref === 'object') {
+    const ref = Object.entries(node.ref)
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${esc(key)}: ${esc(value)}`)
+      .join('<br/>');
+    if (ref) rows.push(`<div class="row"><span class="lab">ref</span><span class="val">${ref}</span></div>`);
   }
-  cy.elements().addClass('faded').removeClass('hl');
-  cy.nodes().filter(n=>nodes.has(n.id())).removeClass('faded').addClass('hl');
-  cy.edges().filter(e=>edges.has(e.id())).removeClass('faded').addClass('hl');
-  setStatus(dir==='up'
-    ? `Evidence path → this conclusion (${nodes.size} nodes; click empty space to clear)`
-    : `What depends on this source (${nodes.size} nodes; click empty space to clear)`);
+  return rows.join('');
 }
 
-const ICON = { source:'📄', reasoning:'🧠', claim:'🏁' };
-const TNAME = { source:'SOURCE', reasoning:'REASONING', claim:'CLAIM' };
-function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function escAttr(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-// source credibility colour (display only — does not affect ν/status)
-const CRED_COL = { high:'#16a34a', medium:'#ca8a04', low:'#dc2626' };
-function srcBadge(n){
-  if(!n || (!n.source_type && !n.credibility)) return '';
-  const cr = n.credibility, col = CRED_COL[cr] || '#64748b';
-  return `<span class="stype" title="source type · credibility (display only)"`
-    + ` style="font-size:10px;font-weight:700;color:var(--muted);background:#f8fafc;`
-    + `border:1px solid var(--line);border-radius:5px;padding:0 5px;margin-left:5px">`
-    + `${n.source_type?esc(n.source_type):'source'}${cr?` · <b style="color:${col}">${esc(cr)}</b>`:''}</span>`;
-}
-function cardTpl(d){
-  const verified = d.type==='source' || d.status==='supported';
-  // EXACTLY ONE top-right badge, mutually exclusive (priority high→low):
-  //   shared-source  > fragile  > load-bearing  > verified  > none
-  // contested / ungrounded are NOT separate badges — they are fragile REASONS,
-  // written into the card body below (so every fragile node states why it's fragile).
-  let badge = '';
-  if(d.shared)       badge = `<span class="lb" style="background:#dbeafe;color:#1d4ed8;border-color:#bfdbfe" title="Shared source — ${esc(d.sharedHint||'same origin as another source')}">🔗 shared</span>`;
-  else if(d.fragile) badge = `<span class="warn warn-frag" title="Fragile — ${esc(d.fragReason||'')}">⚠ fragile</span>`;
-  else if(d.lb)      badge = `<span class="lb" title="Load-bearing — ${d.lb} claim(s) collapse without it">🔑${d.lb}</span>`;
-  else if(verified)  badge = `<span class="vok" title="${d.type==='source'?'Source — evidence by definition':'Evidence support ν≥0.7'}">✓</span>`;
-  // the specific reason printed on the card (shared-source hint, else fragile reason)
-  const reason = d.shared ? (d.sharedHint||'') : (d.fragile ? (d.fragReason||'') : '');
-  const cls = `card card-${d.type}` + (d.focus?' card-focus':'') + (d.fragile?' card-fragile':'');
-  const label = `${TNAME[d.type]||d.type}: ${d.content||''}`.slice(0, 180);
-  return `<div class="${cls}" data-node-id="${escAttr(d.id)}" role="button" tabindex="0" aria-label="${escAttr(label)}"><span class="bar"></span>`
-    + `<div class="card-head"><span class="ic">${ICON[d.type]||'•'}</span>`
-    + `<span class="tname">${TNAME[d.type]||d.type}</span>`
-    + (d.type==='source'?srcBadge(d.full):``)
-    + `<span class="sp"></span>`
-    + badge
-    + `</div><div class="card-body">${esc(d.content)}</div>`
-    + (reason?`<div class="card-reason">⚠ ${esc(reason)}</div>`:``)
-    + (d.plus?`<div class="card-more">＋${d.plus} more evidence</div>`:``)
-    + `</div>`;
+function analysisRowsHtml(node) {
+  const rows = [];
+  if (lbMap[node.id]) rows.push(`<div class="row"><span class="lab">load</span><span class="val"><span class="badge warn">${esc(lbMap[node.id].critical_count)} claims depend on it</span></span></div>`);
+  if (fragMap[node.id]) rows.push(`<div class="row"><span class="lab">fragile</span><span class="val"><span class="badge warn">${esc((fragMap[node.id].reasons || []).join(' · '))}</span></span></div>`);
+  if (weakMap[node.id]) rows.push(`<div class="row"><span class="lab">weak</span><span class="val"><span class="badge warn">support ${Number(weakMap[node.id].support_strength || 0).toFixed(2)}</span></span></div>`);
+  if (prMap[node.id]) rows.push(`<div class="row"><span class="lab">shared</span><span class="val"><span class="badge info">${esc(prMap[node.id].n_support_edges)} paths funnel through one source</span></span></div>`);
+  return rows.join('');
 }
 
-function initCy(){
-  cy = cytoscape({ container:$("cy"), style:cyStyle, elements:[],
-    wheelSensitivity:0.2, minZoom:0.2, maxZoom:2.5 });
-  if (cy.nodeHtmlLabel) cy.nodeHtmlLabel([{ query:'node',
-    halign:'center', valign:'center', halignBox:'center', valignBox:'center', tpl: cardTpl }]);
-  installCardSelectionObserver();
-  installHtmlCardBridge();
-  cy.on('tap','node', e=>{ activateNode(e.target.id()); });
-  cy.on('tap', e=>{ if(e.target===cy){ clearHl(); } });
-  // hover an expandable node => show the floating ＋ ; right-click = expand one hop
-  cy.on('mouseover','node', e=>{ if(e.target.data('plus')) showPlusFor(e.target); });
-  cy.on('mouseout','node', ()=>{ plusHideTimer = setTimeout(hidePlus, 220); });
-  cy.on('cxttap','node', e=>{ if(e.target.data('plus')) expandOneHop(e.target.id()); });
-  cy.on('pan zoom drag', hidePlus);
-  // remember a card's spot the moment you drop it, so the next re-render keeps it
-  cy.on('dragfree','node', e=>{ savedPositions[e.target.id()] = { x:e.target.position('x'), y:e.target.position('y') }; });
-  const pl = $("plus");
-  pl.onmouseenter = ()=>{ if(plusHideTimer) clearTimeout(plusHideTimer); };
-  pl.onmouseleave = hidePlus;
-  pl.onclick = ()=>{ const t = pl.dataset.target; hidePlus(); expandOneHop(t); };
+function connectedHtml(title, edges, incomingMode) {
+  if (!edges.length) return '';
+  const items = edges.map((edge) => {
+    const peerId = incomingMode ? edge.src : edge.dst;
+    const peer = stageModel.nodeById[peerId];
+    return `<div class="mini-item" data-node-id="${escAttr(peerId)}">
+      <b>${esc(edge.rel)}</b> · ${esc(TYPE_META[peer?.type]?.label || peer?.type || 'node')}<br/>
+      ${esc(compact(peer?.content || peerId, 92))}
+    </div>`;
+  }).join('');
+  return `<div class="mini-list"><h2 style="margin-top:10px">${esc(title)}</h2>${items}</div>`;
 }
 
-// --- live watch (non-intrusive) ------------------------------------------
-// A new turn must NEVER redraw the graph while you're reading it (re-layout
-// would lose your zoom / selection / trace-back). So the timer only POLLS for
-// changes and flags the Refresh button; the canvas stays put until you click.
-function sigOf(data){
-  const s = (data && data.summary) || {};
-  return JSON.stringify([s.node_count, s.edge_count, s.nodes_by_status]);
-}
-function markUpdated(on){
-  const b = $("refresh");
-  if(on){ b.textContent = '↻ Refresh •'; b.style.color = '#a16207'; b.style.borderColor = '#facc15'; b.title = 'Graph updated — click to refresh'; }
-  else  { b.textContent = '↻ Refresh';   b.style.color = '';        b.style.borderColor = '';        b.title = 'Refresh'; }
-}
-async function pollChanges(){
-  if(!currentThread || renderedSig === null) return;  // nothing rendered yet to diff against
-  try{
-    const g = await api(`/threads/${encodeURIComponent(currentThread)}/graph`);
-    if(g && g.ok && sigOf(g.data) !== renderedSig) markUpdated(true);
-  }catch(_){}
+function showMetrics(metrics) {
+  $('m-cov').textContent = metrics ? `${(Number(metrics.provenance_coverage || 0) * 100).toFixed(0)}%` : '-';
+  $('m-snd').textContent = metrics ? Number(metrics.provenance_soundness || 0).toFixed(2) : '-';
 }
 
-// --- controls ---
-$("thread").onchange = e=>{ currentThread = e.target.value; renderedSig = null; markUpdated(false); loadGraph(); };
-$("refresh").onclick = loadGraph;
-$("verify").onclick = async ()=>{
-  if(!currentThread) return; setStatus('verifying…');
-  const r = await api(`/threads/${encodeURIComponent(currentThread)}/verify`,
-    {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({threshold:0.7})});
-  setStatus(r.ok?`verified: ${r.data.status_changes.length} status changes`:'verify failed');
+function showAnalysis(data) {
+  const lb = data?.load_bearing || [];
+  const pr = data?.pseudo_robust || [];
+  const weak = data?.weakly_supported || [];
+  if (!lb.length && !pr.length && !weak.length) {
+    $('analysis').innerHTML = '<h2>Load-Bearing / Shared Source</h2><div class="empty" style="min-height:70px;padding:8px">No single-point dependencies or hidden shared sources.</div>';
+    return;
+  }
+  let html = '<h2>Load-Bearing / Shared Source</h2>';
+  lb.slice(0, 5).forEach((item) => {
+    html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge warn">${esc(item.critical_count)}x</span> ${esc(compact(item.content, 76))}</div>`;
+  });
+  pr.slice(0, 5).forEach((item) => {
+    html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge info">${esc(item.n_support_edges)}→1</span> ${esc(compact(item.content, 72))}</div>`;
+  });
+  weak.slice(0, 5).forEach((item) => {
+    html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge warn">ν ${Number(item.support_strength || 0).toFixed(2)}</span> ${esc(compact(item.content, 72))}</div>`;
+  });
+  $('analysis').innerHTML = html;
+  $('analysis').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+function showAuditRun(run) {
+  if (!run) {
+    $('auditFindings').innerHTML = '<h2>Evidence Audit</h2><div class="empty" style="min-height:70px;padding:8px">No audit run yet. Click Audit after the graph loads.</div>';
+    return;
+  }
+  const counts = run.risk_digest?.counts_by_severity || {};
+  let html = '<h2>Evidence Audit</h2>';
+  html += `<div class="riskbar">
+    <span class="badge danger">${counts.blocker || 0} blocker</span>
+    <span class="badge warn">${counts.major || 0} major</span>
+    <span class="badge warn">${counts.minor || 0} minor</span>
+    <span class="badge info">${counts.info || 0} info</span>
+  </div>`;
+  const findings = run.findings || [];
+  if (!findings.length) {
+    html += '<div class="empty" style="min-height:70px;padding:8px">No audit risks found for the current graph.</div>';
+  } else {
+    findings.slice(0, 8).forEach((finding) => {
+      const severity = finding.severity || 'info';
+      const badgeClass = severity === 'blocker' ? 'danger' : severity === 'info' ? 'info' : 'warn';
+      const target = finding.target?.content || finding.target_id || '';
+      html += `<div class="mini-item" data-node-id="${escAttr(finding.target_id || '')}">
+        <span class="badge ${badgeClass}">${esc(severity)}</span> <b>${esc(finding.title || finding.finding_type || 'finding')}</b><br/>
+        ${esc(compact(target, 96))}
+      </div>`;
+    });
+  }
+  $('auditFindings').innerHTML = html;
+  $('auditFindings').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    if (item.dataset.nodeId) item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+async function loadThreads() {
+  const response = await api('/threads');
+  const threads = response.data?.threads || [];
+  const options = [...threads];
+  if (currentThread && !options.includes(currentThread)) options.unshift(currentThread);
+  const select = $('thread');
+  select.innerHTML = options.length ? options.map((thread) => `<option value="${escAttr(thread)}">${esc(thread)}</option>`).join('') : '<option value="">(no threads)</option>';
+  if (options.length && !currentThread) currentThread = options[0];
+  if (currentThread) select.value = currentThread;
+  setSubtitle(currentThread || 'All threads');
+}
+
+async function loadGraph() {
+  if (!currentThread) {
+    renderEmptyGraph('No thread selected.');
+    return;
+  }
+  setStatus('loading...');
+  try {
+    const graphResponse = await api(`/threads/${encodeURIComponent(currentThread)}/graph`);
+    if (!graphResponse.ok) {
+      renderEmptyGraph('No DAG yet for this thread. The graph appears after extraction succeeds.');
+      setStatus(graphResponse.error?.code || 'no graph');
+      return;
+    }
+    const graph = graphResponse.data.graph;
+    selectedNodeId = selectedNodeId && graph.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : null;
+    blastState = null;
+    buildAnalysisMaps(null);
+    renderGraph(graph);
+    renderedSig = sigOf(graphResponse.data);
+    markUpdated(false);
+
+    const needsVerify = graph.edges.some((edge) => edge.rel === 'supports') &&
+      !graph.edges.some((edge) => edge.rel === 'supports' && edge.nli_score != null);
+    if (needsVerify && verifyTriedFor !== currentThread) {
+      verifyTriedFor = currentThread;
+      setStatus('auto-verifying...');
+      try {
+        await api(`/threads/${encodeURIComponent(currentThread)}/verify`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ threshold: 0.7 })
+        });
+      } catch (_) {}
+      return loadGraph();
+    }
+
+    const metrics = await api(`/threads/${encodeURIComponent(currentThread)}/metrics`).catch(() => null);
+    if (metrics?.ok) showMetrics(metrics.data);
+    const analysis = await api(`/threads/${encodeURIComponent(currentThread)}/analysis`).catch(() => null);
+    if (analysis?.ok) {
+      buildAnalysisMaps(analysis.data);
+      showAnalysis(analysis.data);
+      renderGraph(graph);
+    } else {
+      showAnalysis(null);
+    }
+    await loadAuditRuns();
+    setStatus(`${graph.nodes.length} nodes · ${graph.edges.length} edges`);
+  } catch (error) {
+    renderEmptyGraph(error instanceof Error ? error.message : String(error));
+    setStatus('error');
+  }
+}
+
+function renderEmptyGraph(message) {
+  lastGraph = null;
+  stageModel = null;
+  selectedNodeId = null;
+  $('stage').style.width = '720px';
+  $('stage').style.height = '420px';
+  $('laneLayer').innerHTML = '';
+  $('nodeLayer').innerHTML = `<div class="empty" style="position:absolute;inset:0">${esc(message)}</div>`;
+  const defs = $('edgeLayer').querySelector('defs')?.outerHTML || '';
+  $('edgeLayer').innerHTML = defs;
+  updateSummary({ nodes: [], edges: [] });
+  showMetrics(null);
+  showAuditRun(null);
+  showAnalysis(null);
+}
+
+async function loadAuditRuns() {
+  if (!currentThread) return;
+  const response = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`).catch(() => null);
+  if (response?.ok) showAuditRun(response.data.latest);
+}
+
+async function runAuditNow() {
+  if (!currentThread) return;
+  setStatus('auditing...');
+  const response = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ trigger: 'manual', threshold: 0.7 })
+  }).catch((error) => ({ ok: false, error: { message: error.message } }));
+  if (!response.ok) {
+    setStatus(`audit failed: ${response.error?.message || ''}`);
+    return;
+  }
+  showAuditRun(response.data);
+  setStatus(`audit: ${response.data.risk_digest.total_findings} finding(s)`);
+}
+
+async function whatIf(nodeId) {
+  if (!currentThread || !stageModel) return;
+  setStatus('simulating...');
+  const response = await api(`/threads/${encodeURIComponent(currentThread)}/reconcile`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ remove_nodes: [nodeId], threshold: 0.7 })
+  }).catch((error) => ({ ok: false, error: { message: error.message } }));
+  if (!response.ok) {
+    setStatus(`reconcile failed: ${response.error?.message || ''}`);
+    return;
+  }
+  const result = response.data;
+  blastState = {
+    source: nodeId,
+    invalidated: new Set((result.invalidated || []).map((item) => item.id)),
+    weakened: new Set([...(result.weakened || []), ...(result.now_conflicting || [])].map((item) => item.id))
+  };
+  selectedNodeId = nodeId;
+  applyGraphState();
+  showReconcile(nodeId, result);
+  setStatus(`remove → ${result.summary.n_invalidated} collapse · ${result.summary.n_weakened} weakened`);
+}
+
+function showReconcile(nodeId, result) {
+  const node = stageModel.nodeById[nodeId];
+  const itemHtml = (item, cls) => `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge ${cls}">${cls === 'danger' ? 'collapse' : 'weakened'}</span> ${esc(compact(item.content || item.id, 92))}<br/><span style="color:var(--faint)">${esc(item.why || '')}</span></div>`;
+  let html = `<h2>What If Removed</h2>
+    <div class="row"><span class="lab">removing</span><span class="val">${esc(compact(node?.content || nodeId, 110))}</span></div>
+    <div class="row"><span class="lab">impact</span><span class="val"><span class="badge danger">${result.summary.n_invalidated} collapse</span> <span class="badge warn">${result.summary.n_weakened} weakened</span></span></div>
+    <div class="detail-actions"><button id="detailClear">Clear</button></div>`;
+  (result.invalidated || []).forEach((item) => { html += itemHtml(item, 'danger'); });
+  (result.weakened || []).forEach((item) => { html += itemHtml(item, 'warn'); });
+  (result.now_conflicting || []).forEach((item) => { html += itemHtml(item, 'warn'); });
+  if (!(result.invalidated || []).length && !(result.weakened || []).length && !(result.now_conflicting || []).length) {
+    html += '<div class="empty" style="min-height:70px;padding:8px">No downstream conclusion depends on this node.</div>';
+  }
+  $('nodeInspector').innerHTML = html;
+  $('detailClear').onclick = clearSelection;
+  $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+function fitGraph() {
+  $('stageScroll').scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+}
+
+function sigOf(data) {
+  const summary = data?.summary || {};
+  return JSON.stringify([summary.node_count, summary.edge_count, summary.nodes_by_status]);
+}
+
+function markUpdated(on) {
+  const button = $('refresh');
+  if (on) {
+    button.textContent = 'Refresh *';
+    button.style.color = '#a16207';
+    button.style.borderColor = '#facc15';
+    button.title = 'Graph updated - click to refresh';
+  } else {
+    button.textContent = 'Refresh';
+    button.style.color = '';
+    button.style.borderColor = '';
+    button.title = 'Refresh';
+  }
+}
+
+async function pollChanges() {
+  if (!currentThread || renderedSig === null) return;
+  const response = await api(`/threads/${encodeURIComponent(currentThread)}/graph`).catch(() => null);
+  if (response?.ok && sigOf(response.data) !== renderedSig) markUpdated(true);
+}
+
+$('thread').onchange = (event) => {
+  currentThread = event.target.value;
+  selectedNodeId = null;
+  verifyTriedFor = null;
+  renderedSig = null;
+  markUpdated(false);
+  setSubtitle(currentThread || 'All threads');
   loadGraph();
 };
-$("auditNow").onclick = runAuditNow;
-$("expandAll").onclick = showAllClaims;          // show every conclusion (still 1-hop)
-$("collapseAll").onclick = resetView;            // back to top-3 focus
-let timer = null;
-$("auto").onchange = e=>{
-  if(e.target.checked){ timer = setInterval(pollChanges, 3000); } else { clearInterval(timer); timer=null; markUpdated(false); }
+$('refresh').onclick = loadGraph;
+$('verify').onclick = async () => {
+  if (!currentThread) return;
+  setStatus('verifying...');
+  const response = await api(`/threads/${encodeURIComponent(currentThread)}/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ threshold: 0.7 })
+  }).catch((error) => ({ ok: false, error: { message: error.message } }));
+  setStatus(response.ok ? `verified: ${response.data.status_changes.length} status changes` : 'verify failed');
+  loadGraph();
 };
+$('auditNow').onclick = runAuditNow;
+$('fit').onclick = fitGraph;
+$('auto').onchange = (event) => {
+  if (event.target.checked) {
+    timer = setInterval(pollChanges, 3000);
+  } else {
+    clearInterval(timer);
+    timer = null;
+    markUpdated(false);
+  }
+};
+$('stageScroll').addEventListener('click', (event) => {
+  if (event.target === $('stageScroll') || event.target === $('stage') || event.target === $('laneLayer') || event.target === $('edgeLayer')) clearSelection();
+});
 
-initCy();
-loadThreads().then(loadGraph);
-// "watch" defaults ON: it only polls for changes and flags Refresh — it never
-// redraws while you read (the checkbox `checked` only sets UI state — start here).
-if($("auto").checked && !timer){ timer = setInterval(pollChanges, 3000); }
+loadThreads().then(loadGraph).catch((error) => {
+  renderEmptyGraph(error instanceof Error ? error.message : String(error));
+  setStatus('error');
+});
+if ($('auto').checked && !timer) timer = setInterval(pollChanges, 3000);
 </script>
 </body>
 </html>

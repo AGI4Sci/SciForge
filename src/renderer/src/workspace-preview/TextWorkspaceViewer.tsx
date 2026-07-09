@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
@@ -129,6 +129,19 @@ export function createTextReplaceAllOperation(input: {
   }
 }
 
+export function textWorkspaceViewerDraftSourceKey(
+  observation: WorkspaceObservation | null | undefined,
+  model: TextWorkspaceViewerModel
+): string {
+  return [
+    observation?.file.path ?? '',
+    observation?.file.mtimeMs ?? '',
+    observation?.text?.lineCount ?? model.lineCount,
+    observation?.text?.characterCount ?? model.characterCount,
+    model.truncated ? 'truncated' : 'complete'
+  ].join('\u0000')
+}
+
 export function TextWorkspaceViewer({
   observation,
   model,
@@ -136,8 +149,13 @@ export function TextWorkspaceViewer({
   onApplyEdit
 }: TextWorkspaceViewerProps): ReactNode {
   const resolvedModel = model ?? buildTextWorkspaceViewerModel(observation, Boolean(onApplyEdit))
+  const draftSourceKey = textWorkspaceViewerDraftSourceKey(observation, resolvedModel)
   const [draft, setDraft] = useState(resolvedModel.text)
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
+
+  useEffect(() => {
+    setDraft(resolvedModel.text)
+  }, [draftSourceKey, resolvedModel.text])
 
   return (
     <section

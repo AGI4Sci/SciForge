@@ -281,6 +281,30 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
     }
   )
 
+  it('passes side-thread visibility metadata when starting a local runtime thread', async () => {
+    const captured: CapturedRequest[] = []
+    const adapter = adapterWithCapturedRequests(captured)
+
+    await adapter.startThread({ settings: buildSettings() }, {
+      runtimeId: 'sciforge',
+      workspace: '/tmp/workspace',
+      title: 'PDF: selected text',
+      relation: 'side',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
+    })
+
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).toMatchObject({
+      pathAndQuery: '/v1/threads',
+      body: {
+        relation: 'side',
+        threadSource: 'pdf_annotation',
+        sidebarVisibility: 'hidden'
+      }
+    })
+  })
+
   it.each(MODEL_ROUTER_MODEL_CASES)(
     'routes startTurn %s model through the resolved Model Router alias',
     async (_name, model) => {

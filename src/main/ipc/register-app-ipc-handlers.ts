@@ -970,7 +970,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
-    workspacePreviewHost = new WorkspacePreviewHost(),
+    workspacePreviewHost: providedWorkspacePreviewHost,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
@@ -999,6 +999,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     ensureProjectDagReady,
     transcribeSpeech = requestSpeechTranscription
   } = options
+  const workspacePreviewHost = providedWorkspacePreviewHost ?? new WorkspacePreviewHost({
+    loadSettings: () => store.load()
+  })
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const agentRuntimeEventStreams = new Map<string, AgentRuntimeEventStreamRecord>()
   const workspacePreviewSenderSessions = new Map<number, WorkspacePreviewSenderSessionRecord>()

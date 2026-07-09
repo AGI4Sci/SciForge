@@ -10,6 +10,10 @@ import {
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES
 } from '../../../shared/workspace-preview'
+import {
+  PDF_REVIEW_GENERATE_ACTION_ID,
+  PDF_REVIEW_IMPROVE_ACTION_ID
+} from '../../../shared/pdf-review'
 import { WorkspacePreviewHost } from './host'
 import type { WorkspacePreviewWorkerClient } from './worker-client'
 
@@ -906,6 +910,95 @@ describe('WorkspacePreviewHost', () => {
     })
   })
 
+  it('observes source text extensions through the unified text preview plugin', async () => {
+    const files = [
+      ['notes.txt', 'plain text\n'],
+      ['script.py', 'print("hello")\n'],
+      ['.env', 'API_TOKEN=local\n']
+    ] as const
+    for (const [fileName, content] of files) {
+      await writeFile(join(workspaceRoot, fileName), content, 'utf8')
+    }
+
+    let sessionIndex = 0
+    const host = new WorkspacePreviewHost({ createSessionId: () => `session-source-text-${++sessionIndex}` })
+
+    for (const [fileName, content] of files) {
+      const opened = await host.open({
+        workspaceRoot,
+        path: fileName,
+        now: '2026-07-08T00:00:00.000Z'
+      })
+
+      expect(opened).toMatchObject({
+        ok: true,
+        manifest: {
+          id: 'text',
+          modality: 'text'
+        }
+      })
+      if (!opened.ok) continue
+
+      await expect(host.observe(opened.session.id)).resolves.toMatchObject({
+        ok: true,
+        observation: {
+          view: {
+            pluginId: 'text',
+            modality: 'text'
+          },
+          visibleText: content,
+          actions: expect.arrayContaining(['text.replaceRange', 'applyEdit'])
+        }
+      })
+    }
+  })
+
+  it('falls back to text only for unregistered files that sniff as UTF-8 text', async () => {
+    await writeFile(join(workspaceRoot, 'settings.env.local'), 'API_TOKEN=local\n', 'utf8')
+    await writeFile(join(workspaceRoot, 'opaque.custom'), Buffer.from([0x00, 0x01, 0x02, 0x03]))
+    await writeFile(join(workspaceRoot, 'opaque.txt'), Buffer.from([0x00, 0x01, 0x02, 0x03]))
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-text-fallback' })
+
+    const textOpened = await host.open({
+      workspaceRoot,
+      path: 'settings.env.local',
+      now: '2026-07-08T00:00:00.000Z'
+    })
+
+    expect(textOpened).toMatchObject({
+      ok: true,
+      route: 'fallback',
+      manifest: {
+        id: 'text',
+        modality: 'text'
+      }
+    })
+    if (textOpened.ok) {
+      await expect(host.observe(textOpened.session.id)).resolves.toMatchObject({
+        ok: true,
+        observation: {
+          visibleText: 'API_TOKEN=local\n'
+        }
+      })
+    }
+
+    await expect(host.open({
+      workspaceRoot,
+      path: 'opaque.custom'
+    })).resolves.toEqual({
+      ok: false,
+      message: 'No workspace preview plugin is available for opaque.custom.'
+    })
+
+    await expect(host.open({
+      workspaceRoot,
+      path: 'opaque.txt'
+    })).resolves.toEqual({
+      ok: false,
+      message: 'No workspace preview plugin is available for opaque.txt.'
+    })
+  })
+
   it('serves Markdown relative images through the unified host action without exposing file paths', async () => {
     await mkdir(join(workspaceRoot, 'docs'))
     await mkdir(join(workspaceRoot, 'docs', 'figures'))
@@ -1310,6 +1403,8 @@ describe('WorkspacePreviewHost', () => {
         actions: expect.arrayContaining([
           'annotation.sidecar.read',
           'annotation.sidecar.import',
+          PDF_REVIEW_GENERATE_ACTION_ID,
+          PDF_REVIEW_IMPROVE_ACTION_ID,
           'annotation.upsert',
           'annotation.thread.update',
           'annotation.thread.delete'

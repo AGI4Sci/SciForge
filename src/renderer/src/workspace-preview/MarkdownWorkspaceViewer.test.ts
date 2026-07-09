@@ -64,7 +64,7 @@ describe('MarkdownWorkspaceViewer', () => {
     })
   })
 
-  it('renders source editor and hardened Markdown preview panes', () => {
+  it('renders split mode with source editor and hardened Markdown preview panes by default', () => {
     const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
       observation: createMarkdownObservation(),
       onApplyEdit: () => undefined
@@ -72,11 +72,40 @@ describe('MarkdownWorkspaceViewer', () => {
 
     expect(html).toContain('data-workspace-preview-markdown-viewer')
     expect(html).toContain('data-editable="true"')
-    expect(html).not.toContain('data-markdown-agent-summary')
+    expect(html).toContain('data-markdown-agent-summary')
+    expect(html).toContain('data-markdown-view-mode="split"')
+    expect(html).toContain('data-markdown-mode-control')
+    expect(html).toContain('data-markdown-mode-button="edit"')
+    expect(html).toContain('data-markdown-mode-button="preview"')
+    expect(html).toContain('data-markdown-mode-button="split"')
     expect(html).toContain('data-text-preview-editor')
     expect(html).toContain('data-markdown-preview-pane')
     expect(html).toContain('<h1>Alpha</h1>')
     expect(html).toContain('<li>beta</li>')
+  })
+
+  it('can render edit-only mode', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation(),
+      onApplyEdit: () => undefined,
+      initialMode: 'edit'
+    }))
+
+    expect(html).toContain('data-markdown-view-mode="edit"')
+    expect(html).toContain('data-text-preview-editor')
+    expect(html).not.toContain('data-markdown-preview-pane')
+  })
+
+  it('can render preview-only mode', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation(),
+      initialMode: 'preview'
+    }))
+
+    expect(html).toContain('data-markdown-view-mode="preview"')
+    expect(html).not.toContain('data-text-preview-editor')
+    expect(html).toContain('data-markdown-preview-pane')
+    expect(html).toContain('<h1>Alpha</h1>')
   })
 
   it('rejects non-Markdown observations without falling back to hardcoded rendering', () => {

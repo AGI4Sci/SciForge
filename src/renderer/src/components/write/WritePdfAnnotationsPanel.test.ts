@@ -130,7 +130,13 @@ describe('WritePdfAnnotationsPanel', () => {
       onExportPackage: vi.fn(),
       onExportPdf: vi.fn(),
       onImportPackage: vi.fn(),
-      onReloadSidecar: vi.fn()
+      onReloadSidecar: vi.fn(),
+      pdfReviewAvailable: true,
+      pdfReviewHasSelection: true,
+      pdfReviewSelectionLabel: '24 chars',
+      pdfReviewNotice: { tone: 'success', message: 'Generated 1 review comment.' },
+      onGeneratePdfReview: vi.fn(),
+      onImproveAnnotation: vi.fn()
     }))
 
     expect(html).toContain('PDF annotations')
@@ -138,6 +144,10 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Export PDF')
     expect(html).toContain('Import package')
     expect(html).toContain('Reload annotations')
+    expect(html).toContain('Generate SciForge PDF review')
+    expect(html).toContain('Full PDF')
+    expect(html).toContain('Generated 1 review comment.')
+    expect(html).toContain('Improve with SciForge')
     expect(html).toContain('Text highlights')
     expect(html).toContain('Hidden')
     expect(html).toContain('Current')

@@ -89,6 +89,7 @@ export type PdfWorkspaceViewerProps = {
   annotationOverlays?: WritePdfAnnotationOverlay[]
   activeAnnotationId?: string | null
   jumpToRect?: WritePdfSelectionPageRect | null
+  onSelectionChange?: (selection: WritePdfSelection) => void
   onAnnotationSelect?: (threadId: string) => void
   onOpenAnnotations?: (selection: WritePdfSelection | null) => void
 }
@@ -248,6 +249,7 @@ export function PdfWorkspaceViewer({
   annotationOverlays = [],
   activeAnnotationId = null,
   jumpToRect = null,
+  onSelectionChange,
   onAnnotationSelect,
   onOpenAnnotations
 }: PdfWorkspaceViewerProps): ReactElement {
@@ -363,6 +365,7 @@ export function PdfWorkspaceViewer({
               annotationOverlays={annotationOverlays}
               activeAnnotationId={activeAnnotationId}
               jumpToRect={jumpToRect}
+              onSelectionChange={onSelectionChange}
               onAnnotationSelect={onAnnotationSelect}
               onOpenAnnotations={onOpenAnnotations}
               className="h-full min-h-0"

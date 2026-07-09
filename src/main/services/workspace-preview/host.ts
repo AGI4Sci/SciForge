@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
 import { copyFile, open, readFile, stat } from 'node:fs/promises'
 import { basename, relative } from 'node:path'
+import { TextDecoder } from 'node:util'
 import {
   WORKSPACE_TABULAR_MAX_TEXT_CHARS,
   applyWorkspaceTabularDelimitedEdit,
@@ -22,6 +23,15 @@ import {
   type PdfAnnotationThread,
   type PdfAnnotationThreadStatus
 } from '../../../shared/pdf-annotations'
+import type { AppSettingsV1 } from '../../../shared/app-settings'
+import {
+  PDF_REVIEW_GENERATE_ACTION_ID,
+  PDF_REVIEW_IMPROVE_ACTION_ID,
+  pdfReviewGenerateActionInputSchema,
+  pdfReviewGenerateActionResultSchema,
+  pdfReviewImproveAnnotationActionInputSchema,
+  pdfReviewImproveAnnotationActionResultSchema
+} from '../../../shared/pdf-review'
 import {
   exportPdfAnnotationAdobePdf,
   exportPdfAnnotationSidecarPackage,
@@ -29,6 +39,10 @@ import {
   loadPdfAnnotationSidecar,
   savePdfAnnotationSidecar
 } from '../pdf-annotation-sidecar-service'
+import {
+  generatePdfReviewAnnotations,
+  improvePdfReviewAnnotation
+} from '../pdf-review-service'
 import {
   DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
   HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
@@ -226,6 +240,7 @@ export type WorkspacePreviewHostOptions = {
   createSessionId?: () => string
   workerClient?: WorkspacePreviewWorkerClient
   htmlPreviewService?: Pick<WorkspaceHtmlPreviewService, 'preview'>
+  loadSettings?: () => Promise<AppSettingsV1>
 }
 
 type WorkspacePreviewSessionRecord = {
@@ -283,12 +298,14 @@ type WorkspacePreviewAnnotationThreadDeleteOperation =
   Extract<WorkspacePreviewEditOperation, { kind: 'annotation.thread.delete' }>
 
 const WORKSPACE_PREVIEW_TEXT_OBSERVATION_BYTES = WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS
+const WORKSPACE_PREVIEW_TEXT_COMPATIBILITY_SNIFF_BYTES = 8192
 
 export class WorkspacePreviewHost {
   private readonly registry: WorkspacePreviewRegistry
   private readonly createSessionId: () => string
   private readonly workerClient: WorkspacePreviewWorkerClient
   private readonly htmlPreviewService: Pick<WorkspaceHtmlPreviewService, 'preview'>
+  private readonly loadSettings?: () => Promise<AppSettingsV1>
   private readonly sessions = new Map<string, WorkspacePreviewSessionRecord>()
 
   constructor(options: WorkspacePreviewHostOptions = {}) {
@@ -296,6 +313,7 @@ export class WorkspacePreviewHost {
     this.createSessionId = options.createSessionId ?? (() => `preview-${randomUUID()}`)
     this.workerClient = options.workerClient ?? createWorkspacePreviewWorkerClient()
     this.htmlPreviewService = options.htmlPreviewService ?? workspaceHtmlPreviewService
+    this.loadSettings = options.loadSettings
   }
 
   listPlugins(): WorkspacePreviewPluginManifest[] {
@@ -335,6 +353,9 @@ export class WorkspacePreviewHost {
           ok: false,
           message: `Preview support for ${route.extension} is deferred: ${route.reason}`
         }
+      }
+      if (isSourceTextPreviewPlugin(route.manifest.id) && !(await isUtf8TextPreviewCompatibleFile(targetPath, fileInfo))) {
+        return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
       }
 
       const now = input.now ?? new Date().toISOString()
@@ -467,6 +488,9 @@ export class WorkspacePreviewHost {
           ok: false,
           message: `Preview support for ${route.extension} is deferred: ${route.reason}`
         }
+      }
+      if (isSourceTextPreviewPlugin(route.manifest.id) && !(await isUtf8TextPreviewCompatibleFile(targetPath, fileInfo))) {
+        return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
       }
 
       return {
@@ -687,6 +711,7 @@ export class WorkspacePreviewHost {
         ...observation.actions,
         'annotation.sidecar.read',
         ...(documentKind === 'pdf' ? ['annotation.sidecar.import'] : []),
+        ...(documentKind === 'pdf' ? [PDF_REVIEW_GENERATE_ACTION_ID, PDF_REVIEW_IMPROVE_ACTION_ID] : []),
         'annotation.upsert',
         'annotation.thread.update',
         'annotation.thread.delete'
@@ -1397,6 +1422,30 @@ export class WorkspacePreviewHost {
     }
   }
 
+  private async refreshSidecarSession(
+    record: WorkspacePreviewSessionRecord,
+    now: string
+  ): Promise<WorkspacePreviewSession> {
+    const fileInfo = await stat(record.file.path)
+    const file: WorkspacePreviewFileState = {
+      ...record.file,
+      size: fileInfo.size,
+      mtimeMs: fileInfo.mtimeMs
+    }
+    const session = workspacePreviewSessionSchema.parse({
+      ...record.session,
+      updatedAt: now,
+      mtimeMs: fileInfo.mtimeMs,
+      file
+    })
+    this.sessions.set(session.id, {
+      ...record,
+      session,
+      file
+    })
+    return session
+  }
+
   private async completeSidecarWriteEdit(
     record: WorkspacePreviewSessionRecord,
     operationKind: WorkspacePreviewEditOperation['kind'],
@@ -1645,6 +1694,12 @@ export class WorkspacePreviewHost {
     if (action.actionId === 'annotation.sidecar.import' && record.manifest.capabilities.annotations) {
       return this.invokeAnnotationSidecarImportAction(record, action, now)
     }
+    if (action.actionId === PDF_REVIEW_GENERATE_ACTION_ID && record.manifest.capabilities.annotations) {
+      return this.invokePdfReviewGenerateAction(record, action, now)
+    }
+    if (action.actionId === PDF_REVIEW_IMPROVE_ACTION_ID && record.manifest.capabilities.annotations) {
+      return this.invokePdfReviewImproveAction(record, action, now)
+    }
     if (record.manifest.id === HTML_WORKSPACE_PREVIEW_PLUGIN_ID && action.actionId === 'html.previewUrl') {
       return this.invokeHtmlPreviewUrlAction(record, action, now)
     }
@@ -1788,6 +1843,99 @@ export class WorkspacePreviewHost {
     })
   }
 
+  private async invokePdfReviewGenerateAction(
+    record: WorkspacePreviewSessionRecord,
+    action: WorkspacePreviewPluginActionInput,
+    now: string
+  ): Promise<WorkspacePreviewInvokeActionResult> {
+    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'PDF review generation is currently implemented for PDF previews only.' }
+    }
+    if (!this.loadSettings) {
+      return { ok: false, message: 'PDF review generation requires app settings.' }
+    }
+
+    const input = pdfReviewGenerateActionInputSchema.parse(action.input)
+    const generated = await generatePdfReviewAnnotations({
+      pdfPath: record.file.path,
+      workspaceRoot: record.file.workspaceRoot,
+      ...input
+    }, await this.loadSettings())
+    if (!generated.ok) return generated
+
+    const session = await this.refreshSidecarSession(record, now)
+    const result = pdfReviewGenerateActionResultSchema.parse({
+      sidecar: workspacePreviewAnnotationSidecarForAction(generated.sidecar),
+      mode: generated.mode,
+      path: generated.path,
+      ...(generated.reviewDataPath ? { reviewDataPath: generated.reviewDataPath } : {}),
+      commentCount: generated.commentCount,
+      skippedCount: generated.skippedCount,
+      generatedAt: generated.generatedAt || now,
+      effect: 'sidecar-write'
+    })
+
+    return workspacePreviewPluginActionResultSchema.parse({
+      ok: true,
+      sessionId: session.id,
+      pluginId: record.manifest.id,
+      actionId: action.actionId,
+      invokedAt: now,
+      result,
+      audit: {
+        pluginId: record.manifest.id,
+        path: record.file.path,
+        actionId: action.actionId,
+        effect: 'host-action'
+      }
+    })
+  }
+
+  private async invokePdfReviewImproveAction(
+    record: WorkspacePreviewSessionRecord,
+    action: WorkspacePreviewPluginActionInput,
+    now: string
+  ): Promise<WorkspacePreviewInvokeActionResult> {
+    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'PDF annotation improvement is currently implemented for PDF previews only.' }
+    }
+
+    const input = pdfReviewImproveAnnotationActionInputSchema.parse(action.input)
+    const improved = await improvePdfReviewAnnotation({
+      pdfPath: record.file.path,
+      workspaceRoot: record.file.workspaceRoot,
+      ...input
+    }, this.loadSettings ? await this.loadSettings() : undefined)
+    if (!improved.ok) return improved
+
+    const session = await this.refreshSidecarSession(record, now)
+    const result = pdfReviewImproveAnnotationActionResultSchema.parse({
+      sidecar: workspacePreviewAnnotationSidecarForAction(improved.sidecar),
+      path: improved.path,
+      threadId: improved.threadId,
+      annotationId: improved.annotationId,
+      modificationAdvice: improved.modificationAdvice,
+      revisedContent: improved.revisedContent,
+      generatedAt: improved.generatedAt || now,
+      effect: 'sidecar-write'
+    })
+
+    return workspacePreviewPluginActionResultSchema.parse({
+      ok: true,
+      sessionId: session.id,
+      pluginId: record.manifest.id,
+      actionId: action.actionId,
+      invokedAt: now,
+      result,
+      audit: {
+        pluginId: record.manifest.id,
+        path: record.file.path,
+        actionId: action.actionId,
+        effect: 'host-action'
+      }
+    })
+  }
+
   private async invokeMarkdownReadImageAction(
     record: WorkspacePreviewSessionRecord,
     action: WorkspacePreviewPluginActionInput,
@@ -1827,6 +1975,41 @@ function isSourceTextPreviewPlugin(pluginId: string): boolean {
   return pluginId === TEXT_WORKSPACE_PREVIEW_PLUGIN_ID ||
     pluginId === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID ||
     pluginId === HTML_WORKSPACE_PREVIEW_PLUGIN_ID
+}
+
+async function isUtf8TextPreviewCompatibleFile(path: string, fileInfo: Stats): Promise<boolean> {
+  if (fileInfo.size === 0) return true
+
+  const length = Math.min(fileInfo.size, WORKSPACE_PREVIEW_TEXT_COMPATIBILITY_SNIFF_BYTES)
+  const buffer = Buffer.alloc(length)
+  const handle = await open(path, 'r')
+  try {
+    const { bytesRead } = await handle.read(buffer, 0, length, 0)
+    return isUtf8TextPreviewCompatibleBytes(buffer.subarray(0, bytesRead), fileInfo.size > bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+
+function isUtf8TextPreviewCompatibleBytes(bytes: Buffer, mayEndMidCharacter = false): boolean {
+  if (bytes.length === 0) return true
+  if (bytes.includes(0)) return false
+
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return true
+  } catch {
+    if (!mayEndMidCharacter) return false
+    for (let trim = 1; trim <= 3 && bytes.length > trim; trim += 1) {
+      try {
+        new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, bytes.length - trim))
+        return true
+      } catch {
+        // Keep checking shorter suffixes in case the sniff boundary split a UTF-8 sequence.
+      }
+    }
+    return false
+  }
 }
 
 function assetIdForSession(sessionId: string): string {

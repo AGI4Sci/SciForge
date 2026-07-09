@@ -43,6 +43,16 @@ export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS = [
   '.tex',
   '.bib'
 ] as const
+export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_FILE_NAMES = [
+  '.env',
+  '.gitignore',
+  '.dockerignore',
+  'dockerfile',
+  'makefile'
+] as const
+export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_FILE_PREFIXES = [
+  '.env.'
+] as const
 export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES = [
   'text/plain',
   'application/json',
@@ -1590,13 +1600,33 @@ export function isDelimitedTabularEditPreviewPath(path: string): boolean {
   return previewPathHasKnownExtension(path, WORKSPACE_PREVIEW_DELIMITED_TABULAR_EDIT_EXTENSIONS)
 }
 
+export function isFirstPartyTextPreviewPath(path: string): boolean {
+  const fileName = fileNameFromPreviewPath(path).toLowerCase()
+  return previewPathHasKnownExtension(path, WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS) ||
+    WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_FILE_NAMES.includes(fileName as typeof WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_FILE_NAMES[number]) ||
+    WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_FILE_PREFIXES.some((prefix) => fileName.startsWith(prefix))
+}
+
+export function normalizePreviewMimeType(value: string | undefined): string {
+  return value?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+}
+
+export function isTextLikePreviewMimeType(value: string | undefined): boolean {
+  const mimeType = normalizePreviewMimeType(value)
+  return mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'application/xml' ||
+    mimeType === 'application/yaml' ||
+    mimeType === 'application/x-yaml'
+}
+
 export function normalizePreviewManifest(
   manifest: WorkspacePreviewPluginManifest
 ): WorkspacePreviewPluginManifest {
   return workspacePreviewPluginManifestSchema.parse({
     ...manifest,
     extensions: manifest.extensions.map(normalizePreviewExtension),
-    mimeTypes: manifest.mimeTypes.map((mimeType) => mimeType.trim().toLowerCase())
+    mimeTypes: manifest.mimeTypes.map(normalizePreviewMimeType).filter(Boolean)
   })
 }
 
@@ -1608,11 +1638,15 @@ export function resolveWorkspacePreviewPlugin(input: {
   const manifests = input.manifests.map(normalizePreviewManifest)
   const knownExtensions = manifests.flatMap((manifest) => manifest.extensions)
   const extension = extensionFromPreviewPath(input.path, knownExtensions)
-  const mimeType = input.mimeType?.trim().toLowerCase()
+  const mimeType = normalizePreviewMimeType(input.mimeType)
 
   const matches = manifests.filter((manifest) =>
     (mimeType && manifest.mimeTypes.includes(mimeType)) ||
-    (extension && manifest.extensions.includes(extension))
+    (extension && manifest.extensions.includes(extension)) ||
+    (manifest.id === TEXT_WORKSPACE_PREVIEW_PLUGIN_ID && (
+      isTextLikePreviewMimeType(mimeType) ||
+      isFirstPartyTextPreviewPath(input.path)
+    ))
   )
 
   return matches.sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id))[0] ?? null
