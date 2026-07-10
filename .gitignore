@@ -10,6 +10,8 @@ release/
 .claude-code-runtime/
 .scimodality-run/
 .sciforge/
+.npm-cache/
+outputs/
 *.log
 .DS_Store
 __pycache__/

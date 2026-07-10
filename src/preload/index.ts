@@ -143,6 +143,8 @@ const api = {
     ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
   buildScientificPlottingMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+  buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:bgc-discovery-config', { workspaceRoot }),
   buildImageGenerationMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:image-generation-config', { workspaceRoot }),
   buildSciforgeCanvasMcpConfig: (workspaceRoot) =>

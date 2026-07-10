@@ -207,6 +207,8 @@ function createApi(): SciForgeApi {
       invoke('mcp:scientific-skills-config', { workspaceRoot }),
     buildScientificPlottingMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+    buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
+      invoke('mcp:bgc-discovery-config', { workspaceRoot }),
     buildImageGenerationMcpConfig: (workspaceRoot) =>
       invoke('mcp:image-generation-config', { workspaceRoot }),
     buildSciforgeCanvasMcpConfig: (workspaceRoot) =>

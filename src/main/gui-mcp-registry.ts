@@ -125,6 +125,16 @@ import {
   type ScientificPlottingMcpLaunchConfig
 } from './scientific-plotting-mcp-config'
 import {
+  buildBgcDiscoveryMcpArgs,
+  buildBgcDiscoveryLocalRuntimeMcpServerConfig,
+  GUI_BGC_DISCOVERY_MCP_DESCRIPTOR,
+  GUI_BGC_DISCOVERY_MCP_SERVER_NAME,
+  GUI_BGC_DISCOVERY_MCP_TIMEOUT_MS,
+  resolveBgcDiscoveryMcpCommand,
+  bgcDiscoveryMcpEnabledTools,
+  type BgcDiscoveryMcpLaunchConfig
+} from './bgc-discovery-mcp-config'
+import {
   buildImageGenerationMcpArgs,
   buildImageGenerationLocalRuntimeMcpServerConfig,
   buildImageGenerationMcpJsonServerConfig,
@@ -215,6 +225,10 @@ export type GuiMcpRegistryInput = {
     settings?: AppSettingsV1
     launch: ScientificPlottingMcpLaunchConfig
   }
+  bgcDiscoveryMcp?: {
+    settings?: AppSettingsV1
+    launch: BgcDiscoveryMcpLaunchConfig
+  }
   imageGenerationMcp?: {
     settings?: AppSettingsV1
     launch: ImageGenerationMcpLaunchConfig
@@ -246,6 +260,7 @@ export const GUI_MCP_DESCRIPTORS: readonly ManagedGuiMcpDescriptor[] = [
   GUI_RUNTIME_INSPECTOR_MCP_DESCRIPTOR,
   GUI_SCIENTIFIC_SKILLS_MCP_DESCRIPTOR,
   GUI_SCIENTIFIC_PLOTTING_MCP_DESCRIPTOR,
+  GUI_BGC_DISCOVERY_MCP_DESCRIPTOR,
   GUI_IMAGE_GENERATION_MCP_DESCRIPTOR,
   GUI_PPT_MASTER_MCP_DESCRIPTOR,
   GUI_SCIFORGE_CANVAS_MCP_DESCRIPTOR,
@@ -401,6 +416,17 @@ function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, 
         input.scientificPlottingMcp!.launch,
         undefined,
         scientificPlottingSettings.workspaceRoot
+      )
+    ])
+  }
+  const bgcDiscoverySettings = input.bgcDiscoveryMcp?.settings ?? settings
+  if (input.bgcDiscoveryMcp && bgcDiscoverySettings) {
+    builders.push([
+      GUI_BGC_DISCOVERY_MCP_SERVER_NAME,
+      () => buildBgcDiscoveryLocalRuntimeMcpServerConfig(
+        input.bgcDiscoveryMcp!.launch,
+        undefined,
+        bgcDiscoverySettings.workspaceRoot
       )
     ])
   }
@@ -569,6 +595,20 @@ function codexServerConfigs(input: GuiMcpRegistryInput): GuiMcpRuntimeServerConf
       env: { ELECTRON_RUN_AS_NODE: '1' },
       timeoutMs: GUI_SCIENTIFIC_PLOTTING_MCP_TIMEOUT_MS,
       enabledTools: scientificPlottingMcpEnabledTools()
+    })
+  }
+  const bgcDiscoverySettings = input.bgcDiscoveryMcp?.settings ?? settings
+  if (input.bgcDiscoveryMcp && bgcDiscoverySettings) {
+    servers.push({
+      id: GUI_BGC_DISCOVERY_MCP_SERVER_NAME,
+      command: resolveBgcDiscoveryMcpCommand(input.bgcDiscoveryMcp.launch),
+      args: buildBgcDiscoveryMcpArgs(
+        input.bgcDiscoveryMcp.launch,
+        bgcDiscoverySettings.workspaceRoot
+      ),
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      timeoutMs: GUI_BGC_DISCOVERY_MCP_TIMEOUT_MS,
+      enabledTools: bgcDiscoveryMcpEnabledTools()
     })
   }
   const imageGenerationSettings = input.imageGenerationMcp?.settings ?? settings

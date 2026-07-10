@@ -2013,6 +2013,8 @@
   "pluginMcpScientificSkillsDesc": "以只读方式索引、搜索、读取和规划本地已安装的 K-Dense 科学 Skill。",
   "pluginMcpScientificPlottingTitle": "Scientific Plotting MCP",
   "pluginMcpScientificPlottingDesc": "通过 first-party 受控 MCP 生成科研图、应用论文图风格、评分并自动修复一次。",
+  "pluginMcpBgcDiscoveryTitle": "BGC Discovery MCP",
+  "pluginMcpBgcDiscoveryDesc": "基于 antiSMASH 输出或配置好的本地工具执行 genome-to-BGC 挖掘，产出可审计的 BGC 卡片、排序和实验摘要。",
   "pluginMcpImageGenerationTitle": "Image Generation MCP",
   "pluginMcpImageGenerationDesc": "通过 first-party MCP 生成和编辑视觉图片产物，并在 SciForge Canvas 中无覆盖审改。",
   "pluginMcpSciforgeCanvasTitle": "SciForge Canvas MCP",
