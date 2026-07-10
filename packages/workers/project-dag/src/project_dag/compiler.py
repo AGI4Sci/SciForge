@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from .judge import Judge
 from .reader import SessionReader, source_ancestors, source_quality, supporting_subgraph
-from .reconcile import full_reconcile, incremental_reconcile
+from .reconcile import incremental_reconcile
 from .store import Store, new_id, now_iso
 
 _LOCK = threading.Lock()
@@ -83,14 +83,14 @@ class Compiler:
         self.review_threshold = review_threshold
 
     # ------------------------------------------------------------------ entry
-    def compile(self, trigger: str = "manual", scope: Any = "all",
-                *, goal_project_key: Optional[str] = None,
-                scoped_goals: bool = False) -> dict:
+    def compile(self, trigger: str = "scheduled", scope: Any = "all",
+                *, project_key: str,
+                evidence_vector: Optional[list[dict]] = None) -> dict:
         if not _LOCK.acquire(blocking=False):
             return {"skipped": True, "reason": "compile already running"}
         try:
-            return self._compile(trigger, scope, goal_project_key=goal_project_key,
-                                 scoped_goals=scoped_goals)
+            return self._compile(trigger, scope, project_key=project_key,
+                                 evidence_vector=evidence_vector)
         except Exception as exc:
             self._mark_running_failed(exc)
             raise
@@ -102,38 +102,48 @@ class Compiler:
         diff = json.dumps({"errors": [{"error": str(exc)}]}, ensure_ascii=False)
         try:
             self.store.conn.rollback()
-            self.store.x(
-                "UPDATE compile_run SET finished_at=?, status='failed',"
-                " stats=COALESCE(stats, ?), diff=COALESCE(diff, ?)"
-                " WHERE status='running'",
-                (now_iso(), stats, diff),
-            )
+            run_id = getattr(self, "_active_run_id", None)
+            if run_id:
+                self.store.x(
+                    "INSERT OR REPLACE INTO compile_run"
+                    " (id,trigger,scope,started_at,finished_at,status,stats,diff)"
+                    " VALUES (?, 'scheduled', '[]', ?, ?, 'failed', ?, ?)",
+                    (run_id, now_iso(), now_iso(), stats, diff),
+                )
             self.store.conn.commit()
         except Exception:
             pass
 
-    def _compile(self, trigger: str, scope: Any, *,
-                 goal_project_key: Optional[str] = None,
-                 scoped_goals: bool = False) -> dict:
+    def _compile(self, trigger: str, scope: Any, *, project_key: str,
+                 evidence_vector: Optional[list[dict]] = None) -> dict:
         st = self.store
         run_id = new_id("run")
+        self._active_run_id = run_id
+        st.x("BEGIN IMMEDIATE")
         st.x("INSERT INTO compile_run (id,trigger,scope,started_at) VALUES (?,?,?,?)",
              (run_id, trigger, json.dumps(scope), now_iso()))
-        st.conn.commit()
 
         diff: dict[str, Any] = {
             "sessions": [], "added_claims": [], "merged_claims": [],
             "refined_claims": [], "invalidated_claims": [], "conflicts": [],
             "new_entities": [], "merged_entities": [], "review_enqueued": [],
-            "orphans": [], "relabelled": [], "errors": [],
+            "orphans": [], "regoaled_claims": [], "decision_outputs": [],
+            "relabelled": [], "errors": [],
         }
         touched: set[str] = set()
 
+        self._collect_decision_outputs(project_key, diff)
+        touched |= self._rematch_goals(project_key, run_id, diff)
+
         session_ids = (self.reader.list_sessions() if scope == "all"
                        else list(scope))
-        for sid in session_ids:                      # Phase 0/1
+        expected = {entry["threadId"]: entry["digest"] for entry in (evidence_vector or [])}
+        if evidence_vector is not None and set(session_ids) != set(expected):
+            raise ValueError("compile scope must exactly match the captured evidence vector")
+        for index, sid in enumerate(session_ids):                      # Phase 0/1
             try:
-                delta = self.reader.delta(sid, st.get_watermark(sid))
+                delta = self.reader.delta(
+                    sid, st.get_watermark(project_key, sid), expected.get(sid))
             except (OSError, ValueError, KeyError) as exc:
                 diff["errors"].append({"session": sid, "error": str(exc)})
                 continue
@@ -141,31 +151,33 @@ class Compiler:
                 continue
             orphan_mark = len(diff["orphans"])   # roll back diff orphans if the session fails
             try:
-                st.x("BEGIN")
+                savepoint = f"session_{index}"
+                st.x(f"SAVEPOINT {savepoint}")
                 touched |= self._process_session(
                     delta,
                     run_id,
                     diff,
-                    goal_project_key=goal_project_key,
-                    scoped_goals=scoped_goals,
+                    project_key=project_key,
                 )
-                seen = (st.get_watermark(sid) or {}).get("processed_ids", set())
-                st.set_watermark(sid, delta.dag_hash,
-                                 set(seen) | delta.all_node_ids)
-                st.conn.commit()
+                st.set_watermark(project_key, sid, delta.dag_hash, delta.all_node_ids)
+                st.x(f"RELEASE SAVEPOINT {savepoint}")
                 diff["sessions"].append(sid)
             except Exception as exc:               # noqa: BLE001 — session must roll back whole
-                st.conn.rollback()
+                st.x(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                st.x(f"RELEASE SAVEPOINT {savepoint}")
                 del diff["orphans"][orphan_mark:]  # candidates referenced now-rolled-back evidence
                 diff["errors"].append({"session": sid, "error": str(exc)})
 
         if diff["orphans"]:                                  # Phase 7: enqueue once per run
             rid = st.enqueue_review(
-                "orphan_claims", {"run_id": run_id, "candidates": diff["orphans"]})
+                project_key, "orphan_claims",
+                {"run_id": run_id, "candidates": diff["orphans"]})
             diff["review_enqueued"].append({"id": rid, "type": "orphan_claims"})
-            st.conn.commit()
 
-        relabelled = incremental_reconcile(st, touched)      # Phase 6
+        if diff["errors"]:
+            raise RuntimeError(json.dumps(diff["errors"], ensure_ascii=False))
+
+        relabelled = incremental_reconcile(st, touched, commit=False)      # Phase 6
         diff["relabelled"] = relabelled
 
         stats = {
@@ -175,31 +187,129 @@ class Compiler:
             "claims_invalidated": len(diff["invalidated_claims"]),
             "conflicts": len(diff["conflicts"]),
             "review_enqueued": len(diff["review_enqueued"]),
+            "decisions_applied": len(diff["decision_outputs"]),
             "orphans": len(diff["orphans"]),
             "errors": len(diff["errors"]),
         }
         st.x("UPDATE compile_run SET finished_at=?, status='done', stats=?, diff=? WHERE id=?",
              (now_iso(), json.dumps(stats), json.dumps(diff, ensure_ascii=False), run_id))
-        st.conn.commit()
+        # The transaction deliberately stays open. ProjectWorkflow inserts the
+        # immutable Project Snapshot and commits graph+snapshot atomically.
         return {"run_id": run_id, "stats": stats, "diff": diff}
+
+    def _collect_decision_outputs(self, project_key: str, diff: dict) -> None:
+        """Expose only DecisionEvents not yet included in a committed snapshot.
+
+        Decision commands and automatic A3 decisions reach the graph through
+        the same compiler transaction.  ReviewItem candidates remain sidechain
+        records; the immutable snapshot records their applied output in diff.
+        """
+        latest = self.store.q1(
+            "SELECT payload FROM project_snapshot WHERE project_key=?"
+            " ORDER BY version DESC LIMIT 1", (project_key,),
+        )
+        committed: set[str] = set()
+        if latest:
+            payload = json.loads(latest["payload"])
+            committed = {
+                decision.get("id")
+                for decision in payload.get("graph", {}).get("decisions", [])
+                if isinstance(decision, dict) and decision.get("id")
+            }
+        for decision in self.store.q(
+                "SELECT * FROM decision_event WHERE project_key=? ORDER BY created_at,id",
+                (project_key,)):
+            if decision["id"] in committed:
+                continue
+            candidate = None
+            if decision.get("review_id"):
+                review = self.store.q1(
+                    "SELECT payload FROM review WHERE id=?", (decision["review_id"],))
+                if review:
+                    review_payload = json.loads(review["payload"])
+                    candidate = review_payload.get("remediationCandidate")
+            diff["decision_outputs"].append({
+                "decisionId": decision["id"],
+                "reviewId": decision.get("review_id"),
+                "findingId": decision.get("finding_id"),
+                "action": decision["action"],
+                "decidedBy": decision["decided_by"],
+                "evidenceDigest": decision["evidence_digest"],
+                "remediationCandidate": candidate,
+            })
+
+    def _rematch_goals(self, project_key: str, run_id: str, diff: dict) -> set[str]:
+        """Apply persisted Goal changes without re-reading or reinterpreting Evidence.
+
+        Goal saves mark only candidate claims with ``needs_regoal``. They are
+        rematched here inside the same compiler transaction, so a goal-only
+        update can commit a new immutable Project Snapshot even when every
+        Evidence digest is unchanged.
+        """
+        claims = self.store.q(
+            "SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
+            " AND needs_regoal=1 ORDER BY id",
+            (project_key,),
+        )
+        if not claims:
+            return set()
+        goals = self.store.active_goals(project_key=project_key, scoped=True)
+        goal_view = [{
+            "id": goal["root_id"], "title": goal["title"],
+            "description": goal["description"] or "",
+        } for goal in goals]
+        valid_goal_ids = {goal["id"] for goal in goal_view}
+        touched: set[str] = set()
+        for claim in claims:
+            match = self.judge("goal_match", {
+                "claim": {
+                    "id": claim["id"], "statement": claim["statement"],
+                    "claim_type": claim["claim_type"], "current_goal_id": claim["goal_id"],
+                },
+                "active_goals": goal_view,
+            })
+            selected = match.get("goal_id")
+            goal_id = selected if selected in valid_goal_ids else None
+            for edge in self.store.alive_edges(src=claim["id"], edge_type="addresses"):
+                self.store.close_edge(edge["id"])
+            if goal_id is not None:
+                self.store.add_edge(claim["id"], goal_id, "addresses", meta={
+                    "run": run_id, "reason": "goal_changed",
+                    "confidence": float(match.get("confidence", 0.0)),
+                })
+            else:
+                review_id = self.store.enqueue_review(project_key, "goal_rematch", {
+                    "claimId": claim["id"], "statement": claim["statement"],
+                    "reason": match.get("reason", "no active goal matched"),
+                    "runId": run_id,
+                }, subject_id=claim["id"])
+                diff["review_enqueued"].append({"id": review_id, "type": "goal_rematch"})
+            self.store.x("UPDATE claim SET goal_id=?,needs_regoal=0 WHERE id=?",
+                         (goal_id, claim["id"]))
+            diff["regoaled_claims"].append({
+                "id": claim["id"], "from": claim["goal_id"], "to": goal_id,
+                "confidence": float(match.get("confidence", 0.0)),
+            })
+            touched.add(claim["id"])
+        return touched
 
     # -------------------------------------------------------------- per session
     def _process_session(self, delta, run_id: str, diff: dict, *,
-                         goal_project_key: Optional[str],
-                         scoped_goals: bool) -> set[str]:
+                         project_key: str) -> set[str]:
         st = self.store
         touched: set[str] = set()
 
         # rewritten history: claims promoted from vanished node ids go through
         # the conflict/invalidate path, never edited in place.
         for nid in delta.vanished_ids:
-            for row in st.q("SELECT claim_id FROM claim_origin WHERE session_id=? AND node_id=?",
-                            (delta.session_id, nid)):
+            for row in st.q("SELECT claim_id FROM claim_origin"
+                            " WHERE project_key=? AND session_id=? AND node_id=?",
+                            (project_key, delta.session_id, nid)):
                 cid = row["claim_id"]
                 self._drop_support_origin(cid, delta.session_id, nid)
                 touched.add(cid)
 
-        goals = st.active_goals(project_key=goal_project_key, scoped=scoped_goals)
+        goals = st.active_goals(project_key=project_key, scoped=True)
         goal_view = [{"id": g["root_id"], "title": g["title"],
                       "description": g["description"] or ""} for g in goals]
 
@@ -234,11 +344,34 @@ class Compiler:
                 continue
 
             entity_ids = self._resolve_entities(                  # Phase 3
-                out.get("mentioned_entities", []), out.get("statement", ""), diff)
+                out.get("mentioned_entities", []), out.get("statement", ""), diff,
+                project_key=project_key)
             evidence_ids = self._register_evidence(delta, cited)
             self._match_and_insert(                                # Phase 4/5
                 delta, node_id, out, goal_id, entity_ids, evidence_ids,
-                run_id, diff, touched)
+                run_id, diff, touched, project_key=project_key)
+
+        # A prior promoted claim that no longer has any current session origin
+        # is not part of the live graph. Immutable Project Snapshots retain its
+        # history; the mutable compiler state closes it instead of leaking the
+        # stale contribution into later snapshots.
+        for claim_id in sorted(touched):
+            remaining = st.q1(
+                "SELECT 1 AS present FROM claim_origin WHERE project_key=? AND claim_id=? LIMIT 1",
+                (project_key, claim_id),
+            )
+            if remaining is not None:
+                continue
+            st.x(
+                "UPDATE claim SET status='invalidated',t_invalid=?"
+                " WHERE id=? AND project_key=? AND t_invalid IS NULL",
+                (now_iso(), claim_id, project_key),
+            )
+            for edge in st.q(
+                "SELECT id FROM edge WHERE t_invalid IS NULL AND (src=? OR dst=?)",
+                (claim_id, claim_id),
+            ):
+                st.close_edge(edge["id"])
 
         # Orphans are enqueued ONCE for the whole run (see _compile), not per
         # session — otherwise every later session re-enqueues the accumulated
@@ -276,13 +409,16 @@ class Compiler:
                     st.close_edge(edge["id"])
                 continue
 
-            # Backward compatibility for support edges written before origins
-            # were tracked. This preserves other sessions' supports.
-            if meta.get("session") == session_id:
-                st.close_edge(edge["id"])
+            raise ValueError("support edge is missing canonical origins metadata")
+        st.x(
+            "DELETE FROM claim_origin WHERE project_key=(SELECT project_key FROM claim WHERE id=?)"
+            " AND claim_id=? AND session_id=? AND node_id=?",
+            (claim_id, claim_id, session_id, node_id),
+        )
 
     # ------------------------------------------------------------ Phase 3: ER
-    def _resolve_entities(self, names: list[str], context: str, diff: dict) -> list[str]:
+    def _resolve_entities(self, names: list[str], context: str, diff: dict, *,
+                          project_key: str) -> list[str]:
         st = self.store
         out: list[str] = []
         for name in names:
@@ -320,7 +456,7 @@ class Compiler:
                     matched = True
                 elif conf >= self.review_threshold:
                     prov = self._create_entity(name, provisional=True)
-                    rid = st.enqueue_review("entity_merge", {
+                    rid = st.enqueue_review(project_key, "entity_merge", {
                         "provisional": prov, "candidate": ent["id"],
                         "name": name, "candidate_name": ent["canonical_name"],
                         "confidence": conf})
@@ -351,7 +487,7 @@ class Compiler:
         source_ids: set[str] = set()
         for nid in cited_node_ids:
             node = delta.graph.nodes.get(nid)
-            if node is not None and node.type.value == "source":
+            if node is not None and node.type.value == "source_assertion":
                 source_ids.add(nid)
             source_ids.update(source_ancestors(delta.graph, nid))
         for sid in sorted(source_ids):
@@ -364,7 +500,7 @@ class Compiler:
             evid = new_id("ev")
             st.x("INSERT INTO evidence (id,evidence_type,content,content_ref,source_hash,"
                  "quality_score,t_valid) VALUES (?,?,?,?,?,?,?)",
-                 (evid, "external_source" if node.ref else "agent_derived",
+                 (evid, "external_source" if node.artifact_id else "agent_derived",
                   node.content, f"{delta.session_id}#{sid}", sid,
                   source_quality(delta.graph, sid), now_iso()))
             out.append(evid)
@@ -373,11 +509,12 @@ class Compiler:
     # -------------------------------------------- Phase 4/5: match + conflicts
     def _match_and_insert(self, delta, node_id: str, out: dict, goal_id: str,
                           entity_ids: list[str], evidence_ids: list[str],
-                          run_id: str, diff: dict, touched: set[str]) -> None:
+                          run_id: str, diff: dict, touched: set[str], *,
+                          project_key: str) -> None:
         st = self.store
         statement = out.get("statement") or delta.graph.nodes[node_id].content
 
-        pool = self._candidate_pool(goal_id, entity_ids)
+        pool = self._candidate_pool(project_key, goal_id, entity_ids)
         pool = sorted(pool, key=lambda c: -_sim(statement, c["statement"]))[:POOL_K]
 
         relation, target, conf = "new", None, 1.0
@@ -392,19 +529,21 @@ class Compiler:
                 relation, target = "new", None
 
         if relation == "equivalent" and target and conf >= self.auto_threshold:
-            self._merge_into(target, delta.session_id, node_id, evidence_ids, run_id)
+            self._merge_into(target, delta.session_id, node_id, evidence_ids, run_id,
+                             project_key=project_key)
             diff["merged_claims"].append({"into": target, "statement": statement,
                                           "session": delta.session_id})
             touched.add(target)
             return
 
         cid = self._insert_claim(delta, node_id, out, statement, goal_id,
-                                 entity_ids, evidence_ids, run_id)
+                                 entity_ids, evidence_ids, run_id,
+                                 project_key=project_key)
         touched.add(cid)
         diff["added_claims"].append({"id": cid, "statement": statement, "goal": goal_id})
 
         if relation == "equivalent" and target and conf >= self.review_threshold:
-            rid = st.enqueue_review("claim_merge", {
+            rid = st.enqueue_review(project_key, "claim_merge", {
                 "new": cid, "target": target, "confidence": conf,
                 "new_statement": statement})
             diff["review_enqueued"].append({"id": rid, "type": "claim_merge"})
@@ -413,15 +552,17 @@ class Compiler:
             diff["refined_claims"].append({"id": cid, "refines": target})
             touched.add(target)
 
-        self._detect_conflicts(cid, statement, goal_id, entity_ids,
+        self._detect_conflicts(cid, statement, project_key, goal_id, entity_ids,
                                exclude={target} if target else set(),
                                run_id=run_id, diff=diff, touched=touched)
 
-    def _candidate_pool(self, goal_id: str, entity_ids: list[str]) -> list[dict]:
+    def _candidate_pool(self, project_key: str, goal_id: str,
+                        entity_ids: list[str]) -> list[dict]:
         """Alive claims on the same goal sharing >=1 entity (structure first,
         semantics second)."""
         st = self.store
-        rows = st.q("SELECT * FROM claim WHERE t_invalid IS NULL AND goal_id=?", (goal_id,))
+        rows = st.q("SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
+                    " AND goal_id=?", (project_key, goal_id))
         if not entity_ids:
             return rows
         eset = set(entity_ids)
@@ -434,7 +575,7 @@ class Compiler:
 
     def _insert_claim(self, delta, node_id: str, out: dict, statement: str,
                       goal_id: str, entity_ids: list[str], evidence_ids: list[str],
-                      run_id: str) -> str:
+                      run_id: str, *, project_key: str) -> str:
         st = self.store
         cid = new_id("claim")
         t = now_iso()
@@ -442,21 +583,23 @@ class Compiler:
         if ctype not in ("hypothesis", "finding", "method_result",
                          "negative_result", "decision"):
             ctype = "finding"
-        st.x("INSERT INTO claim (id,statement,claim_type,confidence,goal_id,"
-             "t_valid,t_created) VALUES (?,?,?,?,?,?,?)",
-             (cid, statement, ctype, float(out.get("confidence", 0.5)), goal_id, t, t))
+        st.x("INSERT INTO claim (id,project_key,statement,claim_type,confidence,goal_id,"
+             "t_valid,t_created) VALUES (?,?,?,?,?,?,?,?)",
+             (cid, project_key, statement, ctype, float(out.get("confidence", 0.5)),
+              goal_id, t, t))
         st.add_edge(cid, goal_id, "addresses", meta={"run": run_id})
         for eid in entity_ids:
             st.add_edge(cid, eid, "mentions")
         for evid in evidence_ids:
             st.add_edge(evid, cid, "supports",
                         meta=_support_meta(run_id, delta.session_id, node_id))
-        st.x("INSERT OR IGNORE INTO claim_origin (claim_id,session_id,node_id,run_id)"
-             " VALUES (?,?,?,?)", (cid, delta.session_id, node_id, run_id))
+        st.x("INSERT OR IGNORE INTO claim_origin"
+             " (claim_id,project_key,session_id,node_id,run_id) VALUES (?,?,?,?,?)",
+             (cid, project_key, delta.session_id, node_id, run_id))
         return cid
 
     def _merge_into(self, target: str, session_id: str, node_id: str,
-                    evidence_ids: list[str], run_id: str) -> None:
+                    evidence_ids: list[str], run_id: str, *, project_key: str) -> None:
         """Equivalent claim re-confirmed: the existing claim gains a new support
         path + origin, no text rewrite. This is the cross-session robustness."""
         st = self.store
@@ -467,8 +610,9 @@ class Compiler:
                             meta=_support_meta(run_id, session_id, node_id, merged=True))
             else:
                 self._append_support_origin(existing[evid], session_id, node_id, run_id)
-        st.x("INSERT OR IGNORE INTO claim_origin (claim_id,session_id,node_id,run_id)"
-             " VALUES (?,?,?,?)", (target, session_id, node_id, run_id))
+        st.x("INSERT OR IGNORE INTO claim_origin"
+             " (claim_id,project_key,session_id,node_id,run_id) VALUES (?,?,?,?,?)",
+             (target, project_key, session_id, node_id, run_id))
 
     def _append_support_origin(self, edge: dict, session_id: str, node_id: str,
                                run_id: str) -> None:
@@ -495,11 +639,11 @@ class Compiler:
              (json.dumps(meta, ensure_ascii=False), edge["id"]))
 
     # ------------------------------------------------------- Phase 5: conflicts
-    def _detect_conflicts(self, cid: str, statement: str, goal_id: str,
+    def _detect_conflicts(self, cid: str, statement: str, project_key: str, goal_id: str,
                           entity_ids: list[str], *, exclude: set,
                           run_id: str, diff: dict, touched: set[str]) -> None:
         st = self.store
-        pool = [c for c in self._candidate_pool(goal_id, entity_ids)
+        pool = [c for c in self._candidate_pool(project_key, goal_id, entity_ids)
                 if c["id"] != cid and c["id"] not in exclude]
         pool = sorted(pool, key=lambda c: -_sim(statement, c["statement"]))[:POOL_K]
         for old in pool:
@@ -523,7 +667,7 @@ class Compiler:
                 st.add_edge(cid, old["id"], "contradicts",
                             meta={"resolution": "unresolved", "run": run_id,
                                   **verdict["why"]})
-                rid = st.enqueue_review("conflict", {
+                rid = st.enqueue_review(project_key, "conflict", {
                     "a": cid, "b": old["id"],
                     "a_statement": statement, "b_statement": old["statement"],
                     "scores": verdict["why"]})

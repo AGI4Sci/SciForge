@@ -153,7 +153,8 @@ describe('dev sciforge browser bridge', () => {
 
     installDevSciForgeBridge()
     await window.sciforge.getProjectDagView({ view: 'graph', workspaceRoot: '/tmp/project-alpha' })
-    await window.sciforge.runProjectDagCompile({ goalTitle: 'Project alpha', workspaceRoot: '/tmp/project-alpha' })
+    await window.sciforge.updateProjectDag({ scope: 'all', workspaceRoot: '/tmp/project-alpha' })
+    await window.sciforge.saveProjectDagGoal({ title: 'Project alpha', workspaceRoot: '/tmp/project-alpha' })
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:5173/__sciforge-dev-bridge/invoke',
@@ -168,8 +169,17 @@ describe('dev sciforge browser bridge', () => {
       'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         body: JSON.stringify({
-          channel: 'projectDag:compile',
-          payload: { goalTitle: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
+          channel: 'projectDag:update',
+          payload: { scope: 'all', workspaceRoot: '/tmp/project-alpha' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'projectDag:save-goal',
+          payload: { title: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
         })
       })
     )

@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sys
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Make the sibling evidence-dag package importable without an install step —
 # the two workers ship side by side in packages/workers/.

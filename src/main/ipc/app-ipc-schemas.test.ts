@@ -31,7 +31,8 @@ import {
   figureStyleExtractReferencePayloadSchema,
   figureStyleSaveSpecPayloadSchema,
   isSafeOpenExternalUrl,
-  projectDagCompilePayloadSchema,
+  projectDagGoalSavePayloadSchema,
+  projectDagUpdatePayloadSchema,
   projectDagViewPayloadSchema,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
@@ -134,6 +135,11 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'codex',
       threadId: 'thread-1'
     })
+    expect(() => evidenceDagUpdatePayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      operation: 'rebuild'
+    })).toThrow(/rebuildKind/)
   })
 
   it('accepts Project DAG panel payloads', () => {
@@ -150,20 +156,26 @@ describe('app-ipc-schemas', () => {
       project: 'alpha',
       sessions: ['codex:thread-1']
     })
-    expect(projectDagCompilePayloadSchema.parse({
-      goalTitle: ' Project alpha ',
-      goalDescription: ' Find the answer. ',
+    expect(projectDagUpdatePayloadSchema.parse({
       workspaceRoot: ' /tmp/project-alpha ',
       sessions: [' codex:thread-1 '],
-      scope: [' session-1 ']
+      scope: [' session-1 '],
+      excludedSessions: [' codex:thread-2 '],
+      isolatedSessions: [' codex:thread-3 '],
+      autonomyMode: 'autonomous'
     })).toEqual({
-      goalTitle: 'Project alpha',
-      goalDescription: 'Find the answer.',
       workspaceRoot: '/tmp/project-alpha',
       sessions: ['codex:thread-1'],
-      scope: ['session-1']
+      scope: ['session-1'],
+      excludedSessions: ['codex:thread-2'],
+      isolatedSessions: ['codex:thread-3'],
+      autonomyMode: 'autonomous'
     })
-    expect(projectDagCompilePayloadSchema.parse({ scope: 'all' })).toEqual({ scope: 'all' })
+    expect(projectDagUpdatePayloadSchema.parse({ scope: 'all' })).toEqual({ scope: 'all' })
+    expect(projectDagGoalSavePayloadSchema.parse({
+      title: ' Project alpha ',
+      description: ' Find the answer. '
+    })).toEqual({ title: 'Project alpha', description: 'Find the answer.' })
     expect(() => projectDagViewPayloadSchema.parse({ view: 'export' })).toThrow()
   })
 

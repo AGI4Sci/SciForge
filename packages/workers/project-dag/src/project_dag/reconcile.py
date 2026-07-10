@@ -92,7 +92,7 @@ def _update_load(store: Store, cid: str) -> None:
             (float(alive), len(seen), cid))
 
 
-def incremental_reconcile(store: Store, touched: set[str]) -> list[dict]:
+def incremental_reconcile(store: Store, touched: set[str], *, commit: bool = True) -> list[dict]:
     """Relabel only the affected subgraph; returns [{id, status}] changes."""
     if not touched:
         return []
@@ -102,15 +102,16 @@ def incremental_reconcile(store: Store, touched: set[str]) -> list[dict]:
         _update_load(store, cid)
         if new_status:
             changed.append({"id": cid, "status": new_status})
-    store.conn.commit()
+    if commit:
+        store.conn.commit()
     return changed
 
 
-def full_reconcile(store: Store) -> list[dict]:
+def full_reconcile(store: Store, *, commit: bool = True) -> list[dict]:
     """Weekly safety net: relabel EVERY alive claim from scratch. Cheap at
     single-machine scale; the caller diffs against incremental results."""
     ids = {r["id"] for r in store.q("SELECT id FROM claim WHERE t_invalid IS NULL")}
-    return incremental_reconcile(store, ids)
+    return incremental_reconcile(store, ids, commit=commit)
 
 
 # ---------------------------------------------------- projection -> analysis
@@ -145,7 +146,7 @@ def project_analysis(store: Store, *, goal_id: Optional[str] = None,
             w = ev["trust_score"] if ev["evidence_type"] == "human_attested" \
                 else ev["quality_score"]
             if ev["id"] not in g.nodes:
-                g.nodes[ev["id"]] = Node(id=ev["id"], type=NodeType.SOURCE,
+                g.nodes[ev["id"]] = Node(id=ev["id"], type=NodeType.SOURCE_ASSERTION,
                                          content=ev["content"] or ev["id"],
                                          source_quality=w)
             g.add_edge(ev["id"], c["id"], EdgeRel.SUPPORTS,

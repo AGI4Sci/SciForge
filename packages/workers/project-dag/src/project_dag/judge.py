@@ -45,10 +45,34 @@ Compare a NEW claim against a POOL of existing claims from the same goal.
 Output STRICT JSON only:
 {"relation":"equivalent|refines|new","target":"<pool claim id or null>","confidence":0.0}""",
 
+    "goal_match": """PDAG-TASK: goal_match
+Re-evaluate which active project Goal an EXISTING committed claim addresses after
+the Goal tree changed. Do not rewrite the claim. Choose exactly one active goal
+only when the claim materially contributes to it; otherwise choose none.
+Output STRICT JSON only:
+{"goal_id":"<active goal id or none>","confidence":0.0,"reason":"<visible rationale>"}""",
+
     "contradiction": """PDAG-TASK: contradiction
 Do these two claims contradict each other (cannot both hold)? Answer ONLY
 whether they conflict; do NOT judge which is right.
 Output STRICT JSON only: {"contradicts": true|false, "confidence": 0.0}""",
+
+    "a1_verify": """PDAG-TASK: a1_verify
+You are an independent verifier. You did NOT produce the claim or its distill
+output. Given one project claim, its explicit support assertions, provenance
+metadata and scope, separately assess semantic entailment and applicability.
+Do not infer missing facts. Output STRICT JSON only:
+{"entailment":{"result":"passed|failed|uncertain","confidence":0.0,"reason":"..."},
+ "applicability":{"result":"passed|failed|uncertain","confidence":0.0,"reason":"..."}}""",
+
+    "a2_adversarial": """PDAG-TASK: a2_adversarial
+You are an independent adversarial reviewer in a snapshot-isolated context.
+Challenge methodology, source independence, alternative explanations and
+reproducibility using only the supplied claim/support/provenance metadata.
+Missing information must produce uncertain, never passed. Output STRICT JSON:
+{"methodology":{"result":"passed|failed|uncertain","confidence":0.0,"reason":"..."},
+ "reproducibility":{"result":"passed|failed|uncertain","confidence":0.0,"reason":"..."},
+ "independence":{"result":"passed|failed|uncertain","confidence":0.0,"reason":"..."}}""",
 }
 
 

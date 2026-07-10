@@ -65,7 +65,7 @@ class TestBuildGraphNeverCrashes(unittest.TestCase):
         {"nodes": [{"type": "bogus", "content": "c"}]},          # bad type
         {"nodes": [{"type": "claim", "content": 12345}]},        # non-str content
         {"nodes": [{"type": "claim", "content": "c", "tmp_id": None}]},
-        {"nodes": [{"type": "source", "content": "s", "ref": "not a dict"}]},
+        {"nodes": [{"type": "source_assertion", "content": "s", "ref": "not a dict"}]},
         {"edges": [{"rel": "supports", "src": "ghost", "dst": "ghost2"}]},
         {"edges": [{"src": "a"}]},                               # missing rel
         {"nodes": [{"type": "claim", "content": "c", "tmp_id": "n1"}],
@@ -88,7 +88,7 @@ class TestBuildGraphNeverCrashes(unittest.TestCase):
             self.assertEqual(len(build_graph(bad, "t").nodes), 0)
 
     def test_idempotent_build(self):
-        payload = {"nodes": [{"type": "source", "content": "E", "tmp_id": "s"},
+        payload = {"nodes": [{"type": "source_assertion", "content": "E", "tmp_id": "s"},
                              {"type": "claim", "content": "C", "tmp_id": "c"}],
                    "edges": [{"src": "s", "dst": "c", "rel": "supports"}]}
         g1, g2 = build_graph(payload, "t"), build_graph(payload, "t")
@@ -115,14 +115,14 @@ class TestRenderTraceRobustness(unittest.TestCase):
 class TestGraphRobustness(unittest.TestCase):
     def test_dedup_whitespace_case(self):
         g = ThreadGraph("t")
-        a = g.add_or_get_node(NodeType.SOURCE, "Paper A.")
-        b = g.add_or_get_node(NodeType.SOURCE, "  paper   A.  ")
+        a = g.add_or_get_node(NodeType.SOURCE_ASSERTION, "Paper A.")
+        b = g.add_or_get_node(NodeType.SOURCE_ASSERTION, "  paper   A.  ")
         self.assertEqual(a.id, b.id)
         self.assertEqual(len(g.nodes), 1)
 
     def test_dedup_different_type_not_merged(self):
         g = ThreadGraph("t")
-        a = g.add_or_get_node(NodeType.SOURCE, "X")
+        a = g.add_or_get_node(NodeType.SOURCE_ASSERTION, "X")
         b = g.add_or_get_node(NodeType.CLAIM, "X")
         self.assertNotEqual(a.id, b.id)
 
@@ -172,8 +172,7 @@ class TestProvJsonAdversarial(unittest.TestCase):
 
     def test_unicode_none_and_long(self):
         g = ThreadGraph("t-🔬", meta={"k": "中文"})
-        s = g.add_or_get_node(NodeType.SOURCE, "源 🧪 " + "x" * 3000,
-                              ref={"doi": "10.x/中文", "url": None})
+        s = g.add_or_get_node(NodeType.SOURCE_ASSERTION, "源 🧪 " + "x" * 3000)
         c = g.add_or_get_node(NodeType.CLAIM, "结论。")
         g.add_edge(s.id, c.id, EdgeRel.SUPPORTS, nli_score=0.5)
         self._roundtrip(g)
@@ -269,7 +268,7 @@ class TestFuzz(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-EXTRACT_JSON = ('{"nodes":[{"tmp_id":"s","type":"source","content":"Evidence.","trace_ref":"step-1"},'
+EXTRACT_JSON = ('{"nodes":[{"tmp_id":"s","type": "source_assertion","content":"Evidence.","trace_ref":"step-1"},'
                 '{"tmp_id":"c","type":"claim","content":"Claim.","trace_ref":"step-2"}],'
                 '"edges":[{"src":"s","dst":"c","rel":"supports"}]}')
 SERVER_TOKEN = "test-evidence-dag-token"
@@ -343,6 +342,16 @@ class TestServerRobustness(unittest.TestCase):
         data = json.loads(response_body.decode("utf-8"))
         return status, data
 
+    @staticmethod
+    def _update_body(thread_id, *, watermark="w1"):
+        return {
+            "threadId": thread_id, "targetWatermark": watermark,
+            "reason": "turn_committed", "priority": "P2",
+            "workspaceRoot": os.getcwd(), "projectRoot": os.getcwd(), "projectKey": "tests",
+            "trace": [{"id": "step-1", "type": "tool_result", "content": "Evidence."},
+                      {"id": "step-2", "type": "message", "content": "Claim."}],
+        }
+
     def test_health_version(self):
         self.assertEqual(self._req("GET", "/health", token=None)[0], 200)
         self.assertEqual(self._req("GET", "/version")[1]["data"]["service"], "evidence-dag-engine")
@@ -372,7 +381,7 @@ class TestServerRobustness(unittest.TestCase):
         old_max = Handler.max_json_body_bytes
         try:
             Handler.max_json_body_bytes = 8
-            status, data = self._raw_post("/threads/t/ingest-trace", b'{"trace":[]}')
+            status, data = self._raw_post("/updates", b'{"trace":[]}')
             self.assertEqual(status, 413)
             self.assertEqual(data["error"]["code"], "PAYLOAD_TOO_LARGE")
         finally:
@@ -382,23 +391,23 @@ class TestServerRobustness(unittest.TestCase):
         old_max = Handler.max_json_body_bytes
         try:
             Handler.max_json_body_bytes = 8
-            status, data = self._chunked_post("/threads/t/ingest-trace", [b'{"trace":', b'[]}'])
+            status, data = self._chunked_post("/updates", [b'{"trace":', b'[]}'])
             self.assertEqual(status, 413)
             self.assertEqual(data["error"]["code"], "PAYLOAD_TOO_LARGE")
         finally:
             Handler.max_json_body_bytes = old_max
 
     def test_bad_json_body_is_400(self):
-        status, data = self._raw_post("/threads/t/ingest-trace", b"{ this is not json ")
+        status, data = self._raw_post("/updates", b"{ this is not json ")
         self.assertEqual(status, 400)
         self.assertEqual(data["error"]["code"], "INVALID_ARGUMENT")
 
     def test_json_non_object_body_is_400(self):
-        status, data = self._raw_post("/threads/t/ingest-trace", b"[1,2,3]")
+        status, data = self._raw_post("/updates", b"[1,2,3]")
         self.assertEqual(status, 400)
 
-    def test_missing_trace_field_is_400(self):
-        status, data = self._req("POST", "/threads/t/ingest-trace", {"nope": 1})
+    def test_missing_required_update_fields_is_400(self):
+        status, data = self._req("POST", "/updates", {"trace": []})
         self.assertEqual(status, 400)
         self.assertEqual(data["error"]["code"], "INVALID_ARGUMENT")
 
@@ -408,47 +417,48 @@ class TestServerRobustness(unittest.TestCase):
         self.assertEqual(data["error"]["code"], "NOT_FOUND")
 
     def test_provenance_missing_node_arg_is_400(self):
-        self._req("POST", "/threads/tp/ingest-trace", {"trace": [{"id": "step-1", "content": "x"}]})
+        self._req("POST", "/updates", self._update_body("tp"))
         status, _ = self._req("GET", "/threads/tp/provenance")
         self.assertEqual(status, 400)
 
     def test_full_flow_and_idempotency(self):
-        trace = {"trace": [{"id": "step-1", "type": "tool_result", "content": "Evidence."},
-                           {"id": "step-2", "type": "message", "content": "Claim."}]}
-        s1, d1 = self._req("POST", "/threads/flow/ingest-trace", trace)
-        s2, d2 = self._req("POST", "/threads/flow/ingest-trace", trace)  # re-ingest
+        trace = self._update_body("flow")
+        s1, d1 = self._req("POST", "/updates", trace)
+        s2, d2 = self._req("POST", "/updates", {**trace, "trace": None, "reason": "manual_update"})
         self.assertEqual((s1, s2), (200, 200))
-        self.assertEqual(d1["data"]["summary"]["node_count"], d2["data"]["summary"]["node_count"])
-        self.assertEqual(self._req("POST", "/threads/flow/verify", {"threshold": 0.7})[0], 200)
+        self.assertEqual(d1["data"]["snapshot"]["digest"], d2["data"]["snapshot"]["digest"])
+        self.assertTrue(d2["data"]["idempotent"])
         sm, dm = self._req("GET", "/threads/flow/metrics")
         self.assertEqual(sm, 200)
         self.assertIn("provenance_coverage", dm["data"])
 
     def test_manual_and_auto_audit_runs(self):
-        trace = {"trace": [{"id": "step-1", "type": "tool_result", "content": "Evidence."},
-                           {"id": "step-2", "type": "message", "content": "Claim."}]}
-        status, data = self._req("POST", "/threads/audit-flow/ingest-trace", trace)
+        status, data = self._req("POST", "/updates", self._update_body("audit-flow"))
         self.assertEqual(status, 200)
-        self.assertTrue(data["data"]["audited"])
-        self.assertIn("total_findings", data["data"]["audit"])
+        digest = data["data"]["snapshot"]["digest"]
 
-        status, data = self._req("GET", "/threads/audit-flow/audit-runs")
+        status, data = self._req("POST", "/audits",
+                                 {"threadId": "audit-flow", "targetDigest": digest,
+                                  "level": "L0", "trigger": "auto", "threshold": 0.7})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["data"]["trigger"], "auto")
+
+        status, data = self._req("GET", "/audits?threadId=audit-flow")
         self.assertEqual(status, 200)
         self.assertGreaterEqual(len(data["data"]["runs"]), 1)
-        self.assertEqual(data["data"]["latest"]["trigger"], "auto")
 
-        status, data = self._req("POST", "/threads/audit-flow/audit-runs",
-                                 {"trigger": "manual", "threshold": 0.7})
+        status, data = self._req("POST", "/audits",
+                                 {"threadId": "audit-flow", "targetDigest": digest,
+                                  "level": "L0", "trigger": "manual", "threshold": 0.7})
         self.assertEqual(status, 200)
         self.assertEqual(data["data"]["trigger"], "manual")
         self.assertIn("findings", data["data"])
 
-        status, _ = self._req("GET", "/threads/missing-thread/audit-runs")
+        status, _ = self._req("GET", "/audits?threadId=missing-thread")
         self.assertEqual(status, 404)
 
     def test_thread_route_decodes_runtime_scoped_ids(self):
-        trace = {"trace": [{"id": "step-1", "type": "message", "content": "Claim."}]}
-        status, _ = self._req("POST", "/threads/claude%3Athread%2Fone/ingest-trace", trace)
+        status, _ = self._req("POST", "/updates", self._update_body("claude:thread/one"))
         self.assertEqual(status, 200)
         status, data = self._req("GET", "/threads/claude%3Athread%2Fone/graph")
         self.assertEqual(status, 200)

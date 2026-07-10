@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/project-dag",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -19,7 +19,7 @@
     "prestart": "python -m pip install -q -e ../evidence-dag -e .",
     "start": "python -m project_dag.server",
     "serve": "python -m project_dag.server",
-    "test": "python tests/test_compile.py"
+    "test": "python -m unittest discover -s tests -p 'test_*.py' -v"
   },
   "engines": {
     "python": ">=3.10"

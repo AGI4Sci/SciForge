@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS entity (
 
 CREATE TABLE IF NOT EXISTS claim (
   id            TEXT PRIMARY KEY,
+  project_key   TEXT NOT NULL,
   statement     TEXT NOT NULL,
   claim_type    TEXT CHECK(claim_type IN
                 ('hypothesis','finding','method_result','negative_result','decision')),
@@ -94,30 +95,21 @@ CREATE INDEX IF NOT EXISTS idx_edge_dst ON edge(dst, edge_type);
 -- which session node a claim was promoted from (rewrite detection + provenance)
 CREATE TABLE IF NOT EXISTS claim_origin (
   claim_id   TEXT NOT NULL,
+  project_key TEXT NOT NULL,
   session_id TEXT NOT NULL,
   node_id    TEXT NOT NULL,
   run_id     TEXT,
-  PRIMARY KEY (claim_id, session_id, node_id)
+  PRIMARY KEY (project_key, claim_id, session_id, node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_origin_node ON claim_origin(session_id, node_id);
 
 CREATE TABLE IF NOT EXISTS watermark (
-  session_id    TEXT PRIMARY KEY,
+  project_key   TEXT NOT NULL,
+  session_id    TEXT NOT NULL,
   dag_hash      TEXT NOT NULL,
   processed_ids TEXT NOT NULL DEFAULT '[]',  -- JSON array of node ids already seen
-  updated_at    TEXT
-);
-
-CREATE TABLE IF NOT EXISTS review_item (
-  id          TEXT PRIMARY KEY,
-  item_type   TEXT NOT NULL CHECK(item_type IN
-              ('entity_merge','claim_merge','conflict','orphan_claims')),
-  payload     TEXT NOT NULL,
-  status      TEXT NOT NULL DEFAULT 'pending'
-              CHECK(status IN ('pending','accepted','rejected','deferred')),
-  created_at  TEXT,
-  resolved_at TEXT,
-  resolution  TEXT
+  updated_at    TEXT,
+  PRIMARY KEY(project_key, session_id)
 );
 
 CREATE TABLE IF NOT EXISTS compile_run (
@@ -138,6 +130,223 @@ CREATE TABLE IF NOT EXISTS judge_cache (
   task_type  TEXT NOT NULL,
   response   TEXT NOT NULL,
   created_at TEXT
+);
+
+-- Immutable cross-layer input registry.  A digest may only ever describe one
+-- canonical snapshot envelope.
+CREATE TABLE IF NOT EXISTS evidence_snapshot (
+  thread_id          TEXT NOT NULL,
+  digest             TEXT NOT NULL,
+  version            INTEGER NOT NULL,
+  input_watermark    TEXT NOT NULL,
+  schema_version     TEXT NOT NULL,
+  extractor_version  TEXT NOT NULL,
+  verifier_version   TEXT NOT NULL,
+  artifact_digests   TEXT NOT NULL,
+  created_at         TEXT NOT NULL,
+  registered_at      TEXT NOT NULL,
+  envelope           TEXT NOT NULL,
+  PRIMARY KEY(thread_id, digest),
+  UNIQUE(thread_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS project_policy (
+  project_key        TEXT PRIMARY KEY,
+  autonomy_mode      TEXT NOT NULL DEFAULT 'autonomous'
+                     CHECK(autonomy_mode IN ('autonomous','checkpointed','supervised')),
+  policy_version     INTEGER NOT NULL DEFAULT 1,
+  checkpoints        TEXT NOT NULL DEFAULT '[]',
+  allow_agent_critical_override INTEGER NOT NULL DEFAULT 0,
+  min_literature_level TEXT NOT NULL DEFAULT 'L2',
+  min_run_level      TEXT NOT NULL DEFAULT 'L4',
+  updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_scope (
+  project_key  TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  disposition  TEXT NOT NULL CHECK(disposition IN ('included','excluded','isolated')),
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY(project_key, session_id)
+);
+
+-- One durable, coalescing compiler lane per project.  While a job is running,
+-- enqueue only advances request_version and desired inputs; the worker commits
+-- its captured generation and requeues the row if a newer generation arrived.
+CREATE TABLE IF NOT EXISTS project_update_job (
+  id                 TEXT PRIMARY KEY,
+  project_key        TEXT NOT NULL,
+  desired_vector     TEXT NOT NULL,
+  captured_scope     TEXT NOT NULL,
+  reason             TEXT NOT NULL,
+  priority           INTEGER NOT NULL DEFAULT 0,
+  autonomy_mode      TEXT NOT NULL,
+  request_version    INTEGER NOT NULL DEFAULT 1,
+  processing_version INTEGER,
+  status             TEXT NOT NULL DEFAULT 'queued'
+                     CHECK(status IN ('queued','running','done','failed','interrupted')),
+  attempts           INTEGER NOT NULL DEFAULT 0,
+  last_error         TEXT,
+  next_attempt_at    TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  started_at         TEXT,
+  finished_at        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_job_open
+  ON project_update_job(project_key)
+  WHERE status IN ('queued','running','failed','interrupted');
+
+CREATE TABLE IF NOT EXISTS project_snapshot (
+  project_key       TEXT NOT NULL,
+  version           INTEGER NOT NULL,
+  digest            TEXT NOT NULL UNIQUE,
+  goal_version      TEXT NOT NULL,
+  evidence_vector   TEXT NOT NULL,
+  excluded_sessions TEXT NOT NULL,
+  isolated_sessions TEXT NOT NULL,
+  compiler_version  TEXT NOT NULL,
+  created_at        TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK(status='committed'),
+  payload           TEXT NOT NULL,
+  PRIMARY KEY(project_key, version)
+);
+
+CREATE TABLE IF NOT EXISTS domain_event (
+  id          TEXT PRIMARY KEY,
+  event_type  TEXT NOT NULL,
+  project_key TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  actor       TEXT NOT NULL,
+  payload     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assessment (
+  id            TEXT PRIMARY KEY,
+  project_key   TEXT NOT NULL,
+  target_id     TEXT NOT NULL,
+  dimension     TEXT NOT NULL CHECK(dimension IN
+                  ('integrity','provenance','entailment','methodology',
+                   'applicability','reproducibility')),
+  level         TEXT NOT NULL CHECK(level IN ('A0','A1','A2','A3','human')),
+  result        TEXT NOT NULL CHECK(result IN ('passed','failed','uncertain','overridden')),
+  actor         TEXT NOT NULL,
+  method        TEXT NOT NULL,
+  details       TEXT NOT NULL DEFAULT '{}',
+  confidence    REAL NOT NULL,
+  target_digest TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  UNIQUE(project_key,target_id,dimension,level,actor,method,target_digest)
+);
+
+CREATE TABLE IF NOT EXISTS finding (
+  id            TEXT PRIMARY KEY,
+  project_key   TEXT NOT NULL,
+  target_digest TEXT NOT NULL,
+  finding_type  TEXT NOT NULL,
+  subject_id    TEXT NOT NULL,
+  policy_version INTEGER NOT NULL,
+  severity      TEXT NOT NULL CHECK(severity IN ('low','medium','high','critical')),
+  status        TEXT NOT NULL CHECK(status IN
+                  ('open','auto_resolved','resolved','deferred','overridden')),
+  details       TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  resolved_at   TEXT,
+  UNIQUE(target_digest,finding_type,subject_id,policy_version)
+);
+
+CREATE TABLE IF NOT EXISTS review (
+  id            TEXT PRIMARY KEY,
+  project_key   TEXT NOT NULL,
+  finding_id    TEXT,
+  subject_id    TEXT NOT NULL,
+  review_type   TEXT NOT NULL,
+  checkpoint    TEXT,
+  status        TEXT NOT NULL CHECK(status IN ('open','resolved','deferred')),
+  payload       TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  resolved_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decision_event (
+  id               TEXT PRIMARY KEY,
+  project_key      TEXT NOT NULL,
+  review_id        TEXT,
+  finding_id       TEXT,
+  action           TEXT NOT NULL,
+  decided_by       TEXT NOT NULL CHECK(decided_by IN ('agent','human','tool')),
+  agent_id         TEXT,
+  autonomy_mode    TEXT NOT NULL,
+  rationale        TEXT NOT NULL,
+  alternatives     TEXT NOT NULL,
+  evidence_digest  TEXT NOT NULL,
+  confidence       REAL NOT NULL,
+  reversibility    TEXT NOT NULL,
+  supersedes_id    TEXT,
+  created_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS risk_override (
+  id              TEXT PRIMARY KEY,
+  project_key     TEXT NOT NULL,
+  finding_id      TEXT NOT NULL,
+  decision_id     TEXT NOT NULL,
+  actor_type      TEXT NOT NULL CHECK(actor_type IN ('agent','human')),
+  actor_id        TEXT NOT NULL,
+  autonomy_mode   TEXT NOT NULL,
+  rationale       TEXT NOT NULL,
+  policy_version  INTEGER NOT NULL,
+  created_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_run (
+  id            TEXT PRIMARY KEY,
+  request_key   TEXT NOT NULL UNIQUE,
+  project_key   TEXT NOT NULL,
+  target_digest TEXT NOT NULL,
+  level         TEXT NOT NULL CHECK(level IN ('L0','L1','L2')),
+  policy_version INTEGER NOT NULL,
+  reason        TEXT NOT NULL,
+  priority      INTEGER NOT NULL DEFAULT 0,
+  lane          TEXT NOT NULL DEFAULT 'P3' CHECK(lane='P3'),
+  autonomy_mode TEXT NOT NULL CHECK(autonomy_mode IN
+                ('autonomous','checkpointed','supervised')),
+  status        TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','stale')),
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  digest        TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  started_at    TEXT,
+  finished_at   TEXT,
+  error         TEXT
+);
+CREATE TABLE IF NOT EXISTS attention_frontier (
+  project_key    TEXT NOT NULL,
+  snapshot_digest TEXT NOT NULL,
+  subject_id     TEXT NOT NULL,
+  subject_type   TEXT NOT NULL,
+  score          REAL NOT NULL,
+  factors        TEXT NOT NULL,
+  blocking       INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL,
+  PRIMARY KEY(project_key,snapshot_digest,subject_id)
+);
+
+CREATE TABLE IF NOT EXISTS release_record (
+  id                      TEXT PRIMARY KEY,
+  project_key             TEXT NOT NULL,
+  project_snapshot_digest TEXT NOT NULL,
+  evidence_vector         TEXT NOT NULL,
+  audit_run_digest        TEXT NOT NULL,
+  policy_version          INTEGER NOT NULL,
+  critical_findings       TEXT NOT NULL,
+  overrides               TEXT NOT NULL,
+  created_by              TEXT NOT NULL,
+  created_at              TEXT NOT NULL,
+  output_artifacts        TEXT NOT NULL,
+  certification_status    TEXT NOT NULL CHECK(certification_status IN
+                            ('candidate','certified','blocked'))
 );
 """
 
@@ -179,10 +388,49 @@ class Store:
         self.conn.execute(sql, tuple(args))
 
     def _migrate(self) -> None:
+        """Apply the one-way canonical queue schema, then reject older graph schemas."""
+        update_columns = {row["name"] for row in self.q(
+            "PRAGMA table_info(project_update_job)")}
+        if "next_attempt_at" not in update_columns:
+            self.x("ALTER TABLE project_update_job ADD COLUMN next_attempt_at TEXT")
+
+        audit_columns = {row["name"] for row in self.q("PRAGMA table_info(audit_run)")}
+        audit_additions = {
+            "request_key": "TEXT",
+            "reason": "TEXT NOT NULL DEFAULT 'manual'",
+            "priority": "INTEGER NOT NULL DEFAULT 0",
+            "lane": "TEXT NOT NULL DEFAULT 'P3'",
+            "autonomy_mode": "TEXT NOT NULL DEFAULT 'autonomous'",
+            "attempts": "INTEGER NOT NULL DEFAULT 0",
+            "next_attempt_at": "TEXT",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        }
+        for name, declaration in audit_additions.items():
+            if name not in audit_columns:
+                self.x(f"ALTER TABLE audit_run ADD COLUMN {name} {declaration}")
+        migration_time = now_iso()
+        self.x(
+            "UPDATE audit_run SET request_key=COALESCE(request_key,'migrated:' || id),"
+            " created_at=COALESCE(created_at,started_at,finished_at,?),"
+            " updated_at=COALESCE(updated_at,finished_at,started_at,?)",
+            (migration_time, migration_time),
+        )
+        self.x("CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_request ON audit_run(request_key)")
+        self.x(
+            "CREATE INDEX IF NOT EXISTS idx_audit_queue"
+            " ON audit_run(lane,status,next_attempt_at,priority,created_at)"
+        )
+
         columns = {row["name"] for row in self.q("PRAGMA table_info(goal)")}
         if "project_key" not in columns:
-            self.x("ALTER TABLE goal ADD COLUMN project_key TEXT")
-        self.x("CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key)")
+            raise RuntimeError(
+                "legacy Project DAG database requires an explicit offline migration")
+        claim_columns = {row["name"] for row in self.q("PRAGMA table_info(claim)")}
+        watermark_columns = {row["name"] for row in self.q("PRAGMA table_info(watermark)")}
+        if "project_key" not in claim_columns or "project_key" not in watermark_columns:
+            raise RuntimeError(
+                "legacy Project DAG database requires an explicit offline migration")
 
     # --- edges ----------------------------------------------------------------
     def add_edge(self, src: str, dst: str, edge_type: str,
@@ -252,24 +500,29 @@ class Store:
         return self.q(sql + " ORDER BY t_created", args)
 
     # --- watermark --------------------------------------------------------------
-    def get_watermark(self, session_id: str) -> Optional[dict]:
-        row = self.q1("SELECT * FROM watermark WHERE session_id=?", (session_id,))
+    def get_watermark(self, project_key: str, session_id: str) -> Optional[dict]:
+        row = self.q1("SELECT * FROM watermark WHERE project_key=? AND session_id=?",
+                      (project_key, session_id))
         if row:
             row["processed_ids"] = set(json.loads(row["processed_ids"]))
         return row
 
-    def set_watermark(self, session_id: str, dag_hash: str, processed_ids: set[str]) -> None:
-        self.x("INSERT INTO watermark (session_id,dag_hash,processed_ids,updated_at)"
-               " VALUES (?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET"
+    def set_watermark(self, project_key: str, session_id: str, dag_hash: str,
+                      processed_ids: set[str]) -> None:
+        self.x("INSERT INTO watermark (project_key,session_id,dag_hash,processed_ids,updated_at)"
+               " VALUES (?,?,?,?,?) ON CONFLICT(project_key,session_id) DO UPDATE SET"
                " dag_hash=excluded.dag_hash, processed_ids=excluded.processed_ids,"
                " updated_at=excluded.updated_at",
-               (session_id, dag_hash, json.dumps(sorted(processed_ids)), now_iso()))
+               (project_key, session_id, dag_hash, json.dumps(sorted(processed_ids)), now_iso()))
 
     # --- review queue -------------------------------------------------------------
-    def enqueue_review(self, item_type: str, payload: dict) -> str:
+    def enqueue_review(self, project_key: str, item_type: str, payload: dict,
+                       subject_id: str = "project-compile") -> str:
         rid = new_id("review")
-        self.x("INSERT INTO review_item (id,item_type,payload,created_at) VALUES (?,?,?,?)",
-               (rid, item_type, json.dumps(payload, ensure_ascii=False), now_iso()))
+        self.x("INSERT INTO review (id,project_key,subject_id,review_type,status,payload,created_at)"
+               " VALUES (?,?,?,?,'open',?,?)",
+               (rid, project_key, subject_id, item_type,
+                json.dumps(payload, ensure_ascii=False), now_iso()))
         return rid
 
     # --- judge cache ------------------------------------------------------------

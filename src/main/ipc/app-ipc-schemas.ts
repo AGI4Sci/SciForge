@@ -2128,11 +2128,20 @@ export const evidenceDagViewPayloadSchema = z
 export const evidenceDagUpdatePayloadSchema = z
   .object({
     threadId: trimmedString(MAX_ID_LENGTH),
-    runtimeId: agentRuntimeIdSchema
+    runtimeId: agentRuntimeIdSchema,
+    operation: z.enum(['update', 'rebuild']).optional(),
+    rebuildKind: z.enum(['schema_upgrade', 'corruption_recovery', 'reinterpretation']).optional(),
+    rebuildRationale: optionalTrimmedString(1000)
   })
   .strict()
+  .refine((payload) => payload.operation !== 'rebuild' || Boolean(payload.rebuildKind && payload.rebuildRationale), {
+    message: 'rebuildKind and rebuildRationale are required for an explicit rebuild'
+  })
+  .refine((payload) => payload.operation === 'rebuild' || (!payload.rebuildKind && !payload.rebuildRationale), {
+    message: 'rebuild fields are only valid for an explicit rebuild'
+  })
 
-const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'compile'])
+const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'attention'])
 
 export const projectDagViewPayloadSchema = z
   .object({
@@ -2144,10 +2153,10 @@ export const projectDagViewPayloadSchema = z
   })
   .strict()
 
-export const projectDagCompilePayloadSchema = z
+const dagAutonomyModeSchema = z.enum(['autonomous', 'checkpointed', 'supervised'])
+
+export const projectDagUpdatePayloadSchema = z
   .object({
-    goalTitle: optionalTrimmedString(500),
-    goalDescription: optionalTrimmedString(4000),
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
     projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
     project: optionalTrimmedString(MAX_ID_LENGTH),
@@ -2155,7 +2164,23 @@ export const projectDagCompilePayloadSchema = z
     scope: z.union([
       z.literal('all'),
       z.array(trimmedString(MAX_ID_LENGTH)).max(500)
-    ]).optional()
+    ]).optional(),
+    excludedSessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
+    isolatedSessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
+    autonomyMode: dagAutonomyModeSchema.optional()
+  })
+  .strict()
+
+export const projectDagGoalSavePayloadSchema = z
+  .object({
+    title: trimmedString(500),
+    description: optionalTrimmedString(4000),
+    rootGoalId: optionalTrimmedString(MAX_ID_LENGTH),
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    project: optionalTrimmedString(MAX_ID_LENGTH),
+    sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
+    autonomyMode: dagAutonomyModeSchema.optional()
   })
   .strict()
 

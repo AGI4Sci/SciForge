@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -35,6 +35,7 @@ import {
 import type { CodexRuntimeService } from '../codex'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
 import { createAgentRuntimeHost } from './host'
+import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
 import { createLocalRuntimeAgentRuntimeAdapter } from '../local-runtime-agent-runtime-adapter'
 import { ModelRequestAuditRecorder } from '../../services/model-request-audit-service'
@@ -260,10 +261,13 @@ function shellWrappedCommandToolEvent(command: string, index: number): AgentRunt
   }
 }
 
+const evidenceQueueRoots: string[] = []
+
 describe('AgentRuntimeHost', () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
+    await Promise.all(evidenceQueueRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
   })
 
   it('selects the active adapter and allows explicit runtime overrides', async () => {
@@ -3000,9 +3004,10 @@ describe('AgentRuntimeHost', () => {
     expect(adapterAuxiliary).not.toHaveBeenCalled()
   })
 
-  it('does not auto-feed completed turns into Evidence DAG without explicit opt-in', async () => {
+  it('can explicitly pause the default automatic Evidence DAG feed', async () => {
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:3897/')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'dag-secret')
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_AUTO_FEED', 'off')
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     const claude = fakeAdapter('claude', {
@@ -3040,12 +3045,22 @@ describe('AgentRuntimeHost', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('auto-feeds completed turns from the neutral runtime event path into Evidence DAG when enabled', async () => {
+  it('auto-enqueues completed turns from the neutral runtime event path into Evidence DAG when enabled', async () => {
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:3897/')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'dag-secret')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_AUTO_FEED', 'true')
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
+      return new Response(JSON.stringify({ ok: true, data: { snapshot: {
+        threadId: body.threadId, version: 1, digest: 'sha256:auto', inputWatermark: body.targetWatermark,
+        schemaVersion: '2', extractorVersion: '2', verifierVersion: '2', artifactDigests: [],
+        createdAt: '2026-07-10T00:00:00.000Z', status: 'committed'
+      } } }), { status: 200 })
+    })
     vi.stubGlobal('fetch', fetchMock)
+    const queueRoot = await mkdtemp(join(tmpdir(), 'sciforge-host-dag-queue-'))
+    evidenceQueueRoots.push(queueRoot)
+    configureEvidenceDagUpdateQueue({ storagePath: join(queueRoot, 'queue.json') })
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
@@ -3100,21 +3115,22 @@ describe('AgentRuntimeHost', () => {
       expect.anything(),
       { runtimeId: 'claude', threadId: 'claude-thread' }
     )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:3897/threads/claude%3Aclaude-thread/ingest-trace',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({
-          authorization: 'Bearer dag-secret'
-        }),
-        body: JSON.stringify({
-          trace: [
-            { id: 'u1', type: 'message', role: 'user', content: 'question' },
-            { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-          ]
-        })
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0]!
+    expect(requestUrl).toBe('http://127.0.0.1:3897/updates')
+    expect(requestInit).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        threadId: 'claude:claude-thread',
+        targetWatermark: '2',
+        reason: 'turn_committed',
+        priority: 'background',
+        trace: [
+          { id: 'u1', type: 'message', role: 'user', content: 'question' },
+          { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
+        ]
       })
-    )
+    }))
+    expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer dag-secret')
   })
 
   it('observes repeated tool activity and escalates Codex guard controls', async () => {

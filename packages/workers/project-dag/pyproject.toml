@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciforge-project-dag"
-version = "0.1.0"
+version = "0.2.0"
 description = "Compiles per-thread evidence DAGs into one goal-oriented, bi-temporal project DAG"
 requires-python = ">=3.10"
 # evidence_dag is imported from the sibling package via a sys.path shim in

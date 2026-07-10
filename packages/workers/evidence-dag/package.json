@@ -1,10 +1,10 @@
 {
   "name": "@sciforge/evidence-dag",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Standalone Evidence-DAG engine: turns an agent trace into a typed claim-evidence DAG, verifies supports edges with an NLI judge, and serialises to PROV-JSON. HTTP service (ServiceResult-only).",
+  "description": "Evidence DAG compiler with Artifact Registry, structured SourceAnchor, assessment ledger, and immutable snapshots.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": false,

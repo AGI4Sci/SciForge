@@ -76,7 +76,7 @@ def _status_map(graph: ThreadGraph, *, threshold: float,
     for s, d, _nu in surviving:
         g.add_edge(s, d)
     live_sources = {n for n, nd in graph.nodes.items()
-                    if nd.type == NodeType.SOURCE and n not in rm_nodes}
+                    if nd.type == NodeType.SOURCE_ASSERTION and n not in rm_nodes}
     reach: dict[str, set[str]] = {}
     for n in g.nodes:
         reach[n] = (nx.ancestors(g, n) | {n}) & live_sources
@@ -87,15 +87,15 @@ def _status_map(graph: ThreadGraph, *, threshold: float,
         if nid in rm_nodes:
             out[nid] = ("removed", 0.0, set())
             continue
-        if node.type == NodeType.SOURCE:
+        if node.type == NodeType.SOURCE_ASSERTION:
             out[nid] = ("supported", 1.0, reach.get(nid, set()))
             continue
         agg = round(noisy_or(incoming.get(nid, [])), 4)
         srcs = reach.get(nid, set())
         if not srcs or agg < threshold:
-            st = "unverified"
+            st = "undetermined"
         elif nid in contested:
-            st = "conflicting"
+            st = "conflicted"
         else:
             st = "supported"
         out[nid] = (st, agg, srcs)
@@ -135,7 +135,7 @@ def reconcile(graph: ThreadGraph, *, remove_nodes: Iterable[str] = (),
 
     invalidated, weakened, conflicted, restored = [], [], [], []
     for nid, node in graph.nodes.items():
-        if nid in rm_nodes or node.type == NodeType.SOURCE:
+        if nid in rm_nodes or node.type == NodeType.SOURCE_ASSERTION:
             continue
         b_st, _b_agg, b_src = base[nid]
         p_st, p_agg, p_src = pert[nid]
@@ -148,25 +148,25 @@ def reconcile(graph: ThreadGraph, *, remove_nodes: Iterable[str] = (),
             "lost_sources": lost,  # 断裂链:它原来依赖、现在够不到的来源
         }
         # 这四条覆盖了 {supported,conflicting,unverified} 之间所有 b!=p 的转移(穷尽)。
-        if p_st == "unverified" and not p_src:
+        if p_st == "undetermined" and not p_src:
             # 原本有来源支撑,扰动后一个来源都够不到了 → 坍塌
             entry["effect"] = "invalidated"
             entry["why"] = ("collapses — every evidence path passed through the removed "
                             f"{'/'.join(lost) if lost else 'item'}")
             invalidated.append(entry)
-        elif p_st == "unverified":
+        elif p_st == "undetermined":
             entry["effect"] = "weakened"
             entry["why"] = (f"support fell below {threshold:g} (ν={p_agg}) but still "
                             "reaches a source")
             weakened.append(entry)
-        elif p_st == "conflicting":
-            entry["effect"] = "now-conflicting"
+        elif p_st == "conflicted":
+            entry["effect"] = "now-conflicted"
             entry["why"] = "a contradicts edge now bears on a still-supported claim"
             conflicted.append(entry)
         else:  # p_st == "supported"
             entry["effect"] = "restored"
             entry["why"] = ("conflict resolved — the contradicting source was removed"
-                            if b_st == "conflicting" else "support rose to/above threshold")
+                            if b_st == "conflicted" else "support rose to/above threshold")
             restored.append(entry)
 
     invalidated.sort(key=lambda x: x["id"])
@@ -180,14 +180,14 @@ def reconcile(graph: ThreadGraph, *, remove_nodes: Iterable[str] = (),
         },
         "invalidated": invalidated,
         "weakened": weakened,
-        "now_conflicting": conflicted,
+        "now_conflicted": conflicted,
         "restored": restored,
         "summary": {
             "affected_subgraph_size": len(affected),  # 只在此子图重算(增量)
             "n_derived": n_derived,
             "n_invalidated": len(invalidated),
             "n_weakened": len(weakened),
-            "n_now_conflicting": len(conflicted),
+            "n_now_conflicted": len(conflicted),
             "blast_radius": len(invalidated) + len(weakened) + len(conflicted),
         },
     }

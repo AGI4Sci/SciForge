@@ -18,7 +18,7 @@ def _g():
 
 
 def _src(g, txt):
-    return g.add_or_get_node(NodeType.SOURCE, txt).id
+    return g.add_or_get_node(NodeType.SOURCE_ASSERTION, txt).id
 
 
 def _rea(g, txt):

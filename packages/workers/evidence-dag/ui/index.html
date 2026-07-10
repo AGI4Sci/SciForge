@@ -226,8 +226,8 @@
     border-radius: 8px 0 0 8px;
     background: var(--accent);
   }
-  .node-card.source { background: linear-gradient(180deg, #fff, var(--source-soft)); }
-  .node-card.source::before { background: var(--source); }
+  .node-card.source_assertion { background: linear-gradient(180deg, #fff, var(--source-soft)); }
+  .node-card.source_assertion::before { background: var(--source); }
   .node-card.reasoning { background: linear-gradient(180deg, #fff, var(--reasoning-soft)); }
   .node-card.reasoning::before { background: var(--reasoning); }
   .node-card.claim { background: linear-gradient(180deg, #fff, var(--claim-soft)); }
@@ -486,7 +486,6 @@
     <select id="thread" title="thread"></select>
     <button id="refresh" title="Refresh">Refresh</button>
     <label class="chk" title="Watch for new graph data"><input type="checkbox" id="auto" checked /> watch</label>
-    <button id="verify" title="Re-run NLI verification">Verify</button>
     <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit</button>
     <button id="fit" class="icon" title="Fit graph">⌖</button>
     <span class="topbar-spacer"></span>
@@ -582,9 +581,11 @@ function readAuthToken() {
 
 const AUTH_TOKEN = readAuthToken();
 const TYPE_META = {
-  source: { label: 'SOURCE', icon: 'DOC', floor: 0 },
+  source_assertion: { label: 'SOURCE ASSERTION', icon: 'DOC', floor: 0 },
   reasoning: { label: 'REASONING', icon: 'THINK', floor: 1 },
-  claim: { label: 'CLAIM', icon: 'CLAIM', floor: 2 }
+  assumption: { label: 'ASSUMPTION', icon: 'ASSUME', floor: 1 },
+  claim: { label: 'CLAIM', icon: 'CLAIM', floor: 2 },
+  finding: { label: 'FINDING', icon: 'FIND', floor: 2 }
 };
 const NODE_W = 232;
 const NODE_H = 78;
@@ -599,7 +600,7 @@ let stageModel = null;
 let renderedSig = null;
 let selectedNodeId = null;
 let timer = null;
-let verifyTriedFor = null;
+let currentSnapshot = null;
 let lbMap = {};
 let fragMap = {};
 let prMap = {};
@@ -656,7 +657,7 @@ function graphCounts(graph) {
   return {
     nodes: nodes.length,
     edges: edges.length,
-    sources: nodes.filter((n) => n.type === 'source').length,
+    sources: nodes.filter((n) => n.type === 'source_assertion').length,
     reasoning: nodes.filter((n) => n.type === 'reasoning').length,
     claims: nodes.filter((n) => n.type === 'claim').length
   };
@@ -777,7 +778,7 @@ function layerLabel(model, layer, index) {
   const types = new Set(layer.map((id) => model.nodeById[id]?.type));
   if (types.size === 1) {
     const type = [...types][0];
-    if (type === 'source') return 'Evidence Sources';
+    if (type === 'source_assertion') return 'Evidence Sources';
     if (type === 'reasoning') return `Reasoning ${index + 1}`;
     if (type === 'claim') return 'Claims';
   }
@@ -833,7 +834,7 @@ function nodeHtml(node, pos) {
   const badges = nodeBadges(node);
   const ref = sourceRefLabel(node);
   const foot = [
-    node.trace_ref ? `trace ${compact(node.trace_ref, 28)}` : '',
+    node.trace_refs?.length ? `trace ${compact(node.trace_refs[0], 28)}` : '',
     ref ? compact(ref, 38) : ''
   ].filter(Boolean).join(' · ');
   return `
@@ -855,14 +856,13 @@ function nodeBadges(node) {
   if (fragMap[node.id]) return `<span class="badge warn" title="${escAttr((fragMap[node.id].reasons || []).join(' · '))}">fragile</span>`;
   if (weakMap[node.id]) return `<span class="badge warn">weak</span>`;
   if (lbMap[node.id]) return `<span class="badge warn" title="Load-bearing node">${esc(lbMap[node.id].critical_count)}x</span>`;
-  if (node.type === 'source' || node.status === 'supported') return `<span class="badge ok">ok</span>`;
-  if (node.status === 'conflicting') return `<span class="badge danger">conflict</span>`;
+  if (node.type === 'source_assertion' || node.status === 'supported') return `<span class="badge ok">ok</span>`;
+  if (node.status === 'conflicted') return `<span class="badge danger">conflict</span>`;
   return '';
 }
 
 function sourceRefLabel(node) {
-  if (!node.ref || typeof node.ref !== 'object') return '';
-  return node.ref.doi || node.ref.arxiv || node.ref.url || node.ref.citation || '';
+  return node.source_anchor_id || node.artifact_id || '';
 }
 
 function renderEdges(model) {
@@ -1016,7 +1016,7 @@ function showNodeDetail(id) {
   const node = stageModel.nodeById[id];
   const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
   const support = supportStrength(id);
-  const refRows = node.type === 'source' ? refHtml(node) : '';
+  const refRows = node.type === 'source_assertion' ? refHtml(node) : '';
   const incoming = (stageModel.incoming[id] || []).slice(0, 6);
   const outgoing = (stageModel.outgoing[id] || []).slice(0, 6);
   $('nodeInspector').innerHTML = `
@@ -1031,7 +1031,7 @@ function showNodeDetail(id) {
     <div class="row"><span class="lab">status</span><span class="val">${nodeBadges(node) || esc(node.status || '-')}</span></div>
     ${support ? `<div class="row"><span class="lab">support</span><span class="val"><span class="badge ${support.value >= .7 ? 'ok' : 'warn'}">ν ${support.value.toFixed(2)}</span> ${support.count} edge(s)</span></div>` : ''}
     ${analysisRowsHtml(node)}
-    <div class="row"><span class="lab">trace</span><span class="val">${esc(node.trace_ref || '-')}</span></div>
+    <div class="row"><span class="lab">trace</span><span class="val">${esc((node.trace_refs || []).join(', ') || '-')}</span></div>
     ${refRows}
     <div class="content">${esc(node.content || '')}</div>
     <div class="detail-actions">
@@ -1051,13 +1051,9 @@ function showNodeDetail(id) {
 function refHtml(node) {
   const rows = [];
   if (node.source_type) rows.push(`<div class="row"><span class="lab">source</span><span class="val">${esc(node.source_type)}${node.credibility ? ` · ${esc(node.credibility)} credibility` : ''}</span></div>`);
-  if (node.ref && typeof node.ref === 'object') {
-    const ref = Object.entries(node.ref)
-      .filter(([, value]) => value)
-      .map(([key, value]) => `${esc(key)}: ${esc(value)}`)
-      .join('<br/>');
-    if (ref) rows.push(`<div class="row"><span class="lab">ref</span><span class="val">${ref}</span></div>`);
-  }
+  if (node.artifact_id) rows.push(`<div class="row"><span class="lab">artifact</span><span class="val">${esc(node.artifact_id)}</span></div>`);
+  if (node.artifact_version_id) rows.push(`<div class="row"><span class="lab">version</span><span class="val">${esc(node.artifact_version_id)}</span></div>`);
+  if (node.source_anchor_id) rows.push(`<div class="row"><span class="lab">anchor</span><span class="val">${esc(node.source_anchor_id)}</span></div>`);
   return rows.join('');
 }
 
@@ -1171,27 +1167,13 @@ async function loadGraph() {
       return;
     }
     const graph = graphResponse.data.graph;
+    currentSnapshot = graphResponse.data.snapshot;
     selectedNodeId = selectedNodeId && graph.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : null;
     blastState = null;
     buildAnalysisMaps(null);
     renderGraph(graph);
     renderedSig = sigOf(graphResponse.data);
     markUpdated(false);
-
-    const needsVerify = graph.edges.some((edge) => edge.rel === 'supports') &&
-      !graph.edges.some((edge) => edge.rel === 'supports' && edge.nli_score != null);
-    if (needsVerify && verifyTriedFor !== currentThread) {
-      verifyTriedFor = currentThread;
-      setStatus('auto-verifying...');
-      try {
-        await api(`/threads/${encodeURIComponent(currentThread)}/verify`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ threshold: 0.7 })
-        });
-      } catch (_) {}
-      return loadGraph();
-    }
 
     const metrics = await api(`/threads/${encodeURIComponent(currentThread)}/metrics`).catch(() => null);
     if (metrics?.ok) showMetrics(metrics.data);
@@ -1213,6 +1195,7 @@ async function loadGraph() {
 
 function renderEmptyGraph(message) {
   lastGraph = null;
+  currentSnapshot = null;
   stageModel = null;
   selectedNodeId = null;
   $('stage').style.width = '720px';
@@ -1229,17 +1212,22 @@ function renderEmptyGraph(message) {
 
 async function loadAuditRuns() {
   if (!currentThread) return;
-  const response = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`).catch(() => null);
+  const response = await api(`/audits?threadId=${encodeURIComponent(currentThread)}`).catch(() => null);
   if (response?.ok) showAuditRun(response.data.latest);
 }
 
 async function runAuditNow() {
   if (!currentThread) return;
   setStatus('auditing...');
-  const response = await api(`/threads/${encodeURIComponent(currentThread)}/audit-runs`, {
+  if (!currentSnapshot?.digest) {
+    setStatus('audit unavailable: no committed snapshot');
+    return;
+  }
+  const response = await api(`/audits`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ trigger: 'manual', threshold: 0.7 })
+    body: JSON.stringify({ threadId: currentThread, targetDigest: currentSnapshot.digest,
+      level: 'L0', trigger: 'manual', threshold: 0.7 })
   }).catch((error) => ({ ok: false, error: { message: error.message } }));
   if (!response.ok) {
     setStatus(`audit failed: ${response.error?.message || ''}`);
@@ -1265,7 +1253,7 @@ async function whatIf(nodeId) {
   blastState = {
     source: nodeId,
     invalidated: new Set((result.invalidated || []).map((item) => item.id)),
-    weakened: new Set([...(result.weakened || []), ...(result.now_conflicting || [])].map((item) => item.id))
+    weakened: new Set([...(result.weakened || []), ...(result.now_conflicted || [])].map((item) => item.id))
   };
   selectedNodeId = nodeId;
   applyGraphState();
@@ -1282,8 +1270,8 @@ function showReconcile(nodeId, result) {
     <div class="detail-actions"><button id="detailClear">Clear</button></div>`;
   (result.invalidated || []).forEach((item) => { html += itemHtml(item, 'danger'); });
   (result.weakened || []).forEach((item) => { html += itemHtml(item, 'warn'); });
-  (result.now_conflicting || []).forEach((item) => { html += itemHtml(item, 'warn'); });
-  if (!(result.invalidated || []).length && !(result.weakened || []).length && !(result.now_conflicting || []).length) {
+  (result.now_conflicted || []).forEach((item) => { html += itemHtml(item, 'warn'); });
+  if (!(result.invalidated || []).length && !(result.weakened || []).length && !(result.now_conflicted || []).length) {
     html += '<div class="empty" style="min-height:70px;padding:8px">No downstream conclusion depends on this node.</div>';
   }
   $('nodeInspector').innerHTML = html;
@@ -1326,24 +1314,12 @@ async function pollChanges() {
 $('thread').onchange = (event) => {
   currentThread = event.target.value;
   selectedNodeId = null;
-  verifyTriedFor = null;
   renderedSig = null;
   markUpdated(false);
   setSubtitle(currentThread || 'All threads');
   loadGraph();
 };
 $('refresh').onclick = loadGraph;
-$('verify').onclick = async () => {
-  if (!currentThread) return;
-  setStatus('verifying...');
-  const response = await api(`/threads/${encodeURIComponent(currentThread)}/verify`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ threshold: 0.7 })
-  }).catch((error) => ({ ok: false, error: { message: error.message } }));
-  setStatus(response.ok ? `verified: ${response.data.status_changes.length} status changes` : 'verify failed');
-  loadGraph();
-};
 $('auditNow').onclick = runAuditNow;
 $('fit').onclick = fitGraph;
 $('auto').onchange = (event) => {

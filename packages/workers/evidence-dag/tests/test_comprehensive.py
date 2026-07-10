@@ -57,15 +57,15 @@ class StrongLLM:
 # MUST collapse to one shared node. The `ghost` edge is dangling — it MUST drop.
 PARSED = {
     "nodes": [
-        {"tmp_id": "s_key", "type": "source", "trace_ref": "step-3",
+        {"tmp_id": "s_key", "type": "source_assertion", "trace_ref": "step-3",
          "content": "Keystone RCT (TRIAL-2020): intensive lipid lowering cut major cardiac events.",
          "ref": {"doi": "10.1000/trial2020"}},
-        {"tmp_id": "s_key_dup", "type": "source", "trace_ref": "step-11",
+        {"tmp_id": "s_key_dup", "type": "source_assertion", "trace_ref": "step-11",
          "content": "Keystone RCT (TRIAL-2020): intensive lipid lowering cut major cardiac events."},
-        {"tmp_id": "s_coh1", "type": "source", "content": "Cohort study A links statin use to fewer events.", "trace_ref": "step-5"},
-        {"tmp_id": "s_coh2", "type": "source", "content": "Cohort study B independently links statin use to fewer events.", "trace_ref": "step-6"},
-        {"tmp_id": "s_obs", "type": "source", "content": "A single observational study suggests a niche benefit.", "trace_ref": "step-7"},
-        {"tmp_id": "s_counter", "type": "source", "content": "A later study found no such niche benefit.", "trace_ref": "step-9"},
+        {"tmp_id": "s_coh1", "type": "source_assertion", "content": "Cohort study A links statin use to fewer events.", "trace_ref": "step-5"},
+        {"tmp_id": "s_coh2", "type": "source_assertion", "content": "Cohort study B independently links statin use to fewer events.", "trace_ref": "step-6"},
+        {"tmp_id": "s_obs", "type": "source_assertion", "content": "A single observational study suggests a niche benefit.", "trace_ref": "step-7"},
+        {"tmp_id": "s_counter", "type": "source_assertion", "content": "A later study found no such niche benefit.", "trace_ref": "step-9"},
         {"tmp_id": "r_a", "type": "reasoning", "content": "Angle A: the trial effect is dose-responsive.", "trace_ref": "step-12"},
         {"tmp_id": "r_b", "type": "reasoning", "content": "Angle B: the trial effect survives covariate adjustment.", "trace_ref": "step-13"},
         {"tmp_id": "c_pseudo", "type": "claim", "content": "Intensive lipid lowering reduces cardiac events.", "trace_ref": "step-14"},
@@ -106,10 +106,10 @@ class TestComprehensiveEndToEnd(unittest.TestCase):
                 if n.type == ntype and needle in n.content:
                     return n.id
             raise AssertionError(f"node not found: {ntype} ~ {needle}")
-        cls.S_key = nid(NodeType.SOURCE, "Keystone RCT")
-        cls.S_coh1 = nid(NodeType.SOURCE, "Cohort study A")
-        cls.S_obs = nid(NodeType.SOURCE, "single observational")
-        cls.S_counter = nid(NodeType.SOURCE, "no such niche")
+        cls.S_key = nid(NodeType.SOURCE_ASSERTION, "Keystone RCT")
+        cls.S_coh1 = nid(NodeType.SOURCE_ASSERTION, "Cohort study A")
+        cls.S_obs = nid(NodeType.SOURCE_ASSERTION, "single observational")
+        cls.S_counter = nid(NodeType.SOURCE_ASSERTION, "no such niche")
         cls.C_pseudo = nid(NodeType.CLAIM, "Intensive lipid")
         cls.C_single = nid(NodeType.CLAIM, "specific LDL target")
         cls.C_robust = nid(NodeType.CLAIM, "Statin use is associated")
@@ -122,7 +122,7 @@ class TestComprehensiveEndToEnd(unittest.TestCase):
     def test_extractor_shared_node_dedup(self):
         # s_key + s_key_dup share content -> ONE shared node (DAG, not tree).
         # 6 source payload entries, 2 of which are identical -> 5 unique sources.
-        self.assertEqual(len(self.g.nodes_of(NodeType.SOURCE)), 5)
+        self.assertEqual(len(self.g.nodes_of(NodeType.SOURCE_ASSERTION)), 5)
         self.assertEqual(len(self.g.nodes), 12)  # 5 src + 2 reasoning + 5 claim
 
     def test_extractor_dangling_edge_dropped(self):
@@ -144,9 +144,9 @@ class TestComprehensiveEndToEnd(unittest.TestCase):
         for c in (self.C_pseudo, self.C_single, self.C_robust):
             self.assertEqual(st[c], NodeStatus.SUPPORTED, c)
         # supported AND credibly contradicted -> conflicting (contested), not plain supported
-        self.assertEqual(st[self.C_contested], NodeStatus.CONFLICTING)
+        self.assertEqual(st[self.C_contested], NodeStatus.CONFLICTED)
         # no incoming supports edge -> never scored -> stays unverified
-        self.assertEqual(st[self.C_ungrounded], NodeStatus.UNVERIFIED)
+        self.assertEqual(st[self.C_ungrounded], NodeStatus.UNDETERMINED)
 
     def test_every_supports_edge_scored(self):
         for e in self.g.edges_of(EdgeRel.SUPPORTS):
@@ -227,15 +227,15 @@ class TestComprehensiveEndToEnd(unittest.TestCase):
     # --- 6. provenance -----------------------------------------------------
     def test_provenance_pseudo_reaches_keystone(self):
         p = self.g.provenance_path(self.C_pseudo)
-        self.assertTrue(p["reaches_source"])
-        self.assertIn(self.S_key, p["source_leaves"])
+        self.assertTrue(p["sourceAssertionLeaves"])
+        self.assertIn(self.S_key, p["sourceAssertionLeaves"])
         # the subtree is exactly s_key, r_a, r_b, c_pseudo
         self.assertEqual(set(n["id"] for n in p["nodes"]),
                          {self.S_key, self.C_pseudo} | {n.id for n in self.g.nodes.values()
                           if n.type == NodeType.REASONING})
 
     def test_ungrounded_has_no_source(self):
-        self.assertFalse(self.g.provenance_path(self.C_ungrounded)["reaches_source"])
+        self.assertFalse(self.g.provenance_path(self.C_ungrounded)["sourceAssertionLeaves"])
 
     # --- 7. PROV-JSON lossless round-trip ----------------------------------
     def test_provjson_roundtrip(self):

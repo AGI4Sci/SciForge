@@ -24,13 +24,13 @@ export function projectDagApiKeyFromEnv(env: Record<string, string | undefined>)
 
 /**
  * Browser deep link into the bundled project-dag web UI.
- * `view` picks the pane (home | goals | graph | compile);
+ * `view` picks the pane (home | goals | graph | updates);
  * `embed` asks the UI to use compact chrome for an app-side panel.
  */
 export function projectDagUiUrl(input: {
   serviceUrl?: string
   apiKey?: string | null
-  view?: 'home' | 'goals' | 'graph' | 'compile'
+  view?: 'home' | 'goals' | 'graph' | 'updates'
   embed?: boolean
   workspaceRoot?: string | null
   projectRoot?: string | null

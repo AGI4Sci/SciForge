@@ -1,160 +1,264 @@
 # @sciforge/evidence-dag
 
-Standalone, dependency-light **Python** service (`packages/workers/evidence-dag`) that
-turns an agent trace into a typed **claim–evidence DAG**, verifies its `supports` edges
-with an NLI judge, and serialises losslessly to **PROV-JSON**. It is the engine half of the
-"living evidence DAG" — the embedded Workbench view, sidecar launcher, and trace-feed contract live in this
-package's `desktop/` modules and are called from the SciForge desktop app.
+Thread-scoped Evidence DAG compiler for SciForge. The worker consumes visible runtime trace deltas through one update command, links SourceAssertions to structured SourceAnchors and versioned Artifacts, executes A0-A2 review, and commits immutable Evidence Snapshots. Audit is a read-only side chain over a selected committed snapshot.
 
-The service returns structured **`ServiceResult`** evidence only (graph, provenance,
-metrics, audit findings) — never a user-level final answer or completion truth.
+The package follows `docs/evidence-project-dag-design.zh-CN.md`. There is no direct ingest, verify, inline-audit, or mutable PROV import route.
 
-> **Scope (phase 1):** one **thread == one graph**. Status is limited to
-> `supported / unverified / conflicting`; `contradicts` edges are extracted, scored
-> when a verifier is available, and exposed. `fragile`, load-bearing, weak support,
-> hidden shared-source, and audit findings are computed as read-only views; Reconcile-write,
-> source retraction feeds, and ATMS labels remain phase 2+.
+## Core contracts
 
-## Layout
+- Semantic nodes use domain-separated normalized semantic IDs. Artifact bytes use separate `sha256:` content digests.
+- The canonical source node type is `source_assertion`.
+- A SourceAssertion PROV entity links through `edag:artifact_id`, `edag:artifact_version_id`, and `edag:source_anchor_id`.
+- `edag:artifactRegistry` contains exactly `artifacts`, `artifactVersions`, and `sourceAnchors`.
+- SourceAnchor selectors are structured (`pdf|text|table|figure|code|dataset|web`) and carry a digest of the selected content.
+- The compiler accepts native Runtime `kind/toolName/callId/output` items and the desktop canonical `type/tool_name/content/source_refs` shape. It pairs calls and results, decodes canonical JSON result envelopes, prefers a unique structured file/URL/DOI locator, and derives bounded exact selectors only from source-reading results.
+- A canonical tool result without a unique external locator can be retained as a `runtime:` log Artifact, but provenance resolution keeps it at `L0` with an `external_artifact_not_identified` breakpoint. Chat/agent summaries alone are never promoted into scientific Artifacts.
+- Same-path byte changes append an ArtifactVersion. A moved file is rebound only when the old locator is missing and its digest has exactly one candidate inside the configured Project scope.
+- A0, A1, and A2 assessments are append-only records bound to the committed snapshot digest. A1/A2 use prompts and context independent from extraction.
+- ExperimentRun, AnalysisRun, DatasetVersion, SoftwareVersion, Environment, Observation, Artifact, and Agent are first-class source-layer objects. PROV export maps runs to `activity`, actors to `agent`, and other records to `entity`; `used`, `wasGeneratedBy`, `wasDerivedFrom`, `wasAssociatedWith`, and `wasAttributedTo` retain their native PROV-JSON forms.
+- Lineage edges have explicit families. Causal provenance and version relations are cycle-checked; contradiction, identity, and replication relations may cycle by design.
+- A Finding is promoted to `L4` only when every linked run has a stable visible run record, verifiable input, exact software, an explicit parameter map, a verifiable environment, and verifiable log/output ArtifactVersions. Stochastic runs additionally require an explicit random seed. Missing metadata becomes a named provenance breakpoint and is never inferred from prose.
+- `EvidenceUpdateQueued`, `EvidenceSnapshotCommitted`, `ArtifactMoved`, `ArtifactContentChanged`, `AuditCompleted`, and `FindingOpened` form one durable idempotent event outbox. Events are fsynced before they are returned to callers/readers; they observe the shared compiler and audit side chain and never write a graph.
 
-| Concern | File |
-|---|---|
-| Data contract (Node/Edge/enums, content-addressed ids, dedup key) | `src/evidence_dag/model.py` |
-| Thread graph: dedup, cycle detection, provenance traversal, topo layers | `src/evidence_dag/graph.py` |
-| PROV-JSON serialize/deserialize (lossless round-trip) | `src/evidence_dag/provjson.py` |
-| Model Router client (+ offline stub) | `src/evidence_dag/llm.py` |
-| Trace → DAG extractor (LLM structured output) | `src/evidence_dag/extractor.py` |
-| L2 verifier: NLI ν per supports edge, noisy-OR status | `src/evidence_dag/verifier.py` |
-| Four AAR metrics | `src/evidence_dag/metrics.py` |
-| Load-bearing / fragility / hidden shared-source (dominator analysis) | `src/evidence_dag/analysis.py` |
-| Reconcile / what-if 扰动 (deterministic, read-only) | `src/evidence_dag/reconcile.py` |
-| Evidence Audit Runs (deterministic adversarial findings + risk digest) | `src/evidence_dag/audit.py` |
-| Engine facade + per-thread persistence | `src/evidence_dag/service.py` |
-| HTTP service (`ServiceResult`) | `src/evidence_dag/server.py` |
-| Bundled Workbench UI (graph view, served at `/`) | `ui/index.html` |
-| Desktop contract/sidecar modules | `desktop/*.ts` |
-| Demo multi-turn traces for acceptance | `samples/*.json`, `samples/load.py` |
+## Structured run lineage
 
-## Run
+Visible `tool_result` / `function_result` / `tool_output` items can declare a canonical `evidenceLineage` envelope. This deterministic contract is processed independently of semantic LLM extraction:
 
-As an npm workspace (installs the Python package editable, then serves on :3897):
+```json
+{
+  "evidenceLineage": {
+    "activity": {
+      "id": "analysis-run-42",
+      "type": "analysis_run",
+      "name": "Primary analysis",
+      "status": "completed",
+      "parameters": {"alpha": 0.05},
+      "stochastic": true,
+      "randomSeed": 734
+    },
+    "inputs": [{
+      "id": "dataset:measurements:v2",
+      "type": "dataset_version",
+      "name": "Measurements v2",
+      "artifact": {
+        "kind": "dataset",
+        "locator": "data/measurements-v2.csv",
+        "contentDigest": "sha256:<64 hex>"
+      }
+    }],
+    "software": [{
+      "id": "software:analysis-package",
+      "name": "analysis-package",
+      "version": "3.4.1",
+      "commit": "15b34a2c46bd9f78"
+    }],
+    "environment": {
+      "id": "environment:container",
+      "name": "OCI environment",
+      "containerDigest": "sha256:<64 hex>"
+    },
+    "logs": [{
+      "id": "artifact:run-log",
+      "name": "run log",
+      "artifact": {"kind": "log", "locator": "logs/run-42.log", "contentDigest": "sha256:<64 hex>"}
+    }],
+    "outputs": [{
+      "id": "artifact:result-table",
+      "type": "artifact",
+      "name": "result table",
+      "artifact": {"kind": "dataset", "locator": "results/table.csv", "contentDigest": "sha256:<64 hex>"}
+    }],
+    "agents": [{"id": "agent:stats-worker", "name": "Statistics worker", "agentType": "software_agent"}],
+    "relations": [
+      {"src": "finding:<semantic id>", "dst": "analysis-run-42", "rel": "generated_by"}
+    ]
+  }
+}
+```
+
+Every object requires an explicit stable `id`. Inputs require an explicit `type`; section semantics supply fixed types only for software, environment, logs, outputs, and agents. Optional `relations` may declare `extracted_from`, `used`, `generated_by`, `derived_from`, `associated_with`, `attributed_to`, `version_of`, `supersedes`, `replicates`, `fails_to_replicate`, `same_as`, or `invalidates` using envelope IDs or existing graph node IDs. Unknown, ambiguous, dangling, cyclic causal, and unstructured relations are dropped rather than guessed.
+
+Every committed PROV document contains `edag:meta.snapshot`:
+
+```json
+{
+  "threadId": "runtime-qualified thread id",
+  "version": 1,
+  "digest": "sha256:...",
+  "inputWatermark": "runtime item id",
+  "schemaVersion": "evidence.v2",
+  "extractorVersion": "extractor.v2",
+  "verifierVersion": "verifier.v2",
+  "artifactDigests": [],
+  "createdAt": "timestamp",
+  "status": "committed"
+}
+```
+
+Latest files use the shared collision-resistant filename contract exported by `evidence_dag.snapshot.snapshot_filename(thread_id)`. Historical versions are stored under `snapshots/<snapshot_storage_key(thread_id)>/` and never rewritten.
+
+## RO-Crate exchange
+
+`evidence_dag.rocrate` exports one exact committed Evidence Snapshot as a
+reference-first RO-Crate. The metadata represents Evidence nodes, the Artifact
+Registry, ArtifactVersions, structured SourceAnchors, assessments, and
+ExperimentRun/AnalysisRun lineage. Runs are W3C PROV Activities, actors are
+Agents, other scientific records are Entities, and `used`, `wasGeneratedBy`,
+`wasDerivedFrom`, `wasAssociatedWith`, `wasAttributedTo`, and general influence
+relations remain explicit in JSON-LD.
+
+```python
+from evidence_dag import read_ro_crate, write_ro_crate
+
+metadata = write_ro_crate("archive/run-42", graph, committed_snapshot)
+restored = read_ro_crate(
+    metadata.parent,
+    expected_snapshot_digest=committed_snapshot.digest,
+)
+```
+
+Export never copies referenced paper, dataset, code, log, model, or environment
+bytes. Import accepts only `sciforge-ro-crate.v1`, reconstructs the canonical
+ThreadGraph, validates every Registry and PROV reference, and recomputes the
+Evidence Snapshot digest. It therefore cannot act as a mutable or legacy ingest
+bypass. Re-export to an existing crate is idempotent only when its metadata is
+byte-identical; a different snapshot cannot overwrite it.
+
+## DataCite metadata exchange
+
+`evidence_dag.datacite` generates canonical DataCite REST metadata for either a
+Project or one exact ArtifactVersion. Mandatory discovery fields (title,
+creator, publisher, publication year, and DOI) must be explicit; only an exact
+DOI/SWHID locator may supply the corresponding identifier. Artifact kind maps
+deterministically to DataCite `resourceTypeGeneral`.
+
+ArtifactVersion exports carry the same `urn:sciforge:ro-crate:*` identity used
+by RO-Crate PROV Entities, the Artifact content digest when known, and explicit
+Project/version relations. Full SWHIDs and full 40/64-hex Git commits are
+accepted; a Git commit also requires its repository URL. Related identifiers
+are restricted to validated DOI, HTTP(S) URL, or URN values. The export contains
+metadata references only and never reads or copies Artifact bytes.
+
+```python
+from evidence_dag import datacite_digest, export_datacite, import_datacite
+
+metadata = export_datacite(
+    resource, project, artifact=artifact, artifact_version=artifact_version,
+)
+digest = datacite_digest(metadata)  # retain with the immutable archive record
+verified = import_datacite(
+    metadata,
+    expected_metadata_digest=digest,
+    resource=resource,
+    project=project,
+    artifact=artifact,
+    artifact_version=artifact_version,
+)
+```
+
+Import accepts only the canonical `sciforge-datacite.v1` projection, validates
+the detached SHA-256 digest plus authoritative Project/ArtifactVersion
+identities, and rejects unknown fields, invalid identifiers, invented content
+digests, or relation mismatches. It does not create or mutate a DAG.
+
+## HTTP API
+
+All JSON routes except `/health` require `Authorization: Bearer $SCIFORGE_EVIDENCE_DAG_API_KEY`.
+
+```text
+GET  /health
+GET  /version
+GET  /threads
+GET  /threads/{id}/graph                  # latest committed graph + snapshot
+GET  /threads/{id}/snapshot
+GET  /threads/{id}/provenance?node=<id>
+GET  /threads/{id}/metrics
+GET  /threads/{id}/analysis?threshold=0.7
+POST /threads/{id}/reconcile              # read-only what-if
+GET  /threads/{id}/prov-json              # committed snapshot export only
+GET  /events?threadId=<id>&type=<type>&afterSequence=<n>&limit=<n>
+
+POST /updates
+GET  /updates/status?threadId=<id>
+
+POST /artifacts
+POST /artifacts/resolve
+POST /artifacts/events/ack
+POST /artifacts/{id}/resolve
+POST /artifacts/{id}/confirm-rebind
+
+POST /audits
+GET  /audits?threadId=<id>
+```
+
+Canonical update body:
+
+```json
+{
+  "threadId": "sciforge:thread-id",
+  "targetWatermark": "item-id",
+  "reason": "turn_committed",
+  "priority": "P2",
+  "workspaceRoot": "/workspace",
+  "projectRoot": "/workspace/project-scope",
+  "projectKey": "stable-project-id",
+  "trace": [],
+  "accessPolicy": {},
+  "queuedAt": "2026-07-10T00:00:00Z",
+  "idempotencyKey": "durable-queue-job-id",
+  "correlationId": "runtime-turn-or-job-id"
+}
+```
+
+The three scheduling fields are optional transport metadata. When supplied, they preserve end-to-end queue time, delivery identity, and correlation. An identical canonical input digest is returned from the latest committed snapshot without another model call or duplicate queue/snapshot event. Artifact/decision changes use a different reason or effective payload and compile normally.
+
+`rebuild` is an advanced operation only. It requires `rebuild: true`, a reason of `schema_upgrade`, `corruption_recovery`, or `reinterpretation`, and a non-empty `rebuildRationale`.
+
+Canonical Evidence audit body:
+
+```json
+{
+  "threadId": "sciforge:thread-id",
+  "targetDigest": "sha256:immutable-snapshot",
+  "level": "L0",
+  "trigger": "manual",
+  "threshold": 0.7
+}
+```
+
+The Evidence worker currently implements deterministic `L0` structural AuditRuns. A run reads the specified immutable historical snapshot, persists `target_digest`, never writes the DAG, and becomes `stale` when a newer snapshot commits.
+
+## Domain events and metrics
+
+With `EDAG_STORAGE_DIR`, the append-only stream is stored at
+`events/evidence-domain-events.json`. `GET /events` reloads persisted state and
+supports sequence polling. Artifact scan events retain the Registry `eventId`;
+acknowledgement removes only the pending Registry inbox record, never history.
+
+`GET /threads/{id}/metrics` also returns `queue_latency_ms`,
+`commit_latency_ms`, `audit_staleness`, `provenance_break_rate`, and
+`reproducible_finding_rate`. `metric_evidence` reports sample counts or exact
+numerator/denominator. A value is `null` with an explicit reason when timestamps,
+snapshot history, provenance, or explicit run links are absent; missing facts are
+never inferred from prose.
+
+## Run and test
 
 ```bash
 export SCIFORGE_EVIDENCE_DAG_API_KEY=dev-token
 export EDAG_MODEL_ROUTER_BASE_URL=http://127.0.0.1:3892/v1
 export EDAG_MODEL_ROUTER_API_KEY=local-router-key
 export EDAG_MODEL_ROUTER_MODEL=sciforge-router
+export EDAG_STORAGE_DIR=/path/to/evidence-store
 npm --workspace @sciforge/evidence-dag run start
+
+npm --workspace @sciforge/evidence-dag test
 ```
 
-The desktop app normally starts this sidecar automatically from
-`desktop/sidecar.ts`, using the app's local Model Router settings. Direct runs are
-for diagnostics:
-
-```powershell
-cd packages/workers/evidence-dag
-python -m pip install -r requirements.txt    # networkx (stdlib otherwise)
-$env:PYTHONPATH = 'src'; $env:PYTHONUTF8 = '1'
-$env:EDAG_STORAGE_DIR = '.\out\threads'      # optional PROV-JSON persistence
-$env:EDAG_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
-$env:EDAG_MODEL_ROUTER_API_KEY  = 'local-router-key'
-$env:EDAG_MODEL_ROUTER_MODEL    = 'sciforge-router'
-$env:SCIFORGE_EVIDENCE_DAG_API_KEY = 'dev-token'
-python -m evidence_dag.server                # http://127.0.0.1:3897
-```
-
-Load the sample traces into a running engine for diagnostics, then open
-`http://127.0.0.1:3897/#token=dev-token` or use the Workbench right-panel item:
+The sample loader also uses `/updates`:
 
 ```bash
 SCIFORGE_EVIDENCE_DAG_API_KEY=dev-token python samples/load.py
-# or EDAG_URL=http://127.0.0.1:3897 SCIFORGE_EVIDENCE_DAG_API_KEY=dev-token python samples/load.py
 ```
 
-## HTTP API (ServiceResult)
-
-```text
-GET  /health
-GET  /version
-GET  /                                                 # bundled web UI
-POST /threads/{id}/ingest-trace   {"trace":[ {id,type,role?,tool_name?,content} ... ], "rebuild?":bool, "verify?":bool}
-GET  /threads/{id}/graph
-POST /threads/{id}/verify         {"threshold":0.7}
-GET  /threads/{id}/provenance?node=<nodeId>
-GET  /threads/{id}/metrics
-GET  /threads/{id}/analysis?threshold=0.7              # load-bearing / fragility / hidden shared-source
-GET  /threads/{id}/audit-runs                          # latest + persisted audit runs
-POST /threads/{id}/audit-runs      {"trigger":"manual","threshold":0.7,"verify?":bool}
-POST /threads/{id}/reconcile      {"remove_nodes":[...],"remove_edges":[...],"add_contradicts":[...]}
-GET  /threads/{id}/prov-json                           # export
-POST /threads/{id}/prov-json      {"doc":{...}}        # import / reload
-GET  /threads                                          # list known thread ids
-```
-
-All JSON APIs except `/health` and the bundled UI require
-`Authorization: Bearer $SCIFORGE_EVIDENCE_DAG_API_KEY`. If the service starts
-without a configured API key, JSON APIs return `UNAVAILABLE` instead of running
-open on localhost.
-
-The bundled UI reads the token from the URL hash fragment, removes it from the
-address bar, and then sends JSON API requests with the same bearer token. The
-desktop Workbench right-panel item fills this in automatically from the main-process env.
-
-`/analysis` (read-only, no LLM) reports **load-bearing** nodes (dominators ≥2 conclusions
-depend on), **fragile** conclusions (ungrounded / single-source / contested), and
-**hidden shared-source** claims (look multi-supported but every path funnels through one
-source). `/reconcile` is a deterministic **what-if** — simulate removing sources/edges (or
-adding a contradiction) and get the blast radius (which conclusions collapse / weaken /
-turn conflicting); it never mutates the graph. `/audit-runs` converts the current graph and
-analysis view into adversarial findings such as ungrounded claims, unresolved contradictions,
-weak support, single-source dependencies, hidden shared-source, load-bearing evidence, and
-low-credibility sources. Audit runs are persisted next to the thread graph as `.audit.json`,
-carry a stable `dag_digest`, and do not mutate the DAG. `ingest-trace` grows the thread's
-graph incrementally across turns by default; `rebuild:true` explicitly replaces the graph
-from a whole-conversation trace. Ingest runs a lightweight advisory audit by default
-(`EDAG_AUTO_AUDIT=1`) and deduplicates auto-runs for unchanged DAG digests.
-
-## Config (env)
-
-| Var | Default | Meaning |
-|---|---|---|
-| `EDAG_MODEL_ROUTER_BASE_URL` | — | local Model Router base URL (enables extraction/verify; omit for offline) |
-| `EDAG_MODEL_ROUTER_API_KEY` | — | Model Router runtime bearer key |
-| `EDAG_MODEL_ROUTER_MODEL` | `sciforge-router` | public Model Router alias |
-| `EDAG_AUTO_VERIFY` | `1` | auto-verify supports edges right after ingest |
-| `EDAG_AUTO_AUDIT` | `1` | run a quick advisory audit after ingest; duplicate DAG digests reuse the latest auto run |
-| `EDAG_STORAGE_DIR` | — | if set, each thread's DAG is persisted as PROV-JSON |
-| `EDAG_HOST` / `EDAG_PORT` | `127.0.0.1` / `3897` | HTTP bind |
-| `SCIFORGE_EVIDENCE_DAG_API_KEY` | — | required bearer token for JSON APIs/feed |
-| `SCIFORGE_EVIDENCE_DAG_MAX_BODY_BYTES` | `1048576` | max JSON body size for fixed and chunked requests |
-
-Retry/backoff over a slow/flaky model lives in the module (`llm.py`: `max_attempts=5`,
-exp backoff), not in the host.
-
-## App integration seam (SciForge desktop → engine)
-
-Real-time feed: the GUI's unified `AgentRuntimeHost` reads each completed turn's neutral
-items and POSTs them to `/threads/{runtimeId}:{threadId}/ingest-trace`. SciForge Runtime,
-Codex, and the Claude Code CLI all flow through the same public `AgentRuntime` contract, so
-they enter one Evidence-DAG seam. Touch points in the app:
-
-| Piece | Location |
-|---|---|
-| Embedded view + sidecar modules | `packages/workers/evidence-dag/desktop/*.ts` |
-| Mapping + feed (pure mapping + fail-open client) | `src/main/runtime/evidence-dag-feed.ts` |
-| Call site (completed turn, fire-and-forget) | `src/main/runtime/agent-runtime/host.ts` |
-| Resolve UI view | `evidenceDag:view` IPC + Workbench right-panel Evidence DAG item |
-| Rebuild current thread DAG | `evidenceDag:update` IPC + Workbench Evidence DAG update button |
-
-GUI main-process env. In normal app runs `desktop/sidecar.ts` fills these from the
-managed sidecar config; manual env remains useful for diagnostics:
-
-| Var | Default | Meaning |
-|---|---|---|
-| `SCIFORGE_EVIDENCE_DAG_SERVICE_URL` | `http://127.0.0.1:3897` | engine base URL |
-| `SCIFORGE_EVIDENCE_DAG_API_KEY` | generated | required Bearer for app feed/view |
-| `SCIFORGE_EVIDENCE_DAG_TIMEOUT_MS` | `600000` | per-feed timeout (fire-and-forget) |
-
-`trace_ref` reuses the neutral `AgentRuntimeItem.id` (stable, persistent); when the LLM does
-not echo it verbatim, the extractor (`extractor.resolve_trace_refs`) deterministically
-re-anchors to the real item id by content overlap.
+`desktop/sidecar.ts` starts the Python worker using the local Model Router. Reads during extraction/review continue to return the prior committed graph; failed updates remain visible through `/updates/status` and never expose a partial snapshot.

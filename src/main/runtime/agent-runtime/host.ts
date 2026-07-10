@@ -64,9 +64,10 @@ import type {
 import { RuntimeGovernanceSupervisor, runtimeGuardSettings } from './governance'
 import {
   completedTurnItems,
-  feedEvidenceDag,
+  enqueueEvidenceDagUpdate,
   isEvidenceDagAutoFeedEnabled
 } from '../evidence-dag-feed'
+import { evidenceDagThreadId } from '../../../../packages/workers/evidence-dag/desktop/contract'
 import { AgentRuntimeContextCompactor } from './context-compactor'
 import type { LspCodeNavigationService } from '../../services/lsp-code-navigation-service'
 import type { ModelRequestAuditRecorder } from '../../services/model-request-audit-service'
@@ -139,7 +140,6 @@ export class AgentRuntimeHost {
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
   private readonly turnWorkspaces = new Map<string, string>()
   private readonly postTurnCheckpoints = new Set<string>()
-  private readonly evidenceDagFedTurns = new Set<string>()
   private readonly governance = new RuntimeGovernanceSupervisor()
 
   constructor(private readonly options: AgentRuntimeHostOptions) {
@@ -294,7 +294,7 @@ export class AgentRuntimeHost {
         interruptTurn: (payload) => this.interruptTurn(payload),
         publishSyntheticEvent: (payload) => this.publishSyntheticEvent(adapter, context, payload)
       })
-      this.feedEvidenceDagForCompletedTurn(adapter, context, event)
+      this.enqueueEvidenceDagForCompletedTurn(adapter, context, event)
       yield event
     }
   }
@@ -1743,7 +1743,7 @@ export class AgentRuntimeHost {
     return this.turnGovernanceProfiles.get(turnGovernanceKey(runtimeId, threadId, turnId))
   }
 
-  private feedEvidenceDagForCompletedTurn(
+  private enqueueEvidenceDagForCompletedTurn(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
     event: AgentRuntimeEvent
@@ -1754,23 +1754,39 @@ export class AgentRuntimeHost {
     const turnId = event.turnId?.trim()
     if (!threadId || !turnId) return
 
-    const key = turnGovernanceKey(adapter.id, threadId, turnId)
-    if (this.evidenceDagFedTurns.has(key)) return
-    this.evidenceDagFedTurns.add(key)
-
     void (async () => {
       try {
         const detail = await adapter.readThread(context, {
           runtimeId: adapter.id,
           threadId
         })
-        await feedEvidenceDag({
+        const workspace = detail.workspace?.trim()
+        const includedSessions = workspace
+          ? await this.listThreads({
+              limit: 1_000,
+              includeArchived: false,
+              includeSide: true
+            }).then((threads) => threads
+              .filter((thread) => thread.workspace?.trim() === workspace)
+              .map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id))
+            ).catch(() => undefined)
+          : undefined
+        await enqueueEvidenceDagUpdate({
           runtimeId: adapter.id,
           threadId,
-          items: completedTurnItems(detail, turnId)
+          items: completedTurnItems(detail, turnId),
+          targetWatermark: event.seq === undefined ? turnId : String(event.seq),
+          reason: 'turn_committed',
+          priority: 'background',
+          projectContext: workspace ? {
+            projectKey: workspace,
+            workspaceRoot: workspace,
+            projectRoot: workspace,
+            includedSessions
+          } : undefined
         })
       } catch {
-        // fail-open: Evidence-DAG is an observability side channel.
+        // Queueing is fail-open for the foreground turn; the durable queue owns retry/recovery.
       }
     })()
   }

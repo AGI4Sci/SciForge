@@ -110,6 +110,14 @@ class StubLLM:
             premise, hypothesis = _split_nli_user(user)
             score = float(self.nli_handler(premise, hypothesis))
             return json.dumps({"entailment": score, "label": "entailment" if score >= 0.5 else "neutral"})
+        if "EDAG-TASK: adversarial" in system:
+            claim = user.split("\n", 1)[0].removeprefix("CLAIM:").strip()
+            score = float(self.nli_handler(user, claim))
+            return json.dumps({
+                "result": "passed" if score >= 0.7 else ("failed" if score <= 0.3 else "uncertain"),
+                "confidence": score if score >= 0.5 else 1.0 - score,
+                "rationale": "Deterministic independent test reviewer result.",
+            })
         return self.extract_response
 
 

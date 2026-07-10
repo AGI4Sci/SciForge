@@ -45,7 +45,7 @@ def graph_digest(graph: ThreadGraph) -> str:
     import json
 
     payload = json.dumps(graph.to_dict(), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
 
 def finding_fingerprint(thread_id: str, dag_digest: str, target_id: str, finding_type: str) -> str:
@@ -64,8 +64,7 @@ def _node_payload(graph: ThreadGraph, node_id: str) -> dict:
         "type": node.type.value,
         "content": _brief(node.content),
         "status": node.status.value,
-        "trace_ref": node.trace_ref,
-        "ref": node.ref if node.type == NodeType.SOURCE else None,
+        "trace_refs": list(node.trace_refs),
     }
 
 
@@ -104,6 +103,8 @@ def run_audit(
     trigger: str = "manual",
     run_id: Optional[str] = None,
     started_at: Optional[str] = None,
+    target_digest: Optional[str] = None,
+    level: str = "L0",
 ) -> dict:
     """Run a deterministic adversarial review over the current DAG.
 
@@ -113,10 +114,12 @@ def run_audit(
     low-credibility sources. It never mutates the graph.
     """
     trigger = _normalize(trigger, VALID_TRIGGERS, "manual")
+    if level != "L0":
+        raise ValueError("Evidence worker currently supports only L0 structural AuditRun")
     run_id = run_id or f"audit:{uuid.uuid4().hex[:12]}"
     started = started_at or _now_iso()
     analysis = _analysis.analyze(graph, threshold=threshold)
-    dag_digest = graph_digest(graph)
+    dag_digest = target_digest or graph_digest(graph)
 
     findings: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -231,27 +234,27 @@ def run_audit(
         )
 
     for node in graph.nodes.values():
-        if node.type == NodeType.CLAIM and node.status == NodeStatus.CONFLICTING:
+        if node.type == NodeType.CLAIM and node.status == NodeStatus.CONFLICTED:
             add(
                 node.id,
-                "conflicting_status",
+                "conflicted_status",
                 "blocker",
-                "Claim marked conflicting",
+                "Claim marked conflicted",
                 "Verification found both support and credible contradiction for this claim.",
                 "Resolve or qualify the conflict before using the claim in a decision or external artifact.",
                 evidence_refs=[node.id],
             )
-        elif node.type == NodeType.CLAIM and node.status == NodeStatus.UNVERIFIED:
+        elif node.type == NodeType.CLAIM and node.status == NodeStatus.UNDETERMINED:
             add(
                 node.id,
-                "unverified_claim",
+                "undetermined_claim",
                 "minor",
-                "Claim remains unverified",
+                "Claim remains undetermined",
                 "The claim has not crossed the support threshold in the current DAG.",
                 "Treat as provisional unless further evidence or verification supports it.",
                 evidence_refs=[node.id],
             )
-        if node.type == NodeType.SOURCE and node.credibility == "low":
+        if node.type == NodeType.SOURCE_ASSERTION and node.credibility == "low":
             add(
                 node.id,
                 "low_credibility_source",
@@ -260,7 +263,7 @@ def run_audit(
                 "A source node is marked low credibility.",
                 "Avoid using this source as sole support; seek independent higher-quality evidence.",
                 evidence_refs=[node.id],
-                metadata={"source_type": node.source_type, "ref": node.ref},
+                metadata={"source_type": node.source_type},
             )
 
     findings.sort(key=lambda f: (-_SEVERITY_ORDER.get(f["severity"], 0), f["target_id"], f["finding_type"]))
@@ -270,7 +273,8 @@ def run_audit(
         "schema_version": 1,
         "id": run_id,
         "thread_id": graph.thread_id,
-        "dag_digest": dag_digest,
+        "target_digest": dag_digest,
+        "level": level,
         "trigger": trigger,
         "threshold": threshold,
         "status": "completed",

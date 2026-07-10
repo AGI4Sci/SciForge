@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ProjectDagPanel } from './ProjectDagPanel'
+import { ProjectDagPanel, parseProjectSessionList } from './ProjectDagPanel'
 
 const labels: Record<string, string> = {
   projectDagPanelTitle: 'Project evidence',
@@ -14,9 +14,19 @@ const labels: Record<string, string> = {
   projectDagGoalUnset: 'No goal pinned',
   projectDagEditGoal: 'Edit goal',
   projectDagRefresh: 'Refresh project evidence',
-  projectDagUpdate: 'Update project',
-  projectDagUpdating: 'Updating',
-  projectDagUpdateHelp: 'Run compute and update the current project Goal tree and graph',
+  projectDagUpdate: 'Update now',
+  projectDagUpdating: 'Queueing',
+  projectDagUpdateHelp: 'Queue an end-to-end update to the captured project scope',
+  projectDagAutonomyMode: 'Autonomy',
+  projectDagAutonomous: 'Autonomous',
+  projectDagCheckpointed: 'Checkpointed',
+  projectDagSupervised: 'Supervised',
+  projectDagScopeDispositions: 'Session scope',
+  projectDagScopeIncludedCount: '1 included',
+  projectDagScopeHelp: 'Remove an ID and update to include it again.',
+  projectDagExcludedSessions: 'Excluded sessions',
+  projectDagIsolatedSessions: 'Isolated sessions',
+  projectDagSessionListPlaceholder: 'codex:thread-id',
   rightPanelCollapse: 'Collapse right sidebar'
 }
 
@@ -34,7 +44,15 @@ describe('ProjectDagPanel', () => {
     }))
 
     expect(html).toContain('Project evidence')
-    expect(html).toContain('Update project')
-    expect(html).toContain('aria-label="Run compute and update the current project Goal tree and graph"')
+    expect(html).toContain('Update now')
+    expect(html).toContain('aria-label="Queue an end-to-end update to the captured project scope"')
+    expect(html).toContain('Autonomous')
+    expect(html).toContain('Session scope')
+    expect(html).toContain('Excluded sessions')
+    expect(html).toContain('Isolated sessions')
+  })
+
+  it('normalizes editable session dispositions without project-specific rules', () => {
+    expect(parseProjectSessionList(' codex:b\ncodex:a, codex:b ')).toEqual(['codex:a', 'codex:b'])
   })
 })

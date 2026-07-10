@@ -21,6 +21,7 @@ import type {
   ConnectPhoneInstallPollResult,
   ConnectPhoneInstallQrResult,
   ConnectPhoneRuntimeStatus,
+  DagPanelStatus,
   DesktopCommand,
   LocalDrawioUrlResult,
   ModelRouterConfigOpenResult,
@@ -73,7 +74,8 @@ import {
   desktopCommandSchema,
   evidenceDagUpdatePayloadSchema,
   evidenceDagViewPayloadSchema,
-  projectDagCompilePayloadSchema,
+  projectDagGoalSavePayloadSchema,
+  projectDagUpdatePayloadSchema,
   projectDagViewPayloadSchema,
   defaultPathSchema,
   figureStyleEvaluatePayloadSchema,
@@ -325,7 +327,12 @@ import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
-import { feedEvidenceDag } from '../runtime/evidence-dag-feed'
+import {
+  ensureEvidenceDagFresh,
+  ensureProjectFresh,
+  evidenceDagQueueStatus,
+  type EvidenceDagQueueStatus
+} from '../runtime/evidence-dag-feed'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
@@ -593,10 +600,10 @@ function evidenceDagBackfillItems(detail: AgentRuntimeThreadDetail): AgentRuntim
   return (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
 }
 
-async function backfillEvidenceDagThread(
+async function evidenceDagThreadUpdateSource(
   input: { runtimeId: AgentRuntimeId; threadId: string },
   agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
-): Promise<{ items: AgentRuntimeItem[] }> {
+): Promise<{ detail: AgentRuntimeThreadDetail; items: AgentRuntimeItem[] }> {
   if (!agentRuntime) {
     throw new Error('Agent runtime is required to build the current thread Evidence DAG.')
   }
@@ -605,16 +612,7 @@ async function backfillEvidenceDagThread(
     threadId: input.threadId
   })
   const items = evidenceDagBackfillItems(detail)
-  await feedEvidenceDag({
-    runtimeId: input.runtimeId,
-    threadId: input.threadId,
-    items,
-    failOpen: false,
-    rebuild: true,
-    verify: false,
-    audit: false
-  })
-  return { items }
+  return { detail, items }
 }
 
 function projectDagWorkspaceScopeKey(value: string | undefined): string {
@@ -645,23 +643,27 @@ async function projectDagSessionScopeForWorkspace(
   return [...new Set(scoped)].sort()
 }
 
-type ProjectDagGoalScope = {
-  workspaceRoot?: string
-  projectRoot?: string
-  project?: string
-  sessions?: string[]
-}
-
-function projectDagQuery(scope: ProjectDagGoalScope): string {
-  const params = new URLSearchParams()
-  if (scope.workspaceRoot) params.set('workspaceRoot', scope.workspaceRoot)
-  if (scope.projectRoot) params.set('projectRoot', scope.projectRoot)
-  if (scope.project) params.set('project', scope.project)
-  for (const session of scope.sessions ?? []) {
-    if (session.trim()) params.append('session', session.trim())
-  }
-  const query = params.toString()
-  return query ? `?${query}` : ''
+async function projectDagRuntimeThreadsForScope(
+  input: {
+    workspaceRoot?: string
+    projectRoot?: string
+    sessions?: string[]
+    scope?: 'all' | string[]
+    excludedSessions?: string[]
+    isolatedSessions?: string[]
+  },
+  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
+): Promise<AgentRuntimeThread[]> {
+  if (!agentRuntime) throw new Error('Project DAG requires agent runtime sessions for the current project.')
+  const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
+  const requested = input.scope === 'all'
+    ? sessionScope
+    : Array.isArray(input.scope)
+      ? input.scope
+      : sessionScope
+  const wanted = requested ? new Set(requested) : undefined
+  const threads = await agentRuntime.listThreads({ limit: 1_000, includeArchived: false, includeSide: true })
+  return threads.filter((thread) => !wanted || wanted.has(evidenceDagThreadId(thread.runtimeId, thread.id)))
 }
 
 type WriteExportIpcPayload = z.infer<typeof writeExportPayloadSchema>
@@ -681,6 +683,108 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
 function optionalStringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key]
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function finiteNumberField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringArrayField(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key]
+  return Array.isArray(value)
+    ? [...new Set(value
+        .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+        .map((item) => item.trim()))].sort()
+    : []
+}
+
+function snapshotDigest(value: unknown): string | undefined {
+  const record = objectRecord(value)
+  return record ? optionalStringField(record, 'digest') : undefined
+}
+
+function dagFreshness(value: unknown): DagPanelStatus['freshness'] | undefined {
+  if (value === 'fresh' || value === 'dirty' || value === 'queued' || value === 'updating' ||
+      value === 'failed' || value === 'paused' || value === 'degraded') return value
+  if (value === 'running') return 'updating'
+  if (value === 'pending') return 'queued'
+  if (value === 'error' || value === 'update_failed') return 'failed'
+  if (value === 'empty') return 'dirty'
+  return undefined
+}
+
+function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPanelStatus {
+  const record = objectRecord(value) ?? {}
+  const snapshot = objectRecord(record.snapshot ?? record.committedSnapshot)
+  const workerPending = finiteNumberField(record, 'pending') ?? finiteNumberField(record, 'pendingCount') ?? 0
+  const localFreshness = local
+    ? dagFreshness(local.state)
+    : undefined
+  const freshness = localFreshness && localFreshness !== 'fresh'
+    ? localFreshness
+    : dagFreshness(record.state) ?? dagFreshness(record.status) ?? dagFreshness(record.freshness) ??
+      (workerPending > 0 ? 'queued' : 'fresh')
+  const latestSnapshotDigest = snapshotDigest(snapshot)
+  const auditTargetDigest = optionalStringField(record, 'auditTargetDigest')
+  const latestJob = Array.isArray(record.jobs)
+    ? objectRecord(record.jobs.find((job) => Boolean(objectRecord(job)?.last_error)))
+    : null
+  const lastError = local?.lastError ?? optionalStringField(record, 'error') ??
+    (latestJob ? optionalStringField(latestJob, 'last_error') : undefined)
+  const autonomy = objectRecord(record.autonomy)
+  const autonomyMode = record.autonomyMode ?? autonomy?.autonomyMode ?? autonomy?.autonomy_mode
+  const evidenceVector = Array.isArray(snapshot?.evidenceVector) ? snapshot.evidenceVector : []
+  const includedSessions = evidenceVector.flatMap((entry) => {
+    const item = objectRecord(entry)
+    const threadId = item ? optionalStringField(item, 'threadId') : undefined
+    return threadId ? [threadId] : []
+  })
+  const excludedSessions = snapshot ? stringArrayField(snapshot, 'excludedSessions') : []
+  const isolatedSessions = snapshot ? stringArrayField(snapshot, 'isolatedSessions') : []
+  return {
+    freshness,
+    pendingCount: Math.max(workerPending, local?.pendingCount ?? 0),
+    ...(latestSnapshotDigest ? { latestSnapshotDigest, viewedSnapshotDigest: latestSnapshotDigest } : {}),
+    ...(local?.desiredWatermark || optionalStringField(record, 'desiredWatermark') ? {
+      desiredWatermark: local?.desiredWatermark ?? optionalStringField(record, 'desiredWatermark')
+    } : {}),
+    ...(local?.committedWatermark || optionalStringField(snapshot ?? {}, 'inputWatermark') ? {
+      committedWatermark: local?.committedWatermark ?? optionalStringField(snapshot ?? {}, 'inputWatermark')
+    } : {}),
+    ...(auditTargetDigest ? { auditTargetDigest } : {}),
+    ...(typeof record.auditStale === 'boolean' ? { auditStale: record.auditStale } : {}),
+    ...(finiteNumberField(record, 'attentionCount') !== undefined ? {
+      attentionCount: finiteNumberField(record, 'attentionCount')
+    } : {}),
+    ...(finiteNumberField(record, 'missingArtifactCount') !== undefined ? {
+      missingArtifactCount: finiteNumberField(record, 'missingArtifactCount')
+    } : {}),
+    ...(autonomyMode === 'autonomous' || autonomyMode === 'checkpointed' || autonomyMode === 'supervised'
+      ? { autonomyMode }
+      : {}),
+    ...(lastError ? { lastError } : {}),
+    ...(optionalStringField(record, 'degradedReason') ? {
+      degradedReason: optionalStringField(record, 'degradedReason')
+    } : {}),
+    ...(local?.nextAttemptAt ? { nextAttemptAt: local.nextAttemptAt } : {}),
+    ...((includedSessions.length || excludedSessions.length || isolatedSessions.length) ? {
+      scope: { includedSessions, excludedSessions, isolatedSessions }
+    } : {})
+  }
+}
+
+function projectDagStatusQuery(input: {
+  workspaceRoot?: string
+  projectRoot?: string
+  project?: string
+}): string {
+  const query = new URLSearchParams()
+  if (input.workspaceRoot) query.set('workspaceRoot', input.workspaceRoot)
+  if (input.projectRoot) query.set('projectRoot', input.projectRoot)
+  if (input.project) query.set('project', input.project)
+  const serialized = query.toString()
+  return serialized ? `?${serialized}` : ''
 }
 
 function evidenceDagAuditRunForGate(audit: unknown): EvidenceDagAuditForGate {
@@ -721,23 +825,34 @@ async function collectWriteExportEvidenceDagAudit(
     const config = evidenceDagViewConfig(process.env)
     await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
     const detail = await options.agentRuntime.readThread({ runtimeId, threadId })
-    await feedEvidenceDag({
+    const includedSessions = input.workspaceRoot
+      ? await projectDagSessionScopeForWorkspace({ workspaceRoot: input.workspaceRoot }, options.agentRuntime)
+      : undefined
+    const ensured = await ensureEvidenceDagFresh({
       runtimeId,
       threadId,
       items: evidenceDagBackfillItems(detail),
-      failOpen: false,
-      verify: false,
-      audit: false
+      targetWatermark: String(detail.latestSeq),
+      reason: 'manual_immediate',
+      priority: 'immediate',
+      projectContext: input.workspaceRoot ? {
+        projectKey: input.workspaceRoot,
+        workspaceRoot: input.workspaceRoot,
+        projectRoot: input.workspaceRoot,
+        includedSessions
+      } : undefined
     })
-    const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
     const audit = await requestEvidenceDagJson(
       config.serviceUrl,
       config.apiKey,
-      `/threads/${encodeURIComponent(engineThreadId)}/audit-runs`,
+      '/audits',
       {
         method: 'POST',
         body: JSON.stringify({
-          trigger: 'write:export',
+          threadId: ensured.snapshot.threadId,
+          targetDigest: ensured.snapshot.digest,
+          level: 'L0',
+          trigger: 'manual',
           threshold: 0.7
         })
       }
@@ -770,18 +885,7 @@ function writeExportServicePayload(input: WriteExportIpcPayload) {
   }
 }
 
-const PROJECT_DAG_GOAL_TIMEOUT_MS = 5_000
 const PROJECT_DAG_VIEW_HEALTH_TIMEOUT_MS = 1500
-
-type ProjectDagGoalNode = { title?: unknown; children?: ProjectDagGoalNode[] }
-type ProjectDagCompileResponse = {
-  id?: unknown
-  run_id?: unknown
-  stats?: unknown
-  diff?: unknown
-  skipped?: unknown
-  reason?: unknown
-}
 
 function projectDagViewConfig(env: Record<string, string | undefined>): {
   serviceUrl: string
@@ -856,66 +960,6 @@ async function assertProjectDagServiceReachable(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`Project DAG service is not reachable at ${serviceUrl}: ${detail}`)
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-function projectDagGoalTitles(nodes: ProjectDagGoalNode[]): string[] {
-  return nodes.flatMap((node) => [
-    ...(typeof node.title === 'string' ? [node.title] : []),
-    ...projectDagGoalTitles(node.children ?? [])
-  ])
-}
-
-/** Idempotent: create the project goal only if no live goal carries the title. */
-async function ensureProjectDagGoal(
-  serviceUrl: string,
-  apiKey: string,
-  title: string,
-  description: string,
-  scope: ProjectDagGoalScope,
-  fetchImpl: typeof fetch | undefined = globalThis.fetch
-): Promise<void> {
-  if (typeof fetchImpl !== 'function') return
-  const headers = {
-    authorization: `Bearer ${apiKey}`,
-    'content-type': 'application/json'
-  }
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), PROJECT_DAG_GOAL_TIMEOUT_MS)
-  const query = projectDagQuery(scope)
-  try {
-    const listed = await fetchImpl(`${serviceUrl}/goals${query}`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers,
-      signal: controller.signal
-    })
-    if (!listed.ok) throw new Error(`goals returned HTTP ${listed.status}`)
-    const body = (await listed.json().catch(() => null)) as { data?: ProjectDagGoalNode[] } | null
-    const wanted = title.trim().toLowerCase()
-    const exists = projectDagGoalTitles(body?.data ?? []).some(
-      (existing) => existing.trim().toLowerCase() === wanted
-    )
-    if (exists) return
-    const created = await fetchImpl(`${serviceUrl}/goals`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        title,
-        description,
-        ...(scope.workspaceRoot ? { workspaceRoot: scope.workspaceRoot } : {}),
-        ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
-        ...(scope.project ? { project: scope.project } : {}),
-        ...(scope.sessions ? { sessions: scope.sessions } : {})
-      }),
-      signal: controller.signal
-    })
-    if (!created.ok) throw new Error(`goal create returned HTTP ${created.status}`)
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    throw new Error(`Project DAG goal setup failed at ${serviceUrl}: ${detail}`)
   } finally {
     clearTimeout(timer)
   }
@@ -2995,6 +3039,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const config = evidenceDagViewConfig(process.env)
     await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
     const threadId = input.threadId?.trim()
+    const engineThreadId = threadId && input.runtimeId
+      ? evidenceDagThreadId(input.runtimeId, threadId)
+      : undefined
+    const workerStatus = await requestEvidenceDagJson(
+      config.serviceUrl,
+      config.apiKey,
+      `/updates/status${engineThreadId ? `?threadId=${encodeURIComponent(engineThreadId)}` : ''}`,
+      { method: 'GET', cache: 'no-store' }
+    )
+    const localStatus = threadId && input.runtimeId
+      ? await Promise.resolve().then(() => evidenceDagQueueStatus(input.runtimeId!, threadId)).catch(() => undefined)
+      : undefined
     return {
       url: evidenceDagUiUrl({
         runtimeId: input.runtimeId,
@@ -3002,15 +3058,34 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         serviceUrl: config.serviceUrl,
         apiKey: config.apiKey
       }),
-      ...(threadId ? { threadId } : {})
+      ...(threadId ? { threadId } : {}),
+      status: dagPanelStatus(workerStatus, localStatus)
     }
   })
   handleInvoke('evidenceDag:update', async (_, payload: unknown) => {
     const input = parseIpcPayload('evidenceDag:update', evidenceDagUpdatePayloadSchema, payload)
-    await ensureEvidenceDagReady?.()
+    const { detail, items } = await evidenceDagThreadUpdateSource(input, agentRuntime)
+    const workspaceRoot = detail.workspace?.trim()
+    const includedSessions = workspaceRoot
+      ? await projectDagSessionScopeForWorkspace({ workspaceRoot }, agentRuntime)
+      : undefined
+    const ensured = await ensureEvidenceDagFresh({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      items,
+      targetWatermark: String(detail.latestSeq),
+      reason: input.operation === 'rebuild' ? input.rebuildKind! : 'manual_immediate',
+      priority: 'immediate',
+      rebuild: input.operation === 'rebuild',
+      rebuildRationale: input.rebuildRationale,
+      projectContext: workspaceRoot ? {
+        projectKey: workspaceRoot,
+        workspaceRoot,
+        projectRoot: workspaceRoot,
+        includedSessions
+      } : undefined
+    })
     const config = evidenceDagViewConfig(process.env)
-    await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
-    const { items } = await backfillEvidenceDagThread(input, agentRuntime)
     return {
       url: evidenceDagUiUrl({
         runtimeId: input.runtimeId,
@@ -3019,7 +3094,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         apiKey: config.apiKey
       }),
       threadId: input.threadId,
-      itemCount: items.length
+      itemCount: items.length,
+      jobId: ensured.jobId,
+      status: dagPanelStatus({
+        status: 'fresh',
+        snapshot: ensured.snapshot,
+        desiredWatermark: ensured.snapshot.inputWatermark,
+        pendingCount: 0
+      })
     }
   })
   handleInvoke('projectDag:view', async (_, payload: unknown) => {
@@ -3028,51 +3110,98 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
     const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
+    const workerStatus = await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      `/updates/status${projectDagStatusQuery(input)}`,
+      { method: 'GET', cache: 'no-store' }
+    )
+    const goalsValue = await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      `/goals${projectDagStatusQuery(input)}`,
+      { method: 'GET', cache: 'no-store' }
+    )
+    const rootGoal = Array.isArray(goalsValue) ? objectRecord(goalsValue[0]) : null
+    const rootGoalId = rootGoal ? optionalStringField(rootGoal, 'id') : undefined
+    const rootGoalTitle = rootGoal ? optionalStringField(rootGoal, 'title') : undefined
     return {
       url: projectDagUiUrl({
         serviceUrl,
         apiKey,
-        view: input.view ?? 'graph',
+        view: input.view === 'attention' ? 'home' : input.view ?? 'graph',
         embed: true,
         workspaceRoot: input.workspaceRoot,
         projectRoot: input.projectRoot,
         project: input.project,
         sessionIds: sessionScope
-      })
+      }),
+      status: dagPanelStatus(workerStatus),
+      ...(rootGoalId && rootGoalTitle ? {
+        goal: {
+          id: rootGoalId,
+          title: rootGoalTitle,
+          ...(optionalStringField(rootGoal as Record<string, unknown>, 'description') ? {
+            description: optionalStringField(rootGoal as Record<string, unknown>, 'description')
+          } : {}),
+          ...(typeof rootGoal?.version === 'number' ? { version: rootGoal.version } : {})
+        }
+      } : {})
     }
   })
-  handleInvoke('projectDag:compile', async (_, payload: unknown) => {
-    const input = parseIpcPayload('projectDag:compile', projectDagCompilePayloadSchema, payload)
+  handleInvoke('projectDag:update', async (_, payload: unknown) => {
+    const input = parseIpcPayload('projectDag:update', projectDagUpdatePayloadSchema, payload)
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
-    if (input.goalTitle) {
-      await ensureProjectDagGoal(serviceUrl, apiKey, input.goalTitle, input.goalDescription ?? '', {
+    const scopedThreads = await projectDagRuntimeThreadsForScope(input, agentRuntime)
+    const scopedIds = new Set(scopedThreads.map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id)))
+    const excludedSessions = [...new Set(input.excludedSessions ?? [])].sort()
+    const isolatedSessions = [...new Set(input.isolatedSessions ?? [])].sort()
+    const overlap = excludedSessions.filter((session) => isolatedSessions.includes(session))
+    if (overlap.length > 0) {
+      throw new Error(`Project sessions cannot be both excluded and isolated: ${overlap.join(', ')}`)
+    }
+    const outsideScope = [...excludedSessions, ...isolatedSessions]
+      .filter((session) => !scopedIds.has(session))
+    if (outsideScope.length > 0) {
+      throw new Error(`Project session dispositions are outside the captured workspace scope: ${outsideScope.join(', ')}`)
+    }
+    const unavailable = new Set([...excludedSessions, ...isolatedSessions])
+    const threads = scopedThreads.filter((thread) =>
+      !unavailable.has(evidenceDagThreadId(thread.runtimeId, thread.id)))
+    if (threads.length === 0) throw new Error('Project DAG update captured no included runtime sessions.')
+    const sources = await Promise.all(threads.map(async (thread) => {
+      if (!agentRuntime) throw new Error('Project DAG requires agent runtime sessions for the current project.')
+      const detail = await agentRuntime.readThread({ runtimeId: thread.runtimeId, threadId: thread.id })
+      return {
+        runtimeId: thread.runtimeId,
+        threadId: thread.id,
+        items: evidenceDagBackfillItems(detail),
+        targetWatermark: String(detail.latestSeq)
+      }
+    }))
+    const includedSessions = threads.map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id)).sort()
+    const ensured = await ensureProjectFresh({
+      sessions: sources,
+      projectContext: {
+        projectKey: input.workspaceRoot ?? input.projectRoot ?? input.project,
         workspaceRoot: input.workspaceRoot,
         projectRoot: input.projectRoot,
         project: input.project,
-        sessions: sessionScope
-      })
-    }
-    const scope = input.scope === 'all' && sessionScope !== undefined
-      ? sessionScope
-      : input.scope ?? sessionScope ?? 'all'
-    const compile = await requestProjectDagJson(serviceUrl, apiKey, '/compile', {
-      method: 'POST',
-      body: JSON.stringify({
-        scope,
-        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
-        ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
-        ...(input.project ? { project: input.project } : {}),
-        ...(sessionScope !== undefined ? { sessions: sessionScope } : {})
-      })
-    }) as ProjectDagCompileResponse
-    const runId = typeof compile.run_id === 'string'
-      ? compile.run_id
-      : typeof compile.id === 'string'
-        ? compile.id
-        : undefined
+        includedSessions,
+        excludedSessions,
+        isolatedSessions,
+        updateReason: 'manual_immediate',
+        autonomyMode: input.autonomyMode
+      }
+    })
+    const workerStatus = await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      `/updates/status${projectDagStatusQuery(input)}`,
+      { method: 'GET', cache: 'no-store' }
+    )
     const url = projectDagUiUrl({
       serviceUrl,
       apiKey,
@@ -3081,15 +3210,50 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       workspaceRoot: input.workspaceRoot,
       projectRoot: input.projectRoot,
       project: input.project,
-      sessionIds: sessionScope
+      sessionIds: includedSessions
     })
     return {
       url,
-      ...(runId ? { runId } : {}),
-      ...(compile.stats ? { stats: compile.stats } : {}),
-      ...(compile.diff ? { diff: compile.diff } : {}),
-      ...(compile.skipped === true ? { skipped: true } : {}),
-      ...(typeof compile.reason === 'string' ? { reason: compile.reason } : {})
+      jobId: ensured.coordinatorJobId,
+      status: dagPanelStatus(workerStatus)
+    }
+  })
+  handleInvoke('projectDag:save-goal', async (_, payload: unknown) => {
+    const input = parseIpcPayload('projectDag:save-goal', projectDagGoalSavePayloadSchema, payload)
+    await ensureProjectDagReady?.()
+    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
+    await assertProjectDagServiceReachable(serviceUrl, apiKey)
+    const goal = objectRecord(await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      input.rootGoalId ? `/goals/${encodeURIComponent(input.rootGoalId)}/update` : '/goals',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          title: input.title,
+          description: input.description ?? '',
+          actorType: 'human',
+          actorId: 'sciforge-desktop:user',
+          ...(input.rootGoalId ? { reframe: false } : {}),
+          ...(input.workspaceRoot ?? input.projectRoot ?? input.project ? {
+            projectKey: input.workspaceRoot ?? input.projectRoot ?? input.project
+          } : {})
+        })
+      }
+    )) ?? {}
+    const workerStatus = await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      `/updates/status${projectDagStatusQuery(input)}`,
+      { method: 'GET', cache: 'no-store' }
+    )
+    const goalId = optionalStringField(goal, 'root_id') ?? optionalStringField(goal, 'rootId') ??
+      input.rootGoalId ?? optionalStringField(goal, 'id')
+    if (!goalId) throw new Error('Project DAG goal command did not return a goal id.')
+    return {
+      goalId,
+      ...(typeof goal.version === 'number' ? { version: goal.version } : {}),
+      status: dagPanelStatus(workerStatus)
     }
   })
   handleInvoke('notification:turn-complete', async (_, payload: unknown) =>

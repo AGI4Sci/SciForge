@@ -1,23 +1,4 @@
-"""HTTP service for the project DAG, ServiceResult-shaped like the
-evidence-dag sidecar (same auth model: required bearer token, else the JSON
-APIs answer UNAVAILABLE rather than running open on localhost).
-
-Endpoints:
-  GET  /health | /version | /               (bundled UI)
-  POST /compile                {"scope":"all"|["sid",...],"workspaceRoot?","projectRoot?","project?"}
-  POST /full-check                          full relabel safety net, manual trigger
-  GET  /compile-runs           ?limit=20
-  GET  /compile-runs/{id}
-  GET  /goals                  ?workspaceRoot=&projectRoot=&project=&session=
-  POST /goals                  {"title","description?","parent_root?","workspaceRoot?","projectRoot?","project?","sessions?"}
-  POST /goals/{root}/update    {"title?","description?","status?"}
-  GET  /claims                 ?goal=&workspaceRoot=&projectRoot=&project=&session=
-  GET  /claims/{id}
-  GET  /analysis               ?goal=&threshold=0.7&workspaceRoot=&projectRoot=&project=
-  GET  /graph                  ?workspaceRoot=&projectRoot=&project=
-  GET  /review                 ?status=pending
-  POST /review/{id}/resolve    {"decision","note?","extra?"}
-"""
+"""Authenticated HTTP service for the canonical Project DAG workflow."""
 from __future__ import annotations
 
 import hmac
@@ -26,12 +7,10 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
-import project_dag  # noqa: F401
 from project_dag import __version__
 from project_dag.service import Engine
 
@@ -45,37 +24,21 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _session_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        values = value.split(",")
-    elif isinstance(value, list):
-        values = []
-        for item in value:
-            values.extend(item.split(",") if isinstance(item, str) else [item])
-    else:
-        values = [value]
-    return [v.strip() for v in values if isinstance(v, str) and v.strip()]
-
-
-def _query_sessions(raw_query: dict[str, list[str]]) -> list[str]:
-    return _session_list(raw_query.get("session", []) + raw_query.get("sessions", []))
-
-
 def ok(data: Any, op: str, rid: str, started: str) -> dict:
-    return {"ok": True, "data": data,
-            "provenance": {"serviceId": SERVICE_ID, "operation": op,
-                           "requestId": rid, "startedAt": started,
-                           "completedAt": _now()}}
+    return {"ok": True, "data": data, "provenance": {
+        "serviceId": SERVICE_ID, "operation": op, "requestId": rid,
+        "startedAt": started, "completedAt": _now(),
+    }}
 
 
-def err(code: str, message: str, op: str, rid: str, started: str) -> dict:
-    return {"ok": False,
-            "error": {"code": code, "message": message, "retryable": False},
-            "provenance": {"serviceId": SERVICE_ID, "operation": op,
-                           "requestId": rid, "startedAt": started,
-                           "completedAt": _now()}}
+def err(code: str, message: str, op: str, rid: str, started: str,
+        *, retryable: bool = False) -> dict:
+    return {"ok": False, "error": {
+        "code": code, "message": message, "retryable": retryable,
+    }, "provenance": {
+        "serviceId": SERVICE_ID, "operation": op, "requestId": rid,
+        "startedAt": started, "completedAt": _now(),
+    }}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -85,7 +48,6 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-    # ------------------------------------------------------------- plumbing
     def _send(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -97,32 +59,31 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self) -> bool:
         if not self.api_token:
             return False
-        h = self.headers.get("Authorization", "")
-        return h.startswith("Bearer ") and hmac.compare_digest(
-            h[len("Bearer "):], self.api_token)
+        header = self.headers.get("Authorization", "")
+        return header.startswith("Bearer ") and hmac.compare_digest(
+            header[len("Bearer "):], self.api_token)
 
     def _body(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY:
             raise ValueError("body too large")
-        raw = self.rfile.read(n) if n else b"{}"
-        return json.loads(raw.decode("utf-8") or "{}")
+        body = json.loads((self.rfile.read(length) if length else b"{}").decode("utf-8"))
+        if not isinstance(body, dict):
+            raise ValueError("request body must be an object")
+        return body
 
     def _route(self, method: str) -> None:
         rid, started = uuid.uuid4().hex[:8], _now()
-        u = urlparse(self.path)
-        parts = [p for p in u.path.split("/") if p]
-        raw_q = parse_qs(u.query)
-        q = {k: v[0] for k, v in raw_q.items()}
-        q["_sessions"] = _query_sessions(raw_q)
-        op = f"{method} {u.path}"
-
-        if u.path == "/health":
+        parsed = urlparse(self.path)
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+        op = f"{method} {parsed.path}"
+        if parsed.path == "/health":
             return self._send(200, {"ok": True, "service": SERVICE_ID})
-        if u.path == "/" and method == "GET":
+        if parsed.path == "/" and method == "GET":
             try:
-                with open(_UI_PATH, encoding="utf-8") as fh:
-                    html = fh.read().encode("utf-8")
+                with open(_UI_PATH, encoding="utf-8") as handle:
+                    html = handle.read().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(html)))
@@ -131,86 +92,125 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self._send(404, err("NOT_FOUND", "no bundled UI", op, rid, started))
             return
-
         if not self._authed():
+            code = "UNAVAILABLE" if not self.api_token else "UNAUTHORIZED"
             return self._send(503 if not self.api_token else 401,
-                              err("UNAVAILABLE" if not self.api_token else "UNAUTHORIZED",
-                                  "missing/invalid bearer token", op, rid, started))
-        if u.path == "/version":
+                              err(code, "missing/invalid bearer token", op, rid, started))
+        if parsed.path == "/version":
             return self._send(200, ok({"version": __version__, "service": SERVICE_ID},
                                       op, rid, started))
         try:
-            data = self._dispatch(method, parts, q)
+            data = self._dispatch(method, parts, query)
         except KeyError as exc:
             return self._send(404, err("NOT_FOUND", str(exc), op, rid, started))
+        except PermissionError as exc:
+            return self._send(403, err("RUNTIME_PERMISSION_REQUIRED", str(exc), op, rid, started))
         except ValueError as exc:
             return self._send(400, err("BAD_REQUEST", str(exc), op, rid, started))
+        except RuntimeError as exc:
+            return self._send(503, err("UNAVAILABLE", str(exc), op, rid, started,
+                                       retryable=True))
         except Exception as exc:  # noqa: BLE001
             return self._send(500, err("INTERNAL", str(exc), op, rid, started))
         if data is None:
-            return self._send(404, err("NOT_FOUND", u.path, op, rid, started))
+            return self._send(404, err("NOT_FOUND", parsed.path, op, rid, started))
         self._send(200, ok(data, op, rid, started))
 
-    # ------------------------------------------------------------- dispatch
-    def _dispatch(self, method: str, parts: list[str], q: dict) -> Any:
-        e = self.engine
-        if method == "POST" and parts == ["compile"]:
-            b = self._body()
-            return e.compile("manual", b.get("scope", "all"),
-                             workspace_root=b.get("workspaceRoot") or b.get("workspace_root"),
-                             project_root=b.get("projectRoot") or b.get("project_root"),
-                             project=b.get("project"),
-                             sessions=_session_list(
-                                 b.get("sessions") or b.get("sessionIds") or b.get("session")))
-        if method == "POST" and parts == ["full-check"]:
-            return e.full_check()
-        if method == "GET" and parts == ["compile-runs"]:
-            return e.compile_runs(int(q.get("limit", 20)))
-        if method == "GET" and len(parts) == 2 and parts[0] == "compile-runs":
-            return e.compile_run(parts[1])
+    def _project_key(self, query: dict, body: dict | None = None) -> str:
+        value = (body or {}).get("projectKey") or query.get("projectKey")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return self.engine.project_key(
+            (body or {}).get("workspaceRoot") or query.get("workspaceRoot"),
+            (body or {}).get("projectRoot") or query.get("projectRoot"),
+            (body or {}).get("project") or query.get("project"),
+        )
+
+    def _dispatch(self, method: str, parts: list[str], query: dict) -> Any:
+        engine = self.engine
+        if method == "POST" and parts == ["updates"]:
+            return engine.enqueue_update(self._body())
+        if method == "GET" and parts == ["updates", "status"]:
+            return engine.update_status(self._project_key(query))
+        if method == "GET" and parts == ["updates", "history"]:
+            return engine.update_history(self._project_key(query), int(query.get("limit", 20)))
+        if method == "POST" and len(parts) == 3 and parts[0] == "updates" \
+                and parts[2] == "retry":
+            body = self._body()
+            return engine.retry_update(parts[1], actor=body.get("actorId", "human"))
+        if method == "GET" and parts == ["snapshots", "latest"]:
+            return engine.workflow.latest_snapshot(self._project_key(query))
+        if method == "GET" and len(parts) == 2 and parts[0] == "snapshots":
+            return engine.workflow.snapshot(parts[1])
         if method == "GET" and parts == ["goals"]:
-            return e.goal_tree(workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
-                               project_root=q.get("projectRoot") or q.get("project_root"),
-                               project=q.get("project"),
-                               sessions=q.get("_sessions"))
+            return engine.goal_tree(self._project_key(query))
         if method == "POST" and parts == ["goals"]:
-            b = self._body()
-            return e.create_goal(b["title"], b.get("description", ""),
-                                 b.get("parent_root"),
-                                 workspace_root=b.get("workspaceRoot") or b.get("workspace_root"),
-                                 project_root=b.get("projectRoot") or b.get("project_root"),
-                                 project=b.get("project"),
-                                 sessions=_session_list(
-                                     b.get("sessions") or b.get("sessionIds") or b.get("session")))
+            body = self._body()
+            return engine.create_goal(
+                self._project_key(query, body), body["title"], body.get("description", ""),
+                body.get("parentRoot"), body.get("actorType", "human"),
+                body.get("actorId", "user"),
+            )
         if method == "POST" and len(parts) == 3 and parts[0] == "goals" \
                 and parts[2] == "update":
-            return e.update_goal(parts[1], **self._body())
+            body = self._body()
+            project_key = self._project_key(query, body)
+            actor_type = body.pop("actorType")
+            actor_id = body.pop("actorId")
+            reframe = bool(body.pop("reframe", False))
+            body.pop("projectKey", None)
+            return engine.update_goal(project_key, parts[1], actor_type=actor_type,
+                                      actor_id=actor_id, reframe=reframe, **body)
         if method == "GET" and parts == ["claims"]:
-            return e.claims(goal_id=q.get("goal"),
-                            workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
-                            project_root=q.get("projectRoot") or q.get("project_root"),
-                            project=q.get("project"),
-                            sessions=q.get("_sessions"))
+            return engine.claims(self._project_key(query), query.get("goal"))
         if method == "GET" and len(parts) == 2 and parts[0] == "claims":
-            return e.claim_detail(parts[1])
-        if method == "GET" and parts == ["analysis"]:
-            return e.analysis(q.get("goal"), float(q.get("threshold", 0.7)),
-                              workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
-                              project_root=q.get("projectRoot") or q.get("project_root"),
-                              project=q.get("project"),
-                              sessions=q.get("_sessions"))
+            return engine.claim_detail(self._project_key(query), parts[1], query.get("snapshot"))
         if method == "GET" and parts == ["graph"]:
-            return e.graph(workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
-                           project_root=q.get("projectRoot") or q.get("project_root"),
-                           project=q.get("project"),
-                           sessions=q.get("_sessions"))
-        if method == "GET" and parts == ["review"]:
-            return e.review_items(q.get("status", "pending"))
-        if method == "POST" and len(parts) == 3 and parts[0] == "review" \
-                and parts[2] == "resolve":
-            b = self._body()
-            return e.resolve_review(parts[1], b["decision"], b.get("note", ""),
-                                    b.get("extra"))
+            return engine.graph(self._project_key(query))
+        if method == "GET" and parts == ["analysis"]:
+            return engine.analysis(self._project_key(query), query.get("goal"),
+                                   float(query.get("threshold", 0.7)))
+        if method == "GET" and len(parts) == 2 and parts[0] == "provenance":
+            return engine.resolve_provenance(
+                self._project_key(query), parts[1], query["snapshotDigest"])
+        if method == "GET" and parts == ["findings"]:
+            return engine.workflow.findings(self._project_key(query), query.get("status"))
+        if method == "GET" and parts == ["reviews"]:
+            return engine.workflow.reviews(self._project_key(query), query.get("status", "open"))
+        if method == "GET" and parts == ["attention"]:
+            return engine.workflow.attention(self._project_key(query), query.get("snapshotDigest"))
+        if method == "GET" and parts == ["assessments"]:
+            return engine.workflow.assessments(
+                self._project_key(query), query.get("snapshotDigest"))
+        if method == "GET" and parts == ["audits"]:
+            return engine.workflow.audits(
+                self._project_key(query), int(query.get("limit", 20)))
+        if method == "GET" and len(parts) == 2 and parts[0] == "audits":
+            return engine.workflow.audit(parts[1])
+        if method == "POST" and parts == ["audits"]:
+            body = self._body()
+            body["projectKey"] = self._project_key(query, body)
+            return engine.enqueue_audit(body)
+        if method == "POST" and len(parts) == 3 and parts[0] == "audits" \
+                and parts[2] == "retry":
+            body = self._body()
+            return engine.retry_audit(parts[1], actor=body.get("actorId", "human"))
+        if method == "POST" and parts == ["decisions"]:
+            return engine.record_decision(self._body())
+        if method == "POST" and parts == ["policy"]:
+            body = self._body()
+            return engine.configure_policy(self._project_key(query, body), body)
+        if method == "POST" and parts == ["releases"]:
+            body = self._body()
+            return engine.workflow.create_release(
+                project_key=self._project_key(query, body),
+                project_snapshot_digest=body["projectSnapshotDigest"],
+                audit_digest=body["auditDigest"], created_by=body["createdBy"],
+                output_artifacts=body.get("outputArtifacts") or [],
+                requested_status=body.get("requestedStatus", "candidate"),
+                runtime_authorization=body.get("runtimeAuthorization"),
+                external_action=bool(body.get("externalAction", False)),
+            )
         return None
 
     def do_GET(self):
@@ -220,23 +220,22 @@ class Handler(BaseHTTPRequestHandler):
         self._route("POST")
 
 
-def _scheduler(engine: Engine, stop: threading.Event) -> None:
-    """Daily 00:00 compile with catch-up: on start (machine was off at
-    midnight) run once if there was no scheduled run today, then poll."""
-    def ran_today() -> bool:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        row = engine.store.q1(
-            "SELECT 1 FROM compile_run WHERE trigger='scheduled'"
-            " AND started_at LIKE ? || '%'", (today,))
-        return row is not None
-
+def _update_worker(engine: Engine, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
-            if not ran_today():
-                engine.compile("scheduled", "all")
-        except Exception:  # noqa: BLE001 — scheduler must never die
-            pass
-        stop.wait(600)
+            worked = engine.process_updates()
+        except Exception:  # noqa: BLE001 - durable job retains error and is retryable
+            worked = None
+        stop.wait(0.2 if worked is not None else 1.0)
+
+
+def _audit_worker(engine: Engine, stop: threading.Event) -> None:
+    while not stop.is_set():
+        try:
+            worked = engine.process_audits()
+        except Exception:  # noqa: BLE001 - P3 job retains error/backoff metadata
+            worked = None
+        stop.wait(0.5 if worked is not None else 2.0)
 
 
 def main() -> None:
@@ -245,32 +244,38 @@ def main() -> None:
     db_path = os.environ.get("PDAG_DB_PATH", "./project.db")
     host = os.environ.get("PDAG_HOST", "127.0.0.1")
     port = int(os.environ.get("PDAG_PORT", "3898"))
-
     llm = None
     if os.environ.get("EDAG_MODEL_ROUTER_BASE_URL"):
         from evidence_dag.llm import ModelRouterLLM
         llm = ModelRouterLLM()
     engine = Engine(db_path, session_dir, llm=llm)
-
+    audit_engine = Engine(db_path, session_dir, llm=llm)
     Handler.engine = engine
     Handler.api_token = os.environ.get(API_TOKEN_ENV, "")
-
     stop = threading.Event()
-    if os.environ.get("PDAG_SCHEDULE", "1") not in ("0", "false", "off"):
-        threading.Thread(target=_scheduler, args=(engine, stop),
-                         daemon=True).start()
-
-    srv = ThreadingHTTPServer((host, port), Handler)
+    update_thread = threading.Thread(
+        target=_update_worker, args=(engine, stop), daemon=True)
+    audit_thread = threading.Thread(
+        target=_audit_worker, args=(audit_engine, stop), daemon=True)
+    update_thread.start()
+    audit_thread.start()
+    server = ThreadingHTTPServer((host, port), Handler)
     print(f"[project-dag] listening on http://{host}:{port} "
           f"(sessions: {session_dir}, db: {db_path}, "
           f"llm: {'router' if llm else 'OFFLINE'})")
     try:
-        srv.serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
-        srv.server_close()
+        server.server_close()
+        update_thread.join(timeout=5)
+        audit_thread.join(timeout=5)
+        if not update_thread.is_alive():
+            engine.store.close()
+        if not audit_thread.is_alive():
+            audit_engine.store.close()
 
 
 if __name__ == "__main__":

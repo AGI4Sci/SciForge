@@ -3,26 +3,15 @@
 The module returns structured evidence (graph, provenance, metrics) only —
 never a user-level final answer or completion truth.
 
-Endpoints:
-  GET  /health
-  GET  /version
-  POST /threads/{id}/ingest-trace        body {"trace":[...]}        -> graph summary
-  GET  /threads/{id}/graph                                           -> full graph
-  POST /threads/{id}/verify              body {"threshold":0.7}      -> status diff
-  POST /threads/{id}/reconcile           body {"remove_nodes":[...]} -> what-if 扰动 diff
-  GET  /threads/{id}/provenance?node=ID                              -> provenance sub-DAG
-  GET  /threads/{id}/metrics                                         -> 4 AAR metrics
-  GET  /threads/{id}/analysis?threshold=0.7                          -> load-bearing / fragility / pseudo-robust
-  GET  /threads/{id}/audit-runs                                      -> persisted audit runs
-  POST /threads/{id}/audit-runs         body {"trigger":"manual"}     -> run adversarial audit
-  GET  /threads/{id}/prov-json                                       -> PROV-JSON export
-  POST /threads/{id}/prov-json           body {"doc":{...}}          -> import/reload
+All graph writes enter POST /updates. Audit and Artifact commands are separate
+side-chain/registry commands and never mutate a committed graph in place.
 """
 from __future__ import annotations
 
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -276,13 +265,56 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/threads":
             return self._send(200, ok({"threads": self.engine.list_threads()},
                                       operation="threads", request_id=rid, started=started))
+        if path == "/updates/status":
+            tid = (qs.get("threadId") or [None])[0]
+            if not tid:
+                return self._send(400, err("INVALID_ARGUMENT", "?threadId= required",
+                                           operation="updates.status", request_id=rid, started=started))
+            return self._send(200, ok(self.engine.update_status(tid),
+                                      operation="updates.status", request_id=rid, started=started))
+        if path == "/events":
+            tid = (qs.get("threadId") or [None])[0]
+            event_types = [
+                item.strip()
+                for value in (qs.get("type") or [])
+                for item in value.split(",") if item.strip()
+            ]
+            try:
+                after_sequence = int((qs.get("afterSequence") or ["0"])[0])
+                limit = int((qs.get("limit") or ["500"])[0])
+                events = self.engine.events(
+                    thread_id=tid, event_types=event_types,
+                    after_sequence=after_sequence, limit=limit,
+                )
+            except ValueError as exc:
+                return self._send(400, err("INVALID_ARGUMENT", str(exc),
+                                           operation="events.list", request_id=rid, started=started))
+            return self._send(200, ok({
+                "events": events,
+                "lastSequence": events[-1]["sequence"] if events else after_sequence,
+            }, operation="events.list", request_id=rid, started=started))
+        if path == "/audits":
+            tid = (qs.get("threadId") or [None])[0]
+            if not tid:
+                return self._send(400, err("INVALID_ARGUMENT", "?threadId= required",
+                                           operation="audits.list", request_id=rid, started=started))
+            try:
+                self.engine.require(tid)
+                runs = self.engine.audit_runs(tid)
+            except KeyError as exc:
+                return self._send(404, err("NOT_FOUND", str(exc), operation="audits.list",
+                                           request_id=rid, started=started))
+            return self._send(200, ok({"runs": runs, "latest": runs[0] if runs else None},
+                                      operation="audits.list", request_id=rid, started=started))
         tid, action = self._thread_route(path)
         if not tid:
             return self._send(404, err("NOT_FOUND", f"no route for {path}", operation="get", request_id=rid, started=started))
         try:
             if action == "graph":
                 g = self.engine.require(tid)
-                return self._send(200, ok({"summary": g.summary(), "graph": g.to_dict()},
+                snapshot = self.engine.latest_snapshot(tid)
+                return self._send(200, ok({"summary": g.summary(), "graph": g.to_dict(),
+                                           "snapshot": snapshot.to_dict() if snapshot else None},
                                           summary=f"{len(g.nodes)} nodes / {len(g.edges)} edges",
                                           operation="graph", request_id=rid, started=started))
             if action == "metrics":
@@ -290,11 +322,12 @@ class Handler(BaseHTTPRequestHandler):
             if action == "analysis":
                 thr = float((qs.get("threshold") or ["0.7"])[0])
                 return self._send(200, ok(self.engine.analysis(tid, threshold=thr), operation="analysis", request_id=rid, started=started))
-            if action == "audit-runs":
-                self.engine.require(tid)
-                runs = self.engine.audit_runs(tid)
-                return self._send(200, ok({"runs": runs, "latest": runs[0] if runs else None},
-                                          operation="audit-runs.list", request_id=rid, started=started))
+            if action == "snapshot":
+                snapshot = self.engine.latest_snapshot(tid)
+                if snapshot is None:
+                    raise KeyError(tid)
+                return self._send(200, ok(snapshot.to_dict(), operation="snapshot",
+                                          request_id=rid, started=started))
             if action == "provenance":
                 node = (qs.get("node") or [None])[0]
                 if not node:
@@ -312,58 +345,91 @@ class Handler(BaseHTTPRequestHandler):
         rid, started = uuid.uuid4().hex, _now()
         if not self._require_auth(operation="post", request_id=rid, started=started):
             return
-        tid, action = self._thread_route(urlparse(self.path).path)
-        if not tid:
-            return self._send(404, err("NOT_FOUND", f"no route for {self.path}", operation="post", request_id=rid, started=started))
+        path = urlparse(self.path).path
+        tid, action = self._thread_route(path)
         try:
             body = self._body()
-            if action == "ingest-trace":
-                trace = body.get("trace")
-                if not isinstance(trace, list):
-                    return self._send(400, err("INVALID_ARGUMENT", "body.trace must be a list", operation="ingest-trace", request_id=rid, started=started))
-                # Default: accumulate this completed-turn delta into the thread
-                # graph. Explicit rebuild is reserved for whole-thread rebuilds.
-                rebuild = bool(body.get("rebuild", False))
-                g = self.engine.ingest_trace(tid, trace, rebuild=rebuild)
-                delta = self.engine.last_delta(tid)
-                # Auto-verify after ingest (default on) so ν/status are ready
-                # immediately — the UI/poller sees a scored graph. For normal
-                # completed-turn deltas we only score newly added edges; a rebuild
-                # scores the full graph.
-                auto_verify = body.get("verify", os.environ.get("EDAG_AUTO_VERIFY", "1") != "0")
-                verified = None
-                threshold = float(body.get("threshold", 0.7))
-                if auto_verify and self.engine.llm is not None:
-                    try:
-                        verified = self.engine.verify(tid, threshold=threshold, only_unscored=not rebuild)
-                    except Exception:  # noqa: BLE001 — verify is best-effort; ingest already succeeded
-                        verified = None
-                auto_audit = body.get("audit", os.environ.get("EDAG_AUTO_AUDIT", "1") != "0")
-                audit_run = None
-                if auto_audit:
-                    try:
-                        audit_run = self.engine.audit(
-                            tid,
-                            trigger="auto",
-                            threshold=threshold,
-                        )
-                    except Exception:  # noqa: BLE001 — audit is advisory; ingest already succeeded
-                        audit_run = None
-                added = f"{len(g.nodes)} nodes / {len(g.edges)} edges" if rebuild else \
-                        f"+{len(delta['new_nodes'])} nodes / +{len(delta['new_edges'])} edges"
-                return self._send(200, ok({"summary": g.summary(), "verified": verified is not None,
-                                           "audited": audit_run is not None,
-                                           "audit": audit_run["risk_digest"] if audit_run else None,
-                                           "rebuilt": rebuild, "delta": delta},
-                                          summary=(f"rebuilt {added}" if rebuild
-                                                   else f"merged {added} (now {len(g.nodes)} nodes / {len(g.edges)} edges)")
-                                          + (f"; verified ({len(verified['status_changes'])} status changes)" if verified else "")
-                                          + (f"; audit ({audit_run['risk_digest']['total_findings']} finding(s))" if audit_run else ""),
-                                          operation="ingest-trace", request_id=rid, started=started))
-            if action == "verify":
-                threshold = float(body.get("threshold", 0.7))
-                return self._send(200, ok(self.engine.verify(tid, threshold=threshold),
-                                          operation="verify", request_id=rid, started=started))
+            if path == "/updates":
+                result = self.engine.update(
+                    thread_id=str(body.get("threadId") or ""),
+                    target_watermark=str(body.get("targetWatermark") or ""),
+                    reason=str(body.get("reason") or ""), priority=str(body.get("priority") or ""),
+                    trace=body.get("trace"), workspace_root=str(body.get("workspaceRoot") or ""),
+                    project_key=str(body.get("projectKey") or ""),
+                    project_root=body.get("projectRoot"), rebuild=bool(body.get("rebuild", False)),
+                    rebuild_rationale=body.get("rebuildRationale"),
+                    threshold=float(body.get("threshold", 0.7)),
+                    access_policy=body.get("accessPolicy") if isinstance(body.get("accessPolicy"), dict) else None,
+                    queued_at=body.get("queuedAt"),
+                    correlation_id=body.get("correlationId"),
+                    idempotency_key=body.get("idempotencyKey"),
+                )
+                snapshot = result["snapshot"]
+                return self._send(200, ok(result,
+                                          summary=f"Evidence Snapshot {snapshot['version']} committed at {snapshot['inputWatermark']}",
+                                          operation="updates.create", request_id=rid, started=started))
+            if path == "/audits":
+                tid = str(body.get("threadId") or "")
+                if not tid:
+                    raise ValueError("threadId is required")
+                current = self.engine.latest_snapshot(tid)
+                requested = str(body.get("targetDigest") or "")
+                level = str(body.get("level") or "")
+                if not requested or not level:
+                    raise ValueError("targetDigest and level are required")
+                run = self.engine.audit(tid, target_digest=requested, level=level,
+                                        trigger=str(body.get("trigger", "manual")),
+                                        threshold=float(body.get("threshold", 0.7)))
+                return self._send(200, ok(run,
+                                          summary=f"{run['risk_digest']['total_findings']} finding(s)",
+                                          operation="audits.create", request_id=rid, started=started))
+            if path == "/artifacts":
+                result = self.engine.register_artifact(
+                    project_key=str(body.get("projectKey") or ""),
+                    workspace_root=str(body.get("workspaceRoot") or ""),
+                    project_root=body.get("projectRoot"), payload=body,
+                )
+                return self._send(200, ok(result, operation="artifacts.register",
+                                          request_id=rid, started=started))
+            if path == "/artifacts/resolve":
+                result = self.engine.resolve_artifacts(
+                    project_key=str(body.get("projectKey") or ""),
+                    workspace_root=str(body.get("workspaceRoot") or ""),
+                    project_root=body.get("projectRoot"),
+                )
+                return self._send(200, ok(result, operation="artifacts.resolve",
+                                          request_id=rid, started=started))
+            if path == "/artifacts/events/ack":
+                result = self.engine.acknowledge_artifact_events(
+                    project_key=str(body.get("projectKey") or ""),
+                    workspace_root=str(body.get("workspaceRoot") or ""),
+                    project_root=body.get("projectRoot"),
+                    event_ids=body.get("eventIds") if isinstance(body.get("eventIds"), list) else [],
+                )
+                return self._send(200, ok(result, operation="artifacts.events.ack",
+                                          request_id=rid, started=started))
+            artifact_match = re.fullmatch(r"/artifacts/([^/]+)/(resolve|confirm-rebind)", path)
+            if artifact_match:
+                artifact_id = unquote(artifact_match.group(1))
+                if artifact_match.group(2) == "resolve":
+                    result = self.engine.resolve_artifact(
+                        artifact_id, project_key=str(body.get("projectKey") or ""),
+                        workspace_root=str(body.get("workspaceRoot") or ""),
+                        project_root=body.get("projectRoot"),
+                        candidate_locators=body.get("candidateLocators") or [],
+                    )
+                else:
+                    registry = self.engine._registry(
+                        str(body.get("projectKey") or ""),
+                        workspace_root=str(body.get("workspaceRoot") or ""),
+                        project_root=body.get("projectRoot"),
+                    )
+                    result = registry.confirm_rebind(artifact_id, str(body.get("locator") or ""))
+                return self._send(200, ok(result, operation=f"artifacts.{artifact_match.group(2)}",
+                                          request_id=rid, started=started))
+            if not tid:
+                return self._send(404, err("NOT_FOUND", f"no route for {self.path}", operation="post",
+                                           request_id=rid, started=started))
             if action == "reconcile":
                 # what-if 扰动:body {remove_nodes:[],remove_edges:[],add_contradicts:[],threshold}
                 res = self.engine.reconcile(
@@ -377,25 +443,6 @@ class Handler(BaseHTTPRequestHandler):
                                           summary=f"{s['n_invalidated']} invalidated / {s['blast_radius']} affected"
                                                   f" (subgraph {s['affected_subgraph_size']})",
                                           operation="reconcile", request_id=rid, started=started))
-            if action == "audit-runs":
-                threshold = float(body.get("threshold", 0.7))
-                if body.get("verify"):
-                    self.engine.verify(tid, threshold=threshold, only_unscored=True)
-                run = self.engine.audit(
-                    tid,
-                    trigger=str(body.get("trigger", "manual")),
-                    threshold=threshold,
-                )
-                return self._send(200, ok(run,
-                                          summary=f"{run['risk_digest']['total_findings']} finding(s); "
-                                                  f"{run['risk_digest']['highest_severity']}",
-                                          operation="audit-runs.create", request_id=rid, started=started))
-            if action == "prov-json":
-                doc = body.get("doc")
-                if not isinstance(doc, dict):
-                    return self._send(400, err("INVALID_ARGUMENT", "body.doc must be a PROV-JSON object", operation="prov-json.import", request_id=rid, started=started))
-                g = self.engine.import_prov_json(doc)
-                return self._send(200, ok({"summary": g.summary()}, operation="prov-json.import", request_id=rid, started=started))
         except RequestBodyTooLarge as exc:
             return self._send(413, err("PAYLOAD_TOO_LARGE", str(exc), operation=action or "post", request_id=rid, started=started))
         except ValueError as exc:

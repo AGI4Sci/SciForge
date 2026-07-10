@@ -1,435 +1,777 @@
-"""Offline end-to-end tests for the compile pipeline (StubJudge, no network).
-
-Covers the M1-M3 acceptance criteria from the construction plan:
-  * change a session -> compile -> claims appear, watermark advances,
-    re-compiling is a no-op (idempotent)
-  * same conclusion reworded in another session -> merged, not duplicated
-  * injected contradiction -> weaker claim invalidated with a readable rule
-  * incremental reconcile agrees with the full relabel (safety net diff empty)
-  * history rewrite (vanished node id) -> old claim loses support, invalidated
-"""
+"""End-to-end tests for the canonical Project DAG workflow."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-import re
+import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import project_dag  # noqa: F401  (sys.path side effect for evidence_dag)
 from evidence_dag import provjson
 from evidence_dag.graph import ThreadGraph
-from evidence_dag.model import EdgeRel, NodeStatus, NodeType
+from evidence_dag.model import (
+    Artifact, ArtifactVersion, EdgeRel, NodeStatus, NodeType, SourceAnchor, SourceSelector,
+)
+from evidence_dag.snapshot import build_snapshot, snapshot_filename, snapshot_storage_key
 
+from project_dag.contracts import remediation_candidate, select_a3_action
 from project_dag.judge import StubJudge
 from project_dag.service import Engine
-
-
-def _safe_session_filename(session_id: str) -> str:
-    return re.sub(r'[/\\:<>"|?*]', "_", session_id)
-
-
-def _norm(s: str) -> str:
-    return " ".join((s or "").lower().split())
+from project_dag.store import Store
 
 
 def make_judge() -> StubJudge:
-    def distill(p):
-        goals = p.get("active_goals") or []
+    def distill(payload):
+        goals = payload["active_goals"]
         return {
-            "statement": p["claim"],
-            "claim_type": "finding",
-            "mentioned_entities": ["dataset-x"] if "x2" in p["claim"] else ["pipeline-v3"],
+            "statement": payload["claim"], "claim_type": "finding",
+            "mentioned_entities": ["pipeline"],
             "addresses_goal": goals[0]["id"] if goals else "none",
-            "source_node_ids": [n["id"] for n in p["subgraph"]["nodes"]],
+            "source_node_ids": [n["id"] for n in payload["subgraph"]["nodes"]],
             "confidence": 0.9,
         }
 
-    def entity_same(p):
-        return {"same": _norm(p["name"]) == _norm(p["candidate"]), "confidence": 0.95}
-
-    def claim_equiv(p):
-        new = _norm(p["new"]).replace("(again) ", "")
-        for c in p["pool"]:
-            if _norm(c["statement"]) == new:
-                return {"relation": "equivalent", "target": c["id"], "confidence": 0.95}
+    def equiv(payload):
+        new = payload["new"].lower().replace("again ", "")
+        for claim in payload["pool"]:
+            if claim["statement"].lower() == new:
+                return {"relation": "equivalent", "target": claim["id"], "confidence": 0.95}
         return {"relation": "new", "target": None, "confidence": 0.9}
 
-    def contradiction(p):
-        a, b = _norm(p["a"]), _norm(p["b"])
-        flip = ("improves" in a and "does not improve" in b) or \
-               ("does not improve" in a and "improves" in b)
-        return {"contradicts": flip, "confidence": 0.9}
+    return StubJudge({
+        "distill": distill,
+        "goal_match": lambda p: {
+            "goal_id": p["active_goals"][-1]["id"] if p["active_goals"] else "none",
+            "confidence": 0.92,
+            "reason": "best active goal",
+        },
+        "entity_same": lambda p: {"same": p["name"].lower() == p["candidate"].lower(),
+                                   "confidence": 0.95},
+        "claim_equiv": equiv,
+        "contradiction": lambda p: {"contradicts": False, "confidence": 0.9},
+        "a1_verify": lambda p: {
+            "entailment": {"result": "passed", "confidence": 0.91, "reason": "explicit support"},
+            "applicability": {"result": "passed", "confidence": 0.86, "reason": "scope aligns"},
+        },
+        "a2_adversarial": lambda p: {
+            "methodology": {"result": "uncertain", "confidence": 0.62,
+                            "reason": "method metadata incomplete"},
+            "reproducibility": {"result": "uncertain", "confidence": 0.6,
+                                "reason": "not a local run"},
+            "independence": {"result": "passed", "confidence": 0.88,
+                             "reason": "stable artifact identity"},
+        },
+    })
 
-    return StubJudge({"distill": distill, "entity_same": entity_same,
-                      "claim_equiv": claim_equiv, "contradiction": contradiction})
+
+def _sha(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
-def write_session(session_dir: str, sid: str, claims: list[tuple[str, str, str]],
-                  meta: dict | None = None) -> None:
-    """claims: [(claim_text, source_text, credibility)]"""
-    g = ThreadGraph(sid, meta=meta)
-    for claim_text, source_text, cred in claims:
-        s = g.add_or_get_node(NodeType.SOURCE, source_text, credibility=cred)
-        c = g.add_or_get_node(NodeType.CLAIM, claim_text)
-        c.status = NodeStatus.SUPPORTED
-        g.add_edge(s.id, c.id, EdgeRel.SUPPORTS, nli_score=0.9)
-    with open(os.path.join(session_dir, f"{_safe_session_filename(sid)}.prov.json"), "w",
-              encoding="utf-8") as fh:
-        fh.write(provjson.dumps(g))
+def write_snapshot(directory: str, thread_id: str, claims: list[tuple[str, str]],
+                   version: int = 1, node_type: NodeType = NodeType.CLAIM,
+                   artifact_kind: str = "paper", artifact_locator: str | None = None,
+                   node_status: NodeStatus = NodeStatus.SUPPORTED) -> dict:
+    graph = ThreadGraph(thread_id)
+    for index, (claim_text, source_text) in enumerate(claims):
+        artifact_id = f"artifact:{thread_id}:{index}"
+        version_id = f"artifact-version:{thread_id}:{version}:{index}"
+        anchor_id = f"anchor:{thread_id}:{version}:{index}"
+        artifact = Artifact(
+            artifact_id=artifact_id, kind=artifact_kind, created_at="2026-07-10T00:00:00Z",
+            current_version_id=version_id, access_policy={"read": True},
+        )
+        artifact_version = ArtifactVersion(
+            version_id=version_id, artifact_id=artifact_id,
+            locator=artifact_locator or f"papers/{thread_id}-{index}.pdf",
+            content_digest=_sha(source_text),
+            version=str(version), size=len(source_text), media_type="application/pdf",
+            observed_at="2026-07-10T00:00:00Z", availability="available",
+            retention="reference",
+        )
+        anchor = SourceAnchor(
+            anchor_id=anchor_id, artifact_id=artifact_id,
+            artifact_version_id=version_id,
+            selector=SourceSelector(type="pdf", page=index + 1, quote=source_text),
+            anchor_digest=_sha(source_text), created_at="2026-07-10T00:00:00Z",
+        )
+        graph.attach_registry_records(artifact=artifact, artifact_version=artifact_version,
+                                      source_anchor=anchor)
+        source = graph.add_or_get_node(
+            NodeType.SOURCE_ASSERTION, source_text, artifact_id=artifact_id,
+            artifact_version_id=version_id, source_anchor_id=anchor_id,
+            source_quality=0.9,
+        )
+        claim = graph.add_or_get_node(node_type, claim_text)
+        claim.status = node_status
+        graph.add_edge(source.id, claim.id, EdgeRel.SUPPORTS, nli_score=0.94)
+    snapshot = build_snapshot(graph, version=version, input_watermark=f"turn:{version}")
+    graph.meta["snapshot"] = snapshot.to_dict()
+    serialized = provjson.dumps(graph)
+    with open(os.path.join(directory, snapshot_filename(thread_id)), "w", encoding="utf-8") as handle:
+        handle.write(serialized)
+    historical_dir = os.path.join(directory, "snapshots", snapshot_storage_key(thread_id))
+    os.makedirs(historical_dir, exist_ok=True)
+    historical_path = os.path.join(
+        historical_dir, f"{version:08d}-{snapshot.digest[7:]}.prov.json",
+    )
+    with open(historical_path, "x", encoding="utf-8") as handle:
+        handle.write(serialized)
+    return snapshot.to_dict()
 
 
-class CompileTests(unittest.TestCase):
+class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.sessions = os.path.join(self.tmp.name, "threads")
         os.makedirs(self.sessions)
-        self.engine = Engine(os.path.join(self.tmp.name, "project.db"),
-                             self.sessions, judge=make_judge())
-        self.goal = self.engine.create_goal("提升 pipeline 效果")
+        self.engine = Engine(os.path.join(self.tmp.name, "project.db"), self.sessions,
+                             judge=make_judge())
+        self.project = "path:/workspace/a"
+        self.goal = self.engine.create_goal(self.project, "Assess the pipeline")
 
     def tearDown(self):
         self.engine.store.close()
         self.tmp.cleanup()
 
-    def test_engine_creates_nested_database_parent_directory(self):
-        other = tempfile.TemporaryDirectory()
-        engine = None
-        try:
-            sessions = os.path.join(other.name, "threads")
-            db_path = os.path.join(other.name, "missing", "project-dag", "project.db")
-            os.makedirs(sessions)
-
-            engine = Engine(db_path, sessions, judge=make_judge())
-
-            self.assertTrue(os.path.exists(os.path.dirname(db_path)))
-            self.assertTrue(os.path.exists(db_path))
-        finally:
-            if engine is not None:
-                engine.store.close()
-            other.cleanup()
-
-    def test_startup_marks_stale_running_compile_interrupted(self):
-        other = tempfile.TemporaryDirectory()
-        engine = engine2 = None
-        try:
-            sessions = os.path.join(other.name, "threads")
-            os.makedirs(sessions)
-            db_path = os.path.join(other.name, "project.db")
-            engine = Engine(db_path, sessions, judge=make_judge())
-            engine.store.x("INSERT INTO compile_run (id,trigger,scope,started_at,status)"
-                           " VALUES ('run_stale','manual','\"all\"','2026-07-08T00:00:00Z','running')")
-            engine.store.conn.commit()
-            engine.store.close()
-            engine = None
-
-            engine2 = Engine(db_path, sessions, judge=make_judge())
-            row = engine2.store.q1("SELECT status,finished_at FROM compile_run WHERE id='run_stale'")
-            self.assertEqual(row["status"], "interrupted")
-            self.assertIsNotNone(row["finished_at"])
-        finally:
-            if engine is not None:
-                engine.store.close()
-            if engine2 is not None:
-                engine2.store.close()
-            other.cleanup()
-
-    def test_busy_manual_compile_returns_skipped(self):
-        from project_dag import compiler as compiler_mod
-
-        compiler_mod._LOCK.acquire()
-        try:
-            result = self.engine.compile()
-        finally:
-            compiler_mod._LOCK.release()
-
-        self.assertEqual(result, {
-            "skipped": True,
-            "reason": "compile already running",
+    def enqueue(self, snapshots: list[dict], *, project: str | None = None,
+                reason: str = "evidence_snapshot_committed", mode: str = "autonomous") -> dict:
+        vector = [{"threadId": s["threadId"], "digest": s["digest"]} for s in snapshots]
+        return self.engine.enqueue_update({
+            "projectKey": project or self.project,
+            "evidenceVector": vector,
+            "evidenceSnapshots": snapshots,
+            "capturedScope": {"includedSessions": [s["threadId"] for s in snapshots],
+                              "excludedSessions": [], "isolatedSessions": []},
+            "reason": reason, "priority": 5, "autonomyMode": mode,
         })
-        self.assertEqual(self.engine.compile_runs(), [])
 
-    def test_compile_failure_marks_running_run_failed(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A found it",
-                        "high")])
+    def drain(self, project: str | None = None, limit: int = 5) -> list[dict]:
+        out = []
+        for _ in range(limit):
+            update = self.engine.process_updates(project or self.project)
+            audit = self.engine.process_audits(project or self.project)
+            if update is not None:
+                out.append(update)
+            if update is None and audit is None:
+                break
+        return out
 
-        with patch("project_dag.compiler.incremental_reconcile",
-                   side_effect=RuntimeError("reconcile exploded")):
-            with self.assertRaises(RuntimeError):
-                self.engine.compile()
+    def test_committed_snapshot_compiles_with_immutable_vector_and_provenance(self):
+        evidence = write_snapshot(self.sessions, "sciforge:thr/1",
+                                  [("pipeline improves accuracy", "paper says so")])
+        self.enqueue([evidence])
+        runs = self.drain()
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest["evidenceVector"],
+                         [{"threadId": "sciforge:thr/1", "digest": evidence["digest"]}])
+        self.assertEqual(latest["status"], "committed")
+        self.assertGreaterEqual(len(latest["assessments"]), 7)
+        claim = latest["graph"]["claims"][0]
+        provenance = self.engine.resolve_provenance(self.project, claim["id"], latest["digest"])
+        self.assertTrue(provenance["reachesArtifact"])
+        self.assertEqual(provenance["provenanceLevel"], "L3")
+        self.assertNotIn("distill", {a["actor"] for a in latest["assessments"]
+                                     if a["level"] in {"A1", "A2"}})
+        self.assertGreaterEqual(len(runs), 1)
 
-        row = self.engine.compile_runs(1)[0]
-        self.assertEqual(row["status"], "failed")
-        self.assertIsNotNone(row["finished_at"])
-        self.assertEqual(row["stats"]["errors"], 1)
-        detail = self.engine.compile_run(row["id"])
-        self.assertIn("reconcile exploded", detail["diff"]["errors"][0]["error"])
-
-    # M1: promote + watermark + idempotent
-    def test_basic_promote_and_idempotent(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A found it",
-                        "high")])
-        r1 = self.engine.compile()
-        self.assertEqual(r1["stats"]["claims_added"], 1)
-        claims = self.engine.claims(goal_id=self.goal["root_id"])
-        self.assertEqual(len(claims), 1)
-        r2 = self.engine.compile()
-        self.assertEqual(r2["stats"]["sessions_compiled"], 0)
-        self.assertEqual(len(self.engine.claims(goal_id=self.goal["root_id"])), 1)
-
-    # regression: Evidence-DAG stores Windows-safe filenames, but the real id is in PROV meta
-    def test_colon_session_id_roundtrip_from_prov_meta(self):
-        write_session(self.sessions, "codex:thread-42",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.assertTrue(os.path.exists(os.path.join(
-            self.sessions, "codex_thread-42.prov.json")))
-
-        r = self.engine.compile()
-
-        self.assertEqual(r["diff"]["sessions"], ["codex:thread-42"])
-        claim = self.engine.claims(goal_id=self.goal["root_id"])[0]
-        detail = self.engine.claim_detail(claim["id"])
-        self.assertEqual(detail["origins"][0]["session_id"], "codex:thread-42")
-        self.assertTrue(detail["supports"][0]["content_ref"].startswith("codex:thread-42#"))
-
-    def test_legacy_colon_session_filename_still_loads(self):
-        if os.name == "nt":
-            self.skipTest("colon filenames are not legal on Windows")
-        sid = "codex:legacy-thread"
-        g = ThreadGraph(sid)
-        s = g.add_or_get_node(NodeType.SOURCE, "paper A", credibility="high")
-        c = g.add_or_get_node(NodeType.CLAIM, "pipeline v3 improves accuracy on x2")
-        c.status = NodeStatus.SUPPORTED
-        g.add_edge(s.id, c.id, EdgeRel.SUPPORTS, nli_score=0.9)
-        with open(os.path.join(self.sessions, f"{sid}.prov.json"), "w", encoding="utf-8") as fh:
-            fh.write(provjson.dumps(g))
-
-        r = self.engine.compile()
-
-        self.assertEqual(r["stats"]["errors"], 0)
-        self.assertEqual(r["diff"]["sessions"], [sid])
-        claim = self.engine.claims(goal_id=self.goal["root_id"])[0]
-        detail = self.engine.claim_detail(claim["id"])
-        self.assertEqual(detail["origins"][0]["session_id"], sid)
-
-    # cold start: no goals -> orphan pool, adopt via review
-    def test_orphan_pool_and_adopt(self):
-        self.engine.store.x("UPDATE goal SET status='abandoned'")
-        self.engine.store.conn.commit()
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        r = self.engine.compile()
-        self.assertEqual(r["stats"]["claims_added"], 0)
-        self.assertEqual(r["stats"]["orphans"], 1)
-        items = self.engine.review_items()
-        orphan = next(i for i in items if i["item_type"] == "orphan_claims")
-        g = self.engine.create_goal("新方向")
-        out = self.engine.resolve_review(orphan["id"], "accepted",
-                                         extra={"goal_id": g["root_id"]})
-        self.assertEqual(len(self.engine.claims(goal_id=g["root_id"])), 1)
-
-    # regression: orphans across many sessions -> exactly ONE review item
-    def test_orphans_enqueued_once_across_sessions(self):
-        self.engine.store.x("UPDATE goal SET status='abandoned'")
-        self.engine.store.conn.commit()
-        for i in range(3):
-            write_session(self.sessions, f"s{i}",
-                          [(f"finding number {i} about some topic", f"paper {i}", "high")])
-        r = self.engine.compile()
-        self.assertEqual(r["stats"]["orphans"], 3)
-        orphan_items = [it for it in self.engine.review_items()
-                        if it["item_type"] == "orphan_claims"]
-        self.assertEqual(len(orphan_items), 1)                       # one item...
-        self.assertEqual(len(orphan_items[0]["payload"]["candidates"]), 3)  # ...all 3 orphans
-
-    # M2: same conclusion reworded -> merged, evidence union
-    def test_cross_session_merge(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        write_session(self.sessions, "s2",
-                      [("(again) pipeline v3 improves accuracy on x2", "paper B",
-                        "medium")])
-        r = self.engine.compile()
-        self.assertEqual(r["stats"]["claims_merged"], 1)
-        claims = self.engine.claims(goal_id=self.goal["root_id"])
-        self.assertEqual(len(claims), 1)
-        detail = self.engine.claim_detail(claims[0]["id"])
-        alive_sup = [s for s in detail["supports"] if s["edge_t_invalid"] is None]
-        self.assertEqual(len(alive_sup), 2)          # two independent sources
-        self.assertEqual(claims[0]["status"], "supported")
-        self.assertEqual(len(detail["origins"]), 2)  # both sessions on record
-
-    # regression: rewriting one merged session must not close another session's support
-    def test_rewrite_one_session_preserves_other_support(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        write_session(self.sessions, "s2",
-                      [("(again) pipeline v3 improves accuracy on x2", "paper B",
-                        "medium")])
-        self.engine.compile()
-        claim = self.engine.claims(goal_id=self.goal["root_id"])[0]
-        before = self.engine.claim_detail(claim["id"])
-        self.assertEqual(
-            len([s for s in before["supports"] if s["edge_t_invalid"] is None]),
-            2,
+    def test_supported_finding_uses_the_same_project_compile_path_as_claim(self):
+        evidence = write_snapshot(
+            self.sessions,
+            "analysis-session",
+            [("The analysis found a reproducible effect.", "The recorded output reports the effect.")],
+            node_type=NodeType.FINDING,
         )
+        self.enqueue([evidence], reason="manual_immediate")
+        self.drain()
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(len(latest["graph"]["claims"]), 1)
+        self.assertEqual(latest["graph"]["claims"][0]["claim_type"], "finding")
+        self.assertEqual(latest["graph"]["origins"][0]["session_id"], "analysis-session")
 
-        write_session(self.sessions, "s1",
-                      [("something unrelated entirely", "paper D", "medium")])
-        self.engine.compile()
+    def test_runtime_trace_artifact_remains_l0_across_project_provenance(self):
+        evidence = write_snapshot(
+            self.sessions,
+            "runtime-session",
+            [("The agent reported a result.", "Visible agent output")],
+            artifact_kind="log",
+            artifact_locator="runtime:sciforge:runtime-session:item-1",
+        )
+        self.enqueue([evidence], reason="manual_immediate"); self.drain()
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        claim_id = latest["graph"]["claims"][0]["id"]
+        provenance = self.engine.resolve_provenance(self.project, claim_id, latest["digest"])
+        self.assertEqual(provenance["provenanceLevel"], "L0")
+        self.assertTrue(any(
+            item["reason"] == "external_artifact_not_identified"
+            for item in provenance["breakpoints"]
+        ))
 
-        old = self.engine.store.q1("SELECT * FROM claim WHERE id=?", (claim["id"],))
-        self.assertIsNone(old["t_invalid"])
-        self.assertEqual(old["status"], "fragile")
-        after = self.engine.claim_detail(claim["id"])
-        alive_sup = [s for s in after["supports"] if s["edge_t_invalid"] is None]
-        self.assertEqual(len(alive_sup), 1)
-        self.assertEqual(alive_sup[0]["edge_meta"]["session"], "s2")
+    def test_rejects_uncommitted_or_missing_snapshot_envelope(self):
+        with self.assertRaises(ValueError):
+            self.engine.enqueue_update({
+                "projectKey": self.project,
+                "evidenceVector": [{"threadId": "s1", "digest": _sha("x")}],
+                "evidenceSnapshots": [{"threadId": "s1", "status": "updating"}],
+                "capturedScope": {"includedSessions": ["s1"]},
+                "reason": "manual_update",
+            })
 
-    # M3: contradiction -> rule adjudication, weaker invalidated, reason readable
-    def test_conflict_adjudication(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high"),
-                       ("pipeline v3 improves accuracy on x2", "paper B", "high")])
-        self.engine.compile()
-        write_session(self.sessions, "s2",
-                      [("pipeline v3 does not improve accuracy on x2", "blog C",
-                        "low")])
-        r = self.engine.compile()
-        self.assertEqual(len(r["diff"]["conflicts"]), 1)
-        self.assertTrue(r["diff"]["conflicts"][0]["resolved"])
-        inv = r["diff"]["invalidated_claims"]
-        self.assertEqual(len(inv), 1)
-        self.assertIn("rule", inv[0]["why"])
-        alive = self.engine.claims(goal_id=self.goal["root_id"])
-        self.assertEqual(len(alive), 1)
-        self.assertIn("improves", alive[0]["statement"])
-        self.assertNotIn("does not", alive[0]["statement"])
+    def test_evidence_commit_merges_persisted_membership_and_isolates_projects(self):
+        s1 = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
+        self.enqueue([s1]); self.drain()
+        s2 = write_snapshot(self.sessions, "s2", [("claim two", "source two")])
+        # Incremental event carries only the changed session. Persisted s1 is retained.
+        self.enqueue([s2]); self.drain()
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual({v["threadId"] for v in latest["evidenceVector"]}, {"s1", "s2"})
 
-    # incremental == full relabel (weekly safety net finds nothing)
-    def test_full_check_clean(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        self.assertTrue(self.engine.full_check()["clean"])
+        other = "path:/workspace/b"
+        self.engine.create_goal(other, "Other workspace")
+        s3 = write_snapshot(self.sessions, "s3", [("other claim", "other source")])
+        self.enqueue([s3], project=other); self.drain(other)
+        other_latest = self.engine.workflow.latest_snapshot(other)
+        self.assertEqual([v["threadId"] for v in other_latest["evidenceVector"]], ["s3"])
+        self.assertNotIn("s3", {v["threadId"] for v in latest["evidenceVector"]})
 
-    # history rewrite: node id vanishes -> claim loses support -> invalidated
-    def test_history_rewrite(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        write_session(self.sessions, "s1",
-                      [("something unrelated entirely", "paper D", "medium")])
-        r = self.engine.compile()
-        old = self.engine.store.q1(
-            "SELECT * FROM claim WHERE statement LIKE 'pipeline v3 improves%'")
-        self.assertEqual(old["status"], "invalidated")
-        self.assertIsNotNone(old["t_invalid"])
+    def test_changed_digest_refreshes_same_id_support_and_artifact_provenance(self):
+        first = write_snapshot(
+            self.sessions, "s1", [("stable claim", "first source assertion")], version=1)
+        self.enqueue([first], reason="manual_immediate"); self.drain()
+        before = self.engine.workflow.latest_snapshot(self.project)
+        claim_id = before["graph"]["claims"][0]["id"]
 
-    # fragile: single source only
-    def test_fragile_single_source(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        c = self.engine.claims(goal_id=self.goal["root_id"])[0]
-        self.assertEqual(c["status"], "fragile")
+        second = write_snapshot(
+            self.sessions, "s1", [("stable claim", "replacement source assertion")], version=2)
+        self.enqueue([second]); self.drain()
+        after = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(after["graph"]["claims"][0]["id"], claim_id)
+        self.assertEqual(len(after["graph"]["claims"]), 1)
+        self.assertEqual(
+            [item["content"] for item in after["graph"]["evidence"]],
+            ["replacement source assertion"],
+        )
+        provenance = self.engine.resolve_provenance(self.project, claim_id, after["digest"])
+        version = provenance["paths"][0]["sourceAssertions"][0]["artifactVersion"]
+        self.assertEqual(version["version"], "2")
+        self.assertEqual(version["contentDigest"], _sha("replacement source assertion"))
+        historical = self.engine.resolve_provenance(self.project, claim_id, before["digest"])
+        historical_version = historical["paths"][0]["sourceAssertions"][0]["artifactVersion"]
+        self.assertEqual(historical_version["version"], "1")
+        self.assertEqual(historical_version["contentDigest"], _sha("first source assertion"))
 
-    # goal versioning marks claims for re-attribution
-    def test_goal_versioning(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        g2 = self.engine.update_goal(self.goal["root_id"], title="新标题")
-        self.assertEqual(g2["version"], 2)
-        c = self.engine.claims(goal_id=self.goal["root_id"])[0]
-        self.assertEqual(c["needs_regoal"], 1)
-        tree = self.engine.goal_tree()
-        self.assertEqual(tree[0]["title"], "新标题")
+    def test_changed_digest_removes_claim_that_is_no_longer_eligible(self):
+        first = write_snapshot(
+            self.sessions, "s1", [("status-sensitive claim", "source assertion")], version=1)
+        self.enqueue([first], reason="manual_immediate"); self.drain()
+        self.assertEqual(len(self.engine.workflow.latest_snapshot(self.project)["graph"]["claims"]), 1)
 
-    # project analysis reuses evidence-dag dominator machinery
-    def test_project_analysis(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        a = self.engine.analysis()
-        self.assertEqual(a["summary"]["n_sources"], 1)
-        self.assertTrue(a["fragile"])  # single source -> structurally fragile
+        second = write_snapshot(
+            self.sessions, "s1", [("status-sensitive claim", "source assertion")], version=2,
+            node_status=NodeStatus.UNDETERMINED,
+        )
+        self.enqueue([second]); self.drain()
+        after = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(after["evidenceVector"], [{"threadId": "s1", "digest": second["digest"]}])
+        self.assertEqual(after["graph"]["claims"], [])
+        self.assertEqual(after["graph"]["origins"], [])
 
-    def test_graph_filters_by_explicit_sessions_without_losing_provenance(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        write_session(self.sessions, "s2",
-                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
-        self.engine.compile()
+    def test_scope_dispositions_survive_auto_updates_and_support_reinclude(self):
+        s1 = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
+        s2 = write_snapshot(self.sessions, "s2", [("claim two", "source two")])
+        self.enqueue([s1, s2], reason="manual_immediate"); self.drain()
 
-        graph = self.engine.graph(sessions=["s1"])
+        self.engine.enqueue_update({
+            "projectKey": self.project,
+            "evidenceVector": [{"threadId": "s1", "digest": s1["digest"]}],
+            "evidenceSnapshots": [s1],
+            "capturedScope": {
+                "includedSessions": ["s1"],
+                "excludedSessions": ["s2"],
+                "isolatedSessions": [],
+            },
+            "reason": "manual_immediate",
+        })
+        self.drain()
+        excluded = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(excluded["evidenceVector"],
+                         [{"threadId": "s1", "digest": s1["digest"]}])
+        self.assertEqual(excluded["excludedSessions"], ["s2"])
+        self.assertEqual(len(excluded["graph"]["claims"]), 1)
+        self.assertEqual({origin["session_id"] for origin in excluded["graph"]["origins"]},
+                         {"s1"})
+        self.assertTrue(all(
+            all(origin["session"] == "s1" for origin in json.loads(edge["meta"])["origins"])
+            for edge in excluded["graph"]["edges"] if edge["edge_type"] == "supports"
+        ))
 
-        self.assertEqual(graph["scope"]["sessions"], ["s1"])
-        self.assertEqual([c["statement"] for c in graph["claims"]],
-                         ["pipeline v3 improves accuracy on x2"])
-        self.assertEqual(graph["claims"][0]["sessions"], ["s1"])
-        self.assertEqual(len(graph["evidence"]), 1)
-        self.assertIn("s1#", graph["evidence"][0]["content_ref"])
+        changed_s2 = write_snapshot(
+            self.sessions, "s2", [("changed claim", "changed source")], version=2)
+        self.enqueue([changed_s2]); self.drain()
+        after_auto = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(after_auto["evidenceVector"],
+                         [{"threadId": "s1", "digest": s1["digest"]}])
+        self.assertEqual(after_auto["excludedSessions"], ["s2"])
+        self.assertEqual(len(after_auto["graph"]["claims"]), 1)
 
-    def test_analysis_filters_by_explicit_sessions(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        write_session(self.sessions, "s2",
-                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
-        self.engine.compile()
+        self.engine.enqueue_update({
+            "projectKey": self.project,
+            "evidenceVector": [
+                {"threadId": "s1", "digest": s1["digest"]},
+                {"threadId": "s2", "digest": changed_s2["digest"]},
+            ],
+            "evidenceSnapshots": [s1, changed_s2],
+            "capturedScope": {
+                "includedSessions": ["s1", "s2"],
+                "excludedSessions": [],
+                "isolatedSessions": [],
+            },
+            "reason": "manual_immediate",
+        })
+        self.drain()
+        re_included = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual({entry["threadId"] for entry in re_included["evidenceVector"]},
+                         {"s1", "s2"})
+        self.assertEqual(re_included["excludedSessions"], [])
 
-        a = self.engine.analysis(sessions=["s1"])
+    def test_goal_save_versions_and_agent_root_reframe_is_visible(self):
+        updated = self.engine.update_goal(
+            self.project, self.goal["root_id"], actor_type="human", actor_id="researcher",
+            title="Assess pipeline rigorously")
+        self.assertEqual(updated["version"], 2)
+        self.assertEqual(self.engine.update_status(self.project)["state"], "pending")
+        proposal = self.engine.update_goal(
+            self.project, self.goal["root_id"], actor_type="agent", actor_id="agent-1",
+            title="A different research intent")
+        self.assertTrue(proposal["proposal"])
+        self.assertEqual(self.engine.goal_tree(self.project)[0]["title"],
+                         "Assess pipeline rigorously")
 
-        self.assertEqual(a["scope"]["sessions"], ["s1"])
-        self.assertEqual(a["summary"]["n_derived"], 1)
-        self.assertEqual(a["summary"]["n_sources"], 1)
+    def test_goal_change_rematches_existing_claims_with_unchanged_evidence_vector(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
+        self.enqueue([snapshot], reason="manual_immediate"); self.drain()
+        before = self.engine.workflow.latest_snapshot(self.project)
+        claim_id = before["graph"]["claims"][0]["id"]
 
-    def test_project_scoped_compile_does_not_fall_back_to_all_sessions(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        write_session(self.sessions, "s2",
-                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
+        child = self.engine.create_goal(
+            self.project, "Focused follow-up", parent_root=self.goal["root_id"],
+            actor_type="agent", actor_id="research-agent",
+        )
+        self.drain()
+        after = self.engine.workflow.latest_snapshot(self.project)
+        claim = next(item for item in after["graph"]["claims"] if item["id"] == claim_id)
+        self.assertNotEqual(after["digest"], before["digest"])
+        self.assertEqual(after["evidenceVector"], before["evidenceVector"])
+        self.assertEqual(claim["goal_id"], child["root_id"])
+        self.assertEqual(claim["needs_regoal"], 0)
+        self.assertTrue(any(item["id"] == claim_id for item in after["compileDiff"]["regoaled_claims"]))
 
-        r = self.engine.compile(workspace_root="/tmp/project-a")
+    def test_autonomy_modes_share_pipeline_but_only_checkpoints_block(self):
+        self.engine.configure_policy(self.project, {
+            "autonomyMode": "checkpointed", "checkpoints": ["claim_fragile"],
+            "actorId": "researcher",
+        })
+        snapshot = write_snapshot(self.sessions, "s1", [("fragile claim", "one source")])
+        self.enqueue([snapshot], mode="checkpointed"); self.drain(limit=1)
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        reviews = self.engine.workflow.reviews(self.project)
+        self.assertTrue(reviews)
+        self.assertEqual(reviews[0]["checkpoint"], "human")
+        self.assertEqual(
+            reviews[0]["payload"]["remediationCandidate"]["execution"], "record_only")
+        self.assertFalse(self.engine.store.q(
+            "SELECT id FROM decision_event WHERE project_key=?", (self.project,)))
+        self.assertTrue(any(item["blocking"] for item in
+                            self.engine.workflow.attention(self.project, latest["digest"])
+                            if item["subject_type"] == "finding") is False)
+        self.assertEqual(self.engine.update_status(self.project)["state"], "fresh")
 
-        self.assertEqual(r["diff"]["sessions"], [])
-        self.assertEqual(r["stats"]["claims_added"], 0)
+    def test_autonomous_a3_decision_queues_new_snapshot_without_false_resolution(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("fragile claim", "one source")])
+        self.enqueue([snapshot]); first = self.engine.process_updates(self.project)
+        self.assertEqual(first["job"]["status"], "done")
+        queued_audit = self.engine.store.q1(
+            "SELECT * FROM audit_run WHERE project_key=?", (self.project,))
+        self.assertEqual(queued_audit["status"], "queued")
+        self.assertEqual(queued_audit["lane"], "P3")
+        self.engine.process_audits(self.project)
+        self.assertEqual(self.engine.update_status(self.project)["state"], "pending")
+        decisions = self.engine.store.q("SELECT * FROM decision_event WHERE project_key=?",
+                                        (self.project,))
+        self.assertTrue(any(d["action"] == "request_evidence" for d in decisions))
+        review = self.engine.store.q1(
+            "SELECT r.* FROM review r JOIN decision_event d ON d.review_id=r.id"
+            " WHERE d.project_key=? AND d.action='request_evidence'",
+            (self.project,),
+        )
+        candidate = json.loads(review["payload"])["remediationCandidate"]
+        self.assertEqual(candidate["operation"], "collect_or_reingest_evidence")
+        self.assertTrue(candidate["externalAction"])
+        self.assertTrue(candidate["runtimePermissionRequired"])
+        self.assertEqual(candidate["execution"], "record_only")
+        self.engine.process_updates(self.project)
+        self.engine.process_audits(self.project)
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        self.assertTrue(latest["graph"]["decisions"])
+        output = latest["compileDiff"]["decision_outputs"][0]
+        self.assertEqual(output["decisionId"], decisions[0]["id"])
+        self.assertEqual(output["remediationCandidate"]["id"], candidate["id"])
+        self.assertTrue(any(
+            item["subject_type"] == "decision"
+            for item in self.engine.workflow.attention(self.project, latest["digest"])
+        ))
+        self.assertTrue(any(f["status"] == "open" for f in
+                            self.engine.workflow.findings(self.project)))
+        self.assertIsNone(self.engine.process_updates(self.project))
+        self.assertEqual(self.engine.store.q1(
+            "SELECT COUNT(*) n FROM decision_event WHERE project_key=? AND action='request_evidence'",
+            (self.project,))["n"], 1)
 
-        self.engine.create_goal("项目 A", workspace_root="/tmp/project-a")
-        r = self.engine.compile(workspace_root="/tmp/project-a", sessions=["s1"])
+    def test_a3_action_contract_is_evidence_gated_and_never_executes_candidates(self):
+        base = {
+            "id": "finding:1", "finding_type": "claim_fragile",
+            "subject_id": "claim:1", "target_digest": "project:1",
+            "severity": "medium",
+        }
+        self.assertEqual(select_a3_action(base), "request_evidence")
+        self.assertEqual(select_a3_action(
+            {**base, "finding_type": "adversarial_methodology", "severity": "high"}),
+            "challenge")
+        self.assertEqual(select_a3_action(
+            {**base, "finding_type": "stale_release_snapshot", "severity": "critical"}),
+            "defer")
+        self.assertEqual(select_a3_action(
+            base, condition_cleared=True, evidence_supported=True), "resolve")
+        override = {**base, "finding_type": "claim_conflicted", "severity": "critical"}
+        self.assertEqual(select_a3_action(
+            override, evidence_supported=False,
+            allow_agent_critical_override=True), "challenge")
+        self.assertEqual(select_a3_action(
+            override, evidence_supported=True,
+            allow_agent_critical_override=True), "override")
+        candidate = remediation_candidate("request_evidence", base)
+        self.assertEqual(candidate["execution"], "record_only")
+        self.assertTrue(candidate["runtimePermissionRequired"])
 
-        self.assertEqual(r["diff"]["sessions"], ["s1"])
-        self.assertEqual(r["stats"]["claims_added"], 1)
+    def test_autonomous_override_requires_assessments_and_is_carried_without_loop(self):
+        self.engine.configure_policy(self.project, {
+            "autonomyMode": "autonomous", "allowAgentCriticalOverride": True,
+            "actorId": "researcher",
+        })
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot]); self.engine.process_updates(self.project)
+        committed = self.engine.workflow.latest_snapshot(self.project)
+        claim_id = committed["graph"]["claims"][0]["id"]
+        finding_id = self.engine.workflow._open_finding(
+            self.project, committed["digest"], "claim_conflicted", claim_id,
+            self.engine.workflow.policy(self.project)["policy_version"], "critical",
+            {"auditLevel": "L1", "reason": "test conflict"},
+        )
+        self.engine.store.conn.commit()
+        self.engine.workflow._autonomous_review(
+            self.project, committed["digest"], [finding_id], "autonomous", "L1")
+        decision = self.engine.store.q1(
+            "SELECT * FROM decision_event WHERE finding_id=?", (finding_id,))
+        self.assertEqual(decision["action"], "override")
+        self.assertEqual(self.engine.workflow.findings(self.project)[0]["status"], "overridden")
+        self.assertIsNotNone(self.engine.store.q1(
+            "SELECT id FROM risk_override WHERE decision_id=?", (decision["id"],)))
+        self.engine.process_updates(self.project)
+        newer = self.engine.workflow.latest_snapshot(self.project)
+        inherited_id = self.engine.workflow._open_finding(
+            self.project, newer["digest"], "claim_conflicted", claim_id,
+            self.engine.workflow.policy(self.project)["policy_version"], "critical",
+            {"auditLevel": "L1", "reason": "same evidence conflict"},
+        )
+        self.engine.store.conn.commit()
+        inherited = next(
+            item for item in self.engine.workflow.findings(self.project)
+            if item["id"] == inherited_id)
+        self.assertEqual(inherited["status"], "overridden")
+        self.assertEqual(inherited["details"]["inheritedDecisionId"], decision["id"])
+        self.assertIsNotNone(self.engine.store.q1(
+            "SELECT o.id FROM risk_override o JOIN finding f ON f.id=o.finding_id"
+            " WHERE f.target_digest=? AND o.decision_id=?",
+            (newer["digest"], decision["id"]),
+        ))
 
-    def test_explicit_session_scope_filters_without_workspace_metadata(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        write_session(self.sessions, "s2",
-                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
+    def test_new_evidence_can_auto_resolve_an_old_finding(self):
+        first = write_snapshot(self.sessions, "s1", [("claim", "source")], version=1)
+        self.enqueue([first]); self.engine.process_updates(self.project)
+        before = self.engine.workflow.latest_snapshot(self.project)
+        claim_id = before["graph"]["claims"][0]["id"]
+        finding_id = self.engine.workflow._open_finding(
+            self.project, before["digest"], "obsolete_condition", claim_id,
+            self.engine.workflow.policy(self.project)["policy_version"], "medium",
+            {"auditLevel": "L0"},
+        )
+        self.engine.store.conn.commit()
+        second = write_snapshot(self.sessions, "s1", [("claim", "new source")], version=2)
+        self.enqueue([second]); self.engine.process_updates(self.project)
+        self.engine.process_audits(self.project)
+        resolved = next(
+            item for item in self.engine.workflow.findings(self.project)
+            if item["id"] == finding_id)
+        self.assertEqual(resolved["status"], "auto_resolved")
+        decision = self.engine.store.q1(
+            "SELECT * FROM decision_event WHERE finding_id=?", (finding_id,))
+        self.assertEqual(decision["action"], "resolve")
+        self.assertEqual(decision["decided_by"], "agent")
 
-        r = self.engine.compile(sessions=["s1"])
-        graph = self.engine.graph(sessions=["s1"])
+    def test_human_supersession_is_append_only_and_recompiled(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("fragile claim", "one source")])
+        self.enqueue([snapshot]); self.engine.process_updates(self.project)
+        self.engine.process_audits(self.project)
+        prior = self.engine.store.q1(
+            "SELECT * FROM decision_event WHERE project_key=? ORDER BY created_at LIMIT 1",
+            (self.project,))
+        decision = self.engine.record_decision({
+            "projectKey": self.project, "action": "supersede", "decidedBy": "human",
+            "actorId": "researcher", "autonomyMode": "autonomous",
+            "rationale": "new expert assessment", "alternatives": ["endorse"],
+            "evidenceDigest": prior["evidence_digest"], "confidence": 0.95,
+            "reversibility": "reversible", "supersedesId": prior["id"],
+        })
+        self.assertEqual(decision["supersedes_id"], prior["id"])
+        self.assertEqual(self.engine.update_status(self.project)["state"], "pending")
 
-        self.assertEqual(r["diff"]["sessions"], ["s1"])
-        self.assertEqual(graph["scope"]["strategy"], "explicit-sessions")
-        self.assertEqual(graph["scope"]["sessions"], ["s1"])
-        self.assertEqual([c["statement"] for c in graph["claims"]],
-                         ["pipeline v3 improves accuracy on x2"])
+    def test_compile_and_snapshot_commit_are_atomic_on_failure(self):
+        first = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
+        self.enqueue([first]); self.drain()
+        before = self.engine.workflow.latest_snapshot(self.project)
+        before_claims = self.engine.store.q("SELECT id FROM claim WHERE project_key=?",
+                                            (self.project,))
+        second = write_snapshot(self.sessions, "s1", [
+            ("claim one", "source one"), ("claim two", "source two")], version=2)
+        self.enqueue([second])
+        with patch.object(self.engine.workflow, "_commit_project_snapshot",
+                          side_effect=RuntimeError("injected snapshot failure")):
+            with self.assertRaises(RuntimeError):
+                self.engine.process_updates(self.project)
+        after = self.engine.workflow.latest_snapshot(self.project)
+        after_claims = self.engine.store.q("SELECT id FROM claim WHERE project_key=?",
+                                           (self.project,))
+        self.assertEqual(after["digest"], before["digest"])
+        self.assertEqual(after_claims, before_claims)
+        failed = self.engine.store.q1(
+            "SELECT * FROM project_update_job WHERE project_key=? AND status='failed'",
+            (self.project,))
+        self.assertIsNotNone(failed["next_attempt_at"])
+        self.assertIsNone(self.engine.process_updates(self.project))
+        retried = self.engine.retry_update(failed["id"], actor="researcher")
+        self.assertEqual(retried["status"], "queued")
+        self.assertIsNone(retried["next_attempt_at"])
 
-    def test_goal_tree_uses_project_scoped_goals(self):
-        project_goal = self.engine.create_goal("项目 A", workspace_root="/tmp/project-a")
-        self.engine.create_goal("项目 B", workspace_root="/tmp/project-b")
+    def test_queries_never_expose_inflight_graph_before_snapshot_commit(self):
+        first = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
+        self.enqueue([first]); self.drain()
+        self.assertEqual(len(self.engine.claims(self.project)), 1)
+        second = write_snapshot(self.sessions, "s1", [
+            ("claim one", "source one"), ("claim two", "source two")], version=2)
+        self.enqueue([second])
+        entered, release = threading.Event(), threading.Event()
+        original = self.engine.workflow._commit_project_snapshot
 
-        tree = self.engine.goal_tree(workspace_root="/tmp/project-a", sessions=["s1"])
+        def paused(*args, **kwargs):
+            entered.set(); release.wait(2); return original(*args, **kwargs)
 
-        self.assertEqual([g["root_id"] for g in tree], [project_goal["root_id"]])
+        errors = []
+        with patch.object(self.engine.workflow, "_commit_project_snapshot", side_effect=paused):
+            worker = threading.Thread(
+                target=lambda: self._capture_error(errors, self.engine.process_updates, self.project))
+            worker.start(); self.assertTrue(entered.wait(2))
+            self.assertEqual(len(self.engine.claims(self.project)), 1)
+            release.set(); worker.join(2)
+        self.assertFalse(errors)
+        self.assertEqual(len(self.engine.claims(self.project)), 2)
+
+    def test_audit_sidechain_is_persistent_and_failure_does_not_fail_project_job(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot])
+        with patch.object(self.engine.workflow, "_execute_audit") as execute:
+            result = self.engine.process_updates(self.project)
+            execute.assert_not_called()
+        self.assertEqual(result["job"]["status"], "done")
+        self.assertIsNotNone(self.engine.workflow.latest_snapshot(self.project))
+        queued = self.engine.store.q1(
+            "SELECT * FROM audit_run WHERE project_key=?", (self.project,))
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["target_digest"], result["snapshot"]["digest"])
+        with patch.object(self.engine.workflow, "_audit_l0",
+                          side_effect=RuntimeError("audit offline")):
+            with self.assertRaises(RuntimeError):
+                self.engine.process_audits(self.project)
+        failed = self.engine.store.q1(
+            "SELECT * FROM audit_run WHERE project_key=? AND status='failed'",
+            (self.project,))
+        self.assertIn("audit offline", failed["error"])
+        self.assertIsNotNone(failed["next_attempt_at"])
+        self.assertIsNone(self.engine.process_audits(self.project))
+        retried = self.engine.retry_audit(failed["id"], actor="researcher")
+        self.assertEqual(retried["status"], "queued")
+        self.assertIsNone(retried["next_attempt_at"])
+        completed = self.engine.process_audits(self.project)["audit"]
+        self.assertEqual(completed["status"], "completed")
+
+    def test_restart_recovers_running_audit_without_losing_digest_or_attempts(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot]); self.engine.process_updates(self.project)
+        audit = self.engine.store.q1(
+            "SELECT * FROM audit_run WHERE project_key=?", (self.project,))
+        self.engine.store.x(
+            "UPDATE audit_run SET status='running',attempts=2,started_at=? WHERE id=?",
+            ("2026-07-10T00:00:00Z", audit["id"]),
+        )
+        self.engine.store.conn.commit()
+        db_path = self.engine.store.db_path
+        self.engine.store.close()
+        self.engine = Engine(db_path, self.sessions, judge=make_judge())
+        recovered = self.engine.workflow.audit(audit["id"])
+        self.assertEqual(recovered["status"], "queued")
+        self.assertEqual(recovered["target_digest"], audit["target_digest"])
+        self.assertEqual(recovered["attempts"], 2)
+        self.assertIsNotNone(self.engine.process_audits(self.project))
+
+    def test_restart_recovers_interrupted_compile_with_same_desired_vector(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        queued = self.enqueue([snapshot])
+        self.engine.store.x(
+            "UPDATE project_update_job SET status='running',attempts=3,processing_version=1"
+            " WHERE id=?", (queued["id"],),
+        )
+        self.engine.store.conn.commit()
+        db_path = self.engine.store.db_path
+        self.engine.store.close()
+        self.engine = Engine(db_path, self.sessions, judge=make_judge())
+        recovered = self.engine.workflow.job(queued["id"])
+        self.assertEqual(recovered["status"], "interrupted")
+        self.assertEqual(recovered["desiredEvidenceVector"], [
+            {"threadId": "s1", "digest": snapshot["digest"]},
+        ])
+        completed = self.engine.process_updates(self.project)
+        self.assertEqual(completed["job"]["status"], "done")
+
+    def test_audit_enqueue_is_idempotent_for_digest_level_and_policy(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot]); result = self.engine.process_updates(self.project)
+        first = self.engine.enqueue_audit({
+            "projectKey": self.project, "targetDigest": result["snapshot"]["digest"],
+            "level": "L1", "reason": "manual", "priority": 1,
+        })
+        duplicate = self.engine.enqueue_audit({
+            "projectKey": self.project, "targetDigest": result["snapshot"]["digest"],
+            "level": "L1", "reason": "release_gate", "priority": 10,
+        })
+        self.assertEqual(first["id"], duplicate["id"])
+        self.assertEqual(duplicate["priority"], 10)
+        self.assertEqual(self.engine.store.q1(
+            "SELECT COUNT(*) n FROM audit_run WHERE request_key=?",
+            (first["request_key"],),
+        )["n"], 1)
+
+    def test_p3_audit_waits_while_p2_compile_is_eligible(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot]); self.engine.process_updates(self.project)
+        queued_audit = self.engine.store.q1(
+            "SELECT id FROM audit_run WHERE project_key=? AND status='queued'", (self.project,))
+        self.engine.update_goal(
+            self.project, self.goal["root_id"], actor_type="human", actor_id="researcher",
+            description="updated goal context",
+        )
+        self.assertIsNone(self.engine.process_audits(self.project))
+        self.assertEqual(self.engine.workflow.audit(queued_audit["id"])["status"], "queued")
+        self.assertIsNotNone(self.engine.process_updates(self.project))
+
+    def test_one_way_queue_schema_migrates_existing_audit_rows(self):
+        db_path = os.path.join(self.tmp.name, "legacy-audit.db")
+        connection = sqlite3.connect(db_path)
+        connection.executescript("""
+        CREATE TABLE audit_run (
+          id TEXT PRIMARY KEY, project_key TEXT NOT NULL, target_digest TEXT NOT NULL,
+          level TEXT NOT NULL, policy_version INTEGER NOT NULL, status TEXT NOT NULL,
+          digest TEXT, started_at TEXT, finished_at TEXT, error TEXT
+        );
+        INSERT INTO audit_run (
+          id,project_key,target_digest,level,policy_version,status,started_at
+        ) VALUES ('audit_old','path:/old','sha256:old','L0',1,'running',
+                  '2026-07-10T00:00:00Z');
+        """)
+        connection.commit(); connection.close()
+        store = Store(db_path)
+        try:
+            row = store.q1("SELECT * FROM audit_run WHERE id='audit_old'")
+            self.assertEqual(row["request_key"], "migrated:audit_old")
+            self.assertEqual(row["lane"], "P3")
+            self.assertIsNotNone(row["created_at"])
+            self.assertIn("next_attempt_at", row)
+        finally:
+            store.close()
+
+    def test_new_snapshot_marks_older_queued_audit_stale(self):
+        first = write_snapshot(self.sessions, "s1", [("claim", "source")], version=1)
+        self.enqueue([first]); first_run = self.engine.process_updates(self.project)
+        first_audit = self.engine.store.q1(
+            "SELECT * FROM audit_run WHERE target_digest=?", (first_run["snapshot"]["digest"],))
+        self.assertEqual(first_audit["status"], "queued")
+        second = write_snapshot(self.sessions, "s1", [("claim", "new source")], version=2)
+        self.enqueue([second]); second_run = self.engine.process_updates(self.project)
+        self.assertEqual(self.engine.workflow.audit(first_audit["id"])["status"], "stale")
+        current_audit = self.engine.store.q1(
+            "SELECT * FROM audit_run WHERE target_digest=?",
+            (second_run["snapshot"]["digest"],),
+        )
+        self.assertEqual(current_audit["status"], "queued")
+        self.assertEqual(current_audit["target_digest"], second_run["snapshot"]["digest"])
+
+    def test_release_gate_requires_l2_and_runtime_permission_for_external_action(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot]); self.drain()
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        queued = self.engine.enqueue_audit({
+            "projectKey": self.project, "targetDigest": latest["digest"], "level": "L2",
+            "reason": "release_gate", "priority": 10,
+        })
+        audit = self.engine.process_audits(self.project)["audit"]
+        self.assertEqual(audit["id"], queued["id"])
+        with self.assertRaises(PermissionError):
+            self.engine.workflow.create_release(
+                project_key=self.project, project_snapshot_digest=latest["digest"],
+                audit_digest=audit["digest"], created_by="agent", output_artifacts=[],
+                external_action=True)
+        release = self.engine.workflow.create_release(
+            project_key=self.project, project_snapshot_digest=latest["digest"],
+            audit_digest=audit["digest"], created_by="agent", output_artifacts=[],
+            requested_status="candidate", external_action=True,
+            runtime_authorization={"granted": True, "permissionId": "runtime:permit:1"})
+        self.assertEqual(release["certification_status"], "candidate")
+
+    def test_l1_audit_uses_assessment_ledger(self):
+        snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
+        self.enqueue([snapshot]); self.drain()
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        queued = self.engine.enqueue_audit({
+            "projectKey": self.project, "targetDigest": latest["digest"], "level": "L1",
+            "reason": "manual", "priority": 1,
+        })
+        audit = self.engine.process_audits(self.project)["audit"]
+        self.assertEqual(audit["id"], queued["id"])
+        self.assertEqual(audit["level"], "L1")
+        self.assertTrue(any(f["finding_type"].startswith("adversarial_")
+                            for f in self.engine.workflow.findings(self.project)))
+
+    @staticmethod
+    def _capture_error(errors, fn, *args):
+        try:
+            fn(*args)
+        except Exception as exc:  # pragma: no cover - assertion aid
+            errors.append(exc)
 
 
 if __name__ == "__main__":

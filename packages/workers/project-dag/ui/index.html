@@ -1,736 +1,229 @@
 <!doctype html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<title>SciForge Project DAG</title>
-<style>
-  :root { --bg:#f6f8fb; --panel:#ffffff; --line:#dbe3ee; --fg:#172033; --dim:#64748b;
-          --ok:#0f9f6e; --warn:#b7791f; --bad:#d33f49; --acc:#2563eb; --hover:#eef3f9; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:13px/1.5 "Segoe UI",system-ui,sans-serif; display:flex; height:100vh; }
-  nav { width:150px; background:var(--panel); border-right:1px solid var(--line);
-        padding:12px 0; flex-shrink:0; }
-  nav div { padding:8px 16px; cursor:pointer; color:var(--dim); }
-  nav div:hover { background:var(--hover); color:var(--fg); }
-  nav div.on { color:var(--fg); background:var(--hover); border-left:3px solid var(--acc); }
-  main { flex:1; overflow:auto; padding:16px 20px; }
-  h2 { font-size:15px; margin:0 0 12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px;
-          padding:10px 12px; margin-bottom:8px; }
-  .badge { display:inline-block; padding:0 6px; border-radius:8px; font-size:11px;
-           margin-left:6px; background:#edf2f7; color:var(--dim); }
-  .s-supported{color:var(--ok)} .s-fragile{color:var(--warn)}
-  .s-conflicted,.s-undetermined{color:var(--bad)} .s-invalidated{color:var(--dim);text-decoration:line-through}
-  button { background:var(--acc); border:0; color:#fff; padding:6px 14px;
-           border-radius:4px; cursor:pointer; margin-right:6px; }
-  button.ghost { background:#eef2f7; color:var(--fg); }
-  input,select,textarea { background:#fff; border:1px solid var(--line); color:var(--fg);
-          padding:5px 8px; border-radius:4px; }
-  .dim { color:var(--dim); } .mono { font-family:Consolas,monospace; font-size:12px; }
-  pre { background:#eef2f7; padding:10px; border-radius:4px; overflow:auto; white-space:pre-wrap; }
-  .goal-node { margin-left:14px; border-left:1px solid var(--line); padding-left:10px; }
-  .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
-  html[data-embedded="1"] body { font-size:12px; }
-  html[data-embedded="1"] nav { width:112px; padding:8px 0; }
-  html[data-embedded="1"] nav div { padding:7px 10px; }
-  html[data-embedded="1"] main { padding:12px; }
-  html[data-embedded="1"] h2 { font-size:14px; margin-bottom:10px; }
-  html[data-embedded="1"] .card { padding:8px 10px; }
-  html[data-embedded="1"] button { padding:5px 10px; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SciForge Project DAG</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#0c1117;color:#e6edf3;--panel:#161b22;--line:#30363d;--muted:#8b949e;--accent:#58a6ff;--good:#3fb950;--warn:#d29922;--bad:#f85149}
+    *{box-sizing:border-box}body{margin:0;padding:24px;max-width:1440px}h1{font-size:22px;margin:0}h2{font-size:17px;margin:0 0 12px}h3{font-size:14px;margin:18px 0 8px}p{line-height:1.5}button{font:inherit;background:#238636;color:#fff;border:1px solid transparent;border-radius:6px;padding:8px 12px;cursor:pointer}button:hover{filter:brightness(1.12)}button:focus-visible,.claim-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}.muted{color:var(--muted)}.bad{color:var(--bad)}.good{color:var(--good)}.warn{color:var(--warn)}
+    .toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}.toolbar p{margin:6px 0 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:14px;min-width:0}.summary{margin-top:16px}.summary p{margin:8px 0 0}.workspace{display:grid;grid-template-columns:minmax(270px,0.7fr) minmax(440px,1.6fr);gap:14px;margin-top:14px}.claim-list{display:flex;flex-direction:column;gap:8px;max-height:72vh;overflow:auto}.claim-button{width:100%;text-align:left;color:inherit;background:#0d1117;border:1px solid var(--line);padding:11px;border-radius:8px}.claim-button[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}.claim-title{display:block;font-weight:650;line-height:1.4}.claim-meta{display:flex;gap:7px;align-items:center;margin-top:7px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}.status-supported{color:var(--good)}.status-fragile,.status-undetermined{color:var(--warn)}.status-conflicted,.status-invalidated{color:var(--bad)}
+    .detail{min-height:360px}.statement{font-size:18px;font-weight:650;line-height:1.45;margin:4px 0 12px}.facts{display:flex;gap:8px;flex-wrap:wrap}.section{border-top:1px solid var(--line);padding-top:2px;margin-top:16px}.path,.relation,.artifact,.history,.impact,.breakpoint{border-left:3px solid var(--line);padding:8px 10px;margin:8px 0;background:#0d1117;border-radius:0 6px 6px 0}.path.strongest{border-left-color:var(--good)}.breakpoint{border-left-color:var(--warn)}.relation-opposes{border-left-color:var(--bad)}.relation-qualifies{border-left-color:var(--warn)}.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.row>*{min-width:0}.compact{margin:5px 0}.plain-list{margin:7px 0;padding-left:20px}.plain-list li{margin:5px 0}.empty{color:var(--muted);font-style:italic}.locator-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.open-link{color:var(--accent)}.what-if-buttons{display:flex;gap:7px;flex-wrap:wrap}.what-if-buttons button{background:#21262d;border-color:var(--line);padding:6px 9px}.what-if-buttons button[aria-pressed="true"]{border-color:var(--accent);color:#fff}.below{margin-top:14px}.error{background:#2d1117;border:1px solid #6e2530;border-radius:8px;padding:11px;margin-top:12px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    @media(max-width:850px){body{padding:16px}.workspace{grid-template-columns:1fr}.claim-list{max-height:42vh}}
+  </style>
 </head>
 <body>
-<nav id="nav"></nav>
-<main id="main"></main>
-<script>
-const TOKEN = (location.hash.match(/token=([^&]+)/)||[])[1] || "";
-// deep-link params (set by the desktop app): ?view=graph | ?embed=1
-const PARAMS = new URLSearchParams(location.search);
-const START_VIEW = PARAMS.get("view");
-const EMBEDDED = PARAMS.get("embed") === "1" || window.self !== window.top;
-const SCOPE_KEYS = ["workspaceRoot", "projectRoot", "project"];
-const SCOPE_SESSIONS = PARAMS.getAll("session").filter(Boolean);
-document.documentElement.dataset.embedded = EMBEDDED ? "1" : "0";
-history.replaceState(null,"",location.pathname);
-function scopedApiPath(p){
-  const u = new URL(p, location.origin);
-  if(["/analysis", "/claims", "/goals", "/graph"].includes(u.pathname)){
-    for(const key of SCOPE_KEYS){
-      const value = PARAMS.get(key);
-      if(value) u.searchParams.set(key, value);
-    }
-    for(const session of SCOPE_SESSIONS) u.searchParams.append("session", session);
-  }
-  return u.pathname + u.search;
-}
-const api = (p, opt={}) => fetch(scopedApiPath(p), {...opt, headers:{
-  "Content-Type":"application/json", "Authorization":"Bearer "+TOKEN,
-  ...(opt.headers||{})}}).then(r=>r.json()).then(j=>{
-    if(!j.ok) throw new Error(j.error ? j.error.message : "error"); return j.data;});
-const el = (h) => { const d=document.createElement("div"); d.innerHTML=h; return d; };
-const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-
-const VIEWS = {home:"项目主页", goals:"Goal 树", graph:"图谱", compile:"编译控制台"};
-let cur = "home";
-function renderNav(){
-  document.getElementById("nav").innerHTML = Object.entries(VIEWS).map(
-    ([k,v])=>`<div class="${k===cur?'on':''}" onclick="go('${k}')">${v}</div>`).join("");
-}
-function go(v){ cur=v; renderNav(); ROUTES[v](); }
-
-const M = document.getElementById("main");
-function scopedProjectBody(extra={}){
-  const body = {...extra};
-  for(const key of SCOPE_KEYS){
-    const value = PARAMS.get(key);
-    if(value) body[key] = value;
-  }
-  if(SCOPE_SESSIONS.length){
-    body.sessions = SCOPE_SESSIONS;
-  }
-  return body;
-}
-function scopedCompileBody(extra={}){
-  const body = scopedProjectBody(extra);
-  if(SCOPE_SESSIONS.length){
-    body.scope = SCOPE_SESSIONS;
-  } else if(!("scope" in body)) {
-    body.scope = "all";
-  }
-  return body;
-}
-function updateBar(label="更新当前项目"){
-  const scope = PARAMS.get("workspaceRoot") || PARAMS.get("projectRoot") || PARAMS.get("project") || "";
-  const hint = scope ? `当前项目：${esc(scope.split(/[\\/]/).filter(Boolean).pop() || scope)}` : "当前项目";
-  return `<div class="row">
-    <button onclick="updateCurrentProject()">${label}</button>
-    <span class="dim">${hint} · 重新计算 Goal 树和图谱</span>
-    <span id="compilemsg" class="dim"></span>
-  </div>`;
-}
-async function updateCurrentProject(){
-  const msg = document.getElementById("compilemsg") || document.getElementById("msg");
-  if(msg) msg.textContent = "更新中…（session 多或 LLM 慢时需要一会儿）";
-  try{
-    const r = await api("/compile",{method:"POST",body:JSON.stringify(scopedCompileBody())});
-    if(msg) msg.textContent =
-      `完成：+${r.stats?.claims_added ?? 0} claim，merge ${r.stats?.claims_merged ?? 0}，进复核 ${r.stats?.review_enqueued ?? 0}`;
-    setTimeout(()=>go(cur), 800);
-    return r;
-  }catch(e){
-    if(msg) msg.textContent = "失败："+e.message;
-    throw e;
-  }
-}
-
-// ---------------- 项目主页 ----------------
-async function home(){
-  const [tree, review, runs] = await Promise.all(
-    [api("/goals"), api("/review"), api("/compile-runs?limit=5")]);
-  const claims = await api("/claims");
-  const n = s => claims.filter(c=>c.status===s).length;
-  M.innerHTML = `<h2>项目主页</h2>
-    ${updateBar()}
-    <div class="row">
-      <div class="card">活跃 goal <b>${countGoals(tree)}</b></div>
-      <div class="card s-supported">supported <b>${n("supported")}</b></div>
-      <div class="card s-fragile">fragile <b>${n("fragile")}</b></div>
-      <div class="card s-conflicted">冲突/未决 <b>${n("conflicted")+n("undetermined")}</b></div>
-      <div class="card">待复核 <b>${review.length}</b></div>
+  <header class="toolbar">
+    <div>
+      <h1>Project Evidence DAG</h1>
+      <p class="muted">只读取已提交 Snapshot。刷新与 what-if 都不会触发计算或修改图；更新统一进入持久化 <code>POST /updates</code>。</p>
     </div>
-    <h2>最近编译</h2>` +
-    runs.map(r=>`<div class="card mono">${esc(r.started_at)} · ${esc(r.trigger)} ·
-      ${r.stats?`+${r.stats.claims_added} claim / merge ${r.stats.claims_merged} / 失效 ${r.stats.claims_invalidated}`:"…"}
-      <span class="dim">${esc(r.id)}</span></div>`).join("") +
-    `<h2>需要你注意</h2>` + (review.slice(0,5).map(reviewCard).join("") || `<div class="dim">无</div>`);
-}
-const countGoals = t => t.reduce((a,g)=>a+1+countGoals(g.children||[]),0);
+    <button id="refresh" type="button">刷新已提交状态</button>
+  </header>
+  <div id="error" role="alert" aria-live="polite"></div>
+  <section id="summary" class="grid summary" aria-label="Project committed snapshot summary"></section>
+  <main class="workspace">
+    <section class="card" aria-labelledby="claims-heading">
+      <div class="row"><h2 id="claims-heading">Claims</h2><span id="claim-count" class="muted"></span></div>
+      <div id="claims" class="claim-list" role="listbox" aria-label="Committed Project Claims"></div>
+    </section>
+    <article id="claim-detail" class="card detail" aria-labelledby="claim-detail-heading">
+      <h2 id="claim-detail-heading">Claim 详情</h2>
+      <p class="empty">选择一条 Claim，查看跨层原始证据、Decision 历史和只读 what-if。</p>
+    </article>
+  </main>
+  <div class="grid below">
+    <section class="card"><h2>Attention frontier</h2><div id="attention">—</div></section>
+    <section class="card"><h2>Current snapshot findings</h2><div id="findings">—</div></section>
+  </div>
 
-// ---------------- Goal 树 ----------------
-async function goals(){
-  const tree = await api("/goals");
-  M.innerHTML = `<h2>Goal 树</h2>
-    ${updateBar("更新 Goal 树")}
-    <div class="row"><input id="ngoal" placeholder="新 goal 标题" size="40">
-    <button onclick="addGoal()">新建 goal</button></div><div id="tree"></div><div id="claims"></div>`;
-  document.getElementById("tree").append(...tree.map(goalNode));
+<script id="claim-detail-pure">
+function list(value){return Array.isArray(value)?value:[]}
+function object(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function parseMeta(value){if(value&&typeof value==='object')return value;if(typeof value!=='string')return{};try{return object(JSON.parse(value))}catch{return{}}}
+function levelRank(value){const match=/^L([0-4])$/.exec(String(value||''));return match?Number(match[1]):0}
+function normalizedLocator(value){
+  const locator=String(value||'').trim();if(!locator)return null;
+  if(/^(runtime|trace):/i.test(locator))return null;
+  if(/^doi:/i.test(locator))return `doi:${locator.slice(4).trim().toLowerCase()}`;
+  try{const url=new URL(locator);url.hash='';if(/^https?:$/i.test(url.protocol)){const doi=url.hostname.toLowerCase()==='doi.org'?decodeURIComponent(url.pathname.slice(1)).toLowerCase():null;return doi?`doi:${doi}`:url.toString()}}catch{}
+  return `locator:${locator}`;
 }
-function goalNode(g){
-  const st = g.claim_stats||{};
-  const d = el(`<div class="goal-node"><div class="card" style="cursor:pointer">
-    <b>${esc(g.title)}</b> <span class="badge">${esc(g.status)}</span>
-    <span class="badge s-supported">✓ ${st.supported||0}</span>
-    <span class="badge s-fragile">△ ${st.fragile||0}</span>
-    <span class="badge s-conflicted">⚠ ${(st.conflicted||0)+(st.undetermined||0)}</span>
-    <span class="dim">v${g.version}</span></div></div>`);
-  d.querySelector(".card").onclick = ()=>showClaims(g.root_id, g.title);
-  (g.children||[]).forEach(c=>d.append(goalNode(c)));
-  return d;
+function sourceAliases(assertion){
+  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion);
+  if(levelRank(assertion.level)<1)return [];
+  return [...new Set([normalizedLocator(version.locator),assertion.artifactId?`artifact:${assertion.artifactId}`:null,(version.contentDigest||artifact.contentDigest)?`digest:${version.contentDigest||artifact.contentDigest}`:null].filter(Boolean))];
 }
-async function addGoal(){
-  const t = document.getElementById("ngoal").value.trim();
-  if(t){ await api("/goals",{method:"POST",body:JSON.stringify(scopedProjectBody({title:t}))}); goals(); }
+function sourceIdentity(assertion){return sourceAliases(assertion)[0]||null}
+function sourceLabel(assertion){
+  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion);
+  return version.locator||artifact.title||assertion.artifactId||assertion.sourceAssertionId||'未识别来源';
 }
-async function showClaims(root, title){
-  const cs = await api("/claims?goal="+encodeURIComponent(root));
-  document.getElementById("claims").innerHTML = `<h2>${esc(title)} 的 claims</h2>` +
-    (cs.map(c=>`<div class="card" style="cursor:pointer" onclick="claimDetail('${c.id}')">
-      <span class="s-${c.status}">●</span> ${esc(c.statement)}
-      <span class="badge">${esc(c.claim_type)}</span>
-      <span class="badge">承重 ${c.load_bearing}</span>
-      <span class="dim mono">${c.id}</span></div>`).join("") || `<div class="dim">无</div>`);
-}
-async function claimDetail(id){
-  const c = await api("/claims/"+id);
-  const sup = c.supports.map(s=>`<div class="card">
-    ${s.evidence_type==="human_attested"?"👤":"📄"} ${esc(s.content||s.id)}
-    <span class="badge">${s.edge_t_invalid?"已失效":"quality "+(s.quality_score??s.trust_score??"?")}</span>
-    <span class="dim mono">${esc(s.source_hash||"")}</span></div>`).join("");
-  M.innerHTML = `<h2>Claim 详情</h2><div class="card"><b>${esc(c.statement)}</b><br>
-    <span class="s-${c.status}">${esc(c.status)}</span>
-    <span class="badge">窗口 ${esc(c.t_valid)} ~ ${esc(c.t_invalid||"now")}</span></div>
-    <h2>支持证据</h2>${sup||'<div class="dim">无</div>'}
-    <h2>来源 session</h2>${c.origins.map(o=>`<div class="card mono">${esc(o.session_id)} # ${esc(o.node_id)}</div>`).join("")}
-    <button class="ghost" onclick="go('goals')">← 返回</button>`;
-}
-
-// ---------------- 图谱（Project DAG 可视化） ----------------
-// 树形层次：GOAL → ▸子课题组(session) → ▸claim（派生子结论缩进嵌套）→ 证据
-// （缩进小卡，点击 claim 展开）。没有全局证据列 —— 证据共享度高时拉线只会
-// 变成毛线团；共享证据在每条 claim 下就近显示并打 ×n 徽标（同源信号）。
-// 全节点可拖拽（localStorage），/analysis 叠加承重 ⚡ 与脆弱/假鲁棒琥珀虚线。
-let G = null, SEL = null, ZOOM = 1, NPOS = {}, EDGE_OF = {};
-let GROUPS = [], GROUP_OF = {}, EXPANDED = new Set(), CEXP = new Set(), RENDER_EDGES = [];
-let PARENT_OF = {}, CHILDREN_OF = {}, EV_OF = {}, EV_SHARE = {};
-const POS_KEY = "pdag.graph.pos.v3", EXP_KEY = "pdag.graph.exp.v2", CEXP_KEY = "pdag.graph.cexp.v1";
-const DIM = {goal:{w:300,h:46}, grp:{w:310,h:54}, claim:{w:360,h:42}, ev:{w:330,h:30}};
-const STATUS_COLOR = {supported:"#0f9f6e", fragile:"#b7791f",
-  conflicted:"#d33f49", undetermined:"#d33f49", invalidated:"#94a3b8"};
-const EDGE_STYLE = {
-  addresses:    {stroke:"#2563eb", dash:"", w:1.6, op:.5},
-  derived_from: {stroke:"#7c3aed", dash:"", w:1.5, op:.85},
-  contradicts:  {stroke:"#d33f49", dash:"6 4", w:1.8, op:.95},
-  in_group:     {stroke:"#cbd5e1", dash:"", w:1.2, op:.9},
-};
-
-const kindOf = id => id.startsWith("grp_") ? "grp"
-              : G.claims.some(c=>c.id===id) ? "claim"
-              : G.goals.some(g=>g.root_id===id) ? "goal" : "ev";
-function truncFit(s, px, fs){                    // CJK 按 2 单位宽截断
-  s = s || ""; const unit = fs * 0.532; let w = 0, out = "";
-  for(const ch of s){
-    w += /[⺀-鿿豈-﫿＀-￯]/.test(ch) ? 2*unit : unit;
-    if(w > px){ return out + "…"; }
-    out += ch;
+function independentSources(paths){
+  const groups=[],unresolved=[];
+  for(const path of list(paths))for(const assertion of list(path.sourceAssertions)){
+    const aliases=new Set(sourceAliases(assertion));
+    if(!aliases.size){unresolved.push({threadId:path.threadId,sourceAssertionId:assertion.sourceAssertionId});continue}
+    const matches=groups.filter(group=>[...aliases].some(alias=>group.aliases.has(alias)));
+    const current=matches.shift()||{aliases:new Set(),label:sourceLabel(assertion),threads:new Set(),occurrences:0,maxLevel:'L0'};
+    for(const match of matches){for(const alias of match.aliases)current.aliases.add(alias);for(const thread of match.threads)current.threads.add(thread);current.occurrences+=match.occurrences;if(levelRank(match.maxLevel)>levelRank(current.maxLevel))current.maxLevel=match.maxLevel;groups.splice(groups.indexOf(match),1)}
+    for(const alias of aliases)current.aliases.add(alias);
+    current.threads.add(path.threadId);current.occurrences+=1;
+    if(levelRank(assertion.level)>levelRank(current.maxLevel))current.maxLevel=assertion.level;
+    if(!groups.includes(current))groups.push(current);
   }
-  return out;
+  return {sources:groups.map(item=>({key:[...item.aliases].sort()[0],label:item.label,threads:[...item.threads].sort(),occurrences:item.occurrences,maxLevel:item.maxLevel})).sort((a,b)=>a.label.localeCompare(b.label)),unresolved};
 }
-
-function buildGroups(){
-  GROUPS = []; GROUP_OF = {}; PARENT_OF = {}; CHILDREN_OF = {}; EV_OF = {}; EV_SHARE = {};
-  const byGrp = {};
-  for(const c of G.claims){
-    const sid = (c.sessions && c.sessions[0]) || "none";
-    const gid = "grp_" + sid.replace(/[^a-zA-Z0-9_-]/g, "_");
-    GROUP_OF[c.id] = gid;
-    (byGrp[gid] ??= {id: gid, session: sid, claims: []}).claims.push(c);
+function supportQualityForPath(path,supports){
+  const values=[];
+  for(const support of list(supports)){
+    const meta=parseMeta(support.edge_meta),origins=list(meta.origins).length?list(meta.origins):[{session:meta.session,node:meta.claim_node}];
+    if(origins.some(origin=>origin.session===path.threadId&&(!origin.node||origin.node===path.sessionClaimId))&&Number.isFinite(Number(support.quality_score)))values.push(Number(support.quality_score));
   }
-  // 组内派生树：child --derived_from--> parent（同组才嵌套，防环）
-  const cids = new Set(G.claims.map(c=>c.id));
-  for(const e of G.edges){
-    if(e.edge_type !== "derived_from") continue;
-    if(!cids.has(e.src) || !cids.has(e.dst)) continue;
-    if(GROUP_OF[e.src] !== GROUP_OF[e.dst]) continue;
-    if(PARENT_OF[e.src]) continue;
-    let anc = e.dst, loop = false;               // 防环：dst 的祖先里不能有 src
-    while(anc){ if(anc === e.src){ loop = true; break; } anc = PARENT_OF[anc]; }
-    if(loop) continue;
-    PARENT_OF[e.src] = e.dst;
-    (CHILDREN_OF[e.dst] ??= []).push(e.src);
-  }
-  for(const e of G.edges){
-    if(e.edge_type !== "supports") continue;
-    (EV_OF[e.dst] ??= []).push(e.src);
-    EV_SHARE[e.src] = (EV_SHARE[e.src] || 0) + 1;
-  }
-  let i = 0;
-  for(const grp of Object.values(byGrp)){
-    i += 1;
-    const freq = {};
-    for(const c of grp.claims) for(const n of (c.entities||[])) freq[n] = (freq[n]||0)+1;
-    const tops = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,2).map(x=>x[0]);
-    grp.label = tops.length ? tops.join(" · ")
-              : grp.session === "none" ? "其他" : `子课题 ${i}`;
-    grp.stats = {sup:0, fra:0, con:0};
-    for(const c of grp.claims){
-      if(c.status === "supported") grp.stats.sup++;
-      else if(c.status === "fragile") grp.stats.fra++;
-      else grp.stats.con++;
-    }
-    grp.roots = grp.claims.filter(c => !PARENT_OF[c.id]);
-    GROUPS.push(grp);
-  }
-  GROUPS.sort((a,b) => b.claims.length - a.claims.length);
+  return values.length?Math.max(...values):null;
 }
-// 折叠链上溯：组收起 → 组卡；派生子的祖先未展开 → 上溯到最近可见祖先
-function visId(id){
-  if(kindOf(id) !== "claim") return id;
-  if(!EXPANDED.has(GROUP_OF[id])) return GROUP_OF[id];
-  const chain = [];                              // 自底向上收集祖先
-  let node = id;
-  while(PARENT_OF[node]){ chain.unshift(PARENT_OF[node]); node = PARENT_OF[node]; }
-  let visible = chain.length ? chain[0] : id;    // 根总是可见
-  for(let k = 0; k < chain.length; k++){
-    if(!CEXP.has(chain[k])) return chain[k];     // 首个未展开祖先挡住下面所有
-    visible = (k + 1 < chain.length) ? chain[k+1] : id;
-  }
-  return visible;
+function rankPaths(paths,supports){
+  return list(paths).map(path=>{
+    const assertions=list(path.sourceAssertions),quality=supportQualityForPath(path,supports);
+    const anchored=assertions.filter(item=>object(item.sourceAnchor).selector).length;
+    const verifiable=assertions.filter(item=>object(item.artifactVersion).contentDigest&&object(item.sourceAnchor).anchorDigest).length;
+    return {...path,dimensions:{provenanceLevel:path.level||'L0',sourceQuality:quality,anchoredAssertions:anchored,verifiableAssertions:verifiable,assertionCount:assertions.length}};
+  }).sort((a,b)=>levelRank(b.dimensions.provenanceLevel)-levelRank(a.dimensions.provenanceLevel)||b.dimensions.verifiableAssertions-a.dimensions.verifiableAssertions||b.dimensions.anchoredAssertions-a.dimensions.anchoredAssertions||(b.dimensions.sourceQuality??-1)-(a.dimensions.sourceQuality??-1)||String(a.threadId).localeCompare(String(b.threadId)));
 }
-
-async function graphview(){
-  const [g, an] = await Promise.all([api("/graph"), api("/analysis")]);
-  G = {...g, analysis: an}; SEL = null;
-  buildGroups();
-  EXPANDED = new Set(JSON.parse(localStorage.getItem(EXP_KEY) || "[]")
-                     .filter(id => GROUPS.some(x => x.id === id)));
-  CEXP = new Set(JSON.parse(localStorage.getItem(CEXP_KEY) || "[]")
-                 .filter(id => G.claims.some(c => c.id === id)));
-  M.innerHTML = `<h2>图谱 · Project DAG</h2>
-    ${updateBar("更新图谱")}
-    <div class="row">
-      <button class="ghost" onclick="ZOOM=Math.max(.5,ZOOM-.15);drawGraph()">−</button>
-      <button class="ghost" onclick="ZOOM=Math.min(2,ZOOM+.15);drawGraph()">＋</button>
-      <button class="ghost" onclick="setAllGroups(true)">展开全部</button>
-      <button class="ghost" onclick="setAllGroups(false)">收起全部</button>
-      <button class="ghost" onclick="resetLayout()">重置布局</button>
-      <span class="dim">goal ${g.goals.length} · 子课题 ${GROUPS.length} · claim ${g.claims.length} · 证据 ${g.evidence.length}
-        —— 点组卡/claim 展开下一层，拖动整理</span>
-    </div>
-    <div id="ginfo"></div>
-    <div id="gwrap" style="overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--bg)"></div>
-    <div class="dim" style="margin-top:8px;font-size:12px">
-      <span style="color:#4caf7d">●</span> supported&nbsp;
-      <span style="color:#e0b341">●</span> fragile&nbsp;
-      <span style="color:#e05d5d">●</span> conflicted&nbsp;|&nbsp;
-      <span style="color:#9d7bea">━</span> derived_from&nbsp;
-      <span style="color:#e05d5d">╌</span> contradicts&nbsp;|&nbsp;
-      ⚡承重 · 琥珀虚线=脆弱/假鲁棒 · 👤人类证据 ·
-      claim 上 ▤n=n 条证据、×n=多 session 确认 · 证据上 ×n=被 n 条结论引用</div>`;
-  if(!g.claims.length){
-    document.getElementById("gwrap").innerHTML =
-      '<div class="dim" style="padding:30px">还没有存活的 claim —— 先去「编译控制台」跑一次编译。</div>';
-    return;
-  }
-  initPositions();
-  drawGraph();
-}
-
-function setAllGroups(open){
-  EXPANDED = open ? new Set(GROUPS.map(x=>x.id)) : new Set();
-  if(!open) CEXP = new Set();
-  persistExp(); initPositions(); drawGraph();
-}
-function toggleGroup(gid){
-  EXPANDED.has(gid) ? EXPANDED.delete(gid) : EXPANDED.add(gid);
-  persistExp(); initPositions(); drawGraph();
-}
-function toggleClaim(id){
-  CEXP.has(id) ? CEXP.delete(id) : CEXP.add(id);
-  persistExp(); initPositions(); drawGraph();
-}
-function persistExp(){
-  localStorage.setItem(EXP_KEY, JSON.stringify([...EXPANDED]));
-  localStorage.setItem(CEXP_KEY, JSON.stringify([...CEXP]));
-}
-
-// 递归树布局：claim 展开时其证据与派生子结论缩进跟随
-function layoutClaim(pos, c, x, y){
-  pos[c.id] = {x, y: y + DIM.claim.h/2};
-  y += DIM.claim.h + 8;
-  if(CEXP.has(c.id)){
-    for(const evid of (EV_OF[c.id] || [])){
-      pos[`${evid}@${c.id}`] = {x: x + 34, y: y + DIM.ev.h/2};
-      y += DIM.ev.h + 6;
-    }
-    for(const kid of (CHILDREN_OF[c.id] || [])){
-      const kc = G.claims.find(v=>v.id===kid);
-      if(kc) y = layoutClaim(pos, kc, x + 34, y);
-    }
-  }
-  return y;
-}
-function defaultLayout(){
-  const pos = {}, X = {goal: 40, grp: 400, claim: 770};
-  let y = 50;
-  const y0all = y;
-  for(const grp of GROUPS){
-    if(EXPANDED.has(grp.id)){
-      const y0 = y;
-      for(const c of grp.roots) y = layoutClaim(pos, c, X.claim, y);
-      pos[grp.id] = {x: X.grp, y: Math.max((y0 + y - 8) / 2, y0 + DIM.grp.h/2)};
-      y += 16;
-    } else {
-      pos[grp.id] = {x: X.grp, y: y + DIM.grp.h/2};
-      y += DIM.grp.h + 14;
-    }
-  }
-  const mid = Math.max((y0all + y - 60) / 2, 50);
-  G.goals.forEach((goal, i) => { pos[goal.root_id] = {x: X.goal, y: mid + i * 70}; });
-  return pos;
-}
-function initPositions(){
-  const saved = JSON.parse(localStorage.getItem(POS_KEY) || "{}");
-  const base = defaultLayout();
-  NPOS = {};
-  for(const id of Object.keys(base))
-    NPOS[id] = saved[id] ? {...saved[id]} : base[id];
-}
-function resetLayout(){ localStorage.removeItem(POS_KEY); initPositions(); drawGraph(); }
-function savePositions(){ localStorage.setItem(POS_KEY, JSON.stringify(NPOS)); }
-
-function connectedSet(rootId){
-  const seen = new Set([rootId]), q = [rootId];
-  const add = id => { if(!seen.has(id)){ seen.add(id); q.push(id); } };
-  while(q.length){
-    const n = q.pop(), k = kindOf(n);
-    if(k === "grp" && n === rootId)
-      for(const c of GROUPS.find(x=>x.id===n).claims) add(c.id);
-    for(const e of G.edges){
-      const t = e.edge_type;
-      if(k === "claim"){
-        if(t === "supports"   && e.dst === n) seen.add(e.src);
-        if(t === "addresses"  && e.src === n) seen.add(e.dst);
-        if(t === "derived_from" && (e.src === n || e.dst === n)) add(e.src === n ? e.dst : e.src);
-        if(t === "contradicts"  && (e.src === n || e.dst === n)) add(e.src === n ? e.dst : e.src);
-      } else if(k === "ev" && n === rootId){
-        if(t === "supports" && e.src === n) add(e.dst);
-      } else if(k === "goal" && n === rootId){
-        if(t === "addresses" && e.dst === n) add(e.src);
-      }
-    }
-    if(k === "claim") seen.add(GROUP_OF[n]);
-  }
-  return seen;
-}
-function litSet(){
-  if(!SEL) return null;
-  const s = connectedSet(SEL);
-  for(const grp of GROUPS)
-    if(grp.claims.some(c => s.has(c.id))) s.add(grp.id);
-  return s;
-}
-
-function visibleNodeIds(){
-  const out = [...G.goals.map(g=>g.root_id), ...GROUPS.map(x=>x.id)];
-  const walk = (c) => {
-    out.push(c.id);
-    if(!CEXP.has(c.id)) return;
-    for(const evid of (EV_OF[c.id] || [])) out.push(`${evid}@${c.id}`);
-    for(const kid of (CHILDREN_OF[c.id] || [])){
-      const kc = G.claims.find(v=>v.id===kid);
-      if(kc) walk(kc);
-    }
-  };
-  for(const grp of GROUPS) if(EXPANDED.has(grp.id)) grp.roots.forEach(walk);
-  return out;
-}
-
-function buildRenderEdges(){
-  const out = [], seen = new Set();
-  const push = (src, dst, type, w) => {
-    const key = `${src}|${dst}|${type}`;
-    if(src === dst || seen.has(key)) return;
-    seen.add(key); out.push({src, dst, type, w});
-  };
-  for(const grp of GROUPS){
-    const goals = new Set(grp.claims.map(c => c.goal_id).filter(Boolean));
-    for(const gid of goals)
-      push(grp.id, gid, "addresses", Math.min(1.2 + grp.claims.length * .25, 3.2));
-    if(EXPANDED.has(grp.id))
-      for(const c of grp.roots) push(c.id, grp.id, "in_group");
-  }
-  for(const e of G.edges){
-    if(e.edge_type === "derived_from"){
-      const s = visId(e.src), d = visId(e.dst);
-      // 树内父子已用缩进+连接线表达，只画「跨组/未嵌套」的派生边
-      if(PARENT_OF[e.src] === e.dst && s === e.src && d === e.dst) continue;
-      push(s, d, "derived_from");
-    } else if(e.edge_type === "contradicts"){
-      push(visId(e.src), visId(e.dst), "contradicts");
-    }
-  }
-  return out;
-}
-
-function treeConnectors(){
-  // 直角连接线（视觉树干）：claim → 其证据/派生子结论
-  let out = "";
-  const elbow = (px, py, cx, cy) =>
-    `<path d="M ${px} ${py} L ${px} ${cy} L ${cx} ${cy}" fill="none"
-       stroke="#cbd5e1" stroke-width="1.3"/>`;
-  for(const grp of GROUPS){
-    if(!EXPANDED.has(grp.id)) continue;
-    for(const c of grp.claims){
-      if(!CEXP.has(c.id)) continue;
-      const p = NPOS[c.id]; if(!p) continue;
-      const trunkX = p.x + 16;
-      for(const evid of (EV_OF[c.id] || [])){
-        const q = NPOS[`${evid}@${c.id}`]; if(!q) continue;
-        out += elbow(trunkX, p.y + DIM.claim.h/2, q.x, q.y);
-      }
-      for(const kid of (CHILDREN_OF[c.id] || [])){
-        const q = NPOS[kid]; if(!q) continue;
-        out += elbow(trunkX, p.y + DIM.claim.h/2, q.x, q.y);
-      }
-    }
-  }
-  return out;
-}
-
-function edgePath(src, dst){
-  const a = NPOS[src], b = NPOS[dst];
-  if(!a || !b) return "";
-  const da = DIM[src.includes("@") ? "ev" : kindOf(src)], db = DIM[dst.includes("@") ? "ev" : kindOf(dst)];
-  let sx, tx;
-  if(a.x + da.w/2 <= b.x + db.w/2){ sx = a.x + da.w; tx = b.x; }
-  else { sx = a.x; tx = b.x + db.w; }
-  const sy = a.y, ty = b.y, mx = (sx + tx) / 2;
-  return `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ty}, ${tx} ${ty}`;
-}
-
-function nodeCard(id, lit){
-  const isEvInst = id.includes("@");
-  const rawId = isEvInst ? id.split("@")[0] : id;
-  const k = isEvInst ? "ev" : kindOf(id);
-  const p = NPOS[id], d = DIM[k];
-  if(!p) return "";
-  const an = G.analysis;
-  const dimmed = lit && !lit.has(rawId);
-  const sel = SEL === rawId;
-  let body = "", full = "";
-  if(k === "goal"){
-    const g = G.goals.find(x=>x.root_id===id); full = g.title;
-    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="#ffffff"
-        stroke="${sel?'#1d4ed8':'#2563eb'}" stroke-width="${sel?2.2:1.4}"/>
-      <rect width="4" height="${d.h-12}" x="7" y="6" rx="2" fill="#2563eb"/>
-      <text x="20" y="${d.h/2-3}" fill="#64748b" font-size="9" letter-spacing="1.5">GOAL</text>
-      <text x="20" y="${d.h/2+13}" fill="#172033" font-size="12.5" font-weight="600">${esc(truncFit(full, d.w-34, 12.5))}</text>`;
-  } else if(k === "grp"){
-    const grp = GROUPS.find(x=>x.id===id);
-    const open = EXPANDED.has(id);
-    full = `${grp.label}（session: ${grp.session}）`;
-    const s = grp.stats;
-    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="${open?'#ffffff':'#f8fafc'}"
-        stroke="${sel?'#64748b':'#cbd5e1'}" stroke-width="${sel?2:1.4}"/>
-      <text x="14" y="${d.h/2-4}" fill="#334155" font-size="12.5" font-weight="600">${open?"▾":"▸"} ${esc(truncFit(grp.label, d.w-90, 12.5))}</text>
-      <text x="${d.w-12}" y="${d.h/2-4}" text-anchor="end" fill="#64748b" font-size="11">${grp.claims.length} 条</text>
-      <text x="30" y="${d.h/2+15}" font-size="10.5"
-        ><tspan fill="#0f9f6e">✓${s.sup}</tspan><tspan fill="#b7791f"> △${s.fra}</tspan><tspan fill="#d33f49"> ⚠${s.con}</tspan></text>`;
-  } else if(k === "claim"){
-    const c = G.claims.find(x=>x.id===id); full = c.statement;
-    const col = STATUS_COLOR[c.status] || "#5c657a";
-    const lb = (an.load_bearing||[]).find(x => x.id === id);
-    const shaky = (an.fragile||[]).some(x=>x.id===id) || (an.pseudo_robust||[]).some(x=>x.id===id);
-    const multi = (c.sessions||[]).length > 1 ? `×${c.sessions.length}` : "";
-    const nEv = (EV_OF[id]||[]).length, nKid = (CHILDREN_OF[id]||[]).length;
-    const open = CEXP.has(id);
-    const arrow = (nEv + nKid) ? (open ? "▾" : "▸") : "·";
-    body = `${shaky?`<rect x="-4" y="-4" width="${d.w+8}" height="${d.h+8}" rx="12" fill="none" stroke="#b7791f" stroke-dasharray="4 4" stroke-opacity=".8"/>`:""}
-      <rect width="${d.w}" height="${d.h}" rx="8" fill="#ffffff"
-        stroke="${sel?'#64748b':col}" stroke-width="${sel?2.2:1.3}" stroke-opacity="${sel?1:.75}"/>
-      <text x="11" y="${d.h/2+4.5}" fill="#64748b" font-size="11">${arrow}</text>
-      <circle cx="30" cy="${d.h/2}" r="5" fill="${col}"/>
-      <text x="44" y="${d.h/2+4}" fill="#172033" font-size="12">${esc(truncFit(full, d.w-60-(lb?26:0)-(multi?22:0)-(nEv&&!open?26:0), 12))}</text>
-      ${nEv&&!open?`<text x="${d.w-(lb?36:10)-(multi?22:0)}" y="${d.h/2+4}" text-anchor="end" fill="#94a3b8" font-size="10.5">▤${nEv}</text>`:""}
-      ${multi?`<text x="${d.w-(lb?36:10)}" y="${d.h/2+4}" text-anchor="end" fill="#2563eb" font-size="10.5">${multi}</text>`:""}
-      ${lb?`<text x="${d.w-10}" y="${d.h/2+4}" text-anchor="end" fill="#b7791f" font-size="11">⚡${lb.critical_count}</text>`:""}`;
-  } else {
-    const ev = G.evidence.find(x=>x.id===rawId); full = ev.content || rawId;
-    const human = ev.evidence_type === "human_attested";
-    const share = EV_SHARE[rawId] > 1 ? `×${EV_SHARE[rawId]}` : "";
-    const evLb = (an.load_bearing||[]).find(x => x.id === rawId);   // 承重证据（单点支撑多条结论）
-    body = `<rect width="${d.w}" height="${d.h}" rx="8" fill="#f8fafc"
-        stroke="${sel?'#64748b':(evLb?'#b7791f':(human?'#b7791f':'#cbd5e1'))}" stroke-width="${sel?2:(evLb?1.6:1.1)}"/>
-      <text x="10" y="${d.h/2+4}" fill="#64748b" font-size="10.5">${human?"👤 ":""}${esc(truncFit(full, d.w-20-(human?16:0)-(share?24:0)-(evLb?28:0), 10.5))}</text>
-      ${evLb?`<text x="${d.w-(share?32:8)}" y="${d.h/2+4}" text-anchor="end" fill="#b7791f" font-size="10">⚡${evLb.critical_count}</text>`:""}
-      ${share?`<text x="${d.w-8}" y="${d.h/2+4}" text-anchor="end" fill="#2563eb" font-size="10">${share}</text>`:""}`;
-  }
-  return `<g id="n_${id}" transform="translate(${p.x},${p.y - d.h/2})"
-      style="cursor:grab" opacity="${dimmed?0.14:1}"
-      onpointerdown="dragStart(event,'${id}')">
-    <title>${esc(full)}</title>${body}</g>`;
-}
-
-function drawGraph(){
-  RENDER_EDGES = buildRenderEdges();
-  const visible = visibleNodeIds();
-  let maxX = 0, maxY = 0;
-  for(const id of visible){
-    const p = NPOS[id]; if(!p) continue;
-    const d = DIM[id.includes("@") ? "ev" : kindOf(id)];
-    maxX = Math.max(maxX, p.x + d.w); maxY = Math.max(maxY, p.y + d.h);
-  }
-  const width = Math.max(maxX + 50, 900), height = Math.max(maxY + 30, 260);
-  const lit = litSet();
-  EDGE_OF = {};
-  let edges = "";
-  RENDER_EDGES.forEach((e, i) => {
-    const s = EDGE_STYLE[e.type] || EDGE_STYLE.in_group;
-    const faded = lit && !(lit.has(e.src) && lit.has(e.dst));
-    (EDGE_OF[e.src] ??= []).push(i); (EDGE_OF[e.dst] ??= []).push(i);
-    edges += `<path id="e_${i}" d="${edgePath(e.src, e.dst)}" fill="none" stroke="${s.stroke}"
-      stroke-width="${e.w || s.w}" stroke-opacity="${faded?0.06:s.op}"
-      ${s.dash?`stroke-dasharray="${s.dash}"`:""} stroke-linecap="round"/>`;
+function edgeOtherClaim(edge,claimId){return edge.src===claimId?edge.dst:edge.dst===claimId?edge.src:null}
+function relationModel(detail,graph){
+  const claims=new Map(list(graph.claims).map(item=>[item.id,item])),edges=list(graph.edges),claimId=detail.id;
+  const opposing=list(detail.contradicts).map(edge=>{const other=edgeOtherClaim(edge,claimId);return {edge,claim:claims.get(other)||{id:other,statement:'关联 Claim 不在当前 committed scope'}}});
+  const refinements=edges.filter(edge=>edge.edge_type==='derived_from'&&(edge.src===claimId||edge.dst===claimId)).map(edge=>{
+    const other=edgeOtherClaim(edge,claimId),direction=edge.src===claimId?'refines':'refined_by';
+    return {kind:'refinement',direction,edge,claim:claims.get(other)||{id:other,statement:'关联 Claim 不在当前 committed scope'}};
   });
-  const nodes = visible.map(id => nodeCard(id, lit)).join("");
-  document.getElementById("gwrap").innerHTML =
-    `<svg id="gsvg" width="${width*ZOOM}" height="${height*ZOOM}" viewBox="0 0 ${width} ${height}"
-       xmlns="http://www.w3.org/2000/svg" onpointerdown="bgClick(event)">
-      <defs><pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
-        <circle cx="1" cy="1" r="1" fill="#d8e2ee"/></pattern></defs>
-      <rect width="${width}" height="${height}" fill="url(#dots)"/>
-      <g id="glayer-t">${treeConnectors()}</g>
-      <g id="glayer-e">${edges}</g><g id="glayer-n">${nodes}</g></svg>`;
-  renderGInfo();
+  const applicability=list(detail.assessments).filter(item=>item.dimension==='applicability'&&item.result!=='passed').map(item=>({kind:'applicability',assessment:item}));
+  const declared=[];
+  for(const support of list(detail.supports))for(const value of list(parseMeta(support.edge_meta).qualifiers))declared.push({kind:'declared',value,supportId:support.id});
+  return {supports:list(detail.supports),opposing,qualifications:[...refinements,...applicability,...declared]};
 }
-
-// --- 拖拽：移动 <4px 视为点击（组卡/claim=展开收起，证据=选中隔离） ---
-let _drag = null;
-function svgPt(evt){
-  const svg = document.getElementById("gsvg");
-  const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
-  return pt.matrixTransform(svg.getScreenCTM().inverse());
+function referencesClaim(value,claimId){
+  if(value===claimId)return true;
+  if(Array.isArray(value))return value.some(item=>referencesClaim(item,claimId));
+  if(value&&typeof value==='object')return Object.values(value).some(item=>referencesClaim(item,claimId));
+  return false;
 }
-function dragStart(evt, id){
-  evt.stopPropagation();
-  const p = svgPt(evt);
-  _drag = {id, dx: p.x - NPOS[id].x, dy: p.y - NPOS[id].y, moved: false,
-           sx: evt.clientX, sy: evt.clientY};
-  window.addEventListener("pointermove", dragMove);
-  window.addEventListener("pointerup", dragEnd, {once: true});
+function statusHistoryModel(detail,snapshot,findings){
+  const relatedFindings=list(findings).filter(item=>item.subject_id===detail.id),findingIds=new Set(relatedFindings.map(item=>item.id));
+  const decisions=list(object(snapshot.graph).decisions).filter(item=>findingIds.has(item.finding_id)||item.subject_id===detail.id);
+  const diffEvents=[];for(const [kind,entries] of Object.entries(object(snapshot.compileDiff)))for(const entry of list(entries))if(referencesClaim(entry,detail.id))diffEvents.push({kind,entry});
+  return {snapshot:{digest:snapshot.digest,version:snapshot.version,createdAt:snapshot.createdAt,status:detail.status},diffEvents,assessments:list(detail.assessments),findings:relatedFindings,decisions:decisions.sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))};
 }
-function dragMove(evt){
-  if(!_drag) return;
-  if(Math.abs(evt.clientX-_drag.sx) + Math.abs(evt.clientY-_drag.sy) < 4 && !_drag.moved) return;
-  _drag.moved = true;
-  const p = svgPt(evt), id = _drag.id;
-  const d = DIM[id.includes("@") ? "ev" : kindOf(id)];
-  NPOS[id] = {x: Math.max(0, p.x - _drag.dx), y: Math.max(d.h/2, p.y - _drag.dy)};
-  const g = document.getElementById("n_"+id);
-  if(g) g.setAttribute("transform", `translate(${NPOS[id].x},${NPOS[id].y - d.h/2})`);
-  for(const i of EDGE_OF[id] || []){
-    const el = document.getElementById("e_"+i);
-    if(el) el.setAttribute("d", edgePath(RENDER_EDGES[i].src, RENDER_EDGES[i].dst));
-  }
-  const t = document.getElementById("glayer-t");   // 直角树连线实时跟随
-  if(t) t.innerHTML = treeConnectors();
+function whatIfImpact(graph,removedSourceId){
+  const claims=new Map(list(graph.claims).map(item=>[item.id,item])),edges=list(graph.edges);
+  const supportEdges=edges.filter(edge=>edge.edge_type==='supports'),directIds=[...new Set(supportEdges.filter(edge=>edge.src===removedSourceId&&claims.has(edge.dst)).map(edge=>edge.dst))];
+  const impacts=new Map(directIds.map(id=>[id,{claim:claims.get(id),kind:supportEdges.filter(edge=>edge.dst===id&&edge.src!==removedSourceId).length?'weakened':'unsupported',remainingSupportCount:supportEdges.filter(edge=>edge.dst===id&&edge.src!==removedSourceId).length,distance:0}]));
+  const queue=[...directIds];
+  while(queue.length){const current=queue.shift(),distance=impacts.get(current).distance;for(const edge of edges){let next=null;if(edge.edge_type==='derived_from'&&edge.dst===current)next=edge.src;else if(edge.edge_type==='supports'&&edge.src===current)next=edge.dst;else if(edge.edge_type==='same_as'&&edge.src===current)next=edge.dst;else if(edge.edge_type==='same_as'&&edge.dst===current)next=edge.src;if(next&&claims.has(next)&&!impacts.has(next)){impacts.set(next,{claim:claims.get(next),kind:'downstream',remainingSupportCount:null,distance:distance+1});queue.push(next)}}}
+  return {removedSourceId,directCount:directIds.length,affected:[...impacts.values()].sort((a,b)=>a.distance-b.distance||String(a.claim.id).localeCompare(String(b.claim.id)))};
 }
-function dragEnd(){
-  window.removeEventListener("pointermove", dragMove);
-  if(!_drag) return;
-  const {id, moved} = _drag; _drag = null;
-  if(moved){ savePositions(); return; }
-  const k = id.includes("@") ? "ev" : kindOf(id);
-  if(k === "grp"){ toggleGroup(id); return; }
-  if(k === "claim" && ((EV_OF[id]||[]).length || (CHILDREN_OF[id]||[]).length)){
-    toggleClaim(id); return;
-  }
-  const rawId = id.includes("@") ? id.split("@")[0] : id;
-  SEL = (SEL === rawId) ? null : rawId; drawGraph();
+function locatorTarget(assertion){
+  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion),access=artifact.accessPolicy;
+  if(artifact.availability==='restricted'||access==='restricted'||(access&&typeof access==='object'&&access.read===false))return null;
+  const locator=String(version.locator||'').trim();
+  if(/^https?:\/\//i.test(locator))return locator;
+  if(/^doi:/i.test(locator))return `https://doi.org/${encodeURIComponent(locator.slice(4).trim())}`;
+  return null;
 }
-function bgClick(evt){
-  if(evt.target.tagName === "svg" || (evt.target.tagName === "rect" && evt.target.parentNode.tagName === "svg")){
-    if(SEL){ SEL = null; drawGraph(); }
-  }
+</script>
+<script>
+const query=new URLSearchParams(location.search),hash=new URLSearchParams(location.hash.slice(1));
+const token=hash.get('token')||'',projectKey=query.get('projectKey')||projectKeyFromLabels();
+const state={status:null,graph:null,attention:[],findings:[],selectedClaimId:null,detail:null,whatIfSourceId:null};
+function projectKeyFromLabels(){const path=query.get('projectRoot')||query.get('workspaceRoot');if(path)return `path:${path}`;const project=query.get('project');return project?`project:${project}`:''}
+async function api(path){if(!projectKey)throw new Error('缺少 projectKey/workspaceRoot/project');const sep=path.includes('?')?'&':'?';const response=await fetch(`${path}${sep}projectKey=${encodeURIComponent(projectKey)}`,{headers:{Authorization:`Bearer ${token}`,Accept:'application/json'}});const body=await response.json();if(!response.ok||!body.ok)throw new Error(body.error?.message||`HTTP ${response.status}`);return body.data}
+function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]))}
+function pretty(value){return escapeHtml(JSON.stringify(value,null,2))}
+function short(value,size=12){const text=String(value||'');return text.length>size?`${text.slice(0,size)}…`:text||'—'}
+function statusClass(value){return `status-${String(value||'undetermined').replace(/[^a-z_-]/gi,'')}`}
+function renderError(error){document.getElementById('error').innerHTML=error?`<div class="error">${escapeHtml(error.message||error)}</div>`:''}
+function renderSummary(){
+  const snapshot=object(state.graph?.snapshot),status=object(state.status),scope={included:list(snapshot.evidenceVector).map(item=>item.threadId),excluded:list(snapshot.excludedSessions),isolated:list(snapshot.isolatedSessions)};
+  document.getElementById('summary').innerHTML=`<div class="card"><b>更新状态</b><p class="${status.state==='fresh'?'good':status.state==='update_failed'?'bad':'warn'}">${escapeHtml(status.state||'—')}</p></div><div class="card"><b>Committed snapshot</b><p class="mono" title="${escapeHtml(snapshot.digest)}">v${escapeHtml(snapshot.version||'—')} · ${escapeHtml(short(snapshot.digest,18))}</p></div><div class="card"><b>固定 Evidence vector</b><p>${scope.included.length} included · ${scope.excluded.length} excluded · ${scope.isolated.length} isolated</p></div><div class="card"><b>Attention frontier</b><p>${list(state.attention).length} 个当前关键项</p></div>`;
 }
-
-function renderGInfo(){
-  const box = document.getElementById("ginfo");
-  if(!SEL){ box.innerHTML = ""; return; }
-  const c = G.claims.find(x=>x.id===SEL);
-  const gl = G.goals.find(x=>x.root_id===SEL);
-  const grp = GROUPS.find(x=>x.id===SEL);
-  const ev = G.evidence.find(x=>x.id===SEL);
-  if(c) box.innerHTML = `<div class="card"><span class="s-${c.status}">●</span> ${esc(c.statement)}
-    <span class="badge">${esc(c.status)}</span><span class="badge">承重 ${c.load_bearing}</span>
-    ${(c.sessions||[]).length>1?`<span class="badge">跨 ${c.sessions.length} 个 session 确认</span>`:""}
-    <button class="ghost" style="margin-left:8px" onclick="claimDetail('${c.id}')">详情</button></div>`;
-  else if(grp) box.innerHTML = `<div class="card"><b>${esc(grp.label)}</b>
-    <span class="badge">${grp.claims.length} 条 claim</span>
-    <span class="dim mono">session: ${esc(grp.session)}</span></div>`;
-  else if(gl) box.innerHTML = `<div class="card"><b>${esc(gl.title)}</b>
-    <span class="badge">${esc(gl.status)}</span> <span class="dim">${esc(gl.description||"")}</span></div>`;
-  else if(ev) box.innerHTML = `<div class="card">${esc(ev.content||ev.id)}
-    <span class="badge">${esc(ev.evidence_type)}</span>
-    <span class="badge">${ev.trust_score!=null?"trust "+ev.trust_score:"quality "+(ev.quality_score??"?")}</span>
-    ${EV_SHARE[ev.id]>1?`<span class="badge">被 ${EV_SHARE[ev.id]} 条结论引用</span>`:""}</div>`;
+function renderClaims(){
+  const claims=list(state.graph?.claims),container=document.getElementById('claims');document.getElementById('claim-count').textContent=String(claims.length);
+  if(!claims.length){container.innerHTML='<p class="empty">当前 committed snapshot 没有 Claim。</p>';return}
+  container.innerHTML=claims.map(claim=>`<button type="button" class="claim-button" role="option" data-claim-id="${escapeHtml(claim.id)}" aria-current="${claim.id===state.selectedClaimId}"><span class="claim-title">${escapeHtml(claim.statement)}</span><span class="claim-meta"><span class="badge ${statusClass(claim.status)}">${escapeHtml(claim.status)}</span><span class="badge">${escapeHtml(claim.claim_type)}</span><span class="muted mono">${escapeHtml(short(claim.id))}</span></span></button>`).join('');
+  for(const button of container.querySelectorAll('[data-claim-id]'))button.onclick=()=>selectClaim(button.dataset.claimId);
 }
-
-// ---------------- 编译控制台 ----------------
-async function compile(){
-  const [runs, review] = await Promise.all([api("/compile-runs"), api("/review")]);
-  M.innerHTML = `<h2>编译控制台</h2>
-    <div class="row"><button id="btn" onclick="runCompile()">更新当前项目</button>
-    <button class="ghost" onclick="fullCheck()">全量校验</button>
-    <span class="dim">使用当前项目 scope 重新计算 Goal 树和图谱</span>
-    <span id="msg" class="dim"></span></div>
-    <h2>复核队列（${review.length}）</h2><div id="rq">${review.map(reviewCard).join("")||'<div class="dim">空</div>'}</div>
-    <h2>编译历史</h2>` + runs.map(r=>`<div class="card mono" style="cursor:pointer"
-      onclick="runDiff('${r.id}')">${esc(r.started_at)} · ${esc(r.trigger)} · ${esc(r.status)}
-      ${r.stats?` · +${r.stats.claims_added}/merge ${r.stats.claims_merged}/失效 ${r.stats.claims_invalidated}/复核 ${r.stats.review_enqueued}`:""}</div>`).join("");
+function scopeHtml(detail,snapshot){
+  const sessions=[...new Set(list(detail.origins).map(item=>item.session_id))];
+  return `<div class="facts"><span class="badge ${statusClass(detail.status)}">状态 ${escapeHtml(detail.status)}</span><span class="badge">类型 ${escapeHtml(detail.claim_type)}</span><span class="badge">Goal ${escapeHtml(short(detail.goal_id,18))}</span><span class="badge">版本 v${escapeHtml(snapshot.version)}</span></div><p class="compact muted">适用 scope：${sessions.length?escapeHtml(sessions.join('、')):'无 session origin'}；snapshot 固化 ${list(snapshot.evidenceVector).length} 个 included session，${list(snapshot.excludedSessions).length} excluded，${list(snapshot.isolatedSessions).length} isolated。</p>`;
 }
-function reviewCard(i){
-  const p = i.payload;
-  let desc = i.item_type;
-  if(i.item_type==="entity_merge") desc = `实体合并：<b>${esc(p.name)}</b> ≟ <b>${esc(p.candidate_name)}</b> (conf ${p.confidence})`;
-  if(i.item_type==="claim_merge") desc = `claim 合并：${esc(p.new_statement)} → <span class="mono">${esc(p.target)}</span> (conf ${p.confidence})`;
-  if(i.item_type==="conflict") desc = `冲突：${esc(p.a_statement)} ⚔ ${esc(p.b_statement)}`;
-  if(i.item_type==="orphan_claims") desc = `孤儿池：${(p.candidates||[]).length} 条结论无法归属 goal`;
-  const act = i.item_type==="conflict"
-    ? `<button onclick="resolve('${i.id}','accepted',{winner:'${p.a}'})">A 胜</button>
-       <button onclick="resolve('${i.id}','accepted',{winner:'${p.b}'})">B 胜</button>`
-    : i.item_type==="orphan_claims"
-    ? `<input id="og_${i.id}" placeholder="goal root_id" size="18">
-       <button onclick="resolve('${i.id}','accepted',{goal_id:document.getElementById('og_${i.id}').value})">收编</button>`
-    : `<button onclick="resolve('${i.id}','accepted')">接受</button>`;
-  return `<div class="card"><span class="badge">${esc(i.item_type)}</span> ${desc}<br>
-    <div class="row" style="margin-top:6px">${act}
-    <button class="ghost" onclick="resolve('${i.id}','rejected')">拒绝</button>
-    <button class="ghost" onclick="resolve('${i.id}','deferred')">推迟</button></div></div>`;
+function pathHtml(path,index){
+  const dimensions=path.dimensions,assertions=list(path.sourceAssertions);
+  return `<div class="path ${index===0?'strongest':''}"><div class="row"><b>${index===0?'最强路径':'独立候选路径'} · ${escapeHtml(path.threadId)}</b><span class="badge">${escapeHtml(dimensions.provenanceLevel)}</span></div><p class="compact muted">session Claim ${escapeHtml(path.sessionClaimId||'—')} · source quality ${dimensions.sourceQuality==null?'未记录':escapeHtml(dimensions.sourceQuality.toFixed(2))} · anchored ${dimensions.anchoredAssertions}/${dimensions.assertionCount} · verifiable ${dimensions.verifiableAssertions}/${dimensions.assertionCount}</p>${assertions.length?`<ul class="plain-list">${assertions.map(item=>`<li>${escapeHtml(item.content||item.sourceAssertionId)} <span class="muted">(${escapeHtml(item.level)})</span>${list(item.sessionPath).length?`<details><summary>Session provenance edges</summary><pre>${pretty(item.sessionPath)}</pre></details>`:''}</li>`).join('')}</ul>`:'<p class="empty">此 session origin 未找到 SourceAssertion 路径。</p>'}</div>`;
 }
-async function resolve(id, decision, extra){
-  await api(`/review/${id}/resolve`,{method:"POST",
-    body:JSON.stringify({decision, extra:extra||{}})});
-  compile();
+function relationItem(value,type){
+  if(type==='support')return `<div class="relation"><b>${escapeHtml(value.content||value.id)}</b><p class="compact muted">${escapeHtml(value.evidence_type)} · source quality ${value.quality_score==null?'未记录':escapeHtml(Number(value.quality_score).toFixed(2))} · ${escapeHtml(value.id)}</p></div>`;
+  if(type==='oppose')return `<div class="relation relation-opposes"><b>${escapeHtml(value.claim.statement)}</b><p class="compact muted">${escapeHtml(value.claim.status||'not in scope')} · ${escapeHtml(value.claim.id)}</p></div>`;
+  if(value.kind==='refinement')return `<div class="relation relation-qualifies"><b>${value.direction==='refines'?'当前 Claim 限定/细化':'被下列 Claim 限定/细化'}：${escapeHtml(value.claim.statement)}</b><p class="compact muted">derived_from · ${escapeHtml(value.claim.id)}</p></div>`;
+  if(value.kind==='applicability')return `<div class="relation relation-qualifies"><b>适用性 ${escapeHtml(value.assessment.result)}</b><p class="compact muted">${escapeHtml(parseMeta(value.assessment.details).reason||value.assessment.reason||'assessment 未提供原因')} · ${escapeHtml(value.assessment.level)}</p></div>`;
+  return `<div class="relation relation-qualifies"><b>${escapeHtml(value.value)}</b><p class="compact muted">support ${escapeHtml(value.supportId)}</p></div>`;
 }
-async function runCompile(){
-  document.getElementById("msg").textContent = "编译中…（session 多或 LLM 慢时需要一会儿）";
+function artifactHtml(assertion,path){
+  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion),anchor=object(assertion.sourceAnchor),selector=object(anchor.selector),target=locatorTarget(assertion),restricted=artifact.availability==='restricted'||artifact.accessPolicy==='restricted'||object(artifact.accessPolicy).read===false;
+  const availability=restricted?'受访问策略限制':target?'可在当前界面打开':'已记录 locator；当前界面不可直接打开';
+  return `<div class="artifact"><div class="row"><b>${escapeHtml(artifact.kind||'artifact')} · ${escapeHtml(assertion.artifactId||'未注册')}</b><span class="badge">${escapeHtml(assertion.level||path.level)}</span></div><div class="locator-actions"><span class="mono">${restricted?'[restricted]':escapeHtml(version.locator||'无 locator')}</span>${target?`<a class="open-link" href="${escapeHtml(target)}" target="_blank" rel="noopener noreferrer">打开原始工件</a>`:''}</div><p class="compact muted">${escapeHtml(availability)} · version ${escapeHtml(assertion.artifactVersionId||'—')} · content hash ${escapeHtml(short(version.contentDigest||artifact.contentDigest,22))}</p><p class="compact">Anchor：${anchor.sourceAnchorId||assertion.sourceAnchorId?escapeHtml(assertion.sourceAnchorId||anchor.sourceAnchorId):'无'} · selector ${Object.keys(selector).length?`<code>${pretty(selector)}</code>`:'未定位'} · anchor hash ${escapeHtml(short(anchor.anchorDigest,22))}</p>${assertion.run?`<details><summary>Run inputs / software / parameters / environment / outputs</summary><pre>${pretty(assertion.run)}</pre></details>`:''}</div>`;
+}
+function historyHtml(history){
+  const events=[`<div class="history"><b>Committed Snapshot v${escapeHtml(history.snapshot.version)}</b><p class="compact muted">${escapeHtml(history.snapshot.createdAt)} · ${escapeHtml(history.snapshot.digest)} · 当前状态 ${escapeHtml(history.snapshot.status)}</p></div>`];
+  for(const event of history.diffEvents)events.push(`<div class="history"><b>Compile diff · ${escapeHtml(event.kind)}</b><pre>${pretty(event.entry)}</pre></div>`);
+  for(const finding of history.findings)events.push(`<div class="history"><b>Audit Finding · ${escapeHtml(finding.finding_type)}</b><p class="compact muted">${escapeHtml(finding.status)} · ${escapeHtml(finding.severity)} · ${escapeHtml(finding.target_digest)}</p></div>`);
+  for(const decision of history.decisions)events.push(`<div class="history"><b>${escapeHtml(decision.decided_by)} Decision · ${escapeHtml(decision.action)}</b><p class="compact">${escapeHtml(decision.rationale)}</p><p class="compact muted">${escapeHtml(decision.created_at)} · evidence ${escapeHtml(short(decision.evidence_digest,22))} · ${escapeHtml(decision.autonomy_mode)} · ${escapeHtml(decision.reversibility)}</p></div>`);
+  for(const assessment of history.assessments){const details=parseMeta(assessment.details);events.push(`<div class="history"><b>${escapeHtml(assessment.level)} ${escapeHtml(assessment.dimension)} · ${escapeHtml(assessment.result)}</b><p class="compact">${escapeHtml(details.reason||details.check||'未记录计算理由')}</p><p class="compact muted">confidence ${assessment.confidence==null?'未记录':escapeHtml(Number(assessment.confidence).toFixed(2))} · ${escapeHtml(assessment.actor)} · ${escapeHtml(assessment.method)}</p></div>`)}
+  return events.join('');
+}
+function whatIfHtml(detail,graph){
+  const supports=list(detail.supports);if(!supports.length)return '<p class="empty">没有可移除的直接支持来源；模拟不会修改 committed graph。</p>';
+  if(!state.whatIfSourceId||!supports.some(item=>item.id===state.whatIfSourceId))state.whatIfSourceId=supports[0].id;
+  const impact=whatIfImpact(graph,state.whatIfSourceId);
+  return `<p class="muted">只读模拟：临时移除一条支持来源，沿 supports / derived_from / same_as 依赖计算影响；不会 POST 或保存结果。</p><div class="what-if-buttons">${supports.map(item=>`<button type="button" data-what-if-source="${escapeHtml(item.id)}" aria-pressed="${item.id===state.whatIfSourceId}">${escapeHtml(short(item.content||item.id,32))}</button>`).join('')}</div><div id="what-if-result">${impact.affected.length?impact.affected.map(item=>`<div class="impact"><b>${item.kind==='unsupported'?'将失去全部直接支持':item.kind==='weakened'?'支持将减弱':'下游可能受影响'}：${escapeHtml(item.claim.statement)}</b><p class="compact muted">distance ${item.distance}${item.remainingSupportCount==null?'':` · remaining direct supports ${item.remainingSupportCount}`}</p></div>`).join(''):'<p class="empty">该来源在当前 committed graph 中没有可传播的 Claim 影响。</p>'}</div>`;
+}
+function renderDetail(){
+  const container=document.getElementById('claim-detail'),detail=state.detail,graphSnapshot=object(state.graph?.snapshot),statusSnapshot=object(state.status?.committedSnapshot),snapshot=statusSnapshot.digest===graphSnapshot.digest?statusSnapshot:{...graphSnapshot,graph:state.graph,compileDiff:{}};
+  if(!state.selectedClaimId){container.innerHTML='<h2 id="claim-detail-heading">Claim 详情</h2><p class="empty">选择一条 Claim，查看跨层原始证据、Decision 历史和只读 what-if。</p>';return}
+  if(!detail){container.innerHTML='<h2 id="claim-detail-heading">Claim 详情</h2><p class="muted">正在读取固定 Snapshot 的详情…</p>';return}
+  const provenance=object(detail.provenance),ranked=rankPaths(provenance.paths,detail.supports),independence=independentSources(provenance.paths),relations=relationModel(detail,state.graph),history=statusHistoryModel(detail,snapshot,state.findings),artifacts=[];
+  for(const path of list(provenance.paths))for(const assertion of list(path.sourceAssertions))artifacts.push({path,assertion});
+  container.innerHTML=`<h2 id="claim-detail-heading">Claim 详情</h2><p class="statement">${escapeHtml(detail.statement)}</p>${scopeHtml(detail,snapshot)}
+    <section class="section"><h3>2. 最强支持路径</h3>${ranked.length?ranked.map(pathHtml).join(''):'<p class="empty">没有可解析的 session provenance path。</p>'}</section>
+    <section class="section"><h3>3. 真正独立的来源</h3><p><b>${independence.sources.length}</b> 个可识别独立上游；${independence.unresolved.length} 条路径无法证明独立。</p>${independence.sources.length?`<ul class="plain-list">${independence.sources.map(item=>`<li><b>${escapeHtml(item.label)}</b> · ${escapeHtml(item.maxLevel)} · ${item.occurrences} 次引用 · sessions ${escapeHtml(item.threads.join('、'))}</li>`).join('')}</ul>`:'<p class="empty">不同 session 不自动算独立来源；当前没有可识别 Artifact 身份。</p>'}</section>
+    <section class="section"><h3>4. 支持、反对与限定</h3><h3>支持 (${relations.supports.length})</h3>${relations.supports.length?relations.supports.map(item=>relationItem(item,'support')).join(''):'<p class="empty">无直接支持。</p>'}<h3>反对 / 失败复现 (${relations.opposing.length})</h3>${relations.opposing.length?relations.opposing.map(item=>relationItem(item,'oppose')).join(''):'<p class="empty">当前 committed scope 没有反对或失败复现节点。</p>'}<h3>限定 (${relations.qualifications.length})</h3>${relations.qualifications.length?relations.qualifications.map(item=>relationItem(item,'qualify')).join(''):'<p class="empty">当前 Snapshot 没有显式 refinement 或未通过的 applicability assessment。</p>'}</section>
+    <section class="section"><h3>5. Artifact、Anchor 与 Run</h3>${artifacts.length?artifacts.map(item=>artifactHtml(item.assertion,item.path)).join(''):'<p class="empty">未到达 Artifact；查看下方 provenance breakpoint。</p>'}</section>
+    <section class="section"><h3>6. 溯源等级与断点</h3><div class="facts"><span class="badge">${escapeHtml(provenance.provenanceLevel||'L0')}</span><span class="badge">reachesArtifact ${provenance.reachesArtifact?'yes':'no'}</span></div>${list(provenance.breakpoints).length?list(provenance.breakpoints).map(item=>`<div class="breakpoint"><b>${escapeHtml(item.reason)}</b><pre>${pretty(item)}</pre></div>`).join(''):'<p class="good">当前 resolver 没有报告溯源断点。</p>'}</section>
+    <section class="section"><h3>7. Snapshot、审计与 Decision 历史</h3>${historyHtml(history)}${!history.decisions.length?'<p class="empty">没有与该 Claim 的 Finding 可证明关联的 DecisionEvent；项目级 Decision 不会被冒充为 Claim 历史。</p>':''}</section>
+    <section class="section"><h3>8. 移除来源的 what-if 影响</h3>${whatIfHtml(detail,state.graph)}</section>`;
+  for(const button of container.querySelectorAll('[data-what-if-source]'))button.onclick=()=>{state.whatIfSourceId=button.dataset.whatIfSource;renderDetail()};
+}
+function renderSidechains(){
+  const attention=document.getElementById('attention'),findings=document.getElementById('findings'),currentDigest=state.graph?.snapshot?.digest,current=list(state.findings).filter(item=>item.target_digest===currentDigest);
+  attention.innerHTML=list(state.attention).length?`<ul class="plain-list">${list(state.attention).map(item=>`<li><b>${escapeHtml(item.subject_type)} · ${escapeHtml(short(item.subject_id,18))}</b><br><span class="muted">score ${escapeHtml(item.score)} · ${item.blocking?'blocking':'non-blocking'} · ${escapeHtml(Object.entries(object(item.factors)).map(([key,value])=>`${key} ${value}`).join(' / '))}</span></li>`).join('')}</ul>`:'<p class="empty">当前 Snapshot 没有 attention item。</p>';
+  findings.innerHTML=current.length?`<ul class="plain-list">${current.map(item=>`<li><b>${escapeHtml(item.finding_type)}</b> · ${escapeHtml(item.severity)} · ${escapeHtml(item.status)}<br><span class="muted">subject ${escapeHtml(short(item.subject_id,18))}</span></li>`).join('')}</ul>`:'<p class="empty">当前 Snapshot 没有 Finding。</p>';
+}
+async function selectClaim(claimId){
+  state.selectedClaimId=claimId;state.detail=null;state.whatIfSourceId=null;renderClaims();renderDetail();
+  try{const digest=state.graph?.snapshot?.digest;if(!digest)throw new Error('没有 committed snapshot');const detail=await api(`/claims/${encodeURIComponent(claimId)}?snapshot=${encodeURIComponent(digest)}`);if(state.selectedClaimId===claimId&&state.graph?.snapshot?.digest===digest){state.detail=detail;renderDetail()}}catch(error){renderError(error)}
+}
+async function refresh(){
+  renderError(null);document.getElementById('refresh').disabled=true;
   try{
-    const r = await api("/compile",{method:"POST",body:JSON.stringify(scopedCompileBody())});
-    document.getElementById("msg").textContent =
-      `完成：+${r.stats.claims_added} claim，merge ${r.stats.claims_merged}，进复核 ${r.stats.review_enqueued}`;
-  }catch(e){ document.getElementById("msg").textContent = "失败："+e.message; }
-  setTimeout(compile, 800);
+    const graph=await api('/graph'),digest=graph.snapshot?.digest;
+    const [status,attention,findings]=await Promise.all([api('/updates/status'),digest?api(`/attention?snapshotDigest=${encodeURIComponent(digest)}`):Promise.resolve([]),api('/findings')]);
+    state.graph=graph;state.status=status;state.attention=attention;state.findings=findings;
+    if(state.selectedClaimId&&!list(graph.claims).some(item=>item.id===state.selectedClaimId)){state.selectedClaimId=null;state.detail=null;state.whatIfSourceId=null}
+    renderSummary();renderClaims();renderSidechains();
+    if(state.selectedClaimId)await selectClaim(state.selectedClaimId);else renderDetail();
+  }catch(error){renderError(error)}finally{document.getElementById('refresh').disabled=false}
 }
-async function fullCheck(){
-  const r = await api("/full-check",{method:"POST",body:"{}"});
-  alert(r.clean ? "全量校验：与增量一致 ✓" : "发现漂移：\n"+JSON.stringify(r.changed,null,2));
-}
-async function runDiff(id){
-  const r = await api("/compile-runs/"+id);
-  M.innerHTML = `<h2>编译 diff · <span class="mono">${esc(id)}</span></h2>
-    <pre>${esc(JSON.stringify(r.diff,null,2))}</pre>
-    <button class="ghost" onclick="go('compile')">← 返回</button>`;
-}
-
-const ROUTES = {home, goals, graph:graphview, compile};
-// deep link: ?view=... picks the pane.
-if (START_VIEW && ROUTES[START_VIEW]) {
-  go(START_VIEW);
-} else {
-  renderNav(); home();
-}
+document.getElementById('refresh').onclick=refresh;refresh();
 </script>
 </body>
 </html>

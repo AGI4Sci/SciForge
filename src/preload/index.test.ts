@@ -74,16 +74,20 @@ describe('preload agentRuntime bridge', () => {
   it('exposes Project DAG panel IPC', async () => {
     const api = exposedApi as {
       getProjectDagView(payload: unknown): Promise<unknown>
-      runProjectDagCompile(payload: unknown): Promise<unknown>
+      updateProjectDag(payload: unknown): Promise<unknown>
+      saveProjectDagGoal(payload: unknown): Promise<unknown>
     }
     const viewPayload = { view: 'graph', workspaceRoot: '/tmp/project-alpha' }
-    const compilePayload = { goalTitle: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
+    const updatePayload = { scope: 'all', workspaceRoot: '/tmp/project-alpha' }
+    const goalPayload = { title: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
 
     await api.getProjectDagView(viewPayload)
-    await api.runProjectDagCompile(compilePayload)
+    await api.updateProjectDag(updatePayload)
+    await api.saveProjectDagGoal(goalPayload)
 
     expect(invoke).toHaveBeenCalledWith('projectDag:view', viewPayload)
-    expect(invoke).toHaveBeenCalledWith('projectDag:compile', compilePayload)
+    expect(invoke).toHaveBeenCalledWith('projectDag:update', updatePayload)
+    expect(invoke).toHaveBeenCalledWith('projectDag:save-goal', goalPayload)
   })
 
   it('exposes the local draw.io URL IPC', async () => {

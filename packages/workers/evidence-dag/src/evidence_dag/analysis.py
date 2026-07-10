@@ -48,7 +48,7 @@ def _dominator_chain(idom: dict, node: str) -> list[str]:
 
 def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
     g = graph.supports_digraph()
-    sources = [nid for nid, n in graph.nodes.items() if n.type == NodeType.SOURCE]
+    sources = [nid for nid, n in graph.nodes.items() if n.type == NodeType.SOURCE_ASSERTION]
     derived = [nid for nid, n in graph.nodes.items() if n.type in _DERIVED]
     source_set = set(sources)
 
@@ -121,7 +121,6 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
             "content": brief(nid),
             "critical_for": sorted(deps),          # collapse if this is removed
             "critical_count": len(deps),
-            "ref": node.ref if node.type == NodeType.SOURCE else None,
         })
     load_bearing.sort(key=lambda x: (-x["critical_count"], x["id"]))
 
@@ -142,7 +141,7 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
         #   * shared REASONING — looks multi-sourced, but every path rests on one
         #     shared assumption/step. A raw source count can't see this one, so it
         #     was previously invisible: the conclusion read as robust.
-        shared_src = [d for d in doms[c] if graph.nodes[d].type == NodeType.SOURCE]
+        shared_src = [d for d in doms[c] if graph.nodes[d].type == NodeType.SOURCE_ASSERTION]
         shared_rea = [d for d in doms[c] if graph.nodes[d].type == NodeType.REASONING]
         if not shared_src and not shared_rea:
             continue

@@ -18,7 +18,7 @@ def _g():
 
 
 def _src(g, txt):
-    return g.add_or_get_node(NodeType.SOURCE, txt).id
+    return g.add_or_get_node(NodeType.SOURCE_ASSERTION, txt).id
 
 
 def _rea(g, txt):
@@ -94,7 +94,7 @@ class TestReconcile(unittest.TestCase):
         _sup(g, s1, c)
         _sup(g, s2, c)
         r = reconcile(g, add_contradicts=[c])
-        conf = {e["id"] for e in r["now_conflicting"]}
+        conf = {e["id"] for e in r["now_conflicted"]}
         self.assertIn(c, conf)
 
     def test_unrelated_branch_unaffected(self):

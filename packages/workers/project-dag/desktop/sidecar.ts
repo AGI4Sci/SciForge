@@ -85,6 +85,8 @@ export function buildProjectDagLaunch(
   }
 
   const baseEnv = options.env ?? process.env
+  const runtimeEnv = { ...baseEnv }
+  delete runtimeEnv.PDAG_SCHEDULE
   const baseUrl = projectDagBaseUrl(baseEnv)
   const port = localPortFromBaseUrl(baseUrl) ?? 3898
   const runtimeToken =
@@ -106,12 +108,11 @@ export function buildProjectDagLaunch(
       cwd: options.appRoot ?? process.cwd(),
       args: [...npmArgsPrefix, '--workspace', '@sciforge/project-dag', 'run', 'start'],
       env: {
-        ...baseEnv,
+        ...runtimeEnv,
         PDAG_HOST: '127.0.0.1',
         PDAG_PORT: String(port),
         PDAG_SESSION_DIR: sessionDir,
         PDAG_DB_PATH: dbPath,
-        PDAG_SCHEDULE: baseEnv.PDAG_SCHEDULE ?? '0',
         [PROJECT_DAG_API_KEY_ENV]: runtimeToken,
         [PROJECT_DAG_SERVICE_URL_ENV]: baseUrl,
         [MODEL_ROUTER_BASE_URL_ENV]: router.baseUrl,

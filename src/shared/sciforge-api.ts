@@ -467,20 +467,48 @@ export type EvidenceDagViewRequest = {
   threadId?: string
   runtimeId?: AgentRuntimeId
 }
+export type DagAutonomyMode = 'autonomous' | 'checkpointed' | 'supervised'
+export type DagPanelStatus = {
+  freshness: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'paused' | 'degraded'
+  pendingCount: number
+  viewedSnapshotDigest?: string
+  latestSnapshotDigest?: string
+  desiredWatermark?: string
+  committedWatermark?: string
+  auditTargetDigest?: string
+  auditStale?: boolean
+  attentionCount?: number
+  missingArtifactCount?: number
+  autonomyMode?: DagAutonomyMode
+  lastError?: string
+  degradedReason?: string
+  nextAttemptAt?: string
+  scope?: {
+    includedSessions: string[]
+    excludedSessions: string[]
+    isolatedSessions: string[]
+  }
+}
 export type EvidenceDagViewResult = {
   url: string
   threadId?: string
+  status: DagPanelStatus
 }
 export type EvidenceDagUpdateRequest = {
   runtimeId: AgentRuntimeId
   threadId: string
+  operation?: 'update' | 'rebuild'
+  rebuildKind?: 'schema_upgrade' | 'corruption_recovery' | 'reinterpretation'
+  rebuildRationale?: string
 }
 export type EvidenceDagUpdateResult = {
   url: string
   threadId: string
   itemCount: number
+  jobId: string
+  status: DagPanelStatus
 }
-export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'compile'
+export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'attention'
 export type ProjectDagViewRequest = {
   view?: ProjectDagViewName
   workspaceRoot?: string
@@ -490,23 +518,43 @@ export type ProjectDagViewRequest = {
 }
 export type ProjectDagViewResult = {
   url: string
+  status: DagPanelStatus
+  goal?: {
+    id: string
+    title: string
+    description?: string
+    version?: number
+  }
 }
-export type ProjectDagCompileRequest = {
-  goalTitle?: string
-  goalDescription?: string
+export type ProjectDagUpdateRequest = {
   workspaceRoot?: string
   projectRoot?: string
   project?: string
   sessions?: string[]
   scope?: 'all' | string[]
+  excludedSessions?: string[]
+  isolatedSessions?: string[]
+  autonomyMode?: DagAutonomyMode
 }
-export type ProjectDagCompileResult = {
+export type ProjectDagUpdateResult = {
   url: string
-  runId?: string
-  stats?: unknown
-  diff?: unknown
-  skipped?: boolean
-  reason?: string
+  jobId?: string
+  status: DagPanelStatus
+}
+export type ProjectDagGoalSaveRequest = {
+  title: string
+  description?: string
+  rootGoalId?: string
+  workspaceRoot?: string
+  projectRoot?: string
+  project?: string
+  sessions?: string[]
+  autonomyMode?: DagAutonomyMode
+}
+export type ProjectDagGoalSaveResult = {
+  goalId: string
+  version?: number
+  status: DagPanelStatus
 }
 export type ConnectPhoneInstallQrResult =
   | { ok: true; url: string; deviceCode: string; userCode: string; interval: number; expireIn: number }
@@ -1079,7 +1127,8 @@ export type SciForgeApi = {
   getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
   updateEvidenceDag: (input: EvidenceDagUpdateRequest) => Promise<EvidenceDagUpdateResult>
   getProjectDagView: (input: ProjectDagViewRequest) => Promise<ProjectDagViewResult>
-  runProjectDagCompile: (input: ProjectDagCompileRequest) => Promise<ProjectDagCompileResult>
+  updateProjectDag: (input: ProjectDagUpdateRequest) => Promise<ProjectDagUpdateResult>
+  saveProjectDagGoal: (input: ProjectDagGoalSaveRequest) => Promise<ProjectDagGoalSaveResult>
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

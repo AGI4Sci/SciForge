@@ -223,8 +223,8 @@ def verify(graph: ThreadGraph, llm: LLM, *, threshold: float = 0.7,
 
     aggregates: dict[str, float] = {}
     for node in graph.nodes.values():
-        if node.type == NodeType.SOURCE:
-            node.status = NodeStatus.SUPPORTED  # a source IS evidence — always verified
+        if node.type == NodeType.SOURCE_ASSERTION:
+            node.status = NodeStatus.SUPPORTED
             continue
         incoming = graph.incoming_supports(node.id)
         agg = noisy_or([e.nli_score for e in incoming if e.nli_score is not None])
@@ -232,9 +232,9 @@ def verify(graph: ThreadGraph, llm: LLM, *, threshold: float = 0.7,
         contra_agg = noisy_or(contra_nu.get(node.id, []))
         if incoming and agg >= threshold:
             # stands on its evidence — but flag it contested if credibly contradicted
-            node.status = NodeStatus.CONFLICTING if contra_agg >= threshold else NodeStatus.SUPPORTED
+            node.status = NodeStatus.CONFLICTED if contra_agg >= threshold else NodeStatus.SUPPORTED
         else:
-            node.status = NodeStatus.UNVERIFIED
+            node.status = NodeStatus.UNDETERMINED
 
     changes = [
         {"node": nid, "from": before[nid].value, "to": graph.nodes[nid].status.value,

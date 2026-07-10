@@ -48,7 +48,7 @@ afterEach(async () => {
 })
 
 describe('Project DAG sidecar launch', () => {
-  it('disables scheduled compiles for the desktop-managed sidecar by default', () => {
+  it('uses the durable update worker without a separate schedule lane', () => {
     const result = buildProjectDagLaunch(settings(), {
       userDataDir: '/tmp/sciforge',
       appRoot: '/app/root',
@@ -58,12 +58,12 @@ describe('Project DAG sidecar launch', () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.launch.env.PDAG_SCHEDULE).toBe('0')
+    expect(result.launch.env.PDAG_SCHEDULE).toBeUndefined()
     expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('45')
     expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('1')
   })
 
-  it('allows an explicit PDAG_SCHEDULE override', () => {
+  it('does not forward the removed PDAG_SCHEDULE bypass', () => {
     const result = buildProjectDagLaunch(settings(), {
       userDataDir: '/tmp/sciforge',
       appRoot: '/app/root',
@@ -77,7 +77,7 @@ describe('Project DAG sidecar launch', () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.launch.env.PDAG_SCHEDULE).toBe('1')
+    expect(result.launch.env.PDAG_SCHEDULE).toBeUndefined()
     expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('90')
     expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('3')
   })

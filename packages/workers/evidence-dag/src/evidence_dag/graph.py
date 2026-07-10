@@ -1,16 +1,23 @@
-"""Thread-scoped evidence graph: storage, shared-node dedup, cycle detection,
-provenance traversal, and topo layering.
-
-Scope decision (2026-06-16): **one thread == one graph**. Cross-thread
-accumulation is out of scope for phase 1.
-"""
+"""Thread-scoped Evidence DAG and snapshot-contained provenance records."""
 from __future__ import annotations
 
 from typing import Optional
 
 import networkx as nx
 
-from .model import Edge, EdgeRel, Node, NodeType, make_edge_id, make_node_id
+from .model import (
+    ACYCLIC_LINEAGE_RELS,
+    Artifact,
+    ArtifactVersion,
+    Assessment,
+    Edge,
+    EdgeRel,
+    Node,
+    NodeType,
+    SourceAnchor,
+    make_edge_id,
+    make_node_id,
+)
 
 # Edges whose direction is "evidence -> conclusion" and that we walk backwards
 # when reconstructing a provenance path. `contradicts` is exposed but NOT
@@ -27,6 +34,10 @@ class ThreadGraph:
         self.meta: dict = dict(meta or {})
         self.nodes: dict[str, Node] = {}
         self.edges: dict[str, Edge] = {}
+        self.artifacts: dict[str, Artifact] = {}
+        self.artifact_versions: dict[str, ArtifactVersion] = {}
+        self.source_anchors: dict[str, SourceAnchor] = {}
+        self.assessments: list[Assessment] = []
 
     # --- mutation -----------------------------------------------------------
     def add_or_get_node(
@@ -45,23 +56,53 @@ class ThreadGraph:
         (a shared source may first appear without one) so later citations don't
         lose provenance.
         """
-        nid = make_node_id(ntype, content)
+        identity_scope = extra.pop("identity_scope", None)
+        if identity_scope is None and ntype == NodeType.SOURCE_ASSERTION:
+            identity_scope = extra.get("artifact_id")
+        if identity_scope is None:
+            identity_scope = extra.get("external_id")
+        nid = make_node_id(ntype, content, identity_scope)
         existing = self.nodes.get(nid)
         if existing is not None:
-            if existing.trace_ref is None and trace_ref is not None:
-                existing.trace_ref = trace_ref
+            occurrence = Node(
+                id=nid, type=ntype, content=content,
+                trace_refs=[trace_ref] if trace_ref else [], created_at=created_at,
+                created_by=created_by, **extra,
+            )
+            existing.merge_occurrence(occurrence)
             return existing
         node = Node(
             id=nid,
             type=ntype,
             content=content,
-            trace_ref=trace_ref,
+            trace_refs=[trace_ref] if trace_ref else [],
             created_at=created_at,
             created_by=created_by,
             **extra,
         )
         self.nodes[nid] = node
         return node
+
+    def attach_registry_records(
+        self,
+        *,
+        artifact: Artifact,
+        artifact_version: ArtifactVersion,
+        source_anchor: Optional[SourceAnchor] = None,
+    ) -> None:
+        self.artifacts[artifact.artifact_id] = Artifact.from_dict(artifact.to_dict())
+        self.artifact_versions[artifact_version.version_id] = ArtifactVersion.from_dict(
+            artifact_version.to_dict()
+        )
+        if source_anchor is not None:
+            self.source_anchors[source_anchor.anchor_id] = SourceAnchor.from_dict(source_anchor.to_dict())
+
+    def append_assessment(self, assessment: Assessment) -> None:
+        if all(existing.assessment_id != assessment.assessment_id for existing in self.assessments):
+            self.assessments.append(assessment)
+        edge = self.edges.get(assessment.target_id)
+        if edge is not None and assessment.assessment_id not in edge.assessment_ids:
+            edge.assessment_ids.append(assessment.assessment_id)
 
     def add_edge(
         self,
@@ -82,9 +123,20 @@ class ThreadGraph:
             if nli_score is not None:
                 e.nli_score = nli_score
             return e
+        if rel in ACYCLIC_LINEAGE_RELS and self._would_cycle(src, dst, rel):
+            return None
         edge = Edge(id=eid, src=src, dst=dst, rel=rel, nli_score=nli_score, created_at=created_at)
         self.edges[eid] = edge
         return edge
+
+    def _would_cycle(self, src: str, dst: str, rel: EdgeRel) -> bool:
+        family_graph = nx.DiGraph()
+        family_graph.add_nodes_from(self.nodes)
+        for edge in self.edges.values():
+            if edge.rel in ACYCLIC_LINEAGE_RELS:
+                family_graph.add_edge(edge.src, edge.dst)
+        family_graph.add_edge(src, dst)
+        return not nx.is_directed_acyclic_graph(family_graph)
 
     def merge_from(self, other: "ThreadGraph") -> dict:
         """Accumulate another graph's nodes/edges into this one, in place.
@@ -103,8 +155,7 @@ class ThreadGraph:
         for nid, node in other.nodes.items():
             existing = self.nodes.get(nid)
             if existing is not None:
-                if existing.trace_ref is None and node.trace_ref is not None:
-                    existing.trace_ref = node.trace_ref
+                existing.merge_occurrence(node)
                 continue
             self.nodes[nid] = node
             new_nodes.append(nid)
@@ -114,8 +165,17 @@ class ThreadGraph:
                 continue  # endpoint absent after merge -> drop (mirrors add_edge)
             if eid in self.edges:
                 continue
+            if edge.rel in ACYCLIC_LINEAGE_RELS and self._would_cycle(
+                edge.src, edge.dst, edge.rel,
+            ):
+                continue
             self.edges[eid] = edge
             new_edges.append(eid)
+        self.artifacts.update(other.artifacts)
+        self.artifact_versions.update(other.artifact_versions)
+        self.source_anchors.update(other.source_anchors)
+        for assessment in other.assessments:
+            self.append_assessment(assessment)
         return {"new_nodes": new_nodes, "new_edges": new_edges}
 
     # --- graph views --------------------------------------------------------
@@ -169,10 +229,7 @@ class ThreadGraph:
         return [sorted(layer) for layer in nx.topological_generations(g)]
 
     def provenance_path(self, node_id: str) -> dict:
-        """Backward closure over `supports` edges from a claim down to its
-        source leaves. Returns the induced sub-DAG (nodes + supports edges,
-        each carrying ν) — this is the refs-first trace-back.
-        """
+        """Resolve a semantic node through assertions/anchors to original Artifacts."""
         if node_id not in self.nodes:
             raise KeyError(node_id)
         # incoming supports edges, indexed by destination
@@ -193,16 +250,121 @@ class ThreadGraph:
                 seen_edges.append(e)
                 stack.append(e.src)
 
-        leaves = sorted(
-            n for n in seen_nodes
-            if self.nodes[n].type == NodeType.SOURCE or not incoming.get(n)
+        # Extend the epistemic path with explicit activity lineage. Relation
+        # direction follows the domain contract: entity --generated_by--> run,
+        # run --used--> input/software/environment. Generated logs and outputs
+        # are included as sibling entities of the selected run.
+        lineage_rels = {
+            EdgeRel.GENERATED_BY, EdgeRel.USED, EdgeRel.DERIVED_FROM,
+            EdgeRel.ASSOCIATED_WITH, EdgeRel.ATTRIBUTED_TO,
+            EdgeRel.VERSION_OF, EdgeRel.SUPERSEDES,
+            EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE,
+        }
+        lineage_edges: list[Edge] = []
+        lineage_seen: set[str] = set(seen_nodes)
+        lineage_stack = list(seen_nodes)
+        while lineage_stack:
+            current = lineage_stack.pop()
+            for edge in self.edges.values():
+                if edge.rel not in lineage_rels:
+                    continue
+                neighbor: Optional[str] = None
+                if edge.rel == EdgeRel.GENERATED_BY:
+                    if edge.src == current:
+                        neighbor = edge.dst
+                    elif edge.dst == current and self.nodes[current].type in {
+                        NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN,
+                    }:
+                        neighbor = edge.src
+                elif edge.rel in {EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE}:
+                    if edge.dst == current:
+                        neighbor = edge.src
+                elif edge.src == current:
+                    neighbor = edge.dst
+                if neighbor is None:
+                    continue
+                if all(existing.id != edge.id for existing in lineage_edges):
+                    lineage_edges.append(edge)
+                if neighbor not in lineage_seen:
+                    lineage_seen.add(neighbor)
+                    lineage_stack.append(neighbor)
+        seen_nodes.update(lineage_seen)
+        seen_edges.extend(
+            edge for edge in lineage_edges
+            if all(existing.id != edge.id for existing in seen_edges)
+        )
+
+        leaves = sorted(n for n in seen_nodes if self.nodes[n].type == NodeType.SOURCE_ASSERTION)
+        unsupported_leaves = sorted(
+            n for n in seen_nodes if not incoming.get(n) and self.nodes[n].type != NodeType.SOURCE_ASSERTION
+        )
+        assertions = [self.nodes[n] for n in seen_nodes if self.nodes[n].type == NodeType.SOURCE_ASSERTION]
+        artifact_ids = {n.artifact_id for n in assertions if n.artifact_id}
+        version_ids = {n.artifact_version_id for n in assertions if n.artifact_version_id}
+        anchor_ids = {n.source_anchor_id for n in assertions if n.source_anchor_id}
+        breakpoints: list[dict] = []
+        levels: list[int] = []
+        for assertion in assertions:
+            level = 0
+            artifact = self.artifacts.get(assertion.artifact_id or "")
+            version = self.artifact_versions.get(assertion.artifact_version_id or "")
+            trace_only = bool(
+                version and version.locator.lower().startswith(("runtime:", "trace:"))
+            )
+            if artifact is not None and trace_only:
+                breakpoints.append({
+                    "targetId": assertion.id,
+                    "reason": "external_artifact_not_identified",
+                })
+            elif artifact is not None:
+                level = 1
+            else:
+                breakpoints.append({"targetId": assertion.id, "reason": "artifact_not_linked"})
+            anchor = self.source_anchors.get(assertion.source_anchor_id or "")
+            if anchor is not None and not trace_only:
+                level = max(level, 2)
+            elif level >= 1:
+                breakpoints.append({"targetId": assertion.id, "reason": "source_anchor_missing"})
+            if level >= 2 and version is not None and version.content_digest and not trace_only:
+                level = max(level, 3)
+            elif level >= 2:
+                breakpoints.append({"targetId": assertion.id, "reason": "artifact_digest_missing"})
+            levels.append(level)
+        level = min(levels) if levels else 0
+        from .lineage import reproducibility_report
+        reproducibility = reproducibility_report(self, node_id)
+        if reproducibility["complete"]:
+            level = 4
+        elif reproducibility["runIds"]:
+            breakpoints.extend(reproducibility["breakpoints"])
+        lineage_artifact_nodes = [
+            self.nodes[nid] for nid in seen_nodes
+            if self.nodes[nid].artifact_id and self.nodes[nid].type != NodeType.SOURCE_ASSERTION
+        ]
+        reaches_artifact = (
+            bool(assertions) and all(x.artifact_id in self.artifacts for x in assertions)
+        ) or bool(lineage_artifact_nodes) and all(
+            node.artifact_id in self.artifacts for node in lineage_artifact_nodes
         )
         return {
             "root": node_id,
             "nodes": [self.nodes[n].to_dict() for n in sorted(seen_nodes)],
             "edges": [e.to_dict() for e in seen_edges],
-            "source_leaves": leaves,
-            "reaches_source": any(self.nodes[n].type == NodeType.SOURCE for n in seen_nodes),
+            "sourceAssertionLeaves": leaves,
+            "unsupportedLeaves": unsupported_leaves,
+            "reachesArtifact": reaches_artifact,
+            "provenanceLevel": f"L{level}",
+            "breakpoints": breakpoints,
+            "reproducibility": reproducibility,
+            "artifactRegistry": {
+                "artifacts": [self.artifacts[x].to_dict() for x in sorted(artifact_ids) if x in self.artifacts],
+                "artifactVersions": [self.artifact_versions[x].to_dict() for x in sorted(version_ids)
+                                     if x in self.artifact_versions],
+                "sourceAnchors": [self.source_anchors[x].to_dict() for x in sorted(anchor_ids)
+                                  if x in self.source_anchors],
+            },
+            "assessments": [a.to_dict() for a in self.assessments if a.target_id in seen_nodes or
+                            a.target_id in {edge.id for edge in seen_edges}],
         }
 
     def incoming_supports(self, node_id: str) -> list[Edge]:
@@ -221,6 +383,12 @@ class ThreadGraph:
             "meta": self.meta,
             "nodes": [n.to_dict() for n in self.nodes.values()],
             "edges": [e.to_dict() for e in self.edges.values()],
+            "artifact_registry": {
+                "artifacts": [a.to_dict() for a in self.artifacts.values()],
+                "artifactVersions": [v.to_dict() for v in self.artifact_versions.values()],
+                "sourceAnchors": [a.to_dict() for a in self.source_anchors.values()],
+            },
+            "assessments": [a.to_dict() for a in self.assessments],
         }
 
     @classmethod
@@ -232,6 +400,17 @@ class ThreadGraph:
         for ed in d.get("edges", []):
             e = Edge.from_dict(ed)
             g.edges[e.id] = e
+        registry = d.get("artifact_registry") or {}
+        for raw in registry.get("artifacts") or []:
+            artifact = Artifact.from_dict(raw)
+            g.artifacts[artifact.artifact_id] = artifact
+        for raw in registry.get("artifactVersions") or []:
+            version = ArtifactVersion.from_dict(raw)
+            g.artifact_versions[version.version_id] = version
+        for raw in registry.get("sourceAnchors") or []:
+            anchor = SourceAnchor.from_dict(raw)
+            g.source_anchors[anchor.anchor_id] = anchor
+        g.assessments = [Assessment.from_dict(raw) for raw in d.get("assessments") or []]
         return g
 
     def summary(self) -> dict:

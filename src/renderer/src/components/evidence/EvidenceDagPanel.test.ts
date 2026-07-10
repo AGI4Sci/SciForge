@@ -3,8 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   EvidenceDagPanel,
-  runEvidenceDagUpdate,
-  withEvidenceDagUpdateTimeout
+  runEvidenceDagUpdate
 } from './EvidenceDagPanel'
 
 const labels: Record<string, string> = {
@@ -12,9 +11,9 @@ const labels: Record<string, string> = {
   rightPanelCollapse: 'Collapse right sidebar',
   evidenceDagGlobalView: 'All threads',
   evidenceDagRefresh: 'Refresh Evidence DAG',
-  evidenceDagUpdate: 'Update DAG',
-  evidenceDagUpdateRunning: 'Updating',
-  evidenceDagUpdateHelp: 'Update the current thread Evidence DAG',
+  evidenceDagUpdate: 'Update now',
+  evidenceDagUpdateRunning: 'Queueing',
+  evidenceDagUpdateHelp: 'Queue an immediate incremental update for this thread',
   evidenceDagUpdateUnavailableHint: 'Open an active thread to update the DAG'
 }
 
@@ -33,15 +32,17 @@ describe('EvidenceDagPanel', () => {
     }))
 
     expect(html).toContain('Evidence DAG')
-    expect(html).toContain('Update DAG')
-    expect(html).toContain('aria-label="Update the current thread Evidence DAG"')
+    expect(html).toContain('Update now')
+    expect(html).toContain('aria-label="Queue an immediate incremental update for this thread"')
   })
 
   it('uses the dedicated update bridge when it is available', async () => {
     const updateEvidenceDag = vi.fn(async () => ({
       url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1',
       threadId: 'thread-1',
-      itemCount: 2
+      itemCount: 2,
+      jobId: 'job-1',
+      status: { freshness: 'queued' as const, pendingCount: 1 }
     }))
 
     await expect(runEvidenceDagUpdate({
@@ -70,14 +71,4 @@ describe('EvidenceDagPanel', () => {
     })).rejects.toThrow(/extract failed/)
   })
 
-  it('times out an update request that keeps running', async () => {
-    vi.useFakeTimers()
-    const pending = new Promise<never>(() => undefined)
-    const result = withEvidenceDagUpdateTimeout(pending, 25)
-    const assertion = expect(result).rejects.toThrow(/timed out/)
-
-    await vi.advanceTimersByTimeAsync(25)
-    await assertion
-    vi.useRealTimers()
-  })
 })

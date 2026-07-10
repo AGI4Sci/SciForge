@@ -72,6 +72,11 @@ import {
   localRuntimeHttpRequestViaHost
 } from './runtime/local-runtime-adapter'
 import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
+import {
+  configureEvidenceDagUpdateQueue,
+  evidenceDagQueuePath
+} from './runtime/evidence-dag-feed'
+import { EvidenceArtifactLifecycle } from './runtime/evidence-artifact-lifecycle'
 import { createLocalRuntimeAgentRuntimeAdapter } from './runtime/local-runtime-agent-runtime-adapter'
 import { createCodexAgentRuntimeAdapter } from './runtime/codex/codex-agent-runtime-adapter'
 import {
@@ -363,6 +368,7 @@ let codexRuntime: CodexRuntimeService | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let paperRadarWorkerService: PaperRadarWorkerService | null = null
+let evidenceArtifactLifecycle: EvidenceArtifactLifecycle | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
 type RuntimeIdleListThreads = NonNullable<Parameters<typeof waitForRuntimeTurnsIdle>[0]['listThreads']>
@@ -596,6 +602,8 @@ async function stopManagedRuntimes(): Promise<void> {
       zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
       codeNavigationService?.shutdown()
+      evidenceArtifactLifecycle?.stop()
+      evidenceArtifactLifecycle = null
       paperRadarWorkerService?.close()
       paperRadarWorkerService = null
       await stopEvidenceDagSidecar()
@@ -1669,6 +1677,25 @@ app.whenReady().then(async () => {
       message: error instanceof Error ? error.message : String(error)
     })
   })
+  configureEvidenceDagUpdateQueue({
+    storagePath: evidenceDagQueuePath(app.getPath('userData')),
+    ensureEvidenceDagReady: async () => {
+      const settings = await store.load()
+      await ensureEvidenceDagSidecar(settings, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('evidence-dag', message)
+      })
+    },
+    ensureProjectDagReady: async () => {
+      const settings = await store.load()
+      await ensureProjectDagSidecar(settings, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('project-dag', message)
+      })
+    }
+  })
   codeNavigationService = new LspCodeNavigationService()
   const modelAuditRecorder = new ModelRequestAuditRecorder()
   const contextStateService = new RuntimeContextStateService()
@@ -1701,6 +1728,23 @@ app.whenReady().then(async () => {
       visibleContext: visibleContextService,
       goals: runtimeGoalService
     }
+  })
+  evidenceArtifactLifecycle = new EvidenceArtifactLifecycle({
+    threads: agentRuntimeHost,
+    ensureEvidenceDagReady: async () => {
+      const settings = await store.load()
+      await ensureEvidenceDagSidecar(settings, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('evidence-dag', message)
+      })
+    },
+    log: (message, details) => logWarn('evidence-artifact', message, details)
+  })
+  void evidenceArtifactLifecycle.start().catch((error) => {
+    logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
   })
   runtimeIdleListThreads = (input) => agentRuntimeHost.listThreads(input)
 
