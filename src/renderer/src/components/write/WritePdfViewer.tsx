@@ -309,6 +309,8 @@ const PDF_VIEWER_CSS = `
 }
 
 .write-pdf-text-layer {
+  --scale-factor: 1;
+  --total-scale-factor: 1;
   z-index: 1;
   overflow: hidden;
   opacity: 1;
@@ -1951,6 +1953,8 @@ function WritePdfPage({
       }
       const viewport = page.getViewport({ scale })
       const outputScale = Math.max(1, window.devicePixelRatio || 1)
+      textLayer.style.setProperty('--scale-factor', String(viewport.scale))
+      textLayer.style.setProperty('--total-scale-factor', String(viewport.scale))
       canvas.width = Math.floor(viewport.width * outputScale)
       canvas.height = Math.floor(viewport.height * outputScale)
       canvas.style.width = `${viewport.width}px`

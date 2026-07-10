@@ -142,10 +142,14 @@ export function DocumentAnnotationPanelController({
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const sessionId = context.state.session?.id ?? null
   const path = observation?.file.path ?? context.state.session?.path ?? ''
-  const canReadSidecar = Boolean(observation?.actions.includes('annotation.sidecar.read') && sessionId)
-  const canImportSidecar = Boolean(documentKind === 'pdf' && observation?.actions.includes('annotation.sidecar.import') && sessionId)
-  const canGeneratePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_GENERATE_ACTION_ID) && sessionId)
-  const canImprovePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_IMPROVE_ACTION_ID) && sessionId)
+  const observationActions = useMemo(() => new Set([
+    ...(observation?.actions ?? []),
+    ...(context.state.observation?.actions ?? [])
+  ]), [context.state.observation?.actions, observation?.actions])
+  const canReadSidecar = Boolean(observationActions.has('annotation.sidecar.read') && sessionId)
+  const canImportSidecar = Boolean(documentKind === 'pdf' && observationActions.has('annotation.sidecar.import') && sessionId)
+  const canGeneratePdfReview = Boolean(documentKind === 'pdf' && observationActions.has(PDF_REVIEW_GENERATE_ACTION_ID) && sessionId)
+  const canImprovePdfReview = Boolean(documentKind === 'pdf' && observationActions.has(PDF_REVIEW_IMPROVE_ACTION_ID) && sessionId)
   const pdfReviewHasSelection = Boolean(pdfReviewSelection && (pdfReviewSelection.text.trim() || pdfReviewSelection.rects?.length))
   const pdfReviewSelectionLabel = pdfReviewHasSelection
     ? `${pdfReviewSelection?.text.trim().length || pdfReviewSelection?.rects?.length || 0}${pdfReviewSelection?.text.trim() ? ' chars' : ' regions'}`
@@ -200,17 +204,23 @@ export function DocumentAnnotationPanelController({
   }), [activeThreadId, displayMode, sidecar])
   const jumpToRect = useMemo(() => firstPdfAnnotationThreadRect(sidecar, selectedThreadId), [selectedThreadId, sidecar])
 
-  const rememberPdfReviewSelection = useCallback((selection: WritePdfSelection): void => {
-    if (selection.text.trim() || selection.rects?.length) {
-      setPdfReviewSelection(selection)
-    }
+  const clearPdfReviewNotice = useCallback((): void => {
+    setPdfReviewNotice(null)
   }, [])
 
+  const rememberPdfReviewSelection = useCallback((selection: WritePdfSelection): void => {
+    if (selection.text.trim() || selection.rects?.length) {
+      clearPdfReviewNotice()
+      setPdfReviewSelection(selection)
+    }
+  }, [clearPdfReviewNotice])
+
   const openPanel = useCallback((selection?: WritePdfSelection | null): void => {
+    clearPdfReviewNotice()
     if (selection) rememberPdfReviewSelection(selection)
     setPanelOpen(true)
     if (!sidecar && canReadSidecar) void loadSidecar()
-  }, [canReadSidecar, loadSidecar, rememberPdfReviewSelection, sidecar])
+  }, [canReadSidecar, clearPdfReviewNotice, loadSidecar, rememberPdfReviewSelection, sidecar])
 
   const togglePanel = useCallback((): void => {
     setPanelOpen((open) => {
@@ -602,6 +612,7 @@ export function DocumentAnnotationPanelController({
           pdfReviewImprovingThreadId={pdfReviewImprovingThreadId}
           pdfReviewNotice={pdfReviewNotice}
           notice={annotationNotice}
+          onClearPdfReviewNotice={clearPdfReviewNotice}
           onGeneratePdfReview={(input) => void generatePdfReview(input)}
           onImproveAnnotation={canImprovePdfReview ? (threadId, summary) => void improvePdfReviewAnnotation(threadId, summary) : undefined}
           onExportPackage={documentKind === 'pdf' ? () => void exportPackage() : undefined}
