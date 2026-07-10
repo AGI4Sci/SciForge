@@ -1,10 +1,16 @@
 import { z } from 'zod'
+import type {
+  WorkspacePreviewAnchor,
+  WorkspaceStructuredSelection
+} from './workspace-preview'
 
 export type WorkspaceFileTarget = {
   path: string
   workspaceRoot?: string
   line?: number
   column?: number
+  selection?: WorkspaceStructuredSelection
+  anchor?: WorkspacePreviewAnchor
 }
 
 export type WorkspaceEntry = {

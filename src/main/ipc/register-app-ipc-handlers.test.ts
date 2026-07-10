@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { configureEvidenceDagUpdateQueue } from '../runtime/evidence-dag-feed'
+import {
+  configureEvidenceDagUpdateQueue,
+  evidenceDagQueueStatus
+} from '../runtime/evidence-dag-feed'
 import {
   mergeScheduleSettings,
   defaultConnectPhoneSettings,
@@ -189,7 +192,10 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
     }
     if (href.endsWith('/version')) {
       return new Response(
-        JSON.stringify({ ok: status >= 200 && status < 300, data: { service: 'project-dag-engine' } }),
+        JSON.stringify({
+          ok: status >= 200 && status < 300,
+          data: { service: 'project-dag-engine', version: '0.2.0' }
+        }),
         { status }
       )
     }
@@ -778,10 +784,10 @@ describe('registerAppIpcHandlers', () => {
       status: { freshness: 'fresh', pendingCount: 0 }
     })
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/version',
+      'http://127.0.0.1:4897/updates/status?threadId=codex%3Athread-1',
       expect.objectContaining({
         method: 'GET',
-        headers: { authorization: 'Bearer test-token' }
+        headers: expect.any(Headers)
       })
     )
   })
@@ -820,7 +826,7 @@ describe('registerAppIpcHandlers', () => {
 
     await expect(
       handlers.get('evidenceDag:view')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
-    ).rejects.toThrow(/Evidence DAG service is not reachable/)
+    ).rejects.toThrow(/Evidence DAG returned HTTP 503/)
   })
 
   it('returns an embedded Project DAG view URL without opening an external browser', async () => {
@@ -854,7 +860,42 @@ describe('registerAppIpcHandlers', () => {
     )
   })
 
-  it('ensures session Evidence freshness before queueing the Project update', async () => {
+  it('keeps the committed Project scope when currently listed runtime sessions differ', async () => {
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    const fetchMock = stubProjectDagReady()
+    const originalFetch = fetchMock.getMockImplementation()!
+    await originalFetch('http://127.0.0.1:3898/updates', {
+      method: 'POST',
+      body: JSON.stringify({
+        evidenceVector: [
+          { threadId: 'codex:committed-thread', digest: 'sha256:committed' },
+          { threadId: 'sciforge:retired-thread', digest: 'sha256:retired' }
+        ],
+        capturedScope: { excludedSessions: [], isolatedSessions: [] }
+      })
+    })
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      agentRuntime: projectDagAgentRuntime(['unrelated-current-thread'])
+    }))
+
+    await expect(handlers.get('projectDag:view')?.({}, {
+      view: 'graph',
+      workspaceRoot: '/tmp/project-alpha'
+    })).resolves.toMatchObject({
+      url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Acommitted-thread&session=sciforge%3Aretired-thread#token=project-token',
+      status: {
+        freshness: 'fresh',
+        pendingCount: 0,
+        scope: {
+          includedSessions: ['codex:committed-thread', 'sciforge:retired-thread']
+        }
+      }
+    })
+  })
+
+  it('returns after durable enqueue while Session Evidence and Project coordination continue', async () => {
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
     vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
@@ -870,7 +911,14 @@ describe('registerAppIpcHandlers', () => {
       workspaceRoot: '/tmp/project-alpha'
     })).resolves.toMatchObject({
       url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Athread-1#token=project-token',
-      status: { freshness: 'fresh', pendingCount: 0 }
+      status: {
+        freshness: 'queued',
+        pendingCount: 1,
+        progress: { stage: 'evidence', completedItems: 0, totalItems: 1 }
+      }
+    })
+    await vi.waitFor(async () => {
+      expect((await evidenceDagQueueStatus('codex', 'thread-1')).state).toBe('fresh')
     })
     expect(shell.openExternal).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledWith(
@@ -885,6 +933,70 @@ describe('registerAppIpcHandlers', () => {
         method: 'POST'
       })
     )
+  })
+
+  it('reuses unchanged committed Evidence snapshots without rereading full Session histories', async () => {
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    const fetchMock = stubProjectDagReady()
+    const originalFetch = fetchMock.getMockImplementation()!
+    await originalFetch('http://127.0.0.1:3898/updates', {
+      method: 'POST',
+      body: JSON.stringify({
+        evidenceVector: [
+          { threadId: 'codex:thread-1', digest: 'sha256:fresh:codex:thread-1' },
+          { threadId: 'sciforge:retired-thread', digest: 'sha256:fresh:sciforge:retired-thread' }
+        ],
+        capturedScope: { excludedSessions: [], isolatedSessions: [] }
+      })
+    })
+    fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const href = String(input)
+      if (href.startsWith('http://127.0.0.1:4897/updates/status')) {
+        const threadId = new URL(href).searchParams.get('threadId') ?? ''
+        return new Response(JSON.stringify({ ok: true, data: {
+          state: 'fresh', pending: 0, snapshot: {
+            threadId,
+            version: 4,
+            digest: `sha256:fresh:${threadId}`,
+            inputWatermark: '7',
+            schemaVersion: '2', extractorVersion: '2', verifierVersion: '2',
+            artifactDigests: [],
+            createdAt: '2026-07-10T00:00:00.000Z',
+            status: 'committed'
+          }
+        } }), { status: 200 })
+      }
+      return originalFetch(input, init)
+    })
+    const agentRuntime = projectDagAgentRuntime() as unknown as {
+      readThread: ReturnType<typeof vi.fn>
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+
+    await expect(handlers.get('projectDag:update')?.({}, {
+      scope: 'all',
+      workspaceRoot: '/tmp/project-alpha'
+    })).resolves.toMatchObject({ status: { freshness: 'fresh' } })
+
+    expect(agentRuntime.readThread).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://127.0.0.1:4897/updates',
+      expect.objectContaining({ method: 'POST' })
+    )
+    const projectCall = fetchMock.mock.calls.find(([input, init]) =>
+      String(input) === 'http://127.0.0.1:3898/updates' && init?.method === 'POST')
+    expect(JSON.parse(String(projectCall?.[1]?.body))).toMatchObject({
+      priority: 3,
+      evidenceVector: [
+        { threadId: 'codex:thread-1', digest: 'sha256:fresh:codex:thread-1' },
+        { threadId: 'sciforge:retired-thread', digest: 'sha256:fresh:sciforge:retired-thread' }
+      ],
+      capturedScope: { includedSessions: ['codex:thread-1', 'sciforge:retired-thread'] }
+    })
   })
 
   it('applies excluded and isolated sessions through the same Project update command', async () => {
@@ -907,7 +1019,7 @@ describe('registerAppIpcHandlers', () => {
       autonomyMode: 'checkpointed'
     })).resolves.toMatchObject({
       status: {
-        freshness: 'fresh',
+        freshness: 'queued',
         autonomyMode: 'checkpointed',
         scope: {
           includedSessions: ['codex:thread-1'],
@@ -915,6 +1027,9 @@ describe('registerAppIpcHandlers', () => {
           isolatedSessions: ['codex:thread-3']
         }
       }
+    })
+    await vi.waitFor(async () => {
+      expect((await evidenceDagQueueStatus('codex', 'thread-1')).state).toBe('fresh')
     })
     const projectCall = fetchMock.mock.calls.find(([input, init]) =>
       String(input) === 'http://127.0.0.1:3898/updates' && init?.method === 'POST')

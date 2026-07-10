@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { Bot } from 'lucide-react'
+import { ArrowLeft, Bot } from 'lucide-react'
 import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
@@ -1001,6 +1001,7 @@ export function Workbench(): ReactElement {
     beginLeftResize,
     beginRightResize,
     beginTerminalResize,
+    filePreviewReturnContext,
     filePreviewTarget,
     leftSidebarCollapsed,
     leftSidebarWidth,
@@ -1009,6 +1010,7 @@ export function Workbench(): ReactElement {
     rightPanelVisible,
     rightSidebarWidth,
     setFilePreviewTarget,
+    setFilePreviewReturnContext,
     setRightPanelMode,
     setRightSidebarWidth,
     shellRef,
@@ -1407,6 +1409,7 @@ export function Workbench(): ReactElement {
 
   const previewWorkspaceReference = (reference: AgentRuntimeWorkspaceReference): void => {
     if (reference.kind === 'directory') return
+    setFilePreviewReturnContext(null)
     setFilePreviewTarget({
       path: reference.relativePath,
       workspaceRoot: reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
@@ -1418,6 +1421,7 @@ export function Workbench(): ReactElement {
     if (reference.kind === 'directory') return
     const path = reference.relativePath || reference.path
     if (!path) return
+    setFilePreviewReturnContext(null)
     setFilePreviewTarget({
       path,
       workspaceRoot: reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
@@ -1439,10 +1443,12 @@ export function Workbench(): ReactElement {
       path: nextPath,
       nonce: (current?.nonce ?? 0) + 1
     }))
+    setFilePreviewReturnContext(null)
     setFilePreviewTarget(null)
     setRightPanelMode('file')
   }, [
     activeWorkspaceReferenceRoot,
+    setFilePreviewReturnContext,
     setFilePreviewTarget,
     setRightPanelMode,
     workspaceReferenceGroups,
@@ -2401,9 +2407,21 @@ export function Workbench(): ReactElement {
     if (rightPanelMode === 'file') {
       setRightPanelMode(null)
       setFilePreviewTarget(null)
+      setFilePreviewReturnContext(null)
       return
     }
     setRightPanelMode(null)
+    setFilePreviewTarget(null)
+    setFilePreviewReturnContext(null)
+  }
+
+  const closeFilePreview = (): void => {
+    if (filePreviewReturnContext?.kind === 'project-dag') {
+      setFilePreviewTarget(null)
+      setFilePreviewReturnContext(null)
+      setRightPanelMode('project-dag')
+      return
+    }
     setFilePreviewTarget(null)
   }
 
@@ -2452,14 +2470,32 @@ export function Workbench(): ReactElement {
                 />
                 {filePreviewTarget ? (
                   <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-                    <WorkspaceFilePreviewPanelBridge
-                      target={filePreviewTarget}
-                      workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
-                      className="h-full max-h-full w-full"
-                      annotationQuestionBridge={annotationQuestionBridge}
-                      onClose={() => setFilePreviewTarget(null)}
-                      onOpenDirectory={openFileTreeDirectory}
-                    />
+                    <div className="flex h-full min-h-0 flex-col">
+                      {filePreviewReturnContext?.kind === 'project-dag' ? (
+                        <div className="shrink-0 border-b border-ds-border bg-ds-sidebar px-2 py-1.5">
+                          <button
+                            type="button"
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
+                            onClick={closeFilePreview}
+                          >
+                            <ArrowLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            <span className="truncate">{t('workspacePreviewReturnToReview', {
+                              label: filePreviewReturnContext.label || t('projectDagPanelTitle')
+                            })}</span>
+                          </button>
+                        </div>
+                      ) : null}
+                      <div className="min-h-0 flex-1">
+                        <WorkspaceFilePreviewPanelBridge
+                          target={filePreviewTarget}
+                          workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
+                          className="h-full max-h-full w-full"
+                          annotationQuestionBridge={annotationQuestionBridge}
+                          onClose={closeFilePreview}
+                          onOpenDirectory={openFileTreeDirectory}
+                        />
+                      </div>
+                    </div>
                   </Suspense>
                 ) : null}
               </div>

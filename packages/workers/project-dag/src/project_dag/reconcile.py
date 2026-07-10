@@ -56,7 +56,14 @@ def _relabel_one(store: Store, cid: str) -> Optional[str]:
         + store.alive_edges(dst=cid, edge_type="contradicts"))
 
     if not sup:
-        status = "invalidated"
+        # A current session Claim/Finding without a source assertion is an
+        # explicit provenance gap, not proof that the claim ceased to exist.
+        # Keep it visible as undetermined so review/audit can request evidence.
+        # Only close the claim after every session origin has disappeared (for
+        # example, an Evidence rewrite removed the upstream node).
+        has_origin = store.q1(
+            "SELECT 1 AS present FROM claim_origin WHERE claim_id=? LIMIT 1", (cid,))
+        status = "undetermined" if has_origin is not None else "invalidated"
     elif contested:
         status = "conflicted"
     else:

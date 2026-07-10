@@ -88,7 +88,7 @@ describe('Project DAG sidecar launch', () => {
     await withProjectDagServer((_, response) => {
       sendJson(response, 200, {
         ok: true,
-        data: { service: 'project-dag-engine', version: '0.1.0' }
+        data: { service: 'project-dag-engine', version: '0.2.0' }
       })
     }, async (baseUrl, requests) => {
       await ensureProjectDagSidecar(settings(), {
@@ -110,6 +110,26 @@ describe('Project DAG sidecar launch', () => {
     })
   })
 
+  it('rejects a stale authenticated sidecar instead of spawning into its occupied port', async () => {
+    const spawnMock = vi.fn(() => createMockChild())
+
+    await withProjectDagServer((_, response) => {
+      sendJson(response, 200, {
+        ok: true,
+        data: { service: 'project-dag-engine', version: '0.1.0' }
+      })
+    }, async (baseUrl) => {
+      await expect(ensureProjectDagSidecar(settings(), {
+        userDataDir: '/tmp/sciforge',
+        appRoot: '/app/root',
+        env: projectDagEnv(baseUrl),
+        spawnImpl: spawnMock as unknown as ProjectDagSpawn
+      })).rejects.toThrow(/0\.1\.0.*requires 0\.2\.0.*Restart SciForge/)
+
+      expect(spawnMock).not.toHaveBeenCalled()
+    })
+  })
+
   it('does not treat the legacy top-level health payload as healthy', async () => {
     const spawnMock = vi.fn(() => createMockChild())
 
@@ -120,7 +140,7 @@ describe('Project DAG sidecar launch', () => {
       }
       sendJson(response, 200, {
         ok: true,
-        data: { service: 'project-dag-engine', version: '0.1.0' }
+        data: { service: 'project-dag-engine', version: '0.2.0' }
       })
     }, async (baseUrl, requests) => {
       await ensureProjectDagSidecar(settings(), {
@@ -151,7 +171,7 @@ describe('Project DAG sidecar launch', () => {
         }
         sendJson(response, 200, {
           ok: true,
-          data: { service: 'project-dag-engine', version: '0.1.0' }
+          data: { service: 'project-dag-engine', version: '0.2.0' }
         })
       }, async (baseUrl) => {
         await ensureProjectDagSidecar(settings(), {
@@ -191,6 +211,41 @@ describe('Project DAG sidecar launch', () => {
           spawnImpl: spawnMock as unknown as ProjectDagSpawn
         })
       ).rejects.toThrow('Project DAG sidecar exited before becoming ready')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('coalesces concurrent readiness checks into a single sidecar spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-project-dag-sidecar-concurrent-'))
+    const spawnMock = vi.fn(() => createMockChild())
+
+    try {
+      await withProjectDagServer((_, response, requestCount) => {
+        if (requestCount === 1) {
+          response.writeHead(503)
+          response.end()
+          return
+        }
+        sendJson(response, 200, {
+          ok: true,
+          data: { service: 'project-dag-engine', version: '0.2.0' }
+        })
+      }, async (baseUrl) => {
+        const options = {
+          userDataDir: root,
+          appRoot: '/app/root',
+          env: projectDagEnv(baseUrl),
+          spawnImpl: spawnMock as unknown as ProjectDagSpawn
+        }
+
+        await Promise.all([
+          ensureProjectDagSidecar(settings(), options),
+          ensureProjectDagSidecar(settings(), options)
+        ])
+
+        expect(spawnMock).toHaveBeenCalledOnce()
+      })
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

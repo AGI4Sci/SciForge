@@ -46,6 +46,7 @@ class Engine:
         self._last_delta: dict[str, dict] = {}
         self._registries: dict[str, ArtifactRegistry] = {}
         self._lock = threading.RLock()
+        self._compile_locks: dict[str, threading.RLock] = {}
         if storage_dir:
             os.makedirs(storage_dir, exist_ok=True)
         self._event_store = EventStore(
@@ -97,6 +98,11 @@ class Engine:
             self._registries[cache_key] = registry
         return registry
 
+    def _compile_lock(self, thread_id: str) -> threading.RLock:
+        """Serialize one thread without blocking independent DAG compiles or readers."""
+        with self._lock:
+            return self._compile_locks.setdefault(thread_id, threading.RLock())
+
     # --- single compiler command -----------------------------------------
     def update(
         self,
@@ -132,7 +138,9 @@ class Engine:
         if not rebuild and rebuild_rationale is not None:
             raise ValueError("rebuildRationale is only valid when rebuild=true")
 
-        with self._lock:
+        # Model extraction and verification can take minutes. A process-wide lock
+        # made status reads and unrelated threads wait for the whole compile.
+        with self._compile_lock(thread_id):
             registry = self._registry(
                 project_key, workspace_root=workspace_root, project_root=project_root,
             )
@@ -350,22 +358,23 @@ class Engine:
         return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
     def update_status(self, thread_id: str) -> dict[str, Any]:
-        with self._lock:
-            status = self._updates.get(thread_id) or self._load_update_status(thread_id)
-            snapshot = self.latest_snapshot(thread_id)
-            return {
-                "threadId": thread_id,
-                "status": (status or {}).get("state", "fresh" if snapshot else "dirty"),
-                "desiredWatermark": (status or {}).get("desiredWatermark"),
-                "currentWatermark": (status or {}).get("currentWatermark") or
-                    (snapshot.input_watermark if snapshot else None),
-                "error": (status or {}).get("error"),
-                "updateId": (status or {}).get("id"),
-                "queuedEventId": (status or {}).get("queuedEventId"),
-                "reason": (status or {}).get("reason"),
-                "priority": (status or {}).get("priority"),
-                "snapshot": snapshot.to_dict() if snapshot else None,
-            }
+        # update() replaces committed graph/snapshot objects atomically, so the
+        # last valid snapshot remains readable while its successor is compiled.
+        status = dict(self._updates.get(thread_id) or self._load_update_status(thread_id) or {})
+        snapshot = self.latest_snapshot(thread_id)
+        return {
+            "threadId": thread_id,
+            "status": status.get("state", "fresh" if snapshot else "dirty"),
+            "desiredWatermark": status.get("desiredWatermark"),
+            "currentWatermark": status.get("currentWatermark") or
+                (snapshot.input_watermark if snapshot else None),
+            "error": status.get("error"),
+            "updateId": status.get("id"),
+            "queuedEventId": status.get("queuedEventId"),
+            "reason": status.get("reason"),
+            "priority": status.get("priority"),
+            "snapshot": snapshot.to_dict() if snapshot else None,
+        }
 
     def _sync_registry(self, graph: ThreadGraph, registry: ArtifactRegistry) -> None:
         stale_roots: list[str] = []

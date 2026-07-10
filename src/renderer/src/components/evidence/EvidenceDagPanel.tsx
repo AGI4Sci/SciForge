@@ -19,8 +19,20 @@ type Props = {
 
 type EvidenceDagUpdateApi = Partial<Pick<SciForgeApi, 'updateEvidenceDag'>>
 
+const EVIDENCE_DAG_VIEW_TIMEOUT_MS = 15_000
+const viewCache = new Map<string, EvidenceDagViewResult>()
+
+class EvidenceDagViewTimeoutError extends Error {}
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+export function withEvidenceDagViewTimeout<T>(promise: Promise<T>, timeoutMs = EVIDENCE_DAG_VIEW_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new EvidenceDagViewTimeoutError('Evidence DAG view did not become ready in time.')), timeoutMs)
+    promise.then(resolve, reject).finally(() => clearTimeout(timer))
+  })
 }
 
 export async function runEvidenceDagUpdate(
@@ -65,6 +77,7 @@ export function EvidenceDagPanel({
   const [requestNonce, setRequestNonce] = useState(0)
   const [frameNonce, setFrameNonce] = useState(0)
   const threadId = useMemo(() => activeThreadId?.trim() || null, [activeThreadId])
+  const viewCacheKey = `${runtimeId ?? ''}:${threadId ?? ''}`
 
   useEffect(() => {
     let cancelled = false
@@ -75,18 +88,24 @@ export function EvidenceDagPanel({
       return
     }
 
+    const cachedView = viewCache.get(viewCacheKey)
+    if (cachedView) setView(cachedView)
     setLoading(true)
     setError(null)
-    void getEvidenceDagView({
+    void withEvidenceDagViewTimeout(getEvidenceDagView({
       ...(threadId ? { threadId } : {}),
       ...(runtimeId ? { runtimeId } : {})
-    }).then((result) => {
+    })).then((result) => {
       if (cancelled) return
+      viewCache.set(viewCacheKey, result)
       setView(result)
       setFrameNonce((current) => current + 1)
     }).catch((cause) => {
       if (cancelled) return
-      setError(errorMessage(cause))
+      // Keep the last committed graph visible when only background revalidation fails.
+      if (!cachedView) {
+        setError(cause instanceof EvidenceDagViewTimeoutError ? t('evidenceDagViewTimedOut') : errorMessage(cause))
+      }
     }).finally(() => {
       if (!cancelled) setLoading(false)
     })
@@ -94,7 +113,7 @@ export function EvidenceDagPanel({
     return () => {
       cancelled = true
     }
-  }, [requestNonce, runtimeId, t, threadId])
+  }, [requestNonce, runtimeId, t, threadId, viewCacheKey])
 
   useEffect(() => {
     const freshness = view?.status.freshness

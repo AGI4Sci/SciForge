@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   EvidenceDagPanel,
-  runEvidenceDagUpdate
+  runEvidenceDagUpdate,
+  withEvidenceDagViewTimeout
 } from './EvidenceDagPanel'
 
 const labels: Record<string, string> = {
@@ -69,6 +70,11 @@ describe('EvidenceDagPanel', () => {
       runtimeId: 'codex',
       threadId: 'thread-1'
     })).rejects.toThrow(/extract failed/)
+  })
+
+  it('does not leave the panel waiting forever when view startup stalls', async () => {
+    await expect(withEvidenceDagViewTimeout(new Promise(() => undefined), 1))
+      .rejects.toThrow(/did not become ready in time/)
   })
 
 })

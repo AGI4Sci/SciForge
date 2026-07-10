@@ -92,7 +92,7 @@ export function WorkspaceFilePreviewPanelBridge({
     <WorkspacePreviewPanelShell
       target={target}
       workspaceRoot={workspaceRoot}
-      className={className}
+      className={compactClassName('ds-no-drag', className)}
     >
       {(context) => (
         <WorkspacePreviewShellBody
@@ -107,6 +107,10 @@ export function WorkspaceFilePreviewPanelBridge({
       )}
     </WorkspacePreviewPanelShell>
   )
+}
+
+function compactClassName(...parts: Array<string | undefined>): string {
+  return parts.filter(Boolean).join(' ')
 }
 
 export function buildWorkspacePreviewVisibleContextComponent(input: {

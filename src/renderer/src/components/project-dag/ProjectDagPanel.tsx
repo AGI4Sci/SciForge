@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type {
   DagAutonomyMode,
   DagPanelStatus,
+  DagUpdateProgress,
   ProjectDagGoalSaveRequest,
   ProjectDagUpdateRequest,
   ProjectDagViewName,
@@ -26,6 +27,17 @@ type ProjectDagSurface = 'evidence' | 'graph'
 
 export function parseProjectSessionList(value: string): string[] {
   return [...new Set(value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))].sort()
+}
+
+export function projectDagUpdateScope(status: DagPanelStatus | undefined): 'all' | string[] {
+  const scope = status?.scope
+  if (!scope) return 'all'
+  const sessions = [...new Set([
+    ...scope.includedSessions,
+    ...scope.excludedSessions,
+    ...scope.isolatedSessions
+  ])].sort()
+  return sessions.length > 0 ? sessions : 'all'
 }
 
 function projectDagViewForSurface(surface: ProjectDagSurface): ProjectDagViewName {
@@ -59,11 +71,60 @@ function statusTone(status: DagPanelStatus): string {
   return 'border-sky-200 bg-sky-50 text-sky-700'
 }
 
+export function projectDagProgressPercent(progress: DagUpdateProgress): number {
+  if (progress.stage === 'capturing') return 8
+  if (progress.stage === 'evidence') {
+    const fraction = progress.totalItems > 0
+      ? Math.min(1, Math.max(0, progress.completedItems / progress.totalItems))
+      : 0
+    return Math.round(18 + fraction * 42)
+  }
+  if (progress.stage === 'project') return 68
+  if (progress.stage === 'compile') return 86
+  return 68
+}
+
+function progressLabel(
+  progress: DagUpdateProgress,
+  t: (key: string, values?: Record<string, unknown>) => string
+): string {
+  if (progress.stage === 'capturing') return t('projectDagProgressCapturing')
+  if (progress.stage === 'evidence') {
+    return t('projectDagProgressEvidence', {
+      completed: progress.completedItems,
+      total: progress.totalItems
+    })
+  }
+  if (progress.stage === 'project') return t('projectDagProgressProject')
+  if (progress.stage === 'compile') return t('projectDagProgressCompile')
+  return t('projectDagProgressRetrying')
+}
+
+function progressActivity(
+  progress: DagUpdateProgress,
+  t: (key: string, values?: Record<string, unknown>) => string
+): string | null {
+  const activity = progress.updatedAt
+    ? t('projectDagProgressActivity', {
+        time: new Date(progress.updatedAt).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        })
+      })
+    : null
+  const attempt = progress.attempt
+    ? t('projectDagProgressAttempt', { count: progress.attempt })
+    : null
+  return [activity, attempt].filter(Boolean).join(' · ') || null
+}
+
 export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse }: Props): ReactElement {
   const { t } = useTranslation('common')
   const [view, setView] = useState<ProjectDagViewResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [optimisticProgress, setOptimisticProgress] = useState<DagUpdateProgress | null>(null)
   const [savingGoal, setSavingGoal] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -90,6 +151,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     setTitle('')
     setDescription('')
     setSummary(null)
+    setOptimisticProgress(null)
     setEditingGoal(false)
     setActiveSurface('evidence')
     setAutonomyMode('autonomous')
@@ -110,7 +172,21 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     void loadProjectDagView(loader, activeViewName, requestContext)
       .then((result) => {
         if (cancelled) return
-        setView(result)
+        setView((current) => {
+          const inFlightProgress = current?.status.progress ?? optimisticProgress
+          if (submitting && inFlightProgress && !result.status.progress && result.status.freshness === 'fresh') {
+            return {
+              ...result,
+              status: {
+                ...result.status,
+                freshness: current?.status.freshness ?? 'queued',
+                pendingCount: Math.max(1, current?.status.pendingCount ?? 0),
+                progress: inFlightProgress
+              }
+            }
+          }
+          return result
+        })
         setFrameNonce((current) => current + 1)
         if (result.goal) {
           const next = { title: result.goal.title, description: result.goal.description ?? '' }
@@ -122,7 +198,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
           }
         }
         if (result.status.autonomyMode) setAutonomyMode(result.status.autonomyMode)
-        if (result.status.scope) {
+        if (result.status.scope && !result.status.progress) {
           setExcludedSessionsText(result.status.scope.excludedSessions.join('\n'))
           setIsolatedSessionsText(result.status.scope.isolatedSessions.join('\n'))
         }
@@ -134,20 +210,25 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [activeViewName, editingGoal, requestContext, requestNonce, t])
+  }, [activeViewName, editingGoal, optimisticProgress, requestContext, requestNonce, submitting, t])
 
   useEffect(() => {
     const freshness = view?.status.freshness
-    if (freshness !== 'queued' && freshness !== 'updating' && freshness !== 'dirty') return
+    if (!submitting && !optimisticProgress && !view?.status.progress &&
+        freshness !== 'queued' && freshness !== 'updating' && freshness !== 'dirty') return
     const timer = setTimeout(() => setRequestNonce((current) => current + 1), 2_000)
     return () => clearTimeout(timer)
-  }, [view?.status.freshness, view?.status.pendingCount])
+  }, [optimisticProgress, submitting, view?.status.freshness, view?.status.pendingCount, view?.status.progress])
 
   const projectSubtitle = projectName ? t('projectDagCurrentProject', { project: projectName }) : t('projectDagGlobalView')
   const goalTitle = title.trim()
   const goalDescription = description.trim()
   const inlineError = commandError || (view ? loadError : null)
   const status = view?.status
+  const activeProgress = status?.progress ?? optimisticProgress
+  const updateBusy = submitting || Boolean(activeProgress && activeProgress.stage !== 'retrying')
+  const progressPercent = activeProgress ? projectDagProgressPercent(activeProgress) : 0
+  const progressMeta = activeProgress ? progressActivity(activeProgress, t) : null
 
   const cancelGoalEdit = (): void => {
     setTitle(savedGoal.title)
@@ -187,20 +268,30 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
       return
     }
     const request: ProjectDagUpdateRequest = {
-      scope: 'all',
+      scope: projectDagUpdateScope(status),
       ...requestContext,
       autonomyMode,
       excludedSessions: parseProjectSessionList(excludedSessionsText),
       isolatedSessions: parseProjectSessionList(isolatedSessionsText)
     }
     setSubmitting(true)
+    setOptimisticProgress({
+      stage: 'capturing',
+      completedItems: 0,
+      totalItems: status?.scope?.includedSessions.length ?? 0,
+      updatedAt: new Date().toISOString()
+    })
     setCommandError(null)
     setSummary(null)
     void handler(request).then((result) => {
       setView({ url: result.url, status: result.status, ...(view?.goal ? { goal: view.goal } : {}) })
       setSummary(t('projectDagUpdateQueued'))
+      setOptimisticProgress(null)
       setFrameNonce((current) => current + 1)
-    }).catch((cause) => setCommandError(cause instanceof Error ? cause.message : String(cause)))
+    }).catch((cause) => {
+      setOptimisticProgress(null)
+      setCommandError(cause instanceof Error ? cause.message : String(cause))
+    })
       .finally(() => setSubmitting(false))
   }
 
@@ -212,8 +303,8 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
           <div className="mt-1 truncate text-[11.5px] text-ds-faint">{projectSubtitle}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <button type="button" onClick={updateProject} disabled={loading || submitting || savingGoal} className="inline-flex h-7 min-w-[88px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50" aria-label={t('projectDagUpdateHelp')} title={t('projectDagUpdateHelp')}>
-            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}<span>{submitting ? t('projectDagUpdating') : t('projectDagUpdate')}</span>
+          <button type="button" onClick={updateProject} disabled={loading || updateBusy || savingGoal} className="inline-flex h-7 min-w-[88px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50" aria-label={t('projectDagUpdateHelp')} title={t('projectDagUpdateHelp')}>
+            {updateBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}<span>{updateBusy ? t('projectDagUpdating') : t('projectDagUpdate')}</span>
           </button>
           <button type="button" onClick={() => setRequestNonce((current) => current + 1)} disabled={loading || submitting} className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50" aria-label={t('projectDagRefresh')} title={t('projectDagRefresh')}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
           <button type="button" onClick={onCollapse} className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-label={t('rightPanelCollapse')} title={t('rightPanelCollapse')}><PanelRightClose className="h-4 w-4" /></button>
@@ -223,7 +314,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
       <div className="shrink-0 border-b border-ds-border px-4 py-3">
         <div className="mb-3 flex items-center justify-between gap-3">
           <label className="text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-autonomy">{t('projectDagAutonomyMode')}</label>
-          <select id="project-dag-autonomy" value={autonomyMode} onChange={(event) => setAutonomyMode(event.target.value as DagAutonomyMode)} disabled={submitting || savingGoal} className="rounded-lg border border-ds-border bg-ds-surface px-2 py-1 text-[11.5px] text-ds-ink">
+          <select id="project-dag-autonomy" value={autonomyMode} onChange={(event) => setAutonomyMode(event.target.value as DagAutonomyMode)} disabled={updateBusy || savingGoal} className="rounded-lg border border-ds-border bg-ds-surface px-2 py-1 text-[11.5px] text-ds-ink">
             <option value="autonomous">{t('projectDagAutonomous')}</option>
             <option value="checkpointed">{t('projectDagCheckpointed')}</option>
             <option value="supervised">{t('projectDagSupervised')}</option>
@@ -237,9 +328,9 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
           <div className="mt-2 space-y-2">
             <p className="text-[11px] leading-4 text-ds-faint">{t('projectDagScopeHelp')}</p>
             <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-excluded-sessions">{t('projectDagExcludedSessions')}</label>
-            <textarea id="project-dag-excluded-sessions" value={excludedSessionsText} onChange={(event) => setExcludedSessionsText(event.target.value)} disabled={submitting || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
+            <textarea id="project-dag-excluded-sessions" value={excludedSessionsText} onChange={(event) => setExcludedSessionsText(event.target.value)} disabled={updateBusy || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
             <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-isolated-sessions">{t('projectDagIsolatedSessions')}</label>
-            <textarea id="project-dag-isolated-sessions" value={isolatedSessionsText} onChange={(event) => setIsolatedSessionsText(event.target.value)} disabled={submitting || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
+            <textarea id="project-dag-isolated-sessions" value={isolatedSessionsText} onChange={(event) => setIsolatedSessionsText(event.target.value)} disabled={updateBusy || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
           </div>
         </details>
         {editingGoal ? (
@@ -259,6 +350,33 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
         <div className="flex min-w-0 flex-wrap items-center gap-2"><GitMerge className="h-3.5 w-3.5 text-ds-muted" />{status ? <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusTone(status)}`}>{statusLabel(status, t)}</span> : null}{status?.attentionCount ? <span className="text-[11px] text-amber-700">{t('dagAttentionCount', { count: status.attentionCount })}</span> : null}{status?.auditStale ? <span className="text-[11px] text-amber-700">{t('dagAuditStale')}</span> : null}{summary ? <span className="truncate text-[11px] text-ds-faint">{summary}</span> : null}</div>
         <div className="flex shrink-0 rounded-lg border border-ds-border-muted bg-ds-main p-0.5">{(['evidence', 'graph'] as const).map((surface) => <button key={surface} type="button" onClick={() => setActiveSurface(surface)} className={`rounded-md px-2 py-1 text-[11.5px] font-medium ${activeSurface === surface ? 'bg-ds-surface text-ds-ink shadow-sm' : 'text-ds-muted hover:bg-ds-hover'}`} aria-pressed={activeSurface === surface}>{surface === 'graph' ? t('projectDagGraphTab') : t('projectDagEvidenceTab')}</button>)}</div>
       </div>
+      {activeProgress ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`shrink-0 border-b px-4 py-3 ${activeProgress.stage === 'retrying' ? 'border-amber-200 bg-amber-50/70' : 'border-sky-200 bg-sky-50/70'}`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className={`flex min-w-0 items-center gap-2 text-[11.5px] font-medium ${activeProgress.stage === 'retrying' ? 'text-amber-800' : 'text-sky-800'}`}>
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              <span className="truncate">{progressLabel(activeProgress, t)}</span>
+            </div>
+            <span className="shrink-0 text-[10.5px] tabular-nums text-ds-faint">{progressPercent}%</span>
+          </div>
+          <div
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-ds-border-muted"
+            role="progressbar"
+            aria-label={progressLabel(activeProgress, t)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+          >
+            <div className={`h-full rounded-full transition-[width] duration-500 ${activeProgress.stage === 'retrying' ? 'bg-amber-500' : 'bg-sky-500'}`} style={{ width: `${progressPercent}%` }} />
+          </div>
+          {progressMeta ? <div className="mt-1.5 truncate text-[10.5px] text-ds-faint">{progressMeta}</div> : null}
+          {status?.lastError ? <div className="mt-1 break-words text-[10.5px] text-amber-800">{status.lastError}</div> : null}
+        </div>
+      ) : null}
       {status?.latestSnapshotDigest ? <div className="shrink-0 truncate border-b border-ds-border px-4 py-1.5 font-mono text-[10.5px] text-ds-faint" title={status.latestSnapshotDigest}>{t('dagSnapshotDigest')}: {status.latestSnapshotDigest}{status.auditTargetDigest ? ` · ${t('dagAuditDigest')}: ${status.auditTargetDigest}` : ''}</div> : null}
 
       <div className="min-h-0 flex-1 bg-ds-main p-2"><div className="relative h-full overflow-hidden rounded-lg border border-ds-border bg-ds-surface">

@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SciForge Project DAG</title>
   <style>
-    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#0c1117;color:#e6edf3;--panel:#161b22;--line:#30363d;--muted:#8b949e;--accent:#58a6ff;--good:#3fb950;--warn:#d29922;--bad:#f85149}
-    *{box-sizing:border-box}body{margin:0;padding:24px;max-width:1440px}h1{font-size:22px;margin:0}h2{font-size:17px;margin:0 0 12px}h3{font-size:14px;margin:18px 0 8px}p{line-height:1.5}button{font:inherit;background:#238636;color:#fff;border:1px solid transparent;border-radius:6px;padding:8px 12px;cursor:pointer}button:hover{filter:brightness(1.12)}button:focus-visible,.claim-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}.muted{color:var(--muted)}.bad{color:var(--bad)}.good{color:var(--good)}.warn{color:var(--warn)}
-    .toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}.toolbar p{margin:6px 0 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:14px;min-width:0}.summary{margin-top:16px}.summary p{margin:8px 0 0}.workspace{display:grid;grid-template-columns:minmax(270px,0.7fr) minmax(440px,1.6fr);gap:14px;margin-top:14px}.claim-list{display:flex;flex-direction:column;gap:8px;max-height:72vh;overflow:auto}.claim-button{width:100%;text-align:left;color:inherit;background:#0d1117;border:1px solid var(--line);padding:11px;border-radius:8px}.claim-button[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}.claim-title{display:block;font-weight:650;line-height:1.4}.claim-meta{display:flex;gap:7px;align-items:center;margin-top:7px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}.status-supported{color:var(--good)}.status-fragile,.status-undetermined{color:var(--warn)}.status-conflicted,.status-invalidated{color:var(--bad)}
-    .detail{min-height:360px}.statement{font-size:18px;font-weight:650;line-height:1.45;margin:4px 0 12px}.facts{display:flex;gap:8px;flex-wrap:wrap}.section{border-top:1px solid var(--line);padding-top:2px;margin-top:16px}.path,.relation,.artifact,.history,.impact,.breakpoint{border-left:3px solid var(--line);padding:8px 10px;margin:8px 0;background:#0d1117;border-radius:0 6px 6px 0}.path.strongest{border-left-color:var(--good)}.breakpoint{border-left-color:var(--warn)}.relation-opposes{border-left-color:var(--bad)}.relation-qualifies{border-left-color:var(--warn)}.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.row>*{min-width:0}.compact{margin:5px 0}.plain-list{margin:7px 0;padding-left:20px}.plain-list li{margin:5px 0}.empty{color:var(--muted);font-style:italic}.locator-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.open-link{color:var(--accent)}.what-if-buttons{display:flex;gap:7px;flex-wrap:wrap}.what-if-buttons button{background:#21262d;border-color:var(--line);padding:6px 9px}.what-if-buttons button[aria-pressed="true"]{border-color:var(--accent);color:#fff}.below{margin-top:14px}.error{background:#2d1117;border:1px solid #6e2530;border-radius:8px;padding:11px;margin-top:12px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    :root{color-scheme:light;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#f6f7f9;color:#20242c;--canvas:#f6f7f9;--panel:#fff;--soft:#f8f9fb;--line:#dde1e7;--muted:#707782;--accent:#4b7bec;--accent-soft:#eef4ff;--good:#218657;--warn:#a46513;--bad:#c94a52}
+    *{box-sizing:border-box}body{margin:0;padding:16px;max-width:1440px;background:var(--canvas)}h1{font-size:19px;letter-spacing:-.01em;margin:0}h2{font-size:15px;margin:0 0 12px}h3{font-size:13px;margin:18px 0 8px}p{line-height:1.5}button{font:inherit;background:var(--panel);color:#353b45;border:1px solid var(--line);border-radius:7px;padding:7px 11px;cursor:pointer;box-shadow:0 1px 1px rgba(20,28,40,.03)}button:hover{background:#f2f5f9;border-color:#cfd5dd}button:disabled{cursor:default;opacity:.55}button:focus-visible,.claim-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}.muted{color:var(--muted)}.bad{color:var(--bad)}.good{color:var(--good)}.warn{color:var(--warn)}
+    .toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}.toolbar p{margin:5px 0 0;font-size:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;min-width:0;box-shadow:0 1px 2px rgba(20,28,40,.025)}.summary{margin-top:12px}.summary p{margin:7px 0 0}.workspace{display:grid;grid-template-columns:minmax(235px,0.7fr) minmax(380px,1.6fr);gap:10px;margin-top:10px}.claim-list{display:flex;flex-direction:column;gap:8px;max-height:72vh;overflow:auto}.claim-button{width:100%;text-align:left;color:inherit;background:var(--soft);border:1px solid var(--line);padding:10px;border-radius:8px}.claim-button[aria-current="true"]{background:var(--accent-soft);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}.claim-title{display:block;font-weight:650;line-height:1.4}.claim-meta{display:flex;gap:7px;align-items:center;margin-top:7px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}.status-supported{color:var(--good)}.status-fragile,.status-undetermined{color:var(--warn)}.status-conflicted,.status-invalidated{color:var(--bad)}
+    .detail{min-height:360px}.statement{font-size:17px;font-weight:650;line-height:1.45;margin:4px 0 12px}.facts{display:flex;gap:8px;flex-wrap:wrap}.section{border-top:1px solid var(--line);padding-top:2px;margin-top:16px}.path,.relation,.artifact,.history,.impact,.breakpoint{border-left:3px solid var(--line);padding:8px 10px;margin:8px 0;background:var(--soft);border-radius:0 6px 6px 0}.path.strongest{border-left-color:var(--good)}.breakpoint{border-left-color:var(--warn)}.relation-opposes{border-left-color:var(--bad)}.relation-qualifies{border-left-color:var(--warn)}.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.row>*{min-width:0}.compact{margin:5px 0}.plain-list{margin:7px 0;padding-left:20px}.plain-list li{margin:5px 0}.empty{color:var(--muted);font-style:italic}.locator-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.open-link{color:var(--accent)}.what-if-buttons{display:flex;gap:7px;flex-wrap:wrap}.what-if-buttons button{background:var(--soft);border-color:var(--line);padding:6px 9px}.what-if-buttons button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:#234caa}.below{margin-top:10px}.error{background:#fff2f3;border:1px solid #efc2c6;color:#8f2f37;border-radius:8px;padding:11px;margin-top:10px}.update-progress{margin-top:10px;padding:11px 12px;border:1px solid #cddcf8;border-radius:9px;background:var(--accent-soft)}.update-progress.error-state{border-color:#efcf9d;background:#fff8eb}.progress-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.progress-title{font-size:12px;font-weight:650}.progress-meta{font-size:11px;color:var(--muted);margin-top:5px}.progress-track{height:6px;margin-top:8px;overflow:hidden;border-radius:99px;background:#dbe5f7}.progress-bar{height:100%;width:0;border-radius:99px;background:var(--accent);transition:width .35s ease}.error-state .progress-bar{background:#d7902d}.progress-steps{display:flex;gap:6px;margin-top:8px;color:var(--muted);font-size:10.5px;flex-wrap:wrap}.progress-steps .done{color:var(--good)}.progress-steps .active{color:#315fbf;font-weight:650}.error-state .progress-steps .active{color:var(--warn)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}[hidden]{display:none!important}
+    .evidence-vector{margin-top:10px}.vector-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.vector-item{min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--soft);padding:9px 10px}.vector-item b,.vector-item span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.vector-item span{margin-top:4px;font-size:11px}.diagnostic{margin:10px 0 0;padding:9px 10px;border-radius:8px;background:var(--accent-soft);color:#31558f;font-size:12px}
+    .graph-surface{margin-top:10px;padding:0;overflow:hidden}.graph-head{padding:13px;border-bottom:1px solid var(--line)}.graph-head p{margin:5px 0 0;font-size:12px}.graph-stats{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.graph-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:9px 13px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}.legend-item{display:flex;align-items:center;gap:5px}.legend-dot{width:9px;height:9px;border-radius:3px}.legend-session{background:#eaf0ff;border:1px solid #8aa8ef}.legend-evidence{background:#e8f6ef;border:1px solid #78b999}.legend-claim{background:#fff5df;border:1px solid #d7ac55}.legend-goal{background:#f4ebff;border:1px solid #aa82d4}.legend-entity{background:#eff2f6;border:1px solid #9ba6b5}.graph-scroll{min-height:360px;overflow:auto;background:linear-gradient(rgba(106,122,145,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(106,122,145,.07) 1px,transparent 1px);background-size:24px 24px}.graph-canvas{display:block;min-width:920px}.graph-edge{fill:none;stroke:#a7b0bd;stroke-width:1.5}.graph-edge-label{fill:#7e8792;font-size:10px;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.graph-node{cursor:pointer}.graph-node rect{stroke-width:1.5;filter:drop-shadow(0 1px 1px rgba(20,28,40,.05))}.graph-node text{pointer-events:none}.graph-node .node-title{fill:#20242c;font-size:11.5px;font-weight:650}.graph-node .node-meta{fill:#707782;font-size:9.5px}.graph-node-session rect{fill:#f3f6ff;stroke:#8aa8ef}.graph-node-evidence rect{fill:#edf8f2;stroke:#78b999}.graph-node-claim rect{fill:#fff8e8;stroke:#d7ac55}.graph-node-goal rect{fill:#f7f1ff;stroke:#aa82d4}.graph-node-entity rect{fill:#f5f6f8;stroke:#9ba6b5}.graph-node[aria-current="true"] rect{stroke:var(--accent);stroke-width:2.5}.graph-inspector{border-top:1px solid var(--line);padding:12px 13px;background:var(--panel)}.graph-inspector h3{margin:0 0 6px}.graph-inspector p{margin:4px 0}.graph-empty{margin:28px auto;padding:18px;max-width:540px;text-align:center;border:1px dashed var(--line);border-radius:10px;background:rgba(255,255,255,.88)}
     @media(max-width:850px){body{padding:16px}.workspace{grid-template-columns:1fr}.claim-list{max-height:42vh}}
   </style>
 </head>
@@ -21,17 +23,36 @@
     <button id="refresh" type="button">刷新已提交状态</button>
   </header>
   <div id="error" role="alert" aria-live="polite"></div>
+  <section id="update-progress" class="update-progress" role="status" aria-live="polite" hidden>
+    <div class="progress-head"><span id="progress-title" class="progress-title"></span><span id="progress-percent" class="mono"></span></div>
+    <div id="progress-meta" class="progress-meta"></div>
+    <div class="progress-track" role="progressbar" aria-label="Project DAG update progress" aria-valuemin="0" aria-valuemax="100"><div id="progress-bar" class="progress-bar"></div></div>
+    <div id="progress-steps" class="progress-steps"></div>
+  </section>
   <section id="summary" class="grid summary" aria-label="Project committed snapshot summary"></section>
-  <main class="workspace">
-    <section class="card" aria-labelledby="claims-heading">
-      <div class="row"><h2 id="claims-heading">Claims</h2><span id="claim-count" class="muted"></span></div>
-      <div id="claims" class="claim-list" role="listbox" aria-label="Committed Project Claims"></div>
+  <div id="evidence-surface">
+    <section class="card evidence-vector" aria-labelledby="evidence-vector-heading">
+      <div class="row"><div><h2 id="evidence-vector-heading">已提交 Evidence 输入</h2><p class="compact muted">Project Snapshot 固定消费的 Session Evidence Snapshot；它们是图谱可复现性的输入边界。</p></div><span id="evidence-vector-count" class="badge">0</span></div>
+      <div id="evidence-vector" class="vector-list"></div>
+      <div id="evidence-diagnostic"></div>
     </section>
-    <article id="claim-detail" class="card detail" aria-labelledby="claim-detail-heading">
-      <h2 id="claim-detail-heading">Claim 详情</h2>
-      <p class="empty">选择一条 Claim，查看跨层原始证据、Decision 历史和只读 what-if。</p>
-    </article>
-  </main>
+    <main class="workspace">
+      <section class="card" aria-labelledby="claims-heading">
+        <div class="row"><h2 id="claims-heading">Claims</h2><span id="claim-count" class="muted"></span></div>
+        <div id="claims" class="claim-list" role="listbox" aria-label="Committed Project Claims"></div>
+      </section>
+      <article id="claim-detail" class="card detail" aria-labelledby="claim-detail-heading">
+        <h2 id="claim-detail-heading">Claim 详情</h2>
+        <p class="empty">选择一条 Claim，查看跨层原始证据、Decision 历史和只读 what-if。</p>
+      </article>
+    </main>
+  </div>
+  <section id="graph-surface" class="card graph-surface" aria-labelledby="graph-heading" hidden>
+    <div class="graph-head"><div class="row"><div><h2 id="graph-heading">Project DAG 图谱</h2><p class="muted">显示 committed snapshot 中的 Session 输入、Evidence、Claim、Entity、Goal 与固定关系。</p></div><span id="graph-snapshot" class="mono muted">—</span></div><div id="graph-stats" class="graph-stats"></div></div>
+    <div class="graph-legend" aria-label="图谱图例"><span class="legend-item"><span class="legend-dot legend-session"></span>Session snapshot</span><span class="legend-item"><span class="legend-dot legend-evidence"></span>Evidence</span><span class="legend-item"><span class="legend-dot legend-claim"></span>Claim</span><span class="legend-item"><span class="legend-dot legend-goal"></span>Goal</span><span class="legend-item"><span class="legend-dot legend-entity"></span>Entity</span></div>
+    <div id="graph-scroll" class="graph-scroll"></div>
+    <aside id="graph-inspector" class="graph-inspector"><h3>节点详情</h3><p class="empty">选择图中的节点查看其状态、标识和相邻关系。</p></aside>
+  </section>
   <div class="grid below">
     <section class="card"><h2>Attention frontier</h2><div id="attention">—</div></section>
     <section class="card"><h2>Current snapshot findings</h2><div id="findings">—</div></section>
@@ -131,11 +152,29 @@ function locatorTarget(assertion){
   if(/^doi:/i.test(locator))return `https://doi.org/${encodeURIComponent(locator.slice(4).trim())}`;
   return null;
 }
+function graphModel(graph){
+  const snapshot=object(graph.snapshot),nodes=[],seen=new Set();
+  const add=(id,kind,label,status,raw)=>{id=String(id||'').trim();if(!id||seen.has(id))return;seen.add(id);nodes.push({id,kind,label:String(label||id),status:String(status||''),raw:object(raw)})};
+  for(const item of list(snapshot.evidenceVector)){const threadId=String(item.threadId||'').trim();add(`session:${threadId}`,'session',threadId,shortDigest(item.digest),item)}
+  for(const item of list(graph.evidence))add(item.id,'evidence',item.content||item.title||item.id,item.evidence_type,item);
+  for(const item of list(graph.claims))add(item.id,'claim',item.statement||item.id,item.status,item);
+  for(const item of list(graph.entities))add(item.id,'entity',item.canonical_name||item.name||item.label||item.id,item.entity_type,item);
+  for(const item of list(graph.goals))add(item.root_id||item.id,'goal',item.title||item.description||item.root_id||item.id,item.status,item);
+  const nodeIds=new Set(nodes.map(item=>item.id)),edges=[],edgeKeys=new Set();
+  const addEdge=(src,dst,type,raw)=>{src=String(src||'');dst=String(dst||'');const key=`${src}\u0000${dst}\u0000${type}`;if(!nodeIds.has(src)||!nodeIds.has(dst)||edgeKeys.has(key))return;edgeKeys.add(key);edges.push({id:String(object(raw).id||key),src,dst,type:String(type||'related'),raw:object(raw)})};
+  for(const edge of list(graph.edges))addEdge(edge.src,edge.dst,edge.edge_type,edge);
+  for(const origin of list(graph.origins))addEdge(`session:${origin.session_id}`,origin.claim_id,'origin',origin);
+  for(const claim of list(graph.claims))if(claim.goal_id)addEdge(claim.id,claim.goal_id,'addresses',{claimId:claim.id,goalId:claim.goal_id});
+  const counts={session:0,evidence:0,claim:0,entity:0,goal:0};for(const node of nodes)counts[node.kind]+=1;
+  return {nodes,edges,counts};
+}
+function shortDigest(value){const text=String(value||'');return text.length>22?`${text.slice(0,22)}…`:text}
 </script>
 <script>
-const query=new URLSearchParams(location.search),hash=new URLSearchParams(location.hash.slice(1));
+const query=new URLSearchParams(location.search),hash=new URLSearchParams(location.hash.slice(1)),requestedView=query.get('view')==='graph'?'graph':'home';
 const token=hash.get('token')||'',projectKey=query.get('projectKey')||projectKeyFromLabels();
-const state={status:null,graph:null,attention:[],findings:[],selectedClaimId:null,detail:null,whatIfSourceId:null};
+const state={status:null,graph:null,attention:[],findings:[],selectedClaimId:null,selectedGraphNodeId:null,detail:null,whatIfSourceId:null,statusPollTimer:null};
+document.getElementById('evidence-surface').hidden=requestedView==='graph';document.getElementById('graph-surface').hidden=requestedView!=='graph';
 function projectKeyFromLabels(){const path=query.get('projectRoot')||query.get('workspaceRoot');if(path)return `path:${path}`;const project=query.get('project');return project?`project:${project}`:''}
 async function api(path){if(!projectKey)throw new Error('缺少 projectKey/workspaceRoot/project');const sep=path.includes('?')?'&':'?';const response=await fetch(`${path}${sep}projectKey=${encodeURIComponent(projectKey)}`,{headers:{Authorization:`Bearer ${token}`,Accept:'application/json'}});const body=await response.json();if(!response.ok||!body.ok)throw new Error(body.error?.message||`HTTP ${response.status}`);return body.data}
 function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]))}
@@ -143,15 +182,68 @@ function pretty(value){return escapeHtml(JSON.stringify(value,null,2))}
 function short(value,size=12){const text=String(value||'');return text.length>size?`${text.slice(0,size)}…`:text||'—'}
 function statusClass(value){return `status-${String(value||'undetermined').replace(/[^a-z_-]/gi,'')}`}
 function renderError(error){document.getElementById('error').innerHTML=error?`<div class="error">${escapeHtml(error.message||error)}</div>`:''}
+function updateIsActive(status){return ['pending','updating','update_failed'].includes(String(status?.state||''))}
+function activeUpdateJob(status){return list(status?.jobs).find(job=>['queued','running','failed','interrupted'].includes(job.status))||null}
+function renderUpdateProgress(){
+  const status=object(state.status),job=activeUpdateJob(status),container=document.getElementById('update-progress');
+  if(!updateIsActive(status)||!job){container.hidden=true;container.classList.remove('error-state');return}
+  const failed=status.state==='update_failed',running=status.state==='updating';
+  const percent=failed?68:running?86:68,title=failed?'更新失败，后台将按计划重试':running?'正在编译、校验并提交 Project Snapshot':'Session Evidence 已就绪，正在等待项目编译';
+  const updated=job.updated_at?new Date(job.updated_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
+  const retry=status.state==='update_failed'&&job.next_attempt_at?` · 下次重试 ${new Date(job.next_attempt_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'';
+  container.hidden=false;container.classList.toggle('error-state',failed);
+  document.getElementById('progress-title').textContent=title;
+  document.getElementById('progress-percent').textContent=`${percent}%`;
+  document.getElementById('progress-meta').textContent=`最后活动 ${updated} · 第 ${Number(job.attempts||0)+Number(job.status==='queued')} 次尝试${retry}${job.last_error?` · ${job.last_error}`:''}`;
+  document.getElementById('progress-bar').style.width=`${percent}%`;
+  const track=container.querySelector('[role="progressbar"]');track.setAttribute('aria-valuenow',String(percent));
+  document.getElementById('progress-steps').innerHTML=`<span class="done">✓ 收集 Session Evidence</span><span>›</span><span class="${failed||running?'active':''}">${failed?'!':running?'●':'○'} 编译 Project DAG</span><span>›</span><span>${running?'○':'○'} 提交 Snapshot</span>`;
+}
 function renderSummary(){
   const snapshot=object(state.graph?.snapshot),status=object(state.status),scope={included:list(snapshot.evidenceVector).map(item=>item.threadId),excluded:list(snapshot.excludedSessions),isolated:list(snapshot.isolatedSessions)};
   document.getElementById('summary').innerHTML=`<div class="card"><b>更新状态</b><p class="${status.state==='fresh'?'good':status.state==='update_failed'?'bad':'warn'}">${escapeHtml(status.state||'—')}</p></div><div class="card"><b>Committed snapshot</b><p class="mono" title="${escapeHtml(snapshot.digest)}">v${escapeHtml(snapshot.version||'—')} · ${escapeHtml(short(snapshot.digest,18))}</p></div><div class="card"><b>固定 Evidence vector</b><p>${scope.included.length} included · ${scope.excluded.length} excluded · ${scope.isolated.length} isolated</p></div><div class="card"><b>Attention frontier</b><p>${list(state.attention).length} 个当前关键项</p></div>`;
+  renderUpdateProgress();
 }
 function renderClaims(){
   const claims=list(state.graph?.claims),container=document.getElementById('claims');document.getElementById('claim-count').textContent=String(claims.length);
   if(!claims.length){container.innerHTML='<p class="empty">当前 committed snapshot 没有 Claim。</p>';return}
   container.innerHTML=claims.map(claim=>`<button type="button" class="claim-button" role="option" data-claim-id="${escapeHtml(claim.id)}" aria-current="${claim.id===state.selectedClaimId}"><span class="claim-title">${escapeHtml(claim.statement)}</span><span class="claim-meta"><span class="badge ${statusClass(claim.status)}">${escapeHtml(claim.status)}</span><span class="badge">${escapeHtml(claim.claim_type)}</span><span class="muted mono">${escapeHtml(short(claim.id))}</span></span></button>`).join('');
   for(const button of container.querySelectorAll('[data-claim-id]'))button.onclick=()=>selectClaim(button.dataset.claimId);
+}
+function renderEvidenceVector(){
+  const snapshot=object(state.graph?.snapshot),vector=list(snapshot.evidenceVector),claims=list(state.graph?.claims),evidence=list(state.graph?.evidence),container=document.getElementById('evidence-vector');
+  document.getElementById('evidence-vector-count').textContent=`${vector.length} 个 Session`;
+  container.innerHTML=vector.length?vector.map(item=>`<div class="vector-item"><b title="${escapeHtml(item.threadId)}">${escapeHtml(item.threadId)}</b><span class="mono muted" title="${escapeHtml(item.digest)}">${escapeHtml(short(item.digest,30))}</span></div>`).join(''):'<p class="empty">当前 committed snapshot 没有固定 Evidence 输入。</p>';
+  const diagnostic=document.getElementById('evidence-diagnostic');
+  diagnostic.innerHTML=vector.length&&!claims.length?`<p class="diagnostic">已固定 ${vector.length} 个 Session Evidence Snapshot，但尚未编译出 Project Claim（原始 evidence 节点 ${evidence.length} 个）。这不是加载中；请检查对应 Evidence Snapshot 是否包含可合并的 Claim/SourceAssertion。</p>`:'';
+}
+function graphLayout(model){
+  const lanes=[['session'],['evidence'],['claim'],['entity','goal']],xs=[110,340,570,800],positions=new Map();let maxItems=1;
+  lanes.forEach((kinds,lane)=>{const items=model.nodes.filter(node=>kinds.includes(node.kind));maxItems=Math.max(maxItems,items.length);items.forEach((node,index)=>positions.set(node.id,{x:xs[lane],y:58+index*78}))});
+  return {positions,width:920,height:Math.max(360,88+(maxItems-1)*78)};
+}
+function graphNodeText(value){const text=String(value||'').replace(/\s+/g,' ').trim();return text.length>38?`${text.slice(0,37)}…`:text}
+function graphEdgePath(source,target){
+  if(source.x===target.x){const direction=target.y>=source.y?1:-1;return `M ${source.x} ${source.y+direction*26} C ${source.x+50} ${source.y+direction*38}, ${target.x+50} ${target.y-direction*38}, ${target.x} ${target.y-direction*26}`}
+  const direction=target.x>=source.x?1:-1,x1=source.x+direction*90,x2=target.x-direction*90,curve=Math.max(35,Math.abs(x2-x1)*.42);return `M ${x1} ${source.y} C ${x1+direction*curve} ${source.y}, ${x2-direction*curve} ${target.y}, ${x2} ${target.y}`;
+}
+function renderGraphInspector(model,nodeId){
+  const container=document.getElementById('graph-inspector'),node=model.nodes.find(item=>item.id===nodeId),adjacent=model.edges.filter(edge=>edge.src===nodeId||edge.dst===nodeId);
+  if(!node){container.innerHTML=model.edges.length?'<h3>节点详情</h3><p class="empty">选择图中的节点查看其状态、标识和相邻关系。</p>':`<h3>图谱诊断</h3><p class="diagnostic">输入 Snapshot 已可见，但当前 committed Project Snapshot 没有节点间关系。Session 节点来自固定 Evidence vector；Project Claim/Evidence 需要由 Evidence Snapshot 中的可合并内容编译产生。</p>`;return}
+  container.innerHTML=`<div class="row"><div><h3>${escapeHtml(node.label)}</h3><p class="compact muted">${escapeHtml(node.kind)} · ${escapeHtml(node.id)}</p></div>${node.status?`<span class="badge">${escapeHtml(node.status)}</span>`:''}</div><p>${adjacent.length} 条相邻关系：${adjacent.length?escapeHtml(adjacent.map(edge=>`${edge.src===node.id?'→':'←'} ${edge.type} ${edge.src===node.id?edge.dst:edge.src}`).join('；')):'无'}</p><details><summary>Committed node metadata</summary><pre>${pretty(node.raw)}</pre></details>`;
+}
+function selectGraphNode(nodeId){state.selectedGraphNodeId=nodeId;renderGraph()}
+function renderGraph(){
+  const model=graphModel(object(state.graph)),snapshot=object(state.graph?.snapshot),layout=graphLayout(model),container=document.getElementById('graph-scroll');
+  if(state.selectedGraphNodeId&&!model.nodes.some(node=>node.id===state.selectedGraphNodeId))state.selectedGraphNodeId=null;
+  document.getElementById('graph-snapshot').textContent=snapshot.digest?`v${snapshot.version||'—'} · ${short(snapshot.digest,18)}`:'无 Snapshot';
+  document.getElementById('graph-stats').innerHTML=`<span class="badge">${model.counts.session} Session</span><span class="badge">${model.counts.evidence} Evidence</span><span class="badge">${model.counts.claim} Claim</span><span class="badge">${model.counts.entity} Entity</span><span class="badge">${model.counts.goal} Goal</span><span class="badge">${model.edges.length} 关系</span>`;
+  if(!model.nodes.length){container.innerHTML='<div class="graph-empty"><h2>当前 committed snapshot 还没有图节点</h2><p class="muted">没有固定的 Session Evidence 输入，也没有 Project Claim、Evidence、Goal 或 Entity。刷新只读取状态；需要先让 Evidence DAG 产生 committed snapshot，再执行项目更新。</p></div>';renderGraphInspector(model,null);return}
+  const edges=model.edges.map(edge=>{const source=layout.positions.get(edge.src),target=layout.positions.get(edge.dst);if(!source||!target)return'';const middleX=(source.x+target.x)/2,middleY=(source.y+target.y)/2-6;return `<path class="graph-edge" d="${graphEdgePath(source,target)}" marker-end="url(#graph-arrow)"></path><text class="graph-edge-label" x="${middleX}" y="${middleY}">${escapeHtml(edge.type)}</text>`}).join('');
+  const nodes=model.nodes.map(node=>{const position=layout.positions.get(node.id),label=graphNodeText(node.label),meta=graphNodeText(node.status||node.id);return `<g class="graph-node graph-node-${escapeHtml(node.kind)}" data-graph-node-id="${escapeHtml(node.id)}" role="button" tabindex="0" aria-label="${escapeHtml(`${node.kind}: ${node.label}`)}" aria-current="${node.id===state.selectedGraphNodeId}"><rect x="${position.x-90}" y="${position.y-26}" width="180" height="52" rx="8"></rect><text class="node-title" x="${position.x-78}" y="${position.y-4}">${escapeHtml(label)}</text><text class="node-meta" x="${position.x-78}" y="${position.y+14}">${escapeHtml(meta)}</text></g>`}).join('');
+  container.innerHTML=`<svg class="graph-canvas" viewBox="0 0 ${layout.width} ${layout.height}" width="100%" height="${layout.height}" role="img" aria-label="Committed Project DAG，${model.nodes.length} 个节点，${model.edges.length} 条关系"><defs><marker id="graph-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#a7b0bd"></path></marker></defs>${edges}${nodes}</svg>`;
+  for(const element of container.querySelectorAll('[data-graph-node-id]')){element.onclick=()=>selectGraphNode(element.dataset.graphNodeId);element.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();selectGraphNode(element.dataset.graphNodeId)}}}
+  renderGraphInspector(model,state.selectedGraphNodeId);
 }
 function scopeHtml(detail,snapshot){
   const sessions=[...new Set(list(detail.origins).map(item=>item.session_id))];
@@ -212,6 +304,19 @@ async function selectClaim(claimId){
   state.selectedClaimId=claimId;state.detail=null;state.whatIfSourceId=null;renderClaims();renderDetail();
   try{const digest=state.graph?.snapshot?.digest;if(!digest)throw new Error('没有 committed snapshot');const detail=await api(`/claims/${encodeURIComponent(claimId)}?snapshot=${encodeURIComponent(digest)}`);if(state.selectedClaimId===claimId&&state.graph?.snapshot?.digest===digest){state.detail=detail;renderDetail()}}catch(error){renderError(error)}
 }
+function scheduleStatusPoll(){
+  if(state.statusPollTimer)clearTimeout(state.statusPollTimer);
+  state.statusPollTimer=updateIsActive(state.status)?setTimeout(pollUpdateStatus,2000):null;
+}
+async function pollUpdateStatus(){
+  state.statusPollTimer=null;
+  const wasActive=updateIsActive(state.status);
+  try{
+    state.status=await api('/updates/status');renderSummary();
+    if(wasActive&&!updateIsActive(state.status)){await refresh();return}
+  }catch(error){renderError(error)}
+  scheduleStatusPoll();
+}
 async function refresh(){
   renderError(null);document.getElementById('refresh').disabled=true;
   try{
@@ -219,8 +324,9 @@ async function refresh(){
     const [status,attention,findings]=await Promise.all([api('/updates/status'),digest?api(`/attention?snapshotDigest=${encodeURIComponent(digest)}`):Promise.resolve([]),api('/findings')]);
     state.graph=graph;state.status=status;state.attention=attention;state.findings=findings;
     if(state.selectedClaimId&&!list(graph.claims).some(item=>item.id===state.selectedClaimId)){state.selectedClaimId=null;state.detail=null;state.whatIfSourceId=null}
-    renderSummary();renderClaims();renderSidechains();
+    renderSummary();renderEvidenceVector();renderClaims();renderGraph();renderSidechains();
     if(state.selectedClaimId)await selectClaim(state.selectedClaimId);else renderDetail();
+    scheduleStatusPoll();
   }catch(error){renderError(error)}finally{document.getElementById('refresh').disabled=false}
 }
 document.getElementById('refresh').onclick=refresh;refresh();

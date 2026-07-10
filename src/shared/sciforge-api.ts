@@ -60,6 +60,7 @@ import type {
 import type {
   WorkspaceObservation,
   WorkspacePreviewArtifactDescriptor,
+  WorkspacePreviewAnchor,
   WorkspacePreviewAssetTransportDescriptor,
   WorkspacePreviewByteRange,
   WorkspacePreviewEditDiffSummary,
@@ -72,6 +73,7 @@ import type {
   WorkspacePreviewPrepareArtifactRequest,
   WorkspacePreviewReadArtifactRangeRequest,
   WorkspacePreviewSession
+  , WorkspaceStructuredSelection
 } from './workspace-preview'
 import type {
   WriteInlineCompletionDebugEntry,
@@ -471,6 +473,13 @@ export type EvidenceDagViewRequest = {
   runtimeId?: AgentRuntimeId
 }
 export type DagAutonomyMode = 'autonomous' | 'checkpointed' | 'supervised'
+export type DagUpdateProgress = {
+  stage: 'capturing' | 'evidence' | 'project' | 'compile' | 'retrying'
+  completedItems: number
+  totalItems: number
+  updatedAt?: string
+  attempt?: number
+}
 export type DagPanelStatus = {
   freshness: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'paused' | 'degraded'
   pendingCount: number
@@ -486,6 +495,7 @@ export type DagPanelStatus = {
   lastError?: string
   degradedReason?: string
   nextAttemptAt?: string
+  progress?: DagUpdateProgress
   scope?: {
     includedSessions: string[]
     excludedSessions: string[]
@@ -757,6 +767,10 @@ export type WorkspacePreviewOpenInput = {
   workspaceRoot: string
   mimeType?: string
   mode?: WorkspacePreviewSession['mode']
+  line?: number
+  column?: number
+  selection?: WorkspaceStructuredSelection
+  anchor?: WorkspacePreviewAnchor
 }
 export type WorkspacePreviewOpenResult =
   | {

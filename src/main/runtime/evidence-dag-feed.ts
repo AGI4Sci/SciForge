@@ -68,11 +68,15 @@ export type EnqueueEvidenceDagUpdateInput = {
   rebuild?: boolean
   rebuildRationale?: string
   projectContext?: EvidenceDagProjectContext
+  coordinateProject?: boolean
 }
 
 export type EvidenceDagQueueStatus = {
   state: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'degraded'
   pendingCount: number
+  phase?: QueueJobPhase
+  attempts?: number
+  updatedAt?: string
   jobId?: string
   desiredWatermark?: string
   committedWatermark?: string
@@ -111,6 +115,7 @@ type EvidenceQueueJob = {
   rebuild: boolean
   rebuildRationale?: string
   projectContext?: EvidenceDagProjectContext
+  coordinateProject: boolean
   phase: QueueJobPhase
   status: QueueJobStatus
   attempts: number
@@ -310,6 +315,14 @@ function mergedWatermark(current: string, incoming: string): string {
     return incomingNumber > currentNumber ? incoming : current
   }
   return incoming
+}
+
+function watermarkCovers(committed: string, target: string): boolean {
+  const committedNumber = numericWatermark(committed)
+  const targetNumber = numericWatermark(target)
+  return committedNumber !== undefined && targetNumber !== undefined
+    ? committedNumber >= targetNumber
+    : committed === target
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -543,6 +556,8 @@ export class EvidenceDagUpdateQueue {
           existing.priority = input.priority ?? 'normal'
         }
         existing.projectContext = input.projectContext ?? existing.projectContext
+        existing.coordinateProject = existing.coordinateProject ||
+          (input.coordinateProject ?? Boolean(input.projectContext))
         existing.rebuildRationale = input.rebuildRationale ?? existing.rebuildRationale
         existing.status = 'queued'
         existing.nextAttemptAt = undefined
@@ -563,6 +578,7 @@ export class EvidenceDagUpdateQueue {
         rebuild: Boolean(input.rebuild),
         rebuildRationale: input.rebuildRationale,
         projectContext: input.projectContext,
+        coordinateProject: input.coordinateProject ?? Boolean(input.projectContext),
         phase: 'evidence',
         status: 'queued',
         attempts: 0,
@@ -596,6 +612,34 @@ export class EvidenceDagUpdateQueue {
         : this.recoveryWarning
           ? { state: 'degraded', pendingCount: 0, lastError: this.recoveryWarning }
           : { state: 'fresh', pendingCount: 0 }
+    })
+  }
+
+  async acknowledgeSnapshot(snapshot: EvidenceSnapshot): Promise<number> {
+    return this.exclusive(async () => {
+      await this.loadUnlocked()
+      const now = this.now().toISOString()
+      let acknowledged = 0
+      for (const job of this.jobs) {
+        if (job.engineThreadId !== snapshot.threadId ||
+            (job.status !== 'queued' && job.status !== 'retrying') ||
+            !watermarkCovers(snapshot.inputWatermark, job.targetWatermark)) continue
+        job.snapshot = snapshot
+        job.status = 'succeeded'
+        job.lastError = undefined
+        job.nextAttemptAt = undefined
+        job.updatedAt = now
+        acknowledged += 1
+      }
+      if (acknowledged > 0) {
+        const succeeded = this.jobs
+          .filter((job) => job.status === 'succeeded')
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        const keep = new Set(succeeded.slice(0, SUCCEEDED_JOB_HISTORY_LIMIT).map((job) => job.id))
+        this.jobs = this.jobs.filter((job) => job.status !== 'succeeded' || keep.has(job.id))
+        await this.persistUnlocked()
+      }
+      return acknowledged
     })
   }
 
@@ -659,6 +703,9 @@ export class EvidenceDagUpdateQueue {
     return {
       state: this.recoveryWarning && state === 'fresh' ? 'degraded' : state,
       pendingCount,
+      phase: job.phase,
+      attempts: job.attempts,
+      updatedAt: job.updatedAt,
       jobId: job.id,
       desiredWatermark: job.targetWatermark,
       ...(job.snapshot ? {
@@ -684,8 +731,8 @@ export class EvidenceDagUpdateQueue {
               const current = this.jobs.find((candidate) => candidate.id === job.id)
               if (!current) return
               current.snapshot = snapshot
-              current.phase = 'project'
-              current.status = 'queued'
+              current.phase = current.coordinateProject ? 'project' : 'evidence'
+              current.status = current.coordinateProject ? 'queued' : 'succeeded'
               current.lastError = undefined
               current.nextAttemptAt = undefined
               current.updatedAt = this.now().toISOString()
@@ -803,7 +850,7 @@ export class EvidenceDagUpdateQueue {
           ...(job.projectContext.project ? { project: job.projectContext.project } : {}),
           ...(job.projectContext.autonomyMode ? { autonomyMode: job.projectContext.autonomyMode } : {}),
           reason: job.projectContext.updateReason ?? 'evidence_snapshot_committed',
-          priority: job.priority,
+          priority: PRIORITY_WEIGHT[job.priority],
           evidenceVector: evidenceSnapshots.map((snapshot) => ({
             threadId: snapshot.threadId,
             digest: snapshot.digest
@@ -929,8 +976,13 @@ export class EvidenceDagUpdateQueue {
       const parsed = JSON.parse(await readFile(this.options.storagePath, 'utf8')) as QueueFile
       if (parsed.version !== 1 || !Array.isArray(parsed.jobs)) throw new Error('unsupported queue file')
       this.recoveryWarning = nonEmptyString(parsed.recoveryWarning)
-      this.jobs = parsed.jobs.map((job) => job.status === 'running'
-        ? {
+      this.jobs = parsed.jobs.map((storedJob) => {
+        const job = {
+          ...storedJob,
+          coordinateProject: storedJob.coordinateProject ?? Boolean(storedJob.projectContext)
+        }
+        return job.status === 'running'
+          ? {
             ...job,
             status: 'queued' as const,
             reason: 'recovery' as const,
@@ -938,7 +990,8 @@ export class EvidenceDagUpdateQueue {
             nextAttemptAt: undefined,
             updatedAt: this.now().toISOString()
           }
-        : job)
+          : job
+      })
       await this.persistUnlocked()
     } catch (error) {
       const code = objectRecord(error)?.code
@@ -1020,6 +1073,10 @@ export function retryEvidenceDagUpdate(
   return configuredQueue().retry(runtimeId, threadId)
 }
 
+export function acknowledgeEvidenceDagSnapshot(snapshot: EvidenceSnapshot): Promise<number> {
+  return configuredQueue().acknowledgeSnapshot(snapshot)
+}
+
 export async function ensureEvidenceDagFresh(
   input: EnsureEvidenceDagFreshInput
 ): Promise<{ snapshot: EvidenceSnapshot; jobId: string }> {
@@ -1033,13 +1090,22 @@ export async function ensureEvidenceDagFresh(
 export async function ensureProjectFresh(
   input: EnsureProjectFreshInput
 ): Promise<{ snapshots: EvidenceSnapshot[]; coordinatorJobId: string }> {
+  const enqueued = await enqueueProjectFresh(input)
+  const snapshots = await Promise.all(enqueued.jobs.map((job) =>
+    configuredQueue().waitForJob(job.jobId, input.timeoutMs)))
+  return { snapshots, coordinatorJobId: enqueued.coordinatorJobId }
+}
+
+export async function enqueueProjectFresh(
+  input: EnsureProjectFreshInput
+): Promise<{ jobs: EnqueueEvidenceDagUpdateResult[]; coordinatorJobId: string }> {
   if (input.sessions.length === 0) throw new Error('Project update requires at least one included session.')
-  const queued = await Promise.all(input.sessions.map((session, index) => configuredQueue().enqueue({
+  const jobs = await Promise.all(input.sessions.map((session, index) => configuredQueue().enqueue({
     ...session,
     reason: 'manual_immediate',
     priority: 'immediate',
-    projectContext: index === 0 ? input.projectContext : undefined
+    projectContext: input.projectContext,
+    coordinateProject: index === 0
   })))
-  const snapshots = await Promise.all(queued.map((job) => configuredQueue().waitForJob(job.jobId, input.timeoutMs)))
-  return { snapshots, coordinatorJobId: queued[0]!.jobId }
+  return { jobs, coordinatorJobId: jobs[0]!.jobId }
 }

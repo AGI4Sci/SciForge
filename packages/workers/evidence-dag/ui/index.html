@@ -636,8 +636,14 @@ async function api(path, opts) {
   const headers = new Headers(init.headers || {});
   if (AUTH_TOKEN && !headers.has('authorization')) headers.set('authorization', `Bearer ${AUTH_TOKEN}`);
   init.headers = headers;
-  const response = await fetch(API + path, init);
-  return response.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(API + path, { ...init, signal: controller.signal });
+    return response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function buildAnalysisMaps(data) {
@@ -1175,9 +1181,12 @@ async function loadGraph() {
     renderedSig = sigOf(graphResponse.data);
     markUpdated(false);
 
-    const metrics = await api(`/threads/${encodeURIComponent(currentThread)}/metrics`).catch(() => null);
+    const [metrics, analysis, audits] = await Promise.all([
+      api(`/threads/${encodeURIComponent(currentThread)}/metrics`).catch(() => null),
+      api(`/threads/${encodeURIComponent(currentThread)}/analysis`).catch(() => null),
+      api(`/audits?threadId=${encodeURIComponent(currentThread)}`).catch(() => null)
+    ]);
     if (metrics?.ok) showMetrics(metrics.data);
-    const analysis = await api(`/threads/${encodeURIComponent(currentThread)}/analysis`).catch(() => null);
     if (analysis?.ok) {
       buildAnalysisMaps(analysis.data);
       showAnalysis(analysis.data);
@@ -1185,7 +1194,7 @@ async function loadGraph() {
     } else {
       showAnalysis(null);
     }
-    await loadAuditRuns();
+    if (audits?.ok) showAuditRun(audits.data.latest);
     setStatus(`${graph.nodes.length} nodes · ${graph.edges.length} edges`);
   } catch (error) {
     renderEmptyGraph(error instanceof Error ? error.message : String(error));
@@ -1307,8 +1316,9 @@ function markUpdated(on) {
 
 async function pollChanges() {
   if (!currentThread || renderedSig === null) return;
-  const response = await api(`/threads/${encodeURIComponent(currentThread)}/graph`).catch(() => null);
-  if (response?.ok && sigOf(response.data) !== renderedSig) markUpdated(true);
+  const response = await api(`/updates/status?threadId=${encodeURIComponent(currentThread)}`).catch(() => null);
+  const nextDigest = response?.data?.snapshot?.digest;
+  if (response?.ok && nextDigest && nextDigest !== currentSnapshot?.digest) markUpdated(true);
 }
 
 $('thread').onchange = (event) => {
@@ -1335,7 +1345,11 @@ $('stageScroll').addEventListener('click', (event) => {
   if (event.target === $('stageScroll') || event.target === $('stage') || event.target === $('laneLayer') || event.target === $('edgeLayer')) clearSelection();
 });
 
-loadThreads().then(loadGraph).catch((error) => {
+// A URL-scoped thread can paint immediately; populating the thread picker is independent.
+const initialGraphLoad = currentThread ? loadGraph() : null;
+loadThreads().then(() => {
+  return initialGraphLoad || loadGraph();
+}).catch((error) => {
   renderEmptyGraph(error instanceof Error ? error.message : String(error));
   setStatus('error');
 });

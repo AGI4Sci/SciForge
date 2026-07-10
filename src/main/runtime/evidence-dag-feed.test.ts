@@ -8,7 +8,8 @@ import {
   completedTurnItems,
   isEvidenceDagAutoFeedEnabled,
   isEvidenceDagFeedEnabled,
-  toEvidenceDagTraceItems
+  toEvidenceDagTraceItems,
+  type EvidenceSnapshot
 } from './evidence-dag-feed'
 
 const roots: string[] = []
@@ -24,7 +25,7 @@ async function queuePath(): Promise<string> {
   return join(root, 'queue.json')
 }
 
-function committedSnapshot(threadId = 'sciforge:thread-1', watermark = '10') {
+function committedSnapshot(threadId = 'sciforge:thread-1', watermark = '10'): EvidenceSnapshot {
   return {
     threadId,
     version: 1,
@@ -250,6 +251,7 @@ describe('Evidence DAG runtime feed', () => {
       url: 'http://127.0.0.1:3898/updates',
       body: {
         reason: 'evidence_snapshot_committed',
+        priority: 1,
         capturedScope: { includedSessions: ['sciforge:thread-1', 'sciforge:thread-2'] },
         evidenceVector: [
           { threadId: 'sciforge:thread-1', digest: 'sha256:10' },
@@ -308,7 +310,12 @@ describe('Evidence DAG runtime feed', () => {
     })
     const second = await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-2', targetWatermark: '8', reason: 'manual_immediate', priority: 'immediate',
-      items: [{ id: 'a2', kind: 'assistant_message', text: 'answer two' }]
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'answer two' }],
+      projectContext: {
+        projectKey: 'project-1', workspaceRoot: '/workspace/molclaw',
+        includedSessions: ['sciforge:thread-1', 'sciforge:thread-2']
+      },
+      coordinateProject: false
     })
 
     await expect(Promise.all([
@@ -372,6 +379,24 @@ describe('Evidence DAG runtime feed', () => {
     await recovered.start()
     await vi.waitFor(() => expect(recoveredFetch).toHaveBeenCalledTimes(1))
     await vi.waitFor(async () => expect((await recovered.status('sciforge', 'thread-1')).state).toBe('fresh'))
+  })
+
+  it('acknowledges redundant queued work when the same watermark is already committed', async () => {
+    const queue = new EvidenceDagUpdateQueue({ storagePath: await queuePath() })
+    await queue.enqueue({
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      targetWatermark: '10',
+      reason: 'manual_immediate',
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+    })
+
+    await expect(queue.acknowledgeSnapshot(committedSnapshot('sciforge:thread-1', '10'))).resolves.toBe(1)
+    await expect(queue.status('sciforge', 'thread-1')).resolves.toMatchObject({
+      state: 'fresh',
+      pendingCount: 0,
+      committedWatermark: '10'
+    })
   })
 
   it('preserves a corrupt queue file and exposes degraded state', async () => {

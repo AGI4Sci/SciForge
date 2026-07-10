@@ -11,6 +11,7 @@ import { evidenceDagStorageDir } from '../../evidence-dag/desktop/sidecar'
 import {
   DEFAULT_PROJECT_DAG_SERVICE_URL,
   PROJECT_DAG_API_KEY_ENV,
+  PROJECT_DAG_SERVICE_VERSION,
   PROJECT_DAG_SERVICE_URL_ENV,
   normalizeProjectDagServiceUrl,
   projectDagApiKeyFromEnv
@@ -28,6 +29,7 @@ const DEFAULT_READY_TIMEOUT_MS = 45_000
 let projectDagChild: ChildProcess | null = null
 let projectDagLaunchSignature: string | null = null
 let projectDagReadyPromise: Promise<void> | null = null
+let projectDagEnsurePromise: Promise<void> | null = null
 
 export type ProjectDagLaunch = {
   command: string
@@ -141,6 +143,30 @@ export async function ensureProjectDagSidecar(
     log?: (message: string) => void
   }
 ): Promise<void> {
+  if (projectDagEnsurePromise) {
+    await projectDagEnsurePromise
+    return
+  }
+
+  const promise = ensureProjectDagSidecarOnce(settings, options)
+  projectDagEnsurePromise = promise
+  try {
+    await promise
+  } finally {
+    if (projectDagEnsurePromise === promise) projectDagEnsurePromise = null
+  }
+}
+
+async function ensureProjectDagSidecarOnce(
+  settings: AppSettingsV1,
+  options: {
+    userDataDir: string
+    appRoot?: string
+    env?: NodeJS.ProcessEnv
+    spawnImpl?: typeof spawn
+    log?: (message: string) => void
+  }
+): Promise<void> {
   const baseEnv = options.env ?? process.env
   if (baseEnv.SCIFORGE_PROJECT_DAG_AUTO_START === '0') {
     options.log?.('Project DAG auto-start is disabled.')
@@ -174,6 +200,12 @@ export async function ensureProjectDagSidecar(
   } else {
     const health = await checkProjectDagHealth(launch.baseUrl, launch.runtimeToken).catch(() => null)
     if (isProjectDagServiceHealth(health)) return
+    if (isProjectDagServiceResponse(health)) {
+      throw new Error(
+        `Project DAG ${String(health.data?.version ?? 'unknown')} is already running at ${launch.baseUrl}; ` +
+        `SciForge requires ${PROJECT_DAG_SERVICE_VERSION}. Restart SciForge to replace the stale sidecar.`
+      )
+    }
   }
 
   const spawnImpl = options.spawnImpl ?? spawn
@@ -251,8 +283,16 @@ async function checkProjectDagHealth(baseUrl: string, runtimeToken: string): Pro
 }
 
 function isProjectDagServiceHealth(value: unknown): boolean {
+  return isProjectDagServiceResponse(value) &&
+    value.data?.version === PROJECT_DAG_SERVICE_VERSION
+}
+
+function isProjectDagServiceResponse(value: unknown): value is {
+  ok: true
+  data: { service: 'project-dag-engine'; version?: unknown }
+} {
   if (!value || typeof value !== 'object') return false
-  const body = value as { ok?: unknown; data?: { service?: unknown } }
+  const body = value as { ok?: unknown; data?: { service?: unknown; version?: unknown } }
   return body.ok === true && body.data?.service === 'project-dag-engine'
 }
 

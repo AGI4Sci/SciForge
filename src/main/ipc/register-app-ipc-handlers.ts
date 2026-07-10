@@ -243,6 +243,7 @@ import {
 import {
   DEFAULT_PROJECT_DAG_SERVICE_URL,
   projectDagApiKeyFromEnv,
+  PROJECT_DAG_SERVICE_VERSION,
   projectDagServiceUrlFromEnv,
   projectDagUiUrl
 } from '../../../packages/workers/project-dag/desktop/contract'
@@ -332,10 +333,12 @@ import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/wr
 import { listGuiSkills } from '../services/skill-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
 import {
+  acknowledgeEvidenceDagSnapshot,
+  enqueueProjectFresh,
   ensureEvidenceDagFresh,
-  ensureProjectFresh,
   evidenceDagQueueStatus,
-  type EvidenceDagQueueStatus
+  type EvidenceDagQueueStatus,
+  type EvidenceSnapshot
 } from '../runtime/evidence-dag-feed'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
 
@@ -574,7 +577,8 @@ async function requestEvidenceDagJson(
   apiKey: string,
   path: string,
   init: RequestInit = {},
-  fetchImpl: typeof fetch | undefined = globalThis.fetch
+  fetchImpl: typeof fetch | undefined = globalThis.fetch,
+  timeoutMs?: number
 ): Promise<unknown> {
   if (typeof fetchImpl !== 'function') {
     throw new Error('Evidence DAG fetch API is unavailable.')
@@ -582,10 +586,23 @@ async function requestEvidenceDagJson(
   const headers = new Headers(init.headers)
   headers.set('authorization', `Bearer ${apiKey}`)
   if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json')
-  const response = await fetchImpl(`${serviceUrl}${path}`, {
-    ...init,
-    headers
-  })
+  const controller = timeoutMs ? new AbortController() : undefined
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined
+  let response: Response
+  try {
+    response = await fetchImpl(`${serviceUrl}${path}`, {
+      ...init,
+      headers,
+      ...(controller ? { signal: controller.signal } : {})
+    })
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new Error(`Evidence DAG request timed out after ${timeoutMs} ms.`)
+    }
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
   const body = await response.json().catch(() => null) as {
     ok?: boolean
     data?: unknown
@@ -779,6 +796,158 @@ function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPane
   }
 }
 
+function projectDagPanelStatus(
+  value: unknown,
+  evidenceStatuses: EvidenceDagQueueStatus[] = [],
+  sessionCount = evidenceStatuses.length
+): DagPanelStatus {
+  const status = dagPanelStatus(value)
+  const activeEvidence = evidenceStatuses.filter((item) =>
+    item.state === 'queued' || item.state === 'updating' || item.state === 'failed' || item.pendingCount > 0)
+  const degradedEvidence = evidenceStatuses.find((item) => item.state === 'degraded')
+  const totalItems = Math.max(sessionCount, evidenceStatuses.length)
+  if (activeEvidence.length > 0) {
+    const failed = activeEvidence.find((item) => item.state === 'failed' || item.state === 'degraded')
+    const updating = activeEvidence.some((item) => item.state === 'updating')
+    const projectPhase = activeEvidence.some((item) => item.phase === 'project')
+    const completedItems = evidenceStatuses.filter((item) =>
+      item.state === 'fresh' || item.phase === 'project').length
+    const updatedAt = activeEvidence
+      .map((item) => item.updatedAt)
+      .filter((item): item is string => Boolean(item))
+      .sort()
+      .at(-1)
+    return {
+      ...status,
+      freshness: failed ? 'failed' : updating ? 'updating' : 'queued',
+      pendingCount: Math.max(status.pendingCount, activeEvidence.length),
+      ...(failed?.lastError ? { lastError: failed.lastError } : {}),
+      ...(failed?.nextAttemptAt ? { nextAttemptAt: failed.nextAttemptAt } : {}),
+      progress: {
+        stage: failed ? 'retrying' : projectPhase ? 'project' : 'evidence',
+        completedItems,
+        totalItems,
+        ...(updatedAt ? { updatedAt } : {}),
+        ...(failed?.attempts ? { attempt: failed.attempts } : {})
+      }
+    }
+  }
+
+  const record = objectRecord(value) ?? {}
+  const jobs = Array.isArray(record.jobs) ? record.jobs.map(objectRecord).filter(Boolean) : []
+  const activeJob = jobs.find((job) => {
+    const jobStatus = optionalStringField(job!, 'status')
+    return jobStatus === 'queued' || jobStatus === 'running' ||
+      jobStatus === 'failed' || jobStatus === 'interrupted'
+  })
+  if (!activeJob) {
+    return degradedEvidence
+      ? {
+          ...status,
+          freshness: status.freshness === 'fresh' ? 'degraded' : status.freshness,
+          ...(degradedEvidence.lastError ? {
+            lastError: degradedEvidence.lastError,
+            degradedReason: degradedEvidence.lastError
+          } : {})
+        }
+      : status
+  }
+  const jobStatus = optionalStringField(activeJob, 'status')
+  const attempts = finiteNumberField(activeJob, 'attempts')
+  const updatedAt = optionalStringField(activeJob, 'updated_at') ?? optionalStringField(activeJob, 'updatedAt')
+  return {
+    ...status,
+    progress: {
+      stage: jobStatus === 'failed' || jobStatus === 'interrupted'
+        ? 'retrying'
+        : jobStatus === 'running'
+          ? 'compile'
+          : 'project',
+      completedItems: totalItems,
+      totalItems,
+      ...(updatedAt ? { updatedAt } : {}),
+      ...(attempts ? { attempt: attempts } : {})
+    }
+  }
+}
+
+function projectDagCommittedSessions(value: unknown): string[] {
+  const record = objectRecord(value)
+  const snapshots = [
+    objectRecord(record?.committedSnapshot ?? record?.snapshot),
+    objectRecord(record?.previousCommittedSnapshot)
+  ].filter((snapshot): snapshot is Record<string, unknown> => Boolean(snapshot))
+  const included = snapshots.flatMap((snapshot) =>
+    Array.isArray(snapshot.evidenceVector) ? snapshot.evidenceVector.flatMap((entry) => {
+        const item = objectRecord(entry)
+        const threadId = item ? optionalStringField(item, 'threadId') : undefined
+        return threadId ? [threadId] : []
+      }) : [])
+  return [...new Set([
+    ...included,
+    ...snapshots.flatMap((snapshot) => stringArrayField(snapshot, 'excludedSessions')),
+    ...snapshots.flatMap((snapshot) => stringArrayField(snapshot, 'isolatedSessions'))
+  ])].sort()
+}
+
+function projectDagCommittedEvidenceDigests(value: unknown): Map<string, string> {
+  const record = objectRecord(value)
+  const snapshots = [
+    objectRecord(record?.previousCommittedSnapshot),
+    objectRecord(record?.committedSnapshot ?? record?.snapshot)
+  ].filter((snapshot): snapshot is Record<string, unknown> => Boolean(snapshot))
+  const evidenceVector = snapshots.flatMap((snapshot) =>
+    Array.isArray(snapshot.evidenceVector) ? snapshot.evidenceVector : [])
+  return new Map(evidenceVector.flatMap((entry) => {
+    const item = objectRecord(entry)
+    const threadId = item ? optionalStringField(item, 'threadId') : undefined
+    const digest = item ? optionalStringField(item, 'digest') : undefined
+    return threadId && digest ? [[threadId, digest] as const] : []
+  }))
+}
+
+function reusableEvidenceSnapshot(
+  workerStatus: unknown,
+  expectedThreadId: string,
+  threadUpdatedAt?: string,
+  desiredWatermark?: string,
+  committedDigest?: string
+): EvidenceSnapshot | undefined {
+  const status = objectRecord(workerStatus)
+  const snapshot = objectRecord(status?.snapshot)
+  if (!snapshot || optionalStringField(snapshot, 'threadId') !== expectedThreadId ||
+      optionalStringField(snapshot, 'status') !== 'committed') return undefined
+  const createdAt = optionalStringField(snapshot, 'createdAt')
+  if (!createdAt) return undefined
+  const version = finiteNumberField(snapshot, 'version')
+  const digest = optionalStringField(snapshot, 'digest')
+  const inputWatermark = optionalStringField(snapshot, 'inputWatermark')
+  const schemaVersion = optionalStringField(snapshot, 'schemaVersion')
+  const extractorVersion = optionalStringField(snapshot, 'extractorVersion')
+  const verifierVersion = optionalStringField(snapshot, 'verifierVersion')
+  if (version === undefined || !digest || !inputWatermark || !schemaVersion ||
+      !extractorVersion || !verifierVersion) return undefined
+  const snapshotTime = Date.parse(createdAt)
+  const threadTime = threadUpdatedAt ? Date.parse(threadUpdatedAt) : Number.NaN
+  const coversQueuedTarget = desiredWatermark === inputWatermark
+  const matchesCommittedProject = committedDigest === digest
+  if (!coversQueuedTarget && !matchesCommittedProject && (
+    !Number.isFinite(snapshotTime) || !Number.isFinite(threadTime) || snapshotTime < threadTime
+  )) return undefined
+  return {
+    threadId: expectedThreadId,
+    version,
+    digest,
+    inputWatermark,
+    schemaVersion,
+    extractorVersion,
+    verifierVersion,
+    artifactDigests: stringArrayField(snapshot, 'artifactDigests'),
+    createdAt,
+    status: 'committed'
+  }
+}
+
 function projectDagStatusQuery(input: {
   workspaceRoot?: string
   projectRoot?: string
@@ -958,9 +1127,17 @@ async function assertProjectDagServiceReachable(
     if (!response.ok) {
       throw new Error(`version returned HTTP ${response.status}`)
     }
-    const body = await response.json().catch(() => null) as { data?: { service?: unknown } } | null
+    const body = await response.json().catch(() => null) as {
+      data?: { service?: unknown; version?: unknown }
+    } | null
     if (body?.data?.service !== 'project-dag-engine') {
       throw new Error('unexpected Project DAG service response')
+    }
+    if (body.data.version !== PROJECT_DAG_SERVICE_VERSION) {
+      throw new Error(
+        `stale Project DAG ${String(body.data.version ?? 'unknown')} ` +
+        `(requires ${PROJECT_DAG_SERVICE_VERSION}); restart SciForge`
+      )
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
@@ -3067,20 +3244,25 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const input = parseIpcPayload('evidenceDag:view', evidenceDagViewPayloadSchema, payload)
     await ensureEvidenceDagReady?.()
     const config = evidenceDagViewConfig(process.env)
-    await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
     const threadId = input.threadId?.trim()
     const engineThreadId = threadId && input.runtimeId
       ? evidenceDagThreadId(input.runtimeId, threadId)
       : undefined
-    const workerStatus = await requestEvidenceDagJson(
-      config.serviceUrl,
-      config.apiKey,
-      `/updates/status${engineThreadId ? `?threadId=${encodeURIComponent(engineThreadId)}` : ''}`,
-      { method: 'GET', cache: 'no-store' }
-    )
-    const localStatus = threadId && input.runtimeId
-      ? await Promise.resolve().then(() => evidenceDagQueueStatus(input.runtimeId!, threadId)).catch(() => undefined)
-      : undefined
+    const [workerStatus, localStatus] = await Promise.all([
+      engineThreadId
+        ? requestEvidenceDagJson(
+            config.serviceUrl,
+            config.apiKey,
+            `/updates/status?threadId=${encodeURIComponent(engineThreadId)}`,
+            { method: 'GET', cache: 'no-store' },
+            globalThis.fetch,
+            3_000
+          )
+        : Promise.resolve({ status: 'fresh', pendingCount: 0 }),
+      threadId && input.runtimeId
+        ? Promise.resolve().then(() => evidenceDagQueueStatus(input.runtimeId!, threadId)).catch(() => undefined)
+        : Promise.resolve(undefined)
+    ])
     return {
       url: evidenceDagUiUrl({
         runtimeId: input.runtimeId,
@@ -3139,19 +3321,43 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
-    const workerStatus = await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      `/updates/status${projectDagStatusQuery(input)}`,
-      { method: 'GET', cache: 'no-store' }
+    const canResolveRuntimeScope = Boolean(
+      agentRuntime && (input.workspaceRoot || input.projectRoot || input.sessions?.length)
     )
-    const goalsValue = await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      `/goals${projectDagStatusQuery(input)}`,
-      { method: 'GET', cache: 'no-store' }
-    )
+    const scopedThreads = canResolveRuntimeScope
+      ? await projectDagRuntimeThreadsForScope({ ...input, scope: 'all' }, agentRuntime)
+      : []
+    const sessionScope = scopedThreads.length > 0
+      ? scopedThreads.map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id)).sort()
+      : await projectDagSessionScopeForWorkspace(input, agentRuntime)
+    const [workerStatus, goalsValue, scopedEvidenceStatuses] = await Promise.all([
+      requestProjectDagJson(
+        serviceUrl,
+        apiKey,
+        `/updates/status${projectDagStatusQuery(input)}`,
+        { method: 'GET', cache: 'no-store' }
+      ),
+      requestProjectDagJson(
+        serviceUrl,
+        apiKey,
+        `/goals${projectDagStatusQuery(input)}`,
+        { method: 'GET', cache: 'no-store' }
+      ),
+      Promise.all(scopedThreads.map(async (thread) => ({
+        engineThreadId: evidenceDagThreadId(thread.runtimeId, thread.id),
+        status: await Promise.resolve(evidenceDagQueueStatus(thread.runtimeId, thread.id)).catch((error) => ({
+          state: 'degraded' as const,
+          pendingCount: 0,
+          lastError: error instanceof Error ? error.message : String(error)
+        }))
+      })))
+    ])
+    const committedSessions = projectDagCommittedSessions(workerStatus)
+    const visibleSessionScope = committedSessions.length > 0 ? committedSessions : sessionScope
+    const visibleSessionSet = visibleSessionScope ? new Set(visibleSessionScope) : undefined
+    const evidenceStatuses = scopedEvidenceStatuses
+      .filter((item) => !visibleSessionSet || visibleSessionSet.has(item.engineThreadId))
+      .map((item) => item.status)
     const rootGoal = Array.isArray(goalsValue) ? objectRecord(goalsValue[0]) : null
     const rootGoalId = rootGoal ? optionalStringField(rootGoal, 'id') : undefined
     const rootGoalTitle = rootGoal ? optionalStringField(rootGoal, 'title') : undefined
@@ -3164,9 +3370,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         workspaceRoot: input.workspaceRoot,
         projectRoot: input.projectRoot,
         project: input.project,
-        sessionIds: sessionScope
+        sessionIds: visibleSessionScope
       }),
-      status: dagPanelStatus(workerStatus),
+      status: projectDagPanelStatus(workerStatus, evidenceStatuses, visibleSessionScope?.length ?? 0),
       ...(rootGoalId && rootGoalTitle ? {
         goal: {
           id: rootGoalId,
@@ -3184,8 +3390,28 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const scopedThreads = await projectDagRuntimeThreadsForScope(input, agentRuntime)
-    const scopedIds = new Set(scopedThreads.map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id)))
+    const initialWorkerStatus = await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      `/updates/status${projectDagStatusQuery(input)}`,
+      { method: 'GET', cache: 'no-store' }
+    )
+    const committedSessions = projectDagCommittedSessions(initialWorkerStatus)
+    const committedDigests = projectDagCommittedEvidenceDigests(initialWorkerStatus)
+    const requestedSessions = Array.isArray(input.scope)
+      ? [...new Set([...input.scope, ...committedSessions])].sort()
+      : input.scope === 'all' && committedSessions.length > 0
+        ? committedSessions
+        : undefined
+    const scopedThreads = await projectDagRuntimeThreadsForScope(
+      requestedSessions ? { ...input, scope: requestedSessions } : input,
+      agentRuntime
+    )
+    const availableThreads = new Map(scopedThreads.map((thread) => [
+      evidenceDagThreadId(thread.runtimeId, thread.id),
+      thread
+    ]))
+    const scopedIds = new Set(requestedSessions ?? [...availableThreads.keys()])
     const excludedSessions = [...new Set(input.excludedSessions ?? [])].sort()
     const isolatedSessions = [...new Set(input.isolatedSessions ?? [])].sort()
     const overlap = excludedSessions.filter((session) => isolatedSessions.includes(session))
@@ -3198,34 +3424,113 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       throw new Error(`Project session dispositions are outside the captured workspace scope: ${outsideScope.join(', ')}`)
     }
     const unavailable = new Set([...excludedSessions, ...isolatedSessions])
-    const threads = scopedThreads.filter((thread) =>
-      !unavailable.has(evidenceDagThreadId(thread.runtimeId, thread.id)))
-    if (threads.length === 0) throw new Error('Project DAG update captured no included runtime sessions.')
-    const sources = await Promise.all(threads.map(async (thread) => {
-      if (!agentRuntime) throw new Error('Project DAG requires agent runtime sessions for the current project.')
-      const detail = await agentRuntime.readThread({ runtimeId: thread.runtimeId, threadId: thread.id })
+    const includedSessions = [...scopedIds].filter((session) => !unavailable.has(session)).sort()
+    if (includedSessions.length === 0) {
+      throw new Error('Project DAG update captured no included runtime sessions.')
+    }
+    await ensureEvidenceDagReady?.()
+    const evidenceConfig = evidenceDagViewConfig(process.env)
+    const evidenceStates = await Promise.all(includedSessions.map(async (engineThreadId) => {
+      const thread = availableThreads.get(engineThreadId)
+      const separator = engineThreadId.indexOf(':')
+      const runtimeId = separator > 0 ? engineThreadId.slice(0, separator) : ''
+      const threadId = separator > 0 ? engineThreadId.slice(separator + 1) : engineThreadId
+      const localStatus: EvidenceDagQueueStatus = runtimeId
+        ? await Promise.resolve(evidenceDagQueueStatus(runtimeId, threadId))
+            .catch(() => ({ state: 'dirty' as const, pendingCount: 0 }))
+        : { state: 'dirty', pendingCount: 0 }
+      const workerStatus = await requestEvidenceDagJson(
+        evidenceConfig.serviceUrl,
+        evidenceConfig.apiKey,
+        `/updates/status?threadId=${encodeURIComponent(engineThreadId)}`,
+        { method: 'GET', cache: 'no-store' },
+        globalThis.fetch,
+        3_000
+      ).catch(() => undefined)
       return {
-        runtimeId: thread.runtimeId,
-        threadId: thread.id,
-        items: evidenceDagBackfillItems(detail),
-        targetWatermark: String(detail.latestSeq)
+        engineThreadId,
+        thread,
+        localStatus,
+        snapshot: localStatus.state === 'fresh' || localStatus.desiredWatermark ||
+          committedDigests.has(engineThreadId)
+          ? reusableEvidenceSnapshot(
+              workerStatus,
+              engineThreadId,
+              thread?.updatedAt,
+              localStatus.desiredWatermark,
+              committedDigests.get(engineThreadId)
+            )
+          : undefined
       }
     }))
-    const includedSessions = threads.map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id)).sort()
-    const ensured = await ensureProjectFresh({
-      sessions: sources,
-      projectContext: {
-        projectKey: input.workspaceRoot ?? input.projectRoot ?? input.project,
-        workspaceRoot: input.workspaceRoot,
-        projectRoot: input.projectRoot,
-        project: input.project,
-        includedSessions,
-        excludedSessions,
-        isolatedSessions,
-        updateReason: 'manual_immediate',
-        autonomyMode: input.autonomyMode
-      }
-    })
+    const staleEvidence = evidenceStates.filter((item) => !item.snapshot)
+    const projectContext = {
+      projectKey: input.workspaceRoot ?? input.projectRoot ?? input.project,
+      workspaceRoot: input.workspaceRoot,
+      projectRoot: input.projectRoot,
+      project: input.project,
+      includedSessions,
+      excludedSessions,
+      isolatedSessions,
+      updateReason: 'manual_immediate' as const,
+      autonomyMode: input.autonomyMode
+    }
+    let jobId: string | undefined
+    let evidenceStatuses: EvidenceDagQueueStatus[]
+    if (staleEvidence.length > 0) {
+      if (!agentRuntime) throw new Error('Project DAG requires agent runtime sessions for the current project.')
+      const sources = await Promise.all(staleEvidence.map(async ({ thread, engineThreadId }) => {
+        if (!thread) {
+          throw new Error(
+            `Project session ${engineThreadId} is unavailable and has no reusable committed Evidence snapshot.`
+          )
+        }
+        const detail = await agentRuntime.readThread({ runtimeId: thread.runtimeId, threadId: thread.id })
+        return {
+          runtimeId: thread.runtimeId,
+          threadId: thread.id,
+          items: evidenceDagBackfillItems(detail),
+          targetWatermark: String(detail.latestSeq)
+        }
+      }))
+      const enqueued = await enqueueProjectFresh({ sessions: sources, projectContext })
+      jobId = enqueued.coordinatorJobId
+      evidenceStatuses = [
+        ...evidenceStates.filter((item) => item.snapshot).map(() => ({
+          state: 'fresh' as const,
+          pendingCount: 0
+        })),
+        ...enqueued.jobs
+      ]
+    } else {
+      const evidenceSnapshots = evidenceStates.map((item) => item.snapshot!)
+      const projectJob = objectRecord(await requestProjectDagJson(
+        serviceUrl,
+        apiKey,
+        '/updates',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            ...(projectContext.projectKey ? { projectKey: projectContext.projectKey } : {}),
+            ...(projectContext.workspaceRoot ? { workspaceRoot: projectContext.workspaceRoot } : {}),
+            ...(projectContext.projectRoot ? { projectRoot: projectContext.projectRoot } : {}),
+            ...(projectContext.project ? { project: projectContext.project } : {}),
+            ...(projectContext.autonomyMode ? { autonomyMode: projectContext.autonomyMode } : {}),
+            reason: projectContext.updateReason,
+            priority: 3,
+            evidenceVector: evidenceSnapshots.map((snapshot) => ({
+              threadId: snapshot.threadId,
+              digest: snapshot.digest
+            })),
+            evidenceSnapshots,
+            capturedScope: { includedSessions, excludedSessions, isolatedSessions }
+          })
+        }
+      ))
+      jobId = projectJob ? optionalStringField(projectJob, 'id') : undefined
+      await Promise.all(evidenceSnapshots.map((snapshot) => acknowledgeEvidenceDagSnapshot(snapshot)))
+      evidenceStatuses = evidenceSnapshots.map(() => ({ state: 'fresh' as const, pendingCount: 0 }))
+    }
     const workerStatus = await requestProjectDagJson(
       serviceUrl,
       apiKey,
@@ -3242,10 +3547,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       project: input.project,
       sessionIds: includedSessions
     })
+    const panelStatus = projectDagPanelStatus(workerStatus, evidenceStatuses, includedSessions.length)
     return {
       url,
-      jobId: ensured.coordinatorJobId,
-      status: dagPanelStatus(workerStatus)
+      ...(jobId ? { jobId } : {}),
+      status: {
+        ...panelStatus,
+        autonomyMode: input.autonomyMode ?? panelStatus.autonomyMode,
+        scope: { includedSessions, excludedSessions, isolatedSessions }
+      }
     }
   })
   handleInvoke('projectDag:save-goal', async (_, payload: unknown) => {
@@ -3283,7 +3593,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return {
       goalId,
       ...(typeof goal.version === 'number' ? { version: goal.version } : {}),
-      status: dagPanelStatus(workerStatus)
+      status: projectDagPanelStatus(workerStatus)
     }
   })
   handleInvoke('notification:turn-complete', async (_, payload: unknown) =>

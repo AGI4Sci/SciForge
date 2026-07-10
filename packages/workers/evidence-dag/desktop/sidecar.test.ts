@@ -32,9 +32,27 @@ describe('Evidence DAG sidecar launch', () => {
     expect(result.launch.env.EDAG_MODEL_ROUTER_BASE_URL).toBe('http://127.0.0.1:3892/v1')
     expect(result.launch.env.EDAG_MODEL_ROUTER_API_KEY).toBe('router-runtime-key')
     expect(result.launch.env.EDAG_MODEL_ROUTER_MODEL).toBe('sciforge-router')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('45')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('1')
     expect(result.launch.env.SCIFORGE_EVIDENCE_DAG_API_KEY).toMatch(/^edag-/)
     expect(result.launch.env.EDAG_LLM_BASE_URL).toBeUndefined()
     expect(result.launch.env.EDAG_LLM_API_KEY).toBeUndefined()
+  })
+
+  it('preserves explicit Model Router timeout and retry tuning', () => {
+    const result = buildEvidenceDagLaunch(settings(), {
+      userDataDir: '/tmp/sciforge',
+      env: {
+        EDAG_MODEL_ROUTER_TIMEOUT_S: '20',
+        EDAG_MODEL_ROUTER_MAX_ATTEMPTS: '2'
+      } as NodeJS.ProcessEnv,
+      npmCommand: 'npm'
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('20')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('2')
   })
 
   it('keeps the generated Evidence DAG token stable for a Model Router runtime key', () => {

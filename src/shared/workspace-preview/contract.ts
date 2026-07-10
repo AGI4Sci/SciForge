@@ -176,6 +176,39 @@ export type WorkspacePreviewSession = {
   selection?: WorkspaceStructuredSelection
 }
 
+export type WorkspacePreviewDocumentRect = {
+  page: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type WorkspacePreviewAnchor =
+  | {
+      kind: 'text'
+      line: number
+      column?: number
+      endLine?: number
+      endColumn?: number
+    }
+  | {
+      kind: 'document'
+      id?: string
+      page?: number
+      paragraphIndex?: number
+      quote?: string
+      rects?: WorkspacePreviewDocumentRect[]
+    }
+  | {
+      kind: 'tabular'
+      sheet?: string
+      rowStart: number
+      rowEnd: number
+      columnStart: number
+      columnEnd: number
+    }
+
 export type WorkspaceStructuredSelection =
   | {
       kind: 'text'
@@ -189,7 +222,13 @@ export type WorkspaceStructuredSelection =
     }
   | {
       kind: 'document'
-      anchors: Array<{ id: string; page?: number; paragraphIndex?: number; quote?: string }>
+      anchors: Array<{
+        id: string
+        page?: number
+        paragraphIndex?: number
+        quote?: string
+        rects?: WorkspacePreviewDocumentRect[]
+      }>
     }
   | {
       kind: 'deck'
@@ -554,6 +593,43 @@ const tabularSelectionRangeSchema = z.object({
   columnEnd: z.number().int().min(0)
 }).strict()
 
+export const workspacePreviewDocumentRectSchema = z.object({
+  page: z.number().int().positive().max(1_000_000),
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+  width: z.number().finite().gt(0).max(1),
+  height: z.number().finite().gt(0).max(1)
+}).strict()
+
+export const workspacePreviewAnchorSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('text'),
+    line: z.number().int().positive().max(1_000_000),
+    column: z.number().int().positive().max(1_000_000).optional(),
+    endLine: z.number().int().positive().max(1_000_000).optional(),
+    endColumn: z.number().int().positive().max(1_000_000).optional()
+  }).strict(),
+  z.object({
+    kind: z.literal('document'),
+    id: idSchema.optional(),
+    page: z.number().int().positive().max(1_000_000).optional(),
+    paragraphIndex: z.number().int().positive().max(1_000_000).optional(),
+    quote: boundedString(WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS).optional(),
+    rects: z.array(workspacePreviewDocumentRectSchema)
+      .min(1)
+      .max(WORKSPACE_PREVIEW_MAX_ANNOTATION_RECTS)
+      .optional()
+  }).strict(),
+  z.object({
+    kind: z.literal('tabular'),
+    sheet: optionalShortStringSchema,
+    rowStart: z.number().int().min(0),
+    rowEnd: z.number().int().min(0),
+    columnStart: z.number().int().min(0),
+    columnEnd: z.number().int().min(0)
+  }).strict()
+])
+
 export const workspaceStructuredSelectionSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('text'),
@@ -575,7 +651,10 @@ export const workspaceStructuredSelectionSchema = z.discriminatedUnion('kind', [
       id: idSchema,
       page: z.number().int().min(1).optional(),
       paragraphIndex: z.number().int().min(1).optional(),
-      quote: boundedString(WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS).optional()
+      quote: boundedString(WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS).optional(),
+      rects: z.array(workspacePreviewDocumentRectSchema)
+        .max(WORKSPACE_PREVIEW_MAX_ANNOTATION_RECTS)
+        .optional()
     }).strict()).min(1).max(WORKSPACE_PREVIEW_MAX_SELECTION_ITEMS)
   }).strict(),
   z.object({
@@ -658,6 +737,67 @@ export const workspaceStructuredSelectionSchema = z.discriminatedUnion('kind', [
     }).strict()).max(WORKSPACE_PREVIEW_MAX_SELECTION_ITEMS).optional()
   }).strict()
 ])
+
+export function resolveWorkspacePreviewInitialSelection(input: {
+  selection?: WorkspaceStructuredSelection
+  anchor?: WorkspacePreviewAnchor
+  line?: number
+  column?: number
+}): WorkspaceStructuredSelection | undefined {
+  if (input.selection) return workspaceStructuredSelectionSchema.parse(input.selection)
+
+  if (input.anchor) {
+    const anchor = workspacePreviewAnchorSchema.parse(input.anchor)
+    if (anchor.kind === 'text') {
+      const startColumn = anchor.column ?? 1
+      return workspaceStructuredSelectionSchema.parse({
+        kind: 'text',
+        ranges: [{
+          startLine: anchor.line,
+          startColumn,
+          endLine: anchor.endLine ?? anchor.line,
+          endColumn: anchor.endColumn ?? startColumn
+        }]
+      })
+    }
+    if (anchor.kind === 'tabular') {
+      return workspaceStructuredSelectionSchema.parse({
+        kind: 'tabular',
+        ...(anchor.sheet ? { sheet: anchor.sheet } : {}),
+        ranges: [{
+          rowStart: anchor.rowStart,
+          rowEnd: anchor.rowEnd,
+          columnStart: anchor.columnStart,
+          columnEnd: anchor.columnEnd
+        }]
+      })
+    }
+    return workspaceStructuredSelectionSchema.parse({
+      kind: 'document',
+      anchors: [{
+        id: anchor.id ?? 'initial-document-anchor',
+        ...(anchor.page != null ? { page: anchor.page } : {}),
+        ...(anchor.paragraphIndex != null ? { paragraphIndex: anchor.paragraphIndex } : {}),
+        ...(anchor.quote ? { quote: anchor.quote } : {}),
+        ...(anchor.rects?.length ? { rects: anchor.rects } : {})
+      }]
+    })
+  }
+
+  if (input.line != null) {
+    const column = input.column ?? 1
+    return workspaceStructuredSelectionSchema.parse({
+      kind: 'text',
+      ranges: [{
+        startLine: input.line,
+        startColumn: column,
+        endLine: input.line,
+        endColumn: column
+      }]
+    })
+  }
+  return undefined
+}
 
 export const workspacePreviewFileStateSchema = z.object({
   workspaceRoot: pathSchema,

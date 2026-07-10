@@ -16,6 +16,11 @@ type PureUi = {
   whatIfImpact: (graph: unknown, sourceId: string) => {
     affected: Array<{ claim: { id: string }; kind: string; distance: number }>
   }
+  graphModel: (graph: unknown) => {
+    nodes: Array<{ id: string; kind: string; label: string }>
+    edges: Array<{ src: string; dst: string; type: string }>
+    counts: Record<string, number>
+  }
 }
 
 function loadPureUi(): { html: string; pure: PureUi } {
@@ -50,6 +55,41 @@ describe('Project DAG desktop contract', () => {
     expect(html).not.toContain("method:'POST'")
     expect(html).not.toContain('method: "POST"')
     expect(html).not.toContain('/compile')
+  })
+
+  it('ships distinct Evidence and Graph surfaces selected by the requested view', () => {
+    const { html } = loadPureUi()
+    expect(html).toContain('id="evidence-surface"')
+    expect(html).toContain('id="evidence-vector"')
+    expect(html).toContain('id="graph-surface"')
+    expect(html).toContain('id="graph-scroll"')
+    expect(html).toContain("query.get('view')==='graph'?'graph':'home'")
+    expect(html).toContain('role="img" aria-label="Committed Project DAG')
+  })
+
+  it('builds visible nodes and directed edges from the committed Project snapshot', () => {
+    const { pure } = loadPureUi()
+    const model = pure.graphModel({
+      snapshot: { evidenceVector: [{ threadId: 'session-a', digest: 'sha256:a' }] },
+      goals: [{ root_id: 'goal-a', title: 'Discover target' }],
+      evidence: [{ id: 'evidence-a', content: 'Observed activity', evidence_type: 'source' }],
+      claims: [{ id: 'claim-a', statement: 'Target is active', status: 'supported', goal_id: 'goal-a' }],
+      entities: [],
+      origins: [{ session_id: 'session-a', claim_id: 'claim-a' }],
+      edges: [{ id: 'supports-a', src: 'evidence-a', dst: 'claim-a', edge_type: 'supports' }]
+    })
+
+    expect(model.nodes.map(node => [node.id, node.kind])).toEqual([
+      ['session:session-a', 'session'],
+      ['evidence-a', 'evidence'],
+      ['claim-a', 'claim'],
+      ['goal-a', 'goal']
+    ])
+    expect(model.edges.map(edge => [edge.src, edge.dst, edge.type])).toEqual([
+      ['evidence-a', 'claim-a', 'supports'],
+      ['session:session-a', 'claim-a', 'origin'],
+      ['claim-a', 'goal-a', 'addresses']
+    ])
   })
 
   it('ranks strongest paths by explicit dimensions and deduplicates upstream identity', () => {

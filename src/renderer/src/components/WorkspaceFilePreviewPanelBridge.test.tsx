@@ -403,12 +403,14 @@ vi.mock('../workspace-preview', async () => {
     rendererWorkspacePreviewRegistry: registry.rendererWorkspacePreviewRegistry,
     WorkspacePreviewPanelShell: (props: {
       target: { path: string } | null
+      className?: string
       children?: ReactNode | ((nextContext: ReturnType<typeof contextForTarget>) => ReactNode)
     }) => h(
       'section',
       {
         'data-mock-workspace-preview-shell': 'true',
-        'data-target-path': props.target?.path ?? ''
+        'data-target-path': props.target?.path ?? '',
+        'data-shell-class-name': props.className ?? ''
       },
       typeof props.children === 'function'
         ? props.children(contextForTarget(props.target))
@@ -635,6 +637,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(unregisteredHtml).toContain('data-route-reason="unregistered-format"')
     expect(unregisteredHtml).not.toContain('data-mock-legacy-preview-panel="true"')
     expect(markdownHtml).toContain('data-mock-workspace-preview-shell="true"')
+    expect(markdownHtml).toContain('data-shell-class-name="ds-no-drag"')
     expect(markdownHtml).toContain('data-route-reason="registered-plugin"')
     expect(molecularHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(molecularHtml).toContain('data-route-reason="registered-plugin"')

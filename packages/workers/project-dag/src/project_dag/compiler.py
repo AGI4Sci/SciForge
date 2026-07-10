@@ -72,6 +72,16 @@ def _load_edge_meta(edge: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+def _load_json_object(value: Any) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 class Compiler:
     def __init__(self, store: Store, reader: SessionReader, judge: Judge,
                  *, auto_threshold: float = AUTO_THRESHOLD,
@@ -133,6 +143,11 @@ class Compiler:
         touched: set[str] = set()
 
         self._collect_decision_outputs(project_key, diff)
+        # Older compiler versions registered evidence for no-Goal candidates
+        # and advanced the session watermark, but left the candidates only in
+        # an orphan review.  Materialize those candidates before goal rematch
+        # so they are not permanently stranded after a Goal is later created.
+        touched |= self._materialize_legacy_orphans(project_key, run_id, diff)
         touched |= self._rematch_goals(project_key, run_id, diff)
 
         session_ids = (self.reader.list_sessions() if scope == "all"
@@ -238,6 +253,87 @@ class Compiler:
                 "remediationCandidate": candidate,
             })
 
+    def _materialize_legacy_orphans(self, project_key: str, run_id: str,
+                                    diff: dict) -> set[str]:
+        """Recover no-Goal candidates stranded by the pre-v2 compiler.
+
+        The old path wrote their source rows into ``evidence`` and advanced
+        the Evidence watermark, but never created a Project Claim.  Replaying
+        the same immutable Evidence digest therefore returned no delta and the
+        candidate could never be adopted.  The orphan review is the durable
+        recovery record, so convert each still-unmaterialized candidate into
+        an unassigned, ``undetermined`` claim while keeping the review open.
+        """
+        touched: set[str] = set()
+        has_goals = bool(self.store.active_goals(project_key=project_key, scoped=True))
+        reviews = self.store.q(
+            "SELECT * FROM review WHERE project_key=? AND review_type='orphan_claims'"
+            " AND status='open' ORDER BY created_at,id",
+            (project_key,),
+        )
+        for review in reviews:
+            payload = _load_json_object(review.get("payload"))
+            candidates = payload.get("candidates")
+            if not isinstance(candidates, list):
+                continue
+            changed = False
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                session_id = candidate.get("session")
+                node_id = candidate.get("node")
+                statement = candidate.get("statement")
+                if not all(isinstance(value, str) and value for value in
+                           (session_id, node_id, statement)):
+                    continue
+                existing = self.store.q1(
+                    "SELECT claim_id FROM claim_origin WHERE project_key=?"
+                    " AND session_id=? AND node_id=? LIMIT 1",
+                    (project_key, session_id, node_id),
+                )
+                if existing is not None:
+                    candidate["project_claim_id"] = existing["claim_id"]
+                    continue
+                evidence_ids = [
+                    evidence_id for evidence_id in candidate.get("evidence_ids", [])
+                    if isinstance(evidence_id, str) and self.store.q1(
+                        "SELECT 1 AS present FROM evidence WHERE id=? AND t_invalid IS NULL",
+                        (evidence_id,),
+                    ) is not None
+                ]
+                claim_id = self._insert_claim_record(
+                    session_id=session_id,
+                    node_id=node_id,
+                    out={
+                        "claim_type": candidate.get("claim_type"),
+                        "confidence": candidate.get("confidence", 0.5),
+                    },
+                    statement=statement,
+                    goal_id=None,
+                    entity_ids=[],
+                    evidence_ids=evidence_ids,
+                    run_id=run_id,
+                    project_key=project_key,
+                )
+                if has_goals:
+                    self.store.x("UPDATE claim SET needs_regoal=1 WHERE id=?", (claim_id,))
+                candidate["project_claim_id"] = claim_id
+                touched.add(claim_id)
+                changed = True
+                diff["added_claims"].append({
+                    "id": claim_id,
+                    "statement": statement,
+                    "goal": None,
+                    "recovered_from_review": review["id"],
+                })
+            if changed:
+                payload["materialized_run_id"] = run_id
+                self.store.x(
+                    "UPDATE review SET payload=? WHERE id=?",
+                    (json.dumps(payload, ensure_ascii=False), review["id"]),
+                )
+        return touched
+
     def _rematch_goals(self, project_key: str, run_id: str, diff: dict) -> set[str]:
         """Apply persisted Goal changes without re-reading or reinterpreting Evidence.
 
@@ -291,7 +387,49 @@ class Compiler:
                 "confidence": float(match.get("confidence", 0.0)),
             })
             touched.add(claim["id"])
+        self._resolve_assigned_orphan_reviews(project_key)
         return touched
+
+    def _resolve_assigned_orphan_reviews(self, project_key: str) -> None:
+        """Close an orphan review once all of its materialized claims have Goals."""
+        for review in self.store.q(
+            "SELECT * FROM review WHERE project_key=? AND review_type='orphan_claims'"
+            " AND status='open' ORDER BY created_at,id",
+            (project_key,),
+        ):
+            payload = _load_json_object(review.get("payload"))
+            candidates = payload.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                continue
+            materialized_candidates = [
+                candidate for candidate in candidates if isinstance(candidate, dict)
+                and isinstance(candidate.get("session"), str)
+                and isinstance(candidate.get("node"), str)
+            ]
+            claim_ids = {
+                candidate.get("project_claim_id")
+                for candidate in materialized_candidates
+                if isinstance(candidate.get("project_claim_id"), str)
+            }
+            if not claim_ids or any(
+                not isinstance(candidate.get("project_claim_id"), str)
+                for candidate in materialized_candidates
+            ):
+                continue
+            assigned = all(
+                (claim := self.store.q1(
+                    "SELECT goal_id,t_invalid FROM claim WHERE id=? AND project_key=?",
+                    (claim_id, project_key),
+                )) is not None
+                and (claim["t_invalid"] is not None or claim["goal_id"] is not None)
+                for claim_id in claim_ids
+            )
+            if assigned:
+                payload["resolution"] = "all materialized claims assigned or invalidated"
+                self.store.x(
+                    "UPDATE review SET status='resolved',payload=?,resolved_at=? WHERE id=?",
+                    (json.dumps(payload, ensure_ascii=False), now_iso(), review["id"]),
+                )
 
     # -------------------------------------------------------------- per session
     def _process_session(self, delta, run_id: str, diff: dict, *,
@@ -332,14 +470,21 @@ class Compiler:
             goal_id = out.get("addresses_goal") or "none"
             if goal_id != "none" and goal_id not in {g["id"] for g in goal_view}:
                 goal_id = "none"
-            if goal_id == "none":                                  # -> orphan pool (Phase 7)
+            if goal_id == "none":                                  # -> graph + review (Phase 7)
+                entity_ids = self._resolve_entities(
+                    out.get("mentioned_entities", []), out.get("statement", ""), diff,
+                    project_key=project_key)
+                evidence_ids = self._register_evidence(delta, cited)
+                claim_id = self._match_and_insert(
+                    delta, node_id, out, None, entity_ids, evidence_ids,
+                    run_id, diff, touched, project_key=project_key)
                 diff["orphans"].append({
                     "session": delta.session_id, "node": node_id,
+                    "project_claim_id": claim_id,
                     "statement": out.get("statement", node.content),
                     "claim_type": out.get("claim_type"),
                     "source_node_ids": cited,
-                    # register evidence NOW so adoption can wire supports edges
-                    "evidence_ids": self._register_evidence(delta, cited),
+                    "evidence_ids": evidence_ids,
                 })
                 continue
 
@@ -507,10 +652,10 @@ class Compiler:
         return out
 
     # -------------------------------------------- Phase 4/5: match + conflicts
-    def _match_and_insert(self, delta, node_id: str, out: dict, goal_id: str,
+    def _match_and_insert(self, delta, node_id: str, out: dict, goal_id: Optional[str],
                           entity_ids: list[str], evidence_ids: list[str],
                           run_id: str, diff: dict, touched: set[str], *,
-                          project_key: str) -> None:
+                          project_key: str) -> str:
         st = self.store
         statement = out.get("statement") or delta.graph.nodes[node_id].content
 
@@ -534,7 +679,7 @@ class Compiler:
             diff["merged_claims"].append({"into": target, "statement": statement,
                                           "session": delta.session_id})
             touched.add(target)
-            return
+            return target
 
         cid = self._insert_claim(delta, node_id, out, statement, goal_id,
                                  entity_ids, evidence_ids, run_id,
@@ -555,14 +700,21 @@ class Compiler:
         self._detect_conflicts(cid, statement, project_key, goal_id, entity_ids,
                                exclude={target} if target else set(),
                                run_id=run_id, diff=diff, touched=touched)
+        return cid
 
-    def _candidate_pool(self, project_key: str, goal_id: str,
+    def _candidate_pool(self, project_key: str, goal_id: Optional[str],
                         entity_ids: list[str]) -> list[dict]:
         """Alive claims on the same goal sharing >=1 entity (structure first,
         semantics second)."""
         st = self.store
-        rows = st.q("SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
-                    " AND goal_id=?", (project_key, goal_id))
+        if goal_id is None:
+            rows = st.q(
+                "SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
+                " AND goal_id IS NULL", (project_key,))
+        else:
+            rows = st.q(
+                "SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
+                " AND goal_id=?", (project_key, goal_id))
         if not entity_ids:
             return rows
         eset = set(entity_ids)
@@ -574,8 +726,24 @@ class Compiler:
         return out
 
     def _insert_claim(self, delta, node_id: str, out: dict, statement: str,
-                      goal_id: str, entity_ids: list[str], evidence_ids: list[str],
+                      goal_id: Optional[str], entity_ids: list[str], evidence_ids: list[str],
                       run_id: str, *, project_key: str) -> str:
+        return self._insert_claim_record(
+            session_id=delta.session_id,
+            node_id=node_id,
+            out=out,
+            statement=statement,
+            goal_id=goal_id,
+            entity_ids=entity_ids,
+            evidence_ids=evidence_ids,
+            run_id=run_id,
+            project_key=project_key,
+        )
+
+    def _insert_claim_record(self, *, session_id: str, node_id: str, out: dict,
+                             statement: str, goal_id: Optional[str],
+                             entity_ids: list[str], evidence_ids: list[str],
+                             run_id: str, project_key: str) -> str:
         st = self.store
         cid = new_id("claim")
         t = now_iso()
@@ -584,18 +752,19 @@ class Compiler:
                          "negative_result", "decision"):
             ctype = "finding"
         st.x("INSERT INTO claim (id,project_key,statement,claim_type,confidence,goal_id,"
-             "t_valid,t_created) VALUES (?,?,?,?,?,?,?,?)",
+             "status,t_valid,t_created) VALUES (?,?,?,?,?,?,?,?,?)",
              (cid, project_key, statement, ctype, float(out.get("confidence", 0.5)),
-              goal_id, t, t))
-        st.add_edge(cid, goal_id, "addresses", meta={"run": run_id})
+              goal_id, "supported" if goal_id is not None else "undetermined", t, t))
+        if goal_id is not None:
+            st.add_edge(cid, goal_id, "addresses", meta={"run": run_id})
         for eid in entity_ids:
             st.add_edge(cid, eid, "mentions")
         for evid in evidence_ids:
             st.add_edge(evid, cid, "supports",
-                        meta=_support_meta(run_id, delta.session_id, node_id))
+                        meta=_support_meta(run_id, session_id, node_id))
         st.x("INSERT OR IGNORE INTO claim_origin"
              " (claim_id,project_key,session_id,node_id,run_id) VALUES (?,?,?,?,?)",
-             (cid, project_key, delta.session_id, node_id, run_id))
+             (cid, project_key, session_id, node_id, run_id))
         return cid
 
     def _merge_into(self, target: str, session_id: str, node_id: str,
@@ -639,7 +808,8 @@ class Compiler:
              (json.dumps(meta, ensure_ascii=False), edge["id"]))
 
     # ------------------------------------------------------- Phase 5: conflicts
-    def _detect_conflicts(self, cid: str, statement: str, project_key: str, goal_id: str,
+    def _detect_conflicts(self, cid: str, statement: str, project_key: str,
+                          goal_id: Optional[str],
                           entity_ids: list[str], *, exclude: set,
                           run_id: str, diff: dict, touched: set[str]) -> None:
         st = self.store

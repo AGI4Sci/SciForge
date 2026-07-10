@@ -72,6 +72,7 @@ describe('MarkdownWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-workspace-preview-markdown-viewer')
+    expect(html).toContain('overflow-hidden')
     expect(html).toContain('data-editable="true"')
     expect(html).toContain('data-markdown-agent-summary')
     expect(html).toContain('data-markdown-view-mode="preview"')
@@ -95,6 +96,7 @@ describe('MarkdownWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-markdown-view-mode="edit"')
+    expect(html).toContain('overflow-hidden')
     expect(html).toContain('data-text-preview-editor')
     expect(html).not.toContain('data-markdown-preview-pane')
   })

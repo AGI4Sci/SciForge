@@ -7,7 +7,11 @@ import {
   removeBrowserStorageItem,
   writeBrowserStorageItem
 } from '../lib/browser-storage'
-import { WORKSPACE_FILE_PREVIEW_EVENT, type WorkspaceFilePreviewDetail } from '../lib/workspace-file-preview'
+import {
+  WORKSPACE_FILE_PREVIEW_EVENT,
+  type WorkspaceFilePreviewDetail,
+  type WorkspaceFilePreviewReturnContext
+} from '../lib/workspace-file-preview'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
 import { FIGURE_STYLE_PANEL_PAGE_KEY } from './figure-style/figure-style-panel-state'
 
@@ -174,6 +178,7 @@ export function useWorkbenchLayout({
 }) {
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>(readStoredRightPanelMode)
   const [filePreviewTarget, setFilePreviewTarget] = useState<WorkspaceFileTarget | null>(null)
+  const [filePreviewReturnContext, setFilePreviewReturnContext] = useState<WorkspaceFilePreviewReturnContext | null>(null)
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
     readStoredWidth(LEFT_PANEL_WIDTH_KEY, LEFT_PANEL_DEFAULT)
   )
@@ -221,6 +226,7 @@ export function useWorkbenchLayout({
         ...detail,
         workspaceRoot: detail.workspaceRoot ?? workspaceRoot
       })
+      setFilePreviewReturnContext(detail.returnTo ?? null)
       setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
       setRightPanelMode('file')
     }
@@ -233,6 +239,7 @@ export function useWorkbenchLayout({
     if (previewThreadId.current === activeThreadId) return
     previewThreadId.current = activeThreadId
     autoOpenedPreviewUrlRef.current = null
+    setFilePreviewReturnContext(null)
     if (shouldCloseRightPanelOnThreadChange(rightPanelMode)) setRightPanelMode(null)
   }, [activeThreadId, rightPanelMode])
 
@@ -435,6 +442,7 @@ export function useWorkbenchLayout({
     beginLeftResize,
     beginRightResize,
     beginTerminalResize,
+    filePreviewReturnContext,
     filePreviewTarget,
     leftSidebarCollapsed,
     leftSidebarWidth,
@@ -443,6 +451,7 @@ export function useWorkbenchLayout({
     rightPanelVisible,
     rightSidebarWidth,
     setFilePreviewTarget,
+    setFilePreviewReturnContext,
     setRightPanelMode,
     setRightSidebarWidth,
     shellRef,

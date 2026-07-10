@@ -159,7 +159,10 @@ export function TextWorkspaceViewer({
 
   return (
     <section
-      className={compactClassName('workspace-preview-text-viewer flex h-full min-h-0 flex-col', className)}
+      className={compactClassName(
+        'workspace-preview-text-viewer flex h-full min-h-0 flex-col overflow-hidden',
+        className
+      )}
       data-workspace-preview-text-viewer
       data-status={resolvedModel.status.kind}
       data-truncated={resolvedModel.truncated ? 'true' : 'false'}

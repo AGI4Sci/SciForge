@@ -119,7 +119,10 @@ class Handler(BaseHTTPRequestHandler):
     def _project_key(self, query: dict, body: dict | None = None) -> str:
         value = (body or {}).get("projectKey") or query.get("projectKey")
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            value = value.strip()
+            if os.path.isabs(os.path.expanduser(value)):
+                return self.engine.project_key(workspace_root=value)
+            return value
         return self.engine.project_key(
             (body or {}).get("workspaceRoot") or query.get("workspaceRoot"),
             (body or {}).get("projectRoot") or query.get("projectRoot"),
@@ -129,7 +132,9 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str, parts: list[str], query: dict) -> Any:
         engine = self.engine
         if method == "POST" and parts == ["updates"]:
-            return engine.enqueue_update(self._body())
+            body = self._body()
+            body["projectKey"] = self._project_key(query, body)
+            return engine.enqueue_update(body)
         if method == "GET" and parts == ["updates", "status"]:
             return engine.update_status(self._project_key(query))
         if method == "GET" and parts == ["updates", "history"]:

@@ -493,6 +493,11 @@ class ProjectWorkflow:
                 reason="project_snapshot_committed", priority=0,
                 autonomy_mode=autonomy_mode, actor="project-compiler", commit=False,
             )
+            self._enqueue_audit(
+                project_key=project_key, target_digest=payload["digest"], level="L1",
+                reason="project_snapshot_committed_semantic_verification", priority=-1,
+                autonomy_mode=autonomy_mode, actor="project-compiler", commit=False,
+            )
             self._event(project_key, "ProjectSnapshotCommitted", "project-compiler", {
                 "digest": payload["digest"], "version": version,
                 "evidenceVector": vector, "goalVersion": payload["goalVersion"],
@@ -517,9 +522,15 @@ class ProjectWorkflow:
         )
 
     def _assessment_specs(self, graph: dict) -> list[dict]:
+        """Return only deterministic A0 assessments safe for P2 commit.
+
+        Model-backed A1/A2 verification belongs to the independently scheduled
+        P3 L1 audit lane.  Snapshot construction must never wait for those
+        calls, and the immutable snapshot records only assessments available
+        atomically at commit time.
+        """
         specs: list[dict] = []
         supports = {c["id"]: [] for c in graph["claims"]}
-        evidence = {e["id"]: e for e in graph["evidence"]}
         for edge in graph["edges"]:
             if edge["edge_type"] == "supports" and edge["dst"] in supports:
                 supports[edge["dst"]].append(edge["src"])
@@ -538,6 +549,18 @@ class ProjectWorkflow:
                 "actor": "project-dag:deterministic", "method": "support-path-existence/v1",
                 "confidence": 1.0, "details": {},
             })
+        return specs
+
+    def _semantic_assessment_specs(self, graph: dict) -> list[dict]:
+        """Run independent model verification inside the P3 L1 worker."""
+        specs: list[dict] = []
+        supports = {c["id"]: [] for c in graph["claims"]}
+        evidence = {e["id"]: e for e in graph["evidence"]}
+        for edge in graph["edges"]:
+            if edge["edge_type"] == "supports" and edge["dst"] in supports:
+                supports[edge["dst"]].append(edge["src"])
+        for claim in graph["claims"]:
+            cid = claim["id"]
             payload = {
                 "claim": {"id": cid, "statement": claim["statement"],
                           "claimType": claim["claim_type"], "status": claim["status"]},
@@ -762,10 +785,17 @@ class ProjectWorkflow:
         if int(policy["policy_version"]) != int(job["policy_version"]):
             raise RuntimeError("audit policy changed while the job was running")
         findings: list[str] = []
+        l0_findings_after_semantic_verification: list[str] = []
         if job["level"] == "L0":
             findings.extend(self._audit_l0(job["project_key"], snapshot, policy))
         elif job["level"] == "L1":
             findings.extend(self._audit_l1(job["project_key"], snapshot, policy))
+            # Re-evaluate deterministic findings after A1/A2 are persisted so
+            # previously cleared L0 conditions can now pass the evidence-gated
+            # A3 resolution rule.  `_open_finding` and decision replay guards
+            # keep this idempotent with the independently queued L0 run.
+            l0_findings_after_semantic_verification.extend(
+                self._audit_l0(job["project_key"], snapshot, policy))
         else:
             findings.extend(self._audit_l2(job["project_key"], snapshot, policy))
         audit_payload = {
@@ -778,6 +808,10 @@ class ProjectWorkflow:
         self._autonomous_review(
             job["project_key"], job["target_digest"], findings, job["autonomy_mode"],
             job["level"])
+        if job["level"] == "L1":
+            self._autonomous_review(
+                job["project_key"], job["target_digest"],
+                l0_findings_after_semantic_verification, job["autonomy_mode"], "L0")
         self._compute_attention(
             job["project_key"], job["target_digest"], job["autonomy_mode"])
         current = self.store.q1("SELECT status FROM audit_run WHERE id=?", (run_id,))
@@ -887,6 +921,11 @@ class ProjectWorkflow:
     def _audit_l1(self, project_key: str, snapshot: dict, policy: dict) -> list[str]:
         digest, graph = snapshot["digest"], snapshot["graph"]
         findings: list[str] = []
+        # A1/A2 are deliberately generated here, after the Project Snapshot is
+        # committed and outside the P2 update lane.  The assessment uniqueness
+        # constraint makes an idempotent audit retry safe.
+        for assessment in self._semantic_assessment_specs(graph):
+            self._assessment(project_key=project_key, target_digest=digest, **assessment)
         assessments = self.store.q(
             "SELECT * FROM assessment WHERE project_key=? AND target_digest=?"
             " AND level IN ('A1','A2') AND result IN ('failed','uncertain')",
@@ -1528,8 +1567,8 @@ class ProjectWorkflow:
         return row
 
     def status(self, project_key: str) -> dict:
-        latest = self.store.q1(
-            "SELECT payload FROM project_snapshot WHERE project_key=? ORDER BY version DESC LIMIT 1",
+        recent_snapshots = self.store.q(
+            "SELECT payload FROM project_snapshot WHERE project_key=? ORDER BY version DESC LIMIT 2",
             (project_key,),
         )
         jobs = self.store.q(
@@ -1540,7 +1579,11 @@ class ProjectWorkflow:
         )
         active = next((j for j in jobs if j["status"] in
                        {"queued", "running", "failed", "interrupted"}), None)
-        snapshot = _loads(latest["payload"], None) if latest else None
+        snapshot = _loads(recent_snapshots[0]["payload"], None) if recent_snapshots else None
+        previous_snapshot = (
+            _loads(recent_snapshots[1]["payload"], None)
+            if len(recent_snapshots) > 1 else None
+        )
         latest_audit = self.store.q1(
             "SELECT id,target_digest,status,digest,error,next_attempt_at FROM audit_run"
             " WHERE project_key=? AND (? IS NULL OR target_digest=?)"
@@ -1560,6 +1603,7 @@ class ProjectWorkflow:
                       "update_failed" if active and active["status"] in {"failed", "interrupted"} else
                       "pending" if active else "fresh" if snapshot else "empty"),
             "committedSnapshot": snapshot,
+            "previousCommittedSnapshot": previous_snapshot,
             "desiredEvidenceVector": (self.job(active["id"])["desiredEvidenceVector"]
                                       if active else snapshot["evidenceVector"] if snapshot else []),
             "pending": sum(j["status"] in {"queued", "running"} for j in jobs),

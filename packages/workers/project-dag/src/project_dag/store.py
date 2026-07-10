@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS goal (
   t_created   TEXT NOT NULL,
   t_expired   TEXT                      -- non-null: replaced by a newer version
 );
-CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key);
 
 CREATE TABLE IF NOT EXISTS entity (
   id             TEXT PRIMARY KEY,
@@ -431,6 +430,7 @@ class Store:
         if "project_key" not in claim_columns or "project_key" not in watermark_columns:
             raise RuntimeError(
                 "legacy Project DAG database requires an explicit offline migration")
+        self.x("CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key)")
 
     # --- edges ----------------------------------------------------------------
     def add_edge(self, src: str, dst: str, edge_type: str,

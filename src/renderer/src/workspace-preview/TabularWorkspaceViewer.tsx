@@ -4,6 +4,7 @@ import type {
   WorkspacePreviewEditOperation,
   WorkspaceStructuredSelection
 } from '@shared/workspace-preview'
+import './TabularWorkspaceViewer.css'
 
 type TabularStructuredSelection = Extract<WorkspaceStructuredSelection, { kind: 'tabular' }>
 export type TabularWorkspaceViewerUpdateCellOperation = Extract<
@@ -739,7 +740,7 @@ export function TabularWorkspaceViewer({
       data-status={resolvedModel.status.kind}
     >
       <header className="workspace-preview-tabular-viewer__header">
-        <div>
+        <div className="workspace-preview-tabular-viewer__header-copy">
           <h3>{resolvedModel.title}</h3>
           {resolvedModel.subtitle ? <p>{resolvedModel.subtitle}</p> : null}
         </div>
@@ -763,95 +764,101 @@ export function TabularWorkspaceViewer({
             role={resolvedModel.grid.kind === 'preview' ? undefined : 'img'}
             aria-label={resolvedModel.grid.kind === 'preview' ? undefined : 'Tabular grid and editor placeholder'}
           >
-            <strong>{resolvedModel.viewport.title}</strong>
-            <p>{resolvedModel.viewport.message}</p>
+            <div className="workspace-preview-tabular-viewer__grid-heading">
+              <strong>{resolvedModel.viewport.title}</strong>
+              <p>{resolvedModel.viewport.message}</p>
+            </div>
             {resolvedModel.grid.kind === 'preview' ? (
               <>
-                <div
-                  className="workspace-preview-tabular-viewer__grid-controls"
-                  data-filter-active={resolvedModel.grid.filter.active ? 'true' : 'false'}
-                  data-sort-direction={resolvedModel.grid.sort.direction}
-                >
-                  <label>
-                    <span>Filter rows</span>
-                    <input
-                      type="search"
-                      value={resolvedModel.grid.filter.text}
-                      placeholder="Search visible cells"
-                      aria-label="Filter preview rows"
-                      disabled={!gridControlsEnabled}
-                      onChange={(event) => setFilterText(event.currentTarget.value)}
-                    />
-                  </label>
-                  <span data-tabular-grid-state>{resolvedModel.grid.stateSummary}</span>
-                </div>
-                <div
-                  className="workspace-preview-tabular-viewer__row-insert-controls"
-                  data-tabular-row-insert-controls="true"
-                  data-insert-enabled={canEnterRowInsert ? 'true' : 'false'}
-                >
-                  <button
-                    type="button"
-                    data-tabular-row-insert-top="true"
-                    disabled={!canEnterRowInsert}
-                    title={insertUnavailableReason ?? 'Insert row at top'}
-                    onClick={() => {
-                      if (!canEnterRowInsert) return
-                      setInsertDraft(createInsertDraft(-1))
-                    }}
+                <div className="workspace-preview-tabular-viewer__toolbar">
+                  <div
+                    className="workspace-preview-tabular-viewer__grid-controls"
+                    data-filter-active={resolvedModel.grid.filter.active ? 'true' : 'false'}
+                    data-sort-direction={resolvedModel.grid.sort.direction}
                   >
-                    Insert top
-                  </button>
-                  <button
-                    type="button"
-                    data-tabular-row-insert-bottom="true"
-                    data-insert-after-row={bottomInsertAfterRow}
-                    disabled={!canEnterRowInsert}
-                    title={insertUnavailableReason ?? 'Insert row at bottom'}
-                    onClick={() => {
-                      if (!canEnterRowInsert) return
-                      setInsertDraft(createInsertDraft(bottomInsertAfterRow))
-                    }}
-                  >
-                    Insert bottom
-                  </button>
-                  {insertUnavailableReason ? (
-                    <small role="status">{insertUnavailableReason}</small>
-                  ) : null}
-                </div>
-                <div
-                  className="workspace-preview-tabular-viewer__column-insert-controls"
-                  data-tabular-column-insert-controls="true"
-                  data-insert-enabled={canEnterColumnInsert ? 'true' : 'false'}
-                >
-                  <button
-                    type="button"
-                    data-tabular-column-insert-first="true"
-                    disabled={!canEnterColumnInsert}
-                    title={insertColumnsUnavailableReason ?? 'Insert column first'}
-                    onClick={() => {
-                      if (!canEnterColumnInsert) return
-                      setInsertColumnDraft(createInsertColumnDraft(-1))
-                    }}
-                  >
-                    Insert first column
-                  </button>
-                  <button
-                    type="button"
-                    data-tabular-column-insert-last="true"
-                    data-insert-after-column={getLastInsertAfterColumn(resolvedModel.grid)}
-                    disabled={!canEnterColumnInsert}
-                    title={insertColumnsUnavailableReason ?? 'Insert column last'}
-                    onClick={() => {
-                      if (!canEnterColumnInsert) return
-                      setInsertColumnDraft(createInsertColumnDraft(getLastInsertAfterColumn(resolvedModel.grid)))
-                    }}
-                  >
-                    Insert last column
-                  </button>
-                  {insertColumnsUnavailableReason ? (
-                    <small role="status">{insertColumnsUnavailableReason}</small>
-                  ) : null}
+                    <label>
+                      <span>Filter rows</span>
+                      <input
+                        type="search"
+                        value={resolvedModel.grid.filter.text}
+                        placeholder="Search visible cells"
+                        aria-label="Filter preview rows"
+                        disabled={!gridControlsEnabled}
+                        onChange={(event) => setFilterText(event.currentTarget.value)}
+                      />
+                    </label>
+                    <span data-tabular-grid-state>{resolvedModel.grid.stateSummary}</span>
+                  </div>
+                  <div className="workspace-preview-tabular-viewer__toolbar-actions">
+                    <div
+                      className="workspace-preview-tabular-viewer__row-insert-controls"
+                      data-tabular-row-insert-controls="true"
+                      data-insert-enabled={canEnterRowInsert ? 'true' : 'false'}
+                    >
+                      <button
+                        type="button"
+                        data-tabular-row-insert-top="true"
+                        disabled={!canEnterRowInsert}
+                        title={insertUnavailableReason ?? 'Insert row at top'}
+                        onClick={() => {
+                          if (!canEnterRowInsert) return
+                          setInsertDraft(createInsertDraft(-1))
+                        }}
+                      >
+                        Insert top
+                      </button>
+                      <button
+                        type="button"
+                        data-tabular-row-insert-bottom="true"
+                        data-insert-after-row={bottomInsertAfterRow}
+                        disabled={!canEnterRowInsert}
+                        title={insertUnavailableReason ?? 'Insert row at bottom'}
+                        onClick={() => {
+                          if (!canEnterRowInsert) return
+                          setInsertDraft(createInsertDraft(bottomInsertAfterRow))
+                        }}
+                      >
+                        Insert bottom
+                      </button>
+                      {insertUnavailableReason ? (
+                        <small role="status">{insertUnavailableReason}</small>
+                      ) : null}
+                    </div>
+                    <div
+                      className="workspace-preview-tabular-viewer__column-insert-controls"
+                      data-tabular-column-insert-controls="true"
+                      data-insert-enabled={canEnterColumnInsert ? 'true' : 'false'}
+                    >
+                      <button
+                        type="button"
+                        data-tabular-column-insert-first="true"
+                        disabled={!canEnterColumnInsert}
+                        title={insertColumnsUnavailableReason ?? 'Insert column first'}
+                        onClick={() => {
+                          if (!canEnterColumnInsert) return
+                          setInsertColumnDraft(createInsertColumnDraft(-1))
+                        }}
+                      >
+                        Insert first column
+                      </button>
+                      <button
+                        type="button"
+                        data-tabular-column-insert-last="true"
+                        data-insert-after-column={getLastInsertAfterColumn(resolvedModel.grid)}
+                        disabled={!canEnterColumnInsert}
+                        title={insertColumnsUnavailableReason ?? 'Insert column last'}
+                        onClick={() => {
+                          if (!canEnterColumnInsert) return
+                          setInsertColumnDraft(createInsertColumnDraft(getLastInsertAfterColumn(resolvedModel.grid)))
+                        }}
+                      >
+                        Insert last column
+                      </button>
+                      {insertColumnsUnavailableReason ? (
+                        <small role="status">{insertColumnsUnavailableReason}</small>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
                 {insertDraft ? (
                   <TabularWorkspaceViewerRowInsertEditor

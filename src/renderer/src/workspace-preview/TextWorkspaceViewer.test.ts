@@ -80,6 +80,7 @@ describe('TextWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-workspace-preview-text-viewer')
+    expect(html).toContain('overflow-hidden')
     expect(html).toContain('data-truncated="true"')
     expect(html).toContain('data-editable="false"')
     expect(html).not.toContain('data-text-agent-summary')

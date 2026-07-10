@@ -1,6 +1,7 @@
 export const PROJECT_DAG_SERVICE_URL_ENV = 'SCIFORGE_PROJECT_DAG_SERVICE_URL'
 export const PROJECT_DAG_API_KEY_ENV = 'SCIFORGE_PROJECT_DAG_API_KEY'
 export const DEFAULT_PROJECT_DAG_SERVICE_URL = 'http://127.0.0.1:3898'
+export const PROJECT_DAG_SERVICE_VERSION = '0.2.0'
 
 export function normalizeProjectDagServiceUrl(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim().replace(/\/+$/, '') : ''

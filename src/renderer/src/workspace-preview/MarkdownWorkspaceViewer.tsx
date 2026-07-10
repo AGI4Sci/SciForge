@@ -116,13 +116,16 @@ export function MarkdownWorkspaceViewer({
 
   return (
     <section
-      className={compactClassName('workspace-preview-markdown-viewer flex h-full min-h-0 flex-col', className)}
+      className={compactClassName(
+        'workspace-preview-markdown-viewer flex h-full min-h-0 flex-col overflow-hidden',
+        className
+      )}
       data-workspace-preview-markdown-viewer
       data-status={model.status}
       data-editable={model.editable ? 'true' : 'false'}
       data-truncated={model.truncated ? 'true' : 'false'}
     >
-      <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h3 className="truncate text-sm font-semibold text-ds-text" title={model.title}>{model.title}</h3>
@@ -153,14 +156,14 @@ export function MarkdownWorkspaceViewer({
       ) : (
         <div
           className={compactClassName(
-            'min-h-0 flex-1',
+            'min-h-0 flex-1 overflow-hidden',
             showEditor && showPreview ? 'grid grid-cols-1 lg:grid-cols-2' : 'flex flex-col'
           )}
           data-markdown-view-mode={mode}
         >
           {showEditor ? (
             <div className={compactClassName(
-              'min-h-0',
+              'min-h-0 overflow-hidden',
               showPreview ? 'border-b border-ds-border lg:border-b-0 lg:border-r' : 'flex-1'
             )}>
               <TextWorkspaceViewer

@@ -1,7 +1,12 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ProjectDagPanel, parseProjectSessionList } from './ProjectDagPanel'
+import {
+  ProjectDagPanel,
+  parseProjectSessionList,
+  projectDagProgressPercent,
+  projectDagUpdateScope
+} from './ProjectDagPanel'
 
 const labels: Record<string, string> = {
   projectDagPanelTitle: 'Project evidence',
@@ -15,7 +20,7 @@ const labels: Record<string, string> = {
   projectDagEditGoal: 'Edit goal',
   projectDagRefresh: 'Refresh project evidence',
   projectDagUpdate: 'Update now',
-  projectDagUpdating: 'Queueing',
+  projectDagUpdating: 'Updating',
   projectDagUpdateHelp: 'Queue an end-to-end update to the captured project scope',
   projectDagAutonomyMode: 'Autonomy',
   projectDagAutonomous: 'Autonomous',
@@ -54,5 +59,33 @@ describe('ProjectDagPanel', () => {
 
   it('normalizes editable session dispositions without project-specific rules', () => {
     expect(parseProjectSessionList(' codex:b\ncodex:a, codex:b ')).toEqual(['codex:a', 'codex:b'])
+  })
+
+  it('updates the committed project scope instead of widening to every workspace thread', () => {
+    expect(projectDagUpdateScope({
+      freshness: 'fresh',
+      pendingCount: 0,
+      scope: {
+        includedSessions: ['codex:included'],
+        excludedSessions: ['codex:excluded'],
+        isolatedSessions: ['codex:isolated']
+      }
+    })).toEqual(['codex:excluded', 'codex:included', 'codex:isolated'])
+    expect(projectDagUpdateScope(undefined)).toBe('all')
+  })
+
+  it('reports monotonic progress across the durable update stages', () => {
+    expect(projectDagProgressPercent({
+      stage: 'capturing', completedItems: 0, totalItems: 4
+    })).toBe(8)
+    expect(projectDagProgressPercent({
+      stage: 'evidence', completedItems: 2, totalItems: 4
+    })).toBe(39)
+    expect(projectDagProgressPercent({
+      stage: 'project', completedItems: 4, totalItems: 4
+    })).toBe(68)
+    expect(projectDagProgressPercent({
+      stage: 'compile', completedItems: 4, totalItems: 4
+    })).toBe(86)
   })
 })
