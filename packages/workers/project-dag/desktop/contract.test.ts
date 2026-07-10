@@ -21,6 +21,13 @@ type PureUi = {
     edges: Array<{ src: string; dst: string; type: string }>
     counts: Record<string, number>
   }
+  workspaceLocator: (assertion: unknown) => string | null
+  workspacePreviewMessage: (
+    assertion: unknown,
+    claim: unknown,
+    snapshotDigest: string,
+    requestId: string
+  ) => Record<string, unknown> | null
 }
 
 function loadPureUi(): { html: string; pure: PureUi } {
@@ -90,6 +97,41 @@ describe('Project DAG desktop contract', () => {
       ['session:session-a', 'claim-a', 'origin'],
       ['claim-a', 'goal-a', 'addresses']
     ])
+  })
+
+  it('emits a bounded workspace-preview request with an Anchor only for local artifacts', () => {
+    const { html, pure } = loadPureUi()
+    const local = {
+      artifactId: 'artifact-a', artifactVersionId: 'version-a', sourceAnchorId: 'anchor-a',
+      artifact: {}, artifactVersion: { locator: 'papers/source.pdf' },
+      sourceAnchor: { selector: { type: 'pdf', page: 3, quote: 'Supporting text' } }
+    }
+    expect(pure.workspaceLocator(local)).toBe('papers/source.pdf')
+    expect(pure.workspacePreviewMessage(
+      local,
+      { id: 'claim-a', statement: 'A supported Claim' },
+      'project:current',
+      'preview-1'
+    )).toEqual({
+      type: 'sciforge.project-dag.preview-workspace-evidence',
+      version: 1,
+      requestId: 'preview-1',
+      locator: 'papers/source.pdf',
+      artifactId: 'artifact-a',
+      artifactVersionId: 'version-a',
+      sourceAnchorId: 'anchor-a',
+      anchor: { kind: 'document', id: 'anchor-a', page: 3, quote: 'Supporting text' },
+      claim: { id: 'claim-a', statement: 'A supported Claim', snapshotDigest: 'project:current' }
+    })
+    expect(pure.workspaceLocator({
+      artifact: {}, artifactVersion: { locator: 'runtime:thread:item' }
+    })).toBeNull()
+    expect(pure.workspaceLocator({
+      artifact: { availability: 'restricted' }, artifactVersion: { locator: 'private/data.csv' }
+    })).toBeNull()
+    expect(html).toContain('data-preview-artifact=')
+    expect(html).toContain('查看原始证据')
+    expect(html).toContain("window.parent.postMessage(message,'*')")
   })
 
   it('ranks strongest paths by explicit dimensions and deduplicates upstream identity', () => {

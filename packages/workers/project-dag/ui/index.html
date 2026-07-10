@@ -342,6 +342,7 @@ function renderSidechains(){
   findings.innerHTML=current.length?`<ul class="plain-list">${current.map(item=>`<li><b>${escapeHtml(item.finding_type)}</b> · ${escapeHtml(item.severity)} · ${escapeHtml(item.status)}<br><span class="muted">subject ${escapeHtml(short(item.subject_id,18))}</span></li>`).join('')}</ul>`:'<p class="empty">当前 Snapshot 没有 Finding。</p>';
 }
 async function selectClaim(claimId){
+  if(state.selectedClaimId!==claimId)state.previewFeedback=null;
   state.selectedClaimId=claimId;state.detail=null;state.whatIfSourceId=null;renderClaims();renderDetail();
   try{const digest=state.graph?.snapshot?.digest;if(!digest)throw new Error('没有 committed snapshot');const detail=await api(`/claims/${encodeURIComponent(claimId)}?snapshot=${encodeURIComponent(digest)}`);if(state.selectedClaimId===claimId&&state.graph?.snapshot?.digest===digest){state.detail=detail;renderDetail()}}catch(error){renderError(error)}
 }
@@ -370,6 +371,13 @@ async function refresh(){
     scheduleStatusPoll();
   }catch(error){renderError(error)}finally{document.getElementById('refresh').disabled=false}
 }
+window.addEventListener('message',event=>{
+  if(event.source!==window.parent)return;
+  const result=object(event.data),keys=Object.keys(result),allowed=new Set(['type','version','requestId','ok','message']);
+  if(keys.some(key=>!allowed.has(key))||result.type!=='sciforge.project-dag.preview-workspace-evidence-result'||result.version!==1||typeof result.requestId!=='string'||typeof result.ok!=='boolean'||(result.message!==undefined&&typeof result.message!=='string'))return;
+  const pending=state.pendingPreviewRequests.get(result.requestId);if(!pending)return;state.pendingPreviewRequests.delete(result.requestId);
+  state.previewFeedback=result.ok?{status:'opened',message:'已打开原始证据；文件预览顶部可返回当前 Claim。'}:{status:'error',message:String(result.message||'无法打开原始证据。').slice(0,2000)};renderPreviewFeedback();
+});
 document.getElementById('refresh').onclick=refresh;refresh();
 </script>
 </body>
