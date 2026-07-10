@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, FileText, GitMerge, Loader2, PanelRightClose, Pencil, Play, RefreshCw, X } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   DagAutonomyMode,
@@ -16,6 +16,7 @@ import {
   projectDagWorkspaceName,
   type ProjectDagRequestContext
 } from './project-dag-panel-state'
+import { handleProjectDagPreviewMessage } from './project-dag-preview-bridge'
 
 type Props = {
   workspaceRoot?: string
@@ -140,6 +141,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
   const [autonomyMode, setAutonomyMode] = useState<DagAutonomyMode>('autonomous')
   const [excludedSessionsText, setExcludedSessionsText] = useState('')
   const [isolatedSessionsText, setIsolatedSessionsText] = useState('')
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
   const requestContext = useMemo(() => projectDagRequestContext(workspaceRoot), [workspaceRoot])
   const projectName = useMemo(() => projectDagWorkspaceName(workspaceRoot), [workspaceRoot])
@@ -219,6 +221,29 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     const timer = setTimeout(() => setRequestNonce((current) => current + 1), 2_000)
     return () => clearTimeout(timer)
   }, [optimisticProgress, submitting, view?.status.freshness, view?.status.pendingCount, view?.status.progress])
+
+  useEffect(() => {
+    const frameUrl = view?.url
+    const root = workspaceRoot.trim()
+    if (!frameUrl || !root) return
+    const onMessage = (event: MessageEvent): void => {
+      const resolver = window.sciforge?.resolveWorkspaceFile
+      void handleProjectDagPreviewMessage({
+        event,
+        frameWindow: iframeRef.current?.contentWindow ?? null,
+        frameUrl,
+        workspaceRoot: root,
+        resolveWorkspaceFile: typeof resolver === 'function'
+          ? (target) => resolver(target)
+          : async () => ({ ok: false, message: t('projectDagUnavailable') })
+      }).then((result) => {
+        if (result.status === 'rejected') setCommandError(result.message)
+        if (result.status === 'opened') setCommandError(null)
+      })
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [t, view?.url, workspaceRoot])
 
   const projectSubtitle = projectName ? t('projectDagCurrentProject', { project: projectName }) : t('projectDagGlobalView')
   const goalTitle = title.trim()
@@ -380,7 +405,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
       {status?.latestSnapshotDigest ? <div className="shrink-0 truncate border-b border-ds-border px-4 py-1.5 font-mono text-[10.5px] text-ds-faint" title={status.latestSnapshotDigest}>{t('dagSnapshotDigest')}: {status.latestSnapshotDigest}{status.auditTargetDigest ? ` · ${t('dagAuditDigest')}: ${status.auditTargetDigest}` : ''}</div> : null}
 
       <div className="min-h-0 flex-1 bg-ds-main p-2"><div className="relative h-full overflow-hidden rounded-lg border border-ds-border bg-ds-surface">
-        {view ? <iframe key={`${view.url}:${frameNonce}`} src={view.url} title={activeSurface === 'graph' ? t('projectDagGraphSurface') : t('projectDagEvidenceSurface')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-clipboard-write allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" /> : null}
+        {view ? <iframe ref={iframeRef} key={`${view.url}:${frameNonce}`} src={view.url} title={activeSurface === 'graph' ? t('projectDagGraphSurface') : t('projectDagEvidenceSurface')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-clipboard-write allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" /> : null}
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('projectDagLoading')}</span></div> : null}
         {loadError && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main px-6"><div className="max-w-sm text-center"><AlertTriangle className="mx-auto h-5 w-5 text-amber-500" /><div className="mt-3 text-[13px] font-semibold text-ds-ink">{t('projectDagLoadFailed')}</div><div className="mt-2 text-[12px] text-ds-muted">{loadError}</div><button type="button" onClick={() => setRequestNonce((current) => current + 1)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-[12px]"><RefreshCw className="h-3.5 w-3.5" />{t('projectDagRetry')}</button></div></div> : null}
       </div></div>

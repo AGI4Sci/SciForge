@@ -72,8 +72,8 @@ import type {
   WorkspacePreviewPluginManifest,
   WorkspacePreviewPrepareArtifactRequest,
   WorkspacePreviewReadArtifactRangeRequest,
-  WorkspacePreviewSession
-  , WorkspaceStructuredSelection
+  WorkspacePreviewSession,
+  WorkspaceStructuredSelection
 } from './workspace-preview'
 import type {
   WriteInlineCompletionDebugEntry,
