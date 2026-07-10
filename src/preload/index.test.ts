@@ -207,6 +207,7 @@ describe('preload agentRuntime bridge', () => {
         releaseSession(sessionId: string): Promise<boolean>
         watch(payload: unknown): Promise<unknown>
         unwatch(watchId: string): Promise<unknown>
+        getAssetSourceUrl(sessionId: string): string | null
         onChanged(handler: (payload: unknown) => void): () => void
       }
     }
@@ -243,6 +244,7 @@ describe('preload agentRuntime bridge', () => {
     await api.workspacePreview.releaseSession('session-1')
     await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
     await api.workspacePreview.unwatch('watch-1')
+    const assetSourceUrl = api.workspacePreview.getAssetSourceUrl('session 1')
     const changed = vi.fn()
     const unsubscribe = api.workspacePreview.onChanged(changed)
     const wrapped = on.mock.calls.find(([channel]) => channel === 'workspacePreview:changed')?.[1]
@@ -296,6 +298,8 @@ describe('preload agentRuntime bridge', () => {
       workspaceRoot: '/tmp/workspace'
     })
     expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
+    expect(assetSourceUrl).toContain('http://127.0.0.1:5174/workspace-preview/assets/session%201')
+    expect(assetSourceUrl).toContain('clientId=electron-preload-')
     expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
     expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {

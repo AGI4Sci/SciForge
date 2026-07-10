@@ -107,6 +107,7 @@ export type WritePdfAnnotationsPanelProps = {
   onExportPdf?: () => void
   onImportPackage?: () => void
   onReloadSidecar?: () => void
+  onClearPdfReviewNotice?: () => void
   onCollapse?: () => void
   questionReplies?: Record<string, WritePdfQuestionAssistantReply | undefined>
 }
@@ -319,6 +320,7 @@ export function WritePdfAnnotationsPanel({
   onExportPdf,
   onImportPackage,
   onReloadSidecar,
+  onClearPdfReviewNotice,
   onCollapse,
   questionReplies = {}
 }: WritePdfAnnotationsPanelProps): ReactElement {
@@ -489,7 +491,10 @@ export function WritePdfAnnotationsPanel({
               <div className="grid h-8 min-w-0 grid-cols-2 overflow-hidden rounded-md border border-ds-border-muted bg-ds-card">
                 <button
                   type="button"
-                  onClick={() => setPdfReviewScope('document')}
+                  onClick={() => {
+                    onClearPdfReviewNotice?.()
+                    setPdfReviewScope('document')
+                  }}
                   className={`flex min-w-0 items-center justify-center gap-1.5 px-2 text-[11.5px] font-semibold transition ${
                     pdfReviewScope === 'document' ? 'bg-accent/10 text-accent' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`}
@@ -502,7 +507,10 @@ export function WritePdfAnnotationsPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPdfReviewScope('selection')}
+                  onClick={() => {
+                    onClearPdfReviewNotice?.()
+                    setPdfReviewScope('selection')
+                  }}
                   disabled={!pdfReviewHasSelection}
                   className={`flex min-w-0 items-center justify-center gap-1.5 border-l border-ds-border-muted px-2 text-[11.5px] font-semibold transition ${
                     pdfReviewScope === 'selection'
@@ -521,7 +529,10 @@ export function WritePdfAnnotationsPanel({
               </div>
               <button
                 type="button"
-                onClick={() => onGeneratePdfReview?.({ scope: pdfReviewScope, maxComments: pdfReviewMaxComments })}
+                onClick={() => {
+                  onClearPdfReviewNotice?.()
+                  onGeneratePdfReview?.({ scope: pdfReviewScope, maxComments: pdfReviewMaxComments })
+                }}
                 disabled={pdfReviewGenerating || (pdfReviewScope === 'selection' && !pdfReviewHasSelection)}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-accent/25 bg-accent/10 text-accent transition hover:bg-accent/15 disabled:cursor-not-allowed disabled:border-ds-border-muted disabled:bg-ds-surface-subtle disabled:text-ds-faint"
                 aria-label={t('writePdfReviewRun')}
@@ -546,7 +557,10 @@ export function WritePdfAnnotationsPanel({
                   min={PDF_REVIEW_MIN_COMMENTS}
                   max={PDF_REVIEW_MAX_COMMENTS}
                   value={pdfReviewMaxComments}
-                  onChange={(event) => setPdfReviewMaxComments(clampPdfReviewMaxComments(Number(event.currentTarget.value)))}
+                  onChange={(event) => {
+                    onClearPdfReviewNotice?.()
+                    setPdfReviewMaxComments(clampPdfReviewMaxComments(Number(event.currentTarget.value)))
+                  }}
                   onBlur={() => setPdfReviewMaxComments((value) => clampPdfReviewMaxComments(value))}
                   className="h-5 w-9 rounded border border-ds-border-muted bg-transparent px-1 text-center font-mono text-[11px] text-ds-ink outline-none focus:border-accent"
                   aria-label={t('writePdfReviewMaxComments')}

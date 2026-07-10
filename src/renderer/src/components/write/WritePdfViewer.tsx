@@ -43,6 +43,12 @@ import {
   resolveContentZoomWheel,
   stepContentScale
 } from '../../lib/content-zoom-shortcuts'
+import {
+  preferNativePdfDragSelection,
+  rotatedPdfTextBounds,
+  slicedRotatedPdfTextBounds,
+  type RotatedPdfTextGeometry
+} from './write-pdf-viewer-geometry'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
@@ -92,9 +98,19 @@ type TextLayerToken = {
   start: number
   end: number
   rect: DOMRect
+  spanRect: DOMRect
   page: number
   order: number
   wordLike: boolean
+}
+
+type PdfSearchTextSegment = {
+  text: string
+  rect: WritePdfSelectionPageRect
+  geometry: RotatedPdfTextGeometry
+  order: number
+  direction: string
+  font?: string
 }
 
 export type WritePdfSelectionAnchorRect = {
@@ -300,6 +316,8 @@ const PDF_VIEWER_CSS = `
 }
 
 .write-pdf-text-layer {
+  --scale-factor: 1;
+  --total-scale-factor: 1;
   z-index: 1;
   overflow: hidden;
   opacity: 1;
@@ -939,6 +957,193 @@ function unionDomRects(rects: DOMRect[]): DOMRect | null {
   return domRectFromBounds(left, top, right, bottom)
 }
 
+let textMeasureCanvas: HTMLCanvasElement | null = null
+
+function textMeasureContext(doc: Document): CanvasRenderingContext2D | null {
+  try {
+    textMeasureCanvas ??= doc.createElement('canvas')
+    return textMeasureCanvas.getContext('2d')
+  } catch {
+    return null
+  }
+}
+
+function measuredPdfTextRangeRect(node: Text, start: number, end: number, fallbackRect: DOMRect): DOMRect | null {
+  const span = node.parentElement?.closest<HTMLElement>('.write-pdf-text-layer span')
+  if (!span) return null
+  const text = node.data
+  if (end <= start || start < 0 || end > text.length) return null
+
+  const style = span.ownerDocument.defaultView?.getComputedStyle(span)
+  const context = textMeasureContext(span.ownerDocument)
+  const letterSpacing = style?.letterSpacing && style.letterSpacing !== 'normal'
+    ? Number.parseFloat(style.letterSpacing)
+    : 0
+  const extraSpacing = (value: string): number => {
+    return Number.isFinite(letterSpacing) && value.length > 1 ? letterSpacing * (value.length - 1) : 0
+  }
+  const measure = (value: string): number => {
+    if (!context) return value.length
+    if (style?.font) context.font = style.font
+    return context.measureText(value).width + extraSpacing(value)
+  }
+
+  const prefix = text.slice(0, start)
+  const selected = text.slice(start, end)
+  const fullWidth = measure(text)
+  const selectedWidth = measure(selected)
+  if (!Number.isFinite(fullWidth) || fullWidth <= 0 || !Number.isFinite(selectedWidth) || selectedWidth <= 0) {
+    return null
+  }
+
+  const scaleX = fallbackRect.width / fullWidth
+  const startX = measure(prefix) * scaleX
+  const width = selectedWidth * scaleX
+  const direction = style?.direction === 'rtl' ? 'rtl' : 'ltr'
+  const left = direction === 'rtl'
+    ? fallbackRect.right - startX - width
+    : fallbackRect.left + startX
+
+  const range = node.ownerDocument.createRange()
+  let verticalRect: DOMRect | null = null
+  try {
+    range.setStart(node, start)
+    range.setEnd(node, end)
+    const rect = range.getBoundingClientRect()
+    verticalRect = rect.width > 0 && rect.height > 0 ? rect : null
+  } catch {
+    verticalRect = null
+  } finally {
+    range.detach?.()
+  }
+
+  return domRectFromBounds(left, verticalRect?.top ?? fallbackRect.top, left + width, verticalRect?.bottom ?? fallbackRect.bottom)
+}
+
+type PdfTextGeometryStyle = {
+  ascent?: unknown
+  descent?: unknown
+  fontFamily?: unknown
+  vertical?: unknown
+}
+
+type PdfTextGeometryItem = TextContentItem & {
+  dir?: unknown
+  fontName?: unknown
+  height?: unknown
+  transform?: unknown
+  width?: unknown
+}
+
+type PdfTextGeometryViewport = {
+  height: number
+  scale: number
+  transform: number[]
+  width: number
+}
+
+function pdfTextStyleAscent(style: PdfTextGeometryStyle | undefined): number {
+  const ascent = typeof style?.ascent === 'number' ? style.ascent : null
+  if (ascent && Number.isFinite(ascent)) return ascent
+  const descent = typeof style?.descent === 'number' ? style.descent : null
+  if (descent && Number.isFinite(descent)) return 1 + descent
+  return 0.8
+}
+
+function fontForPdfTextGeometry(style: PdfTextGeometryStyle | undefined, fontHeight: number): string {
+  const family = typeof style?.fontFamily === 'string' && style.fontFamily.trim() ? style.fontFamily : 'sans-serif'
+  return `${Math.max(1, fontHeight).toFixed(2)}px ${family}`
+}
+
+function multiplyPdfTransforms(a: number[], b: number[]): number[] {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5]
+  ]
+}
+
+function measureSearchTextWidth(text: string, font: string | undefined): number {
+  const context = textMeasureContext(document)
+  if (!context) return text.length
+  if (font) context.font = font
+  return context.measureText(text).width
+}
+
+function pdfSearchSegmentFromTextItem(
+  item: PdfTextGeometryItem,
+  style: PdfTextGeometryStyle | undefined,
+  viewport: PdfTextGeometryViewport,
+  page: number,
+  order: number
+): PdfSearchTextSegment | null {
+  const text = typeof item.str === 'string' ? item.str : ''
+  const transform = Array.isArray(item.transform) ? item.transform : null
+  const itemWidth = typeof item.width === 'number' ? item.width : 0
+  const itemHeight = typeof item.height === 'number' ? item.height : 0
+  if (!text.trim() || !transform || transform.length < 6 || itemWidth <= 0 || itemHeight < 0) return null
+
+  const tx = multiplyPdfTransforms(viewport.transform, transform as number[])
+  let angle = Math.atan2(tx[1], tx[0])
+  const vertical = style?.vertical === true
+  if (vertical) angle += Math.PI / 2
+  const fontHeight = Math.hypot(tx[2], tx[3])
+  if (!Number.isFinite(fontHeight) || fontHeight <= 0) return null
+  const fontAscent = fontHeight * pdfTextStyleAscent(style)
+  const baseWidth = (vertical ? itemHeight : itemWidth) * viewport.scale
+  if (!Number.isFinite(baseWidth) || baseWidth <= 0) return null
+
+  const left = tx[4] + fontAscent * Math.sin(angle)
+  const top = tx[5] - fontAscent * Math.cos(angle)
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return null
+
+  const rect = rotatedPdfTextBounds({
+    left,
+    top,
+    angle,
+    textWidth: baseWidth,
+    textHeight: fontHeight,
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height
+  })
+
+  return {
+    text,
+    rect: { page, ...rect },
+    geometry: {
+      left,
+      top,
+      angle,
+      textWidth: baseWidth,
+      textHeight: fontHeight,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height
+    },
+    order,
+    direction: typeof item.dir === 'string' ? item.dir : 'ltr',
+    font: fontForPdfTextGeometry(style, fontHeight)
+  }
+}
+
+function buildPdfSearchSegmentsFromTextContent(
+  items: unknown[],
+  styles: Record<string, PdfTextGeometryStyle> | undefined,
+  viewport: PdfTextGeometryViewport,
+  page: number
+): PdfSearchTextSegment[] {
+  const segments: PdfSearchTextSegment[] = []
+  for (const rawItem of items) {
+    const item = rawItem as PdfTextGeometryItem
+    const fontName = typeof item.fontName === 'string' ? item.fontName : ''
+    const segment = pdfSearchSegmentFromTextItem(item, fontName ? styles?.[fontName] : undefined, viewport, page, segments.length)
+    if (segment) segments.push(segment)
+  }
+  return segments
+}
+
 function inflateViewportRect(rect: DOMRect, padX: number, padY: number): ViewportRect {
   return {
     left: rect.left - padX,
@@ -974,6 +1179,9 @@ function firstTextNodeForElement(element: HTMLElement): Text | null {
 
 function rectFromTextRange(node: Text, start: number, end: number, fallbackRect: DOMRect): DOMRect | null {
   if (end <= start || start < 0 || end > node.data.length) return null
+  const measuredPdfRect = measuredPdfTextRangeRect(node, start, end, fallbackRect)
+  if (measuredPdfRect) return measuredPdfRect
+
   const doc = node.ownerDocument
   const range = doc.createRange()
   try {
@@ -1030,6 +1238,7 @@ function collectTextLayerTokens(root: HTMLElement, scopes: Element | Element[] =
           start: part.start,
           end: part.end,
           rect,
+          spanRect,
           page,
           order,
           wordLike: /[A-Za-z0-9]/.test(part.text)
@@ -1108,6 +1317,98 @@ function joinTextLayerTokensWithOffsets(tokens: TextLayerToken[]): {
   return { text: text.trim(), parts }
 }
 
+function joinPdfSearchSegmentsWithOffsets(segments: PdfSearchTextSegment[]): {
+  text: string
+  parts: Array<{ segment: PdfSearchTextSegment; start: number; end: number }>
+} {
+  let text = ''
+  const parts: Array<{ segment: PdfSearchTextSegment; start: number; end: number }> = []
+  for (const segment of [...segments].sort((a, b) => a.order - b.order)) {
+    if (text) {
+      const previous = text.at(-1) ?? ''
+      const noSpaceBefore = /^[,.;:?!%)]/.test(segment.text)
+      const noSpaceAfter = previous === '(' || previous === '['
+      if (!noSpaceBefore && !noSpaceAfter) text += ' '
+    }
+    const start = text.length
+    text += segment.text
+    parts.push({ segment, start, end: text.length })
+  }
+  return { text: text.trim(), parts }
+}
+
+function slicePdfSearchSegmentRect(
+  segment: PdfSearchTextSegment,
+  start: number,
+  end: number
+): WritePdfSelectionPageRect | null {
+  if (end <= start || start < 0 || end > segment.text.length) return null
+  const selected = segment.text.slice(start, end)
+  if (!selected) return null
+  if (start === 0 && end === segment.text.length) return segment.rect
+
+  const prefixWidth = measureSearchTextWidth(segment.text.slice(0, start), segment.font)
+  const selectedWidth = measureSearchTextWidth(selected, segment.font)
+  const fullWidth = measureSearchTextWidth(segment.text, segment.font)
+  if (!Number.isFinite(fullWidth) || fullWidth <= 0 || !Number.isFinite(selectedWidth) || selectedWidth <= 0) {
+    const length = Math.max(1, segment.text.length)
+    const xOffset = segment.rect.width * (start / length)
+    return {
+      ...segment.rect,
+      x: segment.rect.x + xOffset,
+      width: segment.rect.width * ((end - start) / length)
+    }
+  }
+
+  const prefixRatio = prefixWidth / fullWidth
+  const selectedRatio = selectedWidth / fullWidth
+  const startRatio = segment.direction === 'rtl'
+    ? 1 - prefixRatio - selectedRatio
+    : prefixRatio
+  return {
+    page: segment.rect.page,
+    ...slicedRotatedPdfTextBounds(segment.geometry, startRatio, selectedRatio)
+  }
+}
+
+function searchHighlightsFromPdfGeometry(
+  segments: PdfSearchTextSegment[],
+  query: string,
+  activePageMatchIndex: number | null
+): WritePdfSearchHighlight[] {
+  const needle = query.trim()
+  if (!needle || segments.length === 0) return []
+  const joined = joinPdfSearchSegmentsWithOffsets(segments)
+  const occurrences = findTextOccurrences(joined.text, needle)
+  if (occurrences.length === 0) return []
+  const highlightedIndexes = Array.from(
+    { length: Math.min(MAX_SEARCH_HIGHLIGHTS_PER_PAGE, occurrences.length) },
+    (_, index) => index
+  )
+  if (
+    activePageMatchIndex != null &&
+    activePageMatchIndex >= MAX_SEARCH_HIGHLIGHTS_PER_PAGE &&
+    activePageMatchIndex < occurrences.length
+  ) {
+    highlightedIndexes.push(activePageMatchIndex)
+  }
+
+  const highlights: WritePdfSearchHighlight[] = []
+  for (const matchIndex of highlightedIndexes) {
+    const matchStart = occurrences[matchIndex]
+    const matchEnd = matchStart + needle.length
+    const active = activePageMatchIndex === matchIndex
+    for (const part of joined.parts) {
+      if (part.end <= matchStart || part.start >= matchEnd) continue
+      const localStart = Math.max(0, matchStart - part.start)
+      const localEnd = Math.min(part.segment.text.length, matchEnd - part.start)
+      const rect = slicePdfSearchSegmentRect(part.segment, localStart, localEnd)
+      if (rect) highlights.push({ rect, active, matchIndex })
+    }
+  }
+  return highlights
+}
+
 function searchHighlightsFromTextLayer(
   pageElement: HTMLElement,
   page: number,
@@ -1143,12 +1444,14 @@ function searchHighlightsFromTextLayer(
       const localStart = Math.max(0, matchStart - part.start)
       const localEnd = Math.min(part.token.text.length, matchEnd - part.start)
       if (localEnd <= localStart) continue
-      const rect = rectFromTextRange(
-        part.token.node,
-        part.token.start + localStart,
-        part.token.start + localEnd,
-        part.token.rect
-      )
+      const rect = localStart === 0 && localEnd === part.token.text.length
+        ? part.token.rect
+        : rectFromTextRange(
+            part.token.node,
+            part.token.start + localStart,
+            part.token.start + localEnd,
+            part.token.spanRect
+          )
       if (rect) rects.push(rect)
     }
 
@@ -1638,6 +1941,7 @@ function WritePdfPage({
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
   const [textLayerRevision, setTextLayerRevision] = useState(0)
   const [searchHighlights, setSearchHighlights] = useState<WritePdfSearchHighlight[]>([])
+  const [pdfSearchSegments, setPdfSearchSegments] = useState<PdfSearchTextSegment[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -1649,6 +1953,7 @@ function WritePdfPage({
       if (!canvas || !textLayer) return
       textLayer.replaceChildren()
       setSearchHighlights([])
+      setPdfSearchSegments([])
       const page: PDFPageProxy = await document.getPage(pageNumber)
       if (cancelled) {
         page.cleanup()
@@ -1656,6 +1961,8 @@ function WritePdfPage({
       }
       const viewport = page.getViewport({ scale })
       const outputScale = Math.max(1, window.devicePixelRatio || 1)
+      textLayer.style.setProperty('--scale-factor', String(viewport.scale))
+      textLayer.style.setProperty('--total-scale-factor', String(viewport.scale))
       canvas.width = Math.floor(viewport.width * outputScale)
       canvas.height = Math.floor(viewport.height * outputScale)
       canvas.style.width = `${viewport.width}px`
@@ -1677,6 +1984,12 @@ function WritePdfPage({
       }
 
       const textContent = await page.getTextContent()
+      const pageSearchSegments = buildPdfSearchSegmentsFromTextContent(
+        textContent.items,
+        textContent.styles as Record<string, PdfTextGeometryStyle>,
+        viewport as unknown as PdfTextGeometryViewport,
+        pageNumber
+      )
       const textLayerRenderer = new TextLayer({
         textContentSource: textContent,
         container: textLayer,
@@ -1692,6 +2005,7 @@ function WritePdfPage({
           .filter(Boolean)
           .join(' ')
           .trim()
+        setPdfSearchSegments(pageSearchSegments)
         onPageText({ page: pageNumber, text: pageText })
         setTextLayerRevision((value) => value + 1)
       }
@@ -1715,8 +2029,13 @@ function WritePdfPage({
       setSearchHighlights([])
       return
     }
-    setSearchHighlights(searchHighlightsFromTextLayer(pageElement, pageNumber, searchQuery, activeSearchMatchIndex))
-  }, [activeSearchMatchIndex, pageNumber, pageSize, searchQuery, textLayerRevision])
+    const geometryHighlights = searchHighlightsFromPdfGeometry(pdfSearchSegments, searchQuery, activeSearchMatchIndex)
+    setSearchHighlights(
+      geometryHighlights.length > 0
+        ? geometryHighlights
+        : searchHighlightsFromTextLayer(pageElement, pageNumber, searchQuery, activeSearchMatchIndex)
+    )
+  }, [activeSearchMatchIndex, pageNumber, pageSize, pdfSearchSegments, searchQuery, textLayerRevision])
 
   return (
     <div
@@ -2230,19 +2549,22 @@ export function WritePdfViewer({
       if (distance >= 4) {
         const root = rootRef.current
         if (root) {
-          const next = selectionFromPdf(root, selectionContext, {
-            start: textDrag.start,
-            end: textDrag.last
-          })
+          const next = preferNativePdfDragSelection(
+            selectionFromPdf(root, selectionContext),
+            () => selectionFromPdf(root, selectionContext, {
+              start: textDrag.start,
+              end: textDrag.last
+            })
+          )
           if (next.text.trim()) {
             window.getSelection()?.removeAllRanges()
             emitSelection(next)
-              setCommittedSelection(next)
-              setCommittedSelectionRects(next.rects ?? [])
-              setLiveSelection(false)
-              skipMouseUpSelectionSyncRef.current = true
-              return
-            }
+            setCommittedSelection(next)
+            setCommittedSelectionRects(next.rects ?? [])
+            setLiveSelection(false)
+            skipMouseUpSelectionSyncRef.current = true
+            return
+          }
         }
       }
     }
