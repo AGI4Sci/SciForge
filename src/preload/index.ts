@@ -390,7 +390,7 @@ const api = {
     ipcRenderer.invoke('computer-use:request-permission', kind),
   getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
   getEvidenceDagView: (input) => ipcRenderer.invoke('evidenceDag:view', input),
-  runEvidenceDagAudit: (input) => ipcRenderer.invoke('evidenceDag:audit-run', input),
+  updateEvidenceDag: (input) => ipcRenderer.invoke('evidenceDag:update', input),
   getProjectDagView: (input) => ipcRenderer.invoke('projectDag:view', input),
   runProjectDagCompile: (input) => ipcRenderer.invoke('projectDag:compile', input),
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),

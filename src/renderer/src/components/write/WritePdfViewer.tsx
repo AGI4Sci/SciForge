@@ -21,6 +21,8 @@ import {
   Loader2,
   MessageSquare,
   Minus,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   Quote,
   Search,
@@ -191,12 +193,14 @@ export type WritePdfViewerProps = {
   initialScale?: number
   annotationOverlays?: WritePdfAnnotationOverlay[]
   activeAnnotationId?: string | null
+  annotationsOpen?: boolean
   jumpToRect?: WritePdfSelectionPageRect | null
   onSelectionChange?: (selection: WritePdfSelection) => void
   onQuoteSelection?: (selection: WritePdfSelection) => void
   onAnnotationAction?: (action: WritePdfAnnotationAction, selection: WritePdfSelection) => void
   onAnnotationSelect?: (annotationId: string) => void
   onOpenAnnotations?: (selection: WritePdfSelection | null) => void
+  onToggleAnnotations?: () => void
 }
 
 type PdfSelectionContext = {
@@ -243,6 +247,11 @@ const PDF_VIEWER_CSS = `
 .write-pdf-icon-button:hover:not(:disabled) {
   background: var(--ds-hover);
   color: var(--ds-ink);
+}
+
+.write-pdf-icon-button[data-active='true'] {
+  background: color-mix(in srgb, var(--ds-accent) 12%, transparent);
+  color: var(--ds-accent);
 }
 
 .write-pdf-icon-button:disabled {
@@ -1786,12 +1795,14 @@ export function WritePdfViewer({
   initialScale = DEFAULT_PDF_SCALE,
   annotationOverlays = [],
   activeAnnotationId = null,
+  annotationsOpen = false,
   jumpToRect = null,
   onSelectionChange,
   onQuoteSelection,
   onAnnotationAction,
   onAnnotationSelect,
-  onOpenAnnotations
+  onOpenAnnotations,
+  onToggleAnnotations
 }: WritePdfViewerProps): ReactElement {
   const { t } = useTranslation('common')
   const localViewerRef = useRef<HTMLDivElement | null>(null)
@@ -2343,6 +2354,10 @@ export function WritePdfViewer({
     contextMenu &&
     (onOpenAnnotations || contextSelectionHasAnchor || (onQuoteSelection && contextSelectionHasText))
   )
+  const toggleAnnotations = onToggleAnnotations ?? (onOpenAnnotations ? () => onOpenAnnotations(committedSelection) : null)
+  const annotationsToggleLabel = annotationsOpen
+    ? label('writePdfAnnotationsClosePanel', 'Close annotations sidebar')
+    : label('writePdfAnnotationsOpenPanel', 'Open annotations sidebar')
 
   return (
     <div
@@ -2415,6 +2430,26 @@ export function WritePdfViewer({
               <ChevronRight className="h-4 w-4" strokeWidth={1.9} />
             </button>
           </div>
+
+          {toggleAnnotations ? (
+            <div className="flex items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle p-1 dark:bg-white/6">
+              <button
+                type="button"
+                className="write-pdf-icon-button"
+                data-active={annotationsOpen ? 'true' : undefined}
+                title={annotationsToggleLabel}
+                aria-label={annotationsToggleLabel}
+                aria-pressed={annotationsOpen}
+                onClick={toggleAnnotations}
+              >
+                {annotationsOpen ? (
+                  <PanelRightClose className="h-4 w-4" strokeWidth={1.9} />
+                ) : (
+                  <PanelRightOpen className="h-4 w-4" strokeWidth={1.9} />
+                )}
+              </button>
+            </div>
+          ) : null}
 
           <div className="flex min-w-[190px] flex-1 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1 dark:bg-white/6 sm:max-w-[280px]">
             <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.9} />

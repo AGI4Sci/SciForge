@@ -36,11 +36,13 @@ describe('file reference validation cache', () => {
 
     await expect(validateFileReference({ path: ' src/main.ts ' }, ' /repo ')).resolves.toEqual({
       status: 'valid',
-      path: '/resolved/src/main.ts'
+      path: '/resolved/src/main.ts',
+      kind: 'file'
     })
     await expect(validateFileReference({ path: 'src/main.ts' }, '/repo')).resolves.toEqual({
       status: 'valid',
-      path: '/resolved/src/main.ts'
+      path: '/resolved/src/main.ts',
+      kind: 'file'
     })
 
     expect(resolveWorkspaceFile).toHaveBeenCalledTimes(1)
@@ -63,6 +65,20 @@ describe('file reference validation cache', () => {
     expect(hasCachedFileReferenceValidation({ path: 'file-0.ts' }, '/repo')).toBe(false)
     expect(hasCachedFileReferenceValidation({ path: 'file-4.ts' }, '/repo')).toBe(false)
     expect(hasCachedFileReferenceValidation({ path: 'file-5.ts' }, '/repo')).toBe(true)
+  })
+
+  it('preserves directory kind from the resolver', async () => {
+    installResolveWorkspaceFile(vi.fn(async ({ path }: { path: string }) => ({
+      ok: true,
+      path: `/resolved/${path}`,
+      kind: 'directory' as const
+    })))
+
+    await expect(validateFileReference({ path: 'outputs', kind: 'directory' }, '/repo')).resolves.toEqual({
+      status: 'valid',
+      path: '/resolved/outputs',
+      kind: 'directory'
+    })
   })
 
   it('refreshes cached validations when they are reused', async () => {

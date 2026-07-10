@@ -23,14 +23,12 @@ files are this package's read-only input.
 - **Belief maintenance** — every claim is labelled `supported / fragile /
   conflicted / invalidated`; load-bearing / fragility / hidden-shared-source are
   computed by reusing Evidence-DAG's dominator analysis.
-- **Bi-temporal** — nothing is deleted; invalidation closes a `t_invalid`
-  window, so the **time machine** can replay the graph at any past date.
+- **Append-only evidence state** — invalidation closes a `t_invalid` window so
+  Project DAG keeps an auditable current graph without destructive rewrites.
 - **Review queue** — entity/claim merges below the auto threshold, unresolved
-  conflicts, orphan claims (no goal), and uncorroborated human evidence.
-- **Weekly report** — structured progress/changes/unresolved, every factual line
-  citing its `claim` id (faithfulness constraint).
-- **Web UI (5 views)** — 项目主页 / Goal 树 / **图谱** / 编译控制台 / 周报 /
-  时间机器. The 图谱 view is an interactive, draggable, collapsible tree:
+  conflicts, and orphan claims (no goal).
+- **Web UI (4 views)** — 项目主页 / Goal 树 / **图谱** / 编译控制台. The 图谱 view
+  is an interactive, draggable, collapsible tree:
   `GOAL → subtopic group (session) → claim (derived children nested) → evidence`,
   colour-coded by status with ⚡ load-bearing and amber fragility overlays.
 
@@ -75,7 +73,7 @@ Layout:
 | `src/project_dag/judge.py` | `llm_judge(task, payload)` — the single LLM funnel, cached; offline stub |
 | `src/project_dag/compiler.py` | Phase 0–7 pipeline + rule-based conflict adjudication |
 | `src/project_dag/reconcile.py` | status relabel + projection into `ThreadGraph` for analysis reuse |
-| `src/project_dag/service.py` | engine facade: compile, goals, claims, review, human actions, report, snapshot, graph |
+| `src/project_dag/service.py` | engine facade: compile, goals, claims, review, graph |
 | `src/project_dag/server.py` | HTTP service (ServiceResult) + bundled UI + daily scheduler |
 | `ui/index.html` | zero-dependency web UI (the 图谱 view lives here) |
 | `desktop/{contract,sidecar}.ts` | desktop integration: URL/deep-link contract + managed Python sidecar |
@@ -125,16 +123,13 @@ Tests are fully offline (StubJudge): `python tests/test_compile.py`
 ```
 GET  /health | /version | /             bundled UI
 POST /compile                {"scope":"all"|["thread-id",...]}
-POST /full-check                         weekly safety net (relabel all, report drift)
+POST /full-check                         full relabel safety net (report drift)
 GET  /compile-runs[/{id}]                history / full persisted diff
 GET  /goals   POST /goals   POST /goals/{root}/update    (versioned, never in place)
-GET  /claims?goal=&as_of=   GET /claims/{id}             (as_of = time machine)
+GET  /claims?goal=        GET /claims/{id}
 GET  /analysis?goal=&threshold=          reused dominator analysis
 GET  /graph                              alive goals/claims/evidence/edges (图谱 view)
 GET  /review  POST /review/{id}/resolve  {"decision","extra":{"winner"|"goal_id"}}
-POST /human-actions          {"text","file_path?","log_path?"}
-GET  /report?start=&end=                 weekly report, every line cites a claim id
-GET  /snapshot?as_of=                    full graph state at any date
 ```
 
 ## Env
@@ -153,5 +148,4 @@ GET  /snapshot?as_of=                    full graph state at any date
 - `artifact_registry` / `depends_on_artifact` — phase-1 session graphs carry no
   file provenance yet (needs a runtime seam).
 - Embedding recall — text dual-recall only; add when claim volume demands it.
-- `needs_regoal` re-attribution step; min-cut source independence; LLM-polished
-  weekly prose (structured markdown already cites claim ids).
+- `needs_regoal` re-attribution step; min-cut source independence.

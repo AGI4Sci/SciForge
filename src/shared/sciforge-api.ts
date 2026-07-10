@@ -471,19 +471,22 @@ export type EvidenceDagViewResult = {
   url: string
   threadId?: string
 }
-export type EvidenceDagAuditRunRequest = {
+export type EvidenceDagUpdateRequest = {
   runtimeId: AgentRuntimeId
   threadId: string
-  threshold?: number
 }
-export type EvidenceDagAuditRunResult = {
+export type EvidenceDagUpdateResult = {
   url: string
   threadId: string
-  riskDigest?: unknown
+  itemCount: number
 }
-export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'compile' | 'report' | 'time'
+export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'compile'
 export type ProjectDagViewRequest = {
   view?: ProjectDagViewName
+  workspaceRoot?: string
+  projectRoot?: string
+  project?: string
+  sessions?: string[]
 }
 export type ProjectDagViewResult = {
   url: string
@@ -491,6 +494,10 @@ export type ProjectDagViewResult = {
 export type ProjectDagCompileRequest = {
   goalTitle?: string
   goalDescription?: string
+  workspaceRoot?: string
+  projectRoot?: string
+  project?: string
+  sessions?: string[]
   scope?: 'all' | string[]
 }
 export type ProjectDagCompileResult = {
@@ -1070,7 +1077,7 @@ export type SciForgeApi = {
   ) => Promise<ComputerUsePermissions>
   getComputerUseStatus: () => Promise<ComputerUseStatusView>
   getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
-  runEvidenceDagAudit: (input: EvidenceDagAuditRunRequest) => Promise<EvidenceDagAuditRunResult>
+  updateEvidenceDag: (input: EvidenceDagUpdateRequest) => Promise<EvidenceDagUpdateResult>
   getProjectDagView: (input: ProjectDagViewRequest) => Promise<ProjectDagViewResult>
   runProjectDagCompile: (input: ProjectDagCompileRequest) => Promise<ProjectDagCompileResult>
   showTurnCompleteNotification: (

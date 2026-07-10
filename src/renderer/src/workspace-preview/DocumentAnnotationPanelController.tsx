@@ -58,11 +58,13 @@ export type DocumentAnnotationPanelRenderInput = {
   pdf: {
     annotationOverlays: WritePdfAnnotationOverlay[]
     activeAnnotationId: string | null
+    annotationsOpen: boolean
     jumpToRect: WritePdfSelectionPageRect | null
     onApplyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
     onSelectionChange: (selection: WritePdfSelection) => void
     onAnnotationSelect: (threadId: string) => void
     onOpenAnnotations: (selection: WritePdfSelection | null) => void
+    onToggleAnnotations: () => void
   }
   docx: {
     annotationOverlays: WriteDocxAnnotationOverlay[]
@@ -209,6 +211,14 @@ export function DocumentAnnotationPanelController({
     setPanelOpen(true)
     if (!sidecar && canReadSidecar) void loadSidecar()
   }, [canReadSidecar, loadSidecar, rememberPdfReviewSelection, sidecar])
+
+  const togglePanel = useCallback((): void => {
+    setPanelOpen((open) => {
+      const next = !open
+      if (next && !sidecar && canReadSidecar) void loadSidecar()
+      return next
+    })
+  }, [canReadSidecar, loadSidecar, sidecar])
 
   const selectThread = useCallback((threadId: string): void => {
     setSelectedThreadId(threadId)
@@ -545,11 +555,13 @@ export function DocumentAnnotationPanelController({
           pdf: {
             annotationOverlays: pdfAnnotationOverlays,
             activeAnnotationId: activeThreadId,
+            annotationsOpen: panelOpen,
             jumpToRect,
             onApplyEdit: applyPreviewOperation,
             onSelectionChange: rememberPdfReviewSelection,
             onAnnotationSelect: selectThread,
-            onOpenAnnotations: openPanel
+            onOpenAnnotations: openPanel,
+            onToggleAnnotations: togglePanel
           },
           docx: {
             annotationOverlays: docxAnnotationOverlays,

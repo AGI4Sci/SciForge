@@ -2,6 +2,7 @@ export type FileReferenceTarget = {
   path: string
   line?: number
   column?: number
+  kind?: 'file' | 'directory'
 }
 
 export type FileReferenceMatch = {
@@ -25,57 +26,88 @@ export const FILE_REFERENCE_SCHEMES = [FILE_REFERENCE_SCHEME, LEGACY_FILE_REFERE
 const PATH_PREFIX_BOUNDARY = String.raw`(?<![\w@.~\/\\-])`
 
 const EXTENSIONS = [
+  'avif',
   'astro',
   'bash',
+  'bmp',
   'c',
+  'csv',
   'cc',
   'cjs',
   'cpp',
   'cs',
   'css',
   'dart',
+  'docx?',
   'env',
+  'fasta',
+  'fa',
   'fish',
+  'gif',
   'go',
+  'gz',
   'h',
   'hpp',
   'html?',
+  'ipynb',
   'ini',
   'java',
+  'jpe?g',
   'jsx?',
   'json',
+  'jsonl',
   'kt',
   'less',
   'lock',
   'mdx?',
   'mjs',
+  'mol2',
+  'pdb',
+  'pdf',
   'php',
+  'png',
+  'pptx?',
   'py',
   'rb',
   'rs',
   'sass',
   'scss',
   'sh',
+  'sdf',
   'sql',
   'svelte',
   'swift',
+  'tar',
+  'tsv',
   'toml',
   'tsx?',
   'txt',
   'vue',
+  'webp',
+  'xlsx?',
   'ya?ml',
+  'zip',
   'xml',
   'zsh'
 ].join('|')
 
-const PATH_CHARS = String.raw`[\w@.()+=[\]{} $,;!%#~\/\\-]`
-const PATH_END = String.raw`(?=$|[\s(),.;:!?\]\u3001\u3002\uff0c\uff1b\uff08\uff09]|#L)`
+const PATH_CHARS = String.raw`[\p{L}\p{N}_@.()+=[\]{} $,;!%#~\/\\-]`
+const FILE_NAME_CHARS = String.raw`[\p{L}\p{N}_@()+=[\]{}!%#~-]`
+const PATH_END = String.raw`(?=$|[\s(),.;:!?\]\u3001\u3002\uff0c\uff1b\uff1a\uff08\uff09]|#L)`
 const PATH_WITH_SEPARATOR = new RegExp(
   String.raw`${PATH_PREFIX_BOUNDARY}(?:~|\/|\.{1,2}\/|[A-Za-z]:[\\/]|[\w@.-]+[\\/])${PATH_CHARS}*?\.(?:${EXTENSIONS})${PATH_END}`,
   'giu'
 )
+const BASENAME_FILE = new RegExp(
+  String.raw`${PATH_PREFIX_BOUNDARY}${FILE_NAME_CHARS}+?\.(?:${EXTENSIONS})${PATH_END}`,
+  'giu'
+)
+const DIRECTORY_WITH_SEPARATOR = new RegExp(
+  String.raw`${PATH_PREFIX_BOUNDARY}(?:~|\/|\.{1,2}\/|[A-Za-z]:[\\/]|[\p{L}\p{N}_@.-]+[\\/])${PATH_CHARS}*?[\/\\](?=$|[\s),.;:!?\]\u3001\u3002\uff0c\uff1b\uff1a\uff09])`,
+  'giu'
+)
 const LINE_SUFFIX = /(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L\d+)?|\s*[（(](?:line|lines)\s+(\d+)[）)]|\s*[（(]第\s*(\d+)\s*行[）)]|\s+line\s+(\d+)|\s+第\s*(\d+)\s*行)/iy
-const TRAILING_PUNCTUATION = /[.,;!?]+$/
+const TRAILING_PUNCTUATION = /[.,;!?，。；：、]+$/
 const BLOCKED_PARENTS = new Set(['a', 'code', 'pre', 'script', 'style', 'textarea'])
 
 function lineFromSuffix(match: RegExpExecArray): { line?: number; column?: number } {
@@ -103,14 +135,22 @@ function tokenBefore(text: string, index: number): string {
 }
 
 function isProbablyUrl(text: string, index: number): boolean {
-  return tokenBefore(text, index).includes('://')
+  const prefix = text.slice(0, index).trimEnd()
+  return tokenBefore(text, index).includes('://') || /[A-Za-z][A-Za-z0-9+.-]*:$/.test(prefix)
 }
 
-function trimPathMatch(raw: string): string {
-  return raw.replace(TRAILING_PUNCTUATION, '')
+function trimPathMatch(raw: string, kind: FileReferenceTarget['kind']): string {
+  const trimmed = raw.replace(TRAILING_PUNCTUATION, '')
+  if (kind === 'directory') return trimmed.replace(/[\\/]+$/g, '')
+  return trimmed
 }
 
-function collectMatches(text: string, regex: RegExp, requireLineSuffix: boolean): FileReferenceMatch[] {
+function collectMatches(
+  text: string,
+  regex: RegExp,
+  requireLineSuffix: boolean,
+  kind: FileReferenceTarget['kind']
+): FileReferenceMatch[] {
   const matches: FileReferenceMatch[] = []
   regex.lastIndex = 0
 
@@ -119,8 +159,10 @@ function collectMatches(text: string, regex: RegExp, requireLineSuffix: boolean)
     const matched = match[0]
     if (!matched || isProbablyUrl(text, match.index)) continue
 
-    const path = trimPathMatch(matched)
-    const pathEnd = match.index + path.length
+    const displayText = matched.replace(TRAILING_PUNCTUATION, '')
+    const displayEnd = match.index + displayText.length
+    const path = trimPathMatch(matched, kind)
+    const pathEnd = kind === 'directory' ? displayEnd : match.index + path.length
     LINE_SUFFIX.lastIndex = pathEnd
     const suffix = LINE_SUFFIX.exec(text)
     const lineInfo = suffix ? lineFromSuffix(suffix) : {}
@@ -133,7 +175,8 @@ function collectMatches(text: string, regex: RegExp, requireLineSuffix: boolean)
       text: text.slice(match.index, end),
       target: {
         path,
-        ...lineInfo
+        ...lineInfo,
+        ...(kind ? { kind } : {})
       }
     })
   }
@@ -155,13 +198,18 @@ function mergeMatches(matches: FileReferenceMatch[]): FileReferenceMatch[] {
 
 export function findFileReferences(text: string): FileReferenceMatch[] {
   if (!text.trim()) return []
-  return mergeMatches(collectMatches(text, PATH_WITH_SEPARATOR, false))
+  return mergeMatches([
+    ...collectMatches(text, PATH_WITH_SEPARATOR, false, 'file'),
+    ...collectMatches(text, BASENAME_FILE, false, 'file'),
+    ...collectMatches(text, DIRECTORY_WITH_SEPARATOR, false, 'directory')
+  ])
 }
 
 export function createFileReferenceHref(target: FileReferenceTarget): string {
   const params = new URLSearchParams({ path: target.path })
   if (target.line) params.set('line', String(target.line))
   if (target.column) params.set('column', String(target.column))
+  if (target.kind) params.set('kind', target.kind)
   return `${FILE_REFERENCE_SCHEME}//open?${params.toString()}`
 }
 
@@ -173,10 +221,12 @@ export function parseFileReferenceHref(href: string | undefined): FileReferenceT
     if (!path) return null
     const line = Number.parseInt(url.searchParams.get('line') ?? '', 10)
     const column = Number.parseInt(url.searchParams.get('column') ?? '', 10)
+    const kind = url.searchParams.get('kind')
     return {
       path,
       ...(Number.isFinite(line) && line > 0 ? { line } : {}),
-      ...(Number.isFinite(column) && column > 0 ? { column } : {})
+      ...(Number.isFinite(column) && column > 0 ? { column } : {}),
+      ...(kind === 'file' || kind === 'directory' ? { kind } : {})
     }
   } catch {
     return null

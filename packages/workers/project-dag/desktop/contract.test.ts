@@ -7,7 +7,11 @@ describe('Project DAG desktop contract', () => {
       serviceUrl: 'http://127.0.0.1:3898/',
       apiKey: ' project-token ',
       view: 'graph',
-      embed: true
-    })).toBe('http://127.0.0.1:3898/?view=graph&embed=1#token=project-token')
+      embed: true,
+      workspaceRoot: '/tmp/project alpha',
+      projectRoot: '/tmp/project alpha',
+      project: 'project-alpha',
+      sessionIds: ['codex:thread-1', '']
+    })).toBe('http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject+alpha&projectRoot=%2Ftmp%2Fproject+alpha&project=project-alpha&session=codex%3Athread-1#token=project-token')
   })
 })

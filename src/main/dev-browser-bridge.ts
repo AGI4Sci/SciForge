@@ -72,7 +72,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'discord:test-send',
   'editor:list',
   'editor:open-path',
-  'evidenceDag:audit-run',
+  'evidenceDag:update',
   'evidenceDag:view',
   'figure-style:evaluate',
   'figure-style:extract',

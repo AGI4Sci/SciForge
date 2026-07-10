@@ -144,7 +144,7 @@ they enter one Evidence-DAG seam. Touch points in the app:
 | Mapping + feed (pure mapping + fail-open client) | `src/main/runtime/evidence-dag-feed.ts` |
 | Call site (completed turn, fire-and-forget) | `src/main/runtime/agent-runtime/host.ts` |
 | Resolve UI view | `evidenceDag:view` IPC + Workbench right-panel Evidence DAG item |
-| Manual build + audit current thread | `evidenceDag:audit-run` IPC + Workbench Evidence DAG audit button |
+| Rebuild current thread DAG | `evidenceDag:update` IPC + Workbench Evidence DAG update button |
 
 GUI main-process env. In normal app runs `desktop/sidecar.ts` fills these from the
 managed sidecar config; manual env remains useful for diagnostics:

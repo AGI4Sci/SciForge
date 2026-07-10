@@ -26,7 +26,7 @@ import {
   agentRuntimeStartTurnPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
-  evidenceDagAuditRunPayloadSchema,
+  evidenceDagUpdatePayloadSchema,
   evidenceDagViewPayloadSchema,
   figureStyleExtractReferencePayloadSchema,
   figureStyleSaveSpecPayloadSchema,
@@ -126,34 +126,41 @@ describe('app-ipc-schemas', () => {
     })
   })
 
-  it('accepts Evidence DAG audit run payloads with bounded threshold', () => {
-    expect(evidenceDagAuditRunPayloadSchema.parse({
+  it('accepts Evidence DAG update payloads', () => {
+    expect(evidenceDagUpdatePayloadSchema.parse({
       runtimeId: 'codex',
-      threadId: ' thread-1 ',
-      threshold: 0.8
+      threadId: ' thread-1 '
     })).toEqual({
       runtimeId: 'codex',
-      threadId: 'thread-1',
-      threshold: 0.8
+      threadId: 'thread-1'
     })
-    expect(() =>
-      evidenceDagAuditRunPayloadSchema.parse({
-        runtimeId: 'codex',
-        threadId: 'thread-1',
-        threshold: 2
-      })
-    ).toThrow()
   })
 
   it('accepts Project DAG panel payloads', () => {
-    expect(projectDagViewPayloadSchema.parse({ view: 'graph' })).toEqual({ view: 'graph' })
+    expect(projectDagViewPayloadSchema.parse({
+      view: 'graph',
+      workspaceRoot: ' /tmp/project-alpha ',
+      projectRoot: ' /tmp/project-alpha ',
+      project: ' alpha ',
+      sessions: [' codex:thread-1 ']
+    })).toEqual({
+      view: 'graph',
+      workspaceRoot: '/tmp/project-alpha',
+      projectRoot: '/tmp/project-alpha',
+      project: 'alpha',
+      sessions: ['codex:thread-1']
+    })
     expect(projectDagCompilePayloadSchema.parse({
       goalTitle: ' Project alpha ',
       goalDescription: ' Find the answer. ',
+      workspaceRoot: ' /tmp/project-alpha ',
+      sessions: [' codex:thread-1 '],
       scope: [' session-1 ']
     })).toEqual({
       goalTitle: 'Project alpha',
       goalDescription: 'Find the answer.',
+      workspaceRoot: '/tmp/project-alpha',
+      sessions: ['codex:thread-1'],
       scope: ['session-1']
     })
     expect(projectDagCompilePayloadSchema.parse({ scope: 'all' })).toEqual({ scope: 'all' })

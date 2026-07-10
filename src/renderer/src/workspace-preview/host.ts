@@ -476,6 +476,7 @@ export class WorkspacePreviewHost {
   }
 
   private patchState(patch: Partial<WorkspacePreviewHostState>): void {
+    if (statePatchIsNoop(this.state, patch)) return
     this.state = {
       ...this.state,
       ...patch
@@ -658,6 +659,15 @@ function observationWithSessionSelection(
     ...observation,
     selection: session.selection
   }
+}
+
+function statePatchIsNoop(
+  state: WorkspacePreviewHostState,
+  patch: Partial<WorkspacePreviewHostState>
+): boolean {
+  const keys = Object.keys(patch) as Array<keyof WorkspacePreviewHostState>
+  if (keys.length === 0) return true
+  return keys.every((key) => state[key] === patch[key])
 }
 
 function decodeBase64Bytes(value: string): Uint8Array {

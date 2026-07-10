@@ -1,14 +1,54 @@
-import { AlertTriangle, Loader2, Network, PanelRightClose, RefreshCw, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Loader2, Network, PanelRightClose, Play, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentRuntimeId } from '@shared/app-settings'
-import type { EvidenceDagViewResult } from '@shared/sciforge-api'
+import type {
+  EvidenceDagUpdateResult,
+  EvidenceDagViewResult,
+  SciForgeApi
+} from '@shared/sciforge-api'
 
 type Props = {
   activeThreadId: string | null
   runtimeId?: AgentRuntimeId
   className?: string
   onCollapse: () => void
+}
+
+type EvidenceDagUpdateApi = Partial<Pick<SciForgeApi, 'updateEvidenceDag'>>
+export const EVIDENCE_DAG_UPDATE_TIMEOUT_MS = 10 * 60_000
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+export function isEvidenceDagUpdateTimeout(cause: unknown): boolean {
+  return /Evidence DAG update timed out/i.test(errorMessage(cause))
+}
+
+export async function runEvidenceDagUpdate(
+  api: EvidenceDagUpdateApi,
+  input: { runtimeId: AgentRuntimeId; threadId: string }
+): Promise<EvidenceDagUpdateResult> {
+  if (typeof api.updateEvidenceDag === 'function') {
+    return api.updateEvidenceDag(input)
+  }
+  throw new Error('Evidence DAG is unavailable in this build.')
+}
+
+export function withEvidenceDagUpdateTimeout<T>(
+  task: Promise<T>,
+  timeoutMs = EVIDENCE_DAG_UPDATE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error('Evidence DAG update timed out. The request may still be running in the background.'))
+    }, timeoutMs)
+  })
+  return Promise.race([task, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
 
 export function EvidenceDagPanel({
@@ -20,8 +60,8 @@ export function EvidenceDagPanel({
   const { t } = useTranslation('common')
   const [view, setView] = useState<EvidenceDagViewResult | null>(null)
   const [loading, setLoading] = useState(false)
-  const [auditing, setAuditing] = useState(false)
-  const [auditSummary, setAuditSummary] = useState<string | null>(null)
+  const [updating, setUpdating] = useState(false)
+  const [updateSummary, setUpdateSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [requestNonce, setRequestNonce] = useState(0)
   const [frameNonce, setFrameNonce] = useState(0)
@@ -58,34 +98,34 @@ export function EvidenceDagPanel({
   }, [requestNonce, runtimeId, t, threadId])
 
   const subtitle = view?.threadId || threadId || t('evidenceDagGlobalView')
+  const canUpdateDag = Boolean(threadId && runtimeId)
+  const updateDagTitle = !canUpdateDag
+    ? t('evidenceDagUpdateUnavailableHint')
+    : updating
+      ? t('evidenceDagUpdateRunning')
+      : t('evidenceDagUpdateHelp')
 
-  const runAudit = (): void => {
-    const runEvidenceDagAudit = window.sciforge?.runEvidenceDagAudit
-    if (typeof runEvidenceDagAudit !== 'function') {
+  const updateDag = (): void => {
+    const api = window.sciforge
+    if (typeof api?.updateEvidenceDag !== 'function') {
       setError(t('evidenceDagUnavailable'))
       return
     }
     if (!threadId || !runtimeId) return
-    setAuditing(true)
+    setUpdating(true)
     setError(null)
-    setAuditSummary(null)
-    void runEvidenceDagAudit({
+    setUpdateSummary(null)
+    void withEvidenceDagUpdateTimeout(runEvidenceDagUpdate(api, {
       runtimeId,
       threadId
-    }).then((result) => {
+    })).then((result) => {
       setView({ url: result.url, threadId: result.threadId })
-      const digest = result.riskDigest as {
-        total_findings?: unknown
-        highest_severity?: unknown
-      } | undefined
-      const count = typeof digest?.total_findings === 'number' ? digest.total_findings : 0
-      const severity = typeof digest?.highest_severity === 'string' ? digest.highest_severity : 'none'
-      setAuditSummary(t('evidenceDagAuditSummary', { count, severity }))
+      setUpdateSummary(t('evidenceDagUpdateSummary', { count: result.itemCount }))
       setFrameNonce((current) => current + 1)
     }).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(isEvidenceDagUpdateTimeout(cause) ? t('evidenceDagUpdateTimedOut') : errorMessage(cause))
     }).finally(() => {
-      setAuditing(false)
+      setUpdating(false)
     })
   }
 
@@ -97,23 +137,28 @@ export function EvidenceDagPanel({
             <Network className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <span>{t('rightPanelEvidenceDag')}</span>
           </div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">{auditSummary || subtitle}</div>
+          <div className="mt-1 truncate text-[11.5px] text-ds-faint">{updateSummary || subtitle}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            onClick={runAudit}
-            disabled={loading || auditing || !threadId || !runtimeId}
-            className="rounded-lg p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={auditing ? t('evidenceDagAuditRunning') : t('evidenceDagAudit')}
-            title={auditing ? t('evidenceDagAuditRunning') : t('evidenceDagAudit')}
+            onClick={updateDag}
+            disabled={loading || updating || !canUpdateDag}
+            className="inline-flex h-7 min-w-[86px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label={updateDagTitle}
+            title={updateDagTitle}
           >
-            <ShieldCheck className={`h-4 w-4 ${auditing ? 'animate-pulse' : ''}`} strokeWidth={1.75} />
+            {updating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+            ) : (
+              <Play className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+            <span>{updating ? t('evidenceDagUpdateRunning') : t('evidenceDagUpdate')}</span>
           </button>
           <button
             type="button"
             onClick={() => setRequestNonce((current) => current + 1)}
-            disabled={loading}
+            disabled={loading || updating}
             className="rounded-lg p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={t('evidenceDagRefresh')}
             title={t('evidenceDagRefresh')}

@@ -71,7 +71,7 @@ import {
   remoteChannelTaskFromTextPayloadSchema,
   runtimeConfigContentSchema,
   desktopCommandSchema,
-  evidenceDagAuditRunPayloadSchema,
+  evidenceDagUpdatePayloadSchema,
   evidenceDagViewPayloadSchema,
   projectDagCompilePayloadSchema,
   projectDagViewPayloadSchema,
@@ -593,6 +593,77 @@ function evidenceDagBackfillItems(detail: AgentRuntimeThreadDetail): AgentRuntim
   return (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
 }
 
+async function backfillEvidenceDagThread(
+  input: { runtimeId: AgentRuntimeId; threadId: string },
+  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
+): Promise<{ items: AgentRuntimeItem[] }> {
+  if (!agentRuntime) {
+    throw new Error('Agent runtime is required to build the current thread Evidence DAG.')
+  }
+  const detail = await agentRuntime.readThread({
+    runtimeId: input.runtimeId,
+    threadId: input.threadId
+  })
+  const items = evidenceDagBackfillItems(detail)
+  await feedEvidenceDag({
+    runtimeId: input.runtimeId,
+    threadId: input.threadId,
+    items,
+    failOpen: false,
+    rebuild: true,
+    verify: false,
+    audit: false
+  })
+  return { items }
+}
+
+function projectDagWorkspaceScopeKey(value: string | undefined): string {
+  const normalized = (value ?? '').trim().replace(/[\\/]+$/, '').replace(/\\/g, '/')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+async function projectDagSessionScopeForWorkspace(
+  input: { workspaceRoot?: string; projectRoot?: string; sessions?: string[] },
+  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
+): Promise<string[] | undefined> {
+  if (input.sessions) return [...new Set(input.sessions.map((session) => session.trim()).filter(Boolean))].sort()
+  const workspaceRoot = input.projectRoot?.trim() || input.workspaceRoot?.trim()
+  if (!workspaceRoot) return undefined
+  if (!agentRuntime) {
+    throw new Error('Project DAG requires agent runtime session scope for the current project.')
+  }
+  const wanted = projectDagWorkspaceScopeKey(workspaceRoot)
+  if (!wanted) return undefined
+  const threads = await agentRuntime.listThreads({
+    limit: 1_000,
+    includeArchived: false,
+    includeSide: true
+  })
+  const scoped = threads
+    .filter((thread) => projectDagWorkspaceScopeKey(thread.workspace) === wanted)
+    .map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id))
+  return [...new Set(scoped)].sort()
+}
+
+type ProjectDagGoalScope = {
+  workspaceRoot?: string
+  projectRoot?: string
+  project?: string
+  sessions?: string[]
+}
+
+function projectDagQuery(scope: ProjectDagGoalScope): string {
+  const params = new URLSearchParams()
+  if (scope.workspaceRoot) params.set('workspaceRoot', scope.workspaceRoot)
+  if (scope.projectRoot) params.set('projectRoot', scope.projectRoot)
+  if (scope.project) params.set('project', scope.project)
+  for (const session of scope.sessions ?? []) {
+    if (session.trim()) params.append('session', session.trim())
+  }
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
 type WriteExportIpcPayload = z.infer<typeof writeExportPayloadSchema>
 
 type EvidenceDagAuditForGate = {
@@ -654,7 +725,9 @@ async function collectWriteExportEvidenceDagAudit(
       runtimeId,
       threadId,
       items: evidenceDagBackfillItems(detail),
-      failOpen: false
+      failOpen: false,
+      verify: false,
+      audit: false
     })
     const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
     const audit = await requestEvidenceDagJson(
@@ -801,6 +874,7 @@ async function ensureProjectDagGoal(
   apiKey: string,
   title: string,
   description: string,
+  scope: ProjectDagGoalScope,
   fetchImpl: typeof fetch | undefined = globalThis.fetch
 ): Promise<void> {
   if (typeof fetchImpl !== 'function') return
@@ -810,8 +884,9 @@ async function ensureProjectDagGoal(
   }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROJECT_DAG_GOAL_TIMEOUT_MS)
+  const query = projectDagQuery(scope)
   try {
-    const listed = await fetchImpl(`${serviceUrl}/goals`, {
+    const listed = await fetchImpl(`${serviceUrl}/goals${query}`, {
       method: 'GET',
       cache: 'no-store',
       headers,
@@ -827,7 +902,14 @@ async function ensureProjectDagGoal(
     const created = await fetchImpl(`${serviceUrl}/goals`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ title, description }),
+      body: JSON.stringify({
+        title,
+        description,
+        ...(scope.workspaceRoot ? { workspaceRoot: scope.workspaceRoot } : {}),
+        ...(scope.projectRoot ? { projectRoot: scope.projectRoot } : {}),
+        ...(scope.project ? { project: scope.project } : {}),
+        ...(scope.sessions ? { sessions: scope.sessions } : {})
+      }),
       signal: controller.signal
     })
     if (!created.ok) throw new Error(`goal create returned HTTP ${created.status}`)
@@ -2923,37 +3005,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       ...(threadId ? { threadId } : {})
     }
   })
-  handleInvoke('evidenceDag:audit-run', async (_, payload: unknown) => {
-    const input = parseIpcPayload('evidenceDag:audit-run', evidenceDagAuditRunPayloadSchema, payload)
+  handleInvoke('evidenceDag:update', async (_, payload: unknown) => {
+    const input = parseIpcPayload('evidenceDag:update', evidenceDagUpdatePayloadSchema, payload)
     await ensureEvidenceDagReady?.()
     const config = evidenceDagViewConfig(process.env)
     await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
-    if (!agentRuntime) {
-      throw new Error('Agent runtime is required to build the current thread Evidence DAG before auditing.')
-    }
-    const detail = await agentRuntime.readThread({
-      runtimeId: input.runtimeId,
-      threadId: input.threadId
-    })
-    await feedEvidenceDag({
-      runtimeId: input.runtimeId,
-      threadId: input.threadId,
-      items: evidenceDagBackfillItems(detail),
-      failOpen: false
-    })
-    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
-    const audit = await requestEvidenceDagJson(
-      config.serviceUrl,
-      config.apiKey,
-      `/threads/${encodeURIComponent(engineThreadId)}/audit-runs`,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          trigger: 'manual',
-          threshold: input.threshold ?? 0.7
-        })
-      }
-    )
+    const { items } = await backfillEvidenceDagThread(input, agentRuntime)
     return {
       url: evidenceDagUiUrl({
         runtimeId: input.runtimeId,
@@ -2962,9 +3019,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         apiKey: config.apiKey
       }),
       threadId: input.threadId,
-      riskDigest: audit && typeof audit === 'object' && 'risk_digest' in audit
-        ? (audit as { risk_digest?: unknown }).risk_digest
-        : undefined
+      itemCount: items.length
     }
   })
   handleInvoke('projectDag:view', async (_, payload: unknown) => {
@@ -2972,12 +3027,17 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
+    const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
     return {
       url: projectDagUiUrl({
         serviceUrl,
         apiKey,
         view: input.view ?? 'graph',
-        embed: true
+        embed: true,
+        workspaceRoot: input.workspaceRoot,
+        projectRoot: input.projectRoot,
+        project: input.project,
+        sessionIds: sessionScope
       })
     }
   })
@@ -2986,12 +3046,27 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
+    const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
     if (input.goalTitle) {
-      await ensureProjectDagGoal(serviceUrl, apiKey, input.goalTitle, input.goalDescription ?? '')
+      await ensureProjectDagGoal(serviceUrl, apiKey, input.goalTitle, input.goalDescription ?? '', {
+        workspaceRoot: input.workspaceRoot,
+        projectRoot: input.projectRoot,
+        project: input.project,
+        sessions: sessionScope
+      })
     }
+    const scope = input.scope === 'all' && sessionScope !== undefined
+      ? sessionScope
+      : input.scope ?? sessionScope ?? 'all'
     const compile = await requestProjectDagJson(serviceUrl, apiKey, '/compile', {
       method: 'POST',
-      body: JSON.stringify({ scope: input.scope ?? 'all' })
+      body: JSON.stringify({
+        scope,
+        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+        ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+        ...(input.project ? { project: input.project } : {}),
+        ...(sessionScope !== undefined ? { sessions: sessionScope } : {})
+      })
     }) as ProjectDagCompileResponse
     const runId = typeof compile.run_id === 'string'
       ? compile.run_id
@@ -3002,7 +3077,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       serviceUrl,
       apiKey,
       view: 'graph',
-      embed: true
+      embed: true,
+      workspaceRoot: input.workspaceRoot,
+      projectRoot: input.projectRoot,
+      project: input.project,
+      sessionIds: sessionScope
     })
     return {
       url,

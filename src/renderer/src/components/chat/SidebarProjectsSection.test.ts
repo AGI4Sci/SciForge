@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
 import type { RemoteChannelThreadBinding } from '../../store/chat-store-helpers'
-import { buildSidebarWorkspaceGroups, SidebarProjectsSection, ThreadRenameDialog } from './SidebarProjectsSection'
+import {
+  buildSidebarWorkspaceGroups,
+  SidebarProjectsSection,
+  sortSidebarThreadsForDisplay,
+  ThreadRenameDialog
+} from './SidebarProjectsSection'
 
 function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'id' | 'workspace'>): NormalizedThread {
   return {
@@ -222,6 +227,64 @@ describe('SidebarProjectsSection groups', () => {
     expect(html).toContain('Remote error')
     expect(html).toContain('Remote active')
     expect(html).toContain('Remote unread')
+  })
+
+  it('keeps running thread order stable while refreshed snapshots update timestamps', () => {
+    const firstSnapshot = [
+      thread({
+        id: 'running-thread',
+        title: 'Running',
+        workspace: '/Users/zxy/project-a',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        status: 'running'
+      }),
+      thread({
+        id: 'older-thread',
+        title: 'Older',
+        workspace: '/Users/zxy/project-a',
+        updatedAt: '2026-05-31T23:59:00.000Z'
+      })
+    ]
+    const runningSortKeys = new Map([
+      ['running-thread', Date.parse(firstSnapshot[0].updatedAt)]
+    ])
+    const refreshedSnapshot = [
+      {
+        ...firstSnapshot[0],
+        updatedAt: '2026-06-01T00:05:00.000Z'
+      },
+      thread({
+        id: 'newer-thread',
+        title: 'Newer idle',
+        workspace: '/Users/zxy/project-a',
+        updatedAt: '2026-06-01T00:01:00.000Z'
+      }),
+      firstSnapshot[1]
+    ]
+
+    expect(sortSidebarThreadsForDisplay(refreshedSnapshot, runningSortKeys).map((item) => item.id)).toEqual([
+      'newer-thread',
+      'running-thread',
+      'older-thread'
+    ])
+  })
+
+  it('shows a stable running label instead of relative time for running rows', () => {
+    const html = renderProjectsSectionHtml({
+      threads: [
+        thread({
+          id: 'running-thread',
+          title: 'Running local',
+          workspace: '/Users/zxy/project-a',
+          updatedAt: '2026-06-01T00:00:00.000Z',
+          status: 'running'
+        })
+      ]
+    })
+
+    expect(html).toContain('Running local')
+    expect(html).toContain('Running')
+    expect(html).not.toContain('2026')
   })
 })
 

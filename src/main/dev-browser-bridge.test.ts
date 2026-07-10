@@ -369,7 +369,7 @@ describe('dev browser bridge server', () => {
     expect(invoke).toHaveBeenCalledTimes(3)
   })
 
-  it('allows Evidence DAG view and audit channels in browser dev mode', async () => {
+  it('allows Evidence DAG view and update channels in browser dev mode', async () => {
     const invoke = vi.fn(async (_channel, payload) => ({ ok: true, payload }))
     const dispatcher: DevBrowserBridgeDispatcher = { invoke }
 
@@ -378,7 +378,7 @@ describe('dev browser bridge server', () => {
       port: 0
     })
 
-    for (const channel of ['evidenceDag:view', 'evidenceDag:audit-run'] as const) {
+    for (const channel of ['evidenceDag:view', 'evidenceDag:update'] as const) {
       const response = await postJson('/invoke', {
         channel,
         payload: { runtimeId: 'codex', threadId: 'thread-1' }

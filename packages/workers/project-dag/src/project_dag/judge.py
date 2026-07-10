@@ -1,6 +1,6 @@
 """llm_judge(task_type, payload) -> dict — the single funnel for every LLM
 judgement in the compile pipeline (distill / entity_same / claim_equiv /
-contradiction / human_extract).
+contradiction).
 
 Reuses the evidence-dag Model Router client. Every call is cached in SQLite by
 (task_type, payload hash) so re-compiles are free and replayable; majority
@@ -49,13 +49,6 @@ Output STRICT JSON only:
 Do these two claims contradict each other (cannot both hold)? Answer ONLY
 whether they conflict; do NOT judge which is right.
 Output STRICT JSON only: {"contradicts": true|false, "confidence": 0.0}""",
-
-    "human_extract": """PDAG-TASK: human_extract
-A scientist logged an offline action in natural language. Extract it.
-Output STRICT JSON only:
-{"description":"<one sentence, what was done>",
- "mentioned_entities":["..."],
- "happened_at":"<ISO8601 if stated, else null>"}""",
 }
 
 

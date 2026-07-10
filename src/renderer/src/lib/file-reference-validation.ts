@@ -4,7 +4,7 @@ import type { FileReferenceTarget } from './file-references'
 type ValidationState =
   | { status: 'idle' }
   | { status: 'pending' }
-  | { status: 'valid'; path: string }
+  | { status: 'valid'; path: string; kind: 'file' | 'directory' }
   | { status: 'invalid' }
 
 type SettledValidation = Extract<ValidationState, { status: 'valid' | 'invalid' }>
@@ -20,7 +20,8 @@ function normalizeTarget(target: FileReferenceTarget | null): FileReferenceTarge
   return {
     path,
     ...(target?.line ? { line: target.line } : {}),
-    ...(target?.column ? { column: target.column } : {})
+    ...(target?.column ? { column: target.column } : {}),
+    ...(target?.kind ? { kind: target.kind } : {})
   }
 }
 
@@ -88,7 +89,9 @@ export async function validateFileReference(
       workspaceRoot: normalizedWorkspace
     })
 
-    return result.ok ? { status: 'valid', path: result.path } : { status: 'invalid' }
+    return result.ok
+      ? { status: 'valid', path: result.path, kind: result.kind ?? normalizedTarget.kind ?? 'file' }
+      : { status: 'invalid' }
   })()
 
   writeValidationCache(key, task)

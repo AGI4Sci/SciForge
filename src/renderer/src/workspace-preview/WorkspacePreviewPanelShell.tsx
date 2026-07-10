@@ -81,12 +81,37 @@ export function WorkspacePreviewPanelShell({
   const [assetStatus, setAssetStatus] = useState<WorkspacePreviewPanelShellContext['assetStatus']>('idle')
   const [assetError, setAssetError] = useState<string | null>(null)
   const [showInspector, setShowInspector] = useState(false)
-  const targetKey = workspacePreviewPanelTargetKey(target, workspaceRoot)
+  const targetPath = target?.path
+  const targetWorkspaceRoot = target?.workspaceRoot
+  const targetLine = target?.line
+  const targetColumn = target?.column
+  const openInput = useMemo(() => (
+    targetPath
+      ? workspacePreviewOpenInputForPanelTarget({
+          path: targetPath,
+          workspaceRoot: targetWorkspaceRoot,
+          line: targetLine,
+          column: targetColumn
+        }, workspaceRoot)
+      : null
+  ), [targetColumn, targetLine, targetPath, targetWorkspaceRoot, workspaceRoot])
+  const openInputKey = openInput ? `${openInput.workspaceRoot}\u0000${openInput.path}` : ''
+  const stableTarget = useMemo<WorkspaceFileTarget | null>(() => (
+    targetPath
+      ? {
+          path: targetPath,
+          workspaceRoot: targetWorkspaceRoot?.trim() || workspaceRoot,
+          line: targetLine,
+          column: targetColumn
+        }
+      : null
+  ), [targetColumn, targetLine, targetPath, targetWorkspaceRoot, workspaceRoot])
+  const targetKey = workspacePreviewPanelTargetKey(stableTarget, workspaceRoot)
 
   useEffect(() => host.subscribe((nextState) => setState({ ...nextState })), [host])
 
   useEffect(() => {
-    if (!target) {
+    if (!openInput) {
       const sessionId = host.getState().session?.id
       if (sessionId) void host.releaseSession(sessionId)
       setState(createWorkspacePreviewHostState())
@@ -120,7 +145,7 @@ export function WorkspacePreviewPanelShell({
     setAssetStatus('loading')
     setAssetError(null)
 
-    void host.open(workspacePreviewOpenInputForPanelTarget(target, workspaceRoot))
+    void host.open(openInput)
       .then(async (opened) => {
         if (opened.ok) openedSessionId = opened.session.id
         if (cancelled || !opened.ok) {
@@ -170,7 +195,7 @@ export function WorkspacePreviewPanelShell({
       if (releaseTimer) clearTimeout(releaseTimer)
       releaseOpenedSession(WORKSPACE_PREVIEW_SESSION_RELEASE_GRACE_MS)
     }
-  }, [host, target, targetKey, workspaceRoot])
+  }, [host, openInput, openInputKey])
 
   const context = useMemo<WorkspacePreviewPanelShellContext>(() => ({
     state,

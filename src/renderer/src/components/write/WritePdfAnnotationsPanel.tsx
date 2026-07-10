@@ -484,13 +484,13 @@ export function WritePdfAnnotationsPanel({
         ) : null}
 
         {showPdfReviewControls ? (
-          <div className="mt-2 rounded-lg border border-accent/18 bg-accent/5 p-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="inline-flex h-8 min-w-0 flex-1 overflow-hidden rounded-md border border-ds-border-muted bg-ds-card">
+          <div className="mt-2 grid gap-2 rounded-lg border border-accent/18 bg-accent/5 p-2">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <div className="grid h-8 min-w-0 grid-cols-2 overflow-hidden rounded-md border border-ds-border-muted bg-ds-card">
                 <button
                   type="button"
                   onClick={() => setPdfReviewScope('document')}
-                  className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[11.5px] font-semibold transition ${
+                  className={`flex min-w-0 items-center justify-center gap-1.5 px-2 text-[11.5px] font-semibold transition ${
                     pdfReviewScope === 'document' ? 'bg-accent/10 text-accent' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`}
                   aria-label={t('writePdfReviewDocument')}
@@ -498,13 +498,13 @@ export function WritePdfAnnotationsPanel({
                   aria-pressed={pdfReviewScope === 'document'}
                 >
                   <FileText className="h-3.5 w-3.5" strokeWidth={1.9} />
-                  <span className="hidden sm:inline">{t('writePdfReviewDocument')}</span>
+                  <span className="min-w-0 truncate">{t('writePdfReviewDocument')}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setPdfReviewScope('selection')}
                   disabled={!pdfReviewHasSelection}
-                  className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 border-l border-ds-border-muted px-2 text-[11.5px] font-semibold transition ${
+                  className={`flex min-w-0 items-center justify-center gap-1.5 border-l border-ds-border-muted px-2 text-[11.5px] font-semibold transition ${
                     pdfReviewScope === 'selection'
                       ? 'bg-accent/10 text-accent'
                       : pdfReviewHasSelection
@@ -516,22 +516,9 @@ export function WritePdfAnnotationsPanel({
                   aria-pressed={pdfReviewScope === 'selection'}
                 >
                   <SquareDashedMousePointer className="h-3.5 w-3.5" strokeWidth={1.9} />
-                  <span className="hidden sm:inline">{t('writePdfReviewSelection')}</span>
+                  <span className="min-w-0 truncate">{t('writePdfReviewSelection')}</span>
                 </button>
               </div>
-              <label className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card px-2 text-[11.5px] font-semibold text-ds-muted">
-                <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.9} />
-                <input
-                  type="number"
-                  min={PDF_REVIEW_MIN_COMMENTS}
-                  max={PDF_REVIEW_MAX_COMMENTS}
-                  value={pdfReviewMaxComments}
-                  onChange={(event) => setPdfReviewMaxComments(clampPdfReviewMaxComments(Number(event.currentTarget.value)))}
-                  onBlur={() => setPdfReviewMaxComments((value) => clampPdfReviewMaxComments(value))}
-                  className="h-6 w-10 rounded border border-ds-border-muted bg-transparent px-1 text-center font-mono text-[11.5px] text-ds-ink outline-none focus:border-accent"
-                  aria-label={t('writePdfReviewMaxComments')}
-                />
-              </label>
               <button
                 type="button"
                 onClick={() => onGeneratePdfReview?.({ scope: pdfReviewScope, maxComments: pdfReviewMaxComments })}
@@ -548,21 +535,39 @@ export function WritePdfAnnotationsPanel({
                 <span className="sr-only">{t('writePdfReviewRunShort')}</span>
               </button>
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-ds-faint">
-              <span className="truncate">
+            <div className="flex min-w-0 items-center gap-2 text-[11px] text-ds-faint">
+              <span className="min-w-0 flex-1 truncate">
                 {pdfReviewScope === 'selection' ? pdfReviewSelectionLabel || t('writePdfReviewNoSelection') : t('writePdfReviewFullPdf')}
               </span>
-              {pdfReviewNotice ? (
-                <span className={`ml-auto truncate ${pdfReviewNotice.tone === 'error' ? 'text-rose-600 dark:text-rose-300' : 'text-emerald-600 dark:text-emerald-300'}`}>
-                  {pdfReviewNotice.message}
-                </span>
-              ) : null}
+              <label className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card px-2 text-[11px] font-semibold text-ds-muted">
+                <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.9} />
+                <input
+                  type="number"
+                  min={PDF_REVIEW_MIN_COMMENTS}
+                  max={PDF_REVIEW_MAX_COMMENTS}
+                  value={pdfReviewMaxComments}
+                  onChange={(event) => setPdfReviewMaxComments(clampPdfReviewMaxComments(Number(event.currentTarget.value)))}
+                  onBlur={() => setPdfReviewMaxComments((value) => clampPdfReviewMaxComments(value))}
+                  className="h-5 w-9 rounded border border-ds-border-muted bg-transparent px-1 text-center font-mono text-[11px] text-ds-ink outline-none focus:border-accent"
+                  aria-label={t('writePdfReviewMaxComments')}
+                />
+              </label>
             </div>
+            {pdfReviewNotice ? (
+              <div
+                className={`min-w-0 truncate text-[11px] ${
+                  pdfReviewNotice.tone === 'error' ? 'text-rose-600 dark:text-rose-300' : 'text-emerald-600 dark:text-emerald-300'
+                }`}
+                role={pdfReviewNotice.tone === 'error' ? 'alert' : 'status'}
+              >
+                {pdfReviewNotice.message}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
         <div
-          className={`mt-2 grid gap-1 ${pdfMode ? 'grid-cols-4' : 'grid-cols-1'}`}
+          className={`mt-2 grid gap-1.5 ${pdfMode ? 'grid-cols-4' : 'grid-cols-1'}`}
           aria-label={t('writePdfAnnotationsContributionHint')}
         >
           {pdfMode ? (

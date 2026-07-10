@@ -83,11 +83,14 @@ class Compiler:
         self.review_threshold = review_threshold
 
     # ------------------------------------------------------------------ entry
-    def compile(self, trigger: str = "manual", scope: Any = "all") -> dict:
+    def compile(self, trigger: str = "manual", scope: Any = "all",
+                *, goal_project_key: Optional[str] = None,
+                scoped_goals: bool = False) -> dict:
         if not _LOCK.acquire(blocking=False):
             return {"skipped": True, "reason": "compile already running"}
         try:
-            return self._compile(trigger, scope)
+            return self._compile(trigger, scope, goal_project_key=goal_project_key,
+                                 scoped_goals=scoped_goals)
         except Exception as exc:
             self._mark_running_failed(exc)
             raise
@@ -109,7 +112,9 @@ class Compiler:
         except Exception:
             pass
 
-    def _compile(self, trigger: str, scope: Any) -> dict:
+    def _compile(self, trigger: str, scope: Any, *,
+                 goal_project_key: Optional[str] = None,
+                 scoped_goals: bool = False) -> dict:
         st = self.store
         run_id = new_id("run")
         st.x("INSERT INTO compile_run (id,trigger,scope,started_at) VALUES (?,?,?,?)",
@@ -137,7 +142,13 @@ class Compiler:
             orphan_mark = len(diff["orphans"])   # roll back diff orphans if the session fails
             try:
                 st.x("BEGIN")
-                touched |= self._process_session(delta, run_id, diff)
+                touched |= self._process_session(
+                    delta,
+                    run_id,
+                    diff,
+                    goal_project_key=goal_project_key,
+                    scoped_goals=scoped_goals,
+                )
                 seen = (st.get_watermark(sid) or {}).get("processed_ids", set())
                 st.set_watermark(sid, delta.dag_hash,
                                  set(seen) | delta.all_node_ids)
@@ -173,7 +184,9 @@ class Compiler:
         return {"run_id": run_id, "stats": stats, "diff": diff}
 
     # -------------------------------------------------------------- per session
-    def _process_session(self, delta, run_id: str, diff: dict) -> set[str]:
+    def _process_session(self, delta, run_id: str, diff: dict, *,
+                         goal_project_key: Optional[str],
+                         scoped_goals: bool) -> set[str]:
         st = self.store
         touched: set[str] = set()
 
@@ -186,7 +199,7 @@ class Compiler:
                 self._drop_support_origin(cid, delta.session_id, nid)
                 touched.add(cid)
 
-        goals = st.active_goals()
+        goals = st.active_goals(project_key=goal_project_key, scoped=scoped_goals)
         goal_view = [{"id": g["root_id"], "title": g["title"],
                       "description": g["description"] or ""} for g in goals]
 

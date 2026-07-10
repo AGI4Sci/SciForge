@@ -24,19 +24,33 @@ export function projectDagApiKeyFromEnv(env: Record<string, string | undefined>)
 
 /**
  * Browser deep link into the bundled project-dag web UI.
- * `view` picks the pane (home | goals | graph | compile | report | time);
+ * `view` picks the pane (home | goals | graph | compile);
  * `embed` asks the UI to use compact chrome for an app-side panel.
  */
 export function projectDagUiUrl(input: {
   serviceUrl?: string
   apiKey?: string | null
-  view?: 'home' | 'goals' | 'graph' | 'compile' | 'report' | 'time'
+  view?: 'home' | 'goals' | 'graph' | 'compile'
   embed?: boolean
+  workspaceRoot?: string | null
+  projectRoot?: string | null
+  project?: string | null
+  sessionIds?: readonly string[] | null
 }): string {
   const base = normalizeProjectDagServiceUrl(input.serviceUrl) || DEFAULT_PROJECT_DAG_SERVICE_URL
   const url = new URL(`${base}/`)
   if (input.view) url.searchParams.set('view', input.view)
   if (input.embed) url.searchParams.set('embed', '1')
+  const workspaceRoot = input.workspaceRoot?.trim()
+  const projectRoot = input.projectRoot?.trim()
+  const project = input.project?.trim()
+  if (workspaceRoot) url.searchParams.set('workspaceRoot', workspaceRoot)
+  if (projectRoot) url.searchParams.set('projectRoot', projectRoot)
+  if (project) url.searchParams.set('project', project)
+  for (const sessionId of input.sessionIds ?? []) {
+    const normalized = sessionId.trim()
+    if (normalized) url.searchParams.append('session', normalized)
+  }
   const apiKey = input.apiKey?.trim()
   if (apiKey) {
     const hash = new URLSearchParams()

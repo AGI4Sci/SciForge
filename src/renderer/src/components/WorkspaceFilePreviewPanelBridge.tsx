@@ -82,7 +82,11 @@ export function WorkspaceFilePreviewPanelBridge({
   onClose,
   onOpenDirectory
 }: WorkspaceFilePreviewPanelBridgeProps): ReactElement {
-  const route = resolveWorkspaceFilePreviewPanelBridgeRoute(target)
+  const targetPath = target?.path
+  const route = useMemo(
+    () => resolveWorkspaceFilePreviewPanelBridgeRoute(targetPath ? { path: targetPath } : null),
+    [targetPath]
+  )
 
   return (
     <WorkspacePreviewPanelShell

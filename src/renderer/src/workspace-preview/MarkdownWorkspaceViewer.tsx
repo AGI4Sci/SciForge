@@ -17,6 +17,7 @@ import {
   TextWorkspaceViewer,
   type TextWorkspaceViewerApplyEditHandler
 } from './TextWorkspaceViewer'
+import { CopyTextButton } from '../components/CopyTextButton'
 
 export type MarkdownWorkspaceViewerApplyEditHandler = (
   operation: Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>
@@ -60,7 +61,7 @@ export function buildMarkdownWorkspaceViewerModel(
   if (!isMarkdownObservation(observation)) {
     return {
       status: 'unsupported',
-      title: observation.view.title || basename(observation.file.path),
+      title: displayFilePath(observation.file.path, observation.file.workspaceRoot),
       subtitle: compactStrings([observation.view.pluginId, formatLabel(observation.view.mode)]).join(' | '),
       markdown: '',
       truncated: false,
@@ -80,8 +81,7 @@ export function buildMarkdownWorkspaceViewerModel(
 
   return {
     status: 'ready',
-    title: observation.view.title || basename(observation.file.path),
-    subtitle: compactStrings([observation.view.pluginId, formatLabel(observation.view.mode)]).join(' | '),
+    title: displayFilePath(observation.file.path, observation.file.workspaceRoot),
     markdown,
     truncated,
     editable,
@@ -99,7 +99,7 @@ export function MarkdownWorkspaceViewer({
   className,
   onApplyEdit,
   loadWorkspaceImage,
-  initialMode = 'split'
+  initialMode = 'preview'
 }: MarkdownWorkspaceViewerProps): ReactElement {
   const model = buildMarkdownWorkspaceViewerModel(observation, Boolean(onApplyEdit))
   const applyTextEdit: TextWorkspaceViewerApplyEditHandler = async (operation) => {
@@ -124,7 +124,12 @@ export function MarkdownWorkspaceViewer({
     >
       <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-semibold text-ds-text">{model.title}</h3>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h3 className="truncate text-sm font-semibold text-ds-text" title={model.title}>{model.title}</h3>
+            {model.status === 'ready' ? (
+              <CopyTextButton text={model.title} iconOnly className="-mr-1" />
+            ) : null}
+          </div>
           {model.subtitle ? <p className="mt-1 text-xs text-ds-muted">{model.subtitle}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-3">
@@ -262,8 +267,17 @@ function formatLabel(value: string): string {
     .join(' ')
 }
 
-function basename(path: string): string {
-  return path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? path
+function displayFilePath(filePath: string, workspaceRoot?: string): string {
+  if (isAbsoluteFilePath(filePath)) return filePath
+  const root = workspaceRoot?.trim()
+  if (!root) return filePath
+  return `${root.replace(/[\\/]+$/u, '')}/${filePath.replace(/^[\\/]+/u, '')}`
+}
+
+function isAbsoluteFilePath(filePath: string): boolean {
+  return filePath.startsWith('/') ||
+    filePath.startsWith('\\\\') ||
+    /^[A-Za-z]:[\\/]/u.test(filePath)
 }
 
 function compactStrings(values: Array<string | undefined | null | false>): string[] {

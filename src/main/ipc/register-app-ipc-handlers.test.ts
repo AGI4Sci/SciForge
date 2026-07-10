@@ -150,7 +150,7 @@ function waitForAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
 }
 
 function stubEvidenceDagReady(status = 200) {
-  const fetchMock = vi.fn(async () => new Response(
+  const fetchMock = vi.fn(async (_input?: string | URL | Request, _init?: RequestInit) => new Response(
     JSON.stringify({ ok: status >= 200 && status < 300, data: { service: 'evidence-dag-engine' } }),
     { status }
   ))
@@ -177,7 +177,7 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
         { status }
       )
     }
-    if (href.endsWith('/goals') && method === 'GET') {
+    if (href.includes('/goals') && method === 'GET') {
       return new Response(JSON.stringify({ ok: true, data: [] }), { status: 200 })
     }
     if (href.endsWith('/goals') && method === 'POST') {
@@ -195,6 +195,27 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+function projectDagAgentRuntime() {
+  return {
+    listThreads: vi.fn(async () => [
+      {
+        id: 'thread-1',
+        runtimeId: 'codex',
+        title: 'Project alpha thread',
+        updatedAt: '2026-07-09T00:00:00.000Z',
+        workspace: '/tmp/project-alpha'
+      },
+      {
+        id: 'thread-2',
+        runtimeId: 'codex',
+        title: 'Other project thread',
+        updatedAt: '2026-07-09T00:00:00.000Z',
+        workspace: '/tmp/other-project'
+      }
+    ])
+  } as never
 }
 
 function evidenceDagRiskDigest(highestSeverity: 'blocker' | 'major' | 'minor' | 'info' | 'none') {
@@ -746,10 +767,16 @@ describe('registerAppIpcHandlers', () => {
     const { shell } = await import('electron')
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
 
-    registerAppIpcHandlers(registerOptions({ ensureProjectDagReady }))
+    registerAppIpcHandlers(registerOptions({
+      ensureProjectDagReady,
+      agentRuntime: projectDagAgentRuntime()
+    }))
 
-    await expect(handlers.get('projectDag:view')?.({}, { view: 'graph' })).resolves.toEqual({
-      url: 'http://127.0.0.1:3898/?view=graph&embed=1#token=project-token'
+    await expect(handlers.get('projectDag:view')?.({}, {
+      view: 'graph',
+      workspaceRoot: '/tmp/project-alpha'
+    })).resolves.toEqual({
+      url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Athread-1#token=project-token'
     })
     expect(ensureProjectDagReady).toHaveBeenCalledTimes(1)
     expect(shell.openExternal).not.toHaveBeenCalled()
@@ -769,13 +796,14 @@ describe('registerAppIpcHandlers', () => {
     const { shell } = await import('electron')
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
 
-    registerAppIpcHandlers(registerOptions())
+    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
 
     await expect(handlers.get('projectDag:compile')?.({}, {
       goalTitle: 'Project alpha',
-      goalDescription: 'Find the answer.'
+      goalDescription: 'Find the answer.',
+      workspaceRoot: '/tmp/project-alpha'
     })).resolves.toEqual({
-      url: 'http://127.0.0.1:3898/?view=graph&embed=1#token=project-token',
+      url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Athread-1#token=project-token',
       runId: 'run-1',
       stats: {
         claims_added: 2,
@@ -787,21 +815,30 @@ describe('registerAppIpcHandlers', () => {
     })
     expect(shell.openExternal).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:3898/goals',
+      'http://127.0.0.1:3898/goals?workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Athread-1',
       expect.objectContaining({ method: 'GET' })
     )
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:3898/goals',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ title: 'Project alpha', description: 'Find the answer.' })
+        body: JSON.stringify({
+          title: 'Project alpha',
+          description: 'Find the answer.',
+          workspaceRoot: '/tmp/project-alpha',
+          sessions: ['codex:thread-1']
+        })
       })
     )
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:3898/compile',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ scope: 'all' })
+        body: JSON.stringify({
+          scope: ['codex:thread-1'],
+          workspaceRoot: '/tmp/project-alpha',
+          sessions: ['codex:thread-1']
+        })
       })
     )
   })
@@ -856,7 +893,7 @@ describe('registerAppIpcHandlers', () => {
     )
   })
 
-  it('runs a manual Evidence DAG audit after synchronously backfilling the active thread', async () => {
+  it('updates the active thread Evidence DAG on demand', async () => {
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
     vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
@@ -870,16 +907,7 @@ describe('registerAppIpcHandlers', () => {
       if (href.endsWith('/threads/codex%3Athread-1/ingest-trace')) {
         return new Response(JSON.stringify({
           ok: true,
-          data: { summary: { node_count: 2 }, audited: true }
-        }), { status: 200 })
-      }
-      if (href.endsWith('/threads/codex%3Athread-1/audit-runs')) {
-        return new Response(JSON.stringify({
-          ok: true,
-          data: {
-            id: 'audit:1',
-            risk_digest: { total_findings: 2, highest_severity: 'major' }
-          }
+          data: { summary: { node_count: 2 } }
         }), { status: 200 })
       }
       return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
@@ -903,15 +931,15 @@ describe('registerAppIpcHandlers', () => {
     registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
 
     await expect(
-      handlers.get('evidenceDag:audit-run')?.({}, {
-        runtimeId: 'codex',
-        threadId: 'thread-1',
-        threshold: 0.7
-      })
+      handlers.get('evidenceDag:update')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
     ).resolves.toEqual({
       threadId: 'thread-1',
       url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1#token=test-token',
-      riskDigest: { total_findings: 2, highest_severity: 'major' }
+      itemCount: 2
+    })
+    expect(agentRuntime.readThread).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      threadId: 'thread-1'
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:4897/threads/codex%3Athread-1/ingest-trace',
@@ -921,71 +949,12 @@ describe('registerAppIpcHandlers', () => {
           trace: [
             { id: 'u1', type: 'message', role: 'user', content: 'question' },
             { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-          ]
+          ],
+          rebuild: true,
+          verify: false,
+          audit: false
         })
       })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/threads/codex%3Athread-1/audit-runs',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          trigger: 'manual',
-          threshold: 0.7
-        })
-      })
-    )
-  })
-
-  it('does not run a manual Evidence DAG audit when strict backfill fails', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    const fetchMock = vi.fn(async (url: string | URL | Request) => {
-      const href = String(url)
-      if (href.endsWith('/version')) {
-        return new Response(JSON.stringify({
-          ok: true,
-          data: { service: 'evidence-dag-engine' }
-        }), { status: 200 })
-      }
-      if (href.endsWith('/threads/codex%3Athread-1/ingest-trace')) {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: { message: 'extract failed' }
-        }), { status: 500 })
-      }
-      if (href.endsWith('/threads/codex%3Athread-1/audit-runs')) {
-        return new Response(JSON.stringify({
-          ok: true,
-          data: { risk_digest: { total_findings: 0, highest_severity: 'none' } }
-        }), { status: 200 })
-      }
-      return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const agentRuntime = {
-      readThread: vi.fn(async () => ({
-        id: 'thread-1',
-        runtimeId: 'codex',
-        title: 'Thread',
-        updatedAt: '2026-06-26T00:00:00.000Z',
-        latestSeq: 1,
-        items: [{ id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' }]
-      }))
-    }
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-    await expect(
-      handlers.get('evidenceDag:audit-run')?.({}, {
-        runtimeId: 'codex',
-        threadId: 'thread-1'
-      })
-    ).rejects.toThrow(/extract failed/)
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/threads/codex%3Athread-1/audit-runs',
-      expect.anything()
     )
   })
 

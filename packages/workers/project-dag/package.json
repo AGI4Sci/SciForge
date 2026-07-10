@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Project DAG compiler: merges per-thread evidence DAGs into one goal-oriented, bi-temporal project graph with a review queue, weekly report and time-machine audit view. HTTP service (ServiceResult-only).",
+  "description": "Project DAG compiler: merges per-thread evidence DAGs into one goal-oriented project graph with a review queue and interactive graph view. HTTP service (ServiceResult-only).",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": false,

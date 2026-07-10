@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { Bot } from 'lucide-react'
@@ -98,6 +98,10 @@ import {
 } from '../lib/plugin-install-state'
 import { providerSupportsCapability } from '../store/chat-store-provider-capabilities'
 import { collectComposerChangeSummary } from '../lib/composer-change-summary'
+import {
+  WORKSPACE_FILE_PREVIEW_EVENT,
+  type WorkspaceFilePreviewDetail
+} from '../lib/workspace-file-preview'
 import {
   createRemoteChannelTaskFromTextApi,
   mirrorRemoteChannelMessageApi,
@@ -1421,22 +1425,43 @@ export function Workbench(): ReactElement {
     setRightPanelMode('file')
   }
 
-  const openFileTreeDirectory = (target: { workspaceRoot: string; path: string }): void => {
+  const openFileTreeDirectory = useCallback((target: { workspaceRoot: string; path: string }): void => {
     const nextWorkspaceRoot = normalizeWorkspaceRoot(
       target.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
     )
+    const nextPath = relativeWorkspacePath(target.path, nextWorkspaceRoot)
     const hasKnownWorkspaceGroup = workspaceReferenceGroups.some(
       (group) => normalizeWorkspaceRoot(group.workspaceRoot) === nextWorkspaceRoot
     )
     setFileTreeWorkspaceOverride(hasKnownWorkspaceGroup ? null : nextWorkspaceRoot)
     setFileTreeInitialDirectory((current) => ({
       workspaceRoot: nextWorkspaceRoot,
-      path: target.path,
+      path: nextPath,
       nonce: (current?.nonce ?? 0) + 1
     }))
     setFilePreviewTarget(null)
     setRightPanelMode('file')
-  }
+  }, [
+    activeWorkspaceReferenceRoot,
+    setFilePreviewTarget,
+    setRightPanelMode,
+    workspaceReferenceGroups,
+    workspaceRoot
+  ])
+
+  useEffect(() => {
+    const onPreviewWorkspaceDirectory = (event: Event): void => {
+      const detail = (event as CustomEvent<WorkspaceFilePreviewDetail>).detail
+      if (detail?.kind !== 'directory' || !detail.path) return
+      openFileTreeDirectory({
+        workspaceRoot: detail.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot,
+        path: detail.path
+      })
+    }
+
+    window.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceDirectory)
+    return () => window.removeEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceDirectory)
+  }, [activeWorkspaceReferenceRoot, openFileTreeDirectory, workspaceRoot])
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
@@ -2412,27 +2437,32 @@ export function Workbench(): ReactElement {
         />
         <div className="h-full min-h-0 shrink-0" style={{ width: rightSidebarWidth }}>
           <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-            {rightPanelMode === 'file' && filePreviewTarget ? (
-              <WorkspaceFilePreviewPanelBridge
-                target={filePreviewTarget}
-                workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
-                className="h-full max-h-full w-full"
-                annotationQuestionBridge={annotationQuestionBridge}
-                onClose={() => setFilePreviewTarget(null)}
-                onOpenDirectory={openFileTreeDirectory}
-              />
-            ) : rightPanelMode === 'file' ? (
-              <ChatFileTreePanel
-                workspaceRoot={fileTreeWorkspaceRoot}
-                workspaceGroups={fileTreeWorkspaceGroups}
-                selectedPath={filePreviewTarget?.path}
-                initialDirectory={fileTreeInitialDirectory}
-                selectedReferences={composerFileReferences}
-                className="h-full max-h-full w-full"
-                onPreviewFile={previewWorkspaceReference}
-                onAddReference={addComposerFileReference}
-                onCollapse={closeRightPanel}
-              />
+            {rightPanelMode === 'file' ? (
+              <div className="relative h-full max-h-full w-full overflow-hidden">
+                <ChatFileTreePanel
+                  workspaceRoot={fileTreeWorkspaceRoot}
+                  workspaceGroups={fileTreeWorkspaceGroups}
+                  selectedPath={filePreviewTarget?.path}
+                  initialDirectory={fileTreeInitialDirectory}
+                  selectedReferences={composerFileReferences}
+                  className={`h-full max-h-full w-full ${filePreviewTarget ? 'hidden' : ''}`}
+                  onPreviewFile={previewWorkspaceReference}
+                  onAddReference={addComposerFileReference}
+                  onCollapse={closeRightPanel}
+                />
+                {filePreviewTarget ? (
+                  <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
+                    <WorkspaceFilePreviewPanelBridge
+                      target={filePreviewTarget}
+                      workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
+                      className="h-full max-h-full w-full"
+                      annotationQuestionBridge={annotationQuestionBridge}
+                      onClose={() => setFilePreviewTarget(null)}
+                      onOpenDirectory={openFileTreeDirectory}
+                    />
+                  </Suspense>
+                ) : null}
+              </div>
             ) : rightPanelMode === 'sdd-ai' && activeSddDraft ? (
               <SddAssistantPanel
                 draft={activeSddDraft}

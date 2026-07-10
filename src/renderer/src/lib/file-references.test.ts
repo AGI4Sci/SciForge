@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createFileReferenceHref,
   FILE_REFERENCE_SCHEME,
+  findFileReferences,
   isFileReferenceHref,
   LEGACY_FILE_REFERENCE_SCHEME,
   parseFileReferenceHref
@@ -9,14 +10,15 @@ import {
 
 describe('file reference hrefs', () => {
   it('generates neutral SciForge file-reference hrefs', () => {
-    const href = createFileReferenceHref({ path: 'src/main.ts', line: 12, column: 4 })
+    const href = createFileReferenceHref({ path: 'src/main.ts', line: 12, column: 4, kind: 'file' })
 
     expect(href.startsWith(FILE_REFERENCE_SCHEME)).toBe(true)
     expect(href.startsWith(LEGACY_FILE_REFERENCE_SCHEME)).toBe(false)
     expect(parseFileReferenceHref(href)).toEqual({
       path: 'src/main.ts',
       line: 12,
-      column: 4
+      column: 4,
+      kind: 'file'
     })
   })
 
@@ -34,5 +36,57 @@ describe('file reference hrefs', () => {
     expect(isFileReferenceHref(`${FILE_REFERENCE_SCHEME}//open?line=3`)).toBe(true)
     expect(parseFileReferenceHref(`${FILE_REFERENCE_SCHEME}//open?line=3`)).toBeNull()
     expect(isFileReferenceHref('https://example.test/src/main.ts')).toBe(false)
+  })
+})
+
+describe('file reference detection', () => {
+  it('detects bare workspace filenames in inline code or prose', () => {
+    expect(findFileReferences('打开 01_search_strategy.md 查看细节')).toEqual([
+      {
+        start: 3,
+        end: 24,
+        text: '01_search_strategy.md',
+        target: {
+          path: '01_search_strategy.md',
+          kind: 'file'
+        }
+      }
+    ])
+  })
+
+  it('detects directory paths and trims punctuation from the target', () => {
+    const text = '已写入 molclaw_demo_scenes/scene_01_target_discovery/outputs/:'
+
+    expect(findFileReferences(text)).toEqual([
+      {
+        start: 4,
+        end: 58,
+        text: 'molclaw_demo_scenes/scene_01_target_discovery/outputs/',
+        target: {
+          path: 'molclaw_demo_scenes/scene_01_target_discovery/outputs',
+          kind: 'directory'
+        }
+      }
+    ])
+  })
+
+  it('keeps line and column suffixes on file references', () => {
+    expect(findFileReferences('见 src/App.tsx:42:7')).toEqual([
+      {
+        start: 2,
+        end: 18,
+        text: 'src/App.tsx:42:7',
+        target: {
+          path: 'src/App.tsx',
+          line: 42,
+          column: 7,
+          kind: 'file'
+        }
+      }
+    ])
+  })
+
+  it('does not turn URL paths into local file references', () => {
+    expect(findFileReferences('打开 https://example.test/src/App.tsx 查看')).toEqual([])
   })
 })

@@ -151,6 +151,82 @@ describe('thread event sink binding', () => {
     expect(getState().currentTurnId).toBe('turn-current')
   })
 
+  it('marks the active thread running from turn lifecycle before the next list refresh', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-11T00:00:05.000Z'))
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      busy: false,
+      currentTurnId: null,
+      threads: [{
+        id: 'thread-current',
+        title: 'Current',
+        updatedAt: '2026-06-11T00:00:00.000Z',
+        model: 'gpt-5',
+        mode: 'agent',
+        workspace: '/workspace/sciforge',
+        status: 'idle'
+      }]
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    sink.onTurnLifecycle?.({
+      threadId: 'thread-current',
+      turnId: 'turn-running',
+      state: 'running',
+      createdAt: '2026-06-11T00:00:03.000Z'
+    })
+
+    expect(getState().busy).toBe(true)
+    expect(getState().currentTurnId).toBe('turn-running')
+    expect(getState().threads[0]).toMatchObject({
+      id: 'thread-current',
+      status: 'running',
+      latestTurnId: 'turn-running',
+      latestTurnStatus: 'running',
+      updatedAt: '2026-06-11T00:00:03.000Z'
+    })
+  })
+
+  it('clears the active thread running marker from terminal lifecycle before the next list refresh', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-11T00:00:08.000Z'))
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      busy: true,
+      currentTurnId: 'turn-running',
+      liveAssistant: 'done',
+      threads: [{
+        id: 'thread-current',
+        title: 'Current',
+        updatedAt: '2026-06-11T00:00:00.000Z',
+        model: 'gpt-5',
+        mode: 'agent',
+        workspace: '/workspace/sciforge',
+        status: 'running',
+        latestTurnId: 'turn-running',
+        latestTurnStatus: 'running'
+      }]
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    sink.onTurnLifecycle?.({
+      threadId: 'thread-current',
+      turnId: 'turn-running',
+      state: 'completed',
+      createdAt: '2026-06-11T00:00:07.000Z'
+    })
+
+    expect(getState().busy).toBe(false)
+    expect(getState().threads[0]).toMatchObject({
+      id: 'thread-current',
+      status: 'idle',
+      latestTurnId: 'turn-running',
+      latestTurnStatus: 'completed',
+      updatedAt: '2026-06-11T00:00:07.000Z'
+    })
+  })
+
   it('ignores queued callbacks after a stream has been aborted', () => {
     const { getState, set, get } = makeSinkHarness({
       activeThreadId: 'thread-current',

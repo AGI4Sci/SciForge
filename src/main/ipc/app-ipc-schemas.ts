@@ -2125,19 +2125,22 @@ export const evidenceDagViewPayloadSchema = z
   })
   .strict()
 
-export const evidenceDagAuditRunPayloadSchema = z
+export const evidenceDagUpdatePayloadSchema = z
   .object({
     threadId: trimmedString(MAX_ID_LENGTH),
-    runtimeId: agentRuntimeIdSchema,
-    threshold: z.number().min(0).max(1).optional()
+    runtimeId: agentRuntimeIdSchema
   })
   .strict()
 
-const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'compile', 'report', 'time'])
+const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'compile'])
 
 export const projectDagViewPayloadSchema = z
   .object({
-    view: projectDagViewNameSchema.optional()
+    view: projectDagViewNameSchema.optional(),
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    project: optionalTrimmedString(MAX_ID_LENGTH),
+    sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional()
   })
   .strict()
 
@@ -2145,6 +2148,10 @@ export const projectDagCompilePayloadSchema = z
   .object({
     goalTitle: optionalTrimmedString(500),
     goalDescription: optionalTrimmedString(4000),
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    project: optionalTrimmedString(MAX_ID_LENGTH),
+    sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
     scope: z.union([
       z.literal('all'),
       z.array(trimmedString(MAX_ID_LENGTH)).max(500)

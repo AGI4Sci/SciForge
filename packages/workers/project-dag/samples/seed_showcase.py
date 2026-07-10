@@ -11,8 +11,7 @@ Theme: LLM hallucination research — small (8 alive claims) but每个功能都�
   * one benchmark report as the SOLE evidence of two -> shared evidence ×2 + ⚡2
     claims                                              (dominator load-bearing)
   * single-source claims                             -> fragile amber rings
-  * a human-attested evidence wired to a claim       -> 👤 card
-(`invalidated` never shows in the alive graph by design — see time machine.)
+(`invalidated` never shows in the alive graph by design.)
 
 Usage:  python samples/seed_showcase.py <db_path> <session_dir>
 """
@@ -74,12 +73,8 @@ def make_judge() -> StubJudge:
         opposed = ("降低" in a and "反升" in b) or ("反升" in a and "降低" in b)
         return {"contradicts": scaling and opposed, "confidence": 0.9}
 
-    def human_extract(p):
-        return {"description": p["text"], "mentioned_entities": [], "happened_at": None}
-
     return StubJudge({"distill": distill, "entity_same": entity_same,
-                      "claim_equiv": claim_equiv, "contradiction": contradiction,
-                      "human_extract": human_extract})
+                      "claim_equiv": claim_equiv, "contradiction": contradiction})
 
 
 def write_session(session_dir: str, sid: str, rows: list[tuple[str, str, str]]) -> None:
@@ -167,9 +162,6 @@ def main() -> None:
     # 跨组派生（紫色指向）：RAG 缓解结论 derived_from 成因结论
     st.add_edge(rag, cause, "derived_from", meta={"via": "showcase"})
 
-    # 人类线下操作 → 👤 证据挂到 RAG 结论
-    ha = e.register_human_action("在内部评测集上复跑了 RAG 基线，幻觉率下降幅度与论文一致")
-    st.add_edge(ha["evidence"], rag, "supports", meta={"via": "showcase"})
     st.conn.commit()
     full_reconcile(st)
 

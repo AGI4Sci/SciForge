@@ -7,7 +7,6 @@ Covers the M1-M3 acceptance criteria from the construction plan:
   * injected contradiction -> weaker claim invalidated with a readable rule
   * incremental reconcile agrees with the full relabel (safety net diff empty)
   * history rewrite (vanished node id) -> old claim loses support, invalidated
-  * human action registration + review queue + time machine snapshot
 """
 from __future__ import annotations
 
@@ -65,18 +64,14 @@ def make_judge() -> StubJudge:
                ("does not improve" in a and "improves" in b)
         return {"contradicts": flip, "confidence": 0.9}
 
-    def human_extract(p):
-        return {"description": p["text"], "mentioned_entities": [],
-                "happened_at": None}
-
     return StubJudge({"distill": distill, "entity_same": entity_same,
-                      "claim_equiv": claim_equiv, "contradiction": contradiction,
-                      "human_extract": human_extract})
+                      "claim_equiv": claim_equiv, "contradiction": contradiction})
 
 
-def write_session(session_dir: str, sid: str, claims: list[tuple[str, str, str]]) -> None:
+def write_session(session_dir: str, sid: str, claims: list[tuple[str, str, str]],
+                  meta: dict | None = None) -> None:
     """claims: [(claim_text, source_text, credibility)]"""
-    g = ThreadGraph(sid)
+    g = ThreadGraph(sid, meta=meta)
     for claim_text, source_text, cred in claims:
         s = g.add_or_get_node(NodeType.SOURCE, source_text, credibility=cred)
         c = g.add_or_get_node(NodeType.CLAIM, claim_text)
@@ -346,20 +341,6 @@ class CompileTests(unittest.TestCase):
         c = self.engine.claims(goal_id=self.goal["root_id"])[0]
         self.assertEqual(c["status"], "fragile")
 
-    # human action + review + time machine
-    def test_human_action_and_snapshot(self):
-        out = self.engine.register_human_action("昨晚在服务器跑通了 pipeline v3")
-        self.assertEqual(out["attestation_method"], "self_report")
-        pend = self.engine.review_items()
-        self.assertTrue(any(i["item_type"] == "human_evidence" for i in pend))
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        snap_now = self.engine.snapshot("2999-01-01T00:00:00Z")
-        self.assertEqual(len(snap_now["claims"]), 1)
-        snap_past = self.engine.snapshot("2000-01-01T00:00:00Z")
-        self.assertEqual(len(snap_past["claims"]), 0)
-
     # goal versioning marks claims for re-attribution
     def test_goal_versioning(self):
         write_session(self.sessions, "s1",
@@ -372,16 +353,6 @@ class CompileTests(unittest.TestCase):
         tree = self.engine.goal_tree()
         self.assertEqual(tree[0]["title"], "新标题")
 
-    # weekly report carries claim ids on every progress line
-    def test_weekly_report(self):
-        write_session(self.sessions, "s1",
-                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
-        self.engine.compile()
-        rep = self.engine.weekly_report("2000-01-01", "2999-01-01")
-        self.assertEqual(len(rep["added"]), 1)
-        cid = rep["added"][0]["id"]
-        self.assertIn(f"[{cid}]", rep["markdown"])
-
     # project analysis reuses evidence-dag dominator machinery
     def test_project_analysis(self):
         write_session(self.sessions, "s1",
@@ -390,6 +361,75 @@ class CompileTests(unittest.TestCase):
         a = self.engine.analysis()
         self.assertEqual(a["summary"]["n_sources"], 1)
         self.assertTrue(a["fragile"])  # single source -> structurally fragile
+
+    def test_graph_filters_by_explicit_sessions_without_losing_provenance(self):
+        write_session(self.sessions, "s1",
+                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
+        write_session(self.sessions, "s2",
+                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
+        self.engine.compile()
+
+        graph = self.engine.graph(sessions=["s1"])
+
+        self.assertEqual(graph["scope"]["sessions"], ["s1"])
+        self.assertEqual([c["statement"] for c in graph["claims"]],
+                         ["pipeline v3 improves accuracy on x2"])
+        self.assertEqual(graph["claims"][0]["sessions"], ["s1"])
+        self.assertEqual(len(graph["evidence"]), 1)
+        self.assertIn("s1#", graph["evidence"][0]["content_ref"])
+
+    def test_analysis_filters_by_explicit_sessions(self):
+        write_session(self.sessions, "s1",
+                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
+        write_session(self.sessions, "s2",
+                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
+        self.engine.compile()
+
+        a = self.engine.analysis(sessions=["s1"])
+
+        self.assertEqual(a["scope"]["sessions"], ["s1"])
+        self.assertEqual(a["summary"]["n_derived"], 1)
+        self.assertEqual(a["summary"]["n_sources"], 1)
+
+    def test_project_scoped_compile_does_not_fall_back_to_all_sessions(self):
+        write_session(self.sessions, "s1",
+                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
+        write_session(self.sessions, "s2",
+                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
+
+        r = self.engine.compile(workspace_root="/tmp/project-a")
+
+        self.assertEqual(r["diff"]["sessions"], [])
+        self.assertEqual(r["stats"]["claims_added"], 0)
+
+        self.engine.create_goal("项目 A", workspace_root="/tmp/project-a")
+        r = self.engine.compile(workspace_root="/tmp/project-a", sessions=["s1"])
+
+        self.assertEqual(r["diff"]["sessions"], ["s1"])
+        self.assertEqual(r["stats"]["claims_added"], 1)
+
+    def test_explicit_session_scope_filters_without_workspace_metadata(self):
+        write_session(self.sessions, "s1",
+                      [("pipeline v3 improves accuracy on x2", "paper A", "high")])
+        write_session(self.sessions, "s2",
+                      [("pipeline v4 improves accuracy on y3", "paper B", "high")])
+
+        r = self.engine.compile(sessions=["s1"])
+        graph = self.engine.graph(sessions=["s1"])
+
+        self.assertEqual(r["diff"]["sessions"], ["s1"])
+        self.assertEqual(graph["scope"]["strategy"], "explicit-sessions")
+        self.assertEqual(graph["scope"]["sessions"], ["s1"])
+        self.assertEqual([c["statement"] for c in graph["claims"]],
+                         ["pipeline v3 improves accuracy on x2"])
+
+    def test_goal_tree_uses_project_scoped_goals(self):
+        project_goal = self.engine.create_goal("项目 A", workspace_root="/tmp/project-a")
+        self.engine.create_goal("项目 B", workspace_root="/tmp/project-b")
+
+        tree = self.engine.goal_tree(workspace_root="/tmp/project-a", sessions=["s1"])
+
+        self.assertEqual([g["root_id"] for g in tree], [project_goal["root_id"]])
 
 
 if __name__ == "__main__":

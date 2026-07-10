@@ -1,5 +1,5 @@
 import type { FormEvent, MouseEvent as ReactMouseEvent, ReactElement } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
@@ -72,6 +72,43 @@ type SidebarProjectsSectionProps = {
 }
 
 export type SidebarWorkspaceGroup = [workspacePath: string, threads: NormalizedThread[]]
+
+export function sidebarThreadLooksRunning(
+  thread: NormalizedThread,
+  options: {
+    activeThreadId: string | null
+    busy: boolean
+    watchTurnCompletion: Record<string, boolean>
+  }
+): boolean {
+  return thread.status?.trim().toLowerCase() === 'running' ||
+    (options.activeThreadId === thread.id && options.busy) ||
+    options.watchTurnCompletion[thread.id] === true
+}
+
+function threadUpdatedAtMs(thread: NormalizedThread): number {
+  const timestamp = Date.parse(thread.updatedAt)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+export function sortSidebarThreadsForDisplay(
+  threads: NormalizedThread[],
+  runningSortKeys: ReadonlyMap<string, number> = new Map()
+): NormalizedThread[] {
+  return threads
+    .map((thread, index) => ({
+      thread,
+      index,
+      sortKey: runningSortKeys.get(thread.id) ?? threadUpdatedAtMs(thread),
+      updatedAt: threadUpdatedAtMs(thread)
+    }))
+    .sort((a, b) =>
+      b.sortKey - a.sortKey ||
+      b.updatedAt - a.updatedAt ||
+      a.index - b.index
+    )
+    .map(({ thread }) => thread)
+}
 
 type ThreadContextMenuState = {
   thread: NormalizedThread
@@ -201,6 +238,7 @@ export function SidebarProjectsSection({
   const [searchOpen, setSearchOpen] = useState(false)
   const [threadContextMenu, setThreadContextMenu] = useState<ThreadContextMenuState | null>(null)
   const [renameThreadDialog, setRenameThreadDialog] = useState<RenameThreadDialogState | null>(null)
+  const runningThreadSortKeysRef = useRef<Map<string, number>>(new Map())
 
   const groups = useMemo(() => {
     return buildSidebarWorkspaceGroups({
@@ -212,6 +250,30 @@ export function SidebarProjectsSection({
       hiddenWorkspaceRoots
     })
   }, [hiddenWorkspaceRoots, searchQuery, showArchived, threads, workspaceRoot, workspaceRoots])
+
+  const runningThreadIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const thread of threads) {
+      if (sidebarThreadLooksRunning(thread, { activeThreadId, busy, watchTurnCompletion })) {
+        ids.add(thread.id)
+      }
+    }
+    return ids
+  }, [activeThreadId, busy, threads, watchTurnCompletion])
+
+  const runningThreadSortKeys = useMemo(() => {
+    const next = new Map(runningThreadSortKeysRef.current)
+    for (const id of next.keys()) {
+      if (!runningThreadIds.has(id)) next.delete(id)
+    }
+    for (const thread of threads) {
+      if (runningThreadIds.has(thread.id) && !next.has(thread.id)) {
+        next.set(thread.id, threadUpdatedAtMs(thread))
+      }
+    }
+    runningThreadSortKeysRef.current = next
+    return next
+  }, [runningThreadIds, threads])
 
   const searchVisible = searchOpen || searchQuery.trim().length > 0
   const allGroupsCollapsed = groups.length > 0 && groups.every(([workspacePath]) => collapsed[workspacePath] === true)
@@ -427,9 +489,7 @@ export function SidebarProjectsSection({
           const folderName = workspaceLabelFromPath(workspacePath)
           const workspaceContext = workspaceContextLabel(workspacePath, folderName)
           const isCollapsed = collapsed[workspacePath] === true
-          const sortedThreads = [...list].sort(
-            (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
-          )
+          const sortedThreads = sortSidebarThreadsForDisplay(list, runningThreadSortKeys)
           const workspaceExpanded = expandedWorkspaces[workspacePath] === true
           const hasOverflow = sortedThreads.length > 5
           const visibleThreads = workspaceExpanded
@@ -506,10 +566,11 @@ export function SidebarProjectsSection({
                     </div>
                   ) : (
                     visibleThreads.map((thread) => {
-                      const showRunning =
-                        thread.status?.trim().toLowerCase() === 'running' ||
-                        (activeThreadId === thread.id && busy) ||
-                        watchTurnCompletion[thread.id] === true
+                      const showRunning = sidebarThreadLooksRunning(thread, {
+                        activeThreadId,
+                        busy,
+                        watchTurnCompletion
+                      })
                       const remoteBinding = botThreadBindings.get(thread.id)
                       const hasRemoteState = Boolean(remoteBinding) || botWatchedThreadIds.has(thread.id)
                       const remoteStatusKind = hasRemoteState
@@ -645,7 +706,7 @@ function ThreadRow({
       ? t('sidebarThreadForkedFrom', { title: forkedFromTitle })
       : t('sidebarThreadForked')
     : ''
-  const updatedLabel = formatRelativeTime(thread.updatedAt, locale)
+  const updatedLabel = showRunning ? t('sidebarThreadRunning') : formatRelativeTime(thread.updatedAt, locale)
   const remoteStatusLabel = remoteStatusKind ? sidebarRemoteStatusLabel(remoteStatusKind, t) : ''
   const remoteAriaLabel = remoteStatusKind
     ? remoteBinding?.providerLabel
@@ -658,7 +719,6 @@ function ThreadRow({
   const ariaLabel = [
     thread.title,
     updatedLabel,
-    showRunning ? t('sidebarThreadRunning') : '',
     showUnreadDot ? t('sidebarThreadUnread') : '',
     remoteAriaLabel,
     remoteActive ? t('sidebarThreadRemoteActive') : '',

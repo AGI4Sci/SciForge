@@ -4,22 +4,19 @@ APIs answer UNAVAILABLE rather than running open on localhost).
 
 Endpoints:
   GET  /health | /version | /               (bundled UI)
-  POST /compile                {"scope":"all"|["sid",...]}
-  POST /full-check                          weekly safety net, manual trigger
+  POST /compile                {"scope":"all"|["sid",...],"workspaceRoot?","projectRoot?","project?"}
+  POST /full-check                          full relabel safety net, manual trigger
   GET  /compile-runs           ?limit=20
   GET  /compile-runs/{id}
-  GET  /goals                               goal tree + claim stats
-  POST /goals                  {"title","description?","parent_root?"}
+  GET  /goals                  ?workspaceRoot=&projectRoot=&project=&session=
+  POST /goals                  {"title","description?","parent_root?","workspaceRoot?","projectRoot?","project?","sessions?"}
   POST /goals/{root}/update    {"title?","description?","status?"}
-  GET  /claims                 ?goal=&as_of=
+  GET  /claims                 ?goal=&workspaceRoot=&projectRoot=&project=&session=
   GET  /claims/{id}
-  GET  /analysis               ?goal=&threshold=0.7   (reused dominator analysis)
-  GET  /graph                                         alive goals/claims/evidence/edges
+  GET  /analysis               ?goal=&threshold=0.7&workspaceRoot=&projectRoot=&project=
+  GET  /graph                  ?workspaceRoot=&projectRoot=&project=
   GET  /review                 ?status=pending
   POST /review/{id}/resolve    {"decision","note?","extra?"}
-  POST /human-actions          {"text","file_path?","log_path?"}
-  GET  /report                 ?start=YYYY-MM-DD&end=YYYY-MM-DD
-  GET  /snapshot               ?as_of=ISO8601          (time machine)
 """
 from __future__ import annotations
 
@@ -29,7 +26,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
@@ -46,6 +43,24 @@ MAX_BODY = int(os.environ.get("SCIFORGE_PROJECT_DAG_MAX_BODY_BYTES", 1_048_576))
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _session_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = value.split(",")
+    elif isinstance(value, list):
+        values = []
+        for item in value:
+            values.extend(item.split(",") if isinstance(item, str) else [item])
+    else:
+        values = [value]
+    return [v.strip() for v in values if isinstance(v, str) and v.strip()]
+
+
+def _query_sessions(raw_query: dict[str, list[str]]) -> list[str]:
+    return _session_list(raw_query.get("session", []) + raw_query.get("sessions", []))
 
 
 def ok(data: Any, op: str, rid: str, started: str) -> dict:
@@ -97,7 +112,9 @@ class Handler(BaseHTTPRequestHandler):
         rid, started = uuid.uuid4().hex[:8], _now()
         u = urlparse(self.path)
         parts = [p for p in u.path.split("/") if p]
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        raw_q = parse_qs(u.query)
+        q = {k: v[0] for k, v in raw_q.items()}
+        q["_sessions"] = _query_sessions(raw_q)
         op = f"{method} {u.path}"
 
         if u.path == "/health":
@@ -139,7 +156,12 @@ class Handler(BaseHTTPRequestHandler):
         e = self.engine
         if method == "POST" and parts == ["compile"]:
             b = self._body()
-            return e.compile("manual", b.get("scope", "all"))
+            return e.compile("manual", b.get("scope", "all"),
+                             workspace_root=b.get("workspaceRoot") or b.get("workspace_root"),
+                             project_root=b.get("projectRoot") or b.get("project_root"),
+                             project=b.get("project"),
+                             sessions=_session_list(
+                                 b.get("sessions") or b.get("sessionIds") or b.get("session")))
         if method == "POST" and parts == ["full-check"]:
             return e.full_check()
         if method == "GET" and parts == ["compile-runs"]:
@@ -147,22 +169,41 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and len(parts) == 2 and parts[0] == "compile-runs":
             return e.compile_run(parts[1])
         if method == "GET" and parts == ["goals"]:
-            return e.goal_tree()
+            return e.goal_tree(workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
+                               project_root=q.get("projectRoot") or q.get("project_root"),
+                               project=q.get("project"),
+                               sessions=q.get("_sessions"))
         if method == "POST" and parts == ["goals"]:
             b = self._body()
             return e.create_goal(b["title"], b.get("description", ""),
-                                 b.get("parent_root"))
+                                 b.get("parent_root"),
+                                 workspace_root=b.get("workspaceRoot") or b.get("workspace_root"),
+                                 project_root=b.get("projectRoot") or b.get("project_root"),
+                                 project=b.get("project"),
+                                 sessions=_session_list(
+                                     b.get("sessions") or b.get("sessionIds") or b.get("session")))
         if method == "POST" and len(parts) == 3 and parts[0] == "goals" \
                 and parts[2] == "update":
             return e.update_goal(parts[1], **self._body())
         if method == "GET" and parts == ["claims"]:
-            return e.claims(goal_id=q.get("goal"), as_of=q.get("as_of"))
+            return e.claims(goal_id=q.get("goal"),
+                            workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
+                            project_root=q.get("projectRoot") or q.get("project_root"),
+                            project=q.get("project"),
+                            sessions=q.get("_sessions"))
         if method == "GET" and len(parts) == 2 and parts[0] == "claims":
             return e.claim_detail(parts[1])
         if method == "GET" and parts == ["analysis"]:
-            return e.analysis(q.get("goal"), float(q.get("threshold", 0.7)))
+            return e.analysis(q.get("goal"), float(q.get("threshold", 0.7)),
+                              workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
+                              project_root=q.get("projectRoot") or q.get("project_root"),
+                              project=q.get("project"),
+                              sessions=q.get("_sessions"))
         if method == "GET" and parts == ["graph"]:
-            return e.graph()
+            return e.graph(workspace_root=q.get("workspaceRoot") or q.get("workspace_root"),
+                           project_root=q.get("projectRoot") or q.get("project_root"),
+                           project=q.get("project"),
+                           sessions=q.get("_sessions"))
         if method == "GET" and parts == ["review"]:
             return e.review_items(q.get("status", "pending"))
         if method == "POST" and len(parts) == 3 and parts[0] == "review" \
@@ -170,21 +211,6 @@ class Handler(BaseHTTPRequestHandler):
             b = self._body()
             return e.resolve_review(parts[1], b["decision"], b.get("note", ""),
                                     b.get("extra"))
-        if method == "POST" and parts == ["human-actions"]:
-            b = self._body()
-            return e.register_human_action(b["text"],
-                                           file_path=b.get("file_path"),
-                                           log_path=b.get("log_path"))
-        if method == "GET" and parts == ["report"]:
-            start = q.get("start") or (date.today() -
-                                       timedelta(days=date.today().weekday())).isoformat()
-            end = q.get("end") or (date.fromisoformat(start) +
-                                   timedelta(days=7)).isoformat()
-            return e.weekly_report(start, end)
-        if method == "GET" and parts == ["snapshot"]:
-            if "as_of" not in q:
-                raise ValueError("as_of required")
-            return e.snapshot(q["as_of"])
         return None
 
     def do_GET(self):

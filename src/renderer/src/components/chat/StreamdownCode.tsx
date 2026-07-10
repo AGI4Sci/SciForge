@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent,
   type DetailedHTMLProps,
   type HTMLAttributes,
   type ReactNode
@@ -138,11 +139,7 @@ function InlineFileReferenceCode({
     )
   }
 
-  const resolvedTarget = { ...target, path: validation.path }
-
-  const handlePreview = (): void => {
-    previewWorkspaceFile({ ...resolvedTarget, workspaceRoot })
-  }
+  const resolvedTarget = { ...target, path: validation.path, kind: validation.kind }
 
   const handleOpenEditor = (): void => {
     void openWorkspacePathInEditor(resolvedTarget, workspaceRoot).then((result) => {
@@ -153,6 +150,14 @@ function InlineFileReferenceCode({
         })?.catch(() => undefined)
       }
     })
+  }
+
+  const handlePreview = (event: MouseEvent<HTMLButtonElement>): void => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey) {
+      handleOpenEditor()
+      return
+    }
+    previewWorkspaceFile({ ...resolvedTarget, workspaceRoot })
   }
 
   return (

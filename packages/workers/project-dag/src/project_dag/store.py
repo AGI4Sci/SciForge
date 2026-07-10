@@ -1,8 +1,8 @@
 """SQLite storage for the project DAG.
 
 Invariants (the whole audit story rests on these):
-  * NOTHING is ever DELETEd. Invalidation closes a bi-temporal window by
-    setting `t_invalid`; the time-machine view is a plain filter.
+  * Claim/evidence history is append-only. Invalidation closes a validity
+    window by setting `t_invalid`.
   * Goals are versioned, never edited in place.
   * The watermark is a per-session (thread) content hash + the set of
     node ids already promoted — evidence-dag node ids are content-addressed,
@@ -27,9 +27,11 @@ CREATE TABLE IF NOT EXISTS goal (
   status      TEXT NOT NULL DEFAULT 'open'
               CHECK(status IN ('open','achieved','at_risk','blocked','abandoned')),
   version     INTEGER NOT NULL DEFAULT 1,
+  project_key TEXT,
   t_created   TEXT NOT NULL,
   t_expired   TEXT                      -- non-null: replaced by a newer version
 );
+CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key);
 
 CREATE TABLE IF NOT EXISTS entity (
   id             TEXT PRIMARY KEY,
@@ -75,23 +77,13 @@ CREATE TABLE IF NOT EXISTS evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_hash ON evidence(source_hash);
 
-CREATE TABLE IF NOT EXISTS activity (
-  id            TEXT PRIMARY KEY,
-  activity_type TEXT NOT NULL CHECK(activity_type IN
-                ('reasoning','tool_call','human_action')),
-  description   TEXT,
-  session_id    TEXT,
-  started_at    TEXT,
-  ended_at      TEXT
-);
-
 CREATE TABLE IF NOT EXISTS edge (
   id        TEXT PRIMARY KEY,
   src       TEXT NOT NULL,
   dst       TEXT NOT NULL,
   edge_type TEXT NOT NULL CHECK(edge_type IN (
     'decomposes_to','addresses','supports','contradicts','derived_from',
-    'generated_by','used','same_as','mentions')),
+    'same_as','mentions')),
   t_valid   TEXT NOT NULL,
   t_invalid TEXT,
   meta      TEXT                          -- JSON: adjudication reason, confidence...
@@ -119,7 +111,7 @@ CREATE TABLE IF NOT EXISTS watermark (
 CREATE TABLE IF NOT EXISTS review_item (
   id          TEXT PRIMARY KEY,
   item_type   TEXT NOT NULL CHECK(item_type IN
-              ('entity_merge','claim_merge','conflict','human_evidence','orphan_claims')),
+              ('entity_merge','claim_merge','conflict','orphan_claims')),
   payload     TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'pending'
               CHECK(status IN ('pending','accepted','rejected','deferred')),
@@ -169,6 +161,7 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
 
     def close(self) -> None:
@@ -184,6 +177,12 @@ class Store:
 
     def x(self, sql: str, args: Iterable[Any] = ()) -> None:
         self.conn.execute(sql, tuple(args))
+
+    def _migrate(self) -> None:
+        columns = {row["name"] for row in self.q("PRAGMA table_info(goal)")}
+        if "project_key" not in columns:
+            self.x("ALTER TABLE goal ADD COLUMN project_key TEXT")
+        self.x("CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key)")
 
     # --- edges ----------------------------------------------------------------
     def add_edge(self, src: str, dst: str, edge_type: str,
@@ -211,11 +210,13 @@ class Store:
 
     # --- goals ----------------------------------------------------------------
     def create_goal(self, title: str, *, description: str = "",
-                    parent_root: Optional[str] = None, status: str = "open") -> dict:
+                    parent_root: Optional[str] = None, status: str = "open",
+                    project_key: Optional[str] = None) -> dict:
         gid = new_id("goal")
         t = now_iso()
-        self.x("INSERT INTO goal (id,root_id,parent_id,title,description,status,version,t_created)"
-               " VALUES (?,?,?,?,?,?,1,?)", (gid, gid, parent_root, title, description, status, t))
+        self.x("INSERT INTO goal (id,root_id,parent_id,title,description,status,version,project_key,t_created)"
+               " VALUES (?,?,?,?,?,?,1,?,?)",
+               (gid, gid, parent_root, title, description, status, project_key, t))
         self.conn.commit()
         return self.q1("SELECT * FROM goal WHERE id=?", (gid,))  # type: ignore[return-value]
 
@@ -229,18 +230,26 @@ class Store:
         new = {**cur, **{k: v for k, v in changes.items()
                          if k in ("title", "description", "status", "parent_id")}}
         nid = new_id("goal")
-        self.x("INSERT INTO goal (id,root_id,parent_id,title,description,status,version,t_created)"
-               " VALUES (?,?,?,?,?,?,?,?)",
+        self.x("INSERT INTO goal (id,root_id,parent_id,title,description,status,version,project_key,t_created)"
+               " VALUES (?,?,?,?,?,?,?,?,?)",
                (nid, root_id, new["parent_id"], new["title"], new["description"],
-                new["status"], cur["version"] + 1, t))
+                new["status"], cur["version"] + 1, cur.get("project_key"), t))
         # claims pointing at this goal must be re-checked next compile
         self.x("UPDATE claim SET needs_regoal=1 WHERE goal_id=? AND t_invalid IS NULL", (root_id,))
         self.conn.commit()
         return self.q1("SELECT * FROM goal WHERE id=?", (nid,))  # type: ignore[return-value]
 
-    def active_goals(self) -> list[dict]:
-        return self.q("SELECT * FROM goal WHERE t_expired IS NULL "
-                      "AND status NOT IN ('abandoned') ORDER BY t_created")
+    def active_goals(self, *, project_key: Optional[str] = None,
+                     scoped: bool = False) -> list[dict]:
+        sql = "SELECT * FROM goal WHERE t_expired IS NULL AND status NOT IN ('abandoned')"
+        args: list[Any] = []
+        if scoped:
+            if project_key:
+                sql += " AND project_key=?"
+                args.append(project_key)
+            else:
+                sql += " AND project_key IS NULL"
+        return self.q(sql + " ORDER BY t_created", args)
 
     # --- watermark --------------------------------------------------------------
     def get_watermark(self, session_id: str) -> Optional[dict]:

@@ -20,6 +20,9 @@ type FeedOptions = {
   env?: Record<string, string | undefined>
   fetchImpl?: typeof fetch
   failOpen?: boolean
+  rebuild?: boolean
+  verify?: boolean
+  audit?: boolean
 }
 
 function stringifyOutput(value: unknown): string {
@@ -119,7 +122,12 @@ export async function feedEvidenceDag(options: FeedOptions): Promise<void> {
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`
       },
-      body: JSON.stringify({ trace }),
+      body: JSON.stringify({
+        trace,
+        ...(options.rebuild ? { rebuild: true } : {}),
+        ...(typeof options.verify === 'boolean' ? { verify: options.verify } : {}),
+        ...(typeof options.audit === 'boolean' ? { audit: options.audit } : {})
+      }),
       signal: controller.signal
     })
     const body = await response.json().catch(() => null) as { ok?: boolean; error?: { message?: unknown } } | null

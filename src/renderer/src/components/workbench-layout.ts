@@ -216,6 +216,7 @@ export function useWorkbenchLayout({
     const onPreview = (event: Event): void => {
       const detail = (event as CustomEvent<WorkspaceFilePreviewDetail>).detail
       if (!detail?.path) return
+      if (detail.kind === 'directory') return
       setFilePreviewTarget({
         ...detail,
         workspaceRoot: detail.workspaceRoot ?? workspaceRoot

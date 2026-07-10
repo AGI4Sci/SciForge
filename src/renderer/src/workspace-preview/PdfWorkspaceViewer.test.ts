@@ -22,9 +22,11 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     onAnnotationAction?: unknown
     annotationOverlays?: unknown[]
     activeAnnotationId?: string | null
+    annotationsOpen?: boolean
     jumpToRect?: unknown
     onAnnotationSelect?: unknown
     onOpenAnnotations?: unknown
+    onToggleAnnotations?: unknown
   }) => createElement('div', {
     'data-write-pdf-viewer': 'true',
     'data-file-path': props.filePath,
@@ -36,9 +38,11 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     'data-has-annotation-action': props.onAnnotationAction ? 'true' : 'false',
     'data-annotation-overlay-count': props.annotationOverlays?.length ?? 0,
     'data-active-annotation-id': props.activeAnnotationId ?? '',
+    'data-annotations-open': props.annotationsOpen ? 'true' : 'false',
     'data-has-jump-rect': props.jumpToRect ? 'true' : 'false',
     'data-has-annotation-select': props.onAnnotationSelect ? 'true' : 'false',
     'data-has-open-annotations': props.onOpenAnnotations ? 'true' : 'false',
+    'data-has-toggle-annotations': props.onToggleAnnotations ? 'true' : 'false',
     ...(props.sourceUrl ? { 'data-source-url': props.sourceUrl } : {})
   })
 }))
@@ -273,18 +277,22 @@ describe('PdfWorkspaceViewer', () => {
         status: 'open'
       }],
       activeAnnotationId: 'thread-1',
+      annotationsOpen: true,
       jumpToRect: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.04 },
       onAnnotationSelect: vi.fn(),
-      onOpenAnnotations: vi.fn()
+      onOpenAnnotations: vi.fn(),
+      onToggleAnnotations: vi.fn()
     }))
 
     expect(html).toContain('data-write-pdf-viewer="true"')
     expect(html).toContain('data-has-annotation-action="true"')
     expect(html).toContain('data-annotation-overlay-count="1"')
     expect(html).toContain('data-active-annotation-id="thread-1"')
+    expect(html).toContain('data-annotations-open="true"')
     expect(html).toContain('data-has-jump-rect="true"')
     expect(html).toContain('data-has-annotation-select="true"')
     expect(html).toContain('data-has-open-annotations="true"')
+    expect(html).toContain('data-has-toggle-annotations="true"')
   })
 
   it('shows a clear fallback when the PDF exceeds the bounded transport read limit', async () => {

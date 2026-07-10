@@ -45,7 +45,8 @@ describe('MarkdownWorkspaceViewer', () => {
     const model = buildMarkdownWorkspaceViewerModel(observation, true)
 
     expect(model.status).toBe('ready')
-    expect(model.title).toBe('notes.md')
+    expect(model.title).toBe('/workspace/lab/notes.md')
+    expect(model.subtitle).toBeUndefined()
     expect(model.markdown).toBe('# Alpha\n\n- beta\n')
     expect(model.editable).toBe(true)
     expect(model.summary).toContain('3 lines')
@@ -64,7 +65,7 @@ describe('MarkdownWorkspaceViewer', () => {
     })
   })
 
-  it('renders split mode with source editor and hardened Markdown preview panes by default', () => {
+  it('renders preview mode with a copyable absolute file path by default', () => {
     const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
       observation: createMarkdownObservation(),
       onApplyEdit: () => undefined
@@ -73,12 +74,14 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).toContain('data-workspace-preview-markdown-viewer')
     expect(html).toContain('data-editable="true"')
     expect(html).toContain('data-markdown-agent-summary')
-    expect(html).toContain('data-markdown-view-mode="split"')
+    expect(html).toContain('data-markdown-view-mode="preview"')
     expect(html).toContain('data-markdown-mode-control')
     expect(html).toContain('data-markdown-mode-button="edit"')
     expect(html).toContain('data-markdown-mode-button="preview"')
     expect(html).toContain('data-markdown-mode-button="split"')
-    expect(html).toContain('data-text-preview-editor')
+    expect(html).toContain('/workspace/lab/notes.md')
+    expect(html).not.toContain('Markdown | Preview')
+    expect(html).not.toContain('data-text-preview-editor')
     expect(html).toContain('data-markdown-preview-pane')
     expect(html).toContain('<h1>Alpha</h1>')
     expect(html).toContain('<li>beta</li>')

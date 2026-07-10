@@ -173,6 +173,50 @@ function runtimeEventStartedAt(createdAt: string | undefined, now = Date.now()):
   return parsed
 }
 
+function runtimeEventUpdatedAt(createdAt: string | undefined): string {
+  return new Date(runtimeEventStartedAt(createdAt)).toISOString()
+}
+
+function patchThreadRuntimeStatus(
+  threads: NormalizedThread[] | undefined,
+  options: {
+    threadId: string | null | undefined
+    status?: string
+    latestTurnId?: string | null
+    latestTurnStatus?: string
+    updatedAt?: string
+  }
+): NormalizedThread[] | null {
+  const threadId = options.threadId?.trim()
+  if (!threadId) return null
+  if (!Array.isArray(threads)) return null
+  const latestTurnId = options.latestTurnId?.trim()
+  let changed = false
+  const nextThreads = threads.map((thread) => {
+    if (thread.id !== threadId) return thread
+    const patch: Partial<NormalizedThread> = {}
+    if (options.status !== undefined && thread.status !== options.status) {
+      patch.status = options.status
+    }
+    if (latestTurnId && thread.latestTurnId !== latestTurnId) {
+      patch.latestTurnId = latestTurnId
+    }
+    if (
+      options.latestTurnStatus !== undefined &&
+      thread.latestTurnStatus !== options.latestTurnStatus
+    ) {
+      patch.latestTurnStatus = options.latestTurnStatus
+    }
+    if (options.updatedAt !== undefined && thread.updatedAt !== options.updatedAt) {
+      patch.updatedAt = options.updatedAt
+    }
+    if (Object.keys(patch).length === 0) return thread
+    changed = true
+    return { ...thread, ...patch }
+  })
+  return changed ? nextThreads : null
+}
+
 function mergeLiveReasoningMeta(
   current: RuntimeDisclosureMetadata | null,
   incoming: RuntimeDisclosureMetadata | undefined
@@ -792,6 +836,13 @@ export function buildThreadEventSink(
           )
         : ''
     set((s) => {
+      const patchedThreads = patchThreadRuntimeStatus(s.threads, {
+        threadId: completedThreadId,
+        status: 'idle',
+        latestTurnId: ev.turnId ?? completedTurnId,
+        latestTurnStatus: ev.state,
+        updatedAt: runtimeEventUpdatedAt(ev.createdAt)
+      })
       const base = flushLiveBlocks(s, {
         ...finalizeTurnTiming(s),
         error: completed || ev.state === 'cancelled' || ev.state === 'aborted'
@@ -814,6 +865,7 @@ export function buildThreadEventSink(
         delete u[id]
         base.unreadThreadIds = u
       }
+      if (patchedThreads) base.threads = patchedThreads
       return base
     })
     if (completed) refreshCompletedThreadSnapshot(completedThreadId, set, get)
@@ -872,10 +924,18 @@ export function buildThreadEventSink(
             : baseBlocks
         const nextBlocks = upsertUserBlock(reconciledBlocks, ev)
         const startedAt = runtimeEventStartedAt(ev.createdAt)
+        const patchedThreads = patchThreadRuntimeStatus(s.threads, {
+          threadId: boundThreadId || s.activeThreadId,
+          status: 'running',
+          latestTurnId: ev.turnId ?? s.currentTurnId,
+          latestTurnStatus: 'running',
+          updatedAt: new Date(startedAt).toISOString()
+        })
         armBusyWatchdog(set, get)
         return {
           ...flushed,
           blocks: nextBlocks,
+          ...(patchedThreads ? { threads: patchedThreads } : {}),
           busy: true,
           currentTurnId: ev.turnId ?? s.currentTurnId,
           currentTurnUserId: ev.itemId,
@@ -1339,11 +1399,21 @@ export function buildThreadEventSink(
       }
       if (!isAgentRuntimeActiveTurnState(ev.state)) return
       resetBusyRecoveryAttempts()
-      set((s) => ({
-        busy: true,
-        currentTurnId: ev.turnId ?? s.currentTurnId,
-        error: clearRuntimeStreamRecoveringError(s.error)
-      }))
+      set((s) => {
+        const patchedThreads = patchThreadRuntimeStatus(s.threads, {
+          threadId: ev.threadId ?? (boundThreadId || s.activeThreadId),
+          status: 'running',
+          latestTurnId: ev.turnId ?? s.currentTurnId,
+          latestTurnStatus: ev.state,
+          updatedAt: runtimeEventUpdatedAt(ev.createdAt)
+        })
+        return {
+          busy: true,
+          currentTurnId: ev.turnId ?? s.currentTurnId,
+          ...(patchedThreads ? { threads: patchedThreads } : {}),
+          error: clearRuntimeStreamRecoveringError(s.error)
+        }
+      })
       armBusyWatchdog(set, get)
     },
     onGoal: (ev) => {

@@ -60,15 +60,15 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('modelRouter:config:open')
   })
 
-  it('exposes Evidence DAG audit IPC', async () => {
+  it('exposes Evidence DAG update IPC', async () => {
     const api = exposedApi as {
-      runEvidenceDagAudit(payload: unknown): Promise<unknown>
+      updateEvidenceDag(payload: unknown): Promise<unknown>
     }
     const payload = { runtimeId: 'codex', threadId: 'thread-1' }
 
-    await api.runEvidenceDagAudit(payload)
+    await api.updateEvidenceDag(payload)
 
-    expect(invoke).toHaveBeenCalledWith('evidenceDag:audit-run', payload)
+    expect(invoke).toHaveBeenCalledWith('evidenceDag:update', payload)
   })
 
   it('exposes Project DAG panel IPC', async () => {
@@ -76,8 +76,8 @@ describe('preload agentRuntime bridge', () => {
       getProjectDagView(payload: unknown): Promise<unknown>
       runProjectDagCompile(payload: unknown): Promise<unknown>
     }
-    const viewPayload = { view: 'graph' }
-    const compilePayload = { goalTitle: 'Project alpha' }
+    const viewPayload = { view: 'graph', workspaceRoot: '/tmp/project-alpha' }
+    const compilePayload = { goalTitle: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
 
     await api.getProjectDagView(viewPayload)
     await api.runProjectDagCompile(compilePayload)

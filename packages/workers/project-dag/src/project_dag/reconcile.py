@@ -115,6 +115,8 @@ def full_reconcile(store: Store) -> list[dict]:
 
 # ---------------------------------------------------- projection -> analysis
 def project_analysis(store: Store, *, goal_id: Optional[str] = None,
+                     claim_ids: Optional[set[str]] = None,
+                     support_edge_ids: Optional[set[str]] = None,
                      threshold: float = 0.7) -> dict:
     """Project the alive project graph into an evidence-dag ThreadGraph and run
     the SAME dominator analysis the session sidebar uses (load-bearing /
@@ -124,6 +126,8 @@ def project_analysis(store: Store, *, goal_id: Optional[str] = None,
         "SELECT * FROM claim WHERE t_invalid IS NULL" +
         (" AND goal_id=?" if goal_id else ""),
         (goal_id,) if goal_id else ())
+    if claim_ids is not None:
+        claims = [c for c in claims if c["id"] in claim_ids]
     claim_ids = {c["id"] for c in claims}
     for c in claims:
         # keep project-layer ids (ThreadGraph's own ids are content-addressed;
@@ -132,6 +136,8 @@ def project_analysis(store: Store, *, goal_id: Optional[str] = None,
                                 content=c["statement"])
     for c in claims:
         for e in store.alive_edges(dst=c["id"], edge_type="supports"):
+            if support_edge_ids is not None and e["id"] not in support_edge_ids:
+                continue
             ev = store.q1("SELECT * FROM evidence WHERE id=? AND t_invalid IS NULL",
                           (e["src"],))
             if ev is None:

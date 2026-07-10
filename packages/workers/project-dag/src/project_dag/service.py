@@ -1,12 +1,13 @@
 """Engine facade: everything the HTTP layer (and tests) call.
 
 Owns the Store / SessionReader / Judge / Compiler wiring plus the flows that
-are not the compile pipeline itself: review resolution compensation, human
-action registration, the weekly report, and the time-machine snapshot.
+are not the compile pipeline itself, primarily review resolution compensation
+and project-scoped graph/query helpers.
 """
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 from .compiler import Compiler
@@ -26,8 +27,28 @@ class Engine:
         self.compiler = Compiler(self.store, self.reader, self.judge)
 
     # ------------------------------------------------------------- compile
-    def compile(self, trigger: str = "manual", scope: Any = "all") -> dict:
-        return self.compiler.compile(trigger, scope)
+    def compile(self, trigger: str = "manual", scope: Any = "all",
+                *, workspace_root: Optional[str] = None,
+                project_root: Optional[str] = None,
+                project: Optional[str] = None,
+                sessions: Optional[list[str]] = None) -> dict:
+        explicit_sessions = self._clean_session_ids(sessions)
+        project_key = self._project_key(
+            workspace_root,
+            project_root,
+            project,
+            sessions=explicit_sessions,
+        )
+        if scope == "all" and explicit_sessions is not None:
+            scope = explicit_sessions
+        elif scope == "all" and self._scope_requested(workspace_root, project_root, project):
+            scope = []
+        return self.compiler.compile(
+            trigger,
+            scope,
+            goal_project_key=project_key,
+            scoped_goals=project_key is not None,
+        )
 
     def _mark_interrupted_compile_runs(self) -> None:
         self.store.x("UPDATE compile_run SET status='interrupted', finished_at=?"
@@ -50,19 +71,49 @@ class Engine:
         return r
 
     def full_check(self) -> dict:
-        """The weekly safety net: full relabel; report what it changed (a
+        """Full relabel safety net: report what it changed (a
         non-empty result means the incremental algorithm drifted)."""
         changed = full_reconcile(self.store)
         return {"changed": changed, "clean": not changed}
 
     # ---------------------------------------------------------------- goals
-    def goal_tree(self) -> list[dict]:
-        goals = self.store.active_goals()
+    def goal_tree(self, *, workspace_root: Optional[str] = None,
+                  project_root: Optional[str] = None,
+                  project: Optional[str] = None,
+                  sessions: Optional[list[str]] = None) -> list[dict]:
+        scope = self._project_scope(workspace_root, project_root, project, sessions=sessions)
+        scoped_claim_ids: Optional[set[str]] = None
+        goals = self.store.active_goals(
+            project_key=scope.get("projectKey") if scope else None,
+            scoped=scope is not None,
+        )
+        if scope is not None:
+            scoped_claim_ids, _ = self._scoped_claim_and_support_ids(scope["sessions"])
+            if scoped_claim_ids:
+                scoped_goal_ids = {
+                    r["goal_id"] for r in self.store.q(
+                        "SELECT id,goal_id FROM claim WHERE t_invalid IS NULL")
+                    if r["id"] in scoped_claim_ids and r.get("goal_id")
+                }
+                scoped_goal_ids.update(g["root_id"] for g in goals)
+                goals = self._goals_in_scope(self.store.active_goals(), scoped_goal_ids)
         stats: dict[str, dict] = {}
         for g in goals:
             rows = self.store.q(
                 "SELECT status, COUNT(*) n FROM claim WHERE goal_id=?"
                 " AND t_invalid IS NULL GROUP BY status", (g["root_id"],))
+            if scoped_claim_ids is not None:
+                rows = []
+                scoped_claims = [
+                    c for c in self.store.q(
+                        "SELECT id,status FROM claim WHERE goal_id=? AND t_invalid IS NULL",
+                        (g["root_id"],))
+                    if c["id"] in scoped_claim_ids
+                ]
+                by_status: dict[str, int] = {}
+                for claim in scoped_claims:
+                    by_status[claim["status"]] = by_status.get(claim["status"], 0) + 1
+                rows = [{"status": status, "n": n} for status, n in by_status.items()]
             stats[g["root_id"]] = {r["status"]: r["n"] for r in rows}
         by_parent: dict[Optional[str], list[dict]] = {}
         for g in goals:
@@ -76,26 +127,38 @@ class Engine:
         return build(None)
 
     def create_goal(self, title: str, description: str = "",
-                    parent_root: Optional[str] = None) -> dict:
+                    parent_root: Optional[str] = None,
+                    workspace_root: Optional[str] = None,
+                    project_root: Optional[str] = None,
+                    project: Optional[str] = None,
+                    sessions: Optional[list[str]] = None) -> dict:
+        project_key = self._project_key(workspace_root, project_root, project, sessions=sessions)
         return self.store.create_goal(title, description=description,
-                                      parent_root=parent_root)
+                                      parent_root=parent_root,
+                                      project_key=project_key)
 
     def update_goal(self, root_id: str, **changes: Any) -> dict:
         return self.store.update_goal(root_id, **changes)
 
     # --------------------------------------------------------------- claims
     def claims(self, *, goal_id: Optional[str] = None,
-               as_of: Optional[str] = None) -> list[dict]:
+               workspace_root: Optional[str] = None,
+               project_root: Optional[str] = None,
+               project: Optional[str] = None,
+               sessions: Optional[list[str]] = None) -> list[dict]:
+        scope = self._project_scope(workspace_root, project_root, project, sessions=sessions)
+        scoped_claim_ids: Optional[set[str]] = None
+        if scope is not None:
+            scoped_claim_ids, _ = self._scoped_claim_and_support_ids(scope["sessions"])
         sql = "SELECT * FROM claim WHERE 1=1"
         args: list[Any] = []
         if goal_id:
             sql += " AND goal_id=?"; args.append(goal_id)
-        if as_of:                                    # time machine
-            sql += " AND t_valid<=? AND (t_invalid IS NULL OR t_invalid>?)"
-            args += [as_of, as_of]
-        else:
-            sql += " AND t_invalid IS NULL"
-        return self.store.q(sql + " ORDER BY t_created DESC", args)
+        sql += " AND t_invalid IS NULL"
+        claims = self.store.q(sql + " ORDER BY t_created DESC", args)
+        if scoped_claim_ids is not None:
+            claims = [claim for claim in claims if claim["id"] in scoped_claim_ids]
+        return claims
 
     def claim_detail(self, claim_id: str) -> Optional[dict]:
         c = self.store.q1("SELECT * FROM claim WHERE id=?", (claim_id,))
@@ -118,27 +181,69 @@ class Engine:
         return {**c, "supports": sup, "contradicts": contras,
                 "origins": origins, "entities": mentions}
 
-    def analysis(self, goal_id: Optional[str] = None, threshold: float = 0.7) -> dict:
-        return project_analysis(self.store, goal_id=goal_id, threshold=threshold)
+    def analysis(self, goal_id: Optional[str] = None, threshold: float = 0.7,
+                 *, workspace_root: Optional[str] = None,
+                 project_root: Optional[str] = None,
+                 project: Optional[str] = None,
+                 sessions: Optional[list[str]] = None) -> dict:
+        scope = self._project_scope(workspace_root, project_root, project, sessions=sessions)
+        if scope is None:
+            return project_analysis(self.store, goal_id=goal_id, threshold=threshold)
+        claim_ids, support_edge_ids = self._scoped_claim_and_support_ids(scope["sessions"])
+        analysis = project_analysis(
+            self.store,
+            goal_id=goal_id,
+            claim_ids=claim_ids,
+            support_edge_ids=support_edge_ids,
+            threshold=threshold,
+        )
+        analysis["scope"] = scope
+        return analysis
 
-    def graph(self) -> dict:
+    def graph(self, *, workspace_root: Optional[str] = None,
+              project_root: Optional[str] = None,
+              project: Optional[str] = None,
+              sessions: Optional[list[str]] = None) -> dict:
         """One-call payload for the 图谱 view: every ALIVE goal, claim, the
         evidence actually wired to those claims, and the alive edges between
         them. Dangling edges (an endpoint invalidated) are filtered out so the
         renderer never draws into a void."""
-        goals = self.store.active_goals()
+        scope = self._project_scope(workspace_root, project_root, project, sessions=sessions)
+        scoped_claim_ids: Optional[set[str]] = None
+        scoped_support_edge_ids: Optional[set[str]] = None
+        scoped_session_ids: Optional[set[str]] = None
+        if scope is not None:
+            scoped_session_ids = set(scope["sessions"])
+            scoped_claim_ids, scoped_support_edge_ids = self._scoped_claim_and_support_ids(
+                scope["sessions"])
+
+        goals = self.store.active_goals(
+            project_key=scope.get("projectKey") if scope else None,
+            scoped=scope is not None,
+        )
         claims = self.store.q("SELECT id,statement,claim_type,status,goal_id,"
                               "load_bearing,blast_radius FROM claim WHERE t_invalid IS NULL")
+        if scoped_claim_ids is not None:
+            claims = [c for c in claims if c["id"] in scoped_claim_ids]
+            goal_ids_in_scope = {c["goal_id"] for c in claims if c.get("goal_id")}
+            goal_ids_in_scope.update(g["root_id"] for g in goals)
+            goals = self._goals_in_scope(self.store.active_goals(), goal_ids_in_scope)
         # session/topic grouping + entity labels for the 图谱 group cards
         origins: dict[str, list[str]] = {}
         for r in self.store.q("SELECT claim_id, session_id FROM claim_origin"
                               " ORDER BY session_id"):
+            if scoped_claim_ids is not None and r["claim_id"] not in scoped_claim_ids:
+                continue
+            if scoped_session_ids is not None and r["session_id"] not in scoped_session_ids:
+                continue
             origins.setdefault(r["claim_id"], []).append(r["session_id"])
         ent_names: dict[str, list[str]] = {}
         for r in self.store.q(
                 """SELECT e.src AS claim_id, en.canonical_name AS name
                    FROM edge e JOIN entity en ON en.id = e.dst
                    WHERE e.edge_type='mentions' AND e.t_invalid IS NULL"""):
+            if scoped_claim_ids is not None and r["claim_id"] not in scoped_claim_ids:
+                continue
             ent_names.setdefault(r["claim_id"], []).append(r["name"])
         for c in claims:
             c["sessions"] = sorted(set(origins.get(c["id"], [])))
@@ -148,17 +253,142 @@ class Engine:
             " AND edge_type IN ('addresses','supports','contradicts','derived_from')")
         claim_ids = {c["id"] for c in claims}
         goal_ids = {g["root_id"] for g in goals}
+        if scoped_support_edge_ids is not None:
+            edges = [e for e in edges
+                     if e["edge_type"] != "supports" or e["id"] in scoped_support_edge_ids]
         ev_ids = {e["src"] for e in edges
                   if e["edge_type"] == "supports" and e["dst"] in claim_ids}
         evidence = [
             ev for ev in self.store.q(
-                "SELECT id,evidence_type,content,source_hash,quality_score,"
+                "SELECT id,evidence_type,content,content_ref,source_hash,quality_score,"
                 "trust_score,attestation_method FROM evidence WHERE t_invalid IS NULL")
             if ev["id"] in ev_ids
         ]
         keep = claim_ids | goal_ids | {ev["id"] for ev in evidence}
         edges = [e for e in edges if e["src"] in keep and e["dst"] in keep]
-        return {"goals": goals, "claims": claims, "evidence": evidence, "edges": edges}
+        out = {"goals": goals, "claims": claims, "evidence": evidence, "edges": edges}
+        if scope is not None:
+            out["scope"] = scope
+        return out
+
+    # --------------------------------------------------------- project scope
+    def _scope_requested(self, workspace_root: Optional[str],
+                         project_root: Optional[str],
+                         project: Optional[str]) -> bool:
+        return any(self._clean(v) for v in (workspace_root, project_root, project))
+
+    def _project_scope(self, workspace_root: Optional[str],
+                       project_root: Optional[str],
+                       project: Optional[str],
+                       *, sessions: Optional[list[str]] = None) -> Optional[dict]:
+        explicit_sessions = self._clean_session_ids(sessions)
+        if explicit_sessions is None and not self._scope_requested(workspace_root, project_root, project):
+            return None
+        if explicit_sessions is not None:
+            scope_sessions = explicit_sessions
+            strategy = "explicit-sessions"
+        else:
+            scope_sessions = []
+            strategy = "explicit-sessions-required"
+        limitation = (
+            "Project filtering uses explicit session ids supplied by the desktop app. "
+            "Workspace/project names are labels and goal-scope keys, not a fallback "
+            "session-discovery mechanism."
+        )
+        return {
+            "workspaceRoot": self._clean(workspace_root),
+            "projectRoot": self._clean(project_root),
+            "project": self._clean(project),
+            "projectKey": self._project_key(workspace_root, project_root, project,
+                                            sessions=scope_sessions),
+            "sessions": scope_sessions,
+            "matched": bool(scope_sessions),
+            "strategy": strategy,
+            "limitation": limitation,
+        }
+
+    def _project_key(self, workspace_root: Optional[str],
+                     project_root: Optional[str],
+                     project: Optional[str],
+                     *, sessions: Optional[list[str]] = None) -> Optional[str]:
+        project_path = self._normalize_path(project_root) or self._normalize_path(workspace_root)
+        if project_path:
+            return f"path:{project_path}"
+        project_name = self._clean(project)
+        if project_name:
+            return f"project:{project_name}"
+        return None
+
+    def _scoped_claim_and_support_ids(self, session_ids: list[str]) -> tuple[set[str], set[str]]:
+        if not session_ids:
+            return set(), set()
+        placeholders = ",".join("?" for _ in session_ids)
+        claim_ids = {
+            r["claim_id"] for r in self.store.q(
+                f"SELECT DISTINCT claim_id FROM claim_origin WHERE session_id IN ({placeholders})",
+                session_ids)
+        }
+        if not claim_ids:
+            return set(), set()
+        support_edge_ids: set[str] = set()
+        for edge in self.store.q(
+                "SELECT id,src,dst,edge_type,meta FROM edge WHERE t_invalid IS NULL"
+                " AND edge_type='supports'"):
+            if edge["dst"] not in claim_ids:
+                continue
+            if self._edge_has_session(edge, set(session_ids)):
+                support_edge_ids.add(edge["id"])
+        return claim_ids, support_edge_ids
+
+    def _edge_has_session(self, edge: dict, session_ids: set[str]) -> bool:
+        if not session_ids:
+            return False
+        try:
+            meta = json.loads(edge["meta"]) if edge.get("meta") else {}
+        except (TypeError, ValueError):
+            meta = {}
+        if isinstance(meta, dict):
+            session = meta.get("session")
+            if isinstance(session, str) and session in session_ids:
+                return True
+            origins = meta.get("origins")
+            if isinstance(origins, list):
+                for origin in origins:
+                    if isinstance(origin, dict) and origin.get("session") in session_ids:
+                        return True
+        return False
+
+    def _goals_in_scope(self, goals: list[dict], goal_ids: set[str]) -> list[dict]:
+        if not goal_ids:
+            return []
+        by_id = {g["root_id"]: g for g in goals}
+        keep = set(goal_ids)
+        frontier = list(goal_ids)
+        while frontier:
+            gid = frontier.pop()
+            parent = by_id.get(gid, {}).get("parent_id")
+            if parent and parent not in keep:
+                keep.add(parent)
+                frontier.append(parent)
+        return [g for g in goals if g["root_id"] in keep]
+
+    def _normalize_path(self, value: Optional[str]) -> Optional[str]:
+        text = self._clean(value)
+        if not text:
+            return None
+        return os.path.normcase(os.path.normpath(os.path.expanduser(text))).replace("\\", "/")
+
+    def _clean_session_ids(self, sessions: Optional[list[str]]) -> Optional[list[str]]:
+        if sessions is None:
+            return None
+        return sorted({
+            value.strip()
+            for value in sessions
+            if isinstance(value, str) and value.strip()
+        })
+
+    def _clean(self, value: Any) -> Optional[str]:
+        return value.strip() if isinstance(value, str) and value.strip() else None
 
     # ---------------------------------------------------------------- review
     def review_items(self, status: str = "pending") -> list[dict]:
@@ -263,100 +493,4 @@ class Engine:
                          "node_id) VALUES (?,?,?)",
                          (cid, cand["session"], cand["node"]))
                     touched.add(cid)
-        elif item_type == "human_evidence":
-            pass  # trust stays low until corroboration arrives; nothing to do
         return touched
-
-    # --------------------------------------------------------- human actions
-    def register_human_action(self, text: str, *, file_path: Optional[str] = None,
-                              log_path: Optional[str] = None) -> dict:
-        """One-line registration -> activity + human_attested evidence.
-        Attestation auto-upgrades with whatever corroboration was attached."""
-        import hashlib
-        import os
-        st = self.store
-        out = self.judge("human_extract", {"text": text})
-        act_id = new_id("act")
-        t = now_iso()
-        st.x("INSERT INTO activity (id,activity_type,description,started_at)"
-             " VALUES (?,?,?,?)",
-             (act_id, "human_action", out.get("description", text),
-              out.get("happened_at") or t))
-        method, trust, ref = "self_report", 0.3, None
-        if file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as fh:
-                h = hashlib.sha256(fh.read()).hexdigest()
-            method, trust, ref = "artifact_hash", 0.8, f"{file_path}#sha256:{h}"
-        elif log_path and os.path.exists(log_path):
-            method, trust, ref = "log_corroborated", 0.6, log_path
-        ev_id = new_id("ev")
-        st.x("INSERT INTO evidence (id,evidence_type,content,content_ref,"
-             "attestation_method,trust_score,t_valid) VALUES (?,?,?,?,?,?,?)",
-             (ev_id, "human_attested", out.get("description", text), ref,
-              method, trust, t))
-        st.add_edge(ev_id, act_id, "generated_by")
-        if method == "self_report":
-            st.enqueue_review("human_evidence", {
-                "evidence": ev_id, "activity": act_id, "text": text,
-                "hint": "no corroboration; attach artifact or log to upgrade trust"})
-        st.conn.commit()
-        return {"activity": act_id, "evidence": ev_id,
-                "attestation_method": method, "trust_score": trust}
-
-    # ---------------------------------------------------------------- report
-    def weekly_report(self, week_start: str, week_end: str) -> dict:
-        """Structured weekly report aggregated from compile_run.diff. Every
-        factual line carries its claim id (faithfulness hard constraint); no
-        free-form LLM prose in v1."""
-        st = self.store
-        runs = st.q("SELECT * FROM compile_run WHERE started_at>=? AND started_at<?"
-                    " AND status='done' ORDER BY started_at", (week_start, week_end))
-        added, invalidated, conflicts = [], [], []
-        for r in runs:
-            d = json.loads(r["diff"]) if r["diff"] else {}
-            added += [{**c, "run": r["id"]} for c in d.get("added_claims", [])]
-            invalidated += [{**c, "run": r["id"]} for c in d.get("invalidated_claims", [])]
-            conflicts += [{**c, "run": r["id"]} for c in d.get("conflicts", [])
-                          if not c.get("resolved")]
-        pending = self.review_items("pending")
-        humans = st.q(
-            """SELECT a.*, ev.attestation_method, ev.trust_score
-               FROM activity a LEFT JOIN edge e
-                 ON e.dst=a.id AND e.edge_type='generated_by' AND e.t_invalid IS NULL
-               LEFT JOIN evidence ev ON ev.id=e.src
-               WHERE a.activity_type='human_action'
-                 AND a.started_at>=? AND a.started_at<?""", (week_start, week_end))
-        by_goal: dict[str, list[dict]] = {}
-        for c in added:
-            by_goal.setdefault(c.get("goal") or "none", []).append(c)
-        md = [f"# 周报 {week_start} ~ {week_end}", "", "## 进展"]
-        for gid, items in by_goal.items():
-            g = st.q1("SELECT title FROM goal WHERE root_id=? AND t_expired IS NULL", (gid,))
-            md.append(f"### {g['title'] if g else gid}")
-            md += [f"- {c['statement']} [{c['id']}]" for c in items]
-        md += ["", "## 变故"]
-        md += [f"- claim [{c['id']}] 失效（被 [{c.get('beaten_by')}] 裁决击败，规则：" +
-               f"{(c.get('why') or {}).get('rule', '?')}）" for c in invalidated] or ["- 无"]
-        md += ["", "## 未决",
-               f"- 未决冲突 {len(conflicts)} 项，待复核 {len(pending)} 项"]
-        md += ["", "## 人类操作记录"]
-        md += [f"- {h['description']}（佐证：{h['attestation_method'] or 'self_report'}，"
-               f"trust {h['trust_score'] if h['trust_score'] is not None else 0.3}）"
-               for h in humans] or ["- 无"]
-        return {"week_start": week_start, "week_end": week_end,
-                "added": added, "invalidated": invalidated,
-                "unresolved_conflicts": conflicts, "pending_review": len(pending),
-                "human_actions": humans, "markdown": "\n".join(md)}
-
-    # ----------------------------------------------------------- time machine
-    def snapshot(self, as_of: str) -> dict:
-        """Graph state at any historical date — one SQL filter, because nothing
-        is ever deleted."""
-        claims = self.claims(as_of=as_of)
-        goals = self.store.q(
-            "SELECT * FROM goal WHERE t_created<=? AND (t_expired IS NULL OR t_expired>?)",
-            (as_of, as_of))
-        edges = self.store.q(
-            "SELECT * FROM edge WHERE t_valid<=? AND (t_invalid IS NULL OR t_invalid>?)",
-            (as_of, as_of))
-        return {"as_of": as_of, "goals": goals, "claims": claims, "edges": edges}

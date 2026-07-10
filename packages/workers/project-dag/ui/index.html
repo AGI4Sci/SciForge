@@ -49,17 +49,29 @@ const TOKEN = (location.hash.match(/token=([^&]+)/)||[])[1] || "";
 const PARAMS = new URLSearchParams(location.search);
 const START_VIEW = PARAMS.get("view");
 const EMBEDDED = PARAMS.get("embed") === "1" || window.self !== window.top;
+const SCOPE_KEYS = ["workspaceRoot", "projectRoot", "project"];
+const SCOPE_SESSIONS = PARAMS.getAll("session").filter(Boolean);
 document.documentElement.dataset.embedded = EMBEDDED ? "1" : "0";
 history.replaceState(null,"",location.pathname);
-const api = (p, opt={}) => fetch(p, {...opt, headers:{
+function scopedApiPath(p){
+  const u = new URL(p, location.origin);
+  if(["/analysis", "/claims", "/goals", "/graph"].includes(u.pathname)){
+    for(const key of SCOPE_KEYS){
+      const value = PARAMS.get(key);
+      if(value) u.searchParams.set(key, value);
+    }
+    for(const session of SCOPE_SESSIONS) u.searchParams.append("session", session);
+  }
+  return u.pathname + u.search;
+}
+const api = (p, opt={}) => fetch(scopedApiPath(p), {...opt, headers:{
   "Content-Type":"application/json", "Authorization":"Bearer "+TOKEN,
   ...(opt.headers||{})}}).then(r=>r.json()).then(j=>{
     if(!j.ok) throw new Error(j.error ? j.error.message : "error"); return j.data;});
 const el = (h) => { const d=document.createElement("div"); d.innerHTML=h; return d; };
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-const VIEWS = {home:"项目主页", goals:"Goal 树", graph:"图谱", compile:"编译控制台",
-               report:"周报", time:"时间机器"};
+const VIEWS = {home:"项目主页", goals:"Goal 树", graph:"图谱", compile:"编译控制台"};
 let cur = "home";
 function renderNav(){
   document.getElementById("nav").innerHTML = Object.entries(VIEWS).map(
@@ -68,6 +80,49 @@ function renderNav(){
 function go(v){ cur=v; renderNav(); ROUTES[v](); }
 
 const M = document.getElementById("main");
+function scopedProjectBody(extra={}){
+  const body = {...extra};
+  for(const key of SCOPE_KEYS){
+    const value = PARAMS.get(key);
+    if(value) body[key] = value;
+  }
+  if(SCOPE_SESSIONS.length){
+    body.sessions = SCOPE_SESSIONS;
+  }
+  return body;
+}
+function scopedCompileBody(extra={}){
+  const body = scopedProjectBody(extra);
+  if(SCOPE_SESSIONS.length){
+    body.scope = SCOPE_SESSIONS;
+  } else if(!("scope" in body)) {
+    body.scope = "all";
+  }
+  return body;
+}
+function updateBar(label="更新当前项目"){
+  const scope = PARAMS.get("workspaceRoot") || PARAMS.get("projectRoot") || PARAMS.get("project") || "";
+  const hint = scope ? `当前项目：${esc(scope.split(/[\\/]/).filter(Boolean).pop() || scope)}` : "当前项目";
+  return `<div class="row">
+    <button onclick="updateCurrentProject()">${label}</button>
+    <span class="dim">${hint} · 重新计算 Goal 树和图谱</span>
+    <span id="compilemsg" class="dim"></span>
+  </div>`;
+}
+async function updateCurrentProject(){
+  const msg = document.getElementById("compilemsg") || document.getElementById("msg");
+  if(msg) msg.textContent = "更新中…（session 多或 LLM 慢时需要一会儿）";
+  try{
+    const r = await api("/compile",{method:"POST",body:JSON.stringify(scopedCompileBody())});
+    if(msg) msg.textContent =
+      `完成：+${r.stats?.claims_added ?? 0} claim，merge ${r.stats?.claims_merged ?? 0}，进复核 ${r.stats?.review_enqueued ?? 0}`;
+    setTimeout(()=>go(cur), 800);
+    return r;
+  }catch(e){
+    if(msg) msg.textContent = "失败："+e.message;
+    throw e;
+  }
+}
 
 // ---------------- 项目主页 ----------------
 async function home(){
@@ -76,6 +131,7 @@ async function home(){
   const claims = await api("/claims");
   const n = s => claims.filter(c=>c.status===s).length;
   M.innerHTML = `<h2>项目主页</h2>
+    ${updateBar()}
     <div class="row">
       <div class="card">活跃 goal <b>${countGoals(tree)}</b></div>
       <div class="card s-supported">supported <b>${n("supported")}</b></div>
@@ -95,6 +151,7 @@ const countGoals = t => t.reduce((a,g)=>a+1+countGoals(g.children||[]),0);
 async function goals(){
   const tree = await api("/goals");
   M.innerHTML = `<h2>Goal 树</h2>
+    ${updateBar("更新 Goal 树")}
     <div class="row"><input id="ngoal" placeholder="新 goal 标题" size="40">
     <button onclick="addGoal()">新建 goal</button></div><div id="tree"></div><div id="claims"></div>`;
   document.getElementById("tree").append(...tree.map(goalNode));
@@ -113,7 +170,7 @@ function goalNode(g){
 }
 async function addGoal(){
   const t = document.getElementById("ngoal").value.trim();
-  if(t){ await api("/goals",{method:"POST",body:JSON.stringify({title:t})}); goals(); }
+  if(t){ await api("/goals",{method:"POST",body:JSON.stringify(scopedProjectBody({title:t}))}); goals(); }
 }
 async function showClaims(root, title){
   const cs = await api("/claims?goal="+encodeURIComponent(root));
@@ -240,6 +297,7 @@ async function graphview(){
   CEXP = new Set(JSON.parse(localStorage.getItem(CEXP_KEY) || "[]")
                  .filter(id => G.claims.some(c => c.id === id)));
   M.innerHTML = `<h2>图谱 · Project DAG</h2>
+    ${updateBar("更新图谱")}
     <div class="row">
       <button class="ghost" onclick="ZOOM=Math.max(.5,ZOOM-.15);drawGraph()">−</button>
       <button class="ghost" onclick="ZOOM=Math.min(2,ZOOM+.15);drawGraph()">＋</button>
@@ -613,8 +671,9 @@ function renderGInfo(){
 async function compile(){
   const [runs, review] = await Promise.all([api("/compile-runs"), api("/review")]);
   M.innerHTML = `<h2>编译控制台</h2>
-    <div class="row"><button id="btn" onclick="runCompile()">手动编译</button>
+    <div class="row"><button id="btn" onclick="runCompile()">更新当前项目</button>
     <button class="ghost" onclick="fullCheck()">全量校验</button>
+    <span class="dim">使用当前项目 scope 重新计算 Goal 树和图谱</span>
     <span id="msg" class="dim"></span></div>
     <h2>复核队列（${review.length}）</h2><div id="rq">${review.map(reviewCard).join("")||'<div class="dim">空</div>'}</div>
     <h2>编译历史</h2>` + runs.map(r=>`<div class="card mono" style="cursor:pointer"
@@ -628,7 +687,6 @@ function reviewCard(i){
   if(i.item_type==="claim_merge") desc = `claim 合并：${esc(p.new_statement)} → <span class="mono">${esc(p.target)}</span> (conf ${p.confidence})`;
   if(i.item_type==="conflict") desc = `冲突：${esc(p.a_statement)} ⚔ ${esc(p.b_statement)}`;
   if(i.item_type==="orphan_claims") desc = `孤儿池：${(p.candidates||[]).length} 条结论无法归属 goal`;
-  if(i.item_type==="human_evidence") desc = `人类证据待佐证：${esc(p.text)}`;
   const act = i.item_type==="conflict"
     ? `<button onclick="resolve('${i.id}','accepted',{winner:'${p.a}'})">A 胜</button>
        <button onclick="resolve('${i.id}','accepted',{winner:'${p.b}'})">B 胜</button>`
@@ -646,13 +704,12 @@ async function resolve(id, decision, extra){
     body:JSON.stringify({decision, extra:extra||{}})});
   compile();
 }
-async function runCompile(jumpToReport){
+async function runCompile(){
   document.getElementById("msg").textContent = "编译中…（session 多或 LLM 慢时需要一会儿）";
   try{
-    const r = await api("/compile",{method:"POST",body:"{}"});
+    const r = await api("/compile",{method:"POST",body:JSON.stringify(scopedCompileBody())});
     document.getElementById("msg").textContent =
       `完成：+${r.stats.claims_added} claim，merge ${r.stats.claims_merged}，进复核 ${r.stats.review_enqueued}`;
-    if(jumpToReport){ setTimeout(()=>go("report"), 900); return; }
   }catch(e){ document.getElementById("msg").textContent = "失败："+e.message; }
   setTimeout(compile, 800);
 }
@@ -667,39 +724,7 @@ async function runDiff(id){
     <button class="ghost" onclick="go('compile')">← 返回</button>`;
 }
 
-// ---------------- 周报 ----------------
-async function report(){
-  const r = await api("/report");
-  M.innerHTML = `<h2>周报 ${esc(r.week_start)} ~ ${esc(r.week_end)}</h2>
-    <div class="row"><button onclick="navigator.clipboard.writeText(RP)">复制 Markdown</button>
-    <span class="dim">登记 human action：</span>
-    <input id="ha" size="40" placeholder="昨晚在服务器跑通了 pipeline v3">
-    <button class="ghost" onclick="logHuman()">登记</button></div>
-    <pre>${esc(r.markdown)}</pre>`;
-  window.RP = r.markdown;
-}
-async function logHuman(){
-  const t = document.getElementById("ha").value.trim();
-  if(t){ await api("/human-actions",{method:"POST",body:JSON.stringify({text:t})}); report(); }
-}
-
-// ---------------- 时间机器 ----------------
-async function timemachine(){
-  M.innerHTML = `<h2>时间机器</h2>
-    <div class="row"><input type="date" id="tm">
-    <button onclick="snap()">回放</button></div><div id="snap"></div>`;
-}
-async function snap(){
-  const d = document.getElementById("tm").value;
-  if(!d) return;
-  const s = await api("/snapshot?as_of="+d+"T23:59:59Z");
-  document.getElementById("snap").innerHTML =
-    `<div class="card">当日 goal ${s.goals.length} 个 · claim ${s.claims.length} 条 · 边 ${s.edges.length} 条</div>` +
-    s.claims.map(c=>`<div class="card"><span class="s-${c.status}">●</span> ${esc(c.statement)}
-      <span class="dim mono">${c.id}</span></div>`).join("");
-}
-
-const ROUTES = {home, goals, graph:graphview, compile, report, time:timemachine};
+const ROUTES = {home, goals, graph:graphview, compile};
 // deep link: ?view=... picks the pane.
 if (START_VIEW && ROUTES[START_VIEW]) {
   go(START_VIEW);

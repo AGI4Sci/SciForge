@@ -5,7 +5,7 @@ Reuses the evidence-dag engine as a library: PROV-JSON parsing, the Model
 Router LLM client, and the dominator-based load-bearing / fragility /
 pseudo-robust analysis all come from `evidence_dag`; this package only adds
 the cross-session layer (goals, entity resolution, claim matching, conflict
-adjudication, review queue, weekly report).
+adjudication, review queue).
 """
 from __future__ import annotations
 

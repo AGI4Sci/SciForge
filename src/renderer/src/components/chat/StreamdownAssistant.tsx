@@ -88,12 +88,27 @@ function StreamdownLink({
 
   const resolvedFileTarget =
     fileTarget && validation.status === 'valid'
-      ? { ...fileTarget, path: validation.path }
+      ? { ...fileTarget, path: validation.path, kind: validation.kind }
       : null
+
+  const openInEditor = (target: NonNullable<typeof resolvedFileTarget>): void => {
+    void openWorkspacePathInEditor(target, workspaceRoot).then((result) => {
+      if (!result.ok) {
+        void window.sciforge?.logError?.('editor-open', 'Failed to open file reference', {
+          message: result.message,
+          target
+        })?.catch(() => undefined)
+      }
+    })
+  }
 
   const handleClick = (event: MouseEvent<HTMLAnchorElement>): void => {
     if (resolvedFileTarget) {
       event.preventDefault()
+      if (event.metaKey || event.ctrlKey || event.shiftKey) {
+        openInEditor(resolvedFileTarget)
+        return
+      }
       previewWorkspaceFile({ ...resolvedFileTarget, workspaceRoot })
       return
     }
@@ -107,14 +122,7 @@ function StreamdownLink({
   const handleDoubleClick = (event: MouseEvent<HTMLAnchorElement>): void => {
     if (!resolvedFileTarget) return
     event.preventDefault()
-    void openWorkspacePathInEditor(resolvedFileTarget, workspaceRoot).then((result) => {
-      if (!result.ok) {
-        void window.sciforge?.logError?.('editor-open', 'Failed to open file reference', {
-          message: result.message,
-          target: resolvedFileTarget
-        })?.catch(() => undefined)
-      }
-    })
+    openInEditor(resolvedFileTarget)
   }
 
   return (

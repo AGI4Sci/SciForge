@@ -152,15 +152,15 @@ describe('dev sciforge browser bridge', () => {
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
 
     installDevSciForgeBridge()
-    await window.sciforge.getProjectDagView({ view: 'graph' })
-    await window.sciforge.runProjectDagCompile({ goalTitle: 'Project alpha' })
+    await window.sciforge.getProjectDagView({ view: 'graph', workspaceRoot: '/tmp/project-alpha' })
+    await window.sciforge.runProjectDagCompile({ goalTitle: 'Project alpha', workspaceRoot: '/tmp/project-alpha' })
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:5173/__sciforge-dev-bridge/invoke',
       expect.objectContaining({
         body: JSON.stringify({
           channel: 'projectDag:view',
-          payload: { view: 'graph' }
+          payload: { view: 'graph', workspaceRoot: '/tmp/project-alpha' }
         })
       })
     )
@@ -169,7 +169,37 @@ describe('dev sciforge browser bridge', () => {
       expect.objectContaining({
         body: JSON.stringify({
           channel: 'projectDag:compile',
-          payload: { goalTitle: 'Project alpha' }
+          payload: { goalTitle: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
+        })
+      })
+    )
+  })
+
+  it('routes Evidence DAG panel calls through the dev bridge', async () => {
+    installWindow(undefined, '?devBrowserBridgeToken=query-token-123')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, payload: { url: 'http://127.0.0.1:3897/' } })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.getEvidenceDagView({ runtimeId: 'codex', threadId: 'thread-1' })
+    await window.sciforge.updateEvidenceDag({ runtimeId: 'codex', threadId: 'thread-1' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'evidenceDag:view',
+          payload: { runtimeId: 'codex', threadId: 'thread-1' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'evidenceDag:update',
+          payload: { runtimeId: 'codex', threadId: 'thread-1' }
         })
       })
     )

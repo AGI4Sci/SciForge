@@ -120,6 +120,36 @@ describe('Evidence DAG runtime feed', () => {
     )
   })
 
+  it('can request a fast full-thread rebuild for explicit updates', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }))
+
+    await feedEvidenceDag({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      items: [{ id: 'u1', kind: 'user_message', text: 'hello' }],
+      env: {
+        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897/',
+        SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret'
+      },
+      fetchImpl,
+      rebuild: true,
+      verify: false,
+      audit: false
+    })
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://127.0.0.1:3897/threads/codex%3Athread-1/ingest-trace',
+      expect.objectContaining({
+        body: JSON.stringify({
+          trace: [{ id: 'u1', type: 'message', role: 'user', content: 'hello' }],
+          rebuild: true,
+          verify: false,
+          audit: false
+        })
+      })
+    )
+  })
+
   it('throws on failed ingest when failOpen is disabled', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       ok: false,

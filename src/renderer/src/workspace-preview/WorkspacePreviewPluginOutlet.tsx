@@ -1,4 +1,7 @@
-import type { ReactElement } from 'react'
+import {
+  useCallback,
+  type ReactElement
+} from 'react'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation,
@@ -28,7 +31,9 @@ import {
   ImageWorkspaceViewer
 } from './ImageWorkspaceViewer'
 import {
-  MarkdownWorkspaceViewer
+  MarkdownWorkspaceViewer,
+  type MarkdownWorkspaceViewerApplyEditHandler,
+  type MarkdownWorkspaceViewerProps
 } from './MarkdownWorkspaceViewer'
 import {
   PdfWorkspaceViewer
@@ -139,27 +144,10 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         observation.file.mimeType === 'text/x-markdown'
       )),
     render: ({ context, observation, applyEdit }) => (
-      <MarkdownWorkspaceViewer
+      <MarkdownWorkspaceViewerHost
+        context={context}
         observation={observation}
-        className="h-full min-h-0"
-        onApplyEdit={applyEdit}
-        loadWorkspaceImage={async ({ path }) => {
-          const sessionId = context.state.session?.id
-          if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
-          const result = await context.host.invokeAction(sessionId, {
-            actionId: 'markdown.readImage',
-            input: { path }
-          })
-          if (!result.ok) return result
-          const payload = result.result
-          if (!isRecord(payload) || typeof payload.dataUrl !== 'string') {
-            return { ok: false, message: 'Markdown image action did not return a data URL.' }
-          }
-          return {
-            ok: true,
-            dataUrl: payload.dataUrl
-          }
-        }}
+        applyEdit={applyEdit}
       />
     )
   },
@@ -232,10 +220,12 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
             onApplyEdit={pdf.onApplyEdit}
             annotationOverlays={pdf.annotationOverlays}
             activeAnnotationId={pdf.activeAnnotationId}
+            annotationsOpen={pdf.annotationsOpen}
             jumpToRect={pdf.jumpToRect}
             onSelectionChange={pdf.onSelectionChange}
             onAnnotationSelect={pdf.onAnnotationSelect}
             onOpenAnnotations={pdf.onOpenAnnotations}
+            onToggleAnnotations={pdf.onToggleAnnotations}
           />
         )}
       />
@@ -359,6 +349,44 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
     )
   }
 ]
+
+function MarkdownWorkspaceViewerHost({
+  context,
+  observation,
+  applyEdit
+}: {
+  context: WorkspacePreviewPanelShellContext
+  observation: WorkspaceObservation | null
+  applyEdit: MarkdownWorkspaceViewerApplyEditHandler
+}): ReactElement {
+  const host = context.host
+  const sessionId = context.state.session?.id
+  const loadWorkspaceImage = useCallback<NonNullable<MarkdownWorkspaceViewerProps['loadWorkspaceImage']>>(async ({ path }) => {
+    if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
+    const result = await host.invokeAction(sessionId, {
+      actionId: 'markdown.readImage',
+      input: { path }
+    })
+    if (!result.ok) return result
+    const payload = result.result
+    if (!isRecord(payload) || typeof payload.dataUrl !== 'string') {
+      return { ok: false, message: 'Markdown image action did not return a data URL.' }
+    }
+    return {
+      ok: true,
+      dataUrl: payload.dataUrl
+    }
+  }, [host, sessionId])
+
+  return (
+    <MarkdownWorkspaceViewer
+      observation={observation}
+      className="h-full min-h-0"
+      onApplyEdit={applyEdit}
+      loadWorkspaceImage={loadWorkspaceImage}
+    />
+  )
+}
 
 export function resolveWorkspacePreviewPluginRendererContribution(
   context: WorkspacePreviewPanelShellContext,

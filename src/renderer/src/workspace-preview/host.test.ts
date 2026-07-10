@@ -184,6 +184,49 @@ describe('WorkspacePreviewHost', () => {
     expect(host.getState().error).toBeNull()
   })
 
+  it('does not notify subscribers for no-op successful host action patches', async () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    const session = createSession(descriptor)
+    const file = createFileState()
+    const bridge = createMockBridge({
+      open: vi.fn<WorkspacePreviewBridgeAdapter['open']>(async () => ({
+        ok: true,
+        session,
+        manifest: descriptor.manifest,
+        route: 'matched',
+        file
+      })),
+      invokeAction: vi.fn<WorkspacePreviewBridgeAdapter['invokeAction']>(async (sessionId, action) => ({
+        ok: true,
+        sessionId,
+        pluginId: descriptor.manifest.id,
+        actionId: action.actionId,
+        invokedAt: '2026-07-08T00:00:00.000Z',
+        result: { ok: true },
+        audit: {
+          pluginId: descriptor.manifest.id,
+          path: file.path,
+          actionId: action.actionId,
+          effect: 'host-action'
+        }
+      }))
+    })
+    const host = createWorkspacePreviewHost({ registry, bridge })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    expect(host.getState().error).toBeNull()
+
+    const listener = vi.fn()
+    const unsubscribe = host.subscribe(listener)
+    await host.invokeAction({
+      actionId: 'molecular.workbench',
+      input: {}
+    })
+    unsubscribe()
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('forwards generic selection, edit, export, range, watch, and unwatch calls', async () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const descriptor = requireDescriptor(registry, 'protein.pdb')

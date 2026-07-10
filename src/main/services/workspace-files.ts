@@ -1182,7 +1182,8 @@ export async function resolveWorkspaceFile(
     const targetPath = await resolveOpenTargetPath(payload.path, payload.workspaceRoot, {
       allowBasenameFallback: false
     })
-    return { ok: true, path: targetPath }
+    const info = await stat(targetPath)
+    return { ok: true, path: targetPath, kind: info.isDirectory() ? 'directory' : 'file' }
   } catch (error) {
     return {
       ok: false,

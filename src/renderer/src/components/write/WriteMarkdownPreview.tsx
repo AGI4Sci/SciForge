@@ -1,6 +1,10 @@
 import {
   Component,
+  createContext,
+  useCallback,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentPropsWithoutRef,
@@ -67,8 +71,31 @@ export type WriteMarkdownWorkspaceImageLoader = (input: {
 }>
 
 type CodeProps = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
-  node?: { tagName?: string }
+  node?: MarkdownCodeNode
 }
+
+type MarkdownPoint = {
+  line?: number
+  column?: number
+}
+
+type MarkdownPosition = {
+  start?: MarkdownPoint
+  end?: MarkdownPoint
+}
+
+type MarkdownCodeNode = {
+  tagName?: string
+  position?: MarkdownPosition
+}
+
+type CodeBlockExpansionContextValue = {
+  expandedCodeBlocks: Record<string, boolean>
+  filePath?: string | null
+  setCodeBlockExpanded: (key: string, expanded: boolean) => void
+}
+
+const CodeBlockExpansionContext = createContext<CodeBlockExpansionContextValue | null>(null)
 
 export const writeMarkdownHardenOptions = {
   defaultOrigin: 'https://sciforge.local',
@@ -133,27 +160,37 @@ function copyTextFallback(text: string): boolean {
 
 function PreviewCodeBlock({
   code,
-  language
+  language,
+  expanded: controlledExpanded,
+  onExpandedChange
 }: {
   code: string
   language: string
+  expanded?: boolean
+  onExpandedChange?: (expanded: boolean) => void
 }): ReactElement {
   const { t } = useTranslation('common')
-  const trimmedCode = code.replace(TRAILING_NEWLINES_REGEX, '')
+  const trimmedCode = useMemo(() => code.replace(TRAILING_NEWLINES_REGEX, ''), [code])
   const [html, setHtml] = useState(() => renderFallbackCodeHtml(trimmedCode))
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
   const [expandable, setExpandable] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  const [localExpanded, setLocalExpanded] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const copyResetRef = useRef<number | null>(null)
+  const expandableRef = useRef(false)
+  const expanded = controlledExpanded ?? localExpanded
+  const setExpanded = onExpandedChange ?? setLocalExpanded
 
   useEffect(() => {
     let cancelled = false
-    setHtml(renderFallbackCodeHtml(trimmedCode))
+    const fallbackHtml = renderFallbackCodeHtml(trimmedCode)
+    setHtml((current) => current === fallbackHtml ? current : fallbackHtml)
 
     void highlightCodeHtml(trimmedCode, language).then((nextHtml) => {
-      if (!cancelled) setHtml(nextHtml)
+      if (!cancelled) {
+        setHtml((current) => current === nextHtml ? current : nextHtml)
+      }
     })
 
     return () => {
@@ -166,7 +203,10 @@ function PreviewCodeBlock({
     if (!element) return
 
     const update = (): void => {
-      setExpandable(element.scrollHeight > COLLAPSE_HEIGHT)
+      const nextExpandable = element.scrollHeight > COLLAPSE_HEIGHT
+      if (expandableRef.current === nextExpandable) return
+      expandableRef.current = nextExpandable
+      setExpandable(nextExpandable)
     }
 
     update()
@@ -178,8 +218,8 @@ function PreviewCodeBlock({
   }, [html, trimmedCode])
 
   useEffect(() => {
-    setExpanded(false)
-  }, [trimmedCode, language])
+    if (controlledExpanded === undefined) setLocalExpanded(false)
+  }, [controlledExpanded, trimmedCode, language])
 
   useEffect(
     () => () => {
@@ -232,7 +272,7 @@ function PreviewCodeBlock({
               className="ds-code-block-action"
               title={expanded ? 'Collapse code' : 'Expand code'}
               aria-label={expanded ? 'Collapse code' : 'Expand code'}
-              onClick={() => setExpanded((value) => !value)}
+              onClick={() => setExpanded(!expanded)}
             >
               {expanded ? (
                 <ChevronUp className="h-3.5 w-3.5" strokeWidth={1.9} />
@@ -264,6 +304,7 @@ function PreviewCodeBlock({
 }
 
 function PreviewCode({ className, children, node, ...props }: CodeProps): ReactNode {
+  const expansionContext = useContext(CodeBlockExpansionContext)
   const text = extractText(children)
   const isInline = node?.tagName !== 'code' || (!LANGUAGE_REGEX.test(className ?? '') && !text.includes('\n'))
 
@@ -280,7 +321,19 @@ function PreviewCode({ className, children, node, ...props }: CodeProps): ReactN
 
   const match = className?.match(LANGUAGE_REGEX)
   const language = match?.[1] ?? ''
-  return <PreviewCodeBlock code={text} language={language} />
+  if (!expansionContext) {
+    return <PreviewCodeBlock code={text} language={language} />
+  }
+
+  const expansionKey = getCodeBlockExpansionKey(text, language, node, expansionContext?.filePath)
+  return (
+    <PreviewCodeBlock
+      code={text}
+      language={language}
+      expanded={expansionContext.expandedCodeBlocks[expansionKey] ?? false}
+      onExpandedChange={(expanded) => expansionContext.setCodeBlockExpanded(expansionKey, expanded)}
+    />
+  )
 }
 
 type ResolvedMarkdownImageProps = {
@@ -393,54 +446,109 @@ class PreviewErrorBoundary extends Component<PreviewBoundaryProps, PreviewBounda
 }
 
 function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceRoot, loadWorkspaceImage }: Props): ReactElement {
-  if (!isMarkdown) return plainTextFallback(content)
-  const markdownContent = normalizeMarkdownMathDelimiters(content)
+  const [expandedCodeBlocks, setExpandedCodeBlocks] = useState<Record<string, boolean>>({})
+  const setCodeBlockExpanded = useCallback((key: string, expanded: boolean): void => {
+    setExpandedCodeBlocks((current) => {
+      if (current[key] === expanded) return current
+      return {
+        ...current,
+        [key]: expanded
+      }
+    })
+  }, [])
+  const codeBlockExpansionContext = useMemo<CodeBlockExpansionContextValue>(() => ({
+    expandedCodeBlocks,
+    filePath,
+    setCodeBlockExpanded
+  }), [expandedCodeBlocks, filePath, setCodeBlockExpanded])
 
-  return (
-    <div className="ds-markdown write-markdown-preview min-h-full text-ds-ink">
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        urlTransform={writeMarkdownUrlTransform}
-        components={{
-          a: ({ href, children, ...props }): ReactNode => (
-            <a
-              {...props}
-              href={href}
-              onClick={(event) => {
-                if (!href) return
-                event.preventDefault()
-                void openSafeExternalUrl(href).catch(() => undefined)
-              }}
-            >
-              {children}
-            </a>
-          ),
-          img: ({ src, alt, ...props }): ReactNode => (
-            <ResolvedMarkdownImage
-              {...props}
-              src={src}
-              alt={alt}
-              filePath={filePath}
-              workspaceRoot={workspaceRoot}
-              loadWorkspaceImage={loadWorkspaceImage}
-            />
-          ),
-          code: ({ className, children, node, ...props }): ReactNode => (
-            <PreviewCode
-              className={className}
-              node={node}
-              {...props}
-            >
-              {children}
-            </PreviewCode>
-          )
+  useEffect(() => {
+    setExpandedCodeBlocks({})
+  }, [filePath])
+
+  const markdownContent = useMemo(() => normalizeMarkdownMathDelimiters(content), [content])
+  const markdownComponents = useMemo(() => ({
+    a: ({ href, children, ...props }: ComponentPropsWithoutRef<'a'>): ReactNode => (
+      <a
+        {...props}
+        href={href}
+        onClick={(event) => {
+          if (!href) return
+          event.preventDefault()
+          void openSafeExternalUrl(href).catch(() => undefined)
         }}
       >
-        {markdownContent}
-      </ReactMarkdown>
+        {children}
+      </a>
+    ),
+    img: ({ src, alt, ...props }: ComponentPropsWithoutRef<'img'>): ReactNode => (
+      <ResolvedMarkdownImage
+        {...props}
+        src={src}
+        alt={alt}
+        filePath={filePath}
+        workspaceRoot={workspaceRoot}
+        loadWorkspaceImage={loadWorkspaceImage}
+      />
+    ),
+    code: ({ className, children, node, ...props }: CodeProps): ReactNode => (
+      <PreviewCode
+        className={className}
+        node={node}
+        {...props}
+      >
+        {children}
+      </PreviewCode>
+    )
+  }), [filePath, loadWorkspaceImage, workspaceRoot])
+
+  if (!isMarkdown) return plainTextFallback(content)
+  return (
+    <div className="ds-markdown write-markdown-preview min-h-full text-ds-ink">
+      <CodeBlockExpansionContext.Provider value={codeBlockExpansionContext}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          urlTransform={writeMarkdownUrlTransform}
+          components={markdownComponents}
+        >
+          {markdownContent}
+        </ReactMarkdown>
+      </CodeBlockExpansionContext.Provider>
     </div>
   )
+}
+
+function getCodeBlockExpansionKey(
+  code: string,
+  language: string,
+  node?: MarkdownCodeNode,
+  filePath?: string | null
+): string {
+  const position = node?.position
+  const start = position?.start
+  const end = position?.end
+  const positionKey = [
+    start?.line ?? 0,
+    start?.column ?? 0,
+    end?.line ?? 0,
+    end?.column ?? 0
+  ].join(':')
+  return [
+    filePath ?? '',
+    language || 'text',
+    positionKey,
+    stableStringHash(`${language}\n${code}`)
+  ].join('|')
+}
+
+function stableStringHash(value: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 export function WriteMarkdownPreview(props: Props): ReactElement {
