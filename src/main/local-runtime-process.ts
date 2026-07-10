@@ -57,6 +57,7 @@ import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
 import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
+import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import type { ImageGenerationMcpLaunchConfig } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import type { SciforgeCanvasMcpLaunchConfig } from './sciforge-canvas-mcp-config'
@@ -404,6 +405,14 @@ async function startLocalRuntimeChildOnce(
         isPackaged: app.isPackaged
       }
     },
+    bgcDiscoveryMcp: {
+      settings,
+      launch: {
+        appPath: app.getAppPath(),
+        execPath: process.execPath,
+        isPackaged: app.isPackaged
+      }
+    },
     imageGenerationMcp: {
       settings,
       launch: {
@@ -571,6 +580,10 @@ export async function syncGuiManagedLocalRuntimeConfig(
       settings: AppSettingsV1
       launch: ScientificPlottingMcpLaunchConfig
     }
+    bgcDiscoveryMcp?: {
+      settings: AppSettingsV1
+      launch: BgcDiscoveryMcpLaunchConfig
+    }
     imageGenerationMcp?: {
       settings: AppSettingsV1
       launch: ImageGenerationMcpLaunchConfig
@@ -628,6 +641,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
     runtimeInspectorMcp: options?.runtimeInspectorMcp,
     scientificSkillsMcp: options?.scientificSkillsMcp,
     scientificPlottingMcp: options?.scientificPlottingMcp,
+    bgcDiscoveryMcp: options?.bgcDiscoveryMcp,
     imageGenerationMcp: options?.imageGenerationMcp,
     pptMasterMcp: options?.pptMasterMcp,
     sciforgeCanvasMcp: options?.sciforgeCanvasMcp,
@@ -674,6 +688,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
           options?.runtimeInspectorMcp ||
           options?.scientificSkillsMcp ||
           options?.scientificPlottingMcp ||
+          options?.bgcDiscoveryMcp ||
           options?.imageGenerationMcp ||
           options?.pptMasterMcp ||
           options?.sciforgeCanvasMcp ||

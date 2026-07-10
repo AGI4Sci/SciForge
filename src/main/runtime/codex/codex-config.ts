@@ -25,6 +25,7 @@ import type { WriteAssistMcpLaunchConfig } from '../../write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from '../../runtime-inspector-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from '../../scientific-skills-mcp-config'
 import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plotting-mcp-config'
+import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config'
 import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
 import type { SciforgeCanvasMcpLaunchConfig } from '../../sciforge-canvas-mcp-config'
@@ -70,6 +71,7 @@ export async function prepareCodexAppServerLaunch(options: {
   runtimeInspectorMcpLaunch?: RuntimeInspectorMcpLaunchConfig
   scientificSkillsMcpLaunch?: ScientificSkillsMcpLaunchConfig
   scientificPlottingMcpLaunch?: ScientificPlottingMcpLaunchConfig
+  bgcDiscoveryMcpLaunch?: BgcDiscoveryMcpLaunchConfig
   imageGenerationMcpLaunch?: ImageGenerationMcpLaunchConfig
   pptMasterMcpLaunch?: PptMasterMcpLaunchConfig
   sciforgeCanvasMcpLaunch?: SciforgeCanvasMcpLaunchConfig

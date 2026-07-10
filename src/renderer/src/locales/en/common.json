@@ -2013,6 +2013,8 @@
   "pluginMcpScientificSkillsDesc": "Read-only local index, search, reading, and planning for installed K-Dense scientific skills.",
   "pluginMcpScientificPlottingTitle": "Scientific Plotting MCP",
   "pluginMcpScientificPlottingDesc": "Generate scientific figures, apply paper-figure style, score similarity, and run one bounded auto-repair through a first-party controlled MCP.",
+  "pluginMcpBgcDiscoveryTitle": "BGC Discovery MCP",
+  "pluginMcpBgcDiscoveryDesc": "Run controlled genome-to-BGC discovery from antiSMASH outputs or configured local tools, producing auditable BGC cards, rankings, and experiment-ready summaries.",
   "pluginMcpImageGenerationTitle": "Image Generation MCP",
   "pluginMcpImageGenerationDesc": "Generate and edit visual image artifacts through a first-party MCP, then review them on SciForge Canvas without overwriting originals.",
   "pluginMcpSciforgeCanvasTitle": "SciForge Canvas MCP",

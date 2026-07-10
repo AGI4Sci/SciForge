@@ -327,6 +327,21 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
     }
   },
   {
+    id: 'bgc_discovery',
+    kind: 'mcp',
+    titleKey: 'pluginMcpBgcDiscoveryTitle',
+    descriptionKey: 'pluginMcpBgcDiscoveryDesc',
+    group: 'recommended',
+    mcpConfig: async (workspaceRoot) => {
+      if (typeof window.sciforge?.buildBgcDiscoveryMcpConfig !== 'function') {
+        throw new Error('BGC Discovery MCP config is unavailable in this build.')
+      }
+      const result = await window.sciforge.buildBgcDiscoveryMcpConfig(workspaceRoot || undefined)
+      if (!result.ok) throw new Error(result.message)
+      return result.config
+    }
+  },
+  {
     id: 'image_generation',
     kind: 'mcp',
     titleKey: 'pluginMcpImageGenerationTitle',

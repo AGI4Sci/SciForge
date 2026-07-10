@@ -43,6 +43,9 @@ const PACKAGE_DEFINITIONS = {
   scientificPlotting: {
     dir: 'packages/workers/scientific-plotting'
   },
+  bgcDiscovery: {
+    dir: 'packages/workers/bgc-discovery'
+  },
   imageGeneration: {
     dir: 'packages/workers/image-generation'
   },
@@ -74,6 +77,7 @@ const WORKSPACE_PACKAGE_IDS = [
   'runtimeInspector',
   'remoteExecutor',
   'scientificPlotting',
+  'bgcDiscovery',
   'imageGeneration',
   'multiAgent',
   'pptMaster',
@@ -91,6 +95,7 @@ const BUNDLED_PACKAGE_IDS = [
   'paperRadar',
   'runtimeInspector',
   'scientificPlotting',
+  'bgcDiscovery',
   'imageGeneration',
   'multiAgent',
   'pptMaster',
@@ -276,6 +281,21 @@ const RUNTIME_ENTRIES = [
     mcpNodeEntryPaths: [
       'out/main/scientific-skills-mcp-node-entry.js',
       'out/main/scientific-plotting-mcp-node-entry.js'
+    ]
+  },
+  {
+    id: 'bgc-discovery',
+    label: 'BGC Discovery',
+    packageIds: ['bgcDiscovery'],
+    requiredPathsExport: 'BGC_DISCOVERY_RUNTIME_REQUIRED_PATHS',
+    requiredPaths: packagePaths('bgcDiscovery', [
+      'package.json',
+      'src/mcp-server.ts',
+      'src/service.ts',
+      'src/contract.ts'
+    ]),
+    mcpNodeEntryPaths: [
+      'out/main/bgc-discovery-mcp-node-entry.js'
     ]
   },
   {
