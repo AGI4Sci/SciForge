@@ -43,6 +43,12 @@ import {
   resolveContentZoomWheel,
   stepContentScale
 } from '../../lib/content-zoom-shortcuts'
+import {
+  preferNativePdfDragSelection,
+  rotatedPdfTextBounds,
+  slicedRotatedPdfTextBounds,
+  type RotatedPdfTextGeometry
+} from './write-pdf-viewer-geometry'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
@@ -101,6 +107,7 @@ type TextLayerToken = {
 type PdfSearchTextSegment = {
   text: string
   rect: WritePdfSelectionPageRect
+  geometry: RotatedPdfTextGeometry
   order: number
   direction: string
   font?: string
@@ -1089,25 +1096,31 @@ function pdfSearchSegmentFromTextItem(
   const baseWidth = (vertical ? itemHeight : itemWidth) * viewport.scale
   if (!Number.isFinite(baseWidth) || baseWidth <= 0) return null
 
-  let left: number
-  let top: number
-  if (Math.abs(angle) < 0.0001) {
-    left = tx[4]
-    top = tx[5] - fontAscent
-  } else {
-    left = tx[4] + fontAscent * Math.sin(angle)
-    top = tx[5] - fontAscent * Math.cos(angle)
-  }
+  const left = tx[4] + fontAscent * Math.sin(angle)
+  const top = tx[5] - fontAscent * Math.cos(angle)
   if (!Number.isFinite(left) || !Number.isFinite(top)) return null
+
+  const rect = rotatedPdfTextBounds({
+    left,
+    top,
+    angle,
+    textWidth: baseWidth,
+    textHeight: fontHeight,
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height
+  })
 
   return {
     text,
-    rect: {
-      page,
-      x: clamp01(left / viewport.width),
-      y: clamp01(top / viewport.height),
-      width: clamp01(baseWidth / viewport.width),
-      height: clamp01(fontHeight / viewport.height)
+    rect: { page, ...rect },
+    geometry: {
+      left,
+      top,
+      angle,
+      textWidth: baseWidth,
+      textHeight: fontHeight,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height
     },
     order,
     direction: typeof item.dir === 'string' ? item.dir : 'ltr',
@@ -1347,19 +1360,14 @@ function slicePdfSearchSegmentRect(
     }
   }
 
-  const xOffset = segment.rect.width * (prefixWidth / fullWidth)
-  const width = segment.rect.width * (selectedWidth / fullWidth)
-  if (segment.direction === 'rtl') {
-    return {
-      ...segment.rect,
-      x: segment.rect.x + segment.rect.width - xOffset - width,
-      width
-    }
-  }
+  const prefixRatio = prefixWidth / fullWidth
+  const selectedRatio = selectedWidth / fullWidth
+  const startRatio = segment.direction === 'rtl'
+    ? 1 - prefixRatio - selectedRatio
+    : prefixRatio
   return {
-    ...segment.rect,
-    x: segment.rect.x + xOffset,
-    width
+    page: segment.rect.page,
+    ...slicedRotatedPdfTextBounds(segment.geometry, startRatio, selectedRatio)
   }
 }
 
@@ -2541,13 +2549,13 @@ export function WritePdfViewer({
       if (distance >= 4) {
         const root = rootRef.current
         if (root) {
-          const nativeSelection = selectionFromPdf(root, selectionContext)
-          const next = nativeSelection.text.trim()
-            ? nativeSelection
-            : selectionFromPdf(root, selectionContext, {
+          const next = preferNativePdfDragSelection(
+            selectionFromPdf(root, selectionContext),
+            () => selectionFromPdf(root, selectionContext, {
               start: textDrag.start,
               end: textDrag.last
             })
+          )
           if (next.text.trim()) {
             window.getSelection()?.removeAllRanges()
             emitSelection(next)

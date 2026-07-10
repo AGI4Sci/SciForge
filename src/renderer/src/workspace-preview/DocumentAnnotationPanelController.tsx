@@ -142,14 +142,10 @@ export function DocumentAnnotationPanelController({
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const sessionId = context.state.session?.id ?? null
   const path = observation?.file.path ?? context.state.session?.path ?? ''
-  const observationActions = useMemo(() => new Set([
-    ...(observation?.actions ?? []),
-    ...(context.state.observation?.actions ?? [])
-  ]), [context.state.observation?.actions, observation?.actions])
-  const canReadSidecar = Boolean(observationActions.has('annotation.sidecar.read') && sessionId)
-  const canImportSidecar = Boolean(documentKind === 'pdf' && observationActions.has('annotation.sidecar.import') && sessionId)
-  const canGeneratePdfReview = Boolean(documentKind === 'pdf' && observationActions.has(PDF_REVIEW_GENERATE_ACTION_ID) && sessionId)
-  const canImprovePdfReview = Boolean(documentKind === 'pdf' && observationActions.has(PDF_REVIEW_IMPROVE_ACTION_ID) && sessionId)
+  const canReadSidecar = Boolean(observation?.actions.includes('annotation.sidecar.read') && sessionId)
+  const canImportSidecar = Boolean(documentKind === 'pdf' && observation?.actions.includes('annotation.sidecar.import') && sessionId)
+  const canGeneratePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_GENERATE_ACTION_ID) && sessionId)
+  const canImprovePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_IMPROVE_ACTION_ID) && sessionId)
   const pdfReviewHasSelection = Boolean(pdfReviewSelection && (pdfReviewSelection.text.trim() || pdfReviewSelection.rects?.length))
   const pdfReviewSelectionLabel = pdfReviewHasSelection
     ? `${pdfReviewSelection?.text.trim().length || pdfReviewSelection?.rects?.length || 0}${pdfReviewSelection?.text.trim() ? ' chars' : ' regions'}`
