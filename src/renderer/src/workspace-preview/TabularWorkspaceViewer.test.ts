@@ -22,7 +22,8 @@ import {
   TabularWorkspaceViewerColumnInsertEditor,
   TabularWorkspaceViewerDeleteEditor,
   TabularWorkspaceViewerRowInsertEditor,
-  TabularWorkspaceViewer
+  TabularWorkspaceViewer,
+  tabularSelectionContainsCoordinate
 } from './TabularWorkspaceViewer'
 
 function createTabularObservation(
@@ -298,6 +299,10 @@ describe('TabularWorkspaceViewer', () => {
     expect(html).toContain('data-sort-column-index="0"')
     expect(html).toContain('<span>sample</span>')
     expect(html).toContain('data-cell-coordinate="1:0"')
+    expect(html).toMatch(/data-cell-coordinate="1:0"[^>]*data-selected="true"/)
+    expect(html).toContain('data-selection-intersects="true"')
+    expect(tabularSelectionContainsCoordinate(createTabularObservation().selection, 1, 0)).toBe(true)
+    expect(tabularSelectionContainsCoordinate(createTabularObservation().selection, 3, 0)).toBe(false)
     expect(html).toContain('>s2</span>')
     expect(html).toContain('Rows: 3; Columns: 2')
     expect(html).toContain('Selected ranges')

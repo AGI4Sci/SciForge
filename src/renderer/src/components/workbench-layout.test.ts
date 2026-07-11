@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest'
 
-import { fitWorkbenchWidths, shouldCloseRightPanelOnThreadChange } from './workbench-layout'
+import {
+  fitWorkbenchWidths,
+  projectDagReturnSelection,
+  shouldCloseRightPanelOnThreadChange
+} from './workbench-layout'
+
+describe('projectDagReturnSelection', () => {
+  it('preserves the legacy Claim fallback and a validated graph node', () => {
+    expect(projectDagReturnSelection({
+      kind: 'project-dag',
+      claimId: 'claim:source',
+      nodeId: 'evidence:source-1'
+    })).toEqual({ claimId: 'claim:source', nodeId: 'evidence:source-1' })
+  })
+
+  it('drops malformed graph node IDs without losing a valid Claim fallback', () => {
+    expect(projectDagReturnSelection({
+      kind: 'project-dag',
+      claimId: 'claim:source',
+      nodeId: '../evidence source'
+    })).toEqual({ claimId: 'claim:source' })
+    expect(projectDagReturnSelection({
+      kind: 'project-dag',
+      nodeId: `evidence:${'a'.repeat(512)}`
+    })).toBeNull()
+  })
+})
 
 describe('fitWorkbenchWidths', () => {
   it('allows the right panel to consume the remaining width', () => {

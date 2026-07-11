@@ -207,7 +207,25 @@ describe('AgentRuntimeProvider', () => {
       },
       items: [
         { id: 'user-1', kind: 'user_message', text: 'hello', createdAt: '2026-06-11T00:01:01.000Z' },
-        { id: 'assistant-1', kind: 'assistant_message', text: 'hi', createdAt: '2026-06-11T00:01:02.000Z' }
+        {
+          id: 'assistant-1',
+          kind: 'assistant_message',
+          text: 'hi',
+          createdAt: '2026-06-11T00:01:02.000Z',
+          meta: {
+            scientificObjects: [{
+              schemaVersion: 1,
+              id: 'structure-1',
+              modality: 'molecular',
+              title: 'Protein structure',
+              source: 'tool',
+              path: '/tmp/workspace/protein.pdb',
+              workspaceRoot: '/tmp/workspace',
+              mimeType: 'chemical/x-pdb',
+              hash: { algorithm: 'sha256', digest: 'a'.repeat(64) }
+            }]
+          }
+        }
       ]
     }))
     const startTurn = vi.fn(async () => ({ threadId: 'thread-2', turnId: 'turn-2', userMessageItemId: 'user-2' }))
@@ -300,7 +318,14 @@ describe('AgentRuntimeProvider', () => {
       },
       blocks: [
         { kind: 'user', id: 'user-1', text: 'hello' },
-        { kind: 'assistant', id: 'assistant-1', text: 'hi' }
+        {
+          kind: 'assistant',
+          id: 'assistant-1',
+          text: 'hi',
+          meta: {
+            scientificObjects: [expect.objectContaining({ id: 'structure-1', modality: 'molecular' })]
+          }
+        }
       ]
     })
     await expect(provider.sendUserMessage('thread-2', 'hello', {

@@ -42,10 +42,13 @@ import {
   workspacePreviewByteRangeSchema,
   workspacePreviewEditOperationSchema,
   workspacePreviewExportTargetSchema,
+  workspacePreviewAnchorSchema,
+  workspacePreviewIntegrityExpectationSchema,
   workspacePreviewModeSchema,
   workspacePreviewPrepareArtifactRequestSchema,
   workspacePreviewPluginActionInputSchema,
-  workspacePreviewReadArtifactRangeRequestSchema
+  workspacePreviewReadArtifactRangeRequestSchema,
+  workspaceStructuredSelectionSchema
 } from '../../shared/workspace-preview'
 import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
 export {
@@ -520,6 +523,13 @@ const imageGenerationPatchSchema = z.object({
   fastSamModelPath: defaultPathSchema
 }).strict()
 
+const runtimeToolBudgetProfilePatchSchema = z.object({
+  softLimit: z.number().int().positive().max(10_000).optional(),
+  hardLimit: z.number().int().positive().max(10_000).optional(),
+  maxAutomaticPhases: z.number().int().positive().max(32).optional(),
+  totalLimit: z.number().int().positive().max(100_000).optional()
+}).strict()
+
 const localRuntimePatchSchema = z.object({
   binaryPath: defaultPathSchema,
   port: z.number().int().min(1).max(65_535).optional(),
@@ -569,6 +579,19 @@ const localRuntimePatchSchema = z.object({
   runtimeTuning: z.object({
     toolArgumentRepair: z.object({
       maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
+    }).strict().optional(),
+    toolBudget: z.object({
+      enabled: z.boolean().optional(),
+      profiles: z.object({
+        explanation: runtimeToolBudgetProfilePatchSchema.optional(),
+        review: runtimeToolBudgetProfilePatchSchema.optional(),
+        implementation: runtimeToolBudgetProfilePatchSchema.optional(),
+        long: runtimeToolBudgetProfilePatchSchema.optional()
+      }).strict().optional()
+    }).strict().optional(),
+    parallelism: z.object({
+      localReadOnly: z.number().int().positive().max(64).optional(),
+      networkMcp: z.number().int().positive().max(64).optional()
     }).strict().optional()
   }).strict().optional()
 }).strict()
@@ -1767,7 +1790,10 @@ export const openEditorPathPayloadSchema = z
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
     editorId: optionalTrimmedString(MAX_EDITOR_ID_LENGTH),
     line: z.number().int().positive().max(1_000_000).optional(),
-    column: z.number().int().positive().max(1_000_000).optional()
+    column: z.number().int().positive().max(1_000_000).optional(),
+    selection: workspaceStructuredSelectionSchema.optional(),
+    anchor: workspacePreviewAnchorSchema.optional(),
+    integrity: workspacePreviewIntegrityExpectationSchema.optional()
   })
   .strict()
 
@@ -1787,7 +1813,12 @@ export const workspacePreviewOpenPayloadSchema = z
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
     mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH),
-    mode: z.string().trim().pipe(workspacePreviewModeSchema).optional()
+    mode: z.string().trim().pipe(workspacePreviewModeSchema).optional(),
+    line: z.number().int().positive().max(1_000_000).optional(),
+    column: z.number().int().positive().max(1_000_000).optional(),
+    selection: workspaceStructuredSelectionSchema.optional(),
+    anchor: workspacePreviewAnchorSchema.optional(),
+    integrity: workspacePreviewIntegrityExpectationSchema.optional()
   })
   .strict()
 
@@ -2141,6 +2172,17 @@ export const evidenceDagUpdatePayloadSchema = z
     message: 'rebuild fields are only valid for an explicit rebuild'
   })
 
+export const evidenceDagEvidencePreviewResolvePayloadSchema = z
+  .object({
+    runtimeId: agentRuntimeIdSchema,
+    threadId: trimmedString(MAX_ID_LENGTH),
+    snapshotDigest: trimmedString(MAX_ID_LENGTH).regex(/^sha256:[0-9a-f]{64}$/i),
+    sourceAssertionId: trimmedString(MAX_ID_LENGTH),
+    artifactVersionId: trimmedString(MAX_ID_LENGTH),
+    sourceAnchorId: trimmedString(MAX_ID_LENGTH)
+  })
+  .strict()
+
 const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'attention'])
 
 export const projectDagViewPayloadSchema = z
@@ -2181,6 +2223,18 @@ export const projectDagGoalSavePayloadSchema = z
     project: optionalTrimmedString(MAX_ID_LENGTH),
     sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
     autonomyMode: dagAutonomyModeSchema.optional()
+  })
+  .strict()
+
+export const projectDagEvidencePreviewResolvePayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    project: optionalTrimmedString(MAX_ID_LENGTH),
+    snapshotDigest: trimmedString(MAX_ID_LENGTH),
+    claimId: trimmedString(MAX_ID_LENGTH),
+    artifactVersionId: trimmedString(MAX_ID_LENGTH),
+    sourceAnchorId: trimmedString(MAX_ID_LENGTH)
   })
   .strict()
 

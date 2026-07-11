@@ -67,6 +67,8 @@ import type {
   WorkspacePreviewEditOperation,
   WorkspacePreviewExportTarget,
   WorkspacePreviewFileState,
+  WorkspacePreviewIntegrityExpectation,
+  WorkspacePreviewIntegrityVerification,
   WorkspacePreviewPluginActionInput,
   WorkspacePreviewPluginActionResult,
   WorkspacePreviewPluginManifest,
@@ -521,6 +523,49 @@ export type EvidenceDagUpdateResult = {
   jobId: string
   status: DagPanelStatus
 }
+export type EvidenceSourceSelector = {
+  type: 'pdf' | 'text' | 'table' | 'figure' | 'code' | 'dataset' | 'web'
+  page?: number
+  section?: string
+  table?: string
+  figure?: string
+  rowRange?: string
+  columnNames?: string[]
+  lineRange?: string
+  quote?: string
+  query?: Record<string, unknown>
+}
+export type EvidenceDagEvidencePreviewResolveRequest = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  snapshotDigest: string
+  sourceAssertionId: string
+  artifactVersionId: string
+  sourceAnchorId: string
+}
+export type EvidenceDagEvidencePreviewResolveResult =
+  | {
+      ok: true
+      path: string
+      workspaceRoot: string
+      runtimeId: AgentRuntimeId
+      threadId: string
+      snapshotDigest: string
+      sourceAssertionId: string
+      artifactId?: string
+      artifactVersionId: string
+      sourceAnchorId: string
+      selector: EvidenceSourceSelector
+      contentDigest: string
+      anchorDigest?: string
+      mediaType?: string
+    }
+  | {
+      ok: false
+      code: 'snapshot_mismatch' | 'provenance_mismatch' | 'access_restricted' |
+        'unsupported_locator' | 'file_unavailable'
+      message: string
+    }
 export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'attention'
 export type ProjectDagViewRequest = {
   view?: ProjectDagViewName
@@ -569,6 +614,37 @@ export type ProjectDagGoalSaveResult = {
   version?: number
   status: DagPanelStatus
 }
+export type ProjectDagSourceSelector = EvidenceSourceSelector
+export type ProjectDagEvidencePreviewResolveRequest = {
+  workspaceRoot: string
+  projectRoot?: string
+  project?: string
+  snapshotDigest: string
+  claimId: string
+  artifactVersionId: string
+  sourceAnchorId: string
+}
+export type ProjectDagEvidencePreviewResolveResult =
+  | {
+      ok: true
+      path: string
+      workspaceRoot: string
+      snapshotDigest: string
+      claimId: string
+      artifactId?: string
+      artifactVersionId: string
+      sourceAnchorId: string
+      selector: ProjectDagSourceSelector
+      contentDigest?: string
+      anchorDigest?: string
+      mediaType?: string
+    }
+  | {
+      ok: false
+      code: 'claim_mismatch' | 'snapshot_mismatch' | 'provenance_mismatch' |
+        'access_restricted' | 'unsupported_locator' | 'file_unavailable'
+      message: string
+    }
 export type ConnectPhoneInstallQrResult =
   | { ok: true; url: string; deviceCode: string; userCode: string; interval: number; expireIn: number }
   | { ok: false; message: string }
@@ -771,6 +847,7 @@ export type WorkspacePreviewOpenInput = {
   column?: number
   selection?: WorkspaceStructuredSelection
   anchor?: WorkspacePreviewAnchor
+  integrity?: WorkspacePreviewIntegrityExpectation
 }
 export type WorkspacePreviewOpenResult =
   | {
@@ -779,6 +856,7 @@ export type WorkspacePreviewOpenResult =
       manifest: WorkspacePreviewPluginManifest
       route: 'matched' | 'fallback'
       file: WorkspacePreviewFileState
+      integrity?: WorkspacePreviewIntegrityVerification
     }
   | { ok: false; message: string }
 export type WorkspacePreviewObserveResult =
@@ -1144,9 +1222,15 @@ export type SciForgeApi = {
   getComputerUseStatus: () => Promise<ComputerUseStatusView>
   getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
   updateEvidenceDag: (input: EvidenceDagUpdateRequest) => Promise<EvidenceDagUpdateResult>
+  resolveEvidenceDagEvidencePreview: (
+    input: EvidenceDagEvidencePreviewResolveRequest
+  ) => Promise<EvidenceDagEvidencePreviewResolveResult>
   getProjectDagView: (input: ProjectDagViewRequest) => Promise<ProjectDagViewResult>
   updateProjectDag: (input: ProjectDagUpdateRequest) => Promise<ProjectDagUpdateResult>
   saveProjectDagGoal: (input: ProjectDagGoalSaveRequest) => Promise<ProjectDagGoalSaveResult>
+  resolveProjectDagEvidencePreview: (
+    input: ProjectDagEvidencePreviewResolveRequest
+  ) => Promise<ProjectDagEvidencePreviewResolveResult>
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

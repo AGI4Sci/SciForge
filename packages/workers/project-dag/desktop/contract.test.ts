@@ -18,15 +18,35 @@ type PureUi = {
   }
   graphModel: (graph: unknown) => {
     nodes: Array<{ id: string; kind: string; label: string }>
-    edges: Array<{ src: string; dst: string; type: string }>
+    edges: Array<{ id: string; src: string; dst: string; type: string }>
     counts: Record<string, number>
   }
+  evidenceReviewModel: (
+    evidence: unknown,
+    graph: unknown,
+    claimDetails: unknown[]
+  ) => {
+    pointer: { threadId: string; sourceAssertionId: string } | null
+    relatedClaimIds: string[]
+    resolved: null | {
+      claimId: string
+      assertion: { artifactVersionId: string; sourceAnchorId: string }
+    }
+  }
+  graphFocus: (
+    model: unknown,
+    nodeId: string,
+    mode?: 'direct' | 'strongest' | 'all'
+  ) => { mode: string; nodeIds: string[]; edgeIds: string[] }
+  graphEdgeRelationKind: (type: string) => string
+  opaqueGraphNodeId: (value: unknown) => string | null
   workspaceLocator: (assertion: unknown) => string | null
   workspacePreviewMessage: (
     assertion: unknown,
     claim: unknown,
     snapshotDigest: string,
-    requestId: string
+    requestId: string,
+    graphNodeId?: string
   ) => Record<string, unknown> | null
 }
 
@@ -64,14 +84,59 @@ describe('Project DAG desktop contract', () => {
     expect(html).not.toContain('/compile')
   })
 
-  it('ships distinct Evidence and Graph surfaces selected by the requested view', () => {
+  it('ships a unified review surface with the graph canvas always available', () => {
     const { html } = loadPureUi()
     expect(html).toContain('id="evidence-surface"')
     expect(html).toContain('id="evidence-vector"')
     expect(html).toContain('id="graph-surface"')
     expect(html).toContain('id="graph-scroll"')
     expect(html).toContain("query.get('view')==='graph'?'graph':'home'")
+    expect(html).toContain("document.getElementById('evidence-surface').hidden=false")
+    expect(html).toContain("document.getElementById('graph-surface').hidden=false")
+    expect(html).toContain('class="graph-workbench inspector-closed"')
+    expect(html).toContain('id="toggle-inspector"')
+    expect(html).toContain('id="inspector-close"')
+    expect(html).toContain("state.inspectorOpen=true")
+    expect(html).toContain("toggle.textContent=state.inspectorOpen?'专注图谱':'显示详情'")
+    expect(html).toContain('class="overview-fold"')
+    expect(html).toContain('aria-label="Project DAG 审查 Inspector"')
+    expect(html).toContain('>概要</a>')
+    expect(html).toContain('>证据</a>')
+    expect(html).toContain('>原文</a>')
+    expect(html).toContain('>历史</a>')
+    expect(html.indexOf('id="graph-surface"')).toBeLessThan(html.indexOf('id="evidence-surface"'))
+    expect(html).toContain('data-graph-focus-mode="direct"')
+    expect(html).toContain('data-graph-focus-mode="strongest"')
+    expect(html).toContain('data-graph-focus-mode="all"')
+    expect(html).toContain('data-edge-type="${edgeType}"')
+    expect(html).toContain('relation-${graphEdgeRelationKind(edge.type)}')
+    expect(html).toContain('legend-line-contradicts')
+    expect(html).toContain('legend-line-qualifies')
     expect(html).toContain('role="img" aria-label="Committed Project DAG')
+  })
+
+  it('restores a Claim selected before entering the workspace preview', () => {
+    const { html } = loadPureUi()
+    expect(html).toContain("requestedClaimId=String(query.get('claim')||'')")
+    expect(html).toContain('requestedClaimConsumed:false')
+    expect(html).toContain('!state.requestedClaimConsumed&&requestedClaimId')
+    expect(html).toContain('state.requestedClaimConsumed=true;state.selectedClaimId=requestedClaimId')
+  })
+
+  it('restores an arbitrary validated graph node before the legacy Claim fallback', () => {
+    const { html, pure } = loadPureUi()
+    expect(pure.opaqueGraphNodeId('evidence:source-1')).toBe('evidence:source-1')
+    expect(pure.opaqueGraphNodeId('evidence source')).toBeNull()
+    expect(pure.opaqueGraphNodeId(`evidence:${'a'.repeat(512)}`)).toBeNull()
+    expect(html).toContain("requestedGraphNodeId=opaqueGraphNodeId(query.get('node'))")
+    expect(html).toContain('requestedGraphNodeConsumed:false')
+    expect(html).toContain("state.selectedClaimId=requestedNode.kind==='claim'?requestedNode.id:null")
+  })
+
+  it('clears stale Claim state when inspecting a non-Claim graph node', () => {
+    const { html } = loadPureUi()
+    expect(html).toContain("else{state.selectedClaimId=null;state.detail=null}renderClaims()")
+    expect(html).toContain('if(changed){state.previewFeedback=null;state.whatIfSourceId=null}')
   })
 
   it('builds visible nodes and directed edges from the committed Project snapshot', () => {
@@ -99,30 +164,116 @@ describe('Project DAG desktop contract', () => {
     ])
   })
 
-  it('emits a bounded workspace-preview request with an Anchor only for local artifacts', () => {
+  it('computes direct, strongest, and all-related graph focus paths', () => {
+    const { pure } = loadPureUi()
+    const model = pure.graphModel({
+      snapshot: { evidenceVector: [] },
+      evidence: [
+        { id: 'source-weak', content: 'Weak source' },
+        { id: 'source-strong', content: 'Strong source' }
+      ],
+      claims: [
+        { id: 'claim-selected', statement: 'Selected Claim' },
+        { id: 'claim-opposed', statement: 'Opposed Claim' }
+      ],
+      goals: [{ id: 'goal-main', title: 'Main goal' }],
+      edges: [
+        { id: 'weak', src: 'source-weak', dst: 'claim-selected', edge_type: 'supports', quality_score: 0.35 },
+        { id: 'strong', src: 'source-strong', dst: 'claim-selected', edge_type: 'supports', quality_score: 0.95 },
+        { id: 'goal', src: 'claim-selected', dst: 'goal-main', edge_type: 'addresses' },
+        { id: 'opposes', src: 'claim-selected', dst: 'claim-opposed', edge_type: 'contradicts' }
+      ]
+    })
+
+    expect(pure.graphFocus(model, 'claim-selected', 'direct')).toEqual({
+      mode: 'direct',
+      nodeIds: ['claim-selected', 'source-weak', 'source-strong', 'goal-main', 'claim-opposed'],
+      edgeIds: ['weak', 'strong', 'goal', 'opposes']
+    })
+    expect(pure.graphFocus(model, 'claim-selected')).toEqual({
+      mode: 'strongest',
+      nodeIds: ['claim-selected', 'source-strong', 'goal-main'],
+      edgeIds: ['strong', 'goal']
+    })
+    expect(pure.graphFocus(model, 'claim-selected', 'all')).toEqual({
+      mode: 'all',
+      nodeIds: ['claim-selected', 'source-weak', 'source-strong', 'goal-main', 'claim-opposed'],
+      edgeIds: ['weak', 'strong', 'goal', 'opposes']
+    })
+    expect([
+      pure.graphEdgeRelationKind('supports'),
+      pure.graphEdgeRelationKind('contradicts'),
+      pure.graphEdgeRelationKind('qualifies'),
+      pure.graphEdgeRelationKind('derived_from')
+    ]).toEqual(['support', 'contradicts', 'qualifies', 'provenance'])
+  })
+
+  it('joins Project Evidence to its committed SourceAssertion, version, and anchor', () => {
+    const { pure } = loadPureUi()
+    const assertion = {
+      sourceAssertionId: 'source-a',
+      artifactVersionId: 'version-a',
+      sourceAnchorId: 'anchor-a'
+    }
+    const review = pure.evidenceReviewModel({
+      id: 'evidence-a',
+      content_ref: 'session-a#source-a',
+      source_hash: 'source-a'
+    }, {
+      claims: [{ id: 'claim-a', statement: 'Supported Claim' }],
+      edges: [{ src: 'evidence-a', dst: 'claim-a', edge_type: 'supports' }]
+    }, [{
+      id: 'claim-a',
+      provenance: {
+        paths: [{ threadId: 'session-a', sourceAssertions: [assertion] }]
+      }
+    }])
+
+    expect(review.pointer).toEqual({ threadId: 'session-a', sourceAssertionId: 'source-a' })
+    expect(review.relatedClaimIds).toEqual(['claim-a'])
+    expect(review.resolved).toMatchObject({
+      claimId: 'claim-a',
+      assertion: { artifactVersionId: 'version-a', sourceAnchorId: 'anchor-a' }
+    })
+  })
+
+  it('emits only opaque provenance identifiers for trusted workspace resolution', () => {
     const { html, pure } = loadPureUi()
     const local = {
       artifactId: 'artifact-a', artifactVersionId: 'version-a', sourceAnchorId: 'anchor-a',
-      artifact: {}, artifactVersion: { locator: 'papers/source.pdf' },
+      artifact: {}, artifactVersion: {
+        locator: 'papers/source.pdf',
+        contentDigest: `sha256:${'a'.repeat(64)}`
+      },
       sourceAnchor: { selector: { type: 'pdf', page: 3, quote: 'Supporting text' } }
     }
     expect(pure.workspaceLocator(local)).toBe('papers/source.pdf')
-    expect(pure.workspacePreviewMessage(
+    const message = pure.workspacePreviewMessage(
       local,
       { id: 'claim-a', statement: 'A supported Claim' },
       'project:current',
-      'preview-1'
-    )).toEqual({
+      'preview-1',
+      'evidence:source-1'
+    )
+    expect(message).toEqual({
       type: 'sciforge.project-dag.preview-workspace-evidence',
       version: 1,
       requestId: 'preview-1',
-      locator: 'papers/source.pdf',
-      artifactId: 'artifact-a',
       artifactVersionId: 'version-a',
       sourceAnchorId: 'anchor-a',
-      anchor: { kind: 'document', id: 'anchor-a', page: 3, quote: 'Supporting text' },
-      claim: { id: 'claim-a', statement: 'A supported Claim', snapshotDigest: 'project:current' }
+      graphNodeId: 'evidence:source-1',
+      claim: { id: 'claim-a', snapshotDigest: 'project:current' }
     })
+    expect(message).not.toHaveProperty('locator')
+    expect(message).not.toHaveProperty('anchor')
+    expect(message).not.toHaveProperty('contentDigest')
+    expect(pure.workspacePreviewMessage(
+      local,
+      { id: 'claim-a' },
+      'project:current',
+      'preview-invalid',
+      '../evidence source'
+    )).toBeNull()
     expect(pure.workspaceLocator({
       artifact: {}, artifactVersion: { locator: 'runtime:thread:item' }
     })).toBeNull()

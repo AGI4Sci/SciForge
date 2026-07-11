@@ -4,7 +4,7 @@ import {
   parseProjectDagPreviewRequest,
   PROJECT_DAG_PREVIEW_REQUEST,
   PROJECT_DAG_PREVIEW_RESULT,
-  resolveProjectDagWorkspaceLocator
+  projectDagSelectorAnchor
 } from './project-dag-preview-bridge'
 
 function request(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -12,126 +12,142 @@ function request(overrides: Record<string, unknown> = {}): Record<string, unknow
     type: PROJECT_DAG_PREVIEW_REQUEST,
     version: 1,
     requestId: 'preview-1',
-    locator: 'papers/source.pdf',
-    artifactId: 'artifact:paper',
     artifactVersionId: 'artifact-version:paper-v1',
     sourceAnchorId: 'anchor:page-4',
-    anchor: {
-      kind: 'document',
-      id: 'anchor:page-4',
-      page: 4,
-      quote: 'A bounded source quote.'
-    },
-    claim: {
-      id: 'claim:target',
-      statement: 'Target is active.',
-      snapshotDigest: 'project:current'
-    },
+    claim: { id: 'claim:target', snapshotDigest: 'project:current' },
     ...overrides
   }
 }
 
+function frame(): { window: WindowProxy; postMessage: ReturnType<typeof vi.fn> } {
+  const postMessage = vi.fn()
+  return { window: { postMessage } as unknown as WindowProxy, postMessage }
+}
+
 describe('Project DAG workspace preview bridge', () => {
-  it('parses only the versioned strict request schema and bounded anchors', () => {
-    expect(parseProjectDagPreviewRequest(request())).toMatchObject({
+  it('accepts only opaque provenance identifiers from the iframe', () => {
+    expect(parseProjectDagPreviewRequest(request())).toEqual({
+      type: PROJECT_DAG_PREVIEW_REQUEST,
+      version: 1,
       requestId: 'preview-1',
-      locator: 'papers/source.pdf',
-      anchor: { kind: 'document', page: 4 },
-      claim: { id: 'claim:target' }
+      artifactVersionId: 'artifact-version:paper-v1',
+      sourceAnchorId: 'anchor:page-4',
+      claim: { id: 'claim:target', snapshotDigest: 'project:current' }
     })
-    expect(parseProjectDagPreviewRequest(request({ unexpected: true }))).toBeNull()
-    expect(parseProjectDagPreviewRequest(request({
-      anchor: { kind: 'document', page: 4, html: '<script>' }
-    }))).toBeNull()
-    expect(parseProjectDagPreviewRequest(request({ locator: 'x'.repeat(4_097) }))).toBeNull()
+    expect(parseProjectDagPreviewRequest(request({ locator: '../secret.txt' }))).toBeNull()
+    expect(parseProjectDagPreviewRequest(request({ anchor: { kind: 'document', page: 1 } }))).toBeNull()
+    expect(parseProjectDagPreviewRequest(request({ contentDigest: `sha256:${'a'.repeat(64)}` }))).toBeNull()
+    expect(parseProjectDagPreviewRequest(request({ graphNodeId: 'evidence:source-1' })))
+      .toMatchObject({ graphNodeId: 'evidence:source-1' })
+    expect(parseProjectDagPreviewRequest(request({ graphNodeId: 'evidence source' }))).toBeNull()
+    expect(parseProjectDagPreviewRequest(request({ graphNodeId: `evidence:${'a'.repeat(512)}` }))).toBeNull()
   })
 
-  it('accepts only normalized local files below the active workspace', () => {
-    expect(resolveProjectDagWorkspaceLocator(
-      'papers/../outputs/result.pdf',
-      '/workspace/molclaw'
-    )).toBe('/workspace/molclaw/outputs/result.pdf')
-    expect(resolveProjectDagWorkspaceLocator(
-      '/workspace/molclaw/papers/source.pdf',
-      '/workspace/molclaw'
-    )).toBe('/workspace/molclaw/papers/source.pdf')
-    expect(resolveProjectDagWorkspaceLocator('../secret.txt', '/workspace/molclaw')).toBeNull()
-    expect(resolveProjectDagWorkspaceLocator('/workspace/molclaw-old/secret.txt', '/workspace/molclaw')).toBeNull()
-    expect(resolveProjectDagWorkspaceLocator('https://example.test/paper.pdf', '/workspace/molclaw')).toBeNull()
-    expect(resolveProjectDagWorkspaceLocator('runtime:thread:item', '/workspace/molclaw')).toBeNull()
-    expect(resolveProjectDagWorkspaceLocator('file:///etc/passwd', '/workspace/molclaw')).toBeNull()
+  it('maps persisted SourceSelector ranges returned by trusted main', () => {
+    expect(projectDagSelectorAnchor(
+      { type: 'text', lineRange: '40:57', quote: 'bounded quote' },
+      'anchor:text'
+    )).toEqual({ kind: 'text', line: 40, endLine: 57 })
+    expect(projectDagSelectorAnchor(
+      { type: 'table', table: 'results', rowRange: '120:180', columnNames: ['sample_id', 'score'] },
+      'anchor:table'
+    )).toEqual({
+      kind: 'tabular',
+      sheet: 'results',
+      rowStart: 120,
+      rowEnd: 180,
+      columnStart: 0,
+      columnEnd: 0
+    })
+    expect(projectDagSelectorAnchor(
+      { type: 'pdf', page: 4, quote: 'Supporting text' },
+      'anchor:pdf'
+    )).toEqual({ kind: 'document', id: 'anchor:pdf', page: 4, quote: 'Supporting text' })
   })
 
   it('ignores messages not sent by the current iframe at its exact origin', async () => {
-    const frameWindow = { postMessage: vi.fn() } as unknown as WindowProxy
-    const resolveWorkspaceFile = vi.fn()
+    const current = frame()
+    const resolver = vi.fn()
     const openPreview = vi.fn()
-
     await expect(handleProjectDagPreviewMessage({
       event: {
         data: request(),
         origin: 'http://127.0.0.1:3898',
-        source: { postMessage: vi.fn() } as unknown as MessageEventSource
+        source: frame().window
       },
-      frameWindow,
+      frameWindow: current.window,
       frameUrl: 'http://127.0.0.1:3898/?view=home',
       workspaceRoot: '/workspace/molclaw',
-      resolveWorkspaceFile,
+      expectedSnapshotDigest: 'project:current',
+      resolveProjectDagEvidencePreview: resolver,
       openPreview
     })).resolves.toEqual({ status: 'ignored' })
-
     await expect(handleProjectDagPreviewMessage({
-      event: { data: request(), origin: 'http://malicious.test', source: frameWindow },
-      frameWindow,
+      event: { data: request(), origin: 'http://malicious.test', source: current.window },
+      frameWindow: current.window,
       frameUrl: 'http://127.0.0.1:3898/?view=home',
       workspaceRoot: '/workspace/molclaw',
-      resolveWorkspaceFile,
+      expectedSnapshotDigest: 'project:current',
+      resolveProjectDagEvidencePreview: resolver,
       openPreview
     })).resolves.toEqual({ status: 'ignored' })
-    expect(resolveWorkspaceFile).not.toHaveBeenCalled()
-    expect(openPreview).not.toHaveBeenCalled()
+    expect(resolver).not.toHaveBeenCalled()
   })
 
-  it('resolves the local file before opening it with its Anchor and return context', async () => {
-    const postMessage = vi.fn()
-    const frameWindow = { postMessage } as unknown as WindowProxy
-    const resolveWorkspaceFile = vi.fn(async () => ({
+  it('opens only the path, selector and digest returned by trusted main', async () => {
+    const current = frame()
+    const resolver = vi.fn(async () => ({
       ok: true as const,
       path: '/workspace/molclaw/papers/source.pdf',
-      kind: 'file' as const
+      workspaceRoot: '/workspace/molclaw',
+      snapshotDigest: 'project:current',
+      claimId: 'claim:target',
+      artifactId: 'artifact:paper',
+      artifactVersionId: 'artifact-version:paper-v1',
+      sourceAnchorId: 'anchor:page-4',
+      selector: { type: 'pdf' as const, page: 4, quote: 'A bounded source quote.' },
+      contentDigest: `sha256:${'a'.repeat(64)}`
     }))
     const openPreview = vi.fn()
-
     const result = await handleProjectDagPreviewMessage({
-      event: { data: request(), origin: 'http://127.0.0.1:3898', source: frameWindow },
-      frameWindow,
+      event: {
+        data: request({ graphNodeId: 'evidence:source-1' }),
+        origin: 'http://127.0.0.1:3898',
+        source: current.window
+      },
+      frameWindow: current.window,
       frameUrl: 'http://127.0.0.1:3898/?view=home#token=secret',
       workspaceRoot: '/workspace/molclaw',
-      resolveWorkspaceFile,
+      projectRoot: '/workspace/molclaw',
+      expectedSnapshotDigest: 'project:current',
+      resolveProjectDagEvidencePreview: resolver,
       openPreview
     })
 
-    expect(resolveWorkspaceFile).toHaveBeenCalledWith({
-      path: '/workspace/molclaw/papers/source.pdf',
-      workspaceRoot: '/workspace/molclaw'
+    expect(resolver).toHaveBeenCalledWith({
+      workspaceRoot: '/workspace/molclaw',
+      projectRoot: '/workspace/molclaw',
+      snapshotDigest: 'project:current',
+      claimId: 'claim:target',
+      artifactVersionId: 'artifact-version:paper-v1',
+      sourceAnchorId: 'anchor:page-4'
     })
     expect(openPreview).toHaveBeenCalledWith({
       path: '/workspace/molclaw/papers/source.pdf',
       workspaceRoot: '/workspace/molclaw',
       anchor: {
-        kind: 'document',
-        id: 'anchor:page-4',
-        page: 4,
-        quote: 'A bounded source quote.'
+        kind: 'document', id: 'anchor:page-4', page: 4, quote: 'A bounded source quote.'
       },
+      integrity: { algorithm: 'sha256', expectedDigest: `sha256:${'a'.repeat(64)}` },
       returnTo: {
         kind: 'project-dag',
-        label: '返回 Claim',
-        claimId: 'claim:target'
+        label: 'Project DAG',
+        claimId: 'claim:target',
+        nodeId: 'evidence:source-1'
       }
     })
     expect(result).toMatchObject({ status: 'opened' })
-    expect(postMessage).toHaveBeenCalledWith({
+    expect(current.postMessage).toHaveBeenCalledWith({
       type: PROJECT_DAG_PREVIEW_RESULT,
       version: 1,
       requestId: 'preview-1',
@@ -139,32 +155,42 @@ describe('Project DAG workspace preview bridge', () => {
     }, 'http://127.0.0.1:3898')
   })
 
-  it('rejects traversal before resolution and reports the failure to the iframe', async () => {
-    const postMessage = vi.fn()
-    const frameWindow = { postMessage } as unknown as WindowProxy
-    const resolveWorkspaceFile = vi.fn()
-    const openPreview = vi.fn()
-
+  it('rejects stale Snapshot messages before invoking trusted main', async () => {
+    const current = frame()
+    const resolver = vi.fn()
     const result = await handleProjectDagPreviewMessage({
-      event: {
-        data: request({ locator: '../outside/secret.txt' }),
-        origin: 'http://127.0.0.1:3898',
-        source: frameWindow
-      },
-      frameWindow,
+      event: { data: request(), origin: 'http://127.0.0.1:3898', source: current.window },
+      frameWindow: current.window,
       frameUrl: 'http://127.0.0.1:3898/?view=home',
       workspaceRoot: '/workspace/molclaw',
-      resolveWorkspaceFile,
+      expectedSnapshotDigest: 'project:newer',
+      resolveProjectDagEvidencePreview: resolver
+    })
+    expect(result).toMatchObject({ status: 'rejected' })
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  it('translates trusted resolver failures without exposing its technical message', async () => {
+    const current = frame()
+    const resolver = vi.fn(async () => ({
+      ok: false as const,
+      code: 'file_unavailable' as const,
+      message: 'The evidence file does not exist.'
+    }))
+    const openPreview = vi.fn()
+    const result = await handleProjectDagPreviewMessage({
+      event: { data: request(), origin: 'http://127.0.0.1:3898', source: current.window },
+      frameWindow: current.window,
+      frameUrl: 'http://127.0.0.1:3898/?view=home',
+      workspaceRoot: '/workspace/molclaw',
+      expectedSnapshotDigest: 'project:current',
+      resolveProjectDagEvidencePreview: resolver,
       openPreview
     })
-
-    expect(result).toMatchObject({ status: 'rejected' })
-    expect(resolveWorkspaceFile).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      status: 'rejected',
+      message: '证据文件不存在或当前不可访问。'
+    })
     expect(openPreview).not.toHaveBeenCalled()
-    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({
-      type: PROJECT_DAG_PREVIEW_RESULT,
-      requestId: 'preview-1',
-      ok: false
-    }), 'http://127.0.0.1:3898')
   })
 })

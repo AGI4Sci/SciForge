@@ -497,6 +497,11 @@
   font-size: 12px;
 }
 
+.workspace-preview-tabular-viewer__grid-scroll td[data-selected="true"] {
+  background: color-mix(in srgb, var(--ds-accent) 14%, var(--ds-surface-elevated));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ds-accent) 70%, transparent);
+}
+
 @media (max-width: 760px) {
   .workspace-preview-tabular-viewer__toolbar,
   .workspace-preview-tabular-viewer__grid-heading {

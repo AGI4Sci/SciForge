@@ -383,9 +383,13 @@ function createApi(): SciForgeApi {
     getComputerUseStatus: () => invoke('computer-use:status'),
     getEvidenceDagView: (input) => invoke('evidenceDag:view', input),
     updateEvidenceDag: (input) => invoke('evidenceDag:update', input),
+    resolveEvidenceDagEvidencePreview: (input) =>
+      invoke('evidenceDag:resolve-evidence-preview', input),
     getProjectDagView: (input) => invoke('projectDag:view', input),
     updateProjectDag: (input) => invoke('projectDag:update', input),
     saveProjectDagGoal: (input) => invoke('projectDag:save-goal', input),
+    resolveProjectDagEvidencePreview: (input) =>
+      invoke('projectDag:resolve-evidence-preview', input),
     showTurnCompleteNotification: (payload) => invoke('notification:turn-complete', payload),
     getAppVersion: () => invoke('app:version'),
     getGuiUpdateState: () => invoke('gui:update-state'),

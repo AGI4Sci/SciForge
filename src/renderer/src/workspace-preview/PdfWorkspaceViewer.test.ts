@@ -23,6 +23,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     annotationOverlays?: unknown[]
     activeAnnotationId?: string | null
     annotationsOpen?: boolean
+    initialPage?: number
     jumpToRect?: unknown
     onAnnotationSelect?: unknown
     onOpenAnnotations?: unknown
@@ -39,6 +40,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     'data-annotation-overlay-count': props.annotationOverlays?.length ?? 0,
     'data-active-annotation-id': props.activeAnnotationId ?? '',
     'data-annotations-open': props.annotationsOpen ? 'true' : 'false',
+    'data-initial-page': props.initialPage,
     'data-has-jump-rect': props.jumpToRect ? 'true' : 'false',
     'data-has-annotation-select': props.onAnnotationSelect ? 'true' : 'false',
     'data-has-open-annotations': props.onOpenAnnotations ? 'true' : 'false',
@@ -207,6 +209,33 @@ describe('PdfWorkspaceViewer', () => {
     expect(html).toContain('data-file-path="/workspace/lab/paper.pdf"')
     expect(html).not.toContain('data-source-url')
     expect(html).not.toContain('file://')
+  })
+
+  it('maps an initial document selection to the PDF page and jump rectangle', () => {
+    const observation = createPdfObservation({
+      selection: {
+        kind: 'document',
+        anchors: [{
+          id: 'evidence-anchor',
+          page: 6,
+          rects: [{ page: 6, x: 0.1, y: 0.2, width: 0.3, height: 0.1 }]
+        }]
+      }
+    })
+    const html = renderToStaticMarkup(createElement(PdfWorkspaceViewer, {
+      observation,
+      asset: createPdfAssetDescriptor(),
+      previewState: {
+        kind: 'ready',
+        title: 'PDF ready',
+        message: 'ready',
+        data: Uint8Array.from([0x25, 0x50, 0x44, 0x46]),
+        mimeType: 'application/pdf'
+      }
+    }))
+
+    expect(html).toContain('data-initial-page="6"')
+    expect(html).toContain('data-has-jump-rect="true"')
   })
 
   it('prefers workspace preview URL transport for browser-native PDF loading', async () => {

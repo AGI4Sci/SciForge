@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation,
@@ -687,6 +687,7 @@ export function TabularWorkspaceViewer({
   const [insertDraft, setInsertDraft] = useState<TabularWorkspaceViewerInsertRowsDraft | null>(null)
   const [insertColumnDraft, setInsertColumnDraft] = useState<TabularWorkspaceViewerInsertColumnsDraft | null>(null)
   const [deleteDraft, setDeleteDraft] = useState<TabularWorkspaceViewerDeleteDraft | null>(null)
+  const gridScrollRef = useRef<HTMLDivElement | null>(null)
   const resolvedModel = useMemo(
     () => model ?? buildTabularWorkspaceViewerModel(observation, { filterText, sort }),
     [filterText, model, observation, sort]
@@ -732,6 +733,17 @@ export function TabularWorkspaceViewer({
     afterColumn,
     values: createEmptyInsertColumnValues(resolvedModel.grid.rows)
   })
+  const initialTabularRange = observation?.selection?.kind === 'tabular'
+    ? observation.selection.ranges[0]
+    : undefined
+
+  useEffect(() => {
+    const grid = gridScrollRef.current
+    if (!grid || !initialTabularRange) return
+    grid.querySelector<HTMLElement>(
+      `[data-cell-coordinate="${initialTabularRange.rowStart}:${initialTabularRange.columnStart}"]`
+    )?.scrollIntoView({ block: 'center', inline: 'center' })
+  }, [initialTabularRange])
 
   return (
     <section
@@ -956,7 +968,7 @@ export function TabularWorkspaceViewer({
                     onCancel={() => setDeleteDraft(null)}
                   />
                 ) : null}
-                <div className="workspace-preview-tabular-viewer__grid-scroll">
+                <div ref={gridScrollRef} className="workspace-preview-tabular-viewer__grid-scroll">
                   <table>
                     <thead>
                       <tr>
@@ -1016,7 +1028,13 @@ export function TabularWorkspaceViewer({
                     <tbody>
                       {resolvedModel.grid.rows.length ? (
                         resolvedModel.grid.rows.map((row) => (
-                          <tr key={row.id} data-row-index={row.index}>
+                          <tr
+                            key={row.id}
+                            data-row-index={row.index}
+                            data-selection-intersects={resolvedModel.grid.header.some((_, columnIndex) =>
+                              tabularSelectionContainsCoordinate(observation?.selection, row.index, columnIndex)
+                            ) ? 'true' : 'false'}
+                          >
                             <th scope="row">
                               <span>{row.index}</span>
                               <button
@@ -1050,11 +1068,17 @@ export function TabularWorkspaceViewer({
                               const displayedValue = row.values[columnIndex] ?? ''
                               const sourceValue = getTabularCellValue(observation, row.index, columnIndex, displayedValue)
                               const isEditing = editDraft?.row === row.index && editDraft.column === columnIndex
+                              const isSelected = tabularSelectionContainsCoordinate(
+                                observation?.selection,
+                                row.index,
+                                columnIndex
+                              )
 
                               return (
                                 <td
                                   key={`${row.id}-${columnIndex}`}
                                   data-cell-coordinate={`${row.index}:${columnIndex}`}
+                                  data-selected={isSelected ? 'true' : 'false'}
                                   onDoubleClick={() => {
                                     if (!canEnterCellEdit) return
                                     setEditDraft({ row: row.index, column: columnIndex, value: sourceValue })
@@ -1442,6 +1466,18 @@ function buildGridModel(
     truncatedRows,
     truncatedColumns
   }
+}
+
+export function tabularSelectionContainsCoordinate(
+  selection: WorkspaceStructuredSelection | undefined,
+  row: number,
+  column: number
+): boolean {
+  if (selection?.kind !== 'tabular') return false
+  if (selection.cells?.some((cell) => cell.row === row && cell.column === column)) return true
+  return selection.ranges.some((range) =>
+    row >= range.rowStart && row <= range.rowEnd &&
+    column >= range.columnStart && column <= range.columnEnd)
 }
 
 function buildTabularSelectionModel(

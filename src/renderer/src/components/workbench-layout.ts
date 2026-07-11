@@ -8,6 +8,7 @@ import {
   writeBrowserStorageItem
 } from '../lib/browser-storage'
 import {
+  normalizeProjectDagGraphNodeId,
   WORKSPACE_FILE_PREVIEW_EVENT,
   type WorkspaceFilePreviewDetail,
   type WorkspaceFilePreviewReturnContext
@@ -83,6 +84,18 @@ export function persistRightPanelMode(mode: RightPanelMode): void {
 
 export function shouldCloseRightPanelOnThreadChange(mode: RightPanelMode): boolean {
   return mode === 'child-agents'
+}
+
+export function projectDagReturnSelection(
+  context: WorkspaceFilePreviewReturnContext | null
+): { claimId?: string; nodeId?: string } | null {
+  if (context?.kind !== 'project-dag') return null
+  const claimId = context.claimId?.trim() || undefined
+  const nodeId = normalizeProjectDagGraphNodeId(context.nodeId)
+  return claimId || nodeId ? {
+    ...(claimId ? { claimId } : {}),
+    ...(nodeId ? { nodeId } : {})
+  } : null
 }
 
 export function fitWorkbenchWidths(

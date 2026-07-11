@@ -28,6 +28,8 @@ from .snapshot import (
     EvidenceSnapshot,
     VERIFIER_VERSION,
     build_snapshot,
+    compute_snapshot_digest,
+    snapshot_artifact_digests,
     snapshot_filename,
     snapshot_storage_key,
 )
@@ -67,6 +69,37 @@ class Engine:
     def _snapshot_dir(self, thread_id: str) -> Optional[str]:
         return os.path.join(self.storage_dir, "snapshots", snapshot_storage_key(thread_id)) \
             if self.storage_dir else None
+
+    @staticmethod
+    def _verified_snapshot(
+        graph: ThreadGraph, *, thread_id: str, target_digest: Optional[str] = None,
+    ) -> EvidenceSnapshot:
+        """Verify the immutable envelope before exposing a persisted graph."""
+        snapshot = EvidenceSnapshot.from_dict((graph.meta or {}).get("snapshot") or {})
+        if snapshot.thread_id != thread_id:
+            raise ValueError("snapshot threadId does not match requested thread")
+        if target_digest is not None and snapshot.digest != target_digest:
+            raise ValueError("immutable snapshot identity mismatch")
+        actual_digest = compute_snapshot_digest(
+            graph,
+            input_watermark=snapshot.input_watermark,
+            schema_version=snapshot.schema_version,
+            extractor_version=snapshot.extractor_version,
+            verifier_version=snapshot.verifier_version,
+        )
+        if actual_digest != snapshot.digest:
+            raise ValueError(
+                "Evidence Snapshot digest mismatch;"
+                f" envelope={snapshot.digest}, computed={actual_digest}"
+            )
+        actual_artifact_digests = tuple(snapshot_artifact_digests(graph))
+        if actual_artifact_digests != snapshot.artifact_digests:
+            raise ValueError(
+                "Evidence Snapshot artifactDigests mismatch;"
+                f" envelope={list(snapshot.artifact_digests)},"
+                f" computed={list(actual_artifact_digests)}"
+            )
+        return snapshot
 
     def _audit_path(self, thread_id: str) -> Optional[str]:
         return os.path.join(self.storage_dir, f"{self._safe_key(thread_id)}.audit.json") \
@@ -514,9 +547,7 @@ class Engine:
             return None
         with open(path, encoding="utf-8") as fh:
             graph = provjson.loads(fh.read())
-        snapshot = EvidenceSnapshot.from_dict((graph.meta or {}).get("snapshot") or {})
-        if snapshot.thread_id != thread_id:
-            raise ValueError("snapshot threadId does not match requested thread")
+        snapshot = self._verified_snapshot(graph, thread_id=thread_id)
         self._graphs[thread_id] = graph
         self._snapshots[thread_id] = snapshot
         return graph
@@ -596,9 +627,8 @@ class Engine:
                 try:
                     with open(path, encoding="utf-8") as fh:
                         graph = provjson.loads(fh.read())
-                    snapshot = EvidenceSnapshot.from_dict((graph.meta or {}).get("snapshot") or {})
-                    if snapshot.thread_id == thread_id:
-                        snapshots[snapshot.digest] = snapshot.to_dict()
+                    snapshot = self._verified_snapshot(graph, thread_id=thread_id)
+                    snapshots[snapshot.digest] = snapshot.to_dict()
                 except (OSError, TypeError, ValueError):
                     continue
         current = self.latest_snapshot(thread_id)
@@ -619,7 +649,9 @@ class Engine:
     def snapshot_graph(self, thread_id: str, target_digest: str) -> tuple[ThreadGraph, EvidenceSnapshot]:
         current = self.latest_snapshot(thread_id)
         if current is not None and current.digest == target_digest:
-            return self.require(thread_id), current
+            graph = self.require(thread_id)
+            self._verified_snapshot(graph, thread_id=thread_id, target_digest=target_digest)
+            return graph, current
         directory = self._snapshot_dir(thread_id)
         if not directory:
             raise KeyError(target_digest)
@@ -628,10 +660,71 @@ class Engine:
             raise KeyError(target_digest)
         with open(matches[0], encoding="utf-8") as fh:
             graph = provjson.loads(fh.read())
-        snapshot = EvidenceSnapshot.from_dict((graph.meta or {}).get("snapshot") or {})
-        if snapshot.thread_id != thread_id or snapshot.digest != target_digest:
-            raise ValueError("immutable snapshot identity mismatch")
+        snapshot = self._verified_snapshot(
+            graph, thread_id=thread_id, target_digest=target_digest,
+        )
         return graph, snapshot
+
+    def trusted_evidence_preview(
+        self,
+        thread_id: str,
+        *,
+        snapshot_digest: str,
+        source_assertion_id: str,
+        artifact_version_id: str,
+        source_anchor_id: str,
+    ) -> dict[str, Any]:
+        """Re-fetch one opaque evidence tuple from a verified committed snapshot."""
+        try:
+            graph, snapshot = self.snapshot_graph(thread_id, snapshot_digest)
+        except (KeyError, TypeError, ValueError):
+            return {
+                "resolved": False,
+                "code": "snapshot_mismatch",
+                "message": "Pinned committed Evidence Snapshot was not found or failed verification.",
+            }
+
+        assertion = graph.nodes.get(source_assertion_id)
+        if (
+            assertion is None
+            or assertion.type.value != "source_assertion"
+            or assertion.artifact_version_id != artifact_version_id
+            or assertion.source_anchor_id != source_anchor_id
+            or not assertion.artifact_id
+        ):
+            return {
+                "resolved": False,
+                "code": "provenance_mismatch",
+                "message": "SourceAssertion tuple is absent from the pinned Evidence Snapshot.",
+            }
+        artifact = graph.artifacts.get(assertion.artifact_id)
+        version = graph.artifact_versions.get(artifact_version_id)
+        anchor = graph.source_anchors.get(source_anchor_id)
+        if (
+            artifact is None
+            or version is None
+            or anchor is None
+            or version.artifact_id != assertion.artifact_id
+            or anchor.artifact_id != assertion.artifact_id
+            or anchor.artifact_version_id != artifact_version_id
+        ):
+            return {
+                "resolved": False,
+                "code": "provenance_mismatch",
+                "message": "Committed ArtifactVersion and SourceAnchor links are inconsistent.",
+            }
+        scope = graph.meta.get("scope") if isinstance(graph.meta.get("scope"), dict) else {}
+        return {
+            "resolved": True,
+            "threadId": thread_id,
+            "snapshotDigest": snapshot.digest,
+            "workspaceRoot": scope.get("workspaceRoot"),
+            "sourceAssertion": assertion.to_dict(),
+            "artifact": artifact.to_dict(),
+            "artifactVersion": version.to_dict(),
+            "sourceAnchor": anchor.to_dict(),
+            "accessPolicy": dict(scope.get("accessPolicy") or {}),
+        }
 
     def audit(
         self, thread_id: str, *, target_digest: str, level: str = "L0",

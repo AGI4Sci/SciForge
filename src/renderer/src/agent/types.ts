@@ -9,6 +9,11 @@ import type {
 } from './local-runtime-contract'
 import type { AgentRuntimeId } from '@shared/app-settings'
 import type {
+  ScientificObjectComparison,
+  ScientificObjectRef,
+  WorkspaceObservation
+} from '@shared/scientific-objects'
+import type {
   AgentRuntimeCodeNavigationInput,
   AgentRuntimeCodeNavigationOutput,
   AgentRuntimeChild,
@@ -109,6 +114,9 @@ export type RuntimeDisclosureMetadata = {
   child?: RuntimeChildMetadata
   sources?: WebCitationSource[]
   reasoning?: RuntimeReasoningMetadata
+  scientificObjects?: ScientificObjectRef[]
+  scientificObjectComparisons?: ScientificObjectComparison[]
+  workspaceObservations?: WorkspaceObservation[]
 }
 
 export type UserInputOption = {

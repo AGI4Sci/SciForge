@@ -299,6 +299,45 @@ describe('agent runtime event dispatcher', () => {
     expect(sink.onDeltas).not.toHaveBeenCalled()
   })
 
+  it('preserves structured scientific objects from assistant snapshot metadata', () => {
+    const sink = makeSink()
+
+    dispatchAgentRuntimeEvent(
+      {
+        kind: 'item_snapshot',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'assistant-science',
+          kind: 'assistant_message',
+          text: 'Structure ready',
+          meta: {
+            scientific_objects: [{
+              schemaVersion: 1,
+              id: 'structure-1',
+              modality: 'molecular',
+              title: 'Protein structure',
+              source: 'tool',
+              path: '/workspace/protein.pdb',
+              workspaceRoot: '/workspace',
+              mimeType: 'chemical/x-pdb',
+              hash: { algorithm: 'sha256', digest: 'b'.repeat(64) }
+            }]
+          }
+        },
+        seq: 12
+      },
+      sink
+    )
+
+    expect(sink.onAssistantMessage).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: 'assistant-science',
+      meta: {
+        scientificObjects: [expect.objectContaining({ id: 'structure-1', modality: 'molecular' })]
+      }
+    }))
+  })
+
   it('dispatches approval and user input lifecycle events', () => {
     const sink = makeSink()
 

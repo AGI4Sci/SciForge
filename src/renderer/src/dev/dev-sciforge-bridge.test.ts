@@ -194,6 +194,14 @@ describe('dev sciforge browser bridge', () => {
     installDevSciForgeBridge()
     await window.sciforge.getEvidenceDagView({ runtimeId: 'codex', threadId: 'thread-1' })
     await window.sciforge.updateEvidenceDag({ runtimeId: 'codex', threadId: 'thread-1' })
+    await window.sciforge.resolveEvidenceDagEvidencePreview({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      snapshotDigest: 'sha256:pinned',
+      sourceAssertionId: 'source_assertion:one',
+      artifactVersionId: 'artifact-version:one',
+      sourceAnchorId: 'anchor:one'
+    })
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:5173/__sciforge-dev-bridge/invoke',
@@ -210,6 +218,22 @@ describe('dev sciforge browser bridge', () => {
         body: JSON.stringify({
           channel: 'evidenceDag:update',
           payload: { runtimeId: 'codex', threadId: 'thread-1' }
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'evidenceDag:resolve-evidence-preview',
+          payload: {
+            runtimeId: 'codex',
+            threadId: 'thread-1',
+            snapshotDigest: 'sha256:pinned',
+            sourceAssertionId: 'source_assertion:one',
+            artifactVersionId: 'artifact-version:one',
+            sourceAnchorId: 'anchor:one'
+          }
         })
       })
     )

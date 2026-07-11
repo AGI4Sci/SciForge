@@ -44,8 +44,10 @@ export function evidenceDagUiUrl(input: {
   const base = normalizeEvidenceDagServiceUrl(input.serviceUrl) || DEFAULT_EVIDENCE_DAG_SERVICE_URL
   const url = new URL(`${base}/`)
   const threadId = input.threadId?.trim()
+  const runtimeId = input.runtimeId?.trim()
   if (threadId) {
-    url.searchParams.set('thread', evidenceDagThreadId(input.runtimeId, threadId))
+    url.searchParams.set('thread', evidenceDagThreadId(runtimeId, threadId))
+    if (runtimeId) url.searchParams.set('preview', 'trusted')
   }
   const apiKey = input.apiKey?.trim()
   if (apiKey) {

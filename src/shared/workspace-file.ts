@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type {
   WorkspacePreviewAnchor,
+  WorkspacePreviewIntegrityExpectation,
   WorkspaceStructuredSelection
 } from './workspace-preview'
 
@@ -11,6 +12,7 @@ export type WorkspaceFileTarget = {
   column?: number
   selection?: WorkspaceStructuredSelection
   anchor?: WorkspacePreviewAnchor
+  integrity?: WorkspacePreviewIntegrityExpectation
 }
 
 export type WorkspaceEntry = {

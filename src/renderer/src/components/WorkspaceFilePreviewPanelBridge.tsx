@@ -41,6 +41,34 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }
 
+export type WorkspacePreviewIntegrityNotice =
+  | { kind: 'verified'; message: '证据版本已验证' }
+  | { kind: 'mismatch'; message: '当前文件与 Snapshot 证据版本不一致，未打开' }
+
+function normalizedSha256(value?: string): string {
+  return value?.trim().toLowerCase().replace(/^sha256:/u, '') ?? ''
+}
+
+export function workspacePreviewIntegrityNotice(input: {
+  target: WorkspaceFileTarget | null
+  state: Pick<WorkspacePreviewPanelShellContext['state'], 'file' | 'error'>
+  assetError: string | null
+}): WorkspacePreviewIntegrityNotice | null {
+  const expected = input.target?.integrity?.expectedDigest
+  if (!expected) return null
+  const errors = [input.state.error, input.assetError].filter((value): value is string => Boolean(value))
+  if (errors.some((error) => /integrity\s+mismatch/iu.test(error))) {
+    return { kind: 'mismatch', message: '当前文件与 Snapshot 证据版本不一致，未打开' }
+  }
+  const actual = input.state.file?.sha256
+  const normalizedExpected = normalizedSha256(expected)
+  if (actual && /^[a-f0-9]{64}$/u.test(normalizedExpected) &&
+      normalizedSha256(actual) === normalizedExpected) {
+    return { kind: 'verified', message: '证据版本已验证' }
+  }
+  return null
+}
+
 export function resolveWorkspaceFilePreviewPanelBridgeRoute(
   target: WorkspaceFileTarget | null
 ): WorkspaceFilePreviewPanelBridgeRoute {
@@ -229,6 +257,11 @@ function WorkspacePreviewShellBody({
 }): ReactElement {
   const lastEditSummary = context.state.lastEditSummary
   const canOpenDirectory = Boolean(target && onOpenDirectory)
+  const integrityNotice = workspacePreviewIntegrityNotice({
+    target,
+    state: context.state,
+    assetError: context.assetError
+  })
   const visibleContextComponent = useMemo(
     () => buildWorkspacePreviewVisibleContextComponent({
       context,
@@ -282,6 +315,10 @@ function WorkspacePreviewShellBody({
         </button>
       </div>
 
+      {integrityNotice ? (
+        <WorkspacePreviewIntegrityStatus notice={integrityNotice} />
+      ) : null}
+
       {lastEditSummary ? (
         <WorkspacePreviewEditSummaryStatus summary={lastEditSummary} />
       ) : null}
@@ -293,6 +330,29 @@ function WorkspacePreviewShellBody({
         routeModality={route.modality}
         annotationQuestionBridge={annotationQuestionBridge}
       />
+    </div>
+  )
+}
+
+function WorkspacePreviewIntegrityStatus({
+  notice
+}: {
+  notice: WorkspacePreviewIntegrityNotice
+}): ReactElement {
+  const mismatch = notice.kind === 'mismatch'
+  return (
+    <div
+      className={compactClassName(
+        'pointer-events-none absolute left-3 top-3 z-10 max-w-[min(28rem,calc(100%-6rem))] rounded-md border px-3 py-2 text-xs font-medium shadow-sm',
+        mismatch
+          ? 'border-red-300 bg-red-50/95 text-red-800'
+          : 'border-emerald-300 bg-emerald-50/95 text-emerald-800'
+      )}
+      role={mismatch ? 'alert' : 'status'}
+      aria-live={mismatch ? 'assertive' : 'polite'}
+      data-workspace-preview-integrity-status={notice.kind}
+    >
+      {notice.message}
     </div>
   )
 }

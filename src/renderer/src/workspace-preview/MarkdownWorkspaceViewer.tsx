@@ -99,17 +99,20 @@ export function MarkdownWorkspaceViewer({
   className,
   onApplyEdit,
   loadWorkspaceImage,
-  initialMode = 'preview'
+  initialMode
 }: MarkdownWorkspaceViewerProps): ReactElement {
   const model = buildMarkdownWorkspaceViewerModel(observation, Boolean(onApplyEdit))
   const applyTextEdit: TextWorkspaceViewerApplyEditHandler = async (operation) => {
     await onApplyEdit?.(operation)
   }
-  const [mode, setMode] = useState<MarkdownWorkspaceViewerMode>(initialMode)
+  const resolvedInitialMode = initialMode ?? (
+    observation?.selection?.kind === 'text' ? 'edit' : 'preview'
+  )
+  const [mode, setMode] = useState<MarkdownWorkspaceViewerMode>(resolvedInitialMode)
 
   useEffect(() => {
-    setMode(initialMode)
-  }, [initialMode, observation?.file.path])
+    setMode(resolvedInitialMode)
+  }, [resolvedInitialMode, observation?.file.path])
 
   const showEditor = mode === 'edit' || mode === 'split'
   const showPreview = mode === 'preview' || mode === 'split'

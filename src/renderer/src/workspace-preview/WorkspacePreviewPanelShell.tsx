@@ -1,4 +1,5 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import type { WorkspacePreviewOpenInput } from '@shared/sciforge-api'
 import type { WorkspacePreviewAssetTransportDescriptor } from '@shared/workspace-preview'
 import {
   useEffect,
@@ -47,21 +48,30 @@ export function workspacePreviewPanelTargetKey(
   workspaceRoot: string
 ): string {
   if (!target) return ''
-  return [
+  const parts: Array<string | number> = [
     target.workspaceRoot?.trim() || workspaceRoot,
     target.path,
     target.line ?? '',
     target.column ?? ''
-  ].join('\u0000')
+  ]
+  if (target.selection) parts.push(JSON.stringify(target.selection))
+  if (target.anchor) parts.push(JSON.stringify(target.anchor))
+  if (target.integrity) parts.push(JSON.stringify(target.integrity))
+  return parts.join('\u0000')
 }
 
 export function workspacePreviewOpenInputForPanelTarget(
   target: WorkspaceFileTarget,
   workspaceRoot: string
-): { path: string; workspaceRoot: string } {
+): WorkspacePreviewOpenInput {
   return {
     path: target.path,
-    workspaceRoot: target.workspaceRoot?.trim() || workspaceRoot
+    workspaceRoot: target.workspaceRoot?.trim() || workspaceRoot,
+    ...(target.line != null ? { line: target.line } : {}),
+    ...(target.column != null ? { column: target.column } : {}),
+    ...(target.selection ? { selection: target.selection } : {}),
+    ...(target.anchor ? { anchor: target.anchor } : {}),
+    ...(target.integrity ? { integrity: target.integrity } : {})
   }
 }
 
@@ -85,33 +95,63 @@ export function WorkspacePreviewPanelShell({
   const targetWorkspaceRoot = target?.workspaceRoot
   const targetLine = target?.line
   const targetColumn = target?.column
+  const targetSelection = target?.selection
+  const targetAnchor = target?.anchor
+  const targetIntegrity = target?.integrity
   const openInput = useMemo(() => (
     targetPath
       ? workspacePreviewOpenInputForPanelTarget({
           path: targetPath,
           workspaceRoot: targetWorkspaceRoot,
           line: targetLine,
-          column: targetColumn
+          column: targetColumn,
+          selection: targetSelection,
+          anchor: targetAnchor,
+          integrity: targetIntegrity
         }, workspaceRoot)
       : null
-  ), [targetColumn, targetLine, targetPath, targetWorkspaceRoot, workspaceRoot])
-  const openInputKey = openInput ? `${openInput.workspaceRoot}\u0000${openInput.path}` : ''
+  ), [
+    targetAnchor,
+    targetColumn,
+    targetIntegrity,
+    targetLine,
+    targetPath,
+    targetSelection,
+    targetWorkspaceRoot,
+    workspaceRoot
+  ])
+  const openInputKey = openInput
+    ? workspacePreviewPanelTargetKey(openInput, workspaceRoot)
+    : ''
   const stableTarget = useMemo<WorkspaceFileTarget | null>(() => (
     targetPath
       ? {
           path: targetPath,
           workspaceRoot: targetWorkspaceRoot?.trim() || workspaceRoot,
           line: targetLine,
-          column: targetColumn
+          column: targetColumn,
+          selection: targetSelection,
+          anchor: targetAnchor,
+          integrity: targetIntegrity
         }
       : null
-  ), [targetColumn, targetLine, targetPath, targetWorkspaceRoot, workspaceRoot])
+  ), [
+    targetAnchor,
+    targetColumn,
+    targetIntegrity,
+    targetLine,
+    targetPath,
+    targetSelection,
+    targetWorkspaceRoot,
+    workspaceRoot
+  ])
   const targetKey = workspacePreviewPanelTargetKey(stableTarget, workspaceRoot)
 
   useEffect(() => host.subscribe((nextState) => setState({ ...nextState })), [host])
 
   useEffect(() => {
     if (!openInput) {
+      host.cancelPendingOpen()
       const sessionId = host.getState().session?.id
       if (sessionId) void host.releaseSession(sessionId)
       setState(createWorkspacePreviewHostState())
@@ -148,12 +188,13 @@ export function WorkspacePreviewPanelShell({
     void host.open(openInput)
       .then(async (opened) => {
         if (opened.ok) openedSessionId = opened.session.id
-        if (cancelled || !opened.ok) {
+        if (cancelled) {
           if (opened.ok) releaseOpenedSession()
-          if (!opened.ok) {
-            setAssetStatus('error')
-            setAssetError(opened.message)
-          }
+          return
+        }
+        if (!opened.ok) {
+          setAssetStatus('error')
+          setAssetError(opened.message)
           return
         }
 
@@ -192,6 +233,7 @@ export function WorkspacePreviewPanelShell({
 
     return () => {
       cancelled = true
+      host.cancelPendingOpen()
       if (releaseTimer) clearTimeout(releaseTimer)
       releaseOpenedSession(WORKSPACE_PREVIEW_SESSION_RELEASE_GRACE_MS)
     }

@@ -328,6 +328,25 @@ class Handler(BaseHTTPRequestHandler):
                     raise KeyError(tid)
                 return self._send(200, ok(snapshot.to_dict(), operation="snapshot",
                                           request_id=rid, started=started))
+            if action == "evidence-preview":
+                preview_args = {
+                    "snapshot_digest": (qs.get("snapshotDigest") or [""])[0].strip(),
+                    "source_assertion_id": (qs.get("sourceAssertionId") or [""])[0].strip(),
+                    "artifact_version_id": (qs.get("artifactVersionId") or [""])[0].strip(),
+                    "source_anchor_id": (qs.get("sourceAnchorId") or [""])[0].strip(),
+                }
+                if not all(preview_args.values()) or any(
+                    len(value) > 512 for value in preview_args.values()
+                ) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", preview_args["snapshot_digest"]):
+                    return self._send(400, err(
+                        "INVALID_ARGUMENT",
+                        "snapshotDigest, sourceAssertionId, artifactVersionId and sourceAnchorId are required",
+                        operation="evidence-preview", request_id=rid, started=started,
+                    ))
+                return self._send(200, ok(
+                    self.engine.trusted_evidence_preview(tid, **preview_args),
+                    operation="evidence-preview", request_id=rid, started=started,
+                ))
             if action == "provenance":
                 node = (qs.get("node") or [None])[0]
                 if not node:

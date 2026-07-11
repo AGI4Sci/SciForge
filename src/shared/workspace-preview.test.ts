@@ -14,10 +14,14 @@ import {
   normalizePreviewMimeType,
   isLifeSciencePreviewExtension,
   normalizePreviewExtension,
+  normalizeWorkspacePreviewSha256Digest,
+  resolveWorkspacePreviewInitialSelection,
   resolveLifeSciencePreviewRoute,
   resolveWorkspacePreviewPlugin,
   resolveWorkspacePreviewTransferCapabilities,
   workspacePreviewEditOperationSchema,
+  workspacePreviewAnchorSchema,
+  workspacePreviewIntegrityExpectationSchema,
   workspaceObservationSchema,
   workspacePreviewArtifactDescriptorSchema,
   workspacePreviewAnnotationSidecarImportActionInputSchema,
@@ -69,6 +73,59 @@ describe('workspace preview contract', () => {
     expect(isTextLikePreviewMimeType('text/x-python')).toBe(true)
     expect(isTextLikePreviewMimeType('application/json; charset=utf-8')).toBe(true)
     expect(isTextLikePreviewMimeType('application/octet-stream')).toBe(false)
+  })
+
+  it('normalizes initial text, document, and tabular anchors into structured selections', () => {
+    expect(resolveWorkspacePreviewInitialSelection({ line: 7, column: 3 })).toEqual({
+      kind: 'text',
+      ranges: [{ startLine: 7, startColumn: 3, endLine: 7, endColumn: 3 }]
+    })
+    expect(resolveWorkspacePreviewInitialSelection({
+      anchor: { kind: 'text', line: 2, endLine: 4 }
+    })).toEqual({
+      kind: 'text',
+      ranges: [{ startLine: 2, startColumn: 1, endLine: 4, endColumn: 1_000_000 }]
+    })
+    expect(resolveWorkspacePreviewInitialSelection({
+      anchor: {
+        kind: 'document',
+        page: 2,
+        rects: [{ page: 2, x: 0.1, y: 0.2, width: 0.3, height: 0.1 }]
+      }
+    })).toMatchObject({
+      kind: 'document',
+      anchors: [{ page: 2, rects: [{ page: 2, x: 0.1 }] }]
+    })
+    expect(resolveWorkspacePreviewInitialSelection({
+      anchor: {
+        kind: 'tabular',
+        sheet: 'Results',
+        rowStart: 4,
+        rowEnd: 8,
+        columnStart: 1,
+        columnEnd: 3
+      }
+    })).toEqual({
+      kind: 'tabular',
+      sheet: 'Results',
+      ranges: [{ rowStart: 3, rowEnd: 7, columnStart: 1, columnEnd: 3 }]
+    })
+  })
+
+  it('validates anchors and canonicalizes sha256 integrity expectations', () => {
+    expect(workspacePreviewAnchorSchema.parse({ kind: 'text', line: 12 })).toEqual({
+      kind: 'text',
+      line: 12
+    })
+    expect(workspacePreviewIntegrityExpectationSchema.parse({
+      algorithm: 'sha256',
+      expectedDigest: `SHA256:${'A'.repeat(64)}`
+    })).toEqual({
+      algorithm: 'sha256',
+      expectedDigest: `sha256:${'a'.repeat(64)}`
+    })
+    expect(normalizeWorkspacePreviewSha256Digest('0'.repeat(64))).toBe(`sha256:${'0'.repeat(64)}`)
+    expect(() => normalizeWorkspacePreviewSha256Digest('not-a-digest')).toThrow(/64 hexadecimal/)
   })
 
   it('validates plugin manifests with full agent permissions', () => {

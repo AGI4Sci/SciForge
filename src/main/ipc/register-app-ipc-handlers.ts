@@ -72,9 +72,11 @@ import {
   remoteChannelTaskFromTextPayloadSchema,
   runtimeConfigContentSchema,
   desktopCommandSchema,
+  evidenceDagEvidencePreviewResolvePayloadSchema,
   evidenceDagUpdatePayloadSchema,
   evidenceDagViewPayloadSchema,
   projectDagGoalSavePayloadSchema,
+  projectDagEvidencePreviewResolvePayloadSchema,
   projectDagUpdatePayloadSchema,
   projectDagViewPayloadSchema,
   defaultPathSchema,
@@ -293,6 +295,8 @@ import type { DiscordBotRuntime } from '../discord-bot-runtime'
 import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
 import type { PaperRadarWorkerService } from '../services/paper-radar-worker-service'
+import { resolveEvidenceDagEvidencePreview } from '../services/evidence-dag-evidence-preview'
+import { resolveProjectDagEvidencePreview } from '../services/project-dag-evidence-preview'
 import { checkWorkflowCode, type WorkflowRuntime } from '../workflow-runtime'
 import { createAndSwitchGitBranch, getGitBranches, switchGitBranch } from '../services/git-service'
 import {
@@ -3316,6 +3320,55 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       })
     }
   })
+  handleInvoke('evidenceDag:resolve-evidence-preview', async (_, payload: unknown) => {
+    const input = parseIpcPayload(
+      'evidenceDag:resolve-evidence-preview',
+      evidenceDagEvidencePreviewResolvePayloadSchema,
+      payload
+    )
+    if (!agentRuntime) {
+      return {
+        ok: false as const,
+        code: 'file_unavailable' as const,
+        message: 'Agent runtime is required to resolve Evidence DAG workspace evidence.'
+      }
+    }
+    const detail = await agentRuntime.readThread({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId
+    })
+    const workspaceRoot = detail.workspace?.trim()
+    if (!workspaceRoot) {
+      return {
+        ok: false as const,
+        code: 'file_unavailable' as const,
+        message: 'The Evidence DAG thread has no trusted workspace root.'
+      }
+    }
+    await ensureEvidenceDagReady?.()
+    const config = evidenceDagViewConfig(process.env)
+    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const query = new URLSearchParams({
+      snapshotDigest: input.snapshotDigest,
+      sourceAssertionId: input.sourceAssertionId,
+      artifactVersionId: input.artifactVersionId,
+      sourceAnchorId: input.sourceAnchorId
+    })
+    const snapshotEvidence = await requestEvidenceDagJson(
+      config.serviceUrl,
+      config.apiKey,
+      `/threads/${encodeURIComponent(engineThreadId)}/evidence-preview?${query.toString()}`,
+      { method: 'GET', cache: 'no-store' },
+      globalThis.fetch,
+      3_000
+    )
+    return resolveEvidenceDagEvidencePreview(input, {
+      engineThreadId,
+      workspaceRoot,
+      snapshotEvidence,
+      resolveWorkspaceFile
+    })
+  })
   handleInvoke('projectDag:view', async (_, payload: unknown) => {
     const input = parseIpcPayload('projectDag:view', projectDagViewPayloadSchema, payload)
     await ensureProjectDagReady?.()
@@ -3384,6 +3437,28 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         }
       } : {})
     }
+  })
+  handleInvoke('projectDag:resolve-evidence-preview', async (_, payload: unknown) => {
+    const input = parseIpcPayload(
+      'projectDag:resolve-evidence-preview',
+      projectDagEvidencePreviewResolvePayloadSchema,
+      payload
+    )
+    await ensureProjectDagReady?.()
+    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
+    await assertProjectDagServiceReachable(serviceUrl, apiKey)
+    const query = new URLSearchParams(projectDagStatusQuery(input).slice(1))
+    query.set('snapshot', input.snapshotDigest)
+    const claimDetail = await requestProjectDagJson(
+      serviceUrl,
+      apiKey,
+      `/claims/${encodeURIComponent(input.claimId)}?${query.toString()}`,
+      { method: 'GET', cache: 'no-store' }
+    )
+    return resolveProjectDagEvidencePreview(input, {
+      claimDetail,
+      resolveWorkspaceFile
+    })
   })
   handleInvoke('projectDag:update', async (_, payload: unknown) => {
     const input = parseIpcPayload('projectDag:update', projectDagUpdatePayloadSchema, payload)

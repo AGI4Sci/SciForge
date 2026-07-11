@@ -30,7 +30,8 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _artifact_digests(graph: ThreadGraph) -> list[str]:
+def snapshot_artifact_digests(graph: ThreadGraph) -> list[str]:
+    """Return the immutable Artifact digests bound into a snapshot digest."""
     referenced = {node.artifact_version_id for node in graph.nodes.values() if node.artifact_version_id}
     return sorted({
         graph.artifact_versions[version_id].content_digest
@@ -73,7 +74,7 @@ def _digest_payload(
         "schemaVersion": schema_version,
         "extractorVersion": extractor_version,
         "verifierVersion": verifier_version,
-        "artifactDigests": _artifact_digests(graph),
+        "artifactDigests": snapshot_artifact_digests(graph),
         "graph": graph_dict,
     }
 
@@ -157,6 +158,6 @@ def build_snapshot(graph: ThreadGraph, *, version: int, input_watermark: str) ->
         schema_version=SCHEMA_VERSION,
         extractor_version=EXTRACTOR_VERSION,
         verifier_version=VERIFIER_VERSION,
-        artifact_digests=tuple(_artifact_digests(graph)),
+        artifact_digests=tuple(snapshot_artifact_digests(graph)),
         created_at=_now_iso(),
     )

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -55,6 +56,7 @@ describe('WorkspacePreviewHost', () => {
     })
     expect(result.file.relativePath).toBe('huge.csv')
     expect(result.file.size).toBeGreaterThan(0)
+    expect(result.file.sha256).toBeUndefined()
 
     const observation = await host.observe(result.session.id)
     expect(observation).toMatchObject({
@@ -65,6 +67,70 @@ describe('WorkspacePreviewHost', () => {
         tables: [{ id: 'table-1', name: 'huge.csv', rowCount: 1000, columnCount: 2 }],
         actions: expect.arrayContaining(['observe', 'select', 'applyEdit', 'save', 'export'])
       }
+    })
+  })
+
+  it('seeds the session and observation with a structured selection at open time', async () => {
+    await writeFile(join(workspaceRoot, 'selected.csv'), 'name,value\nalpha,1\nbeta,2\n', 'utf8')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-selected' })
+    const selection = {
+      kind: 'tabular' as const,
+      sheet: 'Results',
+      ranges: [{ rowStart: 1, rowEnd: 2, columnStart: 0, columnEnd: 1 }]
+    }
+
+    const opened = await host.open({ workspaceRoot, path: 'selected.csv', selection })
+
+    expect(opened).toMatchObject({ ok: true, session: { selection } })
+    if (!opened.ok) return
+    await expect(host.observe(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      observation: { selection }
+    })
+  })
+
+  it('normalizes document anchors and verifies sha256 only when requested', async () => {
+    const contents = Buffer.from('%PDF-1.4\n%%EOF\n')
+    await writeFile(join(workspaceRoot, 'evidence.pdf'), contents)
+    const expectedHex = createHash('sha256').update(contents).digest('hex')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-evidence' })
+
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'evidence.pdf',
+      anchor: {
+        kind: 'document',
+        id: 'source-anchor-1',
+        page: 3,
+        rects: [{ page: 3, x: 0.1, y: 0.2, width: 0.3, height: 0.1 }]
+      },
+      integrity: { algorithm: 'sha256', expectedDigest: `SHA256:${expectedHex.toUpperCase()}` }
+    })
+
+    expect(opened).toMatchObject({
+      ok: true,
+      session: {
+        selection: {
+          kind: 'document',
+          anchors: [{ id: 'source-anchor-1', page: 3, rects: [{ page: 3 }] }]
+        }
+      },
+      file: { sha256: expectedHex },
+      integrity: {
+        algorithm: 'sha256',
+        expectedDigest: `sha256:${expectedHex}`,
+        actualDigest: `sha256:${expectedHex}`,
+        verified: true
+      }
+    })
+
+    await expect(host.open({
+      workspaceRoot,
+      path: 'evidence.pdf',
+      integrity: { algorithm: 'sha256', expectedDigest: '0'.repeat(64) }
+    })).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('integrity mismatch')
     })
   })
 

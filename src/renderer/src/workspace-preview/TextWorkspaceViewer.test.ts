@@ -9,6 +9,7 @@ import {
   TextWorkspaceViewer,
   buildTextWorkspaceViewerModel,
   createTextReplaceAllOperation,
+  textWorkspaceSelectionOffsets,
   textWorkspaceViewerDraftSourceKey
 } from './TextWorkspaceViewer'
 
@@ -116,5 +117,24 @@ describe('TextWorkspaceViewer', () => {
     expect(textWorkspaceViewerDraftSourceKey(notesObservation, notesModel)).not.toBe(
       textWorkspaceViewerDraftSourceKey(envObservation, envModel)
     )
+  })
+
+  it('maps one-based text anchors to textarea offsets and marks the initial selection', () => {
+    expect(textWorkspaceSelectionOffsets('alpha\nbeta\ngamma', {
+      startLine: 2,
+      startColumn: 2,
+      endLine: 2,
+      endColumn: 5
+    })).toEqual({ start: 7, end: 10 })
+
+    const html = renderToStaticMarkup(createElement(TextWorkspaceViewer, {
+      observation: createTextObservation({
+        selection: {
+          kind: 'text',
+          ranges: [{ startLine: 2, startColumn: 1, endLine: 2, endColumn: 5 }]
+        }
+      })
+    }))
+    expect(html).toContain('data-initial-selection="true"')
   })
 })

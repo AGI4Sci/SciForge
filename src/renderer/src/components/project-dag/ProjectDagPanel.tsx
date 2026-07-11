@@ -17,14 +17,23 @@ import {
   type ProjectDagRequestContext
 } from './project-dag-panel-state'
 import { handleProjectDagPreviewMessage } from './project-dag-preview-bridge'
+import { normalizeProjectDagGraphNodeId } from '../../lib/workspace-file-preview'
 
 type Props = {
   workspaceRoot?: string
+  initialClaimId?: string
+  initialNodeId?: string
   className?: string
   onCollapse: () => void
+  onInitialClaimConsumed?: () => void
+  onInitialNodeConsumed?: () => void
 }
 
-type ProjectDagSurface = 'evidence' | 'graph'
+export const PROJECT_DAG_REVIEW_VIEW: ProjectDagViewName = 'home'
+
+export function projectDagReviewRequest(context: ProjectDagRequestContext): ProjectDagViewRequest {
+  return { view: PROJECT_DAG_REVIEW_VIEW, ...context }
+}
 
 export function parseProjectSessionList(value: string): string[] {
   return [...new Set(value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))].sort()
@@ -41,16 +50,41 @@ export function projectDagUpdateScope(status: DagPanelStatus | undefined): 'all'
   return sessions.length > 0 ? sessions : 'all'
 }
 
-function projectDagViewForSurface(surface: ProjectDagSurface): ProjectDagViewName {
-  return surface === 'graph' ? 'graph' : 'home'
+export function projectDagFrameUrl(url: string, claimId?: string, nodeId?: string): string {
+  const normalizedClaimId = claimId?.trim()
+  const normalizedNodeId = normalizeProjectDagGraphNodeId(nodeId)
+  if (!normalizedClaimId && !normalizedNodeId) return url
+  try {
+    const parsed = new URL(url)
+    if (normalizedClaimId) parsed.searchParams.set('claim', normalizedClaimId)
+    if (normalizedNodeId) parsed.searchParams.set('node', normalizedNodeId)
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
+export function consumeProjectDagInitialClaim(
+  pendingClaim: { current: string | undefined }
+): string | undefined {
+  const claimId = pendingClaim.current
+  pendingClaim.current = undefined
+  return claimId
+}
+
+export function consumeProjectDagInitialNode(
+  pendingNode: { current: string | undefined }
+): string | undefined {
+  const nodeId = pendingNode.current
+  pendingNode.current = undefined
+  return nodeId
 }
 
 async function loadProjectDagView(
   loader: (input: ProjectDagViewRequest) => Promise<ProjectDagViewResult>,
-  viewName: ProjectDagViewName,
   context: ProjectDagRequestContext
 ): Promise<ProjectDagViewResult> {
-  return loader({ view: viewName, ...context })
+  return loader(projectDagReviewRequest(context))
 }
 
 function statusLabel(status: DagPanelStatus, t: (key: string, values?: Record<string, unknown>) => string): string {
@@ -120,9 +154,20 @@ function progressActivity(
   return [activity, attempt].filter(Boolean).join(' · ') || null
 }
 
-export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse }: Props): ReactElement {
+export function ProjectDagPanel({
+  workspaceRoot = '',
+  initialClaimId,
+  initialNodeId,
+  className = '',
+  onCollapse,
+  onInitialClaimConsumed,
+  onInitialNodeConsumed
+}: Props): ReactElement {
   const { t } = useTranslation('common')
+  const pendingInitialClaimRef = useRef(initialClaimId?.trim() || undefined)
+  const pendingInitialNodeRef = useRef(normalizeProjectDagGraphNodeId(initialNodeId))
   const [view, setView] = useState<ProjectDagViewResult | null>(null)
+  const [frameUrl, setFrameUrl] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [optimisticProgress, setOptimisticProgress] = useState<DagUpdateProgress | null>(null)
@@ -137,7 +182,6 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
   const [description, setDescription] = useState('')
   const [savedGoal, setSavedGoal] = useState({ title: '', description: '' })
   const [editingGoal, setEditingGoal] = useState(false)
-  const [activeSurface, setActiveSurface] = useState<ProjectDagSurface>('evidence')
   const [autonomyMode, setAutonomyMode] = useState<DagAutonomyMode>('autonomous')
   const [excludedSessionsText, setExcludedSessionsText] = useState('')
   const [isolatedSessionsText, setIsolatedSessionsText] = useState('')
@@ -145,7 +189,6 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
 
   const requestContext = useMemo(() => projectDagRequestContext(workspaceRoot), [workspaceRoot])
   const projectName = useMemo(() => projectDagWorkspaceName(workspaceRoot), [workspaceRoot])
-  const activeViewName = useMemo(() => projectDagViewForSurface(activeSurface), [activeSurface])
 
   useEffect(() => {
     setRootGoalId(undefined)
@@ -155,7 +198,6 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     setSummary(null)
     setOptimisticProgress(null)
     setEditingGoal(false)
-    setActiveSurface('evidence')
     setAutonomyMode('autonomous')
     setExcludedSessionsText('')
     setIsolatedSessionsText('')
@@ -171,9 +213,14 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     }
     setLoading(true)
     setLoadError(null)
-    void loadProjectDagView(loader, activeViewName, requestContext)
+    void loadProjectDagView(loader, requestContext)
       .then((result) => {
         if (cancelled) return
+        setFrameUrl(projectDagFrameUrl(
+          result.url,
+          pendingInitialClaimRef.current,
+          pendingInitialNodeRef.current
+        ))
         setView((current) => {
           const inFlightProgress = current?.status.progress ?? optimisticProgress
           if (submitting && inFlightProgress && !result.status.progress && result.status.freshness === 'fresh') {
@@ -212,7 +259,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [activeViewName, editingGoal, optimisticProgress, requestContext, requestNonce, submitting, t])
+  }, [editingGoal, optimisticProgress, requestContext, requestNonce, submitting, t])
 
   useEffect(() => {
     const freshness = view?.status.freshness
@@ -223,19 +270,24 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
   }, [optimisticProgress, submitting, view?.status.freshness, view?.status.pendingCount, view?.status.progress])
 
   useEffect(() => {
-    const frameUrl = view?.url
     const root = workspaceRoot.trim()
     if (!frameUrl || !root) return
     const onMessage = (event: MessageEvent): void => {
-      const resolver = window.sciforge?.resolveWorkspaceFile
+      const resolver = window.sciforge?.resolveProjectDagEvidencePreview
       void handleProjectDagPreviewMessage({
         event,
         frameWindow: iframeRef.current?.contentWindow ?? null,
         frameUrl,
         workspaceRoot: root,
-        resolveWorkspaceFile: typeof resolver === 'function'
+        ...(requestContext.projectRoot ? { projectRoot: requestContext.projectRoot } : {}),
+        expectedSnapshotDigest: view?.status.latestSnapshotDigest,
+        resolveProjectDagEvidencePreview: typeof resolver === 'function'
           ? (target) => resolver(target)
-          : async () => ({ ok: false, message: t('projectDagUnavailable') })
+          : async () => ({
+              ok: false,
+              code: 'file_unavailable',
+              message: t('projectDagUnavailable')
+            })
       }).then((result) => {
         if (result.status === 'rejected') setCommandError(result.message)
         if (result.status === 'opened') setCommandError(null)
@@ -243,7 +295,7 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [t, view?.url, workspaceRoot])
+  }, [frameUrl, requestContext.projectRoot, t, view?.status.latestSnapshotDigest, workspaceRoot])
 
   const projectSubtitle = projectName ? t('projectDagCurrentProject', { project: projectName }) : t('projectDagGlobalView')
   const goalTitle = title.trim()
@@ -259,6 +311,11 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     setTitle(savedGoal.title)
     setDescription(savedGoal.description)
     setEditingGoal(false)
+  }
+
+  const consumeInitialSelection = (): void => {
+    if (consumeProjectDagInitialClaim(pendingInitialClaimRef)) onInitialClaimConsumed?.()
+    if (consumeProjectDagInitialNode(pendingInitialNodeRef)) onInitialNodeConsumed?.()
   }
 
   const saveGoal = (): void => {
@@ -309,6 +366,11 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
     setCommandError(null)
     setSummary(null)
     void handler(request).then((result) => {
+      setFrameUrl(projectDagFrameUrl(
+        result.url,
+        pendingInitialClaimRef.current,
+        pendingInitialNodeRef.current
+      ))
       setView({ url: result.url, status: result.status, ...(view?.goal ? { goal: view.goal } : {}) })
       setSummary(t('projectDagUpdateQueued'))
       setOptimisticProgress(null)
@@ -322,12 +384,13 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
 
   return (
     <aside className={`ds-no-drag flex min-h-0 min-w-0 flex-col border-l border-ds-border bg-ds-sidebar ${className}`}>
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink"><FileText className="h-4 w-4 text-ds-muted" /><span>{t('projectDagPanelTitle')}</span></div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">{projectSubtitle}</div>
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-ds-border px-3 py-2 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileText className="h-4 w-4 shrink-0 text-ds-muted" />
+          <span className="shrink-0 text-[13px] font-semibold text-ds-ink">{t('projectDagPanelTitle')}</span>
+          <span className="truncate text-[11.5px] text-ds-faint">· {projectSubtitle}</span>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <button type="button" onClick={updateProject} disabled={loading || updateBusy || savingGoal} className="inline-flex h-7 min-w-[88px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50" aria-label={t('projectDagUpdateHelp')} title={t('projectDagUpdateHelp')}>
             {updateBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}<span>{updateBusy ? t('projectDagUpdating') : t('projectDagUpdate')}</span>
           </button>
@@ -336,45 +399,53 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
         </div>
       </header>
 
-      <div className="shrink-0 border-b border-ds-border px-4 py-3">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <label className="text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-autonomy">{t('projectDagAutonomyMode')}</label>
-          <select id="project-dag-autonomy" value={autonomyMode} onChange={(event) => setAutonomyMode(event.target.value as DagAutonomyMode)} disabled={updateBusy || savingGoal} className="rounded-lg border border-ds-border bg-ds-surface px-2 py-1 text-[11.5px] text-ds-ink">
-            <option value="autonomous">{t('projectDagAutonomous')}</option>
-            <option value="checkpointed">{t('projectDagCheckpointed')}</option>
-            <option value="supervised">{t('projectDagSupervised')}</option>
-          </select>
-        </div>
-        <details className="mb-3 rounded-lg border border-ds-border-muted bg-ds-main px-3 py-2">
-          <summary className="cursor-pointer text-[11.5px] font-medium text-ds-faint">
-            {t('projectDagScopeDispositions')}
-            {status?.scope ? ` · ${t('projectDagScopeIncludedCount', { count: status.scope.includedSessions.length })}` : ''}
-          </summary>
-          <div className="mt-2 space-y-2">
-            <p className="text-[11px] leading-4 text-ds-faint">{t('projectDagScopeHelp')}</p>
-            <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-excluded-sessions">{t('projectDagExcludedSessions')}</label>
-            <textarea id="project-dag-excluded-sessions" value={excludedSessionsText} onChange={(event) => setExcludedSessionsText(event.target.value)} disabled={updateBusy || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
-            <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-isolated-sessions">{t('projectDagIsolatedSessions')}</label>
-            <textarea id="project-dag-isolated-sessions" value={isolatedSessionsText} onChange={(event) => setIsolatedSessionsText(event.target.value)} disabled={updateBusy || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
+      <details className="group shrink-0 border-b border-ds-border bg-ds-sidebar">
+        <summary className="flex min-h-8 cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-[11px] marker:hidden sm:px-4 [&::-webkit-details-marker]:hidden">
+          <GitMerge className="h-3.5 w-3.5 shrink-0 text-ds-muted" />
+          {status ? <span className={`shrink-0 rounded-full border px-2 py-0.5 font-medium ${statusTone(status)}`}>{statusLabel(status, t)}</span> : null}
+          <span className="shrink-0 text-ds-faint">{t('projectDagAutonomyMode')}: {autonomyMode === 'autonomous' ? t('projectDagAutonomous') : autonomyMode === 'checkpointed' ? t('projectDagCheckpointed') : t('projectDagSupervised')}</span>
+          {status?.scope ? <span className="shrink-0 text-ds-faint">· {t('projectDagScopeIncludedCount', { count: status.scope.includedSessions.length })}</span> : null}
+          <span className="min-w-0 flex-1 truncate text-ds-muted">· {goalTitle || t('projectDagGoalUnset')}</span>
+          {status?.attentionCount ? <span className="shrink-0 text-amber-700">{t('dagAttentionCount', { count: status.attentionCount })}</span> : null}
+          <span className="shrink-0 font-medium text-ds-muted group-open:text-ds-ink">{t('projectDagSettings')}</span>
+        </summary>
+        <div className="border-t border-ds-border-muted px-3 py-3 sm:px-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+            <label className="text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-autonomy">{t('projectDagAutonomyMode')}</label>
+            <select id="project-dag-autonomy" value={autonomyMode} onChange={(event) => setAutonomyMode(event.target.value as DagAutonomyMode)} disabled={updateBusy || savingGoal} className="rounded-lg border border-ds-border bg-ds-surface px-2 py-1 text-[11.5px] text-ds-ink">
+              <option value="autonomous">{t('projectDagAutonomous')}</option>
+              <option value="checkpointed">{t('projectDagCheckpointed')}</option>
+              <option value="supervised">{t('projectDagSupervised')}</option>
+            </select>
           </div>
-        </details>
-        {editingGoal ? (
-          <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); saveGoal() }}>
-            <div className="flex items-center justify-between"><label className="text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-goal-title">{t('projectDagGoalTitle')}</label><div className="flex gap-1"><button type="submit" disabled={savingGoal || !goalTitle} className="rounded-lg p-1.5 text-ds-muted disabled:opacity-50" aria-label={t('projectDagSaveGoal')} title={t('projectDagSaveGoal')}>{savingGoal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}</button><button type="button" onClick={cancelGoalEdit} disabled={savingGoal} className="rounded-lg p-1.5 text-ds-muted" aria-label={t('projectDagCancelGoalEdit')}><X className="h-3.5 w-3.5" /></button></div></div>
-            <input id="project-dag-goal-title" value={title} onChange={(event) => setTitle(event.target.value)} disabled={savingGoal} className="w-full rounded-lg border border-ds-border-muted bg-ds-surface px-3 py-2 text-[12px] text-ds-ink outline-none" placeholder={t('projectDagGoalTitlePlaceholder')} />
-            <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-goal-description">{t('projectDagGoalDescription')}</label>
-            <textarea id="project-dag-goal-description" value={description} onChange={(event) => setDescription(event.target.value)} disabled={savingGoal} rows={2} className="w-full resize-none rounded-lg border border-ds-border-muted bg-ds-surface px-3 py-2 text-[12px] leading-5 text-ds-ink outline-none" placeholder={t('projectDagGoalDescriptionPlaceholder')} />
-          </form>
-        ) : (
-          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="text-[11.5px] font-medium text-ds-faint">{t('projectDagGoalTitle')}</div><div className="mt-1 truncate text-[13px] font-medium text-ds-ink">{goalTitle || t('projectDagGoalUnset')}</div>{goalDescription ? <div className="mt-1 line-clamp-2 text-[12px] text-ds-muted">{goalDescription}</div> : null}</div><button type="button" onClick={() => setEditingGoal(true)} disabled={savingGoal} className="rounded-lg p-1.5 text-ds-muted" aria-label={t('projectDagEditGoal')}><Pencil className="h-3.5 w-3.5" /></button></div>
-        )}
-        {inlineError ? <div role="status" className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{inlineError}</span></div> : null}
-      </div>
-
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2"><GitMerge className="h-3.5 w-3.5 text-ds-muted" />{status ? <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusTone(status)}`}>{statusLabel(status, t)}</span> : null}{status?.attentionCount ? <span className="text-[11px] text-amber-700">{t('dagAttentionCount', { count: status.attentionCount })}</span> : null}{status?.auditStale ? <span className="text-[11px] text-amber-700">{t('dagAuditStale')}</span> : null}{summary ? <span className="truncate text-[11px] text-ds-faint">{summary}</span> : null}</div>
-        <div className="flex shrink-0 rounded-lg border border-ds-border-muted bg-ds-main p-0.5">{(['evidence', 'graph'] as const).map((surface) => <button key={surface} type="button" onClick={() => setActiveSurface(surface)} className={`rounded-md px-2 py-1 text-[11.5px] font-medium ${activeSurface === surface ? 'bg-ds-surface text-ds-ink shadow-sm' : 'text-ds-muted hover:bg-ds-hover'}`} aria-pressed={activeSurface === surface}>{surface === 'graph' ? t('projectDagGraphTab') : t('projectDagEvidenceTab')}</button>)}</div>
-      </div>
+          <details className="mb-3 rounded-lg border border-ds-border-muted bg-ds-main px-3 py-2">
+            <summary className="cursor-pointer text-[11.5px] font-medium text-ds-faint">
+              {t('projectDagScopeDispositions')}
+              {status?.scope ? ` · ${t('projectDagScopeIncludedCount', { count: status.scope.includedSessions.length })}` : ''}
+            </summary>
+            <div className="mt-2 space-y-2">
+              <p className="text-[11px] leading-4 text-ds-faint">{t('projectDagScopeHelp')}</p>
+              <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-excluded-sessions">{t('projectDagExcludedSessions')}</label>
+              <textarea id="project-dag-excluded-sessions" value={excludedSessionsText} onChange={(event) => setExcludedSessionsText(event.target.value)} disabled={updateBusy || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
+              <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-isolated-sessions">{t('projectDagIsolatedSessions')}</label>
+              <textarea id="project-dag-isolated-sessions" value={isolatedSessionsText} onChange={(event) => setIsolatedSessionsText(event.target.value)} disabled={updateBusy || savingGoal} rows={2} className="w-full resize-y rounded-lg border border-ds-border-muted bg-ds-surface px-2.5 py-1.5 font-mono text-[11px] leading-4 text-ds-ink outline-none" placeholder={t('projectDagSessionListPlaceholder')} />
+            </div>
+          </details>
+          {editingGoal ? (
+            <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); saveGoal() }}>
+              <div className="flex items-center justify-between"><label className="text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-goal-title">{t('projectDagGoalTitle')}</label><div className="flex gap-1"><button type="submit" disabled={savingGoal || !goalTitle} className="rounded-lg p-1.5 text-ds-muted disabled:opacity-50" aria-label={t('projectDagSaveGoal')} title={t('projectDagSaveGoal')}>{savingGoal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}</button><button type="button" onClick={cancelGoalEdit} disabled={savingGoal} className="rounded-lg p-1.5 text-ds-muted" aria-label={t('projectDagCancelGoalEdit')}><X className="h-3.5 w-3.5" /></button></div></div>
+              <input id="project-dag-goal-title" value={title} onChange={(event) => setTitle(event.target.value)} disabled={savingGoal} className="w-full rounded-lg border border-ds-border-muted bg-ds-surface px-3 py-2 text-[12px] text-ds-ink outline-none" placeholder={t('projectDagGoalTitlePlaceholder')} />
+              <label className="block text-[11.5px] font-medium text-ds-faint" htmlFor="project-dag-goal-description">{t('projectDagGoalDescription')}</label>
+              <textarea id="project-dag-goal-description" value={description} onChange={(event) => setDescription(event.target.value)} disabled={savingGoal} rows={2} className="w-full resize-none rounded-lg border border-ds-border-muted bg-ds-surface px-3 py-2 text-[12px] leading-5 text-ds-ink outline-none" placeholder={t('projectDagGoalDescriptionPlaceholder')} />
+            </form>
+          ) : (
+            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="text-[11.5px] font-medium text-ds-faint">{t('projectDagGoalTitle')}</div><div className="mt-1 truncate text-[13px] font-medium text-ds-ink">{goalTitle || t('projectDagGoalUnset')}</div>{goalDescription ? <div className="mt-1 line-clamp-2 text-[12px] text-ds-muted">{goalDescription}</div> : null}</div><button type="button" onClick={() => setEditingGoal(true)} disabled={savingGoal} className="rounded-lg p-1.5 text-ds-muted" aria-label={t('projectDagEditGoal')}><Pencil className="h-3.5 w-3.5" /></button></div>
+          )}
+          {status?.auditStale ? <div className="mt-2 text-[11px] text-amber-700">{t('dagAuditStale')}</div> : null}
+          {summary ? <div className="mt-2 text-[11px] text-ds-faint">{summary}</div> : null}
+          {inlineError ? <div role="status" className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{inlineError}</span></div> : null}
+        </div>
+      </details>
       {activeProgress ? (
         <div
           role="status"
@@ -402,10 +473,8 @@ export function ProjectDagPanel({ workspaceRoot = '', className = '', onCollapse
           {status?.lastError ? <div className="mt-1 break-words text-[10.5px] text-amber-800">{status.lastError}</div> : null}
         </div>
       ) : null}
-      {status?.latestSnapshotDigest ? <div className="shrink-0 truncate border-b border-ds-border px-4 py-1.5 font-mono text-[10.5px] text-ds-faint" title={status.latestSnapshotDigest}>{t('dagSnapshotDigest')}: {status.latestSnapshotDigest}{status.auditTargetDigest ? ` · ${t('dagAuditDigest')}: ${status.auditTargetDigest}` : ''}</div> : null}
-
-      <div className="min-h-0 flex-1 bg-ds-main p-2"><div className="relative h-full overflow-hidden rounded-lg border border-ds-border bg-ds-surface">
-        {view ? <iframe ref={iframeRef} key={`${view.url}:${frameNonce}`} src={view.url} title={activeSurface === 'graph' ? t('projectDagGraphSurface') : t('projectDagEvidenceSurface')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-clipboard-write allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" /> : null}
+      <div className="min-h-0 flex-1 bg-ds-main p-1 sm:p-1.5"><div className="relative h-full overflow-hidden rounded-md border border-ds-border bg-ds-surface sm:rounded-lg">
+        {frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('projectDagReviewSurface')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-clipboard-write allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={consumeInitialSelection} /> : null}
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('projectDagLoading')}</span></div> : null}
         {loadError && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main px-6"><div className="max-w-sm text-center"><AlertTriangle className="mx-auto h-5 w-5 text-amber-500" /><div className="mt-3 text-[13px] font-semibold text-ds-ink">{t('projectDagLoadFailed')}</div><div className="mt-2 text-[12px] text-ds-muted">{loadError}</div><button type="button" onClick={() => setRequestNonce((current) => current + 1)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-[12px]"><RefreshCw className="h-3.5 w-3.5" />{t('projectDagRetry')}</button></div></div> : null}
       </div></div>

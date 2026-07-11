@@ -409,6 +409,16 @@
     gap: 6px;
     margin-top: 10px;
   }
+  .preview-status {
+    margin-top: 8px;
+    border: 1px solid #bfdbfe;
+    border-radius: 7px;
+    background: #eff6ff;
+    padding: 7px 8px;
+    color: #1e40af;
+    font-size: 11px;
+  }
+  .preview-status.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
   .mini-list {
     display: flex;
     flex-direction: column;
@@ -567,6 +577,8 @@
 const API = location.origin;
 const $ = (id) => document.getElementById(id);
 const Q_THREAD = new URLSearchParams(location.search).get('thread');
+const Q_NODE = new URLSearchParams(location.search).get('node');
+const Q_PREVIEW_TRUSTED = new URLSearchParams(location.search).get('preview') === 'trusted';
 
 function readAuthToken() {
   const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -606,6 +618,9 @@ let fragMap = {};
 let prMap = {};
 let weakMap = {};
 let blastState = null;
+let requestedNodeId = Q_NODE || null;
+let previewFeedback = null;
+const pendingPreviewRequests = new Map();
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -804,9 +819,18 @@ function renderGraph(graph) {
   renderLanes(stageModel);
   renderEdges(stageModel);
   renderNodes(stageModel);
+  let restoredNodeId = null;
+  if (!selectedNodeId && requestedNodeId && stageModel.nodeById[requestedNodeId]) {
+    selectedNodeId = requestedNodeId;
+    restoredNodeId = requestedNodeId;
+    requestedNodeId = null;
+  }
   if (selectedNodeId && !stageModel.nodeById[selectedNodeId]) selectedNodeId = null;
   applyGraphState();
-  if (selectedNodeId) showNodeDetail(selectedNodeId);
+  if (selectedNodeId) {
+    showNodeDetail(selectedNodeId);
+    if (restoredNodeId) requestAnimationFrame(() => centerNode(restoredNodeId));
+  }
   setStatus(`${stageModel.nodes.length} nodes · ${stageModel.layers.length} layers`);
 }
 
@@ -937,6 +961,7 @@ function markerForRel(rel) {
 
 function selectNode(id) {
   if (!id || !stageModel?.nodeById[id]) return;
+  if (selectedNodeId !== id) previewFeedback = null;
   selectedNodeId = id;
   blastState = null;
   applyGraphState();
@@ -946,6 +971,7 @@ function selectNode(id) {
 
 function clearSelection() {
   selectedNodeId = null;
+  previewFeedback = null;
   blastState = null;
   applyGraphState();
   $('nodeInspector').innerHTML = '<h2>Node Detail</h2><div class="empty">Click a node in the structured DAG to inspect content, support, provenance, and connected evidence.</div>';
@@ -1018,11 +1044,84 @@ function supportStrength(id) {
   return { value: noisyOr(scores), count: scores.length };
 }
 
+function object(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function accessRestricted(value) {
+  const policy = object(value);
+  return value === 'restricted' || policy.read === false || policy.classification === 'restricted';
+}
+
+function sourcePreviewModel(node) {
+  if (node?.type !== 'source_assertion') return { kind: 'not-source', message: '' };
+  if (!Q_PREVIEW_TRUSTED) return { kind: 'disabled', message: '请从绑定具体 runtime thread 的 Evidence DAG 面板打开本地证据。' };
+  const sourceType = String(node.source_type || '').toLowerCase();
+  if (sourceType === 'citation' || sourceType === 'web') {
+    return { kind: 'remote', message: '远程或 citation 来源不会作为本地 workspace 路径打开。' };
+  }
+  if (sourceType === 'runtime' || sourceType === 'trace') {
+    return { kind: 'runtime', message: 'runtime / trace 来源仅保留运行时引用，不能作为 workspace 文件打开。' };
+  }
+  const registry = object(lastGraph?.artifact_registry);
+  const versions = Array.isArray(registry.artifactVersions) ? registry.artifactVersions : [];
+  const anchors = Array.isArray(registry.sourceAnchors) ? registry.sourceAnchors : [];
+  const artifacts = Array.isArray(registry.artifacts) ? registry.artifacts : [];
+  const version = versions.find((item) => item.versionId === node.artifact_version_id);
+  const anchor = anchors.find((item) => item.anchorId === node.source_anchor_id);
+  const artifact = artifacts.find((item) => item.artifactId === node.artifact_id);
+  if (!node.artifact_version_id || !node.source_anchor_id || !version || !anchor) {
+    return { kind: 'missing', message: '未记录可验证的 ArtifactVersion / SourceAnchor，无法定位原始文件。' };
+  }
+  if (artifact?.availability === 'restricted' || accessRestricted(artifact?.accessPolicy) || accessRestricted(anchor?.accessPolicy)) {
+    return { kind: 'restricted', message: '该来源受访问策略限制，不能在文件预览中打开。' };
+  }
+  const locator = String(version.locator || '').trim();
+  if (/^(runtime|trace):/i.test(locator)) return { kind: 'runtime', message: 'runtime / trace 来源仅保留运行时引用，不能作为 workspace 文件打开。' };
+  if (/^(https?:|doi:)/i.test(locator)) {
+    return { kind: 'remote', message: '远程或 citation 来源不会作为本地 workspace 路径打开。' };
+  }
+  if (!locator) return { kind: 'missing', message: '该来源没有可定位的本地 Artifact locator。' };
+  return { kind: 'local', message: '已绑定本地 ArtifactVersion；打开前会由主进程按固定 Snapshot 重新验证。' };
+}
+
+function renderPreviewFeedback() {
+  const container = $('detailPreviewFeedback');
+  if (!container) return;
+  container.innerHTML = previewFeedback
+    ? `<div class="preview-status ${previewFeedback.status === 'error' ? 'error' : ''}">${esc(previewFeedback.message)}</div>`
+    : '';
+}
+
+function requestEvidencePreview(node) {
+  const requestId = `preview-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  if (!currentThread || !currentSnapshot?.digest || !node?.id || !node.artifact_version_id || !node.source_anchor_id) {
+    previewFeedback = { status: 'error', message: '缺少当前 thread、Snapshot 或溯源标识，无法打开证据。' };
+    renderPreviewFeedback();
+    return;
+  }
+  const message = {
+    type: 'sciforge.evidence-dag.preview-workspace-evidence',
+    version: 1,
+    requestId,
+    threadId: currentThread,
+    snapshotDigest: currentSnapshot.digest,
+    sourceAssertionId: node.id,
+    artifactVersionId: node.artifact_version_id,
+    sourceAnchorId: node.source_anchor_id
+  };
+  pendingPreviewRequests.set(requestId, node.id);
+  previewFeedback = { status: 'pending', message: '正在验证并打开原始证据…' };
+  renderPreviewFeedback();
+  window.parent.postMessage(message, '*');
+}
+
 function showNodeDetail(id) {
   const node = stageModel.nodeById[id];
   const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
   const support = supportStrength(id);
   const refRows = node.type === 'source_assertion' ? refHtml(node) : '';
+  const preview = sourcePreviewModel(node);
   const incoming = (stageModel.incoming[id] || []).slice(0, 6);
   const outgoing = (stageModel.outgoing[id] || []).slice(0, 6);
   $('nodeInspector').innerHTML = `
@@ -1039,19 +1138,24 @@ function showNodeDetail(id) {
     ${analysisRowsHtml(node)}
     <div class="row"><span class="lab">trace</span><span class="val">${esc((node.trace_refs || []).join(', ') || '-')}</span></div>
     ${refRows}
+    ${node.type === 'source_assertion' ? `<div class="row"><span class="lab">preview</span><span class="val">${esc(preview.message)}</span></div>` : ''}
     <div class="content">${esc(node.content || '')}</div>
+    <div id="detailPreviewFeedback" aria-live="polite"></div>
     <div class="detail-actions">
       <button id="detailClear">Clear</button>
+      ${preview.kind === 'local' ? '<button id="detailPreview" class="primary">查看原始证据</button>' : ''}
       <button id="detailWhatIf" class="primary">What if removed?</button>
     </div>
     ${connectedHtml('Incoming', incoming, true)}
     ${connectedHtml('Outgoing', outgoing, false)}
   `;
   $('detailClear').onclick = clearSelection;
+  if ($('detailPreview')) $('detailPreview').onclick = () => requestEvidencePreview(node);
   $('detailWhatIf').onclick = () => whatIf(id);
   $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
     item.onclick = () => selectNode(item.dataset.nodeId);
   });
+  renderPreviewFeedback();
 }
 
 function refHtml(node) {
@@ -1324,11 +1428,28 @@ async function pollChanges() {
 $('thread').onchange = (event) => {
   currentThread = event.target.value;
   selectedNodeId = null;
+  previewFeedback = null;
   renderedSig = null;
   markUpdated(false);
   setSubtitle(currentThread || 'All threads');
   loadGraph();
 };
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent) return;
+  const result = object(event.data);
+  const allowed = new Set(['type', 'version', 'requestId', 'ok', 'message']);
+  if (Object.keys(result).some((key) => !allowed.has(key)) ||
+      result.type !== 'sciforge.evidence-dag.preview-workspace-evidence-result' ||
+      result.version !== 1 || typeof result.requestId !== 'string' || typeof result.ok !== 'boolean' ||
+      (result.message !== undefined && typeof result.message !== 'string')) return;
+  const nodeId = pendingPreviewRequests.get(result.requestId);
+  if (!nodeId) return;
+  pendingPreviewRequests.delete(result.requestId);
+  previewFeedback = result.ok
+    ? { status: 'opened', message: '已打开原始证据；文件预览顶部可返回当前 Evidence 节点。' }
+    : { status: 'error', message: String(result.message || '无法打开原始证据。').slice(0, 2000) };
+  if (selectedNodeId === nodeId) renderPreviewFeedback();
+});
 $('refresh').onclick = loadGraph;
 $('auditNow').onclick = runAuditNow;
 $('fit').onclick = fitGraph;

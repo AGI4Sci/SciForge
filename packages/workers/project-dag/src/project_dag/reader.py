@@ -18,7 +18,12 @@ import project_dag  # noqa: F401  (side effect: sys.path for evidence_dag)
 from evidence_dag import provjson
 from evidence_dag.graph import ThreadGraph
 from evidence_dag.model import EdgeRel, NodeStatus, NodeType
-from evidence_dag.snapshot import snapshot_filename, snapshot_storage_key
+from evidence_dag.snapshot import (
+    compute_snapshot_digest,
+    snapshot_artifact_digests,
+    snapshot_filename,
+    snapshot_storage_key,
+)
 
 # statuses that qualify a session claim for promotion. `conflicting` is
 # included on purpose: a claim contested inside one session is exactly the
@@ -174,7 +179,27 @@ class SessionReader:
         if expected_digest is not None and snapshot.digest != expected_digest:
             raise ValueError(
                 f"{session_id}: expected Evidence digest {expected_digest}, got {snapshot.digest}")
-        return provjson.from_prov_json(doc), snapshot, doc
+        graph = provjson.from_prov_json(doc)
+        actual_digest = compute_snapshot_digest(
+            graph,
+            input_watermark=snapshot.input_watermark,
+            schema_version=snapshot.schema_version,
+            extractor_version=snapshot.extractor_version,
+            verifier_version=snapshot.verifier_version,
+        )
+        if actual_digest != snapshot.digest:
+            raise ValueError(
+                f"{session_id}: Evidence Snapshot digest mismatch;"
+                f" envelope={snapshot.digest}, computed={actual_digest}"
+            )
+        actual_artifact_digests = tuple(snapshot_artifact_digests(graph))
+        if actual_artifact_digests != snapshot.artifact_digests:
+            raise ValueError(
+                f"{session_id}: Evidence Snapshot artifactDigests mismatch;"
+                f" envelope={list(snapshot.artifact_digests)},"
+                f" computed={list(actual_artifact_digests)}"
+            )
+        return graph, snapshot, doc
 
     def delta(self, session_id: str, watermark: Optional[dict],
               expected_digest: Optional[str] = None) -> Optional[SessionDelta]:

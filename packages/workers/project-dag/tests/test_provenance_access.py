@@ -9,7 +9,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from evidence_dag.snapshot import snapshot_filename
+from evidence_dag import provjson
+from evidence_dag.snapshot import compute_snapshot_digest, snapshot_filename
 
 from project_dag.provenance import ProvenanceResolver
 from project_dag.reader import SessionReader
@@ -207,6 +208,17 @@ class ProvenanceAccessTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _install(self, evidence: dict, project: dict) -> None:
+        header = evidence["edag:meta"]["snapshot"]
+        graph = provjson.from_prov_json(evidence)
+        evidence_digest = compute_snapshot_digest(
+            graph,
+            input_watermark=header["inputWatermark"],
+            schema_version=header["schemaVersion"],
+            extractor_version=header["extractorVersion"],
+            verifier_version=header["verifierVersion"],
+        )
+        header["digest"] = evidence_digest
+        project["evidenceVector"][0]["digest"] = evidence_digest
         with open(os.path.join(self.sessions, snapshot_filename(THREAD_ID)), "w",
                   encoding="utf-8") as handle:
             json.dump(evidence, handle)

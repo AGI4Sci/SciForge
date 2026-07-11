@@ -25,6 +25,7 @@ import type {
   UserInputAnswer,
   UserInputQuestion
 } from './types'
+import { extractScientificObjectMetadata } from '@shared/scientific-objects'
 
 type ApprovalStatus = 'pending' | 'allowed' | 'denied' | 'error'
 
@@ -137,6 +138,10 @@ function runtimeDisclosureMetaFromRecord(
   if (typeof meta.skillInjectionBytes === 'number') {
     next.skillInjectionBytes = meta.skillInjectionBytes
   }
+  const scientific = extractScientificObjectMetadata(meta)
+  if (scientific.scientificObjects.length) next.scientificObjects = scientific.scientificObjects
+  if (scientific.comparisons.length) next.scientificObjectComparisons = scientific.comparisons
+  if (scientific.workspaceObservations.length) next.workspaceObservations = scientific.workspaceObservations
   return Object.keys(next).length > 0 ? next : undefined
 }
 

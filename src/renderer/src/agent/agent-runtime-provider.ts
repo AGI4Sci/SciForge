@@ -40,6 +40,7 @@ import type {
   UserInputAnswer,
   UserInputQuestion
 } from './types'
+import { extractScientificObjectMetadata } from '@shared/scientific-objects'
 import type { LocalRuntimeMemoryRecordJson } from './local-runtime-contract'
 import { getDisplayThreadTitle } from '../lib/thread-title'
 
@@ -189,6 +190,10 @@ function disclosureMeta(meta: Record<string, unknown> | undefined): RuntimeDiscl
     if (injectedMemoryIds.length) next.injectedMemoryIds = injectedMemoryIds
   }
   if (typeof meta.skillInjectionBytes === 'number') next.skillInjectionBytes = meta.skillInjectionBytes
+  const scientific = extractScientificObjectMetadata(meta)
+  if (scientific.scientificObjects.length) next.scientificObjects = scientific.scientificObjects
+  if (scientific.comparisons.length) next.scientificObjectComparisons = scientific.comparisons
+  if (scientific.workspaceObservations.length) next.workspaceObservations = scientific.workspaceObservations
   return Object.keys(next).length ? next : undefined
 }
 

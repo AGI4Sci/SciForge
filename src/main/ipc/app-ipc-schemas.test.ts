@@ -564,6 +564,27 @@ describe('app-ipc-schemas', () => {
     expect(workspacePreviewObservePayloadSchema.parse({
       sessionId: ' session-1 '
     })).toEqual({ sessionId: 'session-1' })
+    expect(workspacePreviewOpenPayloadSchema.parse({
+      path: ' evidence.pdf ',
+      workspaceRoot: ' /tmp/workspace ',
+      anchor: {
+        kind: 'document',
+        page: 5,
+        rects: [{ page: 5, x: 0.1, y: 0.2, width: 0.3, height: 0.1 }]
+      },
+      integrity: {
+        algorithm: 'sha256',
+        expectedDigest: 'A'.repeat(64)
+      }
+    })).toMatchObject({
+      path: 'evidence.pdf',
+      workspaceRoot: '/tmp/workspace',
+      anchor: { kind: 'document', page: 5 },
+      integrity: {
+        algorithm: 'sha256',
+        expectedDigest: `sha256:${'a'.repeat(64)}`
+      }
+    })
     expect(workspacePreviewDescribeAssetPayloadSchema.parse({
       sessionId: ' session-1 '
     })).toEqual({ sessionId: 'session-1' })
@@ -1185,6 +1206,39 @@ describe('app-ipc-schemas', () => {
         }
       })
     ).toThrow(/Unrecognized key/)
+  })
+
+  it('accepts bounded local runtime tool budget and parallelism patches', () => {
+    const parsed = settingsPatchSchema.parse({
+      agents: {
+        sciforge: {
+          runtimeTuning: {
+            toolBudget: {
+              enabled: true,
+              profiles: {
+                review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
+                long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
+              }
+            },
+            parallelism: { localReadOnly: 8, networkMcp: 4 }
+          }
+        }
+      }
+    })
+
+    expect(parsed.agents?.sciforge?.runtimeTuning).toMatchObject({
+      toolBudget: {
+        enabled: true,
+        profiles: {
+          review: { hardLimit: 16 },
+          long: { maxAutomaticPhases: 3, totalLimit: 48 }
+        }
+      },
+      parallelism: { localReadOnly: 8, networkMcp: 4 }
+    })
+    expect(() => settingsPatchSchema.parse({
+      agents: { sciforge: { runtimeTuning: { parallelism: { localReadOnly: 65 } } } }
+    })).toThrow()
   })
 
   it('rejects unknown schedule patch fields', () => {

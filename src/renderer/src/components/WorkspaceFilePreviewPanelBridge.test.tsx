@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
+import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspaceObservation
@@ -175,12 +176,14 @@ const workspacePreviewMock = vi.hoisted(() => {
 vi.mock('../workspace-preview', async () => {
   const registry = await vi.importActual<typeof import('../workspace-preview/registry')>('../workspace-preview/registry')
   const { createElement: h } = await vi.importActual<typeof import('react')>('react')
-  const contextForTarget = (target: { path: string } | null) => {
+  const contextForTarget = (target: WorkspaceFileTarget | null) => {
     const isText = Boolean(target?.path.match(/\.(?:txt|text|log)$/i))
     const isTabular = Boolean(target?.path.match(/\.(?:csv|tsv|jsonl|ndjson|xlsx)$/i))
     const isDeck = Boolean(target?.path.match(/\.pptx$/i))
     const isMolecular = Boolean(target?.path.match(/\.(?:pdb|cif|mmcif|sdf|mol|mol2|xyz)$/i))
     const isSequence = Boolean(target?.path.match(/\.(?:fasta|fa|fastq|fq|gb|gbk|gff|gff3|gtf|bed|vcf)$/i))
+    const integrityMismatch = Boolean(target?.integrity && target.path.includes('integrity-mismatch'))
+    const verifiedSha256 = target?.integrity?.expectedDigest.replace(/^sha256:/u, '')
     return {
       state: {
         session: isTabular
@@ -359,9 +362,17 @@ vi.mock('../workspace-preview', async () => {
                 actions: ['sequence.selectRegion', 'workspace.setSelection']
               }
           : null,
-        file: null,
+        file: target?.integrity && !integrityMismatch
+          ? {
+              workspaceRoot: target.workspaceRoot ?? '/workspace/lab',
+              path: target.path,
+              sha256: verifiedSha256
+            }
+          : null,
         lastEditSummary: workspacePreviewMock.lastEditSummary,
-        error: null
+        error: integrityMismatch
+          ? `Workspace preview integrity mismatch: expected ${target?.integrity?.expectedDigest}, got sha256:${'b'.repeat(64)}.`
+          : null
       },
       asset: isMolecular
         ? {
@@ -394,7 +405,9 @@ vi.mock('../workspace-preview', async () => {
           }
         : null,
       assetStatus: isMolecular ? 'ready' as const : 'idle' as const,
-      assetError: null,
+      assetError: integrityMismatch
+        ? `Workspace preview integrity mismatch: expected ${target?.integrity?.expectedDigest}, got sha256:${'b'.repeat(64)}.`
+        : null,
       host: workspacePreviewMock.host
     }
   }
@@ -402,7 +415,7 @@ vi.mock('../workspace-preview', async () => {
   return {
     rendererWorkspacePreviewRegistry: registry.rendererWorkspacePreviewRegistry,
     WorkspacePreviewPanelShell: (props: {
-      target: { path: string } | null
+      target: WorkspaceFileTarget | null
       className?: string
       children?: ReactNode | ((nextContext: ReturnType<typeof contextForTarget>) => ReactNode)
     }) => h(
@@ -669,6 +682,47 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(sequenceHtml).toContain('data-mock-sequence-viewer="true"')
     expect(sequenceHtml).toContain('data-has-set-selection="true"')
     expect(deferredHtml).toContain('data-route-reason="deferred-non-life-science"')
+  })
+
+  it('shows evidence integrity success only when an expected digest is verified', () => {
+    const expectedDigest = `sha256:${'a'.repeat(64)}`
+    const verifiedHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
+      target: {
+        path: 'notes.txt',
+        workspaceRoot: '/workspace/lab',
+        integrity: { algorithm: 'sha256', expectedDigest }
+      },
+      workspaceRoot: '/workspace/lab',
+      onClose: vi.fn()
+    }))
+    const ordinaryHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
+      target: { path: 'notes.txt', workspaceRoot: '/workspace/lab' },
+      workspaceRoot: '/workspace/lab',
+      onClose: vi.fn()
+    }))
+
+    expect(verifiedHtml).toContain('data-workspace-preview-integrity-status="verified"')
+    expect(verifiedHtml).toContain('证据版本已验证')
+    expect(verifiedHtml).toContain('border-emerald-300')
+    expect(ordinaryHtml).not.toContain('data-workspace-preview-integrity-status')
+    expect(ordinaryHtml).not.toContain('证据版本已验证')
+  })
+
+  it('translates an integrity mismatch into a clear blocking error', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
+      target: {
+        path: 'integrity-mismatch.txt',
+        workspaceRoot: '/workspace/lab',
+        integrity: { algorithm: 'sha256', expectedDigest: `sha256:${'a'.repeat(64)}` }
+      },
+      workspaceRoot: '/workspace/lab',
+      onClose: vi.fn()
+    }))
+
+    expect(html).toContain('data-workspace-preview-integrity-status="mismatch"')
+    expect(html).toContain('当前文件与 Snapshot 证据版本不一致，未打开')
+    expect(html).toContain('border-red-300')
+    expect(html).toContain('role="alert"')
   })
 
   it('connects tabular viewer edit operations to the workspace preview host, refreshes observation, and renders the edit summary', async () => {

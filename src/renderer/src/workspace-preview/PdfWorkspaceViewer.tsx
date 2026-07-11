@@ -321,6 +321,11 @@ export function PdfWorkspaceViewer({
   ])
 
   const activePreviewState = previewState ?? loadedPreviewState
+  const initialDocumentAnchor = observation?.selection?.kind === 'document'
+    ? observation.selection.anchors[0]
+    : undefined
+  const initialAnchorRect = initialDocumentAnchor?.rects?.[0]
+  const initialPage = initialDocumentAnchor?.page ?? initialAnchorRect?.page ?? 1
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
   const handleAnnotationAction = useCallback((action: WritePdfAnnotationAction, selection: WritePdfSelection): void => {
     if (!observation || !onApplyEdit) return
@@ -365,11 +370,12 @@ export function PdfWorkspaceViewer({
               mimeType={activePreviewState.mimeType}
               size={resolvePdfFileSize(observation, resolvedAsset)}
               mtimeMs={observation?.file.mtimeMs}
+              initialPage={initialPage}
               onAnnotationAction={onApplyEdit ? handleAnnotationAction : undefined}
               annotationOverlays={annotationOverlays}
               activeAnnotationId={activeAnnotationId}
               annotationsOpen={annotationsOpen}
-              jumpToRect={jumpToRect}
+              jumpToRect={jumpToRect ?? initialAnchorRect ?? null}
               onSelectionChange={onSelectionChange}
               onAnnotationSelect={onAnnotationSelect}
               onOpenAnnotations={onOpenAnnotations}

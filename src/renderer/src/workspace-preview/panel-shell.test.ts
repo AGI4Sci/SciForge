@@ -60,8 +60,49 @@ describe('WorkspacePreviewPanelShell', () => {
     )
     expect(workspacePreviewOpenInputForPanelTarget(target, '/fallback')).toEqual({
       path: 'data/samples.csv',
-      workspaceRoot: '/workspace/lab'
+      workspaceRoot: '/workspace/lab',
+      line: 2,
+      column: 4
     })
+  })
+
+  it('preserves a scientific object selection when opening the full workspace', () => {
+    const target = {
+      path: 'structures/protein.pdb',
+      workspaceRoot: '/workspace/lab',
+      selection: {
+        kind: 'molecular' as const,
+        chains: ['A'],
+        ligands: ['ATP']
+      }
+    }
+
+    expect(workspacePreviewOpenInputForPanelTarget(target, '/fallback')).toMatchObject({
+      path: 'structures/protein.pdb',
+      workspaceRoot: '/workspace/lab',
+      selection: target.selection
+    })
+    expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('"kind":"molecular"')
+  })
+
+  it('preserves a document anchor and integrity expectation in the host open input', () => {
+    const target = {
+      path: 'reports/evidence.pdf',
+      workspaceRoot: '/workspace/lab',
+      anchor: {
+        kind: 'document' as const,
+        page: 4,
+        rects: [{ page: 4, x: 0.1, y: 0.2, width: 0.3, height: 0.1 }]
+      },
+      integrity: {
+        algorithm: 'sha256' as const,
+        expectedDigest: `sha256:${'a'.repeat(64)}`
+      }
+    }
+
+    expect(workspacePreviewOpenInputForPanelTarget(target, '/fallback')).toEqual(target)
+    expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('"kind":"document"')
+    expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('expectedDigest')
   })
 
   it('renders deferred state through shared chrome before the legacy body opens', () => {

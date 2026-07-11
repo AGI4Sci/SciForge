@@ -81,7 +81,11 @@ import {
 import { parseGuiPlanCommand } from '../plan/plan-command'
 import { DevPreviewLaunchCard } from './DevPreviewLaunchCard'
 import { RuntimeBanner } from './RuntimeBanner'
-import { CODE_PANEL_PREFERRED, useWorkbenchLayout } from './workbench-layout'
+import {
+  CODE_PANEL_PREFERRED,
+  projectDagReturnSelection,
+  useWorkbenchLayout
+} from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { PROJECT_DAG_SETUP_EVENT } from './project-dag/project-dag-panel-state'
 import { prepareImageAttachmentUpload } from '../lib/image-attachment-upload'
@@ -1026,6 +1030,19 @@ export function Workbench(): ReactElement {
     route,
     workspaceRoot
   })
+  const [projectDagReturnTarget, setProjectDagReturnTarget] = useState<{
+    claimId?: string
+    nodeId?: string
+  } | null>(null)
+  const [evidenceDagReturnNode, setEvidenceDagReturnNode] = useState<{
+    nodeId: string
+    threadId: string
+  } | null>(null)
+  useEffect(() => {
+    setEvidenceDagReturnNode((current) =>
+      current && current.threadId !== activeThreadId ? null : current
+    )
+  }, [activeThreadId])
   const [fileTreeInitialDirectory, setFileTreeInitialDirectory] = useState<FileTreeInitialDirectory | null>(null)
   const [figureStylePanelRequest, setFigureStylePanelRequest] = useState<{
     page: FigureStylePanelPage
@@ -2417,9 +2434,23 @@ export function Workbench(): ReactElement {
 
   const closeFilePreview = (): void => {
     if (filePreviewReturnContext?.kind === 'project-dag') {
+      setProjectDagReturnTarget(projectDagReturnSelection(filePreviewReturnContext))
       setFilePreviewTarget(null)
       setFilePreviewReturnContext(null)
       setRightPanelMode('project-dag')
+      return
+    }
+    if (filePreviewReturnContext?.kind === 'evidence-dag') {
+      const returnThreadId = filePreviewReturnContext.threadId.trim()
+      const returnNodeId = filePreviewReturnContext.nodeId.trim()
+      setEvidenceDagReturnNode(
+        returnThreadId && returnNodeId && returnThreadId === activeThreadId
+          ? { threadId: returnThreadId, nodeId: returnNodeId }
+          : null
+      )
+      setFilePreviewTarget(null)
+      setFilePreviewReturnContext(null)
+      setRightPanelMode(returnThreadId === activeThreadId ? 'evidence' : null)
       return
     }
     setFilePreviewTarget(null)
@@ -2471,7 +2502,8 @@ export function Workbench(): ReactElement {
                 {filePreviewTarget ? (
                   <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
                     <div className="flex h-full min-h-0 flex-col">
-                      {filePreviewReturnContext?.kind === 'project-dag' ? (
+                      {filePreviewReturnContext?.kind === 'project-dag' ||
+                      filePreviewReturnContext?.kind === 'evidence-dag' ? (
                         <div className="shrink-0 border-b border-ds-border bg-ds-sidebar px-2 py-1.5">
                           <button
                             type="button"
@@ -2480,7 +2512,11 @@ export function Workbench(): ReactElement {
                           >
                             <ArrowLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span className="truncate">{t('workspacePreviewReturnToReview', {
-                              label: filePreviewReturnContext.label || t('projectDagPanelTitle')
+                              label: filePreviewReturnContext.label || (
+                                filePreviewReturnContext.kind === 'evidence-dag'
+                                  ? t('rightPanelEvidenceDag')
+                                  : t('projectDagPanelTitle')
+                              )
                             })}</span>
                           </button>
                         </div>
@@ -2569,14 +2605,28 @@ export function Workbench(): ReactElement {
               <EvidenceDagPanel
                 activeThreadId={activeThreadId}
                 runtimeId={activeThread?.runtimeId}
+                initialNodeId={
+                  evidenceDagReturnNode?.threadId === activeThreadId
+                    ? evidenceDagReturnNode.nodeId
+                    : undefined
+                }
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
+                onInitialNodeConsumed={() => setEvidenceDagReturnNode(null)}
               />
             ) : rightPanelMode === 'project-dag' ? (
               <ProjectDagPanel
                 workspaceRoot={activeThread?.workspace || workspaceRoot}
+                initialClaimId={projectDagReturnTarget?.claimId}
+                initialNodeId={projectDagReturnTarget?.nodeId}
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
+                onInitialClaimConsumed={() => setProjectDagReturnTarget((current) =>
+                  current?.nodeId ? { nodeId: current.nodeId } : null
+                )}
+                onInitialNodeConsumed={() => setProjectDagReturnTarget((current) =>
+                  current?.claimId ? { claimId: current.claimId } : null
+                )}
               />
             ) : rightPanelMode === 'browser' ? (
               <DevBrowserPanel

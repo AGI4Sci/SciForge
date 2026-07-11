@@ -184,6 +184,127 @@ describe('WorkspacePreviewHost', () => {
     expect(host.getState().error).toBeNull()
   })
 
+  it('keeps the newest preview when overlapping opens resolve out of order', async () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    let resolveFirst: ((result: Awaited<ReturnType<WorkspacePreviewBridgeAdapter['open']>>) => void) | undefined
+    let resolveSecond: ((result: Awaited<ReturnType<WorkspacePreviewBridgeAdapter['open']>>) => void) | undefined
+    const first = new Promise<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['open']>>>((resolve) => {
+      resolveFirst = resolve
+    })
+    const second = new Promise<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['open']>>>((resolve) => {
+      resolveSecond = resolve
+    })
+    const bridge = createMockBridge({
+      open: vi.fn<WorkspacePreviewBridgeAdapter['open']>()
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(second),
+      releaseSession: vi.fn<WorkspacePreviewBridgeAdapter['releaseSession']>(async () => true)
+    })
+    const host = createWorkspacePreviewHost({ registry, bridge })
+    const firstOpen = host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const secondOpen = host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
+    const secondSession = createSession(descriptor, { id: 'session-2', path: 'protein-2.pdb' })
+    const secondFile = createFileState({ path: 'protein-2.pdb', relativePath: 'protein-2.pdb' })
+
+    resolveSecond?.({
+      ok: true,
+      session: secondSession,
+      manifest: descriptor.manifest,
+      route: 'matched',
+      file: secondFile
+    })
+    await expect(secondOpen).resolves.toMatchObject({ ok: true, session: { id: 'session-2' } })
+
+    const firstSession = createSession(descriptor, { id: 'session-1', path: 'protein.pdb' })
+    resolveFirst?.({
+      ok: true,
+      session: firstSession,
+      manifest: descriptor.manifest,
+      route: 'matched',
+      file: createFileState()
+    })
+    await expect(firstOpen).resolves.toEqual({
+      ok: false,
+      message: 'Workspace preview request was superseded.'
+    })
+    expect(bridge.releaseSession).toHaveBeenCalledWith('session-1')
+    expect(host.getState().session?.id).toBe('session-2')
+    expect(host.getState().file?.path).toBe('protein-2.pdb')
+    expect(host.getState().error).toBeNull()
+  })
+
+  it('does not apply an observation from a superseded preview session', async () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    let resolveObservation: ((result: Awaited<ReturnType<WorkspacePreviewBridgeAdapter['observe']>>) => void) | undefined
+    const pendingObservation = new Promise<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['observe']>>>((resolve) => {
+      resolveObservation = resolve
+    })
+    const bridge = createMockBridge({
+      open: vi.fn<WorkspacePreviewBridgeAdapter['open']>(async (input) => {
+        const second = input.path === 'protein-2.pdb'
+        return {
+          ok: true,
+          session: createSession(descriptor, {
+            id: second ? 'session-2' : 'session-1',
+            path: input.path
+          }),
+          manifest: descriptor.manifest,
+          route: 'matched',
+          file: createFileState({ path: input.path, relativePath: input.path })
+        }
+      }),
+      observe: vi.fn<WorkspacePreviewBridgeAdapter['observe']>(() => pendingObservation)
+    })
+    const host = createWorkspacePreviewHost({ registry, bridge })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const staleObserve = host.observe('session-1')
+    await host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
+    const observation: WorkspaceObservation = {
+      schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+      file: { path: 'protein.pdb', workspaceRoot: '/tmp/work' },
+      view: {
+        pluginId: descriptor.manifest.id,
+        modality: descriptor.manifest.modality,
+        mode: 'preview',
+        title: 'stale protein.pdb'
+      },
+      actions: []
+    }
+
+    resolveObservation?.({ ok: true, observation })
+    await expect(staleObserve).resolves.toEqual({ ok: true, observation })
+    expect(host.getState().session?.id).toBe('session-2')
+    expect(host.getState().observation).toBeNull()
+  })
+
+  it('forwards initial selection, anchor, and integrity fields without renderer-side loss', async () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    const bridge = createMockBridge({
+      open: vi.fn<WorkspacePreviewBridgeAdapter['open']>(async (input) => ({
+        ok: true,
+        session: createSession(descriptor, { selection: input.selection }),
+        manifest: descriptor.manifest,
+        route: 'matched',
+        file: createFileState()
+      }))
+    })
+    const host = createWorkspacePreviewHost({ registry, bridge })
+    const input = {
+      path: 'protein.pdb',
+      workspaceRoot: '/tmp/work',
+      selection: { kind: 'molecular' as const, chains: ['A'] },
+      anchor: { kind: 'text' as const, line: 8, column: 2 },
+      integrity: { algorithm: 'sha256' as const, expectedDigest: `sha256:${'f'.repeat(64)}` }
+    }
+
+    await host.open(input)
+
+    expect(bridge.open).toHaveBeenCalledWith(input)
+  })
+
   it('does not notify subscribers for no-op successful host action patches', async () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const descriptor = requireDescriptor(registry, 'protein.pdb')

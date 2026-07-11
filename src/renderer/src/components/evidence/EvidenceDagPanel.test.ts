@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   EvidenceDagPanel,
+  evidenceDagViewUrlWithNode,
   runEvidenceDagUpdate,
   withEvidenceDagViewTimeout
 } from './EvidenceDagPanel'
@@ -75,6 +76,17 @@ describe('EvidenceDagPanel', () => {
   it('does not leave the panel waiting forever when view startup stalls', async () => {
     await expect(withEvidenceDagViewTimeout(new Promise(() => undefined), 1))
       .rejects.toThrow(/did not become ready in time/)
+  })
+
+  it('restores a returned Evidence node without exposing the iframe token', () => {
+    expect(evidenceDagViewUrlWithNode(
+      'http://127.0.0.1:4897/?thread=thread-1#token=secret',
+      'source_assertion:1',
+      true
+    )).toBe('http://127.0.0.1:4897/?thread=thread-1&node=source_assertion%3A1&preview=trusted#token=secret')
+    expect(evidenceDagViewUrlWithNode('http://127.0.0.1:4897/', undefined, true))
+      .toBe('http://127.0.0.1:4897/?preview=trusted')
+    expect(evidenceDagViewUrlWithNode('not a url', 'source_assertion:1')).toBe('not a url')
   })
 
 })

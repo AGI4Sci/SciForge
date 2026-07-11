@@ -10,8 +10,14 @@
     .toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}.toolbar p{margin:5px 0 0;font-size:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;min-width:0;box-shadow:0 1px 2px rgba(20,28,40,.025)}.summary{margin-top:12px}.summary p{margin:7px 0 0}.workspace{display:grid;grid-template-columns:minmax(235px,0.7fr) minmax(380px,1.6fr);gap:10px;margin-top:10px}.claim-list{display:flex;flex-direction:column;gap:8px;max-height:72vh;overflow:auto}.claim-button{width:100%;text-align:left;color:inherit;background:var(--soft);border:1px solid var(--line);padding:10px;border-radius:8px}.claim-button[aria-current="true"]{background:var(--accent-soft);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}.claim-title{display:block;font-weight:650;line-height:1.4}.claim-meta{display:flex;gap:7px;align-items:center;margin-top:7px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}.status-supported{color:var(--good)}.status-fragile,.status-undetermined{color:var(--warn)}.status-conflicted,.status-invalidated{color:var(--bad)}
     .detail{min-height:360px}.statement{font-size:17px;font-weight:650;line-height:1.45;margin:4px 0 12px}.facts{display:flex;gap:8px;flex-wrap:wrap}.section{border-top:1px solid var(--line);padding-top:2px;margin-top:16px}.path,.relation,.artifact,.history,.impact,.breakpoint{border-left:3px solid var(--line);padding:8px 10px;margin:8px 0;background:var(--soft);border-radius:0 6px 6px 0}.path.strongest{border-left-color:var(--good)}.breakpoint{border-left-color:var(--warn)}.relation-opposes{border-left-color:var(--bad)}.relation-qualifies{border-left-color:var(--warn)}.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.row>*{min-width:0}.compact{margin:5px 0}.plain-list{margin:7px 0;padding-left:20px}.plain-list li{margin:5px 0}.empty{color:var(--muted);font-style:italic}.locator-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.open-link{color:var(--accent)}button.open-link{border:0;background:transparent;box-shadow:none;padding:0;text-decoration:underline;text-underline-offset:2px}.preview-status{margin:8px 0;padding:8px 10px;border-radius:7px;background:var(--accent-soft);color:#31558f;font-size:12px}.preview-status.error-state{background:#fff2f3;color:#8f2f37}.what-if-buttons{display:flex;gap:7px;flex-wrap:wrap}.what-if-buttons button{background:var(--soft);border-color:var(--line);padding:6px 9px}.what-if-buttons button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:#234caa}.below{margin-top:10px}.error{background:#fff2f3;border:1px solid #efc2c6;color:#8f2f37;border-radius:8px;padding:11px;margin-top:10px}.update-progress{margin-top:10px;padding:11px 12px;border:1px solid #cddcf8;border-radius:9px;background:var(--accent-soft)}.update-progress.error-state{border-color:#efcf9d;background:#fff8eb}.progress-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.progress-title{font-size:12px;font-weight:650}.progress-meta{font-size:11px;color:var(--muted);margin-top:5px}.progress-track{height:6px;margin-top:8px;overflow:hidden;border-radius:99px;background:#dbe5f7}.progress-bar{height:100%;width:0;border-radius:99px;background:var(--accent);transition:width .35s ease}.error-state .progress-bar{background:#d7902d}.progress-steps{display:flex;gap:6px;margin-top:8px;color:var(--muted);font-size:10.5px;flex-wrap:wrap}.progress-steps .done{color:var(--good)}.progress-steps .active{color:#315fbf;font-weight:650}.error-state .progress-steps .active{color:var(--warn)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}[hidden]{display:none!important}
     .evidence-vector{margin-top:10px}.vector-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.vector-item{min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--soft);padding:9px 10px}.vector-item b,.vector-item span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.vector-item span{margin-top:4px;font-size:11px}.diagnostic{margin:10px 0 0;padding:9px 10px;border-radius:8px;background:var(--accent-soft);color:#31558f;font-size:12px}
-    .graph-surface{margin-top:10px;padding:0;overflow:hidden}.graph-head{padding:13px;border-bottom:1px solid var(--line)}.graph-head p{margin:5px 0 0;font-size:12px}.graph-stats{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.graph-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:9px 13px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}.legend-item{display:flex;align-items:center;gap:5px}.legend-dot{width:9px;height:9px;border-radius:3px}.legend-session{background:#eaf0ff;border:1px solid #8aa8ef}.legend-evidence{background:#e8f6ef;border:1px solid #78b999}.legend-claim{background:#fff5df;border:1px solid #d7ac55}.legend-goal{background:#f4ebff;border:1px solid #aa82d4}.legend-entity{background:#eff2f6;border:1px solid #9ba6b5}.graph-scroll{min-height:360px;overflow:auto;background:linear-gradient(rgba(106,122,145,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(106,122,145,.07) 1px,transparent 1px);background-size:24px 24px}.graph-canvas{display:block;min-width:920px}.graph-edge{fill:none;stroke:#a7b0bd;stroke-width:1.5}.graph-edge-label{fill:#7e8792;font-size:10px;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.graph-node{cursor:pointer}.graph-node rect{stroke-width:1.5;filter:drop-shadow(0 1px 1px rgba(20,28,40,.05))}.graph-node text{pointer-events:none}.graph-node .node-title{fill:#20242c;font-size:11.5px;font-weight:650}.graph-node .node-meta{fill:#707782;font-size:9.5px}.graph-node-session rect{fill:#f3f6ff;stroke:#8aa8ef}.graph-node-evidence rect{fill:#edf8f2;stroke:#78b999}.graph-node-claim rect{fill:#fff8e8;stroke:#d7ac55}.graph-node-goal rect{fill:#f7f1ff;stroke:#aa82d4}.graph-node-entity rect{fill:#f5f6f8;stroke:#9ba6b5}.graph-node[aria-current="true"] rect{stroke:var(--accent);stroke-width:2.5}.graph-inspector{border-top:1px solid var(--line);padding:12px 13px;background:var(--panel)}.graph-inspector h3{margin:0 0 6px}.graph-inspector p{margin:4px 0}.graph-empty{margin:28px auto;padding:18px;max-width:540px;text-align:center;border:1px dashed var(--line);border-radius:10px;background:rgba(255,255,255,.88)}
-    @media(max-width:850px){body{padding:16px}.workspace{grid-template-columns:1fr}.claim-list{max-height:42vh}}
+    .graph-surface{margin-top:10px;padding:0;overflow:hidden}.graph-head{padding:13px;border-bottom:1px solid var(--line)}.graph-head p{margin:5px 0 0;font-size:12px}.graph-stats{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.graph-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:9px 13px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}.legend-item{display:flex;align-items:center;gap:5px}.legend-dot{width:9px;height:9px;border-radius:3px}.legend-session{background:#eaf0ff;border:1px solid #8aa8ef}.legend-evidence{background:#e8f6ef;border:1px solid #78b999}.legend-claim{background:#fff5df;border:1px solid #d7ac55}.legend-goal{background:#f4ebff;border:1px solid #aa82d4}.legend-entity{background:#eff2f6;border:1px solid #9ba6b5}.graph-workbench{display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,420px);height:min(74vh,780px);min-height:520px}.graph-scroll{min-height:0;overflow:auto;background:linear-gradient(rgba(106,122,145,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(106,122,145,.07) 1px,transparent 1px);background-size:24px 24px}.graph-canvas{display:block;min-width:920px}.graph-edge{fill:none;stroke:#a7b0bd;stroke-width:1.5}.graph-edge-label{fill:#7e8792;font-size:10px;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.graph-node{cursor:pointer}.graph-node rect{stroke-width:1.5;filter:drop-shadow(0 1px 1px rgba(20,28,40,.05))}.graph-node text{pointer-events:none}.graph-node .node-title{fill:#20242c;font-size:11.5px;font-weight:650}.graph-node .node-meta{fill:#707782;font-size:9.5px}.graph-node-session rect{fill:#f3f6ff;stroke:#8aa8ef}.graph-node-evidence rect{fill:#edf8f2;stroke:#78b999}.graph-node-claim rect{fill:#fff8e8;stroke:#d7ac55}.graph-node-goal rect{fill:#f7f1ff;stroke:#aa82d4}.graph-node-entity rect{fill:#f5f6f8;stroke:#9ba6b5}.graph-node[aria-current="true"] rect{stroke:var(--accent);stroke-width:2.5}.graph-inspector{min-width:0;overflow:auto;border-left:1px solid var(--line);padding:0 14px 18px;background:var(--panel);scrollbar-gutter:stable}.graph-inspector h3{margin:0 0 6px}.graph-inspector p{margin:4px 0}.graph-empty{margin:28px auto;padding:18px;max-width:540px;text-align:center;border:1px dashed var(--line);border-radius:10px;background:rgba(255,255,255,.88)}
+    .review-head{padding:15px 0 11px}.review-head .statement{font-size:15px;margin:5px 0 8px}.review-kind{color:var(--accent);font-size:10.5px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.review-nav{position:sticky;top:0;z-index:3;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:0 -2px;padding:8px 2px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:rgba(255,255,255,.96);backdrop-filter:blur(8px)}.review-nav a{border-radius:6px;padding:6px 4px;color:var(--muted);font-size:11px;font-weight:650;text-align:center;text-decoration:none}.review-nav a:hover,.review-nav a:focus-visible{background:var(--accent-soft);color:#315fbf;outline:none}.review-section{padding:14px 0 2px;scroll-margin-top:52px}.review-section+.review-section{border-top:1px solid var(--line)}.review-section-head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}.review-section-head h3{margin:0;font-size:13px}.review-index{color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:750}.review-subsection{margin-top:12px}.review-subsection>summary{cursor:pointer;color:#353b45;font-size:12px;font-weight:650}.review-relations{display:flex;flex-direction:column;gap:6px}.review-relation-button{width:100%;text-align:left;background:var(--soft);padding:8px 9px}.review-relation-button b,.review-relation-button span{display:block}.review-relation-button span{margin-top:3px;font-size:10.5px;color:var(--muted)}.review-loading{display:flex;align-items:center;gap:8px;padding:14px 0;color:var(--muted);font-size:12px}.review-loading::before{content:"";width:12px;height:12px;border:2px solid #d3dbea;border-top-color:var(--accent);border-radius:50%;animation:review-spin .8s linear infinite}.review-meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 9px;margin:9px 0;font-size:11px}.review-meta dt{color:var(--muted)}.review-meta dd{margin:0;overflow-wrap:anywhere}.detail .review-nav{top:-13px}.detail{overflow:auto;max-height:76vh;scrollbar-gutter:stable}@keyframes review-spin{to{transform:rotate(360deg)}}
+    .review-context{margin:0 -14px;border-bottom:1px solid var(--line);background:#fbfcfe}.review-context>summary,.diagnostic-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;font-size:12px;font-weight:700;list-style:none}.review-context>summary{position:sticky;top:0;z-index:5;padding:10px 14px;background:#fbfcfe}.review-context>summary::-webkit-details-marker,.diagnostic-fold>summary::-webkit-details-marker{display:none}.review-context>summary::before,.diagnostic-fold>summary::before{content:"▸";margin-right:6px;color:var(--muted)}.review-context[open]>summary::before,.diagnostic-fold[open]>summary::before{content:"▾"}.review-context .evidence-vector,.review-context-claims{padding:0 14px 12px}.review-context .vector-list{grid-template-columns:1fr}.review-context .claim-list{max-height:210px}.review-context h2{font-size:12px;margin:8px 0}.graph-inspector>.detail{max-height:none;overflow:visible}.diagnostic-fold>summary{justify-content:flex-start}.diagnostic-fold>div{margin-top:10px}
+    .graph-focus-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:10px}.graph-focus-controls>span{font-size:11px}.graph-mode-group{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}.graph-mode-group button{border:0;border-right:1px solid var(--line);border-radius:0;box-shadow:none;padding:5px 9px;font-size:11px}.graph-mode-group button:last-child{border-right:0}.graph-mode-group button[aria-pressed="true"]{background:var(--accent-soft);color:#234caa;font-weight:650}.graph-node,.graph-edge,.graph-edge-label{transition:opacity .16s ease,stroke .16s ease,stroke-width .16s ease}.graph-edge.relation-support{stroke:#31815a}.graph-edge-label.relation-support{fill:#26704c}.graph-edge.relation-contradicts{stroke:var(--bad);stroke-dasharray:8 5}.graph-edge-label.relation-contradicts{fill:#a83b43}.graph-edge.relation-qualifies{stroke:#b47a20;stroke-dasharray:2 5;stroke-linecap:round}.graph-edge-label.relation-qualifies{fill:#936314}.graph-edge.relation-provenance{stroke:#7589a7}.graph-edge-label.relation-provenance{fill:#61738d}.graph-node.graph-dimmed{opacity:.16}.graph-edge.graph-dimmed,.graph-edge-label.graph-dimmed{opacity:.11}.graph-edge.graph-focused{stroke-width:3.2;filter:drop-shadow(0 0 1px rgba(40,57,82,.25))}.graph-edge-label.graph-focused{font-weight:750;stroke-width:5}.graph-node.graph-related rect{stroke-width:2}.graph-node.graph-related:not([aria-current="true"]){opacity:.92}
+    .legend-line{display:inline-block;width:23px;height:0;border-top:2px solid;vertical-align:middle}.legend-line-support{border-color:#31815a}.legend-line-contradicts{border-color:var(--bad);border-top-style:dashed}.legend-line-qualifies{border-color:#b47a20;border-top-style:dotted}.legend-line-provenance{border-color:#7589a7}
+    html,body{width:100%;height:100%}body{display:flex;max-width:none;min-height:0;flex-direction:column;gap:6px;overflow:hidden;padding:8px}.toolbar{min-height:30px;flex:none;align-items:center;gap:10px}.toolbar h1{font-size:14px}.toolbar p{display:none}.toolbar button{padding:5px 8px;font-size:11px}.overview-fold{flex:none;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.overview-fold>summary{cursor:pointer;list-style:none;padding:6px 9px;font-size:11px;font-weight:650;color:var(--muted)}.overview-fold>summary::-webkit-details-marker{display:none}.overview-fold>summary::before{content:"▸";margin-right:6px}.overview-fold[open]>summary::before{content:"▾"}.overview-fold .summary{margin:0;padding:0 8px 8px}.overview-fold .card{padding:8px}.overview-fold .summary p{margin:3px 0 0}.graph-surface{display:flex;min-height:0;flex:1;flex-direction:column;margin-top:0}.graph-head{flex:none;padding:8px 10px}.graph-head p{display:none}.graph-head-main{display:flex;align-items:center;justify-content:space-between;gap:8px}.graph-head-actions{display:flex;align-items:center;gap:7px}.graph-stats{margin-top:5px;gap:4px}.graph-stats .badge{padding:1px 5px;font-size:10px}.graph-focus-controls{margin-top:6px;gap:5px}.graph-mode-group button{padding:4px 7px}.graph-legend-fold{flex:none;border-bottom:1px solid var(--line)}.graph-legend-fold>summary{cursor:pointer;list-style:none;padding:5px 10px;font-size:10.5px;color:var(--muted)}.graph-legend-fold>summary::-webkit-details-marker{display:none}.graph-legend{padding:6px 10px;border-bottom:0}.graph-workbench{min-height:0;height:auto;flex:1;grid-template-columns:minmax(0,1fr) minmax(300px,360px)}.graph-workbench.inspector-closed{grid-template-columns:minmax(0,1fr)}.graph-workbench.inspector-closed .graph-inspector{display:none}.inspector-toggle{padding:4px 7px;font-size:10.5px}.inspector-close{position:sticky;top:6px;z-index:8;display:block;margin:6px 0 -28px auto;padding:3px 7px;background:rgba(255,255,255,.94);font-size:11px}.below{flex:none;margin-top:0;gap:6px}.below .card{padding:6px 9px}.diagnostic-fold>summary{font-size:10.5px}.update-progress{flex:none;margin-top:0;padding:7px 9px}.error{flex:none;margin-top:0}.detail{min-height:0}.review-head{padding-top:10px}
+    @media(max-width:850px){.workspace{grid-template-columns:1fr}.claim-list{max-height:42vh}.graph-workbench{grid-template-columns:minmax(0,1fr) minmax(280px,38%)} }
+    @media(max-width:680px){body{height:auto;min-height:100vh;overflow:auto}.graph-surface{min-height:690px}.graph-workbench{display:block;height:auto;min-height:0}.graph-scroll{height:520px}.graph-inspector{max-height:68vh;border-top:1px solid var(--line);border-left:0}}
   </style>
 </head>
 <body>
@@ -29,33 +35,39 @@
     <div class="progress-track" role="progressbar" aria-label="Project DAG update progress" aria-valuemin="0" aria-valuemax="100"><div id="progress-bar" class="progress-bar"></div></div>
     <div id="progress-steps" class="progress-steps"></div>
   </section>
-  <section id="summary" class="grid summary" aria-label="Project committed snapshot summary"></section>
-  <div id="evidence-surface">
-    <section class="card evidence-vector" aria-labelledby="evidence-vector-heading">
-      <div class="row"><div><h2 id="evidence-vector-heading">已提交 Evidence 输入</h2><p class="compact muted">Project Snapshot 固定消费的 Session Evidence Snapshot；它们是图谱可复现性的输入边界。</p></div><span id="evidence-vector-count" class="badge">0</span></div>
-      <div id="evidence-vector" class="vector-list"></div>
-      <div id="evidence-diagnostic"></div>
-    </section>
-    <main class="workspace">
-      <section class="card" aria-labelledby="claims-heading">
-        <div class="row"><h2 id="claims-heading">Claims</h2><span id="claim-count" class="muted"></span></div>
-        <div id="claims" class="claim-list" role="listbox" aria-label="Committed Project Claims"></div>
-      </section>
-      <article id="claim-detail" class="card detail" aria-labelledby="claim-detail-heading">
-        <h2 id="claim-detail-heading">Claim 详情</h2>
-        <p class="empty">选择一条 Claim，查看跨层原始证据、Decision 历史和只读 what-if。</p>
-      </article>
-    </main>
-  </div>
+  <details class="overview-fold">
+    <summary>项目概览 <span id="summary-inline" class="muted"></span></summary>
+    <section id="summary" class="grid summary" aria-label="Project committed snapshot summary"></section>
+  </details>
   <section id="graph-surface" class="card graph-surface" aria-labelledby="graph-heading" hidden>
-    <div class="graph-head"><div class="row"><div><h2 id="graph-heading">Project DAG 图谱</h2><p class="muted">显示 committed snapshot 中的 Session 输入、Evidence、Claim、Entity、Goal 与固定关系。</p></div><span id="graph-snapshot" class="mono muted">—</span></div><div id="graph-stats" class="graph-stats"></div></div>
-    <div class="graph-legend" aria-label="图谱图例"><span class="legend-item"><span class="legend-dot legend-session"></span>Session snapshot</span><span class="legend-item"><span class="legend-dot legend-evidence"></span>Evidence</span><span class="legend-item"><span class="legend-dot legend-claim"></span>Claim</span><span class="legend-item"><span class="legend-dot legend-goal"></span>Goal</span><span class="legend-item"><span class="legend-dot legend-entity"></span>Entity</span></div>
-    <div id="graph-scroll" class="graph-scroll"></div>
-    <aside id="graph-inspector" class="graph-inspector"><h3>节点详情</h3><p class="empty">选择图中的节点查看其状态、标识和相邻关系。</p></aside>
+    <div class="graph-head"><div class="graph-head-main"><div><h2 id="graph-heading">Project DAG 图谱</h2><p class="muted">显示 committed snapshot 中的 Session 输入、Evidence、Claim、Entity、Goal 与固定关系。</p></div><div class="graph-head-actions"><span id="graph-snapshot" class="mono muted">—</span><button id="toggle-inspector" class="inspector-toggle" type="button" aria-controls="graph-inspector" aria-expanded="false">显示详情</button></div></div><div id="graph-stats" class="graph-stats"></div><div class="graph-focus-controls"><span class="muted">路径</span><div class="graph-mode-group" role="group" aria-label="图谱关联路径范围"><button type="button" data-graph-focus-mode="direct" aria-pressed="false">直接关系</button><button type="button" data-graph-focus-mode="strongest" aria-pressed="true">最强路径</button><button type="button" data-graph-focus-mode="all" aria-pressed="false">全部相关路径</button></div><span id="graph-focus-summary" class="muted" aria-live="polite">默认显示最强路径</span></div></div>
+    <details class="graph-legend-fold"><summary>图例</summary><div class="graph-legend" aria-label="图谱图例"><span class="legend-item"><span class="legend-dot legend-session"></span>Session snapshot</span><span class="legend-item"><span class="legend-dot legend-evidence"></span>Evidence</span><span class="legend-item"><span class="legend-dot legend-claim"></span>Claim</span><span class="legend-item"><span class="legend-dot legend-goal"></span>Goal</span><span class="legend-item"><span class="legend-dot legend-entity"></span>Entity</span><span class="legend-item"><span class="legend-line legend-line-support"></span>支持 / 目标</span><span class="legend-item"><span class="legend-line legend-line-contradicts"></span>反对</span><span class="legend-item"><span class="legend-line legend-line-qualifies"></span>限定</span><span class="legend-item"><span class="legend-line legend-line-provenance"></span>溯源 / 派生</span></div></details>
+    <div class="graph-workbench inspector-closed">
+      <div id="graph-scroll" class="graph-scroll"></div>
+      <aside id="graph-inspector" class="graph-inspector" aria-label="Project DAG 审查 Inspector">
+        <button id="inspector-close" class="inspector-close" type="button" aria-label="收起详情">收起</button>
+        <details id="evidence-surface" class="review-context">
+          <summary><span>项目 Evidence 上下文</span><span id="evidence-vector-count" class="badge">0</span></summary>
+          <section class="evidence-vector" aria-labelledby="evidence-vector-heading">
+            <h2 id="evidence-vector-heading">已提交 Evidence 输入</h2>
+            <p class="compact muted">固定消费的 Session Evidence Snapshot，是图谱可复现性的输入边界。</p>
+            <div id="evidence-vector" class="vector-list"></div>
+            <div id="evidence-diagnostic"></div>
+          </section>
+          <section class="review-context-claims" aria-labelledby="claims-heading">
+            <div class="row"><h2 id="claims-heading">Claims</h2><span id="claim-count" class="muted"></span></div>
+            <div id="claims" class="claim-list" role="listbox" aria-label="Committed Project Claims"></div>
+          </section>
+        </details>
+        <article id="claim-detail" class="detail" aria-labelledby="claim-detail-heading">
+          <div class="review-head"><span class="review-kind">Inspector</span><h2 id="claim-detail-heading">选择节点开始审查</h2><p class="empty">右侧会按概要、证据、原文和历史组织当前节点。</p></div>
+        </article>
+      </aside>
+    </div>
   </section>
-  <div class="grid below">
-    <section class="card"><h2>Attention frontier</h2><div id="attention">—</div></section>
-    <section class="card"><h2>Current snapshot findings</h2><div id="findings">—</div></section>
+  <div class="grid below" aria-label="Project review diagnostics">
+    <details class="card diagnostic-fold"><summary>Attention frontier</summary><div id="attention">—</div></details>
+    <details class="card diagnostic-fold"><summary>Current snapshot findings</summary><div id="findings">—</div></details>
   </div>
 
 <script id="claim-detail-pure">
@@ -164,22 +176,13 @@ function workspaceLocator(assertion){
   if(!windows&&/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(locator))return null;
   return locator;
 }
-function integer(value,min=0){return Number.isInteger(value)&&value>=min&&value<=1000000?value:null}
-function previewAnchor(assertion){
-  const sourceAnchor=object(assertion.sourceAnchor),selector=object(sourceAnchor.selector),id=String(assertion.sourceAnchorId||sourceAnchor.sourceAnchorId||'').trim()||undefined;
-  const line=integer(selector.line,1),column=integer(selector.column,1),endLine=integer(selector.endLine,1),endColumn=integer(selector.endColumn,1);
-  if(line!==null)return {kind:'text',line,...(column!==null?{column}:{}),...(endLine!==null?{endLine}:{}),...(endColumn!==null?{endColumn}:{})};
-  const rowStart=integer(selector.rowStart),rowEnd=integer(selector.rowEnd),columnStart=integer(selector.columnStart),columnEnd=integer(selector.columnEnd);
-  if(rowStart!==null&&rowEnd!==null&&columnStart!==null&&columnEnd!==null&&rowEnd>=rowStart&&columnEnd>=columnStart)return {kind:'tabular',...(typeof selector.sheet==='string'&&selector.sheet.trim()?{sheet:selector.sheet.trim().slice(0,256)}:{}),rowStart,rowEnd,columnStart,columnEnd};
-  const page=integer(selector.page,1),paragraphIndex=integer(selector.paragraphIndex,1),quote=typeof selector.quote==='string'?selector.quote.slice(0,8000):undefined,rects=[];
-  for(const value of list(selector.rects).slice(0,64)){const rect=object(value),rectPage=integer(rect.page,1);if(rectPage===null||![rect.x,rect.y,rect.width,rect.height].every(item=>typeof item==='number'&&Number.isFinite(item)&&item>=0&&item<=1)||rect.width<=0||rect.height<=0||rect.x+rect.width>1||rect.y+rect.height>1)continue;rects.push({page:rectPage,x:rect.x,y:rect.y,width:rect.width,height:rect.height})}
-  if(page!==null||paragraphIndex!==null||quote||rects.length||id)return {kind:'document',...(id?{id:id.slice(0,256)}:{}),...(page!==null?{page}:{}),...(paragraphIndex!==null?{paragraphIndex}:{}),...(quote?{quote}:{}),...(rects.length?{rects}:{})};
-  return null;
-}
-function workspacePreviewMessage(assertion,claim,snapshotDigest,requestId){
-  const locator=workspaceLocator(assertion);if(!locator)return null;
-  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion),anchor=previewAnchor(assertion),claimId=String(claim.id||'').trim();if(!claimId)return null;
-  return {type:'sciforge.project-dag.preview-workspace-evidence',version:1,requestId,locator,...(assertion.artifactId?{artifactId:String(assertion.artifactId).slice(0,512)}:{}),...(assertion.artifactVersionId?{artifactVersionId:String(assertion.artifactVersionId).slice(0,512)}:{}),...(assertion.sourceAnchorId?{sourceAnchorId:String(assertion.sourceAnchorId).slice(0,512)}:{}),...(anchor?{anchor}:{}),claim:{id:claimId.slice(0,512),...(claim.statement?{statement:String(claim.statement).slice(0,8000)}:{}),...(snapshotDigest?{snapshotDigest:String(snapshotDigest).slice(0,512)}:{})}};
+function numericRange(value,min=0){if(typeof value!=='string'||!/^\d+:\d+$/u.test(value))return null;const [start,end]=value.split(':').map(Number);return start>=min&&end>=start&&end<=1000000?[start,end]:null}
+function anchorMappingNote(assertion){const selector=object(object(assertion.sourceAnchor).selector);return numericRange(selector.rowRange)?'表格来源只记录了行范围/列名，列名无法安全换算为列索引；预览会定位到对应行范围的起始列。':''}
+function opaqueGraphNodeId(value){const nodeId=String(value||'').trim();return /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,511}$/u.test(nodeId)?nodeId:null}
+function workspacePreviewMessage(assertion,claim,snapshotDigest,requestId,graphNodeId){
+  if(!workspaceLocator(assertion))return null;
+  const claimId=String(claim.id||'').trim(),artifactVersionId=String(assertion.artifactVersionId||'').trim(),sourceAnchorId=String(assertion.sourceAnchorId||'').trim(),digest=String(snapshotDigest||'').trim(),nodeId=graphNodeId==null?null:opaqueGraphNodeId(graphNodeId);if(!claimId||!artifactVersionId||!sourceAnchorId||!digest||(graphNodeId!=null&&!nodeId))return null;
+  return {type:'sciforge.project-dag.preview-workspace-evidence',version:1,requestId,artifactVersionId:artifactVersionId.slice(0,512),sourceAnchorId:sourceAnchorId.slice(0,512),...(nodeId?{graphNodeId:nodeId}:{}),claim:{id:claimId.slice(0,512),snapshotDigest:digest.slice(0,512)}};
 }
 function graphModel(graph){
   const snapshot=object(graph.snapshot),nodes=[],seen=new Set();
@@ -197,13 +200,66 @@ function graphModel(graph){
   const counts={session:0,evidence:0,claim:0,entity:0,goal:0};for(const node of nodes)counts[node.kind]+=1;
   return {nodes,edges,counts};
 }
+function evidenceReviewModel(evidence,graph,claimDetails){
+  const raw=object(evidence),reference=String(raw.content_ref||''),separator=reference.lastIndexOf('#'),pointer=separator>0?{threadId:reference.slice(0,separator),sourceAssertionId:reference.slice(separator+1)}:null;
+  const relatedClaimIds=[...new Set(list(graph.edges).filter(edge=>(edge.src===raw.id||edge.dst===raw.id)&&edge.edge_type==='supports').map(edge=>edge.src===raw.id?edge.dst:edge.src))];
+  const claims=relatedClaimIds.map(id=>list(graph.claims).find(claim=>claim.id===id)||{id,statement:'关联 Claim 不在当前 committed scope'});
+  let resolved=null;
+  for(const detail of list(claimDetails))for(const path of list(object(detail.provenance).paths))for(const assertion of list(path.sourceAssertions)){
+    const sourceId=String(assertion.sourceAssertionId||'');
+    const pointerMatches=pointer&&path.threadId===pointer.threadId&&sourceId===pointer.sourceAssertionId;
+    const hashMatches=String(raw.source_hash||'')&&sourceId===String(raw.source_hash);
+    if(pointerMatches||hashMatches){resolved={claimId:detail.id,detail,path,assertion};break}
+  }
+  return {pointer,relatedClaimIds,claims,resolved};
+}
+function graphEdgeStrength(edge){
+  const raw=object(edge.raw),meta=parseMeta(raw.edge_meta),values=[raw.quality_score,raw.confidence,raw.score,raw.weight,meta.quality_score,meta.confidence];
+  for(const value of values){const score=Number(value);if(Number.isFinite(score))return Math.max(.01,Math.min(1,score))}
+  return ({supports:.92,origin:.88,addresses:.84,derived_from:.8,same_as:.76,contradicts:.62}[edge.type]||.7);
+}
+function graphEdgeRelationKind(type){
+  const value=String(type||'').toLowerCase();
+  if(['supports','addresses'].includes(value))return 'support';
+  if(['contradicts','opposes','conflicts_with'].includes(value))return 'contradicts';
+  if(['qualifies','limits','prerequisite','applicable_to'].includes(value))return 'qualifies';
+  if(['origin','derived_from','same_as'].includes(value))return 'provenance';
+  return 'related';
+}
+function graphDirectFocus(model,nodeId){
+  const edgeIds=[],nodeIds=[nodeId];
+  for(const edge of list(model.edges))if(edge.src===nodeId||edge.dst===nodeId){edgeIds.push(edge.id);nodeIds.push(edge.src===nodeId?edge.dst:edge.src)}
+  return {nodeIds:[...new Set(nodeIds)],edgeIds:[...new Set(edgeIds)]};
+}
+function graphStrongestBranch(model,nodeId,direction){
+  const nodeIds=[],edgeIds=[],visited=new Set([nodeId]);let current=nodeId;
+  while(true){
+    const candidates=list(model.edges).filter(edge=>(direction==='upstream'?edge.dst===current:edge.src===current)&&!visited.has(direction==='upstream'?edge.src:edge.dst)).sort((a,b)=>graphEdgeStrength(b)-graphEdgeStrength(a)||String(a.id).localeCompare(String(b.id)));
+    const edge=candidates[0];if(!edge)break;
+    const next=direction==='upstream'?edge.src:edge.dst;edgeIds.push(edge.id);nodeIds.push(next);visited.add(next);current=next;
+  }
+  return {nodeIds,edgeIds};
+}
+function graphAllRelatedFocus(model,nodeId){
+  const nodeIds=new Set([nodeId]),edgeIds=new Set(),queue=[nodeId];
+  while(queue.length){const current=queue.shift();for(const edge of list(model.edges)){if(edge.src!==current&&edge.dst!==current)continue;edgeIds.add(edge.id);const next=edge.src===current?edge.dst:edge.src;if(!nodeIds.has(next)){nodeIds.add(next);queue.push(next)}}}
+  return {nodeIds:[...nodeIds],edgeIds:[...edgeIds]};
+}
+function graphFocus(model,nodeId,mode='strongest'){
+  if(!nodeId||!list(model.nodes).some(node=>node.id===nodeId))return {mode,nodeIds:[],edgeIds:[]};
+  if(mode==='direct'){const focus=graphDirectFocus(model,nodeId);return {mode,...focus}}
+  if(mode==='all'){const focus=graphAllRelatedFocus(model,nodeId);return {mode,...focus}}
+  const upstream=graphStrongestBranch(model,nodeId,'upstream'),downstream=graphStrongestBranch(model,nodeId,'downstream'),nodeIds=[nodeId,...upstream.nodeIds.reverse(),...downstream.nodeIds],edgeIds=[...upstream.edgeIds.reverse(),...downstream.edgeIds];
+  if(!edgeIds.length){const focus=graphDirectFocus(model,nodeId);return {mode:'strongest',...focus}}
+  return {mode:'strongest',nodeIds:[...new Set(nodeIds)],edgeIds:[...new Set(edgeIds)]};
+}
 function shortDigest(value){const text=String(value||'');return text.length>22?`${text.slice(0,22)}…`:text}
 </script>
 <script>
-const query=new URLSearchParams(location.search),hash=new URLSearchParams(location.hash.slice(1)),requestedView=query.get('view')==='graph'?'graph':'home';
+const query=new URLSearchParams(location.search),hash=new URLSearchParams(location.hash.slice(1)),requestedView=query.get('view')==='graph'?'graph':'home',requestedClaimId=String(query.get('claim')||'').trim().slice(0,512),requestedGraphNodeId=opaqueGraphNodeId(query.get('node'));
 const token=hash.get('token')||'',projectKey=query.get('projectKey')||projectKeyFromLabels();
-const state={status:null,graph:null,attention:[],findings:[],selectedClaimId:null,selectedGraphNodeId:null,detail:null,whatIfSourceId:null,statusPollTimer:null,previewFeedback:null,pendingPreviewRequests:new Map()};
-document.getElementById('evidence-surface').hidden=requestedView==='graph';document.getElementById('graph-surface').hidden=requestedView!=='graph';
+const state={status:null,graph:null,attention:[],findings:[],selectedClaimId:null,selectedGraphNodeId:null,requestedClaimConsumed:false,requestedGraphNodeConsumed:false,graphFocusMode:'strongest',inspectorOpen:false,graphInspectorDetails:[],graphInspectorLoading:false,graphInspectorError:null,graphInspectorRequest:0,detail:null,whatIfSourceId:null,statusPollTimer:null,previewFeedback:null,pendingPreviewRequests:new Map()};
+document.getElementById('evidence-surface').hidden=false;document.getElementById('graph-surface').hidden=false;
 function projectKeyFromLabels(){const path=query.get('projectRoot')||query.get('workspaceRoot');if(path)return `path:${path}`;const project=query.get('project');return project?`project:${project}`:''}
 async function api(path){if(!projectKey)throw new Error('缺少 projectKey/workspaceRoot/project');const sep=path.includes('?')?'&':'?';const response=await fetch(`${path}${sep}projectKey=${encodeURIComponent(projectKey)}`,{headers:{Authorization:`Bearer ${token}`,Accept:'application/json'}});const body=await response.json();if(!response.ok||!body.ok)throw new Error(body.error?.message||`HTTP ${response.status}`);return body.data}
 function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]))}
@@ -230,6 +286,7 @@ function renderUpdateProgress(){
 }
 function renderSummary(){
   const snapshot=object(state.graph?.snapshot),status=object(state.status),scope={included:list(snapshot.evidenceVector).map(item=>item.threadId),excluded:list(snapshot.excludedSessions),isolated:list(snapshot.isolatedSessions)};
+  document.getElementById('summary-inline').textContent=`· ${status.state||'—'} · v${snapshot.version||'—'} · ${scope.included.length} sessions`;
   document.getElementById('summary').innerHTML=`<div class="card"><b>更新状态</b><p class="${status.state==='fresh'?'good':status.state==='update_failed'?'bad':'warn'}">${escapeHtml(status.state||'—')}</p></div><div class="card"><b>Committed snapshot</b><p class="mono" title="${escapeHtml(snapshot.digest)}">v${escapeHtml(snapshot.version||'—')} · ${escapeHtml(short(snapshot.digest,18))}</p></div><div class="card"><b>固定 Evidence vector</b><p>${scope.included.length} included · ${scope.excluded.length} excluded · ${scope.isolated.length} isolated</p></div><div class="card"><b>Attention frontier</b><p>${list(state.attention).length} 个当前关键项</p></div>`;
   renderUpdateProgress();
 }
@@ -237,7 +294,7 @@ function renderClaims(){
   const claims=list(state.graph?.claims),container=document.getElementById('claims');document.getElementById('claim-count').textContent=String(claims.length);
   if(!claims.length){container.innerHTML='<p class="empty">当前 committed snapshot 没有 Claim。</p>';return}
   container.innerHTML=claims.map(claim=>`<button type="button" class="claim-button" role="option" data-claim-id="${escapeHtml(claim.id)}" aria-current="${claim.id===state.selectedClaimId}"><span class="claim-title">${escapeHtml(claim.statement)}</span><span class="claim-meta"><span class="badge ${statusClass(claim.status)}">${escapeHtml(claim.status)}</span><span class="badge">${escapeHtml(claim.claim_type)}</span><span class="muted mono">${escapeHtml(short(claim.id))}</span></span></button>`).join('');
-  for(const button of container.querySelectorAll('[data-claim-id]'))button.onclick=()=>selectClaim(button.dataset.claimId);
+  for(const button of container.querySelectorAll('[data-claim-id]'))button.onclick=()=>selectGraphNode(button.dataset.claimId);
 }
 function renderEvidenceVector(){
   const snapshot=object(state.graph?.snapshot),vector=list(snapshot.evidenceVector),claims=list(state.graph?.claims),evidence=list(state.graph?.evidence),container=document.getElementById('evidence-vector');
@@ -256,21 +313,73 @@ function graphEdgePath(source,target){
   if(source.x===target.x){const direction=target.y>=source.y?1:-1;return `M ${source.x} ${source.y+direction*26} C ${source.x+50} ${source.y+direction*38}, ${target.x+50} ${target.y-direction*38}, ${target.x} ${target.y-direction*26}`}
   const direction=target.x>=source.x?1:-1,x1=source.x+direction*90,x2=target.x-direction*90,curve=Math.max(35,Math.abs(x2-x1)*.42);return `M ${x1} ${source.y} C ${x1+direction*curve} ${source.y}, ${x2-direction*curve} ${target.y}, ${x2} ${target.y}`;
 }
-function renderGraphInspector(model,nodeId){
-  const container=document.getElementById('graph-inspector'),node=model.nodes.find(item=>item.id===nodeId),adjacent=model.edges.filter(edge=>edge.src===nodeId||edge.dst===nodeId);
-  if(!node){container.innerHTML=model.edges.length?'<h3>节点详情</h3><p class="empty">选择图中的节点查看其状态、标识和相邻关系。</p>':`<h3>图谱诊断</h3><p class="diagnostic">输入 Snapshot 已可见，但当前 committed Project Snapshot 没有节点间关系。Session 节点来自固定 Evidence vector；Project Claim/Evidence 需要由 Evidence Snapshot 中的可合并内容编译产生。</p>`;return}
-  container.innerHTML=`<div class="row"><div><h3>${escapeHtml(node.label)}</h3><p class="compact muted">${escapeHtml(node.kind)} · ${escapeHtml(node.id)}</p></div>${node.status?`<span class="badge">${escapeHtml(node.status)}</span>`:''}</div><p>${adjacent.length} 条相邻关系：${adjacent.length?escapeHtml(adjacent.map(edge=>`${edge.src===node.id?'→':'←'} ${edge.type} ${edge.src===node.id?edge.dst:edge.src}`).join('；')):'无'}</p><details><summary>Committed node metadata</summary><pre>${pretty(node.raw)}</pre></details>`;
+function reviewNav(prefix){return `<nav class="review-nav" aria-label="审查详情分区"><a href="#${prefix}-overview">概要</a><a href="#${prefix}-evidence">证据</a><a href="#${prefix}-original">原文</a><a href="#${prefix}-history">历史</a></nav>`}
+function reviewSection(prefix,key,index,title,content){return `<section id="${prefix}-${key}" class="review-section"><div class="review-section-head"><span class="review-index">${index}</span><h3>${title}</h3></div>${content}</section>`}
+function committedReviewSnapshot(){const graphSnapshot=object(state.graph?.snapshot),statusSnapshot=object(state.status?.committedSnapshot);return statusSnapshot.digest===graphSnapshot.digest?statusSnapshot:{...graphSnapshot,graph:state.graph,compileDiff:{}}}
+function genericInspectorHtml(node,model){
+  const prefix='graph-review',adjacent=model.edges.filter(edge=>edge.src===node.id||edge.dst===node.id),snapshot=object(state.graph?.snapshot),relations=adjacent.length?`<div class="review-relations">${adjacent.map(edge=>{const other=edge.src===node.id?edge.dst:edge.src;return `<button type="button" class="review-relation-button" data-inspector-node="${escapeHtml(other)}"><b>${escapeHtml(edge.src===node.id?'→':'←')} ${escapeHtml(edge.type)}</b><span>${escapeHtml(other)}</span></button>`}).join('')}</div>`:'<p class="empty">当前节点没有相邻关系。</p>';
+  return `<div class="review-head"><span class="review-kind">${escapeHtml(node.kind)}</span><h2 id="claim-detail-heading">${escapeHtml(node.label)}</h2><p class="compact muted mono">${escapeHtml(node.id)}</p>${node.status?`<span class="badge">${escapeHtml(node.status)}</span>`:''}</div>${reviewNav(prefix)}${reviewSection(prefix,'overview','01','概要',`<p>${escapeHtml(node.label)}</p><dl class="review-meta"><dt>节点类型</dt><dd>${escapeHtml(node.kind)}</dd><dt>状态</dt><dd>${escapeHtml(node.status||'未记录')}</dd></dl>`)}${reviewSection(prefix,'evidence','02','证据',relations)}${reviewSection(prefix,'original','03','原文','<p class="empty">该节点不是可解析的 Project Evidence；选择 Evidence 或 Claim 可继续追溯原文。</p>')}${reviewSection(prefix,'history','04','历史',`<p class="compact muted">Committed Snapshot v${escapeHtml(snapshot.version||'—')} · ${escapeHtml(snapshot.createdAt||'—')}</p><p class="mono muted">${escapeHtml(snapshot.digest||'—')}</p><details><summary>Committed node metadata</summary><pre>${pretty(node.raw)}</pre></details>`)}`;
 }
-function selectGraphNode(nodeId){state.selectedGraphNodeId=nodeId;renderGraph()}
+function evidenceInspectorHtml(node,model){
+  const prefix='graph-review',review=evidenceReviewModel(node.raw,object(state.graph),state.graphInspectorDetails),raw=node.raw,resolved=review.resolved,quality=raw.quality_score==null?'未记录':Number(raw.quality_score).toFixed(2),relations=review.claims.length?`<div class="review-relations">${review.claims.map(claim=>`<button type="button" class="review-relation-button" data-inspector-node="${escapeHtml(claim.id)}"><b>${escapeHtml(claim.statement||claim.id)}</b><span>supports · ${escapeHtml(claim.id)}</span></button>`).join('')}</div>`:'<p class="empty">当前 committed graph 没有与此 Evidence 相连的 Claim。</p>',pointer=review.pointer?`<dl class="review-meta"><dt>Session</dt><dd class="mono">${escapeHtml(review.pointer.threadId)}</dd><dt>SourceAssertion</dt><dd class="mono">${escapeHtml(review.pointer.sourceAssertionId)}</dd></dl>`:'<p class="warn">content_ref 未提供可解析的 Session SourceAssertion 指针。</p>';
+  const original=resolved?`${artifactHtml(resolved.assertion,resolved.path,0)}<div class="preview-feedback-slot" aria-live="polite"></div>`:state.graphInspectorLoading?'<div class="review-loading">正在固定 Snapshot 中解析 ArtifactVersion 与 SourceAnchor…</div>':state.graphInspectorError?`<p class="bad">${escapeHtml(state.graphInspectorError)}</p>`:'<p class="empty">未从关联 Claim 的固定 provenance 中匹配到 ArtifactVersion / SourceAnchor，不能提供可信本地预览。</p>';
+  return `<div class="review-head"><span class="review-kind">Evidence</span><h2 id="claim-detail-heading">${escapeHtml(node.label)}</h2><p class="compact muted mono">${escapeHtml(node.id)}</p><div class="facts"><span class="badge">${escapeHtml(raw.evidence_type||'evidence')}</span><span class="badge">quality ${escapeHtml(quality)}</span></div></div>${reviewNav(prefix)}${reviewSection(prefix,'overview','01','概要',`<p>${escapeHtml(raw.content||node.label)}</p><dl class="review-meta"><dt>Evidence 类型</dt><dd>${escapeHtml(raw.evidence_type||'未记录')}</dd><dt>质量分</dt><dd>${escapeHtml(quality)}</dd><dt>有效期</dt><dd>${escapeHtml(raw.t_valid||'—')} → ${escapeHtml(raw.t_invalid||'current')}</dd></dl>`)}${reviewSection(prefix,'evidence','02','证据',`${pointer}<h3>支持的 Claims</h3>${relations}`)}${reviewSection(prefix,'original','03','原文',original)}${reviewSection(prefix,'history','04','历史',`<p class="compact muted">当前 Project Snapshot 仅引用固定的 Evidence 身份；历史不会重新解析未提交数据。</p><details><summary>Committed Evidence metadata</summary><pre>${pretty(raw)}</pre></details>`)}`;
+}
+function bindInspectorNavigation(container){for(const button of container.querySelectorAll('[data-inspector-node]'))button.onclick=()=>selectGraphNode(button.dataset.inspectorNode)}
+function renderGraphInspector(model,nodeId){
+  const container=document.getElementById('claim-detail'),node=model.nodes.find(item=>item.id===nodeId);
+  if(!node){container.innerHTML=model.edges.length?'<div class="review-head"><span class="review-kind">Inspector</span><h2 id="claim-detail-heading">选择节点开始审查</h2><p class="empty">右侧会按概要、证据、原文和历史组织当前节点。</p></div>':`<div class="review-head"><span class="review-kind">诊断</span><h2 id="claim-detail-heading">图谱尚未形成关系</h2><p class="diagnostic">输入 Snapshot 已可见，但当前 committed Project Snapshot 没有节点间关系。Session 节点来自固定 Evidence vector；Project Claim/Evidence 需要由 Evidence Snapshot 中的可合并内容编译产生。</p></div>`;return}
+  if(node.kind==='claim'){
+    const detail=state.graphInspectorDetails.find(item=>item.id===node.id)||((state.detail||{}).id===node.id?state.detail:null);
+    if(detail){renderClaimReviewInto(container,detail,'graph-review',()=>renderGraphInspector(model,nodeId));return}
+    container.innerHTML=`<div class="review-head"><span class="review-kind">Claim</span><h2 id="claim-detail-heading">${escapeHtml(node.label)}</h2><p class="compact muted mono">${escapeHtml(node.id)}</p></div>${state.graphInspectorLoading?'<div class="review-loading">正在读取固定 Snapshot 的 Claim 详情…</div>':`<p class="bad">${escapeHtml(state.graphInspectorError||'无法读取 Claim 详情。')}</p>`}`;return
+  }
+  container.innerHTML=node.kind==='evidence'?evidenceInspectorHtml(node,model):genericInspectorHtml(node,model);bindInspectorNavigation(container);
+  if(node.kind==='evidence'){
+    const review=evidenceReviewModel(node.raw,object(state.graph),state.graphInspectorDetails);
+    for(const button of container.querySelectorAll('[data-preview-artifact]'))button.onclick=()=>{if(review.resolved)requestWorkspaceEvidence({path:review.resolved.path,assertion:review.resolved.assertion},review.resolved.detail)};
+    renderPreviewFeedback();
+  }
+}
+async function hydrateGraphInspector(nodeId){
+  const model=graphModel(object(state.graph)),node=model.nodes.find(item=>item.id===nodeId);if(!node)return;
+  const claimIds=node.kind==='claim'?[node.id]:node.kind==='evidence'?evidenceReviewModel(node.raw,object(state.graph),[]).relatedClaimIds.slice(0,8):[];
+  const request=++state.graphInspectorRequest;state.graphInspectorDetails=[];state.graphInspectorError=null;state.graphInspectorLoading=claimIds.length>0;renderGraphInspector(model,nodeId);
+  if(!claimIds.length)return;
+  try{
+    const digest=state.graph?.snapshot?.digest;if(!digest)throw new Error('没有 committed snapshot');
+    const results=await Promise.allSettled(claimIds.map(claimId=>api(`/claims/${encodeURIComponent(claimId)}?snapshot=${encodeURIComponent(digest)}`)));
+    if(request!==state.graphInspectorRequest||state.selectedGraphNodeId!==nodeId||state.graph?.snapshot?.digest!==digest)return;
+    state.graphInspectorDetails=results.filter(result=>result.status==='fulfilled').map(result=>result.value);state.graphInspectorError=state.graphInspectorDetails.length?null:(results.find(result=>result.status==='rejected')?.reason?.message||'无法读取关联 Claim 详情。');state.graphInspectorLoading=false;
+    if(node.kind==='claim'&&state.graphInspectorDetails[0]){state.selectedClaimId=node.id;state.detail=state.graphInspectorDetails[0];renderClaims()}
+    renderGraphInspector(graphModel(object(state.graph)),nodeId);
+  }catch(error){if(request!==state.graphInspectorRequest)return;state.graphInspectorLoading=false;state.graphInspectorError=error.message||String(error);renderGraphInspector(graphModel(object(state.graph)),nodeId)}
+}
+function selectGraphNode(nodeId){
+  const changed=state.selectedGraphNodeId!==nodeId;state.selectedGraphNodeId=nodeId;state.inspectorOpen=true;if(changed){state.previewFeedback=null;state.whatIfSourceId=null}state.graphInspectorDetails=[];state.graphInspectorError=null;state.graphInspectorLoading=false;
+  const node=graphModel(object(state.graph)).nodes.find(item=>item.id===nodeId);state.graphInspectorLoading=node?.kind==='claim'||node?.kind==='evidence';if(node?.kind==='claim'){state.selectedClaimId=node.id;state.detail=null}else{state.selectedClaimId=null;state.detail=null}renderClaims();
+  renderGraph();void hydrateGraphInspector(nodeId);
+}
+function selectGraphFocusMode(mode){if(!['direct','strongest','all'].includes(mode)||state.graphFocusMode===mode)return;state.graphFocusMode=mode;renderGraph()}
+function syncInspectorVisibility(){
+  const workbench=document.querySelector('.graph-workbench'),toggle=document.getElementById('toggle-inspector');
+  workbench?.classList.toggle('inspector-closed',!state.inspectorOpen);
+  if(toggle){toggle.setAttribute('aria-expanded',String(state.inspectorOpen));toggle.textContent=state.inspectorOpen?'专注图谱':'显示详情'}
+}
+function setInspectorOpen(open){state.inspectorOpen=Boolean(open);syncInspectorVisibility()}
 function renderGraph(){
   const model=graphModel(object(state.graph)),snapshot=object(state.graph?.snapshot),layout=graphLayout(model),container=document.getElementById('graph-scroll');
   if(state.selectedGraphNodeId&&!model.nodes.some(node=>node.id===state.selectedGraphNodeId))state.selectedGraphNodeId=null;
+  const focus=graphFocus(model,state.selectedGraphNodeId,state.graphFocusMode),focusedNodes=new Set(focus.nodeIds),focusedEdges=new Set(focus.edgeIds),hasFocus=Boolean(state.selectedGraphNodeId);
   document.getElementById('graph-snapshot').textContent=snapshot.digest?`v${snapshot.version||'—'} · ${short(snapshot.digest,18)}`:'无 Snapshot';
   document.getElementById('graph-stats').innerHTML=`<span class="badge">${model.counts.session} Session</span><span class="badge">${model.counts.evidence} Evidence</span><span class="badge">${model.counts.claim} Claim</span><span class="badge">${model.counts.entity} Entity</span><span class="badge">${model.counts.goal} Goal</span><span class="badge">${model.edges.length} 关系</span>`;
+  const modeLabels={direct:'直接关系',strongest:'最强路径',all:'全部相关路径'},summary=document.getElementById('graph-focus-summary');summary.textContent=hasFocus?`${modeLabels[focus.mode]} · ${focus.nodeIds.length} 节点 · ${focus.edgeIds.length} 关系`:'默认显示最强路径';
+  syncInspectorVisibility();
+  for(const button of document.querySelectorAll('[data-graph-focus-mode]')){button.setAttribute('aria-pressed',String(button.dataset.graphFocusMode===state.graphFocusMode));button.onclick=()=>selectGraphFocusMode(button.dataset.graphFocusMode)}
   if(!model.nodes.length){container.innerHTML='<div class="graph-empty"><h2>当前 committed snapshot 还没有图节点</h2><p class="muted">没有固定的 Session Evidence 输入，也没有 Project Claim、Evidence、Goal 或 Entity。刷新只读取状态；需要先让 Evidence DAG 产生 committed snapshot，再执行项目更新。</p></div>';renderGraphInspector(model,null);return}
-  const edges=model.edges.map(edge=>{const source=layout.positions.get(edge.src),target=layout.positions.get(edge.dst);if(!source||!target)return'';const middleX=(source.x+target.x)/2,middleY=(source.y+target.y)/2-6;return `<path class="graph-edge" d="${graphEdgePath(source,target)}" marker-end="url(#graph-arrow)"></path><text class="graph-edge-label" x="${middleX}" y="${middleY}">${escapeHtml(edge.type)}</text>`}).join('');
-  const nodes=model.nodes.map(node=>{const position=layout.positions.get(node.id),label=graphNodeText(node.label),meta=graphNodeText(node.status||node.id);return `<g class="graph-node graph-node-${escapeHtml(node.kind)}" data-graph-node-id="${escapeHtml(node.id)}" role="button" tabindex="0" aria-label="${escapeHtml(`${node.kind}: ${node.label}`)}" aria-current="${node.id===state.selectedGraphNodeId}"><rect x="${position.x-90}" y="${position.y-26}" width="180" height="52" rx="8"></rect><text class="node-title" x="${position.x-78}" y="${position.y-4}">${escapeHtml(label)}</text><text class="node-meta" x="${position.x-78}" y="${position.y+14}">${escapeHtml(meta)}</text></g>`}).join('');
-  container.innerHTML=`<svg class="graph-canvas" viewBox="0 0 ${layout.width} ${layout.height}" width="100%" height="${layout.height}" role="img" aria-label="Committed Project DAG，${model.nodes.length} 个节点，${model.edges.length} 条关系"><defs><marker id="graph-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#a7b0bd"></path></marker></defs>${edges}${nodes}</svg>`;
+  const edges=model.edges.map(edge=>{const source=layout.positions.get(edge.src),target=layout.positions.get(edge.dst);if(!source||!target)return'';const middleX=(source.x+target.x)/2,middleY=(source.y+target.y)/2-6,isFocused=!hasFocus||focusedEdges.has(edge.id),focusClass=hasFocus?(isFocused?' graph-focused':' graph-dimmed'):'',relationClass=` relation-${graphEdgeRelationKind(edge.type)}`,edgeType=escapeHtml(edge.type);return `<path class="graph-edge${relationClass}${focusClass}" data-edge-type="${edgeType}" d="${graphEdgePath(source,target)}" marker-end="url(#graph-arrow)"></path><text class="graph-edge-label${relationClass}${focusClass}" data-edge-type="${edgeType}" x="${middleX}" y="${middleY}">${edgeType}</text>`}).join('');
+  const nodes=model.nodes.map(node=>{const position=layout.positions.get(node.id),label=graphNodeText(node.label),meta=graphNodeText(node.status||node.id),focusClass=hasFocus?(focusedNodes.has(node.id)?' graph-related':' graph-dimmed'):'';return `<g class="graph-node graph-node-${escapeHtml(node.kind)}${focusClass}" data-graph-node-id="${escapeHtml(node.id)}" role="button" tabindex="0" aria-label="${escapeHtml(`${node.kind}: ${node.label}`)}" aria-current="${node.id===state.selectedGraphNodeId}"><rect x="${position.x-90}" y="${position.y-26}" width="180" height="52" rx="8"></rect><text class="node-title" x="${position.x-78}" y="${position.y-4}">${escapeHtml(label)}</text><text class="node-meta" x="${position.x-78}" y="${position.y+14}">${escapeHtml(meta)}</text></g>`}).join('');
+  container.innerHTML=`<svg class="graph-canvas" viewBox="0 0 ${layout.width} ${layout.height}" width="100%" height="${layout.height}" role="img" aria-label="Committed Project DAG，${model.nodes.length} 个节点，${model.edges.length} 条关系"><defs><marker id="graph-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="context-stroke"></path></marker></defs>${edges}${nodes}</svg>`;
   for(const element of container.querySelectorAll('[data-graph-node-id]')){element.onclick=()=>selectGraphNode(element.dataset.graphNodeId);element.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();selectGraphNode(element.dataset.graphNodeId)}}}
   renderGraphInspector(model,state.selectedGraphNodeId);
 }
@@ -290,19 +399,18 @@ function relationItem(value,type){
   return `<div class="relation relation-qualifies"><b>${escapeHtml(value.value)}</b><p class="compact muted">support ${escapeHtml(value.supportId)}</p></div>`;
 }
 function artifactHtml(assertion,path,index){
-  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion),anchor=object(assertion.sourceAnchor),selector=object(anchor.selector),target=locatorTarget(assertion),local=workspaceLocator(assertion),restricted=artifactIsRestricted(assertion),runtime=/^(runtime|trace):/i.test(String(version.locator||''));
+  const artifact=object(assertion.artifact),version=object(assertion.artifactVersion),anchor=object(assertion.sourceAnchor),selector=object(anchor.selector),target=locatorTarget(assertion),local=workspaceLocator(assertion),restricted=artifactIsRestricted(assertion),runtime=/^(runtime|trace):/i.test(String(version.locator||'')),mappingNote=anchorMappingNote(assertion);
   const availability=restricted?'受访问策略限制':local?'位于当前 workspace，可受控预览':runtime?'runtime/trace locator 不能作为本地文件打开':target?'远程来源，可在浏览器中打开':'已记录 locator；当前界面不可直接打开';
   const action=local?`<button type="button" class="open-link" data-preview-artifact="${index}">查看原始证据</button>`:target?`<a class="open-link" href="${escapeHtml(target)}" target="_blank" rel="noopener noreferrer">打开远程来源</a>`:'';
-  return `<div class="artifact"><div class="row"><b>${escapeHtml(artifact.kind||'artifact')} · ${escapeHtml(assertion.artifactId||'未注册')}</b><span class="badge">${escapeHtml(assertion.level||path.level)}</span></div><div class="locator-actions"><span class="mono">${restricted?'[restricted]':escapeHtml(version.locator||'无 locator')}</span>${action}</div><p class="compact muted">${escapeHtml(availability)} · version ${escapeHtml(assertion.artifactVersionId||'—')} · content hash ${escapeHtml(short(version.contentDigest||artifact.contentDigest,22))}</p><p class="compact">Anchor：${anchor.sourceAnchorId||assertion.sourceAnchorId?escapeHtml(assertion.sourceAnchorId||anchor.sourceAnchorId):'无'} · selector ${Object.keys(selector).length?`<code>${pretty(selector)}</code>`:'未定位'} · anchor hash ${escapeHtml(short(anchor.anchorDigest,22))}</p>${assertion.run?`<details><summary>Run inputs / software / parameters / environment / outputs</summary><pre>${pretty(assertion.run)}</pre></details>`:''}</div>`;
+  return `<div class="artifact"><div class="row"><b>${escapeHtml(artifact.kind||'artifact')} · ${escapeHtml(assertion.artifactId||'未注册')}</b><span class="badge">${escapeHtml(assertion.level||path.level)}</span></div><div class="locator-actions"><span class="mono">${restricted?'[restricted]':escapeHtml(version.locator||'无 locator')}</span>${action}</div><p class="compact muted">${escapeHtml(availability)} · version ${escapeHtml(assertion.artifactVersionId||'—')} · content hash ${escapeHtml(short(version.contentDigest||artifact.contentDigest,22))}</p><p class="compact">Anchor：${anchor.sourceAnchorId||assertion.sourceAnchorId?escapeHtml(assertion.sourceAnchorId||anchor.sourceAnchorId):'无'} · selector ${Object.keys(selector).length?`<code>${pretty(selector)}</code>`:'未定位'} · anchor hash ${escapeHtml(short(anchor.anchorDigest,22))}</p>${mappingNote?`<p class="compact warn">${escapeHtml(mappingNote)}</p>`:''}${assertion.run?`<details><summary>Run inputs / software / parameters / environment / outputs</summary><pre>${pretty(assertion.run)}</pre></details>`:''}</div>`;
 }
 function renderPreviewFeedback(){
-  const container=document.getElementById('preview-feedback');if(!container)return;
-  const feedback=state.previewFeedback;container.innerHTML=feedback?`<p class="preview-status ${feedback.status==='error'?'error-state':''}">${escapeHtml(feedback.message)}</p>`:'';
+  const feedback=state.previewFeedback;for(const container of document.querySelectorAll('.preview-feedback-slot'))container.innerHTML=feedback?`<p class="preview-status ${feedback.status==='error'?'error-state':''}">${escapeHtml(feedback.message)}</p>`:'';
 }
 function requestWorkspaceEvidence(item,detail){
-  const requestId=`preview-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`,message=workspacePreviewMessage(item.assertion,detail,state.graph?.snapshot?.digest,requestId);
+  const requestId=`preview-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`,message=workspacePreviewMessage(item.assertion,detail,state.graph?.snapshot?.digest,requestId,state.selectedGraphNodeId);
   if(!message){state.previewFeedback={status:'error',message:'该来源不是可预览的 workspace 本地文件。'};renderPreviewFeedback();return}
-  state.pendingPreviewRequests.set(requestId,{claimId:detail.id});state.previewFeedback={status:'pending',message:'正在验证并打开原始证据…'};renderPreviewFeedback();window.parent.postMessage(message,'*');
+  const mappingNote=anchorMappingNote(item.assertion);state.pendingPreviewRequests.set(requestId,{claimId:detail.id});state.previewFeedback={status:'pending',message:`正在验证并打开原始证据…${mappingNote?` ${mappingNote}`:''}`};renderPreviewFeedback();window.parent.postMessage(message,'*');
 }
 function historyHtml(history){
   const events=[`<div class="history"><b>Committed Snapshot v${escapeHtml(history.snapshot.version)}</b><p class="compact muted">${escapeHtml(history.snapshot.createdAt)} · ${escapeHtml(history.snapshot.digest)} · 当前状态 ${escapeHtml(history.snapshot.status)}</p></div>`];
@@ -318,23 +426,26 @@ function whatIfHtml(detail,graph){
   const impact=whatIfImpact(graph,state.whatIfSourceId);
   return `<p class="muted">只读模拟：临时移除一条支持来源，沿 supports / derived_from / same_as 依赖计算影响；不会 POST 或保存结果。</p><div class="what-if-buttons">${supports.map(item=>`<button type="button" data-what-if-source="${escapeHtml(item.id)}" aria-pressed="${item.id===state.whatIfSourceId}">${escapeHtml(short(item.content||item.id,32))}</button>`).join('')}</div><div id="what-if-result">${impact.affected.length?impact.affected.map(item=>`<div class="impact"><b>${item.kind==='unsupported'?'将失去全部直接支持':item.kind==='weakened'?'支持将减弱':'下游可能受影响'}：${escapeHtml(item.claim.statement)}</b><p class="compact muted">distance ${item.distance}${item.remainingSupportCount==null?'':` · remaining direct supports ${item.remainingSupportCount}`}</p></div>`).join(''):'<p class="empty">该来源在当前 committed graph 中没有可传播的 Claim 影响。</p>'}</div>`;
 }
-function renderDetail(){
-  const container=document.getElementById('claim-detail'),detail=state.detail,graphSnapshot=object(state.graph?.snapshot),statusSnapshot=object(state.status?.committedSnapshot),snapshot=statusSnapshot.digest===graphSnapshot.digest?statusSnapshot:{...graphSnapshot,graph:state.graph,compileDiff:{}};
-  if(!state.selectedClaimId){container.innerHTML='<h2 id="claim-detail-heading">Claim 详情</h2><p class="empty">选择一条 Claim，查看跨层原始证据、Decision 历史和只读 what-if。</p>';return}
-  if(!detail){container.innerHTML='<h2 id="claim-detail-heading">Claim 详情</h2><p class="muted">正在读取固定 Snapshot 的详情…</p>';return}
-  const provenance=object(detail.provenance),ranked=rankPaths(provenance.paths,detail.supports),independence=independentSources(provenance.paths),relations=relationModel(detail,state.graph),history=statusHistoryModel(detail,snapshot,state.findings),artifacts=[];
+function claimReviewView(detail,prefix){
+  const snapshot=committedReviewSnapshot(),provenance=object(detail.provenance),ranked=rankPaths(provenance.paths,detail.supports),independence=independentSources(provenance.paths),relations=relationModel(detail,state.graph),history=statusHistoryModel(detail,snapshot,state.findings),artifacts=[];
   for(const path of list(provenance.paths))for(const assertion of list(path.sourceAssertions))artifacts.push({path,assertion});
-  container.innerHTML=`<h2 id="claim-detail-heading">Claim 详情</h2><p class="statement">${escapeHtml(detail.statement)}</p><div id="preview-feedback" aria-live="polite"></div>${scopeHtml(detail,snapshot)}
-    <section class="section"><h3>2. 最强支持路径</h3>${ranked.length?ranked.map(pathHtml).join(''):'<p class="empty">没有可解析的 session provenance path。</p>'}</section>
-    <section class="section"><h3>3. 真正独立的来源</h3><p><b>${independence.sources.length}</b> 个可识别独立上游；${independence.unresolved.length} 条路径无法证明独立。</p>${independence.sources.length?`<ul class="plain-list">${independence.sources.map(item=>`<li><b>${escapeHtml(item.label)}</b> · ${escapeHtml(item.maxLevel)} · ${item.occurrences} 次引用 · sessions ${escapeHtml(item.threads.join('、'))}</li>`).join('')}</ul>`:'<p class="empty">不同 session 不自动算独立来源；当前没有可识别 Artifact 身份。</p>'}</section>
-    <section class="section"><h3>4. 支持、反对与限定</h3><h3>支持 (${relations.supports.length})</h3>${relations.supports.length?relations.supports.map(item=>relationItem(item,'support')).join(''):'<p class="empty">无直接支持。</p>'}<h3>反对 / 失败复现 (${relations.opposing.length})</h3>${relations.opposing.length?relations.opposing.map(item=>relationItem(item,'oppose')).join(''):'<p class="empty">当前 committed scope 没有反对或失败复现节点。</p>'}<h3>限定 (${relations.qualifications.length})</h3>${relations.qualifications.length?relations.qualifications.map(item=>relationItem(item,'qualify')).join(''):'<p class="empty">当前 Snapshot 没有显式 refinement 或未通过的 applicability assessment。</p>'}</section>
-    <section class="section"><h3>5. Artifact、Anchor 与 Run</h3>${artifacts.length?artifacts.map((item,index)=>artifactHtml(item.assertion,item.path,index)).join(''):'<p class="empty">未到达 Artifact；查看下方 provenance breakpoint。</p>'}</section>
-    <section class="section"><h3>6. 溯源等级与断点</h3><div class="facts"><span class="badge">${escapeHtml(provenance.provenanceLevel||'L0')}</span><span class="badge">reachesArtifact ${provenance.reachesArtifact?'yes':'no'}</span></div>${list(provenance.breakpoints).length?list(provenance.breakpoints).map(item=>`<div class="breakpoint"><b>${escapeHtml(item.reason)}</b><pre>${pretty(item)}</pre></div>`).join(''):'<p class="good">当前 resolver 没有报告溯源断点。</p>'}</section>
-    <section class="section"><h3>7. Snapshot、审计与 Decision 历史</h3>${historyHtml(history)}${!history.decisions.length?'<p class="empty">没有与该 Claim 的 Finding 可证明关联的 DecisionEvent；项目级 Decision 不会被冒充为 Claim 历史。</p>':''}</section>
-    <section class="section"><h3>8. 移除来源的 what-if 影响</h3>${whatIfHtml(detail,state.graph)}</section>`;
-  for(const button of container.querySelectorAll('[data-what-if-source]'))button.onclick=()=>{state.whatIfSourceId=button.dataset.whatIfSource;renderDetail()};
-  for(const button of container.querySelectorAll('[data-preview-artifact]'))button.onclick=()=>{const item=artifacts[Number(button.dataset.previewArtifact)];if(item)requestWorkspaceEvidence(item,detail)};
+  const overview=`${scopeHtml(detail,snapshot)}<details class="review-subsection" open><summary>最强支持路径</summary>${ranked.length?ranked.map(pathHtml).join(''):'<p class="empty">没有可解析的 session provenance path。</p>'}</details><details class="review-subsection"><summary>真正独立的来源</summary><p><b>${independence.sources.length}</b> 个可识别独立上游；${independence.unresolved.length} 条路径无法证明独立。</p>${independence.sources.length?`<ul class="plain-list">${independence.sources.map(item=>`<li><b>${escapeHtml(item.label)}</b> · ${escapeHtml(item.maxLevel)} · ${item.occurrences} 次引用 · sessions ${escapeHtml(item.threads.join('、'))}</li>`).join('')}</ul>`:'<p class="empty">不同 session 不自动算独立来源；当前没有可识别 Artifact 身份。</p>'}</details>`;
+  const evidence=`<div class="facts"><span class="badge">${escapeHtml(provenance.provenanceLevel||'L0')}</span><span class="badge">reachesArtifact ${provenance.reachesArtifact?'yes':'no'}</span></div><h3>支持 (${relations.supports.length})</h3>${relations.supports.length?relations.supports.map(item=>relationItem(item,'support')).join(''):'<p class="empty">无直接支持。</p>'}<h3>反对 / 失败复现 (${relations.opposing.length})</h3>${relations.opposing.length?relations.opposing.map(item=>relationItem(item,'oppose')).join(''):'<p class="empty">当前 committed scope 没有反对或失败复现节点。</p>'}<h3>限定 (${relations.qualifications.length})</h3>${relations.qualifications.length?relations.qualifications.map(item=>relationItem(item,'qualify')).join(''):'<p class="empty">当前 Snapshot 没有显式 refinement 或未通过的 applicability assessment。</p>'}`;
+  const original=`<div class="preview-feedback-slot" aria-live="polite"></div>${artifacts.length?artifacts.map((item,index)=>artifactHtml(item.assertion,item.path,index)).join(''):'<p class="empty">未到达 Artifact；查看历史中的 provenance breakpoint。</p>'}`;
+  const historyContent=`<details class="review-subsection" open><summary>Snapshot、审计与 Decision 历史</summary>${historyHtml(history)}${!history.decisions.length?'<p class="empty">没有与该 Claim 的 Finding 可证明关联的 DecisionEvent；项目级 Decision 不会被冒充为 Claim 历史。</p>':''}</details><details class="review-subsection"><summary>溯源断点</summary>${list(provenance.breakpoints).length?list(provenance.breakpoints).map(item=>`<div class="breakpoint"><b>${escapeHtml(item.reason)}</b><pre>${pretty(item)}</pre></div>`).join(''):'<p class="good">当前 resolver 没有报告溯源断点。</p>'}</details><details class="review-subsection"><summary>移除来源的 what-if 影响</summary>${whatIfHtml(detail,state.graph)}</details>`;
+  return {artifacts,html:`<div class="review-head"><span class="review-kind">Claim</span><h2 id="claim-detail-heading">${escapeHtml(detail.statement)}</h2><p class="compact muted mono">${escapeHtml(detail.id)}</p></div>${reviewNav(prefix)}${reviewSection(prefix,'overview','01','概要',overview)}${reviewSection(prefix,'evidence','02','证据',evidence)}${reviewSection(prefix,'original','03','原文',original)}${reviewSection(prefix,'history','04','历史',historyContent)}`};
+}
+function renderClaimReviewInto(container,detail,prefix,rerender){
+  const view=claimReviewView(detail,prefix);container.innerHTML=view.html;
+  for(const button of container.querySelectorAll('[data-what-if-source]'))button.onclick=()=>{state.whatIfSourceId=button.dataset.whatIfSource;rerender()};
+  for(const button of container.querySelectorAll('[data-preview-artifact]'))button.onclick=()=>{const item=view.artifacts[Number(button.dataset.previewArtifact)];if(item)requestWorkspaceEvidence(item,detail)};
   renderPreviewFeedback();
+}
+function renderDetail(){
+  const container=document.getElementById('claim-detail'),detail=state.detail;
+  if(!state.selectedClaimId){renderGraphInspector(graphModel(object(state.graph)),state.selectedGraphNodeId);return}
+  if(!detail){container.innerHTML='<div class="review-head"><span class="review-kind">Claim</span><h2 id="claim-detail-heading">Claim 详情</h2><div class="review-loading">正在读取固定 Snapshot 的详情…</div></div>';return}
+  renderClaimReviewInto(container,detail,'graph-review',renderDetail);
 }
 function renderSidechains(){
   const attention=document.getElementById('attention'),findings=document.getElementById('findings'),currentDigest=state.graph?.snapshot?.digest,current=list(state.findings).filter(item=>item.target_digest===currentDigest);
@@ -342,9 +453,7 @@ function renderSidechains(){
   findings.innerHTML=current.length?`<ul class="plain-list">${current.map(item=>`<li><b>${escapeHtml(item.finding_type)}</b> · ${escapeHtml(item.severity)} · ${escapeHtml(item.status)}<br><span class="muted">subject ${escapeHtml(short(item.subject_id,18))}</span></li>`).join('')}</ul>`:'<p class="empty">当前 Snapshot 没有 Finding。</p>';
 }
 async function selectClaim(claimId){
-  if(state.selectedClaimId!==claimId)state.previewFeedback=null;
-  state.selectedClaimId=claimId;state.detail=null;state.whatIfSourceId=null;renderClaims();renderDetail();
-  try{const digest=state.graph?.snapshot?.digest;if(!digest)throw new Error('没有 committed snapshot');const detail=await api(`/claims/${encodeURIComponent(claimId)}?snapshot=${encodeURIComponent(digest)}`);if(state.selectedClaimId===claimId&&state.graph?.snapshot?.digest===digest){state.detail=detail;renderDetail()}}catch(error){renderError(error)}
+  selectGraphNode(claimId);
 }
 function scheduleStatusPoll(){
   if(state.statusPollTimer)clearTimeout(state.statusPollTimer);
@@ -365,9 +474,12 @@ async function refresh(){
     const graph=await api('/graph'),digest=graph.snapshot?.digest;
     const [status,attention,findings]=await Promise.all([api('/updates/status'),digest?api(`/attention?snapshotDigest=${encodeURIComponent(digest)}`):Promise.resolve([]),api('/findings')]);
     state.graph=graph;state.status=status;state.attention=attention;state.findings=findings;
+    const model=graphModel(graph),requestedNode=model.nodes.find(item=>item.id===requestedGraphNodeId);
+    if(!state.requestedGraphNodeConsumed&&requestedNode){state.requestedGraphNodeConsumed=true;state.requestedClaimConsumed=true;state.selectedGraphNodeId=requestedNode.id;state.selectedClaimId=requestedNode.kind==='claim'?requestedNode.id:null;state.inspectorOpen=true}
+    else if(!state.requestedClaimConsumed&&requestedClaimId&&list(graph.claims).some(item=>item.id===requestedClaimId)){state.requestedClaimConsumed=true;state.selectedClaimId=requestedClaimId;state.selectedGraphNodeId=requestedClaimId;state.inspectorOpen=true}
     if(state.selectedClaimId&&!list(graph.claims).some(item=>item.id===state.selectedClaimId)){state.selectedClaimId=null;state.detail=null;state.whatIfSourceId=null}
     renderSummary();renderEvidenceVector();renderClaims();renderGraph();renderSidechains();
-    if(state.selectedClaimId)await selectClaim(state.selectedClaimId);else renderDetail();
+    if(state.selectedGraphNodeId)await hydrateGraphInspector(state.selectedGraphNodeId);else renderGraphInspector(graphModel(object(state.graph)),null);
     scheduleStatusPoll();
   }catch(error){renderError(error)}finally{document.getElementById('refresh').disabled=false}
 }
@@ -376,9 +488,12 @@ window.addEventListener('message',event=>{
   const result=object(event.data),keys=Object.keys(result),allowed=new Set(['type','version','requestId','ok','message']);
   if(keys.some(key=>!allowed.has(key))||result.type!=='sciforge.project-dag.preview-workspace-evidence-result'||result.version!==1||typeof result.requestId!=='string'||typeof result.ok!=='boolean'||(result.message!==undefined&&typeof result.message!=='string'))return;
   const pending=state.pendingPreviewRequests.get(result.requestId);if(!pending)return;state.pendingPreviewRequests.delete(result.requestId);
-  state.previewFeedback=result.ok?{status:'opened',message:'已打开原始证据；文件预览顶部可返回当前 Claim。'}:{status:'error',message:String(result.message||'无法打开原始证据。').slice(0,2000)};renderPreviewFeedback();
+  state.previewFeedback=result.ok?{status:'opened',message:'已打开原始证据；文件预览顶部可返回当前图节点。'}:{status:'error',message:String(result.message||'无法打开原始证据。').slice(0,2000)};renderPreviewFeedback();
 });
-document.getElementById('refresh').onclick=refresh;refresh();
+document.getElementById('refresh').onclick=refresh;
+document.getElementById('toggle-inspector').onclick=()=>setInspectorOpen(!state.inspectorOpen);
+document.getElementById('inspector-close').onclick=()=>setInspectorOpen(false);
+syncInspectorVisibility();refresh();
 </script>
 </body>
 </html>

@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants, createReadStream, type Stats } from 'node:fs'
 import { copyFile, open, readFile, stat } from 'node:fs/promises'
 import { basename, relative } from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -24,6 +24,10 @@ import {
   type PdfAnnotationThreadStatus
 } from '../../../shared/pdf-annotations'
 import type { AppSettingsV1 } from '../../../shared/app-settings'
+import type {
+  WorkspacePreviewOpenInput as WorkspacePreviewApiOpenInput,
+  WorkspacePreviewOpenResult as WorkspacePreviewApiOpenResult
+} from '../../../shared/sciforge-api'
 import {
   PDF_REVIEW_GENERATE_ACTION_ID,
   PDF_REVIEW_IMPROVE_ACTION_ID,
@@ -60,6 +64,7 @@ import {
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
   extensionFromPreviewPath,
   fileNameFromPreviewPath,
+  resolveWorkspacePreviewInitialSelection,
   workspacePreviewAssetTransportDescriptorSchema,
   workspacePreviewAnnotationSidecarImportActionInputSchema,
   workspacePreviewAnnotationSidecarImportActionResultSchema,
@@ -67,6 +72,7 @@ import {
   workspacePreviewEditDiffSummarySchema,
   workspacePreviewEditOperationSchema,
   workspacePreviewExportTargetSchema,
+  workspacePreviewIntegrityExpectationSchema,
   workspacePreviewPluginActionInputSchema,
   workspacePreviewPluginActionResultSchema,
   workspaceObservationSchema,
@@ -80,6 +86,8 @@ import {
   type WorkspacePreviewEditDiffSummary,
   type WorkspacePreviewEditOperation,
   type WorkspacePreviewExportTarget,
+  type WorkspacePreviewIntegrityExpectation,
+  type WorkspacePreviewIntegrityVerification,
   type WorkspacePreviewPluginActionInput,
   type WorkspacePreviewPluginActionResult,
   type WorkspacePreviewJsonValue,
@@ -105,31 +113,40 @@ import {
 } from '../workspace-html-preview-service'
 import {
   createWorkspacePreviewRegistry,
-  type WorkspacePreviewRegistry,
-  type WorkspacePreviewRoute
+  type WorkspacePreviewRegistry
 } from './registry'
 import {
   createWorkspacePreviewWorkerClient,
   type WorkspacePreviewWorkerClient
 } from './worker-client'
 
-export type WorkspacePreviewOpenInput = {
-  path: string
-  workspaceRoot: string
-  mimeType?: string
-  mode?: WorkspacePreviewSession['mode']
+export type WorkspacePreviewOpenInput = WorkspacePreviewApiOpenInput & {
   now?: string
 }
 
-export type WorkspacePreviewOpenResult =
-  | {
-      ok: true
-      session: WorkspacePreviewSession
-      manifest: WorkspacePreviewPluginManifest
-      route: Extract<WorkspacePreviewRoute, { status: 'matched' | 'fallback' }>['status']
-      file: WorkspacePreviewFileState
-    }
-  | { ok: false; message: string }
+export type WorkspacePreviewOpenResult = WorkspacePreviewApiOpenResult
+
+type WorkspacePreviewIntegrityCheck =
+  | WorkspacePreviewIntegrityVerification
+  | (WorkspacePreviewIntegrityExpectation & {
+      actualDigest: string
+      verified: false
+    })
+
+async function verifyWorkspacePreviewFileIntegrity(
+  path: string,
+  expectation: WorkspacePreviewIntegrityExpectation
+): Promise<WorkspacePreviewIntegrityCheck> {
+  const normalized = workspacePreviewIntegrityExpectationSchema.parse(expectation)
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  const actualDigest = `sha256:${hash.digest('hex')}`
+  return {
+    ...normalized,
+    actualDigest,
+    verified: actualDigest === normalized.expectedDigest
+  }
+}
 
 export type WorkspacePreviewObserveResult =
   | {
@@ -368,6 +385,17 @@ export class WorkspacePreviewHost {
         mtimeMs: fileInfo.mtimeMs
       }
       const mode = input.mode ?? 'preview'
+      const selection = resolveWorkspacePreviewInitialSelection(input)
+      const integrity = input.integrity
+        ? await verifyWorkspacePreviewFileIntegrity(targetPath, input.integrity)
+        : undefined
+      if (integrity && !integrity.verified) {
+        return {
+          ok: false,
+          message: `Workspace preview integrity mismatch: expected ${integrity.expectedDigest}, got ${integrity.actualDigest}.`
+        }
+      }
+      if (integrity) file.sha256 = integrity.actualDigest.slice('sha256:'.length)
       const session: WorkspacePreviewSession = workspacePreviewSessionSchema.parse({
         id: this.createSessionId(),
         pluginId: route.manifest.id,
@@ -378,7 +406,8 @@ export class WorkspacePreviewHost {
         openedAt: now,
         updatedAt: now,
         mtimeMs: fileInfo.mtimeMs,
-        file
+        file,
+        ...(selection ? { selection } : {})
       })
 
       this.sessions.set(session.id, {
@@ -394,7 +423,8 @@ export class WorkspacePreviewHost {
         session,
         manifest: route.manifest,
         route: route.status,
-        file
+        file,
+        ...(integrity ? { integrity } : {})
       }
     } catch (error) {
       return {

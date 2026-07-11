@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
@@ -142,6 +142,22 @@ export function textWorkspaceViewerDraftSourceKey(
   ].join('\u0000')
 }
 
+export function textWorkspaceSelectionOffsets(
+  text: string,
+  range: Extract<WorkspaceObservation['selection'], { kind: 'text' }>['ranges'][number]
+): { start: number; end: number } {
+  const offset = (line: number, column: number): number => {
+    const lines = text.split(/(?<=\n)/u)
+    const lineIndex = Math.max(0, Math.min(lines.length - 1, line - 1))
+    const prefix = lines.slice(0, lineIndex).join('').length
+    const contentLength = (lines[lineIndex] ?? '').replace(/\r?\n$/u, '').length
+    return prefix + Math.max(0, Math.min(contentLength, column - 1))
+  }
+  const start = offset(range.startLine, range.startColumn)
+  const end = offset(range.endLine, range.endColumn)
+  return { start: Math.min(start, end), end: Math.max(start, end) }
+}
+
 export function TextWorkspaceViewer({
   observation,
   model,
@@ -151,11 +167,24 @@ export function TextWorkspaceViewer({
   const resolvedModel = model ?? buildTextWorkspaceViewerModel(observation, Boolean(onApplyEdit))
   const draftSourceKey = textWorkspaceViewerDraftSourceKey(observation, resolvedModel)
   const [draft, setDraft] = useState(resolvedModel.text)
+  const editorRef = useRef<HTMLTextAreaElement | null>(null)
+  const initialTextRange = observation?.selection?.kind === 'text'
+    ? observation.selection.ranges[0]
+    : undefined
+  const initialTextRangeKey = JSON.stringify(initialTextRange ?? null)
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
 
   useEffect(() => {
     setDraft(resolvedModel.text)
   }, [draftSourceKey, resolvedModel.text])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !initialTextRange || draft !== resolvedModel.text) return
+    const offsets = textWorkspaceSelectionOffsets(resolvedModel.text, initialTextRange)
+    editor.setSelectionRange(offsets.start, offsets.end)
+    editor.scrollTop = Math.max(0, initialTextRange.startLine - 1) * 20
+  }, [draft, initialTextRange, initialTextRangeKey, resolvedModel.text])
 
   return (
     <section
@@ -176,8 +205,10 @@ export function TextWorkspaceViewer({
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 pr-20">
           <textarea
+            ref={editorRef}
             className="min-h-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-xs leading-5 text-ds-text outline-none focus:border-ds-accent"
             data-text-preview-editor
+            data-initial-selection={initialTextRange ? 'true' : 'false'}
             value={draft}
             readOnly={!resolvedModel.editable}
             spellCheck={false}

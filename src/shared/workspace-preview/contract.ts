@@ -203,11 +203,25 @@ export type WorkspacePreviewAnchor =
   | {
       kind: 'tabular'
       sheet?: string
+      /** Source/evidence row ordinals are 1-based by default; use 0 for legacy viewer indices. */
+      rowIndexBase?: 0 | 1
+      /** Columns are viewer indices by default because SourceSelector exposes names, not indices. */
+      columnIndexBase?: 0 | 1
       rowStart: number
       rowEnd: number
       columnStart: number
       columnEnd: number
     }
+
+export type WorkspacePreviewIntegrityExpectation = {
+  algorithm: 'sha256'
+  expectedDigest: string
+}
+
+export type WorkspacePreviewIntegrityVerification = WorkspacePreviewIntegrityExpectation & {
+  actualDigest: string
+  verified: true
+}
 
 export type WorkspaceStructuredSelection =
   | {
@@ -599,6 +613,29 @@ export const workspacePreviewDocumentRectSchema = z.object({
   y: z.number().finite().min(0).max(1),
   width: z.number().finite().gt(0).max(1),
   height: z.number().finite().gt(0).max(1)
+}).strict().refine(
+  (rect) => rect.x + rect.width <= 1 && rect.y + rect.height <= 1,
+  { message: 'Document rectangle must stay within normalized page bounds.' }
+)
+
+export function normalizeWorkspacePreviewSha256Digest(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/^sha256:/, '')
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new Error('Expected a SHA-256 digest with 64 hexadecimal characters.')
+  }
+  return `sha256:${normalized}`
+}
+
+export const workspacePreviewIntegrityExpectationSchema = z.object({
+  algorithm: z.literal('sha256'),
+  expectedDigest: z.string().trim().min(1).max(128)
+    .transform(normalizeWorkspacePreviewSha256Digest)
+}).strict()
+
+export const workspacePreviewIntegrityVerificationSchema = workspacePreviewIntegrityExpectationSchema.extend({
+  actualDigest: z.string().trim().min(1).max(128)
+    .transform(normalizeWorkspacePreviewSha256Digest),
+  verified: z.literal(true)
 }).strict()
 
 export const workspacePreviewAnchorSchema = z.discriminatedUnion('kind', [
@@ -623,12 +660,21 @@ export const workspacePreviewAnchorSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('tabular'),
     sheet: optionalShortStringSchema,
+    rowIndexBase: z.union([z.literal(0), z.literal(1)]).optional(),
+    columnIndexBase: z.union([z.literal(0), z.literal(1)]).optional(),
     rowStart: z.number().int().min(0),
     rowEnd: z.number().int().min(0),
     columnStart: z.number().int().min(0),
     columnEnd: z.number().int().min(0)
   }).strict()
-])
+]).superRefine((anchor, context) => {
+  if (anchor.kind !== 'document') return
+  if (anchor.page != null || anchor.paragraphIndex != null || anchor.quote || anchor.rects?.length) return
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'Document anchor requires a page, paragraph, quote, or rectangle.'
+  })
+})
 
 export const workspaceStructuredSelectionSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -756,19 +802,21 @@ export function resolveWorkspacePreviewInitialSelection(input: {
           startLine: anchor.line,
           startColumn,
           endLine: anchor.endLine ?? anchor.line,
-          endColumn: anchor.endColumn ?? startColumn
+          endColumn: anchor.endColumn ?? (anchor.endLine != null ? 1_000_000 : startColumn)
         }]
       })
     }
     if (anchor.kind === 'tabular') {
+      const rowBase = anchor.rowIndexBase ?? 1
+      const columnBase = anchor.columnIndexBase ?? 0
       return workspaceStructuredSelectionSchema.parse({
         kind: 'tabular',
         ...(anchor.sheet ? { sheet: anchor.sheet } : {}),
         ranges: [{
-          rowStart: anchor.rowStart,
-          rowEnd: anchor.rowEnd,
-          columnStart: anchor.columnStart,
-          columnEnd: anchor.columnEnd
+          rowStart: Math.max(0, anchor.rowStart - rowBase),
+          rowEnd: Math.max(0, anchor.rowEnd - rowBase),
+          columnStart: Math.max(0, anchor.columnStart - columnBase),
+          columnEnd: Math.max(0, anchor.columnEnd - columnBase)
         }]
       })
     }

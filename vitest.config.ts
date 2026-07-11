@@ -11,7 +11,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
-      'src/**/*.test.ts',
+      'src/**/*.test.{ts,tsx}',
       'packages/workers/evidence-dag/desktop/**/*.test.ts',
       'packages/workers/project-dag/desktop/**/*.test.ts'
     ]

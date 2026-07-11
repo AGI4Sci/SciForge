@@ -101,6 +101,21 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).not.toContain('data-markdown-preview-pane')
   })
 
+  it('opens the source editor when an initial one-based text anchor is present', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation({
+        selection: {
+          kind: 'text',
+          ranges: [{ startLine: 3, startColumn: 1, endLine: 3, endColumn: 7 }]
+        }
+      })
+    }))
+
+    expect(html).toContain('data-markdown-view-mode="edit"')
+    expect(html).toContain('data-text-preview-editor')
+    expect(html).toContain('data-initial-selection="true"')
+  })
+
   it('can render preview-only mode', () => {
     const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
       observation: createMarkdownObservation(),

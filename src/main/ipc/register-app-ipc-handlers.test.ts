@@ -780,7 +780,7 @@ describe('registerAppIpcHandlers', () => {
     expect(handler).toBeTypeOf('function')
     await expect(handler?.({}, { runtimeId: 'codex', threadId: 'thread-1' })).resolves.toMatchObject({
       threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1#token=test-token',
+      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
       status: { freshness: 'fresh', pendingCount: 0 }
     })
     expect(fetchMock).toHaveBeenCalledWith(
@@ -804,6 +804,86 @@ describe('registerAppIpcHandlers', () => {
       url: 'http://127.0.0.1:4897/#token=test-token',
       status: { freshness: 'fresh', pendingCount: 0 }
     })
+  })
+
+  it('resolves Evidence DAG preview metadata only through the pinned snapshot endpoint', async () => {
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
+    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
+    const workspace = mkdtempSync(join(tmpdir(), 'evidence-dag-ipc-preview-'))
+    queueRoots.push(workspace)
+    writeFileSync(join(workspace, 'source.txt'), 'source bytes')
+    const digest = `sha256:${'a'.repeat(64)}`
+    const snapshotDigest = `sha256:${'b'.repeat(64)}`
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      expect(init).toMatchObject({ method: 'GET', cache: 'no-store' })
+      expect(init?.headers).toBeInstanceOf(Headers)
+      expect(url.pathname).toBe('/threads/codex%3Athread-1/evidence-preview')
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        snapshotDigest,
+        sourceAssertionId: 'source_assertion:one',
+        artifactVersionId: 'artifact-version:one',
+        sourceAnchorId: 'anchor:one'
+      })
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          resolved: true,
+          threadId: 'codex:thread-1',
+          snapshotDigest,
+          workspaceRoot: workspace,
+          accessPolicy: {},
+          sourceAssertion: {
+            id: 'source_assertion:one', type: 'source_assertion', artifact_id: 'artifact:one',
+            artifact_version_id: 'artifact-version:one', source_anchor_id: 'anchor:one'
+          },
+          artifact: { artifactId: 'artifact:one', accessPolicy: {} },
+          artifactVersion: {
+            versionId: 'artifact-version:one', artifactId: 'artifact:one', locator: 'source.txt',
+            contentDigest: digest, availability: 'available', mediaType: 'text/plain'
+          },
+          sourceAnchor: {
+            anchorId: 'anchor:one', artifactId: 'artifact:one',
+            artifactVersionId: 'artifact-version:one',
+            selector: { type: 'text', lineRange: '1:1' },
+            anchorDigest: digest, accessPolicy: {}
+          }
+        }
+      }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const agentRuntime = {
+      readThread: vi.fn(async () => ({
+        id: 'thread-1', runtimeId: 'codex', title: 'Evidence',
+        updatedAt: '2026-07-11T00:00:00.000Z', latestSeq: 1, workspace
+      }))
+    }
+    const ensureEvidenceDagReady = vi.fn(async () => undefined)
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      agentRuntime: agentRuntime as never,
+      ensureEvidenceDagReady
+    }))
+
+    await expect(handlers.get('evidenceDag:resolve-evidence-preview')?.({}, {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      snapshotDigest,
+      sourceAssertionId: 'source_assertion:one',
+      artifactVersionId: 'artifact-version:one',
+      sourceAnchorId: 'anchor:one'
+    })).resolves.toMatchObject({
+      ok: true,
+      path: realpathSync(join(workspace, 'source.txt')),
+      workspaceRoot: workspace,
+      selector: { type: 'text', lineRange: '1:1' },
+      contentDigest: digest
+    })
+    expect(agentRuntime.readThread).toHaveBeenCalledWith({
+      runtimeId: 'codex', threadId: 'thread-1'
+    })
+    expect(ensureEvidenceDagReady).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('rejects Evidence DAG view when the service is not configured', async () => {
@@ -1108,7 +1188,7 @@ describe('registerAppIpcHandlers', () => {
       handlers.get('evidenceDag:view')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
     ).resolves.toMatchObject({
       threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1#token=test-token',
+      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
       status: { freshness: 'fresh', pendingCount: 0 }
     })
 
@@ -1165,7 +1245,7 @@ describe('registerAppIpcHandlers', () => {
       handlers.get('evidenceDag:update')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
     ).resolves.toMatchObject({
       threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1#token=test-token',
+      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
       itemCount: 2,
       status: { freshness: 'fresh', pendingCount: 0 }
     })
@@ -2820,7 +2900,7 @@ describe('registerAppIpcHandlers', () => {
       })
     ).resolves.toMatchObject({
       threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=claude%3Athread-1#token=main-process-token',
+      url: 'http://127.0.0.1:4897/?thread=claude%3Athread-1&preview=trusted#token=main-process-token',
       status: { freshness: 'fresh', pendingCount: 0 }
     })
   })

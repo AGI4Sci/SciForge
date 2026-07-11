@@ -1,9 +1,11 @@
 import type {
-  WorkspaceFileResolveResult,
-  WorkspaceFileTarget
-} from '@shared/workspace-file'
+  ProjectDagEvidencePreviewResolveRequest,
+  ProjectDagEvidencePreviewResolveResult,
+  ProjectDagSourceSelector
+} from '@shared/sciforge-api'
 import type { WorkspacePreviewAnchor } from '@shared/workspace-preview'
 import {
+  normalizeProjectDagGraphNodeId,
   previewWorkspaceFile,
   type WorkspaceFilePreviewDetail
 } from '../../lib/workspace-file-preview'
@@ -15,15 +17,12 @@ export type ProjectDagPreviewRequest = {
   type: typeof PROJECT_DAG_PREVIEW_REQUEST
   version: 1
   requestId: string
-  locator: string
-  artifactId?: string
-  artifactVersionId?: string
-  sourceAnchorId?: string
-  anchor?: WorkspacePreviewAnchor
+  artifactVersionId: string
+  sourceAnchorId: string
+  graphNodeId?: string
   claim: {
     id: string
-    statement?: string
-    snapshotDigest?: string
+    snapshotDigest: string
   }
 }
 
@@ -33,10 +32,13 @@ type ProjectDagPreviewTarget = WorkspaceFilePreviewDetail & {
     kind: 'project-dag'
     label: string
     claimId: string
+    nodeId?: string
   }
 }
 
-type Resolver = (target: WorkspaceFileTarget) => Promise<WorkspaceFileResolveResult>
+type Resolver = (
+  input: ProjectDagEvidencePreviewResolveRequest
+) => Promise<ProjectDagEvidencePreviewResolveResult>
 
 export type ProjectDagPreviewBridgeResult =
   | { status: 'ignored' }
@@ -61,6 +63,12 @@ function boundedString(value: unknown, max: number, required = false): string | 
   return trimmed || undefined
 }
 
+function sha256Digest(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim().toLowerCase().replace(/^sha256:/u, '')
+  return /^[a-f0-9]{64}$/u.test(normalized) ? `sha256:${normalized}` : undefined
+}
+
 function positiveInteger(value: unknown): number | undefined {
   return Number.isInteger(value) && Number(value) > 0 && Number(value) <= 1_000_000
     ? Number(value)
@@ -73,44 +81,32 @@ function nonnegativeInteger(value: unknown): number | undefined {
     : undefined
 }
 
-function finiteUnit(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
-    ? value
-    : undefined
+function numericRange(value: unknown, min: number): [number, number] | null {
+  if (typeof value !== 'string' || !/^\d+:\d+$/u.test(value)) return null
+  const [start, end] = value.split(':').map(Number)
+  return start! >= min && end! >= start! && end! <= 1_000_000 ? [start!, end!] : null
 }
 
-function parseDocumentRects(value: unknown): Extract<WorkspacePreviewAnchor, { kind: 'document' }>['rects'] | null {
-  if (value === undefined) return undefined
-  if (!Array.isArray(value) || value.length > 64) return null
-  const rects: NonNullable<Extract<WorkspacePreviewAnchor, { kind: 'document' }>['rects']> = []
-  for (const item of value) {
-    const candidate = record(item)
-    if (!candidate || !hasOnlyKeys(candidate, ['page', 'x', 'y', 'width', 'height'])) return null
-    const page = positiveInteger(candidate.page)
-    const x = finiteUnit(candidate.x)
-    const y = finiteUnit(candidate.y)
-    const width = finiteUnit(candidate.width)
-    const height = finiteUnit(candidate.height)
-    if (!page || x === undefined || y === undefined || !width || !height || x + width > 1 || y + height > 1) {
-      return null
-    }
-    rects.push({ page, x, y, width, height })
+export function projectDagSelectorAnchor(
+  selector: ProjectDagSourceSelector,
+  sourceAnchorId: string
+): WorkspacePreviewAnchor | undefined {
+  const native = selector as ProjectDagSourceSelector & {
+    line?: number
+    column?: number
+    endLine?: number
+    endColumn?: number
+    rowStart?: number
+    rowEnd?: number
+    columnStart?: number
+    columnEnd?: number
+    sheet?: string
   }
-  return rects
-}
-
-function parseAnchor(value: unknown): WorkspacePreviewAnchor | null | undefined {
-  if (value === undefined) return undefined
-  const anchor = record(value)
-  if (!anchor || typeof anchor.kind !== 'string') return null
-  if (anchor.kind === 'text') {
-    if (!hasOnlyKeys(anchor, ['kind', 'line', 'column', 'endLine', 'endColumn'])) return null
-    const line = positiveInteger(anchor.line)
-    const column = anchor.column === undefined ? undefined : positiveInteger(anchor.column)
-    const endLine = anchor.endLine === undefined ? undefined : positiveInteger(anchor.endLine)
-    const endColumn = anchor.endColumn === undefined ? undefined : positiveInteger(anchor.endColumn)
-    if (!line || (anchor.column !== undefined && !column) || (anchor.endLine !== undefined && !endLine) ||
-        (anchor.endColumn !== undefined && !endColumn)) return null
+  const line = positiveInteger(native.line)
+  if (line) {
+    const column = positiveInteger(native.column)
+    const endLine = positiveInteger(native.endLine)
+    const endColumn = positiveInteger(native.endColumn)
     return {
       kind: 'text',
       line,
@@ -119,131 +115,77 @@ function parseAnchor(value: unknown): WorkspacePreviewAnchor | null | undefined 
       ...(endColumn ? { endColumn } : {})
     }
   }
-  if (anchor.kind === 'document') {
-    if (!hasOnlyKeys(anchor, ['kind', 'id', 'page', 'paragraphIndex', 'quote', 'rects'])) return null
-    const id = anchor.id === undefined ? undefined : boundedString(anchor.id, 256, true)
-    const page = anchor.page === undefined ? undefined : positiveInteger(anchor.page)
-    const paragraphIndex = anchor.paragraphIndex === undefined ? undefined : positiveInteger(anchor.paragraphIndex)
-    const quote = anchor.quote === undefined ? undefined : boundedString(anchor.quote, 8_000)
-    const rects = parseDocumentRects(anchor.rects)
-    if ((anchor.id !== undefined && !id) || (anchor.page !== undefined && !page) ||
-        (anchor.paragraphIndex !== undefined && !paragraphIndex) ||
-        (anchor.quote !== undefined && quote === undefined) || rects === null) return null
-    return {
-      kind: 'document',
-      ...(id ? { id } : {}),
-      ...(page ? { page } : {}),
-      ...(paragraphIndex ? { paragraphIndex } : {}),
-      ...(quote ? { quote } : {}),
-      ...(rects?.length ? { rects } : {})
-    }
-  }
-  if (anchor.kind === 'tabular') {
-    if (!hasOnlyKeys(anchor, ['kind', 'sheet', 'rowStart', 'rowEnd', 'columnStart', 'columnEnd'])) return null
-    const sheet = anchor.sheet === undefined ? undefined : boundedString(anchor.sheet, 256, true)
-    const rowStart = nonnegativeInteger(anchor.rowStart)
-    const rowEnd = nonnegativeInteger(anchor.rowEnd)
-    const columnStart = nonnegativeInteger(anchor.columnStart)
-    const columnEnd = nonnegativeInteger(anchor.columnEnd)
-    if ((anchor.sheet !== undefined && !sheet) || rowStart === undefined || rowEnd === undefined ||
-        columnStart === undefined || columnEnd === undefined || rowEnd < rowStart || columnEnd < columnStart) {
-      return null
-    }
+  const lineRange = numericRange(selector.lineRange, 1)
+  if (lineRange) return { kind: 'text', line: lineRange[0], endLine: lineRange[1] }
+
+  const rowStart = nonnegativeInteger(native.rowStart)
+  const rowEnd = nonnegativeInteger(native.rowEnd)
+  const columnStart = nonnegativeInteger(native.columnStart)
+  const columnEnd = nonnegativeInteger(native.columnEnd)
+  if (rowStart !== undefined && rowEnd !== undefined && columnStart !== undefined &&
+      columnEnd !== undefined && rowEnd >= rowStart && columnEnd >= columnStart) {
     return {
       kind: 'tabular',
-      ...(sheet ? { sheet } : {}),
+      ...(native.sheet?.trim() ? { sheet: native.sheet.trim().slice(0, 256) } : {}),
       rowStart,
       rowEnd,
       columnStart,
       columnEnd
     }
   }
-  return null
+  const rowRange = numericRange(selector.rowRange, 0)
+  if (rowRange) {
+    return {
+      kind: 'tabular',
+      ...(selector.table?.trim() ? { sheet: selector.table.trim().slice(0, 256) } : {}),
+      rowStart: rowRange[0],
+      rowEnd: rowRange[1],
+      columnStart: 0,
+      columnEnd: 0
+    }
+  }
+
+  const page = positiveInteger(selector.page)
+  const quote = boundedString(selector.quote, 8_000)
+  if (page || quote || sourceAnchorId) {
+    return {
+      kind: 'document',
+      id: sourceAnchorId.slice(0, 256),
+      ...(page ? { page } : {}),
+      ...(quote ? { quote } : {})
+    }
+  }
+  return undefined
 }
 
 export function parseProjectDagPreviewRequest(value: unknown): ProjectDagPreviewRequest | null {
   const message = record(value)
   if (!message || !hasOnlyKeys(message, [
-    'type', 'version', 'requestId', 'locator', 'artifactId', 'artifactVersionId',
-    'sourceAnchorId', 'anchor', 'claim'
+    'type', 'version', 'requestId', 'artifactVersionId', 'sourceAnchorId', 'graphNodeId', 'claim'
   ])) return null
   if (message.type !== PROJECT_DAG_PREVIEW_REQUEST || message.version !== 1) return null
   const requestId = boundedString(message.requestId, 128, true)
-  const locator = boundedString(message.locator, 4_096, true)
-  const artifactId = message.artifactId === undefined ? undefined : boundedString(message.artifactId, 512, true)
-  const artifactVersionId = message.artifactVersionId === undefined
+  const artifactVersionId = boundedString(message.artifactVersionId, 512, true)
+  const sourceAnchorId = boundedString(message.sourceAnchorId, 512, true)
+  const graphNodeId = message.graphNodeId === undefined
     ? undefined
-    : boundedString(message.artifactVersionId, 512, true)
-  const sourceAnchorId = message.sourceAnchorId === undefined
-    ? undefined
-    : boundedString(message.sourceAnchorId, 512, true)
-  const anchor = parseAnchor(message.anchor)
+    : normalizeProjectDagGraphNodeId(message.graphNodeId)
   const claim = record(message.claim)
-  if (!requestId || !locator || anchor === null || !claim ||
-      !hasOnlyKeys(claim, ['id', 'statement', 'snapshotDigest'])) return null
+  if (!requestId || !artifactVersionId || !sourceAnchorId ||
+      (message.graphNodeId !== undefined && !graphNodeId) || !claim ||
+      !hasOnlyKeys(claim, ['id', 'snapshotDigest'])) return null
   const claimId = boundedString(claim.id, 512, true)
-  const statement = claim.statement === undefined ? undefined : boundedString(claim.statement, 8_000)
-  const snapshotDigest = claim.snapshotDigest === undefined
-    ? undefined
-    : boundedString(claim.snapshotDigest, 512, true)
-  if (!claimId || (message.artifactId !== undefined && !artifactId) ||
-      (message.artifactVersionId !== undefined && !artifactVersionId) ||
-      (message.sourceAnchorId !== undefined && !sourceAnchorId) ||
-      (claim.statement !== undefined && statement === undefined) ||
-      (claim.snapshotDigest !== undefined && snapshotDigest === undefined)) return null
+  const snapshotDigest = boundedString(claim.snapshotDigest, 512, true)
+  if (!claimId || !snapshotDigest) return null
   return {
     type: PROJECT_DAG_PREVIEW_REQUEST,
     version: 1,
     requestId,
-    locator,
-    ...(artifactId ? { artifactId } : {}),
-    ...(artifactVersionId ? { artifactVersionId } : {}),
-    ...(sourceAnchorId ? { sourceAnchorId } : {}),
-    ...(anchor ? { anchor } : {}),
-    claim: {
-      id: claimId,
-      ...(statement ? { statement } : {}),
-      ...(snapshotDigest ? { snapshotDigest } : {})
-    }
+    artifactVersionId,
+    sourceAnchorId,
+    ...(graphNodeId ? { graphNodeId } : {}),
+    claim: { id: claimId, snapshotDigest }
   }
-}
-
-function normalizeAbsolutePath(value: string): string | null {
-  const path = value.trim().replaceAll('\\', '/')
-  if (!path || /[\u0000-\u001f\u007f]/u.test(path) || path.startsWith('//')) return null
-  const drive = /^([A-Za-z]):\/(.*)$/u.exec(path)
-  const isPosix = path.startsWith('/')
-  if (!drive && !isPosix) return null
-  const prefix = drive ? `${drive[1]!.toUpperCase()}:/` : '/'
-  const tail = drive ? drive[2]! : path.slice(1)
-  const segments: string[] = []
-  for (const segment of tail.split('/')) {
-    if (!segment || segment === '.') continue
-    if (segment === '..') {
-      if (!segments.length) return null
-      segments.pop()
-      continue
-    }
-    segments.push(segment)
-  }
-  return `${prefix}${segments.join('/')}`.replace(/\/$/u, '') || prefix
-}
-
-export function resolveProjectDagWorkspaceLocator(locator: string, workspaceRoot: string): string | null {
-  const root = normalizeAbsolutePath(workspaceRoot)
-  const candidate = locator.trim().replaceAll('\\', '/')
-  if (!root || !candidate || /[\u0000-\u001f\u007f]/u.test(candidate) || candidate.startsWith('~')) return null
-  const windowsAbsolute = /^[A-Za-z]:\//u.test(candidate)
-  if (!windowsAbsolute && /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(candidate)) return null
-  const absolute = candidate.startsWith('/') || windowsAbsolute
-    ? normalizeAbsolutePath(candidate)
-    : normalizeAbsolutePath(`${root}/${candidate}`)
-  if (!absolute) return null
-  const windows = /^[A-Za-z]:\//u.test(root)
-  const comparableRoot = windows ? root.toLowerCase() : root
-  const comparablePath = windows ? absolute.toLowerCase() : absolute
-  if (comparablePath === comparableRoot || !comparablePath.startsWith(`${comparableRoot}/`)) return null
-  return absolute
 }
 
 function expectedOrigin(frameUrl: string): string | null {
@@ -270,12 +212,23 @@ function sendResult(
   }, origin)
 }
 
+function failureMessage(result: Extract<ProjectDagEvidencePreviewResolveResult, { ok: false }>): string {
+  if (result.code === 'access_restricted') return '该证据受访问策略限制，无法打开。'
+  if (result.code === 'unsupported_locator') return '该来源不是当前 workspace 内可预览的本地文件。'
+  if (result.code === 'file_unavailable') return '证据文件不存在或当前不可访问。'
+  if (result.code === 'snapshot_mismatch') return '证据请求不属于当前正在查看的 committed Project Snapshot。'
+  return '无法验证该 Claim 与原始证据的固定溯源关系。'
+}
+
 export async function handleProjectDagPreviewMessage(input: {
   event: Pick<MessageEvent, 'data' | 'origin' | 'source'>
   frameWindow: WindowProxy | null
   frameUrl: string
   workspaceRoot: string
-  resolveWorkspaceFile: Resolver
+  projectRoot?: string
+  project?: string
+  expectedSnapshotDigest: string | undefined
+  resolveProjectDagEvidencePreview: Resolver
   openPreview?: (target: ProjectDagPreviewTarget) => void
 }): Promise<ProjectDagPreviewBridgeResult> {
   const origin = expectedOrigin(input.frameUrl)
@@ -289,41 +242,55 @@ export async function handleProjectDagPreviewMessage(input: {
     sendResult(input.event.source!, origin, requestId, { ok: false, message })
     return { status: 'rejected', message }
   }
-  const candidate = resolveProjectDagWorkspaceLocator(request.locator, input.workspaceRoot)
-  if (!candidate) {
-    const message = '只能预览当前 workspace 内的本地证据；远程、runtime、受限或越界路径不会被打开。'
+  if (!input.expectedSnapshotDigest || request.claim.snapshotDigest !== input.expectedSnapshotDigest) {
+    const message = '证据请求不属于当前正在查看的 committed Project Snapshot，已拒绝打开。'
     sendResult(input.event.source!, origin, request.requestId, { ok: false, message })
     return { status: 'rejected', message }
   }
-  let resolved: WorkspaceFileResolveResult
+  let resolved: ProjectDagEvidencePreviewResolveResult
   try {
-    resolved = await input.resolveWorkspaceFile({ path: candidate, workspaceRoot: input.workspaceRoot })
+    resolved = await input.resolveProjectDagEvidencePreview({
+      workspaceRoot: input.workspaceRoot,
+      ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+      ...(input.project ? { project: input.project } : {}),
+      snapshotDigest: request.claim.snapshotDigest,
+      claimId: request.claim.id,
+      artifactVersionId: request.artifactVersionId,
+      sourceAnchorId: request.sourceAnchorId
+    })
   } catch {
-    resolved = { ok: false, message: '无法验证证据文件。' }
+    resolved = { ok: false, code: 'file_unavailable', message: 'Unable to resolve evidence.' }
   }
-  if (!resolved.ok || resolved.kind === 'directory') {
-    const message = resolved.ok ? '证据定位到目录，无法作为文件预览。' : (resolved.message || '证据文件不存在或不可访问。')
+  if (!resolved.ok) {
+    const message = failureMessage(resolved)
     sendResult(input.event.source!, origin, request.requestId, { ok: false, message })
     return { status: 'rejected', message }
   }
-  const safeResolvedPath = resolveProjectDagWorkspaceLocator(resolved.path, input.workspaceRoot)
-  if (!safeResolvedPath) {
-    const message = '证据文件解析后超出当前 workspace，已拒绝打开。'
+  if (resolved.workspaceRoot !== input.workspaceRoot ||
+      resolved.snapshotDigest !== request.claim.snapshotDigest ||
+      resolved.claimId !== request.claim.id ||
+      resolved.artifactVersionId !== request.artifactVersionId ||
+      resolved.sourceAnchorId !== request.sourceAnchorId) {
+    const message = '受信解析结果与请求的固定溯源标识不一致，已拒绝打开。'
     sendResult(input.event.source!, origin, request.requestId, { ok: false, message })
     return { status: 'rejected', message }
   }
+  const anchor = projectDagSelectorAnchor(resolved.selector, resolved.sourceAnchorId)
+  const digest = sha256Digest(resolved.contentDigest)
   const target: ProjectDagPreviewTarget = {
-    path: safeResolvedPath,
-    workspaceRoot: input.workspaceRoot,
-    ...(request.anchor ? { anchor: request.anchor } : {}),
-    ...(request.anchor?.kind === 'text' ? {
-      line: request.anchor.line,
-      ...(request.anchor.column ? { column: request.anchor.column } : {})
+    path: resolved.path,
+    workspaceRoot: resolved.workspaceRoot,
+    ...(anchor ? { anchor } : {}),
+    ...(digest ? { integrity: { algorithm: 'sha256', expectedDigest: digest } } : {}),
+    ...(anchor?.kind === 'text' ? {
+      line: anchor.line,
+      ...(anchor.column ? { column: anchor.column } : {})
     } : {}),
     returnTo: {
       kind: 'project-dag',
-      label: '返回 Claim',
-      claimId: request.claim.id
+      label: request.graphNodeId ? 'Project DAG' : 'Claim',
+      claimId: request.claim.id,
+      ...(request.graphNodeId ? { nodeId: request.graphNodeId } : {})
     }
   }
   ;(input.openPreview ?? previewWorkspaceFile)(target)

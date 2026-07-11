@@ -1,5 +1,5 @@
 import { AlertTriangle, ChevronDown, Loader2, Network, PanelRightClose, Play, RefreshCw, RotateCcw } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentRuntimeId } from '@shared/app-settings'
 import type {
@@ -9,12 +9,17 @@ import type {
   EvidenceDagViewResult,
   SciForgeApi
 } from '@shared/sciforge-api'
+import {
+  handleEvidenceDagPreviewMessage
+} from './evidence-dag-preview-bridge'
 
 type Props = {
   activeThreadId: string | null
   runtimeId?: AgentRuntimeId
+  initialNodeId?: string
   className?: string
   onCollapse: () => void
+  onInitialNodeConsumed?: () => void
 }
 
 type EvidenceDagUpdateApi = Partial<Pick<SciForgeApi, 'updateEvidenceDag'>>
@@ -26,6 +31,19 @@ class EvidenceDagViewTimeoutError extends Error {}
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+export function evidenceDagViewUrlWithNode(url: string, nodeId?: string, previewEnabled = false): string {
+  const selected = nodeId?.trim()
+  if (!selected && !previewEnabled) return url
+  try {
+    const next = new URL(url)
+    if (selected) next.searchParams.set('node', selected)
+    if (previewEnabled) next.searchParams.set('preview', 'trusted')
+    return next.toString()
+  } catch {
+    return url
+  }
 }
 
 export function withEvidenceDagViewTimeout<T>(promise: Promise<T>, timeoutMs = EVIDENCE_DAG_VIEW_TIMEOUT_MS): Promise<T> {
@@ -65,8 +83,10 @@ function statusTone(status: DagPanelStatus): string {
 export function EvidenceDagPanel({
   activeThreadId,
   runtimeId,
+  initialNodeId,
   className = '',
-  onCollapse
+  onCollapse,
+  onInitialNodeConsumed
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const [view, setView] = useState<EvidenceDagViewResult | null>(null)
@@ -74,10 +94,33 @@ export function EvidenceDagPanel({
   const [submitting, setSubmitting] = useState(false)
   const [updateSummary, setUpdateSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const [requestNonce, setRequestNonce] = useState(0)
   const [frameNonce, setFrameNonce] = useState(0)
+  const [requestedNodeId, setRequestedNodeId] = useState<string | null>(() => initialNodeId?.trim() || null)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const requestedNodeThreadRef = useRef<string | null>(activeThreadId)
   const threadId = useMemo(() => activeThreadId?.trim() || null, [activeThreadId])
   const viewCacheKey = `${runtimeId ?? ''}:${threadId ?? ''}`
+  const frameUrl = useMemo(
+    () => view ? evidenceDagViewUrlWithNode(
+      view.url,
+      requestedNodeId ?? undefined,
+      Boolean(threadId && runtimeId)
+    ) : null,
+    [requestedNodeId, runtimeId, threadId, view]
+  )
+
+  useEffect(() => {
+    const nextNodeId = initialNodeId?.trim() || null
+    if (requestedNodeThreadRef.current !== threadId) {
+      requestedNodeThreadRef.current = threadId
+      setRequestedNodeId(nextNodeId)
+      return
+    }
+    if (nextNodeId) setRequestedNodeId(nextNodeId)
+    setPreviewError(null)
+  }, [initialNodeId, threadId])
 
   useEffect(() => {
     let cancelled = false
@@ -121,6 +164,33 @@ export function EvidenceDagPanel({
     const timer = setTimeout(() => setRequestNonce((current) => current + 1), 2_000)
     return () => clearTimeout(timer)
   }, [view?.status.freshness, view?.status.pendingCount])
+
+  useEffect(() => {
+    if (!frameUrl || !view) return
+    const onMessage = (event: MessageEvent): void => {
+      const resolver = window.sciforge?.resolveEvidenceDagEvidencePreview
+      void handleEvidenceDagPreviewMessage({
+        event,
+        frameWindow: iframeRef.current?.contentWindow ?? null,
+        frameUrl,
+        runtimeId,
+        currentThreadId: view.threadId || threadId,
+        expectedSnapshotDigest: view.status.latestSnapshotDigest,
+        resolveEvidenceDagEvidencePreview: typeof resolver === 'function'
+          ? (input) => resolver(input)
+          : async () => ({
+              ok: false,
+              code: 'file_unavailable',
+              message: t('evidenceDagUnavailable')
+            })
+      }).then((result) => {
+        if (result.status === 'rejected') setPreviewError(result.message)
+        if (result.status === 'opened') setPreviewError(null)
+      })
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [frameUrl, runtimeId, t, threadId, view])
 
   const subtitle = view?.threadId || threadId || t('evidenceDagGlobalView')
   const canUpdateDag = Boolean(threadId && runtimeId)
@@ -233,7 +303,8 @@ export function EvidenceDagPanel({
       ) : null}
 
       <div className="relative min-h-0 flex-1 bg-ds-main">
-        {view ? <iframe key={`${view.url}:${frameNonce}`} src={view.url} title={t('rightPanelEvidenceDag')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" /> : null}
+        {view && frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('rightPanelEvidenceDag')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={() => { if (requestedNodeId && initialNodeId?.trim() === requestedNodeId) onInitialNodeConsumed?.() }} /> : null}
+        {previewError ? <div role="status" className="absolute left-3 right-3 top-3 z-10 rounded-lg border border-red-200 bg-red-50/95 px-3 py-2 text-[11.5px] text-red-800 shadow-sm">{previewError}</div> : null}
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('evidenceDagLoading')}</span></div> : null}
         {error ? (
           <div className="absolute inset-0 flex items-center justify-center bg-ds-main px-6">

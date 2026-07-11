@@ -815,7 +815,7 @@ function createInactiveModel(
     structureRows: [],
     selection: {
       kind: 'none',
-      summary: 'No molecular selection.',
+      summary: 'File opened at whole-structure scope; no precise molecular selection was provided.',
       groups: []
     },
     capabilities: {
@@ -906,7 +906,7 @@ function buildMolecularSelectionModel(
   if (!selection) {
     return {
       kind: 'none',
-      summary: 'No molecular selection.',
+      summary: 'File opened at whole-structure scope; no precise molecular selection was provided.',
       groups: []
     }
   }
@@ -914,7 +914,7 @@ function buildMolecularSelectionModel(
   if (selection.kind !== 'molecular') {
     return {
       kind: 'unsupported',
-      summary: `${titleCase(selection.kind)} selection is active outside the molecular workbench.`,
+      summary: `File opened, but the ${titleCase(selection.kind)} anchor cannot be mapped to chains, residues, atoms, or ligands.`,
       groups: []
     }
   }

@@ -145,6 +145,21 @@ describe('MolecularWorkspaceViewer', () => {
     expect(model.agentSummary).toContain('Mol* capabilities: structure, selection, measurements, screenshot')
   })
 
+  it('opens safely at whole-structure scope when no molecular selector can be mapped', () => {
+    const withoutSelector = buildMolecularWorkspaceViewerModel(createMolecularObservation({
+      selection: undefined
+    }))
+    const incompatibleAnchor = buildMolecularWorkspaceViewerModel(createMolecularObservation({
+      selection: {
+        kind: 'document',
+        anchors: [{ id: 'source-anchor', page: 2 }]
+      }
+    }))
+
+    expect(withoutSelector.selection.summary).toContain('whole-structure scope')
+    expect(incompatibleAnchor.selection.summary).toContain('cannot be mapped to chains')
+  })
+
   it('reports empty and unsupported states without trying to render a molecular viewport', () => {
     const empty = buildMolecularWorkspaceViewerModel(null)
     const unsupported = buildMolecularWorkspaceViewerModel({

@@ -127,6 +127,7 @@ export class WorkspacePreviewHost {
   private readonly getBridge: () => WorkspacePreviewBridgeAdapter | null | undefined
   private readonly listeners = new Set<WorkspacePreviewHostListener>()
   private state: WorkspacePreviewHostState = createWorkspacePreviewHostState()
+  private openRequestSequence = 0
 
   constructor(options: WorkspacePreviewHostOptions = {}) {
     this.registry = options.registry ?? rendererWorkspacePreviewRegistry
@@ -167,6 +168,7 @@ export class WorkspacePreviewHost {
   }
 
   async open(input: WorkspacePreviewOpenInput): Promise<WorkspacePreviewOpenResult> {
+    const requestSequence = ++this.openRequestSequence
     const descriptor = this.resolvePath({
       path: input.path,
       mimeType: input.mimeType,
@@ -181,6 +183,15 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.open(input)
+      if (requestSequence !== this.openRequestSequence) {
+        if (result.ok) {
+          await bridge.releaseSession(result.session.id).catch(() => false)
+        }
+        return {
+          ok: false,
+          message: 'Workspace preview request was superseded.'
+        }
+      }
       if (!result.ok) {
         this.patchState({ error: result.message })
         return result
@@ -197,8 +208,18 @@ export class WorkspacePreviewHost {
       })
       return result
     } catch (error) {
+      if (requestSequence !== this.openRequestSequence) {
+        return {
+          ok: false,
+          message: 'Workspace preview request was superseded.'
+        }
+      }
       return this.failOpen(messageFromError(error))
     }
+  }
+
+  cancelPendingOpen(): void {
+    this.openRequestSequence += 1
   }
 
   async observe(sessionId?: string): Promise<WorkspacePreviewObserveResult> {
@@ -210,6 +231,7 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.observe(resolvedSessionId)
+      if (this.state.session?.id !== resolvedSessionId) return result
       if (!result.ok) {
         this.patchState({ error: result.message })
         return result
@@ -221,6 +243,9 @@ export class WorkspacePreviewHost {
       })
       return result
     } catch (error) {
+      if (this.state.session?.id !== resolvedSessionId) {
+        return { ok: false, message: 'Workspace preview session was superseded.' }
+      }
       return this.failObserve(messageFromError(error))
     }
   }
@@ -255,12 +280,16 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.describeAsset(resolvedSessionId)
+      if (this.state.session?.id !== resolvedSessionId) return result
       this.patchState({
         asset: result.ok ? result.descriptor : null,
         error: result.ok ? null : result.message
       })
       return result
     } catch (error) {
+      if (this.state.session?.id !== resolvedSessionId) {
+        return { ok: false, message: 'Workspace preview session was superseded.' }
+      }
       return this.failDescribeAsset(messageFromError(error))
     }
   }
