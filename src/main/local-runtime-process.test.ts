@@ -535,6 +535,16 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true, windowSize: 8, threshold: 3 })
     expect(parsed.runtime.modelStreamIdleTimeoutMs).toBe(600000)
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 524288 })
+    expect(parsed.runtime.toolBudget).toMatchObject({
+      enabled: true,
+      profiles: {
+        explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
+        review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
+        implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
+        long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
+      }
+    })
+    expect(parsed.runtime.parallelism).toEqual({ localReadOnly: 8, networkMcp: 4 })
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.web).toMatchObject({ enabled: true, fetchEnabled: true })
     expect(parsed.capabilities.subagents).toMatchObject({
@@ -1096,8 +1106,13 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
         summaryInputMaxBytes: 131072
       },
       runtimeTuning: {
+        ...defaultLocalRuntimeSettings().runtimeTuning,
         toolArgumentRepair: {
           maxStringBytes: 262144
+        },
+        parallelism: {
+          localReadOnly: 16,
+          networkMcp: 6
         }
       },
       mcpSearch: {
@@ -1193,6 +1208,13 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     expect(parsed.runtime.customRuntimeFlag).toBeUndefined()
     expect(parsed.runtime.modelStreamIdleTimeoutMs).toBe(180000)
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 262144 })
+    expect(parsed.runtime.toolBudget.profiles.long).toMatchObject({
+      softLimit: 16,
+      hardLimit: 16,
+      maxAutomaticPhases: 3,
+      totalLimit: 48
+    })
+    expect(parsed.runtime.parallelism).toEqual({ localReadOnly: 16, networkMcp: 6 })
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.subagents).toMatchObject({
       enabled: true,

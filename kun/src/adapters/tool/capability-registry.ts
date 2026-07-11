@@ -22,6 +22,7 @@ export type CapabilityToolSpec = {
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
   providerId: string
   providerKind: ToolProviderKind
+  metadata?: Record<string, unknown>
 }
 
 const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
@@ -86,7 +87,8 @@ export class CapabilityRegistry {
         inputSchema: record.tool.inputSchema,
         toolKind: record.tool.toolKind,
         providerId: record.provider.id,
-        providerKind: record.provider.kind
+        providerKind: record.provider.kind,
+        ...(record.tool.metadata ? { metadata: record.tool.metadata } : {})
       })
     }
     return specs

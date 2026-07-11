@@ -445,6 +445,13 @@ function createMcpLocalTool(
         serverId: state.serverId,
         toolName: descriptor.name,
         canonicalName: normalizeMcpToolName(state.serverId, descriptor.name)
+      },
+      execution: {
+        readOnly: descriptor.annotations?.readOnlyHint === true,
+        parallelSafe:
+          descriptor.annotations?.readOnlyHint === true &&
+          descriptor.annotations?.destructiveHint !== true &&
+          descriptor.annotations?.openWorldHint !== true
       }
     },
     shouldAdvertise: (context: ToolHostContext) => isMcpServerTrusted(state.server, context.workspace),

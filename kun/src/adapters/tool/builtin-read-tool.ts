@@ -29,7 +29,11 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
       properties: {
         path: { type: 'string' },
         offset: { type: 'number' },
-        limit: { type: 'number' }
+        limit: { type: 'number' },
+        reason: {
+          type: 'string',
+          description: 'Optional justification to force one reread of an already-covered range.'
+        }
       },
       required: ['path'],
       additionalProperties: false

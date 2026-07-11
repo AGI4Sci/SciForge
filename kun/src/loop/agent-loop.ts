@@ -73,8 +73,16 @@ import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../adapters/tool/goal-tools.js'
 import { TODO_LIST_TOOL_NAME, TODO_WRITE_TOOL_NAME } from '../adapters/tool/todo-tools.js'
 import { shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
+import {
+  checkpointSupportsContinuation,
+  classifyToolBudgetProfile,
+  parseToolBudgetCheckpoint,
+  resolveToolBudgetProfile,
+  type ToolBudgetConfig,
+  type ToolBudgetProfile,
+  type ToolBudgetProfileName
+} from './tool-budget.js'
 
-const MAX_PARALLEL_TOOL_CALLS = 4
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls'])
 const PARALLEL_DELEGATION_TOOL_NAMES = new Set(['delegate_task', 'delegate_tasks'])
 const DEFAULT_MAX_TURN_MODEL_STEPS = 64
@@ -144,11 +152,20 @@ type ToolCatalogDrift =
 
 type ToolLoopHealth = {
   totalToolCalls: number
+  phaseToolCalls: number
+  phaseSuccessfulCalls: number
+  phase: number
   suppressedCalls: number
   consecutiveAllSuppressed: number
   consecutiveNonProgressToolSteps: number
   postRecoveryAllSuppressed: number
   toolBudgetExhausted: boolean
+  softBudgetReached: boolean
+  checkpointPending: boolean
+  budgetProfileName?: ToolBudgetProfileName
+  budgetProfile?: ToolBudgetProfile
+  checkpointSummary?: string
+  previousCheckpointPlan?: string[]
   recoveryIssuedAtStep?: number
 }
 
@@ -302,6 +319,40 @@ function toolBudgetExhaustedInstruction(): string {
     '- No more tool calls are available for this turn.',
     '- Use the evidence already gathered and produce the best complete answer now.',
     '- If the gathered evidence is incomplete, state the concrete gaps instead of trying another search.'
+  ].join('\n')
+}
+
+function toolBudgetSoftLimitInstruction(health: ToolLoopHealth): string {
+  return [
+    'Tool budget checkpoint approaching:',
+    `- Phase ${health.phase} has used ${health.phaseToolCalls} tool call(s).`,
+    '- Review the evidence already gathered before requesting more tools.',
+    '- Continue only for a concrete unresolved question that the next call can answer.',
+    '- Prefer one batch of independent read-only calls over several sequential model rounds.',
+    '- If the evidence is sufficient, answer now.'
+  ].join('\n')
+}
+
+function toolBudgetPhaseContextInstruction(health: ToolLoopHealth): string | null {
+  if (!health.checkpointSummary) return null
+  return [
+    `Tool phase ${Math.max(1, health.phase - 1)} checkpoint summary:`,
+    health.checkpointSummary,
+    '',
+    `Continue with phase ${health.phase}. Do not repeat evidence gathering completed in earlier phases.`
+  ].join('\n')
+}
+
+function toolBudgetCheckpointInstruction(health: ToolLoopHealth): string {
+  return [
+    'Perform an internal tool-budget checkpoint. Tools are unavailable for this checkpoint.',
+    'Return one JSON object only with this shape:',
+    '{"decision":"continue|finish","summary":"new evidence gathered in this phase","remaining":["specific unresolved item"],"nextPlan":["specific next-phase action"]}',
+    'Use decision="continue" only when concrete work remains, this phase produced useful new evidence, and the next plan is materially different.',
+    'Use decision="finish" when evidence is sufficient, progress is marginal, or no distinct next plan exists.',
+    `Current phase: ${health.phase}.`,
+    `Calls in current phase: ${health.phaseToolCalls}.`,
+    `Successful calls in current phase: ${health.phaseSuccessfulCalls}.`
   ].join('\n')
 }
 
@@ -491,6 +542,12 @@ export type AgentLoopOptions = {
     nonProgressThreshold?: number
     maxStepsAfterRecovery?: number
     maxToolCallsPerTurn?: number
+  }
+  toolBudget?: ToolBudgetConfig
+  toolBudgetProfile?: ToolBudgetProfileName
+  parallelism?: {
+    localReadOnly?: number
+    networkMcp?: number
   }
   toolArgumentRepair?: {
     maxStringBytes?: number
@@ -813,9 +870,15 @@ export class AgentLoop {
       taskType: memoryTaskType
     })
     const planTurnActive = effectiveMode === 'plan' || Boolean(activePlanContext)
-    const activeGoalInstruction = planTurnActive
+    let activeGoalInstruction = planTurnActive
       ? null
       : goalContinuationInstruction(thread?.goal)
+    const toolBudgetHealth = this.configureToolBudget(classifyToolBudgetProfile({
+      prompt: turn?.prompt ?? '',
+      explicit: this.opts.toolBudgetProfile,
+      hasActiveGoal: thread?.goal?.status === 'active',
+      planTurnActive
+    }), turnId)
     const activeTodoInstruction = todoContinuationInstruction(thread?.todos)
     const baseAllowedToolNames = mergeAllowedToolNames(
       skillResolution.allowedToolNames,
@@ -856,7 +919,8 @@ export class AgentLoop {
     const createPlanSatisfied = planTurnActive
       ? hasSuccessfulCreatePlanResult(healed.items, turnId)
       : false
-    const toolBudgetExhausted = this.toolLoopHealthByTurn.get(turnId)?.toolBudgetExhausted === true
+    const toolBudgetExhausted = toolBudgetHealth.toolBudgetExhausted
+    if (toolBudgetExhausted) activeGoalInstruction = null
     const internalToolCallMarkupRecoverySteps =
       this.internalToolCallMarkupRecoveryStepsByTurn.get(turnId) ?? 0
     const effectiveToolSpecs = toolBudgetExhausted
@@ -867,7 +931,11 @@ export class AgentLoop {
           stepIndex
         })
     const toolProviderMetadata = new Map(
-      tools.map((tool) => [tool.name, { providerId: tool.providerId, providerKind: tool.providerKind }])
+      tools.map((tool) => [tool.name, {
+        providerId: tool.providerId,
+        providerKind: tool.providerKind,
+        metadata: tool.metadata
+      }])
     )
     const toolCatalog = buildToolCatalogFingerprint(toolSpecs)
     const toolCatalogDrift = this.recordToolCatalogFingerprint({
@@ -932,6 +1000,12 @@ export class AgentLoop {
       ...(this.toolLoopHealthByTurn.get(turnId)?.recoveryIssuedAtStep !== undefined
         ? [toolLoopRecoveryInstruction()]
         : []),
+      ...(toolBudgetHealth.softBudgetReached && !toolBudgetExhausted
+        ? [toolBudgetSoftLimitInstruction(toolBudgetHealth)]
+        : []),
+      ...(toolBudgetPhaseContextInstruction(toolBudgetHealth)
+        ? [toolBudgetPhaseContextInstruction(toolBudgetHealth)!]
+        : []),
       ...(toolBudgetExhausted ? [toolBudgetExhaustedInstruction()] : []),
       ...(internalToolCallMarkupRecoverySteps > 0 ? [internalToolCallMarkupRecoveryInstruction()] : []),
       ...(activeTodoInstruction ? [activeTodoInstruction] : []),
@@ -971,6 +1045,15 @@ export class AgentLoop {
     const request: ModelRequest = {
       ...economyRequest,
       history: applyRequestHistoryHygiene(economyRequest.history, tokenEconomy.historyHygiene)
+    }
+    if (toolBudgetHealth.checkpointPending) {
+      return this.runToolBudgetCheckpoint({
+        request,
+        threadId,
+        turnId,
+        health: toolBudgetHealth,
+        signal
+      })
     }
     if (tokenEconomy.enabled) {
       await this.recordTokenEconomySavings({
@@ -1277,7 +1360,7 @@ export class AgentLoop {
             allowedToolNames,
             bashCommandPolicy: turn?.bashCommandPolicy,
             filePathPolicy: turn?.filePathPolicy,
-            toolProviderKinds: new Map(tools.map((tool) => [tool.name, tool.providerKind])),
+            toolProviderMetadata,
             approvalPolicy,
             sandboxMode,
             signal
@@ -1382,7 +1465,7 @@ export class AgentLoop {
       explicitStrictAllowedToolNames: turn?.strictAllowedToolNames,
       bashCommandPolicy: turn?.bashCommandPolicy,
       filePathPolicy: turn?.filePathPolicy,
-      toolProviderKinds: new Map(tools.map((tool) => [tool.name, tool.providerKind])),
+      toolProviderMetadata,
       approvalPolicy,
       sandboxMode,
       signal
@@ -1413,7 +1496,10 @@ export class AgentLoop {
     explicitStrictAllowedToolNames?: boolean
     bashCommandPolicy?: ToolHostContext['bashCommandPolicy']
     filePathPolicy?: ToolHostContext['filePathPolicy']
-    toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
+    toolProviderMetadata: ReadonlyMap<string, {
+      providerKind?: ToolProviderKind
+      metadata?: Record<string, unknown>
+    }>
     approvalPolicy: ToolHostContext['approvalPolicy']
     sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
     signal: AbortSignal
@@ -1452,7 +1538,9 @@ export class AgentLoop {
         continue
       }
 
-      const storm = this.toolStormBreakers.get(input.turnId)?.inspect(call)
+      const storm = this.toolStormBreakers.get(input.turnId)?.inspect(call, {
+        workspace: input.workspace
+      })
       if (storm?.suppress) {
         suppressedCount += 1
         await this.persistSuppressedToolCall({
@@ -1465,7 +1553,12 @@ export class AgentLoop {
         continue
       }
 
-      if (!this.isParallelSafeToolCall(call, input.approvalPolicy, input.toolProviderKinds)) {
+      const firstParallelLimit = this.parallelToolCallLimit(
+        call,
+        input.approvalPolicy,
+        input.toolProviderMetadata
+      )
+      if (firstParallelLimit <= 1) {
         const result = await this.executeToolCallSafely({
           threadId: input.threadId,
           turnId: input.turnId,
@@ -1473,8 +1566,19 @@ export class AgentLoop {
           context
         })
         executedCount += 1
-        if (isSuccessfulToolResult(result)) successCount += 1
-        else errorCount += 1
+        const evidence = this.toolStormBreakers.get(input.turnId)?.recordResult(
+          call,
+          result.item.kind === 'tool_result' ? result.item.output : { error: 'non-tool-result' },
+          {
+            workspace: input.workspace,
+            isError: result.item.kind !== 'tool_result' || result.item.isError === true
+          }
+        )
+        if (isSuccessfulToolResult(result)) {
+          if (call.toolName !== 'read' || evidence?.evidenceGained !== false) successCount += 1
+        } else {
+          errorCount += 1
+        }
         await this.persistToolCallResult(input.threadId, input.turnId, call, result)
         index += 1
         continue
@@ -1484,10 +1588,17 @@ export class AgentLoop {
       index += 1
       let suppressedAfterBatch: { call: ToolCallLike; reason?: string } | undefined
 
-      while (batch.length < MAX_PARALLEL_TOOL_CALLS && index < input.calls.length) {
+      let batchParallelLimit = firstParallelLimit
+      while (batch.length < batchParallelLimit && index < input.calls.length) {
         const next = input.calls[index]
         if (!next) break
-        if (!this.isParallelSafeToolCall(next, input.approvalPolicy, input.toolProviderKinds)) break
+        const nextParallelLimit = this.parallelToolCallLimit(
+          next,
+          input.approvalPolicy,
+          input.toolProviderMetadata
+        )
+        if (nextParallelLimit <= 1) break
+        batchParallelLimit = Math.min(batchParallelLimit, nextParallelLimit)
 
         if (!takeToolCallBudget()) {
           suppressedCount += 1
@@ -1496,7 +1607,9 @@ export class AgentLoop {
           break
         }
 
-        const nextStorm = this.toolStormBreakers.get(input.turnId)?.inspect(next)
+        const nextStorm = this.toolStormBreakers.get(input.turnId)?.inspect(next, {
+          workspace: input.workspace
+        })
         if (nextStorm?.suppress) {
           suppressedCount += 1
           suppressedAfterBatch = { call: next, reason: nextStorm.reason }
@@ -1524,8 +1637,22 @@ export class AgentLoop {
         if (!result || !batchCall) continue
         if (result.status === 'rejected') throw result.reason
         executedCount += 1
-        if (isSuccessfulToolResult(result.value)) successCount += 1
-        else errorCount += 1
+        const evidence = this.toolStormBreakers.get(input.turnId)?.recordResult(
+          batchCall,
+          result.value.item.kind === 'tool_result'
+            ? result.value.item.output
+            : { error: 'non-tool-result' },
+          {
+            workspace: input.workspace,
+            isError:
+              result.value.item.kind !== 'tool_result' || result.value.item.isError === true
+          }
+        )
+        if (isSuccessfulToolResult(result.value)) {
+          if (batchCall.toolName !== 'read' || evidence?.evidenceGained !== false) successCount += 1
+        } else {
+          errorCount += 1
+        }
         await this.persistToolCallResult(input.threadId, input.turnId, batchCall, result.value)
       }
 
@@ -1545,9 +1672,25 @@ export class AgentLoop {
   }
 
   private remainingToolCallBudget(turnId: string): number | undefined {
+    const health = this.toolLoopHealth(turnId)
+    const limits: number[] = []
     const maxToolCallsPerTurn = this.toolLoopLimits().maxToolCallsPerTurn
-    if (maxToolCallsPerTurn === undefined) return undefined
-    return Math.max(0, maxToolCallsPerTurn - this.toolLoopHealth(turnId).totalToolCalls)
+    if (maxToolCallsPerTurn !== undefined) {
+      limits.push(Math.max(0, maxToolCallsPerTurn - health.totalToolCalls))
+    }
+    if (health.budgetProfile && this.opts.toolBudget?.enabled !== false) {
+      limits.push(Math.max(0, health.budgetProfile.hardLimit - health.phaseToolCalls))
+      limits.push(Math.max(0, health.budgetProfile.totalLimit - health.totalToolCalls))
+    }
+    return limits.length > 0 ? Math.min(...limits) : undefined
+  }
+
+  private configureToolBudget(profileName: ToolBudgetProfileName, turnId: string): ToolLoopHealth {
+    const health = this.toolLoopHealth(turnId)
+    if (health.budgetProfileName) return health
+    health.budgetProfileName = profileName
+    health.budgetProfile = resolveToolBudgetProfile(this.opts.toolBudget, profileName)
+    return health
   }
 
   private async handleToolDispatchOutcome(input: {
@@ -1558,7 +1701,7 @@ export class AgentLoop {
     signal: AbortSignal
   }): Promise<'continue' | 'failed' | 'aborted'> {
     if (input.signal.aborted || input.outcome.kind === 'aborted') return 'aborted'
-    if (this.opts.toolStorm?.enabled === false) return 'continue'
+    const stormRecoveryEnabled = this.opts.toolStorm?.enabled !== false
     const health = this.toolLoopHealth(input.turnId)
     const limits = this.toolLoopLimits()
     const callsThisStep = input.outcome.kind === 'continue'
@@ -1567,6 +1710,10 @@ export class AgentLoop {
         ? input.outcome.suppressedCount
         : 0
     health.totalToolCalls += callsThisStep
+    health.phaseToolCalls += callsThisStep
+    if (input.outcome.kind === 'continue') {
+      health.phaseSuccessfulCalls += input.outcome.successCount
+    }
     if (input.outcome.kind === 'all_suppressed') {
       health.suppressedCalls += input.outcome.suppressedCount
       health.consecutiveAllSuppressed += 1
@@ -1598,6 +1745,27 @@ export class AgentLoop {
       await this.warnToolBudgetExhausted(input.threadId, input.turnId, limits.maxToolCallsPerTurn)
       return 'continue'
     }
+
+    if (
+      this.opts.toolBudget?.enabled !== false &&
+      health.budgetProfile &&
+      !health.toolBudgetExhausted
+    ) {
+      if (health.phaseToolCalls >= health.budgetProfile.softLimit) {
+        health.softBudgetReached = true
+      }
+      if (
+        !health.checkpointPending &&
+        (health.phaseToolCalls >= health.budgetProfile.hardLimit ||
+          health.totalToolCalls >= health.budgetProfile.totalLimit)
+      ) {
+        health.checkpointPending = true
+        await this.warnToolPhaseCheckpoint(input.threadId, input.turnId, health)
+        return 'continue'
+      }
+    }
+
+    if (!stormRecoveryEnabled) return 'continue'
 
     if (health.recoveryIssuedAtStep === undefined) {
       if (
@@ -1648,11 +1816,16 @@ export class AgentLoop {
     if (existing) return existing
     const next: ToolLoopHealth = {
       totalToolCalls: 0,
+      phaseToolCalls: 0,
+      phaseSuccessfulCalls: 0,
+      phase: 1,
       suppressedCalls: 0,
       consecutiveAllSuppressed: 0,
       consecutiveNonProgressToolSteps: 0,
       postRecoveryAllSuppressed: 0,
-      toolBudgetExhausted: false
+      toolBudgetExhausted: false,
+      softBudgetReached: false,
+      checkpointPending: false
     }
     this.toolLoopHealthByTurn.set(turnId, next)
     return next
@@ -1680,6 +1853,121 @@ export class AgentLoop {
       ),
       ...(maxToolCallsPerTurn !== undefined ? { maxToolCallsPerTurn } : {})
     }
+  }
+
+  private async runToolBudgetCheckpoint(input: {
+    request: ModelRequest
+    threadId: string
+    turnId: string
+    health: ToolLoopHealth
+    signal: AbortSignal
+  }): Promise<'continue' | 'stop' | 'failed' | 'aborted'> {
+    if (input.signal.aborted) return 'aborted'
+    let text = ''
+    let failed = false
+    for await (const chunk of this.opts.model.stream({
+      ...input.request,
+      tools: [],
+      requiredToolName: undefined,
+      contextInstructions: [
+        ...(input.request.contextInstructions ?? []),
+        toolBudgetCheckpointInstruction(input.health)
+      ],
+      responseFormat: 'json_object',
+      maxTokens: 800,
+      temperature: 0,
+      reasoningEffort: 'off'
+    })) {
+      if (input.signal.aborted) return 'aborted'
+      if (chunk.kind === 'assistant_text_delta') text += chunk.text
+      if (chunk.kind === 'usage') {
+        const usage = this.opts.usage.record(input.threadId, chunk.usage)
+        await this.opts.events.record({
+          kind: 'usage',
+          threadId: input.threadId,
+          turnId: input.turnId,
+          model: input.request.model,
+          usage
+        })
+      }
+      if (chunk.kind === 'error') failed = true
+    }
+
+    const checkpoint = failed ? null : parseToolBudgetCheckpoint(text)
+    const profile = input.health.budgetProfile
+    const canOpenAnotherPhase = Boolean(
+      profile &&
+      input.health.phase < profile.maxAutomaticPhases &&
+      input.health.totalToolCalls < profile.totalLimit &&
+      input.health.phaseSuccessfulCalls > 0 &&
+      checkpoint &&
+      checkpointSupportsContinuation(checkpoint, input.health.previousCheckpointPlan)
+    )
+
+    input.health.checkpointPending = false
+    if (canOpenAnotherPhase && checkpoint) {
+      const completedPhase = input.health.phase
+      const completedPhaseToolCalls = input.health.phaseToolCalls
+      input.health.phase += 1
+      input.health.phaseToolCalls = 0
+      input.health.phaseSuccessfulCalls = 0
+      input.health.softBudgetReached = false
+      input.health.checkpointSummary = checkpoint.summary || 'The previous phase produced useful evidence.'
+      input.health.previousCheckpointPlan = checkpoint.nextPlan
+      await this.opts.events.record({
+        kind: 'error',
+        threadId: input.threadId,
+        turnId: input.turnId,
+        code: 'tool_budget_phase_continued',
+        severity: 'warning',
+        details: {
+          profile: input.health.budgetProfileName,
+          completedPhase,
+          nextPhase: input.health.phase,
+          totalToolCalls: input.health.totalToolCalls,
+          phaseToolCalls: completedPhaseToolCalls,
+          remainingItems: checkpoint.remaining.length
+        },
+        message:
+          `Tool budget checkpoint opened phase ${input.health.phase}; ` +
+          `${checkpoint.remaining.length} concrete item(s) remain.`
+      })
+      return 'continue'
+    }
+
+    input.health.toolBudgetExhausted = true
+    await this.warnToolBudgetExhausted(
+      input.threadId,
+      input.turnId,
+      input.health.totalToolCalls
+    )
+    return 'continue'
+  }
+
+  private async warnToolPhaseCheckpoint(
+    threadId: string,
+    turnId: string,
+    health: ToolLoopHealth
+  ): Promise<void> {
+    await this.opts.events.record({
+      kind: 'error',
+      threadId,
+      turnId,
+      code: 'tool_budget_phase_checkpoint',
+      severity: 'warning',
+      details: {
+        profile: health.budgetProfileName,
+        phase: health.phase,
+        totalToolCalls: health.totalToolCalls,
+        phaseToolCalls: health.phaseToolCalls,
+        successfulCalls: health.phaseSuccessfulCalls,
+        hardLimit: health.budgetProfile?.hardLimit,
+        totalLimit: health.budgetProfile?.totalLimit
+      },
+      message:
+        `Tool phase ${health.phase} reached its ${health.budgetProfile?.hardLimit ?? health.phaseToolCalls}-call budget; ` +
+        'the runtime will perform an internal evidence checkpoint before continuing.'
+    })
   }
 
   private async warnToolBudgetExhausted(threadId: string, turnId: string, maxToolCalls: number): Promise<void> {
@@ -1774,18 +2062,30 @@ export class AgentLoop {
     })
   }
 
-  private isParallelSafeToolCall(
+  private parallelToolCallLimit(
     call: ToolCallLike,
     approvalPolicy: ToolHostContext['approvalPolicy'],
-    toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
-  ): boolean {
-    if (call.toolKind && call.toolKind !== 'tool_call') return false
-    if (approvalPolicy === 'untrusted') return false
+    toolProviderMetadata: ReadonlyMap<string, {
+      providerKind?: ToolProviderKind
+      metadata?: Record<string, unknown>
+    }>
+  ): number {
+    if (call.toolKind && call.toolKind !== 'tool_call') return 1
+    if (approvalPolicy === 'untrusted') return 1
+    const provider = toolProviderMetadata.get(call.toolName)
     if (PARALLEL_DELEGATION_TOOL_NAMES.has(call.toolName)) {
-      return toolProviderKinds.get(call.toolName) === 'delegation'
+      return provider?.providerKind === 'delegation' ? 4 : 1
     }
-    if (!PARALLEL_READ_ONLY_TOOL_NAMES.has(call.toolName)) return false
-    return toolProviderKinds.get(call.toolName) === 'built-in'
+    if (
+      PARALLEL_READ_ONLY_TOOL_NAMES.has(call.toolName) &&
+      provider?.providerKind === 'built-in'
+    ) {
+      return positiveIntegerOrDefault(this.opts.parallelism?.localReadOnly, 8)
+    }
+    if (provider?.providerKind !== 'mcp' && provider?.providerKind !== 'web') return 1
+    const execution = objectRecordValue(provider.metadata?.execution)
+    if (execution.readOnly !== true || execution.parallelSafe !== true) return 1
+    return positiveIntegerOrDefault(this.opts.parallelism?.networkMcp, 4)
   }
 
   private createToolContext(input: {
@@ -2858,6 +3158,12 @@ function positiveIntegerOrUndefined(value: number | undefined): number | undefin
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined
+}
+
+function objectRecordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
 }
 
 function clipForPrompt(text: string, maxChars: number): string {

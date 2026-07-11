@@ -113,6 +113,19 @@ export function defaultLocalRuntimeTuningSettings(): LocalRuntimeTuningSettingsV
   return {
     toolArgumentRepair: {
       maxStringBytes: 512 * 1024
+    },
+    toolBudget: {
+      enabled: true,
+      profiles: {
+        explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
+        review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
+        implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
+        long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
+      }
+    },
+    parallelism: {
+      localReadOnly: 8,
+      networkMcp: 4
     }
   }
 }
@@ -226,6 +239,32 @@ export function mergeLocalRuntimeSettings(
           toolArgumentRepair: {
             ...currentRuntimeTuning.toolArgumentRepair,
             ...(runtimePatch.runtimeTuning.toolArgumentRepair ?? {})
+          },
+          toolBudget: {
+            ...currentRuntimeTuning.toolBudget,
+            ...(runtimePatch.runtimeTuning.toolBudget ?? {}),
+            profiles: {
+              explanation: {
+                ...currentRuntimeTuning.toolBudget.profiles.explanation,
+                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.explanation ?? {})
+              },
+              review: {
+                ...currentRuntimeTuning.toolBudget.profiles.review,
+                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.review ?? {})
+              },
+              implementation: {
+                ...currentRuntimeTuning.toolBudget.profiles.implementation,
+                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.implementation ?? {})
+              },
+              long: {
+                ...currentRuntimeTuning.toolBudget.profiles.long,
+                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.long ?? {})
+              }
+            }
+          },
+          parallelism: {
+            ...currentRuntimeTuning.parallelism,
+            ...(runtimePatch.runtimeTuning.parallelism ?? {})
           }
         }
       : {})
@@ -390,12 +429,68 @@ function normalizeLocalRuntimeTuningSettings(
   input: Partial<LocalRuntimeTuningSettingsV1> | undefined
 ): LocalRuntimeTuningSettingsV1 {
   const defaults = defaultLocalRuntimeTuningSettings()
+  const normalizeBudgetProfile = (
+    inputProfile: Partial<LocalRuntimeTuningSettingsV1['toolBudget']['profiles']['explanation']> | undefined,
+    defaultProfile: LocalRuntimeTuningSettingsV1['toolBudget']['profiles']['explanation']
+  ): LocalRuntimeTuningSettingsV1['toolBudget']['profiles']['explanation'] => {
+    const hardLimit = boundedPositiveInt(inputProfile?.hardLimit, defaultProfile.hardLimit, 10_000)
+    const softLimit = Math.min(
+      boundedPositiveInt(inputProfile?.softLimit, defaultProfile.softLimit, 10_000),
+      hardLimit
+    )
+    return {
+      softLimit,
+      hardLimit,
+      maxAutomaticPhases: boundedPositiveInt(
+        inputProfile?.maxAutomaticPhases,
+        defaultProfile.maxAutomaticPhases,
+        32
+      ),
+      totalLimit: Math.max(
+        hardLimit,
+        boundedPositiveInt(inputProfile?.totalLimit, defaultProfile.totalLimit, 100_000)
+      )
+    }
+  }
   return {
     toolArgumentRepair: {
       maxStringBytes: boundedPositiveInt(
         input?.toolArgumentRepair?.maxStringBytes,
         defaults.toolArgumentRepair.maxStringBytes,
         16 * 1024 * 1024
+      )
+    },
+    toolBudget: {
+      enabled: input?.toolBudget?.enabled !== false,
+      profiles: {
+        explanation: normalizeBudgetProfile(
+          input?.toolBudget?.profiles?.explanation,
+          defaults.toolBudget.profiles.explanation
+        ),
+        review: normalizeBudgetProfile(
+          input?.toolBudget?.profiles?.review,
+          defaults.toolBudget.profiles.review
+        ),
+        implementation: normalizeBudgetProfile(
+          input?.toolBudget?.profiles?.implementation,
+          defaults.toolBudget.profiles.implementation
+        ),
+        long: normalizeBudgetProfile(
+          input?.toolBudget?.profiles?.long,
+          defaults.toolBudget.profiles.long
+        )
+      }
+    },
+    parallelism: {
+      localReadOnly: boundedPositiveInt(
+        input?.parallelism?.localReadOnly,
+        defaults.parallelism.localReadOnly,
+        64
+      ),
+      networkMcp: boundedPositiveInt(
+        input?.parallelism?.networkMcp,
+        defaults.parallelism.networkMcp,
+        64
       )
     }
   }

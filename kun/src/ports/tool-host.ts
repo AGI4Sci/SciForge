@@ -148,6 +148,7 @@ export interface ToolHost {
     toolKind?: 'tool_call' | 'command_execution' | 'file_change'
     providerId?: string
     providerKind?: ToolProviderKind
+    metadata?: Record<string, unknown>
   }[]>
   execute(
     call: ToolCallLike,

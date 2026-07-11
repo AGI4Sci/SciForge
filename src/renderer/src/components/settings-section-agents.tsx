@@ -16,6 +16,7 @@ import {
   DEFAULT_LOCAL_RUNTIME_DATA_DIR,
   defaultCodexRuntimeSettings,
   defaultClaudeRuntimeSettings,
+  defaultLocalRuntimeTuningSettings,
   defaultRuntimeGuardSettings,
   defaultModelRouterSettings,
   getCodexRuntimeSettings,
@@ -75,6 +76,9 @@ function computerUseStatusPill(available: boolean | undefined): string {
   if (available === false) return 'border-red-300/50 bg-red-500/10 text-red-700 dark:text-red-200'
   return 'border-ds-border-muted bg-ds-card text-ds-faint'
 }
+
+const TOOL_BUDGET_PROFILE_NAMES = ['explanation', 'review', 'implementation', 'long'] as const
+type ToolBudgetProfileName = (typeof TOOL_BUDGET_PROFILE_NAMES)[number]
 
 type ComputerUseBackendSafetyStatus = {
   inputIsolation?: string
@@ -464,10 +468,12 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     fallbackSoftThreshold: contextCompaction.defaultSoftThreshold,
     fallbackHardThreshold: contextCompaction.defaultHardThreshold
   })
-  const runtimeTuning = localRuntime.runtimeTuning ?? {
-    toolArgumentRepair: {
-      maxStringBytes: 524288
-    }
+  const runtimeTuning = localRuntime.runtimeTuning ?? defaultLocalRuntimeTuningSettings()
+  const toolBudgetProfileLabels: Record<ToolBudgetProfileName, string> = {
+    explanation: t('localRuntimeToolBudgetProfileExplanation'),
+    review: t('localRuntimeToolBudgetProfileReview'),
+    implementation: t('localRuntimeToolBudgetProfileImplementation'),
+    long: t('localRuntimeToolBudgetProfileLong')
   }
   const runtimeGuards = normalizeRuntimeGuardSettings(form?.runtimeGuards ?? defaultRuntimeGuardSettings())
   const updateMcpSearch = (patch: Record<string, unknown>): void => {
@@ -536,6 +542,36 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     updateRuntimeTuning({
       toolArgumentRepair: {
         ...runtimeTuning.toolArgumentRepair,
+        ...patch
+      }
+    })
+  }
+  const updateToolBudget = (patch: Record<string, unknown>): void => {
+    updateRuntimeTuning({
+      toolBudget: {
+        ...runtimeTuning.toolBudget,
+        ...patch
+      }
+    })
+  }
+  const updateToolBudgetProfile = (
+    profileName: ToolBudgetProfileName,
+    patch: Record<string, unknown>
+  ): void => {
+    updateToolBudget({
+      profiles: {
+        ...runtimeTuning.toolBudget.profiles,
+        [profileName]: {
+          ...runtimeTuning.toolBudget.profiles[profileName],
+          ...patch
+        }
+      }
+    })
+  }
+  const updateParallelism = (patch: Record<string, unknown>): void => {
+    updateRuntimeTuning({
+      parallelism: {
+        ...runtimeTuning.parallelism,
         ...patch
       }
     })
@@ -1235,6 +1271,76 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                             disabled={!runtimeGuards.toolStorm.enabled}
                             onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
                           />
+                        </label>
+                      </div>
+                    }
+                  />
+                  <SettingRow
+                    title={t('localRuntimeToolBudget')}
+                    description={t('localRuntimeToolBudgetDesc')}
+                    control={
+                      <Toggle
+                        checked={runtimeTuning.toolBudget.enabled}
+                        onChange={(enabled) => updateToolBudget({ enabled })}
+                      />
+                    }
+                  />
+                  <SettingRow
+                    title={t('localRuntimeToolBudgetProfiles')}
+                    description={t('localRuntimeToolBudgetProfilesDesc')}
+                    wideControl
+                    control={
+                      <div className="w-full overflow-x-auto">
+                        <div className="grid min-w-[620px] grid-cols-[minmax(110px,1.4fr)_repeat(4,minmax(92px,1fr))] gap-2 text-[12px] text-ds-muted">
+                          <span />
+                          <span>{t('localRuntimeToolBudgetSoft')}</span>
+                          <span>{t('localRuntimeToolBudgetHard')}</span>
+                          <span>{t('localRuntimeToolBudgetPhases')}</span>
+                          <span>{t('localRuntimeToolBudgetTotal')}</span>
+                          {TOOL_BUDGET_PROFILE_NAMES.flatMap((profileName) => {
+                            const profile = runtimeTuning.toolBudget.profiles[profileName]
+                            const fieldClass = 'min-w-0 rounded-lg border border-ds-border bg-ds-card px-2 py-1.5 text-[13px] text-ds-ink'
+                            return [
+                              <span key={`${profileName}-label`} className="self-center font-medium text-ds-ink">
+                                {toolBudgetProfileLabels[profileName]}
+                              </span>,
+                              <input key={`${profileName}-soft`} type="number" min={1} max={4096} className={fieldClass}
+                                disabled={!runtimeTuning.toolBudget.enabled} value={profile.softLimit}
+                                onChange={(event) => updateToolBudgetProfile(profileName, { softLimit: Number(event.target.value) })} />,
+                              <input key={`${profileName}-hard`} type="number" min={1} max={4096} className={fieldClass}
+                                disabled={!runtimeTuning.toolBudget.enabled} value={profile.hardLimit}
+                                onChange={(event) => updateToolBudgetProfile(profileName, { hardLimit: Number(event.target.value) })} />,
+                              <input key={`${profileName}-phases`} type="number" min={1} max={32} className={fieldClass}
+                                disabled={!runtimeTuning.toolBudget.enabled} value={profile.maxAutomaticPhases}
+                                onChange={(event) => updateToolBudgetProfile(profileName, { maxAutomaticPhases: Number(event.target.value) })} />,
+                              <input key={`${profileName}-total`} type="number" min={1} max={131072} className={fieldClass}
+                                disabled={!runtimeTuning.toolBudget.enabled} value={profile.totalLimit}
+                                onChange={(event) => updateToolBudgetProfile(profileName, { totalLimit: Number(event.target.value) })} />
+                            ]
+                          })}
+                        </div>
+                      </div>
+                    }
+                  />
+                  <SettingRow
+                    title={t('localRuntimeParallelism')}
+                    description={t('localRuntimeParallelismDesc')}
+                    wideControl
+                    control={
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                          {t('localRuntimeParallelismLocal')}
+                          <input type="number" min={1} max={64}
+                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink"
+                            value={runtimeTuning.parallelism.localReadOnly}
+                            onChange={(event) => updateParallelism({ localReadOnly: Number(event.target.value) })} />
+                        </label>
+                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                          {t('localRuntimeParallelismNetwork')}
+                          <input type="number" min={1} max={64}
+                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink"
+                            value={runtimeTuning.parallelism.networkMcp}
+                            onChange={(event) => updateParallelism({ networkMcp: Number(event.target.value) })} />
                         </label>
                       </div>
                     }

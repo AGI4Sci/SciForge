@@ -812,6 +812,103 @@ describe('AgentLoop', () => {
     expect(resultCallIds).toEqual(['call_read', 'call_grep'])
   })
 
+  it('runs up to eight local read-only calls in one batch by default', async () => {
+    let active = 0
+    let maxActive = 0
+    const grepTool = LocalToolHost.defineTool({
+      name: 'grep',
+      description: 'Parallel grep fixture',
+      inputSchema: { type: 'object', properties: { pattern: { type: 'string' } } },
+      policy: 'auto',
+      execute: async () => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        active -= 1
+        return { output: { ok: true } }
+      }
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'parallel-eight-model',
+      model: 'parallel-eight-model',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          for (let index = 0; index < 8; index += 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_grep_${index}`,
+              toolName: 'grep',
+              arguments: { pattern: `pattern-${index}` }
+            }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { tools: [grepTool] })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(maxActive).toBe(8)
+  })
+
+  it('caps explicitly parallel-safe MCP calls at four by default', async () => {
+    let active = 0
+    let maxActive = 0
+    const mcpTool = LocalToolHost.defineTool({
+      name: 'mcp_safe_read',
+      description: 'Parallel-safe MCP fixture',
+      inputSchema: { type: 'object', properties: { key: { type: 'string' } } },
+      metadata: { execution: { readOnly: true, parallelSafe: true } },
+      policy: 'auto',
+      execute: async () => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        active -= 1
+        return { output: { ok: true } }
+      }
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'parallel-mcp-model',
+      model: 'parallel-mcp-model',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          for (let index = 0; index < 5; index += 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_mcp_${index}`,
+              toolName: 'mcp_safe_read',
+              arguments: { key: String(index) }
+            }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      toolHost: new LocalToolHost({
+        registry: new CapabilityRegistry([{
+          id: 'safe-mcp',
+          kind: 'mcp',
+          enabled: true,
+          available: true,
+          tools: [mcpTool]
+        }])
+      })
+    })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(maxActive).toBe(4)
+  })
+
 	  it('repairs wrapped tool arguments before persisting and dispatching calls', async () => {
 	    let observedArguments: Record<string, unknown> | null = null
 	    let calls = 0
@@ -1034,6 +1131,150 @@ describe('AgentLoop', () => {
     expect(advertisedTools[1]).toEqual([])
     expect(events.some((event) =>
       event.kind === 'error' && event.code === 'tool_budget_exhausted'
+    )).toBe(true)
+  })
+
+  it('runs an internal checkpoint and forces a final answer at a phase budget', async () => {
+    let executions = 0
+    const requests: ModelRequest[] = []
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { ok: true } }
+      }
+    })
+    let calls = 0
+    const h = makeHarness({
+      provider: 'phase-budget-model',
+      model: 'phase-budget-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        calls += 1
+        if (calls === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_echo',
+            toolName: 'echo',
+            arguments: { text: 'inspect' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        if (request.responseFormat === 'json_object') {
+          yield {
+            kind: 'assistant_text_delta',
+            text: '{"decision":"finish","summary":"enough evidence","remaining":[],"nextPlan":[]}'
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Final answer from gathered evidence.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [echoTool],
+      toolBudgetProfile: 'explanation',
+      toolBudget: {
+        profiles: {
+          explanation: { softLimit: 1, hardLimit: 1, maxAutomaticPhases: 1, totalLimit: 1 }
+        }
+      }
+    })
+    await bootstrapThread(h, { request: { prompt: 'Explain the behavior' } })
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+    const items = await h.sessionStore.loadItems(h.threadId)
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(1)
+    expect(requests).toHaveLength(3)
+    expect(requests[1]?.tools).toEqual([])
+    expect(requests[1]?.responseFormat).toBe('json_object')
+    expect(requests[2]?.tools).toEqual([])
+    expect(items.some((item) =>
+      item.kind === 'assistant_text' && item.text === 'Final answer from gathered evidence.'
+    )).toBe(true)
+    expect(events.some((event) =>
+      event.kind === 'error' && event.code === 'tool_budget_phase_checkpoint'
+    )).toBe(true)
+  })
+
+  it('automatically opens a distinct next phase for a long task', async () => {
+    let executions = 0
+    const advertisedTools: string[][] = []
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { execution: executions } }
+      }
+    })
+    let normalCalls = 0
+    let checkpointCalls = 0
+    const h = makeHarness({
+      provider: 'long-phase-model',
+      model: 'long-phase-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        advertisedTools.push(request.tools.map((tool) => tool.name))
+        if (request.responseFormat === 'json_object') {
+          checkpointCalls += 1
+          yield {
+            kind: 'assistant_text_delta',
+            text: checkpointCalls === 1
+              ? '{"decision":"continue","summary":"A checked","remaining":["B"],"nextPlan":["check B"]}'
+              : '{"decision":"finish","summary":"B checked","remaining":[],"nextPlan":[]}'
+          }
+          yield { kind: 'completed', stopReason: 'stop' }
+          return
+        }
+        normalCalls += 1
+        if (normalCalls <= 2) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: `call_echo_${normalCalls}`,
+            toolName: 'echo',
+            arguments: { text: `phase ${normalCalls}` }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Long task checkpoint complete.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [echoTool],
+      toolBudgetProfile: 'long',
+      toolBudget: {
+        profiles: {
+          long: { softLimit: 1, hardLimit: 1, maxAutomaticPhases: 2, totalLimit: 2 }
+        }
+      }
+    })
+    await bootstrapThread(h, { request: { prompt: 'Complete the long task' } })
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(2)
+    expect(checkpointCalls).toBe(2)
+    expect(advertisedTools).toEqual([
+      ['echo'],
+      [],
+      ['echo'],
+      [],
+      []
+    ])
+    expect(events.some((event) =>
+      event.kind === 'error' && event.code === 'tool_budget_phase_continued'
     )).toBe(true)
   })
 

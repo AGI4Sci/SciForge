@@ -126,6 +126,8 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
       maxTurnModelSteps: resolveChildMaxTurnModelSteps(options.runtime),
       ...(toolStorm ? { toolStorm } : {}),
+      ...(options.runtime?.toolBudget ? { toolBudget: options.runtime.toolBudget } : {}),
+      ...(options.runtime?.parallelism ? { parallelism: options.runtime.parallelism } : {}),
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})
     })
 

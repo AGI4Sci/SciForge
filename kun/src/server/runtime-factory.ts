@@ -318,6 +318,8 @@ export async function createLocalRuntimeServeRuntime(
     contextCompaction: options.contextCompaction,
     ...(options.runtime?.maxTurnModelSteps ? { maxTurnModelSteps: options.runtime.maxTurnModelSteps } : {}),
     ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),
+    ...(options.runtime?.toolBudget ? { toolBudget: options.runtime.toolBudget } : {}),
+    ...(options.runtime?.parallelism ? { parallelism: options.runtime.parallelism } : {}),
     ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {}),
     ...(attachmentStore ? { attachmentStore } : {}),
     ...(memoryStore ? { memoryStore } : {}),

@@ -496,6 +496,19 @@ describe('cli', () => {
           },
           toolArgumentRepair: {
             maxStringBytes: 4096
+          },
+          toolBudget: {
+            enabled: true,
+            profiles: {
+              explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
+              review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
+              implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
+              long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
+            }
+          },
+          parallelism: {
+            localReadOnly: 8,
+            networkMcp: 4
           }
         },
         capabilities: {
@@ -555,6 +568,13 @@ describe('cli', () => {
       expect(parsed.runtime?.toolStorm?.windowSize).toBe(5)
       expect(parsed.runtime?.toolStorm?.threshold).toBe(4)
       expect(parsed.runtime?.toolArgumentRepair?.maxStringBytes).toBe(4096)
+      expect(parsed.runtime?.toolBudget?.profiles?.review).toEqual({
+        softLimit: 8,
+        hardLimit: 16,
+        maxAutomaticPhases: 1,
+        totalLimit: 16
+      })
+      expect(parsed.runtime?.parallelism).toEqual({ localReadOnly: 8, networkMcp: 4 })
       expect(parsed.runtime?.modelStreamIdleTimeoutMs).toBe(120_000)
       expect(parsed.runtime?.maxTurnModelSteps).toBe(128)
       expect(parsed.capabilities.web.enabled).toBe(true)

@@ -6,6 +6,8 @@ import {
 } from '../src/contracts/index.js'
 import { parseReviewOutput, renderReviewOutput } from '../src/review/review-output.js'
 import { resolveReviewTargetPrompt } from '../src/review/git-review-target.js'
+import { SCIFORGE_RUNTIME_REVIEW_PROMPT } from '../src/review/review-prompt.js'
+import { SCIFORGE_RUNTIME_SYSTEM_PROMPT } from '../src/prompt/kun-system-prompt.js'
 
 describe('review contracts', () => {
   it('accepts review start requests and persisted review items', () => {
@@ -63,10 +65,40 @@ describe('review output parsing', () => {
     expect(renderReviewOutput(output)).toContain('/tmp/project/src/a.ts:10-10')
   })
 
-  it('falls back to plain text when the reviewer returns prose', () => {
-    const output = parseReviewOutput('No obvious issues.')
-    expect(output.findings).toEqual([])
-    expect(output.overallExplanation).toBe('No obvious issues.')
+  it.each([
+    ['', 'an empty response'],
+    ['No obvious issues.', 'prose'],
+    ['{}', 'JSON without an explicit correctness judgement']
+  ])('fails closed for %s (%s)', (rawText) => {
+    expect(() => parseReviewOutput(rawText)).toThrow(
+      'Review inconclusive: reviewer did not return valid structured JSON.'
+    )
+  })
+})
+
+describe('review tool-use guidance', () => {
+  it('stops inspection when evidence is sufficient and batches independent reads', () => {
+    expect(SCIFORGE_RUNTIME_REVIEW_PROMPT).toContain(
+      'As soon as the evidence is sufficient, stop using tools'
+    )
+    expect(SCIFORGE_RUNTIME_REVIEW_PROMPT).toContain(
+      'request them together in one response'
+    )
+    expect(SCIFORGE_RUNTIME_REVIEW_PROMPT).toContain(
+      'Do not reread equivalent content'
+    )
+  })
+
+  it('applies evidence-sensitive tool use to explanation and review requests', () => {
+    expect(SCIFORGE_RUNTIME_SYSTEM_PROMPT).toContain(
+      'For explanation, analysis, and review requests, inspect only the evidence needed to answer'
+    )
+    expect(SCIFORGE_RUNTIME_SYSTEM_PROMPT).toContain(
+      'request them together in one response'
+    )
+    expect(SCIFORGE_RUNTIME_SYSTEM_PROMPT).toContain(
+      'Do not reread equivalent content'
+    )
   })
 })
 

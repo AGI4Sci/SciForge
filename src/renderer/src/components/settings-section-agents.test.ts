@@ -130,6 +130,22 @@ const labels: Record<string, string> = {
   runtimeGuardToolStormWindowSize: 'Tool storm window',
   runtimeGuardToolStormSoftThreshold: 'Soft threshold',
   runtimeGuardToolStormHardThreshold: 'Hard threshold',
+  localRuntimeToolBudget: 'Adaptive tool budget',
+  localRuntimeToolBudgetDesc: 'Adaptive tool budget description',
+  localRuntimeToolBudgetProfiles: 'Task budget profiles',
+  localRuntimeToolBudgetProfilesDesc: 'Task budget profiles description',
+  localRuntimeToolBudgetProfileExplanation: 'Explanation',
+  localRuntimeToolBudgetProfileReview: 'Review',
+  localRuntimeToolBudgetProfileImplementation: 'Implementation',
+  localRuntimeToolBudgetProfileLong: 'Long task',
+  localRuntimeToolBudgetSoft: 'Soft budget',
+  localRuntimeToolBudgetHard: 'Phase hard budget',
+  localRuntimeToolBudgetPhases: 'Automatic phases',
+  localRuntimeToolBudgetTotal: 'Total budget',
+  localRuntimeParallelism: 'Tool parallelism',
+  localRuntimeParallelismDesc: 'Tool parallelism description',
+  localRuntimeParallelismLocal: 'Local read-only concurrency',
+  localRuntimeParallelismNetwork: 'Network MCP concurrency',
   localRuntimeToolArgumentRepair: 'Tool argument repair',
   localRuntimeToolArgumentRepairDesc: 'Tool argument repair description',
   localRuntimeDiagnostics: 'SciForge Runtime diagnostics',
@@ -639,6 +655,19 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).toContain('Tool storm window')
     expect(html).toContain('Tool storm limits')
     expect(html).not.toContain('Hard threshold')
+  })
+
+  it('renders task budgets and the default 8/4 parallelism controls', () => {
+    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
+
+    expect(html).toContain('Adaptive tool budget')
+    expect(html).toContain('Task budget profiles')
+    expect(html).toContain('Explanation')
+    expect(html).toContain('Long task')
+    expect(html).toContain('Local read-only concurrency')
+    expect(html).toContain('Network MCP concurrency')
+    expect(html).toContain('value="8"')
+    expect(html).toContain('value="4"')
   })
 
   it('renders pure JSONL as a selectable storage backend', () => {

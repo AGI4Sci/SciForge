@@ -233,8 +233,32 @@ export type LocalRuntimeToolArgumentRepairSettingsV1 = {
   maxStringBytes: number
 }
 
+export type LocalRuntimeToolBudgetProfileSettingsV1 = {
+  softLimit: number
+  hardLimit: number
+  maxAutomaticPhases: number
+  totalLimit: number
+}
+
+export type LocalRuntimeToolBudgetSettingsV1 = {
+  enabled: boolean
+  profiles: {
+    explanation: LocalRuntimeToolBudgetProfileSettingsV1
+    review: LocalRuntimeToolBudgetProfileSettingsV1
+    implementation: LocalRuntimeToolBudgetProfileSettingsV1
+    long: LocalRuntimeToolBudgetProfileSettingsV1
+  }
+}
+
+export type LocalRuntimeParallelismSettingsV1 = {
+  localReadOnly: number
+  networkMcp: number
+}
+
 export type LocalRuntimeTuningSettingsV1 = {
   toolArgumentRepair: LocalRuntimeToolArgumentRepairSettingsV1
+  toolBudget: LocalRuntimeToolBudgetSettingsV1
+  parallelism: LocalRuntimeParallelismSettingsV1
 }
 
 export type RuntimeToolStormGuardSettingsV1 = {
@@ -296,6 +320,10 @@ export type AgentRuntimeSettingsMapV1 = AgentRuntimeSettingsEnvelopeV1
 
 export type LocalRuntimeTuningSettingsPatchV1 = {
   toolArgumentRepair?: Partial<LocalRuntimeToolArgumentRepairSettingsV1>
+  toolBudget?: Partial<Omit<LocalRuntimeToolBudgetSettingsV1, 'profiles'>> & {
+    profiles?: Partial<Record<keyof LocalRuntimeToolBudgetSettingsV1['profiles'], Partial<LocalRuntimeToolBudgetProfileSettingsV1>>>
+  }
+  parallelism?: Partial<LocalRuntimeParallelismSettingsV1>
 }
 
 export type LocalRuntimeTokenEconomySettingsPatchV1 = Partial<

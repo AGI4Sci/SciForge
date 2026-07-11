@@ -961,8 +961,12 @@ function runtimeTuningConfigForRuntime(
 ): Record<string, unknown> {
   const existingToolStorm = objectValue(existing.toolStorm)
   const existingToolArgumentRepair = objectValue(existing.toolArgumentRepair)
+  const existingToolBudget = objectValue(existing.toolBudget)
+  const existingToolBudgetProfiles = objectValue(existingToolBudget.profiles)
+  const existingParallelism = objectValue(existing.parallelism)
   const existingModelStreamIdleTimeoutMs = positiveIntegerValue(existing.modelStreamIdleTimeoutMs)
   const toolStorm = normalizeRuntimeGuardSettings(runtimeGuards).toolStorm
+  const toolBudget = runtimeTuning.toolBudget
   return {
     ...existing,
     modelStreamIdleTimeoutMs: existingModelStreamIdleTimeoutMs ?? DEFAULT_LOCAL_RUNTIME_MODEL_STREAM_IDLE_TIMEOUT_MS,
@@ -975,6 +979,22 @@ function runtimeTuningConfigForRuntime(
     toolArgumentRepair: {
       ...existingToolArgumentRepair,
       maxStringBytes: runtimeTuning.toolArgumentRepair.maxStringBytes
+    },
+    toolBudget: {
+      ...existingToolBudget,
+      enabled: toolBudget.enabled,
+      profiles: {
+        ...existingToolBudgetProfiles,
+        explanation: { ...toolBudget.profiles.explanation },
+        review: { ...toolBudget.profiles.review },
+        implementation: { ...toolBudget.profiles.implementation },
+        long: { ...toolBudget.profiles.long }
+      }
+    },
+    parallelism: {
+      ...existingParallelism,
+      localReadOnly: runtimeTuning.parallelism.localReadOnly,
+      networkMcp: runtimeTuning.parallelism.networkMcp
     }
   }
 }
@@ -1068,6 +1088,31 @@ function sanitizeLocalRuntimeRuntimeConfig(value: unknown): Record<string, unkno
   if (maxStringBytes !== undefined) {
     next.toolArgumentRepair = { maxStringBytes }
   }
+
+  const rawToolBudget = objectValue(raw.toolBudget)
+  const toolBudget: Record<string, unknown> = {}
+  if (typeof rawToolBudget.enabled === 'boolean') toolBudget.enabled = rawToolBudget.enabled
+  const rawProfiles = objectValue(rawToolBudget.profiles)
+  const profiles: Record<string, unknown> = {}
+  for (const name of ['explanation', 'review', 'implementation', 'long'] as const) {
+    const rawProfile = objectValue(rawProfiles[name])
+    const profile: Record<string, unknown> = {}
+    for (const key of ['softLimit', 'hardLimit', 'maxAutomaticPhases', 'totalLimit'] as const) {
+      const normalized = positiveIntegerValue(rawProfile[key])
+      if (normalized !== undefined) profile[key] = normalized
+    }
+    if (Object.keys(profile).length > 0) profiles[name] = profile
+  }
+  if (Object.keys(profiles).length > 0) toolBudget.profiles = profiles
+  if (Object.keys(toolBudget).length > 0) next.toolBudget = toolBudget
+
+  const rawParallelism = objectValue(raw.parallelism)
+  const parallelism: Record<string, unknown> = {}
+  const localReadOnly = positiveIntegerValue(rawParallelism.localReadOnly)
+  const networkMcp = positiveIntegerValue(rawParallelism.networkMcp)
+  if (localReadOnly !== undefined) parallelism.localReadOnly = localReadOnly
+  if (networkMcp !== undefined) parallelism.networkMcp = networkMcp
+  if (Object.keys(parallelism).length > 0) next.parallelism = parallelism
 
   const parsed = RuntimeTuningConfigSchema.safeParse(next)
   return parsed.success ? objectValue(parsed.data) : {}

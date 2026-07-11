@@ -102,6 +102,37 @@ export const ContextCompactionConfigSchema = z
     }
   })
 
+const ToolBudgetProfileConfigSchema = z
+  .object({
+    softLimit: PositiveInt.optional(),
+    hardLimit: PositiveInt.optional(),
+    maxAutomaticPhases: PositiveInt.optional(),
+    totalLimit: PositiveInt.optional()
+  })
+  .strict()
+  .superRefine((profile, ctx) => {
+    if (
+      profile.softLimit !== undefined &&
+      profile.hardLimit !== undefined &&
+      profile.softLimit > profile.hardLimit
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'softLimit must be less than or equal to hardLimit'
+      })
+    }
+    if (
+      profile.hardLimit !== undefined &&
+      profile.totalLimit !== undefined &&
+      profile.hardLimit > profile.totalLimit
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'totalLimit must be greater than or equal to hardLimit'
+      })
+    }
+  })
+
 export const RuntimeTuningConfigSchema = z
   .object({
     modelStreamIdleTimeoutMs: PositiveInt.optional(),
@@ -117,6 +148,28 @@ export const RuntimeTuningConfigSchema = z
     toolArgumentRepair: z
       .object({
         maxStringBytes: PositiveInt.optional()
+      })
+      .strict()
+      .optional(),
+    toolBudget: z
+      .object({
+        enabled: z.boolean().optional(),
+        profiles: z
+          .object({
+            explanation: ToolBudgetProfileConfigSchema.optional(),
+            review: ToolBudgetProfileConfigSchema.optional(),
+            implementation: ToolBudgetProfileConfigSchema.optional(),
+            long: ToolBudgetProfileConfigSchema.optional()
+          })
+          .strict()
+          .optional()
+      })
+      .strict()
+      .optional(),
+    parallelism: z
+      .object({
+        localReadOnly: PositiveInt.optional(),
+        networkMcp: PositiveInt.optional()
       })
       .strict()
       .optional()

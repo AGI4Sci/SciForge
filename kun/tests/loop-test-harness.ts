@@ -91,6 +91,9 @@ export function makeHarness(
     toolArgumentRepair?: {
       maxStringBytes?: number
     }
+    toolBudget?: AgentLoopOptions['toolBudget']
+    toolBudgetProfile?: AgentLoopOptions['toolBudgetProfile']
+    parallelism?: AgentLoopOptions['parallelism']
     onPlanWritten?: AgentLoopOptions['onPlanWritten']
   } = {}
 ): Harness {
@@ -145,6 +148,9 @@ export function makeHarness(
     ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
     ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
     ...(options.toolStorm ? { toolStorm: options.toolStorm } : {}),
+    ...(options.toolBudget ? { toolBudget: options.toolBudget } : {}),
+    ...(options.toolBudgetProfile ? { toolBudgetProfile: options.toolBudgetProfile } : {}),
+    ...(options.parallelism ? { parallelism: options.parallelism } : {}),
     ...(options.toolArgumentRepair ? { toolArgumentRepair: options.toolArgumentRepair } : {}),
     ...(options.onPlanWritten ? { onPlanWritten: options.onPlanWritten } : {})
   })

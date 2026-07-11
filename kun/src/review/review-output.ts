@@ -13,12 +13,9 @@ export function parseReviewOutput(rawText: string): ReviewOutput {
     const parsed = parseJsonCandidate(embedded)
     if (parsed) return parsed
   }
-  return {
-    findings: [],
-    overallCorrectness: 'patch is correct',
-    overallExplanation: text || 'Reviewer did not return a structured response.',
-    overallConfidenceScore: 0
-  }
+  throw new Error(
+    'Review inconclusive: reviewer did not return valid structured JSON.'
+  )
 }
 
 export function renderReviewOutput(output: ReviewOutput): string {
@@ -58,7 +55,7 @@ function normalizeReviewOutputKeys(value: unknown): unknown {
     : []
   return {
     findings,
-    overallCorrectness: raw.overallCorrectness ?? raw.overall_correctness ?? 'patch is correct',
+    overallCorrectness: raw.overallCorrectness ?? raw.overall_correctness,
     overallExplanation: raw.overallExplanation ?? raw.overall_explanation ?? '',
     overallConfidenceScore:
       raw.overallConfidenceScore ?? raw.overall_confidence_score ?? 0
