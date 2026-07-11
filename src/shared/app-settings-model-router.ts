@@ -15,6 +15,8 @@ import {
   normalizeModelRouterBaseUrl
 } from './model-router-url'
 
+export const DEFAULT_MODEL_ROUTER_IMAGE_GENERATOR_MODEL = 'gpt-image-2'
+
 export function defaultModelRouterSettings(): ModelRouterSettingsV1 {
   return {
     enabled: true,
@@ -25,7 +27,10 @@ export function defaultModelRouterSettings(): ModelRouterSettingsV1 {
     profiles: {
       default: {
         textReasoner: defaultModelRouterMemberProvider('openai-compatible'),
-        imageGenerator: defaultModelRouterMemberProvider('openai-compatible'),
+        imageGenerator: defaultModelRouterMemberProvider(
+          'openai-compatible',
+          DEFAULT_MODEL_ROUTER_IMAGE_GENERATOR_MODEL
+        ),
         translators: {
           vision: defaultModelRouterMemberProvider('qwen-compatible'),
           scientific: defaultModelRouterScientificTranslator()
@@ -53,7 +58,7 @@ export function normalizeModelRouterSettings(
           rawDefaultProfile?.textReasoner,
           defaultProfile.textReasoner
         ),
-        imageGenerator: normalizeModelRouterMemberProvider(
+        imageGenerator: normalizeModelRouterImageGenerator(
           rawDefaultProfile?.imageGenerator,
           defaultProfile.imageGenerator
         ),
@@ -150,12 +155,28 @@ export function isModelRouterTextReasonerConfigured(
   )
 }
 
-function defaultModelRouterMemberProvider(provider: string): ModelRouterMemberProviderSettingsV1 {
+function defaultModelRouterMemberProvider(
+  provider: string,
+  model = ''
+): ModelRouterMemberProviderSettingsV1 {
   return {
     provider,
     baseUrl: '',
     apiKey: '',
-    model: ''
+    model
+  }
+}
+
+function normalizeModelRouterImageGenerator(
+  input: ModelRouterMemberProviderSettingsPatchV1 | undefined,
+  defaults: ModelRouterMemberProviderSettingsV1
+): ModelRouterMemberProviderSettingsV1 {
+  const normalized = normalizeModelRouterMemberProvider(input, defaults)
+  return {
+    ...normalized,
+    // Keep existing explicit provider-model overrides compatible, while making
+    // gpt-image-2 the canonical model for new and partially migrated settings.
+    model: nonEmptyString(input?.model, defaults.model)
   }
 }
 

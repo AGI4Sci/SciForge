@@ -689,6 +689,15 @@ describe('createCodexAgentRuntimeAdapter', () => {
               seq: 3,
               child: {
                 ...childCompleted,
+                id: 'duplicate-call-id'
+              }
+            },
+            {
+              threadId,
+              turnId: 'turn-1',
+              seq: 4,
+              child: {
+                ...childCompleted,
                 id: 'other-child',
                 parentThreadId: 'other-thread'
               }
@@ -946,6 +955,89 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }
     })
+  })
+
+  it('deduplicates a native child thread and collab event that reference the same thread', async () => {
+    const service = {
+      readStoredEvents: vi.fn(async () => [{
+        threadId: 'parent-thread',
+        turnId: 'turn-1',
+        seq: 1,
+        child: {
+          id: 'collab-call-1',
+          runtimeId: 'codex' as const,
+          parentThreadId: 'parent-thread',
+          parentTurnId: 'turn-1',
+          kind: 'agent' as const,
+          status: 'completed' as const,
+          name: 'Reviewer',
+          prompt: 'Review the patch',
+          summary: 'The patch looks good.',
+          openAsThreadRef: {
+            runtimeId: 'codex' as const,
+            threadId: 'native-child',
+            relation: 'side' as const
+          },
+          transcriptRef: {
+            runtimeId: 'codex' as const,
+            childId: 'collab-call-1',
+            transcriptId: 'native-child',
+            source: 'codex-multi-agent'
+          },
+          updatedAt: '2026-06-21T00:00:02.000Z'
+        }
+      }]),
+      listThreads: vi.fn(async () => ({
+        ok: true as const,
+        threads: [{
+          id: 'native-child',
+          title: 'Reviewer thread',
+          updatedAt: '2026-06-21T00:00:01.000Z',
+          model: 'gpt-5',
+          mode: 'agent',
+          status: 'running',
+          latestTurnStatus: 'running',
+          parentThreadId: 'parent-thread',
+          parentTurnId: 'turn-1',
+          relation: 'side' as const,
+          threadSource: 'subagent',
+          agentNickname: 'Reviewer',
+          agentRole: 'code reviewer'
+        }]
+      }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+
+    const listed = await adapter.auxiliary!({ settings: {} as never }, {
+      runtimeId: 'codex',
+      operation: 'listThreadChildren',
+      payload: { threadId: 'parent-thread', parentTurnId: 'turn-1' }
+    })
+
+    expect(listed).toMatchObject({
+      metadata: { totalChildren: 1 },
+      children: [{
+        id: 'native-child',
+        kind: 'thread',
+        status: 'completed',
+        prompt: 'Review the patch',
+        summary: 'The patch looks good.',
+        openAsThreadRef: {
+          threadId: 'native-child',
+          title: 'Reviewer thread'
+        },
+        transcriptRef: {
+          childId: 'native-child',
+          transcriptId: 'native-child',
+          source: 'codex-thread'
+        },
+        metadata: {
+          source: 'codex.threadSource',
+          threadSource: 'subagent'
+        }
+      }]
+    })
+    expect((listed as { children: Array<{ id: string }> }).children).toHaveLength(1)
   })
 
   it('returns a degraded child transcript when Codex exposes no real child thread', async () => {

@@ -137,12 +137,9 @@ def reflect(cfg: Config, instruction: str, progress_status: str, current_subgoal
             {"type": "image_url", "image_url": {"url": owl_agent._png_data_url(after_img)}},
         ]},
     ]
-    model = cfg.reflect_model or cfg.vision_model
     text = owl_agent.call_owl(
-        cfg.vision_base_url, model, cfg.vision_api_key, messages,
-        endpoint=cfg.vision_endpoint, extra_headers=cfg.vision_extra_headers,
-        base_url_label="CUA_VISION_BASE_URL or SCIFORGE_MODEL_ROUTER_BASE_URL",
-        api_key_label="CUA_VISION_API_KEY or SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY",
+        cfg.model_router_base_url, cfg.model_router_model,
+        cfg.model_router_api_key, messages,
         max_tokens=512)
     parsed = parse_response(text)
     parsed["outcome"] = _classify(parsed["outcome"])

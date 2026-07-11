@@ -204,6 +204,7 @@ const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'SciForge may configure specialized MCP tools for this runtime.',
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
   'For requests about the current GUI, visible panes, right sidebar, previews, PDF annotations, selected text, or component state, first use `gui_visible_context` to discover the visible component/resource index, then follow the returned access hints.',
+  'When visual inspection is needed, call `gui_visual_capture` for the whole window or for a componentId/targetId returned by `gui_visible_context`, then inspect the returned local PNG path with the available image tool. Do not substitute OS-level screenshots.',
   'Use command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.',
   'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
   ...CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES
@@ -3211,7 +3212,9 @@ function workspaceIntelToolNameForRequest(
 }
 
 const WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS = new Set<WorkspaceIntelToolName>(
-  WorkspaceIntelToolNames.filter((name) => name !== 'gui_visible_context')
+  WorkspaceIntelToolNames.filter((name) => (
+    name !== 'gui_visible_context' && name !== 'gui_visual_capture'
+  ))
 )
 
 function arrayValue(value: unknown): unknown[] {

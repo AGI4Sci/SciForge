@@ -10,7 +10,8 @@ import {
 import {
   WorkspaceFilePreviewPanelBridge,
   buildWorkspacePreviewVisibleContextComponent,
-  resolveWorkspaceFilePreviewPanelBridgeRoute
+  resolveWorkspaceFilePreviewPanelBridgeRoute,
+  workspacePreviewVisualContentType
 } from './WorkspaceFilePreviewPanelBridge'
 
 const workspacePreviewMock = vi.hoisted(() => {
@@ -408,7 +409,9 @@ vi.mock('../workspace-preview', async () => {
       assetError: integrityMismatch
         ? `Workspace preview integrity mismatch: expected ${target?.integrity?.expectedDigest}, got sha256:${'b'.repeat(64)}.`
         : null,
-      host: workspacePreviewMock.host
+      host: workspacePreviewMock.host,
+      refresh: vi.fn(),
+      refreshing: false
     }
   }
 
@@ -502,6 +505,14 @@ vi.mock('../workspace-preview', async () => {
 })
 
 describe('WorkspaceFilePreviewPanelBridge', () => {
+  it('maps generic preview modalities onto visual content types', () => {
+    expect(workspacePreviewVisualContentType('deck')).toBe('slide')
+    expect(workspacePreviewVisualContentType('image')).toBe('image')
+    expect(workspacePreviewVisualContentType('bioimaging')).toBe('image')
+    expect(workspacePreviewVisualContentType('pdf')).toBe('pdf')
+    expect(workspacePreviewVisualContentType('canvas')).toBe('canvas')
+  })
+
   afterEach(() => {
     workspacePreviewMock.latestTabularProps = null
     workspacePreviewMock.latestTextProps = null
@@ -675,6 +686,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(textHtml).toContain('data-route-reason="registered-plugin"')
     expect(textHtml).toContain('data-mock-text-viewer="true"')
     expect(textHtml).toContain('data-has-apply-edit="true"')
+    expect(textHtml).toContain('aria-label="刷新文件预览"')
     expect(deckHtml).toContain('data-route-reason="registered-plugin"')
     expect(deckHtml).toContain('data-mock-deck-viewer="true"')
     expect(deckHtml).toContain('data-has-apply-edit="true"')
@@ -753,6 +765,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(summaryHtml).toContain('data-workspace-preview-edit-summary')
     expect(summaryHtml).toContain(workspacePreviewMock.editSummary.summary)
     expect(summaryHtml).toContain(workspacePreviewMock.editSummary.undo.hint)
+    expect(summaryHtml).toContain('bottom-3 left-3')
+    expect(summaryHtml).not.toContain('right-3 top-12')
   })
 
   it('connects deck viewer text edits to the workspace preview host and refreshes observation', async () => {

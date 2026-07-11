@@ -12,6 +12,9 @@ const labels: Record<string, string> = {
   sidebarChildrenLoadError: 'Unable to load children',
   sidebarChildrenNoThread: 'No active thread.',
   sidebarChildrenEmpty: 'No child agents yet.',
+  sidebarChildrenNavigation: 'Child agent navigation',
+  sidebarChildrenRoot: 'Main',
+  sidebarChildrenViewNested: 'View child agents',
   sidebarChildrenDetail: 'details',
   sidebarChildrenCloseDetail: 'Close child details',
   sidebarChildrenStatus: 'Status',
@@ -95,6 +98,7 @@ function renderView(overrides: Partial<Parameters<typeof ChildAgentsPanelView>[0
     onSelectChild: vi.fn(),
     onSideInputChange: vi.fn(),
     onSideSend: vi.fn(),
+    onSideRemoveQueuedMessage: vi.fn(),
     onSideInterrupt: vi.fn(),
     onSideModelChange: vi.fn(),
     onSideReasoningEffortChange: vi.fn(),
@@ -402,6 +406,88 @@ describe('ChildAgentsPanelView', () => {
     expect(html).toContain('child-ok')
     expect(html).toContain('<textarea')
     expect(html).not.toContain('Open thread')
+  })
+
+  it('presents busy child sends as steering and shows queued follow-ups', () => {
+    const html = renderView({
+      selectedChildId: 'child-research',
+      children: [
+        child({
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-child' }
+        })
+      ],
+      runtimeCapabilities: {
+        interrupt: true,
+        stream: true,
+        approvals: true,
+        attachFiles: false,
+        steer: true
+      },
+      selectedSide: side({
+        busy: true,
+        input: 'Use the new evidence',
+        queuedMessages: [
+          {
+            id: 'queued-1',
+            text: 'Run the follow-up checks',
+            model: 'deepseek-chat'
+          }
+        ]
+      })
+    })
+
+    expect(html).toContain('Keep typing; sends inject into the current run')
+    expect(html).toContain('Inject into current run')
+    expect(html).toContain('Run the follow-up checks')
+  })
+
+  it('deduplicates native and event child records that open the same thread', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'collaboration-call-1',
+          name: 'clone-repo',
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-child' }
+        }),
+        child({
+          id: 'thread-child',
+          name: 'clone-repo',
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-child' }
+        })
+      ],
+      selectedSide: side({ title: 'clone-repo' })
+    })
+
+    expect(html.match(/role="tab"/g)).toHaveLength(1)
+    expect(html.match(/>clone-repo</g)).toHaveLength(1)
+  })
+
+  it('renders bounded breadcrumb navigation and a drill-down action in the same panel', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'grandchild',
+          parentThreadId: 'thread-child',
+          name: 'reviewer',
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-grandchild' }
+        })
+      ],
+      activeThreadId: 'thread-child',
+      selectedChildId: 'grandchild',
+      selectedSide: side({ threadId: 'thread-grandchild', parentThreadId: 'thread-child' }),
+      navigationPath: [
+        { threadId: 'thread-child', runtimeId: 'codex', label: 'clone-repo' }
+      ],
+      onNavigateToDepth: vi.fn(),
+      onOpenSelectedChildren: vi.fn()
+    })
+
+    expect(html).toContain('aria-label="Child agent navigation"')
+    expect(html).toContain('Main')
+    expect(html).toContain('clone-repo')
+    expect(html).toContain('aria-current="page"')
+    expect(html).toContain('View child agents')
+    expect(html).not.toContain('grid-cols-3')
   })
 
   it('defaults to running, then queued, then most recently updated children', () => {

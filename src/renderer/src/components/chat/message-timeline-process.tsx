@@ -14,6 +14,7 @@ import { AssistantMarkdown } from './AssistantMarkdown'
 import { blockHasPendingRuntimeWork, splitThink } from './message-timeline-turns'
 import { formatDuration, formatToolTitle } from './message-timeline-tools'
 import { remoteToolMetadataChips, remoteToolSummarySuffix } from './remote-tool-metadata'
+import { TimelineVisualCapturePreview } from './message-timeline-media'
 
 export type ProcessSection = {
   id: string
@@ -428,6 +429,7 @@ function ProcessStackRows({
                 </div>
               )
             ) : null}
+            {block.kind === 'tool' ? <TimelineVisualCapturePreview block={block} /> : null}
           </div>
         )
       })}
@@ -528,6 +530,7 @@ function ProcessEntryRow({
         ) : null}
       </div>
       <RuntimeMetaBadges block={block} t={t} />
+      {block.kind === 'tool' ? <TimelineVisualCapturePreview block={block} /> : null}
       {canExpand && open ? (
         detail.kind === 'assistant' ? (
           <div className="mt-1">

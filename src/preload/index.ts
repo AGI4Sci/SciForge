@@ -320,7 +320,28 @@ const api = {
   },
   visibleContext: {
     publish: (snapshot) => ipcRenderer.invoke('visibleContext:publish', snapshot),
-    get: () => ipcRenderer.invoke('visibleContext:get')
+    get: () => ipcRenderer.invoke('visibleContext:get'),
+    readCapturePreview: (request) => ipcRenderer.invoke('visibleContext:capture:preview', request),
+    onRefreshRequested: (handler) => {
+      const wrapped = () => handler()
+      ipcRenderer.on('visibleContext:refresh-requested', wrapped)
+      return () => ipcRenderer.removeListener('visibleContext:refresh-requested', wrapped)
+    },
+    onCaptureStateChanged: (handler) => {
+      const wrapped = (_: Electron.IpcRendererEvent, active: boolean) => handler(active === true)
+      ipcRenderer.on('visibleContext:capture-state', wrapped)
+      return () => ipcRenderer.removeListener('visibleContext:capture-state', wrapped)
+    }
+  },
+  anchoredComments: {
+    list: (filter) => ipcRenderer.invoke('anchoredComments:list', filter),
+    get: (threadId) => ipcRenderer.invoke('anchoredComments:get', threadId),
+    upsert: (thread) => ipcRenderer.invoke('anchoredComments:upsert', thread),
+    delete: (threadId) => ipcRenderer.invoke('anchoredComments:delete', threadId),
+    readAsset: (asset) => ipcRenderer.invoke('anchoredComments:asset:read', asset),
+    capture: (request) => ipcRenderer.invoke('anchoredComments:capture', request),
+    submitFeedback: (request) => ipcRenderer.invoke('anchoredComments:feedback:submit', request),
+    feedbackStatus: (request) => ipcRenderer.invoke('anchoredComments:feedback:status', request)
   },
   agentRuntime: {
     connect: (runtimeId) => ipcRenderer.invoke('agentRuntime:connect', { runtimeId }),

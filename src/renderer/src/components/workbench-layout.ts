@@ -1,5 +1,5 @@
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { AppRoute } from '../store/chat-store-types'
 import {
@@ -34,6 +34,43 @@ const PANEL_RESIZE_HANDLE_WIDTH = 7
 const TERMINAL_HEIGHT_DEFAULT = 360
 const TERMINAL_HEIGHT_MIN = 220
 const TERMINAL_HEIGHT_MAX = 760
+const RIGHT_PANEL_HISTORY_LIMIT = 50
+
+export type RightPanelHistoryEntry = {
+  mode: Exclude<RightPanelMode, null>
+  filePreviewTarget: WorkspaceFileTarget | null
+  filePreviewReturnContext: WorkspaceFilePreviewReturnContext | null
+}
+
+export type RightPanelHistory = {
+  entries: RightPanelHistoryEntry[]
+  index: number
+}
+
+export function rightPanelHistoryEntryKey(entry: RightPanelHistoryEntry): string {
+  return JSON.stringify(entry)
+}
+
+export function pushRightPanelHistoryEntry(
+  history: RightPanelHistory,
+  entry: RightPanelHistoryEntry
+): RightPanelHistory {
+  if (rightPanelHistoryEntryKey(history.entries[history.index]) === rightPanelHistoryEntryKey(entry)) {
+    return history
+  }
+  const entries = [...history.entries.slice(0, history.index + 1), entry]
+  const boundedEntries = entries.slice(-RIGHT_PANEL_HISTORY_LIMIT)
+  return { entries: boundedEntries, index: boundedEntries.length - 1 }
+}
+
+export function moveRightPanelHistory(
+  history: RightPanelHistory,
+  offset: -1 | 1
+): RightPanelHistory {
+  if (history.entries.length === 0) return history
+  const index = Math.min(history.entries.length - 1, Math.max(0, history.index + offset))
+  return index === history.index ? history : { ...history, index }
+}
 
 function clampWidth(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -208,6 +245,9 @@ export function useWorkbenchLayout({
   const shellRef = useRef<HTMLDivElement | null>(null)
   const previewThreadId = useRef<string | null>(activeThreadId)
   const autoOpenedPreviewUrlRef = useRef<string | null>(null)
+  const rightPanelHistoryRef = useRef<RightPanelHistory>({ entries: [], index: -1 })
+  const restoringRightPanelEntryKeyRef = useRef<string | null>(null)
+  const [, setRightPanelHistoryRevision] = useState(0)
   const rightPanelVisible = rightPanelMode !== null
 
   useEffect(() => {
@@ -225,6 +265,24 @@ export function useWorkbenchLayout({
   useEffect(() => {
     persistRightPanelMode(rightPanelMode)
   }, [rightPanelMode])
+
+  useEffect(() => {
+    if (!rightPanelMode) return
+    const entry: RightPanelHistoryEntry = {
+      mode: rightPanelMode,
+      filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
+      filePreviewReturnContext: rightPanelMode === 'file' ? filePreviewReturnContext : null
+    }
+    const entryKey = rightPanelHistoryEntryKey(entry)
+    if (restoringRightPanelEntryKeyRef.current === entryKey) {
+      restoringRightPanelEntryKeyRef.current = null
+      return
+    }
+    const nextHistory = pushRightPanelHistoryEntry(rightPanelHistoryRef.current, entry)
+    if (nextHistory === rightPanelHistoryRef.current) return
+    rightPanelHistoryRef.current = nextHistory
+    setRightPanelHistoryRevision((revision) => revision + 1)
+  }, [filePreviewReturnContext, filePreviewTarget, rightPanelMode])
 
   useEffect(() => {
     persistWidth(TERMINAL_HEIGHT_KEY, terminalHeight)
@@ -297,6 +355,18 @@ export function useWorkbenchLayout({
     }
     setRightPanelMode('browser')
   }
+
+  const navigateRightPanelHistory = useCallback((offset: -1 | 1): void => {
+    const nextHistory = moveRightPanelHistory(rightPanelHistoryRef.current, offset)
+    if (nextHistory === rightPanelHistoryRef.current) return
+    rightPanelHistoryRef.current = nextHistory
+    const entry = nextHistory.entries[nextHistory.index]
+    restoringRightPanelEntryKeyRef.current = rightPanelHistoryEntryKey(entry)
+    setFilePreviewTarget(entry.filePreviewTarget)
+    setFilePreviewReturnContext(entry.filePreviewReturnContext)
+    setRightPanelMode(entry.mode)
+    setRightPanelHistoryRevision((revision) => revision + 1)
+  }, [])
 
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return
@@ -460,6 +530,12 @@ export function useWorkbenchLayout({
     leftSidebarCollapsed,
     leftSidebarWidth,
     openDevPreview,
+    canNavigateRightPanelBack: rightPanelHistoryRef.current.index > 0,
+    canNavigateRightPanelForward:
+      rightPanelHistoryRef.current.index >= 0 &&
+      rightPanelHistoryRef.current.index < rightPanelHistoryRef.current.entries.length - 1,
+    navigateRightPanelBack: () => navigateRightPanelHistory(-1),
+    navigateRightPanelForward: () => navigateRightPanelHistory(1),
     rightPanelMode,
     rightPanelVisible,
     rightSidebarWidth,

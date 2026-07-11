@@ -139,18 +139,14 @@ export function Sidebar({
       }
     >
       <div className="ds-no-drag flex flex-col px-1">
-        {activeView !== 'schedule' && activeView !== 'workflow' ? (
-          <>
-            <SidebarCommandRow
-              icon={<Plus className="h-4 w-4" strokeWidth={2} />}
-              label={t('newAgent')}
-              onClick={runtimeReady ? onNewChat : undefined}
-              disabled={!runtimeReady}
-              disabledHint={t('runtimeActionNeedsConnection')}
-              variant="accent"
-            />
-          </>
-        ) : null}
+        <SidebarCommandRow
+          icon={<Plus className="h-4 w-4" strokeWidth={2} />}
+          label={t('newAgent')}
+          onClick={runtimeReady ? onNewChat : undefined}
+          disabled={!runtimeReady}
+          disabledHint={t('runtimeActionNeedsConnection')}
+          variant="accent"
+        />
         <SidebarCommandRow
           icon={<LayoutGrid className="h-4 w-4" strokeWidth={1.75} />}
           label={t('plugins')}
@@ -173,44 +169,6 @@ export function Sidebar({
 
       <div className="ds-no-drag mx-1 my-3" />
 
-      {activeView === 'workflow' ? (
-        <div className="ds-no-drag flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-          <Workflow className="h-7 w-7 text-ds-faint" strokeWidth={1.5} />
-          <p className="text-[12.5px] leading-5 text-ds-faint">{t('workflowSidebarHint')}</p>
-        </div>
-      ) : activeView === 'schedule' ? (
-        <SidebarProjectsSection
-          threads={threads}
-          activeView="chat"
-          activeThreadId={activeThreadId}
-          runtimeReady={runtimeReady}
-          searchQuery={threadSearch}
-          showArchived={showArchivedThreads}
-          workspaceRoot={workspaceRoot}
-          workspaceRoots={codeWorkspaceRoots}
-          hiddenWorkspaceRoots={hiddenCodeWorkspaceRoots}
-          busy={busy}
-          watchTurnCompletion={watchTurnCompletion}
-          unreadThreadIds={unreadThreadIds}
-          botWatchedThreadIds={botWatchedThreadIds}
-          botThreadBindings={botThreadBindings}
-          queuedThreadIds={queuedThreadIds}
-          activeRemoteThreadIds={activeRemoteThreadIds}
-          locale={i18n.language}
-          onPickWorkspace={() => void chooseWorkspace()}
-          onRemoveWorkspace={deleteWorkspace}
-          onCreateThreadInWorkspace={onNewChatInWorkspace}
-          onSelectThread={onSelectThread}
-          onRenameThread={onRenameThread}
-          onArchiveThread={onArchiveThread}
-          onDeleteThread={onDeleteThread}
-          onRestoreThread={onRestoreThread}
-          onSearchQueryChange={onThreadSearchChange}
-          onShowArchivedChange={onShowArchivedThreadsChange}
-          t={t}
-        />
-      ) : (
-      <>
       <SidebarRemoteChannelSection
         channels={remoteChannels}
         activeChannelId={remoteGuardChannelId ?? ''}
@@ -248,8 +206,6 @@ export function Sidebar({
         onShowArchivedChange={onShowArchivedThreadsChange}
         t={t}
       />
-      </>
-      )}
 
     </SidebarFrame>
 

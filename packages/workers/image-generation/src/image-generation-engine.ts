@@ -2644,7 +2644,10 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
     try {
       await renderWithImageEndpoint(candidateBaseUrl, {
         apiKey: endpoint.apiKey,
-        model: input.recipe?.model?.trim() || endpoint.model,
+        // The local Model Router exposes one public model alias. Recipe model
+        // metadata describes the internal generator, but must never bypass the
+        // Router's alias validation (for example by sending `gpt-image-2`).
+        model: endpoint.model,
         prompt,
         size,
         outputPath: input.outputPath

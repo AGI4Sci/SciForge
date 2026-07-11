@@ -2,6 +2,7 @@ import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { WorkspacePreviewOpenInput } from '@shared/sciforge-api'
 import type { WorkspacePreviewAssetTransportDescriptor } from '@shared/workspace-preview'
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -31,6 +32,8 @@ export type WorkspacePreviewPanelShellContext = {
   assetError: string | null
   transport: WorkspacePreviewAssetTransportClient
   host: WorkspacePreviewHost
+  refresh: () => void
+  refreshing: boolean
 }
 
 export type WorkspacePreviewPanelShellProps = {
@@ -91,6 +94,7 @@ export function WorkspacePreviewPanelShell({
   const [assetStatus, setAssetStatus] = useState<WorkspacePreviewPanelShellContext['assetStatus']>('idle')
   const [assetError, setAssetError] = useState<string | null>(null)
   const [showInspector, setShowInspector] = useState(false)
+  const [refreshRevision, setRefreshRevision] = useState(0)
   const targetPath = target?.path
   const targetWorkspaceRoot = target?.workspaceRoot
   const targetLine = target?.line
@@ -237,7 +241,12 @@ export function WorkspacePreviewPanelShell({
       if (releaseTimer) clearTimeout(releaseTimer)
       releaseOpenedSession(WORKSPACE_PREVIEW_SESSION_RELEASE_GRACE_MS)
     }
-  }, [host, openInput, openInputKey])
+  }, [host, openInput, openInputKey, refreshRevision])
+
+  const refresh = useCallback((): void => {
+    if (!openInput) return
+    setRefreshRevision((revision) => revision + 1)
+  }, [openInput])
 
   const context = useMemo<WorkspacePreviewPanelShellContext>(() => ({
     state,
@@ -251,8 +260,10 @@ export function WorkspacePreviewPanelShell({
       prepareArtifact: (request) => host.prepareArtifact(request),
       readArtifactRange: (request) => host.readArtifactRange(request)
     }),
-    host
-  }), [assetError, assetStatus, host, state])
+    host,
+    refresh,
+    refreshing: assetStatus === 'loading'
+  }), [assetError, assetStatus, host, refresh, state])
 
   return (
     <WorkspacePreviewChrome

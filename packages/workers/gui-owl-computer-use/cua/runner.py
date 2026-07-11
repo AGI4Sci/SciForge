@@ -214,9 +214,8 @@ def _run_loop(cfg: Config, instruction: str, screenshot_provider: ScreenshotProv
                                                 progress_status=progress_status,
                                                 replan_hint=replan_hint)
             output_text = owl_agent.call_owl(
-                cfg.grounding_base_url, cfg.grounding_model, cfg.grounding_api_key,
-                messages, endpoint=cfg.grounding_endpoint,
-                extra_headers=cfg.grounding_extra_headers)
+                cfg.model_router_base_url, cfg.model_router_model,
+                cfg.model_router_api_key, messages)
         except Exception as e:  # noqa: BLE001
             status = "error"
             steps.append({"step": i, "error": str(e)})

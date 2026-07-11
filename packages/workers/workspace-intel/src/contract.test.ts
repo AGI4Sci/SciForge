@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  VisualCaptureInputSchema,
   WorkspaceListInputSchema,
   WorkspaceReadInputSchema,
   WorkspaceTreeInputSchema,
@@ -16,6 +17,14 @@ test('workspace intel schemas reject unbounded inputs', () => {
   assert.equal(WorkspaceTreeInputSchema.safeParse({ depth: 999 }).success, false)
   assert.equal(WorkspaceReadInputSchema.safeParse({ path: 'a.txt', maxBytes: 0 }).success, false)
   assert.equal(WorkspaceReadInputSchema.safeParse({ path: '' }).success, false)
+  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window' }).success, true)
+  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', targetId: 'page' }).success, false)
+  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'target' }).success, false)
+  assert.equal(VisualCaptureInputSchema.safeParse({
+    scope: 'target',
+    componentId: 'preview',
+    targetId: 'current-page'
+  }).success, true)
 })
 
 test('workspace resource URI helpers keep paths encoded and stable', () => {

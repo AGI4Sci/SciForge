@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowLeft, Bot } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Eye } from 'lucide-react'
 import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
@@ -41,6 +41,7 @@ import { MessageTimeline } from './chat/MessageTimeline'
 import type { TimelineImageCanvasArtifact } from './chat/message-timeline-media'
 import {
   FloatingComposer,
+  type ComposerCommentReference,
   type ComposerImageAttachmentInput,
   type ComposerFileReference,
   type ComposerSendIntent
@@ -50,7 +51,11 @@ import {
   type ComposerReasoningEffort
 } from './chat/FloatingComposerModelPicker'
 import { SideConversationPanel } from './chat/SideConversationPanel'
-import { ChildAgentsPanel, useThreadChildren } from './chat/ChildAgentsPanel'
+import {
+  ChildAgentsPanel,
+  filterDirectChildAgents,
+  useThreadChildren
+} from './chat/ChildAgentsPanel'
 import type { FileTreeInitialDirectory } from './chat/ChatFileTreePanel'
 import {
   RemoteGuardDetailView,
@@ -120,8 +125,23 @@ import {
 } from '../lib/composer-file-references'
 import { readComposerFileContextEntries as readComposerFileContextEntriesFromReferences } from '../lib/composer-file-context'
 import { buildWorkspaceReferenceGroups } from '../lib/workspace-reference-groups'
-import { registerVisibleContextComponent, setVisibleContextShell } from '../lib/visible-context'
+import {
+  registerVisibleContextComponent,
+  registerVisibleContextSensitiveElements,
+  registerVisibleContextVisualTarget,
+  setVisibleContextShell
+} from '../lib/visible-context'
+import {
+  buildAnchoredCommentContextPrompt,
+  type AnchoredCommentPromptReference
+} from '../lib/anchored-comment-chat'
 import type { FigureStylePanelPage } from './figure-style/figure-style-panel-state'
+import {
+  ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT,
+  AnchoredCommentsLayer,
+  anchoredCommentStore,
+  type AnchoredCommentsAddToConversationDetail
+} from './anchored-comments'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -385,6 +405,8 @@ const PDF_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024
 const SCIENTIFIC_ATTACHMENT_MAX_BYTES = 256 * 1024
 const SCIENTIFIC_ATTACHMENT_EXTENSIONS =
   /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)$/i
+
+type AttachedComposerComment = ComposerCommentReference & AnchoredCommentPromptReference
 const DESKTOP_SHORTCUT_COMMANDS: Partial<Record<KeyboardShortcutCommandId, DesktopCommand>> = {
   quit: 'quit',
   undo: 'undo',
@@ -817,9 +839,67 @@ export function Workbench(): ReactElement {
   const [runtimeSkills, setRuntimeSkills] = useState<LocalRuntimeSkillJson[]>([])
   const [composerAttachments, setComposerAttachments] = useState<AttachmentReference[]>([])
   const [composerFileReferences, setComposerFileReferences] = useState<ComposerFileReference[]>([])
+  const [composerCommentReferences, setComposerCommentReferences] = useState<AttachedComposerComment[]>([])
   const [attachmentUploadBusy, setAttachmentUploadBusy] = useState(false)
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null)
   const [runtimeLogPath, setRuntimeLogPath] = useState('')
+  const [visualCaptureActive, setVisualCaptureActive] = useState(false)
+  useEffect(() => {
+    const subscribe = window.sciforge?.visibleContext?.onCaptureStateChanged
+    if (typeof subscribe !== 'function') return undefined
+    let hideTimer: number | null = null
+    const unsubscribe = subscribe((active) => {
+      if (hideTimer !== null) window.clearTimeout(hideTimer)
+      if (active) {
+        setVisualCaptureActive(true)
+        return
+      }
+      hideTimer = window.setTimeout(() => {
+        hideTimer = null
+        setVisualCaptureActive(false)
+      }, 800)
+    })
+    return () => {
+      if (hideTimer !== null) window.clearTimeout(hideTimer)
+      unsubscribe()
+    }
+  }, [])
+  useEffect(() => {
+    const onAddComments = (event: Event): void => {
+      const detail = (event as CustomEvent<AnchoredCommentsAddToConversationDetail>).detail
+      if (!detail?.threadIds?.length) return
+      const selectedIds = new Set(detail.threadIds)
+      const additions: AttachedComposerComment[] = anchoredCommentStore.getState().threads
+        .filter((thread) => selectedIds.has(thread.id))
+        .map((thread) => ({
+          id: thread.id,
+          label: thread.target.label,
+          comment: thread.comment,
+          createdAt: thread.createdAt,
+          route: thread.target.route,
+          anchor: {
+            kind: thread.target.resourceId ? 'research' : thread.target.componentId ? 'ui' : 'visual',
+            ...(thread.target.resourceType ? { resourceType: thread.target.resourceType } : {}),
+            ...(thread.target.resourceId ? { resourceId: thread.target.resourceId } : {}),
+            ...(thread.target.componentId ? { componentId: thread.target.componentId } : {}),
+            ...(thread.target.elementId ? { elementId: thread.target.elementId } : {}),
+            ...(thread.target.selection ? { selection: thread.target.selection } : {}),
+            bounds: thread.target.bounds,
+            domFingerprint: thread.target.domFingerprint
+          }
+        }))
+      setComposerCommentReferences((current) => {
+        const byId = new Map(current.map((reference) => [reference.id, reference]))
+        for (const addition of additions) byId.set(addition.id, addition)
+        return [...byId.values()]
+      })
+    }
+    window.addEventListener(ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT, onAddComments)
+    return () => window.removeEventListener(ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT, onAddComments)
+  }, [])
+  const removeComposerCommentReference = useCallback((id: string): void => {
+    setComposerCommentReferences((current) => current.filter((reference) => reference.id !== id))
+  }, [])
   const annotationQuestionBridge = useMemo(() => ({
     sideConversations,
     spawnSideConversation,
@@ -996,8 +1076,16 @@ export function Workbench(): ReactElement {
     runtimeReady: runtimeConnection === 'ready',
     busy
   })
-  const childAgentCount = threadChildrenState.children.length
-  const childAgentRunningCount = threadChildrenState.children.reduce(
+  const visibleThreadChildren = useMemo(
+    () => filterDirectChildAgents(
+      threadChildrenState.children,
+      activeThreadId,
+      activeThread?.runtimeId
+    ),
+    [activeThread?.runtimeId, activeThreadId, threadChildrenState.children]
+  )
+  const childAgentCount = visibleThreadChildren.length
+  const childAgentRunningCount = visibleThreadChildren.reduce(
     (count, child) => count + (child.status === 'running' || child.status === 'queued' ? 1 : 0),
     0
   )
@@ -1005,10 +1093,14 @@ export function Workbench(): ReactElement {
     beginLeftResize,
     beginRightResize,
     beginTerminalResize,
+    canNavigateRightPanelBack,
+    canNavigateRightPanelForward,
     filePreviewReturnContext,
     filePreviewTarget,
     leftSidebarCollapsed,
     leftSidebarWidth,
+    navigateRightPanelBack,
+    navigateRightPanelForward,
     openDevPreview,
     rightPanelMode,
     rightPanelVisible,
@@ -1104,6 +1196,38 @@ export function Workbench(): ReactElement {
       workspaceRoot
     })
   }, [activeThreadId, route, workspaceRoot])
+
+  useEffect(() => {
+    const componentId = 'app.window'
+    const unregisterComponent = registerVisibleContextComponent({
+      id: componentId,
+      region: 'window',
+      component: 'sciforge-window',
+      title: 'SciForge',
+      visible: true,
+      priority: 1,
+      updatedAt: new Date().toISOString(),
+      summary: 'The active SciForge application window.'
+    })
+    const unregisterTarget = registerVisibleContextVisualTarget({
+      componentId,
+      target: {
+        id: 'window.current',
+        kind: 'window',
+        contentType: 'ui',
+        active: true
+      }
+    })
+    const unregisterSensitiveElements = registerVisibleContextSensitiveElements({
+      componentId,
+      root: document.documentElement
+    })
+    return () => {
+      unregisterSensitiveElements()
+      unregisterTarget()
+      unregisterComponent()
+    }
+  }, [])
 
   useEffect(() => {
     if (!rightPanelMode) return undefined
@@ -2043,9 +2167,12 @@ export function Workbench(): ReactElement {
     const attachments = route === 'chat' ? composerAttachments : []
     const attachmentIds = attachments.map((attachment) => attachment.id)
     const fileReferences = route === 'chat' ? composerFileReferences : []
+    const commentReferences = route === 'chat' && !activeThreadIsRemoteChannel
+      ? composerCommentReferences
+      : []
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
     const isImageGenerationIntent = intent?.kind === 'image-generation'
-    if (!v && attachmentIds.length === 0 && fileReferences.length === 0) return
+    if (!v && attachmentIds.length === 0 && fileReferences.length === 0 && commentReferences.length === 0) return
     const emptyPrompt =
       fileReferences.length > 0 && attachmentIds.length > 0
         ? t('composerFileAndImageOnlyPrompt')
@@ -2054,12 +2181,14 @@ export function Workbench(): ReactElement {
           : t('composerImageOnlyPrompt')
     const emptyDisplayText = v
       ? undefined
+      : commentReferences.length > 0
+        ? t('composerCommentOnlyDisplay', { count: commentReferences.length })
       : fileReferences.length > 0 && attachmentIds.length > 0
         ? t('composerFileAndImageOnlyDisplay', { count: fileReferences.length })
         : fileReferences.length > 0
           ? t('composerFileOnlyDisplay', { count: fileReferences.length })
           : t('composerImageOnlyDisplay')
-    const messageText = v || emptyPrompt
+    const messageText = v || (commentReferences.length > 0 ? t('composerCommentOnlyPrompt') : emptyPrompt)
     const shouldUsePlanPrompt =
       mode === 'plan' &&
       route === 'chat' &&
@@ -2094,7 +2223,7 @@ export function Workbench(): ReactElement {
       }).text
       if (fileReferences.length === 0) {
         return {
-          text: preparedRuntimeMessageText,
+          text: buildAnchoredCommentContextPrompt(preparedRuntimeMessageText, commentReferences),
           ...(userVisibleText ? { displayText: userVisibleText } : {})
         }
       }
@@ -2108,7 +2237,10 @@ export function Workbench(): ReactElement {
       try {
         const fileContext = await readComposerFileContextEntries(fileReferences, workspace)
         return {
-          text: buildComposerFileContextPrompt(preparedRuntimeMessageText, fileContext),
+          text: buildAnchoredCommentContextPrompt(
+            buildComposerFileContextPrompt(preparedRuntimeMessageText, fileContext),
+            commentReferences
+          ),
           ...(userVisibleText ? { displayText: userVisibleText } : {})
         }
       } catch (error) {
@@ -2240,6 +2372,7 @@ export function Workbench(): ReactElement {
       setInput('')
       clearComposerAttachments()
       clearComposerFileReferences()
+      setComposerCommentReferences([])
       void sendPlanTurn(prepared.text, {
         ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -2254,6 +2387,7 @@ export function Workbench(): ReactElement {
     setInput('')
     clearComposerAttachments()
     clearComposerFileReferences()
+    setComposerCommentReferences([])
     void sendMessage(prepared.text, isImageGenerationIntent ? 'agent' : mode === 'plan' ? 'plan' : 'agent', {
       ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -2484,8 +2618,37 @@ export function Workbench(): ReactElement {
           className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
           onPointerDown={beginRightResize}
         />
-        <div className="h-full min-h-0 shrink-0" style={{ width: rightSidebarWidth }}>
-          <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
+        <div className="flex h-full min-h-0 shrink-0 flex-col bg-ds-sidebar" style={{ width: rightSidebarWidth }}>
+          <div
+            className="ds-no-drag flex h-9 shrink-0 items-center gap-1 border-b border-ds-border bg-ds-sidebar px-2"
+            data-right-panel-history-navigation
+          >
+            <button
+              type="button"
+              onClick={navigateRightPanelBack}
+              disabled={!canNavigateRightPanelBack}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-30"
+              aria-label={t('rightPanelBack')}
+              title={t('rightPanelBack')}
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={navigateRightPanelForward}
+              disabled={!canNavigateRightPanelForward}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-30"
+              aria-label={t('rightPanelForward')}
+              title={t('rightPanelForward')}
+            >
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <span className="ml-1 min-w-0 truncate text-[11.5px] font-medium text-ds-faint">
+              {rightPanelMode ? rightPanelVisibleContextTitle(rightPanelMode) : ''}
+            </span>
+          </div>
+          <div className="min-h-0 flex-1">
+            <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
             {rightPanelMode === 'file' ? (
               <div className="relative h-full max-h-full w-full overflow-hidden">
                 <ChatFileTreePanel
@@ -2584,7 +2747,7 @@ export function Workbench(): ReactElement {
               <ChildAgentsPanel
                 activeThreadId={activeThreadId}
                 activeThread={activeThread}
-                children={threadChildrenState.children}
+                children={visibleThreadChildren}
                 loading={threadChildrenState.loading}
                 error={threadChildrenState.error}
                 className="h-full max-h-full w-full"
@@ -2670,7 +2833,8 @@ export function Workbench(): ReactElement {
                 onReplanChanged={(changedIds) => void replanChangedRequirements(changedIds)}
               />
             ) : null}
-          </Suspense>
+            </Suspense>
+          </div>
         </div>
       </>
     )
@@ -2681,6 +2845,17 @@ export function Workbench(): ReactElement {
       ref={shellRef}
       className="ds-workbench-shell ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main"
     >
+      {visualCaptureActive ? (
+        <div
+          className="pointer-events-none fixed left-1/2 top-3 z-[200] flex -translate-x-1/2 items-center gap-2 rounded-full border border-accent/25 bg-ds-card/95 px-3 py-1.5 text-[11.5px] font-semibold text-ds-ink shadow-lg backdrop-blur-xl"
+          role="status"
+          aria-live="polite"
+        >
+          <Eye className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+          {t('visualContextCaptureActive')}
+        </div>
+      ) : null}
+      <AnchoredCommentsLayer route={route} workspaceKey={workspaceRoot || 'global'} />
       {!leftSidebarCollapsed ? (
         <>
           <div className="min-h-0 shrink-0" style={{ width: leftSidebarWidth }}>
@@ -2903,6 +3078,7 @@ export function Workbench(): ReactElement {
                     attachmentUploadError={attachmentUploadError}
                     fileReferenceEnabled={route === 'chat' && !activeSddDraft && !activeThreadIsRemoteChannel}
                     fileReferences={composerFileReferences}
+                    commentReferences={activeThreadIsRemoteChannel ? [] : composerCommentReferences}
                     webAccessAvailable={webAccessAvailable}
                     changedFiles={composerChangeSummary?.files}
                     changedFileStats={composerChangeSummary}
@@ -2915,6 +3091,7 @@ export function Workbench(): ReactElement {
                     onAddFileReference={addComposerFileReference}
                     onPreviewFileReference={previewComposerFileReference}
                     onRemoveFileReference={removeComposerFileReference}
+                    onRemoveCommentReference={removeComposerCommentReference}
                     queuedMessages={queuedMessages}
                     onRemoveQueuedMessage={removeQueuedMessage}
                     onSteerQueuedMessage={(id) => void steerQueuedMessage(id)}

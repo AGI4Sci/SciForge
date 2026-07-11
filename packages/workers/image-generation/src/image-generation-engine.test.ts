@@ -544,6 +544,41 @@ describe('image generation engine', () => {
     })
   })
 
+  it('keeps recipe provider model metadata behind the Model Router public alias', async () => {
+    const pngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body ?? '{}'))).toMatchObject({
+        model: 'sciforge-router'
+      })
+      return new Response(JSON.stringify({
+        data: [{ b64_json: pngBase64 }]
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await renderImageGeneration({
+      workspaceRoot,
+      imageId: 'provider-model-behind-alias',
+      recipe: {
+        mode: 'text_to_image',
+        model: 'gpt-image-2',
+        prompt: 'A tiny generated image',
+        size: { width: 512, height: 512 },
+        outputFormat: 'png'
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('retries the images endpoint with a text field for providers that do not accept prompt', async () => {
     const pngBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='

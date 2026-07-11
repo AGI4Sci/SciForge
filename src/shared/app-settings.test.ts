@@ -1286,6 +1286,52 @@ describe('agent runtime settings', () => {
     expect(modelRouter.baseUrl).toBe('http://localhost:49876/v1')
   })
 
+  it('defaults missing Model Router image generator models to gpt-image-2', () => {
+    expect(defaultModelRouterSettings().profiles.default.imageGenerator.model).toBe('gpt-image-2')
+
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      modelRouter: {
+        ...defaultModelRouterSettings(),
+        profiles: {
+          default: {
+            ...defaultModelRouterSettings().profiles.default,
+            imageGenerator: {
+              provider: 'openai-compatible',
+              baseUrl: 'https://image.example/v1',
+              apiKey: 'image-key',
+              model: ''
+            }
+          }
+        }
+      }
+    })
+
+    expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('gpt-image-2')
+  })
+
+  it('preserves an explicitly configured Model Router image generator model', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      modelRouter: {
+        ...defaultModelRouterSettings(),
+        profiles: {
+          default: {
+            ...defaultModelRouterSettings().profiles.default,
+            imageGenerator: {
+              provider: 'openai-compatible',
+              baseUrl: 'https://legacy-image.example/v1',
+              apiKey: 'legacy-image-key',
+              model: 'legacy-image-model'
+            }
+          }
+        }
+      }
+    })
+
+    expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('legacy-image-model')
+  })
+
   it('preserves Model Router vision supplement rounds when configured', () => {
     const normalized = normalizeAppSettings({
       ...settings(),

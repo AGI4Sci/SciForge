@@ -2,9 +2,54 @@ import { describe, expect, it } from 'vitest'
 
 import {
   fitWorkbenchWidths,
+  moveRightPanelHistory,
   projectDagReturnSelection,
+  pushRightPanelHistoryEntry,
   shouldCloseRightPanelOnThreadChange
 } from './workbench-layout'
+
+describe('right panel history', () => {
+  const fileA = {
+    mode: 'file' as const,
+    filePreviewTarget: { path: '/workspace/a.md', workspaceRoot: '/workspace' },
+    filePreviewReturnContext: null
+  }
+  const browser = {
+    mode: 'browser' as const,
+    filePreviewTarget: null,
+    filePreviewReturnContext: null
+  }
+  const changes = {
+    mode: 'changes' as const,
+    filePreviewTarget: null,
+    filePreviewReturnContext: null
+  }
+
+  it('moves backward and forward across right panel states', () => {
+    let history = pushRightPanelHistoryEntry({ entries: [], index: -1 }, fileA)
+    history = pushRightPanelHistoryEntry(history, browser)
+
+    history = moveRightPanelHistory(history, -1)
+    expect(history.entries[history.index]).toEqual(fileA)
+    history = moveRightPanelHistory(history, 1)
+    expect(history.entries[history.index]).toEqual(browser)
+  })
+
+  it('drops the forward branch when a new state opens after going back', () => {
+    let history = pushRightPanelHistoryEntry({ entries: [], index: -1 }, fileA)
+    history = pushRightPanelHistoryEntry(history, browser)
+    history = moveRightPanelHistory(history, -1)
+    history = pushRightPanelHistoryEntry(history, changes)
+
+    expect(history.entries).toEqual([fileA, changes])
+    expect(moveRightPanelHistory(history, 1)).toBe(history)
+  })
+
+  it('does not duplicate the current state', () => {
+    const history = pushRightPanelHistoryEntry({ entries: [], index: -1 }, fileA)
+    expect(pushRightPanelHistoryEntry(history, fileA)).toBe(history)
+  })
+})
 
 describe('projectDagReturnSelection', () => {
   it('preserves the legacy Claim fallback and a validated graph node', () => {

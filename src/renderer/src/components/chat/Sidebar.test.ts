@@ -2,7 +2,35 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { RemoteChannelV1 } from '@shared/app-settings'
-import { SidebarRemoteChannelSection } from './Sidebar'
+import { Sidebar, SidebarRemoteChannelSection } from './Sidebar'
+
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'zh-CN' }
+  })
+}))
+
+vi.mock('../../store/chat-store', () => ({
+  useChatStore: (selector: (state: Record<string, unknown>) => unknown) => selector({
+    workspaceRoot: '/workspace',
+    codeWorkspaceRoots: ['/workspace'],
+    hiddenCodeWorkspaceRoots: [],
+    chooseWorkspace: vi.fn(),
+    deleteWorkspace: vi.fn(),
+    busy: false,
+    watchTurnCompletion: {},
+    unreadThreadIds: {},
+    queuedMessages: [],
+    remoteChannels: [],
+    activeRemoteChannelId: null,
+    remoteGuardChannelId: null,
+    selectRemoteGuardChannel: vi.fn(),
+    addRemoteChannel: vi.fn(),
+    deleteRemoteChannel: vi.fn()
+  })
+}))
 
 type DiscordChannelOverrides = Partial<Omit<RemoteChannelV1, 'provider' | 'platformCredential'>>
 
@@ -102,4 +130,46 @@ describe('SidebarRemoteChannelSection', () => {
     expect(html).toContain('#debug')
     expect(html).toContain('等待远端消息')
   })
+})
+
+describe('Sidebar navigation continuity', () => {
+  it.each(['schedule', 'workflow'] as const)(
+    'keeps new chat, all feature entries, and conversation history visible in %s view',
+    (activeView) => {
+      const html = renderToStaticMarkup(
+        createElement(Sidebar, {
+          threads: [],
+          activeThreadId: null,
+          activeView,
+          connectPhoneSidebarOpen: false,
+          pluginsActive: false,
+          runtimeReady: true,
+          threadSearch: '',
+          showArchivedThreads: false,
+          onThreadSearchChange: vi.fn(),
+          onShowArchivedThreadsChange: vi.fn(),
+          onSelectThread: vi.fn(),
+          onRenameThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          onNewChat: vi.fn(),
+          onNewChatInWorkspace: vi.fn(),
+          onOpenSettings: vi.fn(),
+          onOpenPlugins: vi.fn(),
+          onToggleConnectPhone: vi.fn(),
+          onScheduleOpen: vi.fn(),
+          onWorkflowOpen: vi.fn(),
+          onToggleSidebar: vi.fn()
+        })
+      )
+
+      expect(html).toContain('newAgent')
+      expect(html).toContain('plugins')
+      expect(html).toContain('schedule')
+      expect(html).toContain('workflow')
+      expect(html).toContain('sidebarProjects')
+      expect(html).not.toContain('workflowSidebarHint')
+    }
+  )
 })

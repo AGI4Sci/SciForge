@@ -141,7 +141,9 @@ function createContext(observation: WorkspaceObservation): WorkspacePreviewPanel
       descriptor: null,
       readRange: (range) => host.readRange(range)
     }),
-    host
+    host,
+    refresh: vi.fn(),
+    refreshing: false
   }
 }
 

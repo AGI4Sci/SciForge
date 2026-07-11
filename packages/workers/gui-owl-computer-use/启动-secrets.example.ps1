@@ -5,19 +5,10 @@
 #  Copy this file to  启动-secrets.local.ps1  and fill in real values (gitignored).
 # =============================================================================
 
-# --- Computer-Use worker grounding model access ------------------------------
-# URL/model/header defaults are built into this package. Keep real keys local.
-$env:CUA_GROUNDING_API_KEY = "replace-with-grounding-api-key"
-
-# Override only if the GUI-Owl gateway changes:
-# $env:CUA_GROUNDING_BASE_URL      = "http://10.140.158.130:8881/v1/chat/completions"
-# $env:CUA_GROUNDING_MODEL         = "gui-owl"
-# $env:CUA_GROUNDING_ENDPOINT      = "chat_completions"
-# $env:CUA_GROUNDING_EXTRA_HEADERS = '{"x-original-model":"gui-owl"}'
-
-# Optional general vision route for reflection; default is Model Router public
-# alias sciforge-router at http://127.0.0.1:3892/v1. Usually leave off.
-# $env:CUA_VISION_API_KEY = $env:SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY
+# --- App-owned Model Router access ------------------------------------------
+$env:SCIFORGE_MODEL_ROUTER_BASE_URL = "http://127.0.0.1:3892/v1"
+$env:SCIFORGE_MODEL_ROUTER_MODEL = "sciforge-router"
+$env:SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = "replace-with-router-runtime-key"
 
 # --- Computer-Use 服务端口 / 行为 --------------------------------------------
 $env:CUA_PORT         = "3900"             # HTTP sidecar 端口 (GUI 通过它调用)

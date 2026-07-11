@@ -1,20 +1,20 @@
 # @sciforge/gui-owl-computer-use
 
-OpenAI-compatible **vision** computer-use worker: turn one natural-language
+Model-Router-backed **vision** computer-use worker: turn one natural-language
 task into real desktop actions (click / type / scroll / open apps) on the
 user's own **Windows / macOS / Linux** machine.
 
-Computer-use is delegated to the package-default GUI-Owl
-OpenAI-compatible grounding model. The selected model reads the screen, plans,
+Computer-use is delegated through SciForge's app-owned Model Router. The routed
+vision and reasoning models read the screen, plan,
 grounds pixel coordinates, and decides when to stop. The main agent does not
 call provider APIs or plan the desktop steps; it hands the task to
-`computer_use`, and this worker sends model traffic only to the configured
-grounding endpoint.
+`computer_use`, and this worker sends model traffic only to the local Model
+Router responses endpoint.
 
 ```
                 ┌──────────────────────────────────────────────┐
 task ──▶        │  observe → routed model plans+grounds+decides → act → …    │
-                │   model  → OpenAI-compatible grounding endpoint             │
+                │   model  → local SciForge Model Router                      │
                 │   act    → DesktopExecutor (local, the only OS layer) │
                 └──────────────────────────────────────────────┘
 ```
@@ -33,8 +33,8 @@ startup cleanup removes stale `gui_computer_use` entries from user MCP config.
 
 All runtimes expose the same `computer_use` tool through the GUI-managed
 `gui_owl_computer_use` MCP wrapper. That wrapper calls this HTTP sidecar.
-GUI-Owl owns the observe → plan → act loop, while the configured grounding API
-owns model/provider selection and policy.
+GUI-Owl owns the observe → plan → act loop, while Model Router owns all
+model/provider selection and policy.
 
 ## Boundary (Servic_Module_Template.md / PROJECT_mcp.md)
 
@@ -51,13 +51,10 @@ owns model/provider selection and policy.
   passes it to the GUI-managed MCP wrapper as `SCIFORGE_CUA_SERVICE_TOKEN`.
 - **Refs-first**: screenshots are written to disk and returned as artifact refs,
   never inlined into a tool result.
-- **Grounding API only**: the GUI-Owl URL/model/header defaults live in this
-  package. Keep only the bearer key machine-local via `CUA_GROUNDING_API_KEY`;
-  override `CUA_GROUNDING_BASE_URL`, `CUA_GROUNDING_MODEL`, or
-  `CUA_GROUNDING_EXTRA_HEADERS` only when the gateway changes.
-- **General vision**: optional reflection uses the Model Router public alias by
-  default (`sciforge-router` on `http://127.0.0.1:3892/v1`). The routed concrete
-  vision model stays controlled by Model Router settings.
+- **Model Router only**: computer-use and optional reflection share the local
+  Model Router public alias (`sciforge-router` by default). This worker accepts
+  no upstream provider URL, provider model name, provider header, or provider
+  credential.
 
 ## Package layout
 
@@ -77,7 +74,7 @@ owns model/provider selection and policy.
 | Click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
 | Development-only local model serve helper | `server/serve-gui-owl-32b.sh` |
-| One-click launcher: grounding config + service + SciForge GUI | `一键启动-computer-use.bat`, `启动-sciforge-computer-use.ps1` |
+| One-click launcher: Model Router config + service + SciForge GUI | `一键启动-computer-use.bat`, `启动-sciforge-computer-use.ps1` |
 | Launcher secrets template (copy to `启动-secrets.local.ps1`) | `启动-secrets.example.ps1` |
 
 Everything for the module lives in this one folder; see **Integration touchpoints**
@@ -96,7 +93,9 @@ block alongside a one-line summary; screenshots stay as artifact refs.
 ```bash
 python -m pip install -r requirements.txt
 export CUA_SERVICE_TOKEN=dev-local-token
-export CUA_GROUNDING_API_KEY=replace-with-grounding-api-key
+export SCIFORGE_MODEL_ROUTER_BASE_URL=http://127.0.0.1:3892/v1
+export SCIFORGE_MODEL_ROUTER_MODEL=sciforge-router
+export SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY=replace-with-router-runtime-key
 
 # MCP stdio server (worker-native contract; the app uses a managed wrapper):
 python -m cua.cli --stdio
@@ -121,7 +120,7 @@ Standalone service smoke test (no GUI): start `--http`, then
 To launch the **full SciForge GUI with this module wired in** (so the in-app
 agent gets a `computer_use` tool), double-click `一键启动-computer-use.bat`
 (or run `启动-sciforge-computer-use.ps1`) **in this folder**: it verifies
-the local grounding key, starts this service, sets `SCIFORGE_CUA_SERVICE_URL`,
+the local Model Router runtime key, starts this service, sets `SCIFORGE_CUA_SERVICE_URL`,
 then runs `npm run dev` from the repo root.
 
 ## Integration touchpoints (outside this folder)
@@ -138,8 +137,7 @@ minimal wiring needed to expose it to the agent runtime:
 
 ## Config
 
-See [`.env.example`](.env.example). Key vars: `CUA_GROUNDING_BASE_URL`,
-`CUA_GROUNDING_MODEL`, `CUA_GROUNDING_API_KEY`, `CUA_GROUNDING_EXTRA_HEADERS`,
-`CUA_VISION_BASE_URL`, `CUA_VISION_MODEL`, `CUA_VISION_API_KEY`,
+See [`.env.example`](.env.example). Key vars: `SCIFORGE_MODEL_ROUTER_BASE_URL`,
+`SCIFORGE_MODEL_ROUTER_MODEL`, `SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY`,
 `CUA_MAX_STEPS`, `CUA_REFLECT`, `CUA_ALLOW_EXECUTE`,
 `CUA_PORT`, `CUA_SERVICE_TOKEN`, `CUA_SHOW_OVERLAY`, `CUA_ARTIFACT_DIR`.

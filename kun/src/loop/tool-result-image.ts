@@ -9,7 +9,7 @@ export type ToolResultImage = {
 
 export const IMAGE_TOOL_RESULT_TOKEN_ESTIMATE = 1_200
 
-const MODEL_VISIBLE_IMAGE_KINDS = new Set(['image', 'computer_screenshot'])
+const MODEL_VISIBLE_IMAGE_KINDS = new Set(['image', 'computer_screenshot', 'visualSnapshot'])
 
 const EVICTED_IMAGE_PLACEHOLDER =
   '[older screenshot omitted to save context; take another screenshot if you need the current view]'
@@ -20,8 +20,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function toImage(value: unknown): ToolResultImage | null {
   if (!isRecord(value)) return null
-  const dataBase64 = typeof value.data_base64 === 'string' ? value.data_base64 : ''
-  const mimeType = typeof value.mime_type === 'string' ? value.mime_type : ''
+  const dataBase64 = typeof value.data_base64 === 'string'
+    ? value.data_base64
+    : typeof value.dataBase64 === 'string'
+      ? value.dataBase64
+      : ''
+  const mimeType = typeof value.mime_type === 'string'
+    ? value.mime_type
+    : typeof value.mimeType === 'string'
+      ? value.mimeType
+      : ''
   if (!dataBase64 || !mimeType) return null
   const width = typeof value.width === 'number' ? value.width : undefined
   const height = typeof value.height === 'number' ? value.height : undefined
@@ -68,15 +76,20 @@ function directToolResultImages(output: Record<string, unknown>): ToolResultImag
 
 function mcpContentImages(output: Record<string, unknown>): ToolResultImage[] {
   const structured = isRecord(output.structuredContent) ? output.structuredContent : {}
-  const kind = typeof structured.kind === 'string' ? structured.kind : ''
-  if (!MODEL_VISIBLE_IMAGE_KINDS.has(kind)) return []
   const content = Array.isArray(output.content) ? output.content : []
   const metadata = Array.isArray(structured.images) ? structured.images : []
+  const visualResource = isRecord(structured.resource) && structured.resource.kind === 'visualSnapshot'
+    ? structured.resource
+    : undefined
   const images: ToolResultImage[] = []
   let imageIndex = 0
   for (const entry of content) {
     if (!isRecord(entry) || entry.type !== 'image') continue
-    addUniqueImage(images, toMcpContentImage(entry, metadata[imageIndex]))
+    // MCP `content.type=image` is already an explicit model-visible image
+    // contract. Do not require a second, tool-specific `kind` marker: doing so
+    // silently drops otherwise valid images from tools such as
+    // gui_visual_capture, whose metadata lives under `resource`.
+    addUniqueImage(images, toMcpContentImage(entry, metadata[imageIndex] ?? visualResource))
     imageIndex += 1
   }
   return images

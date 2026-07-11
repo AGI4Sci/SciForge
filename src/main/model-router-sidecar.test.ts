@@ -284,6 +284,30 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(JSON.stringify(result.launch.config)).not.toContain('image-secret')
   })
 
+  it('uses gpt-image-2 as the internal image provider model when settings omit it', () => {
+    const current = settings()
+    current.modelRouter!.profiles.default.imageGenerator = {
+      provider: 'openai-compatible',
+      apiKey: 'image-secret',
+      baseUrl: 'https://image.example/v1',
+      model: ''
+    }
+
+    const result = buildModelRouterSidecarLaunch(current, {
+      userDataDir: '/tmp/sciforge-user-data',
+      env: {},
+      npmCommand: 'npm'
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.launch.config?.publicModelAlias).toBe('sciforge-router')
+    expect(result.launch.config?.profiles.default.imageGenerator).toMatchObject({
+      apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY',
+      model: 'gpt-image-2'
+    })
+  })
+
   it('fails closed when the text reasoner member is incomplete in UI settings', () => {
     const current = settings()
     current.modelRouter!.profiles.default.textReasoner.apiKey = ''

@@ -93,7 +93,20 @@ import { SharedMemoryService } from './services/shared-memory-service'
 import { RuntimeGoalService } from './services/runtime-goal-service'
 import { ResearchCardService } from './services/research-card-service'
 import { WorkspaceReferenceService } from './services/workspace-reference-service'
-import { VisibleContextService, visibleContextSnapshotPath } from './services/visible-context-service'
+import {
+  VisibleContextService,
+  visibleContextSnapshotPath,
+  type CapturedVisualPage
+} from './services/visible-context-service'
+import type { VisibleContextBounds } from '../shared/visible-context'
+import { AnchoredCommentService } from './services/anchored-comment-service'
+import { AnchoredCommentScreenshotService } from './services/anchored-comment-screenshot-service'
+import { AnchoredCommentFeedbackService } from './services/anchored-comment-feedback-service'
+import {
+  FeedbackGatewayClient,
+  configuredFeedbackGatewayToken,
+  configuredFeedbackGatewayUrl
+} from './services/feedback-gateway-client'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
 import {
   createPaperRadarWorkerService,
@@ -131,6 +144,7 @@ import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
 import { syncExternalManagedGuiMcpConfig } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
+import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
 import {
   startDevBrowserBridgeServer,
@@ -398,6 +412,45 @@ let remoteChannelActiveThreadContext: {
   workspaceRoot?: string
   updatedAt: string
 } | null = null
+
+async function captureMainWindowPage(bounds?: VisibleContextBounds): Promise<CapturedVisualPage> {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) throw new Error('SciForge window is unavailable.')
+  const [viewportWidth, viewportHeight] = window.getContentSize()
+  const clippedBounds = bounds ? clipCaptureBounds(bounds, viewportWidth, viewportHeight) : undefined
+  const image = await window.webContents.capturePage(clippedBounds)
+  const imageSize = image.getSize()
+  const cssWidth = clippedBounds?.width ?? Math.max(1, viewportWidth)
+  return {
+    png: image.toPNG(),
+    width: imageSize.width,
+    height: imageSize.height,
+    scaleFactor: Math.max(0.01, imageSize.width / cssWidth),
+    ...(clippedBounds ? { bounds: clippedBounds } : {})
+  }
+}
+
+function clipCaptureBounds(
+  bounds: VisibleContextBounds,
+  viewportWidth: number,
+  viewportHeight: number
+): VisibleContextBounds {
+  const x = Math.max(0, Math.floor(bounds.x))
+  const y = Math.max(0, Math.floor(bounds.y))
+  const right = Math.min(viewportWidth, Math.ceil(bounds.x + bounds.width))
+  const bottom = Math.min(viewportHeight, Math.ceil(bounds.y + bounds.height))
+  if (right <= x || bottom <= y) {
+    throw new Error('Visual target is outside the SciForge window viewport.')
+  }
+  return { x, y, width: right - x, height: bottom - y }
+}
+
+function emitVisibleContextRendererEvent(channel: string, payload?: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload)
+  }
+  devBrowserBridgeServer?.send(channel, payload)
+}
 
 type GuiUpdaterModule = typeof import('./gui-updater')
 
@@ -1715,7 +1768,21 @@ app.whenReady().then(async () => {
   const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
   const researchCardService = new ResearchCardService(app.getPath('userData'))
   const workspaceReferenceService = new WorkspaceReferenceService()
-  const visibleContextService = new VisibleContextService(app.getPath('userData'))
+  const visibleContextService = new VisibleContextService(app.getPath('userData'), {
+    captureProvider: { capturePage: captureMainWindowPage },
+    requestContextRefresh: () => {
+      emitVisibleContextRendererEvent('visibleContext:refresh-requested')
+    },
+    onCaptureState: (active) => {
+      emitVisibleContextRendererEvent('visibleContext:capture-state', active)
+    }
+  })
+  void visibleContextService.startCaptureRequestBroker().catch((error) => {
+    logWarn('visible-context', 'Failed to start the visual capture request broker.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
+  const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
     adapters: [
@@ -1853,6 +1920,49 @@ app.whenReady().then(async () => {
     ipcMain,
     getMainWindow: () => mainWindow,
     logError
+  })
+  let feedbackGatewayClient: FeedbackGatewayClient | null = null
+  try {
+    const gatewayUrl = configuredFeedbackGatewayUrl()
+    feedbackGatewayClient = gatewayUrl
+      ? new FeedbackGatewayClient({
+          baseUrl: gatewayUrl,
+          authToken: configuredFeedbackGatewayToken() ?? undefined
+        })
+      : null
+  } catch (error) {
+    logWarn('anchored-comments', 'Ignoring invalid feedback gateway configuration.', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  }
+  const anchoredCommentScreenshotService = new AnchoredCommentScreenshotService({
+    captureWindow: async () => {
+      const captured = await captureMainWindowPage()
+      const window = mainWindow
+      if (!window || window.isDestroyed()) throw new Error('SciForge window is unavailable.')
+      const [width, height] = window.getContentSize()
+      return {
+        png: captured.png,
+        viewport: {
+          width: Math.max(1, width),
+          height: Math.max(1, height),
+          scaleFactor: captured.scaleFactor
+        }
+      }
+    },
+    assetWriter: anchoredCommentService,
+    getAppVersion: () => app.getVersion()
+  })
+  const anchoredCommentFeedbackService = new AnchoredCommentFeedbackService({
+    comments: anchoredCommentService,
+    gateway: feedbackGatewayClient
+  })
+  registerAnchoredCommentIpc({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    comments: anchoredCommentService,
+    screenshots: anchoredCommentScreenshotService,
+    feedback: anchoredCommentFeedbackService
   })
   const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
     const prev = await store.load()

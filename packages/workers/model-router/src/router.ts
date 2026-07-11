@@ -28,7 +28,7 @@ import {
 } from './manifest';
 import { readIncomingMessageBody } from './http-body';
 import { hygienizeChatProviderBody } from './request-hygiene';
-import { redactTraceText } from './trace-redaction';
+import { redactTraceText, redactUserVisibleText } from './trace-redaction';
 
 export interface ModelRouterProviderConfig {
   provider: string;
@@ -1032,7 +1032,7 @@ async function routeResponsesRequest(
 
       const control = parseTextControl(textResult.outputText);
       if (control?.type === 'final_answer') {
-        outputText = publicProviderOutputText(control.content, profile, publicModelAlias, traceRedactionSecrets, [context.workspaceRoot]);
+        outputText = publicProviderOutputText(control.content, profile, publicModelAlias, traceRedactionSecrets);
         outputItems = reasoningItems;
         break;
       }
@@ -1041,7 +1041,7 @@ async function routeResponsesRequest(
         const target = visionModalities.find((modality) => modality.id === control.target);
         if (target) {
           supplementRounds += 1;
-          const safeControl = sanitizeTextControl(control, profile, publicModelAlias, traceRedactionSecrets, [context.workspaceRoot]);
+          const safeControl = sanitizeTextControl(control, profile, publicModelAlias, traceRedactionSecrets);
           let supplementStatus: 'ok' | 'failed' = 'ok';
           let supplementObservation: string;
           try {
@@ -1085,7 +1085,7 @@ async function routeResponsesRequest(
         }
       }
 
-      outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets, [context.workspaceRoot]);
+      outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
       outputItems = reasoningItems;
       break;
     }
@@ -1350,7 +1350,7 @@ function visitInput(value: unknown, texts: string[], modalities: ModalityRef[]) 
   if (value.input !== undefined) visitInput(value.input, texts, modalities);
 }
 
-const MODEL_VISIBLE_IMAGE_KINDS = new Set(['image', 'computer_screenshot']);
+const MODEL_VISIBLE_IMAGE_KINDS = new Set(['image', 'computer_screenshot', 'visualSnapshot']);
 const TOOL_RESULT_IMAGE_PLACEHOLDER = '[image data omitted; image was routed as visual modality input]';
 
 function safeTextualFallback(value: unknown): string {
@@ -1471,8 +1471,6 @@ function directToolResultImages(output: Record<string, unknown>): ToolResultImag
 
 function mcpToolResultImages(output: Record<string, unknown>): ToolResultImage[] {
   const structured = isRecord(output.structuredContent) ? output.structuredContent : {};
-  const kind = stringField(structured.kind) ?? stringField(output.kind) ?? '';
-  if (!MODEL_VISIBLE_IMAGE_KINDS.has(kind)) return [];
   const content = Array.isArray(output.content) ? output.content : [];
   const metadata = Array.isArray(structured.images) ? structured.images : [];
   const images: ToolResultImage[] = [];
@@ -1551,7 +1549,7 @@ function addUniqueToolResultImage(images: ToolResultImage[], image: ToolResultIm
 }
 
 function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, signal?: SemanticModalitySignal): ModalityRef | undefined {
-  const rawImageUrl = value.image_url;
+  const rawImageUrl = value.image_url ?? value.imageUrl;
   const imageUrl = typeof rawImageUrl === 'string'
     ? rawImageUrl
     : isRecord(rawImageUrl)
@@ -2784,13 +2782,14 @@ function sanitizeTextControl(
   profile: ModelRouterProfile,
   publicModelAlias: string,
   sensitiveValues: string[],
-  allowedLocalPathPrefixes: string[] = [],
 ): Extract<TextControl, { type: 'need_more_visual_info' }> {
   return {
     type: 'need_more_visual_info',
     target: control.target,
-    question: publicProviderOutputText(control.question, profile, publicModelAlias, sensitiveValues, allowedLocalPathPrefixes),
-    reason: control.reason ? publicProviderOutputText(control.reason, profile, publicModelAlias, sensitiveValues, allowedLocalPathPrefixes) : undefined,
+    question: publicProviderOutputText(control.question, profile, publicModelAlias, sensitiveValues),
+    reason: control.reason
+      ? publicProviderOutputText(control.reason, profile, publicModelAlias, sensitiveValues)
+      : undefined,
   };
 }
 
@@ -3661,7 +3660,7 @@ function finalModalityRoutingSignal(item: ModalityRef): SemanticModalitySignal {
 }
 
 function modalityKindFromSpecificType(type: string | undefined): ModalityKind | undefined {
-  const normalized = type?.trim().toLowerCase().replace(/_/g, '-');
+  const normalized = type?.trim().replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/_/g, '-');
   if (!normalized) return undefined;
   if (normalized === 'input-image' || normalized === 'local-image' || normalized === 'image') return 'vision.image';
   if (normalized === 'input-audio' || normalized === 'audio') return 'audio';
@@ -3814,11 +3813,12 @@ function publicProviderOutputText(
   profile: ModelRouterProfile,
   publicModelAlias: string,
   sensitiveValues: string[] = [],
-  allowedLocalPathPrefixes: string[] = [],
 ) {
-  return redactTraceText(value, {
+  return redactUserVisibleText(value, {
+    // Product-facing responses should look like one native multimodal model.
+    // Keep useful paths and ordinary URLs visible, but never leak the internal
+    // provider/model split used for text, vision, science, or image generation.
     sensitiveValues: [...profileTraceRedactionValues(profile, publicModelAlias), ...sensitiveValues],
-    allowedLocalPathPrefixes,
   });
 }
 

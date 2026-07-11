@@ -1437,6 +1437,41 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('aria-label="Send" disabled=""')
   })
 
+  it('renders selected comment references as removable sendable context', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposer, {
+        input: '',
+        setInput: () => undefined,
+        mode: 'agent',
+        setMode: () => undefined,
+        busy: false,
+        runtimeReady: true,
+        hasActiveThread: true,
+        composerModel: '',
+        composerPickList: [],
+        onComposerModelChange: () => undefined,
+        queuedMessages: [],
+        onRemoveQueuedMessage: () => undefined,
+        onSend: () => undefined,
+        onInterrupt: () => undefined,
+        commentReferences: [{
+          id: 'comment-1',
+          label: 'Figure 2 · peak 3',
+          comment: 'This peak looks shifted.'
+        }],
+        onRemoveCommentReference: () => undefined,
+        attachmentUploadEnabled: false,
+        webAccessAvailable: false
+      })
+    )
+
+    expect(html).toContain('Figure 2 · peak 3')
+    expect(html).toContain('This peak looks shifted.')
+    expect(html).toContain('Remove comment reference')
+    expect(html).toContain('aria-label="Send"')
+    expect(html).not.toContain('aria-label="Send" disabled=""')
+  })
+
   it('hides execution access controls in the composer footer', () => {
     useChatStore.setState({
       activeThreadId: 'thr_1',

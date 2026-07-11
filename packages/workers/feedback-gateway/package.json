@@ -1,0 +1,44 @@
+{
+  "name": "@sciforge/feedback-gateway",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Deployable SciForge product-feedback gateway for immutable evidence and idempotent GitHub Issues.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false,
+    "sideEffects": "filesystem,network"
+  },
+  "bin": {
+    "sciforge-feedback-gateway": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./service": "./src/service.ts",
+    "./server": "./src/server.ts"
+  },
+  "files": [
+    "src",
+    ".env.example",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1049.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

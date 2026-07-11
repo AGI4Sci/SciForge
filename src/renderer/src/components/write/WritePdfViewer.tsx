@@ -21,8 +21,6 @@ import {
   Loader2,
   MessageSquare,
   Minus,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
   Quote,
   Search,
@@ -43,12 +41,14 @@ import {
   resolveContentZoomWheel,
   stepContentScale
 } from '../../lib/content-zoom-shortcuts'
+import { registerVisibleContextVisualTarget } from '../../lib/visible-context'
 import {
   preferNativePdfDragSelection,
   rotatedPdfTextBounds,
   slicedRotatedPdfTextBounds,
   type RotatedPdfTextGeometry
 } from './write-pdf-viewer-geometry'
+import { normalizedBoundsForPageRects } from './write-pdf-visible-context'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
@@ -205,6 +205,7 @@ export type WritePdfViewerProps = {
   workspaceRoot?: string
   className?: string
   viewerRef?: RefObject<HTMLDivElement | null>
+  visualContextComponentId?: string
   initialPage?: number
   initialScale?: number
   annotationOverlays?: WritePdfAnnotationOverlay[]
@@ -2110,6 +2111,7 @@ export function WritePdfViewer({
   workspaceRoot,
   className,
   viewerRef,
+  visualContextComponentId,
   initialPage = 1,
   initialScale = DEFAULT_PDF_SCALE,
   annotationOverlays = [],
@@ -2134,6 +2136,9 @@ export function WritePdfViewer({
   const skipMouseUpSelectionSyncRef = useRef(false)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const onQuoteSelectionRef = useRef(onQuoteSelection)
+  const currentPageRef = useRef(Math.max(1, Math.round(initialPage)))
+  const initialPageRef = useRef(initialPage)
+  const activeFilePathRef = useRef(filePath)
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -2150,6 +2155,8 @@ export function WritePdfViewer({
   const [liveSelection, setLiveSelection] = useState(false)
   const rootRef = viewerRef ?? localViewerRef
   const pageCount = pdfDocument?.numPages ?? 0
+  currentPageRef.current = currentPage
+  initialPageRef.current = initialPage
   const sourceTitle = useMemo(() => relativeToWorkspace(workspaceRoot, filePath), [filePath, workspaceRoot])
   const selectionContext = useMemo<PdfSelectionContext>(() => ({
     filePath,
@@ -2195,6 +2202,10 @@ export function WritePdfViewer({
 
   useEffect(() => {
     let cancelled = false
+    const pageToRestore = activeFilePathRef.current === filePath
+      ? currentPageRef.current
+      : initialPageRef.current
+    activeFilePathRef.current = filePath
     setLoading(true)
     setError('')
     setPdfDocument(null)
@@ -2229,7 +2240,7 @@ export function WritePdfViewer({
         void pdf.destroy()
         return
       }
-      const targetPage = clamp(Math.round(initialPage), 1, pdf.numPages || 1)
+      const targetPage = clamp(Math.round(pageToRestore), 1, pdf.numPages || 1)
       setPdfDocument(pdf)
       setCurrentPage(targetPage)
       setPageInput(String(targetPage))
@@ -2245,7 +2256,16 @@ export function WritePdfViewer({
       cancelled = true
       void task.destroy()
     }
-  }, [data, dataBase64, emitSelection, filePath, initialPage, mimeType, mtimeMs, size, sourceTitle, sourceUrl])
+  }, [data, dataBase64, emitSelection, filePath, mimeType, mtimeMs, size, sourceTitle, sourceUrl])
+
+  useEffect(() => {
+    if (!pdfDocument) return
+    const page = currentPageRef.current
+    const frame = window.requestAnimationFrame(() => {
+      pageRefs.current.get(page)?.scrollIntoView({ block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [pdfDocument])
 
   useEffect(() => {
     setScale(normalizePdfScale(initialScale))
@@ -2358,6 +2378,84 @@ export function WritePdfViewer({
     }
     return byPage
   }, [annotationOverlays])
+
+  useEffect(() => {
+    if (!visualContextComponentId || !pdfDocument) return undefined
+    return registerVisibleContextVisualTarget({
+      componentId: visualContextComponentId,
+      target: {
+        id: 'pdf.page.current',
+        kind: 'document-page',
+        contentType: 'pdf',
+        page: currentPage,
+        active: true,
+        metadata: {
+          path: filePath,
+          pageCount,
+          scale
+        }
+      },
+      element: () => pageRefs.current.get(currentPage)
+        ?.querySelector<HTMLElement>('[data-write-pdf-page]') ?? null
+    })
+  }, [currentPage, filePath, pageCount, pdfDocument, scale, visualContextComponentId])
+
+  useEffect(() => {
+    if (!visualContextComponentId) return undefined
+    const page = committedSelection?.pageStart ?? committedSelectionRects[0]?.page
+    const relativeBounds = page == null
+      ? null
+      : normalizedBoundsForPageRects(committedSelectionRects, page)
+    if (!page || !relativeBounds) return undefined
+    return registerVisibleContextVisualTarget({
+      componentId: visualContextComponentId,
+      target: {
+        id: 'pdf.selection.current',
+        kind: 'region',
+        contentType: 'pdf',
+        page,
+        active: true,
+        metadata: {
+          path: filePath,
+          source: 'selection',
+          charCount: committedSelection?.charCount ?? 0
+        }
+      },
+      element: () => pageRefs.current.get(page)
+        ?.querySelector<HTMLElement>('[data-write-pdf-page]') ?? null,
+      relativeBounds
+    })
+  }, [committedSelection, committedSelectionRects, filePath, visualContextComponentId])
+
+  useEffect(() => {
+    if (!visualContextComponentId || !activeAnnotationId) return undefined
+    const annotation = annotationOverlays.find((overlay) => overlay.id === activeAnnotationId)
+    const page = annotation?.rects[0]?.page
+    const relativeBounds = page == null
+      ? null
+      : normalizedBoundsForPageRects(annotation?.rects ?? [], page)
+    if (!annotation || !page || !relativeBounds) return undefined
+    return registerVisibleContextVisualTarget({
+      componentId: visualContextComponentId,
+      target: {
+        id: 'pdf.annotation.active',
+        kind: 'region',
+        contentType: 'pdf',
+        page,
+        active: true,
+        metadata: {
+          path: filePath,
+          source: 'annotation',
+          annotationId: annotation.id,
+          annotationKind: annotation.kind,
+          status: annotation.status
+        }
+      },
+      element: () => pageRefs.current.get(page)
+        ?.querySelector<HTMLElement>('[data-write-pdf-page]') ?? null,
+      relativeBounds
+    })
+  }, [activeAnnotationId, annotationOverlays, filePath, visualContextComponentId])
 
   useEffect(() => {
     setSearchIndex(0)
@@ -2661,8 +2759,40 @@ export function WritePdfViewer({
 
   useEffect(() => {
     if (!jumpToRect) return
-    scrollToPage(jumpToRect.page)
-  }, [jumpToRect, scrollToPage])
+    const page = clamp(Math.round(jumpToRect.page), 1, pageCount || 1)
+    setCurrentPage(page)
+    setPageInput(String(page))
+    let frame = 0
+    let attempts = 0
+    const focusAnnotation = (): void => {
+      const pageNode = pageRefs.current.get(page)
+      const annotationRect = pageNode?.querySelector<HTMLElement>('.write-pdf-annotation-rect[data-active="true"]')
+      if (annotationRect && annotationRect.getBoundingClientRect().height > 0) {
+        annotationRect.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+        return
+      }
+      const renderedPage = pageNode?.querySelector<HTMLElement>('.write-pdf-page')
+      const scroller = scrollerRef.current
+      if (renderedPage && scroller && renderedPage.getBoundingClientRect().height > 0) {
+        const pageRect = renderedPage.getBoundingClientRect()
+        const scrollerRect = scroller.getBoundingClientRect()
+        const targetY = pageRect.top - scrollerRect.top + scroller.scrollTop + jumpToRect.y * pageRect.height
+        scroller.scrollTo({
+          top: Math.max(0, targetY - scroller.clientHeight / 2),
+          behavior: 'smooth'
+        })
+        return
+      }
+      attempts += 1
+      if (attempts < 20) {
+        frame = window.requestAnimationFrame(focusAnnotation)
+      } else {
+        pageNode?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }
+    }
+    frame = window.requestAnimationFrame(focusAnnotation)
+    return () => window.cancelAnimationFrame(frame)
+  }, [jumpToRect, pageCount])
 
   const matchLabel = searchQuery.trim()
     ? `${searchMatches.length ? Math.min(searchIndex + 1, searchMatches.length) : 0}/${searchMatches.length}`
@@ -2764,11 +2894,7 @@ export function WritePdfViewer({
                 aria-pressed={annotationsOpen}
                 onClick={toggleAnnotations}
               >
-                {annotationsOpen ? (
-                  <PanelRightClose className="h-4 w-4" strokeWidth={1.9} />
-                ) : (
-                  <PanelRightOpen className="h-4 w-4" strokeWidth={1.9} />
-                )}
+                <StickyNote className="h-4 w-4" strokeWidth={1.9} />
               </button>
             </div>
           ) : null}

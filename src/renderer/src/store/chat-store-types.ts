@@ -128,12 +128,27 @@ export type SideConversation = {
   liveAssistant: string
   lastSeq: number
   input: string
+  /** Follow-up messages waiting for the current side turn to finish. */
+  queuedMessages?: SideQueuedMessage[]
   model: string
   reasoningEffort: string
   busy: boolean
   turnId: string | null
   userItemId: string | null
   error: string | null
+}
+
+export type SideMessageOverrides = {
+  attachmentIds?: string[]
+  fileReferences?: AgentRuntimeFileReference[]
+  displayText?: string
+}
+
+export type SideQueuedMessage = SideMessageOverrides & {
+  id: string
+  text: string
+  model: string
+  reasoningEffort?: string
 }
 
 export type SidePanelState = {
@@ -298,7 +313,12 @@ export type ChatState = {
    * thread. The first draft send will create the side thread.
    */
   openSideConversationDraft: () => void
-  sendSideMessage: (sideId: string, text: string) => Promise<boolean>
+  sendSideMessage: (
+    sideId: string,
+    text: string,
+    overrides?: SideMessageOverrides
+  ) => Promise<boolean>
+  removeSideQueuedMessage: (sideId: string, messageId: string) => void
   interruptSide: (sideId: string) => Promise<void>
   setSideInput: (sideId: string, text: string) => void
   setSideModel: (sideId: string, model: string) => void

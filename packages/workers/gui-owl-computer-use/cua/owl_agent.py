@@ -1,7 +1,6 @@
-"""Computer-use model driver routed through an OpenAI-compatible grounding API.
+"""Computer-use model driver routed through SciForge Model Router.
 
-The configured endpoint must point at a vision-capable GUI agent chosen by the
-user/operator. Given the system prompt
+The configured endpoint must point at the local Model Router. Given the system prompt
 (which defines the `computer_use` action space), the task, previous actions, and
 the current screenshot, the routed model returns one step as:
 
@@ -122,9 +121,9 @@ SYSTEM_PROMPT = (
 )
 
 GROUNDING_DIM = 1000  # the model's normalized coordinate space
-GROUNDING_ENDPOINT_URL_ERROR = (
-    "CUA_GROUNDING_BASE_URL must be an http(s) URL without embedded credentials, "
-    "query parameters, or fragments."
+MODEL_ROUTER_URL_ERROR = (
+    "SCIFORGE_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router "
+    "responses endpoint (127.0.0.1, localhost, or [::1])."
 )
 
 
@@ -204,37 +203,20 @@ def build_messages(instruction: str, history: List[Dict[str, str]],
 
 
 def call_owl(base_url: str, model: str, api_key: str,
-             messages: List[Dict[str, Any]], endpoint: str = "chat_completions",
-             extra_headers: Optional[Dict[str, str]] = None,
-             base_url_label: str = "CUA_GROUNDING_BASE_URL",
-             api_key_label: str = "CUA_GROUNDING_API_KEY",
+             messages: List[Dict[str, Any]],
              timeout: float = 120.0,
              max_tokens: int = 1024) -> str:
-    """POST to the configured grounding endpoint and return generated text."""
-    endpoint = _normalize_endpoint(endpoint)
-    url = _grounding_endpoint_url(base_url, endpoint, base_url_label)
+    """POST to the app Model Router responses endpoint and return generated text."""
+    url = _model_router_responses_url(base_url)
     headers = {"Content-Type": "application/json"}
     if not api_key:
-        raise RuntimeError(f"{api_key_label} is required.")
-    headers.update(extra_headers or {})
+        raise RuntimeError("SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY is required.")
     headers["Authorization"] = f"Bearer {api_key}"
-    if endpoint == "chat_completions":
-        body = {
-            "model": model,
-            "messages": _messages_to_chat_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": 0.0,
-            "stream": False,
-        }
-        r = requests.post(url, headers=headers, json=body, timeout=timeout)
-        r.raise_for_status()
-        return _chat_completions_output_text(r.json())
-
     instructions, input_items = _messages_to_responses_input(messages)
     body = {
         "model": model,
         "input": input_items,
-        "max_tokens": max_tokens,
+        "max_output_tokens": max_tokens,
         "temperature": 0.0,
         "stream": False,
     }
@@ -245,30 +227,21 @@ def call_owl(base_url: str, model: str, api_key: str,
     return _responses_output_text(r.json())
 
 
-def _normalize_endpoint(endpoint: str) -> str:
-    value = endpoint.strip().lower().replace("-", "_").replace("/", "_")
-    if value in ("", "chat", "chat_completions", "v1_chat_completions"):
-        return "chat_completions"
-    if value in ("responses", "v1_responses"):
-        return "responses"
-    raise RuntimeError("CUA_GROUNDING_ENDPOINT must be chat_completions or responses.")
-
-
-def _grounding_endpoint_url(base_url: str, endpoint: str,
-                            base_url_label: str = "CUA_GROUNDING_BASE_URL") -> str:
+def _model_router_responses_url(base_url: str) -> str:
     base = base_url.strip()
     if not base:
-        raise RuntimeError(f"{base_url_label} is required.")
+        raise RuntimeError("SCIFORGE_MODEL_ROUTER_BASE_URL is required.")
     parsed = urlparse(base)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise RuntimeError(_base_url_error(base_url_label))
+        raise RuntimeError(MODEL_ROUTER_URL_ERROR)
     if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
-        raise RuntimeError(_base_url_error(base_url_label))
+        raise RuntimeError(MODEL_ROUTER_URL_ERROR)
+    if (parsed.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError(MODEL_ROUTER_URL_ERROR)
     path = parsed.path.rstrip("/")
-    if endpoint == "responses":
-        suffix = "/responses"
-    else:
-        suffix = "/chat/completions"
+    if path not in ("", "/v1", "/v1/responses"):
+        raise RuntimeError(MODEL_ROUTER_URL_ERROR)
+    suffix = "/responses"
     if path.endswith(suffix):
         resolved = path
     elif path.endswith("/v1"):
@@ -278,54 +251,6 @@ def _grounding_endpoint_url(base_url: str, endpoint: str,
     else:
         resolved = f"{path}{suffix}"
     return urlunparse((parsed.scheme, parsed.netloc, resolved, "", "", ""))
-
-
-def _base_url_error(base_url_label: str) -> str:
-    if base_url_label == "CUA_GROUNDING_BASE_URL":
-        return GROUNDING_ENDPOINT_URL_ERROR
-    return (
-        f"{base_url_label} must be an http(s) URL without embedded credentials, "
-        "query parameters, or fragments."
-    )
-
-
-def _messages_to_chat_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for msg in messages:
-        role = str(msg.get("role") or "user")
-        if role not in ("system", "user", "assistant"):
-            role = "user"
-        content = msg.get("content", "")
-        if role in ("system", "assistant"):
-            out.append({"role": role, "content": _content_to_text(content)})
-        else:
-            out.append({"role": role, "content": _content_to_chat_parts(content)})
-    return out or [{"role": "user", "content": ""}]
-
-
-def _content_to_chat_parts(content: Any) -> Any:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return str(content or "")
-    parts: List[Dict[str, Any]] = []
-    for part in content:
-        if not isinstance(part, dict):
-            text = str(part)
-            if text:
-                parts.append({"type": "text", "text": text})
-            continue
-        if part.get("type") == "text":
-            parts.append({"type": "text", "text": str(part.get("text") or "")})
-            continue
-        if part.get("type") == "image_url":
-            image_url = part.get("image_url") if isinstance(part.get("image_url"), dict) else {}
-            url = image_url.get("url") or part.get("url")
-            if url:
-                parts.append({"type": "image_url", "image_url": {"url": str(url)}})
-            continue
-        parts.append({"type": "text", "text": json.dumps(part, ensure_ascii=False)})
-    return parts or ""
 
 
 def _messages_to_responses_input(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
@@ -403,29 +328,6 @@ def _responses_output_text(payload: Dict[str, Any]) -> str:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
                 chunks.append(part["text"])
     return "\n".join(chunks)
-
-
-def _chat_completions_output_text(payload: Dict[str, Any]) -> str:
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return ""
-    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
-    if not isinstance(message, dict):
-        return ""
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        chunks: List[str] = []
-        for part in content:
-            if isinstance(part, dict):
-                text = part.get("text") or part.get("content")
-                if isinstance(text, str):
-                    chunks.append(text)
-            elif isinstance(part, str):
-                chunks.append(part)
-        return "\n".join(chunks)
-    return ""
 
 
 def extract_action(text: str) -> Optional[Dict[str, Any]]:

@@ -314,7 +314,20 @@ function createApi(): SciForgeApi {
     copyWriteDocumentAsRichText: (payload) => invoke('write:copy-rich-text', payload),
     visibleContext: {
       publish: (snapshot) => invoke('visibleContext:publish', snapshot),
-      get: () => invoke('visibleContext:get')
+      get: () => invoke('visibleContext:get'),
+      readCapturePreview: (request) => invoke('visibleContext:capture:preview', request),
+      onRefreshRequested: (handler) => onChannel('visibleContext:refresh-requested', handler),
+      onCaptureStateChanged: (handler) => onChannel('visibleContext:capture-state', handler)
+    },
+    anchoredComments: {
+      list: (filter) => invoke('anchoredComments:list', filter),
+      get: (threadId) => invoke('anchoredComments:get', threadId),
+      upsert: (thread) => invoke('anchoredComments:upsert', thread),
+      delete: (threadId) => invoke('anchoredComments:delete', threadId),
+      readAsset: (asset) => invoke('anchoredComments:asset:read', asset),
+      capture: (request) => invoke('anchoredComments:capture', request),
+      submitFeedback: (request) => invoke('anchoredComments:feedback:submit', request),
+      feedbackStatus: (request) => invoke('anchoredComments:feedback:status', request)
     },
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)

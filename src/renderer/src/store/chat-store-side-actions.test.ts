@@ -34,6 +34,7 @@ class FakeProvider implements AgentProvider {
   forkMock = vi.fn()
   getDetailMock = vi.fn()
   sendMock = vi.fn()
+  steerMock = vi.fn()
   deleteMock = vi.fn()
   patchMock = vi.fn()
   updateRelationMock = vi.fn()
@@ -78,7 +79,9 @@ class FakeProvider implements AgentProvider {
     this.sendMock(threadId, text, options)
     return { threadId, turnId: `turn_${threadId}_${Date.now()}` }
   }
-  async steerUserMessage() {}
+  async steerUserMessage(threadId: string, turnId: string, text: string) {
+    this.steerMock(threadId, turnId, text)
+  }
   async interruptTurn(threadId: string, turnId: string) {
     this.interruptMock(threadId, turnId)
   }
@@ -235,6 +238,7 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     attachSideConversation: async () => null,
     openSideConversationDraft: () => undefined,
     sendSideMessage: async () => false,
+    removeSideQueuedMessage: () => undefined,
     interruptSide: async () => undefined,
     setSideInput: () => undefined,
     setSideModel: () => undefined,
@@ -693,7 +697,7 @@ describe('chat-store-side-actions', () => {
     expect(state.busy).toBe(true)
   })
 
-  it('reconnects and marks the side busy when send sees an already-running turn', async () => {
+  it('reconnects and queues the message when send discovers an already-running turn', async () => {
     const { actions, state, provider } = buildHarness()
     const id = (await actions.spawnSideConversation())!
     provider.subscribeMock.mockClear()
@@ -703,12 +707,153 @@ describe('chat-store-side-actions', () => {
 
     const sent = await actions.sendSideMessage(id, 'hi from side')
 
-    expect(sent).toBe(false)
+    expect(sent).toBe(true)
     expect(state.sideConversations[id]).toEqual(expect.objectContaining({
       busy: true,
-      error: expect.stringContaining('turn_in_progress')
+      error: null,
+      queuedMessages: [expect.objectContaining({ text: 'hi from side' })]
     }))
     expect(provider.subscribeMock).toHaveBeenCalledWith(id, 0, expect.anything(), expect.any(AbortSignal))
+  })
+
+  it('steers a running child-agent turn and strips an explicit /steer command', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: true }
+    provider.threadDetail = {
+      blocks: [],
+      latestSeq: 4,
+      threadStatus: 'running',
+      latestTurnId: 'turn-child'
+    }
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+
+    const sent = await actions.sendSideMessage(id, '/steer inspect the visual evidence')
+
+    expect(sent).toBe(true)
+    expect(provider.steerMock).toHaveBeenCalledWith(
+      'child-thread',
+      'turn-child',
+      'inspect the visual evidence'
+    )
+    expect(provider.sendMock).not.toHaveBeenCalled()
+    expect(state.sideConversations[id].queuedMessages).toEqual([])
+  })
+
+  it('queues complete multimodal payloads when a running child turn cannot be steered', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: true }
+    provider.threadDetail = {
+      blocks: [],
+      latestSeq: 4,
+      threadStatus: 'running',
+      latestTurnId: 'turn-child'
+    }
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+    const fileReference = {
+      path: 'figure.png',
+      relativePath: 'figure.png',
+      name: 'figure.png',
+      mimeType: 'image/png'
+    }
+
+    const sent = await actions.sendSideMessage(id, 'use this image', {
+      attachmentIds: ['attachment-1'],
+      fileReferences: [fileReference]
+    })
+
+    expect(sent).toBe(true)
+    expect(provider.steerMock).not.toHaveBeenCalled()
+    expect(state.sideConversations[id].queuedMessages).toEqual([
+      expect.objectContaining({
+        text: 'use this image',
+        attachmentIds: ['attachment-1'],
+        fileReferences: [fileReference]
+      })
+    ])
+  })
+
+  it('sends an attachment-only child message with a runtime prompt', async () => {
+    const { actions, provider } = buildHarness()
+    provider.threadDetail = { blocks: [], latestSeq: 0, threadStatus: 'idle' }
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+
+    const sent = await actions.sendSideMessage(id, '', { attachmentIds: ['attachment-1'] })
+
+    expect(sent).toBe(true)
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'common:composerImageOnlyPrompt',
+      expect.objectContaining({ attachmentIds: ['attachment-1'] })
+    )
+  })
+
+  it('automatically sends the next queued child message after turn completion', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: false }
+    provider.threadDetail = {
+      blocks: [],
+      latestSeq: 4,
+      threadStatus: 'running',
+      latestTurnId: 'turn-child'
+    }
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+    await actions.sendSideMessage(id, 'follow up after completion')
+    expect(state.sideConversations[id].queuedMessages).toHaveLength(1)
+    const subscription = provider.subscribeMock.mock.calls.at(-1) as
+      | [string, number, ThreadEventSink, AbortSignal]
+      | undefined
+
+    subscription?.[2].onTurnComplete()
+    await flushPromises()
+
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'follow up after completion',
+      expect.objectContaining({ model: 'deepseek-chat', reasoningEffort: 'max' })
+    )
+    expect(state.sideConversations[id].queuedMessages).toEqual([])
+    expect(state.sideConversations[id].busy).toBe(true)
+    expect(state.sideConversations[id].turnId).toMatch(/^turn_child-thread_/)
+  })
+
+  it('removes a queued side message without changing the active turn', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: false }
+    provider.threadDetail = {
+      blocks: [],
+      latestSeq: 4,
+      threadStatus: 'running',
+      latestTurnId: 'turn-child'
+    }
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+    await actions.sendSideMessage(id, 'remove this follow-up')
+    const queuedId = state.sideConversations[id].queuedMessages?.[0]?.id
+
+    actions.removeSideQueuedMessage(id, queuedId!)
+
+    expect(state.sideConversations[id].queuedMessages).toEqual([])
+    expect(state.sideConversations[id].busy).toBe(true)
+    expect(state.sideConversations[id].turnId).toBe('turn-child')
   })
 
   it('settles side interrupt when the runtime reports the turn is already stopped', async () => {

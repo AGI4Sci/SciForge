@@ -7,10 +7,11 @@ import {
   isDeferredNonLifeScienceExtension,
   type WorkspaceObservation
 } from '@shared/workspace-preview'
-import { FolderOpen, PanelRightClose } from 'lucide-react'
+import { FolderOpen, PanelRightClose, RefreshCw } from 'lucide-react'
 import {
   useEffect,
   useMemo,
+  useRef,
   type ReactElement
 } from 'react'
 import {
@@ -23,7 +24,10 @@ import {
   rendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewPluginDescriptor
 } from '../workspace-preview'
-import { registerVisibleContextComponent } from '../lib/visible-context'
+import {
+  registerVisibleContextComponent,
+  registerVisibleContextVisualTarget
+} from '../lib/visible-context'
 
 export type WorkspaceFilePreviewPanelBridgeRoute = {
   kind: 'workspace-preview-shell'
@@ -255,6 +259,7 @@ function WorkspacePreviewShellBody({
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }): ReactElement {
+  const previewRef = useRef<HTMLDivElement | null>(null)
   const lastEditSummary = context.state.lastEditSummary
   const canOpenDirectory = Boolean(target && onOpenDirectory)
   const integrityNotice = workspacePreviewIntegrityNotice({
@@ -278,8 +283,35 @@ function WorkspacePreviewShellBody({
     return registerVisibleContextComponent(visibleContextComponent)
   }, [visibleContextComponent])
 
+  useEffect(() => {
+    if (!visibleContextComponent) return undefined
+    const observation = context.state.observation
+    const modality = observation?.view.modality ?? context.state.session?.modality ?? route.modality ?? 'unknown'
+    const slideId = observation?.selection?.kind === 'deck'
+      ? observation.selection.slideIds[0]
+      : observation?.slides?.[0]?.id
+    return registerVisibleContextVisualTarget({
+      componentId: visibleContextComponent.id,
+      target: {
+        id: 'preview.current',
+        kind: 'component',
+        contentType: workspacePreviewVisualContentType(modality),
+        active: true,
+        metadata: {
+          path: visibleContextComponent.state?.path,
+          modality,
+          pluginId: visibleContextComponent.state?.pluginId,
+          selectionKind: visibleContextComponent.state?.selectionKind,
+          ...(slideId ? { slideId } : {})
+        }
+      },
+      element: () => previewRef.current
+    })
+  }, [context.state.observation, context.state.session?.modality, route.modality, visibleContextComponent])
+
   return (
     <div
+      ref={previewRef}
       className="relative h-full min-h-0 overflow-hidden"
       data-workspace-file-preview-panel-bridge
       data-route={route.kind}
@@ -287,6 +319,16 @@ function WorkspacePreviewShellBody({
       data-asset-status={context.assetStatus}
     >
       <div className="absolute right-3 top-3 z-10 flex items-center gap-1">
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted hover:bg-ds-hover hover:text-ds-text disabled:cursor-not-allowed disabled:opacity-45"
+          title="刷新文件预览"
+          aria-label="刷新文件预览"
+          disabled={!context.state.session || context.refreshing}
+          onClick={context.refresh}
+        >
+          <RefreshCw className={compactClassName('h-4 w-4', context.refreshing ? 'animate-spin' : undefined)} aria-hidden="true" />
+        </button>
         {canOpenDirectory ? (
           <button
             type="button"
@@ -329,9 +371,16 @@ function WorkspacePreviewShellBody({
         routePluginId={route.pluginId}
         routeModality={route.modality}
         annotationQuestionBridge={annotationQuestionBridge}
+        visualContextComponentId={visibleContextComponent?.id}
       />
     </div>
   )
+}
+
+export function workspacePreviewVisualContentType(modality: string): string {
+  if (modality === 'deck') return 'slide'
+  if (modality === 'image' || modality === 'bioimaging') return 'image'
+  return modality
 }
 
 function WorkspacePreviewIntegrityStatus({
@@ -364,7 +413,7 @@ function WorkspacePreviewEditSummaryStatus({
 }): ReactElement {
   return (
     <div
-      className="pointer-events-none absolute right-3 top-12 z-10 max-w-[min(22rem,calc(100%-1.5rem))] rounded-md border border-ds-border bg-ds-panel/95 px-3 py-2 text-xs shadow-lg"
+      className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(22rem,calc(100%-1.5rem))] rounded-md border border-ds-border bg-ds-panel/95 px-3 py-2 text-xs shadow-lg"
       role="status"
       aria-live="polite"
       data-workspace-preview-edit-summary

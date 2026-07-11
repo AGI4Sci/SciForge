@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -109,6 +109,94 @@ test('handles binary and oversized files without unbounded reads', async (t) => 
   assert.equal(huge.nextOffset, 1024)
 })
 
+test('requests a managed visual capture and returns the verified PNG resource', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-capture-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const visibleContextPath = join(tempRoot, 'visible-context', 'snapshot.json')
+  const captureDirectory = join(tempRoot, 'visible-context', 'captures')
+  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
+  const capturePath = join(captureDirectory, 'latest.png')
+  await mkdir(captureDirectory, { recursive: true })
+  await writeFile(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+
+  const service = createWorkspaceIntelService({
+    visibleContextPath,
+    visualCaptureTimeoutMs: 1_000,
+    visualCapturePollIntervalMs: 5
+  })
+  const capturePromise = service.visualCapture({
+    scope: 'target',
+    componentId: 'right-sidebar.file-preview',
+    targetId: 'current-page'
+  })
+  const requestName = await waitForFileName(requestDirectory, '.request.json')
+  const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as {
+    requestId: string
+    scope: string
+    componentId: string
+    targetId: string
+  }
+  assert.equal(request.scope, 'target')
+  assert.equal(request.componentId, 'right-sidebar.file-preview')
+  assert.equal(request.targetId, 'current-page')
+  await writeFile(join(requestDirectory, `${request.requestId}.response.json`), JSON.stringify({
+    schemaVersion: 1,
+    requestId: request.requestId,
+    completedAt: new Date().toISOString(),
+    ok: true,
+    capture: {
+      kind: 'visualSnapshot',
+      role: 'target',
+      path: capturePath,
+      mimeType: 'image/png',
+      capturedAt: new Date().toISOString(),
+      width: 1200,
+      height: 800,
+      scaleFactor: 2,
+      windowId: 'window-1',
+      revision: 4,
+      componentId: request.componentId,
+      targetId: request.targetId,
+      target: {
+        id: request.targetId,
+        kind: 'document-page',
+        bounds: { x: 10, y: 20, width: 600, height: 400 },
+        page: 10,
+        active: true
+      }
+    }
+  }), 'utf8')
+
+  const result = await capturePromise
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.resource.path, capturePath)
+  assert.equal(result.resource.target?.page, 10)
+  assert.deepEqual(await readdir(requestDirectory), [])
+})
+
+test('bounds visual capture waits and reports an actionable timeout', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-timeout-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
+  const service = createWorkspaceIntelService({
+    visibleContextPath: join(tempRoot, 'visible-context', 'snapshot.json'),
+    visualCaptureTimeoutMs: 100,
+    visualCapturePollIntervalMs: 5
+  })
+
+  const result = await service.visualCapture({ scope: 'window' })
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.error.code, 'visual_capture_timeout')
+  assert.equal(result.error.retryable, true)
+  assert.deepEqual(await readdir(requestDirectory), [])
+})
+
 test('lists and reads project skills by id', async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-skills-'))
   t.after(async () => {
@@ -184,6 +272,17 @@ async function writeSkill(root: string, name: string, description: string): Prom
     '',
     description
   ].join('\n'), 'utf8')
+}
+
+async function waitForFileName(directory: string, suffix: string): Promise<string> {
+  const deadline = Date.now() + 1_000
+  while (Date.now() < deadline) {
+    const names = await readdir(directory).catch(() => [])
+    const match = names.find((name) => name.endsWith(suffix))
+    if (match) return match
+    await new Promise<void>((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`Timed out waiting for ${suffix} in ${directory}`)
 }
 
 async function withHome<T>(homeRoot: string, action: () => Promise<T>): Promise<T> {

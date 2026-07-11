@@ -73,6 +73,7 @@ export type WorkspacePreviewPluginOutletProps = {
   routeModality?: WorkspacePreviewModality
   renderers?: readonly WorkspacePreviewPluginRendererContribution[]
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
+  visualContextComponentId?: string
 }
 
 export type WorkspacePreviewPluginRendererInput = {
@@ -85,6 +86,7 @@ export type WorkspacePreviewPluginRendererInput = {
   modality?: WorkspacePreviewModality
   applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
+  visualContextComponentId?: string
 }
 
 export type WorkspacePreviewPluginRendererContribution = {
@@ -204,7 +206,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         observation.file.mimeType === 'application/pdf' ||
         observation.file.mimeType === 'application/x-pdf'
       )),
-    render: ({ context, observation, asset, transport, annotationQuestionBridge }) => (
+    render: ({ context, observation, asset, transport, annotationQuestionBridge, visualContextComponentId }) => (
       <DocumentAnnotationPanelController
         context={context}
         observation={observation}
@@ -226,6 +228,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
             onAnnotationSelect={pdf.onAnnotationSelect}
             onOpenAnnotations={pdf.onOpenAnnotations}
             onToggleAnnotations={pdf.onToggleAnnotations}
+            visualContextComponentId={visualContextComponentId}
           />
         )}
       />
@@ -423,7 +426,8 @@ export function WorkspacePreviewPluginOutlet({
   routePluginId,
   routeModality,
   renderers = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
-  annotationQuestionBridge
+  annotationQuestionBridge,
+  visualContextComponentId
 }: WorkspacePreviewPluginOutletProps): ReactElement {
   const observation = context.state.observation
   const pluginId = observation?.view.pluginId ??
@@ -454,7 +458,8 @@ export function WorkspacePreviewPluginOutlet({
       pluginId,
       modality,
       applyEdit,
-      annotationQuestionBridge
+      annotationQuestionBridge,
+      visualContextComponentId
     })
   }
 

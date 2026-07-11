@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
   一键启动「集成了 Computer-Use 模块」的 SciForge GUI。
-  One-click launcher for the SciForge GUI with the Computer-Use worker wired through a grounding API.
+  One-click launcher for the SciForge GUI with Computer-Use wired through Model Router.
 
 .DESCRIPTION
   流程 / What it does:
@@ -54,12 +54,10 @@ elseif (Test-Path $secretsExample) { Warn "未找到 启动-secrets.local.ps1, �
 else { Die "缺少 secrets 配置 (启动-secrets.local.ps1 / .example)" }
 
 if (-not $env:CUA_PORT) { $env:CUA_PORT = "3900" }
-if (-not $env:CUA_GROUNDING_BASE_URL) { $env:CUA_GROUNDING_BASE_URL = "http://10.140.158.130:8881/v1/chat/completions" }
-if (-not $env:CUA_GROUNDING_MODEL) { $env:CUA_GROUNDING_MODEL = "gui-owl" }
-if (-not $env:CUA_GROUNDING_ENDPOINT) { $env:CUA_GROUNDING_ENDPOINT = "chat_completions" }
-if (-not $env:CUA_GROUNDING_EXTRA_HEADERS) { $env:CUA_GROUNDING_EXTRA_HEADERS = '{"x-original-model":"gui-owl"}' }
-if (-not $env:CUA_GROUNDING_API_KEY -or $env:CUA_GROUNDING_API_KEY -eq "replace-with-grounding-api-key") {
-  Die "缺少 CUA_GROUNDING_API_KEY; 请通过 启动-secrets.local.ps1 或环境变量提供 grounding API key"
+if (-not $env:SCIFORGE_MODEL_ROUTER_BASE_URL) { $env:SCIFORGE_MODEL_ROUTER_BASE_URL = "http://127.0.0.1:3892/v1" }
+if (-not $env:SCIFORGE_MODEL_ROUTER_MODEL) { $env:SCIFORGE_MODEL_ROUTER_MODEL = "sciforge-router" }
+if (-not $env:SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY) {
+  Die "缺少 SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY; Computer-Use 的所有模型调用必须经过 Model Router"
 }
 
 # 真机执行默认开启 (每个动作仍由 GUI 审批门控); -SafeDryRun 关闭。
@@ -85,14 +83,14 @@ if ($Install) {
   Info "pip install worker requirements"; & python -m pip install -r (Join-Path $worker "requirements.txt"); if ($LASTEXITCODE -ne 0) { Die "pip install 失败" }
 }
 
-# --- 3. Grounding endpoint config --------------------------------------------
-Info "Grounding endpoint: $($env:CUA_GROUNDING_BASE_URL) (model=$($env:CUA_GROUNDING_MODEL), endpoint=$($env:CUA_GROUNDING_ENDPOINT))"
+# --- 3. Model Router config --------------------------------------------------
+Info "Model Router: $($env:SCIFORGE_MODEL_ROUTER_BASE_URL) (model=$($env:SCIFORGE_MODEL_ROUTER_MODEL))"
 
 # --- 4. Computer-Use service -------------------------------------------------
 $server = $null
 try {
   if (-not $SkipService) {
-    Info "启动 Computer-Use 服务 :$($env:CUA_PORT)  (真机执行=$($env:CUA_ALLOW_EXECUTE), grounding=$($env:CUA_GROUNDING_MODEL) @ $($env:CUA_GROUNDING_BASE_URL))"
+    Info "启动 Computer-Use 服务 :$($env:CUA_PORT)  (真机执行=$($env:CUA_ALLOW_EXECUTE), router=$($env:SCIFORGE_MODEL_ROUTER_BASE_URL))"
     $server = Start-Process python -ArgumentList @("-m","cua.cli","--http") -PassThru -WorkingDirectory $worker
     $ok = $false
     for ($i = 0; $i -lt 30; $i++) {

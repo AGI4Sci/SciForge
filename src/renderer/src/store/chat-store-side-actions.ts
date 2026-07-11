@@ -17,6 +17,7 @@ import {
 } from './chat-store-runtime-helpers'
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { getRuntimeErrorCode } from '../lib/format-runtime-error'
+import { parseSteerCommand } from '../lib/steer-command'
 
 type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -34,6 +35,7 @@ type ActiveSideAbort = {
 }
 
 const sideAbortControllers = new Map<string, AbortController>()
+const sideQueueDraining = new Set<string>()
 
 function compactTitlePrefix(value: string): string {
   return Array.from(value.trim()).slice(0, 5).join('')
@@ -339,6 +341,7 @@ function buildSideSink(sideId: string, ctx: SideContext): ThreadEventSink {
           return { ...flushed.side, busy: false, turnId: null }
         })
       )
+      void drainNextSideMessage(sideId, ctx)
     },
     onError: (err) => {
       ctx.set((s) =>
@@ -354,6 +357,51 @@ function buildSideSink(sideId: string, ctx: SideContext): ThreadEventSink {
       // a per-thread usage counter can be wired here in the future.
       void usage
     }
+  }
+}
+
+async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<void> {
+  if (sideQueueDraining.has(sideId)) return
+  const side = ctx.get().sideConversations[sideId]
+  const queued = side?.queuedMessages?.[0]
+  if (!side || side.busy || !queued) return
+
+  sideQueueDraining.add(sideId)
+  // Claim the idle slot before awaiting the runtime so duplicate completion
+  // events cannot start the same queued message twice.
+  ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, busy: true, error: null })))
+  const provider = ctx.getProvider()
+  try {
+    rememberSideThreadRuntime(provider, sideId, side)
+    const { turnId } = await provider.sendUserMessage(sideId, queued.text, {
+      model: queued.model,
+      ...(queued.reasoningEffort ? { reasoningEffort: queued.reasoningEffort } : {}),
+      ...(queued.attachmentIds?.length ? { attachmentIds: queued.attachmentIds } : {}),
+      ...(queued.fileReferences?.length ? { fileReferences: queued.fileReferences } : {}),
+      ...(queued.displayText ? { displayText: queued.displayText } : {})
+    })
+    ctx.set((s) =>
+      patchSide(s, sideId, (cur) => ({
+        ...cur,
+        queuedMessages: (cur.queuedMessages ?? []).filter((message) => message.id !== queued.id),
+        busy: true,
+        turnId,
+        error: null
+      }))
+    )
+    startSideSubscription(sideId, side.lastSeq, ctx)
+  } catch (error) {
+    const code = getRuntimeErrorCode(error)
+    ctx.set((s) =>
+      patchSide(s, sideId, (cur) => ({
+        ...cur,
+        busy: code === 'turn_in_progress',
+        error: ctx.formatRuntimeError(error)
+      }))
+    )
+    if (code === 'turn_in_progress') startSideSubscription(sideId, side.lastSeq, ctx)
+  } finally {
+    sideQueueDraining.delete(sideId)
   }
 }
 
@@ -411,6 +459,7 @@ export function createSideActions(ctx: SideContext): Pick<
   | 'attachSideConversation'
   | 'openSideConversationDraft'
   | 'sendSideMessage'
+  | 'removeSideQueuedMessage'
   | 'interruptSide'
   | 'setSideInput'
   | 'setSideModel'
@@ -427,6 +476,7 @@ export function createSideActions(ctx: SideContext): Pick<
     | 'attachSideConversation'
     | 'openSideConversationDraft'
     | 'sendSideMessage'
+    | 'removeSideQueuedMessage'
     | 'interruptSide'
     | 'setSideInput'
     | 'setSideModel'
@@ -496,6 +546,7 @@ export function createSideActions(ctx: SideContext): Pick<
         liveAssistant: '',
         lastSeq: detail.latestSeq,
         input: '',
+        queuedMessages: [],
         model: input.model?.trim() || defaultSideModel(state, parentThreadId),
         reasoningEffort: 'max',
         busy: threadSnapshotLooksRunning(detail.blocks, detail.threadStatus),
@@ -607,6 +658,7 @@ export function createSideActions(ctx: SideContext): Pick<
         liveAssistant: '',
         lastSeq: 0,
         input: '',
+        queuedMessages: [],
         model: connectedParentId
           ? defaultSideModel(connectedState, connectedParentId)
           : defaultStandaloneSideModel(connectedState),
@@ -642,20 +694,92 @@ export function createSideActions(ctx: SideContext): Pick<
       }))
     },
 
-    sendSideMessage: async (sideId, text) => {
+    sendSideMessage: async (sideId, text, overrides) => {
       const state = ctx.get()
       const side = state.sideConversations[sideId]
       if (!side) return false
-      if (side.busy) return false
       const trimmed = text.trim()
-      if (!trimmed) return false
+      const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
+      const fileReferences = overrides?.fileReferences?.filter((reference) => reference.path.trim().length > 0)
+      if (!trimmed && !attachmentIds?.length && !fileReferences?.length) return false
+      const steerCommandText = parseSteerCommand(trimmed)
+      const explicitSteerText = steerCommandText !== false ? steerCommandText.trim() : null
+      const messageText = explicitSteerText ?? (trimmed || (
+        attachmentIds?.length && fileReferences?.length
+          ? ctx.t('common:composerFileAndImageOnlyPrompt')
+          : attachmentIds?.length
+            ? ctx.t('common:composerImageOnlyPrompt')
+            : ctx.t('common:composerFileOnlyPrompt')
+      ))
+      if (!messageText) {
+        ctx.set((s) => patchSide(s, sideId, (cur) => ({
+          ...cur,
+          error: ctx.t('common:steerCommandRequiresMessage')
+        })))
+        return false
+      }
       const provider = ctx.getProvider()
       const reasoningEffort = sideReasoningEffortRequestValue(side.reasoningEffort)
+
+      if (side.busy) {
+        const prefersSteer = side.source === 'child_agent' || explicitSteerText !== null
+        const canSteer =
+          prefersSteer &&
+          Boolean(side.turnId) &&
+          typeof provider.steerUserMessage === 'function' &&
+          providerSupportsCapability(provider, 'steer') &&
+          !attachmentIds?.length &&
+          !fileReferences?.length
+        if (canSteer && side.turnId && provider.steerUserMessage) {
+          try {
+            rememberSideThreadRuntime(provider, sideId, side)
+            await provider.steerUserMessage(sideId, side.turnId, messageText)
+            ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, input: '', error: null })))
+            return true
+          } catch (error) {
+            const code = getRuntimeErrorCode(error)
+            if (code === 'turn_not_running') {
+              ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, busy: false, turnId: null })))
+            } else if (code !== 'capability_unavailable') {
+              ctx.set((s) => patchSide(s, sideId, (cur) => ({
+                ...cur,
+                error: ctx.formatRuntimeError(error)
+              })))
+              return false
+            }
+          }
+        }
+
+        if (ctx.get().sideConversations[sideId]?.busy) {
+          ctx.set((s) => patchSide(s, sideId, (cur) => ({
+            ...cur,
+            input: '',
+            queuedMessages: [
+              ...(cur.queuedMessages ?? []),
+              {
+                id: `side-q-${Date.now()}-${cur.queuedMessages?.length ?? 0}`,
+                text: messageText,
+                model: cur.model,
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+                ...(attachmentIds?.length ? { attachmentIds } : {}),
+                ...(fileReferences?.length ? { fileReferences } : {}),
+                ...(overrides?.displayText ? { displayText: overrides.displayText } : {})
+              }
+            ],
+            error: null
+          })))
+          return true
+        }
+      }
+
       try {
         rememberSideThreadRuntime(provider, sideId, side)
-        const { turnId } = await provider.sendUserMessage(sideId, trimmed, {
+        const { turnId } = await provider.sendUserMessage(sideId, messageText, {
           model: side.model,
-          ...(reasoningEffort ? { reasoningEffort } : {})
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(attachmentIds?.length ? { attachmentIds } : {}),
+          ...(fileReferences?.length ? { fileReferences } : {}),
+          ...(overrides?.displayText ? { displayText: overrides.displayText } : {})
         })
         ctx.set((s) =>
           patchSide(s, sideId, (cur) => ({
@@ -673,16 +797,28 @@ export function createSideActions(ctx: SideContext): Pick<
         return true
       } catch (e) {
         if (getRuntimeErrorCode(e) === 'turn_in_progress') {
-          const message = ctx.formatRuntimeError(e)
           ctx.set((s) =>
             patchSide(s, sideId, (cur) => ({
               ...cur,
+              input: '',
               busy: true,
-              error: message
+              queuedMessages: [
+                ...(cur.queuedMessages ?? []),
+                {
+                  id: `side-q-${Date.now()}-${cur.queuedMessages?.length ?? 0}`,
+                  text: messageText,
+                  model: cur.model,
+                  ...(reasoningEffort ? { reasoningEffort } : {}),
+                  ...(attachmentIds?.length ? { attachmentIds } : {}),
+                  ...(fileReferences?.length ? { fileReferences } : {}),
+                  ...(overrides?.displayText ? { displayText: overrides.displayText } : {})
+                }
+              ],
+              error: null
             }))
           )
           startSideSubscription(sideId, side.lastSeq, ctx)
-          return false
+          return true
         }
         ctx.set((s) =>
           patchSide(s, sideId, (cur) => ({
@@ -692,6 +828,13 @@ export function createSideActions(ctx: SideContext): Pick<
         )
         return false
       }
+    },
+
+    removeSideQueuedMessage: (sideId, messageId) => {
+      ctx.set((s) => patchSide(s, sideId, (side) => ({
+        ...side,
+        queuedMessages: (side.queuedMessages ?? []).filter((message) => message.id !== messageId)
+      })))
     },
 
     interruptSide: async (sideId) => {
@@ -839,4 +982,5 @@ export function createSideActions(ctx: SideContext): Pick<
 export function teardownAllSideSubscriptions(): void {
   for (const ac of sideAbortControllers.values()) ac.abort()
   sideAbortControllers.clear()
+  sideQueueDraining.clear()
 }

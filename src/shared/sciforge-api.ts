@@ -14,6 +14,16 @@ import type {
   WorkflowRunResult,
   WorkflowRuntimeStatus
 } from './app-settings'
+import type {
+  AnchoredCommentCaptureRequest,
+  AnchoredCommentCaptureResult,
+  AnchoredCommentThread,
+  CommentScreenshotAssetRef,
+  FeedbackSubmissionRequest,
+  FeedbackSubmissionResult,
+  FeedbackSubmissionStatusRequest,
+  FeedbackSubmissionStatusResult
+} from './anchored-comments'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult } from './git-branches'
 import type {
@@ -142,7 +152,11 @@ import type {
   PaperRadarStatus,
   PaperRadarSyncResult
 } from './paper-radar'
-import type { VisibleContextSnapshot } from './visible-context'
+import type {
+  VisibleContextCapturePreviewRequest,
+  VisibleContextCapturePreviewResult,
+  VisibleContextSnapshot
+} from './visible-context'
 import type {
   FigureStyleExtractRequest,
   FigureStyleExtractReferenceRequest,
@@ -1168,6 +1182,33 @@ export type SciForgeApi = {
   visibleContext: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
+    readCapturePreview: (
+      request: VisibleContextCapturePreviewRequest
+    ) => Promise<VisibleContextCapturePreviewResult>
+    onRefreshRequested: (handler: () => void) => () => void
+    onCaptureStateChanged: (handler: (active: boolean) => void) => () => void
+  }
+  anchoredComments: {
+    list: (filter?: {
+      workspaceKey?: string
+      targetKey?: string
+      purpose?: AnchoredCommentThread['purpose']
+      status?: AnchoredCommentThread['status']
+      includeResolved?: boolean
+    }) => Promise<AnchoredCommentThread[]>
+    get: (threadId: string) => Promise<AnchoredCommentThread | null>
+    upsert: (thread: AnchoredCommentThread) => Promise<AnchoredCommentThread>
+    delete: (threadId: string) => Promise<boolean>
+    readAsset: (asset: CommentScreenshotAssetRef) => Promise<{
+      digest: string
+      mimeType: 'image/png'
+      dataUrl: string
+    }>
+    capture: (request: AnchoredCommentCaptureRequest) => Promise<AnchoredCommentCaptureResult>
+    submitFeedback: (request: FeedbackSubmissionRequest) => Promise<FeedbackSubmissionResult>
+    feedbackStatus: (
+      request: FeedbackSubmissionStatusRequest
+    ) => Promise<FeedbackSubmissionStatusResult>
   }
   onRuntimeStatus: (handler: (payload: LocalRuntimeStatusPayload) => void) => () => void
   agentRuntime: {

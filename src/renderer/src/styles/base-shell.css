@@ -243,6 +243,29 @@ summary,
   -webkit-app-region: no-drag;
 }
 
+/* Comment controls are portaled above the draggable workbench in Electron. */
+[data-sciforge-comments-ui] {
+  -webkit-app-region: no-drag !important;
+}
+
+#sciforge-comments-portal-root {
+  -webkit-app-region: no-drag !important;
+  zoom: calc(1 / var(--ds-ui-scale));
+}
+
+/*
+ * Electron computes draggable regions before normal DOM pointer dispatch. While
+ * the global comment picker is active, disable every draggable region so its
+ * transparent capture surface receives pointer events even above titlebar-like
+ * workbench areas. The attribute only exists for the lifetime of comment mode.
+ */
+html[data-sciforge-comment-mode='true'],
+html[data-sciforge-comment-mode='true'] body,
+html[data-sciforge-comment-mode='true'] #root,
+html[data-sciforge-comment-mode='true'] #root * {
+  -webkit-app-region: no-drag !important;
+}
+
 html {
   color-scheme: light;
 }

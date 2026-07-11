@@ -2186,7 +2186,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     )
   })
 
-  it('does not inject a workspace root into visible-context dynamic MCP calls', async () => {
+  it('does not inject a workspace root into visible-context or visual-capture dynamic MCP calls', async () => {
     const client = controllableClient()
     const storageRoot = await tempRoot()
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
@@ -2195,19 +2195,34 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
     const mcpClient: CodexDynamicMcpClient = {
       listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_visible_context',
-          description: 'Inspect current visible GUI context.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              region: { type: 'string' },
-              componentId: { type: 'string' },
-              includeHidden: { type: 'boolean' }
-            },
-            additionalProperties: false
+        tools: [
+          {
+            name: 'gui_visible_context',
+            description: 'Inspect current visible GUI context.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                region: { type: 'string' },
+                componentId: { type: 'string' },
+                includeHidden: { type: 'boolean' }
+              },
+              additionalProperties: false
+            }
+          },
+          {
+            name: 'gui_visual_capture',
+            description: 'Capture one published visual target.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                scope: { type: 'string' },
+                componentId: { type: 'string' },
+                targetId: { type: 'string' }
+              },
+              additionalProperties: false
+            }
           }
-        }]
+        ]
       })),
       callTool,
       close: vi.fn(async () => undefined)
@@ -2252,6 +2267,28 @@ describe('CodexRuntimeService compatibility operations', () => {
         name: 'gui_visible_context',
         arguments: {
           region: 'right-sidebar'
+        }
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+    )
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'visual-capture-request-1',
+      threadId: 'thread-1',
+      tool: 'gui_visual_capture',
+      arguments: {
+        scope: 'target',
+        componentId: 'right-sidebar.file-preview',
+        targetId: 'current-page'
+      }
+    })).resolves.toMatchObject({ success: true })
+    expect(callTool).toHaveBeenLastCalledWith(
+      {
+        name: 'gui_visual_capture',
+        arguments: {
+          scope: 'target',
+          componentId: 'right-sidebar.file-preview',
+          targetId: 'current-page'
         }
       },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })

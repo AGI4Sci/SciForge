@@ -114,10 +114,18 @@ import {
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 
+export type ComposerCommentReference = {
+  id: string
+  label: string
+  comment: string
+}
+
 type Props = {
   variant?: 'default' | 'compact'
   threadIdOverride?: string | null
   disableThreadManagementCommands?: boolean
+  /** Use direct runtime steering, rather than continuation queueing, for sends while busy. */
+  preferSteerWhileBusy?: boolean
   workspaceRootOverride?: string
   preferWorkspaceRootOverride?: boolean
   input: string
@@ -146,6 +154,7 @@ type Props = {
   attachmentUploadError?: string | null
   fileReferenceEnabled?: boolean
   fileReferences?: ComposerFileReference[]
+  commentReferences?: ComposerCommentReference[]
   webAccessAvailable?: boolean
   changedFiles?: ComposerChangedFile[]
   changedFileStats?: { added: number; removed: number } | null
@@ -174,6 +183,7 @@ type Props = {
   onAddFileReference?: (reference: ComposerFileReference) => void
   onPreviewFileReference?: (reference: ComposerFileReference) => void
   onRemoveFileReference?: (relativePath: string, workspaceRoot?: string) => void
+  onRemoveCommentReference?: (id: string) => void
   onSend: (intent?: ComposerSendIntent) => void
   onInterrupt: (options?: { discard?: boolean }) => void
   onPlanCommand?: () => void
@@ -197,6 +207,7 @@ type SkillCommand = NonNullable<Props['skillCommands']>[number]
 const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
 const EMPTY_ATTACHMENTS: AttachmentReference[] = []
 const EMPTY_FILE_REFERENCES: ComposerFileReference[] = []
+const EMPTY_COMMENT_REFERENCES: ComposerCommentReference[] = []
 const EMPTY_CHANGED_FILES: ComposerChangedFile[] = []
 const EMPTY_SKILL_COMMANDS: SkillCommand[] = []
 
@@ -639,6 +650,7 @@ export function FloatingComposer({
   variant = 'default',
   threadIdOverride,
   disableThreadManagementCommands = false,
+  preferSteerWhileBusy = false,
   workspaceRootOverride,
   preferWorkspaceRootOverride = false,
   input,
@@ -667,6 +679,7 @@ export function FloatingComposer({
   attachmentUploadError = null,
   fileReferenceEnabled = false,
   fileReferences = EMPTY_FILE_REFERENCES,
+  commentReferences = EMPTY_COMMENT_REFERENCES,
   changedFiles = EMPTY_CHANGED_FILES,
   changedFileStats = null,
   contextState,
@@ -679,6 +692,7 @@ export function FloatingComposer({
   onAddFileReference,
   onPreviewFileReference,
   onRemoveFileReference,
+  onRemoveCommentReference,
   onSend,
   onInterrupt,
   onPlanCommand,
@@ -766,7 +780,8 @@ export function FloatingComposer({
   const canSend = canCompose && (
     input.trim().length > 0 ||
     (attachmentUploadEnabled && attachments.length > 0) ||
-    (fileReferenceEnabled && fileReferences.length > 0)
+    (fileReferenceEnabled && fileReferences.length > 0) ||
+    commentReferences.length > 0
   )
   const canOpenAttachmentPicker = canEditComposer && Boolean(onPickAttachments) && !attachmentUploadBusy
   const canPickAttachment = canOpenAttachmentPicker && attachmentUploadEnabled
@@ -866,7 +881,9 @@ export function FloatingComposer({
       : goalPanelOpen && !isActiveRemoteChannelThread
       ? t('goalComposerPlaceholder')
       : busy
-        ? t('composerQueuePlaceholder')
+        ? preferSteerWhileBusy && runtimeSupportsSteer
+          ? t('composerSteerPlaceholder')
+          : t('composerQueuePlaceholder')
         : imageGenerationMode
           ? t('composerImageGenerationPlaceholder')
           : isActiveRemoteChannelThread
@@ -1100,7 +1117,7 @@ export function FloatingComposer({
     : canSetGoalPanelDraft
       ? t('goalSetCurrentInput')
     : busy
-      ? parsedSteerCommand !== false && runtimeSupportsSteer
+      ? (preferSteerWhileBusy || parsedSteerCommand !== false) && runtimeSupportsSteer
         ? t('steerMessage')
         : t('queueContinuation')
       : imageGenerationMode
@@ -2200,6 +2217,7 @@ export function FloatingComposer({
           ) : null}
           <textarea
             ref={draft.textareaRef}
+            data-visual-context-sensitive="true"
             rows={1}
             className={`ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
               canEditComposer ? '' : 'opacity-80'
@@ -2219,6 +2237,31 @@ export function FloatingComposer({
             onCompositionEnd={draft.onCompositionEnd}
             onKeyDown={handleComposerKeyDown}
           />
+          {commentReferences.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 px-1" data-composer-comment-references>
+              {commentReferences.map((reference) => (
+                <span
+                  key={reference.id}
+                  className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1 rounded-lg border border-violet-500/25 bg-violet-500/10 px-1.5 text-[12px] font-medium text-violet-800 dark:text-violet-200"
+                  title={reference.comment}
+                >
+                  <MessageCircleMore className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                  <span className="max-w-52 truncate">{reference.label}</span>
+                  {onRemoveCommentReference ? (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveCommentReference(reference.id)}
+                      className="rounded-full p-0.5 text-violet-700/65 transition hover:bg-violet-500/15 hover:text-violet-900 dark:text-violet-200/70 dark:hover:text-violet-100"
+                      aria-label={t('composerRemoveCommentReference')}
+                      title={t('composerRemoveCommentReference')}
+                    >
+                      <X className="h-3 w-3" strokeWidth={2} />
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          ) : null}
           {fileReferences.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2 px-1">
               {fileReferences.map((reference) => (

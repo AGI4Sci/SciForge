@@ -10,7 +10,8 @@ import {
   resolveMarkdownImageReference,
   timelineCanvasArtifactsFromToolBlock,
   timelineImagesFromToolBlock,
-  timelineImagesFromToolBlocks
+  timelineImagesFromToolBlocks,
+  timelineVisualSnapshotsFromToolBlock
 } from './message-timeline-media'
 import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
 
@@ -349,6 +350,69 @@ describe('MessageTimeline local runtime metadata smoke', () => {
         sourceTool: 'image_generation'
       })
     ])
+  })
+
+  it('extracts managed visual snapshots separately from generated image artifacts', () => {
+    const block = toolBlock({
+      summary: 'gui_visual_capture: captured',
+      detail: JSON.stringify({
+        structuredContent: {
+          resource: {
+            kind: 'visualSnapshot',
+            role: 'target',
+            path: '/tmp/visible-context/captures/capture-1.png',
+            name: 'capture-1.png',
+            mimeType: 'image/png',
+            size: 1024,
+            width: 1200,
+            height: 800
+          }
+        }
+      }),
+      meta: { toolName: 'gui_visual_capture' }
+    })
+
+    expect(timelineVisualSnapshotsFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        source: 'capture',
+        path: '/tmp/visible-context/captures/capture-1.png',
+        name: 'capture-1.png',
+        mimeType: 'image/png'
+      })
+    ])
+    expect(timelineImagesFromToolBlock(block)).toEqual([])
+  })
+
+  it('renders a visual capture inline with its tool process row', () => {
+    const block: ChatBlock = toolBlock({
+      summary: 'gui_visual_capture: captured',
+      detail: JSON.stringify({
+        structuredContent: {
+          resource: {
+            kind: 'visualSnapshot',
+            role: 'window',
+            path: '/tmp/visible-context/captures/capture-inline.png',
+            name: 'capture-inline.png',
+            mimeType: 'image/png',
+            width: 1200,
+            height: 800
+          }
+        }
+      }),
+      meta: { toolName: 'gui_visual_capture' }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-capture', kind: 'execution', blocks: [block] },
+        processing: false,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('data-testid="timeline-visual-capture-preview"')
+    expect(html).toContain('capture-inline.png')
   })
 
   it('normalizes artifact workspace roots when the runtime points at the .sciforge child folder', () => {

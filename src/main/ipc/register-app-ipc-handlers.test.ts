@@ -464,6 +464,33 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.has(removedFeishuMirrorChannel)).toBe(false)
   })
 
+  it('validates and routes managed visible capture preview requests', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const readCapturePreview = vi.fn(async (path: string) => ({
+      ok: true as const,
+      path,
+      dataUrl: 'data:image/png;base64,capture',
+      mimeType: 'image/png' as const,
+      size: 7
+    }))
+    const visibleContext = {
+      publish: vi.fn(),
+      get: vi.fn(),
+      readCapturePreview
+    }
+    registerAppIpcHandlers(registerOptions({ visibleContext }))
+
+    const handler = handlers.get('visibleContext:capture:preview')
+    await expect(handler?.({}, { path: '/tmp/visible-context/captures/capture-1.png' })).resolves.toMatchObject({
+      ok: true,
+      mimeType: 'image/png'
+    })
+    expect(readCapturePreview).toHaveBeenCalledWith('/tmp/visible-context/captures/capture-1.png')
+    await expect(handler?.({}, { path: '' })).rejects.toThrow(
+      /Invalid payload for visibleContext:capture:preview/
+    )
+  })
+
   it('rejects invalid settings patches at the handler boundary', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const applySettingsPatch = vi.fn(async () => settings())

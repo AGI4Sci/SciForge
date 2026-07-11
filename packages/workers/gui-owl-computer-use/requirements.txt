@@ -1,5 +1,5 @@
 # Computer-use worker runtime deps.
-# Model HTTP client talks to the configured grounding API; see CUA_GROUNDING_BASE_URL.
+# Model HTTP client talks only to the local SciForge Model Router.
 requests>=2.31.0
 # Local desktop executor — cross-platform.
 pyautogui>=0.9.54

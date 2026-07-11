@@ -35,7 +35,7 @@ function startModelRouterServer(options: Parameters<typeof startModelRouterServe
   });
 }
 
-test('provider-originated text is redacted from trace summaries and public answers', async () => {
+test('public answers hide internal router identities while preserving user-operational context', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-redaction-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -79,9 +79,9 @@ test('provider-originated text is redacted from trace summaries and public answe
     const body = await response.json() as Record<string, unknown>;
     assert.match(String(body.output_text), /Returned answer intentionally remains raw:/);
     assert.doesNotMatch(String(body.output_text), /Authorization:\s*Bearer|sk-echo-secret|echo-assignment-secret|text-secret|vision-secret/i);
-    assert.doesNotMatch(String(body.output_text), /private\.example\.test|token=x|\/a\.png/i);
-    assert.doesNotMatch(String(body.output_text), /\/Users\/alice\/private\.png/i);
-    assert.doesNotMatch(String(body.output_text), /data:image\/png;base64|provider echoed private pixels/i);
+    assert.match(String(body.output_text), /private\.example\.test\/a\.png\?\[redacted-secret-assignment\]/i);
+    assert.match(String(body.output_text), /\/Users\/alice\/private\.png/i);
+    assert.match(String(body.output_text), /data:image\/png;base64/i);
     assert.doesNotMatch(String(body.output_text), /vision-provider|vision-model|text-provider|text-model/i);
     assert.equal(calls.length, 4);
 

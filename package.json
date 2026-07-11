@@ -8,6 +8,7 @@
   "main": "./out/main/index.js",
   "type": "module",
   "workspaces": [
+    "packages/workers/feedback-gateway",
     "packages/workers/model-router",
     "packages/workers/schedule",
     "packages/workers/search",
@@ -61,6 +62,9 @@
     "verify:apple": "node ./scripts/verify-apple-signing.cjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "feedback-gateway:start": "npm --workspace @sciforge/feedback-gateway run start",
+    "feedback-gateway:test": "npm --workspace @sciforge/feedback-gateway run test",
+    "feedback-gateway:typecheck": "npm --workspace @sciforge/feedback-gateway run typecheck",
     "model-router:start": "npm --workspace @sciforge/model-router run start",
     "model-router:test": "npm --workspace @sciforge/model-router run test",
     "model-router:typecheck": "npm --workspace @sciforge/model-router run typecheck",

@@ -3,6 +3,10 @@ export type TraceTextRedactionOptions = {
   allowedLocalPathPrefixes?: string[];
 };
 
+export type UserVisibleTextRedactionOptions = {
+  sensitiveValues?: string[];
+};
+
 const dataImagePattern = /\bdata:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]*/gi;
 const inlineBase64PayloadPattern = /;base64,[A-Za-z0-9+/=_-]{24,}/gi;
 const rawAuthHeaderPattern = /\bAuthorization\s*:\s*(?:Bearer|Basic)?\s*[A-Za-z0-9._~+/=-]+/gi;
@@ -29,6 +33,20 @@ export function redactTraceText(value: string, options: TraceTextRedactionOption
   redacted = redacted.replace(providerTokenPattern, '[redacted-provider-token]');
   redacted = redacted.replace(genericSecretAssignmentPattern, '[redacted-secret-assignment]');
   redacted = redacted.replace(likelyBase64BlobPattern, '[redacted-base64]');
+
+  for (const sensitiveValue of normalizedSensitiveValues(options.sensitiveValues ?? [])) {
+    redacted = redacted.replace(new RegExp(escapeRegExp(sensitiveValue), 'g'), '[redacted-sensitive]');
+  }
+
+  return redacted;
+}
+
+export function redactUserVisibleText(value: string, options: UserVisibleTextRedactionOptions = {}) {
+  let redacted = value;
+  redacted = redacted.replace(rawAuthHeaderPattern, '[redacted-auth-header]');
+  redacted = redacted.replace(bearerTokenPattern, '[redacted-bearer-token]');
+  redacted = redacted.replace(providerTokenPattern, '[redacted-provider-token]');
+  redacted = redacted.replace(genericSecretAssignmentPattern, '[redacted-secret-assignment]');
 
   for (const sensitiveValue of normalizedSensitiveValues(options.sensitiveValues ?? [])) {
     redacted = redacted.replace(new RegExp(escapeRegExp(sensitiveValue), 'g'), '[redacted-sensitive]');

@@ -2458,6 +2458,7 @@ function renderVisibleContextLookupHint(snapshot: VisibleContextSnapshot): strin
     'Visible GUI context lookup:',
     'The current user request appears to reference content visible in the SciForge GUI. Do not say you cannot see the right sidebar, current preview, or PDF annotations before checking the available visible-context tools.',
     'First call `gui_visible_context` when it is available. It returns a bounded index of visible components and resource pointers, not full document contents.',
+    'If the request requires visual inspection, call `gui_visual_capture` with `scope: window` or with a componentId and targetId published by `gui_visible_context`, then inspect the returned local PNG path with the available image tool.',
     'If the result includes a `pdfAnnotations` resource, use its workspaceRoot plus relativePath/path with `gui_workspace_read` to inspect the annotation sidecar JSON only when the task needs those annotations.'
   ]
   const components = snapshot.components.filter((component) => component.visible).slice(0, 6)

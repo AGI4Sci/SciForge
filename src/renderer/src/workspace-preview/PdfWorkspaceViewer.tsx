@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement
 } from 'react'
@@ -85,6 +86,7 @@ export type PdfWorkspaceViewerProps = {
   model?: PdfWorkspaceViewerModel
   previewState?: PdfWorkspaceViewerPreviewState
   className?: string
+  visualContextComponentId?: string
   onApplyEdit?: (operation: WorkspacePreviewEditOperation) => Promise<void> | void
   annotationOverlays?: WritePdfAnnotationOverlay[]
   activeAnnotationId?: string | null
@@ -247,6 +249,7 @@ export function PdfWorkspaceViewer({
   model,
   previewState,
   className,
+  visualContextComponentId,
   onApplyEdit,
   annotationOverlays = [],
   activeAnnotationId = null,
@@ -270,25 +273,31 @@ export function PdfWorkspaceViewer({
       transport
     })
   )
+  const activeDocumentKeyRef = useRef(`${observation?.file.path ?? ''}:${resolvedAsset?.assetId ?? ''}`)
 
   useEffect(() => {
     if (previewState) return
     let cancelled = false
+    const documentKey = `${observation?.file.path ?? ''}:${resolvedAsset?.assetId ?? ''}`
+    const preserveReadyPreview = activeDocumentKeyRef.current === documentKey
+    activeDocumentKeyRef.current = documentKey
 
     const initialState = initialPdfPreviewState({
       model: resolvedModel,
       asset: resolvedAsset,
       transport
     })
-    setLoadedPreviewState(initialState)
+    setLoadedPreviewState((current) => preserveReadyPreview && current.kind === 'ready' ? current : initialState)
 
     if (resolvedModel.status.kind !== 'ready' || !resolvedAsset || !transport) return
 
-    setLoadedPreviewState({
-      kind: 'loading',
-      title: 'Loading PDF',
-      message: 'Reading PDF bytes through workspace preview transport.'
-    })
+    setLoadedPreviewState((current) => preserveReadyPreview && current.kind === 'ready'
+      ? current
+      : {
+          kind: 'loading',
+          title: 'Loading PDF',
+          message: 'Reading PDF bytes through workspace preview transport.'
+        })
 
     void loadPdfWorkspacePreviewData({
       observation,
@@ -370,6 +379,7 @@ export function PdfWorkspaceViewer({
               mimeType={activePreviewState.mimeType}
               size={resolvePdfFileSize(observation, resolvedAsset)}
               mtimeMs={observation?.file.mtimeMs}
+              visualContextComponentId={visualContextComponentId}
               initialPage={initialPage}
               onAnnotationAction={onApplyEdit ? handleAnnotationAction : undefined}
               annotationOverlays={annotationOverlays}

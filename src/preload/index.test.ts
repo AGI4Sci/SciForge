@@ -452,11 +452,17 @@ describe('preload agentRuntime bridge', () => {
       visibleContext: {
         publish(snapshot: unknown): Promise<unknown>
         get(): Promise<unknown>
+        readCapturePreview(request: { path: string }): Promise<unknown>
+        onRefreshRequested(handler: () => void): () => void
+        onCaptureStateChanged(handler: (active: boolean) => void): () => void
       }
     }
     const snapshot = {
-      schemaVersion: 1,
-      updatedAt: '2026-07-04T00:00:00.000Z',
+      schemaVersion: 2,
+      windowId: 'window-1',
+      revision: 1,
+      publishedAt: '2026-07-04T00:00:00.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
       workspaceRoot: '/tmp/workspace',
       components: [{
         id: 'right-sidebar',
@@ -470,9 +476,25 @@ describe('preload agentRuntime bridge', () => {
 
     await api.visibleContext.publish(snapshot)
     await api.visibleContext.get()
+    await api.visibleContext.readCapturePreview({ path: '/tmp/capture.png' })
+    const onRefresh = vi.fn()
+    const onCaptureState = vi.fn()
+    const stopRefresh = api.visibleContext.onRefreshRequested(onRefresh)
+    const stopCaptureState = api.visibleContext.onCaptureStateChanged(onCaptureState)
+    const refreshWrapped = on.mock.calls.find(([channel]) => channel === 'visibleContext:refresh-requested')?.[1]
+    const captureStateWrapped = on.mock.calls.find(([channel]) => channel === 'visibleContext:capture-state')?.[1]
+    refreshWrapped?.({})
+    captureStateWrapped?.({}, true)
+    stopRefresh()
+    stopCaptureState()
 
     expect(invoke).toHaveBeenCalledWith('visibleContext:publish', snapshot)
     expect(invoke).toHaveBeenCalledWith('visibleContext:get')
+    expect(invoke).toHaveBeenCalledWith('visibleContext:capture:preview', { path: '/tmp/capture.png' })
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(onCaptureState).toHaveBeenCalledWith(true)
+    expect(removeListener).toHaveBeenCalledWith('visibleContext:refresh-requested', refreshWrapped)
+    expect(removeListener).toHaveBeenCalledWith('visibleContext:capture-state', captureStateWrapped)
   })
 
   it('forwards Discord Client ID and per-channel guard IPC payloads', async () => {

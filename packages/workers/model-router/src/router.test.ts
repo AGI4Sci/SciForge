@@ -478,7 +478,7 @@ test('anthropic messages route through the configured text reasoner', async () =
   }
 });
 
-test('public text preserves workspace-local paths while redacting external local paths', async () => {
+test('public text preserves local paths while hiding internal router identities', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-workspace-paths-'));
   const workspaceDataPath = join(workspaceRoot, 'data', 'input.h5ad');
   const privatePath = '/Users/alice/private/input.h5ad';
@@ -489,7 +489,10 @@ test('public text preserves workspace-local paths while redacting external local
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
-      chatCompletion('text-reasoner-answer', `Read ${workspaceDataPath} but never read ${privatePath}.`),
+      chatCompletion(
+        'text-reasoner-answer',
+        `Read ${workspaceDataPath} but never read ${privatePath}. Internal model=text-model provider=text-provider.`,
+      ),
     ]),
   });
 
@@ -506,8 +509,10 @@ test('public text preserves workspace-local paths while redacting external local
 
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, any>;
-    assert.equal(body.content?.[0]?.text, `Read ${workspaceDataPath} but never read [redacted-path].`);
-    assert.doesNotMatch(String(body.content?.[0]?.text ?? ''), /\/Users\/alice/);
+    const text = String(body.content?.[0]?.text ?? '');
+    assert.ok(text.includes(workspaceDataPath));
+    assert.match(text, /\/Users\/alice\/private\/input\.h5ad/);
+    assert.doesNotMatch(text, /text-model|text-provider/);
     assert.equal(calls.length, 1);
   } finally {
     await server.close();
@@ -1659,7 +1664,7 @@ test('vision responses translate refs first, then ask the text reasoner for the 
           role: 'user',
           content: [
             { type: 'input_text', text: 'What does the axis label say?' },
-            { type: 'input_image', image_url: pngDataUrl, mime_type: 'image/png' },
+            { type: 'inputImage', imageUrl: pngDataUrl, mimeType: 'image/png' },
             { type: 'input_image', ref: 'artifact:microscopy-panel', mime_type: 'image/jpeg' },
           ],
         }],
@@ -1808,7 +1813,7 @@ test('tool result screenshots fall back to safe text and are not sent without vi
   }
 });
 
-test('standard MCP screenshot tool result routes through the vision translator', async () => {
+test('standard MCP visualSnapshot tool result routes through the vision translator', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-result-vision-'));
   const imageData = Buffer.from('mcp-screen-pixels').toString('base64');
   const calls: CapturedFetch[] = [];
@@ -1849,11 +1854,15 @@ test('standard MCP screenshot tool result routes through the vision translator',
                 { type: 'image', data: imageData, mimeType: 'image/png' },
               ],
               structuredContent: {
-                kind: 'computer_screenshot',
-                action: 'screenshot',
-                note: 'Screenshot captured at 1024x768.',
-                images: [{ mime_type: 'image/png', width: 1024, height: 768 }],
-                images_omitted: 1,
+                ok: true,
+                requestId: 'capture-request-1',
+                resource: {
+                  kind: 'visualSnapshot',
+                  role: 'window',
+                  mimeType: 'image/png',
+                  width: 1024,
+                  height: 768,
+                },
               },
             },
           },

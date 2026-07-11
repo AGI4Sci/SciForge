@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -25,8 +25,11 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   await writeFile(join(workspaceRoot, 'notes.txt'), 'hello from MCP\n', 'utf8')
   const visibleContextPath = join(tempRoot, 'visible-context.json')
   await writeFile(visibleContextPath, JSON.stringify({
-    schemaVersion: 1,
-    updatedAt: '2026-07-04T00:00:00.000Z',
+    schemaVersion: 2,
+    windowId: 'window-1',
+    revision: 3,
+    publishedAt: new Date().toISOString(),
+    freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
     activeThreadId: 'thread-1',
     workspaceRoot,
     route: 'chat',
@@ -43,6 +46,12 @@ test('serves structured workspace tool results and resource reads over MCP', asy
         role: 'preview-target',
         workspaceRoot,
         relativePath: 'notes.txt'
+      }],
+      visualTargets: [{
+        id: 'current-preview',
+        kind: 'region',
+        bounds: { x: 100, y: 80, width: 900, height: 700 },
+        active: true
       }]
     }]
   }), 'utf8')
@@ -77,6 +86,7 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   const toolNames = tools.tools.map((tool) => tool.name).sort()
   assert.deepEqual(toolNames, [
     'gui_visible_context',
+    'gui_visual_capture',
     'gui_workspace_list',
     'gui_workspace_preview',
     'gui_workspace_read',
@@ -102,7 +112,49 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   const structuredVisibleContext = asRecord(visibleContext.structuredContent)
   assert.equal(structuredVisibleContext.ok, true)
   assert.equal(structuredVisibleContext.componentCount, 1)
+  assert.equal(structuredVisibleContext.windowId, 'window-1')
   assert.equal(asRecord((structuredVisibleContext.components as unknown[])[0]).component, 'workspace-preview')
+
+  const captureDirectory = join(tempRoot, 'captures')
+  const requestDirectory = join(tempRoot, 'capture-requests')
+  const capturePath = join(captureDirectory, 'latest.png')
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  await mkdir(captureDirectory, { recursive: true })
+  await writeFile(capturePath, pngBytes)
+  const capturePromise = client.callTool({
+    name: 'gui_visual_capture',
+    arguments: { scope: 'window' }
+  })
+  const requestName = await waitForFileName(requestDirectory, '.request.json')
+  const captureRequest = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as { requestId: string }
+  await writeFile(join(requestDirectory, `${captureRequest.requestId}.response.json`), JSON.stringify({
+    schemaVersion: 1,
+    requestId: captureRequest.requestId,
+    completedAt: new Date().toISOString(),
+    ok: true,
+    capture: {
+      kind: 'visualSnapshot',
+      role: 'window',
+      path: capturePath,
+      mimeType: 'image/png',
+      capturedAt: new Date().toISOString(),
+      width: 1280,
+      height: 720,
+      scaleFactor: 2,
+      windowId: 'window-1',
+      revision: 3
+    }
+  }), 'utf8')
+  const capture = await capturePromise
+  const structuredCapture = asRecord(capture.structuredContent)
+  assert.equal(structuredCapture.ok, true)
+  assert.equal(asRecord(structuredCapture.resource).kind, 'visualSnapshot')
+  const imageContent = capture.content.find((item) => item.type === 'image')
+  assert.equal(imageContent?.type, 'image')
+  if (imageContent?.type === 'image') {
+    assert.equal(imageContent.mimeType, 'image/png')
+    assert.deepEqual(Buffer.from(imageContent.data, 'base64'), pngBytes)
+  }
 
   const read = await client.callTool({
     name: 'gui_workspace_read',
@@ -190,4 +242,14 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+async function waitForFileName(directory: string, suffix: string): Promise<string> {
+  const deadline = Date.now() + 1_000
+  while (Date.now() < deadline) {
+    const match = (await readdir(directory).catch(() => [])).find((entry) => entry.endsWith(suffix))
+    if (match) return match
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`Timed out waiting for ${suffix} in ${directory}`)
 }

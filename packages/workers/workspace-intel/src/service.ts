@@ -1,9 +1,11 @@
 import type { Dirent, Stats } from 'node:fs'
-import { access, lstat, open as openFile, readFile, readdir, realpath, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { access, lstat, mkdir, open as openFile, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import {
   basename,
   delimiter,
+  dirname,
   extname,
   isAbsolute,
   join,
@@ -18,7 +20,13 @@ import {
   WORKSPACE_INTEL_MAX_LIST_LIMIT,
   WORKSPACE_INTEL_MAX_READ_BYTES,
   WORKSPACE_INTEL_MAX_TREE_DEPTH,
+  VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION,
+  VISIBLE_CONTEXT_SCHEMA_VERSION,
+  VisualCaptureBrokerResponseSchema,
   workspaceFileResourceUri,
+  type VisualCaptureInput,
+  type VisualCaptureResult,
+  type VisualContextTarget,
   type VisibleContextComponent,
   type VisibleContextInput,
   type VisibleContextResource,
@@ -56,6 +64,8 @@ export type WorkspaceIntelServiceOptions = {
   skillRoots?: string[]
   includeGlobalSkillRoots?: boolean
   visibleContextPath?: string
+  visualCaptureTimeoutMs?: number
+  visualCapturePollIntervalMs?: number
   maxReadBytes?: number
   maxPreviewChars?: number
   maxListEntries?: number
@@ -94,6 +104,11 @@ const DEFAULT_IGNORED_DIRS = new Set([
 ])
 
 const MAX_SKILL_METADATA_BYTES = 64 * 1024
+const DEFAULT_VISUAL_CAPTURE_TIMEOUT_MS = 15_000
+const DEFAULT_VISUAL_CAPTURE_POLL_INTERVAL_MS = 40
+const MIN_VISUAL_CAPTURE_TIMEOUT_MS = 100
+const MAX_VISUAL_CAPTURE_TIMEOUT_MS = 25_000
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 const IMAGE_MIME_BY_EXT = new Map([
   ['.png', 'image/png'],
@@ -138,6 +153,8 @@ export class WorkspaceIntelService {
   readonly skillRoots: string[]
   readonly includeGlobalSkillRoots: boolean
   readonly visibleContextPath?: string
+  readonly visualCaptureTimeoutMs: number
+  readonly visualCapturePollIntervalMs: number
   readonly maxReadBytes: number
   readonly maxPreviewChars: number
   readonly maxListEntries: number
@@ -147,6 +164,16 @@ export class WorkspaceIntelService {
     this.skillRoots = uniqueStrings((options.skillRoots ?? []).map(cleanOptionalPath).filter(isPresent))
     this.includeGlobalSkillRoots = options.includeGlobalSkillRoots === true
     this.visibleContextPath = cleanOptionalPath(options.visibleContextPath)
+    this.visualCaptureTimeoutMs = clampInteger(
+      options.visualCaptureTimeoutMs ?? DEFAULT_VISUAL_CAPTURE_TIMEOUT_MS,
+      MIN_VISUAL_CAPTURE_TIMEOUT_MS,
+      MAX_VISUAL_CAPTURE_TIMEOUT_MS
+    )
+    this.visualCapturePollIntervalMs = clampInteger(
+      options.visualCapturePollIntervalMs ?? DEFAULT_VISUAL_CAPTURE_POLL_INTERVAL_MS,
+      5,
+      1_000
+    )
     this.maxReadBytes = clampInteger(
       options.maxReadBytes ?? WORKSPACE_INTEL_DEFAULT_READ_BYTES,
       1,
@@ -460,7 +487,10 @@ export class WorkspaceIntelService {
       return {
         ok: true,
         snapshotPath: this.visibleContextPath,
-        ...(snapshot.updatedAt ? { updatedAt: snapshot.updatedAt } : {}),
+        ...(snapshot.windowId ? { windowId: snapshot.windowId } : {}),
+        ...(snapshot.revision !== undefined ? { revision: snapshot.revision } : {}),
+        ...(snapshot.publishedAt ? { publishedAt: snapshot.publishedAt } : {}),
+        ...(snapshot.freshness ? { freshness: snapshot.freshness } : {}),
         ...(snapshot.activeThreadId !== undefined ? { activeThreadId: snapshot.activeThreadId } : {}),
         ...(snapshot.workspaceRoot ? { workspaceRoot: snapshot.workspaceRoot } : {}),
         ...(snapshot.route ? { route: snapshot.route } : {}),
@@ -468,6 +498,89 @@ export class WorkspaceIntelService {
         componentCount: components.length
       }
     })
+  }
+
+  async visualCapture(input: VisualCaptureInput): Promise<VisualCaptureResult> {
+    return this.captureFailure(async () => {
+      if (!this.visibleContextPath) {
+        throw serviceError(
+          'visual_capture_unavailable',
+          'No visible context path was configured for visual capture.',
+          'Launch the GUI-managed workspace-intel server before requesting a visual capture.'
+        )
+      }
+
+      const brokerDirectory = join(dirname(this.visibleContextPath), 'capture-requests')
+      const requestId = randomUUID()
+      const requestPath = join(brokerDirectory, `${requestId}.request.json`)
+      const responsePath = join(brokerDirectory, `${requestId}.response.json`)
+      const now = Date.now()
+      const request = {
+        schemaVersion: VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION,
+        requestId,
+        requestedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + this.visualCaptureTimeoutMs).toISOString(),
+        scope: input.scope,
+        ...(input.scope === 'target'
+          ? { componentId: input.componentId, targetId: input.targetId }
+          : {})
+      }
+
+      await mkdir(brokerDirectory, { recursive: true })
+      await atomicWriteJson(requestPath, request)
+      try {
+        const response = await this.waitForVisualCaptureResponse(responsePath, requestId)
+        if (!response.ok) {
+          throw serviceError(
+            visualCaptureErrorCode(response.error.code),
+            response.error.message,
+            'Refresh the visible context and retry with a currently published visual target.',
+            response.error.retryable
+          )
+        }
+        await validateVisualCaptureAsset(response.capture.path, this.visibleContextPath)
+        return {
+          ok: true,
+          requestId,
+          resource: response.capture
+        }
+      } finally {
+        await Promise.all([
+          rm(requestPath, { force: true }),
+          rm(responsePath, { force: true })
+        ])
+      }
+    })
+  }
+
+  private async waitForVisualCaptureResponse(responsePath: string, requestId: string) {
+    const deadline = Date.now() + this.visualCaptureTimeoutMs
+    while (Date.now() < deadline) {
+      const raw = await readFile(responsePath, 'utf8').catch((error) => {
+        if (isNodeErrorCode(error, 'ENOENT')) return ''
+        throw error
+      })
+      if (raw) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw) as unknown
+        } catch (error) {
+          throw serviceError('visual_capture_failed', `Visual capture response is invalid JSON: ${errorMessage(error)}`)
+        }
+        const response = VisualCaptureBrokerResponseSchema.safeParse(parsed)
+        if (!response.success || response.data.requestId !== requestId) {
+          throw serviceError('visual_capture_failed', 'Visual capture response failed contract validation.')
+        }
+        return response.data
+      }
+      await delay(this.visualCapturePollIntervalMs)
+    }
+    throw serviceError(
+      'visual_capture_timeout',
+      `Visual capture did not complete within ${this.visualCaptureTimeoutMs} ms.`,
+      'Keep SciForge open with a visible target and retry.',
+      true
+    )
   }
 
   private async discoverSkills(inputWorkspaceRoot?: string): Promise<{
@@ -1066,6 +1179,45 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function atomicWriteJson(path: string, value: unknown): Promise<void> {
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(value)}\n`, { encoding: 'utf8', flag: 'wx' })
+    await rename(temporaryPath, path)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function validateVisualCaptureAsset(path: string, visibleContextPath: string): Promise<void> {
+  const capturesRoot = await realpath(join(dirname(visibleContextPath), 'captures')).catch(() => '')
+  const capturePath = await realpath(path).catch(() => '')
+  if (!capturesRoot || !capturePath || !isWithinRoot(capturesRoot, capturePath)) {
+    throw serviceError(
+      'visual_capture_failed',
+      'Visual capture response referenced an asset outside the managed capture directory.'
+    )
+  }
+  const info = await stat(capturePath).catch(() => null)
+  if (!info?.isFile()) {
+    throw serviceError('visual_capture_failed', 'Visual capture response did not reference a readable file.')
+  }
+  const handle = await openFile(capturePath, 'r')
+  try {
+    const signature = Buffer.alloc(PNG_SIGNATURE.byteLength)
+    const { bytesRead } = await handle.read(signature, 0, signature.length, 0)
+    if (bytesRead !== PNG_SIGNATURE.byteLength || !signature.equals(PNG_SIGNATURE)) {
+      throw serviceError('visual_capture_failed', 'Visual capture asset is not a PNG image.')
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, milliseconds))
+}
+
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory()
@@ -1208,7 +1360,10 @@ function stringValue(value: unknown): string {
 }
 
 type VisibleContextSnapshotRecord = {
-  updatedAt?: string
+  windowId?: string
+  revision?: number
+  publishedAt?: string
+  freshness?: { stale: boolean; ageMs: number; staleAfterMs: number }
   activeThreadId?: string | null
   workspaceRoot?: string
   route?: string
@@ -1226,11 +1381,46 @@ function parseVisibleContextSnapshot(raw: string): VisibleContextSnapshotRecord 
   if (!record) {
     throw serviceError('read_failed', 'Visible context snapshot must be a JSON object.', 'Wait for the GUI to publish a fresh visible context snapshot.')
   }
-  const components = Array.isArray(record.components)
-    ? record.components.map(visibleContextComponentFromUnknown).filter(isPresent)
-    : []
+  if (record.schemaVersion !== VISIBLE_CONTEXT_SCHEMA_VERSION) {
+    throw serviceError(
+      'read_failed',
+      `Visible context snapshot schema version must be ${VISIBLE_CONTEXT_SCHEMA_VERSION}.`,
+      'Wait for SciForge to publish a current visible context snapshot.'
+    )
+  }
+  const windowId = stringValue(record.windowId)
+  const revision = numberValue(record.revision)
+  const publishedAt = stringValue(record.publishedAt)
+  const declaredFreshness = recordValue(record.freshness)
+  const staleAfterMs = numberValue(declaredFreshness?.staleAfterMs)
+  if (
+    !windowId || revision === undefined || !Number.isInteger(revision) || revision < 0 ||
+    !publishedAt || !Number.isFinite(Date.parse(publishedAt)) ||
+    staleAfterMs === undefined || !Number.isInteger(staleAfterMs) || staleAfterMs < 1 ||
+    !Array.isArray(record.components)
+  ) {
+    throw serviceError(
+      'read_failed',
+      'Visible context snapshot does not satisfy the current snapshot contract.',
+      'Wait for SciForge to publish a fresh visible context snapshot.'
+    )
+  }
+  const parsedComponents = record.components.map(visibleContextComponentFromUnknown)
+  if (parsedComponents.some((component) => component === undefined)) {
+    throw serviceError(
+      'read_failed',
+      'Visible context snapshot contains an invalid component.',
+      'Wait for SciForge to publish a fresh visible context snapshot.'
+    )
+  }
+  const components = parsedComponents.filter(isPresent)
+  const boundedStaleAfterMs = clampInteger(staleAfterMs, 1, 300_000)
+  const ageMs = Math.max(0, Date.now() - Date.parse(publishedAt))
   return {
-    updatedAt: stringValue(record.updatedAt) || undefined,
+    windowId,
+    revision,
+    publishedAt,
+    freshness: { stale: ageMs > boundedStaleAfterMs, ageMs, staleAfterMs: boundedStaleAfterMs },
     activeThreadId: record.activeThreadId === null ? null : stringValue(record.activeThreadId) || undefined,
     workspaceRoot: stringValue(record.workspaceRoot) || undefined,
     route: stringValue(record.route) || undefined,
@@ -1258,7 +1448,38 @@ function visibleContextComponentFromUnknown(value: unknown): VisibleContextCompo
     resources: Array.isArray(record.resources)
       ? record.resources.map(visibleContextResourceFromUnknown).filter(isPresent)
       : undefined,
+    visualTargets: Array.isArray(record.visualTargets)
+      ? record.visualTargets.map(visualContextTargetFromUnknown).filter(isPresent)
+      : undefined,
     state: recordValue(record.state) ?? undefined
+  }
+}
+
+function visualContextTargetFromUnknown(value: unknown): VisualContextTarget | undefined {
+  const record = recordValue(value)
+  const id = stringValue(record?.id)
+  const kind = stringValue(record?.kind)
+  if (!record || !id || !['component', 'document-page', 'region', 'window'].includes(kind)) return undefined
+  const bounds = recordValue(record.bounds)
+  const width = numberValue(bounds?.width)
+  const height = numberValue(bounds?.height)
+  return {
+    id,
+    kind: kind as VisualContextTarget['kind'],
+    contentType: stringValue(record.contentType) || undefined,
+    ...(bounds && width !== undefined && width > 0 && height !== undefined && height > 0
+      ? {
+          bounds: {
+            x: numberValue(bounds.x) ?? 0,
+            y: numberValue(bounds.y) ?? 0,
+            width,
+            height
+          }
+        }
+      : {}),
+    page: numberValue(record.page),
+    active: typeof record.active === 'boolean' ? record.active : undefined,
+    metadata: recordValue(record.metadata) ?? undefined
   }
 }
 
@@ -1354,6 +1575,21 @@ function errorToWorkspaceIntelError(error: unknown): WorkspaceIntelError {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function visualCaptureErrorCode(code: string): WorkspaceIntelErrorCode {
+  switch (code) {
+    case 'invalid_visual_capture_request':
+    case 'stale_visible_context':
+    case 'visual_target_not_found':
+    case 'visual_target_bounds_unavailable':
+    case 'visual_capture_request_expired':
+    case 'visual_capture_broker_failed':
+    case 'visual_capture_failed':
+      return code
+    default:
+      return 'visual_capture_failed'
+  }
 }
 
 function isNodeErrorCode(error: unknown, code: string): boolean {

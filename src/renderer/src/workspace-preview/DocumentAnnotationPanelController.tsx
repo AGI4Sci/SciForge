@@ -129,6 +129,7 @@ export function DocumentAnnotationPanelController({
   const [sidecar, setSidecar] = useState<PdfAnnotationSidecar | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  const [jumpRevision, setJumpRevision] = useState(0)
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
   const [displayMode, setDisplayMode] = useState<WritePdfAnnotationDisplayMode>('current')
   const [loadingSidecar, setLoadingSidecar] = useState(false)
@@ -198,7 +199,10 @@ export function DocumentAnnotationPanelController({
     displayMode,
     activeThreadId
   }), [activeThreadId, displayMode, sidecar])
-  const jumpToRect = useMemo(() => firstPdfAnnotationThreadRect(sidecar, selectedThreadId), [selectedThreadId, sidecar])
+  const jumpToRect = useMemo(() => {
+    const rect = firstPdfAnnotationThreadRect(sidecar, selectedThreadId)
+    return rect ? { ...rect, requestId: jumpRevision } : null
+  }, [jumpRevision, selectedThreadId, sidecar])
 
   const clearPdfReviewNotice = useCallback((): void => {
     setPdfReviewNotice(null)
@@ -228,6 +232,7 @@ export function DocumentAnnotationPanelController({
 
   const selectThread = useCallback((threadId: string): void => {
     setSelectedThreadId(threadId)
+    setJumpRevision((revision) => revision + 1)
     setPanelOpen(true)
   }, [])
 
@@ -247,6 +252,7 @@ export function DocumentAnnotationPanelController({
       const threadId = annotationThreadIdFromOperation(operation)
       if (threadId && options.revealThread) {
         setSelectedThreadId(threadId)
+        setJumpRevision((revision) => revision + 1)
         setPanelOpen(true)
       }
       if (sidecarLoaded) setAnnotationNotice(null)
@@ -455,6 +461,7 @@ export function DocumentAnnotationPanelController({
         setSidecar(nextSidecar)
         const firstReviewThread = nextSidecar.threads.find((thread) => thread.id.startsWith('sciforge-review-thread-'))
         setSelectedThreadId(firstReviewThread?.id ?? selectedThreadId)
+        setJumpRevision((revision) => revision + 1)
       }
       await context.host.observe(sessionId)
       setDisplayMode('all')
@@ -498,6 +505,7 @@ export function DocumentAnnotationPanelController({
       if (nextSidecar) setSidecar(nextSidecar)
       await context.host.observe(sessionId)
       setSelectedThreadId(threadId)
+      setJumpRevision((revision) => revision + 1)
       setPanelOpen(true)
       setPdfReviewNotice({ tone: 'success', message: 'SciForge added improvement advice to the selected comment.' })
     } catch (error) {

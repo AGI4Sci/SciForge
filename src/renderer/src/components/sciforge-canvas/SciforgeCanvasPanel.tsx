@@ -23,6 +23,10 @@ import {
   useState,
   type ReactElement
 } from 'react'
+import {
+  registerVisibleContextComponent,
+  registerVisibleContextVisualTarget
+} from '../../lib/visible-context'
 import './SciforgeCanvasPanel.css'
 
 type Props = {
@@ -201,6 +205,7 @@ export function SciforgeCanvasPanel({
   refreshKey,
   focusShapeId
 }: Props): ReactElement {
+  const panelRef = useRef<HTMLElement | null>(null)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pendingXmlRef = useRef<string | null>(null)
   const lastSavedXmlRef = useRef<string | null>(null)
@@ -225,6 +230,36 @@ export function SciforgeCanvasPanel({
   const configuredIframeSrc = useMemo(configuredDrawioUrl, [])
   const iframeSrc = configuredIframeSrc ?? localDrawioUrl ?? (useOnlineDrawio ? ONLINE_DRAWIO_EMBED_URL : null)
   const iframeOrigin = useMemo(() => drawioTargetOrigin(iframeSrc), [iframeSrc])
+
+  useEffect(() => {
+    const componentId = 'right-sidebar.sciforge-canvas'
+    const unregisterComponent = registerVisibleContextComponent({
+      id: componentId,
+      region: 'right-sidebar',
+      component: 'sciforge-canvas',
+      title: canvasId,
+      visible: true,
+      priority: 25,
+      updatedAt: new Date().toISOString(),
+      summary: `SciForge Canvas ${canvasId} is open.`,
+      state: { canvasId, workspaceRoot, ready }
+    })
+    const unregisterTarget = registerVisibleContextVisualTarget({
+      componentId,
+      target: {
+        id: 'canvas.current',
+        kind: 'component',
+        contentType: 'canvas',
+        active: true,
+        metadata: { canvasId, workspaceRoot, ready }
+      },
+      element: () => iframeRef.current ?? panelRef.current
+    })
+    return () => {
+      unregisterTarget()
+      unregisterComponent()
+    }
+  }, [canvasId, ready, workspaceRoot])
 
   const postToDrawio = useCallback((payload: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(JSON.stringify(payload), iframeOrigin)
@@ -537,7 +572,7 @@ export function SciforgeCanvasPanel({
   }, [annotationDraft, canvasId, exportReviewPacket, onSendReviewRequest, packetPath, suggestions.length, workspaceRoot])
 
   return (
-    <aside className={`sciforge-canvas-panel ${embedded ? 'embedded' : 'standalone'} ${className}`}>
+    <aside ref={panelRef} className={`sciforge-canvas-panel ${embedded ? 'embedded' : 'standalone'} ${className}`}>
       {!embedded && (
         <div className="sciforge-canvas-header">
           <div>

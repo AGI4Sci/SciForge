@@ -718,6 +718,8 @@ async function codexChildrenFromThreadEvents(
   threadId: string
 ): Promise<AgentRuntimeChild[]> {
   const byId = new Map<string, AgentRuntimeChild>()
+  const childIdByCanonicalIdentity = new Map<string, string>()
+  const nativeChildIds = new Set<string>()
   const [events, threadsResult] = await Promise.all([
     typeof service.readStoredEvents === 'function'
       ? service.readStoredEvents(threadId, 0)
@@ -732,15 +734,30 @@ async function codexChildrenFromThreadEvents(
       if (!child) continue
       const existing = byId.get(child.id)
       byId.set(child.id, mergeCodexChild(existing, child))
+      const canonicalIdentity = canonicalCodexChildIdentity(child)
+      if (canonicalIdentity) childIdByCanonicalIdentity.set(canonicalIdentity, child.id)
+      nativeChildIds.add(child.id)
     }
   }
   for (const event of events) {
     const child = normalizeCodexChild(event.child, event)
     if (!child) continue
-    const existing = byId.get(child.id)
-    byId.set(child.id, mergeCodexChild(existing, child))
+    const canonicalIdentity = canonicalCodexChildIdentity(child)
+    const canonicalChildId = canonicalIdentity ? childIdByCanonicalIdentity.get(canonicalIdentity) : undefined
+    const existingId = canonicalChildId ?? child.id
+    const existing = byId.get(existingId)
+    const preferExistingId = Boolean(existing && canonicalChildId)
+    const preferExistingThreadIdentity = Boolean(existing && nativeChildIds.has(existing.id))
+    const merged = mergeCodexChild(existing, child, { preferExistingId, preferExistingThreadIdentity })
+    byId.set(merged.id, merged)
+    if (canonicalIdentity) childIdByCanonicalIdentity.set(canonicalIdentity, merged.id)
   }
   return [...byId.values()].sort(compareCodexChildren)
+}
+
+function canonicalCodexChildIdentity(child: AgentRuntimeChild): string {
+  const childThreadId = child.openAsThreadRef?.threadId?.trim()
+  return childThreadId ? `${child.parentThreadId}\u0000${childThreadId}` : ''
 }
 
 function childFromCodexThread(
@@ -931,19 +948,76 @@ function normalizeCodexUsage(value: unknown): AgentRuntimeChild['usage'] | undef
 
 function mergeCodexChild(
   previous: AgentRuntimeChild | undefined,
-  next: AgentRuntimeChild
+  next: AgentRuntimeChild,
+  options: { preferExistingId?: boolean; preferExistingThreadIdentity?: boolean } = {}
 ): AgentRuntimeChild {
   if (!previous) return next
+  const preferExistingId = options.preferExistingId === true
+  const preferExistingThreadIdentity = options.preferExistingThreadIdentity === true
+  const openAsThreadRef = previous.openAsThreadRef && next.openAsThreadRef
+    ? {
+        ...previous.openAsThreadRef,
+        ...next.openAsThreadRef,
+        metadata: {
+          ...(previous.openAsThreadRef.metadata ?? {}),
+          ...(next.openAsThreadRef.metadata ?? {})
+        }
+      }
+    : next.openAsThreadRef ?? previous.openAsThreadRef
+  const transcriptRef = previous.transcriptRef && next.transcriptRef
+    ? {
+        ...(preferExistingThreadIdentity ? next.transcriptRef : previous.transcriptRef),
+        ...(preferExistingThreadIdentity ? previous.transcriptRef : next.transcriptRef),
+        metadata: {
+          ...(previous.transcriptRef.metadata ?? {}),
+          ...(next.transcriptRef.metadata ?? {})
+        }
+      }
+    : next.transcriptRef ?? previous.transcriptRef
+  const latest = latestCodexChild(previous, next)
   return {
     ...previous,
     ...next,
+    id: preferExistingId ? previous.id : next.id,
+    kind: preferExistingThreadIdentity ? previous.kind : next.kind,
+    status: latest.status,
+    ...(previous.usage || next.usage
+      ? { usage: { ...(previous.usage ?? {}), ...(next.usage ?? {}) } }
+      : {}),
+    ...(transcriptRef
+      ? {
+          transcriptRef: preferExistingThreadIdentity
+            ? { ...transcriptRef, childId: previous.id }
+            : preferExistingId
+              ? { ...transcriptRef, childId: previous.id }
+              : transcriptRef
+        }
+      : {}),
+    ...(openAsThreadRef ? { openAsThreadRef } : {}),
     createdAt: previous.createdAt ?? next.createdAt,
     startedAt: previous.startedAt ?? next.startedAt,
     metadata: {
       ...(previous.metadata ?? {}),
-      ...(next.metadata ?? {})
+      ...(next.metadata ?? {}),
+      ...(preferExistingThreadIdentity && previous.metadata?.source
+        ? { source: previous.metadata.source }
+        : {})
     }
   }
+}
+
+function latestCodexChild(previous: AgentRuntimeChild, next: AgentRuntimeChild): AgentRuntimeChild {
+  const previousTime = codexChildStatusTime(previous)
+  const nextTime = codexChildStatusTime(next)
+  return Number.isFinite(previousTime) && Number.isFinite(nextTime) && previousTime > nextTime
+    ? previous
+    : next
+}
+
+function codexChildStatusTime(child: AgentRuntimeChild): number {
+  const value = child.completedAt || child.updatedAt || child.startedAt || child.createdAt
+  const time = value ? Date.parse(value) : Number.NaN
+  return Number.isFinite(time) ? time : Number.NaN
 }
 
 function compareCodexChildren(a: AgentRuntimeChild, b: AgentRuntimeChild): number {

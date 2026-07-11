@@ -1,9 +1,11 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { readFile } from 'node:fs/promises'
 
 import {
   VISIBLE_CONTEXT_RESOURCE_URI,
+  VisualCaptureInputSchema,
   WORKSPACE_FILE_RESOURCE_URI_TEMPLATE,
   WORKSPACE_TREE_RESOURCE_URI,
   VisibleContextInputSchema,
@@ -22,8 +24,11 @@ import {
   type WorkspaceIntelService
 } from './service.js'
 
-type McpTextToolResult = {
-  content: Array<{ type: 'text'; text: string }>
+type McpToolResult = {
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'image'; data: string; mimeType: string }
+  >
   structuredContent?: Record<string, unknown>
   isError?: true
 }
@@ -55,6 +60,23 @@ export function createWorkspaceIntelMcpServer(
     return toolResult(result, result.ok
       ? `Visible context has ${result.componentCount} component${result.componentCount === 1 ? '' : 's'}.`
       : result.error.message)
+  })
+
+  server.registerTool('gui_visual_capture', {
+    description: 'Capture the current SciForge window or one visual target published by gui_visible_context. Returns the captured PNG as standard MCP image content plus structured capture metadata; arbitrary coordinates are not accepted.',
+    inputSchema: VisualCaptureInputSchema,
+    annotations: READ_ONLY_TOOL_ANNOTATIONS
+  }, async (args) => {
+    const result = await service.visualCapture(args)
+    if (!result.ok) return toolResult(result, result.error.message)
+    const bytes = await readFile(result.resource.path)
+    return {
+      content: [
+        { type: 'text', text: `Captured ${result.resource.role} visual context to ${result.resource.path}.` },
+        { type: 'image', data: bytes.toString('base64'), mimeType: result.resource.mimeType }
+      ],
+      structuredContent: result
+    }
   })
 
   server.registerTool('gui_workspace_list', {
@@ -184,7 +206,7 @@ export async function startWorkspaceIntelMcpServer(
   await server.connect(transport)
 }
 
-function toolResult(result: Record<string, unknown>, text: string): McpTextToolResult {
+function toolResult(result: Record<string, unknown>, text: string): McpToolResult {
   return {
     content: [{ type: 'text', text }],
     structuredContent: result,

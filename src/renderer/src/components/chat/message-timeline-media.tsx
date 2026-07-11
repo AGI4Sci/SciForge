@@ -48,7 +48,7 @@ export type TimelineImageReference = {
   threadId?: string
   workspaceRoot?: string
   caption?: string
-  source: 'attachment' | 'generated'
+  source: 'attachment' | 'generated' | 'capture'
 }
 
 export type TimelineImageCanvasArtifact = {
@@ -111,6 +111,7 @@ type PreviewState = {
 
 type PreviewRequest =
   | { key: string; id: string; mode: 'attachment' }
+  | { key: string; path: string; mode: 'managed-capture' }
   | { key: string; path: string; mode: 'workspace-image'; workspaceRoot?: string }
 
 type ImageActionState = 'idle' | 'busy' | 'done' | 'error'
@@ -740,6 +741,58 @@ function parseJsonValuesFromText(text: string | undefined): unknown[] {
   return values
 }
 
+function visualSnapshotFromRecord(record: Record<string, unknown>): TimelineImageReference | null {
+  if (record.kind !== 'visualSnapshot') return null
+  const path = readString(record, 'path')
+  const mimeType = readString(record, 'mimeType', 'mime_type')
+  if (!path || mimeType !== 'image/png' || !hasAbsolutePathPrefix(path)) return null
+  const name = readString(record, 'name') ?? path.split(/[\\/]/).filter(Boolean).at(-1) ?? 'Visual capture'
+  return {
+    source: 'capture',
+    path,
+    name,
+    mimeType: 'image/png',
+    sourceTool: 'gui_visual_capture',
+    ...(readNumber(record, 'size') ? { byteSize: readNumber(record, 'size') } : {}),
+    ...(readNumber(record, 'width') ? { width: readNumber(record, 'width') } : {}),
+    ...(readNumber(record, 'height') ? { height: readNumber(record, 'height') } : {})
+  }
+}
+
+function collectVisualSnapshotsFromValue(
+  value: unknown,
+  images: TimelineImageReference[],
+  indexByKey: Map<string, number>,
+  depth = 0
+): void {
+  if (depth > 6) return
+  if (Array.isArray(value)) {
+    for (const entry of value) collectVisualSnapshotsFromValue(entry, images, indexByKey, depth + 1)
+    return
+  }
+  const record = asRecord(value)
+  if (!record) return
+  addUniqueImage(images, indexByKey, visualSnapshotFromRecord(record))
+  for (const nested of Object.values(record)) {
+    if (nested && typeof nested === 'object') {
+      collectVisualSnapshotsFromValue(nested, images, indexByKey, depth + 1)
+    }
+  }
+}
+
+export function timelineVisualSnapshotsFromToolBlock(block: TimelineToolImageBlock): TimelineImageReference[] {
+  const images: TimelineImageReference[] = []
+  const indexByKey = new Map<string, number>()
+  collectVisualSnapshotsFromValue(block.meta, images, indexByKey)
+  for (const parsed of parseJsonValuesFromText(block.detail)) {
+    collectVisualSnapshotsFromValue(parsed, images, indexByKey)
+  }
+  for (const parsed of parseJsonValuesFromText(block.summary)) {
+    collectVisualSnapshotsFromValue(parsed, images, indexByKey)
+  }
+  return images
+}
+
 export function timelineImagesFromToolBlock(block: TimelineToolImageBlock): TimelineImageReference[] {
   const images: TimelineImageReference[] = []
   const indexByKey = new Map<string, number>()
@@ -1045,6 +1098,9 @@ function usePreviewState(images: TimelineImageReference[]): PreviewState {
         if (rawPreviewUrl(image) || state.urls[key] || state.failures[key]) return null
         const path = imagePath(image)
         if (path) {
+          if (image.source === 'capture') {
+            return { key, path, mode: 'managed-capture' }
+          }
           return {
             key,
             path,
@@ -1058,7 +1114,9 @@ function usePreviewState(images: TimelineImageReference[]): PreviewState {
       .filter((request): request is PreviewRequest => request !== null)
   }, [images, state.failures, state.urls, workspaceRoot])
   const requestKey = requests
-    .map((request) => request.mode === 'attachment' ? `attachment:${request.id}` : `path:${request.workspaceRoot ?? ''}:${request.path}`)
+    .map((request) => request.mode === 'attachment'
+      ? `attachment:${request.id}`
+      : `${request.mode}:${'workspaceRoot' in request ? request.workspaceRoot ?? '' : ''}:${request.path}`)
     .join('\n')
 
   useEffect(() => {
@@ -1087,6 +1145,15 @@ function usePreviewState(images: TimelineImageReference[]): PreviewState {
             previewUrl,
             path: content.attachment.localFilePath
           }
+        }
+
+        if (request.mode === 'managed-capture') {
+          if (typeof window.sciforge?.visibleContext?.readCapturePreview !== 'function') {
+            return { key: request.key, failed: 'Capture preview reader is unavailable.' }
+          }
+          const result = await window.sciforge.visibleContext.readCapturePreview({ path: request.path })
+          if (!result.ok) return { key: request.key, failed: result.message }
+          return { key: request.key, previewUrl: result.dataUrl, path: result.path }
         }
 
         if (typeof window.sciforge?.readWorkspaceImage !== 'function') {
@@ -1165,10 +1232,10 @@ function TimelineImageTile({
   const copyValue = sourcePath || sourceUrl
   const byteSize = formatByteSize(image.byteSize)
   const metadata = [image.mimeType, byteSize].filter(Boolean).join(' | ')
-  const canOpenOriginal = Boolean(sourcePath || sourceUrl)
+  const canOpenOriginal = image.source !== 'capture' && Boolean(sourcePath || sourceUrl)
   const canDownload = Boolean(src)
-  const canCopy = Boolean(copyValue)
-  const canvasArtifact = imageCanvasArtifact(image, resolvedPath)
+  const canCopy = image.source !== 'capture' && Boolean(copyValue)
+  const canvasArtifact = image.source === 'capture' ? null : imageCanvasArtifact(image, resolvedPath)
   const canOpenCanvas = Boolean(canvasArtifact && onOpenCanvas)
   const tileClass =
     variant === 'conversation' || variant === 'assistant'
@@ -1278,32 +1345,35 @@ function TimelineImageTile({
           >
             {actionIcon(downloadState, <Download className="h-3.5 w-3.5" strokeWidth={1.9} />)}
           </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              void handleOpenOriginal()
-            }}
-            disabled={!canOpenOriginal || openState === 'busy'}
-            title={t('imageOpenOriginal')}
-            aria-label={t('imageOpenOriginal')}
-            className={iconButtonClass}
-          >
-            {actionIcon(openState, <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.9} />)}
-          </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              void handleCopy()
-            }}
-            disabled={!canCopy}
-            title={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
-            aria-label={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
-            className={iconButtonClass}
-          >
-            {actionIcon(copyState, <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />)}
-          </button>
+          {canOpenOriginal ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleOpenOriginal()
+              }}
+              disabled={openState === 'busy'}
+              title={t('imageOpenOriginal')}
+              aria-label={t('imageOpenOriginal')}
+              className={iconButtonClass}
+            >
+              {actionIcon(openState, <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.9} />)}
+            </button>
+          ) : null}
+          {canCopy ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopy()
+              }}
+              title={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
+              aria-label={copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
+              className={iconButtonClass}
+            >
+              {actionIcon(copyState, <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />)}
+            </button>
+          ) : null}
         </div>
         {metadata ? (
           <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-ds-card/90 px-2 py-1 text-[11px] text-ds-faint opacity-0 transition group-hover/image:opacity-100">
@@ -1343,7 +1413,7 @@ function TimelineImageTile({
           </div>
         </div>
       </div>
-      {copyValue ? (
+      {canCopy ? (
         <button
           type="button"
           onClick={() => void handleCopy()}
@@ -1525,6 +1595,20 @@ export function TimelineImagesFromMeta({
 }): ReactElement | null {
   const images = useMemo(() => timelineImagesFromMeta(meta), [meta])
   return <TimelineImageGallery images={images} variant={variant} onOpenCanvas={onOpenCanvas} />
+}
+
+export function TimelineVisualCapturePreview({
+  block
+}: {
+  block: TimelineToolImageBlock
+}): ReactElement | null {
+  const images = useMemo(() => timelineVisualSnapshotsFromToolBlock(block), [block])
+  if (images.length === 0) return null
+  return (
+    <div className="ml-1 mt-1" data-testid="timeline-visual-capture-preview">
+      <TimelineImageGallery images={images} variant="tool" />
+    </div>
+  )
 }
 
 export function MarkdownImageArtifactProvider({

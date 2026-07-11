@@ -52,6 +52,7 @@ import {
 } from '../../shared/workspace-preview'
 import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
 export {
+  visibleContextCapturePreviewRequestSchema as visibleContextCapturePreviewPayloadSchema,
   visibleContextSnapshotSchema as visibleContextPublishPayloadSchema
 } from '../../shared/visible-context'
 

@@ -4,8 +4,10 @@ import { useShallow } from 'zustand/react/shallow'
 import {
   Bot,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
   CircleHelp,
+  CornerUpLeft,
   Clock3,
   Loader2,
   PanelRightClose
@@ -20,6 +22,7 @@ import type {
 import type { AgentRuntimeId } from '@shared/app-settings'
 import type {
   AgentProviderCapabilities,
+  AttachmentReference,
   ChatBlock,
   NormalizedThread,
   RuntimeConnectionStatus,
@@ -31,9 +34,19 @@ import type { SideConversation } from '../../store/chat-store-types'
 import { getProvider } from '../../agent/registry'
 import { useChatStore } from '../../store/chat-store'
 import { AssistantMarkdown } from './AssistantMarkdown'
-import { FloatingComposer } from './FloatingComposer'
+import {
+  FloatingComposer,
+  type ComposerFileReference,
+  type ComposerImageAttachmentInput,
+  type ComposerSendIntent
+} from './FloatingComposer'
 import { MessageTimeline } from './MessageTimeline'
 import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
+import { prepareImageAttachmentUpload } from '../../lib/image-attachment-upload'
+import {
+  buildImageGenerationDisplayText,
+  buildImageGenerationWorkflowPrompt
+} from '../../lib/image-generation-chat'
 
 type TFunction = (k: string, opts?: Record<string, unknown>) => string
 
@@ -69,6 +82,26 @@ export type ChildAgentsPanelProps = {
   className?: string
 }
 
+export type ChildAgentNavigationCrumb = {
+  threadId: string
+  runtimeId?: AgentRuntimeId
+  label: string
+}
+
+type ChildComposerDraft = {
+  attachments: AttachmentReference[]
+  fileReferences: ComposerFileReference[]
+  uploadBusy: boolean
+  uploadError: string | null
+}
+
+const EMPTY_CHILD_COMPOSER_DRAFT: ChildComposerDraft = {
+  attachments: [],
+  fileReferences: [],
+  uploadBusy: false,
+  uploadError: null
+}
+
 export type ChildAgentsPanelViewProps = {
   activeThreadId: string | null
   activeRuntimeId?: AgentRuntimeId
@@ -84,9 +117,28 @@ export type ChildAgentsPanelViewProps = {
   activeAgentRuntime?: AgentRuntimeId
   runtimeCapabilities?: AgentProviderCapabilities
   transcriptState: ChildAgentTranscriptState
+  navigationPath?: ChildAgentNavigationCrumb[]
+  selectedComposerDraft?: ChildComposerDraft
+  workspaceRoot?: string
   onSelectChild: (childId: string) => void
+  onNavigateToDepth?: (depth: number) => void
+  onOpenSelectedChildren?: (child: AgentRuntimeChild) => void
   onSideInputChange: (threadId: string, value: string) => void
-  onSideSend: (threadId: string, text: string) => void
+  onSideSend: (
+    threadId: string,
+    text: string,
+    payload?: {
+      attachmentIds?: string[]
+      fileReferences?: ComposerFileReference[]
+      displayText?: string
+    }
+  ) => void
+  onSidePickAttachments?: (threadId: string, attachments: ComposerImageAttachmentInput[]) => void
+  onSidePasteClipboardImage?: (threadId: string, options?: { silentNoImage?: boolean }) => void
+  onSideRemoveAttachment?: (threadId: string, attachmentId: string) => void
+  onSideAddFileReference?: (threadId: string, reference: ComposerFileReference) => void
+  onSideRemoveFileReference?: (threadId: string, relativePath: string, workspaceRoot?: string) => void
+  onSideRemoveQueuedMessage: (threadId: string, messageId: string) => void
   onSideInterrupt: (threadId: string) => void
   onSideModelChange: (threadId: string, model: string) => void
   onSideReasoningEffortChange: (threadId: string, effort: ComposerReasoningEffort) => void
@@ -97,6 +149,26 @@ export type ChildAgentsPanelViewProps = {
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function clipboardImageFile(image: { name: string; mimeType: string; dataBase64: string }): File {
+  const binary = atob(image.dataBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return new File([bytes], image.name || 'image', { type: image.mimeType })
+}
+
+function mergeChildFileReference(
+  references: readonly ComposerFileReference[],
+  reference: ComposerFileReference
+): ComposerFileReference[] {
+  const identity = `${reference.workspaceRoot ?? ''}\u0000${reference.relativePath}`
+  return [
+    ...references.filter((current) =>
+      `${current.workspaceRoot ?? ''}\u0000${current.relativePath}` !== identity
+    ),
+    reference
+  ]
 }
 
 export function childAgentShortName(child: AgentRuntimeChild): string {
@@ -110,10 +182,46 @@ export function filterDirectChildAgents(
 ): AgentRuntimeChild[] {
   const threadId = activeThreadId?.trim()
   if (!threadId) return []
-  return children
+  const directChildren = children
     .filter((child) => child.parentThreadId === threadId)
     .filter((child) => !activeRuntimeId || child.runtimeId === activeRuntimeId)
-    .map((child) => ({ ...child }))
+  const deduped = new Map<string, AgentRuntimeChild>()
+  for (const child of directChildren) {
+    const openThreadId = childOpenThreadId(child)
+    const openRuntimeId = childOpenThreadRuntimeId(child) ?? child.runtimeId
+    const identity = openThreadId
+      ? `${openRuntimeId}\u0000thread:${openThreadId}`
+      : `${child.runtimeId}\u0000child:${child.id}`
+    const existing = deduped.get(identity)
+    if (!existing) {
+      deduped.set(identity, { ...child })
+      continue
+    }
+
+    const canonicalId = openThreadId && (existing.id === openThreadId || child.id === openThreadId)
+      ? openThreadId
+      : existing.id
+    const existingUpdatedAt = Date.parse(existing.updatedAt ?? existing.startedAt ?? existing.createdAt ?? '')
+    const childUpdatedAt = Date.parse(child.updatedAt ?? child.startedAt ?? child.createdAt ?? '')
+    const childIsNewer = Number.isFinite(childUpdatedAt) && (
+      !Number.isFinite(existingUpdatedAt) || childUpdatedAt >= existingUpdatedAt
+    )
+    const primary = childIsNewer ? child : existing
+    const fallback = childIsNewer ? existing : child
+    deduped.set(identity, {
+      ...fallback,
+      ...primary,
+      id: canonicalId,
+      name: primary.name?.trim() ? primary.name : fallback.name,
+      label: primary.label?.trim() ? primary.label : fallback.label,
+      prompt: primary.prompt?.trim() ? primary.prompt : fallback.prompt,
+      summary: primary.summary?.trim() ? primary.summary : fallback.summary,
+      transcriptRef: primary.transcriptRef ?? fallback.transcriptRef,
+      openAsThreadRef: primary.openAsThreadRef ?? fallback.openAsThreadRef,
+      usage: primary.usage ?? fallback.usage
+    })
+  }
+  return [...deduped.values()]
 }
 
 function childStatusOrder(status: AgentRuntimeChildStatus): number {
@@ -725,8 +833,7 @@ function childRuntimeCapabilities(
     fork: false,
     goals: false,
     review: false,
-    sideConversations: false,
-    steer: false
+    sideConversations: false
   }
 }
 
@@ -739,8 +846,16 @@ function ChildAgentChatSurface({
   composerModelGroups,
   activeAgentRuntime,
   runtimeCapabilities,
+  composerDraft,
+  workspaceRoot,
   onInputChange,
   onSend,
+  onPickAttachments,
+  onPasteClipboardImage,
+  onRemoveAttachment,
+  onAddFileReference,
+  onRemoveFileReference,
+  onRemoveQueuedMessage,
   onInterrupt,
   onModelChange,
   onReasoningEffortChange,
@@ -754,8 +869,24 @@ function ChildAgentChatSurface({
   composerModelGroups?: ModelProviderModelGroup[]
   activeAgentRuntime?: AgentRuntimeId
   runtimeCapabilities?: AgentProviderCapabilities
+  composerDraft: ChildComposerDraft
+  workspaceRoot?: string
   onInputChange: (threadId: string, value: string) => void
-  onSend: (threadId: string, text: string) => void
+  onSend: (
+    threadId: string,
+    text: string,
+    payload?: {
+      attachmentIds?: string[]
+      fileReferences?: ComposerFileReference[]
+      displayText?: string
+    }
+  ) => void
+  onPickAttachments?: (threadId: string, attachments: ComposerImageAttachmentInput[]) => void
+  onPasteClipboardImage?: (threadId: string, options?: { silentNoImage?: boolean }) => void
+  onRemoveAttachment?: (threadId: string, attachmentId: string) => void
+  onAddFileReference?: (threadId: string, reference: ComposerFileReference) => void
+  onRemoveFileReference?: (threadId: string, relativePath: string, workspaceRoot?: string) => void
+  onRemoveQueuedMessage: (threadId: string, messageId: string) => void
   onInterrupt: (threadId: string) => void
   onModelChange: (threadId: string, model: string) => void
   onReasoningEffortChange: (threadId: string, effort: ComposerReasoningEffort) => void
@@ -767,6 +898,24 @@ function ChildAgentChatSurface({
   const effectivePickList = side?.model && !composerPickList.includes(side.model)
     ? [side.model, ...composerPickList]
     : composerPickList
+
+  const sendComposerMessage = (intent?: ComposerSendIntent): void => {
+    if (!side) return
+    const imageGeneration = intent?.kind === 'image-generation'
+    const text = imageGeneration
+      ? buildImageGenerationWorkflowPrompt(side.input, {
+          threadId: side.threadId,
+          ...(workspaceRoot ? { workspaceRoot } : {})
+        })
+      : side.input
+    onSend(side.threadId, text, {
+      attachmentIds: composerDraft.attachments.map((attachment) => attachment.id),
+      fileReferences: composerDraft.fileReferences,
+      ...(imageGeneration
+        ? { displayText: buildImageGenerationDisplayText(side.input) }
+        : {})
+    })
+  }
 
   if (!threadId) {
     return (
@@ -815,6 +964,7 @@ function ChildAgentChatSurface({
         <FloatingComposer
           threadIdOverride={side.threadId}
           disableThreadManagementCommands
+          preferSteerWhileBusy={side.source === 'child_agent'}
           input={side.input}
           setInput={(value) => onInputChange(side.threadId, value)}
           mode={mode}
@@ -829,12 +979,34 @@ function ChildAgentChatSurface({
           composerReasoningEffort={side.reasoningEffort}
           onComposerModelChange={(model) => onModelChange(side.threadId, model)}
           onComposerReasoningEffortChange={(effort) => onReasoningEffortChange(side.threadId, effort)}
-          queuedMessages={[]}
-          onRemoveQueuedMessage={() => undefined}
-          attachments={[]}
-          fileReferenceEnabled={false}
+          queuedMessages={side.queuedMessages ?? []}
+          onRemoveQueuedMessage={(messageId) => onRemoveQueuedMessage(side.threadId, messageId)}
+          attachments={composerDraft.attachments}
+          attachmentUploadEnabled={Boolean(onPickAttachments)}
+          attachmentUploadBusy={composerDraft.uploadBusy}
+          attachmentUploadError={composerDraft.uploadError}
+          fileReferenceEnabled={Boolean(workspaceRoot && onAddFileReference)}
+          fileReferences={composerDraft.fileReferences}
+          workspaceRootOverride={workspaceRoot}
+          preferWorkspaceRootOverride
+          onPickAttachments={onPickAttachments
+            ? (attachments) => onPickAttachments(side.threadId, attachments)
+            : undefined}
+          onPasteClipboardImage={onPasteClipboardImage
+            ? (options) => onPasteClipboardImage(side.threadId, options)
+            : undefined}
+          onRemoveAttachment={onRemoveAttachment
+            ? (attachmentId) => onRemoveAttachment(side.threadId, attachmentId)
+            : undefined}
+          onAddFileReference={onAddFileReference
+            ? (reference) => onAddFileReference(side.threadId, reference)
+            : undefined}
+          onRemoveFileReference={onRemoveFileReference
+            ? (relativePath, referenceWorkspaceRoot) =>
+                onRemoveFileReference(side.threadId, relativePath, referenceWorkspaceRoot)
+            : undefined}
           runtimeCapabilities={effectiveCapabilities}
-          onSend={() => onSend(side.threadId, side.input)}
+          onSend={sendComposerMessage}
           onInterrupt={() => onInterrupt(side.threadId)}
           hideBtwCommand
         />
@@ -858,9 +1030,20 @@ export function ChildAgentsPanelView({
   activeAgentRuntime,
   runtimeCapabilities,
   transcriptState,
+  navigationPath = [],
+  selectedComposerDraft = EMPTY_CHILD_COMPOSER_DRAFT,
+  workspaceRoot,
   onSelectChild,
+  onNavigateToDepth,
+  onOpenSelectedChildren,
   onSideInputChange,
   onSideSend,
+  onSidePickAttachments,
+  onSidePasteClipboardImage,
+  onSideRemoveAttachment,
+  onSideAddFileReference,
+  onSideRemoveFileReference,
+  onSideRemoveQueuedMessage,
   onSideInterrupt,
   onSideModelChange,
   onSideReasoningEffortChange,
@@ -918,6 +1101,42 @@ export function ChildAgentsPanelView({
           <ChildAgentStat label={t('sidebarChildren')} value={directChildren.length} />
           <ChildAgentStat label={t('sidebarChildrenActive')} value={runningCount} />
         </div>
+        {navigationPath.length > 0 ? (
+          <nav
+            className="flex min-w-0 items-center gap-1 overflow-x-auto px-4 pb-2 text-[11.5px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label={t('sidebarChildrenNavigation')}
+          >
+            <button
+              type="button"
+              onClick={() => onNavigateToDepth?.(0)}
+              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            >
+              <CornerUpLeft className="h-3.5 w-3.5" strokeWidth={1.8} />
+              {t('sidebarChildrenRoot')}
+            </button>
+            {navigationPath.map((crumb, index) => {
+              const current = index === navigationPath.length - 1
+              return (
+                <span key={`${crumb.threadId}:${index}`} className="inline-flex min-w-0 shrink-0 items-center gap-1">
+                  <ChevronRight className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={1.8} />
+                  <button
+                    type="button"
+                    aria-current={current ? 'page' : undefined}
+                    onClick={() => onNavigateToDepth?.(index + 1)}
+                    className={`h-7 max-w-36 truncate rounded-md px-1.5 font-medium transition ${
+                      current
+                        ? 'bg-ds-hover text-ds-ink'
+                        : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                    }`}
+                    title={crumb.label}
+                  >
+                    {crumb.label}
+                  </button>
+                </span>
+              )
+            })}
+          </nav>
+        ) : null}
         {directChildren.length > 0 ? (
           <div
             role="tablist"
@@ -967,29 +1186,52 @@ export function ChildAgentsPanelView({
             <ChildAgentsEmpty icon={<Bot className="h-6 w-6" strokeWidth={1.6} />} title={t('sidebarChildrenEmpty')} />
           </div>
         ) : selectedChild ? (
-          childOpenThreadId(selectedChild) ? (
-            <ChildAgentChatSurface
-              child={selectedChild}
-              side={selectedSide}
-              loading={sideLoading}
-              runtimeConnection={runtimeConnection}
-              composerPickList={composerPickList}
-              composerModelGroups={composerModelGroups}
-              activeAgentRuntime={activeAgentRuntime}
-              runtimeCapabilities={runtimeCapabilities}
-              onInputChange={onSideInputChange}
-              onSend={onSideSend}
-              onInterrupt={onSideInterrupt}
-              onModelChange={onSideModelChange}
-              onReasoningEffortChange={onSideReasoningEffortChange}
-              t={t}
-            />
-          ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            {childOpenThreadId(selectedChild) && onOpenSelectedChildren ? (
+              <div className="flex shrink-0 justify-end border-b border-ds-border-muted px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenSelectedChildren(selectedChild)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                  title={t('sidebarChildrenViewNested')}
+                >
+                  {t('sidebarChildrenViewNested')}
+                  <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.8} />
+                </button>
+              </div>
+            ) : null}
+            {childOpenThreadId(selectedChild) ? (
+              <ChildAgentChatSurface
+                child={selectedChild}
+                side={selectedSide}
+                loading={sideLoading}
+                runtimeConnection={runtimeConnection}
+                composerPickList={composerPickList}
+                composerModelGroups={composerModelGroups}
+                activeAgentRuntime={activeAgentRuntime}
+                runtimeCapabilities={runtimeCapabilities}
+                composerDraft={selectedComposerDraft}
+                workspaceRoot={workspaceRoot}
+                onInputChange={onSideInputChange}
+                onSend={onSideSend}
+                onPickAttachments={onSidePickAttachments}
+                onPasteClipboardImage={onSidePasteClipboardImage}
+                onRemoveAttachment={onSideRemoveAttachment}
+                onAddFileReference={onSideAddFileReference}
+                onRemoveFileReference={onSideRemoveFileReference}
+                onRemoveQueuedMessage={onSideRemoveQueuedMessage}
+                onInterrupt={onSideInterrupt}
+                onModelChange={onSideModelChange}
+                onReasoningEffortChange={onSideReasoningEffortChange}
+                t={t}
+              />
+            ) : (
             <div ref={transcriptScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
               <ChildAgentOverview child={selectedChild} t={t} />
               <ChildAgentTranscriptTimeline child={selectedChild} state={transcriptState} t={t} />
             </div>
-          )
+            )}
+          </div>
         ) : null}
         {error ? (
           <div className="mx-3 mt-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-800 dark:text-amber-200">
@@ -1095,6 +1337,7 @@ export function ChildAgentsPanel({
       sideConversations: s.sideConversations,
       attachSideConversation: s.attachSideConversation,
       sendSideMessage: s.sendSideMessage,
+      removeSideQueuedMessage: s.removeSideQueuedMessage,
       interruptSide: s.interruptSide,
       setSideInput: s.setSideInput,
       setSideModel: s.setSideModel,
@@ -1107,31 +1350,116 @@ export function ChildAgentsPanel({
     }))
   )
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null)
+  const [navigationPath, setNavigationPath] = useState<ChildAgentNavigationCrumb[]>([])
   const [transcriptState, setTranscriptState] = useState<ChildAgentTranscriptState>({ status: 'idle' })
   const [attachingThreadId, setAttachingThreadId] = useState<string | null>(null)
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, ChildComposerDraft>>({})
   const appliedFocusRequestKeyRef = useRef<number | null>(null)
   const activeRuntimeId = activeThread?.runtimeId
+  const currentParent = navigationPath[navigationPath.length - 1]
+  const currentParentThreadId = currentParent?.threadId ?? activeThreadId
+  const currentRuntimeId = currentParent?.runtimeId ?? activeRuntimeId
+  const nestedChildrenState = useThreadChildren({
+    activeThreadId: navigationPath.length > 0 ? currentParentThreadId : null,
+    activeRuntimeId: currentRuntimeId,
+    childRefreshKey: focusChildRequestKey,
+    runtimeReady: sideData.runtimeConnection === 'ready',
+    busy: false
+  })
+  const visibleChildren = navigationPath.length > 0 ? nestedChildrenState.children : children
+  const visibleLoading = navigationPath.length > 0 ? nestedChildrenState.loading : loading
+  const visibleError = navigationPath.length > 0 ? nestedChildrenState.error : error
   const directChildren = useMemo(
-    () => sortChildAgents(filterDirectChildAgents(children, activeThreadId, activeRuntimeId)),
-    [activeRuntimeId, activeThreadId, children]
+    () => sortChildAgents(filterDirectChildAgents(visibleChildren, currentParentThreadId, currentRuntimeId)),
+    [currentParentThreadId, currentRuntimeId, visibleChildren]
   )
   const selectedChild = directChildren.find((child) => child.id === selectedChildId) ?? directChildren[0] ?? null
   const selectedChildThreadId = childOpenThreadId(selectedChild)
   const selectedSide = selectedChildThreadId
     ? sideData.sideConversations[selectedChildThreadId] ?? null
     : null
+  const selectedComposerDraft = selectedChildThreadId
+    ? composerDrafts[selectedChildThreadId] ?? EMPTY_CHILD_COMPOSER_DRAFT
+    : EMPTY_CHILD_COMPOSER_DRAFT
   const runtimeCapabilities = sideData.runtimeConnection === 'ready'
     ? getProvider().getCapabilities()
     : undefined
   const selectedTranscriptKey = selectedChild
-    ? `${activeThreadId ?? ''}:${selectedChild.runtimeId}:${selectedChild.id}:${selectedChild.parentTurnId ?? ''}:${selectedChild.updatedAt ?? ''}:${transcriptRefKey(selectedChild.transcriptRef)}`
+    ? `${currentParentThreadId ?? ''}:${selectedChild.runtimeId}:${selectedChild.id}:${selectedChild.parentTurnId ?? ''}:${selectedChild.updatedAt ?? ''}:${transcriptRefKey(selectedChild.transcriptRef)}`
     : ''
+
+  useEffect(() => {
+    setNavigationPath([])
+    setComposerDrafts({})
+  }, [activeThreadId])
+
+  const patchComposerDraft = (
+    threadId: string,
+    patch: (draft: ChildComposerDraft) => ChildComposerDraft
+  ): void => {
+    setComposerDrafts((current) => ({
+      ...current,
+      [threadId]: patch(current[threadId] ?? EMPTY_CHILD_COMPOSER_DRAFT)
+    }))
+  }
+
+  const pickSideAttachments = async (
+    threadId: string,
+    inputs: ComposerImageAttachmentInput[]
+  ): Promise<void> => {
+    if (inputs.length === 0) return
+    const provider = getProvider()
+    patchComposerDraft(threadId, (draft) => ({ ...draft, uploadBusy: true, uploadError: null }))
+    try {
+      const runtimeInfo = await provider.getRuntimeInfo?.()
+      const capabilities = runtimeInfo?.capabilities.attachments
+      if (!capabilities || typeof provider.uploadAttachment !== 'function') {
+        throw new Error(t('composerAttachmentUnavailable'))
+      }
+      const uploaded: AttachmentReference[] = []
+      for (const input of inputs) {
+        if (!input.file.type.startsWith('image/')) continue
+        const prepared = await prepareImageAttachmentUpload(input.file, capabilities)
+        const attachment = await provider.uploadAttachment({
+          name: input.file.name || 'image',
+          mimeType: prepared.mimeType,
+          dataBase64: prepared.dataBase64,
+          textFallback: prepared.textFallback,
+          ...(input.path ? { localFilePath: input.path } : {}),
+          threadId,
+          ...(activeThread?.workspace ? { workspace: activeThread.workspace } : {})
+        })
+        uploaded.push({
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          byteSize: attachment.byteSize,
+          width: attachment.width,
+          height: attachment.height,
+          previewUrl: `data:${prepared.mimeType};base64,${prepared.dataBase64}`,
+          ...(attachment.localFilePath ? { absolutePath: attachment.localFilePath } : {})
+        })
+      }
+      patchComposerDraft(threadId, (draft) => {
+        const byId = new Map(draft.attachments.map((attachment) => [attachment.id, attachment]))
+        for (const attachment of uploaded) byId.set(attachment.id, attachment)
+        return { ...draft, attachments: [...byId.values()], uploadError: null }
+      })
+    } catch (uploadError) {
+      patchComposerDraft(threadId, (draft) => ({
+        ...draft,
+        uploadError: messageFromError(uploadError)
+      }))
+    } finally {
+      patchComposerDraft(threadId, (draft) => ({ ...draft, uploadBusy: false }))
+    }
+  }
 
   useEffect(() => {
     setSelectedChildId(null)
     setTranscriptState({ status: 'idle' })
     appliedFocusRequestKeyRef.current = null
-  }, [activeThreadId])
+  }, [currentParentThreadId])
 
   useEffect(() => {
     setSelectedChildId((current) => preferredChildAgentId(directChildren, current))
@@ -1144,16 +1472,16 @@ export function ChildAgentsPanel({
       return
     }
     if (appliedFocusRequestKeyRef.current === focusChildRequestKey) return
-    if (!directChildren.some((child) => child.id === nextFocusId)) return
+    if (navigationPath.length > 0 || !directChildren.some((child) => child.id === nextFocusId)) return
     appliedFocusRequestKeyRef.current = focusChildRequestKey
     setSelectedChildId(nextFocusId)
-  }, [directChildren, focusChildId, focusChildRequestKey])
+  }, [directChildren, focusChildId, focusChildRequestKey, navigationPath.length])
 
   useEffect(() => {
     let cancelled = false
     const child = selectedChild
     const threadId = selectedChildThreadId
-    if (!activeThreadId || !child || !threadId) {
+    if (!currentParentThreadId || !child || !threadId) {
       setAttachingThreadId(null)
       return undefined
     }
@@ -1164,7 +1492,7 @@ export function ChildAgentsPanel({
     setAttachingThreadId(threadId)
     void sideData.attachSideConversation({
       threadId,
-      parentThreadId: activeThreadId,
+      parentThreadId: currentParentThreadId,
       runtimeId: childOpenThreadRuntimeId(child),
       title: childAgentShortName(child),
       model: activeThread?.model ?? sideData.composerModel,
@@ -1177,7 +1505,7 @@ export function ChildAgentsPanel({
     }
   }, [
     activeThread?.model,
-    activeThreadId,
+    currentParentThreadId,
     selectedChild,
     selectedChildThreadId,
     sideData
@@ -1187,7 +1515,7 @@ export function ChildAgentsPanel({
     let cancelled = false
     const child = selectedChild
 
-    if (!activeThreadId || !child) {
+    if (!currentParentThreadId || !child) {
       setTranscriptState({ status: 'idle' })
       return undefined
     }
@@ -1212,11 +1540,11 @@ export function ChildAgentsPanel({
       return undefined
     }
 
-    provider.rememberThreadRuntime?.(activeThreadId, child.runtimeId)
+    provider.rememberThreadRuntime?.(currentParentThreadId, child.runtimeId)
     setTranscriptState({ status: 'loading', childId: child.id })
     void provider.readChildTranscript({
       runtimeId: child.runtimeId,
-      parentThreadId: activeThreadId,
+      parentThreadId: currentParentThreadId,
       ...(child.parentTurnId ? { parentTurnId: child.parentTurnId } : {}),
       childId: child.id,
       transcriptRef: child.transcriptRef,
@@ -1232,16 +1560,16 @@ export function ChildAgentsPanel({
     return () => {
       cancelled = true
     }
-  }, [activeThreadId, selectedTranscriptKey, t])
+  }, [currentParentThreadId, selectedTranscriptKey, t])
 
   return (
     <ChildAgentsPanelView
-      activeThreadId={activeThreadId}
-      activeRuntimeId={activeRuntimeId}
-      children={children}
+      activeThreadId={currentParentThreadId}
+      activeRuntimeId={currentRuntimeId}
+      children={visibleChildren}
       selectedChildId={selectedChildId}
-      loading={loading}
-      error={error}
+      loading={visibleLoading}
+      error={visibleError}
       selectedSide={selectedSide}
       sideLoading={Boolean(selectedChildThreadId && attachingThreadId === selectedChildThreadId && !selectedSide)}
       runtimeConnection={sideData.runtimeConnection}
@@ -1250,10 +1578,86 @@ export function ChildAgentsPanel({
       activeAgentRuntime={sideData.activeAgentRuntime}
       runtimeCapabilities={runtimeCapabilities}
       transcriptState={transcriptState}
+      navigationPath={navigationPath}
+      selectedComposerDraft={selectedComposerDraft}
+      workspaceRoot={activeThread?.workspace}
       onSelectChild={(childId) => setSelectedChildId(childId)}
+      onNavigateToDepth={(depth) => {
+        setNavigationPath((current) => depth <= 0 ? [] : current.slice(0, depth))
+      }}
+      onOpenSelectedChildren={(child) => {
+        const threadId = childOpenThreadId(child)
+        if (!threadId) return
+        const existingDepth = navigationPath.findIndex((crumb) => crumb.threadId === threadId)
+        if (existingDepth >= 0) {
+          setNavigationPath((current) => current.slice(0, existingDepth + 1))
+          return
+        }
+        setNavigationPath((current) => [
+          ...current,
+          {
+            threadId,
+            runtimeId: childOpenThreadRuntimeId(child),
+            label: childAgentShortName(child)
+          }
+        ])
+      }}
       onSideInputChange={(threadId, value) => sideData.setSideInput(threadId, value)}
-      onSideSend={(threadId, text) => {
-        void sideData.sendSideMessage(threadId, text)
+      onSideSend={(threadId, text, payload) => {
+        void sideData.sendSideMessage(threadId, text, payload).then((sent) => {
+          if (!sent) return
+          patchComposerDraft(threadId, (draft) => ({
+            ...draft,
+            attachments: [],
+            fileReferences: [],
+            uploadError: null
+          }))
+        })
+      }}
+      onSidePickAttachments={(threadId, attachments) => {
+        void pickSideAttachments(threadId, attachments)
+      }}
+      onSidePasteClipboardImage={(threadId, options) => {
+        void (async () => {
+          if (typeof window.sciforge?.readClipboardImage !== 'function') {
+            patchComposerDraft(threadId, (draft) => ({
+              ...draft,
+              uploadError: t('composerAttachmentUnavailable')
+            }))
+            return
+          }
+          const image = await window.sciforge.readClipboardImage()
+          if (!image.ok) {
+            if (options?.silentNoImage) return
+            patchComposerDraft(threadId, (draft) => ({ ...draft, uploadError: image.message }))
+            return
+          }
+          await pickSideAttachments(threadId, [{ file: clipboardImageFile(image) }])
+        })()
+      }}
+      onSideRemoveAttachment={(threadId, attachmentId) => {
+        patchComposerDraft(threadId, (draft) => ({
+          ...draft,
+          attachments: draft.attachments.filter((attachment) => attachment.id !== attachmentId)
+        }))
+      }}
+      onSideAddFileReference={(threadId, reference) => {
+        patchComposerDraft(threadId, (draft) => ({
+          ...draft,
+          fileReferences: mergeChildFileReference(draft.fileReferences, reference)
+        }))
+      }}
+      onSideRemoveFileReference={(threadId, relativePath, workspaceRoot) => {
+        patchComposerDraft(threadId, (draft) => ({
+          ...draft,
+          fileReferences: draft.fileReferences.filter((reference) =>
+            reference.relativePath !== relativePath ||
+            (workspaceRoot !== undefined && reference.workspaceRoot !== workspaceRoot)
+          )
+        }))
+      }}
+      onSideRemoveQueuedMessage={(threadId, messageId) => {
+        sideData.removeSideQueuedMessage(threadId, messageId)
       }}
       onSideInterrupt={(threadId) => {
         void sideData.interruptSide(threadId)

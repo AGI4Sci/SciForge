@@ -116,6 +116,7 @@ import {
   researchCardCreatePayloadSchema,
   researchCardListPayloadSchema,
   researchCardUpdatePayloadSchema,
+  visibleContextCapturePreviewPayloadSchema,
   visibleContextPublishPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
@@ -160,7 +161,10 @@ import {
   workflowTestNodePayloadSchema,
   workspaceRootSchema
 } from './app-ipc-schemas'
-import type { VisibleContextSnapshot } from '../../shared/visible-context'
+import {
+  emptyVisibleContextSnapshot,
+  type VisibleContextSnapshot
+} from '../../shared/visible-context'
 import {
   buildScientificSkillsMcpConfigFragment,
   type ScientificSkillsMcpLaunchConfig
@@ -424,6 +428,13 @@ type RegisterAppIpcHandlersOptions = {
   visibleContext?: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
+    readCapturePreview: (path: string) => Promise<{
+      ok: true
+      path: string
+      dataUrl: string
+      mimeType: 'image/png'
+      size: number
+    } | { ok: false; message: string }>
   }
   setRemoteChannelActiveThreadContext?: (payload: {
     threadId: string
@@ -1796,14 +1807,17 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return visibleContext.publish(snapshot)
   })
   handleInvoke('visibleContext:get', async () => {
-    if (!visibleContext) {
-      return {
-        schemaVersion: 1,
-        updatedAt: new Date(0).toISOString(),
-        components: []
-      }
-    }
+    if (!visibleContext) return emptyVisibleContextSnapshot()
     return visibleContext.get()
+  })
+  handleInvoke('visibleContext:capture:preview', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'visibleContext:capture:preview',
+      visibleContextCapturePreviewPayloadSchema,
+      payload
+    )
+    if (!visibleContext) return { ok: false, message: 'Visible capture previews are unavailable.' }
+    return visibleContext.readCapturePreview(request.path)
   })
 
   const requireAgentRuntime = (): NonNullable<RegisterAppIpcHandlersOptions['agentRuntime']> => {
