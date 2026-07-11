@@ -260,6 +260,12 @@ SciForge 当前仍处于快速演进阶段。为避免误解，下面这些边�
 
 它解决的问题是：研究项目里“这个图、这个序列、这个结论、这个 slide 到底从哪来”不再靠人脑记忆。
 
+目前对话层已经落地第一版结构化对象引用与展示：工具可返回带 hash、路径、来源、
+`WorkspaceObservation` 和 selection 的 `ScientificObjectRef`；主对话会渲染分子、序列、
+光谱、组学和生物成像卡片，并可进入完整工作区、按需展开 Mol*、引用当前选择继续提问、
+比较对象和记录注释。工具输出格式见
+[`docs/scientific-object-chat-contract.md`](./docs/scientific-object-chat-contract.md)。
+
 ### Experiment Notebook Ledger
 
 科研实验不是只看最后结果，还要记录尝试过什么、环境是什么、失败在哪里、哪张图来自哪次运行。Notebook Ledger 可以自动把 Agent 的科研运行过程整理成结构化实验账本：

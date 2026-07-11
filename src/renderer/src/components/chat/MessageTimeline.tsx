@@ -28,6 +28,7 @@ import {
 import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import { performanceMonitor } from '../../lib/performance-monitor'
+import { TimelineScientificObjectsPanel } from './TimelineScientificObjectsPanel'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -152,6 +153,7 @@ export function MessageTimeline({
   const stableOnBuildPlan = useStableOptionalCallback(onBuildPlan)
   const stableOnOpenPlan = useStableOptionalCallback(onOpenPlan)
   const stableOnOpenImageArtifactInCanvas = useStableOptionalCallback(onOpenImageArtifactInCanvas)
+  const stableOnContinueScientificObject = useStableOptionalCallback(onSelectSuggestion)
 
   const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
   const hasContent = blocks.length > 0 || live || liveReasoning
@@ -280,6 +282,7 @@ export function MessageTimeline({
                 onBuildPlan={stableOnBuildPlan}
                 onOpenPlan={stableOnOpenPlan}
                 onOpenImageArtifactInCanvas={stableOnOpenImageArtifactInCanvas}
+                onContinueScientificObject={stableOnContinueScientificObject}
                 viewportRef={containerRef}
               />
             </Fragment>
@@ -315,6 +318,7 @@ export function MessageTimeline({
             live={live}
             devPreviewCard={devPreviewCard}
             onOpenImageArtifactInCanvas={stableOnOpenImageArtifactInCanvas}
+            onContinueScientificObject={stableOnContinueScientificObject}
             viewportRef={containerRef}
             liveStartedAtMs={
               effectiveCurrentTurnUserId && typeof effectiveTurnStartedAtByUserId[effectiveCurrentTurnUserId] === 'number'
@@ -350,6 +354,7 @@ function MessageTurn({
   onBuildPlan,
   onOpenPlan,
   onOpenImageArtifactInCanvas,
+  onContinueScientificObject,
   viewportRef
 }: {
   turn: Turn
@@ -365,6 +370,7 @@ function MessageTurn({
   onBuildPlan?: () => void
   onOpenPlan?: () => void
   onOpenImageArtifactInCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onContinueScientificObject?: (prompt: string) => void
   viewportRef: RefObject<HTMLDivElement | null>
 }): ReactElement {
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
@@ -483,6 +489,12 @@ function MessageTurn({
 
       <TimelineImageResultsPanel blocks={toolResultImageBlocks} onOpenCanvas={onOpenImageArtifactInCanvas} />
 
+      <TimelineScientificObjectsPanel
+        blocks={isProcessing ? [] : turn.blocks}
+        workspaceRoot={workspaceRoot}
+        onContinuePrompt={onContinueScientificObject}
+      />
+
       {reviewBlocks.map((review) => (
         <ReviewSummaryCard key={review.id} review={review} />
       ))}
@@ -535,5 +547,6 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&
   prev.onOpenImageArtifactInCanvas === next.onOpenImageArtifactInCanvas &&
+  prev.onContinueScientificObject === next.onContinueScientificObject &&
   prev.viewportRef === next.viewportRef
 ))
